@@ -580,6 +580,10 @@ class MovementMixin:
             return True
         if abs(self.world.x - x) + abs(self.world.z - z) != 1:
             return False
+        if (x, z, level) in (self._stair_tiles or ()):
+            # Never step onto a transition tile by accident: the server
+            # would move the player to another floor mid-route.
+            return False
         before = (self.world.x, self.world.z)
         self._send_walk([(x, z)], False)
         limit = time.time() + min(1.0, max(0.2, deadline - time.time()))
@@ -909,6 +913,10 @@ class MovementMixin:
                        (start[0], start[1] + 1), (start[0], start[1] - 1)):
             if not collision_mod.tile_walkable(self._collision.get(nx, nz, level)):
                 continue
+            if (nx, nz, level) in (self._stair_tiles or ()):
+                # Never step onto a transition tile by accident: the server
+                # would move the player to another floor mid-route.
+                continue
             self._send_walk([(nx, nz)], False)
             deadline = time.time() + 1.0
             while time.time() < deadline:
@@ -1175,6 +1183,10 @@ class MovementMixin:
         steps.sort(key=lambda tile: abs(tile[0] - start[0]) + abs(tile[1] - start[1]))
         for nx, nz in steps:
             if any((nx, nz, self.world.level) in self._door_footprints[id(other)] for other in self._wall_doors):
+                continue
+            if (nx, nz, self.world.level) in (self._stair_tiles or ()):
+                # Never step onto a transition tile by accident: the server
+                # would move the player to another floor mid-route.
                 continue
             if not collision_mod.tile_walkable(self._collision.get(nx, nz, self.world.level)):
                 continue
