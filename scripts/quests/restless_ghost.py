@@ -53,46 +53,48 @@ def solve(bot):
         solver.talk_like(bot, "father_aereck", ["looking for a quest", "quest"])
     if stage < 2:
         solver.talk_like(bot, "father_urhney", ["aereck", "ghost", "sent me"])
-    # The ghost only spawns when its coffin is opened, despawns quickly,
-    # and only speaks through the ghostspeak amulet: wear it, spawn, and
-    # talk fast (no relogin patrols: the ghost would be long gone).
-    _wear(bot, "amulet_of_ghostspeak")
-    talked = False
-    for _ in range(6):
-        try:
-            solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=60)
-        except (Unreachable, TimeoutError):
-            pass
-        nid = bot.find_npc("ghost")
-        if nid is None:
-            bot.pump(10)
+    if stage < 3:
+        # The ghost only spawns when its coffin is opened, despawns quickly,
+        # and only speaks through the ghostspeak amulet: wear it, spawn, and
+        # talk fast (no relogin patrols: the ghost would be long gone).
+        _wear(bot, "amulet_of_ghostspeak")
+        talked = False
+        for _ in range(6):
+            try:
+                solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=60)
+            except (Unreachable, TimeoutError):
+                pass
             nid = bot.find_npc("ghost")
-        if nid is None:
-            continue
-        npc = bot.world.npcs[nid]
-        try:
-            bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
-        except (Unreachable, TimeoutError):
-            continue
-        bot.talk_to(bot.find_npc("ghost") or nid)
-        bot.pump(5)
-        if bot.world.modal is None:
-            continue
-        print("ghost talking attempt, npc at %s" % ((bot.world.npcs[nid]["x"], bot.world.npcs[nid]["z"]),), flush=True)
-        # The full ghost story runs a dozen pages: budget generously, and
-        # bail out to a fresh respawn only on a real stall.
-        try:
-            solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=400)
-        except solver.SolverError:
-            continue
-        talked = True
-        break
-    if not talked:
-        raise solver.SolverError("ghost never talked at %s" % (bot.position,))
-    # The skull lies in the tower basement south-west of here; taking it
-    # wakes its skeleton, which a maxed account simply tanks.
-    bot.approach(3120, 9567, radius=6, timeout=600, open_doors=True)
-    solver.take_near(bot, "ghostskull", timeout=300)
+            if nid is None:
+                bot.pump(10)
+                nid = bot.find_npc("ghost")
+            if nid is None:
+                continue
+            npc = bot.world.npcs[nid]
+            try:
+                bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
+            except (Unreachable, TimeoutError):
+                continue
+            bot.talk_to(bot.find_npc("ghost") or nid)
+            bot.pump(5)
+            if bot.world.modal is None:
+                continue
+            print("ghost talking attempt, npc at %s" % ((bot.world.npcs[nid]["x"], bot.world.npcs[nid]["z"]),), flush=True)
+            try:
+                solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=400)
+            except solver.SolverError:
+                continue
+            talked = True
+            break
+        if not talked:
+            raise solver.SolverError("ghost never talked at %s" % (bot.position,))
+    # The skull lies in the tower basement: taking it wakes its skeleton,
+    # which a maxed account simply tanks. Already holding it (saved stage
+    # 4): skip straight to the altar.
+    if not (stage >= 4 and bot.inventory().get(solver.obj_id("ghostskull"), 0) > 0):
+        bot.approach(3120, 9567, radius=6, timeout=600, open_doors=True)
+        solver.take_near(bot, "ghostskull", timeout=300)
+    solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
     solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
     try:
         _wear(bot, "amulet_of_strength")
