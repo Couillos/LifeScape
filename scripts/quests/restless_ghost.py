@@ -53,22 +53,34 @@ def solve(bot):
         solver.talk_like(bot, "father_aereck", ["looking for a quest", "quest"])
     if stage < 2:
         solver.talk_like(bot, "father_urhney", ["aereck", "ghost", "sent me"])
-    # The ghost only spawns when its coffin is opened, and only speaks
-    # through the ghostspeak amulet: wear it first, then open, then talk.
-    # The ghost despawns quickly, so reopen right before each talk attempt.
+    # The ghost only spawns when its coffin is opened, despawns quickly,
+    # and only speaks through the ghostspeak amulet: wear it, spawn, and
+    # talk fast (no relogin patrols: the ghost would be long gone).
     _wear(bot, "amulet_of_ghostspeak")
     talked = False
-    for _ in range(3):
+    for _ in range(6):
         try:
             solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=60)
         except (Unreachable, TimeoutError):
             pass
-        try:
-            solver.talk_like(bot, "ghost", ["problem", "doomed", "skull", "yep", "yes"], near=(3249, 3194), timeout=120)
-            talked = True
-            break
-        except (Unreachable, TimeoutError, solver.SolverError):
+        nid = bot.find_npc("ghost")
+        if nid is None:
+            bot.pump(10)
+            nid = bot.find_npc("ghost")
+        if nid is None:
             continue
+        npc = bot.world.npcs[nid]
+        try:
+            bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
+        except (Unreachable, TimeoutError):
+            continue
+        bot.talk_to(bot.find_npc("ghost") or nid)
+        bot.pump(5)
+        if bot.world.modal is None:
+            continue
+        solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=120)
+        talked = True
+        break
     if not talked:
         raise solver.SolverError("ghost never talked at %s" % (bot.position,))
     # The skull lies in the tower basement south-west of here; taking it
