@@ -78,7 +78,12 @@ def solve(bot):
         bot.pump(5)
         if bot.world.modal is None:
             continue
-        solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=120)
+        # Short budget per attempt: the ghost despawns quickly, so a stuck
+        # talk must fail fast and let the next attempt respawn it.
+        try:
+            solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=150)
+        except solver.SolverError:
+            continue
         talked = True
         break
     if not talked:
