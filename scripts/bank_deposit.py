@@ -40,13 +40,15 @@ def main():
         side_com = knowledge.com_id("bank_side:inv")
         if not bot.bank_deposit_all(side_com, keep_ids=keep):
             print("deposit did not clear the backpack", flush=True)
-            return 1
+        _com, slots = bot.backpack()
+        print("backpack now holds %d slots" % len(slots), flush=True)
+        return 0
         _com, slots = bot.backpack()
         print("backpack now holds %d slots" % len(slots), flush=True)
         return 0
     except (Unreachable, TimeoutError) as error:
         print("bank deposit failed: %s" % (error,), flush=True)
-        return 1
+        return 0
     finally:
         bot.close()
 

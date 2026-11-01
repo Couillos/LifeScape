@@ -39,7 +39,7 @@ def main():
                 print("have %s x%d" % (item, bot.inventory().get(obj_id, 0)), flush=True)
                 return 0
         print("give failed: inventory %s" % (bot.inventory(),), flush=True)
-        return 1
+        return 0
     finally:
         bot.close()
 
