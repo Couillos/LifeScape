@@ -44,6 +44,7 @@ SCRIPTS = {
     "probe_transitions": "scripts/probe_transitions.py",
     "goto": "scripts/goto.py",
     "bank_deposit": "scripts/bank_deposit.py",
+    "drop": "scripts/drop.py",
     "probe_door": "scripts/probe_door.py",
     "probe_give": "scripts/probe_give.py",
     "probe_vars": "scripts/probe_vars.py",
