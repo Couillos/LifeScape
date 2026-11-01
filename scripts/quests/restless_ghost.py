@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
 
 from gamedata import quest_requirements
+from lifescape.client import Unreachable
 from scripts.quests import solver
 from scripts.quests.common import run
 from scripts.tutorial import common as C
@@ -54,12 +55,25 @@ def solve(bot):
         solver.talk_like(bot, "father_urhney", ["aereck", "ghost", "sent me"])
     # The ghost only spawns when its coffin is opened, and only speaks
     # through the ghostspeak amulet: wear it first, then open, then talk.
+    # The ghost despawns quickly, so reopen right before each talk attempt.
     _wear(bot, "amulet_of_ghostspeak")
-    solver.operate_loc(bot, ["shutghostcoffin"], op=1)
-    solver.talk_like(bot, "ghost", ["problem", "doomed", "skull", "yep", "yes"], near=(3249, 3194))
+    talked = False
+    for _ in range(3):
+        try:
+            solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=60)
+        except (Unreachable, TimeoutError):
+            pass
+        try:
+            solver.talk_like(bot, "ghost", ["problem", "doomed", "skull", "yep", "yes"], near=(3249, 3194), timeout=120)
+            talked = True
+            break
+        except (Unreachable, TimeoutError, solver.SolverError):
+            continue
+    if not talked:
+        raise solver.SolverError("ghost never talked at %s" % (bot.position,))
     # The skull lies in the tower basement south-west of here; taking it
     # wakes its skeleton, which a maxed account simply tanks.
-    bot.approach(3120, 9565, radius=6, timeout=600, open_doors=True)
+    bot.approach(3120, 9567, radius=6, timeout=600, open_doors=True)
     solver.take_near(bot, "ghostskull", timeout=300)
     solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
     try:
