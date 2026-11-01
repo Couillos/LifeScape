@@ -95,7 +95,6 @@ def solve(bot):
         bot.approach(3120, 9567, radius=6, timeout=600, open_doors=True)
         solver.take_near(bot, "ghostskull", timeout=300)
     solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
-    solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
     try:
         _wear(bot, "amulet_of_strength")
     except Exception:
