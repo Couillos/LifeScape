@@ -57,6 +57,10 @@ class MovementMixin:
                 if not payload.ride(self):
                     print("transition %s failed at %s, replanning" % (payload.name, self.world.position), flush=True)
                     skip.add(payload.name)
+                    # Session-wide, with expiry: a locked door or missing key
+                    # will fail the same way on every fresh plan, so remember
+                    # it instead of rediscovering it on each walk_to.
+                    self._bad_transitions[payload.name] = time.time() + 600
                     replanned = True
                     break
                 leg_start = tuple(payload.to)
@@ -1423,6 +1427,10 @@ class MovementMixin:
         routing = self._planning_map or self._opened_map
         skip = set(skip)
         skip_walks = set(skip_walks)
+        now = time.time()
+        for name in [name for name, expiry in self._bad_transitions.items() if expiry <= now]:
+            del self._bad_transitions[name]
+        skip.update(self._bad_transitions)
         # Walk edges are straight-line estimates: a staircase can look close
         # and still sit behind battlements, swamps or a missing bridge.
         # Validate every walking leg with the real router and plan again

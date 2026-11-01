@@ -74,6 +74,7 @@ class BotCore:
         self._stair_tiles = None
         self._blocked_doors = set()
         self._blocked_doors_exp = {}
+        self._bad_transitions = {}
         self._unsealed_doors = set()
         self._recent_doors = {}
         self._opening = set()
@@ -144,6 +145,7 @@ class BotCore:
             self._door_footprints = None
             self._blocked_doors = set()
             self._blocked_doors_exp = {}
+            self._bad_transitions = {}
             self._unsealed_doors = set()
             self._recent_doors = {}
             self._opening = set()
