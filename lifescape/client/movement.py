@@ -962,6 +962,19 @@ class MovementMixin:
         self._apply_removal_to(self._opened_map, x, z, level)
 
     def _open_nearby_door(self, deadline, target=None):
+        # Single-flight: _open_door_inner walks with doors allowed, which can
+        # land right back here when its approach has no path. Without a guard
+        # the rescue nests once per nearby door until the stack (or the
+        # server connection) gives out.
+        if getattr(self, "_in_nearby_door", False):
+            return False
+        self._in_nearby_door = True
+        try:
+            return self._open_nearby_door_inner(deadline, target)
+        finally:
+            self._in_nearby_door = False
+
+    def _open_nearby_door_inner(self, deadline, target=None):
 
         candidates = []
         for spot in self._wall_doors or ():
