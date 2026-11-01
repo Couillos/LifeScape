@@ -70,6 +70,8 @@ def finish_dialog_like(bot, keywords, timeout=300):
     target = bot.world.ticks + timeout
     answered = set()
     no_option_since = None
+    still_texts = None
+    still_rounds = 0
     while bot.world.ticks < target:
         bot.pump(5)
         if _completion_open(bot):
@@ -83,6 +85,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
         ]
         if options:
             no_option_since = None
+            still_rounds = 0
             choice = None
             for keyword in keywords:
                 choice = next(
@@ -116,6 +119,22 @@ def finish_dialog_like(bot, keywords, timeout=300):
             else:
                 bot.chat_continue()
             no_option_since = None
+            texts_now = sorted(text for _com, text in bot.chat_texts())
+            if texts_now != still_texts:
+                still_texts = texts_now
+                still_rounds = 0
+            else:
+                still_rounds += 1
+            if still_rounds >= 3:
+                # No options and nothing new for ~36+ ticks: the server
+                # already closed this dialogue and its close packet never
+                # landed (missed IF_CLOSE). Hanging here is always wrong,
+                # so sync to the closed state and carry on; quest
+                # verification afterwards fails loudly if this was a
+                # mistake.
+                bot.close_modal()
+                bot.pump(5)
+                return True
             continue
         return True
     raise SolverError("dialog did not close at %s" % (bot.position,))
