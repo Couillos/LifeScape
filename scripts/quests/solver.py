@@ -96,6 +96,8 @@ def finish_dialog_like(bot, keywords, timeout=300):
                     break
             if choice is None:
                 choice = options[0]
+            # DIAG-TEMP: which option gets clicked?
+            print("dialog click com=%s text=%r" % (choice[0], choice[1][:60]), flush=True)
             bot.if_button(choice[0])
             answered.add(choice[1])
             continue
