@@ -97,6 +97,10 @@ def finish_dialog_like(bot, keywords, timeout=300):
             answered.add(choice[1])
             continue
         if bot.world.modal:
+            if _completion_open(bot):
+                bot.close_modal()
+                bot.pump(5)
+                return True
             if no_option_since is None:
                 no_option_since = bot.world.ticks
             # A choice page arrives a tick or two after the NPC line. Never
@@ -104,7 +108,13 @@ def finish_dialog_like(bot, keywords, timeout=300):
             # switch_component then falls through to the default branch.
             if bot.world.ticks - no_option_since < 12:
                 continue
-            bot.chat_continue()
+            if bot.world.modal[0] == "main":
+                # A main window with no options (quest scroll, level-up) is
+                # not advanced by the chat continue button: close it like a
+                # player clicking it away, then carry on.
+                bot.close_modal()
+            else:
+                bot.chat_continue()
             no_option_since = None
             continue
         return True
