@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import threading
+import traceback
 import time
 
 from . import holdings, naming, quest_state, registry, web
@@ -132,6 +133,7 @@ class Orchestrator:
                 self.supervise_once(job)
             except Exception as error:
                 print("supervise error on %s: %r" % (job.account, error), flush=True)
+                traceback.print_exc()
             time.sleep(0.5)
 
     def supervise_once(self, job):

@@ -538,6 +538,7 @@ function updatePanels() {
       if (r.type === 'item') return `${r.item} ${r.owned}/${r.required}`;
       if (r.type === 'skill') return `${r.skill} ${r.current}/${r.required}`;
       if (r.type === 'quest_points') return `quest points ${r.current}/${r.required}`;
+      if (r.type === 'navigation') return r.detail || 'no route';
       return `quest ${r.name || r.quest}`;
     });
     lines.push(`quest ${req.quest}: ${req.met ? 'requirements met' : 'missing ' + reasons.join(', ')}`);
