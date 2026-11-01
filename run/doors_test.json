@@ -1,0 +1,14 @@
+{
+ "1516@2009,4747,0": {
+  "from": [
+   0,
+   2009,
+   4747
+  ],
+  "kind": "door",
+  "loc": 1516,
+  "name": "loc_1516",
+  "outcome": "walk through: no path to 2010,4748 from (2010, 4747); nearest reachable by path 2010,4747 (path 0, 1 tiles from target); frontier blocked by macro_theatre_floor; possible cause: wall, water, different level or missing access",
+  "seconds": 26.2
+ }
+}

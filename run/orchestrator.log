@@ -1,0 +1,3 @@
+webapp listening on http://0.0.0.0:8765/
+orchestrator listening on /home/josh/dev/LifeScape/run/orchestrator.sock
+job tests: tests pid=1597483

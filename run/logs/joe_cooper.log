@@ -1,0 +1,725 @@
+=== joe_cooper mining 17:19:03 ===
+bank at (3011,3354)
+bank trip to (3011,3354) from (0, 2983, 3237)
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+depositing copper_ore
+mining copper_ore at (2907, 3361) ((0, 3011, 3355))
+detour to (2975,3346)
+=== joe_cooper woodcut 17:38:56 ===
+bank at (2948,3367)
+bank trip to (2948,3367) from (0, 2948, 3379)
+depositing the load
+ok withdrew banked axe
+bank at (2948,3367)
+chopping logs at (2953, 3363) ((0, 2948, 3368))
+click tree at (2953, 3363)
+tree quiet, next one
+chopping logs at (2947, 3356) ((0, 2952, 3363))
+click tree at (2947, 3356)
+tree quiet, next one
+chopping logs at (2945, 3354) ((0, 2946, 3356))
+walk adjacent (2946, 3355) failed: no path to 2946,3355
+walk adjacent (2945, 3355) failed: no path to 2945,3355
+walk adjacent (2946, 3354) failed: no path to 2946,3354
+adjacent in 1.5s
+click tree at (2945, 3354)
+click tree at (2945, 3354)
+tree quiet, next one
+chopping logs at (2931, 3357) ((0, 2944, 3355))
+no path from (0, 2936, 3356) to (2931,3357)
+chopping logs at (2928, 3350) ((0, 2936, 3356))
+no path from (0, 2936, 3354) to (2928,3350)
+chopping logs at (2931, 3365) ((0, 2936, 3354))
+no path from (0, 2937, 3365) to (2931,3365)
+chopping logs at (2930, 3368) ((0, 2937, 3365))
+no path from (0, 2937, 3368) to (2930,3368)
+chopping logs at (2928, 3369) ((0, 2937, 3368))
+no path from (0, 2937, 3369) to (2928,3369)
+chopping logs at (2929, 3372) ((0, 2937, 3369))
+no path from (0, 2937, 3372) to (2929,3372)
+chopping logs at (2930, 3376) ((0, 2937, 3372))
+no path from (0, 2937, 3376) to (2930,3376)
+chopping logs at (2925, 3376) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2925,3376)
+chopping logs at (2925, 3370) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2925,3370)
+chopping logs at (2921, 3372) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2921,3372)
+chopping logs at (2925, 3367) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2925,3367)
+chopping logs at (2914, 3375) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2914,3375)
+chopping logs at (2923, 3365) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2923,3365)
+chopping logs at (2924, 3360) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2924,3360)
+chopping logs at (2906, 3378) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2906,3378)
+chopping logs at (2917, 3362) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2917,3362)
+chopping logs at (2921, 3358) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2921,3358)
+chopping logs at (2903, 3376) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2903,3376)
+chopping logs at (2905, 3373) ((0, 2937, 3376))
+no path from (0, 2937, 3376) to (2905,3373)
+chopping logs at (2946, 3404) ((0, 2937, 3376))
+click tree at (2946, 3404)
+ok level-up dismissed
+tree quiet, next one
+chopping logs at (2949, 3403) ((0, 2946, 3403))
+adjacent in 0.3s
+click tree at (2949, 3403)
+click tree at (2949, 3403)
+tree quiet, next one
+chopping logs at (2947, 3407) ((0, 2948, 3403))
+adjacent in 0.3s
+click tree at (2947, 3407)
+click tree at (2947, 3407)
+tree quiet, next one
+chopping logs at (2952, 3405) ((0, 2948, 3406))
+adjacent in 0.3s
+click tree at (2952, 3405)
+click tree at (2952, 3405)
+tree quiet, next one
+chopping logs at (2954, 3409) ((0, 2951, 3406))
+adjacent in 0.2s
+click tree at (2954, 3409)
+chopping logs at (2954, 3413) ((0, 2953, 3408))
+click tree at (2954, 3413)
+tree quiet, next one
+chopping logs at (2957, 3410) ((0, 2954, 3412))
+adjacent in 0.2s
+click tree at (2957, 3410)
+tree quiet, next one
+chopping logs at (2956, 3405) ((0, 2956, 3411))
+click tree at (2956, 3405)
+click tree at (2956, 3405)
+tree quiet, next one
+chopping logs at (2958, 3406) ((0, 2955, 3405))
+walk adjacent (2957, 3405) failed: no path to 2957,3405
+walk adjacent (2957, 3406) failed: no path to 2957,3406
+adjacent in 1.8s
+click tree at (2958, 3406)
+click tree at (2958, 3406)
+ok level-up dismissed
+tree quiet, next one
+chopping logs at (2958, 3402) ((0, 2958, 3405))
+walk adjacent (2958, 3403) failed: no path to 2958,3403
+adjacent in 0.5s
+click tree at (2958, 3402)
+click tree at (2958, 3402)
+tree quiet, next one
+chopping logs at (2953, 3401) ((0, 2957, 3403))
+walk adjacent (2954, 3402) failed: no path to 2954,3402
+walk adjacent (2953, 3402) failed: no path to 2953,3402
+walk adjacent (2954, 3401) failed: no path to 2954,3401
+adjacent in 1.7s
+click tree at (2953, 3401)
+click tree at (2953, 3401)
+tree quiet, next one
+chopping logs at (2949, 3403) ((0, 2952, 3402))
+adjacent in 0.3s
+click tree at (2949, 3403)
+click tree at (2949, 3403)
+tree quiet, next one
+chopping logs at (2952, 3405) ((0, 2950, 3402))
+adjacent in 0.2s
+click tree at (2952, 3405)
+chopping logs at (2946, 3404) ((0, 2951, 3404))
+click tree at (2946, 3404)
+tree quiet, next one
+chopping logs at (2947, 3407) ((0, 2946, 3403))
+adjacent in 0.5s
+click tree at (2947, 3407)
+chopping logs at (2948, 3412) ((0, 2946, 3406))
+click tree at (2948, 3412)
+click tree at (2948, 3412)
+ok level-up dismissed
+tree quiet, next one
+chopping logs at (2948, 3417) ((0, 2948, 3411))
+click tree at (2948, 3417)
+click tree at (2948, 3417)
+tree quiet, next one
+chopping logs at (2951, 3415) ((0, 2948, 3416))
+adjacent in 0.2s
+click tree at (2951, 3415)
+tree quiet, next one
+chopping logs at (2954, 3413) ((0, 2950, 3416))
+adjacent in 0.3s
+click tree at (2954, 3413)
+click tree at (2954, 3413)
+tree quiet, next one
+chopping logs at (2957, 3410) ((0, 2953, 3414))
+adjacent in 0.6s
+click tree at (2957, 3410)
+click tree at (2957, 3410)
+tree quiet, next one
+chopping logs at (2956, 3405) ((0, 2956, 3411))
+click tree at (2956, 3405)
+tree quiet, next one
+chopping logs at (2958, 3406) ((0, 2955, 3405))
+walk adjacent (2957, 3405) failed: no path to 2957,3405
+walk adjacent (2957, 3406) failed: no path to 2957,3406
+adjacent in 2.2s
+click tree at (2958, 3406)
+click tree at (2958, 3406)
+ok level-up dismissed
+tree quiet, next one
+chopping logs at (2958, 3402) ((0, 2958, 3405))
+walk adjacent (2958, 3403) failed: no path to 2958,3403
+adjacent in 0.3s
+click tree at (2958, 3402)
+tree quiet, next one
+chopping logs at (2953, 3401) ((0, 2957, 3403))
+walk adjacent (2954, 3402) failed: no path to 2954,3402
+walk adjacent (2953, 3402) failed: no path to 2953,3402
+walk adjacent (2954, 3401) failed: no path to 2954,3401
+adjacent in 1.9s
+click tree at (2953, 3401)
+click tree at (2953, 3401)
+tree quiet, next one
+chopping logs at (2949, 3403) ((0, 2952, 3402))
+adjacent in 0.3s
+click tree at (2949, 3403)
+click tree at (2949, 3403)
+tree quiet, next one
+chopping logs at (2946, 3404) ((0, 2950, 3402))
+walk adjacent (2947, 3403) failed: no path to 2947,3403
+adjacent in 0.5s
+click tree at (2946, 3404)
+tree quiet, next one
+chopping logs at (2948, 3412) ((0, 2946, 3403))
+click tree at (2948, 3412)
+click tree at (2948, 3412)
+ok level-up dismissed
+tree quiet, next one
+chopping logs at (2948, 3417) ((0, 2948, 3411))
+click tree at (2948, 3417)
+click tree at (2948, 3417)
+tree quiet, next one
+chopping logs at (2951, 3415) ((0, 2948, 3416))
+adjacent in 0.1s
+click tree at (2951, 3415)
+click tree at (2951, 3415)
+tree quiet, next one
+chopping logs at (2954, 3413) ((0, 2950, 3416))
+adjacent in 0.3s
+click tree at (2954, 3413)
+click tree at (2954, 3413)
+tree quiet, next one
+chopping logs at (2954, 3409) ((0, 2953, 3414))
+click tree at (2954, 3409)
+tree quiet, next one
+bank trip to (2948,3367) from (0, 2953, 3409)
+no path from (0, 2949, 3377) to (2948,3367)
+depositing the load
+ok load 1 banked (wc=7)
+=== joe_cooper mining 17:43:00 ===
+bank at (2948,3367)
+bank trip to (2948,3367) from (0, 2948, 3368)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:43:25 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:43:28 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+=== joe_cooper mining 17:43:46 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/mining/run.py", line 1119, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/scripts/mining/run.py", line 1033, in main
+    bot.login(username, username)
+        ^^^^^
+  File "/opt/lifescape/scripts/../lifescape/client.py", line 85, in login
+    info = self.connection.login(username, self.password, defaults["pack_dir"], defaults["server_key"])
+                           ^^^^^
+  File "/opt/lifescape/scripts/../lifescape/connection.py", line 85, in login
+    raise LoginError("login refused: %d (%s)" % (response, RESPONSES.get(response, "unknown")))
+lifescape.connection.LoginError: login refused: 5 (already logged in)
+=== joe_cooper clean_session 17:43:46 ===
+session busy for joe_cooper: login refused: 5 (already logged in)
+session busy for joe_cooper: login refused: 5 (already logged in)
+session freed for joe_cooper
+=== joe_cooper mining 17:43:53 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3366)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:44:16 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:44:18 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:44:41 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:44:44 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:45:07 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:45:10 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:45:32 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:45:35 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:45:58 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:46:01 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:46:24 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:46:26 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:46:49 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:46:52 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:47:15 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:47:18 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:47:41 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:47:43 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:48:06 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:48:09 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:48:32 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:48:35 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:48:58 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:49:01 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:49:24 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:49:27 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:49:49 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:49:52 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:50:15 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:50:18 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:50:41 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:50:43 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:51:07 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:51:10 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:51:33 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:51:36 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:51:58 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:52:01 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:52:24 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:52:26 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:52:49 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:52:52 ===
+=== joe_cooper mining 17:53:06 ===
+session still busy, retrying login
+session still busy, retrying login
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:53:34 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:53:37 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:54:00 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:54:02 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:54:25 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:54:28 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:54:51 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:54:54 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:55:17 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:55:20 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:55:43 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:55:46 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:56:09 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:56:12 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:56:35 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:56:38 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:57:01 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:57:03 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:57:26 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:57:29 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:57:52 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:57:55 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:58:18 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:58:21 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:58:44 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:58:47 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:59:10 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:59:13 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 17:59:36 ===
+session freed for joe_cooper
+=== joe_cooper mining 17:59:39 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:00:02 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:00:04 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:00:28 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:00:31 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:00:54 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:00:57 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:01:20 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:01:23 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:01:46 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:01:49 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:02:12 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:02:14 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:02:37 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:02:40 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:03:03 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:03:06 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:03:29 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:03:32 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:03:55 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:03:57 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:04:21 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:04:23 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:04:46 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:04:49 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:05:13 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:05:15 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:05:38 ===
+session freed for joe_cooper
+=== joe_cooper mining 18:05:41 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/mining/run.py", line 1119, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/scripts/mining/run.py", line 1037, in main
+    bot.pump(5)
+        ^^^^
+  File "/opt/lifescape/scripts/../lifescape/client.py", line 493, in pump
+    opcode, name, body = self.connection.recv()
+                                         ^^^^
+  File "/opt/lifescape/scripts/../lifescape/connection.py", line 109, in recv
+    raw = self._read_exact(1)[0]
+               ^^^^^^^^^^^
+  File "/opt/lifescape/scripts/../lifescape/connection.py", line 141, in _read_exact
+    raise ConnectionError("server closed the socket")
+ConnectionError: server closed the socket
+=== joe_cooper clean_session 18:05:51 ===
+session busy for joe_cooper: [Errno 111] Connection refused
+session freed for joe_cooper
+=== joe_cooper mining 18:05:55 ===
+bank at (2949,3367)
+bank trip to (2949,3367) from (0, 2950, 3367)
+bank trip: bank did not open at (0, 2950, 3367)
+=== joe_cooper clean_session 18:06:18 ===
+session freed for joe_cooper
+=== joe_cooper quest_cooks_assistant 09:32:39 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/quests/cooks_assistant.py", line 15, in <module>
+    sys.exit(run(QUEST))
+             ^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../scripts/quests/common.py", line 109, in run
+    bank_items = _open_nearest_bank(bot)
+                 ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../scripts/quests/common.py", line 63, in _open_nearest_bank
+    bot.approach(bank.x, bank.z, radius=2, timeout=180, open_doors=True)
+        ^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 35, in approach
+    self._ensure_nav()
+         ^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 483, in _ensure_nav
+    self._load_portals()
+         ^^^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 493, in _load_portals
+    path = os.path.join(os.path.dirname(__file__), "data", "portals.json")
+           ^^
+NameError: name 'os' is not defined. Did you forget to import 'os'
+=== joe_cooper clean_session 09:33:00 ===
+session freed for joe_cooper
+=== joe_cooper quest_cooks_assistant 09:33:03 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/quests/cooks_assistant.py", line 15, in <module>
+    sys.exit(run(QUEST))
+             ^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../scripts/quests/common.py", line 109, in run
+    bank_items = _open_nearest_bank(bot)
+                 ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../scripts/quests/common.py", line 63, in _open_nearest_bank
+    bot.approach(bank.x, bank.z, radius=2, timeout=180, open_doors=True)
+        ^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 35, in approach
+    def approach(self, x, z, level=0, radius=2, timeout=60, open_doors=True):
+             ^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 483, in _ensure_nav
+    self._rebuild_opened()
+         ^^^^^^^^^^^^^
+  File "/opt/lifescape/scripts/quests/../../lifescape/client/movement.py", line 493, in _load_portals
+    self._portals = []
+           ^^
+NameError: name 'os' is not defined. Did you forget to import 'os'
+=== joe_cooper clean_session 09:33:24 ===
+session freed for joe_cooper
+=== joe_cooper quest_cooks_assistant 09:33:27 ===
+bank 2949,3367 unusable: bank did not open at 2949,3367
+@@EVENT {"account": "joe_cooper", "completed": false, "kind": "quest_requirements", "met": false, "name": "Cook's Assistant", "quest": "cook", "reasons": [{"bank": 0, "inventory": 0, "item": "bucket_milk", "name": "bucket_milk", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "egg", "name": "egg", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "pot_flour", "name": "pot_flour", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}]}
+Cook's Assistant: missing bucket_milk 0/1 (inv 0, worn 0, bank 0); egg 0/1 (inv 0, worn 0, bank 0); pot_flour 0/1 (inv 0, worn 0, bank 0)
+=== joe_cooper quest_cooks_assistant 09:34:26 ===
+bank attempt 2948,3367 at (0, 2948, 3368) booth=(2948, 3367, 0, 2213) modal=None
+@@EVENT {"account": "joe_cooper", "completed": false, "kind": "quest_requirements", "met": false, "name": "Cook's Assistant", "quest": "cook", "reasons": [{"bank": 0, "inventory": 0, "item": "bucket_milk", "name": "bucket_milk", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "egg", "name": "egg", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "pot_flour", "name": "pot_flour", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}]}
+Cook's Assistant: missing bucket_milk 0/1 (inv 0, worn 0, bank 0); egg 0/1 (inv 0, worn 0, bank 0); pot_flour 0/1 (inv 0, worn 0, bank 0)
+=== joe_cooper quest_cooks_assistant 09:35:13 ===
+bank attempt 2948,3367 at (0, 2948, 3368) booth=(2948, 3367, 0, 2213) modal=None
+@@EVENT {"account": "joe_cooper", "completed": false, "kind": "quest_requirements", "met": false, "name": "Cook's Assistant", "quest": "cook", "reasons": [{"bank": 0, "inventory": 0, "item": "bucket_milk", "name": "bucket_milk", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "egg", "name": "egg", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "pot_flour", "name": "pot_flour", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}]}
+Cook's Assistant: missing bucket_milk 0/1 (inv 0, worn 0, bank 0); egg 0/1 (inv 0, worn 0, bank 0); pot_flour 0/1 (inv 0, worn 0, bank 0)
+=== joe_cooper quest_cooks_assistant 09:36:14 ===
+bank attempt 2948,3367 at (0, 2948, 3368) booth=(2948, 3367, 0, 2213) modal=None
+bank opened, inv keys=[3214, 1688, 2006, 5382] items={995: 25, 590: 1, 303: 1, 315: 1, 1925: 1, 1931: 1, 2309: 1, 1205: 1, 1277: 1, 1171: 1, 841: 1, 882: 25, 556: 25, 558: 15, 555: 6, 557: 4, 559: 2, 436: 41, 1265: 1, 1511: 26, 1351: 1}
+@@EVENT {"account": "joe_cooper", "completed": false, "kind": "quest_requirements", "met": false, "name": "Cook's Assistant", "quest": "cook", "reasons": [{"bank": 0, "inventory": 0, "item": "bucket_milk", "name": "bucket_milk", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "egg", "name": "egg", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "pot_flour", "name": "pot_flour", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}]}
+Cook's Assistant: missing bucket_milk 0/1 (inv 0, worn 0, bank 0); egg 0/1 (inv 0, worn 0, bank 0); pot_flour 0/1 (inv 0, worn 0, bank 0)
+=== joe_cooper quest_demon_slayer 09:37:23 ===
+bank attempt 2948,3367 at (0, 2948, 3368) booth=(2948, 3367, 0, 2213) modal=None
+bank opened, inv keys=[3214, 1688, 2006, 5382] items={995: 25, 590: 1, 303: 1, 315: 1, 1925: 1, 1931: 1, 2309: 1, 1205: 1, 1277: 1, 1171: 1, 841: 1, 882: 25, 556: 25, 558: 15, 555: 6, 557: 4, 559: 2, 436: 41, 1265: 1, 1511: 26, 1351: 1}
+@@EVENT {"account": "joe_cooper", "completed": false, "kind": "quest_requirements", "met": false, "name": "Demon Slayer", "quest": "demon", "reasons": [{"bank": 0, "inventory": 0, "item": "bucket_water", "name": "bucket_water", "needs_worn": false, "owned": 0, "required": 1, "type": "item", "worn": 0}, {"bank": 0, "inventory": 0, "item": "bones", "name": "bones", "needs_worn": false, "owned": 0, "required": 25, "type": "item", "worn": 0}]}
+Demon Slayer: missing bucket_water 0/1 (inv 0, worn 0, bank 0); bones 0/25 (inv 0, worn 0, bank 0)

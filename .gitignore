@@ -1,0 +1,4 @@
+lifescape/sdk uniquement avec la stdlib, voir AGENTS.md.
+.pypy/
+__pycache__/
+*.pyc

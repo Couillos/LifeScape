@@ -1,0 +1,349 @@
+=== t19 tutorial 17:40:30 ===
+start (0, 3098, 3107)
+ok no design screen, already validated
+stage survival_start hint=('npc', 1303) flash=None
+talk near walk failed: walk to 3103,3095 timed out at (0, 3097, 3107) at (0, 3097, 3107)
+ok survival found
+dialog not closing, recent texts: ['Follow the path to find the next instructor.', 'Clicking on the ground will walk you to that point.', 'Talk to the survival expert by the pond to continue the tuto', 'Remember you can rotate the view by pressing the arrow keys.']
+dialog not closing, recent texts: ['Follow the path to find the next instructor.', 'Clicking on the ground will walk you to that point.', 'Talk to the survival expert by the pond to continue the tuto', 'Remember you can rotate the view by pressing the arrow keys.']
+dialog not closing, recent texts: ['Click on the flashing backpack icon to the', 'right side of the main window to view your inventory.', 'Your inventory is a list of everything you have in your back', '']
+stage open_inventory hint=None flash=3
+ok axe+tinderbox given
+stage chop hint=('coord', 3100, 3095, 175) flash=3
+ok axe held
+ok logs chopped
+ok logs chopped
+stage light_fire hint=None flash=3
+ok fire lit
+stage open_stats hint=None flash=1
+stage survival_food hint=('npc', 1303) flash=1
+ok survival again
+dialog not closing, recent texts: ['Here you will see how good your skills are. Moving your', 'mouse over the icons will show you the exact amount of', 'experience for that skill in the bottom panel.', 'Speak to the instructor to continue.']
+ok net given
+stage catch hint=('npc', 1301) flash=1
+ok shrimp caught
+stage cook_burnt hint=None flash=1
+ok has newbieraw_shrimp
+ok fire lit
+ok burntfish1 cooked
+stage cook_fresh hint=None flash=1
+ok shrimp caught for cooking
+ok has newbieraw_shrimp
+ok axe held
+ok logs chopped
+ok logs chopped
+ok fire lit
+=== t19 tutorial 17:41:57 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/tutorial/run.py", line 184, in <module>
+    main()
+  File "/opt/lifescape/scripts/tutorial/run.py", line 99, in main
+    bot.login(username)
+        ^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/client.py", line 85, in login
+    info = self.connection.login(username, self.password, defaults["pack_dir"], defaults["server_key"])
+                           ^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/connection.py", line 85, in login
+    raise LoginError("login refused: %d (%s)" % (response, RESPONSES.get(response, "unknown")))
+lifescape.connection.LoginError: login refused: 5 (already logged in)
+=== t19 clean_session 17:41:57 ===
+session busy for t19: login refused: 5 (already logged in)
+session busy for t19: login refused: 5 (already logged in)
+session freed for t19
+=== t19 tutorial 17:42:04 ===
+start (0, 3104, 3096)
+ok no design screen, already validated
+stage cook_fresh hint=None flash=None
+ok has newbieraw_shrimp
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/tutorial/run.py", line 184, in <module>
+    main()
+  File "/opt/lifescape/scripts/tutorial/run.py", line 175, in main
+    action(bot)
+  File "/opt/lifescape/scripts/tutorial/../../scripts/tutorial/north.py", line 152, in cook_fresh
+    cook_on_fire(bot, "newbieraw_shrimp", "shrimp")
+  File "/opt/lifescape/scripts/tutorial/../../scripts/tutorial/north.py", line 136, in cook_on_fire
+    light_fire(bot)
+  File "/opt/lifescape/scripts/tutorial/../../scripts/tutorial/north.py", line 91, in light_fire
+    bot.walk_to(here[0] + 2, here[1], open_doors=True, timeout=30)
+        ^^^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/client.py", line 741, in walk_to
+    self._walk_single(step[0], step[1], run, deadline, open_doors)
+         ^^^^^^^^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/client.py", line 808, in _walk_single
+    raise Unreachable("no path to %d,%d" % (x, z))
+lifescape.client.Unreachable: no path to 3106,3096
+=== t19 clean_session 17:42:20 ===
+session freed for t19
+=== t19 tutorial 17:42:23 ===
+start (0, 3105, 3096)
+ok no design screen, already validated
+stage cook_fresh hint=None flash=None
+ok has newbieraw_shrimp
+ok axe held
+ok logs chopped
+ok logs chopped
+ok fire lit
+ok shrimp cooked
+stage survival_gate hint=('coord', 3089, 3092, 100) flash=None
+ok through survival gate
+stage chef_path hint=('coord', 3078, 3084, 150) flash=None
+talk relogging to resync NPCs
+talk near (0, 3080, 3084) reached
+=== t19 tutorial 17:43:46 ===
+Traceback (most recent call last):
+  File "/pypy/lib/pypy3.11/runpy.py", line 201, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/orchestration/worker.py", line 42, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/lifescape/orchestration/worker.py", line 30, in main
+    runpy.run_path(path, run_name="__main__")
+          ^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 294, in run_path
+    return _run_module_code(code, init_globals, run_name,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pypy/lib/pypy3.11/runpy.py", line 98, in _run_module_code
+    _run_code(code, mod_globals, init_globals,
+  File "/pypy/lib/pypy3.11/runpy.py", line 88, in _run_code
+    exec(code, run_globals)
+  File "/opt/lifescape/scripts/tutorial/run.py", line 184, in <module>
+    main()
+  File "/opt/lifescape/scripts/tutorial/run.py", line 99, in main
+    bot.login(username)
+        ^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/client.py", line 85, in login
+    info = self.connection.login(username, self.password, defaults["pack_dir"], defaults["server_key"])
+                           ^^^^^
+  File "/opt/lifescape/scripts/tutorial/../../lifescape/connection.py", line 85, in login
+    raise LoginError("login refused: %d (%s)" % (response, RESPONSES.get(response, "unknown")))
+lifescape.connection.LoginError: login refused: 5 (already logged in)
+=== t19 clean_session 17:43:46 ===
+session busy for t19: login refused: 5 (already logged in)
+session busy for t19: login refused: 5 (already logged in)
+session freed for t19
+=== t19 tutorial 17:43:53 ===
+start (0, 3079, 3084)
+ok no design screen, already validated
+stage chef_path hint=('coord', 3078, 3084, 150) flash=None
+ok chef found
+dialog not closing, recent texts: ['Talk to the chef indicated. He will teach you the more advan', 'aspects of cooking such as combining ingredients. He will al', 'teach you about your music player menu as well.', '']
+dialog not closing, recent texts: ['Talk to the chef indicated. He will teach you the more advan', 'aspects of cooking such as combining ingredients. He will al', 'teach you about your music player menu as well.', '']
+dialog not closing, recent texts: ['Talk to the chef indicated. He will teach you the more advan', 'aspects of cooking such as combining ingredients. He will al', 'teach you about your music player menu as well.', '']
+dialog not closing, recent texts: ['This is the base for many of the meals. To make dough we mus', 'mix flour and water. So first right click the bucket of wate', 'select use then left click on the pot of flour.', '']
+ok flour+water given
+stage make_dough hint=None flash=None
+ok flour+water ready
+ok flour+water ready
+ok dough mixed
+stage bake hint=('coord', 3075, 3081, 100) flash=None
+ok bread baked
+stage music_tab hint=None flash=13
+ok music tab opened
+stage chef_door hint=('coord', 3072, 3090, 150) flash=13
+ok newbie_door3
+ok through chef door
+stage run_controls hint=None flash=12
+ok run toggled (verified at quest door)
+stage quest_door hint=('coord', 3086, 3126, 150) flash=12
+ok newbie_door4
+ok through quest door
+stage quest_talk hint=('npc', 1295) flash=12
+talk near walk failed: walk to 3086,3121 timed out at (0, 3086, 3126) at (0, 3086, 3126)
+ok quest guide found
+dialog not closing, recent texts: ['Talk with the Quest Guide Instructor.', '', "He'll tell you all about quests.", '']
+stage quest_tab hint=None flash=2
+ok quest tab opened
+stage quest_recap hint=('npc', 1295) flash=2
+ok quest guide again
+dialog not closing, recent texts: ['Your Quest journal.', 'This is your quest journal, a list of all the quests in the ', 'Talk to the instructor again for an explanation.', '']
+dialog not closing, recent texts: ['Your Quest journal.', 'This is your quest journal, a list of all the quests in the ', 'Talk to the instructor again for an explanation.', '']
+stage ladder_down hint=('coord', 3088, 3119, 0) flash=2
+ok down the mine ladder
+stage mining_intro hint=('npc', 1519) flash=2
+talk near (0, 3079, 9505) reached
+ok miner found
+dialog not closing, recent texts: ["Next let's get you a weapon, or more to the point,", 'you can make your first weapon yourself.', "Don't panic, the mining instructor will help you.", "Talk to him and he'll tell you all about it."]
+dialog not closing, recent texts: ["Next let's get you a weapon, or more to the point,", 'you can make your first weapon yourself.', "Don't panic, the mining instructor will help you.", "Talk to him and he'll tell you all about it."]
+stage prospect hint=('coord', 3076, 9504, 100) flash=2
+ok copper prospected
+ok tin prospected
+talk near (0, 3079, 9505) reached
+ok miner again
+dialog not closing, recent texts: ['Talk to the mining instructor to find out about these types ', "ore and how you can mine them. He'll give you the needed too", 'too.', '']
+dialog not closing, recent texts: ['Talk to the mining instructor to find out about these types ', "ore and how you can mine them. He'll give you the needed too", 'too.', '']
+ok pickaxe given
+stage dig_tin_first hint=('coord', 3076, 9504, 100) flash=2
+ok tin_ore mined
+stage dig_copper hint=('coord', 3086, 9501, 100) flash=2
+ok copper_ore mined
+stage smelt hint=('coord', 3079, 9496, 150) flash=2
+ok bar smelted
+stage smith_talk hint=('npc', 1519) flash=2
+talk near (0, 3079, 9505) reached
+ok miner for hammer
+dialog not closing, recent texts: ['', "Speak to Dezzick and he'll show you how to make it into a", 'weapon.', '']
+dialog not closing, recent texts: ['', "Speak to Dezzick and he'll show you how to make it into a", 'weapon.', '']
+dialog not closing, recent texts: ['', "Speak to Dezzick and he'll show you how to make it into a", 'weapon.', '']
+ok hammer given
+stage smith_anvil hint=('coord', 3083, 9499, 100) flash=2
+ok smithing interface
+ok dagger smithed
+stage mine_exit hint=('coord', 3094, 9502, 125) flash=2
+ok out of the mine
+stage combat_intro hint=('npc', 1530) flash=2
+talk near (0, 3107, 9510) reached
+talk scan at (0, 3115, 9510): 10 npcs [(950, 10)], 143 NPC frames
+talk relogging to resync NPCs
+talk near (0, 3107, 9510) reached
+ok combat instructor found
+dialog not closing, recent texts: ['In this area you will find out about combat,', 'both melee and ranged.', "Speak to the guide and he'll tell you all about it.", '']
+dialog not closing, recent texts: ['Wielding weapons.', 'You now have access to a new interface. Click on the flashin', 'of a man, the one to the right of your backpack icon.', '']
+stage wield_tab hint=None flash=4
+ok worn tab opened
+stage wield hint=None flash=4
+ok dagger equipped (verified at next talk)
+stage sword_talk hint=('npc', 1530) flash=4
+ok combat instructor again
+dialog not closing, recent texts: ['If you check your worn inventory you will see it in your rig', 'hand. Clothes, armour, weapons and many other items are', 'equipped like this. You can unequip items by clicking on the', 'worn inventory. Now go and speak to Vannaka to continue.']
+dialog not closing, recent texts: ['In your worn inventory panel right click on the dagger and', "select the remove option from the drop down list. After you'", 'unequipped the dagger wield the sword and shield. As you pas', 'mouse over an item you will see its name appear at the top l']
+ok sword+shield given
+stage sword_equip hint=None flash=4
+ok bronze_sword held
+ok wooden_shield held
+stage combat_tab hint=None flash=0
+stage rat_cage hint=('coord', 3111, 9518, 125) flash=0
+rat cage try 0 at (0, 3107, 9510) door=(3111,9518)
+ok rat cage
+ok inside rat pit
+stage melee hint=('npc', 1533) flash=0
+melee try 1 at (0, 3109, 9519) rat=1525
+ok rat killed in melee
+ok bones picked up
+stage ranged_prep hint=('npc', 1530) flash=0
+ok rat cage exit
+talk near (0, 3107, 9510) reached
+ok combat instructor ranged
+dialog not closing, recent texts: ['', 'Pass through the gate and talk to Vannaka, he will give you ', 'next task.', '']
+dialog not closing, recent texts: ['Now you have a bow and some arrows. Before you can use', "them you'll need to equip them. Once equipped with the", 'ranging gear try killing another rat. Remember, to attack ri', 'click on the monster and select attack.']
+ok bow given
+ok shortbow held
+ok bronze_arrow held
+stage ranged_kill hint=('npc', 1533) flash=0
+ok rat killed at range
+stage ladder_bank hint=('coord', 3111, 9526, 125) flash=0
+ok up the bank ladder
+stage bank_booth hint=('coord', 3122, 3124, 125) flash=0
+dialog not closing, recent texts: ['Follow the path and you will come to the front of the buildi', "This is the 'Bank of RuneScape' where you can store all your", 'most valued items. To open your bank box just right click on', 'open booth indicated and select use.']
+dialog not closing, recent texts: ['Follow the path and you will come to the front of the buildi', "This is the 'Bank of RuneScape' where you can store all your", 'most valued items. To open your bank box just right click on', 'open booth indicated and select use.']
+dialog not closing, recent texts: ['You can store stuff here for safe keeping. If you die,', 'anything in your bank will be saved. To deposit something ri', "click it and select store. Once you've had a good look close", 'window and move on through the door indicated.']
+=== t19 clean_session 17:47:36 ===
+session freed for t19
+=== t19 tutorial 17:47:39 ===
+start (0, 3119, 3125)
+ok no design screen, already validated
+stage bank_door hint=('coord', 3124, 3124, 150) flash=None
+ok newbie_door6
+ok through bank door
+stage advisor_talk hint=('npc', 1310) flash=None
+ok advisor found
+dialog not closing, recent texts: ['', 'The guide here will tell you all about making cash. Just cli', "him to hear what he's going to say.", '']
+stage advisor_door hint=('coord', 3129, 3124, 150) flash=None
+ok newbie_door7
+ok through advisor door
+stage chapel_path hint=('npc', 1309) flash=None
+talk near (0, 3125, 3106) reached
+ok brother found
+dialog not closing, recent texts: ['Follow the path to the chapel and enter it.', 'Once inside talk to the monk.', "He'll tell you all about prayer.", '']
+stage prayer_tab hint=None flash=5
+ok prayer tab opened
+stage chapel_recap hint=('npc', 1309) flash=5
+ok brother prayer list
+dialog not closing, recent texts: ['Your prayer menu.', '', "Talk with Brother Brace and he'll tell you about prayers.", '']
+ok bones buried
+stage friends_tab hint=None flash=8
+ok friends tab opened
+stage ignore_tab hint=None flash=9
+ok ignore tab opened
+stage chapel_final hint=('npc', 1309) flash=9
+ok brother final
+dialog not closing, recent texts: ['The two lists; friends and ignore, can be very helpful for', 'keeping track of when your friends are online or for blockin', "messages from people you simply don't like. Speak with", 'Brother Brace and he will tell you more.']
+stage chapel_door hint=('coord', 3122, 3102, 125) flash=9
+ok newbie_door8
+ok out of chapel
+stage terrova_talk hint=('npc', 343) flash=9
+talk near (0, 3141, 3089) reached
+ok terrova found
+dialog not closing, recent texts: ['Just follow the path to the wizards house,', 'where you will be shown how to cast spells.', 'Just talk with the mage indicated to find out more.', '']
+dialog not closing, recent texts: ['Just follow the path to the wizards house,', 'where you will be shown how to cast spells.', 'Just talk with the mage indicated to find out more.', '']
+stage magic_tab hint=('npc', 343) flash=6
+ok terrova runes
+dialog not closing, recent texts: ['', 'Open up the Magic menu by clicking on the flashing icon next', 'the Prayer button you just learned about.', '']
+ok runes held
+ok magic tab opened
+stage wind hint=('npc', 341) flash=6
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3140, 3097), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3095), next chicken
+magic blocked at (0, 3142, 3094), next chicken
+stage wind_retry hint=('npc', 338) flash=6
+magic blocked at (0, 3142, 3093), next chicken
+magic blocked at (0, 3142, 3093), next chicken
+stage final hint=('npc', 343) flash=6
+talk near (0, 3141, 3089) reached
+ok terrova final
+dialog not closing, recent texts: ['', 'All you need to do now is move on to the mainland.', "Just speak with Terrova and he'll teleport you to Castle Lum", '']
+dialog not closing, recent texts: ['', 'All you need to do now is move on to the mainland.', "Just speak with Terrova and he'll teleport you to Castle Lum", '']
+dialog not closing, recent texts: ['', 'All you need to do now is move on to the mainland.', "Just speak with Terrova and he'll teleport you to Castle Lum", '']
+dialog not closing, recent texts: ['', 'All you need to do now is move on to the mainland.', "Just speak with Terrova and he'll teleport you to Castle Lum", '']
+ok teleported to mainland
+done (0, 3222, 3222)

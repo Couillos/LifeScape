@@ -1,0 +1,179 @@
+"""Requirement check and completion: Dragon Slayer.
+
+Guildmaster -> Oziach (maze key + map leads) -> Duke (shield) -> Ned
+(hire) -> Melzar's maze (part 1) -> Oracle door + chest (part 3) ->
+Wormbrain (part 2, 10000 coins) -> Klarense (buy ship, 2000 coins) ->
+repair the hull (3 planks, 12 nails) -> join the map -> Ned (map) ->
+sail to Crandor -> Elvarg with the anti-dragonbreath shield worn.
+
+Needs from the bank (auto-withdrawn as quest requirements): 12000
+coins, 3 planks, 12 nails, hammer, mind bomb, unfired bowl, lobster
+pot, silk, anti-dragonbreath shield. Combat expected throughout
+(Melzar, lesser demon, Elvarg); an admin-level account is assumed, so
+no extra gearing or food runs are scripted.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
+
+import gamedata as knowledge
+from gamedata import quest_requirements
+from lifescape.client import Unreachable
+from scripts.quests import solver
+from scripts.quests.common import run
+from scripts.tutorial import common as C
+
+QUEST = quest_requirements.by_key("dragon")
+
+WORN_COM = knowledge.com_id("wornitems:wear")
+DRAGONQUEST = knowledge.varp_id_by_name("dragonquest")
+COMPLETE = 10  # ^dragon_complete
+
+
+def _varp(bot, name):
+    return bot.world.varps.get(knowledge.varp_id_by_name(name), 0)
+
+
+def _count(bot, obj_id):
+    return bot.inventory().get(obj_id, 0)
+
+
+def _have(bot, name):
+    return _count(bot, solver.obj_id(name)) > 0
+
+
+def _wield(bot, item):
+    """Wear an item through its Wield op; a missing item is a SolverError."""
+    obj = solver.obj_id(item)
+    worn = bot.world.inv.get(WORN_COM, {})
+    if any(held == obj for held, _count in worn.values()):
+        return
+    try:
+        com, slot = C.inv_slot(bot, obj)
+    except KeyError:
+        raise solver.SolverError("no %s to wield at %s" % (item, bot.position))
+    bot.op_held(2, obj, slot, com)
+    target = bot.world.ticks + 30
+    while bot.world.ticks < target:
+        bot.pump(2)
+        worn = bot.world.inv.get(WORN_COM, {})
+        if any(held == obj for held, _count in worn.values()):
+            return
+    raise solver.SolverError("could not wield %s" % item)
+
+
+def _try_op(bot, func, *args, **kwargs):
+    """Best-effort loc op (ladders/gangplanks while routing the maze/ship)."""
+    try:
+        func(bot, *args, **kwargs)
+        return True
+    except (Unreachable, TimeoutError) as error:
+        print("optional op %s failed: %s" % (args, error), flush=True)
+        return False
+
+
+def _maze_room(bot, npc, key, door):
+    """Kill the room's monster, loot its key and unlock the next door."""
+    if not _have(bot, key) and not _have(bot, "mappart1"):
+        solver.attack(bot, (npc,), timeout=600)
+        solver.take_near(bot, key, timeout=300)
+    if _have(bot, key):
+        solver.use_item_on_loc(bot, key, (door,))
+
+
+def _combine_map(bot):
+    if _have(bot, "dragonmap"):
+        return
+    for part in ("mappart1", "mappart2", "mappart3"):
+        if not _have(bot, part):
+            raise solver.SolverError("missing map piece %s at %s" % (part, bot.position))
+    first = solver.obj_id("mappart1")
+    second = solver.obj_id("mappart2")
+    C.use_held_on_held(bot, first, second)
+    target = bot.world.ticks + 60
+    while bot.world.ticks < target and not _have(bot, "dragonmap"):
+        bot.pump(2)
+    if not _have(bot, "dragonmap"):
+        raise solver.SolverError("map pieces did not combine at %s" % (bot.position,))
+
+
+def _repair_ship(bot):
+    for _ in range(3):
+        solver.use_item_on_loc(bot, "woodplank", ("shiphole",))
+
+
+def solve(bot):
+    if bot.world.varps.get(DRAGONQUEST, 0) == COMPLETE:
+        return
+    # Champions' Guild -> Oziach: the guildmaster names him, Oziach hands
+    # over the maze key and the three map leads (plus the shield lead).
+    solver.talk_like(bot, "guildmaster", ["rune plate", "plate mail", "oziach"])
+    solver.talk_like(bot, "oziach", ["rune plate", "sell", "guildmaster", "prove", "fun",
+                                     "shield", "first", "second", "third", "dragon",
+                                     "everything", "together", "fare"])
+    # Anti-dragonbreath shield from the Duke (needs Oziach's shield lead).
+    if not _have(bot, "antidragonbreathshield"):
+        solver.talk_like(bot, "duke_of_lumbridge", ["shield", "dragon", "breath"])
+    if not _have(bot, "antidragonbreathshield"):
+        raise solver.SolverError("no anti-dragonbreath shield at %s" % (bot.position,))
+    # Hire Ned in Draynor; he sails once the ship is repaired and mapped.
+    solver.talk_like(bot, "ned", ["sailor", "crandor", "take me", "map"])
+    # Melzar's maze: rat -> ghost -> skeleton, then down the ladder for
+    # zombie -> Melzar -> lesser demon, then the chest holds part 1.
+    if not _have(bot, "mappart1"):
+        solver.use_item_on_loc(bot, "melzarkey", ("melzardoor",))
+        _maze_room(bot, "dragonslayer_giantrat", "redkey", "reddoor")
+        _maze_room(bot, "dragonslayer_ghost", "orangekey", "orangedoor")
+        _maze_room(bot, "dragonslayer_skeleton", "yellowkey", "yellowdoor")
+        _try_op(bot, solver.operate_loc, ("funladdertop",), 1, timeout=120)
+        _maze_room(bot, "dragonslayer_zombie", "bluekey", "bluedoor")
+        _maze_room(bot, "melzar_the_mad", "magentakey", "magentadoor")
+        _maze_room(bot, "dragonslayer_demon", "greenkey", "greendoor")
+        solver.operate_loc(bot, ("funchestshut",), 1, timeout=120)
+        solver.operate_loc(bot, ("funchestopen",), 1, timeout=120)
+    if not _have(bot, "mappart1"):
+        raise solver.SolverError("no Melzar map piece at %s" % (bot.position,))
+    # Oracle rhyme, then through the magic door (consumes the four items)
+    # to the dwarven-mine chest holding part 3.
+    if not _have(bot, "mappart3"):
+        solver.talk_like(bot, "oracle", ["map", "crandor", "piece"])
+        solver.operate_loc(bot, ("dragon_slayer_magic_door",), 1, timeout=120)
+        solver.operate_loc(bot, ("oraclechestshut",), 1, timeout=120)
+        solver.operate_loc(bot, ("oraclechestopen",), 1, timeout=120)
+    if not _have(bot, "mappart3"):
+        raise solver.SolverError("no oracle map piece at %s" % (bot.position,))
+    # Wormbrain in the Port Sarim jail sells part 2 for 10000 coins.
+    if not _have(bot, "mappart2"):
+        solver.talk_like(bot, "wormbrain", ["piece of map", "pay", "alright", "10,000"])
+    if not _have(bot, "mappart2"):
+        raise solver.SolverError("no Wormbrain map piece at %s" % (bot.position,))
+    # Buy the Lady Lumbridge from Klarense, patch her three holes, then
+    # join the map and hand it to Ned in Draynor.
+    if _varp(bot, "dragonquest") < 3:
+        solver.talk_like(bot, "klarense", ["buy", "yep", "sounds good"])
+    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_on",), 1, timeout=120)
+    _try_op(bot, solver.operate_loc, ("dragonshipladdertop",), 1, timeout=120)
+    if _varp(bot, "dragonquestvar") < 3:
+        _repair_ship(bot)
+    _try_op(bot, solver.operate_loc, ("dragonshipladder",), 1, timeout=120)
+    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_off",), 1, timeout=120)
+    _combine_map(bot)
+    solver.talk_like(bot, "ned", ["crandor island", "take me", "map", "sailor"])
+    # Board in Port Sarim, climb to Ned's cabin and sail to Crandor.
+    solver.operate_loc(bot, ("dragonshipgangplank_on",), 1, timeout=120)
+    solver.operate_loc(bot, ("dragonshipladdertop",), 1, timeout=120)
+    solver.talk_like(bot, "dragonslayer_ned", ["yep", "ready", "go"])
+    # Into the lair: rock opening, then the gates, then Elvarg himself.
+    # The shield must be worn or the dragon fire (max 70) is unsurvivable.
+    _wield(bot, "antidragonbreathshield")
+    solver.operate_loc(bot, ("crandor_rock_opening",), 1, timeout=120)
+    _try_op(bot, solver.operate_loc, ("elvarg_gate_right", "elvarg_gate_left"), 1, timeout=120)
+    solver.attack(bot, ("elvarg",), timeout=1200)
+    solver.wait_complete(bot)
+
+
+if __name__ == "__main__":
+    sys.exit(run(QUEST, solve=solve))

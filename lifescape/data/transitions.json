@@ -1,0 +1,11266 @@
+[
+ {
+  "climb_loc": 1764,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2856,
+    9569
+   ]
+  ],
+  "from": [
+   0,
+   2856,
+   9569
+  ],
+  "kind": "ladder",
+  "loc": 1764,
+  "name": "climbing_rope2_0",
+  "open_to": null,
+  "to": [
+   0,
+   2856,
+   3166
+  ]
+ },
+ {
+  "climb_loc": 2610,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2833,
+    9657
+   ]
+  ],
+  "from": [
+   0,
+   2833,
+   9657
+  ],
+  "kind": "ladder",
+  "loc": 2610,
+  "name": "crandor_climbing_rope_1",
+  "open_to": null,
+  "to": [
+   0,
+   2833,
+   3257
+  ]
+ },
+ {
+  "climb_loc": 2609,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2833,
+    3255
+   ],
+   [
+    2834,
+    3255
+   ],
+   [
+    2833,
+    3256
+   ],
+   [
+    2834,
+    3256
+   ]
+  ],
+  "from": [
+   0,
+   2833,
+   3255
+  ],
+  "kind": "other",
+  "loc": 2609,
+  "name": "crandor_rock_opening_2",
+  "open_to": null,
+  "to": [
+   0,
+   2833,
+   9658
+  ]
+ },
+ {
+  "climb_loc": 2617,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3077,
+    9768
+   ],
+   [
+    3078,
+    9768
+   ],
+   [
+    3077,
+    9769
+   ],
+   [
+    3078,
+    9769
+   ],
+   [
+    3077,
+    9770
+   ],
+   [
+    3078,
+    9770
+   ]
+  ],
+  "from": [
+   0,
+   3077,
+   9768
+  ],
+  "kind": "stair",
+  "loc": 2617,
+  "name": "cryptstairsup_3",
+  "open_to": null,
+  "to": [
+   0,
+   3115,
+   3356
+  ]
+ },
+ {
+  "climb_loc": 2592,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3048,
+    9640
+   ]
+  ],
+  "from": [
+   1,
+   3048,
+   9640
+  ],
+  "kind": "ladder",
+  "loc": 2592,
+  "name": "dragonshipladder_4",
+  "open_to": null,
+  "to": [
+   1,
+   3047,
+   3207
+  ]
+ },
+ {
+  "climb_loc": 2592,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3048,
+    9640
+   ]
+  ],
+  "from": [
+   2,
+   3048,
+   9640
+  ],
+  "kind": "ladder",
+  "loc": 2592,
+  "name": "dragonshipladder_5",
+  "open_to": null,
+  "to": [
+   1,
+   3047,
+   3207
+  ]
+ },
+ {
+  "climb_loc": 2592,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3048,
+    9640
+   ]
+  ],
+  "from": [
+   3,
+   3048,
+   9640
+  ],
+  "kind": "ladder",
+  "loc": 2592,
+  "name": "dragonshipladder_6",
+  "open_to": null,
+  "to": [
+   1,
+   3047,
+   3207
+  ]
+ },
+ {
+  "climb_loc": 2590,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3049,
+    3208
+   ]
+  ],
+  "from": [
+   1,
+   3049,
+   3208
+  ],
+  "kind": "ladder",
+  "loc": 2590,
+  "name": "dragonshipladdertop_7",
+  "open_to": null,
+  "to": [
+   1,
+   3047,
+   9640
+  ]
+ },
+ {
+  "climb_loc": 2605,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2932,
+    3240
+   ]
+  ],
+  "from": [
+   0,
+   2932,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 2605,
+  "name": "funladdertop_8",
+  "open_to": null,
+  "to": [
+   0,
+   2932,
+   9640
+  ]
+ },
+ {
+  "climb_loc": 60,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3013,
+    3244
+   ]
+  ],
+  "from": [
+   0,
+   3013,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 60,
+  "name": "jewellersladder_9",
+  "open_to": null,
+  "to": [
+   1,
+   3013,
+   3245
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2848,
+    3235
+   ]
+  ],
+  "from": [
+   0,
+   2848,
+   3235
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_10",
+  "open_to": null,
+  "to": [
+   1,
+   2848,
+   3235
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2923,
+    3240
+   ]
+  ],
+  "from": [
+   0,
+   2923,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_11",
+  "open_to": null,
+  "to": [
+   1,
+   2923,
+   3240
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2923,
+    3248
+   ]
+  ],
+  "from": [
+   0,
+   2923,
+   3248
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_12",
+  "open_to": null,
+  "to": [
+   1,
+   2923,
+   3248
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2928,
+    3256
+   ]
+  ],
+  "from": [
+   0,
+   2928,
+   3256
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_13",
+  "open_to": null,
+  "to": [
+   1,
+   2928,
+   3256
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2932,
+    3244
+   ]
+  ],
+  "from": [
+   1,
+   2932,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_14",
+  "open_to": null,
+  "to": [
+   2,
+   2932,
+   3244
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2934,
+    3244
+   ]
+  ],
+  "from": [
+   1,
+   2934,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_15",
+  "open_to": null,
+  "to": [
+   2,
+   2934,
+   3244
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2934,
+    3254
+   ]
+  ],
+  "from": [
+   1,
+   2934,
+   3254
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_16",
+  "open_to": null,
+  "to": [
+   2,
+   2934,
+   3254
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2938,
+    3250
+   ]
+  ],
+  "from": [
+   1,
+   2938,
+   3250
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_17",
+  "open_to": null,
+  "to": [
+   2,
+   2938,
+   3250
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2940,
+    3257
+   ]
+  ],
+  "from": [
+   1,
+   2940,
+   3257
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_18",
+  "open_to": null,
+  "to": [
+   2,
+   2940,
+   3257
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2915,
+    3323
+   ]
+  ],
+  "from": [
+   0,
+   2915,
+   3323
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_19",
+  "open_to": null,
+  "to": [
+   1,
+   2915,
+   3323
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2948,
+    3213
+   ]
+  ],
+  "from": [
+   0,
+   2948,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_20",
+  "open_to": null,
+  "to": [
+   1,
+   2948,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2946,
+    3378
+   ]
+  ],
+  "from": [
+   0,
+   2946,
+   3378
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_21",
+  "open_to": null,
+  "to": [
+   1,
+   2946,
+   3378
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3389
+   ]
+  ],
+  "from": [
+   0,
+   2954,
+   3389
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_22",
+  "open_to": null,
+  "to": [
+   1,
+   2954,
+   3389
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3351
+   ]
+  ],
+  "from": [
+   0,
+   2983,
+   3351
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_23",
+  "open_to": null,
+  "to": [
+   1,
+   2983,
+   3351
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2994,
+    3341
+   ]
+  ],
+  "from": [
+   0,
+   2994,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_24",
+  "open_to": null,
+  "to": [
+   1,
+   2994,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3352
+   ]
+  ],
+  "from": [
+   1,
+   2983,
+   3352
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_25",
+  "open_to": null,
+  "to": [
+   2,
+   2983,
+   3352
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2996,
+    3341
+   ]
+  ],
+  "from": [
+   1,
+   2996,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_26",
+  "open_to": null,
+  "to": [
+   2,
+   2996,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3351
+   ]
+  ],
+  "from": [
+   2,
+   2983,
+   3351
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_27",
+  "open_to": null,
+  "to": [
+   3,
+   2983,
+   3351
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2994,
+    3341
+   ]
+  ],
+  "from": [
+   2,
+   2994,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_28",
+  "open_to": null,
+  "to": [
+   3,
+   2994,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2962,
+    3394
+   ]
+  ],
+  "from": [
+   1,
+   2962,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_29",
+  "open_to": null,
+  "to": [
+   2,
+   2962,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2969,
+    3394
+   ]
+  ],
+  "from": [
+   1,
+   2969,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_30",
+  "open_to": null,
+  "to": [
+   2,
+   2969,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2962,
+    3394
+   ]
+  ],
+  "from": [
+   2,
+   2962,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_31",
+  "open_to": null,
+  "to": [
+   3,
+   2962,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2969,
+    3394
+   ]
+  ],
+  "from": [
+   2,
+   2969,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_32",
+  "open_to": null,
+  "to": [
+   3,
+   2969,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3011,
+    3235
+   ]
+  ],
+  "from": [
+   0,
+   3011,
+   3235
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_33",
+  "open_to": null,
+  "to": [
+   1,
+   3011,
+   3235
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3013,
+    3203
+   ]
+  ],
+  "from": [
+   0,
+   3013,
+   3203
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_34",
+  "open_to": null,
+  "to": [
+   1,
+   3013,
+   3203
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3027,
+    3353
+   ]
+  ],
+  "from": [
+   0,
+   3027,
+   3353
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_35",
+  "open_to": null,
+  "to": [
+   1,
+   3027,
+   3353
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3042,
+    3379
+   ]
+  ],
+  "from": [
+   1,
+   3042,
+   3379
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_36",
+  "open_to": null,
+  "to": [
+   2,
+   3042,
+   3379
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3021,
+    3510
+   ]
+  ],
+  "from": [
+   0,
+   3021,
+   3510
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_37",
+  "open_to": null,
+  "to": [
+   1,
+   3021,
+   3510
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3017,
+    3516
+   ]
+  ],
+  "from": [
+   1,
+   3017,
+   3516
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_38",
+  "open_to": null,
+  "to": [
+   2,
+   3017,
+   3516
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   0,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_39",
+  "open_to": null,
+  "to": [
+   1,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3116,
+    3126
+   ]
+  ],
+  "from": [
+   0,
+   3116,
+   3126
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_40",
+  "open_to": null,
+  "to": [
+   1,
+   3116,
+   3126
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3123,
+    3128
+   ]
+  ],
+  "from": [
+   0,
+   3123,
+   3128
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_41",
+  "open_to": null,
+  "to": [
+   1,
+   3123,
+   3128
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3126,
+    3124
+   ]
+  ],
+  "from": [
+   1,
+   3126,
+   3124
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_42",
+  "open_to": null,
+  "to": [
+   2,
+   3126,
+   3124
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3083,
+    3513
+   ]
+  ],
+  "from": [
+   0,
+   3083,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_43",
+  "open_to": null,
+  "to": [
+   1,
+   3083,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3096,
+    3511
+   ]
+  ],
+  "from": [
+   0,
+   3096,
+   3511
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_44",
+  "open_to": null,
+  "to": [
+   1,
+   3096,
+   3511
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3139,
+    3078
+   ]
+  ],
+  "from": [
+   0,
+   3139,
+   3078
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_45",
+  "open_to": null,
+  "to": [
+   1,
+   3139,
+   3078
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3164,
+    3307
+   ]
+  ],
+  "from": [
+   0,
+   3164,
+   3307
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_46",
+  "open_to": null,
+  "to": [
+   1,
+   3164,
+   3307
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3144,
+    3446
+   ]
+  ],
+  "from": [
+   1,
+   3144,
+   3446
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_47",
+  "open_to": null,
+  "to": [
+   2,
+   3144,
+   3446
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3213
+   ]
+  ],
+  "from": [
+   0,
+   3229,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_48",
+  "open_to": null,
+  "to": [
+   1,
+   3229,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3224
+   ]
+  ],
+  "from": [
+   0,
+   3229,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_49",
+  "open_to": null,
+  "to": [
+   1,
+   3229,
+   3224
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3203,
+    3389
+   ]
+  ],
+  "from": [
+   0,
+   3203,
+   3389
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_50",
+  "open_to": null,
+  "to": [
+   1,
+   3203,
+   3389
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3224,
+    3388
+   ]
+  ],
+  "from": [
+   0,
+   3224,
+   3388
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_51",
+  "open_to": null,
+  "to": [
+   1,
+   3224,
+   3388
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3252,
+    3384
+   ]
+  ],
+  "from": [
+   0,
+   3252,
+   3384
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_52",
+  "open_to": null,
+  "to": [
+   1,
+   3252,
+   3384
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3434
+   ]
+  ],
+  "from": [
+   0,
+   3202,
+   3434
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_53",
+  "open_to": null,
+  "to": [
+   1,
+   3202,
+   3434
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3395
+   ]
+  ],
+  "from": [
+   0,
+   3205,
+   3395
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_54",
+  "open_to": null,
+  "to": [
+   1,
+   3205,
+   3395
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3214,
+    3410
+   ]
+  ],
+  "from": [
+   0,
+   3214,
+   3410
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_55",
+  "open_to": null,
+  "to": [
+   1,
+   3214,
+   3410
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3233,
+    3424
+   ]
+  ],
+  "from": [
+   0,
+   3233,
+   3424
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_56",
+  "open_to": null,
+  "to": [
+   1,
+   3233,
+   3424
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3247,
+    3409
+   ]
+  ],
+  "from": [
+   0,
+   3247,
+   3409
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_57",
+  "open_to": null,
+  "to": [
+   1,
+   3247,
+   3409
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3262,
+    3403
+   ]
+  ],
+  "from": [
+   0,
+   3262,
+   3403
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_58",
+  "open_to": null,
+  "to": [
+   1,
+   3262,
+   3403
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3497
+   ]
+  ],
+  "from": [
+   2,
+   3205,
+   3497
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_59",
+  "open_to": null,
+  "to": [
+   3,
+   3205,
+   3497
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3284,
+    3165
+   ]
+  ],
+  "from": [
+   0,
+   3284,
+   3165
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_60",
+  "open_to": null,
+  "to": [
+   1,
+   3284,
+   3165
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3286,
+    3192
+   ]
+  ],
+  "from": [
+   0,
+   3286,
+   3192
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_61",
+  "open_to": null,
+  "to": [
+   1,
+   3286,
+   3192
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3283,
+    3398
+   ]
+  ],
+  "from": [
+   0,
+   3283,
+   3398
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_62",
+  "open_to": null,
+  "to": [
+   1,
+   3283,
+   3398
+  ]
+ },
+ {
+  "climb_loc": 1747,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3310,
+    3509
+   ]
+  ],
+  "from": [
+   0,
+   3310,
+   3509
+  ],
+  "kind": "ladder",
+  "loc": 1747,
+  "name": "ladder_63",
+  "open_to": null,
+  "to": [
+   1,
+   3310,
+   3509
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2924,
+    3250
+   ]
+  ],
+  "from": [
+   0,
+   2924,
+   3250
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_64",
+  "open_to": null,
+  "to": [
+   0,
+   2924,
+   9650
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2939,
+    3257
+   ]
+  ],
+  "from": [
+   0,
+   2939,
+   3257
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_65",
+  "open_to": null,
+  "to": [
+   0,
+   2939,
+   9657
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3116,
+    3452
+   ]
+  ],
+  "from": [
+   0,
+   3116,
+   3452
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_66",
+  "open_to": null,
+  "to": [
+   0,
+   3116,
+   9852
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3244,
+    3383
+   ]
+  ],
+  "from": [
+   0,
+   3244,
+   3383
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_67",
+  "open_to": null,
+  "to": [
+   0,
+   3244,
+   9783
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3231,
+    3401
+   ]
+  ],
+  "from": [
+   0,
+   3231,
+   3401
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_68",
+  "open_to": null,
+  "to": [
+   0,
+   3231,
+   9801
+  ]
+ },
+ {
+  "climb_loc": 1754,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3230,
+    3504
+   ]
+  ],
+  "from": [
+   0,
+   3230,
+   3504
+  ],
+  "kind": "ladder",
+  "loc": 1754,
+  "name": "ladder_cellar_69",
+  "open_to": null,
+  "to": [
+   0,
+   3230,
+   9904
+  ]
+ },
+ {
+  "climb_loc": 1759,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3008,
+    3150
+   ]
+  ],
+  "from": [
+   0,
+   3008,
+   3150
+  ],
+  "kind": "ladder",
+  "loc": 1759,
+  "name": "ladder_cellar_inside_down_70",
+  "open_to": null,
+  "to": [
+   0,
+   3008,
+   9550
+  ]
+ },
+ {
+  "climb_loc": 1759,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3088,
+    3571
+   ]
+  ],
+  "from": [
+   0,
+   3088,
+   3571
+  ],
+  "kind": "ladder",
+  "loc": 1759,
+  "name": "ladder_cellar_inside_down_71",
+  "open_to": null,
+  "to": [
+   0,
+   3088,
+   9971
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2946,
+    3363
+   ]
+  ],
+  "from": [
+   0,
+   2946,
+   3363
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_72",
+  "open_to": null,
+  "to": [
+   1,
+   2946,
+   3363
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3390
+   ]
+  ],
+  "from": [
+   1,
+   2954,
+   3390
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_73",
+  "open_to": null,
+  "to": [
+   2,
+   2954,
+   3390
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3035,
+    3344
+   ]
+  ],
+  "from": [
+   0,
+   3035,
+   3344
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_74",
+  "open_to": null,
+  "to": [
+   1,
+   3035,
+   3344
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    3354
+   ]
+  ],
+  "from": [
+   0,
+   3059,
+   3354
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_75",
+  "open_to": null,
+  "to": [
+   1,
+   3059,
+   3354
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    3357
+   ]
+  ],
+  "from": [
+   0,
+   3059,
+   3357
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_76",
+  "open_to": null,
+  "to": [
+   1,
+   3059,
+   3357
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3050,
+    3355
+   ]
+  ],
+  "from": [
+   1,
+   3050,
+   3355
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_77",
+  "open_to": null,
+  "to": [
+   2,
+   3050,
+   3355
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3015,
+    3519
+   ]
+  ],
+  "from": [
+   0,
+   3015,
+   3519
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_78",
+  "open_to": null,
+  "to": [
+   1,
+   3015,
+   3519
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3518
+   ]
+  ],
+  "from": [
+   0,
+   3022,
+   3518
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_79",
+  "open_to": null,
+  "to": [
+   1,
+   3022,
+   3518
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3016,
+    3519
+   ]
+  ],
+  "from": [
+   1,
+   3016,
+   3519
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_80",
+  "open_to": null,
+  "to": [
+   2,
+   3016,
+   3519
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3023,
+    3513
+   ]
+  ],
+  "from": [
+   1,
+   3023,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_81",
+  "open_to": null,
+  "to": [
+   2,
+   3023,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3025,
+    3513
+   ]
+  ],
+  "from": [
+   1,
+   3025,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_82",
+  "open_to": null,
+  "to": [
+   2,
+   3025,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3096,
+    3433
+   ]
+  ],
+  "from": [
+   0,
+   3096,
+   3433
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_83",
+  "open_to": null,
+  "to": [
+   1,
+   3096,
+   3433
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3097,
+    3433
+   ]
+  ],
+  "from": [
+   1,
+   3097,
+   3433
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_84",
+  "open_to": null,
+  "to": [
+   2,
+   3097,
+   3433
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3183,
+    3447
+   ]
+  ],
+  "from": [
+   0,
+   3183,
+   3447
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_85",
+  "open_to": null,
+  "to": [
+   1,
+   3183,
+   3447
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3416
+   ]
+  ],
+  "from": [
+   0,
+   3202,
+   3416
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_86",
+  "open_to": null,
+  "to": [
+   1,
+   3202,
+   3416
+  ]
+ },
+ {
+  "climb_loc": 1750,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3225,
+    3472
+   ]
+  ],
+  "from": [
+   1,
+   3225,
+   3472
+  ],
+  "kind": "ladder",
+  "loc": 1750,
+  "name": "ladder_directional_87",
+  "open_to": null,
+  "to": [
+   2,
+   3225,
+   3472
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_88",
+  "open_to": null,
+  "to": [
+   2,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_89",
+  "open_to": null,
+  "to": [
+   0,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_90",
+  "open_to": null,
+  "to": [
+   2,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_91",
+  "open_to": null,
+  "to": [
+   0,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_92",
+  "open_to": null,
+  "to": [
+   2,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_93",
+  "open_to": null,
+  "to": [
+   0,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_94",
+  "open_to": null,
+  "to": [
+   2,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_95",
+  "open_to": null,
+  "to": [
+   0,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_96",
+  "open_to": null,
+  "to": [
+   3,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_97",
+  "open_to": null,
+  "to": [
+   1,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_98",
+  "open_to": null,
+  "to": [
+   3,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_99",
+  "open_to": null,
+  "to": [
+   1,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   2,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_100",
+  "open_to": null,
+  "to": [
+   3,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   2,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_101",
+  "open_to": null,
+  "to": [
+   1,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   2,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_102",
+  "open_to": null,
+  "to": [
+   3,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   2,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_103",
+  "open_to": null,
+  "to": [
+   1,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3164,
+    3307
+   ]
+  ],
+  "from": [
+   1,
+   3164,
+   3307
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_104",
+  "open_to": null,
+  "to": [
+   2,
+   3164,
+   3307
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3164,
+    3307
+   ]
+  ],
+  "from": [
+   1,
+   3164,
+   3307
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_105",
+  "open_to": null,
+  "to": [
+   0,
+   3164,
+   3307
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3213
+   ]
+  ],
+  "from": [
+   1,
+   3229,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_106",
+  "open_to": null,
+  "to": [
+   2,
+   3229,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3213
+   ]
+  ],
+  "from": [
+   1,
+   3229,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_107",
+  "open_to": null,
+  "to": [
+   0,
+   3229,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3224
+   ]
+  ],
+  "from": [
+   1,
+   3229,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_108",
+  "open_to": null,
+  "to": [
+   2,
+   3229,
+   3224
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3224
+   ]
+  ],
+  "from": [
+   1,
+   3229,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_109",
+  "open_to": null,
+  "to": [
+   0,
+   3229,
+   3224
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 2,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3286,
+    3192
+   ]
+  ],
+  "from": [
+   1,
+   3286,
+   3192
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_110",
+  "open_to": null,
+  "to": [
+   2,
+   3286,
+   3192
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3286,
+    3192
+   ]
+  ],
+  "from": [
+   1,
+   3286,
+   3192
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_111",
+  "open_to": null,
+  "to": [
+   0,
+   3286,
+   3192
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2923,
+    3240
+   ]
+  ],
+  "from": [
+   1,
+   2923,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_112",
+  "open_to": null,
+  "to": [
+   0,
+   2923,
+   3240
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2923,
+    3248
+   ]
+  ],
+  "from": [
+   1,
+   2923,
+   3248
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_113",
+  "open_to": null,
+  "to": [
+   0,
+   2923,
+   3248
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2925,
+    3258
+   ]
+  ],
+  "from": [
+   1,
+   2925,
+   3258
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_114",
+  "open_to": null,
+  "to": [
+   0,
+   2925,
+   3258
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2928,
+    3256
+   ]
+  ],
+  "from": [
+   1,
+   2928,
+   3256
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_115",
+  "open_to": null,
+  "to": [
+   0,
+   2928,
+   3256
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2929,
+    3240
+   ]
+  ],
+  "from": [
+   1,
+   2929,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_116",
+  "open_to": null,
+  "to": [
+   0,
+   2929,
+   3240
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2937,
+    3240
+   ]
+  ],
+  "from": [
+   1,
+   2937,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_117",
+  "open_to": null,
+  "to": [
+   0,
+   2937,
+   3240
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2929,
+    3245
+   ]
+  ],
+  "from": [
+   2,
+   2929,
+   3245
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_118",
+  "open_to": null,
+  "to": [
+   1,
+   2929,
+   3245
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2930,
+    3258
+   ]
+  ],
+  "from": [
+   2,
+   2930,
+   3258
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_119",
+  "open_to": null,
+  "to": [
+   1,
+   2930,
+   3258
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2932,
+    3244
+   ]
+  ],
+  "from": [
+   2,
+   2932,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_120",
+  "open_to": null,
+  "to": [
+   1,
+   2932,
+   3244
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2934,
+    3243
+   ]
+  ],
+  "from": [
+   2,
+   2934,
+   3243
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_121",
+  "open_to": null,
+  "to": [
+   1,
+   2934,
+   3243
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2934,
+    3244
+   ]
+  ],
+  "from": [
+   2,
+   2934,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_122",
+  "open_to": null,
+  "to": [
+   1,
+   2934,
+   3244
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2934,
+    3254
+   ]
+  ],
+  "from": [
+   2,
+   2934,
+   3254
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_123",
+  "open_to": null,
+  "to": [
+   1,
+   2934,
+   3254
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2937,
+    3247
+   ]
+  ],
+  "from": [
+   2,
+   2937,
+   3247
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_124",
+  "open_to": null,
+  "to": [
+   1,
+   2937,
+   3247
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2938,
+    3250
+   ]
+  ],
+  "from": [
+   2,
+   2938,
+   3250
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_125",
+  "open_to": null,
+  "to": [
+   1,
+   2938,
+   3250
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2938,
+    3255
+   ]
+  ],
+  "from": [
+   2,
+   2938,
+   3255
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_126",
+  "open_to": null,
+  "to": [
+   1,
+   2938,
+   3255
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2940,
+    3240
+   ]
+  ],
+  "from": [
+   2,
+   2940,
+   3240
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_127",
+  "open_to": null,
+  "to": [
+   1,
+   2940,
+   3240
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2940,
+    3257
+   ]
+  ],
+  "from": [
+   2,
+   2940,
+   3257
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_128",
+  "open_to": null,
+  "to": [
+   1,
+   2940,
+   3257
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2915,
+    3323
+   ]
+  ],
+  "from": [
+   1,
+   2915,
+   3323
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_129",
+  "open_to": null,
+  "to": [
+   0,
+   2915,
+   3323
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2948,
+    3213
+   ]
+  ],
+  "from": [
+   1,
+   2948,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_130",
+  "open_to": null,
+  "to": [
+   0,
+   2948,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2946,
+    3378
+   ]
+  ],
+  "from": [
+   1,
+   2946,
+   3378
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_131",
+  "open_to": null,
+  "to": [
+   0,
+   2946,
+   3378
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3389
+   ]
+  ],
+  "from": [
+   1,
+   2954,
+   3389
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_132",
+  "open_to": null,
+  "to": [
+   0,
+   2954,
+   3389
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3351
+   ]
+  ],
+  "from": [
+   1,
+   2983,
+   3351
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_133",
+  "open_to": null,
+  "to": [
+   0,
+   2983,
+   3351
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2994,
+    3341
+   ]
+  ],
+  "from": [
+   1,
+   2994,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_134",
+  "open_to": null,
+  "to": [
+   0,
+   2994,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3352
+   ]
+  ],
+  "from": [
+   2,
+   2983,
+   3352
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_135",
+  "open_to": null,
+  "to": [
+   1,
+   2983,
+   3352
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2996,
+    3341
+   ]
+  ],
+  "from": [
+   2,
+   2996,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_136",
+  "open_to": null,
+  "to": [
+   1,
+   2996,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2983,
+    3351
+   ]
+  ],
+  "from": [
+   3,
+   2983,
+   3351
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_137",
+  "open_to": null,
+  "to": [
+   2,
+   2983,
+   3351
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2994,
+    3341
+   ]
+  ],
+  "from": [
+   3,
+   2994,
+   3341
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_138",
+  "open_to": null,
+  "to": [
+   2,
+   2994,
+   3341
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3011,
+    3235
+   ]
+  ],
+  "from": [
+   1,
+   3011,
+   3235
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_139",
+  "open_to": null,
+  "to": [
+   0,
+   3011,
+   3235
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3013,
+    3203
+   ]
+  ],
+  "from": [
+   1,
+   3013,
+   3203
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_140",
+  "open_to": null,
+  "to": [
+   0,
+   3013,
+   3203
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3013,
+    3244
+   ]
+  ],
+  "from": [
+   1,
+   3013,
+   3244
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_141",
+  "open_to": null,
+  "to": [
+   0,
+   3013,
+   3244
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3027,
+    3353
+   ]
+  ],
+  "from": [
+   1,
+   3027,
+   3353
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_142",
+  "open_to": null,
+  "to": [
+   0,
+   3027,
+   3353
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3042,
+    3379
+   ]
+  ],
+  "from": [
+   2,
+   3042,
+   3379
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_143",
+  "open_to": null,
+  "to": [
+   1,
+   3042,
+   3379
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3021,
+    3510
+   ]
+  ],
+  "from": [
+   1,
+   3021,
+   3510
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_144",
+  "open_to": null,
+  "to": [
+   0,
+   3021,
+   3510
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3046,
+    3483
+   ]
+  ],
+  "from": [
+   1,
+   3046,
+   3483
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_145",
+  "open_to": null,
+  "to": [
+   0,
+   3046,
+   3483
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3057,
+    3483
+   ]
+  ],
+  "from": [
+   1,
+   3057,
+   3483
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_146",
+  "open_to": null,
+  "to": [
+   0,
+   3057,
+   3483
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3017,
+    3516
+   ]
+  ],
+  "from": [
+   2,
+   3017,
+   3516
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_147",
+  "open_to": null,
+  "to": [
+   1,
+   3017,
+   3516
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   3,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_148",
+  "open_to": null,
+  "to": [
+   2,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   3,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_149",
+  "open_to": null,
+  "to": [
+   2,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   3,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_150",
+  "open_to": null,
+  "to": [
+   2,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   3,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_151",
+  "open_to": null,
+  "to": [
+   2,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3116,
+    3126
+   ]
+  ],
+  "from": [
+   1,
+   3116,
+   3126
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_152",
+  "open_to": null,
+  "to": [
+   0,
+   3116,
+   3126
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3123,
+    3128
+   ]
+  ],
+  "from": [
+   1,
+   3123,
+   3128
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_153",
+  "open_to": null,
+  "to": [
+   0,
+   3123,
+   3128
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3126,
+    3124
+   ]
+  ],
+  "from": [
+   2,
+   3126,
+   3124
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_154",
+  "open_to": null,
+  "to": [
+   1,
+   3126,
+   3124
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3083,
+    3513
+   ]
+  ],
+  "from": [
+   1,
+   3083,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_155",
+  "open_to": null,
+  "to": [
+   0,
+   3083,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3096,
+    3511
+   ]
+  ],
+  "from": [
+   1,
+   3096,
+   3511
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_156",
+  "open_to": null,
+  "to": [
+   0,
+   3096,
+   3511
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3139,
+    3078
+   ]
+  ],
+  "from": [
+   1,
+   3139,
+   3078
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_157",
+  "open_to": null,
+  "to": [
+   0,
+   3139,
+   3078
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3164,
+    3307
+   ]
+  ],
+  "from": [
+   2,
+   3164,
+   3307
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_158",
+  "open_to": null,
+  "to": [
+   1,
+   3164,
+   3307
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3187,
+    3414
+   ]
+  ],
+  "from": [
+   1,
+   3187,
+   3414
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_159",
+  "open_to": null,
+  "to": [
+   0,
+   3187,
+   3414
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3144,
+    3446
+   ]
+  ],
+  "from": [
+   2,
+   3144,
+   3446
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_160",
+  "open_to": null,
+  "to": [
+   1,
+   3144,
+   3446
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3213
+   ]
+  ],
+  "from": [
+   2,
+   3229,
+   3213
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_161",
+  "open_to": null,
+  "to": [
+   1,
+   3229,
+   3213
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3229,
+    3224
+   ]
+  ],
+  "from": [
+   2,
+   3229,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_162",
+  "open_to": null,
+  "to": [
+   1,
+   3229,
+   3224
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3203,
+    3389
+   ]
+  ],
+  "from": [
+   1,
+   3203,
+   3389
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_163",
+  "open_to": null,
+  "to": [
+   0,
+   3203,
+   3389
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3224,
+    3388
+   ]
+  ],
+  "from": [
+   1,
+   3224,
+   3388
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_164",
+  "open_to": null,
+  "to": [
+   0,
+   3224,
+   3388
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3252,
+    3384
+   ]
+  ],
+  "from": [
+   1,
+   3252,
+   3384
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_165",
+  "open_to": null,
+  "to": [
+   0,
+   3252,
+   3384
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3434
+   ]
+  ],
+  "from": [
+   1,
+   3202,
+   3434
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_166",
+  "open_to": null,
+  "to": [
+   0,
+   3202,
+   3434
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3395
+   ]
+  ],
+  "from": [
+   1,
+   3205,
+   3395
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_167",
+  "open_to": null,
+  "to": [
+   0,
+   3205,
+   3395
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3214,
+    3410
+   ]
+  ],
+  "from": [
+   1,
+   3214,
+   3410
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_168",
+  "open_to": null,
+  "to": [
+   0,
+   3214,
+   3410
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3233,
+    3424
+   ]
+  ],
+  "from": [
+   1,
+   3233,
+   3424
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_169",
+  "open_to": null,
+  "to": [
+   0,
+   3233,
+   3424
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3247,
+    3409
+   ]
+  ],
+  "from": [
+   1,
+   3247,
+   3409
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_170",
+  "open_to": null,
+  "to": [
+   0,
+   3247,
+   3409
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3262,
+    3403
+   ]
+  ],
+  "from": [
+   1,
+   3262,
+   3403
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_171",
+  "open_to": null,
+  "to": [
+   0,
+   3262,
+   3403
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3497
+   ]
+  ],
+  "from": [
+   3,
+   3205,
+   3497
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_172",
+  "open_to": null,
+  "to": [
+   2,
+   3205,
+   3497
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3284,
+    3165
+   ]
+  ],
+  "from": [
+   1,
+   3284,
+   3165
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_173",
+  "open_to": null,
+  "to": [
+   0,
+   3284,
+   3165
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3286,
+    3192
+   ]
+  ],
+  "from": [
+   2,
+   3286,
+   3192
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_174",
+  "open_to": null,
+  "to": [
+   1,
+   3286,
+   3192
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3283,
+    3398
+   ]
+  ],
+  "from": [
+   1,
+   3283,
+   3398
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_175",
+  "open_to": null,
+  "to": [
+   0,
+   3283,
+   3398
+  ]
+ },
+ {
+  "climb_loc": 1746,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3310,
+    3509
+   ]
+  ],
+  "from": [
+   1,
+   3310,
+   3509
+  ],
+  "kind": "ladder",
+  "loc": 1746,
+  "name": "laddertop_176",
+  "open_to": null,
+  "to": [
+   0,
+   3310,
+   3509
+  ]
+ },
+ {
+  "climb_loc": 1734,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    9776
+   ],
+   [
+    3060,
+    9776
+   ],
+   [
+    3061,
+    9776
+   ],
+   [
+    3059,
+    9777
+   ],
+   [
+    3060,
+    9777
+   ],
+   [
+    3061,
+    9777
+   ]
+  ],
+  "from": [
+   0,
+   3059,
+   9776
+  ],
+  "kind": "other",
+  "loc": 1734,
+  "name": "loc_1734_177",
+  "open_to": null,
+  "to": [
+   0,
+   3062,
+   3376
+  ]
+ },
+ {
+  "climb_loc": 1734,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3187,
+    9833
+   ],
+   [
+    3188,
+    9833
+   ],
+   [
+    3189,
+    9833
+   ],
+   [
+    3187,
+    9834
+   ],
+   [
+    3188,
+    9834
+   ],
+   [
+    3189,
+    9834
+   ]
+  ],
+  "from": [
+   0,
+   3187,
+   9833
+  ],
+  "kind": "other",
+  "loc": 1734,
+  "name": "loc_1734_178",
+  "open_to": null,
+  "to": [
+   0,
+   3186,
+   3433
+  ]
+ },
+ {
+  "climb_loc": 1736,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2968,
+    3347
+   ],
+   [
+    2969,
+    3347
+   ]
+  ],
+  "from": [
+   1,
+   2968,
+   3347
+  ],
+  "kind": "other",
+  "loc": 1736,
+  "name": "loc_1736_179",
+  "open_to": null,
+  "to": [
+   0,
+   2971,
+   3347
+  ]
+ },
+ {
+  "climb_loc": 882,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3237,
+    3458
+   ]
+  ],
+  "from": [
+   0,
+   3237,
+   3458
+  ],
+  "kind": "trapdoor",
+  "loc": 881,
+  "name": "manholeclosed_180",
+  "open_to": 882,
+  "to": [
+   0,
+   3237,
+   9858
+  ]
+ },
+ {
+  "climb_loc": 2113,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3018,
+    3339
+   ]
+  ],
+  "from": [
+   0,
+   3018,
+   3339
+  ],
+  "kind": "ladder",
+  "loc": 2113,
+  "name": "miningguildladder_181",
+  "open_to": null,
+  "to": [
+   0,
+   3018,
+   9739
+  ]
+ },
+ {
+  "climb_loc": 2113,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    3338
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   3338
+  ],
+  "kind": "ladder",
+  "loc": 2113,
+  "name": "miningguildladder_182",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   9738
+  ]
+ },
+ {
+  "climb_loc": 2113,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    3340
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   3340
+  ],
+  "kind": "ladder",
+  "loc": 2113,
+  "name": "miningguildladder_183",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   9740
+  ]
+ },
+ {
+  "climb_loc": 2113,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3020,
+    3339
+   ]
+  ],
+  "from": [
+   0,
+   3020,
+   3339
+  ],
+  "kind": "ladder",
+  "loc": 2113,
+  "name": "miningguildladder_184",
+  "open_to": null,
+  "to": [
+   0,
+   3020,
+   9739
+  ]
+ },
+ {
+  "climb_loc": 2641,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": "Prayer Guild ladder: members of the order only (%prayer_guild)",
+  "footprint": [
+   [
+    3046,
+    3483
+   ]
+  ],
+  "from": [
+   0,
+   3046,
+   3483
+  ],
+  "kind": "ladder",
+  "loc": 2641,
+  "name": "monasteryladder_185",
+  "open_to": null,
+  "to": [
+   1,
+   3046,
+   3483
+  ]
+ },
+ {
+  "climb_loc": 2641,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": "Prayer Guild ladder: members of the order only (%prayer_guild)",
+  "footprint": [
+   [
+    3057,
+    3483
+   ]
+  ],
+  "from": [
+   0,
+   3057,
+   3483
+  ],
+  "kind": "ladder",
+  "loc": 2641,
+  "name": "monasteryladder_186",
+  "open_to": null,
+  "to": [
+   1,
+   3057,
+   3483
+  ]
+ },
+ {
+  "climb_loc": 3028,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3088,
+    9519
+   ]
+  ],
+  "from": [
+   0,
+   3088,
+   9519
+  ],
+  "kind": "ladder",
+  "loc": 3028,
+  "name": "newbieladder1_187",
+  "open_to": null,
+  "to": [
+   0,
+   3088,
+   3119
+  ]
+ },
+ {
+  "climb_loc": 3030,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": "Tutorial Island ladder: tutorial progress gate",
+  "footprint": [
+   [
+    3111,
+    9526
+   ]
+  ],
+  "from": [
+   0,
+   3111,
+   9526
+  ],
+  "kind": "ladder",
+  "loc": 3030,
+  "name": "newbieladder2_188",
+  "open_to": null,
+  "to": [
+   0,
+   3111,
+   3126
+  ]
+ },
+ {
+  "climb_loc": 3029,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": "Tutorial Island ladder: tutorial progress gate",
+  "footprint": [
+   [
+    3088,
+    3119
+   ]
+  ],
+  "from": [
+   0,
+   3088,
+   3119
+  ],
+  "kind": "ladder",
+  "loc": 3029,
+  "name": "newbieladdertop1_189",
+  "open_to": null,
+  "to": [
+   0,
+   3088,
+   9519
+  ]
+ },
+ {
+  "climb_loc": 3031,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3111,
+    3126
+   ]
+  ],
+  "from": [
+   0,
+   3111,
+   3126
+  ],
+  "kind": "ladder",
+  "loc": 3031,
+  "name": "newbieladdertop2_190",
+  "open_to": null,
+  "to": [
+   0,
+   3111,
+   9526
+  ]
+ },
+ {
+  "climb_loc": 1737,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2970,
+    3347
+   ]
+  ],
+  "from": [
+   0,
+   2970,
+   3347
+  ],
+  "kind": "stair",
+  "loc": 1737,
+  "name": "outdoorstairs_wooden_bottom_191",
+  "open_to": null,
+  "to": [
+   1,
+   2968,
+   3348
+  ]
+ },
+ {
+  "climb_loc": 2405,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3244,
+    9783
+   ]
+  ],
+  "from": [
+   0,
+   3244,
+   9783
+  ],
+  "kind": "ladder",
+  "loc": 2405,
+  "name": "phoenixladder_192",
+  "open_to": null,
+  "to": [
+   0,
+   3244,
+   3382
+  ]
+ },
+ {
+  "climb_loc": 132,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3117,
+    9754
+   ]
+  ],
+  "from": [
+   0,
+   3117,
+   9754
+  ],
+  "kind": "ladder",
+  "loc": 132,
+  "name": "puzzle_ladder_193",
+  "open_to": null,
+  "to": [
+   0,
+   3092,
+   3361
+  ]
+ },
+ {
+  "climb_loc": 133,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3092,
+    3362
+   ]
+  ],
+  "from": [
+   0,
+   3092,
+   3362
+  ],
+  "kind": "ladder",
+  "loc": 133,
+  "name": "puzzle_ladder_top_194",
+  "open_to": null,
+  "to": [
+   0,
+   3116,
+   9754
+  ]
+ },
+ {
+  "climb_loc": 4031,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   3
+  ],
+  "disabled": "Shantay Pass gate: members only, not a level change",
+  "footprint": [
+   [
+    3302,
+    3116
+   ],
+   [
+    3303,
+    3116
+   ],
+   [
+    3304,
+    3116
+   ],
+   [
+    3305,
+    3116
+   ]
+  ],
+  "from": [
+   0,
+   3302,
+   3116
+  ],
+  "kind": "other",
+  "loc": 4031,
+  "name": "shantay_pass_henge_doorway_195",
+  "open_to": null,
+  "to": [
+   0,
+   3302,
+   3119
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3141
+   ]
+  ],
+  "from": [
+   0,
+   2954,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_196",
+  "open_to": null,
+  "to": [
+   1,
+   2954,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2958,
+    3141
+   ]
+  ],
+  "from": [
+   0,
+   2958,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_197",
+  "open_to": null,
+  "to": [
+   1,
+   2958,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2962,
+    3141
+   ]
+  ],
+  "from": [
+   0,
+   2962,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_198",
+  "open_to": null,
+  "to": [
+   1,
+   2962,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3215
+   ]
+  ],
+  "from": [
+   0,
+   3034,
+   3215
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_199",
+  "open_to": null,
+  "to": [
+   1,
+   3034,
+   3215
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3219
+   ]
+  ],
+  "from": [
+   0,
+   3034,
+   3219
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_200",
+  "open_to": null,
+  "to": [
+   1,
+   3034,
+   3219
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3223
+   ]
+  ],
+  "from": [
+   0,
+   3034,
+   3223
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_201",
+  "open_to": null,
+  "to": [
+   1,
+   3034,
+   3223
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3049,
+    3208
+   ]
+  ],
+  "from": [
+   0,
+   3049,
+   3208
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_202",
+  "open_to": null,
+  "to": [
+   1,
+   3049,
+   3208
+  ]
+ },
+ {
+  "climb_loc": 272,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3052,
+    3229
+   ]
+  ],
+  "from": [
+   0,
+   3052,
+   3229
+  ],
+  "kind": "ladder",
+  "loc": 272,
+  "name": "ship_ladder_203",
+  "open_to": null,
+  "to": [
+   1,
+   3052,
+   3229
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3141
+   ]
+  ],
+  "from": [
+   1,
+   2954,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_204",
+  "open_to": null,
+  "to": [
+   0,
+   2954,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2958,
+    3141
+   ]
+  ],
+  "from": [
+   1,
+   2958,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_205",
+  "open_to": null,
+  "to": [
+   0,
+   2958,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2962,
+    3141
+   ]
+  ],
+  "from": [
+   1,
+   2962,
+   3141
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_206",
+  "open_to": null,
+  "to": [
+   0,
+   2962,
+   3141
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3215
+   ]
+  ],
+  "from": [
+   1,
+   3034,
+   3215
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_207",
+  "open_to": null,
+  "to": [
+   0,
+   3034,
+   3215
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3219
+   ]
+  ],
+  "from": [
+   1,
+   3034,
+   3219
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_208",
+  "open_to": null,
+  "to": [
+   0,
+   3034,
+   3219
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3223
+   ]
+  ],
+  "from": [
+   1,
+   3034,
+   3223
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_209",
+  "open_to": null,
+  "to": [
+   0,
+   3034,
+   3223
+  ]
+ },
+ {
+  "climb_loc": 273,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3052,
+    3229
+   ]
+  ],
+  "from": [
+   1,
+   3052,
+   3229
+  ],
+  "kind": "ladder",
+  "loc": 273,
+  "name": "ship_laddertop_210",
+  "open_to": null,
+  "to": [
+   0,
+   3052,
+   3229
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2851,
+    3234
+   ]
+  ],
+  "from": [
+   1,
+   2851,
+   3234
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_211",
+  "open_to": null,
+  "to": [
+   2,
+   2853,
+   3234
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2851,
+    3236
+   ]
+  ],
+  "from": [
+   1,
+   2851,
+   3236
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_212",
+  "open_to": null,
+  "to": [
+   2,
+   2853,
+   3236
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2963,
+    3139
+   ]
+  ],
+  "from": [
+   1,
+   2963,
+   3139
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_213",
+  "open_to": null,
+  "to": [
+   2,
+   2965,
+   3139
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2963,
+    3143
+   ]
+  ],
+  "from": [
+   1,
+   2963,
+   3143
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_214",
+  "open_to": null,
+  "to": [
+   2,
+   2965,
+   3143
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   2
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3032,
+    3224
+   ]
+  ],
+  "from": [
+   1,
+   3032,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_215",
+  "open_to": null,
+  "to": [
+   2,
+   3032,
+   3226
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   2
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3224
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_216",
+  "open_to": null,
+  "to": [
+   2,
+   3036,
+   3226
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3046,
+    3227
+   ]
+  ],
+  "from": [
+   1,
+   3046,
+   3227
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_217",
+  "open_to": null,
+  "to": [
+   2,
+   3044,
+   3227
+  ]
+ },
+ {
+  "climb_loc": 245,
+  "climb_op": 1,
+  "delta": [
+   1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3046,
+    3231
+   ]
+  ],
+  "from": [
+   1,
+   3046,
+   3231
+  ],
+  "kind": "ladder",
+  "loc": 245,
+  "name": "shipladder_angled_218",
+  "open_to": null,
+  "to": [
+   2,
+   3044,
+   3231
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2851,
+    3234
+   ]
+  ],
+  "from": [
+   2,
+   2851,
+   3234
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_219",
+  "open_to": null,
+  "to": [
+   1,
+   2849,
+   3234
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2851,
+    3236
+   ]
+  ],
+  "from": [
+   2,
+   2851,
+   3236
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_220",
+  "open_to": null,
+  "to": [
+   1,
+   2849,
+   3236
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2963,
+    3139
+   ]
+  ],
+  "from": [
+   2,
+   2963,
+   3139
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_221",
+  "open_to": null,
+  "to": [
+   1,
+   2961,
+   3139
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   -2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2963,
+    3143
+   ]
+  ],
+  "from": [
+   2,
+   2963,
+   3143
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_222",
+  "open_to": null,
+  "to": [
+   1,
+   2961,
+   3143
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   -2
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3032,
+    3224
+   ]
+  ],
+  "from": [
+   2,
+   3032,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_223",
+  "open_to": null,
+  "to": [
+   1,
+   3032,
+   3222
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   -2
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3224
+   ]
+  ],
+  "from": [
+   2,
+   3036,
+   3224
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_224",
+  "open_to": null,
+  "to": [
+   1,
+   3036,
+   3222
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3046,
+    3227
+   ]
+  ],
+  "from": [
+   2,
+   3046,
+   3227
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_225",
+  "open_to": null,
+  "to": [
+   1,
+   3048,
+   3227
+  ]
+ },
+ {
+  "climb_loc": 246,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   2,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3046,
+    3231
+   ]
+  ],
+  "from": [
+   2,
+   3046,
+   3231
+  ],
+  "kind": "ladder",
+  "loc": 246,
+  "name": "shipladder_top_angled_226",
+  "open_to": null,
+  "to": [
+   1,
+   3048,
+   3231
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2931,
+    3282
+   ],
+   [
+    2932,
+    3282
+   ],
+   [
+    2931,
+    3283
+   ],
+   [
+    2932,
+    3283
+   ]
+  ],
+  "from": [
+   0,
+   2931,
+   3282
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_227",
+  "open_to": null,
+  "to": [
+   1,
+   2933,
+   3282
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3338
+   ],
+   [
+    2955,
+    3338
+   ],
+   [
+    2954,
+    3339
+   ],
+   [
+    2955,
+    3339
+   ]
+  ],
+  "from": [
+   0,
+   2954,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_228",
+  "open_to": null,
+  "to": [
+   1,
+   2956,
+   3338
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2973,
+    3384
+   ],
+   [
+    2974,
+    3384
+   ],
+   [
+    2973,
+    3385
+   ],
+   [
+    2974,
+    3385
+   ]
+  ],
+  "from": [
+   0,
+   2973,
+   3384
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_229",
+  "open_to": null,
+  "to": [
+   1,
+   2972,
+   3385
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2960,
+    3338
+   ],
+   [
+    2961,
+    3338
+   ],
+   [
+    2960,
+    3339
+   ],
+   [
+    2961,
+    3339
+   ]
+  ],
+  "from": [
+   1,
+   2960,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_230",
+  "open_to": null,
+  "to": [
+   2,
+   2959,
+   3339
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2957,
+    3338
+   ],
+   [
+    2958,
+    3338
+   ],
+   [
+    2957,
+    3339
+   ],
+   [
+    2958,
+    3339
+   ]
+  ],
+  "from": [
+   2,
+   2957,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_231",
+  "open_to": null,
+  "to": [
+   3,
+   2956,
+   3339
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3023,
+    3261
+   ],
+   [
+    3023,
+    3262
+   ],
+   [
+    3024,
+    3261
+   ],
+   [
+    3024,
+    3262
+   ]
+  ],
+  "from": [
+   0,
+   3023,
+   3261
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_232",
+  "open_to": null,
+  "to": [
+   1,
+   3025,
+   3261
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3026,
+    3248
+   ],
+   [
+    3027,
+    3248
+   ],
+   [
+    3026,
+    3249
+   ],
+   [
+    3027,
+    3249
+   ]
+  ],
+  "from": [
+   0,
+   3026,
+   3248
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_233",
+  "open_to": null,
+  "to": [
+   1,
+   3026,
+   3247
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3011,
+    3338
+   ],
+   [
+    3012,
+    3338
+   ],
+   [
+    3011,
+    3339
+   ],
+   [
+    3012,
+    3339
+   ]
+  ],
+  "from": [
+   0,
+   3011,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_234",
+  "open_to": null,
+  "to": [
+   1,
+   3011,
+   3337
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3034,
+    3363
+   ],
+   [
+    3035,
+    3363
+   ],
+   [
+    3034,
+    3364
+   ],
+   [
+    3035,
+    3364
+   ]
+  ],
+  "from": [
+   0,
+   3034,
+   3363
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_235",
+  "open_to": null,
+  "to": [
+   1,
+   3036,
+   3363
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3048,
+    3352
+   ],
+   [
+    3049,
+    3352
+   ],
+   [
+    3048,
+    3353
+   ],
+   [
+    3049,
+    3353
+   ]
+  ],
+  "from": [
+   0,
+   3048,
+   3352
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_236",
+  "open_to": null,
+  "to": [
+   1,
+   3049,
+   3354
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3010,
+    3515
+   ],
+   [
+    3011,
+    3515
+   ],
+   [
+    3010,
+    3516
+   ],
+   [
+    3011,
+    3516
+   ]
+  ],
+  "from": [
+   0,
+   3010,
+   3515
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_237",
+  "open_to": null,
+  "to": [
+   1,
+   3012,
+   3515
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3010,
+    3516
+   ],
+   [
+    3011,
+    3516
+   ],
+   [
+    3010,
+    3517
+   ],
+   [
+    3011,
+    3517
+   ]
+  ],
+  "from": [
+   2,
+   3010,
+   3516
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_238",
+  "open_to": null,
+  "to": [
+   3,
+   3010,
+   3515
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3029,
+    3506
+   ],
+   [
+    3030,
+    3506
+   ],
+   [
+    3029,
+    3507
+   ],
+   [
+    3030,
+    3507
+   ]
+  ],
+  "from": [
+   2,
+   3029,
+   3506
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_239",
+  "open_to": null,
+  "to": [
+   3,
+   3028,
+   3507
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3082,
+    3124
+   ],
+   [
+    3083,
+    3124
+   ],
+   [
+    3082,
+    3125
+   ],
+   [
+    3083,
+    3125
+   ]
+  ],
+  "from": [
+   0,
+   3082,
+   3124
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_240",
+  "open_to": null,
+  "to": [
+   1,
+   3084,
+   3124
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3115,
+    3107
+   ],
+   [
+    3116,
+    3107
+   ],
+   [
+    3115,
+    3108
+   ],
+   [
+    3116,
+    3108
+   ]
+  ],
+  "from": [
+   0,
+   3115,
+   3107
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_241",
+  "open_to": null,
+  "to": [
+   1,
+   3117,
+   3107
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3103,
+    3159
+   ],
+   [
+    3104,
+    3159
+   ],
+   [
+    3103,
+    3160
+   ],
+   [
+    3104,
+    3160
+   ]
+  ],
+  "from": [
+   0,
+   3103,
+   3159
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_242",
+  "open_to": null,
+  "to": [
+   1,
+   3105,
+   3160
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3104,
+    3362
+   ],
+   [
+    3105,
+    3362
+   ],
+   [
+    3104,
+    3363
+   ],
+   [
+    3105,
+    3363
+   ]
+  ],
+  "from": [
+   1,
+   3104,
+   3362
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_243",
+  "open_to": null,
+  "to": [
+   2,
+   3105,
+   3364
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3144,
+    3447
+   ],
+   [
+    3145,
+    3447
+   ],
+   [
+    3144,
+    3448
+   ],
+   [
+    3145,
+    3448
+   ]
+  ],
+  "from": [
+   0,
+   3144,
+   3447
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_244",
+  "open_to": null,
+  "to": [
+   1,
+   3143,
+   3448
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3207
+   ],
+   [
+    3205,
+    3207
+   ],
+   [
+    3204,
+    3208
+   ],
+   [
+    3205,
+    3208
+   ]
+  ],
+  "from": [
+   0,
+   3204,
+   3207
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_245",
+  "open_to": null,
+  "to": [
+   1,
+   3205,
+   3209
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3229
+   ],
+   [
+    3205,
+    3229
+   ],
+   [
+    3204,
+    3230
+   ],
+   [
+    3205,
+    3230
+   ]
+  ],
+  "from": [
+   0,
+   3204,
+   3229
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_246",
+  "open_to": null,
+  "to": [
+   1,
+   3205,
+   3228
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3237,
+    3447
+   ],
+   [
+    3238,
+    3447
+   ],
+   [
+    3237,
+    3448
+   ],
+   [
+    3238,
+    3448
+   ]
+  ],
+  "from": [
+   0,
+   3237,
+   3447
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_247",
+  "open_to": null,
+  "to": [
+   1,
+   3239,
+   3447
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3255,
+    3421
+   ],
+   [
+    3255,
+    3422
+   ],
+   [
+    3256,
+    3421
+   ],
+   [
+    3256,
+    3422
+   ]
+  ],
+  "from": [
+   0,
+   3255,
+   3421
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_248",
+  "open_to": null,
+  "to": [
+   1,
+   3255,
+   3420
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3497
+   ],
+   [
+    3203,
+    3497
+   ],
+   [
+    3202,
+    3498
+   ],
+   [
+    3203,
+    3498
+   ]
+  ],
+  "from": [
+   0,
+   3202,
+   3497
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_249",
+  "open_to": null,
+  "to": [
+   1,
+   3203,
+   3496
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3218,
+    3496
+   ],
+   [
+    3219,
+    3496
+   ],
+   [
+    3218,
+    3497
+   ],
+   [
+    3219,
+    3497
+   ]
+  ],
+  "from": [
+   0,
+   3218,
+   3496
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_250",
+  "open_to": null,
+  "to": [
+   1,
+   3220,
+   3496
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ],
+   [
+    3259,
+    3487
+   ],
+   [
+    3258,
+    3488
+   ],
+   [
+    3259,
+    3488
+   ]
+  ],
+  "from": [
+   0,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_251",
+  "open_to": null,
+  "to": [
+   1,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3221,
+    3472
+   ],
+   [
+    3222,
+    3472
+   ],
+   [
+    3221,
+    3473
+   ],
+   [
+    3222,
+    3473
+   ]
+  ],
+  "from": [
+   2,
+   3221,
+   3472
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_252",
+  "open_to": null,
+  "to": [
+   3,
+   3223,
+   3472
+  ]
+ },
+ {
+  "climb_loc": 1738,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3312,
+    3185
+   ],
+   [
+    3313,
+    3185
+   ],
+   [
+    3312,
+    3186
+   ],
+   [
+    3313,
+    3186
+   ]
+  ],
+  "from": [
+   0,
+   3312,
+   3185
+  ],
+  "kind": "stair",
+  "loc": 1738,
+  "name": "spiralstairs_253",
+  "open_to": null,
+  "to": [
+   1,
+   3314,
+   3185
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3103,
+    3159
+   ],
+   [
+    3104,
+    3159
+   ],
+   [
+    3103,
+    3160
+   ],
+   [
+    3104,
+    3160
+   ]
+  ],
+  "from": [
+   1,
+   3103,
+   3159
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_254",
+  "open_to": null,
+  "to": [
+   2,
+   3104,
+   3161
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3103,
+    3159
+   ],
+   [
+    3104,
+    3159
+   ],
+   [
+    3103,
+    3160
+   ],
+   [
+    3104,
+    3160
+   ]
+  ],
+  "from": [
+   1,
+   3103,
+   3159
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_255",
+  "open_to": null,
+  "to": [
+   0,
+   3105,
+   3160
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3207
+   ],
+   [
+    3205,
+    3207
+   ],
+   [
+    3204,
+    3208
+   ],
+   [
+    3205,
+    3208
+   ]
+  ],
+  "from": [
+   1,
+   3204,
+   3207
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_256",
+  "open_to": null,
+  "to": [
+   2,
+   3205,
+   3209
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3207
+   ],
+   [
+    3205,
+    3207
+   ],
+   [
+    3204,
+    3208
+   ],
+   [
+    3205,
+    3208
+   ]
+  ],
+  "from": [
+   1,
+   3204,
+   3207
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_257",
+  "open_to": null,
+  "to": [
+   0,
+   3205,
+   3209
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3229
+   ],
+   [
+    3205,
+    3229
+   ],
+   [
+    3204,
+    3230
+   ],
+   [
+    3205,
+    3230
+   ]
+  ],
+  "from": [
+   1,
+   3204,
+   3229
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_258",
+  "open_to": null,
+  "to": [
+   2,
+   3206,
+   3229
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3204,
+    3229
+   ],
+   [
+    3205,
+    3229
+   ],
+   [
+    3204,
+    3230
+   ],
+   [
+    3205,
+    3230
+   ]
+  ],
+  "from": [
+   1,
+   3204,
+   3229
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_259",
+  "open_to": null,
+  "to": [
+   0,
+   3205,
+   3228
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3497
+   ],
+   [
+    3203,
+    3497
+   ],
+   [
+    3202,
+    3498
+   ],
+   [
+    3203,
+    3498
+   ]
+  ],
+  "from": [
+   1,
+   3202,
+   3497
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_260",
+  "open_to": null,
+  "to": [
+   2,
+   3204,
+   3497
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3497
+   ],
+   [
+    3203,
+    3497
+   ],
+   [
+    3202,
+    3498
+   ],
+   [
+    3203,
+    3498
+   ]
+  ],
+  "from": [
+   1,
+   3202,
+   3497
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_261",
+  "open_to": null,
+  "to": [
+   0,
+   3203,
+   3496
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ],
+   [
+    3259,
+    3487
+   ],
+   [
+    3258,
+    3488
+   ],
+   [
+    3259,
+    3488
+   ]
+  ],
+  "from": [
+   1,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_262",
+  "open_to": null,
+  "to": [
+   2,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ],
+   [
+    3259,
+    3487
+   ],
+   [
+    3258,
+    3488
+   ],
+   [
+    3259,
+    3488
+   ]
+  ],
+  "from": [
+   1,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_263",
+  "open_to": null,
+  "to": [
+   0,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 2,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ],
+   [
+    3259,
+    3487
+   ],
+   [
+    3258,
+    3488
+   ],
+   [
+    3259,
+    3488
+   ]
+  ],
+  "from": [
+   2,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_264",
+  "open_to": null,
+  "to": [
+   3,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1739,
+  "climb_op": 3,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ],
+   [
+    3259,
+    3487
+   ],
+   [
+    3258,
+    3488
+   ],
+   [
+    3259,
+    3488
+   ]
+  ],
+  "from": [
+   2,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1739,
+  "name": "spiralstairsmiddle_265",
+  "open_to": null,
+  "to": [
+   1,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2932,
+    3282
+   ]
+  ],
+  "from": [
+   1,
+   2932,
+   3282
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_266",
+  "open_to": null,
+  "to": [
+   0,
+   2932,
+   3281
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2955,
+    3338
+   ]
+  ],
+  "from": [
+   1,
+   2955,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_267",
+  "open_to": null,
+  "to": [
+   0,
+   2955,
+   3337
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2973,
+    3385
+   ]
+  ],
+  "from": [
+   1,
+   2973,
+   3385
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_268",
+  "open_to": null,
+  "to": [
+   0,
+   2972,
+   3384
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2960,
+    3339
+   ]
+  ],
+  "from": [
+   2,
+   2960,
+   3339
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_269",
+  "open_to": null,
+  "to": [
+   1,
+   2960,
+   3340
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2957,
+    3339
+   ]
+  ],
+  "from": [
+   3,
+   2957,
+   3339
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_270",
+  "open_to": null,
+  "to": [
+   2,
+   2957,
+   3340
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3024,
+    3261
+   ]
+  ],
+  "from": [
+   1,
+   3024,
+   3261
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_271",
+  "open_to": null,
+  "to": [
+   0,
+   3025,
+   3261
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3026,
+    3248
+   ]
+  ],
+  "from": [
+   1,
+   3026,
+   3248
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_272",
+  "open_to": null,
+  "to": [
+   0,
+   3025,
+   3248
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3011,
+    3338
+   ]
+  ],
+  "from": [
+   1,
+   3011,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_273",
+  "open_to": null,
+  "to": [
+   0,
+   3010,
+   3338
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3035,
+    3363
+   ]
+  ],
+  "from": [
+   1,
+   3035,
+   3363
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_274",
+  "open_to": null,
+  "to": [
+   0,
+   3036,
+   3363
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3049,
+    3353
+   ]
+  ],
+  "from": [
+   1,
+   3049,
+   3353
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_275",
+  "open_to": null,
+  "to": [
+   0,
+   3049,
+   3354
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3011,
+    3515
+   ]
+  ],
+  "from": [
+   1,
+   3011,
+   3515
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_276",
+  "open_to": null,
+  "to": [
+   0,
+   3011,
+   3514
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3010,
+    3516
+   ]
+  ],
+  "from": [
+   3,
+   3010,
+   3516
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_277",
+  "open_to": null,
+  "to": [
+   2,
+   3010,
+   3515
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3029,
+    3507
+   ]
+  ],
+  "from": [
+   3,
+   3029,
+   3507
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_278",
+  "open_to": null,
+  "to": [
+   2,
+   3028,
+   3507
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3083,
+    3124
+   ]
+  ],
+  "from": [
+   1,
+   3083,
+   3124
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_279",
+  "open_to": null,
+  "to": [
+   0,
+   3084,
+   3124
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3116,
+    3107
+   ]
+  ],
+  "from": [
+   1,
+   3116,
+   3107
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_280",
+  "open_to": null,
+  "to": [
+   0,
+   3117,
+   3107
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3104,
+    3160
+   ]
+  ],
+  "from": [
+   2,
+   3104,
+   3160
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_281",
+  "open_to": null,
+  "to": [
+   1,
+   3105,
+   3160
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3105,
+    3363
+   ]
+  ],
+  "from": [
+   2,
+   3105,
+   3363
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_282",
+  "open_to": null,
+  "to": [
+   1,
+   3106,
+   3363
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3144,
+    3448
+   ]
+  ],
+  "from": [
+   1,
+   3144,
+   3448
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_283",
+  "open_to": null,
+  "to": [
+   0,
+   3143,
+   3448
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3208
+   ]
+  ],
+  "from": [
+   2,
+   3205,
+   3208
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_284",
+  "open_to": null,
+  "to": [
+   1,
+   3205,
+   3209
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3205,
+    3229
+   ]
+  ],
+  "from": [
+   2,
+   3205,
+   3229
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_285",
+  "open_to": null,
+  "to": [
+   1,
+   3205,
+   3228
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3238,
+    3447
+   ]
+  ],
+  "from": [
+   1,
+   3238,
+   3447
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_286",
+  "open_to": null,
+  "to": [
+   0,
+   3239,
+   3447
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3255,
+    3421
+   ]
+  ],
+  "from": [
+   1,
+   3255,
+   3421
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_287",
+  "open_to": null,
+  "to": [
+   0,
+   3254,
+   3421
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3219,
+    3496
+   ]
+  ],
+  "from": [
+   1,
+   3219,
+   3496
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_288",
+  "open_to": null,
+  "to": [
+   0,
+   3220,
+   3496
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3203,
+    3497
+   ]
+  ],
+  "from": [
+   2,
+   3203,
+   3497
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_289",
+  "open_to": null,
+  "to": [
+   1,
+   3203,
+   3496
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3222,
+    3472
+   ]
+  ],
+  "from": [
+   3,
+   3222,
+   3472
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_290",
+  "open_to": null,
+  "to": [
+   2,
+   3222,
+   3471
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3258,
+    3487
+   ]
+  ],
+  "from": [
+   3,
+   3258,
+   3487
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_291",
+  "open_to": null,
+  "to": [
+   2,
+   3258,
+   3486
+  ]
+ },
+ {
+  "climb_loc": 1740,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3313,
+    3185
+   ]
+  ],
+  "from": [
+   1,
+   3313,
+   3185
+  ],
+  "kind": "stair",
+  "loc": 1740,
+  "name": "spiralstairstop_292",
+  "open_to": null,
+  "to": [
+   0,
+   3313,
+   3184
+  ]
+ },
+ {
+  "climb_loc": 1730,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3108,
+    3363
+   ],
+   [
+    3109,
+    3363
+   ],
+   [
+    3108,
+    3364
+   ],
+   [
+    3109,
+    3364
+   ],
+   [
+    3108,
+    3365
+   ],
+   [
+    3109,
+    3365
+   ]
+  ],
+  "from": [
+   0,
+   3108,
+   3363
+  ],
+  "kind": "stair",
+  "loc": 1730,
+  "name": "spookystairs_293",
+  "open_to": null,
+  "to": [
+   1,
+   3108,
+   3367
+  ]
+ },
+ {
+  "climb_loc": 1731,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   -4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3108,
+    3364
+   ],
+   [
+    3109,
+    3364
+   ],
+   [
+    3108,
+    3365
+   ],
+   [
+    3109,
+    3365
+   ]
+  ],
+  "from": [
+   1,
+   3108,
+   3364
+  ],
+  "kind": "stair",
+  "loc": 1731,
+  "name": "spookystairstop_294",
+  "open_to": null,
+  "to": [
+   0,
+   3108,
+   3360
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2965,
+    3215
+   ],
+   [
+    2966,
+    3215
+   ],
+   [
+    2967,
+    3215
+   ],
+   [
+    2965,
+    3216
+   ],
+   [
+    2966,
+    3216
+   ],
+   [
+    2967,
+    3216
+   ]
+  ],
+  "from": [
+   0,
+   2965,
+   3215
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_295",
+  "open_to": null,
+  "to": [
+   1,
+   2968,
+   3215
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2959,
+    3369
+   ],
+   [
+    2959,
+    3370
+   ],
+   [
+    2959,
+    3371
+   ],
+   [
+    2960,
+    3369
+   ],
+   [
+    2960,
+    3370
+   ],
+   [
+    2960,
+    3371
+   ]
+  ],
+  "from": [
+   0,
+   2959,
+   3369
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_296",
+  "open_to": null,
+  "to": [
+   1,
+   2959,
+   3373
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2971,
+    3370
+   ],
+   [
+    2972,
+    3370
+   ],
+   [
+    2971,
+    3371
+   ],
+   [
+    2972,
+    3371
+   ],
+   [
+    2971,
+    3372
+   ],
+   [
+    2972,
+    3372
+   ]
+  ],
+  "from": [
+   0,
+   2971,
+   3370
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_297",
+  "open_to": null,
+  "to": [
+   1,
+   2971,
+   3374
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2984,
+    3337
+   ],
+   [
+    2985,
+    3337
+   ],
+   [
+    2984,
+    3338
+   ],
+   [
+    2985,
+    3338
+   ],
+   [
+    2984,
+    3339
+   ],
+   [
+    2985,
+    3339
+   ]
+  ],
+  "from": [
+   1,
+   2984,
+   3337
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_298",
+  "open_to": null,
+  "to": [
+   2,
+   2984,
+   3340
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3018,
+    3343
+   ],
+   [
+    3019,
+    3343
+   ],
+   [
+    3020,
+    3343
+   ],
+   [
+    3018,
+    3344
+   ],
+   [
+    3019,
+    3344
+   ],
+   [
+    3020,
+    3344
+   ]
+  ],
+  "from": [
+   0,
+   3018,
+   3343
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_299",
+  "open_to": null,
+  "to": [
+   1,
+   3021,
+   3344
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3021,
+    3332
+   ],
+   [
+    3022,
+    3332
+   ],
+   [
+    3023,
+    3332
+   ],
+   [
+    3021,
+    3333
+   ],
+   [
+    3022,
+    3333
+   ],
+   [
+    3023,
+    3333
+   ]
+  ],
+  "from": [
+   0,
+   3021,
+   3332
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_300",
+  "open_to": null,
+  "to": [
+   1,
+   3024,
+   3333
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3044,
+    3381
+   ],
+   [
+    3045,
+    3381
+   ],
+   [
+    3044,
+    3382
+   ],
+   [
+    3045,
+    3382
+   ],
+   [
+    3044,
+    3383
+   ],
+   [
+    3045,
+    3383
+   ]
+  ],
+  "from": [
+   0,
+   3044,
+   3381
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_301",
+  "open_to": null,
+  "to": [
+   1,
+   3044,
+   3384
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3045,
+    3363
+   ],
+   [
+    3046,
+    3363
+   ],
+   [
+    3045,
+    3364
+   ],
+   [
+    3046,
+    3364
+   ],
+   [
+    3045,
+    3365
+   ],
+   [
+    3046,
+    3365
+   ]
+  ],
+  "from": [
+   0,
+   3045,
+   3363
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_302",
+  "open_to": null,
+  "to": [
+   1,
+   3045,
+   3366
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3090,
+    3251
+   ],
+   [
+    3091,
+    3251
+   ],
+   [
+    3092,
+    3251
+   ],
+   [
+    3090,
+    3252
+   ],
+   [
+    3091,
+    3252
+   ],
+   [
+    3092,
+    3252
+   ]
+  ],
+  "from": [
+   0,
+   3090,
+   3251
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_303",
+  "open_to": null,
+  "to": [
+   1,
+   3093,
+   3251
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3099,
+    3266
+   ],
+   [
+    3100,
+    3266
+   ],
+   [
+    3101,
+    3266
+   ],
+   [
+    3099,
+    3267
+   ],
+   [
+    3100,
+    3267
+   ],
+   [
+    3101,
+    3267
+   ]
+  ],
+  "from": [
+   0,
+   3099,
+   3266
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_304",
+  "open_to": null,
+  "to": [
+   1,
+   3102,
+   3266
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3188,
+    3355
+   ],
+   [
+    3189,
+    3355
+   ],
+   [
+    3188,
+    3356
+   ],
+   [
+    3189,
+    3356
+   ],
+   [
+    3188,
+    3357
+   ],
+   [
+    3189,
+    3357
+   ]
+  ],
+  "from": [
+   0,
+   3188,
+   3355
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_305",
+  "open_to": null,
+  "to": [
+   1,
+   3188,
+   3354
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3188,
+    3389
+   ],
+   [
+    3189,
+    3389
+   ],
+   [
+    3188,
+    3390
+   ],
+   [
+    3189,
+    3390
+   ],
+   [
+    3188,
+    3391
+   ],
+   [
+    3189,
+    3391
+   ]
+  ],
+  "from": [
+   0,
+   3188,
+   3389
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_306",
+  "open_to": null,
+  "to": [
+   1,
+   3188,
+   3392
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3156,
+    3435
+   ],
+   [
+    3157,
+    3435
+   ],
+   [
+    3158,
+    3435
+   ],
+   [
+    3156,
+    3436
+   ],
+   [
+    3157,
+    3436
+   ],
+   [
+    3158,
+    3436
+   ]
+  ],
+  "from": [
+   0,
+   3156,
+   3435
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_307",
+  "open_to": null,
+  "to": [
+   1,
+   3155,
+   3435
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3175,
+    3420
+   ],
+   [
+    3175,
+    3421
+   ],
+   [
+    3175,
+    3422
+   ],
+   [
+    3176,
+    3420
+   ],
+   [
+    3176,
+    3421
+   ],
+   [
+    3176,
+    3422
+   ]
+  ],
+  "from": [
+   0,
+   3175,
+   3420
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_308",
+  "open_to": null,
+  "to": [
+   1,
+   3175,
+   3419
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3177,
+    3401
+   ],
+   [
+    3178,
+    3401
+   ],
+   [
+    3179,
+    3401
+   ],
+   [
+    3177,
+    3402
+   ],
+   [
+    3178,
+    3402
+   ],
+   [
+    3179,
+    3402
+   ]
+  ],
+  "from": [
+   0,
+   3177,
+   3401
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_309",
+  "open_to": null,
+  "to": [
+   1,
+   3176,
+   3401
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3259,
+    3446
+   ],
+   [
+    3260,
+    3446
+   ],
+   [
+    3259,
+    3447
+   ],
+   [
+    3260,
+    3447
+   ],
+   [
+    3259,
+    3448
+   ],
+   [
+    3260,
+    3448
+   ]
+  ],
+  "from": [
+   0,
+   3259,
+   3446
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_310",
+  "open_to": null,
+  "to": [
+   1,
+   3259,
+   3449
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3212,
+    3473
+   ],
+   [
+    3213,
+    3473
+   ],
+   [
+    3212,
+    3474
+   ],
+   [
+    3213,
+    3474
+   ],
+   [
+    3212,
+    3475
+   ],
+   [
+    3213,
+    3475
+   ]
+  ],
+  "from": [
+   0,
+   3212,
+   3473
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_311",
+  "open_to": null,
+  "to": [
+   1,
+   3212,
+   3476
+  ]
+ },
+ {
+  "climb_loc": 1722,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3239,
+    3489
+   ],
+   [
+    3239,
+    3490
+   ],
+   [
+    3240,
+    3489
+   ],
+   [
+    3241,
+    3489
+   ],
+   [
+    3240,
+    3490
+   ],
+   [
+    3241,
+    3490
+   ]
+  ],
+  "from": [
+   0,
+   3239,
+   3489
+  ],
+  "kind": "stair",
+  "loc": 1722,
+  "name": "stairs_312",
+  "open_to": null,
+  "to": [
+   1,
+   3242,
+   3489
+  ]
+ },
+ {
+  "climb_loc": 1733,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    3376
+   ],
+   [
+    3060,
+    3376
+   ],
+   [
+    3061,
+    3376
+   ],
+   [
+    3059,
+    3377
+   ],
+   [
+    3060,
+    3377
+   ],
+   [
+    3061,
+    3377
+   ]
+  ],
+  "from": [
+   0,
+   3059,
+   3376
+  ],
+  "kind": "stair",
+  "loc": 1733,
+  "name": "stairs_cellar_313",
+  "open_to": null,
+  "to": [
+   0,
+   3058,
+   9776
+  ]
+ },
+ {
+  "climb_loc": 1733,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3187,
+    3433
+   ],
+   [
+    3188,
+    3433
+   ],
+   [
+    3189,
+    3433
+   ],
+   [
+    3187,
+    3434
+   ],
+   [
+    3188,
+    3434
+   ],
+   [
+    3189,
+    3434
+   ]
+  ],
+  "from": [
+   0,
+   3187,
+   3433
+  ],
+  "kind": "stair",
+  "loc": 1733,
+  "name": "stairs_cellar_314",
+  "open_to": null,
+  "to": [
+   0,
+   3190,
+   9833
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2966,
+    3215
+   ],
+   [
+    2967,
+    3215
+   ],
+   [
+    2966,
+    3216
+   ],
+   [
+    2967,
+    3216
+   ]
+  ],
+  "from": [
+   1,
+   2966,
+   3215
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_315",
+  "open_to": null,
+  "to": [
+   0,
+   2964,
+   3215
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   -4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2959,
+    3370
+   ],
+   [
+    2959,
+    3371
+   ],
+   [
+    2960,
+    3370
+   ],
+   [
+    2960,
+    3371
+   ]
+  ],
+  "from": [
+   1,
+   2959,
+   3370
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_316",
+  "open_to": null,
+  "to": [
+   0,
+   2959,
+   3366
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   -4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2971,
+    3371
+   ],
+   [
+    2972,
+    3371
+   ],
+   [
+    2971,
+    3372
+   ],
+   [
+    2972,
+    3372
+   ]
+  ],
+  "from": [
+   1,
+   2971,
+   3371
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_317",
+  "open_to": null,
+  "to": [
+   0,
+   2971,
+   3367
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    2984,
+    3338
+   ],
+   [
+    2985,
+    3338
+   ],
+   [
+    2984,
+    3339
+   ],
+   [
+    2985,
+    3339
+   ]
+  ],
+  "from": [
+   2,
+   2984,
+   3338
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_318",
+  "open_to": null,
+  "to": [
+   1,
+   2984,
+   3336
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    3343
+   ],
+   [
+    3020,
+    3343
+   ],
+   [
+    3019,
+    3344
+   ],
+   [
+    3020,
+    3344
+   ]
+  ],
+  "from": [
+   1,
+   3019,
+   3343
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_319",
+  "open_to": null,
+  "to": [
+   0,
+   3017,
+   3344
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3332
+   ],
+   [
+    3023,
+    3332
+   ],
+   [
+    3022,
+    3333
+   ],
+   [
+    3023,
+    3333
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3332
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_320",
+  "open_to": null,
+  "to": [
+   0,
+   3020,
+   3333
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3044,
+    3382
+   ],
+   [
+    3045,
+    3382
+   ],
+   [
+    3044,
+    3383
+   ],
+   [
+    3045,
+    3383
+   ]
+  ],
+  "from": [
+   1,
+   3044,
+   3382
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_321",
+  "open_to": null,
+  "to": [
+   0,
+   3044,
+   3380
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3045,
+    3364
+   ],
+   [
+    3046,
+    3364
+   ],
+   [
+    3045,
+    3365
+   ],
+   [
+    3046,
+    3365
+   ]
+  ],
+  "from": [
+   1,
+   3045,
+   3364
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_322",
+  "open_to": null,
+  "to": [
+   0,
+   3045,
+   3362
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3091,
+    3251
+   ],
+   [
+    3092,
+    3251
+   ],
+   [
+    3091,
+    3252
+   ],
+   [
+    3092,
+    3252
+   ]
+  ],
+  "from": [
+   1,
+   3091,
+   3251
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_323",
+  "open_to": null,
+  "to": [
+   0,
+   3089,
+   3251
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3100,
+    3266
+   ],
+   [
+    3101,
+    3266
+   ],
+   [
+    3100,
+    3267
+   ],
+   [
+    3101,
+    3267
+   ]
+  ],
+  "from": [
+   1,
+   3100,
+   3266
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_324",
+  "open_to": null,
+  "to": [
+   0,
+   3098,
+   3266
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3188,
+    3355
+   ],
+   [
+    3189,
+    3355
+   ],
+   [
+    3188,
+    3356
+   ],
+   [
+    3189,
+    3356
+   ]
+  ],
+  "from": [
+   1,
+   3188,
+   3355
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_325",
+  "open_to": null,
+  "to": [
+   0,
+   3188,
+   3358
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3188,
+    3390
+   ],
+   [
+    3189,
+    3390
+   ],
+   [
+    3188,
+    3391
+   ],
+   [
+    3189,
+    3391
+   ]
+  ],
+  "from": [
+   1,
+   3188,
+   3390
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_326",
+  "open_to": null,
+  "to": [
+   0,
+   3188,
+   3388
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3156,
+    3435
+   ],
+   [
+    3157,
+    3435
+   ],
+   [
+    3156,
+    3436
+   ],
+   [
+    3157,
+    3436
+   ]
+  ],
+  "from": [
+   1,
+   3156,
+   3435
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_327",
+  "open_to": null,
+  "to": [
+   0,
+   3159,
+   3435
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3175,
+    3420
+   ],
+   [
+    3175,
+    3421
+   ],
+   [
+    3176,
+    3420
+   ],
+   [
+    3176,
+    3421
+   ]
+  ],
+  "from": [
+   1,
+   3175,
+   3420
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_328",
+  "open_to": null,
+  "to": [
+   0,
+   3175,
+   3423
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3177,
+    3401
+   ],
+   [
+    3178,
+    3401
+   ],
+   [
+    3177,
+    3402
+   ],
+   [
+    3178,
+    3402
+   ]
+  ],
+  "from": [
+   1,
+   3177,
+   3401
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_329",
+  "open_to": null,
+  "to": [
+   0,
+   3180,
+   3401
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3259,
+    3447
+   ],
+   [
+    3260,
+    3447
+   ],
+   [
+    3259,
+    3448
+   ],
+   [
+    3260,
+    3448
+   ]
+  ],
+  "from": [
+   1,
+   3259,
+   3447
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_330",
+  "open_to": null,
+  "to": [
+   0,
+   3259,
+   3445
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3212,
+    3474
+   ],
+   [
+    3213,
+    3474
+   ],
+   [
+    3212,
+    3475
+   ],
+   [
+    3213,
+    3475
+   ]
+  ],
+  "from": [
+   1,
+   3212,
+   3474
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_331",
+  "open_to": null,
+  "to": [
+   0,
+   3212,
+   3472
+  ]
+ },
+ {
+  "climb_loc": 1723,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3240,
+    3489
+   ],
+   [
+    3241,
+    3489
+   ],
+   [
+    3240,
+    3490
+   ],
+   [
+    3241,
+    3490
+   ]
+  ],
+  "from": [
+   1,
+   3240,
+   3489
+  ],
+  "kind": "stair",
+  "loc": 1723,
+  "name": "stairstop_332",
+  "open_to": null,
+  "to": [
+   0,
+   3238,
+   3489
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3097,
+    3468
+   ]
+  ],
+  "from": [
+   0,
+   3097,
+   3468
+  ],
+  "kind": "trapdoor",
+  "loc": 1568,
+  "name": "trapdoor_333",
+  "open_to": 1570,
+  "to": [
+   0,
+   3097,
+   9868
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3209,
+    3216
+   ]
+  ],
+  "from": [
+   0,
+   3209,
+   3216
+  ],
+  "kind": "trapdoor",
+  "loc": 1568,
+  "name": "trapdoor_334",
+  "open_to": 1570,
+  "to": [
+   0,
+   3209,
+   9616
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3206,
+    3371
+   ]
+  ],
+  "from": [
+   2,
+   3206,
+   3371
+  ],
+  "kind": "trapdoor",
+  "loc": 1568,
+  "name": "trapdoor_335",
+  "open_to": 1570,
+  "to": [
+   2,
+   3206,
+   9771
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3242,
+    3505
+   ]
+  ],
+  "from": [
+   2,
+   3242,
+   3505
+  ],
+  "kind": "trapdoor",
+  "loc": 1568,
+  "name": "trapdoor_336",
+  "open_to": 1570,
+  "to": [
+   2,
+   3242,
+   9905
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3278,
+    3434
+   ]
+  ],
+  "from": [
+   2,
+   3278,
+   3434
+  ],
+  "kind": "trapdoor",
+  "loc": 1568,
+  "name": "trapdoor_337",
+  "open_to": 1570,
+  "to": [
+   2,
+   3278,
+   9834
+  ]
+ },
+ {
+  "climb_loc": 1570,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    3450
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   3450
+  ],
+  "kind": "trapdoor",
+  "loc": 1570,
+  "name": "trapdoor_open_338",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   9850
+  ]
+ },
+ {
+  "climb_loc": 492,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2856,
+    3168
+   ],
+   [
+    2857,
+    3168
+   ],
+   [
+    2856,
+    3169
+   ],
+   [
+    2857,
+    3169
+   ]
+  ],
+  "from": [
+   0,
+   2856,
+   3168
+  ],
+  "kind": "portal",
+  "loc": 492,
+  "name": "volcano_entrance_339",
+  "open_to": null,
+  "to": [
+   0,
+   2856,
+   9568
+  ]
+ },
+ {
+  "climb_loc": 2148,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3103,
+    9576
+   ]
+  ],
+  "from": [
+   0,
+   3103,
+   9576
+  ],
+  "kind": "ladder",
+  "loc": 2148,
+  "name": "wizards_tower_ladder_340",
+  "open_to": null,
+  "to": [
+   0,
+   3105,
+   3162
+  ]
+ },
+ {
+  "climb_loc": 2147,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3104,
+    3162
+   ]
+  ],
+  "from": [
+   0,
+   3104,
+   3162
+  ],
+  "kind": "ladder",
+  "loc": 2147,
+  "name": "wizards_tower_laddertop_341",
+  "open_to": null,
+  "to": [
+   0,
+   3104,
+   9576
+  ]
+ },
+ {
+  "climb_loc": 1725,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3230,
+    3383
+   ],
+   [
+    3231,
+    3383
+   ],
+   [
+    3230,
+    3384
+   ],
+   [
+    3231,
+    3384
+   ],
+   [
+    3230,
+    3385
+   ],
+   [
+    3231,
+    3385
+   ]
+  ],
+  "from": [
+   0,
+   3230,
+   3383
+  ],
+  "kind": "stair",
+  "loc": 1725,
+  "name": "woodenstairs_342",
+  "open_to": null,
+  "to": [
+   1,
+   3230,
+   3382
+  ]
+ },
+ {
+  "climb_loc": 1725,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3227,
+    3393
+   ],
+   [
+    3228,
+    3393
+   ],
+   [
+    3229,
+    3393
+   ],
+   [
+    3227,
+    3394
+   ],
+   [
+    3228,
+    3394
+   ],
+   [
+    3229,
+    3394
+   ]
+  ],
+  "from": [
+   0,
+   3227,
+   3393
+  ],
+  "kind": "stair",
+  "loc": 1725,
+  "name": "woodenstairs_343",
+  "open_to": null,
+  "to": [
+   1,
+   3230,
+   3393
+  ]
+ },
+ {
+  "climb_loc": 1725,
+  "climb_op": 1,
+  "delta": [
+   1,
+   0,
+   -4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3285,
+    3493
+   ],
+   [
+    3286,
+    3493
+   ],
+   [
+    3285,
+    3494
+   ],
+   [
+    3286,
+    3494
+   ],
+   [
+    3285,
+    3495
+   ],
+   [
+    3286,
+    3495
+   ]
+  ],
+  "from": [
+   0,
+   3285,
+   3493
+  ],
+  "kind": "stair",
+  "loc": 1725,
+  "name": "woodenstairs_344",
+  "open_to": null,
+  "to": [
+   1,
+   3285,
+   3489
+  ]
+ },
+ {
+  "climb_loc": 1726,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3230,
+    3383
+   ],
+   [
+    3231,
+    3383
+   ],
+   [
+    3230,
+    3384
+   ],
+   [
+    3231,
+    3384
+   ]
+  ],
+  "from": [
+   1,
+   3230,
+   3383
+  ],
+  "kind": "stair",
+  "loc": 1726,
+  "name": "woodenstairstop_345",
+  "open_to": null,
+  "to": [
+   0,
+   3230,
+   3386
+  ]
+ },
+ {
+  "climb_loc": 1726,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3228,
+    3393
+   ],
+   [
+    3229,
+    3393
+   ],
+   [
+    3228,
+    3394
+   ],
+   [
+    3229,
+    3394
+   ]
+  ],
+  "from": [
+   1,
+   3228,
+   3393
+  ],
+  "kind": "stair",
+  "loc": 1726,
+  "name": "woodenstairstop_346",
+  "open_to": null,
+  "to": [
+   0,
+   3226,
+   3393
+  ]
+ },
+ {
+  "climb_loc": 1726,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   4
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3285,
+    3493
+   ],
+   [
+    3286,
+    3493
+   ],
+   [
+    3285,
+    3494
+   ],
+   [
+    3286,
+    3494
+   ]
+  ],
+  "from": [
+   1,
+   3285,
+   3493
+  ],
+  "kind": "stair",
+  "loc": 1726,
+  "name": "woodenstairstop_347",
+  "open_to": null,
+  "to": [
+   0,
+   3285,
+   3497
+  ]
+ }
+]
