@@ -78,10 +78,11 @@ def solve(bot):
         bot.pump(5)
         if bot.world.modal is None:
             continue
-        # Short budget per attempt: the ghost despawns quickly, so a stuck
-        # talk must fail fast and let the next attempt respawn it.
+        print("ghost talking attempt, npc at %s" % ((bot.world.npcs[nid]["x"], bot.world.npcs[nid]["z"]),), flush=True)
+        # The full ghost story runs a dozen pages: budget generously, and
+        # bail out to a fresh respawn only on a real stall.
         try:
-            solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=150)
+            solver.finish_dialog_like(bot, ["problem", "doomed", "skull", "yep", "yes"], timeout=400)
         except solver.SolverError:
             continue
         talked = True
