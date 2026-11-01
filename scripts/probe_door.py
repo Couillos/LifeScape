@@ -54,13 +54,11 @@ def main():
             if bot._try_step_on(x, z, level, time.time() + 3.0):
                 print("step-first: OPEN ALREADY", flush=True)
                 return 0
-        bot._click_door_pair(x, z, level, op, spot[9])
-        changed = bot._await_loc_change(x, z, level, spot[9], time.time() + 2.0)
-        print("loc-changed=%s now=%s" % (changed, bot.world.loc_at(x, z, level)), flush=True)
-        if bot._try_step_on(x, z, level, time.time() + 3.0):
-            print("PROBE OK: click opened, step accepted", flush=True)
+        before = bot.world.loc_at(x, z, level)
+        if bot._open_door_inner(x, z, 10.0):
+            print("PROBE OK: opened/stepped (was=%s now=%s)" % (before, bot.world.loc_at(x, z, level)), flush=True)
             return 0
-        print("PROBE FAIL: step refused after click", flush=True)
+        print("PROBE FAIL: still closed after click, loc=%s" % (bot.world.loc_at(x, z, level),), flush=True)
         return 1
     finally:
         bot.close()
