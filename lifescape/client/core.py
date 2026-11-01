@@ -390,6 +390,14 @@ class BotCore:
             entry = None
             if self._loctypes is not None and held < len(self._loctypes["obj"]):
                 entry = self._loctypes["obj"][held]
+            if entry is None and held is not None and not getattr(self, "_noname_logged", False):
+                # DIAG-TEMP: why do live snapshots lose item names?
+                self._noname_logged = True
+                print("noname obj %r loctypes=%s objlen=%s" % (
+                    held,
+                    type(self._loctypes).__name__ if self._loctypes is not None else None,
+                    len(self._loctypes["obj"]) if isinstance(self._loctypes, dict) and isinstance(self._loctypes.get("obj"), list) else None,
+                ), flush=True)
             found.append({"id": held, "name": (entry["name"] if entry else "") or "", "count": count})
         return found
 
