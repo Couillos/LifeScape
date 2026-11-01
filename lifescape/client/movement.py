@@ -461,12 +461,10 @@ class MovementMixin:
                     print("door %d,%d has no reachable side" % (action.x, action.z), flush=True)
                     return False
             # The plan crosses this tile: entry steps succeed even onto a
-            # closed door, so only a real click opens the way. Never skip
-            # it (a skipped click on a closed door strands the route, and
-            # a click on a stale-open door is fixed by the next rescue).
-            self._click_door_pair(action.x, action.z, action.level, action.op, action.loc_id)
-            self._await_loc_change(action.x, action.z, action.level, action.loc_id, min(deadline, time.time() + DOOR_WAIT))
-            through = self._try_step_on(action.x, action.z, action.level, deadline)
+            # closed door, so only a real click opens the way. The click
+            # itself resolves the live loc id (a stale static id is
+            # silently ignored by the server once the door changed state).
+            through = self._open_door_inner(action.x, action.z, deadline)
             self._recent_doors[(action.x, action.z)] = time.time()
             if through:
                 self._unseal(action.x, action.z, action.level)
@@ -542,10 +540,9 @@ class MovementMixin:
         try:
             if not self._stand_on_door_side(spot, timeout=10):
                 return False
-            self._click_door_pair(spot[0], spot[1], spot[2], op, spot[9])
-            self._await_loc_change(spot[0], spot[1], spot[2], spot[9], time.time() + DOOR_WAIT)
-            if self._try_step_on(spot[0], spot[1], spot[2], time.time() + 2.0):
-                self._unseal(spot[0], spot[1], spot[2])
+            # The click resolves the live loc id itself (a stale static id
+            # is silently ignored by the server once the door changed).
+            if self._open_door_inner(spot[0], spot[1], time.time() + 10):
                 self._recent_doors[(spot[0], spot[1])] = time.time()
                 self._door_failures.pop(id(spot), None)
                 return True
@@ -559,18 +556,6 @@ class MovementMixin:
             return False
         finally:
             self._opening.discard(id(spot))
-
-    def _click_door_pair(self, x, z, level, op, loc_id):
-        """Click one door half, never the pair.
-
-        Clicking every Open loc within a tile toggles double doors out of
-        sync: the half the server already opened gets closed again while
-        the closed half opens, so the doorway stays shut forever no matter
-        how often we click. The route only ever steps onto this tile, so
-        opening just this half is enough.
-        """
-        self._unseal(x, z, level)
-        self._send_oploc(op, x, z, loc_id)
 
     def _try_step_on(self, x, z, level, deadline):
         """Walk one tile onto the door and report whether the server agreed."""
