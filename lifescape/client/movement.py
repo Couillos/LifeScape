@@ -990,10 +990,16 @@ class MovementMixin:
         level = self.world.level if level is None else level
         if level != self.world.level:
             return False
+        if abs(self.world.x - x) + abs(self.world.z - z) <= near:
+            # Already there: find_path compresses the start tile away and
+            # reports [], which must not read as unreachable.
+            return True
         for routing_map in (self._planning_map, self._opened_map):
             if routing_map is None:
                 continue
-            path = self._router.find_path(routing_map, level, self.world.x, self.world.z, x, z)
+            # Full waypoint list: the default cap truncates long routes
+            # mid-way, and the truncated end is never near the target.
+            path = self._router.find_path(routing_map, level, self.world.x, self.world.z, x, z, max_waypoints=10000)
             if path and abs(path[-1][1] - x) + abs(path[-1][2] - z) <= near:
                 return True
         return False
