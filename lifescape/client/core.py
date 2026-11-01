@@ -9,6 +9,7 @@ import os
 import signal
 import time
 
+from .. import collision as collision_mod
 from .. import route as route_mod
 from .. import spots as spots_mod
 from ..buffer import Writer
@@ -224,6 +225,7 @@ class BotCore:
     def _write_state(self):
         if self._state_path is None:
             return
+        self._ensure_names()
         self._state_tick = self.world.ticks
         self._state_written = time.time()
         state = {
@@ -380,6 +382,22 @@ class BotCore:
         found.sort(key=lambda obj: abs(obj["x"] - self.world.x) + abs(obj["z"] - self.world.z))
         return found[:120]
 
+    def _ensure_names(self):
+        """Load the type table for snapshot names without building nav maps.
+
+        Snapshots are written from login on, long before the first walk;
+        jobs that never move (give/probe/clean_session) would otherwise
+        publish nameless items, NPCs and scenery to the dashboard.
+        """
+        if self._loctypes is not None:
+            return
+        if not self._paths or not self._paths.get("types"):
+            return
+        try:
+            self._loctypes = collision_mod.load_types(self._paths["types"])
+        except (OSError, ValueError):
+            pass
+
     def _state_items(self, com_name):
         com = self._com_id(com_name)
         slots = self.world.inv.get(com, {})
@@ -390,14 +408,6 @@ class BotCore:
             entry = None
             if self._loctypes is not None and held < len(self._loctypes["obj"]):
                 entry = self._loctypes["obj"][held]
-            if entry is None and held is not None and not getattr(self, "_noname_logged", False):
-                # DIAG-TEMP: why do live snapshots lose item names?
-                self._noname_logged = True
-                print("noname obj %r loctypes=%s objlen=%s" % (
-                    held,
-                    type(self._loctypes).__name__ if self._loctypes is not None else None,
-                    len(self._loctypes["obj"]) if isinstance(self._loctypes, dict) and isinstance(self._loctypes.get("obj"), list) else None,
-                ), flush=True)
             found.append({"id": held, "name": (entry["name"] if entry else "") or "", "count": count})
         return found
 
