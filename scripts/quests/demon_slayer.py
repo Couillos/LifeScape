@@ -158,6 +158,8 @@ def solve(bot):
             solver.drain_dialog(bot)
         if bot.world.z < 9000:
             raise solver.SolverError("manhole did not go down at %s" % (bot.position,))
+        # The key lands ~40 tiles in, out of take range: walk over first.
+        bot.approach(3225, 9897, radius=10, timeout=300, open_doors=True)
         # The key despawns fast: grab it before anything else.
         solver.take_near(bot, "silverlight_key_3", timeout=60)
         solver.operate_loc(bot, ("ladder_from_cellar",), 1, timeout=120)
