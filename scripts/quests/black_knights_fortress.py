@@ -134,8 +134,12 @@ def solve(bot):
     if _stage(bot) < LISTENED:
         _go_level(bot, 0)
         solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=300)
-        if bot.world.modal:
+        if bot.world.modal and bot.world.modal[0] != "main":
             raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
+        # A wilderness warning (plain main window) is informational, not a
+        # refusal: dismiss it instead of aborting the infiltration.
+        bot.close_modal()
+        bot.pump(5)
         solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
         solver.finish_dialog_like(bot, ["going in", "don't care"])
         # The inner door is upstairs (static spawns put it on level 1).
