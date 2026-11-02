@@ -7,9 +7,7 @@ import sys
 import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape import save as save_mod
-from lifescape.buffer import Writer
 from lifescape.client import Unreachable
-from lifescape.protocol import client_op_id
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
 from scripts.quests.common import run
@@ -84,13 +82,7 @@ def use_item_on_npc(bot, item, npc, timeout=1800):
             com, slot = tutorial_common.inv_slot(bot, obj)
         except KeyError:
             raise solver.SolverError("no %s for %s at %s" % (item, npc, bot.position))
-        body = Writer()
-        body.u16(nid)
-        body.u16(obj)
-        body.u16(slot)
-        body.u16(com)
-        bot.dbg("opnpcu slot=%d obj=%d npc=%d,%d" % (nid, obj, person["x"], person["z"]))
-        bot.connection.send(client_op_id("OPNPCU"), body.bytes())
+        bot.op_npc_u(nid, obj, slot, com)
         # An accepted use opens a result mesbox that halts the script until
         # dismissed: without a continue the tie-up never completes and later
         # sends are refused while it pends (the earlier 18 s timeout mistook
