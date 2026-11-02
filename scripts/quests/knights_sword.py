@@ -34,9 +34,33 @@ COMPLETE = 7
 
 VYVIN_ROOM = (2983, 3335, 2)
 
+# Save-backed stages for this run: fresh logins are blind to live varps,
+# so gates consult the persisted stage too (max wins either way).
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return {}
+    try:
+        from lifescape import save as save_mod
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
+
+def _await_stage(bot, want, timeout=60):
+    """Poll a stage gate: the live varp update can land a tick after the
+    dialogue that set it closes, and a single read falsely fails."""
+    target = bot.world.ticks + timeout
+    while bot.world.ticks < target and _stage(bot) < want:
+        bot.pump(2)
+    return _stage(bot)
+
 
 def _stage(bot):
-    return bot.world.varps.get(SQUIRE, 0)
+    return max(bot.world.varps.get(SQUIRE, 0), _SAVED_VARPS.get(SQUIRE, 0))
 
 
 def _count(bot, name):
@@ -46,10 +70,12 @@ def _count(bot, name):
 def _talk_until(bot, name, keywords, want, tries=3):
     """Talk until the squire varp reaches want; a wrong option otherwise cascades."""
     for _ in range(tries):
-        if _stage(bot) >= want:
+        if _await_stage(bot, want) >= want:
             return
         solver.talk_like(bot, name, keywords)
-    if _stage(bot) < want:
+        if _await_stage(bot, want) >= want:
+            return
+    if _await_stage(bot, want) < want:
         raise solver.SolverError("talking to %s never reached stage %d (at %d)" % (name, want, _stage(bot)))
 
 
@@ -83,6 +109,8 @@ def _portrait(bot):
 def solve(bot):
     if _stage(bot) == COMPLETE:
         return
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
     # Squire starts the quest down the "make a new sword" branch.
     _talk_until(bot, "squire", ["life as a squire", "make a new sword", "dwarves make another", "give it a go"], STARTED)
     # Reldo names the Imcando and their love of redberry pie.
