@@ -5,6 +5,7 @@ import sys
 
 import gamedata as knowledge
 from gamedata import quest_requirements
+from lifescape import save as save_mod
 from scripts.quests import solver
 from scripts.quests.common import run
 from scripts.tutorial import common as tutorial_common
@@ -12,8 +13,33 @@ from scripts.tutorial import common as tutorial_common
 QUEST = quest_requirements.by_key("demon")
 
 DEMONSTART = knowledge.varp_id_by_name("demonstart")
+TALKED_ARIS = 1
+GOT_TRAIBORN_KEY = 28
+SILVERLIGHT = 29
 COMPLETE = 30  # ^demon_complete in content/scripts/general/configs/quest.constant
 INCANTATION = "Carlem Aber Camerinthum Purchai Gabindo"
+
+# Save-backed stage: fresh logins are blind to live varps (demonstart is
+# not transmitted), so resume gates consult the persisted stage too.
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return {}
+    try:
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
+
+def _stage(bot):
+    return max(bot.world.varps.get(DEMONSTART, 0), _SAVED_VARPS.get(DEMONSTART, 0))
+
+
+def _count(bot, name):
+    return bot.inventory().get(solver.obj_id(name), 0)
 
 
 def _wield(bot, item):
@@ -38,8 +64,19 @@ def _wield(bot, item):
 
 
 def solve(bot):
-    if bot.world.varps.get(DEMONSTART) == COMPLETE:
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
+    if _stage(bot) == COMPLETE:
         return
+    # Aris takes a coin; Traiborn eats all 25 bones at stage 28 and the
+    # drain drinks the bucket: each consumable is only required while its
+    # step is still ahead, so a resume after handover never asks for it.
+    if _stage(bot) < TALKED_ARIS and _count(bot, "coins") < 1:
+        raise solver.SolverError("no coin for Aris at %s" % (bot.position,))
+    if _count(bot, "silverlight_key_1") < 1 and _stage(bot) < GOT_TRAIBORN_KEY and _count(bot, "bones") < 25:
+        raise solver.SolverError("need 25 bones for Traiborn at %s" % (bot.position,))
+    if _count(bot, "silverlight_key_3") < 1 and _count(bot, "bucket_water") < 1:
+        raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
     # Gypsy Aris starts the quest for 1 coin and names Sir Prysin.
     solver.talk_like(bot, "aris", ["here you go", "delrith", "silverlight", "incantation", "best"])
     # Sir Prysin sends us hunting for his three keys.

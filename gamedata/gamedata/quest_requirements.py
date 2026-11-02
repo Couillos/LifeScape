@@ -94,7 +94,11 @@ F2P_QUESTS = (
         name="Demon Slayer",
         members=False,
         completion_varps=_completion(("demonstart", 30)),
-        items=(_item("coins"), _item("bucket_water"), _item("bones", 25)),
+        # No bones, no water: Traiborn takes all 25 bones at stage 28 and
+        # the drain drinks the bucket, so requiring them upfront blocks any
+        # resume after handover (like knights pie/materials, hunt rum).
+        # Stage-gated checks in solve() name them for fresh runs.
+        items=(_item("coins"),),
     ),
     QuestRequirements(
         key="doric",
