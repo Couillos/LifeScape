@@ -21,6 +21,25 @@ QUEST = quest_requirements.by_key("prince")
 PRINCEQUEST = knowledge.varp_id_by_name("princequest")
 COMPLETE = 110  # ^prince_complete in content/scripts/general/configs/quest.constant
 
+# Stage gates (10 started, 20 osman, 30 prep, 40 drunk, 50 tied, 100 saved).
+# Save-backed: fresh logins are blind to live varps, so max wins either way.
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return {}
+    try:
+        from lifescape import save as save_mod
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
+
+def _stage(bot):
+    return max(bot.world.varps.get(PRINCEQUEST, 0), _SAVED_VARPS.get(PRINCEQUEST, 0))
+
 
 def use_item_on_npc(bot, item, npc, timeout=180):
     """OPNPCU: the client has no use-item-on-NPC wrapper, so send it directly.
@@ -65,22 +84,38 @@ def use_item_on_npc(bot, item, npc, timeout=180):
 def solve(bot):
     if bot.world.varps.get(PRINCEQUEST) == COMPLETE:
         return
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
+    stage = _stage(bot)
     # Hassan starts the quest; Osman explains the two jobs (rope/disguise
     # via Leela, key copy via Keli's boast). Keywords pick "first thing"
     # then "better go" so the briefing ends instead of looping.
-    solver.talk_like(bot, "hassan", ["help", "chancellor", "osman"])
-    solver.talk_like(bot, "osman", ["better", "okay", "luck", "leela", "first", "second"])
+    if stage < 10:
+        solver.talk_like(bot, "hassan", ["help", "chancellor", "osman"])
+        stage = _stage(bot)
+    if stage < 20:
+        solver.talk_like(bot, "osman", ["better", "okay", "luck", "leela", "first", "second"])
+        stage = _stage(bot)
     # Leela confirms the full kit (key, wig, skirt, paste) is carried and
     # advances to prep_finished; with the kit this is a single chat.
-    solver.talk_like(bot, "leela", ["help", "free", "prince", "equipment", "guard"])
+    if stage < 30:
+        solver.talk_like(bot, "leela", ["help", "free", "prince", "equipment", "guard"])
+        stage = _stage(bot)
     # Joe's beer dialogue drinks all 3 beers by itself and sets guard_drunk.
-    solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
+    if stage < 40:
+        solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
+        stage = _stage(bot)
     # Tie up Keli, unlock the cell door, hand over key + disguise.
-    use_item_on_npc(bot, "rope", "lady_keli")
-    solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
-    solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"])
+    if stage < 50:
+        use_item_on_npc(bot, "rope", "lady_keli")
+        stage = _stage(bot)
+    if stage < 100:
+        solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
+        solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"])
+        stage = _stage(bot)
     # Hassan pays out 700 coins, which completes the quest.
-    solver.talk_like(bot, "hassan", ["reward", "payment", "rescued", "emir"])
+    if stage < 110:
+        solver.talk_like(bot, "hassan", ["reward", "payment", "rescued", "emir"])
     solver.wait_complete(bot)
 
 
