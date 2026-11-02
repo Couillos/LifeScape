@@ -255,12 +255,13 @@ def solve(bot):
     # The chest only answers from its east side: the south tile borders a
     # wall the server's reach check refuses, so nearest-approach (south)
     # silently drops both clicks (verified live with probe_use).
-    _x, _z, _level, _loc = C.find_loc(bot, "piratechest")
-    bot.walk_to(_x + 1, _z, _level, timeout=120, open_doors=True)
-    C.use_held_on_loc(bot, _x, _z, _loc, key)
-    target = bot.world.ticks + 300
-    while _count(bot, message) < 1 and bot.world.ticks < target:
-        bot.pump(5)
+    if _count(bot, message) < 1:
+        _x, _z, _level, _loc = C.find_loc(bot, "piratechest")
+        bot.walk_to(_x + 1, _z, _level, timeout=120, open_doors=True)
+        C.use_held_on_loc(bot, _x, _z, _loc, key)
+        target = bot.world.ticks + 300
+        while _count(bot, message) < 1 and bot.world.ticks < target:
+            bot.pump(5)
     if _count(bot, message) < 1:
         raise solver.SolverError("chest did not yield the pirate message")
     com, slots = bot.backpack()
