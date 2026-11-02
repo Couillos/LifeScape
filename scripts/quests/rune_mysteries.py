@@ -28,15 +28,20 @@ def _saved_stage():
 
 def solve(bot):
     # Duke re-talk is pure cost once started (castle interior doors);
-    # completed stages never need re-talking.
-    if _saved_stage() < 1:
+    # completed stages never need re-talking. Stage-gate the rest too:
+    # restarts otherwise walk every leg again.
+    stage = _saved_stage()
+    if stage < 1:
         solver.talk_like(bot, "duke_of_lumbridge", ["talisman", "help", "runes", "yes"])
     # Sedridor opens with "looking for the head wizard" (the "Nothing
     # thanks" first option is a dead end), then takes the talisman with
     # "here you are" and hands the package on "certainly".
-    solver.talk_like(bot, "head_wizard", ["looking for the head wizard", "here you are", "certainly", "yes"])
-    solver.talk_like(bot, "aubury", ["package", "research", "head_wizard", "notes"])
-    solver.talk_like(bot, "aubury", ["notes", "head_wizard", "finished"])
+    if stage < 3:
+        solver.talk_like(bot, "head_wizard", ["looking for the head wizard", "here you are", "certainly", "yes"])
+    if stage < 4:
+        solver.talk_like(bot, "aubury", ["package", "research", "head_wizard", "notes"])
+    if stage < 5:
+        solver.talk_like(bot, "aubury", ["notes", "head_wizard", "finished"])
     # The finale is item-on-NPC, not talk: Sedridor only takes the notes
     # through opnpcu.
     solver.use_item_on_npc(bot, "research_notes", "head_wizard", near=(3103, 9571))
