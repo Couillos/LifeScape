@@ -96,8 +96,13 @@ def solve(bot):
         solver.take_near(bot, "ghostskull", timeout=300)
     # The coffin/altar lives in Lumbridge church, not in the basement: climb
     # back out before the use-item search (find_loc only sees nearby locs).
+    # The skull only goes into the OPEN coffin: flip shut->altar first.
     bot.approach(3249, 3194, radius=6, timeout=600, open_doors=True)
-    solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
+    try:
+        solver.operate_loc(bot, ["shutghostcoffin"], op=1, timeout=60)
+    except (Unreachable, TimeoutError):
+        pass
+    solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar", "shutghostcoffin"])
     try:
         _wear(bot, "amulet_of_strength")
     except Exception:
