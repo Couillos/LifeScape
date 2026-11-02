@@ -88,7 +88,7 @@ class MovementMixin:
             self.walk_to(x, z, level, timeout=min(timeout, 15), open_doors=open_doors)
         except (Unreachable, TimeoutError) as error:
             print("exact approach to %d,%d failed: %s" % (x, z, error), flush=True)
-        if abs(self.world.x - x) + abs(self.world.z - z) <= radius:
+        if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
             return True
         deadline = time.time() + timeout
         here = (self.world.x, self.world.z)
@@ -97,7 +97,7 @@ class MovementMixin:
             key=lambda tile: abs(tile[0] - here[0]) + abs(tile[1] - here[1]),
         )
         for cx, cz in candidates:
-            if (cx, cz) == here:
+            if (cx, cz) == here and self.world.level == level:
                 return True
             try:
                 path = self.router.find_path(self.opened_map if open_doors else self.collision, level, here[0], here[1], cx, cz)
@@ -112,7 +112,7 @@ class MovementMixin:
             except (Unreachable, TimeoutError) as error:
                 print("approach candidate %d,%d failed: %s" % (cx, cz, error), flush=True)
                 continue
-            if abs(self.world.x - x) + abs(self.world.z - z) <= radius:
+            if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
                 return True
         raise Unreachable("nothing reachable within %d of %d,%d from %s" % (
             radius, x, z, self.world.position
