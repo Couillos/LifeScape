@@ -18,9 +18,26 @@ def _has(bot, name):
     return bot.inventory().get(solver.obj_id(name), 0) > 0
 
 
+def _saved_stage():
+    """Save-based quest stage (live varps are blind to pre-login stages)."""
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return 0
+    try:
+        from lifescape import save as save_mod
+        varps = save_mod.load_account(account).get("varps", {})
+        return varps.get(QUEST.completion_varps[0][0], 0) or 0
+    except Exception:
+        return 0
+
+
 def solve(bot):
-    solver.talk_like(bot, "veronica", ["quest", "help", "ernest"])
-    solver.talk_like(bot, "professor_oddenstein", ["ernest", "looking", "chicken", "change", "back"])
+    # Manor doors only open outward: never walk back out for a re-talk.
+    stage = _saved_stage()
+    if stage < 1:
+        solver.talk_like(bot, "veronica", ["quest", "help", "ernest"])
+    if stage < 2:
+        solver.talk_like(bot, "professor_oddenstein", ["ernest", "looking", "chicken", "change", "back"])
     # Only the pressure gauge needs work in-world: the oil can and rubber
     # tube arrive from the bank (see QUEST items). Kill the fountain's
     # piranhas with the banked fish food + poison, then take the gauge.
