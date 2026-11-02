@@ -19,6 +19,28 @@ class SolverError(RuntimeError):
     pass
 
 
+# Random-event junk (macro cubes) is unbankable and piles up on long
+# treks until quest item deliveries overflow to the ground and despawn.
+# Dropped on sight: it has no use.
+JUNK_ITEMS = ("macro_cube",)
+
+
+def drop_junk(bot):
+    """Drop any junk in the backpack; silent when there is none."""
+    for name in JUNK_ITEMS:
+        found = knowledge.objs.by_name(name)
+        if not found:
+            continue
+        obj_id = found[0].obj_id
+        while bot.inventory().get(obj_id, 0) > 0:
+            try:
+                if not bot.drop(obj_id, timeout=15):
+                    break
+            except Exception:
+                break
+            bot.pump(3)
+
+
 def _known_npc(name):
     entries = knowledge.npc_by_name(name)
     if not entries:
@@ -74,6 +96,9 @@ def finish_dialog_like(bot, keywords, timeout=300):
     still_rounds = 0
     while bot.world.ticks < target:
         bot.pump(2)
+        # Quest items land mid-dialogue: keep one slot free so a delivery
+        # never overflows to the ground while we click through pages.
+        drop_junk(bot)
         if _completion_open(bot):
             # The quest finished mid-talk: close its scroll so follow-up
             # talks start from a clean slate instead of piling interfaces.
