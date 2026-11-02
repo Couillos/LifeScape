@@ -291,12 +291,30 @@ def load_types(path):
 def load_maps(pack_dir, loctypes, members=True):
     collision = CollisionMap()
     static_locs = {}
+    static_actions = {}
     maps = _map_files(pack_dir)
     for square_x, square_z, ground, locs in maps:
         _load_ground(collision, ground, square_x, square_z, members)
         lands = _read_lands(ground)
-        _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs)
-    return collision, static_locs
+        _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions)
+    return collision, static_locs, static_actions
+
+
+def step_open(collision, x, z, level, dx, dz):
+    """True when a size-1 mover can step one tile diagonally or straight."""
+    here = collision.get(x, z, level)
+    there = collision.get(x + dx, z + dz, level)
+    if not tile_walkable(here) or not tile_walkable(there):
+        return False
+    if dx == 0 and dz == 1:
+        return not (here & WALL_NORTH) and not (there & WALL_SOUTH)
+    if dx == 0 and dz == -1:
+        return not (here & WALL_SOUTH) and not (there & WALL_NORTH)
+    if dx == 1 and dz == 0:
+        return not (here & WALL_EAST) and not (there & WALL_WEST)
+    if dx == -1 and dz == 0:
+        return not (here & WALL_WEST) and not (there & WALL_EAST)
+    return False
 
 
 def _map_files(pack_dir):
@@ -365,7 +383,7 @@ def _load_ground(collision, ground, square_x, square_z, members):
                 collision.change_floor(absolute_x, absolute_z, actual, True)
 
 
-def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs):
+def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions):
     packet = Reader(locs)
     loc_id = -1
     offset = packet.smarts()
@@ -393,6 +411,11 @@ def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, st
             angle = info & 0x3
             static_locs[(absolute_x, absolute_z, actual)] = (loc_id, shape, angle)
             loc = loctypes["loc"][loc_id] if loc_id < len(loctypes["loc"]) else None
+            if loc is not None and any(loc.get("ops") or ()):
+                # Actionable locs keep their own table: static_locs holds one
+                # loc per tile and a decorative loc on the same tile (the maze
+                # statue shares its corner with dug-up soil) would hide it.
+                static_actions.setdefault((absolute_x, absolute_z, actual), (loc_id, shape, angle))
             if loc is None or not loc["blockwalk"]:
                 continue
             change_loc_collision(

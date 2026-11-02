@@ -18,9 +18,17 @@ knights (squire=7), demon (demonstart=30).
 
 ## Commandes (que via l'orchestrateur, jamais de pypy direct)
 ```
-../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py start|stop|status [job] [account]
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py open <compte>
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py run <compte> <script> [args]
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py call <compte> <methode> [args]   # debug SDK direct
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py shell <compte>                   # REPL
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py status | show | see | logs <compte> 40
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py unload <compte> | close <compte>
 ../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py test   # unitaires
 ```
+Plus de `start`/`stop`/`restart`. Pour vérifier un comportement, `call` (lecture
+depuis le snapshot, écriture au prochain `pump`) ou `shell` remplacent les
+sondes jetables.
 Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 `probe_use` (clic loc + use objet + dump modals/unsets/msgs),
 `probe_vars`, `drop`, `bank_deposit`, `quest_reset`. `see <compte>` :
@@ -34,7 +42,7 @@ Comptes test t01…t20,
   un commentaire "no teleport" dans solver.py).
 - Ne jamais modifier le serveur (`../lostcity/engine`, `content`) : tout se
   corrige côté client/SDK.
-- Tickrate dev = 100 ms → respawns 6x plus rapides qu'en prod (Keli = 10 s).
+- Tickrate dev = 20 ms (`tickRate: 20`) → respawns 30x plus rapides qu'en prod (Keli = 10 s).
 - Varps live ne pré-chargent pas : gates d'étape = `max(live, save)` +
   `save` rechargé au début du solve (`_SAVED_VARPS`), + poll `_await_stage`
   après chaque dialogue (le varp live arrive après la fermeture du modal).
@@ -79,13 +87,32 @@ Comptes test t01…t20,
 - SDK : `lifescape/client/{core,actions,movement}.py`, `lifescape/{route,doors,portals.py}`,
   `lifescape/data/transitions.json` (généré par `scripts/dump_transitions.py`).
 - Sondes : `scripts/probe_*.py`, registre `orchestration/registry.py`.
-- Tickrate : `../lostcity/engine/data/config/world.json` (`tickRate`, 100 dev / 600 prod).
+- Tickrate : `../lostcity/engine/data/config/world.json` (`tickRate`, 20 dev / 600 prod).
 
 ## Point de reprise immédiat
-1. `scripts/orchestrator.py status` (job blackknight vivant ?).
-2. Sinon `start quest_black_knights_fortress admin` (gates sautent
+1. `scripts/orchestrator.py status` (session admin vivante ?).
+2. Sinon `open admin` puis `run admin quest_black_knights_fortress` (gates sautent
    amik+portes si save≥1, sabotage direct si save≥2).
 3. `see admin` pour voir ce que le bot voit (positions + distances).
+
+## Blocage connu : random event maze
+`admin` est resté bloqué dans le maze (`0_45_71`, ~2911,4574) : la statue de
+sortie (`macro_maze_complete`, loc 3634, 3×3 en 2911,4575) ne répond à aucun
+clic, y compris sur ses 9 tuiles et sur toutes les tuiles voisines. Côté carte,
+le sol sous la statue porte `dugupsoil1/2_macromaze` (même tuile) ; le serveur
+garde probablement la loc de décor et la résolution de clic n'atteint jamais la
+statue. Les cheats `::mazeend`, `::pp2` et le `::tele` de `goto.py` ne déplacent
+plus le joueur dans cet état, donc l'événement est **infini** côté bot : à
+corriger côté contenu (retirer le dugupsoil sous la statue, ou déplacer la
+statue), pas côté client.
+
+Côté client, `scripts/randomevents.py` (solve_maze) a été réécrit et vérifié
+live : il calcule la poche atteignable, clique les `walllow` et franchit
+chaque porte d'un pas (`Bot.step_to`), il atteint la tuile voisine de la statue
+puis s'arrête proprement avec un diagnostic. Le SDK expose désormais
+`world.static_actions` : les locs actionnables qu'un décor posé sur la même
+tuile masquait dans `static_locs` (c'était la cause du solver qui tournait à
+vide).
 
 ## Leçons knights (utiles pour les suivantes)
 - Varp non transmis (`transmit=False`, ex. `squire`) : le gate live ne passe

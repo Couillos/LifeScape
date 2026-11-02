@@ -384,6 +384,7 @@ class BotCore:
                 "args": list(args),
                 "start_tick": self.world.ticks,
                 "cancelled": False,
+                "started": threading.Event(),
                 "done": threading.Event(),
                 "result": None,
                 "error": None,
@@ -409,6 +410,7 @@ class BotCore:
                 self._commands.remove(command)
         if command is None:
             return
+        command["started"].set()
         self._draining = True
         try:
             try:
@@ -423,6 +425,8 @@ class BotCore:
                         command["result"] = target(*command["args"])
                     except Exception as error:
                         command["error"] = "%s: %s" % (type(error).__name__, error)
+                        import traceback
+                        traceback.print_exc()
         finally:
             self._draining = False
             command["done"].set()

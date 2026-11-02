@@ -20,8 +20,10 @@ box dance, swarm/triffid aggression (the walk flee handles those).
 """
 
 import json
+from collections import deque
 
 
+from lifescape import collision as collision_mod
 from lifescape.client import Unreachable  # noqa: F401  (re-exported for callers)
 from scripts.tutorial import common as tutorial_common
 
@@ -29,7 +31,6 @@ EVENT_HOSTS = ("macro_mage", "macro_geni", "macro_dwarf")
 
 MAZE_X = (2880, 2944)
 MAZE_Z = (4544, 4608)
-MAZE_CENTRE = (2911, 4575)
 STATUE_NAMES = ("macro_maze_complete",)
 
 # Mime stage mapzone 0_31_74.
@@ -71,33 +72,14 @@ def greet(bot, timeout=3000):
         tutorial_common.finish_dialog(bot, (), timeout=timeout)
 
 
-def nearby_named_locs(bot, needle, radius=60):
-    found = []
-    seen = {}
-    seen.update(bot.world.locs)
-    seen.update(bot.world.static_locs)
-    for (x, z, _level), loc in seen.items():
-        # Dynamic locs vanish as None when the server removes them.
-        if loc is None:
-            continue
-        loc_id = loc[0]
-        if abs(x - bot.world.x) + abs(z - bot.world.z) > radius:
-            continue
-        entry = bot.loctypes["loc"][loc_id] if loc_id < len(bot.loctypes["loc"]) else None
-        name = (entry["name"] if entry else "") or ""
-        if needle in name.lower():
-            found.append((abs(x - bot.world.x) + abs(z - bot.world.z), x, z, loc_id, name))
-    found.sort()
-    return found
-
-
 def _touch_statue(bot, x, z, loc_id):
     """Walk to the exit statue and touch it. True when out of the maze."""
-    try:
-        bot.approach(x, z, radius=2, timeout=6000, open_doors=True)
-    except (Unreachable, TimeoutError) as err:
-        print("statue approach failed: %s" % (err,), flush=True)
-        return False
+    if abs(bot.world.x - x) + abs(bot.world.z - z) > 2:
+        try:
+            bot.approach(x, z, radius=3, timeout=3000, open_doors=False)
+        except (Unreachable, TimeoutError) as err:
+            print("statue approach failed: %s" % (err,), flush=True)
+            return False
     bot.op_loc(1, x, z, loc_id)
     target = bot.world.ticks + 200
     while bot.world.ticks < target and in_maze(bot):
@@ -108,82 +90,218 @@ def _touch_statue(bot, x, z, loc_id):
     return False
 
 
-def solve_maze(bot):
-    """Ratchet to the maze centre, touching the exit statue on sight.
+def in_rect(x, z):
+    return MAZE_X[0] <= x < MAZE_X[1] and MAZE_Z[0] <= z < MAZE_Z[1]
 
-    Walllow segments open from one side only (the planner clicks them
-    and blocklists refusals); wallhigh segments never open. One direct
-    walk stalls on the first wrong-side door, so advance in short legs
-    and rescan for the statue after each: it streams in around 15
-    tiles out, well before the centre tile itself is reachable.
+
+def loc_name(bot, loc_id):
+    entry = bot.loctypes["loc"][loc_id] if loc_id < len(bot.loctypes["loc"]) else None
+    return (entry["name"] if entry else "") or ""
+
+
+def maze_statue(bot):
+    """(x, z, loc_id) of the maze exit statue, from the static action table."""
+    for (x, z, level), (loc_id, _shape, _angle) in (bot.world.static_actions or {}).items():
+        if level == 0 and in_rect(x, z) and loc_name(bot, loc_id) in STATUE_NAMES:
+            return x, z, loc_id
+    return None
+
+
+def maze_doors(bot):
+    """{(x, z): placement} for every maze door the server may open.
+
+    Server truth (macro_event_maze.rs2): the plain walllow and the safe1/
+    safe4 variants answer the click; safe2/safe3 answer "I don't think
+    that's the right way". Which variant sits where is map data, not a
+    rule we can trust blind, so every door is a candidate and a refusal
+    removes it at runtime.
+    """
+    found = {}
+    for spot in bot.wall_doors or ():
+        if spot[2] != 0 or not in_rect(spot[0], spot[1]):
+            continue
+        name = loc_name(bot, spot[9])
+        if name.startswith(("macro_maze_walllow", "macor_maze_walllow")):
+            found[(spot[0], spot[1])] = spot
+    return found
+
+
+def maze_statue_targets(bot):
+    """Tiles from which the 3x3 exit statue can be touched."""
+    statue = maze_statue(bot)
+    if statue is None:
+        return set()
+    x, z, _loc_id = statue
+    return {
+        (x + dx, z + dz)
+        for dx in range(-1, 4)
+        for dz in range(-1, 4)
+        if dx in (-1, 3) or dz in (-1, 3)
+    }
+
+
+def maze_path(bot, goals, doors, blocked):
+    """Shortest tile path to any goal, crossing candidate doors.
+
+    `blocked` holds the directed edges (from_tile, door_tile) the server
+    already refused, so a refused approach is never retried from the same
+    side.
+    """
+    start = (bot.world.x, bot.world.z)
+    previous = {start: None}
+    queue = deque([start])
+    level = bot.world.level
+    while queue:
+        here = queue.popleft()
+        if here in goals:
+            path = []
+            tile = here
+            while tile is not None:
+                path.append(tile)
+                tile = previous[tile]
+            path.reverse()
+            return path
+        x, z = here
+        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nxt = (x + dx, z + dz)
+            if nxt in previous or not in_rect(nxt[0], nxt[1]):
+                continue
+            traversable = collision_mod.step_open(bot.collision, x, z, level, dx, dz)
+            if not traversable and (here in doors or nxt in doors):
+                # A door is walked like an open tile; the server decides
+                # which approach side it accepts, learned from refusals.
+                traversable = (here, nxt) not in blocked
+            if traversable:
+                previous[nxt] = here
+                queue.append(nxt)
+    return None
+
+
+def cross_maze_door(bot, spot, near, beyond):
+    """Get onto a walllow, click it, then walk out through the opened face.
+
+    Verified live: the click is accepted from the corridor side or from the
+    door tile itself, and is refused from the along-wall side, so the door
+    is entered first when the plain step fails. Returns True when the bot
+    reached `beyond`.
+    """
+    x, z = spot[0], spot[1]
+    door_tile = (x, z)
+    here = (bot.world.x, bot.world.z)
+    if here != door_tile:
+        try:
+            bot.walk_to(near[0], near[1], 0, timeout=300, open_doors=False)
+        except (Unreachable, TimeoutError) as err:
+            print("cannot reach %s before walllow %s: %s" % (near, door_tile, err), flush=True)
+            return False
+        if (bot.world.x, bot.world.z) != door_tile:
+            try:
+                bot.walk_to(door_tile[0], door_tile[1], 0, timeout=300, open_doors=False)
+            except (Unreachable, TimeoutError):
+                pass
+    seen_messages = len(bot.world.messages)
+    print("open walllow (%d,%d) at %s then step to %s" % (x, z, bot.position, beyond), flush=True)
+    bot.op_loc(1, x, z, spot[9])
+    ticks = bot.world.ticks + 60
+    while bot.world.ticks < ticks:
+        bot.pump(3)
+        if (bot.world.x, bot.world.z) in (door_tile, beyond):
+            break
+    # The click either opens the face or answers with a box; the only
+    # reliable proof is the server moving us, so judge on the tile reached.
+    if bot.world.modal is not None:
+        bot.close_modal()
+        bot.pump(3)
+    if (bot.world.x, bot.world.z) != door_tile:
+        try:
+            bot.step_to(door_tile[0], door_tile[1])
+        except (Unreachable, TimeoutError) as err:
+            print("walllow (%d,%d) not entered: %s" % (x, z, err), flush=True)
+    if (bot.world.x, bot.world.z) == door_tile:
+        try:
+            bot.step_to(beyond[0], beyond[1])
+        except (Unreachable, TimeoutError) as err:
+            print("walllow (%d,%d) open but %s failed: %s" % (x, z, beyond, err), flush=True)
+    if (bot.world.x, bot.world.z) != beyond:
+        print("walllow (%d,%d) did not yield %s (at %s)%s" % (
+            x, z, beyond, bot.position,
+            ", server said: " + refusal_text(bot, seen_messages) if refusal_since(bot, seen_messages) else "",
+        ), flush=True)
+        return False
+    return True
+
+
+def refusal_text(bot, first):
+    for line in (bot.world.messages or [])[first:]:
+        text = str(getattr(line, "text", line))
+        if "right way" in text.lower():
+            return text
+    return ""
+
+def refusal_since(bot, first):
+    """True when the server answered a door click with its wrong-side box."""
+    return bool(refusal_text(bot, first))
+
+
+def solve_maze(bot):
+    """Walk to the maze centre through the doors the server lets us open.
+
+    The maze map is static, so the geometry and the statue come from the
+    collision map; only the walllow clicks are live. Each leg crosses one
+    door, walked through right after the click while it stands open. A
+    refused approach is remembered as a directed edge and never retried.
     Returns True when outside the maze.
     """
     if not in_maze(bot):
         return True
     bot.ensure_nav()
-    # Maze wallhigh segments never open (the server says "I can't open
-    # that"), but they carry an Open op so the planner treats them as
-    # doors and burns legs clicking them. Take them out of planning so
-    # the router only threads the walllow one-way doors. Temporary like
-    # any other door block (2 min), routing-only, expires on its own.
-    # Batched: one rebuild, not one per wall (each rebuild copies maps).
-    fresh = bot.world.ticks + 6000
-    added = False
-    for spot in bot.wall_doors or ():
-        if spot[2] != bot.world.level:
-            continue
-        if not (MAZE_X[0] <= spot[0] < MAZE_X[1] and MAZE_Z[0] <= spot[1] < MAZE_Z[1]):
-            continue
-        entry = bot.loctypes["loc"][spot[9]] if spot[9] < len(bot.loctypes["loc"]) else None
-        if entry is not None and entry.get("name") == "macro_maze_wallhigh":
-            if id(spot) not in bot._blocked_doors:
-                bot._blocked_doors.add(id(spot))
-                added = True
-            bot._blocked_doors_exp[id(spot)] = fresh
-    if added:
-        bot._rebuild_opened()
+    statue = maze_statue(bot)
+    if statue is None:
+        print("maze exit statue missing from the static action table", flush=True)
+        return False
     deadline = bot.world.ticks + 15000
-    best = abs(bot.world.x - MAZE_CENTRE[0]) + abs(bot.world.z - MAZE_CENTRE[1])
-    stall = 0
-    last = (bot.world.x, bot.world.z)
+    doors = maze_doors(bot)
+    goals = maze_statue_targets(bot)
+    print("maze doors: %d candidates, statue at (%d,%d)" % (len(doors), statue[0], statue[1]), flush=True)
+    blocked = set()
     while in_maze(bot) and bot.world.ticks < deadline:
-        if bot.world.modal is not None:
-            # Wrong-side door refusals land in a mesbox: dismiss it so
-            # the rest of the leg stops clicking behind a modal.
+        if bot.world.modal is not None and bot.world.modal[0] == "mesbox":
             bot.close_modal()
             bot.pump(5)
-        for _dist, x, z, loc_id, name in nearby_named_locs(bot, "maze"):
-            if name in STATUE_NAMES:
-                print("statue at (%d,%d)" % (x, z), flush=True)
-                if _touch_statue(bot, x, z, loc_id):
-                    return True
-                break
-        else:
+        if abs(bot.world.x - statue[0]) + abs(bot.world.z - statue[1]) <= 2:
+            print("statue in reach from %s" % (bot.position,), flush=True)
+            if _touch_statue(bot, *statue):
+                return True
+            return False
+        path = maze_path(bot, goals, doors, blocked)
+        if path is None:
+            print("no path through the open doors at %s" % (bot.position,), flush=True)
+            return False
+        index = next((i for i, tile in enumerate(path) if tile in doors), None)
+        if index is None:
+            goal = path[-1]
             try:
-                # Short legs: one door interaction per pass, then
-                # dismiss any refusal modal before the next click.
-                bot.walk_to(MAZE_CENTRE[0], MAZE_CENTRE[1], bot.world.level, timeout=400, open_doors=True)
+                bot.walk_to(goal[0], goal[1], 0, timeout=600, open_doors=False)
             except (Unreachable, TimeoutError) as err:
-                print("leg toward centre failed at %s: %s" % (bot.position, err), flush=True)
-            bot.pump(5)
+                print("cannot walk the last leg to %s: %s" % (goal, err), flush=True)
+                return False
+            if _touch_statue(bot, *statue):
+                return True
+            return False
         here = (bot.world.x, bot.world.z)
-        dist = abs(here[0] - MAZE_CENTRE[0]) + abs(here[1] - MAZE_CENTRE[1])
-        if dist < best:
-            # Real progress: the maze is threadable, allow more time.
-            best = dist
-            deadline = bot.world.ticks + 15000
-        stall = stall + 1 if here == last else 0
-        last = here
-        if stall >= 3:
-            # Door ping-pong: sidestep off the desire line so the next
-            # replan tries a different set of doors.
-            stall = 0
-            detour = (here[0] + 4, here[1] - 4)
-            print("sidestep to %s" % (detour,), flush=True)
+        near = path[index - 1] if index > 0 else here
+        door_tile = path[index]
+        beyond = path[index + 1] if index + 1 < len(path) else near
+        if near != here:
             try:
-                bot.walk_to(detour[0], detour[1], bot.world.level, timeout=600, open_doors=True)
-            except (Unreachable, TimeoutError):
-                pass
+                bot.walk_to(near[0], near[1], 0, timeout=600, open_doors=False)
+            except (Unreachable, TimeoutError) as err:
+                print("cannot reach %s before walllow %s: %s" % (near, door_tile, err), flush=True)
+                blocked.add((near, door_tile))
+                continue
+        if not cross_maze_door(bot, doors[door_tile], near, beyond):
+            blocked.add((near, door_tile))
+    print("maze unsolved after %d ticks at %s" % (15000, bot.position), flush=True)
     return not in_maze(bot)
 
 

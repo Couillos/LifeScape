@@ -1354,8 +1354,9 @@ class MovementMixin:
         if self.collision is not None:
             return
         self.loctypes = collision_mod.load_types(self.paths["types"])
-        self.collision, static_locs = collision_mod.load_maps(self.paths["pack_dir"], self.loctypes)
+        self.collision, static_locs, static_actions = collision_mod.load_maps(self.paths["pack_dir"], self.loctypes)
         self.world.static_locs = static_locs
+        self.world.static_actions = static_actions
         self.world.static_objs = {}
         for x, z, level, oid, count in objs_mod.load_static_objs(self.paths["pack_dir"]):
             self.world.static_objs[((x, z, level), oid)] = count
@@ -1628,6 +1629,30 @@ class MovementMixin:
 
     def _expand(self, waypoints):
         return route_mod.expand_steps(waypoints, (self.world.x, self.world.z), STEP_CAP)
+
+    def step_to(self, x, z, timeout_ticks=120):
+        """Walk one tile past an opened door, without routing.
+
+        A wall door is open for a moment after its click: routing again
+        from the live map races that window and, in a maze of look-alike
+        walls, sends the planner hunting other doors. The caller already
+        knows the tile, so send the single step directly. Returns True
+        when the server moved us there.
+        """
+        if (self.world.x, self.world.z) == (x, z):
+            return True
+        self.ensure_nav()
+        if abs(x - self.world.x) + abs(z - self.world.z) != 1:
+            raise Unreachable("step_to is one tile, not %s -> %d,%d" % (self.world.position, x, z))
+        if not collision_mod.tile_walkable(self.collision.get(x, z, self.world.level)):
+            raise Unreachable("step target %d,%d is blocked at %s" % (x, z, self.world.position))
+        self._send_walk([(x, z)], self.want_run())
+        deadline = self.world.ticks + timeout_ticks
+        while self.world.ticks < deadline:
+            self.pump(1)
+            if (self.world.x, self.world.z) == (x, z):
+                return True
+        return False
 
     def _send_walk(self, steps, run):
         self.dbg("send_walk %d steps run=%s" % (len(steps), run))

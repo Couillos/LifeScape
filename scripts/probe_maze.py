@@ -28,6 +28,21 @@ def run(bot, *args):
         print("d=%d (%d,%d) id=%d %r ops=%s" % (dist, x, z, loc_id, name, ops), flush=True)
     # Planner internals: which doors does the router assume open?
     try:
+        from lifescape import collision as collision_mod
+        for nx, nz in ((bot.world.x + 1, bot.world.z), (bot.world.x - 1, bot.world.z),
+                       (bot.world.x, bot.world.z + 1), (bot.world.x, bot.world.z - 1)):
+            raw = bot.collision.get(nx, nz, bot.world.level) if bot.collision else None
+            opened = bot.opened_map.get(nx, nz, bot.world.level) if bot.opened_map else None
+            print("tile (%d,%d) raw=%s opened=%s walkable_raw=%s" % (
+                nx, nz, raw, opened, collision_mod.tile_walkable(raw)), flush=True)
+        here = (bot.world.x, bot.world.z)
+        for label, routing in (("collision", bot.collision), ("opened", bot.opened_map),
+                               ("planning", getattr(bot, "planning_map", None))):
+            try:
+                path = bot.router.find_path(routing, bot.world.level, here[0], here[1], 2904, 4557)
+                print("find_path %s to (2904,4557): %s" % (label, path if not path else (len(path), path[:3])), flush=True)
+            except Exception as err:
+                print("find_path %s raised %r" % (label, err), flush=True)
         maze_doors = [s for s in (bot.wall_doors or [])
                       if 2880 <= s[0] <= 2943 and 4544 <= s[1] <= 4607 and s[2] == 0]
         print("wall_doors near maze: %d (total %d)" % (len(maze_doors), len(bot.wall_doors or [])), flush=True)

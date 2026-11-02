@@ -437,8 +437,12 @@ class SessionWorker:
                 return {"ok": False, "error": "busy: unload in progress"}
             running = self.script_thread is not None and self.script_thread.is_alive()
         command = self.bot.queue_command(method, parse_call_args(args))
-        done = self.wait_command(command)
-        if not done or command["cancelled"]:
+        reached = self.wait_command(command)
+        if reached != "done" or command["cancelled"]:
+            if command["started"].is_set():
+                # Started but the waiter gave up (frozen ticks mid-call):
+                # leave it running, its own timeouts bound it.
+                return {"ok": False, "error": "call %s stalled: ticks frozen" % method}
             self.bot.drop_command(command)
             return {"ok": False, "error": "busy: script did not yield within %d ticks" % SAFE_POINT_TICKS}
         if command["error"] is not None:
@@ -449,19 +453,46 @@ class SessionWorker:
         return self.bot.stop_requested()
 
     def wait_command(self, command):
-        """Wait for the next pump safe-point, bounded in ticks (wall backstop
-        when ticks are frozen: no connection or a CPU-spinning script)."""
+        """Wait for the next pump safe-point, then for the call to finish.
+
+        Only reaching the safe-point is tick-bounded (500 ticks): once the
+        call starts, its own tick timeouts bound it, so the wait follows
+        tick progress instead of a fixed budget. The wall backstop only
+        fires when ticks are frozen (dead connection or CPU-spinning
+        script), in either phase.
+        Returns "started", "done", or None (give up)."""
         start_tick = self.bot.world.ticks
         start_wall = time.time()
-        while not command["done"].is_set():
+        while not command["started"].is_set():
+            if command["done"].is_set():
+                # Drained and finished before the waiter looked: nothing left
+                # to wait for, report the call as done instead of stalling.
+                return "done"
+            if command["cancelled"]:
+                return None
             if self.bot.world.ticks - start_tick >= SAFE_POINT_TICKS:
-                return False
+                return None
             if time.time() - start_wall > WALL_BACKSTOP:
-                return False
+                return None
             if self.bot.stop_requested():
-                return False
+                return None
             time.sleep(0.05)
-        return True
+        if not command["started"].is_set():
+            return None
+        last_tick = self.bot.world.ticks
+        last_progress = time.time()
+        while not command["done"].is_set():
+            if command["cancelled"]:
+                return None
+            if self.bot.world.ticks != last_tick:
+                last_tick = self.bot.world.ticks
+                last_progress = time.time()
+            if time.time() - last_progress > WALL_BACKSTOP:
+                return None
+            if self.bot.stop_requested():
+                return None
+            time.sleep(0.05)
+        return "done"
 
     # -- network ---------------------------------------------------------
 
