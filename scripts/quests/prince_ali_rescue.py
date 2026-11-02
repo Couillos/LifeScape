@@ -146,14 +146,11 @@ def solve(bot):
         C.use_held_on_loc(bot, _dx, _dz, _dloc, solver.obj_id("princeskey"))
         wait_ticks(bot, 30)
         solver._drain_dialog(bot)
-        # Step onto the door tile: only possible while unlocked, and the
-        # talk then runs with no wall between us and the prince.
-        try:
-            bot.walk_to(_dx, _dz, _dlvl, timeout=20, open_doors=True)
-        except (Unreachable, TimeoutError):
-            raise solver.SolverError("cell door refused (Keli respawned?) at %s" % (bot.position,))
+        # Talk from the door tile: with the gate open there is no wall in
+        # the way. (No step-in: walking onto the tile grinds when shut and
+        # eats the ~60 s the open gate lasts.)
         solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"],
-                         near=(_dx, _dz))
+                         near=(_dx, _dz + 1))
         stage = _stage(bot)
     if stage < 100:
         raise solver.SolverError("prince not freed at %s" % (bot.position,))
