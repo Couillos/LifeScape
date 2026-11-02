@@ -97,6 +97,8 @@ def _vyvin_close(bot):
 
 
 def _portrait(bot):
+    if _stage(bot) >= LOOKING_BLURITE:
+        return
     if _count(bot, "knights_portrait") > 0:
         return
     bot.intend("climbing to Vyvin's room for the portrait")
