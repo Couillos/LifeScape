@@ -32,7 +32,7 @@ def main():
             print("unknown item %r" % (item,), flush=True)
             return 1
         obj_id = found[0].obj_id
-        wait_backpack(knowledge.com_id("inventory:inv"))
+        wait_backpack(bot, knowledge.com_id("inventory:inv"))
         dropped = 0
         while dropped < count:
             try:
