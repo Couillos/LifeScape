@@ -105,6 +105,13 @@ def solve(bot):
     if stage < 40:
         solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
         stage = _stage(bot)
+    if stage < 40:
+        # A mistargeted chat leaves the beers untouched: retry once, then
+        # fail fast instead of timing out on Keli (she refuses while sober).
+        solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
+        stage = _stage(bot)
+    if stage < 40:
+        raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
     # Tie up Keli, unlock the cell door, hand over key + disguise.
     if stage < 50:
         use_item_on_npc(bot, "rope", "lady_keli")
