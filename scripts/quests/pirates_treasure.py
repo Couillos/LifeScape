@@ -28,9 +28,25 @@ QUEST = quest_requirements.by_key("hunt")
 COINS_TARGET = 600
 DIG_TILES = ((2999, 3383), (2998, 3383), (3000, 3383), (2999, 3382), (2999, 3384))
 
+# Save-backed varps for this run: fresh logins are blind to live varps,
+# so gates below consult the persisted stage too (max wins either way).
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return {}
+    try:
+        from lifescape import save as save_mod
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
 
 def _varp(bot, name):
-    return bot.world.varps.get(knowledge.varp_id_by_name(name), 0)
+    live = bot.world.varps.get(knowledge.varp_id_by_name(name), 0)
+    return max(live, _SAVED_VARPS.get(knowledge.varp_id_by_name(name), 0))
 
 
 def _count(bot, obj_id):
@@ -186,6 +202,8 @@ def solve(bot):
     rum = solver.obj_id("karamja_rum")
     key = solver.obj_id("chest_key")
     message = solver.obj_id("piratemessage")
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
 
     _bank_topup(bot)
     if _count(bot, solver.obj_id("coins")) < 90:
