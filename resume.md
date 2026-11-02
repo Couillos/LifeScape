@@ -33,6 +33,8 @@ Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 `probe_use` (clic loc + use objet + dump modals/unsets/msgs),
 `probe_vars`, `drop`, `bank_deposit`, `quest_reset`. `see <compte>` :
 tout ce que le bot voit (positions + distances, inventaire, modal).
+`show <compte>` expose aussi `messages` (messages serveur) et `texts`
+(interface) : c'est le moyen de debugger sans sonde.
 Comptes test t01…t20,
 `admin`/`admin` = compte de dev (jamais de cheats dans les solvers).
 
@@ -95,24 +97,42 @@ Comptes test t01…t20,
    amik+portes si save≥1, sabotage direct si save≥2).
 3. `see admin` pour voir ce que le bot voit (positions + distances).
 
-## Blocage connu : random event maze
-`admin` est resté bloqué dans le maze (`0_45_71`, ~2911,4574) : la statue de
-sortie (`macro_maze_complete`, loc 3634, 3×3 en 2911,4575) ne répond à aucun
-clic, y compris sur ses 9 tuiles et sur toutes les tuiles voisines. Côté carte,
-le sol sous la statue porte `dugupsoil1/2_macromaze` (même tuile) ; le serveur
-garde probablement la loc de décor et la résolution de clic n'atteint jamais la
-statue. Les cheats `::mazeend`, `::pp2` et le `::tele` de `goto.py` ne déplacent
-plus le joueur dans cet état, donc l'événement est **infini** côté bot : à
-corriger côté contenu (retirer le dugupsoil sous la statue, ou déplacer la
-statue), pas côté client.
+État au dernier passage : `admin` est libre (L1, ~2971,3385, BKF stage 1),
+inventaire sans cube. Random events : cube résolu par `rescue_cube` ; maze
+terminable côté serveur mais solver client encore partiel ; mime non résolu
+(abandon propre).
 
-Côté client, `scripts/randomevents.py` (solve_maze) a été réécrit et vérifié
-live : il calcule la poche atteignable, clique les `walllow` et franchit
-chaque porte d'un pas (`Bot.step_to`), il atteint la tuile voisine de la statue
-puis s'arrête proprement avec un diagnostic. Le SDK expose désormais
-`world.static_actions` : les locs actionnables qu'un décor posé sur la même
-tuile masquait dans `static_locs` (c'était la cause du solver qui tournait à
-vide).
+## Blocage connu : random event maze
+**Corrigé côté serveur** (contenu, non versionné ici : `content/` est gitignoré
+dans ce clone) :
+- la statue de sortie (`macro_maze_complete`) est recouverte par le décor de
+  sol `dugupsoil` : elle n'est cliquable depuis aucune tuile (« I can't reach
+  that! »). La fin de l'événement est donc détectée par son timer quand le
+  joueur atteint le centre (`coordx 2909..2913`, `coordz 4573..4577`) ;
+- `macro_return_teleport` utilisait `p_teleport`, qui ne déplaçait personne :
+  passé en `p_telejump` (retour effectif au point de départ) ;
+- `::maze` appelait une copie du démarrage qui ne posait ni les varps ni le
+  timer : il appelle maintenant `~start_macro_maze`.
+
+Récupération d'un compte bloqué : `call <compte> cheat "~mazeend"` → téléport
+au centre → le timer termine l'événement et renvoie le joueur à son origine.
+`::tele` prend des virgules : `call <compte> cheat "tele 0,50,50,22,18"`.
+
+Côté client (`scripts/randomevents.py`) : `solve_maze` avance **tuile par
+tuile** (`Bot.step_to`), sans routeur ni chasse aux portes, apprend les arêtes
+refusées et s'arrête proprement avec un diagnostic. Il n'est pas encore fiable
+sur tous les layouts (portes `walllow` directionnelles) : un bot qui tombe dans
+le maze peut rester bloqué.
+
+## Random event cube (Strange box)
+`scripts/rescue_cube.py` résout l'interface : il lit les trois modèles
+(centre/côté/haut), la question (« What colour is the <shape> ? » ou
+« Which shape is <colour> ? ») et clique le bon bouton-réponse. Détection
+automatique dans `randomevents.check` (un `macro_cube` en inventaire suffit),
+rescue mappé `cube` → `rescue_cube`. Validé live sur 29 cubes d'affilée
+(admin), 0 restant, récompense versée. Le SDK expose désormais `Bot.com_id()`
+et l'état publie `messages` et `texts` : plus besoin de sonde pour lire un
+message serveur ou une interface.
 
 ## Leçons knights (utiles pour les suivantes)
 - Varp non transmis (`transmit=False`, ex. `squire`) : le gate live ne passe

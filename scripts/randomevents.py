@@ -25,6 +25,7 @@ from collections import deque
 
 from lifescape import collision as collision_mod
 from lifescape.client import Unreachable  # noqa: F401  (re-exported for callers)
+from scripts.rescue_cube import cube_count
 from scripts.tutorial import common as tutorial_common
 
 EVENT_HOSTS = ("macro_mage", "macro_geni", "macro_dwarf")
@@ -287,6 +288,12 @@ def check(bot):
     if in_mime(bot):
         print("in mime event at %s, needs a performer" % (bot.position,), flush=True)
         report(bot, "mime", False)
+        return False
+    if cube_count(bot):
+        # The strange box is carried, not a zone: hand it to the rescue so
+        # the botting script is not blocked behind a question interface.
+        print("strange box in inventory, handing it to the cube rescue", flush=True)
+        report(bot, "cube", False)
         return False
     if in_maze(bot):
         solved = solve_maze(bot)

@@ -37,7 +37,8 @@ SCRIPTS = {
     "quest_shield_of_arrav": "scripts/quests/shield_of_arrav.py",
     "quest_vampire_slayer": "scripts/quests/vampire_slayer.py",
     "quest_witchs_potion": "scripts/quests/witchs_potion.py",
-    "rescue_maze": "scripts/rescue_maze.py",    "rescue_down": "scripts/rescue_down.py",
+    "rescue_maze": "scripts/rescue_maze.py",
+    "rescue_cube": "scripts/rescue_cube.py",    "rescue_down": "scripts/rescue_down.py",
     "rescue_fallback": "scripts/rescue_fallback.py",
     "check_transitions": "scripts/check_transitions.py",
     "check_doors": "scripts/check_doors.py",
@@ -59,7 +60,7 @@ SCRIPTS = {
 
 # Unresolved random event -> rescue script. Events with no dedicated rescue
 # fall back to rescue_fallback (bounded relogin + event check loop).
-RESCUES = {"maze": "rescue_maze", "tower": "rescue_down"}
+RESCUES = {"maze": "rescue_maze", "tower": "rescue_down", "cube": "rescue_cube"}
 
 
 _mtime = None

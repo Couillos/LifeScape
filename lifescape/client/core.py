@@ -485,6 +485,7 @@ class BotCore:
             "bank": self._state_items("bank_main:inv"),
             "chat": [line.text for line in self.world.chat[-6:]],
             "messages": [str(line) for line in self.world.messages[-6:]],
+            "texts": {str(com): text for com, text in list(self.world.texts.items())[-12:]},
         }
         try:
             temporary = self._state_path + ".tmp"
@@ -666,6 +667,10 @@ class BotCore:
                 print("closing connection failed: %s" % (error,), flush=True)
             if _active_bot is self:
                 _active_bot = None
+
+    def com_id(self, name):
+        """Interface component id by name ("macro_cube:question")."""
+        return self._com_id(name)
 
     def _com_id(self, name):
         if self._com_ids is None:
