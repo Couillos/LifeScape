@@ -149,11 +149,13 @@ def solve(bot):
     # Back to the squire: he points at Vyvin's cupboard portrait.
     _talk_until(bot, "squire", ["picture", "portrait", "sword"], LOOKING_PORTRAIT)
     _portrait(bot)
-    # Portrait for the design, then ore + bars for the blade.
+    # Portrait for the design, then ore + bars for the blade. The bars and
+    # ore are eaten when the sword is made, so only fresh blades need them.
     _talk_until(bot, "thurgo", ["sword", "picture"], LOOKING_BLURITE)
-    if _count(bot, "blurite_ore") < 1 or _count(bot, "iron_bar") < 2:
-        raise solver.SolverError("missing sword materials at %s" % (bot.position,))
-    solver.talk_like(bot, "thurgo", ["sword", "materials", "here"])
+    if _count(bot, "faladian_sword") < 1:
+        if _count(bot, "blurite_ore") < 1 or _count(bot, "iron_bar") < 2:
+            raise solver.SolverError("missing sword materials at %s" % (bot.position,))
+        solver.talk_like(bot, "thurgo", ["sword", "materials", "here"])
     if _count(bot, "faladian_sword") < 1:
         raise solver.SolverError("Thurgo never made the sword at %s" % (bot.position,))
     # The squire only accepts the blade from the backpack, never worn.
