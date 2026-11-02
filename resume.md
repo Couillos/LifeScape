@@ -9,12 +9,21 @@ haunted, vampire, hunt (pirate=4), prince (princequest=110),
 knights (squire=7), demon (demonstart=30).
 
 ## En cours
-- **black_knights_fortress** : stage 1 (spy=1), déguisement porté
-  (chainbody+helm), bot au L1 près porte secrète/trou
-  (`(3030,3510)` / trou `(3031,3507)`), chevaliers aggro
-  ("Die intruder!!!", HP 99). Reste : sabotage → report Amik.
-- **Reste après** : shield_of_arrav (voir note échange ci-dessous),
+- **black_knights_fortress** : save `spy=1` (varp 130) = étape « démarré ».
+  Entrée OK après le fix save (porte 1 → banquet → étage), **bloqué sur la
+  porte intérieure** `bkfortressdoor3` en `(3025,3511,1)` : depuis la salle de
+  banquet montée, le bot est en `(3030,3510,1)` et le chemin est coupé
+  (`oldcastlewall`, `laddertop_directional`) — il faut trouver la bonne
+  montée/le bon couloir de l'étage avant la grille puis le sabotage.
+- **Reste après** : shield_of_arrav (échange à 2 comptes, voir note),
   dragon_slayer en dernier (32 QP requis).
+
+## Régressions corrigées côté sessions (à garder en tête)
+- Un run de quête force `bot.relogin()` : la save n'est écrite qu'au logout,
+  donc en session persistante les gates d'étape (`max(live, save)`)
+  régressaient et le solver rejouait l'entrée.
+- `find_loc` lit `world.static_actions` : une loc actionnable masquée par un
+  décor sur la même tuile (porte intérieure BKF, statue du maze) est trouvée.
 
 ## Commandes (que via l'orchestrateur, jamais de pypy direct)
 ```
