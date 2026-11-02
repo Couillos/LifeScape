@@ -175,7 +175,7 @@ F2P_QUESTS = (
         completion_varps=_completion(("princequest", 110)),
         items=(
             _item("princeskey"),
-            _item("rope"),
+            # No rope: it is consumed tying Keli mid-quest (like beer).
             # No beer: all 3 are drunk by the guard mid-quest, so requiring
             # them upfront can never pass once Joe is done (like hunt rum).
             _item("skinpaste"),

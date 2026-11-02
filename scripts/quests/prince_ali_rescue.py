@@ -129,6 +129,8 @@ def solve(bot):
         raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
     # Tie up Keli, unlock the cell door, hand over key + disguise.
     if stage < 50:
+        if _count(bot, solver.obj_id("rope")) < 1:
+            raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
         use_item_on_npc(bot, "rope", "lady_keli")
         stage = _stage(bot)
     if stage < 100:
