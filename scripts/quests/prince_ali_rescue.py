@@ -135,25 +135,39 @@ def solve(bot):
         target = bot.world.ticks + 150
         while bot.world.ticks < target and not bot.npcs_named(("lady_keli",)):
             bot.pump(5)
-        # Tie her whenever she is about — the tie consumes the rope. Then
-        # turn the key with NO client-side approach: the server walks into
-        # reach itself, while a client walk burns the ~10 s Keli respawn
-        # window (100 ticks).
-        if bot.npcs_named(("lady_keli",)):
-            if _count(bot, solver.obj_id("rope")) < 1:
-                raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
-            use_item_on_npc(bot, "rope", "lady_keli")
-            # The rope vanishes a tick after the tie lands: poll briefly, as
-            # an immediate read races the inventory stream and falsely
-            # fails. A genuinely refused tie keeps the rope.
-            target = bot.world.ticks + 30
-            while _count(bot, solver.obj_id("rope")) > 0 and bot.world.ticks < target:
-                bot.pump(2)
-            if _count(bot, solver.obj_id("rope")) > 0:
-                raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
-        C.use_held_on_loc(bot, _dx, _dz, _dloc, solver.obj_id("princeskey"))
-        wait_ticks(bot, 30)
-        solver._drain_dialog(bot)
+        # Tie + key, driven by the server's own verdict: the door answers
+        # "You unlock the door." on success and names Keli on refusal (both
+        # plain game messages, no modal). A refused tie keeps the rope, so
+        # a flicker-exited tie simply retries with the rope still held.
+        key = solver.obj_id("princeskey")
+        unlocked = False
+        for _attempt in range(4):
+            if bot.npcs_named(("lady_keli",)):
+                if _count(bot, solver.obj_id("rope")) < 1:
+                    raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
+                use_item_on_npc(bot, "rope", "lady_keli")
+                target = bot.world.ticks + 30
+                while _count(bot, solver.obj_id("rope")) > 0 and bot.world.ticks < target:
+                    bot.pump(2)
+            seen_msgs = len(bot.world.messages)
+            # No client-side approach: the server walks into reach itself,
+            # while a client walk burns the ~10 s Keli respawn window.
+            C.use_held_on_loc(bot, _dx, _dz, _dloc, key)
+            target = bot.world.ticks + 100
+            while bot.world.ticks < target and not unlocked:
+                bot.pump(5)
+                for text in bot.world.messages[seen_msgs:]:
+                    if "unlock the door" in text:
+                        unlocked = True
+                    elif "Keli" in text:
+                        break
+                else:
+                    continue
+                break
+            if unlocked:
+                break
+        if not unlocked:
+            raise solver.SolverError("cell door refused at %s" % (bot.position,))
         # Talk from the door tile: with the gate open there is no wall in
         # the way. (No step-in: walking onto the tile grinds when shut and
         # eats the ~60 s the open gate lasts.)
