@@ -1488,6 +1488,11 @@ class MovementMixin:
         ranked = []
         for side in sides:
             walled = bool(self._collision.get(side[0], side[1], level) & facing[side])
+            if (self.world.level, self.world.x, self.world.z) == (level, side[0], side[1]):
+                # find_path compresses a zero-length route to []: rank
+                # standing-put as the best side instead of unwalkable.
+                ranked.append((walled, not lands_ok(*side), False, 0, -1, side))
+                continue
             path = self._router.find_path(routing, level, self.world.x, self.world.z, side[0], side[1])
             stair = (side[0], side[1], level) in stairs
             ranked.append((walled, not lands_ok(*side), stair, 0 if path else 1, len(path), side))
