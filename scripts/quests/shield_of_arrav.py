@@ -20,10 +20,10 @@ import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
-from scripts.quests import common as Q
+from scripts.quests import common as quest_common
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("blackarmgang")
 
@@ -45,7 +45,7 @@ def _ensure_coins(bot, amount=20):
     if bot.inventory().get(coins, 0) >= amount:
         return
     try:
-        bank = Q._open_nearest_bank(bot)
+        bank = quest_common._open_nearest_bank(bot)
     except Exception as error:
         raise solver.SolverError("need %d coins for Baraek: %s" % (amount, error))
     try:
@@ -66,7 +66,7 @@ def _read_book(bot):
             raise solver.SolverError("palace bookcase did not yield the book")
     if _varp(bot, "phoenixgang") != 2:
         try:
-            com, slot = C.inv_slot(bot, book)
+            com, slot = tutorial_common.inv_slot(bot, book)
         except KeyError:
             raise solver.SolverError("the Shield of Arrav book is not in the backpack")
         bot.op_held(1, book, slot, com)
@@ -116,7 +116,7 @@ def _join_phoenix(bot):
 def _loot_inside(bot, door, closed, opened, closed_op, opened_op):
     """Search our own gang's loot store, entering first unless inside."""
     try:
-        C.find_loc(bot, closed, opened)
+        tutorial_common.find_loc(bot, closed, opened)
     except Unreachable:
         solver.operate_loc(bot, (door,), 1)
     solver.operate_loc(bot, (closed,), closed_op)

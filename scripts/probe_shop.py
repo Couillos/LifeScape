@@ -10,7 +10,7 @@ import time
 
 from lifescape.client import Bot, Unreachable
 
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 COM_SHOP_SIDE_INV = 3823
 COM_SHOP_INV = 3900
@@ -102,14 +102,14 @@ def main():
         deadline = time.time() + 90
         while time.time() < deadline and not bot.inventory():
             bot.pump(5)
-        logs_id = C.obj_id(bot, "logs")
-        coins_id = C.obj_id(bot, "coins")
-        tinder_id = C.obj_id(bot, "tinderbox")
+        logs_id = tutorial_common.obj_id(bot, "logs")
+        coins_id = tutorial_common.obj_id(bot, "coins")
+        tinder_id = tutorial_common.obj_id(bot, "tinderbox")
         print("start inv logs=%d coins=%d" % (bot.inventory().get(logs_id, 0), bot.inventory().get(coins_id, 0)), flush=True)
         if not trade(bot, "generalshopkeeper", (3209, 3246, 0)):
             return 1
         dump_shop(bot)
-        log_com, log_slot = C.inv_slot(bot, logs_id)
+        log_com, log_slot = tutorial_common.inv_slot(bot, logs_id)
         bot.inv_button(2, logs_id, log_slot, COM_SHOP_SIDE_INV)
         bot.pump(10)
         print("after sell logs=%d coins=%d" % (bot.inventory().get(logs_id, 0), bot.inventory().get(coins_id, 0)), flush=True)

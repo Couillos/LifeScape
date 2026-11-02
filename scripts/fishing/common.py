@@ -20,7 +20,7 @@ from lifescape.waits import wait_backpack, wait_hitpoints, wait_ticks
 
 import gamedata as knowledge
 
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 BACKPACK_SIZE = 28
 BACKPACK_COM = 3214

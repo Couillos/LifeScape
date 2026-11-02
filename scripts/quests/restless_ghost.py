@@ -8,7 +8,7 @@ from gamedata import quest_requirements
 from lifescape.client import Unreachable
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 import gamedata as knowledge
 
@@ -36,7 +36,7 @@ def _wear(bot, name):
     if any(held == obj for held, _count in worn.values()):
         return
     try:
-        com, slot = C.inv_slot(bot, obj)
+        com, slot = tutorial_common.inv_slot(bot, obj)
     except KeyError:
         raise solver.SolverError("no %s to wear at %s" % (name, bot.position))
     bot.op_held(2, obj, slot, com)
@@ -99,9 +99,9 @@ def solve(bot):
     try:
         # solver.operate_loc walks to the blocked coffin tile itself and
         # burns full timeouts; stand on a walkable neighbour and click.
-        # (C.approach_loc skips the tile we already stand on and can
+        # (tutorial_common.approach_loc skips the tile we already stand on and can
         # loop its 25 s walk_to on every candidate.)
-        coffin = C.find_loc(bot, "shutghostcoffin")
+        coffin = tutorial_common.find_loc(bot, "shutghostcoffin")
         cx, cz, clevel, cloc = coffin
         neigh = sorted(
             [(cx + dx, cz + dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1) if dx or dz],
@@ -126,7 +126,7 @@ def solve(bot):
         bot.chat_continue()
         bot.pump(5)
     # Same blocked-tile trap for the skull use: neighbour-stand, then click.
-    altar = C.find_loc(bot, "restless_ghost_altar", "shutghostcoffin")
+    altar = tutorial_common.find_loc(bot, "restless_ghost_altar", "shutghostcoffin")
     ax, az, alevel, aloc = altar
     for nx, nz in sorted(
         [(ax + dx, az + dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1) if dx or dz],
@@ -137,7 +137,7 @@ def solve(bot):
             break
         except (Unreachable, TimeoutError):
             continue
-    C.use_held_on_loc(bot, ax, az, aloc, solver.obj_id("ghostskull"))
+    tutorial_common.use_held_on_loc(bot, ax, az, aloc, solver.obj_id("ghostskull"))
     bot.pump(10)
     # Click through the skull mesboxes so the completion scroll can land.
     for _ in range(12):

@@ -12,7 +12,7 @@ from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 
 import gamedata as knowledge
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 
 class SolverError(RuntimeError):
@@ -71,10 +71,10 @@ def talk(bot, name, answers=(), near=None, timeout=400):
     if bot.world.modal is not None:
         bot.close_modal()
         bot.pump(5)
-    if not C.talk(bot, name, timeout=timeout, near=near):
+    if not tutorial_common.talk(bot, name, timeout=timeout, near=near):
         raise SolverError("cannot talk to %s at %s" % (name, bot.position))
     # finish_dialog_like always answers something (first option as fallback):
-    # C.finish_dialog with empty answers stalls forever on a choice page,
+    # tutorial_common.finish_dialog with empty answers stalls forever on a choice page,
     # e.g. the post-quest chat when an earlier step already finished the job.
     finish_dialog_like(bot, answers, timeout=timeout)
 
@@ -171,7 +171,7 @@ def talk_like(bot, name, keywords, near=None, timeout=400):
     if bot.world.modal is not None:
         bot.close_modal()
         bot.pump(5)
-    if not C.talk(bot, name, timeout=timeout, near=near):
+    if not tutorial_common.talk(bot, name, timeout=timeout, near=near):
         raise SolverError("cannot talk to %s at %s" % (name, bot.position))
     finish_dialog_like(bot, keywords, timeout=timeout)
 
@@ -180,7 +180,7 @@ def wait_complete(bot, timeout=300):
     target = bot.world.ticks + timeout
     while bot.world.ticks < target:
         bot.pump(5)
-        if C.has_message(bot, "Congratulations! Quest complete!"):
+        if tutorial_common.has_message(bot, "Congratulations! Quest complete!"):
             return True
         if _completion_open(bot):
             bot.close_modal()
@@ -190,7 +190,7 @@ def wait_complete(bot, timeout=300):
 
 
 def operate_loc(bot, names, op=1, timeout=60, stand=None):
-    x, z, level, loc = C.find_loc(bot, *names)
+    x, z, level, loc = tutorial_common.find_loc(bot, *names)
     if stand is not None:
         # Some locs only answer from one side (reachLoc angle): park on the
         # given tile instead of the nearest approach tile, which the server
@@ -259,7 +259,7 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
         except (Unreachable, TimeoutError):
             continue
         nid = bot.find_npc(npc_name) or nid
-        use_com, use_slot = C.inv_slot(bot, obj_id(item_name))
+        use_com, use_slot = tutorial_common.inv_slot(bot, obj_id(item_name))
         bot.op_npc_u(nid, obj_id(item_name), use_slot, use_com)
         wait_ticks(bot, 10)
         # Same halt risk as operate_loc: a result mesbox or a multi-page
@@ -317,7 +317,7 @@ def solve_strange_box(bot, max_rounds=40):
         if bot.inventory().get(cube, 0) == 0:
             return True
         try:
-            inv_com, slot = C.inv_slot(bot, cube)
+            inv_com, slot = tutorial_common.inv_slot(bot, cube)
         except KeyError:
             return True
         bot.op_held(1, cube, slot, inv_com)
@@ -354,9 +354,9 @@ def solve_strange_box(bot, max_rounds=40):
 
 
 def use_item_on_loc(bot, item_name, loc_names):
-    x, z, level, loc = C.find_loc(bot, *loc_names)
-    C.approach_loc(bot, x, z, loc, level)
-    C.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
+    x, z, level, loc = tutorial_common.find_loc(bot, *loc_names)
+    tutorial_common.approach_loc(bot, x, z, loc, level)
+    tutorial_common.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
     wait_ticks(bot, 10)
     # Same halt risk as operate_loc: a result mesbox or a multi-page
     # story blocks the server script until dismissed.

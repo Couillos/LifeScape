@@ -16,10 +16,10 @@ import sys
 import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape.waits import wait_ticks
-from scripts.quests import common as Q
+from scripts.quests import common as quest_common
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("hunt")
 
@@ -60,7 +60,7 @@ def _bank_topup(bot):
     if stocked:
         return
     try:
-        bank = Q._open_nearest_bank(bot)
+        bank = quest_common._open_nearest_bank(bot)
     except Exception as error:
         print("bank top-up skipped: %s" % (error,), flush=True)
         return
@@ -118,15 +118,15 @@ def _buy(bot, obj_name):
 
 def _wear(bot, obj_name):
     wanted = solver.obj_id(obj_name)
-    worn = bot.world.inv.get(Q.WORN_COM, {})
+    worn = bot.world.inv.get(quest_common.WORN_COM, {})
     if any(held == wanted for held, _count in worn.values()):
         return True
-    com, slot = C.inv_slot(bot, wanted)
+    com, slot = tutorial_common.inv_slot(bot, wanted)
     bot.op_held(2, wanted, slot, com)
     target = bot.world.ticks + 60
     while bot.world.ticks < target:
         bot.pump(2)
-        worn = bot.world.inv.get(Q.WORN_COM, {})
+        worn = bot.world.inv.get(quest_common.WORN_COM, {})
         if any(held == wanted for held, _count in worn.values()):
             return True
     raise solver.SolverError("could not wear %s" % obj_name)
@@ -191,7 +191,7 @@ def _dig(bot):
             continue
         bot.op_held(1, spade, slot, com)
         wait_ticks(bot, 10)
-        if C.has_message(bot, "dig a hole"):
+        if tutorial_common.has_message(bot, "dig a hole"):
             return
     raise solver.SolverError("could not dig at the Falador park spot")
 
@@ -229,7 +229,7 @@ def solve(bot):
         if not (_varp(bot, "hunt_store_employed") & 2):
             solver.talk_like(bot, "wydin", ["job"])
         _wear(bot, "white_apron")
-        _x, _z, level, loc = C.find_loc(bot, "grocerycrate")
+        _x, _z, level, loc = tutorial_common.find_loc(bot, "grocerycrate")
         bot.approach(_x, _z, level=level, radius=2, timeout=300, open_doors=True)
         bot.op_loc(1, _x, _z, loc)
         wait_ticks(bot, 10)
@@ -256,9 +256,9 @@ def solve(bot):
     # wall the server's reach check refuses, so nearest-approach (south)
     # silently drops both clicks (verified live with probe_use).
     if _count(bot, message) < 1:
-        _x, _z, _level, _loc = C.find_loc(bot, "piratechest")
+        _x, _z, _level, _loc = tutorial_common.find_loc(bot, "piratechest")
         bot.walk_to(_x + 1, _z, _level, timeout=120, open_doors=True)
-        C.use_held_on_loc(bot, _x, _z, _loc, key)
+        tutorial_common.use_held_on_loc(bot, _x, _z, _loc, key)
         target = bot.world.ticks + 300
         while _count(bot, message) < 1 and bot.world.ticks < target:
             bot.pump(5)

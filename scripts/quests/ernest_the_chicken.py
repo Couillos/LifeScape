@@ -7,7 +7,7 @@ import sys
 from gamedata import quest_requirements
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("haunted")
 
@@ -43,7 +43,7 @@ def solve(bot):
         if not _has(bot, "poisoned_fish_food"):
             if not (_has(bot, "fish_food") and _has(bot, "poison")):
                 raise solver.SolverError("need fish food and poison for the fountain")
-            C.use_held_on_held(bot, solver.obj_id("fish_food"), solver.obj_id("poison"))
+            tutorial_common.use_held_on_held(bot, solver.obj_id("fish_food"), solver.obj_id("poison"))
         solver.go_to_npc(bot, "veronica")
         solver.use_item_on_loc(bot, "poisoned_fish_food", ("hauntedfountain",))
         solver.operate_loc(bot, ("hauntedfountain",), 1)

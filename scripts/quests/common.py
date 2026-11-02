@@ -18,7 +18,7 @@ from lifescape.waits import wait_backpack
 
 import gamedata as knowledge
 from scripts.quests import solver
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 BACKPACK_COM = knowledge.com_id("inventory:inv")
 WORN_COM = knowledge.com_id("wornitems:wear")
@@ -78,7 +78,7 @@ def _open_nearest_bank(bot):
         try:
             bot.intend("walking to bank %d,%d" % (bank.x, bank.z))
             bot.approach(bank.x, bank.z, radius=2, timeout=180, open_doors=True)
-            booth = C.find_loc(bot, "bankbooth")
+            booth = tutorial_common.find_loc(bot, "bankbooth")
             if booth is not None:
                 booth_x, booth_z, _booth_level, booth_loc = booth
                 bot.open_bank(booth_x, booth_z, booth_loc)

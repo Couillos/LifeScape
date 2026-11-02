@@ -12,7 +12,7 @@ from lifescape.protocol import client_op_id
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("prince")
 
@@ -81,7 +81,7 @@ def use_item_on_npc(bot, item, npc, timeout=1800):
         except (Unreachable, TimeoutError):
             pass
         try:
-            com, slot = C.inv_slot(bot, obj)
+            com, slot = tutorial_common.inv_slot(bot, obj)
         except KeyError:
             raise solver.SolverError("no %s for %s at %s" % (item, npc, bot.position))
         body = Writer()
@@ -139,7 +139,7 @@ def solve(bot):
     if stage < 40:
         raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
     if stage < 100:
-        _dx, _dz, _dlvl, _dloc = C.find_loc(bot, "alidoor")
+        _dx, _dz, _dlvl, _dloc = tutorial_common.find_loc(bot, "alidoor")
         # Fresh logins are blind to NPCs until the stream arrives: wait for
         # Keli before deciding the tie is unnecessary (a respawned Keli the
         # client never sees still blocks the door server-side).
@@ -175,7 +175,7 @@ def solve(bot):
             # No client-side approach beyond that: the server walks into
             # reach itself, while a longer client walk burns the respawn
             # window.
-            C.use_held_on_loc(bot, _dx, _dz, _dloc, key)
+            tutorial_common.use_held_on_loc(bot, _dx, _dz, _dloc, key)
             target = bot.world.ticks + 100
             while bot.world.ticks < target and not unlocked:
                 bot.pump(5)

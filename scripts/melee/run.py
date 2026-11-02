@@ -21,7 +21,7 @@ import gamedata as knowledge
 
 from scripts import randomevents
 from scripts.hazards import wait_respawn
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 BACKPACK = 3214
 BANK_MAIN = knowledge.comps.com_id("bank_main:inv")
@@ -179,7 +179,7 @@ def find_bank(bot):
 
 def open_bank(bot, bank):
     try:
-        booth_x, booth_z, level, booth_loc = C.find_loc(bot, "bankbooth")
+        booth_x, booth_z, level, booth_loc = tutorial_common.find_loc(bot, "bankbooth")
     except Unreachable:
         return False
     tiles = sorted(
@@ -225,7 +225,7 @@ def equip(bot, entry, timeout=25):
     if held is not None and held[0] == obj_id:
         return True
     try:
-        com, slot = C.inv_slot(bot, obj_id)
+        com, slot = tutorial_common.inv_slot(bot, obj_id)
     except KeyError:
         return False
     before = len(bot.world.messages)

@@ -11,7 +11,7 @@ import time
 from lifescape.client import Bot, Unreachable
 
 from gamedata import comps as comps_module
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 BACKPACK_COM = 3214
 
@@ -50,8 +50,8 @@ def main():
         deadline = time.time() + 90
         while time.time() < deadline and not bot.world.inv.get(BACKPACK_COM):
             bot.pump(5)
-        knife_id = C.obj_id(bot, "knife")
-        coins_id = C.obj_id(bot, "coins")
+        knife_id = tutorial_common.obj_id(bot, "knife")
+        coins_id = tutorial_common.obj_id(bot, "coins")
         side_com = comps_module.com_id("bank_side:inv")
         main_com = comps_module.com_id("bank_main:inv")
         print("bank coms side=%s main=%s" % (side_com, main_com), flush=True)
@@ -59,7 +59,7 @@ def main():
             print("pack empty, will withdraw first", flush=True)
         bot.approach(3091, 3243, open_doors=True)
         print("at bank %s" % (bot.position,), flush=True)
-        booth = C.find_loc(bot, "bankbooth")
+        booth = tutorial_common.find_loc(bot, "bankbooth")
         print("booth %s" % (booth,), flush=True)
         booth_x, booth_z, booth_level, booth_loc = booth
         bot.approach(booth_x, booth_z, open_doors=True)

@@ -12,7 +12,7 @@ import sys
 from lifescape.client import Bot, Unreachable
 
 import gamedata as knowledge
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
     bot = Bot()
     try:
         bot.login(account, account)
-        booth = C.find_loc(bot, "bankbooth")
+        booth = tutorial_common.find_loc(bot, "bankbooth")
         if booth is None:
             print("no bank booth nearby", flush=True)
             return 1

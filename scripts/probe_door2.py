@@ -27,8 +27,8 @@ def main():
         try:
             bot.walk_to(3100, 3107, open_doors=True, timeout=60)
             print("through: %s" % (bot.position,), flush=True)
-        except Exception as e:
-            print("walk failed: %s at %s loc=%s" % (e, bot.position, bot.world.loc_at(3098, 3107, 0)), flush=True)
+        except Exception as error:
+            print("walk failed: %s at %s loc=%s" % (error, bot.position, bot.world.loc_at(3098, 3107, 0)), flush=True)
     finally:
         bot.close()
 

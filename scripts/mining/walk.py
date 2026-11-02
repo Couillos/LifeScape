@@ -1,6 +1,7 @@
 """Mining walk helpers (split from run.py)."""
 
 from scripts.mining.common import *
+from scripts.tutorial import common as tutorial_common
 
 def tile_walkable(bot, check_x, check_z):
     for known_map in (bot._opened_map, bot._collision):
@@ -107,7 +108,7 @@ def cross_nearby_door(bot, dest_x, dest_z):
     for _dist, door_x, door_z, door_loc in sorted(cands):
         beyond = (door_x + (1 if dest_x > door_x else -1 if dest_x < door_x else 0), door_z + (1 if dest_z > door_z else -1 if dest_z < door_z else 0))
         try:
-            if C.cross_door(bot, door_x, door_z, door_loc, beyond=beyond, what="door"):
+            if tutorial_common.cross_door(bot, door_x, door_z, door_loc, beyond=beyond, what="door"):
                 print("door crossed at (%d,%d)" % (door_x, door_z), flush=True)
                 return True
         except (Unreachable, TimeoutError):

@@ -5,56 +5,56 @@ inventory and the final teleport.
 
 import time
 
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 
 def bank_booth(bot):
     # Talk to the banker himself: clicking the booth only opens his
     # dialog when he happens to stand within 2 tiles, otherwise the
     # bank opens *without* advancing the tutorial (infinite repeat).
-    if not C.talk(bot, "banker"):
-        x, z, _level, loc = C.find_loc(bot, "newbiebankbooth")
+    if not tutorial_common.talk(bot, "banker"):
+        x, z, _level, loc = tutorial_common.find_loc(bot, "newbiebankbooth")
         bot.approach(x, z, open_doors=True)
         bot.op_loc(1, x, z, loc)
         bot.pump(10)
     if bot.world.modal:
-        C.finish_dialog(bot, ("Yes.",))
+        tutorial_common.finish_dialog(bot, ("Yes.",))
     bot.close_modal()
     bot.pump(5)
-    C.check(bot, C.wait_modal_closed(bot, timeout=60), "bank visited")
+    tutorial_common.check(bot, tutorial_common.wait_modal_closed(bot, timeout=60), "bank visited")
 
 
 def bank_door(bot):
-    C.check(bot, C.pass_door(bot, "newbie_door6", beyond=(3127, 3124)), "through bank door")
+    tutorial_common.check(bot, tutorial_common.pass_door(bot, "newbie_door6", beyond=(3127, 3124)), "through bank door")
 
 
 def advisor_talk(bot):
-    C.check(bot, C.talk(bot, "account_instructor", near=(3127, 3124)), "advisor found")
-    C.finish_dialog(bot, ("No thanks.",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "account_instructor", near=(3127, 3124)), "advisor found")
+    tutorial_common.finish_dialog(bot, ("No thanks.",))
 
 
 def advisor_door(bot):
-    C.check(bot, C.pass_door(bot, "newbie_door7", beyond=(3132, 3124)), "through advisor door")
+    tutorial_common.check(bot, tutorial_common.pass_door(bot, "newbie_door7", beyond=(3132, 3124)), "through advisor door")
 
 
 def chapel_path(bot):
-    C.check(bot, C.talk(bot, "brother_noob", near=(3125, 3106)), "brother found")
-    C.finish_dialog(bot, ("Nope, I'm ready to move on!",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "brother_noob", near=(3125, 3106)), "brother found")
+    tutorial_common.finish_dialog(bot, ("Nope, I'm ready to move on!",))
 
 
 def prayer_tab(bot):
-    C.click_tut_tab(bot)
+    tutorial_common.click_tut_tab(bot)
     bot.pump(10)
     print("ok prayer tab opened", flush=True)
 
 
 def chapel_recap(bot):
-    C.check(bot, C.talk(bot, "brother_noob", near=(3125, 3106)), "brother prayer list")
-    C.finish_dialog(bot, ("Nope, I'm ready to move on!",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "brother_noob", near=(3125, 3106)), "brother prayer list")
+    tutorial_common.finish_dialog(bot, ("Nope, I'm ready to move on!",))
     try:
-        bones = C.obj_id(bot, "newbiebones")
+        bones = tutorial_common.obj_id(bot, "newbiebones")
         if bones in bot.inventory():
-            com, slot = C.inv_slot(bot, bones)
+            com, slot = tutorial_common.inv_slot(bot, bones)
             bot.op_held(1, bones, slot, com)
             bot.pump(10)
             print("ok bones buried", flush=True)
@@ -63,34 +63,34 @@ def chapel_recap(bot):
 
 
 def friends_tab(bot):
-    C.click_tut_tab(bot)
+    tutorial_common.click_tut_tab(bot)
     bot.pump(10)
     print("ok friends tab opened", flush=True)
 
 
 def ignore_tab(bot):
-    C.click_tut_tab(bot)
+    tutorial_common.click_tut_tab(bot)
     bot.pump(10)
     print("ok ignore tab opened", flush=True)
 
 
 def chapel_final(bot):
-    C.check(bot, C.talk(bot, "brother_noob", near=(3125, 3106)), "brother final")
-    C.finish_dialog(bot, ("Nope, I'm ready to move on!",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "brother_noob", near=(3125, 3106)), "brother final")
+    tutorial_common.finish_dialog(bot, ("Nope, I'm ready to move on!",))
 
 
 def chapel_door(bot):
-    C.check(bot, C.pass_door(bot, "newbie_door8", beyond=(3121, 3098)), "out of chapel")
+    tutorial_common.check(bot, tutorial_common.pass_door(bot, "newbie_door8", beyond=(3121, 3098)), "out of chapel")
 
 
 def terrova_talk(bot):
-    C.check(bot, C.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova found")
-    C.finish_dialog(bot, ("Yes.",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova found")
+    tutorial_common.finish_dialog(bot, ("Yes.",))
 
 
 def wind_strike(bot, timeout=250):
-    air = C.obj_id(bot, "airrune")
-    mind = C.obj_id(bot, "mindrune")
+    air = tutorial_common.obj_id(bot, "airrune")
+    mind = tutorial_common.obj_id(bot, "mindrune")
     try:
         bot.walk_to(3141, 3089, bot.world.level, timeout=60, open_doors=True)
     except Exception:
@@ -115,7 +115,7 @@ def wind_strike(bot, timeout=250):
         except Exception:
             pass
         seen = len(bot.world.messages)
-        C.cast_on_npc(bot, nid)
+        tutorial_common.cast_on_npc(bot, nid)
         inner = bot.world.ticks + 20
         while bot.world.ticks < inner:
             bot.pump(2)
@@ -131,7 +131,7 @@ def wind_strike(bot, timeout=250):
 
 
 def magic_tab(bot):
-    C.click_tut_tab(bot)
+    tutorial_common.click_tut_tab(bot)
     bot.pump(10)
     # The tab click lands on a transient stage with no instruction text;
     # talking right away hands out runes and moves to wind strike.
@@ -140,14 +140,14 @@ def magic_tab(bot):
 
 
 def terrova_runes(bot):
-    air = C.obj_id(bot, "airrune")
-    mind = C.obj_id(bot, "mindrune")
+    air = tutorial_common.obj_id(bot, "airrune")
+    mind = tutorial_common.obj_id(bot, "mindrune")
     if bot.inventory().get(air, 0) >= 1 and bot.inventory().get(mind, 0) >= 1:
         print("ok runes already held", flush=True)
         return
-    C.check(bot, C.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova runes")
-    C.finish_dialog(bot, ("Yes.",))
-    C.check(bot, C.wait_inv(bot, air, timeout=60), "runes held")
+    tutorial_common.check(bot, tutorial_common.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova runes")
+    tutorial_common.finish_dialog(bot, ("Yes.",))
+    tutorial_common.check(bot, tutorial_common.wait_inv(bot, air, timeout=60), "runes held")
 
 
 def final(bot):
@@ -155,12 +155,12 @@ def final(bot):
         print("ok already on the mainland", flush=True)
         return
     start = (bot.world.x, bot.world.z, bot.world.level)
-    C.check(bot, C.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova final")
-    C.finish_dialog(bot, ("Yes.",))
+    tutorial_common.check(bot, tutorial_common.talk(bot, "magic_instructor", near=(3141, 3089)), "terrova final")
+    tutorial_common.finish_dialog(bot, ("Yes.",))
     target = bot.world.ticks + 100
     while bot.world.ticks < target:
         bot.pump(5)
         if (bot.world.x, bot.world.z, bot.world.level) != start:
             print("ok teleported to mainland", flush=True)
             return
-    C.check(bot, False, "teleported to mainland")
+    tutorial_common.check(bot, False, "teleported to mainland")

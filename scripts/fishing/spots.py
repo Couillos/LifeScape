@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from scripts.fishing.common import *
+from scripts.tutorial import common as tutorial_common
 
 def pick_fish_spot(tiers, fishing_level, banned, player_combat, near_x=None, near_z=None, player_level=0, pinned_bank=None, bot=None, relaxed=False):
     if relaxed:
@@ -78,7 +79,7 @@ BANK_TREK_LIMIT = 150
 
 def nearest_toll_gate(bot):
     try:
-        gate = C.find_loc(bot, "border_gate_toll_left", "border_gate_toll_right")
+        gate = tutorial_common.find_loc(bot, "border_gate_toll_left", "border_gate_toll_right")
     except Unreachable:
         return None
     return gate

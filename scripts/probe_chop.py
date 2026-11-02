@@ -9,7 +9,7 @@ import time
 
 from lifescape.client import Bot
 
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 TREE_NAMES = ("tree",)
 
@@ -27,12 +27,12 @@ def main():
         for obj_id, count in sorted(bot.inventory().items()):
             entry = bot._loctypes["obj"][obj_id] if obj_id < len(bot._loctypes["obj"]) else None
             print("  hold %s x%d" % ((entry["name"] if entry else obj_id), count), flush=True)
-        found = C.find_loc(bot, *TREE_NAMES)
+        found = tutorial_common.find_loc(bot, *TREE_NAMES)
         print("tree at %s" % (found,), flush=True)
-        logs_id = C.obj_id(bot, "logs")
+        logs_id = tutorial_common.obj_id(bot, "logs")
         had = bot.inventory().get(logs_id, 0)
         deadline = time.time() + 120
-        chopped = C.op_loc_near(bot, TREE_NAMES, 1, lambda probe: probe.inventory().get(logs_id, 0) > had, timeout=120)
+        chopped = tutorial_common.op_loc_near(bot, TREE_NAMES, 1, lambda probe: probe.inventory().get(logs_id, 0) > had, timeout=120)
         print("chopped=%s inv=%s wc=%s" % (chopped, bot.inventory(), bot.world.stats.get(8)), flush=True)
         return 0 if chopped else 1
     finally:

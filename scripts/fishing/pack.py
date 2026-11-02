@@ -1,6 +1,7 @@
 """Fishing pack helpers (split from run.py)."""
 
 from scripts.fishing.common import *
+from scripts.tutorial import common as tutorial_common
 
 def pack_counts(bot):
     return dict(bot.world.inv.get(BACKPACK_COM, {}))
@@ -21,7 +22,7 @@ def pack_slot(bot, obj_id):
 
 
 def obj_id(bot, name):
-    return C.obj_id(bot, name)
+    return tutorial_common.obj_id(bot, name)
 
 
 

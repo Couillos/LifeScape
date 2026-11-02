@@ -11,7 +11,7 @@ import time
 
 
 from lifescape.client import Bot, Unreachable
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
         bot._ensure_nav()
         bot.pump(10)
         print("start %s" % (bot.position,), flush=True)
-        tree = C.find_loc(bot, "tree")
+        tree = tutorial_common.find_loc(bot, "tree")
         tree_x, tree_z, _level, tree_loc = tree
         print("tree at (%d,%d)" % (tree_x, tree_z), flush=True)
         bot.approach(tree_x, tree_z, open_doors=True)

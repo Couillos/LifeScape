@@ -1,6 +1,7 @@
 """Woodcut bank helpers (split from run.py)."""
 
 from scripts.woodcut.common import *
+from scripts.tutorial import common as tutorial_common
 from scripts.woodcut.pack import *
 from scripts.woodcut.walk import *
 from scripts.woodcut.spots import *
@@ -8,7 +9,7 @@ from scripts.woodcut.gear import *
 from scripts.woodcut.shop import *
 
 def open_bank(bot, bank):
-    booth = C.find_loc(bot, "bankbooth")
+    booth = tutorial_common.find_loc(bot, "bankbooth")
     booth_x, booth_z, booth_level, booth_loc = booth
     bot.approach(booth_x, booth_z, open_doors=True)
     bot.op_loc(2, booth_x, booth_z, booth_loc)
@@ -225,7 +226,7 @@ def nearest_free_bank(bot):
 
 def nearest_toll_gate(bot):
     try:
-        gate = C.find_loc(bot, "border_gate_toll_left", "border_gate_toll_right")
+        gate = tutorial_common.find_loc(bot, "border_gate_toll_left", "border_gate_toll_right")
     except Unreachable:
         return None
     return gate

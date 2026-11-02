@@ -1,6 +1,7 @@
 """Fishing bank helpers (split from run.py)."""
 
 from scripts.fishing.common import *
+from scripts.tutorial import common as tutorial_common
 from scripts.fishing.pack import *
 from scripts.fishing.walk import *
 from scripts.fishing.spots import *
@@ -8,7 +9,7 @@ from scripts.fishing.gear import *
 from scripts.fishing.shop import *
 
 def open_bank(bot, bank):
-    booth_x, booth_z, booth_level, booth_loc = C.find_loc(bot, "bankbooth")
+    booth_x, booth_z, booth_level, booth_loc = tutorial_common.find_loc(bot, "bankbooth")
     bot.approach(booth_x, booth_z, open_doors=True)
     bot.op_loc(2, booth_x, booth_z, booth_loc)
     target = bot.world.ticks + 50

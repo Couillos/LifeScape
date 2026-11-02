@@ -1,6 +1,7 @@
 """Woodcut walk helpers (split from run.py)."""
 
 from scripts.woodcut.common import *
+from scripts.tutorial import common as tutorial_common
 
 def walk_checked(bot, dest_x, dest_z, timeout=300):
     # Failure backstop on purpose in wall seconds (walk_to takes seconds):
@@ -96,11 +97,11 @@ def cross_toll_gate(bot):
     else:
         print("toll gate guard never talked", flush=True)
         return False
-    C.finish_dialog(bot, ("Yes, ok.",), timeout=60)
+    tutorial_common.finish_dialog(bot, ("Yes, ok.",), timeout=60)
     if bot.world.x < gate_x:
         print("through the toll gate at %s" % (bot.position,), flush=True)
         return True
-    if not C.wait_moved(bot, timeout=30):
+    if not tutorial_common.wait_moved(bot, timeout=30):
         print("toll gate did not move us", flush=True)
         return False
     print("through the toll gate at %s" % (bot.position,), flush=True)

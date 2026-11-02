@@ -21,7 +21,7 @@ from gamedata import quest_requirements
 from lifescape.client import Unreachable
 from scripts.quests import solver
 from scripts.quests.common import run
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("dragon")
 
@@ -49,7 +49,7 @@ def _wield(bot, item):
     if any(held == obj for held, _count in worn.values()):
         return
     try:
-        com, slot = C.inv_slot(bot, obj)
+        com, slot = tutorial_common.inv_slot(bot, obj)
     except KeyError:
         raise solver.SolverError("no %s to wield at %s" % (item, bot.position))
     bot.op_held(2, obj, slot, com)
@@ -89,7 +89,7 @@ def _combine_map(bot):
             raise solver.SolverError("missing map piece %s at %s" % (part, bot.position))
     first = solver.obj_id("mappart1")
     second = solver.obj_id("mappart2")
-    C.use_held_on_held(bot, first, second)
+    tutorial_common.use_held_on_held(bot, first, second)
     target = bot.world.ticks + 60
     while bot.world.ticks < target and not _have(bot, "dragonmap"):
         bot.pump(2)

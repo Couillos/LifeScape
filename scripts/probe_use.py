@@ -11,7 +11,7 @@ import sys
 
 
 from lifescape.client import Bot
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 import gamedata.objs
 
@@ -39,7 +39,7 @@ def main():
     try:
         bot.login(account, account)
         bot.pump(10)
-        x, z, level, loc = C.find_loc(bot, loc_name)
+        x, z, level, loc = tutorial_common.find_loc(bot, loc_name)
         print("loc %s at %d,%d,%d id=%d" % (loc_name, x, z, level, loc), flush=True)
         if stand is not None:
             bot.walk_to(stand[0], stand[1], level, timeout=120, open_doors=True)
@@ -61,7 +61,7 @@ def main():
                 break
         if item_name is not None:
             from scripts.quests import solver
-            C.use_held_on_loc(bot, x, z, loc, solver.obj_id(item_name))
+            tutorial_common.use_held_on_loc(bot, x, z, loc, solver.obj_id(item_name))
             print("sent use %s on %s" % (item_name, loc_name), flush=True)
             seen_msgs = len(bot.world.messages)
             for round_no in range(10):

@@ -235,8 +235,8 @@ def talk(bot, npc_name, timeout=90, near=None):
         bot.relogin()
         bot.close_modal()
         bot.pump(5)
-    except Exception as e:
-        print("relogin failed: %s" % e, flush=True)
+    except Exception as error:
+        print("relogin failed: %s" % error, flush=True)
         return False
     if _scan_and_talk(bot, npc_name, near):
         return True
@@ -262,8 +262,8 @@ def _scan_and_talk(bot, npc_name, near=None):
             # Measured: near points are chosen reachable, reached in <10 s.
             bot.walk_to(near[0], near[1], bot.world.level, timeout=25, open_doors=True)
             print("talk near %s reached" % (bot.position,), flush=True)
-        except Exception as e:
-            print("talk near walk failed: %s at %s" % (e, bot.position), flush=True)
+        except Exception as error:
+            print("talk near walk failed: %s at %s" % (error, bot.position), flush=True)
     frames = 0
     # NPC streaming flickers (wanderers drift in and out of view): scan
     # patiently and keep moving a little, since moving forces the server

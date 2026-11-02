@@ -45,8 +45,8 @@ def talk_and_finish(bot, name, answers=("No, thank you.", "Nothing, thanks."), t
     if near is not None:
         try:
             bot.walk_to(near[0], near[1], open_doors=True)
-        except (Unreachable, TimeoutError) as e:
-            print("near walk failed: %s at %s" % (e, bot.position), flush=True)
+        except (Unreachable, TimeoutError) as error:
+            print("near walk failed: %s at %s" % (error, bot.position), flush=True)
             return False
     nid = None
     deadline = time.time() + 60

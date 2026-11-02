@@ -25,7 +25,7 @@ import time
 
 
 from lifescape.client import Unreachable  # noqa: F401  (re-exported for callers)
-from scripts.tutorial import common as C
+from scripts.tutorial import common as tutorial_common
 
 EVENT_HOSTS = ("macro_mage", "macro_geni", "macro_dwarf")
 
@@ -70,7 +70,7 @@ def greet(bot, timeout=60):
             continue
         except Exception:
             continue
-        C.finish_dialog(bot, (), timeout=timeout)
+        tutorial_common.finish_dialog(bot, (), timeout=timeout)
 
 
 def nearby_named_locs(bot, needle, radius=60):
@@ -127,7 +127,7 @@ def climb_out(bot):
             print("ok on ground at %s" % (bot.position,), flush=True)
             return True
         try:
-            x, z, _level, loc = C.find_loc(bot, "ladder", "stair")
+            x, z, _level, loc = tutorial_common.find_loc(bot, "ladder", "stair")
         except Unreachable:
             print("no ladder or stair near %s" % (bot.position,), flush=True)
             return False
