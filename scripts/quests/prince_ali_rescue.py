@@ -150,8 +150,18 @@ def solve(bot):
                 while _count(bot, solver.obj_id("rope")) > 0 and bot.world.ticks < target:
                     bot.pump(2)
             seen_msgs = len(bot.world.messages)
-            # No client-side approach: the server walks into reach itself,
-            # while a client walk burns the ~10 s Keli respawn window.
+            # The door's script silently refuses clicks resolved from the
+            # north/east (coordz guard), so stand south first: the server
+            # then fires from the only side it accepts. Still no full
+            # client approach — the walk south is a couple of tiles, keeping
+            # well inside the ~10 s Keli respawn window.
+            try:
+                bot.walk_to(_dx, _dz + 1, _dlvl, timeout=15, open_doors=True)
+            except (Unreachable, TimeoutError):
+                pass
+            # No client-side approach beyond that: the server walks into
+            # reach itself, while a longer client walk burns the respawn
+            # window.
             C.use_held_on_loc(bot, _dx, _dz, _dloc, key)
             target = bot.world.ticks + 100
             while bot.world.ticks < target and not unlocked:
@@ -161,6 +171,8 @@ def solve(bot):
                         unlocked = True
                     elif "Keli" in text:
                         break
+                    else:
+                        print("door click says: %r" % (text[:80],), flush=True)
                 else:
                     continue
                 break
