@@ -40,6 +40,9 @@ class MovementMixin:
         skip_walks = set()
         self._dbg("route plan %s" % ([(k, getattr(q, "name", q)) for k, q in plan][:12]))
         while True:
+            # Replans are pure CPU; keep the server from dropping us.
+            if getattr(self.connection, "sock", None) is not None:
+                self.pump(1)
             leg_start = (self.world.level, self.world.x, self.world.z)
             replanned = False
             for kind, payload in plan:
@@ -656,6 +659,12 @@ class MovementMixin:
         leg_timeouts = 0
         recent_spots = []
         while (self.world.x, self.world.z, self.world.level) != (x, z, self.world.level):
+            if time.time() > deadline:
+                raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
+            # The server drops clients that fall behind the tick: pump for
+            # keepalive even on pure-planning iterations with no leg to walk.
+            if getattr(self.connection, "sock", None) is not None:
+                self.pump(1)
             if time.time() > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
             # Tight-loop guard: three timed-out legs in a row means the
