@@ -25,6 +25,9 @@ def dump(bot, tag):
         print("  text %s: %r" % (com, text[:100]), flush=True)
     for com, text in bot.chat_options():
         print("  option %s: %r" % (com, text[:100]), flush=True)
+    for (loc_x, loc_z, loc_level), entry in bot.world.locs.items():
+        if loc_level == bot.world.level and abs(loc_x - bot.world.x) + abs(loc_z - bot.world.z) <= 2 and entry is not None:
+            print("  near loc id=%d at %d,%d" % (entry[0], loc_x, loc_z), flush=True)
 
 
 def main():

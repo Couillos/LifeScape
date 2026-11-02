@@ -34,6 +34,10 @@ COMPLETE = 7
 
 VYVIN_ROOM = (2983, 3335, 2)
 
+# The cupboard only answers from its south side: approach() parks west
+# (2983,3336), which the server refuses with "I can't reach that!".
+CUPBOARD_STAND = (2984, 3335, 2)
+
 # Save-backed stages for this run: fresh logins are blind to live varps,
 # so gates consult the persisted stage too (max wins either way).
 _SAVED_VARPS = {}
@@ -79,21 +83,32 @@ def _talk_until(bot, name, keywords, want, tries=3):
         raise solver.SolverError("talking to %s never reached stage %d (at %d)" % (name, want, _stage(bot)))
 
 
+def _vyvin_close(bot):
+    """True while Vyvin guards the cupboard (the server checks radius 1)."""
+    for _nid, npc in bot.npcs_named(("sir_vyvin",)):
+        if max(abs(npc["x"] - 2984), abs(npc["z"] - 3336)) <= 1:
+            return True
+    return False
+
+
 def _portrait(bot):
     if _count(bot, "knights_portrait") > 0:
         return
     bot.intend("climbing to Vyvin's room for the portrait")
     bot.approach(*VYVIN_ROOM, radius=4, timeout=600, open_doors=True)
-    target = bot.world.ticks + 600
+    target = bot.world.ticks + 1800
     while bot.world.ticks < target:
         if _count(bot, "knights_portrait") > 0:
             return
+        if _vyvin_close(bot):
+            wait_ticks(bot, 10)
+            continue
         try:
-            solver.operate_loc(bot, ("vyvincupboardshut",), 1, timeout=60)
+            solver.operate_loc(bot, ("vyvincupboardshut",), 1, timeout=60, stand=CUPBOARD_STAND)
         except Exception as error:
             print("cupboard open failed: %s" % (error,), flush=True)
         try:
-            solver.operate_loc(bot, ("vyvincupboardopen",), 1, timeout=60)
+            solver.operate_loc(bot, ("vyvincupboardopen",), 1, timeout=60, stand=CUPBOARD_STAND)
         except Exception as error:
             print("cupboard search failed: %s" % (error,), flush=True)
         wait_ticks(bot, 5)

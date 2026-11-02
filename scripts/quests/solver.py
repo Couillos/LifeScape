@@ -189,9 +189,15 @@ def wait_complete(bot, timeout=300):
     return False
 
 
-def operate_loc(bot, names, op=1, timeout=60):
+def operate_loc(bot, names, op=1, timeout=60, stand=None):
     x, z, level, loc = C.find_loc(bot, *names)
-    bot.approach(x, z, level=level, radius=2, timeout=timeout, open_doors=True)
+    if stand is not None:
+        # Some locs only answer from one side (reachLoc angle): park on the
+        # given tile instead of the nearest approach tile, which the server
+        # can refuse with "I can't reach that!".
+        bot.walk_to(stand[0], stand[1], stand[2] if len(stand) > 2 else level, timeout=timeout, open_doors=True)
+    else:
+        bot.approach(x, z, level=level, radius=2, timeout=timeout, open_doors=True)
     bot.op_loc(op, x, z, loc)
     wait_ticks(bot, 10)
     # An op often opens a plain mesbox (drink, open, search) that halts the
