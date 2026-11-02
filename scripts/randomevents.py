@@ -23,9 +23,9 @@ import json
 from collections import deque
 
 
+import gamedata as knowledge
 from lifescape import collision as collision_mod
 from lifescape.client import Unreachable  # noqa: F401  (re-exported for callers)
-from scripts.rescue_cube import cube_count
 from scripts.tutorial import common as tutorial_common
 
 EVENT_HOSTS = ("macro_mage", "macro_geni", "macro_dwarf")
@@ -274,6 +274,12 @@ def climb_out(bot):
     return bot.world.level == 0
 
 
+def cube_in_pack(bot):
+    """True when a strange box is waiting to be solved in the inventory."""
+    cube = knowledge.objs.by_name("macro_cube")
+    return bool(cube) and bot.inventory().get(cube[0].obj_id, 0) > 0
+
+
 def report(bot, event, resolved, detail=None):
     """Tell the orchestrator (log event) what a random event needs."""
     payload = {"kind": "random_event", "event": event, "resolved": bool(resolved), "at": bot.position}
@@ -289,7 +295,7 @@ def check(bot):
         print("in mime event at %s, needs a performer" % (bot.position,), flush=True)
         report(bot, "mime", False)
         return False
-    if cube_count(bot):
+    if cube_in_pack(bot):
         # The strange box is carried, not a zone: hand it to the rescue so
         # the botting script is not blocked behind a question interface.
         print("strange box in inventory, handing it to the cube rescue", flush=True)

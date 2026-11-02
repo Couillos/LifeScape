@@ -668,10 +668,6 @@ class BotCore:
             if _active_bot is self:
                 _active_bot = None
 
-    def com_id(self, name):
-        """Interface component id by name ("macro_cube:question")."""
-        return self._com_id(name)
-
     def _com_id(self, name):
         if self._com_ids is None:
             if not self.paths or not self.paths.get("comps"):

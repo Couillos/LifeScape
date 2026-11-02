@@ -90,8 +90,13 @@ def find_loc(bot, *names, radius=150, timeout=20):
     can_pump = hasattr(bot, "pump")
     while True:
         best = None
-        seen = list(bot.world.locs.items()) + [(k, v) for k, v in bot.world.static_locs.items() if k not in bot.world.locs]
-        for (x, z, level), loc in seen:
+        # static_actions carries the locs that answer a click even when a
+        # decoration on the same tile replaces them in static_locs (the
+        # fortress inner door and the maze statue both hide that way).
+        seen = dict(bot.world.static_locs)
+        seen.update(getattr(bot.world, "static_actions", None) or {})
+        seen.update(bot.world.locs)
+        for (x, z, level), loc in seen.items():
             if loc is None or level != bot.world.level:
                 continue
             dist = abs(x - bot.world.x) + abs(z - bot.world.z)

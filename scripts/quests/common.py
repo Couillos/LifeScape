@@ -123,6 +123,11 @@ def report_result(account, quest, solved, error=None):
 
 def run(bot, requirements, solve=None):
     """Check requirements and solve in the open session."""
+    # Quest stages are gated on max(live varps, saved varps), and the save is
+    # only written on logout: in a long-lived session it falls behind, so the
+    # solver replays steps it already did. Logging out and back in refreshes
+    # it (a fresh worker used to do this implicitly, one process per run).
+    bot.relogin()
     _wait_for_state(bot)
     _drop_junk(bot)
     # A random-event box replicates until solved and then eats quest
