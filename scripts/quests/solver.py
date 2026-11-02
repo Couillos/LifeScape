@@ -19,10 +19,10 @@ class SolverError(RuntimeError):
     pass
 
 
-# Random-event junk (macro cubes) is unbankable and piles up on long
-# treks until quest item deliveries overflow to the ground and despawn.
-# Dropped on sight: it has no use.
-JUNK_ITEMS = ("macro_cube",)
+# Random-event junk the bank refuses. macro_cube is deliberately NOT here:
+# dropping a cube (opheld5) runs try_add_macro_cube and ADDS another one.
+# Cubes are cleared by solving the strange box (see solve_strange_box).
+JUNK_ITEMS = ()
 
 
 def drop_junk(bot):
@@ -255,6 +255,87 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
             bot.pump(5)
         return True
     raise SolverError("cannot use %s on %s at %s" % (item_name, npc_name, bot.position))
+
+
+CUBE_SHAPES = ("Triangle", "Square", "Circle", "Star", "Halfmoon")
+CUBE_COLOURS = ("Red", "Blue", "Yellow")
+
+
+def _cube_shape_colour(obj_id):
+    """(shape, colour) for a shape-model obj id, or None."""
+    if 3063 <= obj_id <= 3091 and (obj_id - 3063) % 2 == 0:
+        slot = (obj_id - 3063) // 2
+        return CUBE_SHAPES[slot // 3], CUBE_COLOURS[slot % 3]
+    return None
+
+
+def _cube_answer(question, shapes_colours):
+    """Answer-button index (0-2) for the quiz question, or None."""
+    asked = question.strip().rstrip("?")
+    if asked.lower().startswith("what colour is the "):
+        want = asked[len("what colour is the "):].strip().lower()
+        for index, (shape, _colour) in enumerate(shapes_colours):
+            if shape.lower() == want:
+                return index
+    elif asked.lower().startswith("which shape is "):
+        want = asked[len("which shape is "):].strip().lower()
+        for index, (_shape, colour) in enumerate(shapes_colours):
+            if colour.lower() == want:
+                return index
+    return None
+
+
+def solve_strange_box(bot, max_rounds=40):
+    """Answer the strange-box shape quiz until the cubes are gone.
+
+    The box interface shows three shape models (centre, side, top) and
+    asks for one's colour or one's shape. The model obj ids encode both,
+    so the correct answer button (1-3, same order) is picked
+    deterministically instead of guessed.
+    """
+    cube = obj_id("macro_cube")
+    question_com = knowledge.com_id("macro_cube:question")
+    button_coms = [knowledge.com_id("macro_cube:answer_button%d" % i) for i in (1, 2, 3)]
+    model_coms = [knowledge.com_id(name) for name in (
+        "macro_cube:center_shape_model",
+        "macro_cube:side_shape_model",
+        "macro_cube:top_shape_model",
+    )]
+    for _ in range(max_rounds):
+        if bot.inventory().get(cube, 0) == 0:
+            return True
+        try:
+            inv_com, slot = C.inv_slot(bot, cube)
+        except KeyError:
+            return True
+        bot.op_held(1, cube, slot, inv_com)
+        target = bot.world.ticks + 60
+        question = None
+        models = []
+        while bot.world.ticks < target:
+            bot.pump(3)
+            texts = dict(bot.chat_texts())
+            question = texts.get(question_com)
+            models = [bot.world.modal_models.get(com) for com in model_coms]
+            if question and all(models):
+                break
+        if not question or not all(models):
+            continue
+        shapes_colours = [_cube_shape_colour(held) for held in models]
+        if any(pair is None for pair in shapes_colours):
+            continue
+        pick = _cube_answer(question, shapes_colours)
+        if pick is None:
+            continue
+        bot.if_button(button_coms[pick])
+        bot.pump(5)
+        # Dismiss the result box (success, next-cube prompt, or fail note).
+        for _ in range(12):
+            if bot.world.modal is None:
+                break
+            bot.chat_continue()
+            bot.pump(3)
+    return bot.inventory().get(cube, 0) == 0
 
 
 def use_item_on_loc(bot, item_name, loc_names):

@@ -68,6 +68,7 @@ class World:
         self.stats = {}
         self.texts = {}
         self.pending_texts = {}
+        self.modal_models = {}
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -113,6 +114,7 @@ class World:
         self.stats = {}
         self.texts = {}
         self.pending_texts = {}
+        self.modal_models = {}
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -192,6 +194,7 @@ class World:
             self.modal = None
             self.texts = {}
             self.pending_texts = {}
+            self.modal_models = {}
             self.chat_interfaces = []
         elif name == "IF_SETTEXT":
             text = Reader(body)
@@ -199,6 +202,12 @@ class World:
             value = text.jstr()
             self.texts[com] = value
             self.pending_texts[com] = value
+        elif name == "IF_SETOBJECT":
+            obj = Reader(body)
+            com = obj.u16()
+            obj_id = obj.u16()
+            obj.u16()  # scale
+            self.modal_models[com] = obj_id
         elif name == "P_COUNTDIALOG":
             self.count_dialog = True
         elif name == "SET_PLAYER_OP":
@@ -508,7 +517,9 @@ class World:
             self.chat_interfaces = self.chat_interfaces[-8:]
         # The server sets an interface's texts just before opening it. Keep
         # only that batch, so options from the previous dialogue disappear.
+        # Models arrive after the open; start fresh the same way.
         self.texts = dict(self.pending_texts)
+        self.modal_models = {}
         self.pending_texts = {}
         self.chat_interfaces = []
 

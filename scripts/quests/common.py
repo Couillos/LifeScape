@@ -132,6 +132,9 @@ def run(requirements, account=None, solve=None):
         bot.login(account, account)
         _wait_for_state(bot)
         _drop_junk(bot)
+        # A random-event box replicates until solved and then eats quest
+        # item deliveries; clear any backlog before doing anything else.
+        solver.solve_strange_box(bot)
         try:
             bank_items = {} if _all_carried(bot, requirements) else _open_nearest_bank(bot)
         except (Unreachable, TimeoutError) as error:
