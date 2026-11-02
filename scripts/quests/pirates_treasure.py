@@ -247,8 +247,9 @@ def solve(bot):
         if _count(bot, key) == 0:
             raise solver.SolverError("Redbeard Frank did not replace the key")
 
-    bot.approach(3227, 3393, radius=3, timeout=600, open_doors=True)
-    solver.operate_loc(bot, ("woodenstairs",), 1)
+    # Upstairs via the portal planner (a raw click on these stairs has
+    # been observed to open a choice instead of climbing).
+    bot.walk_to(3230, 3382, 1, timeout=180, open_doors=True)
     if bot.world.level != 1:
         raise solver.SolverError("did not climb to the Blue Moon Inn upstairs")
     solver.operate_loc(bot, ("piratechest",), 1)
