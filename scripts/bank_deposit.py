@@ -37,6 +37,8 @@ def main():
         side_com = knowledge.com_id("bank_side:inv")
         if not bot.bank_deposit_all(side_com, keep_ids=keep):
             print("deposit did not clear the backpack", flush=True)
+            for text in bot.world.messages[-5:]:
+                print("game msg: %r" % (text[:100],), flush=True)
         _com, slots = bot.backpack()
         print("backpack now holds %d slots" % len(slots), flush=True)
         return 0
