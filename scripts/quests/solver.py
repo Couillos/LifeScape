@@ -95,7 +95,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
     still_texts = None
     still_rounds = 0
     while bot.world.ticks < target:
-        bot.pump(2)
+        frames = bot.pump(2)
         # Quest items land mid-dialogue: keep one slot free so a delivery
         # never overflows to the ground while we click through pages.
         drop_junk(bot)
@@ -148,6 +148,14 @@ def finish_dialog_like(bot, keywords, timeout=300):
             texts_now = sorted(text for _com, text in bot.chat_texts())
             if texts_now != still_texts:
                 still_texts = texts_now
+                still_rounds = 0
+            elif any(
+                name.startswith("IF_") or name in ("MESSAGE_GAME", "UPDATE_INV_FULL", "UPDATE_INV_PARTIAL")
+                for _op, name, _body in frames
+            ):
+                # Same words, but the server is still talking (the 25-bone
+                # handover repeats one mesbox): only a silent server means
+                # a missed close.
                 still_rounds = 0
             else:
                 still_rounds += 1

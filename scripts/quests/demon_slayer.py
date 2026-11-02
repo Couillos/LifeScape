@@ -98,10 +98,21 @@ def solve(bot):
     # step is still ahead, so a resume after handover never asks for it.
     if _stage(bot) < TALKED_ARIS and _count(bot, "coins") < 1:
         raise solver.SolverError("no coin for Aris at %s" % (bot.position,))
-    if _count(bot, "silverlight_key_1") < 1 and _stage(bot) < GOT_TRAIBORN_KEY and _count(bot, "bones") < 25:
-        raise solver.SolverError("need 25 bones for Traiborn at %s" % (bot.position,))
     if _count(bot, "silverlight_key_3") < 1 and _count(bot, "bucket_water") < 1:
         raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
+    # Wizard Traiborn wants 25 bones for his key: agree first, then hand
+    # them over. Without the key past stage 28 the key was lost (or its
+    # handover dialogue was cut): Traiborn resets the hunt and the 25
+    # bones are due again.
+    if _count(bot, "silverlight_key_1") < 1 and _stage(bot) < SILVERLIGHT:
+        if _stage(bot) >= GOT_TRAIBORN_KEY or _stage(bot) < FIND_BONES:
+            want_bones = 25
+        else:
+            want_bones = max(1, GOT_TRAIBORN_KEY - _stage(bot))
+        if _count(bot, "bones") < want_bones:
+            raise solver.SolverError("need %d bones for Traiborn at %s" % (want_bones, bot.position))
+        solver.talk_like(bot, "traiborn", ["knocking", "bones", "key"])
+        solver.talk_like(bot, "traiborn", ["bones", "give"])
     # Gypsy Aris starts the quest for 1 coin and names Sir Prysin.
     _talk_until(bot, "aris", ["here you go", "delrith", "silverlight", "incantation", "best"], TALKED_ARIS)
     # Sir Prysin sends us hunting for his three keys.
@@ -109,14 +120,10 @@ def solve(bot):
     # Captain Rovin hands over his key for the demon story (no varp: skip when held).
     if _count(bot, "silverlight_key_2") < 1:
         solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
-    # Wizard Traiborn wants 25 bones for his key: agree first, then hand them over.
-    if _stage(bot) < FIND_BONES:
-        solver.talk_like(bot, "traiborn", ["knocking", "bones", "key"])
-    if _stage(bot) < GOT_TRAIBORN_KEY:
-        solver.talk_like(bot, "traiborn", ["bones", "give"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
     key3 = solver.obj_id("silverlight_key_3")
-    if bot.inventory().get(key3, 0) < 1:
+    if _count(bot, "silverlight_key_3") < 1:
+        bot.approach(3225, 3495, radius=6, timeout=600, open_doors=True)
         solver.use_item_on_loc(bot, "bucket_water", ("questdrain",))
         # The key washes into the Varrock sewer: use that manhole, not the
         # nearest one wherever we stand (tower/draynor covers go elsewhere).
