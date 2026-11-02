@@ -138,6 +138,8 @@ def format_seen(state):
         lines.append("modal %s %s" % (state.get("modal_name") or "-", state.get("modal")))
     for line in (state.get("chat") or [])[-8:]:
         lines.append("chat %s" % str(line)[:160])
+    for line in (state.get("messages") or [])[-6:]:
+        lines.append("msg  %s" % str(line)[:160])
     if state.get("route_target"):
         lines.append("route_target %s" % (state.get("route_target"),))
     if state.get("last_event"):

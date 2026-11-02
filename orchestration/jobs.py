@@ -85,6 +85,7 @@ class Job:
             "inv": bot_state.get("inv") or [],
             "bank": bot_state.get("bank") or [],
             "chat": bot_state.get("chat") or [],
+            "messages": bot_state.get("messages") or [],
             "log": log_path,
             "last_event": self.last_event,
             "requirements": self.last_requirements,

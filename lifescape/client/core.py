@@ -484,6 +484,7 @@ class BotCore:
             "models": dict(self.world.modal_models),
             "bank": self._state_items("bank_main:inv"),
             "chat": [line.text for line in self.world.chat[-6:]],
+            "messages": [str(line) for line in self.world.messages[-6:]],
         }
         try:
             temporary = self._state_path + ".tmp"

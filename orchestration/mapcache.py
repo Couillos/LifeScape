@@ -158,15 +158,16 @@ class MapCache:
         return grounds
 
     def _square(self, square_x, square_z):
+        # Cache the misses too: a square missing from the pack (random-event
+        # areas are not in it) used to reopen the zip once per tile, which
+        # made one spectator frame take seconds.
         key = (square_x, square_z)
-        square = self._squares.get(key)
-        if square is None:
-            with self._lock:
-                square = self._squares.get(key)
-                if square is None:
-                    square = self._load_square(square_x, square_z)
-                    self._squares[key] = square
-        return square
+        if key in self._squares:
+            return self._squares[key]
+        with self._lock:
+            if key not in self._squares:
+                self._squares[key] = self._load_square(square_x, square_z)
+        return self._squares[key]
 
     def colour_at(self, level, x, z):
         square = self._square(x >> 6, z >> 6)
