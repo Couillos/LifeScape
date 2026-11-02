@@ -129,18 +129,22 @@ def solve(bot):
         raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
     if stage < 100:
         _dx, _dz, _dlvl, _dloc = C.find_loc(bot, "alidoor")
-        if not bot.can_reach(_dx, _dz - 1, _dlvl, near=0):
-            # Locked (or Keli back within 10 tiles): tie her if she is
-            # about — the tie consumes the rope — then turn the key.
-            if bot.npcs_named(("lady_keli",)):
-                if _count(bot, solver.obj_id("rope")) < 1:
-                    raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
-                use_item_on_npc(bot, "rope", "lady_keli")
-                if _count(bot, solver.obj_id("rope")) > 0:
-                    raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
-            solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
-            if not bot.can_reach(_dx, _dz - 1, _dlvl, near=0):
-                raise solver.SolverError("cell door refused (Keli respawned?) at %s" % (bot.position,))
+        # Fresh logins are blind to NPCs until the stream arrives: wait for
+        # Keli before deciding the tie is unnecessary (a respawned Keli the
+        # client never sees still blocks the door server-side).
+        target = bot.world.ticks + 150
+        while bot.world.ticks < target and not bot.npcs_named(("lady_keli",)):
+            bot.pump(5)
+        # Tie her whenever she is about — the tie consumes the rope, so a
+        # held rope afterwards means refusal. Then turn the key (harmless
+        # when already unlocked) and free the prince.
+        if bot.npcs_named(("lady_keli",)):
+            if _count(bot, solver.obj_id("rope")) < 1:
+                raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
+            use_item_on_npc(bot, "rope", "lady_keli")
+            if _count(bot, solver.obj_id("rope")) > 0:
+                raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
+        solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
         solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"],
                          near=(_dx, _dz + 1))
         stage = _stage(bot)
