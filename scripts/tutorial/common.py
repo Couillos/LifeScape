@@ -76,22 +76,37 @@ def inv_slot(bot, obj):
     raise KeyError("no %d in backpack" % obj)
 
 
-def find_loc(bot, *names):
+def find_loc(bot, *names, radius=60, timeout=20):
+    """Nearest loc whose debugname contains one of names, on this level.
+
+    Only matches within radius tiles: locs are interaction targets, and
+    a match on the other side of the world (a stale static entry while
+    the live one is still streaming in) must fail loudly instead of
+    sending the bot across the continent. Pumps briefly first, since a
+    freshly streamed area takes a few ticks to arrive.
+    """
     bot.ensure_nav()
-    best = None
-    seen = list(bot.world.locs.items()) + [(k, v) for k, v in bot.world.static_locs.items() if k not in bot.world.locs]
-    for (x, z, level), loc in seen:
-        if loc is None or level != bot.world.level:
-            continue
-        label = bot.loctypes["loc"][loc[0]]["name"] if loc[0] < len(bot.loctypes["loc"]) else ""
-        if not any(name in label for name in names):
-            continue
-        dist = abs(x - bot.world.x) + abs(z - bot.world.z)
-        if best is None or dist < best[0]:
-            best = (dist, x, z, level, loc[0])
-    if best is None:
-        raise Unreachable("no loc %r near %s" % (names, bot.position))
-    return best[1:]
+    target = bot.world.ticks + timeout
+    can_pump = hasattr(bot, "pump")
+    while True:
+        best = None
+        seen = list(bot.world.locs.items()) + [(k, v) for k, v in bot.world.static_locs.items() if k not in bot.world.locs]
+        for (x, z, level), loc in seen:
+            if loc is None or level != bot.world.level:
+                continue
+            dist = abs(x - bot.world.x) + abs(z - bot.world.z)
+            if dist > radius:
+                continue
+            label = bot.loctypes["loc"][loc[0]]["name"] if loc[0] < len(bot.loctypes["loc"]) else ""
+            if not any(name in label for name in names):
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, x, z, level, loc[0])
+        if best is not None:
+            return best[1:]
+        if bot.world.ticks >= target or not can_pump:
+            raise Unreachable("no loc %r near %s" % (names, bot.position))
+        bot.pump(2)
 
 
 def use_held_on_held(bot, target_obj, tool_obj):

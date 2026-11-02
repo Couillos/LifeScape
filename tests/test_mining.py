@@ -11,8 +11,9 @@ from lifescape.collision import CollisionMap
 
 class _StubWorld:
     x, z, level = 3222, 3222, 0
+    ticks = 0
     locs = {}
-    static_locs = {(3268, 3227, 0): (2882, 0, 0)}
+    static_locs = {(3230, 3227, 0): (2882, 0, 0)}
 
 
 class _StubBot:
