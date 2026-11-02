@@ -9,7 +9,6 @@ import random
 import socket
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.buffer import Reader, Writer
 from lifescape.cache import login_crcs

@@ -9,13 +9,9 @@ Usage: run.py [account] [spot ...] [--kills N] [--ticks N]
 Without a spot, picks the highest spot whose minimum level is reached.
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot, Unreachable
 from lifescape.connection import LoginError

@@ -2,12 +2,9 @@
 
 Diagnostic only. Run: ../lostcity/.pypy/bin/pypy3 scripts/probe_appearance.py <user>
 """
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "gamedata"))
 
 from lifescape import world as world_mod
 from lifescape.client import Bot

@@ -7,10 +7,8 @@ bot script.
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/goto.py <account> <x> <z> [level]
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot
 

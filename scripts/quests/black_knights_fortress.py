@@ -10,11 +10,8 @@ through on "going in anyway"), inner door, listen at the grill
 the hole (%spy 2->3), report back to Sir Amik for 2500 coins.
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
 
 from lifescape.client import Unreachable
 

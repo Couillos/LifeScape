@@ -1,10 +1,7 @@
 """Requirement check and completion: Demon Slayer."""
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
 
 import gamedata as knowledge
 from gamedata import quest_requirements

@@ -11,11 +11,8 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/woodcut/run.py <username> [loads]
   loads = full bank trips before stopping, 0 means forever (default 0).
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
 
 from scripts.woodcut.common import *
 from scripts.woodcut.pack import *

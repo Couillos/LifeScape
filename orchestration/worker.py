@@ -17,6 +17,22 @@ from .registry import script_path
 
 RANDOM_EVENT_CODE = 75
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def ensure_project_paths():
+    """Put the project on sys.path for the supervised script.
+
+    Every bot, probe and test runs through this worker (the only entry
+    point), so scripts import ``lifescape``, ``scripts`` and ``gamedata``
+    directly with no per-file ``sys.path`` boilerplate. The inner
+    ``gamedata/`` dir comes first: ``import gamedata`` must resolve to
+    the generated tables, shadowing the outer container.
+    """
+    for entry in (PROJECT_ROOT, os.path.join(PROJECT_ROOT, "gamedata")):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+
 
 def main():
     if len(sys.argv) < 3:
@@ -26,6 +42,7 @@ def main():
     path = script_path(script)
     os.environ.setdefault("LIFESCAPE_USER", account)
     sys.argv = [path, account] + args
+    ensure_project_paths()
     try:
         runpy.run_path(path, run_name="__main__")
     except SystemExit as stop:

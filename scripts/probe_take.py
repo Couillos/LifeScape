@@ -6,11 +6,9 @@ No cheats: pure ground-spawn protocol.
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_take.py [username]
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.client import Bot
 

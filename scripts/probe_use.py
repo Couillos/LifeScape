@@ -7,11 +7,8 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_use.py <account> <loc> [item] [
 Stand tile forces the click position instead of the nearest approach.
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gamedata"))
 
 from lifescape.client import Bot
 from scripts.tutorial import common as C

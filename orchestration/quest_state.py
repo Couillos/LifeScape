@@ -1,12 +1,5 @@
 """Quest completion read by the orchestrator, never by a bot script."""
 
-import os
-import sys
-
-from .paths import ROOT
-
-sys.path.insert(0, os.path.join(ROOT, "gamedata"))
-
 import gamedata as knowledge
 
 from lifescape import save

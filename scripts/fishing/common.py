@@ -6,14 +6,9 @@ are all picked by proximity from gamedata (best spot for the level,
 safe for the combat level, nearest usable bank). Banks across the toll
 gate are a last resort. Stays on one level."""
 
-import os
 import math
-import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from scripts import hazards, randomevents
 from scripts.hazards import LIVE_MARGIN, hitpoints, static_threats, threats

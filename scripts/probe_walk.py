@@ -3,10 +3,8 @@
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_walk.py [username] [dx] [dz]
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.client import Bot
 

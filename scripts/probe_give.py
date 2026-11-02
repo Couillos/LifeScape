@@ -8,12 +8,9 @@ Gives count of each item (default 1) and reports the inventory delta.
 Never used by a bot script.
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gamedata"))
 
 from lifescape.client import Bot
 

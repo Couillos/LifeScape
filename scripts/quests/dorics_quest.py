@@ -1,10 +1,7 @@
 """Requirement check and completion: Doric's Quest."""
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gamedata"))
 
 from gamedata import quest_requirements
 from scripts.quests import solver

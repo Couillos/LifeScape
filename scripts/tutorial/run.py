@@ -10,12 +10,9 @@ the inventory (items only prove what the player holds, and each step
 function checks its own required items before acting).
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.client import Bot
 

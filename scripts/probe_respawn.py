@@ -6,11 +6,9 @@ so ~12-20s wall at 100ms ticks vs 72-120s at 600ms.
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_respawn.py <username>
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot, Unreachable
 from scripts.tutorial import common as C

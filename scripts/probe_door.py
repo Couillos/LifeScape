@@ -7,11 +7,9 @@ refused click or a refused step is unambiguous.
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_door.py <account> <x> <z> [level]
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape import doors as doors_mod
 from lifescape.client import Bot

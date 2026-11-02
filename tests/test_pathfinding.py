@@ -1,9 +1,6 @@
-import os
-import sys
 import unittest
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape import collision as flags
 from lifescape.client import Bot

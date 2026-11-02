@@ -1,9 +1,7 @@
 import os
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.buffer import Writer
 from lifescape.save import parse

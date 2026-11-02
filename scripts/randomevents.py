@@ -20,12 +20,9 @@ because our client gets no zone stream and wrong collision that far
 out; a solver needs that fixed first.
 """
 
-import os
 import json
-import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Unreachable  # noqa: F401  (re-exported for callers)
 from scripts.tutorial import common as C

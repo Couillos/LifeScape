@@ -4,12 +4,9 @@ Walk into a dark wizard, wait for hitpoints to hit 0, then time
 lifescape.hazards.wait_respawn until control comes back and print where
 the player lands. Diagnostic only.
 """
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "gamedata"))
 
 from lifescape import hazards
 from lifescape.client import Bot

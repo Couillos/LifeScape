@@ -14,10 +14,8 @@ This is a development tool, not a bot.
 import json
 import os
 import re
-import sys
 import zipfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape import collision
 from lifescape.buffer import Reader

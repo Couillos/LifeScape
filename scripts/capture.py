@@ -4,10 +4,8 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/capture.py [username] [frames] [outfi
 """
 
 import json
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lifescape.client import Bot
 

@@ -3,8 +3,6 @@ import os
 import runpy
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "gamedata"))
 
 from lifescape import world as world_mod
 

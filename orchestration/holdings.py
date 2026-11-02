@@ -20,8 +20,6 @@ from lifescape import save
 from .naming import humanize
 from .paths import ROOT, RUN_DIR, read_json
 
-sys.path.insert(0, os.path.join(ROOT, "gamedata"))
-
 import gamedata as knowledge
 
 SAVE_DIR = save.default_save_dir()

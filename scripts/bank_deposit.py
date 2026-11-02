@@ -6,11 +6,8 @@ Keeps the listed debugnames (default: coins). Never used by a bot script.
 Usage: ../lostcity/.pypy/bin/pypy3 scripts/bank_deposit.py <account> [keep ...]
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gamedata"))
 
 from lifescape.client import Bot, Unreachable
 

@@ -17,7 +17,6 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot
 from lifescape.world import to_base37

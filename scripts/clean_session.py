@@ -7,11 +7,9 @@ keeps a session for a few ticks after a hard kill, so this retries until
 the login is accepted, then closes it at once.
 """
 
-import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot
 

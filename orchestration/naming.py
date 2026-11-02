@@ -5,12 +5,7 @@ sees "bankbooth" or "main_side:inventory" instead of raw ids. Lookups are
 O(1): gamedata builds each id->name table once and keeps it.
 """
 
-import os
 import re
-import sys
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "gamedata"))
 
 import gamedata as knowledge
 

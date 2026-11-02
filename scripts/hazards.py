@@ -16,11 +16,7 @@ the player to Lumbridge and refills stats in a few ticks, then play
 resumes at once.
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gamedata"))
 
 import gamedata as knowledge
 

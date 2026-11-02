@@ -1,9 +1,5 @@
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "gamedata"))
 
 from gamedata import quest_requirements
 from lifescape.quests import PlayerState, check
