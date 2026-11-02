@@ -100,8 +100,6 @@ def solve(bot):
     # step is still ahead, so a resume after handover never asks for it.
     if _stage(bot) < TALKED_ARIS and _count(bot, "coins") < 1:
         raise solver.SolverError("no coin for Aris at %s" % (bot.position,))
-    if _count(bot, "silverlight_key_3") < 1 and _count(bot, "bucket_water") < 1:
-        raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
     # Wizard Traiborn wants 25 bones for his key: agree first, then hand
     # them over. Without the key past stage 28 the key was lost (or its
     # handover dialogue was cut): Traiborn resets the hunt and the 25
@@ -131,6 +129,8 @@ def solve(bot):
         except (Unreachable, TimeoutError):
             pass
     if _count(bot, "silverlight_key_3") < 1:
+        if _count(bot, "bucket_water") < 1:
+            raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
         drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, "questdrain")
         # The drain tile itself is walkable and the use only lands from it:
         # clicked from the north side, the server drops it silently.
