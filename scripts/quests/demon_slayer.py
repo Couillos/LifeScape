@@ -7,6 +7,7 @@ import sys
 import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape import save as save_mod
+from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
 from scripts.quests.common import run
@@ -122,6 +123,13 @@ def solve(bot):
     if _count(bot, "silverlight_key_2") < 1:
         solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
+    if _count(bot, "silverlight_key_3") < 1:
+        # Fast path: already standing next to the key in the sewer (retry
+        # after a pour). A missing key fails fast with no walking.
+        try:
+            bot.take(name="silverlight_key_3", timeout=15)
+        except (Unreachable, TimeoutError):
+            pass
     if _count(bot, "silverlight_key_3") < 1:
         drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, "questdrain")
         # The drain tile itself is walkable and the use only lands from it:
