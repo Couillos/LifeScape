@@ -100,14 +100,39 @@ def solve(bot):
     bot.approach(3249, 3194, radius=6, timeout=600, open_doors=True)
     try:
         # solver.operate_loc walks to the blocked coffin tile itself and
-        # burns full timeouts; stand on a reachable neighbour and click.
+        # burns full timeouts; stand on a walkable neighbour and click.
+        # (C.approach_loc skips the tile we already stand on and can
+        # loop its 25 s walk_to on every candidate.)
         coffin = C.find_loc(bot, "shutghostcoffin")
-        C.approach_loc(bot, coffin[0], coffin[1], coffin[3], coffin[2])
-        bot.op_loc(1, coffin[0], coffin[1], coffin[3])
+        cx, cz, clevel, cloc = coffin
+        neigh = sorted(
+            [(cx + dx, cz + dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1) if dx or dz],
+            key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
+        )
+        for nx, nz in neigh:
+            try:
+                bot.approach(nx, nz, level=clevel, radius=0, timeout=30, open_doors=True)
+                break
+            except (Unreachable, TimeoutError):
+                continue
+        bot.op_loc(1, cx, cz, cloc)
         bot.pump(10)
     except (Unreachable, TimeoutError):
         pass
-    solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar", "shutghostcoffin"])
+    # Same blocked-tile trap for the skull use: neighbour-stand, then click.
+    altar = C.find_loc(bot, "restless_ghost_altar", "shutghostcoffin")
+    ax, az, alevel, aloc = altar
+    for nx, nz in sorted(
+        [(ax + dx, az + dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1) if dx or dz],
+        key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
+    ):
+        try:
+            bot.approach(nx, nz, level=alevel, radius=0, timeout=30, open_doors=True)
+            break
+        except (Unreachable, TimeoutError):
+            continue
+    C.use_held_on_loc(bot, ax, az, aloc, solver.obj_id("ghostskull"))
+    bot.pump(10)
     try:
         _wear(bot, "amulet_of_strength")
     except Exception:
