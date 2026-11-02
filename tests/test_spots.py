@@ -2,6 +2,7 @@ import unittest
 
 from lifescape import spots
 from lifescape.client import Bot
+import gamedata as knowledge_data
 
 
 def bot_with_stats(stats, energy=100):
@@ -43,14 +44,12 @@ class SpotsTest(unittest.TestCase):
         self.assertIsNone(spots.nearest_safe_spot([(101, 101, 0)], [npc], 3, 0, 0, 0))
 
     def test_draynor_bank_spot_threats_match_live_death(self):
-        from lifescape import spots as live_spots
-        import gamedata as knowledge_data
         entry = knowledge_data.npc_by_name("young_dark_wizard")[0]
         near = [spot for spot in entry.spawns if abs(spot.x - 3091) + abs(spot.z - 3243) < 30]
         self.assertTrue(near)
         npcs = [(spot.x, spot.z, spot.level, entry.huntrange, entry.vislevel, True) for spot in entry.spawns]
-        self.assertTrue(live_spots.threats_at(3091, 3243, 0, npcs, 3))
-        self.assertEqual(live_spots.threats_at(3091, 3243, 0, npcs, 15), [])
+        self.assertTrue(spots.threats_at(3091, 3243, 0, npcs, 3))
+        self.assertEqual(spots.threats_at(3091, 3243, 0, npcs, 15), [])
 
 
 class RunTest(unittest.TestCase):

@@ -6,6 +6,7 @@ import unittest
 
 from lifescape.buffer import Reader
 from lifescape.world import World, base37_name
+from lifescape.client import Bot
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -150,7 +151,6 @@ class WorldTest(unittest.TestCase):
         self.assertEqual(world.inv.get(0x0C8E), {})
 
     def test_backpack_prefers_capacity_28(self):
-        from lifescape.client import Bot
         bot = Bot()
         bot.world.inv = {1688: {}, 3214: {0: (1351, 1)}}
         bot.world.inv_cap = {1688: 14, 3214: 28}

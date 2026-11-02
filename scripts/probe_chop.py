@@ -23,9 +23,9 @@ def main():
         while time.time() < deadline and not bot.inventory():
             bot.pump(5)
         print("inv=%s" % bot.inventory(), flush=True)
-        bot._ensure_nav()
+        bot.ensure_nav()
         for obj_id, count in sorted(bot.inventory().items()):
-            entry = bot._loctypes["obj"][obj_id] if obj_id < len(bot._loctypes["obj"]) else None
+            entry = bot.loctypes["obj"][obj_id] if obj_id < len(bot.loctypes["obj"]) else None
             print("  hold %s x%d" % ((entry["name"] if entry else obj_id), count), flush=True)
         found = tutorial_common.find_loc(bot, *TREE_NAMES)
         print("tree at %s" % (found,), flush=True)

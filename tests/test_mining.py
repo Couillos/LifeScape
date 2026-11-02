@@ -5,6 +5,8 @@ import gamedata as knowledge
 from gamedata.banks import Bank
 
 from scripts.mining import run
+from lifescape import collision as collision_flags
+from lifescape.collision import CollisionMap
 
 
 class _StubWorld:
@@ -15,38 +17,32 @@ class _StubWorld:
 
 class _StubBot:
     world = _StubWorld()
-    _loctypes = {"loc": [None] * 2882 + [{"name": "border_gate_toll_left"}]}
+    loctypes = {"loc": [None] * 2882 + [{"name": "border_gate_toll_left"}]}
 
     def combat_level(self):
         return 3
 
-    def _ensure_nav(self):
+    def ensure_nav(self):
         return None
 
 
 class TrekTest(unittest.TestCase):
     def test_tile_walkable_open_and_blocked(self):
-        import gamedata as knowledge  # noqa: F401  (ensures gamedata importable)
-        from lifescape import collision as collision_flags
-        from lifescape.collision import CollisionMap
-
         class _World:
             level = 0
 
         class _Bot:
             world = _World()
-            _opened_map = None
-            _collision = CollisionMap()
+            opened_map = None
+            collision = CollisionMap()
 
         bot = _Bot()
-        bot._collision.set(10, 10, 0, 0)
-        bot._collision.set(11, 11, 0, collision_flags.WALK_BLOCKED)
+        bot.collision.set(10, 10, 0, 0)
+        bot.collision.set(11, 11, 0, collision_flags.WALK_BLOCKED)
         self.assertTrue(run.tile_walkable(bot, 10, 10))
         self.assertFalse(run.tile_walkable(bot, 11, 11))
 
     def test_step_open_prefers_walkable(self):
-        from lifescape import collision as collision_flags
-        from lifescape.collision import CollisionMap
 
         class _World:
             level = 0
@@ -54,13 +50,13 @@ class TrekTest(unittest.TestCase):
 
         class _Bot:
             world = _World()
-            _opened_map = None
-            _collision = CollisionMap()
+            opened_map = None
+            collision = CollisionMap()
 
         bot = _Bot()
         for dx in range(-15, 16):
-            bot._collision.set(dx, 0, 0, 0)
-        bot._collision.set(12, 0, 0, collision_flags.WALK_BLOCKED)
+            bot.collision.set(dx, 0, 0, 0)
+        bot.collision.set(12, 0, 0, collision_flags.WALK_BLOCKED)
         step_x, step_z = run.step_open(bot, 100, 0)
         self.assertTrue(run.tile_walkable(bot, step_x, step_z))
         self.assertLessEqual(abs(step_x - 12) + abs(step_z), 4)

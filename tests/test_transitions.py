@@ -55,11 +55,11 @@ class PortalRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.bot = Bot()
-        cls.bot._paths = default_paths()
-        cls.bot._ensure_nav()
+        cls.bot.paths = default_paths()
+        cls.bot.ensure_nav()
 
     def test_route_to_lumbridge_first_floor(self):
-        plan = self.bot._plan_portals((0, 3209, 3215), (1, 3205, 3228))
+        plan = self.bot.plan_portals((0, 3209, 3215), (1, 3205, 3228))
         self.assertIsNotNone(plan)
         kinds = [kind for kind, _payload in plan]
         self.assertEqual(kinds[0], "walk")
@@ -69,14 +69,14 @@ class PortalRoutingTest(unittest.TestCase):
         self.assertEqual(arrival, (1, 3205, 3228))
 
     def test_route_to_edgeville_dungeon(self):
-        plan = self.bot._plan_portals((0, 3209, 3215), (0, 3096, 9868))
+        plan = self.bot.plan_portals((0, 3209, 3215), (0, 3096, 9868))
         self.assertIsNotNone(plan)
         self.assertIn("portal", [kind for kind, _payload in plan])
 
     def test_stair_tiles_are_never_walked_over(self):
         # Stepping on a transition tile makes the server move the player.
-        self.assertIn((3103, 3159, 0), self.bot._stair_tiles)
-        self.assertIn((3209, 3216, 0), self.bot._stair_tiles)
+        self.assertIn((3103, 3159, 0), self.bot.stair_tiles)
+        self.assertIn((3209, 3216, 0), self.bot.stair_tiles)
 
     def test_disabled_transitions_are_not_loaded(self):
         names = {portal.name for portal in self.bot._portals}
@@ -85,7 +85,7 @@ class PortalRoutingTest(unittest.TestCase):
                 self.assertNotIn(row["name"], names)
 
     def test_planner_refuses_unknown_destination(self):
-        planner = portals.RoutePlanner(self.bot._router, self.bot._collision)
+        planner = portals.RoutePlanner(self.bot.router, self.bot.collision)
         for portal in self.bot._portals:
             planner.add_portal(portal)
         self.assertIsNone(planner.plan((0, 3209, 3215), (0, 500, 500)))

@@ -15,6 +15,7 @@ import sys
 
 import gamedata as knowledge
 from gamedata import quest_requirements
+from lifescape import save as save_mod
 from lifescape.waits import wait_ticks
 from scripts.quests import common as quest_common
 from scripts.quests import solver
@@ -36,7 +37,6 @@ def _saved_varps():
     if not account:
         return {}
     try:
-        from lifescape import save as save_mod
         return save_mod.load_account(account).get("varps", {})
     except Exception:
         return {}
@@ -60,7 +60,7 @@ def _bank_topup(bot):
     if stocked:
         return
     try:
-        bank = quest_common._open_nearest_bank(bot)
+        bank = quest_common.open_nearest_bank(bot)
     except Exception as error:
         print("bank top-up skipped: %s" % (error,), flush=True)
         return

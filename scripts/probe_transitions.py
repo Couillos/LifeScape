@@ -96,8 +96,8 @@ def main():
 
     bot = Bot()
     bot.login(options.account, options.account)
-    bot._paths = default_paths()
-    bot._ensure_nav()
+    bot.paths = default_paths()
+    bot.ensure_nav()
     bot.pump(3)
     try:
         for name in sorted(targets):

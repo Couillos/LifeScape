@@ -17,7 +17,7 @@ from .core import StateError, Unreachable
 class ActionsMixin:
 
     def op_loc(self, op, x, z, loc_id):
-        self._dbg("oploc%d %d,%d id=%d" % (op, x, z, loc_id))
+        self.dbg("oploc%d %d,%d id=%d" % (op, x, z, loc_id))
         body = Writer()
         body.u16(x)
         body.u16(z)
@@ -25,13 +25,13 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPLOC%d" % op), body.bytes())
 
     def op_npc(self, op, slot):
-        self._dbg("opnpc%d slot=%d" % (op, slot))
+        self.dbg("opnpc%d slot=%d" % (op, slot))
         body = Writer()
         body.u16(slot)
         self.connection.send(client_op_id("OPNPC%d" % op), body.bytes())
 
     def op_npc_u(self, slot, obj_id, use_slot, com):
-        self._dbg("opnpcu slot=%d obj=%d" % (slot, obj_id))
+        self.dbg("opnpcu slot=%d obj=%d" % (slot, obj_id))
         body = Writer()
         body.u16(slot)
         body.u16(obj_id)
@@ -47,7 +47,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPOBJ%d" % op), body.bytes())
 
     def op_loc_u(self, x, z, loc_id, obj_id, slot, com):
-        self._dbg("oplocu %d,%d id=%d obj=%d" % (x, z, loc_id, obj_id))
+        self.dbg("oplocu %d,%d id=%d obj=%d" % (x, z, loc_id, obj_id))
         body = Writer()
         body.u16(x)
         body.u16(z)
@@ -69,7 +69,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPPLAYER%d" % op), body.bytes())
 
     def op_held(self, op, obj, slot, com):
-        self._dbg("opheld%d obj=%d slot=%d" % (op, obj, slot))
+        self.dbg("opheld%d obj=%d slot=%d" % (op, obj, slot))
         body = Writer()
         body.u16(obj)
         body.u16(slot)
@@ -87,7 +87,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPHELDU"), body.bytes())
 
     def inv_button(self, n, obj, slot, com):
-        self._dbg("inv_button%d obj=%d slot=%d" % (n, obj, slot))
+        self.dbg("inv_button%d obj=%d slot=%d" % (n, obj, slot))
         body = Writer()
         body.u16(obj)
         body.u16(slot)
@@ -103,24 +103,24 @@ class ActionsMixin:
         self.connection.send(client_op_id("INV_BUTTOND"), body.bytes())
 
     def if_button(self, com):
-        self._dbg("if_button com=%d" % (com,))
+        self.dbg("if_button com=%d" % (com,))
         body = Writer()
         body.u16(com)
         self.connection.send(client_op_id("IF_BUTTON"), body.bytes())
 
     def close_modal(self):
-        self._dbg("close_modal")
+        self.dbg("close_modal")
         self.connection.send(client_op_id("CLOSE_MODAL"))
 
     def talk_to(self, slot):
-        self._dbg("talk_to slot=%d" % (slot,))
+        self.dbg("talk_to slot=%d" % (slot,))
         self.op_npc(1, slot)
 
     def find_npc(self, name):
-        self._ensure_nav()
+        self.ensure_nav()
         best = None
         for nid, npc in self.world.npcs.items():
-            entry = self._loctypes["npc"][npc["type"]] if npc["type"] < len(self._loctypes["npc"]) else None
+            entry = self.loctypes["npc"][npc["type"]] if npc["type"] < len(self.loctypes["npc"]) else None
             label = entry["name"] if entry else ""
             if name.lower() not in label.lower():
                 continue
@@ -131,11 +131,11 @@ class ActionsMixin:
 
     def npcs_named(self, names):
         """(nid, npc) for every visible NPC whose type name is in names."""
-        self._ensure_nav()
+        self.ensure_nav()
         wanted = {name.lower() for name in names}
         found = []
         for nid, npc in self.world.npcs.items():
-            entry = self._loctypes["npc"][npc["type"]] if npc["type"] < len(self._loctypes["npc"]) else None
+            entry = self.loctypes["npc"][npc["type"]] if npc["type"] < len(self.loctypes["npc"]) else None
             if entry and (entry["name"] or "").lower() in wanted:
                 found.append((nid, npc))
         return found
@@ -204,9 +204,9 @@ class ActionsMixin:
 
     def take(self, obj_id=None, name=None, timeout=30):
 
-        self._ensure_nav()
+        self.ensure_nav()
         if name is not None:
-            for index, entry in enumerate(self._loctypes["obj"]):
+            for index, entry in enumerate(self.loctypes["obj"]):
                 if entry and entry["name"] and name.lower() in entry["name"].lower():
                     obj_id = index
                     break
@@ -219,7 +219,7 @@ class ActionsMixin:
             raise Unreachable("no such item nearby")
         (key, oid), _count = min(items.items(), key=lambda item: abs(item[0][0][0] - self.world.x) + abs(item[0][0][1] - self.world.z))
         (x, z, level) = key
-        op = objs_mod.take_op(self._loctypes["obj"], oid)
+        op = objs_mod.take_op(self.loctypes["obj"], oid)
         before = dict(self.inventory())
         if abs(self.world.x - x) + abs(self.world.z - z) > 1:
             neighbors = sorted(
@@ -292,7 +292,7 @@ class ActionsMixin:
         for slot, (held, _count) in slots.items():
             if held != obj_id:
                 continue
-            op = objs_mod.drop_op(self._loctypes["obj"], held)
+            op = objs_mod.drop_op(self.loctypes["obj"], held)
             before = sum(count for (carried, count) in slots.values() if carried == obj_id)
             body = Writer()
             body.u16(held)
@@ -309,7 +309,7 @@ class ActionsMixin:
         raise Unreachable("no such item in inventory")
 
     def chat_continue(self):
-        self._dbg("chat_continue")
+        self.dbg("chat_continue")
         body = Writer()
         body.u16(0)
         self.connection.send(client_op_id("RESUME_PAUSEBUTTON"), body.bytes())

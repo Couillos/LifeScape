@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 
+from .daemon import Orchestrator
 from .paths import ROOT, RUN_DIR, SOCKET_PATH, ensure_dirs
 
 
@@ -89,7 +90,6 @@ def main(argv):
         return 2
     command = argv[1]
     if command == "daemon":
-        from .daemon import Orchestrator
         return Orchestrator().serve()
     if not ensure_daemon():
         print("orchestrator failed to start", file=sys.stderr)

@@ -45,22 +45,22 @@ class PathfindingTest(unittest.TestCase):
         wall = {(5, z) for z in range(-4, 5)}
 
         class FakeBot:
-            _router = Router()
-            _opened_map = FakeMap(wall)
-            _collision = FakeMap(wall)
+            router = Router()
+            opened_map = FakeMap(wall)
+            collision = FakeMap(wall)
             world = SimpleNamespace(
                 level=0,
                 x=0,
                 z=0,
                 loc_at=lambda x, z, level: (0, 0, 0) if (x, z) in wall else None,
             )
-            _loctypes = {"loc": [{"name": "closed door"}]}
-            _loc_name_at = Bot._loc_name_at
-            _unreachable_hints = Bot._unreachable_hints
-            _explain_unreachable = Bot._explain_unreachable
+            loctypes = {"loc": [{"name": "closed door"}]}
+            loc_name_at = Bot.loc_name_at
+            unreachable_hints = Bot.unreachable_hints
+            explain_unreachable = Bot.explain_unreachable
 
         fake = FakeBot()
-        message = Bot._explain_unreachable(fake, 5, 0, False)
+        message = Bot.explain_unreachable(fake, 5, 0, False)
         self.assertIn("no path to 5,0", message)
         self.assertIn("closed door", message)
         self.assertIn("nearest reachable by path 4,0", message)

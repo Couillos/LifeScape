@@ -6,6 +6,7 @@ from unittest import mock
 
 
 from orchestration import holdings
+from lifescape import save as save_mod
 
 
 class HoldingsScheduleTest(unittest.TestCase):
@@ -43,7 +44,6 @@ class HoldingsScheduleTest(unittest.TestCase):
             self.assertEqual(self._count(), 2)
 
     def test_staff_and_private_accounts_are_excluded(self):
-        from lifescape import save as save_mod
 
         saved_default = save_mod.default_save_dir
         save_mod.default_save_dir = lambda: holdings.SAVE_DIR

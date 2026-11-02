@@ -55,7 +55,7 @@ def pick_fish_spot(tiers, fishing_level, banned, player_combat, near_x=None, nea
 
 
 def npc_matches_tier(bot, npc, tier):
-    entry = bot._loctypes["npc"][npc["type"]] if npc["type"] < len(bot._loctypes["npc"]) else None
+    entry = bot.loctypes["npc"][npc["type"]] if npc["type"] < len(bot.loctypes["npc"]) else None
     name = (entry["name"] if entry else "") or ""
     return name == tier.category or name.endswith("_" + tier.category)
 

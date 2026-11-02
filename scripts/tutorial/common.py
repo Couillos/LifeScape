@@ -61,8 +61,8 @@ def wait_modal_closed(bot, timeout=50):
 
 
 def obj_id(bot, name):
-    bot._ensure_nav()
-    for index, entry in enumerate(bot._loctypes["obj"]):
+    bot.ensure_nav()
+    for index, entry in enumerate(bot.loctypes["obj"]):
         if entry and entry["name"] == name:
             return index
     raise KeyError("unknown obj %r" % name)
@@ -77,13 +77,13 @@ def inv_slot(bot, obj):
 
 
 def find_loc(bot, *names):
-    bot._ensure_nav()
+    bot.ensure_nav()
     best = None
     seen = list(bot.world.locs.items()) + [(k, v) for k, v in bot.world.static_locs.items() if k not in bot.world.locs]
     for (x, z, level), loc in seen:
         if loc is None or level != bot.world.level:
             continue
-        label = bot._loctypes["loc"][loc[0]]["name"] if loc[0] < len(bot._loctypes["loc"]) else ""
+        label = bot.loctypes["loc"][loc[0]]["name"] if loc[0] < len(bot.loctypes["loc"]) else ""
         if not any(name in label for name in names):
             continue
         dist = abs(x - bot.world.x) + abs(z - bot.world.z)
@@ -101,8 +101,8 @@ def use_held_on_held(bot, target_obj, tool_obj):
 
 
 def approach_loc(bot, x, z, loc_id, level=None):
-    bot._ensure_nav()
-    entry = bot._loctypes["loc"][loc_id] if loc_id < len(bot._loctypes["loc"]) else {}
+    bot.ensure_nav()
+    entry = bot.loctypes["loc"][loc_id] if loc_id < len(bot.loctypes["loc"]) else {}
     radius = max(entry.get("length", 1), entry.get("width", 1)) + 1
     level = bot.world.level if level is None else level
     cands = sorted(
@@ -112,7 +112,7 @@ def approach_loc(bot, x, z, loc_id, level=None):
     reachable = []
     for cx, cz in cands:
         try:
-            if bot._router.find_path(bot._opened_map, level, bot.world.x, bot.world.z, cx, cz, move_near=False):
+            if bot.router.find_path(bot.opened_map, level, bot.world.x, bot.world.z, cx, cz, move_near=False):
                 reachable.append((cx, cz))
                 if len(reachable) >= 3:
                     break
@@ -137,7 +137,7 @@ def use_held_on_loc(bot, x, z, loc, tool_obj):
 def op_loc_near(bot, loc_names, op, done, timeout=400):
     target = bot.world.ticks + timeout
     x, z, _level, loc = find_loc(bot, *loc_names)
-    entry = bot._loctypes["loc"][loc] if loc < len(bot._loctypes["loc"]) else {}
+    entry = bot.loctypes["loc"][loc] if loc < len(bot.loctypes["loc"]) else {}
     radius = max(entry.get("length", 1), entry.get("width", 1))
     cands = sorted(
         [(x + dx, z + dz) for dx in range(-radius, radius + 1) for dz in range(-radius, radius + 1) if dx or dz],
@@ -150,7 +150,7 @@ def op_loc_near(bot, loc_names, op, done, timeout=400):
             if bot.world.ticks > target or (cx, cz) in tried:
                 continue
             try:
-                path = bot._router.find_path(bot._opened_map, bot.world.level, bot.world.x, bot.world.z, cx, cz, move_near=False)
+                path = bot.router.find_path(bot.opened_map, bot.world.level, bot.world.x, bot.world.z, cx, cz, move_near=False)
             except Exception:
                 continue
             if not path:
@@ -183,7 +183,7 @@ def op_loc_near(bot, loc_names, op, done, timeout=400):
 def use_held_on_loc_near(bot, loc_names, tool_obj, done, timeout=400):
     target = bot.world.ticks + timeout
     x, z, _level, loc = find_loc(bot, *loc_names)
-    entry = bot._loctypes["loc"][loc] if loc < len(bot._loctypes["loc"]) else {}
+    entry = bot.loctypes["loc"][loc] if loc < len(bot.loctypes["loc"]) else {}
     radius = max(entry.get("length", 1), entry.get("width", 1)) + 1
     cands = sorted(
         [(x + dx, z + dz) for dx in range(-radius, radius + 1) for dz in range(-radius, radius + 1) if dx or dz],
@@ -196,7 +196,7 @@ def use_held_on_loc_near(bot, loc_names, tool_obj, done, timeout=400):
             if bot.world.ticks > target or (cx, cz) in tried:
                 continue
             try:
-                path = bot._router.find_path(bot._opened_map, bot.world.level, bot.world.x, bot.world.z, cx, cz, move_near=False)
+                path = bot.router.find_path(bot.opened_map, bot.world.level, bot.world.x, bot.world.z, cx, cz, move_near=False)
             except Exception:
                 continue
             if not path:
@@ -422,7 +422,7 @@ def pass_door(bot, door_name, beyond, timeout=120):
 def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
     for _attempt in range(tries):
         if beyond is not None and (bot.world.x, bot.world.z) == beyond:
-            bot._recent_doors[(x, z)] = time.time()
+            bot.recent_doors[(x, z)] = time.time()
             return True
         if abs(bot.world.x - x) + abs(bot.world.z - z) > 1:
             stepped = False
@@ -447,7 +447,7 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
             bot.pump(1)
             if beyond is not None and (bot.world.x, bot.world.z) == beyond:
                 print("ok %s" % what, flush=True)
-                bot._recent_doors[(x, z)] = time.time()
+                bot.recent_doors[(x, z)] = time.time()
                 return True
             if bot.world.loc_at(x, z, bot.world.level) != was:
                 break
@@ -456,17 +456,17 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
         # Teleport doors open server-side on click; plan the dash as open
         # (the local map still shows them closed).
         try:
-            bot._unseal(x, z, bot.world.level)
+            bot.unseal(x, z, bot.world.level)
         except Exception:
             pass
-        bot._recent_doors[(x, z)] = time.time()
+        bot.recent_doors[(x, z)] = time.time()
         refresh_openings(bot)
         if beyond is not None:
             # The dash can land while the door is mid-cycle; retry once
             # after it settles instead of clicking again (ping-pong).
             for _dash in range(2):
                 try:
-                    bot._walk_raw(beyond[0], beyond[1], bot.world.level, time.time() + 8)
+                    bot.walk_raw(beyond[0], beyond[1], bot.world.level, time.time() + 8)
                     print("ok %s" % what, flush=True)
                     return True
                 except Exception:
@@ -479,22 +479,22 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
 
 
 def refresh_openings(bot):
-    bot._ensure_nav()
-    for spot in bot._wall_doors:
+    bot.ensure_nav()
+    for spot in bot.wall_doors:
         x, z, level = spot[0], spot[1], spot[2]
-        if (x, z, level) in bot._unsealed_doors:
+        if (x, z, level) in bot.unsealed_doors:
             continue
         if (x, z, level) not in bot.world.locs:
             continue
         dyn = bot.world.locs[(x, z, level)]
-        if dyn is not None and doors_mod.open_op(bot._loctypes, dyn[0]) is not None:
+        if dyn is not None and doors_mod.open_op(bot.loctypes, dyn[0]) is not None:
             continue
         static = bot.world.static_locs.get((x, z, level))
-        entry = bot._loctypes["loc"][static[0]] if static else bot._loctypes["loc"][dyn[0]]
+        entry = bot.loctypes["loc"][static[0]] if static else bot.loctypes["loc"][dyn[0]]
         collision_mod.change_loc_collision(
-            bot._opened_map, spot[3], spot[4], entry["blockrange"], entry["length"], entry["width"], entry["active"], x, z, level, False
+            bot.opened_map, spot[3], spot[4], entry["blockrange"], entry["length"], entry["width"], entry["active"], x, z, level, False
         )
-        bot._unsealed_doors.add((x, z, level))
+        bot.unsealed_doors.add((x, z, level))
 
 
 def use_exit(bot, names, what, timeout=20):
@@ -503,7 +503,7 @@ def use_exit(bot, names, what, timeout=20):
         bot.approach(x, z, radius=1, open_doors=True)
         bot.op_loc(1, x, z, loc)
         if wait_moved(bot, timeout=timeout):
-            bot._recent_doors[(x, z)] = time.time()
+            bot.recent_doors[(x, z)] = time.time()
             refresh_openings(bot)
             print("ok %s" % what, flush=True)
             return

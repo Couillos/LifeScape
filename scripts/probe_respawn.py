@@ -19,7 +19,7 @@ def main():
     bot = Bot()
     try:
         bot.login(username, username)
-        bot._ensure_nav()
+        bot.ensure_nav()
         bot.pump(10)
         print("start %s" % (bot.position,), flush=True)
         tree = tutorial_common.find_loc(bot, "tree")
@@ -34,7 +34,7 @@ def main():
             live = bot.world.locs.get((tree_x, tree_z, bot.world.level))
             static = bot.world.static_locs.get((tree_x, tree_z, bot.world.level))
             loc_id = (live or static or (None,))[0]
-            name = bot._loctypes["loc"][loc_id]["name"] if loc_id else None
+            name = bot.loctypes["loc"][loc_id]["name"] if loc_id else None
             if name != "tree" and stump_at is None:
                 stump_at = time.time()
                 print("depleted at +%.0fs (%s)" % (stump_at - float(start_mark[0]), name), flush=True)

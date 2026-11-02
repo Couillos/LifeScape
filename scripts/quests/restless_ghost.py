@@ -11,6 +11,7 @@ from scripts.quests.common import run
 from scripts.tutorial import common as tutorial_common
 
 import gamedata as knowledge
+from lifescape import save as save_mod
 
 
 QUEST = quest_requirements.by_key("priest")
@@ -22,7 +23,6 @@ def _saved_stage():
     if not account:
         return 0
     try:
-        from lifescape import save as save_mod
         varps = save_mod.load_account(account).get("varps", {})
         return varps.get(QUEST.completion_varps[0][0], 0) or 0
     except Exception:
@@ -143,7 +143,7 @@ def solve(bot):
     for _ in range(12):
         if bot.world.modal is None:
             break
-        if bot.chat_options() or solver._completion_open(bot):
+        if bot.chat_options() or solver.completion_open(bot):
             break
         bot.chat_continue()
         bot.pump(5)

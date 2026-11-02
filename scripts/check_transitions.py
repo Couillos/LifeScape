@@ -32,14 +32,14 @@ def loaded_bot(account):
     paths = default_paths()
     bot = Bot()
     bot.login(account, account)
-    bot._paths = paths
-    bot._ensure_nav()
+    bot.paths = paths
+    bot.ensure_nav()
     return bot
 
 
 def walkable(bot, x, z, level):
     try:
-        return collision_mod.tile_walkable(bot._collision.get(x, z, level))
+        return collision_mod.tile_walkable(bot.collision.get(x, z, level))
     except (KeyError, IndexError):
         return False
 
@@ -58,7 +58,7 @@ def teleport(bot, level, x, z):
 def staging_tile(bot, row):
     """A reachable tile a few steps away; the SDK does the walking."""
     level, x, z = row["from"]
-    sides = bot._transition_sides(level, x, z, row.get("delta"), row.get("footprint"))
+    sides = bot.transition_sides(level, x, z, row.get("delta"), row.get("footprint"))
     if not sides:
         return None
     for radius in range(3, 6):
@@ -70,14 +70,14 @@ def staging_tile(bot, row):
                 if not walkable(bot, cx, cz, level):
                     continue
                 for side_x, side_z in sides:
-                    if bot._router.find_path(bot._planning_map, level, cx, cz, side_x, side_z):
+                    if bot.router.find_path(bot.planning_map, level, cx, cz, side_x, side_z):
                         return cx, cz
     return None
 
 
 def test_one(bot, row):
     level, x, z = row["from"]
-    sides = bot._transition_sides(level, x, z, row.get("delta"), row.get("footprint"))
+    sides = bot.transition_sides(level, x, z, row.get("delta"), row.get("footprint"))
     if not sides:
         return "no walkable side"
     delta = row.get("delta")
@@ -91,8 +91,8 @@ def test_one(bot, row):
             (level + delta[0], side_x + delta[1], side_z + delta[2])
             if delta else tuple(row["to"])
         )
-        bot._open_transition(row, level, x, z)
-        if bot._await_teleport(row, expected, seconds=1.5, quiet=True):
+        bot.open_transition(row, level, x, z)
+        if bot.await_teleport(row, expected, seconds=1.5, quiet=True):
             return "ok"
     return "ride: ended at %s" % (bot.position,)
 

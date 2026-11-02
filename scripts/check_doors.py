@@ -54,8 +54,8 @@ def f2p_zones():
 def loaded_bot(account):
     bot = Bot()
     bot.login(account, account)
-    bot._paths = default_paths()
-    bot._ensure_nav()
+    bot.paths = default_paths()
+    bot.ensure_nav()
     return bot
 
 
@@ -71,14 +71,14 @@ def teleport(bot, level, x, z):
 
 def walkable(bot, x, z, level):
     try:
-        return collision_mod.tile_walkable(bot._collision.get(x, z, level))
+        return collision_mod.tile_walkable(bot.collision.get(x, z, level))
     except (KeyError, IndexError):
         return False
 
 
 def sides(bot, spot):
     """Two walkable tiles on opposite sides of the door, closest first."""
-    tiles = [tile for tile in bot._door_footprints[id(spot)]]
+    tiles = [tile for tile in bot.door_footprints[id(spot)]]
     if not tiles:
         return None
     centre_x = sum(tile[0] for tile in tiles) / len(tiles)
@@ -91,7 +91,7 @@ def sides(bot, spot):
                 if (dx, dz) == (0, 0):
                     continue
                 nx, nz = tile_x + dx, tile_z + dz
-                if (nx, nz, level) in bot._door_footprints[id(spot)]:
+                if (nx, nz, level) in bot.door_footprints[id(spot)]:
                     continue
                 if walkable(bot, nx, nz, level):
                     neighbours.add((nx, nz))
@@ -112,7 +112,7 @@ def sides(bot, spot):
 def sample_doors(bot):
     zones = f2p_zones()
     seen = {}
-    for spot in bot._wall_doors:
+    for spot in bot.wall_doors:
         if zones is not None and (spot[0] >> 3, spot[1] >> 3) not in zones:
             continue
         if sides(bot, spot) is None:
@@ -159,7 +159,7 @@ def main():
     results = {}
     try:
         for index, spot in enumerate(doors):
-            name = bot._loc_name_at(spot[0], spot[1], spot[2]) or ""
+            name = bot.loc_name_at(spot[0], spot[1], spot[2]) or ""
             label = "%d@%d,%d,%d" % (spot[9], spot[0], spot[1], spot[2])
             started = time.time()
             try:

@@ -81,7 +81,7 @@ def nearby_named_locs(bot, needle, radius=60):
     for (x, z, _level), (loc_id, _shape, _angle) in seen.items():
         if abs(x - bot.world.x) + abs(z - bot.world.z) > radius:
             continue
-        entry = bot._loctypes["loc"][loc_id] if loc_id < len(bot._loctypes["loc"]) else None
+        entry = bot.loctypes["loc"][loc_id] if loc_id < len(bot.loctypes["loc"]) else None
         name = (entry["name"] if entry else "") or ""
         if needle in name.lower():
             found.append((abs(x - bot.world.x) + abs(z - bot.world.z), x, z, loc_id, name))
@@ -93,7 +93,7 @@ def solve_maze(bot):
     """Try to leave the maze. Returns True when outside it."""
     if not in_maze(bot):
         return True
-    bot._ensure_nav()
+    bot.ensure_nav()
     deadline = bot.world.ticks + 1500
     while in_maze(bot) and bot.world.ticks < deadline:
         for _dist, x, z, loc_id, name in nearby_named_locs(bot, "maze"):
@@ -141,7 +141,7 @@ def climb_out(bot):
             except (Unreachable, TimeoutError):
                 pass
             try:
-                if not bot._open_nearby_door(time.time() + 60):
+                if not bot.open_nearby_door(time.time() + 60):
                     pass
             except Exception:
                 pass

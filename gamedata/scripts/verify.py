@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from gamedata import base
+import gamedata as knowledge
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
@@ -54,9 +55,6 @@ def check_static():
 
 
 def check_cross_refs():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    import gamedata as knowledge
-
     obj_names = {entry.name for entry in knowledge.all_objs() if entry.name}
     npc_count = len(knowledge.all_npcs())
     missing_objs = set()

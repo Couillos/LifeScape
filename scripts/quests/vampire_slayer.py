@@ -5,6 +5,7 @@ import sys
 
 
 from gamedata import quest_requirements
+from lifescape import save as save_mod
 from scripts.quests import solver
 from scripts.quests.common import run
 
@@ -17,7 +18,6 @@ def _saved_stage():
     if not account:
         return 0
     try:
-        from lifescape import save as save_mod
         varps = save_mod.load_account(account).get("varps", {})
         return varps.get(QUEST.completion_varps[0][0], 0) or 0
     except Exception:

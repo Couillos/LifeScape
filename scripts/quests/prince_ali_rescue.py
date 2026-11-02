@@ -6,6 +6,7 @@ import sys
 
 import gamedata as knowledge
 from gamedata import quest_requirements
+from lifescape import save as save_mod
 from lifescape.buffer import Writer
 from lifescape.client import Unreachable
 from lifescape.protocol import client_op_id
@@ -29,7 +30,6 @@ def _saved_varps():
     if not account:
         return {}
     try:
-        from lifescape import save as save_mod
         return save_mod.load_account(account).get("varps", {})
     except Exception:
         return {}
@@ -89,14 +89,14 @@ def use_item_on_npc(bot, item, npc, timeout=1800):
         body.u16(obj)
         body.u16(slot)
         body.u16(com)
-        bot._dbg("opnpcu slot=%d obj=%d npc=%d,%d" % (nid, obj, person["x"], person["z"]))
+        bot.dbg("opnpcu slot=%d obj=%d npc=%d,%d" % (nid, obj, person["x"], person["z"]))
         bot.connection.send(client_op_id("OPNPCU"), body.bytes())
         # An accepted use opens a result mesbox that halts the script until
         # dismissed: without a continue the tie-up never completes and later
         # sends are refused while it pends (the earlier 18 s timeout mistook
         # this for a moving-NPC problem).
         wait_ticks(bot, 10)
-        solver._drain_dialog(bot)
+        solver.drain_dialog(bot)
         bot.pump(5)
     raise solver.SolverError("could not use %s on %s at %s" % (item, npc, bot.position))
 

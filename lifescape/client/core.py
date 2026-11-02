@@ -54,7 +54,7 @@ class BotCore:
         self.zone = (0, 0)
         self.username = None
         self.password = None
-        self._paths = None
+        self.paths = None
         self._intent = ""
         self._state_path = None
         self._state_tick = 0
@@ -67,23 +67,23 @@ class BotCore:
         self._route_target = None
         self._action_route = []
         self._route_action = None
-        self._collision = None
-        self._loctypes = None
-        self._wall_doors = None
-        self._door_footprints = None
-        self._stair_tiles = None
+        self.collision = None
+        self.loctypes = None
+        self.wall_doors = None
+        self.door_footprints = None
+        self.stair_tiles = None
         self._blocked_doors = set()
         self._blocked_doors_exp = {}
         self._bad_transitions = {}
-        self._unsealed_doors = set()
-        self._recent_doors = {}
+        self.unsealed_doors = set()
+        self.recent_doors = {}
         self._opening = set()
         self._door_failures = {}
         self._blocked_tiles = {}
-        self._opened_map = None
-        self._planning_map = None
+        self.opened_map = None
+        self.planning_map = None
         self._planner = None
-        self._router = route_mod.Router()
+        self.router = route_mod.Router()
         self._portals = []
         self._in_portal_route = False
         # Verbose trace for pathfinding work: every move, click and ride.
@@ -92,7 +92,7 @@ class BotCore:
         run_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "run"))
         self._debug = os.environ.get("LIFESCAPE_DEBUG") == "1" or os.path.exists(os.path.join(run_dir, "debug"))
 
-    def _dbg(self, message):
+    def dbg(self, message):
         if getattr(self, "_debug", False):
             print("DBG %s %s" % (self.world.position, message), flush=True)
 
@@ -104,7 +104,7 @@ class BotCore:
             pass  # not the main thread: no signal handler to install
         defaults = default_paths()
         defaults.update(paths)
-        self._paths = defaults
+        self.paths = defaults
         _active_bot = self
         self._state_path = os.environ.get("LIFESCAPE_STATE") or None
         self.username = username
@@ -146,22 +146,22 @@ class BotCore:
             self.connection = Connection(host, port)
             self.world = World()
             self.zone = (0, 0)
-            self._collision = None
-            self._loctypes = None
+            self.collision = None
+            self.loctypes = None
             self._static_loc_index = None
             self._static_obj_index = None
-            self._wall_doors = None
-            self._door_footprints = None
+            self.wall_doors = None
+            self.door_footprints = None
             self._blocked_doors = set()
             self._blocked_doors_exp = {}
             self._bad_transitions = {}
-            self._unsealed_doors = set()
-            self._recent_doors = {}
+            self.unsealed_doors = set()
+            self.recent_doors = {}
             self._opening = set()
             self._door_failures = {}
             self._blocked_tiles = {}
-            self._opened_map = None
-            self._planning_map = None
+            self.opened_map = None
+            self.planning_map = None
             self._planner = None
             self._route = []
             self._route_target = None
@@ -302,8 +302,8 @@ class BotCore:
             if abs(npc["x"] - self.world.x) + abs(npc["z"] - self.world.z) > 12:
                 continue
             entry = None
-            if self._loctypes is not None and npc["type"] < len(self._loctypes["npc"]):
-                entry = self._loctypes["npc"][npc["type"]]
+            if self.loctypes is not None and npc["type"] < len(self.loctypes["npc"]):
+                entry = self.loctypes["npc"][npc["type"]]
             found.append({"nid": nid, "type": npc["type"], "name": (entry["name"] if entry else "") or "", "x": npc["x"], "z": npc["z"]})
         found.sort(key=lambda item: abs(item["x"] - self.world.x) + abs(item["z"] - self.world.z))
         return found[:25]
@@ -354,8 +354,8 @@ class BotCore:
             if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > 8:
                 continue
             entry = None
-            if self._loctypes is not None and loc_id < len(self._loctypes["loc"]):
-                entry = self._loctypes["loc"][loc_id]
+            if self.loctypes is not None and loc_id < len(self.loctypes["loc"]):
+                entry = self.loctypes["loc"][loc_id]
             name = (entry["name"] if entry else "") or ""
             if not name or name.startswith("null"):
                 continue
@@ -391,8 +391,8 @@ class BotCore:
             if abs(obj_x - self.world.x) + abs(obj_z - self.world.z) > 8:
                 continue
             entry = None
-            if self._loctypes is not None and obj_id < len(self._loctypes["obj"]):
-                entry = self._loctypes["obj"][obj_id]
+            if self.loctypes is not None and obj_id < len(self.loctypes["obj"]):
+                entry = self.loctypes["obj"][obj_id]
             found.append({"name": (entry["name"] if entry else "") or "", "x": obj_x, "z": obj_z, "id": obj_id, "count": count})
         found.sort(key=lambda obj: abs(obj["x"] - self.world.x) + abs(obj["z"] - self.world.z))
         return found[:120]
@@ -404,12 +404,12 @@ class BotCore:
         jobs that never move (give/probe/clean_session) would otherwise
         publish nameless items, NPCs and scenery to the dashboard.
         """
-        if self._loctypes is not None:
+        if self.loctypes is not None:
             return
-        if not self._paths or not self._paths.get("types"):
+        if not self.paths or not self.paths.get("types"):
             return
         try:
-            self._loctypes = collision_mod.load_types(self._paths["types"])
+            self.loctypes = collision_mod.load_types(self.paths["types"])
         except (OSError, ValueError):
             pass
 
@@ -421,8 +421,8 @@ class BotCore:
         found = []
         for _slot, (held, count) in sorted(slots.items()):
             entry = None
-            if self._loctypes is not None and held < len(self._loctypes["obj"]):
-                entry = self._loctypes["obj"][held]
+            if self.loctypes is not None and held < len(self.loctypes["obj"]):
+                entry = self.loctypes["obj"][held]
             found.append({"id": held, "name": (entry["name"] if entry else "") or "", "count": count})
         return found
 
@@ -445,9 +445,9 @@ class BotCore:
 
     def _com_id(self, name):
         if self._com_ids is None:
-            if not self._paths or not self._paths.get("comps"):
+            if not self.paths or not self.paths.get("comps"):
                 raise StateError("component table path is not configured")
-            path = self._paths["comps"]
+            path = self.paths["comps"]
             try:
                 with open(path) as handle:
                     rows = json.load(handle)
@@ -467,7 +467,7 @@ class BotCore:
     def _request_logout(self, timeout=8):
         """Run the server's logout trigger, so the session is released at once
         instead of lingering until the server's idle/no-response timeout."""
-        if self._paths is None or self.world.ticks <= 0 or self.connection.sock is None:
+        if self.paths is None or self.world.ticks <= 0 or self.connection.sock is None:
             return
         try:
             com = self._logout_com_id()

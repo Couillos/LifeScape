@@ -11,7 +11,7 @@ class FishTest(unittest.TestCase):
     def test_npc_matches_tier_by_name_not_id(self):
         tier = next(t for t in knowledge.all_fish_tiers() if t.category == "saltfish")
         types = [{"name": "hans"}] * 5 + [{"name": "0_99_99_saltfish"}]
-        bot = SimpleNamespace(_loctypes={"npc": types})
+        bot = SimpleNamespace(loctypes={"npc": types})
         self.assertTrue(run.npc_matches_tier(bot, {"type": 5}, tier))
         self.assertFalse(run.npc_matches_tier(bot, {"type": 0}, tier))
         self.assertFalse(run.npc_matches_tier(bot, {"type": 999}, tier))

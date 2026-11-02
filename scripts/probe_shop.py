@@ -126,7 +126,7 @@ def main():
             return 1
         dump_shop(bot)
         for slot, (obj_id, count) in sorted(bot.world.inv.get(COM_SHOP_INV, {}).items()):
-            entry = bot._loctypes["obj"][obj_id] if obj_id < len(bot._loctypes["obj"]) else None
+            entry = bot.loctypes["obj"][obj_id] if obj_id < len(bot.loctypes["obj"]) else None
             print("  stock %s x%d" % ((entry["name"] if entry else obj_id), count), flush=True)
         bot.close_modal()
         return 0

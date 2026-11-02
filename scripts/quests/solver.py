@@ -79,7 +79,7 @@ def talk(bot, name, answers=(), near=None, timeout=400):
     finish_dialog_like(bot, answers, timeout=timeout)
 
 
-def _completion_open(bot):
+def completion_open(bot):
     """True when the quest-complete scroll is on screen."""
     if not bot.world.modal or bot.world.modal[0] != "main":
         return False
@@ -99,7 +99,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
         # Quest items land mid-dialogue: keep one slot free so a delivery
         # never overflows to the ground while we click through pages.
         drop_junk(bot)
-        if _completion_open(bot):
+        if completion_open(bot):
             # The quest finished mid-talk: close its scroll so follow-up
             # talks start from a clean slate instead of piling interfaces.
             bot.close_modal()
@@ -125,7 +125,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
             answered.add(choice[1])
             continue
         if bot.world.modal:
-            if _completion_open(bot):
+            if completion_open(bot):
                 bot.close_modal()
                 bot.pump(5)
                 return True
@@ -182,7 +182,7 @@ def wait_complete(bot, timeout=300):
         bot.pump(5)
         if tutorial_common.has_message(bot, "Congratulations! Quest complete!"):
             return True
-        if _completion_open(bot):
+        if completion_open(bot):
             bot.close_modal()
             bot.pump(5)
             return True
@@ -204,7 +204,7 @@ def operate_loc(bot, names, op=1, timeout=60, stand=None):
     # server script until dismissed: click through it (and any story that
     # follows) so follow-up steps and the completion scroll can land.
     # Main windows are left alone for wait_complete.
-    _drain_dialog(bot)
+    drain_dialog(bot)
 
 
 def obj_id(name):
@@ -226,7 +226,7 @@ def take_near(bot, name, timeout=120):
     raise SolverError("cannot pick up %s at %s" % (name, bot.position))
 
 
-def _drain_dialog(bot, extra_ticks=150):
+def drain_dialog(bot, extra_ticks=150):
     """Click through plain chat pages until the modal closes or chooses.
 
     Follows operating/using when the server keeps talking (mesboxes and
@@ -236,7 +236,7 @@ def _drain_dialog(bot, extra_ticks=150):
     """
     target = bot.world.ticks + extra_ticks
     while bot.world.ticks < target:
-        if bot.world.modal is None or _completion_open(bot):
+        if bot.world.modal is None or completion_open(bot):
             return
         if bot.world.modal[0] == "main" or bot.chat_options():
             return
@@ -264,7 +264,7 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
         wait_ticks(bot, 10)
         # Same halt risk as operate_loc: a result mesbox or a multi-page
         # story blocks the server script until dismissed.
-        _drain_dialog(bot)
+        drain_dialog(bot)
         return True
     raise SolverError("cannot use %s on %s at %s" % (item_name, npc_name, bot.position))
 
@@ -360,7 +360,7 @@ def use_item_on_loc(bot, item_name, loc_names):
     wait_ticks(bot, 10)
     # Same halt risk as operate_loc: a result mesbox or a multi-page
     # story blocks the server script until dismissed.
-    _drain_dialog(bot)
+    drain_dialog(bot)
 
 
 def withdraw_requirements(bot, requirements):

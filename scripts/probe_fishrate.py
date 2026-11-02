@@ -16,7 +16,7 @@ LIVE_RADIUS = 40
 def nearest_fish(bot):
     best = None
     for slot, npc in bot.world.npcs.items():
-        entry = bot._loctypes["npc"][npc["type"]] if npc["type"] < len(bot._loctypes["npc"]) else None
+        entry = bot.loctypes["npc"][npc["type"]] if npc["type"] < len(bot.loctypes["npc"]) else None
         name = (entry["name"] if entry else "") or ""
         if "saltfish" not in name and "freshfish" not in name:
             continue
@@ -31,7 +31,7 @@ def nearest_fish(bot):
 def fish_count(bot):
     total = 0
     for _slot, (held, count) in bot.world.inv.get(3214, {}).items():
-        entry = bot._loctypes["obj"][held] if held < len(bot._loctypes["obj"]) else None
+        entry = bot.loctypes["obj"][held] if held < len(bot.loctypes["obj"]) else None
         name = (entry["name"] if entry else "") or ""
         if "raw_" in name or name in ("shrimp",):
             total += count
@@ -44,7 +44,7 @@ def main():
     bot = Bot()
     try:
         bot.login(username, username)
-        bot._ensure_nav()
+        bot.ensure_nav()
         for _i in range(10):
             bot.pump(5)
         found = nearest_fish(bot)

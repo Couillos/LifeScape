@@ -45,7 +45,7 @@ def _ensure_coins(bot, amount=20):
     if bot.inventory().get(coins, 0) >= amount:
         return
     try:
-        bank = quest_common._open_nearest_bank(bot)
+        bank = quest_common.open_nearest_bank(bot)
     except Exception as error:
         raise solver.SolverError("need %d coins for Baraek: %s" % (amount, error))
     try:

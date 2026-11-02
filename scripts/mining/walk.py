@@ -4,7 +4,7 @@ from scripts.mining.common import *
 from scripts.tutorial import common as tutorial_common
 
 def tile_walkable(bot, check_x, check_z):
-    for known_map in (bot._opened_map, bot._collision):
+    for known_map in (bot.opened_map, bot.collision):
         if known_map is None:
             continue
         try:
@@ -53,10 +53,10 @@ def walk_checked(bot, dest_x, dest_z, timeout=300):
     trail = getattr(bot, "_trail", None)
     if trail is None:
         trail = []
-        bot._trail = trail
+        bot.trail = trail
     while (bot.world.x, bot.world.z) != (dest_x, dest_z):
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
-            bot._last_greet = bot.world.ticks
+            bot.last_greet = bot.world.ticks
             randomevents.greet(bot)
         if time.time() > deadline:
             raise TimeoutError("walk to %d,%d timed out at %s" % (dest_x, dest_z, bot.position))
@@ -94,7 +94,7 @@ def cross_nearby_door(bot, dest_x, dest_z):
     """Click open a nearby closed door/gate (city gates are locs, not
     wall doors, so the router alone never gets through them) and step
     through before it swings shut again."""
-    bot._ensure_nav()
+    bot.ensure_nav()
     seen = list(bot.world.locs.items()) + [(key, val) for key, val in bot.world.static_locs.items() if key not in bot.world.locs]
     cands = []
     for (door_x, door_z, door_level), loc in seen:
@@ -102,7 +102,7 @@ def cross_nearby_door(bot, dest_x, dest_z):
             continue
         if abs(door_x - bot.world.x) + abs(door_z - bot.world.z) > 12:
             continue
-        if doors_module.open_op(bot._loctypes, loc[0]) is None:
+        if doors_module.open_op(bot.loctypes, loc[0]) is None:
             continue
         cands.append((abs(door_x - bot.world.x) + abs(door_z - bot.world.z), door_x, door_z, loc[0]))
     for _dist, door_x, door_z, door_loc in sorted(cands):
@@ -186,7 +186,7 @@ def retreat_along_trail(bot, max_back=12):
 
 
 def compass_escape(bot, dest_x=None, dest_z=None):
-    bot._ensure_nav()
+    bot.ensure_nav()
     degs = (0, 45, 90, 135, 180, 225, 270, 315)
     if dest_x is not None and dest_z is not None:
         # Escape toward the goal, not blindly: a blind jump can fling
@@ -195,7 +195,7 @@ def compass_escape(bot, dest_x=None, dest_z=None):
     for deg in degs:
         dest_x = bot.world.x + round(25 * math.cos(math.radians(deg)))
         dest_z = bot.world.z + round(25 * math.sin(math.radians(deg)))
-        path = bot._router.find_path(bot._opened_map, bot.world.level, bot.world.x, bot.world.z, dest_x, dest_z)
+        path = bot.router.find_path(bot.opened_map, bot.world.level, bot.world.x, bot.world.z, dest_x, dest_z)
         if not path:
             continue
         try:

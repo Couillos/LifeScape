@@ -61,7 +61,7 @@ def _all_carried(bot, requirements):
     return all(carried.get(item.obj_id, 0) >= item.count for item in requirements.items)
 
 
-def _open_nearest_bank(bot):
+def open_nearest_bank(bot):
     if BANK_COM in bot.world.inv:
         return bot.bank_items()
 
@@ -134,7 +134,7 @@ def run(requirements, account=None, solve=None):
         # item deliveries; clear any backlog before doing anything else.
         solver.solve_strange_box(bot)
         try:
-            bank_items = {} if _all_carried(bot, requirements) else _open_nearest_bank(bot)
+            bank_items = {} if _all_carried(bot, requirements) else open_nearest_bank(bot)
         except (Unreachable, TimeoutError) as error:
             result = QuestReport(
                 quest=requirements.key,

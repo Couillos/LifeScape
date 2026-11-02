@@ -15,6 +15,7 @@ import sys
 
 import gamedata as knowledge
 from gamedata import quest_requirements
+from lifescape import save as save_mod
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
 from scripts.quests.common import run
@@ -46,7 +47,6 @@ def _saved_varps():
     if not account:
         return {}
     try:
-        from lifescape import save as save_mod
         return save_mod.load_account(account).get("varps", {})
     except Exception:
         return {}

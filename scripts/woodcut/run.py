@@ -146,7 +146,7 @@ def chop_load(bot, tiers, bank, coins_id, woodcutting_level, side_bank, main_ban
             bot.intend("fleeing a hunter")
             nearby = []
             for _slot, npc in bot.world.npcs.items():
-                entry = bot._loctypes["npc"][npc["type"]] if npc["type"] < len(bot._loctypes["npc"]) else None
+                entry = bot.loctypes["npc"][npc["type"]] if npc["type"] < len(bot.loctypes["npc"]) else None
                 label = entry["name"] if entry else npc["type"]
                 nearby.append((abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z), label, npc["x"], npc["z"]))
             nearby.sort()

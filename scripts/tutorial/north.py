@@ -177,7 +177,7 @@ def survival_gate(bot):
                 bot.pump(5)
             tutorial_common.refresh_openings(bot)
         try:
-            bot._walk_raw(3085, 3092, 0, time.time() + 8)
+            bot.walk_raw(3085, 3092, 0, time.time() + 8)
         except Exception:
             bot.pump(5)
     if bot.world.x >= 3089:

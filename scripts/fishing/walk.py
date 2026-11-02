@@ -3,7 +3,7 @@
 from scripts.fishing.common import *
 
 def tile_walkable(bot, check_x, check_z):
-    for known_map in (bot._opened_map, bot._collision):
+    for known_map in (bot.opened_map, bot.collision):
         if known_map is None:
             continue
         try:
@@ -26,7 +26,7 @@ def walk_via_mid(bot, dest_x, dest_z, used):
         if mid in used:
             continue
         try:
-            path = bot._router.find_path(bot._opened_map, bot.world.level, src_x, src_z, mid[0], mid[1])
+            path = bot.router.find_path(bot.opened_map, bot.world.level, src_x, src_z, mid[0], mid[1])
             legs = [step for step in path if step[0] == bot.world.level]
         except Exception:
             continue
@@ -49,10 +49,10 @@ def walk_checked(bot, dest_x, dest_z, timeout=300):
     trail = getattr(bot, "_trail", None)
     if trail is None:
         trail = []
-        bot._trail = trail
+        bot.trail = trail
     while (bot.world.x, bot.world.z) != (dest_x, dest_z):
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
-            bot._last_greet = bot.world.ticks
+            bot.last_greet = bot.world.ticks
             randomevents.greet(bot)
         if time.time() > deadline:
             raise TimeoutError("walk to %d,%d timed out at %s" % (dest_x, dest_z, bot.position))
@@ -95,11 +95,11 @@ def retreat_along_trail(bot, max_back=2):
 
 
 def compass_escape(bot):
-    bot._ensure_nav()
+    bot.ensure_nav()
     for deg in (0, 45, 90, 135, 180, 225, 270, 315):
         dest_x = bot.world.x + round(25 * math.cos(math.radians(deg)))
         dest_z = bot.world.z + round(25 * math.sin(math.radians(deg)))
-        path = bot._router.find_path(bot._opened_map, bot.world.level, bot.world.x, bot.world.z, dest_x, dest_z)
+        path = bot.router.find_path(bot.opened_map, bot.world.level, bot.world.x, bot.world.z, dest_x, dest_z)
         if not path:
             continue
         try:
