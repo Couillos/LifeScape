@@ -214,11 +214,14 @@ def solve(bot):
         raise solver.SolverError("need a spade for the dig (bank/general store)")
 
     if _varp(bot, "hunt") < 2 and _count(bot, key) == 0 and _count(bot, message) == 0:
-        solver.talk_like(bot, "redbeard_frank", ["treasure"])
-        _sail(bot, "seaman_lorris", ["yes"])
-        solver.go_to_npc(bot, "zambo")
-        if not _buy(bot, "karamja_rum"):
-            raise solver.SolverError("could not buy Karamjan rum from Zambo")
+        # Skip the rum run when already holding it (spawned for testing or
+        # banked earlier): Luthas still needs the employment chat.
+        if _count(bot, rum) < 1:
+            solver.talk_like(bot, "redbeard_frank", ["treasure"])
+            _sail(bot, "seaman_lorris", ["yes"])
+            solver.go_to_npc(bot, "zambo")
+            if not _buy(bot, "karamja_rum"):
+                raise solver.SolverError("could not buy Karamjan rum from Zambo")
         solver.talk_like(bot, "luthas", ["employment"])
         _pack_crate(bot)
         solver.talk_like(bot, "luthas", ["thank", "another"])
