@@ -82,7 +82,10 @@ class MovementMixin:
         self._dbg("approach %d,%d,%d r=%d" % (x, z, level, radius))
         self._ensure_nav()
         try:
-            self.walk_to(x, z, level, timeout=timeout, open_doors=open_doors)
+            # Exact first, but briefly: a blocked target (wall, locked door)
+            # can never be stood on, and grinding it burns the whole budget
+            # while an adjacent tile already satisfies the radius.
+            self.walk_to(x, z, level, timeout=min(timeout, 15), open_doors=open_doors)
         except (Unreachable, TimeoutError) as error:
             print("exact approach to %d,%d failed: %s" % (x, z, error), flush=True)
         if abs(self.world.x - x) + abs(self.world.z - z) <= radius:
