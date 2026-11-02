@@ -10,16 +10,52 @@ through on "going in anyway"), inner door, listen at the grill
 the hole (%spy 2->3), report back to Sir Amik for 2500 coins.
 """
 
+import os
 import sys
 
-
+from lifescape import save as save_mod
 from lifescape.client import Unreachable
 
 from gamedata import quest_requirements
+import gamedata as knowledge
 from scripts.quests import solver
 from scripts.quests.common import run
 
 QUEST = quest_requirements.by_key("blackknight")
+
+SPY = knowledge.varp_id_by_name("spy")
+STARTED = 1
+LISTENED = 2
+SABOTAGED = 3
+COMPLETE = 4
+
+# Save-backed stage: fresh logins are blind to live varps (spy is not
+# transmitted), so resume gates consult the persisted stage too.
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not account:
+        return {}
+    try:
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
+
+def _stage(bot):
+    return max(bot.world.varps.get(SPY, 0), _SAVED_VARPS.get(SPY, 0))
+
+
+def _count(bot, name):
+    obj = solver.obj_id(name)
+    carried = bot.inventory().get(obj, 0)
+    worn_com = knowledge.com_id("wornitems:wear")
+    for held, _count in bot.world.inv.get(worn_com, {}).values():
+        if held == obj:
+            carried += _count
+    return carried
 
 GRILL_LEVEL = 0  # "Grate 3025 3508 0" header in quest_blackknight.rs2
 HOLE_LEVEL = 1  # "Hole 3031 3508 1" header in quest_blackknight.rs2
@@ -81,6 +117,16 @@ def _sabotage_potion(bot):
 
 
 def solve(bot):
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
+    if _stage(bot) == COMPLETE:
+        return
+    # The disguise stays worn; the cabbage is eaten at stage 3, so only
+    # fresh runs need one in the pack.
+    if _count(bot, "iron_chainbody") < 1 or _count(bot, "bronze_med_helm") < 1:
+        raise solver.SolverError("no disguise (chainbody + med helm) at %s" % (bot.position,))
+    if _stage(bot) < SABOTAGED and _count(bot, "cabbage") < 1:
+        raise solver.SolverError("no cabbage for the hole at %s" % (bot.position,))
     solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
     _wear(bot, "iron_chainbody")
     _wear(bot, "bronze_med_helm")
@@ -92,7 +138,8 @@ def solve(bot):
     solver.finish_dialog_like(bot, ["going in", "don't care"])
     solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
     _listen_at_grill(bot)
-    _sabotage_potion(bot)
+    if _stage(bot) < SABOTAGED:
+        _sabotage_potion(bot)
     solver.talk(bot, "sir_amik_varze")
 
 
