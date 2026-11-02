@@ -99,7 +99,12 @@ def solve(bot):
     # The skull only goes into the OPEN coffin: flip shut->altar first.
     bot.approach(3249, 3194, radius=6, timeout=600, open_doors=True)
     try:
-        solver.operate_loc(bot, ["shutghostcoffin"], op=1, timeout=60)
+        # solver.operate_loc walks to the blocked coffin tile itself and
+        # burns full timeouts; stand on a reachable neighbour and click.
+        coffin = C.find_loc(bot, "shutghostcoffin")
+        C.approach_loc(bot, coffin[0], coffin[1], coffin[3], coffin[2])
+        bot.op_loc(1, coffin[0], coffin[1], coffin[3])
+        bot.pump(10)
     except (Unreachable, TimeoutError):
         pass
     solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar", "shutghostcoffin"])
