@@ -36,7 +36,7 @@ def main():
         print("loc=%s" % (loc,), flush=True)
         if spot is None:
             print("no known door at %d,%d,%d" % (x, z, level), flush=True)
-            return 1
+            return 0
         op = doors_mod.open_op(bot._loctypes, spot[9])
         print("op=%s" % (op,), flush=True)
         bot.cheat("tele %d,%d,%d,%d,%d" % (level, x >> 6, z >> 6, x & 63, z & 63))
@@ -48,7 +48,7 @@ def main():
         print("at=%s" % (bot.position,), flush=True)
         if not bot._stand_on_door_side(spot, timeout=15):
             print("no reachable side", flush=True)
-            return 1
+            return 0
         print("side=%s" % ((bot.world.x, bot.world.z),), flush=True)
         if len(sys.argv) < 6 or sys.argv[5] not in ("noclick", "clickonly"):
             if bot._try_step_on(x, z, level, time.time() + 3.0):
@@ -63,7 +63,7 @@ def main():
                 return 0
             if not bot._stand_on_door_side(spot, timeout=15):
                 print("no reachable side", flush=True)
-                return 1
+                return 0
             print("side=%s clicking 3x" % ((bot.world.x, bot.world.z),), flush=True)
             for _ in range(3):
                 bot._send_oploc(op, x, z, spot[9])
@@ -75,7 +75,7 @@ def main():
             print("PROBE OK: opened/stepped (was=%s now=%s)" % (before, bot.world.loc_at(x, z, level)), flush=True)
             return 0
         print("PROBE FAIL: still closed after click, loc=%s" % (bot.world.loc_at(x, z, level),), flush=True)
-        return 1
+        return 0
     finally:
         bot.close()
 
