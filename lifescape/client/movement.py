@@ -648,22 +648,18 @@ class MovementMixin:
         if open_doors:
             self._sync_open_doors()
         idle_rounds = 0
-        last_spot = None
+        leg_timeouts = 0
         while (self.world.x, self.world.z, self.world.level) != (x, z, self.world.level):
             if time.time() > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
-            # Tight-loop guard: iterations that neither move nor click fail
-            # fast instead of spinning (and spamming the log) until the
-            # walk deadline. Door clicks and steps reset it via movement;
-            # genuine slow walks move every iteration.
-            spot_now = (self.world.x, self.world.z)
-            if spot_now == last_spot:
-                idle_rounds += 1
-            else:
-                idle_rounds = 0
-                last_spot = spot_now
-            if idle_rounds >= 8:
+            # Tight-loop guard: three timed-out legs in a row means the
+            # route is refused, not slow (door ping-pong, wall the maps
+            # think is open). Fail fast so the caller replans instead of
+            # grinding until the walk deadline. A backstop iteration cap
+            # catches loops that keep moving without approaching.
+            if leg_timeouts >= 3 or idle_rounds >= 60:
                 raise TimeoutError("walk to %d,%d stuck at %s" % (x, z, self.world.position))
+            idle_rounds += 1
             # Rebuilt maps are new objects (_rebuild_opened copies): always
             # route on the current one so temp blocks and unseals apply.
             routing_map = self._opened_map if open_doors else self._collision
@@ -729,6 +725,17 @@ class MovementMixin:
                 self._await_leg(leg, min(deadline, time.time() + len(leg) * 2 + 10))
             except TimeoutError as error:
                 print("walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
+                if (self.world.x, self.world.z) == before:
+                    leg_timeouts += 1
+                    if leg_timeouts >= 3:
+                        # Same start three legs running: the first step is
+                        # refused, not slow. Fail fast into a replan instead
+                        # of burning another full leg timeout.
+                        raise TimeoutError("walk to %d,%d stuck at %s" % (x, z, self.world.position))
+                else:
+                    leg_timeouts = 0
+            else:
+                leg_timeouts = 0
                 if (self.world.x, self.world.z) == before:
                     # Zero progress: the server refused the first step,
                     # usually a closed door the plan missed (diagonal
