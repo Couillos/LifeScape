@@ -1,11 +1,12 @@
 """Run the fishing bot and print the packet that breaks player-info parsing.
 
 Diagnostic only.
+
+Usage: scripts/orchestrator.py run <account> probe_fishing_packets [args...]
 """
 import collections
 import os
 import runpy
-import sys
 
 
 from lifescape import connection as connection_mod
@@ -14,6 +15,8 @@ from lifescape import world as world_mod
 recent = collections.deque(maxlen=8)
 orig_recv = connection_mod.Connection.recv
 orig_read_appearance = world_mod.World._read_appearance
+
+_installed = False
 
 
 def recv(self):
@@ -33,8 +36,16 @@ def traced(self, data, pid):
         raise
 
 
-connection_mod.Connection.recv = recv
-world_mod.World._read_appearance = traced
+def _install():
+    global _installed
+    if _installed:
+        return
+    connection_mod.Connection.recv = recv
+    world_mod.World._read_appearance = traced
+    _installed = True
 
-sys.argv = [os.path.join(os.path.dirname(__file__), "fishing", "run.py")] + sys.argv[1:]
-runpy.run_path(os.path.join(os.path.dirname(__file__), "fishing", "run.py"), run_name="__main__")
+
+def run(bot, *args):
+    _install()
+    namespace = runpy.run_path(os.path.join(os.path.dirname(__file__), "fishing", "run.py"))
+    return namespace["run"](bot, *args)

@@ -72,7 +72,7 @@ def avoid(bot, threats, tiles=3):
     for _distance, dest_x, dest_z in candidates:
         before = (bot.world.x, bot.world.z)
         try:
-            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=5, open_doors=True)
+            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=250, open_doors=True)
         except (Unreachable, TimeoutError):
             continue
         if (bot.world.x, bot.world.z) == before:

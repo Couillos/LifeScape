@@ -6,7 +6,6 @@ bank). Bank items are withdrawn here, then the quest dialogue/actions
 run. Item gathering is deliberately out of scope.
 """
 
-import time
 
 from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
@@ -34,7 +33,7 @@ def drop_junk(bot):
         obj_id = found[0].obj_id
         while bot.inventory().get(obj_id, 0) > 0:
             try:
-                if not bot.drop(obj_id, timeout=15):
+                if not bot.drop(obj_id, timeout=750):
                     break
             except Exception:
                 break
@@ -53,7 +52,7 @@ def go_to_npc(bot, name, near=None):
     if near is not None:
         if abs(near[0] - bot.world.x) + abs(near[1] - bot.world.z) > 2:
             bot.intend("walking to %s near %d,%d" % (name, near[0], near[1]))
-            bot.approach(near[0], near[1], radius=2, timeout=300, open_doors=True)
+            bot.approach(near[0], near[1], radius=2, timeout=15000, open_doors=True)
         bot.intend("talking to %s" % name)
         return
     entries = [entry for entry in _known_npc(name) if not entry.members]
@@ -62,7 +61,7 @@ def go_to_npc(bot, name, near=None):
         spot, _entry = min(spawns, key=lambda item: abs(item[0].x - bot.world.x) + abs(item[0].z - bot.world.z))
         if spot.level != bot.world.level or abs(spot.x - bot.world.x) + abs(spot.z - bot.world.z) > 2:
             bot.intend("walking to %s at %d,%d,%d" % (name, spot.x, spot.z, spot.level))
-            bot.approach(spot.x, spot.z, level=spot.level, radius=2, timeout=300, open_doors=True)
+            bot.approach(spot.x, spot.z, level=spot.level, radius=2, timeout=15000, open_doors=True)
         bot.intend("talking to %s" % name)
 
 
@@ -224,7 +223,7 @@ def wait_complete(bot, timeout=300):
     return False
 
 
-def operate_loc(bot, names, op=1, timeout=60, stand=None):
+def operate_loc(bot, names, op=1, timeout=3000, stand=None):
     x, z, level, loc = tutorial_common.find_loc(bot, *names)
     if stand is not None:
         # Some locs only answer from one side (reachLoc angle): park on the
@@ -242,7 +241,7 @@ def operate_loc(bot, names, op=1, timeout=60, stand=None):
     drain_dialog(bot)
 
 
-def ride_loc(bot, names, op=1, timeout=60):
+def ride_loc(bot, names, op=1, timeout=3000):
     """Ride a stair/ladder/trapdoor through the portal table.
 
     A raw click from the wrong side is dropped silently (reachLoc
@@ -270,7 +269,7 @@ def take_near(bot, name, timeout=120):
     target = bot.world.ticks + timeout
     while bot.world.ticks < target:
         try:
-            bot.take(name=name, timeout=20)
+            bot.take(name=name, timeout=1000)
             return True
         except (Unreachable, TimeoutError) as error:
             print("take %s failed: %s" % (name, error), flush=True)
@@ -311,7 +310,7 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
             continue
         npc = bot.world.npcs[nid]
         try:
-            bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
+            bot.approach(npc["x"], npc["z"], radius=2, timeout=1000, open_doors=True)
         except (Unreachable, TimeoutError):
             continue
         nid = bot.find_npc(npc_name) or nid
@@ -462,7 +461,7 @@ def attack(bot, names, timeout=300):
         nid, npc = min(candidates, key=lambda item: abs(item[1]["x"] - bot.world.x) + abs(item[1]["z"] - bot.world.z))
         if abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z) > 5:
             try:
-                bot.approach(npc["x"], npc["z"], radius=2, timeout=30, open_doors=True)
+                bot.approach(npc["x"], npc["z"], radius=2, timeout=1500, open_doors=True)
             except (Unreachable, TimeoutError):
                 bot.pump(5)
                 continue

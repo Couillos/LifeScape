@@ -11,7 +11,6 @@ the hole (%spy 2->3), report back to Sir Amik for 2500 coins.
 """
 
 import os
-import sys
 
 from lifescape import save as save_mod
 from lifescape.client import Unreachable
@@ -20,7 +19,7 @@ from lifescape.waits import wait_ticks
 from gamedata import quest_requirements
 import gamedata as knowledge
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 
 QUEST = quest_requirements.by_key("blackknight")
 
@@ -36,7 +35,7 @@ _SAVED_VARPS = {}
 
 
 def _saved_varps():
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return {}
     try:
@@ -76,9 +75,9 @@ def _wear(bot, name):
 
 def _climb_toward(bot, level):
     if bot.world.level > level:
-        solver.ride_loc(bot, ("laddertop", "spiralstairstop", "stairstop"), 1, timeout=120)
+        solver.ride_loc(bot, ("laddertop", "spiralstairstop", "stairstop"), 1, timeout=6000)
     elif bot.world.level < level:
-        solver.ride_loc(bot, ("ladder", "spiralstairs", "stairs"), 1, timeout=120)
+        solver.ride_loc(bot, ("ladder", "spiralstairs", "stairs"), 1, timeout=6000)
     else:
         raise solver.SolverError("no path on level %d at %s" % (level, bot.position))
 
@@ -94,7 +93,7 @@ def _go_level(bot, level):
 def _listen_at_grill(bot):
     for _ in range(4):
         try:
-            solver.operate_loc(bot, ("witchgrill",), 1, timeout=120)
+            solver.operate_loc(bot, ("witchgrill",), 1, timeout=6000)
             break
         except Unreachable:
             _climb_toward(bot, GRILL_LEVEL)
@@ -112,7 +111,7 @@ def _sabotage_potion(bot):
         solver.use_item_on_loc(bot, "cabbage", ("blackknighthole",))
     except Unreachable:
         # Hole room hides behind the secret wall: push it, then retry.
-        solver.operate_loc(bot, ("bksecretdoor",), 1, timeout=120)
+        solver.operate_loc(bot, ("bksecretdoor",), 1, timeout=6000)
         solver.use_item_on_loc(bot, "cabbage", ("blackknighthole",))
     solver.finish_dialog_like(bot, ["sabotaged", "successfully"])
 
@@ -134,37 +133,37 @@ def solve(bot):
     _wear(bot, "bronze_med_helm")
     if _stage(bot) < LISTENED:
         _go_level(bot, 0)
-        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=300)
+        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=15000)
         if bot.world.modal and bot.world.modal[0] != "main":
             raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
         # A wilderness warning (plain main window) is informational, not a
         # refusal: dismiss it instead of aborting the infiltration.
         bot.close_modal()
         bot.pump(5)
-        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
+        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
         solver.finish_dialog_like(bot, ["going in", "don't care"])
         # The banquet door only opens on a guard chat and shuts again:
         # knock until through, then verify by position (east side).
         for _ in range(8):
             try:
-                bot.walk_to(3022, 3515, 0, timeout=30, open_doors=True)
+                bot.walk_to(3022, 3515, 0, timeout=1500, open_doors=True)
             except (Unreachable, TimeoutError):
                 pass
             if bot.world.x > 3020:
                 break
-            solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
+            solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
             solver.finish_dialog_like(bot, ["going in", "don't care"])
             wait_ticks(bot, 10)
         else:
             raise solver.SolverError("banquet door never opened at %s" % (bot.position,))
         # The inner door is upstairs (static spawns put it on level 1).
         _go_level(bot, 1)
-        solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
+        solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=6000)
         _listen_at_grill(bot)
     if _stage(bot) < SABOTAGED:
         _sabotage_potion(bot)
     solver.talk(bot, "sir_amik_varze")
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

@@ -11,6 +11,10 @@ Everything the daemon writes lives under ``run/`` at the project root:
 
 import json
 import os
+import threading
+
+_transaction = 0
+_transaction_lock = threading.Lock()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_DIR = os.environ.get("LIFESCAPE_ENGINE_DIR") or os.path.normpath(os.path.join(ROOT, "..", "lostcity", "engine"))
@@ -32,6 +36,14 @@ def user_paths(account):
     )
 
 
+def session_paths(account):
+    """(command socket, ready file) for one persistent session."""
+    return (
+        os.path.join(RUN_DIR, "session-%s.sock" % account),
+        os.path.join(RUN_DIR, "session-%s.ready" % account),
+    )
+
+
 def ensure_dirs():
     for directory in (RUN_DIR, USERS_DIR, LOGS_DIR):
         os.makedirs(directory, exist_ok=True)
@@ -46,8 +58,15 @@ def read_json(path, default=None):
 
 
 def write_json(path, data):
+    # Unique tmp per call: supervise threads and dispatch share account
+    # files, and a fixed "<path>.tmp" lost the os.replace race with
+    # FileNotFoundError. os.replace stays atomic for readers.
+    global _transaction
+    with _transaction_lock:
+        _transaction += 1
+        suffix = "%d.%d.%d" % (os.getpid(), threading.get_ident(), _transaction)
+    temporary = "%s.tmp.%s" % (path, suffix)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    temporary = path + ".tmp"
     with open(temporary, "w") as handle:
         json.dump(data, handle, sort_keys=True)
         handle.flush()

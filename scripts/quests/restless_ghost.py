@@ -1,13 +1,12 @@
 """Requirement check and completion: The Restless Ghost."""
 
 import os
-import sys
 
 
 from gamedata import quest_requirements
 from lifescape.client import Unreachable
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 import gamedata as knowledge
@@ -19,7 +18,7 @@ QUEST = quest_requirements.by_key("priest")
 
 def _saved_stage():
     """Save-based quest stage (live varps are blind to pre-login stages)."""
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return 0
     try:
@@ -59,7 +58,7 @@ def solve(bot):
         talked = False
         for _ in range(6):
             try:
-                solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=60)
+                solver.operate_loc(bot, ["shutghostcoffin", "restless_ghost_altar"], op=1, timeout=3000)
             except (Unreachable, TimeoutError):
                 pass
             nid = bot.find_npc("ghost")
@@ -70,7 +69,7 @@ def solve(bot):
                 continue
             npc = bot.world.npcs[nid]
             try:
-                bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
+                bot.approach(npc["x"], npc["z"], radius=2, timeout=1000, open_doors=True)
             except (Unreachable, TimeoutError):
                 continue
             bot.talk_to(bot.find_npc("ghost") or nid)
@@ -109,7 +108,7 @@ def solve(bot):
         )
         for nx, nz in neigh:
             try:
-                bot.approach(nx, nz, level=clevel, radius=0, timeout=30, open_doors=True)
+                bot.approach(nx, nz, level=clevel, radius=0, timeout=1500, open_doors=True)
                 break
             except (Unreachable, TimeoutError):
                 continue
@@ -133,7 +132,7 @@ def solve(bot):
         key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
     ):
         try:
-            bot.approach(nx, nz, level=alevel, radius=0, timeout=30, open_doors=True)
+            bot.approach(nx, nz, level=alevel, radius=0, timeout=1500, open_doors=True)
             break
         except (Unreachable, TimeoutError):
             continue
@@ -154,5 +153,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

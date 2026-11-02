@@ -36,7 +36,7 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0, withdraw_logs
     opened = False
     for _attempt in range(3):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=300)
+            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
         except (Unreachable, TimeoutError):
             # Booth tiles sit inside walls; standing next to one is close
             # enough since open_bank approaches the booth itself.
@@ -47,7 +47,7 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0, withdraw_logs
                 wait_hitpoints(bot, hitpoints(bot) + 1, timeout=200)
         if not reached:
             try:
-                bot.approach(bank.x, bank.z, radius=6, timeout=120, open_doors=True)
+                bot.approach(bank.x, bank.z, radius=6, timeout=6000, open_doors=True)
                 reached = True
             except (Unreachable, TimeoutError):
                 reached = False

@@ -54,7 +54,7 @@ def reattach(bot):
         except KeyError:
             continue
         spots = bot.world.ground_items(bot.world.x, bot.world.z, bot.world.level, obj_id=head_id)
-        if spots and bot.take(head_id, timeout=20):
+        if spots and bot.take(head_id, timeout=1000):
             return use_handle_on_head(bot, handle_id, head_id)
     return False
 

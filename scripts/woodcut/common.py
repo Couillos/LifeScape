@@ -12,7 +12,6 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/woodcut/run.py <username> [loads]
 """
 
 import math
-import time
 
 
 from scripts import hazards, randomevents

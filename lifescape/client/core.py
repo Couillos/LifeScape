@@ -7,6 +7,7 @@ __init__); this module owns the session and the orchestrator heartbeat.
 import json
 import os
 import signal
+import threading
 import time
 
 from .. import collision as collision_mod
@@ -18,6 +19,9 @@ from ..protocol import client_op_id
 from ..words import pack
 from ..world import World
 
+SAFE_POINT_TICKS = 500  # a queued SDK call waits at most this long for a pump
+UNLOAD_TICKS = 250  # a script thread gets this long to notice the stop flag
+
 
 class Unreachable(Exception):
     """No reachable tile, door, target or portal for the requested action."""
@@ -25,6 +29,18 @@ class Unreachable(Exception):
 
 class StateError(RuntimeError):
     """The SDK cannot read or expose player state (bad component table, write)."""
+
+
+class StopRequested(BaseException):
+    """The session asked this script to stop (unload/close).
+
+    BaseException so a script's ``except Exception`` cannot swallow it:
+    only the session wrapper handles it.
+    """
+
+
+class StaleConnection(ConnectionError):
+    """A send from a script thread that outlived its unload (orphan)."""
 
 
 _active_bot = None
@@ -60,6 +76,19 @@ class BotCore:
         self._state_tick = 0
         self._state_written = 0.0
         self._state_error = None
+        self._last_send_tick = 0
+        self._send_lock = threading.Lock()
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread = None
+        self._connection_epoch = 0
+        self._commands = []
+        self._commands_lock = threading.Lock()
+        self._command_seq = 0
+        self._stop_event = threading.Event()
+        self._generation = 0
+        self._muted_idents = set()
+        self._snapshot = {}
+        self._snapshot_lock = threading.Lock()
         self._com_ids = None
         self._static_loc_index = None
         self._static_obj_index = None
@@ -110,20 +139,25 @@ class BotCore:
         self.username = username
         self.password = password or username
         self.connection.connect()
+        self._track_connection()
         info = self._login_with_retry(defaults)
         self._drain_startup()
         self.intend("connected")
+        self._ensure_keepalive()
         return info
 
-    def _login_with_retry(self, defaults, retry_seconds=30):
-        """A crashed or restarted client can still hold its session on the
-        server for a few seconds: wait it out instead of crashing the job."""
-        deadline = time.time() + retry_seconds
-        while True:
+    def _login_with_retry(self, defaults, attempts=15, spacing=2):
+        """A crashed client can still hold its session on the server for a
+        few seconds: wait it out instead of crashing the job. Attempts and
+        spacing are a process guard in seconds: ticks are frozen outside a
+        connection, so no tick bound can apply here."""
+        last = None
+        for _attempt in range(attempts):
             try:
                 return self.connection.login(self.username, self.password, defaults["pack_dir"], defaults["server_key"])
             except LoginError as error:
-                if "already logged in" not in str(error) or time.time() > deadline:
+                last = error
+                if "already logged in" not in str(error):
                     raise
                 print("session still busy, retrying login", flush=True)
                 host, port = self.connection.host, self.connection.port
@@ -131,57 +165,134 @@ class BotCore:
                     self.connection.close()
                 except (OSError, ConnectionError) as close_error:
                     print("closing busy session failed: %s" % (close_error,), flush=True)
-                time.sleep(2)
-                self.connection = Connection(host, port)
-                self.connection.connect()
+                time.sleep(spacing)
+                self._new_connection(host, port)
+        raise last
 
-    def relogin(self, timeout=90):
-        try:
-            self.connection.close()
-        except (OSError, ConnectionError) as error:
-            print("closing session before relogin failed: %s" % (error,), flush=True)
-        host, port = self.connection.host, self.connection.port
-        deadline = time.time() + timeout
-        while True:
-            self.connection = Connection(host, port)
-            self.world = World()
-            self.zone = (0, 0)
-            self.collision = None
-            self.loctypes = None
-            self._static_loc_index = None
-            self._static_obj_index = None
-            self.wall_doors = None
-            self.door_footprints = None
-            self._blocked_doors = set()
-            self._blocked_doors_exp = {}
-            self._bad_transitions = {}
-            self.unsealed_doors = set()
-            self.recent_doors = {}
-            self._opening = set()
-            self._door_failures = {}
-            self._blocked_tiles = {}
-            self.opened_map = None
-            self.planning_map = None
-            self._planner = None
-            self._route = []
-            self._route_target = None
-            self._action_route = []
-            self._route_action = None
+    def relogin(self, attempts=9, spacing=10):
+        """Reconnect after a dropped connection, bounded. Attempts and
+        spacing are a process guard in seconds: world.ticks is frozen with
+        no connection, so no tick bound can apply here."""
+        last = None
+        for _attempt in range(attempts):
+            self._reset_session()
             try:
                 return self.login(self.username, self.password)
             except (LoginError, ConnectionError, OSError) as error:
+                last = error
                 print("relogin attempt failed: %s" % (error,), flush=True)
                 try:
                     self.connection.close()
                 except (OSError, ConnectionError) as close_error:
                     print("closing failed session failed: %s" % (close_error,), flush=True)
-                if time.time() > deadline:
-                    raise
-                time.sleep(10)
+                time.sleep(spacing)
+        raise last
+
+    def _reset_session(self):
+        try:
+            self.connection.close()
+        except (OSError, ConnectionError) as error:
+            print("closing session before relogin failed: %s" % (error,), flush=True)
+        host, port = self.connection.host, self.connection.port
+        self._new_connection(host, port)
+        self.world = World()
+        self._last_send_tick = 0  # fresh ticks: never mute keepalives after a relogin
+        self.zone = (0, 0)
+        self.collision = None
+        self.loctypes = None
+        self._static_loc_index = None
+        self._static_obj_index = None
+        self.wall_doors = None
+        self.door_footprints = None
+        self._blocked_doors = set()
+        self._blocked_doors_exp = {}
+        self._bad_transitions = {}
+        self.unsealed_doors = set()
+        self.recent_doors = {}
+        self._opening = set()
+        self._door_failures = {}
+        self._blocked_tiles = {}
+        self.opened_map = None
+        self.planning_map = None
+        self._planner = None
+        self._route = []
+        self._route_target = None
+        self._action_route = []
+        self._route_action = None
+
+    def _new_connection(self, host, port):
+        """Swap the socket and guard sends against the previous epoch.
+
+        A script thread that survives its unload (CPU loop without pump)
+        keeps a reference to the old wrapper: its sends raise instead of
+        reaching the server on the recycled session.
+        """
+        self.connection = Connection(host, port)
+        self.connection.connect()
+        self._track_connection()
+
+    def _track_connection(self):
+        """Guard sends against the previous epoch. (see _new_connection)."""
+        self._connection_epoch += 1
+        epoch = self._connection_epoch
+        raw_send = Connection.send.__get__(self.connection)
+
+        def send(op_id, payload=b""):
+            with self._send_lock:
+                if epoch != self._connection_epoch:
+                    raise StaleConnection("stale send from an unloaded script thread")
+                if threading.get_ident() in self._muted_idents:
+                    raise StaleConnection("stale send from an unloaded script thread")
+                raw_send(op_id, payload)
+                self._last_send_tick = self.world.ticks
+
+        self.connection.send = send
+
+    def note_run_thread(self):
+        """A fresh script thread owns its ident again (idents get recycled)."""
+        self._muted_idents.discard(threading.get_ident())
+
+    def _ensure_keepalive(self):
+        """Background NO_TIMEOUT sender for planning stalls.
+
+        The server drops a session after 100 ticks without any response
+        (2 s at the 20 ms tick rate): a long planning phase with no pump
+        would look like a dead client. This thread answers every 0.5 s of
+        wall clock while nothing else was sent in the last 40 ticks. It is
+        connection maintenance, not game pacing: all sends stay serialized
+        through the send lock so the cipher stream never interleaves.
+        """
+        if self._keepalive_thread is not None and self._keepalive_thread.is_alive():
+            return
+        self._keepalive_stop.clear()
+        self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+        self._keepalive_thread.start()
+
+    def _keepalive_due(self):
+        """True when no send happened for 40 ticks or 1 s of wall clock.
+
+        Ticks freeze with no pump (long planning), so the tick gate alone
+        would never fire mid-stall: the wall backstop covers it.
+        """
+        connection = self.connection
+        if connection is None or getattr(connection, "sock", None) is None:
+            return False
+        if connection.outgoing is None:
+            return False
+        return self.world.ticks - self._last_send_tick >= 40 or time.time() - connection.last_send >= 1.0
+
+    def _keepalive_loop(self):
+        while not self._keepalive_stop.wait(0.5):
+            try:
+                if self._keepalive_due():
+                    self.idle()
+            except (OSError, ConnectionError):
+                pass
 
     def combat_level(self):
-        levels = {index: level for index, (level, _exp) in self.world.stats.items()}
-        return spots_mod.combat_level(levels)
+        from . import snapshot as snapshot_mod
+
+        return snapshot_mod.combat_level(self.world.stats)
 
     def want_run(self):
         return self.world.energy >= 100
@@ -200,12 +311,13 @@ class BotCore:
         self.connection.send(client_op_id("NO_TIMEOUT"))
 
     def pump(self, count=1):
+        self._check_stop()
+        self._drain_command()
         frames = []
         for _ in range(count):
-            # Server timeouts are counted in ticks (100 = 60s at 600ms but
-            # 10s at this dev server's 100ms): send NO_TIMEOUT keepalives on
-            # a wall clock so long planning phases never look dead.
-            if self.connection.outgoing is not None and time.time() - self.connection.last_send > 1:
+            # Keepalive in ticks: the server counts timeouts in ticks, so a
+            # long planning phase without sends must still answer regularly.
+            if self.connection.outgoing is not None and self.world.ticks - self._last_send_tick >= 50:
                 self.idle()
         for _ in range(count):
             opcode, name, body = self.connection.recv()
@@ -218,18 +330,109 @@ class BotCore:
             for _pending in range(256):
                 if not self.connection.available():
                     break
-                if time.time() - self.connection.last_send > 1:
+                if self.connection.outgoing is not None and self.world.ticks - self._last_send_tick >= 50:
                     self.idle()
                 opcode, name, body = self.connection.recv()
                 self.world.feed(opcode, name, body)
                 if name == "REBUILD_NORMAL":
                     self.zone = (self.world.zone_x, self.world.zone_z)
                 frames.append((opcode, name, body))
-        # The dashboard follows this file: write often enough to look live
-        # (wall clock, so a slow tick rate never makes it stutter).
-        if self._state_path is not None and time.time() - self._state_written >= 0.2:
+        self._check_stop()
+        self._drain_command()
+        # The dashboard follows this file: write often enough to look live,
+        # paced in ticks so a slow tick rate never makes it stutter.
+        if self._state_path is not None and self.world.ticks - self._state_tick >= 10:
             self._write_state()
         return frames
+
+    def request_stop(self):
+        """Ask the script thread to stop at its next pump (unload/close)."""
+        self._stop_event.set()
+
+    def stop_requested(self):
+        return self._stop_event.is_set()
+
+    def clear_stop(self):
+        self._stop_event.clear()
+
+    def invalidate_sends(self, thread=None):
+        """Mute an unloaded thread's future sends without touching the socket.
+
+        Last resort when the script thread survives its tick bound (CPU loop
+        with no pump): rewrapping alone cannot mute it, because it looks up
+        the shared wrapper on every send. The muted ident belongs to the
+        orphan thread itself, so the next script (new ident) sends normally.
+        """
+        if thread is not None:
+            ident = thread.ident if hasattr(thread, "ident") else thread
+            if ident is not None:
+                self._muted_idents.add(ident)
+        self._track_connection()
+
+    def _check_stop(self):
+        if self._stop_event.is_set():
+            raise StopRequested("session asked the script to stop")
+
+    def queue_command(self, method, args):
+        """Enqueue one SDK call for the next pump safe-point. Returns the
+        command record; the pumper fills result/error and sets done."""
+        with self._commands_lock:
+            self._command_seq += 1
+            command = {
+                "id": self._command_seq,
+                "method": method,
+                "args": list(args),
+                "start_tick": self.world.ticks,
+                "cancelled": False,
+                "done": threading.Event(),
+                "result": None,
+                "error": None,
+            }
+            self._commands.append(command)
+        return command
+
+    def drop_command(self, command):
+        """Cancel a queued call that waited past its tick bound."""
+        with self._commands_lock:
+            command["cancelled"] = True
+            if command in self._commands:
+                self._commands.remove(command)
+        command["done"].set()
+
+    def _drain_command(self):
+        """Run one queued SDK call on this (pumping) thread: the safe-point."""
+        if getattr(self, "_draining", False):
+            return
+        with self._commands_lock:
+            command = next((item for item in self._commands if not item["cancelled"]), None)
+            if command is not None:
+                self._commands.remove(command)
+        if command is None:
+            return
+        self._draining = True
+        try:
+            try:
+                target = getattr(self, command["method"])
+            except AttributeError:
+                command["error"] = "unknown method %r" % (command["method"],)
+            else:
+                if not callable(target) or command["method"].startswith("_"):
+                    command["error"] = "unknown method %r" % (command["method"],)
+                else:
+                    try:
+                        command["result"] = target(*command["args"])
+                    except Exception as error:
+                        command["error"] = "%s: %s" % (type(error).__name__, error)
+        finally:
+            self._draining = False
+            command["done"].set()
+
+    def snapshot(self):
+        """Last heartbeat's raw state, for serving reads off the pump thread."""
+        import copy
+
+        with self._snapshot_lock:
+            return copy.deepcopy(self._snapshot)
 
     def intend(self, intention):
         """Record what the bot is doing right now (shown by the orchestrator)."""
@@ -288,6 +491,18 @@ class BotCore:
             if self._state_error != str(error):
                 self._state_error = str(error)
                 print("state write failed (%s): %s" % (self._state_path, error), flush=True)
+        import copy
+
+        with self._snapshot_lock:
+            self._snapshot = {
+                "inv": copy.deepcopy(self.world.inv),
+                "stats": dict(self.world.stats),
+                "texts": dict(self.world.texts),
+                "position": tuple(self.world.position),
+                "modal": self.world.modal,
+                "com_ids": dict(self._com_ids or {}),
+                "inv_cap": dict(self.world.inv_cap),
+            }
 
     def _hint_type(self):
         hint = self.world.hint
@@ -401,8 +616,8 @@ class BotCore:
         """Load the type table for snapshot names without building nav maps.
 
         Snapshots are written from login on, long before the first walk;
-        jobs that never move (give/probe/clean_session) would otherwise
-        publish nameless items, NPCs and scenery to the dashboard.
+        jobs that never move (give/probe) would otherwise publish nameless
+        items, NPCs and scenery to the dashboard.
         """
         if self.loctypes is not None:
             return
@@ -428,6 +643,10 @@ class BotCore:
 
     def close(self):
         global _active_bot
+        self._keepalive_stop.set()
+        thread, self._keepalive_thread = self._keepalive_thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(2)
         self._intent = "closed"
         try:
             self._write_state()
@@ -466,7 +685,9 @@ class BotCore:
 
     def _request_logout(self, timeout=8):
         """Run the server's logout trigger, so the session is released at once
-        instead of lingering until the server's idle/no-response timeout."""
+        instead of lingering until the server's idle/no-response timeout.
+        Both timeouts below are socket/teardown guards (the connection is
+        already closing, not game pacing), so they stay wall-clock."""
         if self.paths is None or self.world.ticks <= 0 or self.connection.sock is None:
             return
         try:

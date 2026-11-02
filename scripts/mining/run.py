@@ -8,11 +8,10 @@ level, safe for the combat level, nearest usable bank). Banks across
 the toll gate are a last resort (10 coins per crossing). Stays on one
 level.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/mining/run.py <username> [loads]
+Usage: scripts/orchestrator.py run <account> mining [loads]
   loads = full bank trips before stopping, 0 means forever (default 0).
 """
 
-import sys
 import time
 
 
@@ -30,7 +29,7 @@ def work_spot(bot, rock_x, rock_z, rock_loc, ore_ids, had_ore):
     randomevents.greet(bot)
     if max(abs(bot.world.x - rock_x), abs(bot.world.z - rock_z)) > 4:
         try:
-            reached = walk_checked(bot, rock_x, rock_z, timeout=120)
+            reached = walk_checked(bot, rock_x, rock_z, timeout=6000)
         except (Unreachable, TimeoutError):
             return "unreachable", 0
         if not reached:
@@ -43,7 +42,7 @@ def work_spot(bot, rock_x, rock_z, rock_loc, ore_ids, had_ore):
         walked_at = time.time()
         for next_x, next_z in neighbors:
             try:
-                bot.walk_to(next_x, next_z, bot.world.level, timeout=2, open_doors=False)
+                bot.walk_to(next_x, next_z, bot.world.level, timeout=100, open_doors=False)
                 print("adjacent in %.1fs" % (time.time() - walked_at), flush=True)
                 break
             except (Unreachable, TimeoutError) as walk_error:
@@ -75,7 +74,7 @@ def work_spot(bot, rock_x, rock_z, rock_loc, ore_ids, had_ore):
                 if not dismiss_levelup(bot):
                     texts = [text for _com, text in bot.chat_texts()][-4:]
                     print("modal %s texts=%s" % (bot.world.modal, [text[:60] for text in texts]), flush=True)
-                    randomevents.greet(bot, timeout=20)
+                    randomevents.greet(bot, timeout=1000)
                     bot.pump(10)
                     if bot.world.modal is not None and not dismiss_levelup(bot):
                         return "blocked", gained
@@ -207,98 +206,86 @@ def mine_load(bot, tiers, bank, coins_id, mining_level, side_bank, main_bank, ma
 
 
 
-def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "karl_lee"
-    loads = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    bot = Bot()
-    try:
-        bot.login(username, username)
-        start_ticks = bot.world.ticks
-        last_greet = start_ticks
-        while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
-            bot.pump(5)
-            if bot.world.ticks - last_greet > 30:
-                last_greet = bot.world.ticks
-                randomevents.greet(bot)
-        if not randomevents.check(bot):
-            raise SystemExit("random event unresolved at %s" % (bot.position,))
-        side_bank = knowledge.comps.com_id("bank_side:inv")
-        main_bank = knowledge.comps.com_id("bank_main:inv")
-        side_shop = knowledge.comps.com_id("shop_template_side:inv")
-        main_shop = knowledge.comps.com_id("shop_template:inv")
-        coins_id = obj_id(bot, COINS)
-        tiers = usable_tiers()
-        mining_level = learn_level(bot, 1)
-        bank = pick_home_bank(bot, tiers, mining_level)
-        if bank is None:
-            raise SystemExit("no reachable bank from %s" % (bot.position,))
-        print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
-        current_pick = best_pickaxe(bot)
-        junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_pick_ids(bot) and held != coins_id]
-        bank_coins_known = 0
-        if current_pick is None or junk:
-            if current_pick is None and reattach(bot):
-                print("ok pickaxe reattached from pack, no bootstrap needed", flush=True)
+def run(bot, *args):
+    """Mine banked loads in the open session (0 = forever)."""
+    loads = int(args[0]) if args else 0
+    start_ticks = bot.world.ticks
+    last_greet = start_ticks
+    while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
+        bot.pump(5)
+        if bot.world.ticks - last_greet > 30:
+            last_greet = bot.world.ticks
+            randomevents.greet(bot)
+    if not randomevents.check(bot):
+        raise SystemExit("random event unresolved at %s" % (bot.position,))
+    side_bank = knowledge.comps.com_id("bank_side:inv")
+    main_bank = knowledge.comps.com_id("bank_main:inv")
+    side_shop = knowledge.comps.com_id("shop_template_side:inv")
+    main_shop = knowledge.comps.com_id("shop_template:inv")
+    coins_id = obj_id(bot, COINS)
+    tiers = usable_tiers()
+    mining_level = learn_level(bot, 1)
+    bank = pick_home_bank(bot, tiers, mining_level)
+    if bank is None:
+        raise SystemExit("no reachable bank from %s" % (bot.position,))
+    print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
+    current_pick = best_pickaxe(bot)
+    junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_pick_ids(bot) and held != coins_id]
+    bank_coins_known = 0
+    if current_pick is None or junk:
+        if current_pick is None and reattach(bot):
+            print("ok pickaxe reattached from pack, no bootstrap needed", flush=True)
+            current_pick = best_pickaxe(bot)
+            junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_pick_ids(bot) and held != coins_id]
+        keep = {pick_id(bot, current_pick)} if current_pick else set()
+        bronze_price = obj_price(bot, "bronze_pickaxe")
+        withdraw = max(0, bronze_price - pack_total(bot, coins_id)) if current_pick is None else 0
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
+        if not ok:
+            raise SystemExit("cleanup bank trip failed")
+        if best_pickaxe(bot) is None:
+            if restore_from_bank(bot, bank, side_bank, main_bank):
+                print("ok bootstrapped pickaxe from bank", flush=True)
                 current_pick = best_pickaxe(bot)
-                junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_pick_ids(bot) and held != coins_id]
-            keep = {pick_id(bot, current_pick)} if current_pick else set()
-            bronze_price = obj_price(bot, "bronze_pickaxe")
-            withdraw = max(0, bronze_price - pack_total(bot, coins_id)) if current_pick is None else 0
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
-            if not ok:
-                raise SystemExit("cleanup bank trip failed")
-            if best_pickaxe(bot) is None:
-                if restore_from_bank(bot, bank, side_bank, main_bank):
-                    print("ok bootstrapped pickaxe from bank", flush=True)
-                    current_pick = best_pickaxe(bot)
-                elif pack_total(bot, coins_id) >= bronze_price and buy_pickaxe(bot, main_shop, "bronze_pickaxe"):
-                    print("ok bootstrapped bronze pickaxe", flush=True)
-                else:
-                    raise SystemExit("cannot bootstrap: no pickaxe, %d coins" % pack_total(bot, coins_id))
-        done_loads = 0
-        toolless_loads = 0
-        while loads == 0 or done_loads < loads:
-            try:
-                ok, bank, mining_level = mine_load(bot, tiers, bank, coins_id, mining_level, side_bank, main_bank, main_shop)
-            except ConnectionError:
-                print("disconnected, relogging", flush=True)
-                bot.relogin()
-                wait_backpack(bot, BACKPACK_COM)
-                continue
-            if not ok:
-                raise SystemExit("mine failed at %s" % (bot.position,))
-            candidates, cheapest = cheapest_upgrade(bot, mining_level)
-            if candidates:
-                sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known))
-            current = best_pickaxe(bot)
-            keep = {pick_id(bot, current)} if current else set()
-            # Pack is emptied into the bank during this same trip, so the
-            # withdraw must cover the full price, not price minus the
-            # about-to-be-deposited pack coins.
-            withdraw = cheapest if candidates else 0
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
-            if not ok:
-                raise SystemExit("bank trip failed")
-            if candidates:
-                for candidate in candidates:
-                    if mining_level >= PICK_REQS.get(candidate, 99) and buy_pickaxe(bot, main_shop, candidate):
-                        print("ok upgraded to %s" % candidate, flush=True)
-                        break
-            if best_pickaxe(bot) is None:
-                toolless_loads += 1
+            elif pack_total(bot, coins_id) >= bronze_price and buy_pickaxe(bot, main_shop, "bronze_pickaxe"):
+                print("ok bootstrapped bronze pickaxe", flush=True)
             else:
-                toolless_loads = 0
-            if toolless_loads >= 2:
-                raise SystemExit("no pickaxe and cannot rebuy, aborting at %s" % (bot.position,))
-            done_loads += 1
-            print("ok load %d banked (mining=%s)" % (done_loads, mining_level), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-if __name__ == "__main__":
-    sys.exit(main())
+                raise SystemExit("cannot bootstrap: no pickaxe, %d coins" % pack_total(bot, coins_id))
+    done_loads = 0
+    toolless_loads = 0
+    while loads == 0 or done_loads < loads:
+        try:
+            ok, bank, mining_level = mine_load(bot, tiers, bank, coins_id, mining_level, side_bank, main_bank, main_shop)
+        except ConnectionError:
+            print("disconnected, relogging", flush=True)
+            bot.relogin()
+            wait_backpack(bot, BACKPACK_COM)
+            continue
+        if not ok:
+            raise SystemExit("mine failed at %s" % (bot.position,))
+        candidates, cheapest = cheapest_upgrade(bot, mining_level)
+        if candidates:
+            sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known))
+        current = best_pickaxe(bot)
+        keep = {pick_id(bot, current)} if current else set()
+        # Pack is emptied into the bank during this same trip, so the
+        # withdraw must cover the full price, not price minus the
+        # about-to-be-deposited pack coins.
+        withdraw = cheapest if candidates else 0
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
+        if not ok:
+            raise SystemExit("bank trip failed")
+        if candidates:
+            for candidate in candidates:
+                if mining_level >= PICK_REQS.get(candidate, 99) and buy_pickaxe(bot, main_shop, candidate):
+                    print("ok upgraded to %s" % candidate, flush=True)
+                    break
+        if best_pickaxe(bot) is None:
+            toolless_loads += 1
+        else:
+            toolless_loads = 0
+        if toolless_loads >= 2:
+            raise SystemExit("no pickaxe and cannot rebuy, aborting at %s" % (bot.position,))
+        done_loads += 1
+        print("ok load %d banked (mining=%s)" % (done_loads, mining_level), flush=True)
+    return 0

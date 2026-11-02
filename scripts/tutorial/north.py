@@ -5,7 +5,6 @@ inventory contents, position), never through the tutorial varp which
 the server does not transmit.
 """
 
-import time
 
 from lifescape.client import Unreachable
 
@@ -89,7 +88,7 @@ def light_fire(bot):
                 print("ok fire lit", flush=True)
                 return here
         try:
-            bot.walk_to(here[0] + 2, here[1], open_doors=True, timeout=30)
+            bot.walk_to(here[0] + 2, here[1], open_doors=True, timeout=1500)
         except (Unreachable, TimeoutError):
             pass
         here = (bot.world.x, bot.world.z)
@@ -177,13 +176,13 @@ def survival_gate(bot):
                 bot.pump(5)
             tutorial_common.refresh_openings(bot)
         try:
-            bot.walk_raw(3085, 3092, 0, time.time() + 8)
+            bot.walk_raw(3085, 3092, 0, bot.world.ticks + 400)
         except Exception:
             bot.pump(5)
     if bot.world.x >= 3089:
         raise SystemExit("tutorial stuck at: through survival gate pos=%s" % (bot.position,))
     print("ok through survival gate", flush=True)
-    bot.walk_to(3080, 3086, open_doors=True, timeout=120)
+    bot.walk_to(3080, 3086, open_doors=True, timeout=6000)
     tutorial_common.refresh_openings(bot)
 
 

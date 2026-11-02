@@ -13,7 +13,6 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/mining/run.py <username> [loads]
 """
 
 import math
-import time
 
 
 from scripts import hazards, randomevents

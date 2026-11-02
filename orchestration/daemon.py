@@ -1,13 +1,15 @@
-"""Supervisor daemon: one worker process per account, one state file each.
+"""Supervisor daemon: one persistent session worker per account.
 
-It owns process lifetime (start/stop/restart), the log tail that carries
-``@@EVENT`` markers from ``scripts/randomevents.py``, the rescue/cleanup
-state machine, and the unix socket the CLI talks to. It never speaks the
-game protocol: that stays in the SDK, inside the worker.
+It owns session lifetime (open/close), the log tail that carries
+``@@EVENT`` markers from ``scripts/randomevents.py``, the rescue state
+machine (unresolved event -> rescue in session -> resume the interrupted
+script), and the unix socket the CLI talks to. It never speaks the game
+protocol: that stays in the SDK, inside the session worker.
 """
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -24,14 +26,17 @@ from .paths import (
     USERS_DIR,
     ensure_dirs,
     read_json,
+    session_paths,
     user_paths,
     write_json,
 )
 
-MAX_RESTARTS = 30
-RESTART_DELAY = 2.0
 STOP_GRACE = 8.0
-ONLINE_WINDOW = 15.0
+OPEN_TIMEOUT = 45.0
+WORKER_TIMEOUT = 40.0
+# Process-side bounds in wall-clock seconds: spawning a worker and waiting
+# for its socket RPCs happen outside any game connection, so no game-tick
+# bound can apply here.
 
 
 def known_accounts():
@@ -46,6 +51,32 @@ def known_accounts():
     ]
 
 
+class AttachedProcess:
+    """A session worker that outlived the daemon: signal by pid."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def poll(self):
+        try:
+            os.kill(self.pid, 0)
+        except OSError:
+            return 1
+        return None
+
+    def terminate(self):
+        try:
+            os.kill(self.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    def kill(self):
+        try:
+            os.kill(self.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 class Orchestrator:
     def __init__(self):
         self.jobs = {}
@@ -53,47 +84,106 @@ class Orchestrator:
         self.running = True
         ensure_dirs()
 
-    # -- process control -------------------------------------------------
+    # -- session control -----------------------------------------------
 
-    def spawn(self, job, script):
-        job.script = script
-        # Keep the previous snapshot until the new worker writes its own:
-        # the dashboard stays populated while a bot is restarting.
-        with open(user_paths(job.account)[2], "ab") as handle:
-            handle.write(("=== %s %s %s ===\n" % (job.account, script, time.strftime("%H:%M:%S"))).encode())
+    def spawn(self, job, no_login=False):
+        """Start the session worker and wait for its login (or typed error)."""
+        sock_path, ready_path = session_paths(job.account)
+        for stale in (sock_path, ready_path):
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
+        _merged, _partial, log_path = user_paths(job.account)
+        env = dict(
+            os.environ,
+            PYTHONPATH=ROOT,
+            LIFESCAPE_USER=job.account,
+            LIFESCAPE_STATE=user_paths(job.account)[1],
+        )
+        if no_login:
+            env["LIFESCAPE_NO_LOGIN"] = "1"
         job.process = subprocess.Popen(
-            [sys.executable, "-m", "orchestration.worker", job.account, script] + job.args,
+            [sys.executable, "-m", "orchestration.session_worker", job.account],
             cwd=ROOT,
-            stdout=open(user_paths(job.account)[2], "ab"),
+            stdout=open(log_path, "ab"),
             stderr=subprocess.STDOUT,
-            env=dict(
-                os.environ,
-                PYTHONPATH=ROOT,
-                LIFESCAPE_USER=job.account,
-                LIFESCAPE_SCRIPT=script,
-                LIFESCAPE_STATE=user_paths(job.account)[1],
-            ),
+            env=env,
             start_new_session=True,
         )
-        job.status = "running"
+        job.status = "starting"
         job.started = time.time()
-        print("job %s: %s pid=%d" % (job.account, script, job.process.pid), flush=True)
-
-    def start_job(self, account, script, args):
-        if not account or not script:
-            return {"ok": False, "error": "account and script are required"}
+        print("session %s: worker pid=%d" % (job.account, job.process.pid), flush=True)
+        deadline = time.time() + OPEN_TIMEOUT
+        ready = None
+        while time.time() < deadline:
+            if job.process.poll() is not None:
+                break
+            try:
+                with open(ready_path) as handle:
+                    ready = json.load(handle)
+                break
+            except (OSError, ValueError):
+                time.sleep(0.1)
+        else:
+            ready = None
         try:
-            registry.script_path(script)
-        except KeyError as error:
-            return {"ok": False, "error": str(error)}
+            os.unlink(ready_path)
+        except OSError:
+            pass
+        if not isinstance(ready, dict) or not ready.get("ok"):
+            error = (ready or {}).get("error") if isinstance(ready, dict) else None
+            error = error or "worker died during open"
+            self.kill_process(job)
+            with open(log_path, "ab") as handle:
+                handle.write(("open failed for %s: %s\n" % (job.account, error)).encode())
+            return {"ok": False, "error": error}
+        return {"ok": True}
+
+    def kill_process(self, job):
+        process, job.process = job.process, None
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+                deadline = time.time() + STOP_GRACE
+                while time.time() < deadline and process.poll() is None:
+                    time.sleep(0.2)
+                if process.poll() is None:
+                    process.kill()
+        except OSError:
+            pass
+
+    def open_job(self, account, no_login=False):
+        if not account:
+            return {"ok": False, "error": "account is required"}
         with self.lock:
             existing = self.jobs.get(account)
             if existing is not None and existing.alive():
-                return {"ok": False, "error": "%s already runs %s" % (account, existing.script)}
-            job = Job(account, script, args)
+                return {"ok": False, "error": "already open %s" % account}
+            elif existing is not None:
+                del self.jobs[account]
+        sock_path, _ready = session_paths(account)
+        if os.path.exists(sock_path):
+            try:
+                self.send_worker(account, {"cmd": "ping"}, timeout=2)
+                return {"ok": False, "error": "already open %s" % account}
+            except OSError:
+                pass
+            try:
+                os.unlink(sock_path)
+            except OSError:
+                pass
+        job = Job(account)
+        result = self.spawn(job, no_login=no_login)
+        if not result.get("ok"):
+            return result
+        with self.lock:
             self.jobs[account] = job
-            self.spawn(job, script)
-            self.write_state(job)
+        session = self.send_worker(account, {"cmd": "status"}, timeout=WORKER_TIMEOUT).get("session", {})
+        self.apply_session(job, session)
+        self.write_state(job)
         self.start_supervisor(job)
         return {"ok": True, "job": job.describe()}
 
@@ -102,28 +192,118 @@ class Orchestrator:
         job.supervisor = threading.Thread(target=self.supervise_job, args=(job,), daemon=True)
         job.supervisor.start()
 
-    def stop_job(self, account, kill_after=STOP_GRACE):
+    def run_job(self, account, script, args):
         with self.lock:
             job = self.jobs.get(account)
         if job is None:
-            return {"ok": False, "error": "no job for %s" % account}
-        job.status = "stopping"
-        job.restart_at = None
+            return {"ok": False, "error": "no session, open %s first" % account}
+        with job.guard():
+            if job.rescue_for is not None:
+                return {"ok": False, "error": "busy: rescue %s in progress" % job.rescue_for}
+        try:
+            registry.script_path(script)
+        except KeyError as error:
+            return {"ok": False, "error": str(error)}
+        reply = self.send_worker(account, {"cmd": "run", "script": script, "args": args}, timeout=WORKER_TIMEOUT)
+        if reply.get("ok"):
+            self.apply_session(job, reply.get("session", {}))
+            self.write_state(job)
+        return reply
+
+    def unload_job(self, account):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session for %s" % account}
+        reply = self.send_worker(account, {"cmd": "unload"}, timeout=WORKER_TIMEOUT)
+        if reply.get("ok"):
+            self.apply_session(job, reply.get("session", {}))
+            self.write_state(job)
+        return reply
+
+    def call_job(self, account, method, args):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session, open %s first" % account}
+        return self.send_worker(
+            account, {"cmd": "call", "method": method, "args": args, "admin": account == "admin"},
+            timeout=WORKER_TIMEOUT,
+        )
+
+    def methods_job(self, account):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session, open %s first" % account}
+        return self.send_worker(account, {"cmd": "methods", "admin": account == "admin"}, timeout=WORKER_TIMEOUT)
+
+    def close_job(self, account):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session for %s" % account}
         job.supervise = False
-        if job.alive():
+        try:
+            reply = self.send_worker(account, {"cmd": "close"}, timeout=WORKER_TIMEOUT)
+            session = reply.get("session", {}) if reply.get("ok") else {}
+        except OSError as error:
+            session = {}
+            print("close %s: worker unreachable: %s" % (account, error), flush=True)
+        self.kill_process(job)
+        for stale in session_paths(account):
             try:
-                job.process.terminate()
+                os.unlink(stale)
             except OSError:
                 pass
-            deadline = time.time() + kill_after
-            while time.time() < deadline and job.process.poll() is None:
-                time.sleep(0.2)
-            if job.process.poll() is None:
-                job.process.kill()
         job.status = "stopped"
+        job.phase = "idle"
+        job.script = None
         job.supervise = False
+        if isinstance(session, dict):
+            if session.get("last_error"):
+                job.last_error = session["last_error"]
         self.write_state(job)
+        with self.lock:
+            self.jobs.pop(account, None)
         return {"ok": True, "job": job.describe()}
+
+    def send_worker(self, account, request, timeout=WORKER_TIMEOUT):
+        """One JSON round-trip to the session worker.
+
+        A missing socket means no live session, never a bare traceback.
+        """
+        sock_path, _ready = session_paths(account)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(timeout)
+        try:
+            try:
+                client.connect(sock_path)
+            except FileNotFoundError:
+                raise ConnectionError("session unreachable for %s" % account)
+            writer = client.makefile("w")
+            writer.write(json.dumps(request) + "\n")
+            writer.flush()
+            return json.loads(client.makefile("r").readline() or "{}")
+        finally:
+            client.close()
+
+    def apply_session(self, job, session):
+        """Mirror the worker's session truth (phase/script/status/errors)."""
+        if not session:
+            return
+        with job.guard():
+            job.phase = session.get("phase", job.phase)
+            job.script = session.get("script", job.script)
+            job.script_args = session.get("script_args", job.script_args)
+            job.args = list(job.script_args)
+            job.status = session.get("status", job.status)
+            if session.get("last_error") is not None:
+                job.last_error = session["last_error"]
+            if session.get("last_event") is not None:
+                job.last_event = session["last_event"]
+            if session.get("last_code") is not None:
+                job.last_code = session["last_code"]
 
     # -- supervision -----------------------------------------------------
 
@@ -137,17 +317,21 @@ class Orchestrator:
             time.sleep(0.5)
 
     def supervise_once(self, job):
-        self.read_events(job)
-        if job.process is None:
-            if job.restart_at is not None and time.time() >= job.restart_at:
-                job.restart_at = None
-                job.phase = "bot"
-                self.spawn(job, job.main_script)
-            self.write_state(job)
+        process = job.process
+        if process is not None and process.poll() is not None:
+            self.handle_worker_death(job)
             return
-        code = job.process.poll()
-        if code is not None:
-            self.handle_exit(job, code)
+        try:
+            session = self.send_worker(job.account, {"cmd": "status"}, timeout=5).get("session")
+        except OSError:
+            session = None
+        if session:
+            self.apply_session(job, session)
+        self.read_events(job)
+        with job.guard():
+            self.maybe_rescue_from_worker(job, session)
+            self.rescue_step(job)
+            self.auto_idle_finished(job)
         self.write_state(job)
 
     def read_events(self, job):
@@ -185,93 +369,193 @@ class Orchestrator:
         name = event.get("event") or "unknown"
         resolved = bool(event.get("resolved"))
         print("job %s: random event %s resolved=%s" % (job.account, name, resolved), flush=True)
+        previous = job.last_event if isinstance(job.last_event, dict) else {}
         job.last_event = {"event": name, "resolved": resolved, "at": time.time()}
+        for key in ("script", "args"):
+            if key in previous:
+                job.last_event[key] = previous[key]
         if resolved:
             return
-        if name in registry.RESCUES:
-            job.rescue = registry.RESCUES[name]
+        with job.guard():
+            if job.rescue_for is not None:
+                return
+            if job.phase == "running" and job.script is not None:
+                job.interrupted = (job.script, list(job.script_args))
+                self.send_worker(job.account, {"cmd": "unload"}, timeout=WORKER_TIMEOUT)
+            elif isinstance(job.last_event, dict) and job.last_event.get("script"):
+                # The worker already aborted the script before the daemon
+                # read this event (idle mirror, script cleared): resume from
+                # the script it retained in its own event record.
+                job.interrupted = (job.last_event["script"], list(job.last_event.get("args") or []))
+            rescue = registry.RESCUES.get(name, "rescue_fallback")
+            try:
+                reply = self.send_worker(job.account, {"cmd": "run", "script": rescue, "args": []}, timeout=WORKER_TIMEOUT)
+            except OSError as error:
+                reply = {"ok": False, "error": str(error)}
+            if reply.get("ok"):
+                job.rescue_for = rescue
+                job.phase = "running"
+                job.script = rescue
+                job.script_args = []
+                job.args = []
+                job.status = "running"
+            else:
+                job.last_error = {"where": "rescue", "type": "rescue", "message": str(reply.get("error")), "at": []}
+
+    def maybe_rescue_from_worker(self, job, session):
+        """Rescue when the worker aborted on a random event without @@EVENT.
+
+        The normal path prints @@EVENT before raising, but a script that
+        raises SystemExit random event without reporting leaves only the
+        worker last_event. Start the fallback rescue from it instead of
+        leaving the session idle with an unresolved event.
+        """
+        if not isinstance(session, dict):
+            return
+        if job.rescue_for is not None:
+            return
+        last = session.get("last_event")
+        if not isinstance(last, dict):
+            return
+        if last.get("event") != "random_event" or last.get("resolved"):
+            return
+        if session.get("phase") != "idle" or session.get("script") is not None:
+            return
+        script = last.get("script")
+        if not script:
+            return
+        if last.get("at") == job._worker_rescue_at:
+            return
+        job._worker_rescue_at = last.get("at")
+        job.interrupted = (script, list(last.get("args") or []))
+        try:
+            reply = self.send_worker(job.account, {"cmd": "run", "script": "rescue_fallback", "args": []}, timeout=WORKER_TIMEOUT)
+        except OSError as error:
+            reply = {"ok": False, "error": str(error)}
+        if reply.get("ok"):
+            job.rescue_for = "rescue_fallback"
+            job.phase = "running"
+            job.script = "rescue_fallback"
+            job.script_args = []
+            job.args = []
+            job.status = "running"
         else:
-            job.status = "needs_human"
+            job.last_error = {"where": "rescue", "type": "rescue", "message": str(reply.get("error")), "at": []}
 
-    def handle_exit(self, job, code):
-        job.process = None
-        if job.status in ("stopping", "stopped"):
-            job.status = "stopped"
-            return
-        if job.status == "needs_human":
-            return
-        if job.main_script == "tests":
-            # Not an account: no session to free, no relaunch.
-            job.status = "finished" if code == 0 else "failed"
-            job.last_code = code
-            job.supervise = False
-            return
-        if job.phase == "cleanup":
-            self.after_cleanup(job)
-            return
-        if job.phase == "repair":
-            self.start_cleanup(job)
-            return
-        if code == 0:
-            job.status = "finished"
-            job.supervise = False
-            return
-        job.status = "crashed"
-        job.last_code = code
-        self.start_cleanup(job)
+    def auto_idle_finished(self, job):
+        """Finished is transient: the daemon unloads it back to idle.
 
-    def after_cleanup(self, job):
-        job.phase = "bot"
-        if job.rescue is not None:
-            rescue = job.rescue
-            job.rescue = None
-            job.phase = "repair"
-            job.status = "repairing"
-            self.spawn(job, rescue)
+        The worker keeps finished until observed so the test command and
+        the dashboard see it; the next supervision pass returns the
+        session to idle without dropping the connection, keeping last_code.
+        """
+        if job.rescue_for is not None:
             return
-        if job.restarts >= MAX_RESTARTS:
+        if job.phase != "idle" or job.status != "finished":
+            return
+        try:
+            reply = self.send_worker(job.account, {"cmd": "unload"}, timeout=WORKER_TIMEOUT)
+        except OSError:
+            return
+        if reply.get("ok"):
+            self.apply_session(job, reply.get("session", {}))
+        if job.status == "finished":
+            job.status = "idle"
+
+    def rescue_step(self, job):
+        """A finished rescue hands the session back; a failed one ends it."""
+        if job.rescue_for is None:
+            return
+        if job.phase == "running":
+            return
+        rescue = job.rescue_for
+        job.rescue_for = None
+        if job.status == "failed":
+            job.interrupted = None
+            print("job %s: rescue %s failed, session failed" % (job.account, rescue), flush=True)
             job.status = "failed"
-            job.supervise = False
             return
-        job.restarts += 1
-        job.status = "restarting"
-        job.restart_at = time.time() + RESTART_DELAY
+        if job.interrupted is not None:
+            script, args = job.interrupted
+            job.interrupted = None
+            try:
+                reply = self.send_worker(job.account, {"cmd": "run", "script": script, "args": args}, timeout=WORKER_TIMEOUT)
+            except OSError as error:
+                reply = {"ok": False, "error": str(error)}
+            if reply.get("ok"):
+                self.apply_session(job, reply.get("session", {}))
+            else:
+                job.last_error = {"where": "resume", "type": "resume", "message": str(reply.get("error")), "at": []}
+                job.status = "failed"
+        else:
+            job.status = "idle"
 
-    def start_cleanup(self, job):
-        """Free the session (login+close) before the next attempt."""
-        job.phase = "cleanup"
-        job.status = "cleaning"
-        self.spawn(job, "clean_session")
+    def handle_worker_death(self, job):
+        code = job.process.poll() if job.process is not None else None
+        job.process = None
+        job.supervise = False
+        job.phase = "idle"
+        job.script = None
+        job.status = "disconnected"
+        job.last_error = {"where": "worker", "type": "death", "message": "session worker died (code %s): close + open to recover" % (code,), "at": []}
+        print("job %s: worker died (code %s)" % (job.account, code), flush=True)
+        self.write_state(job)
 
     def write_state(self, job):
         merged_path, _partial, _log = user_paths(job.account)
         write_json(merged_path, job.describe())
 
     def restore_jobs(self):
-        """Relaunch jobs that were running when the daemon last stopped."""
-        try:
-            names = sorted(os.listdir(USERS_DIR))
-        except OSError:
-            return
-        for name in names:
-            if not name.endswith(".json") or name.endswith(".bot.json"):
-                continue
-            state = read_json(os.path.join(USERS_DIR, name), {}) or {}
-            account = state.get("account")
-            script = state.get("script")
-            if not account or script not in registry.SCRIPTS:
-                continue
-            if state.get("status") in ("finished", "stopped", "failed", "needs_human"):
-                continue
+        """Adopt live session workers as idle, without their scripts.
+
+        Workers survive the daemon: adopt each reachable one, stop any
+        script it still runs (the new daemon never resumes work it did
+        not start), and report the session idle. Stale sockets are removed.
+        """
+        for account in known_accounts():
             with self.lock:
                 if account in self.jobs:
                     continue
-                job = Job(account, script, state.get("args") or [])
+            sock_path, _ready = session_paths(account)
+            if not os.path.exists(sock_path):
+                continue
+            try:
+                session = self.send_worker(account, {"cmd": "status"}, timeout=3).get("session")
+            except OSError:
+                try:
+                    os.unlink(sock_path)
+                except OSError:
+                    pass
+                continue
+            if not session:
+                continue
+            if session.get("phase") == "running":
+                try:
+                    self.send_worker(account, {"cmd": "unload"}, timeout=WORKER_TIMEOUT)
+                    session = self.send_worker(account, {"cmd": "status"}, timeout=3).get("session") or session
+                except OSError:
+                    pass
+            with self.lock:
+                if account in self.jobs:
+                    continue
+                job = Job(account)
+                job.process = AttachedProcess(session.get("session_pid") or 0)
                 self.jobs[account] = job
-                self.spawn(job, script)
-                self.write_state(job)
+                self.apply_session(job, session)
+                job.phase = "idle"
+                job.script = None
+                job.script_args = []
+                job.args = []
+                if job.status == "running":
+                    job.status = "idle"
+                try:
+                    with open(user_paths(account)[2], "rb") as handle:
+                        handle.seek(0, 2)
+                        job.log_offset = handle.tell()
+                except OSError:
+                    pass
             self.start_supervisor(job)
-            print("restored %s (%s)" % (account, script), flush=True)
+            print("restored %s (%s)" % (account, job.script or "idle"), flush=True)
 
     # -- socket ----------------------------------------------------------
 
@@ -315,38 +599,55 @@ class Orchestrator:
             writer.write(json.dumps(reply) + "\n")
             writer.flush()
 
+    def test_command(self, pattern):
+        reply = self.open_job("tests", no_login=True)
+        if not reply.get("ok"):
+            return reply
+        reply = self.send_worker("tests", {"cmd": "run", "script": "tests", "args": pattern}, timeout=WORKER_TIMEOUT)
+        if not reply.get("ok"):
+            self.close_job("tests")
+            return reply
+        deadline = time.time() + 600
+        state = {}
+        while time.time() < deadline:
+            time.sleep(0.5)
+            state = self.dispatch({"cmd": "show", "account": "tests"}).get("state", {})
+            if state.get("status") in ("finished", "failed"):
+                break
+            if state.get("status") == "idle" and state.get("last_code") is not None:
+                break
+        code = 0 if state.get("status") == "finished" or (state.get("status") == "idle" and state.get("last_code") == 0) else 1
+        tail = self.dispatch({"cmd": "logs", "account": "tests", "lines": 60}).get("lines", [])
+        self.close_job("tests")
+        return {"ok": code == 0, "state": state, "log_tail": tail}
+
     def dispatch(self, request):
         command = request.get("cmd")
         account = request.get("account") or ""
-        if command == "start":
-            return self.start_job(account, request.get("script") or "", request.get("args") or [])
-        if command == "stop":
-            return self.stop_job(account)
+        if command == "open":
+            return self.open_job(account)
+        if command == "run":
+            return self.run_job(account, request.get("script") or "", request.get("args") or [])
+        if command == "unload":
+            return self.unload_job(account)
+        if command == "close":
+            return self.close_job(account)
+        if command == "call":
+            return self.call_job(account, request.get("method") or "", request.get("args") or [])
+        if command == "methods":
+            return self.methods_job(account)
         if command == "status":
             with self.lock:
                 live = {job.account: job for job in self.jobs.values()}
             if account:
-                accounts = [account] if account in live or os.path.exists(user_paths(account)[0]) else []
+                accounts = [account] if account in live else []
             else:
-                accounts = sorted(set(live) | set(known_accounts()))
+                accounts = sorted(live)
             described = []
             for name in accounts:
-                job = live.get(name)
-                if job is None or job.status in ("finished", "stopped"):
-                    state = read_json(user_paths(name)[0], {}) or {}
-                    # Only an account with a fresh heartbeat is online: the
-                    # list follows connect/disconnect instead of keeping
-                    # every account ever supervised.
-                    age = time.time() - (state.get("updated") or 0)
-                    if age > ONLINE_WINDOW:
-                        continue
-                    job = Job(name, state.get("script") or "", state.get("args") or [])
-                    job.status = "idle"
-                entry = job.describe()
+                entry = live[name].describe()
                 entry["account_name"] = naming.humanize(entry["account"])
                 described.append(entry)
-            # Running bots first: the idle snapshots are only kept so an
-            # account stays spectatable between runs.
             described.sort(key=lambda entry: (entry["status"] == "idle", entry["account"]))
             return {"ok": True, "jobs": described}
         if command == "items":
@@ -355,8 +656,6 @@ class Orchestrator:
             merged_path, _partial, _log = user_paths(account)
             return {"ok": True, "state": naming.resolve_state(read_json(merged_path, {}))}
         if command == "live":
-            # Spectator feed: the heartbeat is written 5x/s by the SDK, the
-            # merged file only every 0.5s, so overlay it to look real-time.
             merged_path, partial_path, _log = user_paths(account)
             state = read_json(merged_path, {}) or {}
             state.update(read_json(partial_path, {}) or {})
@@ -370,11 +669,16 @@ class Orchestrator:
             except OSError:
                 tail = []
             return {"ok": True, "lines": [line.rstrip("\n") for line in tail]}
+        if command == "test":
+            return self.test_command(request.get("args") or [])
         if command == "shutdown":
             with self.lock:
                 jobs = list(self.jobs.values())
             for job in jobs:
-                self.stop_job(job.account)
+                try:
+                    self.close_job(job.account)
+                except OSError:
+                    pass
             self.running = False
             try:
                 self.server.close()  # unblock accept()

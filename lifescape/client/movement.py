@@ -19,8 +19,8 @@ from .core import StateError, Unreachable
 
 STEP_CAP = 24
 # The server either sends the open state within a couple of ticks or never
-# (stale zone); waiting seconds just freezes the bot in front of the door.
-DOOR_WAIT = 0.7
+# (stale zone); waiting longer just freezes the bot in front of the door.
+DOOR_WAIT = 35
 
 
 class _DoorOpened(Exception):
@@ -35,7 +35,7 @@ class MovementMixin:
         # plan again from where we stand instead of failing the whole route.
         # A walking leg can also turn out to be impassable (the estimate is
         # straight-line): drop that walk edge and plan again the same way.
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         skip = set()
         skip_walks = set()
         self.dbg("route plan %s" % ([(k, getattr(q, "name", q)) for k, q in plan][:12]))
@@ -46,11 +46,11 @@ class MovementMixin:
             leg_start = (self.world.level, self.world.x, self.world.z)
             replanned = False
             for kind, payload in plan:
-                if time.time() > deadline:
+                if self.world.ticks > deadline:
                     raise TimeoutError("route timed out at %s" % (self.world.position,))
                 if kind == "walk":
                     try:
-                        self.walk_to(payload[1], payload[2], payload[0], run=run, timeout=max(30, deadline - time.time()), open_doors=open_doors)
+                        self.walk_to(payload[1], payload[2], payload[0], run=run, timeout=max(1500, deadline - self.world.ticks), open_doors=open_doors)
                     except (Unreachable, TimeoutError) as error:
                         print("walk leg to %s failed: %s, replanning" % (payload, error), flush=True)
                         skip_walks.add((leg_start, payload))
@@ -68,7 +68,7 @@ class MovementMixin:
                     # expiry: a transition failed for a transient reason
                     # (closed door, missed click) must become usable again
                     # quickly, or one hiccup detours the whole session.
-                    self._bad_transitions[payload.name] = time.time() + 180
+                    self._bad_transitions[payload.name] = self.world.ticks + 9000
                     replanned = True
                     break
                 leg_start = tuple(payload.to)
@@ -78,19 +78,19 @@ class MovementMixin:
             if plan is None:
                 raise Unreachable("no route to %s" % (dest,))
 
-    def approach(self, x, z, level=0, radius=2, timeout=60, open_doors=True):
+    def approach(self, x, z, level=0, radius=2, timeout=3000, open_doors=True):
         self.dbg("approach %d,%d,%d r=%d" % (x, z, level, radius))
         self.ensure_nav()
         try:
             # Exact first, but briefly: a blocked target (wall, locked door)
             # can never be stood on, and grinding it burns the whole budget
             # while an adjacent tile already satisfies the radius.
-            self.walk_to(x, z, level, timeout=min(timeout, 15), open_doors=open_doors)
+            self.walk_to(x, z, level, timeout=min(timeout, 750), open_doors=open_doors)
         except (Unreachable, TimeoutError) as error:
             print("exact approach to %d,%d failed: %s" % (x, z, error), flush=True)
         if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
             return True
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         here = (self.world.x, self.world.z)
         candidates = sorted(
             [(x + dx, z + dz) for dx in range(-radius, radius + 1) for dz in range(-radius, radius + 1)],
@@ -108,7 +108,7 @@ class MovementMixin:
             if not path:
                 continue
             try:
-                self.walk_to(cx, cz, level, timeout=max(5, deadline - time.time()), open_doors=open_doors)
+                self.walk_to(cx, cz, level, timeout=max(250, deadline - self.world.ticks), open_doors=open_doors)
             except (Unreachable, TimeoutError) as error:
                 print("approach candidate %d,%d failed: %s" % (cx, cz, error), flush=True)
                 continue
@@ -118,7 +118,7 @@ class MovementMixin:
             radius, x, z, self.world.position
         ))
 
-    def walk_to(self, x, z, level=0, run=None, timeout=180, open_doors=True):
+    def walk_to(self, x, z, level=0, run=None, timeout=9000, open_doors=True):
         # Movement, doors and known ladder/trapdoor links are the SDK's job:
         # a script only names the destination.
         if level != self.world.level:
@@ -180,7 +180,7 @@ class MovementMixin:
             # A door we believe open can be closed on the server: retry with
             # the raw map, which routes around it instead of through it.
             print("walk with doors open stalled, retrying on the raw map", flush=True)
-            return self._walk_direct(x, z, level, run, min(timeout, 30), False)
+            return self._walk_direct(x, z, level, run, min(timeout, 1500), False)
         except Unreachable:
             if self._in_portal_route:
                 raise
@@ -211,11 +211,11 @@ class MovementMixin:
                         self.explain_unreachable(x, z, open_doors),
                     ), flush=True)
                     return True
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         visited = [(self.world.x, self.world.z)]
         planned_only = False
         while (self.world.x, self.world.z) != (x, z):
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
             before = (self.world.x, self.world.z)
             try:
@@ -402,7 +402,7 @@ class MovementMixin:
             if not chunk:
                 continue
             self._send_walk(chunk, run)
-            limit = min(deadline, time.time() + len(chunk) * 2 + 10)
+            limit = min(deadline, self.world.ticks + len(chunk) * 100 + 500)
             try:
                 self._await_leg(chunk, limit)
                 continue
@@ -498,7 +498,7 @@ class MovementMixin:
                     if not self._raw_step_off():
                         print("door %d,%d has no reachable side" % (action.x, action.z), flush=True)
                         return False
-                if not self.stand_on_door_side(spot, timeout=10):
+                if not self.stand_on_door_side(spot, timeout=500):
                     print("door %d,%d has no reachable side" % (action.x, action.z), flush=True)
                     return False
             # The plan crosses this tile: entry steps succeed even onto a
@@ -506,7 +506,7 @@ class MovementMixin:
             # itself resolves the live loc id (a stale static id is
             # silently ignored by the server once the door changed state).
             through = self.open_door_inner(action.x, action.z, deadline)
-            self.recent_doors[(action.x, action.z)] = time.time()
+            self.recent_doors[(action.x, action.z)] = self.world.ticks
             if through:
                 self.unseal(action.x, action.z, action.level)
                 if spot is not None:
@@ -543,7 +543,11 @@ class MovementMixin:
                 continue
             if not self._door_closed_at(spot):
                 continue
-            if time.time() - self.recent_doors.get((spot[0], spot[1]), 0) < 10:
+            if id(spot) in self._blocked_doors:
+                # Known-dead for now (two refused clicks): re-clicking it
+                # here would also extend its block on every step refusal.
+                continue
+            if self.world.ticks - self.recent_doors.get((spot[0], spot[1]), 0) < 500:
                 continue
             distance = abs(spot[0] - self.world.x) + abs(spot[1] - self.world.z)
             if best is None or distance < best[0]:
@@ -565,7 +569,7 @@ class MovementMixin:
                 self._opening.add(id(spot))
                 try:
                     self.send_oploc(op, spot[0], spot[1], spot[9])
-                    self._await_loc_change(spot[0], spot[1], spot[2], spot[9], time.time() + DOOR_WAIT)
+                    self._await_loc_change(spot[0], spot[1], spot[2], spot[9], self.world.ticks + DOOR_WAIT)
                 finally:
                     self._opening.discard(id(spot))
                 if self._raw_step_off():
@@ -580,16 +584,16 @@ class MovementMixin:
         print("step refused toward %s, opening door at %d,%d" % (step, spot[0], spot[1]), flush=True)
         self._opening.add(id(spot))
         try:
-            if not self.stand_on_door_side(spot, timeout=10):
+            if not self.stand_on_door_side(spot, timeout=500):
                 return False
             # The click resolves the live loc id itself (a stale static id
             # is silently ignored by the server once the door changed).
-            if self.open_door_inner(spot[0], spot[1], time.time() + 10):
-                self.recent_doors[(spot[0], spot[1])] = time.time()
+            if self.open_door_inner(spot[0], spot[1], self.world.ticks + 500):
+                self.recent_doors[(spot[0], spot[1])] = self.world.ticks
                 self._door_failures.pop(id(spot), None)
                 return True
             print("door %d,%d refused the click" % (spot[0], spot[1]), flush=True)
-            self.recent_doors[(spot[0], spot[1])] = time.time()
+            self.recent_doors[(spot[0], spot[1])] = self.world.ticks
             if self._door_failures.get(id(spot), 0) + 1 >= 2:
                 print("door %d,%d blocked after repeated refusals" % (spot[0], spot[1]), flush=True)
                 self._block_door(spot)
@@ -613,8 +617,8 @@ class MovementMixin:
             return False
         before = (self.world.x, self.world.z)
         self._send_walk([(x, z)], False)
-        limit = time.time() + min(1.0, max(0.2, deadline - time.time()))
-        while time.time() < limit:
+        limit = self.world.ticks + min(50, max(10, deadline - self.world.ticks))
+        while self.world.ticks < limit:
             self.pump(1)
             if (self.world.x, self.world.z) != before:
                 return True
@@ -662,13 +666,13 @@ class MovementMixin:
         leg_timeouts = 0
         recent_spots = []
         while (self.world.x, self.world.z, self.world.level) != (x, z, self.world.level):
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
             # The server drops clients that fall behind the tick: pump for
             # keepalive even on pure-planning iterations with no leg to walk.
             if getattr(self.connection, "sock", None) is not None:
                 self.pump(1)
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
             # Tight-loop guard: three timed-out legs in a row means the
             # route is refused, not slow (door ping-pong, wall the maps
@@ -737,14 +741,14 @@ class MovementMixin:
                     # stale door state, not a locked door. Cooldown instead so
                     # the next plan tries another door; locked doors stay shut
                     # and keep failing fast through the router.
-                    self.recent_doors[(door[0], door[1])] = time.time()
+                    self.recent_doors[(door[0], door[1])] = self.world.ticks
                     continue
             self._write_state()  # show the route at once, not at the next heartbeat
             leg = self._expand(path[:STEP_CAP])
             before = (self.world.x, self.world.z)
             self._send_walk(leg, run)
             try:
-                self._await_leg(leg, min(deadline, time.time() + len(leg) * 2 + 10))
+                self._await_leg(leg, min(deadline, self.world.ticks + len(leg) * 100 + 500))
             except TimeoutError as error:
                 print("walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
                 if (self.world.x, self.world.z) == before:
@@ -794,7 +798,7 @@ class MovementMixin:
 
     def walk_raw(self, x, z, level, deadline):
         while (self.world.x, self.world.z, self.world.level) != (x, z, level):
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
             path = self.router.find_path(self.opened_map, level, self.world.x, self.world.z, x, z)
             path = [step for step in path if step[0] == level]
@@ -803,13 +807,13 @@ class MovementMixin:
             leg = self._expand(path[:STEP_CAP])
             self._send_walk(leg, False)
             try:
-                self._await_leg(leg, min(deadline, time.time() + len(leg) * 2 + 10))
+                self._await_leg(leg, min(deadline, self.world.ticks + len(leg) * 100 + 500))
             except TimeoutError as error:
                 print("raw walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
                 continue
         return True
 
-    def stand_on_door_side(self, spot, timeout=10):
+    def stand_on_door_side(self, spot, timeout=500):
         """Stand on a tile the server accepts clicks from, trying each side.
 
         Only the first side used to be tried: when it sat behind another
@@ -833,12 +837,12 @@ class MovementMixin:
             path = self.router.find_path(routing, spot[2], self.world.x, self.world.z, side[0], side[1])
             ranked.append((0 if path else 1, len(path), side))
         ranked.sort()
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         for _, _, (side_x, side_z) in ranked:
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 break
             try:
-                self.walk_to(side_x, side_z, spot[2], timeout=min(4, max(3, deadline - time.time())))
+                self.walk_to(side_x, side_z, spot[2], timeout=min(200, max(150, deadline - self.world.ticks)))
             except (Unreachable, TimeoutError) as error:
                 print("door side %d,%d failed: %s" % (side_x, side_z, error), flush=True)
                 continue
@@ -847,7 +851,7 @@ class MovementMixin:
                 return True
         return (self.world.x, self.world.z) in sides
 
-    def open_door(self, x, z, timeout=25):
+    def open_door(self, x, z, timeout=1250):
         self.ensure_nav()
         spot = self.door_spot(x, z, self.world.level)
         if spot is not None:
@@ -855,14 +859,13 @@ class MovementMixin:
                 return False
             self._opening.add(id(spot))
         try:
-            return self.open_door_inner(x, z, timeout)
+            return self.open_door_inner(x, z, self.world.ticks + timeout)
         finally:
             if spot is not None:
                 self._opening.discard(id(spot))
 
-    def open_door_inner(self, x, z, timeout):
+    def open_door_inner(self, x, z, deadline):
         level = self.world.level
-        deadline = time.time() + timeout
         spot = self.door_spot(x, z, level)
         self.unseal(x, z, level)
         loc = self.world.loc_at(x, z, level)
@@ -898,15 +901,15 @@ class MovementMixin:
         for nx, nz in neighbors:
             if (nx, nz) != here:
                 try:
-                    self.walk_to(nx, nz, level, timeout=max(5, deadline - time.time()), open_doors=True)
+                    self.walk_to(nx, nz, level, timeout=max(250, deadline - self.world.ticks), open_doors=True)
                 except (Unreachable, TimeoutError) as error:
                     print("door step to %d,%d failed: %s" % (nx, nz, error), flush=True)
                     continue
             seen_messages = len(self.world.messages)
             self.dbg("door click %d,%d id=%s" % (x, z, loc_id))
             self.send_oploc(op, x, z, loc_id)
-            if self._await_loc_change(x, z, level, loc_id, min(deadline, time.time() + DOOR_WAIT)):
-                if self.try_step_on(x, z, level, time.time() + 2.0):
+            if self._await_loc_change(x, z, level, loc_id, min(deadline, self.world.ticks + DOOR_WAIT)):
+                if self.try_step_on(x, z, level, self.world.ticks + 100):
                     self.unseal(x, z, level)
                     self.dbg("door through %d,%d" % (x, z))
                     return True
@@ -917,10 +920,15 @@ class MovementMixin:
             # The server often applies the open without the client seeing the
             # zone loc update: only unblock after proving the step, otherwise
             # rescind the optimistic double-pair unseal done above.
-            if self.try_step_on(x, z, level, time.time() + 2.0):
+            if self.try_step_on(x, z, level, self.world.ticks + 100):
                 self.unseal(x, z, level)
                 return True
             self.reseal(x, z, level)
+            if self.world.modal is not None:
+                # A refused click (wrong side, locked) lands in a mesbox:
+                # dismiss it now or every later side clicks behind a modal.
+                self.close_modal()
+                self.pump(2)
             continue
         self._rebuild_opened()
         return False
@@ -972,7 +980,7 @@ class MovementMixin:
             if abs(spot[0] - self.world.x) + abs(spot[1] - self.world.z) > radius:
                 continue
             self.unseal(spot[0], spot[1], spot[2])
-            self.recent_doors[(spot[0], spot[1])] = time.time()
+            self.recent_doors[(spot[0], spot[1])] = self.world.ticks
         self._blocked_doors.clear()
         self._blocked_doors_exp.clear()
         return True
@@ -995,8 +1003,8 @@ class MovementMixin:
                 # would move the player to another floor mid-route.
                 continue
             self._send_walk([(nx, nz)], False)
-            deadline = time.time() + 1.0
-            while time.time() < deadline:
+            deadline = self.world.ticks + 50
+            while self.world.ticks < deadline:
                 self.pump(1)
                 if (self.world.x, self.world.z) != start:
                     print("stepped off stuck tile to %s" % (self.position,), flush=True)
@@ -1078,7 +1086,7 @@ class MovementMixin:
                     continue
             candidates.append((dist, x, z))
         for _, x, z in sorted(candidates):
-            if self.open_door(x, z, timeout=max(5, deadline - time.time())):
+            if self.open_door(x, z, timeout=max(250, deadline - self.world.ticks)):
                 return True
         return False
 
@@ -1106,10 +1114,10 @@ class MovementMixin:
                 return True
         return False
 
-    def open_doors_near(self, x, z, radius=8, timeout=60):
+    def open_doors_near(self, x, z, radius=8, timeout=3000):
         """Open closed doors around a target before routing into a building."""
         self.ensure_nav()
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         candidates = [
             spot for spot in self.wall_doors
             if spot[2] == self.world.level and abs(spot[0] - x) + abs(spot[1] - z) <= radius
@@ -1118,9 +1126,9 @@ class MovementMixin:
         for spot in candidates:
             if not self._door_closed_at(spot):
                 continue
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 return False
-            remaining = max(5, deadline - time.time())
+            remaining = max(250, deadline - self.world.ticks)
             try:
                 self.open_door(spot[0], spot[1], timeout=remaining)
             except (Unreachable, TimeoutError) as error:
@@ -1146,7 +1154,7 @@ class MovementMixin:
                 continue
             if id(spot) in self._opening:
                 continue
-            if time.time() - self.recent_doors.get((spot[0], spot[1]), 0) < 30:
+            if self.world.ticks - self.recent_doors.get((spot[0], spot[1]), 0) < 1500:
                 continue
             indices = [
                 index_by_tile[(tile_x, tile_z)]
@@ -1175,11 +1183,11 @@ class MovementMixin:
         # exit, tower door) would otherwise disconnect the map for the rest
         # of the session and every later route reports "no route".
         self._blocked_doors.add(id(spot))
-        self._blocked_doors_exp[id(spot)] = time.time() + 120
+        self._blocked_doors_exp[id(spot)] = self.world.ticks + 6000
         self._rebuild_opened()
 
     def _sweep_blocked_doors(self):
-        now = time.time()
+        now = self.world.ticks
         for key in [key for key, expiry in self._blocked_doors_exp.items() if expiry <= now]:
             self._blocked_doors_exp.pop(key, None)
             self._blocked_doors.discard(key)
@@ -1222,20 +1230,20 @@ class MovementMixin:
                 ), flush=True)
         self._apply_temp_blocks(self.planning_map)
 
-    def _temp_block(self, x, z, level, seconds=15):
+    def _temp_block(self, x, z, level, ticks=750):
         """Bar a tile briefly: the server refuses it but the maps say free.
 
         Capped and short-lived: an unbounded block list would seal the bot
         into a pocket of its own making (every stall adds one, and a
         deterministic router keeps returning the same first step).
         """
-        self._blocked_tiles[(x, z, level)] = time.time() + seconds
+        self._blocked_tiles[(x, z, level)] = self.world.ticks + ticks
         while len(self._blocked_tiles) > 8:
             oldest = min(self._blocked_tiles, key=self._blocked_tiles.get)
             del self._blocked_tiles[oldest]
 
     def _apply_temp_blocks(self, target):
-        now = time.time()
+        now = self.world.ticks
         for key in [key for key, expiry in self._blocked_tiles.items() if expiry <= now]:
             del self._blocked_tiles[key]
         for (x, z, level) in self._blocked_tiles:
@@ -1249,7 +1257,7 @@ class MovementMixin:
         for spot in self.wall_doors:
             if id(spot) in self._blocked_doors:
                 continue
-            if time.time() - self.recent_doors.get((spot[0], spot[1]), 0) < 30:
+            if self.world.ticks - self.recent_doors.get((spot[0], spot[1]), 0) < 1500:
                 continue
             if here in self.door_footprints[id(spot)] and self._door_closed_at(spot):
                 return spot
@@ -1277,7 +1285,7 @@ class MovementMixin:
                 continue
             if not collision_mod.tile_walkable(self.collision.get(nx, nz, self.world.level)):
                 continue
-            if self.try_step_on(nx, nz, self.world.level, time.time() + 1.5):
+            if self.try_step_on(nx, nz, self.world.level, self.world.ticks + 75):
                 print("stepped off %s to %d,%d" % (self.position, nx, nz), flush=True)
                 return True
         return False
@@ -1293,7 +1301,7 @@ class MovementMixin:
                 if any((nx, nz, self.world.level) in self.door_footprints[id(other)] for other in self.wall_doors):
                     continue
                 try:
-                    self.walk_to(nx, nz, self.world.level, timeout=max(5, deadline - time.time()), open_doors=False)
+                    self.walk_to(nx, nz, self.world.level, timeout=max(250, deadline - self.world.ticks), open_doors=False)
                     return True
                 except (Unreachable, TimeoutError) as error:
                     print("door step-off to %d,%d failed: %s" % (nx, nz, error), flush=True)
@@ -1309,14 +1317,14 @@ class MovementMixin:
         self._opening.add(id(spot))
         try:
             x, z = spot[0], spot[1]
-            if not self.stand_on_door_side(spot, timeout=10):
-                self.recent_doors[(x, z)] = time.time()
+            if not self.stand_on_door_side(spot, timeout=500):
+                self.recent_doors[(x, z)] = self.world.ticks
                 return False
-            if self.open_door(x, z, timeout=max(5, deadline - time.time())):
-                self.recent_doors[(x, z)] = time.time()
+            if self.open_door(x, z, timeout=max(250, deadline - self.world.ticks)):
+                self.recent_doors[(x, z)] = self.world.ticks
                 self._door_failures.pop(id(spot), None)
                 return True
-            self.recent_doors[(x, z)] = time.time()
+            self.recent_doors[(x, z)] = self.world.ticks
             if self._door_failures.get(id(spot), 0) + 1 >= 2:
                 print("door %d,%d blocked after repeated refusals" % (x, z), flush=True)
                 self._block_door(spot)
@@ -1335,7 +1343,7 @@ class MovementMixin:
 
     def _await_loc_change(self, x, z, level, was, deadline):
 
-        while time.time() < deadline:
+        while self.world.ticks < deadline:
             self.pump(1)
             now = self.world.loc_at(x, z, level)
             if now is None or now[0] != was:
@@ -1416,10 +1424,10 @@ class MovementMixin:
             print("transition %s has no reachable side from %s" % (row.get("name"), self.world.position), flush=True)
             return False
         for side_x, side_z in sides:
-            if deadline is not None and time.time() > deadline:
+            if deadline is not None and self.world.ticks > deadline:
                 print("transition %s: out of time at %s" % (row.get("name"), self.world.position), flush=True)
                 break
-            timeout = 45 if deadline is None else max(3.0, deadline - time.time())
+            timeout = 2250 if deadline is None else max(150, deadline - self.world.ticks)
             if not self._stand_beside(level, side_x, side_z, timeout):
                 continue
             if not self.open_transition(row, level, frm_x, frm_z):
@@ -1501,7 +1509,7 @@ class MovementMixin:
             ranked.append((0 if path else 1, walled, not lands_ok(*side), stair, len(path), side))
         return [side for _found, _walled, _landing, _stair, _length, side in sorted(ranked)]
 
-    def _stand_beside(self, level, x, z, timeout=45):
+    def _stand_beside(self, level, x, z, timeout=2250):
         if self.world.level == level and (self.world.x, self.world.z) == (x, z):
             return True
         try:
@@ -1530,7 +1538,7 @@ class MovementMixin:
         routing = self.planning_map or self.opened_map
         skip = set(skip)
         skip_walks = set(skip_walks)
-        now = time.time()
+        now = self.world.ticks
         for name in [name for name, expiry in self._bad_transitions.items() if expiry <= now]:
             del self._bad_transitions[name]
         skip.update(self._bad_transitions)
@@ -1645,7 +1653,7 @@ class MovementMixin:
         # bot re-sending a stale leg (it looks like it circles).
         target = leg[-1]
         best = abs(self.world.x - target[0]) + abs(self.world.z - target[1])
-        last_move = time.time()
+        last_move = self.world.ticks
         while True:
             position = (self.world.x, self.world.z)
             if position == target:
@@ -1656,10 +1664,10 @@ class MovementMixin:
                 return  # passed it: the next leg recomputes from here
             if distance < best:
                 best = distance
-                last_move = time.time()
-            elif time.time() - last_move > 2.0:
-                # Wall clock: a 20 ms tick makes a tick budget meaningless.
+                last_move = self.world.ticks
+            elif self.world.ticks - last_move > 100:
+                # No progress for 100 ticks: the leg is refused, not slow.
                 raise TimeoutError("leg to %s stalled at %s" % (target, self.world.position))
-            if time.time() > deadline:
+            if self.world.ticks > deadline:
                 raise TimeoutError("leg to %s timed out at %s" % (target, self.world.position))
             self.pump(1)

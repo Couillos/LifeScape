@@ -5,17 +5,14 @@ footprint, click it, and record whether the player actually moved. No
 walking, no door chasing: this only answers "from which tile does the
 server accept this click, and where does it land".
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_transitions.py [--name NAME]
+Usage: scripts/orchestrator.py run <account> probe_transitions [--name NAME]
 """
 
 import argparse
 import json
 import os
-import sys
-import time
 
 
-from lifescape.client import Bot
 from lifescape.connection import default_paths
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -23,9 +20,9 @@ TABLE = os.path.join(ROOT, "lifescape", "data", "transitions.json")
 RESULTS = os.path.join(ROOT, "run", "transitions_test.json")
 
 
-def settle(bot, seconds=0.15):
-    deadline = time.time() + seconds
-    while time.time() < deadline:
+def settle(bot, ticks=8):
+    target = bot.world.ticks + ticks
+    while bot.world.ticks < target:
         bot.pump(1)
 
 
@@ -59,9 +56,9 @@ def probe(bot, row):
             if row.get("delta") else expected
         )
         bot.op_loc(row["climb_op"], x, z, row["climb_loc"])
-        deadline = time.time() + 1.5
+        target = bot.world.ticks + 75
         landed = None
-        while time.time() < deadline:
+        while bot.world.ticks < target:
             bot.pump(1)
             if (bot.world.level, bot.world.x, bot.world.z) != (level, side_x, side_z):
                 landed = bot.position
@@ -73,12 +70,11 @@ def probe(bot, row):
     return working
 
 
-def main():
+def run(bot, *args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("account", nargs="?", default="admin")
     parser.add_argument("--name", default=None)
     parser.add_argument("--all", action="store_true")
-    options = parser.parse_args()
+    options = parser.parse_args(args)
 
     rows = {row["name"]: row for row in json.load(open(TABLE))}
     results = json.load(open(RESULTS)) if os.path.exists(RESULTS) else {}
@@ -94,29 +90,20 @@ def main():
     if options.name:
         targets = [name for name in targets if options.name in name]
 
-    bot = Bot()
-    bot.login(options.account, options.account)
     bot.paths = default_paths()
     bot.ensure_nav()
     bot.pump(3)
-    try:
-        for name in sorted(targets):
-            row = rows.get(name)
-            if row is None:
-                print("%-34s (absent de la table)" % name, flush=True)
-                continue
-            working = probe(bot, row)
-            if working:
-                for side, landed, exact in working:
-                    print("%-34s depuis %-12s -> %-18s %s" % (
-                        name, str(side), str(landed), "ok" if exact else "MAUVAIS")
-                    , flush=True)
-            else:
-                print("%-34s aucun cote n'accepte le clic" % name, flush=True)
-    finally:
-        bot.close()
+    for name in sorted(targets):
+        row = rows.get(name)
+        if row is None:
+            print("%-34s (absent de la table)" % name, flush=True)
+            continue
+        working = probe(bot, row)
+        if working:
+            for side, landed, exact in working:
+                print("%-34s depuis %-12s -> %-18s %s" % (
+                    name, str(side), str(landed), "ok" if exact else "MAUVAIS")
+                , flush=True)
+        else:
+            print("%-34s aucun cote n'accepte le clic" % name, flush=True)
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

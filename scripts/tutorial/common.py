@@ -138,7 +138,7 @@ def approach_loc(bot, x, z, loc_id, level=None):
         raise Unreachable("no path near %d,%d" % (x, z))
     for cx, cz in reachable:
         try:
-            bot.walk_to(cx, cz, level, timeout=25, open_doors=True)
+            bot.walk_to(cx, cz, level, timeout=1250, open_doors=True)
             return
         except (Unreachable, TimeoutError):
             continue
@@ -172,7 +172,7 @@ def op_loc_near(bot, loc_names, op, done, timeout=400):
             if not path:
                 continue
             try:
-                bot.walk_to(cx, cz, bot.world.level, timeout=25, open_doors=True)
+                bot.walk_to(cx, cz, bot.world.level, timeout=1250, open_doors=True)
             except (Unreachable, TimeoutError):
                 continue
             tried.add((cx, cz))
@@ -218,7 +218,7 @@ def use_held_on_loc_near(bot, loc_names, tool_obj, done, timeout=400):
             if not path:
                 continue
             try:
-                bot.walk_to(cx, cz, bot.world.level, timeout=25, open_doors=True)
+                bot.walk_to(cx, cz, bot.world.level, timeout=1250, open_doors=True)
             except (Unreachable, TimeoutError):
                 continue
             tried.add((cx, cz))
@@ -263,7 +263,7 @@ def talk(bot, npc_name, timeout=90, near=None):
     for dx, dz in ((20, 0), (0, 0), (-20, 0)):
         if dx or dz:
             try:
-                bot.walk_to(base[0] + dx, base[1] + dz, open_doors=True, timeout=25)
+                bot.walk_to(base[0] + dx, base[1] + dz, open_doors=True, timeout=1250)
             except Exception:
                 pass
         if _scan_and_talk(bot, npc_name, None):
@@ -276,7 +276,7 @@ def _scan_and_talk(bot, npc_name, near=None):
     if near is not None and abs(bot.world.x - near[0]) + abs(bot.world.z - near[1]) > 4:
         try:
             # Measured: near points are chosen reachable, reached in <10 s.
-            bot.walk_to(near[0], near[1], bot.world.level, timeout=25, open_doors=True)
+            bot.walk_to(near[0], near[1], bot.world.level, timeout=1250, open_doors=True)
             print("talk near %s reached" % (bot.position,), flush=True)
         except Exception as error:
             print("talk near walk failed: %s at %s" % (error, bot.position), flush=True)
@@ -296,7 +296,7 @@ def _scan_and_talk(bot, npc_name, near=None):
             stepped += 1
             for dx, dz in ((2, 0), (0, 2), (-2, 0), (0, -2)):
                 try:
-                    bot.walk_to(bot.world.x + dx, bot.world.z + dz, bot.world.level, timeout=10, open_doors=True)
+                    bot.walk_to(bot.world.x + dx, bot.world.z + dz, bot.world.level, timeout=500, open_doors=True)
                     break
                 except (Unreachable, TimeoutError):
                     continue
@@ -348,7 +348,7 @@ def _talk_from_best_tile(bot, nid, rounds=2):
         )
         for nx, nz in tiles:
             try:
-                bot.walk_to(nx, nz, bot.world.level, timeout=15, open_doors=True)
+                bot.walk_to(nx, nz, bot.world.level, timeout=750, open_doors=True)
             except (Unreachable, TimeoutError):
                 continue
             if _click_npc(bot, nid):
@@ -438,7 +438,7 @@ def pass_door(bot, door_name, beyond, timeout=120):
 def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
     for _attempt in range(tries):
         if beyond is not None and (bot.world.x, bot.world.z) == beyond:
-            bot.recent_doors[(x, z)] = time.time()
+            bot.recent_doors[(x, z)] = bot.world.ticks
             return True
         if abs(bot.world.x - x) + abs(bot.world.z - z) > 1:
             stepped = False
@@ -447,7 +447,7 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
                 key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
             ):
                 try:
-                    bot.walk_to(nx, nz, bot.world.level, timeout=20, open_doors=False)
+                    bot.walk_to(nx, nz, bot.world.level, timeout=1000, open_doors=False)
                     stepped = True
                     break
                 except (Unreachable, TimeoutError):
@@ -463,7 +463,7 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
             bot.pump(1)
             if beyond is not None and (bot.world.x, bot.world.z) == beyond:
                 print("ok %s" % what, flush=True)
-                bot.recent_doors[(x, z)] = time.time()
+                bot.recent_doors[(x, z)] = bot.world.ticks
                 return True
             if bot.world.loc_at(x, z, bot.world.level) != was:
                 break
@@ -475,14 +475,14 @@ def cross_door(bot, x, z, loc, beyond=None, what="door", tries=6):
             bot.unseal(x, z, bot.world.level)
         except Exception:
             pass
-        bot.recent_doors[(x, z)] = time.time()
+        bot.recent_doors[(x, z)] = bot.world.ticks
         refresh_openings(bot)
         if beyond is not None:
             # The dash can land while the door is mid-cycle; retry once
             # after it settles instead of clicking again (ping-pong).
             for _dash in range(2):
                 try:
-                    bot.walk_raw(beyond[0], beyond[1], bot.world.level, time.time() + 8)
+                    bot.walk_raw(beyond[0], beyond[1], bot.world.level, bot.world.ticks + 400)
                     print("ok %s" % what, flush=True)
                     return True
                 except Exception:
@@ -519,7 +519,7 @@ def use_exit(bot, names, what, timeout=20):
         bot.approach(x, z, radius=1, open_doors=True)
         bot.op_loc(1, x, z, loc)
         if wait_moved(bot, timeout=timeout):
-            bot.recent_doors[(x, z)] = time.time()
+            bot.recent_doors[(x, z)] = bot.world.ticks
             refresh_openings(bot)
             print("ok %s" % what, flush=True)
             return

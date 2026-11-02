@@ -7,34 +7,23 @@ run/transitions_test.json and a one-line summary per transition is printed.
 
 This is a development tool, not a bot.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/check_transitions.py [account] [--only NAME]
+Usage: scripts/orchestrator.py run <account> check_transitions [--only NAME]
        [--kind stair|ladder|trapdoor|portal|other] [--limit N] [--skip N]
 """
 
 import argparse
 import json
 import os
-import sys
 import time
 
 
 from lifescape import collision as collision_mod
-from lifescape.client import Bot
 from lifescape.client.core import Unreachable
 from lifescape.connection import default_paths
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 TABLE = os.path.join(ROOT, "lifescape", "data", "transitions.json")
 RESULTS = os.path.join(ROOT, "run", "transitions_test.json")
-
-
-def loaded_bot(account):
-    paths = default_paths()
-    bot = Bot()
-    bot.login(account, account)
-    bot.paths = paths
-    bot.ensure_nav()
-    return bot
 
 
 def walkable(bot, x, z, level):
@@ -47,8 +36,8 @@ def walkable(bot, x, z, level):
 def teleport(bot, level, x, z):
     body = "tele %d,%d,%d,%d,%d" % (level, x >> 6, z >> 6, x & 63, z & 63)
     bot.cheat(body)
-    deadline = time.time() + 5
-    while time.time() < deadline:
+    target = bot.world.ticks + 250
+    while bot.world.ticks < target:
         bot.pump(2)
         if (bot.world.level, bot.world.x, bot.world.z) == (level, x, z):
             return True
@@ -81,9 +70,9 @@ def test_one(bot, row):
     if not sides:
         return "no walkable side"
     delta = row.get("delta")
-    limit = time.time() + 12
+    limit = bot.world.ticks + 600
     for side_x, side_z in sides:
-        if time.time() > limit:
+        if bot.world.ticks > limit:
             break
         if not teleport(bot, level, side_x, side_z):
             continue
@@ -112,22 +101,22 @@ def row_key(row):
     )
 
 
-def main():
+def run(bot, *args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("account", nargs="?", default="admin")
     parser.add_argument("--only", default=None)
     parser.add_argument("--kind", default=None)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--skip", type=int, default=0)
     parser.add_argument("--fresh", action="store_true")
-    options = parser.parse_args()
+    options = parser.parse_args(args)
 
     rows = [row for row in json.load(open(TABLE)) if not row.get("disabled")]
     if options.only:
         rows = [row for row in rows if options.only in row["name"]]
     if options.kind:
         rows = [row for row in rows if row["kind"] == options.kind]
-    bot = loaded_bot(options.account)
+    bot.paths = default_paths()
+    bot.ensure_nav()
     results = {}
     if not options.fresh:
         previous = {}
@@ -144,32 +133,28 @@ def main():
     if options.limit:
         rows = rows[:options.limit]
     print("resume: %d already ok, %d to test" % (len(results), len(rows)), flush=True)
-    try:
-        for index, row in enumerate(rows):
-            started = time.time()
-            try:
-                outcome = test_one(bot, row)
-            except Exception as error:  # report, keep testing the next one
-                outcome = "error: %s: %s" % (type(error).__name__, error)
-            results[row_key(row)] = {
-                "name": row["name"],
-                "kind": row["kind"],
-                "from": row["from"],
-                "to": row["to"],
-                "outcome": outcome,
-                "seconds": round(time.time() - started, 1),
-            }
-            print("%4d/%d %-34s %s" % (index + 1, len(rows), row["name"], outcome), flush=True)
-            if (index + 1) % 20 == 0:
-                save(results)
-            if outcome != "ok":
-                # A failed ride can leave the player on a blocked stair tile;
-                # teleport back to open ground to keep the run going.
-                teleport(bot, 0, 3222, 3218)
-    finally:
-        save(results)
-        bot.close()
-
+    for index, row in enumerate(rows):
+        started = time.time()
+        try:
+            outcome = test_one(bot, row)
+        except Exception as error:  # report, keep testing the next one
+            outcome = "error: %s: %s" % (type(error).__name__, error)
+        results[row_key(row)] = {
+            "name": row["name"],
+            "kind": row["kind"],
+            "from": row["from"],
+            "to": row["to"],
+            "outcome": outcome,
+            "seconds": round(time.time() - started, 1),
+        }
+        print("%4d/%d %-34s %s" % (index + 1, len(rows), row["name"], outcome), flush=True)
+        if (index + 1) % 20 == 0:
+            save(results)
+        if outcome != "ok":
+            # A failed ride can leave the player on a blocked stair tile;
+            # teleport back to open ground to keep the run going.
+            teleport(bot, 0, 3222, 3218)
+    save(results)
     bad = {name: entry["outcome"] for name, entry in results.items() if entry["outcome"] != "ok"}
     print("tested=%d ok=%d failed=%d" % (len(results), len(results) - len(bad), len(bad)), flush=True)
     for name, outcome in sorted(bad.items()):
@@ -177,7 +162,3 @@ def main():
     # A report, not a gate: a non-zero exit would make the orchestrator
     # clean up the session and relaunch the whole table.
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

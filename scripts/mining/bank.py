@@ -25,7 +25,7 @@ def stage_at_bank(bot, bank):
     if (bot.world.x, bot.world.z) == (best_x, best_z):
         return True
     try:
-        return walk_checked(bot, best_x, best_z, timeout=120)
+        return walk_checked(bot, best_x, best_z, timeout=6000)
     except (Unreachable, TimeoutError):
         return False
 
@@ -54,7 +54,7 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0):
     bot.intend("walking to the bank at (%d,%d)" % (bank.x, bank.z))
     for _attempt in range(3):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=300)
+            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
         except (Unreachable, TimeoutError):
             reached = False
         if reached:

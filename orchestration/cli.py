@@ -1,8 +1,14 @@
 """CLI client for the orchestrator daemon (see orchestration/daemon.py).
 
-    orchestrator.py start <script> <account> [args...]
-    orchestrator.py stop <account>
-    orchestrator.py restart <script> <account> [args...]
+Sessions are persistent: open one per account, then load/unload scripts
+and call SDK methods inside it without reconnecting.
+
+    orchestrator.py open <account>
+    orchestrator.py run <account> <script> [args...]
+    orchestrator.py unload <account>
+    orchestrator.py close <account>
+    orchestrator.py call <account> <method> [args...]
+    orchestrator.py shell <account>
     orchestrator.py status [account]
     orchestrator.py show <account>
     orchestrator.py see <account>
@@ -11,11 +17,13 @@
     orchestrator.py shutdown
     orchestrator.py ping
 
-Every command auto-starts the daemon when it is not running.
+Call args parse as JSON when possible (3200, true, "text", [1,2]),
+else stay strings. Every command auto-starts the daemon when needed.
 """
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -25,11 +33,13 @@ from .daemon import Orchestrator
 from .paths import ROOT, RUN_DIR, SOCKET_PATH, ensure_dirs
 
 
-def send_command(request, timeout=10):
+def send_command(request, timeout=45):
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
     client.connect(SOCKET_PATH)
-    client.sendall((json.dumps(request) + "\n").encode())
+    writer = client.makefile("w")
+    writer.write(json.dumps(request) + "\n")
+    writer.flush()
     reply = client.makefile("r").readline()
     client.close()
     return json.loads(reply or "{}")
@@ -69,14 +79,14 @@ def ensure_daemon():
 
 def format_status(jobs):
     if not jobs:
-        return "no job"
+        return "no session"
     rows = []
     for job in jobs:
         position = job.get("position")
         place = "%d,%d" % (position[1], position[2]) if position else "-"
-        rows.append("%-14s %-12s %-11s hp=%-4s %-10s %s" % (
+        rows.append("%-14s %-14s %-13s hp=%-4s %-10s %s" % (
             job.get("account", "?"),
-            job.get("script", "?"),
+            job.get("script") or "-",
             job.get("status", "?"),
             job.get("hitpoints") if job.get("hitpoints") is not None else "-",
             place,
@@ -132,7 +142,66 @@ def format_seen(state):
         lines.append("route_target %s" % (state.get("route_target"),))
     if state.get("last_event"):
         lines.append("last_event %s" % (state.get("last_event"),))
+    if state.get("last_error"):
+        lines.append("last_error %s" % (state.get("last_error"),))
     return "\n".join(lines)
+
+
+def shell(account):
+    """REPL over one open session: SDK calls with fresh state after each."""
+    try:
+        reply = send_command({"cmd": "methods", "account": account}, timeout=10)
+    except OSError as error:
+        print("session unreachable: %s" % (error,), file=sys.stderr)
+        return 1
+    if not reply.get("ok"):
+        print(reply.get("error", "no session, open %s first" % account), file=sys.stderr)
+        return 1
+    reads = reply.get("reads", [])
+    writes = reply.get("writes", [])
+    print("session %s: %d reads (snapshot) + %d writes (safe-point). help lists them." % (account, len(reads), len(writes)))
+    while True:
+        try:
+            line = input("%s> " % account)
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            # The session lives in its worker: ^C only gets a fresh prompt.
+            print()
+            continue
+        try:
+            parts = shlex.split(line)
+        except ValueError as error:
+            print("parse error: %s" % (error,))
+            continue
+        if not parts:
+            continue
+        if parts[0] == "exit":
+            break
+        if parts[0] == "help":
+            print("reads:  " + " ".join(reads))
+            print("writes: " + " ".join(writes))
+            print("also:   unload, exit")
+            continue
+        if parts[0] == "unload":
+            reply = send_command({"cmd": "unload", "account": account})
+            print(json.dumps(reply, sort_keys=True))
+            continue
+        method, args = parts[0], parts[1:]
+        try:
+            reply = send_command({"cmd": "call", "account": account, "method": method, "args": args})
+        except OSError as error:
+            print("session unreachable: %s" % (error,))
+            continue
+        print(json.dumps(reply, sort_keys=True))
+        try:
+            state = send_command({"cmd": "show", "account": account}, timeout=10).get("state", {})
+        except OSError:
+            continue
+        print("%s hp=%s pos=%s :: %s" % (
+            state.get("status", "?"), state.get("hitpoints", "-"),
+            state.get("position", "-"), state.get("intention") or "-"))
+    return 0
 
 
 def main(argv):
@@ -146,21 +215,22 @@ def main(argv):
         print("orchestrator failed to start", file=sys.stderr)
         return 1
     account = argv[2] if len(argv) > 2 else ""
-    if command == "start":
-        script = argv[2] if len(argv) > 2 else ""
-        account = argv[3] if len(argv) > 3 else ""
-        reply = send_command({"cmd": "start", "account": account, "script": script, "args": argv[4:]})
-    elif command == "stop":
-        reply = send_command({"cmd": "stop", "account": account})
-    elif command == "restart":
-        script = argv[2] if len(argv) > 2 else ""
-        account = argv[3] if len(argv) > 3 else ""
-        send_command({"cmd": "stop", "account": account})
-        if not script or not account:
-            state = send_command({"cmd": "show", "account": account}).get("state", {}) or {}
-            script = script or state.get("script", "")
-            account = account or state.get("account", "")
-        reply = send_command({"cmd": "start", "account": account, "script": script, "args": argv[4:]})
+    if command == "open":
+        reply = send_command({"cmd": "open", "account": account})
+    elif command == "close":
+        reply = send_command({"cmd": "close", "account": account})
+    elif command == "run":
+        script = argv[3] if len(argv) > 3 else ""
+        reply = send_command({"cmd": "run", "account": account, "script": script, "args": argv[4:]})
+    elif command == "unload":
+        reply = send_command({"cmd": "unload", "account": account})
+    elif command == "call":
+        method = argv[3] if len(argv) > 3 else ""
+        reply = send_command({"cmd": "call", "account": account, "method": method, "args": argv[4:]})
+        print(json.dumps(reply, indent=2, sort_keys=True))
+        return 0 if reply.get("ok") else 1
+    elif command == "shell":
+        return shell(account)
     elif command == "status":
         reply = send_command({"cmd": "status", "account": account})
         print(format_status(reply.get("jobs", [])))
@@ -179,18 +249,12 @@ def main(argv):
         print("\n".join(reply.get("lines", [])))
         return 0
     elif command == "test":
-        reply = send_command({"cmd": "start", "account": "tests", "script": "tests", "args": argv[2:]})
-        if not reply.get("ok"):
-            print(json.dumps(reply, indent=2, sort_keys=True))
-            return 1
-        while True:
-            state = send_command({"cmd": "show", "account": "tests"}).get("state", {})
-            if state.get("status") not in ("running", "starting", "restarting", "cleaning", "repairing"):
-                break
-            time.sleep(0.5)
-        lines = send_command({"cmd": "logs", "account": "tests", "lines": 60}).get("lines", [])
-        print("\n".join(lines))
-        return 0 if state.get("status") == "finished" else 1
+        reply = send_command({"cmd": "test", "args": argv[2:]}, timeout=660)
+        for line in reply.get("log_tail", []) or []:
+            print(line)
+        state = reply.get("state", {}) or {}
+        print("tests: %s" % (state.get("status", "?")))
+        return 0 if reply.get("ok") else 1
     elif command == "shutdown":
         reply = send_command({"cmd": "shutdown"})
     elif command == "ping":
@@ -198,7 +262,7 @@ def main(argv):
         print("daemon ok" if reply.get("ok") else reply)
         return 0
     else:
-        print(__doc__)
+        print("unknown command %r" % (command,), file=sys.stderr)
         return 2
     print(json.dumps(reply, indent=2, sort_keys=True))
     return 0 if reply.get("ok") else 1

@@ -3,47 +3,35 @@
 Frees inventory space when the bank deposit flow is unusable. Never used
 by a bot script.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/drop.py <account> <item> [count]
+Usage: scripts/orchestrator.py run <account> drop <item> [count]
 """
 
-import sys
-
-
-from lifescape.client import Bot, Unreachable
+from lifescape.client import Unreachable
 from lifescape.waits import wait_backpack
 
 import gamedata as knowledge
 
 
-def main():
-    if len(sys.argv) < 3:
-        print(__doc__, file=sys.stderr)
+def run(bot, *args):
+    if len(args) < 1:
+        print("usage: run <account> drop <item> [count]", flush=True)
         return 2
-    account, item = sys.argv[1], sys.argv[2]
-    count = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-    bot = Bot()
-    try:
-        bot.login(account, account)
-        found = knowledge.objs.by_name(item)
-        if not found:
-            print("unknown item %r" % (item,), flush=True)
-            return 1
-        obj_id = found[0].obj_id
-        wait_backpack(bot, knowledge.com_id("inventory:inv"))
-        dropped = 0
-        while dropped < count:
-            try:
-                if not bot.drop(obj_id, timeout=15):
-                    break
-            except Unreachable:
+    item = args[0]
+    count = int(args[1]) if len(args) > 1 else 1
+    found = knowledge.objs.by_name(item)
+    if not found:
+        print("unknown item %r" % (item,), flush=True)
+        return 1
+    obj_id = found[0].obj_id
+    wait_backpack(bot, knowledge.com_id("inventory:inv"))
+    dropped = 0
+    while dropped < count:
+        try:
+            if not bot.drop(obj_id, timeout=750):
                 break
-            bot.pump(3)
-            dropped += 1
-        print("dropped %s x%d" % (item, dropped), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        except Unreachable:
+            break
+        bot.pump(3)
+        dropped += 1
+    print("dropped %s x%d" % (item, dropped), flush=True)
+    return 0

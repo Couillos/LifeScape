@@ -3,16 +3,10 @@
 Gives each named item once and reports the inventory delta. Never used by
 a bot script.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_give.py <account> <item[=count]>...
+Usage: scripts/orchestrator.py run <account> probe_give <item[=count]>...
 Gives count of each item (default 1) and reports the inventory delta.
 Never used by a bot script.
 """
-
-import sys
-import time
-
-
-from lifescape.client import Bot
 
 import gamedata as knowledge
 
@@ -24,34 +18,24 @@ def parse(spec):
     return spec, 1
 
 
-def main():
-    if len(sys.argv) < 3:
-        print(__doc__, file=sys.stderr)
+def run(bot, *args):
+    if len(args) < 1:
+        print("usage: run <account> probe_give <item[=count]>...", flush=True)
         return 2
-    account, specs = sys.argv[1], sys.argv[2:]
-    bot = Bot()
-    try:
-        bot.login(account, account)
-        for spec in specs:
-            name, count = parse(spec)
-            found = knowledge.objs.by_name(name)
-            if not found:
-                print("%s: UNKNOWN-LOCALLY" % name, flush=True)
-                continue
-            obj_id = found[0].obj_id
-            before = bot.inventory().get(obj_id, 0)
-            bot.cheat("give %s %d" % (name, count))
-            target = time.time() + 8
-            while time.time() < target:
-                bot.pump(2)
-                if bot.inventory().get(obj_id, 0) >= before + count:
-                    break
-            after = bot.inventory().get(obj_id, 0)
-            print("%s: %d -> %d %s" % (name, before, after, "OK" if after >= before + count else "REFUSED"), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    for spec in args:
+        name, count = parse(spec)
+        found = knowledge.objs.by_name(name)
+        if not found:
+            print("%s: UNKNOWN-LOCALLY" % name, flush=True)
+            continue
+        obj_id = found[0].obj_id
+        before = bot.inventory().get(obj_id, 0)
+        bot.cheat("give %s %d" % (name, count))
+        target = bot.world.ticks + 400
+        while bot.world.ticks < target:
+            bot.pump(2)
+            if bot.inventory().get(obj_id, 0) >= before + count:
+                break
+        after = bot.inventory().get(obj_id, 0)
+        print("%s: %d -> %d %s" % (name, before, after, "OK" if after >= before + count else "REFUSED"), flush=True)
+    return 0

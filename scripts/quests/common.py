@@ -8,11 +8,9 @@ log event, which fills quest completion from the save.
 """
 
 import json
-import os
-import sys
 
 
-from lifescape.client import Bot, Unreachable
+from lifescape.client import Unreachable
 from lifescape.quests import NavigationBlocked, PlayerState, QuestReport, SKILL_INDEX, check
 from lifescape.waits import wait_backpack
 
@@ -77,7 +75,7 @@ def open_nearest_bank(bot):
     for bank in banks[:BANK_ATTEMPTS]:
         try:
             bot.intend("walking to bank %d,%d" % (bank.x, bank.z))
-            bot.approach(bank.x, bank.z, radius=2, timeout=180, open_doors=True)
+            bot.approach(bank.x, bank.z, radius=2, timeout=9000, open_doors=True)
             booth = tutorial_common.find_loc(bot, "bankbooth")
             if booth is not None:
                 booth_x, booth_z, _booth_level, booth_loc = booth
@@ -121,74 +119,69 @@ def report_result(account, quest, solved, error=None):
     print("@@EVENT " + json.dumps(payload, sort_keys=True), flush=True)
 
 
-def run(requirements, account=None, solve=None):
-    account = account or os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
-    if not account:
-        raise SystemExit("usage: %s <account>" % os.path.basename(sys.argv[0]))
-    bot = Bot()
+
+
+def run(bot, requirements, solve=None):
+    """Check requirements and solve in the open session."""
+    _wait_for_state(bot)
+    _drop_junk(bot)
+    # A random-event box replicates until solved and then eats quest
+    # item deliveries; clear any backlog before doing anything else.
+    solver.solve_strange_box(bot)
     try:
-        bot.login(account, account)
-        _wait_for_state(bot)
-        _drop_junk(bot)
-        # A random-event box replicates until solved and then eats quest
-        # item deliveries; clear any backlog before doing anything else.
-        solver.solve_strange_box(bot)
-        try:
-            bank_items = {} if _all_carried(bot, requirements) else open_nearest_bank(bot)
-        except (Unreachable, TimeoutError) as error:
-            result = QuestReport(
-                quest=requirements.key,
-                name=requirements.name,
-                met=False,
-                completed=False,
-                reasons=(NavigationBlocked(detail=str(error)),),
-            )
-        else:
-            result = check(requirements, snapshot(bot, bank_items))
-        report(result, account)
-        print(result.summary(), flush=True)
-        try:
-            from orchestration import quest_state
-            save_completed = quest_state.completion(account, requirements.key)
-        except Exception:
-            save_completed = None
-        if save_completed or result.completed:
-            # Save-based and reliable (unlike live varps, which the server
-            # only pushes on change): nothing left to do.
-            print("%s: already complete" % (requirements.name,), flush=True)
-            report_result(account, requirements.key, True)
-            return 0
-        if result.met and solve is not None:
-            # The save the checker reads can lag the live session (a run
-            # that completes the quest but never logs out cleanly): the
-            # live varps are truth, so skip a finished quest instead of
-            # talking to its post-quest dialogue forever.
-            if all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps):
-                print("%s: already complete" % (requirements.name,), flush=True)
-                report_result(account, requirements.key, True)
-                return 0
-            try:
-                solver.withdraw_requirements(bot, requirements)
-                solver.close_bank(bot)
-                solve(bot)
-                solved = solver.wait_complete(bot)
-                if not solved:
-                    # The completion message is easy to miss (it can arrive
-                    # while a follow-up dialogue is open): the live quest
-                    # varps are proof enough. Pump once more first: the
-                    # server often applies the stage on queued ticks after
-                    # the last dialogue click lands.
-                    bot.pump(20)
-                    solved = all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps)
-            except (Unreachable, TimeoutError, solver.SolverError) as error:
-                print("quest solve failed: %s" % (error,), flush=True)
-                report_result(account, requirements.key, False, error)
-            else:
-                report_result(account, requirements.key, solved)
-                print("%s: %s" % (
-                    requirements.name,
-                    "completed" if solved else "solver ran but no completion message",
-                ), flush=True)
+        bank_items = {} if _all_carried(bot, requirements) else open_nearest_bank(bot)
+    except (Unreachable, TimeoutError) as error:
+        result = QuestReport(
+            quest=requirements.key,
+            name=requirements.name,
+            met=False,
+            completed=False,
+            reasons=(NavigationBlocked(detail=str(error)),),
+        )
+    else:
+        result = check(requirements, snapshot(bot, bank_items))
+    report(result, bot.username)
+    print(result.summary(), flush=True)
+    try:
+        from orchestration import quest_state
+        save_completed = quest_state.completion(bot.username, requirements.key)
+    except Exception:
+        save_completed = None
+    if save_completed or result.completed:
+        # Save-based and reliable (unlike live varps, which the server
+        # only pushes on change): nothing left to do.
+        print("%s: already complete" % (requirements.name,), flush=True)
+        report_result(bot.username, requirements.key, True)
         return 0
-    finally:
-        bot.close()
+    if result.met and solve is not None:
+        # The save the checker reads can lag the live session (a run
+        # that completes the quest but never logs out cleanly): the
+        # live varps are truth, so skip a finished quest instead of
+        # talking to its post-quest dialogue forever.
+        if all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps):
+            print("%s: already complete" % (requirements.name,), flush=True)
+            report_result(bot.username, requirements.key, True)
+            return 0
+        try:
+            solver.withdraw_requirements(bot, requirements)
+            solver.close_bank(bot)
+            solve(bot)
+            solved = solver.wait_complete(bot)
+            if not solved:
+                # The completion message is easy to miss (it can arrive
+                # while a follow-up dialogue is open): the live quest
+                # varps are proof enough. Pump once more first: the
+                # server often applies the stage on queued ticks after
+                # the last dialogue click lands.
+                bot.pump(20)
+                solved = all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps)
+        except (Unreachable, TimeoutError, solver.SolverError) as error:
+            print("quest solve failed: %s" % (error,), flush=True)
+            report_result(bot.username, requirements.key, False, error)
+        else:
+            report_result(bot.username, requirements.key, solved)
+            print("%s: %s" % (
+                requirements.name,
+                "completed" if solved else "solver ran but no completion message",
+            ), flush=True)
+    return 0

@@ -1,13 +1,12 @@
 """Woodcut walk helpers (split from run.py)."""
-import time
 
 from scripts.woodcut.common import *
 from scripts.tutorial import common as tutorial_common
 
-def walk_checked(bot, dest_x, dest_z, timeout=300):
+def walk_checked(bot, dest_x, dest_z, timeout=15000):
     # Failure backstop on purpose in wall seconds (walk_to takes seconds):
     # pacing waits above are all tick-based, this only bounds a stuck walk.
-    deadline = time.time() + timeout
+    deadline = bot.world.ticks + timeout
     hitpoints_before = hitpoints(bot)
     trail = getattr(bot, "_trail", None)
     if trail is None:
@@ -17,12 +16,12 @@ def walk_checked(bot, dest_x, dest_z, timeout=300):
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
             bot.last_greet = bot.world.ticks
             randomevents.greet(bot)
-        if time.time() > deadline:
+        if bot.world.ticks > deadline:
             raise TimeoutError("walk to %d,%d timed out at %s" % (dest_x, dest_z, bot.position))
         step_x = bot.world.x + max(-40, min(40, dest_x - bot.world.x))
         step_z = bot.world.z + max(-40, min(40, dest_z - bot.world.z))
         try:
-            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(120, max(10, deadline - time.time())), open_doors=True)
+            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(6000, max(500, deadline - bot.world.ticks)), open_doors=True)
         except Unreachable:
             if max(abs(bot.world.x - dest_x), abs(bot.world.z - dest_z)) <= 2:
                 return True
@@ -47,7 +46,7 @@ def retreat_along_trail(bot, max_back=5):
         if abs(dest_x - bot.world.x) + abs(dest_z - bot.world.z) < 4:
             continue
         try:
-            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=90, open_doors=True)
+            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=4500, open_doors=True)
             steps += 1
         except (Unreachable, TimeoutError):
             continue
@@ -64,7 +63,7 @@ def compass_escape(bot):
         if not path:
             continue
         try:
-            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=90, open_doors=True)
+            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=4500, open_doors=True)
             print("escaped to %s" % (bot.position,), flush=True)
             return True
         except (Unreachable, TimeoutError):

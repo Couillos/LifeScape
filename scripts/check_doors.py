@@ -7,18 +7,16 @@ open it, walk to a tile on the other side and check we got there.
 
 This is a development tool, not a bot.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/check_doors.py [account] [--limit N] [--skip N] [--only ID]
+Usage: scripts/orchestrator.py run <account> check_doors [--limit N] [--skip N] [--only ID]
 """
 
 import argparse
 import json
 import os
-import sys
 import time
 
 
 from lifescape import collision as collision_mod
-from lifescape.client import Bot
 from lifescape.client.core import Unreachable
 from lifescape.connection import default_paths
 
@@ -51,18 +49,10 @@ def f2p_zones():
     return zones
 
 
-def loaded_bot(account):
-    bot = Bot()
-    bot.login(account, account)
-    bot.paths = default_paths()
-    bot.ensure_nav()
-    return bot
-
-
 def teleport(bot, level, x, z):
     bot.cheat("tele %d,%d,%d,%d,%d" % (level, x >> 6, z >> 6, x & 63, z & 63))
-    deadline = time.time() + 10
-    while time.time() < deadline:
+    target = bot.world.ticks + 500
+    while bot.world.ticks < target:
         bot.pump(2)
         if (bot.world.level, bot.world.x, bot.world.z) == (level, x, z):
             return True
@@ -129,10 +119,10 @@ def test_one(bot, spot):
     (ax, az), (bx, bz) = pair
     if not teleport(bot, level, ax, az):
         return "teleport failed"
-    if not bot.open_door(spot[0], spot[1], timeout=20):
+    if not bot.open_door(spot[0], spot[1], timeout=1000):
         return "door did not open"
     try:
-        bot.walk_to(bx, bz, level, timeout=25)
+        bot.walk_to(bx, bz, level, timeout=1250)
     except (Unreachable, TimeoutError) as error:
         return "walk through: %s" % error
     if (bot.world.x, bot.world.z) != (bx, bz):
@@ -140,15 +130,15 @@ def test_one(bot, spot):
     return "ok"
 
 
-def main():
+def run(bot, *args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("account", nargs="?", default="admin")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--skip", type=int, default=0)
     parser.add_argument("--only", default=None)
-    options = parser.parse_args()
+    options = parser.parse_args(args)
 
-    bot = loaded_bot(options.account)
+    bot.paths = default_paths()
+    bot.ensure_nav()
     doors = sample_doors(bot)
     if options.only:
         doors = [spot for spot in doors if str(spot[9]) == options.only]
@@ -157,38 +147,32 @@ def main():
         doors = doors[:options.limit]
 
     results = {}
-    try:
-        for index, spot in enumerate(doors):
-            name = bot.loc_name_at(spot[0], spot[1], spot[2]) or ""
-            label = "%d@%d,%d,%d" % (spot[9], spot[0], spot[1], spot[2])
-            started = time.time()
-            try:
-                outcome = test_one(bot, spot)
-            except Exception as error:  # report, keep testing the next one
-                outcome = "error: %s: %s" % (type(error).__name__, error)
-            results[label] = {
-                "loc": spot[9],
-                "name": name,
-                "kind": "door",
-                "from": [spot[2], spot[0], spot[1]],
-                "outcome": outcome,
-                "seconds": round(time.time() - started, 1),
-            }
-            print("%4d/%d %-30s %-12s %s" % (index + 1, len(doors), label, name, outcome), flush=True)
-            if outcome != "ok":
-                teleport(bot, 0, 3222, 3218)
-    finally:
-        os.makedirs(os.path.dirname(RESULTS), exist_ok=True)
-        with open(RESULTS, "w") as handle:
-            json.dump(results, handle, indent=1, sort_keys=True)
-        bot.close()
+    for index, spot in enumerate(doors):
+        name = bot.loc_name_at(spot[0], spot[1], spot[2]) or ""
+        label = "%d@%d,%d,%d" % (spot[9], spot[0], spot[1], spot[2])
+        started = time.time()
+        try:
+            outcome = test_one(bot, spot)
+        except Exception as error:  # report, keep testing the next one
+            outcome = "error: %s: %s" % (type(error).__name__, error)
+        results[label] = {
+            "loc": spot[9],
+            "name": name,
+            "kind": "door",
+            "from": [spot[2], spot[0], spot[1]],
+            "outcome": outcome,
+            "seconds": round(time.time() - started, 1),
+        }
+        print("%4d/%d %-30s %-12s %s" % (index + 1, len(doors), label, name, outcome), flush=True)
+        if outcome != "ok":
+            teleport(bot, 0, 3222, 3218)
+
+    os.makedirs(os.path.dirname(RESULTS), exist_ok=True)
+    with open(RESULTS, "w") as handle:
+        json.dump(results, handle, indent=1, sort_keys=True)
 
     bad = {key: entry["outcome"] for key, entry in results.items() if entry["outcome"] != "ok"}
     print("doors=%d ok=%d failed=%d" % (len(results), len(results) - len(bad), len(bad)), flush=True)
     for key, outcome in sorted(bad.items()):
         print("  %-30s %s" % (key, outcome))
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

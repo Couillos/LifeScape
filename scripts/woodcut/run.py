@@ -7,11 +7,10 @@ are all picked by proximity from gamedata (best spot for the level,
 safe for the combat level, nearest usable bank). Banks across the
 toll gate are a last resort (10 coins per crossing). Stays on one level.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/woodcut/run.py <username> [loads]
+Usage: scripts/orchestrator.py run <account> woodcut [loads]
   loads = full bank trips before stopping, 0 means forever (default 0).
 """
 
-import sys
 import time
 
 
@@ -30,7 +29,7 @@ def work_spot(bot, tree_x, tree_z, tree_loc, log_ids, had_logs):
         # Far spot (live trees can be far when the area is depleted):
         # trek properly instead of hopping neighbor tiles across the map.
         try:
-            reached = walk_checked(bot, tree_x, tree_z, timeout=120)
+            reached = walk_checked(bot, tree_x, tree_z, timeout=6000)
         except (Unreachable, TimeoutError):
             return "unreachable", 0
         if not reached:
@@ -43,7 +42,7 @@ def work_spot(bot, tree_x, tree_z, tree_loc, log_ids, had_logs):
         walked_at = time.time()
         for next_x, next_z in neighbors:
             try:
-                bot.walk_to(next_x, next_z, bot.world.level, timeout=2, open_doors=False)
+                bot.walk_to(next_x, next_z, bot.world.level, timeout=100, open_doors=False)
                 print("adjacent in %.1fs" % (time.time() - walked_at), flush=True)
                 break
             except (Unreachable, TimeoutError) as walk_error:
@@ -75,7 +74,7 @@ def work_spot(bot, tree_x, tree_z, tree_loc, log_ids, had_logs):
                 if not dismiss_levelup(bot):
                     texts = [text for _com, text in bot.chat_texts()][-4:]
                     print("modal %s texts=%s" % (bot.world.modal, [text[:60] for text in texts]), flush=True)
-                    randomevents.greet(bot, timeout=20)
+                    randomevents.greet(bot, timeout=1000)
                     bot.pump(10)
                     if bot.world.modal is not None and not dismiss_levelup(bot):
                         return "blocked", gained
@@ -216,121 +215,109 @@ def chop_load(bot, tiers, bank, coins_id, woodcutting_level, side_bank, main_ban
 
 
 
-def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "t48"
-    loads = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    bot = Bot()
-    try:
-        bot.login(username, username)
-        start_ticks = bot.world.ticks
-        last_greet = start_ticks
-        while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
-            bot.pump(5)
-            if bot.world.ticks - last_greet > 30:
-                last_greet = bot.world.ticks
-                randomevents.greet(bot)
-        ensure_not_mazed(bot)
-        side_bank = knowledge.comps.com_id("bank_side:inv")
-        main_bank = knowledge.comps.com_id("bank_main:inv")
-        side_shop = knowledge.comps.com_id("shop_template_side:inv")
-        main_shop = knowledge.comps.com_id("shop_template:inv")
-        coins_id = obj_id(bot, COINS)
-        tiers = knowledge.all_tiers()
-        woodcutting_level = learn_level(bot, 1)
-        bank = nearest_free_bank(bot)
-        if bank is None:
-            raise SystemExit("no reachable bank from %s" % (bot.position,))
-        print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
-        current_axe = best_axe(bot)
-        junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_axe_ids(bot) and held != coins_id]
-        log_ids = set()
-        for tier in tiers:
-            try:
-                log_ids.add(obj_id(bot, tier.product))
-            except KeyError:
-                pass
-        junk = [held for held in junk if held not in log_ids]
-        bank_coins_known = 0
-        if current_axe is None or junk:
-            if current_axe is None and reattach(bot):
-                print("ok reattached axe from pack, no bootstrap needed", flush=True)
+def run(bot, *args):
+    """Cut banked loads in the open session (0 = forever)."""
+    loads = int(args[0]) if args else 0
+    start_ticks = bot.world.ticks
+    last_greet = start_ticks
+    while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
+        bot.pump(5)
+        if bot.world.ticks - last_greet > 30:
+            last_greet = bot.world.ticks
+            randomevents.greet(bot)
+    ensure_not_mazed(bot)
+    side_bank = knowledge.comps.com_id("bank_side:inv")
+    main_bank = knowledge.comps.com_id("bank_main:inv")
+    side_shop = knowledge.comps.com_id("shop_template_side:inv")
+    main_shop = knowledge.comps.com_id("shop_template:inv")
+    coins_id = obj_id(bot, COINS)
+    tiers = knowledge.all_tiers()
+    woodcutting_level = learn_level(bot, 1)
+    bank = nearest_free_bank(bot)
+    if bank is None:
+        raise SystemExit("no reachable bank from %s" % (bot.position,))
+    print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
+    current_axe = best_axe(bot)
+    junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_axe_ids(bot) and held != coins_id]
+    log_ids = set()
+    for tier in tiers:
+        try:
+            log_ids.add(obj_id(bot, tier.product))
+        except KeyError:
+            pass
+    junk = [held for held in junk if held not in log_ids]
+    bank_coins_known = 0
+    if current_axe is None or junk:
+        if current_axe is None and reattach(bot):
+            print("ok reattached axe from pack, no bootstrap needed", flush=True)
+            current_axe = best_axe(bot)
+            junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_axe_ids(bot) and held != coins_id]
+            junk = [held for held in junk if held not in log_ids]
+        keep = set(log_ids)
+        if current_axe is not None:
+            keep.add(axe_id(bot, current_axe))
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, 0)
+        if not ok:
+            raise SystemExit("cleanup bank trip failed")
+        if best_axe(bot) is None:
+            if restore_from_bank(bot, bank, side_bank, main_bank):
                 current_axe = best_axe(bot)
-                junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_axe_ids(bot) and held != coins_id]
-                junk = [held for held in junk if held not in log_ids]
-            keep = set(log_ids)
-            if current_axe is not None:
-                keep.add(axe_id(bot, current_axe))
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, 0)
-            if not ok:
-                raise SystemExit("cleanup bank trip failed")
-            if best_axe(bot) is None:
-                if restore_from_bank(bot, bank, side_bank, main_bank):
-                    current_axe = best_axe(bot)
+                print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
+            else:
+                ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw=-1, withdraw_logs=10, log_ids=tuple(log_ids))
+                if not ok:
+                    raise SystemExit("funding bank trip failed")
+                need_cross_gate = False
+                gate = nearest_toll_gate(bot)
+                if gate is not None and bot.world.x >= gate[0]:
+                    need_cross_gate = True
+                target = 16 + (10 if need_cross_gate else 0)
+                if pack_total(bot, coins_id) < target:
+                    sell_for_target(bot, side_shop, coins_id, target - pack_total(bot, coins_id))
+                if need_cross_gate and not cross_toll_gate(bot):
+                    raise SystemExit("cannot cross toll gate at %s" % (bot.position,))
+                if pack_total(bot, coins_id) >= 16 and buy_attempt(bot, main_shop, "bronze_axe"):
+                    print("ok bootstrapped bronze axe", flush=True)
+                    bank = nearest_free_bank(bot) or bank
                     print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
                 else:
-                    ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw=-1, withdraw_logs=10, log_ids=tuple(log_ids))
-                    if not ok:
-                        raise SystemExit("funding bank trip failed")
-                    need_cross_gate = False
-                    gate = nearest_toll_gate(bot)
-                    if gate is not None and bot.world.x >= gate[0]:
-                        need_cross_gate = True
-                    target = 16 + (10 if need_cross_gate else 0)
-                    if pack_total(bot, coins_id) < target:
-                        sell_for_target(bot, side_shop, coins_id, target - pack_total(bot, coins_id))
-                    if need_cross_gate and not cross_toll_gate(bot):
-                        raise SystemExit("cannot cross toll gate at %s" % (bot.position,))
-                    if pack_total(bot, coins_id) >= 16 and buy_attempt(bot, main_shop, "bronze_axe"):
-                        print("ok bootstrapped bronze axe", flush=True)
-                        bank = nearest_free_bank(bot) or bank
-                        print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
-                    else:
-                        raise SystemExit("cannot bootstrap: no axe, %d coins" % pack_total(bot, coins_id))
-        done_loads = 0
-        toolless_loads = 0
-        while loads == 0 or done_loads < loads:
-            ensure_not_mazed(bot)
-            try:
-                ok, bank, woodcutting_level = chop_load(bot, tiers, bank, coins_id, woodcutting_level, side_bank, main_bank, main_shop)
-            except ConnectionError:
-                print("disconnected, relogging", flush=True)
-                bot.relogin()
-                wait_backpack(bot, BACKPACK_COM)
-                continue
-            if not ok:
-                raise SystemExit("chop failed at %s" % (bot.position,))
-            candidates, cheapest = cheapest_upgrade(bot)
-            if candidates:
-                sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known - pack_total(bot, coins_id)))
-            current = best_axe(bot)
-            keep = {axe_id(bot, current)} if current else set()
-            # Pack is emptied into the bank during this same trip, so the
-            # withdraw must cover the full price, not price minus the
-            # about-to-be-deposited pack coins.
-            withdraw = cheapest if candidates else 0
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
-            if not ok:
-                raise SystemExit("bank trip failed")
-            if candidates:
-                for candidate in candidates:
-                    if buy_attempt(bot, main_shop, candidate):
-                        print("ok upgraded to %s" % candidate, flush=True)
-                        break
-            if best_axe(bot) is None:
-                toolless_loads += 1
-            else:
-                toolless_loads = 0
-            if toolless_loads >= 2:
-                raise SystemExit("no axe and cannot rebuy, aborting at %s" % (bot.position,))
-            done_loads += 1
-            print("ok load %d banked (wc=%s)" % (done_loads, woodcutting_level), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-if __name__ == "__main__":
-    sys.exit(main())
+                    raise SystemExit("cannot bootstrap: no axe, %d coins" % pack_total(bot, coins_id))
+    done_loads = 0
+    toolless_loads = 0
+    while loads == 0 or done_loads < loads:
+        ensure_not_mazed(bot)
+        try:
+            ok, bank, woodcutting_level = chop_load(bot, tiers, bank, coins_id, woodcutting_level, side_bank, main_bank, main_shop)
+        except ConnectionError:
+            print("disconnected, relogging", flush=True)
+            bot.relogin()
+            wait_backpack(bot, BACKPACK_COM)
+            continue
+        if not ok:
+            raise SystemExit("chop failed at %s" % (bot.position,))
+        candidates, cheapest = cheapest_upgrade(bot)
+        if candidates:
+            sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known - pack_total(bot, coins_id)))
+        current = best_axe(bot)
+        keep = {axe_id(bot, current)} if current else set()
+        # Pack is emptied into the bank during this same trip, so the
+        # withdraw must cover the full price, not price minus the
+        # about-to-be-deposited pack coins.
+        withdraw = cheapest if candidates else 0
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
+        if not ok:
+            raise SystemExit("bank trip failed")
+        if candidates:
+            for candidate in candidates:
+                if buy_attempt(bot, main_shop, candidate):
+                    print("ok upgraded to %s" % candidate, flush=True)
+                    break
+        if best_axe(bot) is None:
+            toolless_loads += 1
+        else:
+            toolless_loads = 0
+        if toolless_loads >= 2:
+            raise SystemExit("no axe and cannot rebuy, aborting at %s" % (bot.position,))
+        done_loads += 1
+        print("ok load %d banked (wc=%s)" % (done_loads, woodcutting_level), flush=True)
+    return 0

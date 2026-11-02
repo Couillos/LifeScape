@@ -1,13 +1,12 @@
 """Live login probe: validates handshake, CRCs, RSA and ISAAC against
 the real server before the SDK builds on them. Exits 0 on login success.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_login.py [username] [password]
+Usage: scripts/orchestrator.py run <account> probe_login [username] [password]
 """
 
 import os
 import random
 import socket
-import sys
 
 
 from lifescape.buffer import Reader, Writer
@@ -45,10 +44,13 @@ def read_exact(sock, length):
     return bytes(out)
 
 
-def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "bite"
-    password = sys.argv[2] if len(sys.argv) > 2 else username
+def run(bot, *args):
+    username = args[0] if len(args) > 0 else "bite"
+    password = args[1] if len(args) > 1 else username
+    return probe(username, password)
 
+
+def probe(username, password):
     seeds = [random.randrange(0, 0x7FFFFFFF) for _ in range(4)]
     uid = random.randrange(0, 0x7FFFFFFF)
 
@@ -109,7 +111,3 @@ def main():
             zone = Reader(body)
             print("spawn zone: x=%d z=%d" % (zone.u16(), zone.u16()))
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

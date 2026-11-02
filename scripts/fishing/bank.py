@@ -32,7 +32,7 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0, withdraw_tool
     trip_hitpoints = hitpoints(bot)
     for _attempt in range(2):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=300)
+            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
         except Unreachable:
             reached = False
         if reached:
@@ -86,7 +86,7 @@ def recover_tool(bot, side_bank, main_bank, main_shop, tool_name, coins_id, bank
         return True
     # The big-fish event knocks the tool onto the ground: pick it back up.
     try:
-        if bot.take(tool_id, timeout=30):
+        if bot.take(tool_id, timeout=1500):
             print("ok tool recovered from ground", flush=True)
             return True
     except Unreachable:

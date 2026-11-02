@@ -85,7 +85,7 @@ def buy_attempt(bot, shop_main_com, axe_name):
         print("no shop stocks %s nearby" % axe_name, flush=True)
         return False
     try:
-        walk_checked(bot, spot[0], spot[1], timeout=300)
+        walk_checked(bot, spot[0], spot[1], timeout=15000)
     except (Unreachable, TimeoutError):
         pass
     if not bot.trade_to(keeper, spot):
@@ -137,7 +137,7 @@ def sell_for_target(bot, shop_side_com, coins_id, target_coins):
         print("no general store found", flush=True)
         return 0
     try:
-        walk_checked(bot, spot[0], spot[1], timeout=300)
+        walk_checked(bot, spot[0], spot[1], timeout=15000)
     except (Unreachable, TimeoutError):
         pass
     if not bot.trade_to(keeper, spot):

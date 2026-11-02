@@ -1,7 +1,6 @@
 """Requirement check and completion: Demon Slayer."""
 
 import os
-import sys
 
 
 import gamedata as knowledge
@@ -10,7 +9,7 @@ from lifescape import save as save_mod
 from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("demon")
@@ -31,7 +30,7 @@ _SAVED_VARPS = {}
 
 
 def _saved_varps():
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return {}
     try:
@@ -125,7 +124,7 @@ def solve(bot):
         # Fast path: already standing next to the key in the sewer (retry
         # after a pour). A missing key fails fast with no walking.
         try:
-            bot.take(name="silverlight_key_3", timeout=15)
+            bot.take(name="silverlight_key_3", timeout=750)
         except (Unreachable, TimeoutError):
             pass
     if _count(bot, "silverlight_key_3") < 1 and _stage(bot) < SILVERLIGHT:
@@ -134,7 +133,7 @@ def solve(bot):
         drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, "questdrain")
         # The drain tile itself is walkable and the use only lands from it:
         # clicked from the north side, the server drops it silently.
-        bot.walk_to(drain_x, drain_z, drain_level, timeout=120, open_doors=True)
+        bot.walk_to(drain_x, drain_z, drain_level, timeout=6000, open_doors=True)
         bot.op_loc(1, drain_x, drain_z, drain_loc)
         wait_ticks(bot, 5)
         solver.drain_dialog(bot)
@@ -159,10 +158,10 @@ def solve(bot):
         if bot.world.z < 9000:
             raise solver.SolverError("manhole did not go down at %s" % (bot.position,))
         # The key lands ~40 tiles in, out of take range: walk over first.
-        bot.approach(3225, 9897, radius=10, timeout=300, open_doors=True)
+        bot.approach(3225, 9897, radius=10, timeout=15000, open_doors=True)
         # The key despawns fast: grab it before anything else.
         solver.take_near(bot, "silverlight_key_3", timeout=60)
-        solver.operate_loc(bot, ("ladder_from_cellar",), 1, timeout=120)
+        solver.operate_loc(bot, ("ladder_from_cellar",), 1, timeout=6000)
     # Trade all three keys to Sir Prysin for Silverlight.
     if _stage(bot) < SILVERLIGHT:
         solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])
@@ -185,5 +184,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

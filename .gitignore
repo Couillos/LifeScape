@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 run/
 /tmp/
+prd/

@@ -3,7 +3,6 @@ and the teleport to the mainland. Verified through modals closing,
 inventory and the final teleport.
 """
 
-import time
 
 from scripts.tutorial import common as tutorial_common
 
@@ -92,7 +91,7 @@ def wind_strike(bot, timeout=250):
     air = tutorial_common.obj_id(bot, "airrune")
     mind = tutorial_common.obj_id(bot, "mindrune")
     try:
-        bot.walk_to(3141, 3089, bot.world.level, timeout=60, open_doors=True)
+        bot.walk_to(3141, 3089, bot.world.level, timeout=3000, open_doors=True)
     except Exception:
         pass
     target = bot.world.ticks + timeout

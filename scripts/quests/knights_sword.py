@@ -10,7 +10,6 @@ and the bars, so this only delivers; no mining here.
 """
 
 import os
-import sys
 
 
 import gamedata as knowledge
@@ -18,7 +17,7 @@ from gamedata import quest_requirements
 from lifescape import save as save_mod
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 
 QUEST = quest_requirements.by_key("squire")
 
@@ -43,7 +42,7 @@ _SAVED_VARPS = {}
 
 
 def _saved_varps():
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return {}
     try:
@@ -109,7 +108,7 @@ def _portrait(bot):
             wait_ticks(bot, 10)
             continue
         try:
-            solver.operate_loc(bot, ("vyvincupboardshut",), 1, timeout=60, stand=CUPBOARD_STAND)
+            solver.operate_loc(bot, ("vyvincupboardshut",), 1, timeout=3000, stand=CUPBOARD_STAND)
         except Exception as error:
             print("cupboard open failed: %s" % (error,), flush=True)
         if _vyvin_close(bot):
@@ -118,7 +117,7 @@ def _portrait(bot):
             wait_ticks(bot, 10)
             continue
         try:
-            solver.operate_loc(bot, ("vyvincupboardopen",), 1, timeout=60, stand=CUPBOARD_STAND)
+            solver.operate_loc(bot, ("vyvincupboardopen",), 1, timeout=3000, stand=CUPBOARD_STAND)
         except Exception as error:
             print("cupboard search failed: %s" % (error,), flush=True)
         wait_ticks(bot, 5)
@@ -163,5 +162,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

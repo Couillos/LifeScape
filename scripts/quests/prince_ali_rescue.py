@@ -1,7 +1,6 @@
 """Requirement check and completion: Prince Ali Rescue."""
 
 import os
-import sys
 
 
 import gamedata as knowledge
@@ -10,7 +9,7 @@ from lifescape import save as save_mod
 from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("prince")
@@ -24,7 +23,7 @@ _SAVED_VARPS = {}
 
 
 def _saved_varps():
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return {}
     try:
@@ -75,7 +74,7 @@ def use_item_on_npc(bot, item, npc, timeout=1800):
             continue
         person = bot.world.npcs[nid]
         try:
-            bot.approach(person["x"], person["z"], radius=1, timeout=30, open_doors=True)
+            bot.approach(person["x"], person["z"], radius=1, timeout=1500, open_doors=True)
         except (Unreachable, TimeoutError):
             pass
         try:
@@ -161,7 +160,7 @@ def solve(bot):
             # client approach — the walk south is a couple of tiles, keeping
             # well inside the ~10 s Keli respawn window.
             try:
-                bot.walk_to(_dx, _dz + 1, _dlvl, timeout=15, open_doors=True)
+                bot.walk_to(_dx, _dz + 1, _dlvl, timeout=750, open_doors=True)
             except (Unreachable, TimeoutError):
                 pass
             # No client-side approach beyond that: the server walks into
@@ -199,5 +198,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

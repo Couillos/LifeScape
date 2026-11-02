@@ -1,5 +1,4 @@
 """Mining walk helpers (split from run.py)."""
-import time
 
 from scripts.mining.common import *
 from scripts.tutorial import common as tutorial_common
@@ -43,11 +42,11 @@ def step_open(bot, dest_x, dest_z):
 
 
 
-def walk_checked(bot, dest_x, dest_z, timeout=300):
+def walk_checked(bot, dest_x, dest_z, timeout=15000):
     # Failure backstop on purpose in wall-clock seconds (walk_to takes
     # seconds): pacing waits above are all tick-based, this only bounds
     # a stuck walk.
-    deadline = time.time() + timeout
+    deadline = bot.world.ticks + timeout
     hitpoints_before = hitpoints(bot)
     max_hitpoints = hitpoints_before
     visited_detours = []
@@ -59,13 +58,13 @@ def walk_checked(bot, dest_x, dest_z, timeout=300):
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
             bot.last_greet = bot.world.ticks
             randomevents.greet(bot)
-        if time.time() > deadline:
+        if bot.world.ticks > deadline:
             raise TimeoutError("walk to %d,%d timed out at %s" % (dest_x, dest_z, bot.position))
         # Short legs: the router gives up on long cuts through dense
         # fields (crop patches), but weaves around them on short hops.
         step_x, step_z = step_open(bot, dest_x, dest_z)
         try:
-            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(120, max(10, deadline - time.time())), open_doors=True)
+            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(6000, max(500, deadline - bot.world.ticks)), open_doors=True)
         except Unreachable:
             if max(abs(bot.world.x - dest_x), abs(bot.world.z - dest_z)) <= 2:
                 return True
@@ -124,7 +123,7 @@ def settle_step(bot, step_x, step_z, deadline):
     for _retry in range(2):
         bot.pump(10)
         try:
-            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(30, max(10, deadline - time.time())), open_doors=True)
+            bot.walk_to(step_x, step_z, bot.world.level, timeout=min(1500, max(500, deadline - bot.world.ticks)), open_doors=True)
             return True
         except (Unreachable, TimeoutError):
             continue
@@ -159,7 +158,7 @@ def walk_detour(bot, dest_x, dest_z, step_x, step_z, deadline, visited_detours):
     cands.sort(key=lambda cand: (not spot_is_safe(bot, cand[0], cand[1]), abs(cand[0] - dest_x) + abs(cand[1] - dest_z)))
     for cand_x, cand_z in cands:
         try:
-            bot.walk_to(cand_x, cand_z, bot.world.level, timeout=min(60, max(10, deadline - time.time())), open_doors=True)
+            bot.walk_to(cand_x, cand_z, bot.world.level, timeout=min(3000, max(500, deadline - bot.world.ticks)), open_doors=True)
             print("detour to (%d,%d)" % (cand_x, cand_z), flush=True)
             visited_detours.append((cand_x, cand_z))
             del visited_detours[:-8]
@@ -178,7 +177,7 @@ def retreat_along_trail(bot, max_back=12):
         if abs(dest_x - bot.world.x) + abs(dest_z - bot.world.z) < 4:
             continue
         try:
-            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=90, open_doors=True)
+            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=4500, open_doors=True)
             steps += 1
         except (Unreachable, TimeoutError):
             continue
@@ -200,7 +199,7 @@ def compass_escape(bot, dest_x=None, dest_z=None):
         if not path:
             continue
         try:
-            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=90, open_doors=True)
+            bot.walk_to(dest_x, dest_z, bot.world.level, timeout=4500, open_doors=True)
             print("escaped to %s" % (bot.position,), flush=True)
             return True
         except (Unreachable, TimeoutError):

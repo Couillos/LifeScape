@@ -9,11 +9,9 @@ Usage: run.py [account] [spot ...] [--kills N] [--ticks N]
 Without a spot, picks the highest spot whose minimum level is reached.
 """
 
-import sys
-import time
 
 
-from lifescape.client import Bot, Unreachable
+from lifescape.client import Unreachable
 from lifescape.connection import LoginError
 from lifescape.waits import wait_backpack, wait_ticks
 
@@ -188,7 +186,7 @@ def open_bank(bot, bank):
     )
     for tile_x, tile_z in tiles:
         try:
-            bot.walk_to(tile_x, tile_z, level, open_doors=True, timeout=20)
+            bot.walk_to(tile_x, tile_z, level, open_doors=True, timeout=1000)
         except (Unreachable, TimeoutError):
             continue
         for op in (2, 1):
@@ -318,7 +316,7 @@ def prepare_at_bank(bot):
         equip_inventory(bot)
         return False
     bot.intend("banking at (%d,%d)" % (bank.x, bank.z))
-    bot.walk_to(bank.x, bank.z, bank.level, open_doors=True, timeout=300)
+    bot.walk_to(bank.x, bank.z, bank.level, open_doors=True, timeout=15000)
     if not open_bank(bot, bank):
         print("bank did not open at %s" % (bot.position,), flush=True)
         equip_inventory(bot)
@@ -428,7 +426,7 @@ def pick_cluster(bot, spot):
 
 
 def go_to_spot(bot, spot, target):
-    bot.walk_to(target[0], target[1], open_doors=True, timeout=300)
+    bot.walk_to(target[0], target[1], open_doors=True, timeout=15000)
 
 
 def attack_nearest(bot, spot):
@@ -439,7 +437,7 @@ def attack_nearest(bot, spot):
     distance = abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z)
     if distance > 6:
         try:
-            bot.approach(npc["x"], npc["z"], open_doors=True, timeout=30)
+            bot.approach(npc["x"], npc["z"], open_doors=True, timeout=1500)
         except (Unreachable, TimeoutError):
             return None
     bot.op_npc(2, nid)
@@ -470,7 +468,7 @@ def loot_ground(bot):
         if not name:
             continue
         try:
-            if bot.take(obj_id=obj_id, timeout=12):
+            if bot.take(obj_id=obj_id, timeout=600):
                 taken += 1
         except Unreachable:
             continue
@@ -518,7 +516,7 @@ def fight(bot, spot, target, kills_limit, ticks_limit, bank_food=True):
                 npc = bot.world.npcs[target_nid]
                 if abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z) > 1:
                     try:
-                        bot.approach(npc["x"], npc["z"], radius=1, timeout=10)
+                        bot.approach(npc["x"], npc["z"], radius=1, timeout=500)
                     except (Unreachable, TimeoutError):
                         pass
                 bot.op_npc(2, target_nid)
@@ -542,7 +540,7 @@ def fight(bot, spot, target, kills_limit, ticks_limit, bank_food=True):
             if target_nid is None:
                 if abs(bot.world.x - target[0]) + abs(bot.world.z - target[1]) > 8:
                     try:
-                        bot.approach(target[0], target[1], open_doors=True, timeout=30)
+                        bot.approach(target[0], target[1], open_doors=True, timeout=1500)
                     except (Unreachable, TimeoutError):
                         pass
                 wait_ticks(bot, 5)
@@ -613,30 +611,20 @@ def parse_args(argv):
     return spots, kills, ticks, no_bank
 
 
-def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "t46"
-    requested, kills_limit, ticks_limit, no_bank = parse_args(sys.argv)
-    bot = Bot()
-    try:
-        bot.login(username, username)
-        wait_backpack(bot, BACKPACK)
-        target = bot.world.ticks + 60
-        while bot.world.ticks < target and not (0 in bot.world.stats and 3 in bot.world.stats):
-            bot.pump(5)
-        randomevents.greet(bot)
-        spots = [knowledge.spot_by_key(key) for key in requested if knowledge.spot_by_key(key)]
-        if not spots:
-            spots = [knowledge.best_spot(melee_level(bot))]
-        print("melee=%d spots=%s" % (melee_level(bot), ",".join(spot.key for spot in spots)), flush=True)
-        for spot in spots:
-            print("=== %s ===" % spot.key, flush=True)
-            bot.intend("melee at %s" % spot.key)
-            total = run_spot(bot, spot, kills_limit, ticks_limit, no_bank=no_bank)
-            print("ok %s killed %d" % (spot.key, total), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+def run(bot, *args):
+    requested, kills_limit, ticks_limit, no_bank = parse_args(["melee", bot.username] + list(args))
+    wait_backpack(bot, BACKPACK)
+    target = bot.world.ticks + 60
+    while bot.world.ticks < target and not (0 in bot.world.stats and 3 in bot.world.stats):
+        bot.pump(5)
+    randomevents.greet(bot)
+    spots = [knowledge.spot_by_key(key) for key in requested if knowledge.spot_by_key(key)]
+    if not spots:
+        spots = [knowledge.best_spot(melee_level(bot))]
+    print("melee=%d spots=%s" % (melee_level(bot), ",".join(spot.key for spot in spots)), flush=True)
+    for spot in spots:
+        print("=== %s ===" % spot.key, flush=True)
+        bot.intend("melee at %s" % spot.key)
+        total = run_spot(bot, spot, kills_limit, ticks_limit, no_bank=no_bank)
+        print("ok %s killed %d" % (spot.key, total), flush=True)
+    return 0

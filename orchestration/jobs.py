@@ -1,63 +1,68 @@
-"""One supervised account: its process, phase and reported state.
+"""One supervised account: its session process, script and reported state.
 
-Phases and transitions (driven by daemon.supervise):
+A job is a persistent session (``open`` spawns the worker, ``close`` ends
+it). Scripts come and go inside it (``run``/``unload``) without touching
+the connection. The worker owns the session truth; the job mirrors it for
+the CLI and the dashboard, and carries the rescue bookkeeping (which
+script an unresolved random event interrupted).
 
-    bot      --crash-->  cleanup  --ok-->  restart -> bot
-    bot      --event-->  (script exits, rescue set)
-    bot      --crash with rescue-->  cleanup --> repair -> cleanup -> bot
-    any      --stop-->   stopped
-
-A ``cleanup`` phase runs ``clean_session``: log in and log out, which
-frees a session left behind by a hard kill before the next attempt.
+Phases: ``idle`` (connected, no script) or ``running`` (a script thread
+is active in the worker). Statuses: ``starting``, ``idle``, ``running``,
+``busy`` (unload in progress), ``reconnecting``, ``finished``,
+``failed``, ``disconnected``, ``stopped``.
 """
 
+import threading
 import time
 
 from .paths import read_json, user_paths
 
 
 class Job:
-    def __init__(self, account, script, args=()):
+    def __init__(self, account, script=None, args=()):
         self.account = account
-        self.main_script = script
         self.script = script
-        self.phase = "bot"  # bot | repair | cleanup
-        self.args = list(args)
+        self.script_args = list(args)
+        self.args = list(self.script_args)
+        self.phase = "running" if script else "idle"
         self.process = None
         self.status = "starting"
         self.started = time.time()
-        self.restarts = 0
-        self.rescue = None
-        self.restart_at = None
         self.log_offset = 0
+        self.last_error = None
         self.last_event = None
         self.last_requirements = None
         self.last_code = None
+        self.interrupted = None  # (script, args) paused for a rescue
+        self.rescue_for = None  # script currently running as a rescue
+        self._worker_rescue_at = None  # worker last_event already rescued
         self.supervise = True
         self.supervisor = None
+        self._guard = threading.RLock()
+
+    def guard(self):
+        return self._guard
 
     def alive(self):
-        return self.process is not None and self.process.poll() is None
+        process = self.process
+        return process is not None and process.poll() is None
 
     def describe(self):
         """Merged daemon + bot view, written to run/users/<account>.json."""
         _merged, partial, log_path = user_paths(self.account)
         bot_state = read_json(partial, {}) or {}
         intention = bot_state.get("intention") or ""
-        if self.status not in ("stopped", "finished", "failed"):
-            if self.phase == "cleanup":
-                intention = "session cleanup"
-            elif self.phase == "repair":
-                intention = "rescue " + self.script
-        return {
+        if self.phase == "running" and self.script in ("rescue_maze", "rescue_down", "rescue_fallback"):
+            intention = "rescue " + (self.script or "")
+        entry = {
             "account": self.account,
-            "script": self.main_script,
-            "args": self.args,
+            "script": self.script,
+            "script_args": list(self.args),
+            "args": list(self.args),
             "phase": self.phase,
             "status": self.status,
-            "pid": self.process.pid if self.process is not None else None,
+            "session_pid": self.process.pid if self.process is not None else None,
             "started": self.started,
-            "restarts": self.restarts,
             "intention": intention,
             "position": bot_state.get("position"),
             "hitpoints": bot_state.get("hitpoints"),
@@ -83,5 +88,7 @@ class Job:
             "log": log_path,
             "last_event": self.last_event,
             "requirements": self.last_requirements,
+            "last_error": self.last_error,
             "last_code": self.last_code,
         }
+        return entry

@@ -144,8 +144,8 @@ INDEX_HTML = """<!doctype html>
   #list li a { text-decoration: none; }
   #list li a.cur { font-weight: bold; color: #ff0; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: #555; }
-  .running { background: #46c46f; } .restarting, .cleaning, .repairing { background: #d9a441; }
-  .needs_human, .crashed, .failed { background: #e05a5a; } .finished, .stopped { background: #6b7280; }
+  .running { background: #46c46f; } .reconnecting, .busy, .starting { background: #d9a441; }
+  .failed, .disconnected { background: #e05a5a; } .finished, .stopped { background: #6b7280; }
   #detail { flex: 2 1 420px; min-width: 300px; }
   #title { color: #888; margin-bottom: 6px; }
   canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; }
@@ -213,7 +213,7 @@ const TILE = 16;      // px per tile
 const R = 16;         // drawn radius, in tiles
 
 const esc = (s) => String(s ?? "");
-const statusClass = (s) => ["running","restarting","cleaning","repairing","needs_human","crashed","failed","finished","stopped"].includes(s) ? s : "";
+const statusClass = (s) => ["running","reconnecting","busy","starting","failed","disconnected","finished","stopped"].includes(s) ? s : "";
 
 function toggleList(force) {
   const hidden = force !== undefined ? force : !document.body.classList.contains("list-hidden");
@@ -527,7 +527,8 @@ function updatePanels() {
   const lines = [];
   lines.push(`${last.account_name || last.account} @ ${x},${z} level ${level} (combat ${last.combat ?? '?'}, energy ${last.energy ?? '?'}, hp ${last.hitpoints ?? '?'})`);
   lines.push(`intent: ${last.intention || '-'}`);
-  lines.push(`status: ${last.status || '?'} | script ${last.script || '?'} | ticks ${last.ticks ?? '?'} | pid ${last.pid ?? '?'} | restarts ${last.restarts ?? 0}`);
+  lines.push(`status: ${last.status || '?'} | script ${last.script || '-'} | ticks ${last.ticks ?? '?'} | pid ${last.pid ?? last.session_pid ?? '?'} | restarts ${last.restarts ?? 0}`);
+  if (last.last_error) lines.push(`last error: ${JSON.stringify(last.last_error)}`);
   lines.push(modal ? `window open: ${modal}` : 'no window open');
   if (hint) lines.push(`hint arrow: ${hint}`);
   if (last.flash !== null && last.flash !== undefined && last.flash !== -1) lines.push(`flashing tab: ${last.flash}`);

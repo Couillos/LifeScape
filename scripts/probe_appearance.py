@@ -1,13 +1,12 @@
 """Dump the bytes around a player-info appearance desync.
 
-Diagnostic only. Run: ../lostcity/.pypy/bin/pypy3 scripts/probe_appearance.py <user>
+Diagnostic only.
+
+Usage: scripts/orchestrator.py run <account> probe_appearance [seconds]
 """
-import sys
-import time
 
 
 from lifescape import world as world_mod
-from lifescape.client import Bot
 
 orig_read_appearance = world_mod.World._read_appearance
 
@@ -22,16 +21,10 @@ def traced(self, data, pid):
         raise
 
 
-world_mod.World._read_appearance = traced
-
-username = sys.argv[1] if len(sys.argv) > 1 else "olivia_king"
-seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 20
-bot = Bot()
-try:
-    bot.login(username, username)
+def run(bot, *args):
+    seconds = float(args[0]) if len(args) > 0 else 20
+    world_mod.World._read_appearance = traced
     print("login ok at", bot.position, flush=True)
-    end = time.time() + seconds
-    while time.time() < end:
+    end = bot.world.ticks + int(seconds * 50)
+    while bot.world.ticks < end:
         bot.pump(5)
-finally:
-    bot.close()

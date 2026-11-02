@@ -6,7 +6,6 @@ are all picked by proximity from gamedata (best spot for the level,
 safe for the combat level, nearest usable bank). Banks across the toll
 gate are a last resort. Stays on one level."""
 
-import sys
 import time
 
 
@@ -25,7 +24,7 @@ def work_spot(bot, tier, product_ids, had_fish):
     _slot, spot_x, spot_z = found
     if max(abs(bot.world.x - spot_x), abs(bot.world.z - spot_z)) > 4:
         try:
-            reached = walk_checked(bot, spot_x, spot_z, timeout=120)
+            reached = walk_checked(bot, spot_x, spot_z, timeout=6000)
         except (Unreachable, TimeoutError):
             return "unreachable", 0
         if not reached:
@@ -49,7 +48,7 @@ def work_spot(bot, tier, product_ids, had_fish):
         walked_at = time.time()
         for next_x, next_z in neighbors:
             try:
-                bot.walk_to(next_x, next_z, bot.world.level, timeout=2, open_doors=False)
+                bot.walk_to(next_x, next_z, bot.world.level, timeout=100, open_doors=False)
                 print("adjacent in %.1fs" % (time.time() - walked_at), flush=True)
                 break
             except (Unreachable, TimeoutError) as walk_error:
@@ -81,7 +80,7 @@ def work_spot(bot, tier, product_ids, had_fish):
             if not dismiss_modal(bot):
                 texts = [text for _com, text in bot.chat_texts()][-4:]
                 print("modal %s texts=%s" % (bot.world.modal, [text[:60] for text in texts]), flush=True)
-                randomevents.greet(bot, timeout=20)
+                randomevents.greet(bot, timeout=1000)
                 bot.pump(10)
                 if bot.world.modal is not None and not dismiss_modal(bot):
                     return "blocked", gained
@@ -176,7 +175,7 @@ def fish_load(bot, tiers, bank, coins_id, fishing_level, side_bank, main_bank, s
         if spawn is None:
             if abs(bot.world.x - bank.x) + abs(bot.world.z - bank.z) > 60:
                 try:
-                    walk_checked(bot, bank.x, bank.z, timeout=300)
+                    walk_checked(bot, bank.x, bank.z, timeout=15000)
                 except (Unreachable, TimeoutError):
                     pass
             for _wait in range(16):
@@ -206,7 +205,7 @@ def fish_load(bot, tiers, bank, coins_id, fishing_level, side_bank, main_bank, s
             print("fishing %s at %s (%s) pack=%s" % (tier.products[0], (spawn.x, spawn.z), bot.position, sorted(pack_counts(bot).values())), flush=True)
             bot.intend("walking to the fishing spot at (%d,%d)" % (spawn.x, spawn.z))
             try:
-                if not walk_checked(bot, spawn.x, spawn.z, timeout=300):
+                if not walk_checked(bot, spawn.x, spawn.z, timeout=15000):
                     wait_hitpoints(bot, hitpoints(bot) + 1, timeout=200)
                     walk_hurts += 1
                     if walk_hurts >= 3:
@@ -272,103 +271,91 @@ def fish_load(bot, tiers, bank, coins_id, fishing_level, side_bank, main_bank, s
 
 
 
-def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "t46"
-    loads = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    bot = Bot()
-    try:
-        bot.login(username, username)
-        start_ticks = bot.world.ticks
-        last_greet = bot.world.ticks
-        while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
-            bot.pump(5)
-            if bot.world.ticks - last_greet > 30:
-                last_greet = bot.world.ticks
-                randomevents.greet(bot)
-        ensure_not_mazed(bot)
-        side_bank = knowledge.comps.com_id("bank_side:inv")
-        main_bank = knowledge.comps.com_id("bank_main:inv")
-        side_shop = knowledge.comps.com_id("shop_template_side:inv")
-        main_shop = knowledge.comps.com_id("shop_template:inv")
-        coins_id = obj_id(bot, COINS)
-        tiers = knowledge.all_fish_tiers()
-        fishing_level = learn_level(bot, 1)
-        bank = nearest_free_bank(bot)
-        if bank is None:
-            raise SystemExit("no reachable bank from %s" % (bot.position,))
-        print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
-        current_tool = best_tool(bot)
-        junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_tool_ids(bot) and held != coins_id]
-        bank_coins_known = 0
-        bait_held = [tier for tier in tiers if tier.bait and pack_total(bot, obj_id(bot, tier.bait)) > 0]
-        if current_tool is None or junk:
-            keep = set()
-            net_price = obj_price(bot, "net")
-            if current_tool:
-                try:
-                    keep.add(obj_id(bot, current_tool))
-                except KeyError:
-                    pass
-            for tier in bait_held:
-                try:
-                    keep.add(obj_id(bot, tier.bait))
-                except KeyError:
-                    continue
-            withdraw = max(0, net_price - pack_total(bot, coins_id)) if current_tool is None else 0
-            if current_tool is None and withdraw > 0 and junk:
-                # No coins for the net: sell expendable junk first.
-                sell_junk(bot, side_shop, coins_id, keep | known_tool_ids(bot), net_price)
-                withdraw = max(0, net_price - pack_total(bot, coins_id))
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
-            if not ok:
-                raise SystemExit("cleanup bank trip failed")
-            if best_tool(bot) is None:
-                if pack_total(bot, coins_id) >= net_price and buy_tool(bot, main_shop, "net"):
-                    print("ok bootstrapped net", flush=True)
-                else:
-                    raise SystemExit("cannot bootstrap: no tool, %d coins" % pack_total(bot, coins_id))
-        done_loads = 0
-        while loads == 0 or done_loads < loads:
-            ensure_not_mazed(bot)
+def run(bot, *args):
+    """Fish banked loads in the open session (0 = forever)."""
+    loads = int(args[0]) if args else 0
+    start_ticks = bot.world.ticks
+    last_greet = bot.world.ticks
+    while not bot.world.inv.get(BACKPACK_COM) and bot.world.ticks - start_ticks < 150:
+        bot.pump(5)
+        if bot.world.ticks - last_greet > 30:
+            last_greet = bot.world.ticks
+            randomevents.greet(bot)
+    ensure_not_mazed(bot)
+    side_bank = knowledge.comps.com_id("bank_side:inv")
+    main_bank = knowledge.comps.com_id("bank_main:inv")
+    side_shop = knowledge.comps.com_id("shop_template_side:inv")
+    main_shop = knowledge.comps.com_id("shop_template:inv")
+    coins_id = obj_id(bot, COINS)
+    tiers = knowledge.all_fish_tiers()
+    fishing_level = learn_level(bot, 1)
+    bank = nearest_free_bank(bot)
+    if bank is None:
+        raise SystemExit("no reachable bank from %s" % (bot.position,))
+    print("bank at (%d,%d)" % (bank.x, bank.z), flush=True)
+    current_tool = best_tool(bot)
+    junk = [held for (held, _count) in pack_counts(bot).values() if held not in known_tool_ids(bot) and held != coins_id]
+    bank_coins_known = 0
+    bait_held = [tier for tier in tiers if tier.bait and pack_total(bot, obj_id(bot, tier.bait)) > 0]
+    if current_tool is None or junk:
+        keep = set()
+        net_price = obj_price(bot, "net")
+        if current_tool:
             try:
-                ok, bank, fishing_level = fish_load(bot, tiers, bank, coins_id, fishing_level, side_bank, main_bank, side_shop, main_shop)
-            except ConnectionError:
-                print("disconnected, relogging", flush=True)
-                bot.relogin()
-                wait_backpack(bot, BACKPACK_COM)
+                keep.add(obj_id(bot, current_tool))
+            except KeyError:
+                pass
+        for tier in bait_held:
+            try:
+                keep.add(obj_id(bot, tier.bait))
+            except KeyError:
                 continue
-            if not ok:
-                raise SystemExit("fish failed at %s" % (bot.position,))
-            candidates, cheapest = cheapest_upgrade(bot, fishing_level)
-            if candidates:
-                sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known))
-            keep = {held for (held, _count) in pack_counts(bot).values() if held in known_tool_ids(bot)}
-            for tier in tiers:
-                if not tier.bait:
-                    continue
-                try:
-                    if pack_total(bot, obj_id(bot, tier.bait)) > 0:
-                        keep.add(obj_id(bot, tier.bait))
-                except KeyError:
-                    continue
-            withdraw = cheapest if candidates else 0
-            ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
-            if not ok:
-                raise SystemExit("bank trip failed")
-            if candidates:
-                for candidate in candidates:
-                    if buy_tool(bot, main_shop, candidate):
-                        print("ok upgraded to %s" % candidate, flush=True)
-                        break
-            done_loads += 1
-            print("ok load %d banked (fishing=%s)" % (done_loads, fishing_level), flush=True)
-        return 0
-    finally:
-        bot.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-if __name__ == "__main__":
-    sys.exit(main())
+        withdraw = max(0, net_price - pack_total(bot, coins_id)) if current_tool is None else 0
+        if current_tool is None and withdraw > 0 and junk:
+            # No coins for the net: sell expendable junk first.
+            sell_junk(bot, side_shop, coins_id, keep | known_tool_ids(bot), net_price)
+            withdraw = max(0, net_price - pack_total(bot, coins_id))
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
+        if not ok:
+            raise SystemExit("cleanup bank trip failed")
+        if best_tool(bot) is None:
+            if pack_total(bot, coins_id) >= net_price and buy_tool(bot, main_shop, "net"):
+                print("ok bootstrapped net", flush=True)
+            else:
+                raise SystemExit("cannot bootstrap: no tool, %d coins" % pack_total(bot, coins_id))
+    done_loads = 0
+    while loads == 0 or done_loads < loads:
+        ensure_not_mazed(bot)
+        try:
+            ok, bank, fishing_level = fish_load(bot, tiers, bank, coins_id, fishing_level, side_bank, main_bank, side_shop, main_shop)
+        except ConnectionError:
+            print("disconnected, relogging", flush=True)
+            bot.relogin()
+            wait_backpack(bot, BACKPACK_COM)
+            continue
+        if not ok:
+            raise SystemExit("fish failed at %s" % (bot.position,))
+        candidates, cheapest = cheapest_upgrade(bot, fishing_level)
+        if candidates:
+            sell_for_target(bot, side_shop, coins_id, max(0, cheapest - bank_coins_known))
+        keep = {held for (held, _count) in pack_counts(bot).values() if held in known_tool_ids(bot)}
+        for tier in tiers:
+            if not tier.bait:
+                continue
+            try:
+                if pack_total(bot, obj_id(bot, tier.bait)) > 0:
+                    keep.add(obj_id(bot, tier.bait))
+            except KeyError:
+                continue
+        withdraw = cheapest if candidates else 0
+        ok, bank_coins_known = bank_trip(bot, bank, side_bank, main_bank, keep, withdraw)
+        if not ok:
+            raise SystemExit("bank trip failed")
+        if candidates:
+            for candidate in candidates:
+                if buy_tool(bot, main_shop, candidate):
+                    print("ok upgraded to %s" % candidate, flush=True)
+                    break
+        done_loads += 1
+        print("ok load %d banked (fishing=%s)" % (done_loads, fishing_level), flush=True)
+    return 0

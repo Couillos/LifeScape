@@ -145,8 +145,8 @@ def apply_random_look(username, gender, kits, colors):
     bot = Bot()
     try:
         bot.login(username, username)
-        deadline = time.time() + 30
-        while time.time() < deadline and bot.world.modal is None:
+        deadline = bot.world.ticks + 1500
+        while bot.world.ticks < deadline and bot.world.modal is None:
             bot.pump(5)
         if bot.world.modal != ("main", COM_DESIGN_MAIN):
             raise SystemExit("no design screen for %s (modal=%s)" % (username, bot.world.modal))

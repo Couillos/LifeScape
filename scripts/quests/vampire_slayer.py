@@ -1,20 +1,19 @@
 """Requirement check and completion: Vampire Slayer."""
 
 import os
-import sys
 
 
 from gamedata import quest_requirements
 from lifescape import save as save_mod
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 
 QUEST = quest_requirements.by_key("vampire")
 
 
 def _saved_stage():
     """Save-based quest stage (live varps are blind to pre-login stages)."""
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return 0
     try:
@@ -43,5 +42,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

@@ -13,7 +13,6 @@ Needs from the bank (besides the two halves the check already proves):
 20 coins for Baraek's bribe, topped up here when the bank has them.
 """
 
-import sys
 
 
 import gamedata as knowledge
@@ -22,7 +21,7 @@ from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 from scripts.quests import common as quest_common
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("blackarmgang")
@@ -155,5 +154,5 @@ def solve(bot):
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

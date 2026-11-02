@@ -1,12 +1,16 @@
-"""Run the fishing bot with a player-info desync trace. Diagnostic only."""
+"""Run the fishing bot with a player-info desync trace. Diagnostic only.
+
+Usage: scripts/orchestrator.py run <account> probe_fishing_trace [args...]
+"""
 import os
 import runpy
-import sys
 
 
 from lifescape import world as world_mod
 
 orig_read_mask_set = world_mod.World._read_mask_set
+
+_installed = False
 
 
 def traced(self, data, pid, player):
@@ -22,7 +26,15 @@ def traced(self, data, pid, player):
         raise
 
 
-world_mod.World._read_mask_set = traced
+def _install():
+    global _installed
+    if _installed:
+        return
+    world_mod.World._read_mask_set = traced
+    _installed = True
 
-sys.argv = [os.path.join(os.path.dirname(__file__), "fishing", "run.py")] + sys.argv[1:]
-runpy.run_path(os.path.join(os.path.dirname(__file__), "fishing", "run.py"), run_name="__main__")
+
+def run(bot, *args):
+    _install()
+    namespace = runpy.run_path(os.path.join(os.path.dirname(__file__), "fishing", "run.py"))
+    return namespace["run"](bot, *args)

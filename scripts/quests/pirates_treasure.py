@@ -10,7 +10,6 @@ a spade; both are bought from shops when the bank lacks them.
 """
 
 import os
-import sys
 
 
 import gamedata as knowledge
@@ -19,7 +18,7 @@ from lifescape import save as save_mod
 from lifescape.waits import wait_ticks
 from scripts.quests import common as quest_common
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("hunt")
@@ -33,7 +32,7 @@ _SAVED_VARPS = {}
 
 
 def _saved_varps():
-    account = os.environ.get("LIFESCAPE_USER") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    account = os.environ.get("LIFESCAPE_USER") or ""
     if not account:
         return {}
     try:
@@ -162,10 +161,10 @@ def _pack_crate(bot):
             before = _count(bot, banana)
             inner = bot.world.ticks + 300
             while _count(bot, banana) == before and bot.world.ticks < inner:
-                solver.operate_loc(bot, ("bananatree",), 1, timeout=60)
+                solver.operate_loc(bot, ("bananatree",), 1, timeout=3000)
             if _count(bot, banana) == before:
                 try:
-                    bot.approach(bot.world.x + 5, bot.world.z, radius=2, timeout=30)
+                    bot.approach(bot.world.x + 5, bot.world.z, radius=2, timeout=1500)
                 except Exception:
                     pass
                 continue
@@ -185,7 +184,7 @@ def _dig(bot):
         raise solver.SolverError("spade is not in the backpack")
     for x, z in DIG_TILES:
         try:
-            bot.approach(x, z, radius=1, timeout=120, open_doors=True)
+            bot.approach(x, z, radius=1, timeout=6000, open_doors=True)
         except Exception as error:
             print("dig tile %d,%d unreachable: %s" % (x, z, error), flush=True)
             continue
@@ -230,7 +229,7 @@ def solve(bot):
             solver.talk_like(bot, "wydin", ["job"])
         _wear(bot, "white_apron")
         _x, _z, level, loc = tutorial_common.find_loc(bot, "grocerycrate")
-        bot.approach(_x, _z, level=level, radius=2, timeout=300, open_doors=True)
+        bot.approach(_x, _z, level=level, radius=2, timeout=15000, open_doors=True)
         bot.op_loc(1, _x, _z, loc)
         wait_ticks(bot, 10)
         if _count(bot, rum) < 1:
@@ -249,7 +248,7 @@ def solve(bot):
     # been observed to open a choice instead of climbing). Already
     # upstairs (key probe, resume after a break): no trek needed.
     if bot.world.level != 1:
-        bot.walk_to(3230, 3382, 1, timeout=180, open_doors=True)
+        bot.walk_to(3230, 3382, 1, timeout=9000, open_doors=True)
     if bot.world.level != 1:
         raise solver.SolverError("did not climb to the Blue Moon Inn upstairs")
     # The chest only answers from its east side: the south tile borders a
@@ -257,7 +256,7 @@ def solve(bot):
     # silently drops both clicks (verified live with probe_use).
     if _count(bot, message) < 1:
         _x, _z, _level, _loc = tutorial_common.find_loc(bot, "piratechest")
-        bot.walk_to(_x + 1, _z, _level, timeout=120, open_doors=True)
+        bot.walk_to(_x + 1, _z, _level, timeout=6000, open_doors=True)
         tutorial_common.use_held_on_loc(bot, _x, _z, _loc, key)
         target = bot.world.ticks + 300
         while _count(bot, message) < 1 and bot.world.ticks < target:
@@ -280,5 +279,5 @@ def solve(bot):
     _dig(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

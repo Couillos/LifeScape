@@ -103,20 +103,22 @@ mais jamais un script de bot commité.
 
 ## Ticks serveur réduits pour le dev
 
-Le serveur tourne en ticks de 100 ms (`tickRate: 100` dans
+Le serveur tourne en ticks de 20 ms (`tickRate: 20` dans
 `engine/data/config/world.json`, défaut 600) pour accélérer dev et
 tests. Retour au défaut : remettre 600 (ou supprimer la clé) +
-`docker compose restart lostcity`.
+`docker compose restart server`.
 
 ## Attentes en ticks, jamais en secondes
 
 Toutes les attentes des scripts Python s'expriment en ticks serveur
 (`bot.world.ticks`, incrémenté à chaque paquet player-info, donc à
 chaque tick quand on est connecté), jamais en secondes : le même
-code se comporte pareil à 600 ms comme à 100 ms. Helper partagé :
+code se comporte pareil à 600 ms comme à 20 ms. Helper partagé :
 `lifescape.waits.wait_ticks(bot, n)` (+ `wait_hitpoints`,
-`ban_area`). Les timeouts `walk_to`/`take` (SDK, secondes) restent
-des garde-fous d'échec, pas du pacing.
+`ban_area`, constantes `TICK_MS` et bornes ticks dans le SDK :
+`walk_to`, `take`, `approach` prennent des ticks). Les garde-fous
+process (spawn/join/kill, espacement relogin, timeouts socket) restent
+en secondes et sont documentés comme tels.
 
 ## Mesures in-game, jamais de sleep
 
@@ -130,30 +132,38 @@ jusqu'à un état observable, avec une borne en ticks au cas où.
 
 ## Orchestrateur (dossier `orchestration/`)
 
-Un seul daemon supervise tous les bots, un job par compte. Il possède le
-cycle de vie (lancer/arrêter/relancer), les logs et l'état live, et les
-réparations ; il ne parle jamais le protocole réseau (ça reste le SDK).
+Un seul daemon supervise tous les bots, un worker de session par compte.
+Il possède le cycle de vie (open/close des sessions, run/unload des
+scripts, relogin borné), les logs et l'état live ; il ne parle jamais
+le protocole réseau (ça reste le SDK).
 
 - `paths.py` : layout `run/` + IO JSON atomique
   (`run/users/<compte>.json` état fusionné, `run/users/<compte>.bot.json`
-  heartbeat du SDK, `run/logs/<compte>.log`).
+  heartbeat du SDK, `run/logs/<compte>.log`, `run/session-<compte>.sock`
+  commande du worker).
 - `registry.py` : scripts lançables + mapping événement → rescue.
-- `jobs.py` : modèle d'un job et ses phases (`bot`, `repair`, `cleanup`).
-- `daemon.py` : un process worker par compte, lecture des `@@EVENT`,
-  machine à états (crash → cleanup → relance ; événement non résolu →
-  rescue puis relance), socket unix.
-- `worker.py` : exécute un script sous le daemon et traduit un abandon
-  « random event » en code 75.
-- `cli.py` : client CLI (démarre le daemon au besoin).
+- `jobs.py` : modèle d'une session (`phase` idle|running, `script`
+  nullable, `status`, `last_error`) et son rescue en cours.
+- `daemon.py` : un worker de session par compte, lecture des `@@EVENT`,
+  machine à états (event non résolu → unload + rescue en session puis
+  reprise du script interrompu), socket unix.
+- `session_worker.py` : session connectée persistante, thread script
+  dédié, file de commandes drainée aux safe-points `pump()`,
+  lectures depuis le snapshot heartbeat.
+- `cli.py` : client CLI + REPL `shell` (démarre le daemon au besoin).
 - `web.py` : dashboard et API HTTP (port 8765).
 
 ```sh
 # CLI (le daemon démarre tout seul)
-../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py start fishing olivia_king 1
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py open olivia_king
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py run olivia_king fishing 1
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py call olivia_king inventory
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py shell olivia_king
 ../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py status
 ../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py show olivia_king
 ../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py logs olivia_king 40
-../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py stop olivia_king
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py unload olivia_king
+../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py close olivia_king
 ../lostcity/.pypy/bin/pypy3 scripts/orchestrator.py shutdown
 # daemon seul
 ../lostcity/.pypy/bin/pypy3 -m orchestration.daemon
@@ -166,12 +176,20 @@ sur **http://5.83.152.180:8765/**. Variables lues par le SDK et le daemon :
 
 Contrat d'un script de bot :
 
+- `run(bot, *args)` : le worker ouvre la session avant et la referme
+  après ; le script ne fait ni `Bot()`, ni `login`, ni `close`, et lit
+  ses arguments depuis `args` (l'orchestrateur appelle `run t01 goto
+  3200 3227`, pas `pypy scripts/goto.py`) ;
 - `bot.intend("...")` à chaque changement d'action : c'est l'intention
   affichée en temps réel par le dashboard et l'état du compte ;
 - `randomevents.check(bot)` rapporte les événements non résolus
-  (`@@EVENT {...}`) que le daemon transforme en job de rescue ;
-- sortie par `finally: bot.close()` (déjà en place) pour un logout propre,
-  et tout crash est suivi d'un `clean_session` avant relance.
+  (`@@EVENT {...}`) ; le worker décharge le script et le daemon joue le
+  rescue mappé en session, puis reprend le script interrompu ;
+- les bornes et attentes jeu s'expriment en ticks (`bot.world.ticks`),
+  jamais en secondes ni `time.sleep` (voir `lifescape/waits.py`,
+  `TICK_MS = 20`) ; seuls les garde-fous process (spawn/join/kill,
+  espacement relogin, timeouts socket) restent en secondes, documentés
+  comme tels.
 
 Spectate : l'état live contient position, hp, ticks, PNJ/décors/joueurs
 proches, inventaire et chat ; `web.py` en dessine une grille 15×15 autour
@@ -190,18 +208,46 @@ les logs, l'état live, le logout propre et les relances ; un run manuel
 laisse des sessions orphelines et des états faux (« run brocant »).
 
 Les outils de diagnostic aussi : `check_transitions` et `check_doors` sont
-des scripts supervisés (`scripts/orchestrator.py start check_transitions
-admin`). C'est ce qui alimente l'état live et donc le spectate du front ;
+des scripts supervisés (`open admin` puis `run admin check_transitions`).
+C'est ce qui alimente l'état live et donc le spectate du front ;
 un run direct apparaît comme un bot « closed » sans carte.
 
 ```sh
-# bots
-scripts/orchestrator.py start <script> <account> [args...]
-# suite unitaire, exécutée comme un job supervisé (logs + code de sortie)
+# bots : une session par compte, scripts chargés/déchargés sans reconnexion
+scripts/orchestrator.py open <account>
+scripts/orchestrator.py run <account> <script> [args...]
+# appels SDK directs dans la session (snapshot ou safe-point pump)
+scripts/orchestrator.py call <account> <method> [args...]
+scripts/orchestrator.py shell <account>
+# suite unitaire, exécutée comme session éphémère (logs + code de sortie)
 scripts/orchestrator.py test [pattern]
 # suivi
 scripts/orchestrator.py status | show <account> | logs <account> 40
 ```
+
+## Debugger, tester, lancer (sessions)
+
+Lancer un script : `open` (connecte, `idle`), `run` (charge,
+`running`), `unload` (décharge, session gardée, même pid), `close`
+(logout propre). Un `run` qui lève rend `idle` + `last_error`, jamais
+de mort de session ; un event non résolu déclenche le rescue en
+session puis reprend le script.
+
+Tester, dans l'ordre : unitaires (`-m unittest discover tests`
+depuis la racine, 227 attendus), session éphémère
+(`orchestrator.py test [pattern]`), puis live sur `t01` (`open`,
+`run`, `call`, `unload`, `close`, `show` ×2 pour voir les ticks
+avancer). Une théorie protocole = une sonde live avant d'entrer
+dans le SDK ; jamais `admin`/`bite` pour les tests.
+
+Debugger sans script temporaire : `show` (état fusionné + `last_error`),
+`see` (vue triée par distance), `logs` (marqueurs
+`=== session open/run/unload/call/close ===`), `call` (lectures
+depuis le snapshot même si un script tourne ; écritures au prochain
+safe-point `pump()`, borne 500 ticks), `shell` (REPL + `help`).
+Erreurs franches à connaître : `no session` (ouvrir d'abord),
+`already open`, `busy` (script sans `pump`), `unknown method`
+(hors whitelist), `forbidden` (`cheat` hors `admin`).
 
 Les comptes tournent en parallèle : un thread de supervision et un process
 worker par compte, donc plusieurs bots peuvent tourner en même temps sans
@@ -211,8 +257,9 @@ Le service `bots` monte `../LifeScape` en direct (scripts, SDK, gamedata,
 orchestration) et `./engine` en lecture seule : un script, le SDK ou une
 table gamedata modifiés sont visibles sans redémarrer le service. Le
 registre se recharge tout seul (`registry.reload_if_changed`) quand on
-ajoute un script ; les workers sont des processus neufs à chaque job. Seul
-le code du daemon déjà importé (web, jobs, superviseur) demande encore un
+ajoute un script ; le worker de session persiste tant que la session est
+ouverte (seul `run` charge du code frais). Seul le code du daemon déjà
+importé (web, jobs, superviseur) demande encore un
 `docker compose restart bots`.
 
 ## Interface : noms gamedata, pas d'ids

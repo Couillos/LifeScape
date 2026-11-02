@@ -6,6 +6,9 @@ the server sends each tick while the bot is logged in.
 """
 
 
+TICK_MS = 20  # server tick length; matches node.tickRate in world.json.
+
+
 def wait_ticks(bot, n, per_pump=2):
     target = bot.world.ticks + n
     while bot.world.ticks < target:

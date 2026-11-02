@@ -1,11 +1,10 @@
 """Requirement check and completion: Witch's Potion."""
 
-import sys
 
 
 from gamedata import quest_requirements
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 
 QUEST = quest_requirements.by_key("hetty")
 
@@ -16,5 +15,5 @@ def solve(bot):
     solver.operate_loc(bot, ("hettycauldron",), 1)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

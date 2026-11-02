@@ -4,7 +4,6 @@ The mixin assumes the core session (connection, world, tick pump) and the
 movement mixin (walk_to/approach) are present on the same Bot instance.
 """
 
-import time
 
 from .. import objs as objs_mod
 from ..buffer import Writer
@@ -12,6 +11,7 @@ from ..connection import LoginError
 from ..protocol import client_op_id
 from ..world import to_base37
 from .core import StateError, Unreachable
+from . import snapshot as snapshot_mod
 
 
 class ActionsMixin:
@@ -156,7 +156,7 @@ class ActionsMixin:
         for dx, dz in ((20, 0), (0, 0), (-20, 0)):
             if dx or dz:
                 try:
-                    self.walk_to(base[0] + dx, base[1] + dz, self.world.level, open_doors=True, timeout=25)
+                    self.walk_to(base[0] + dx, base[1] + dz, self.world.level, open_doors=True, timeout=1250)
                 except (Unreachable, TimeoutError) as error:
                     print("trade approach step failed at %s: %s" % (self.world.position, error), flush=True)
             if self._scan_and_trade(name, None):
@@ -166,12 +166,12 @@ class ActionsMixin:
     def _scan_and_trade(self, name, near):
         if near is not None and abs(self.world.x - near[0]) + abs(self.world.z - near[1]) > 4:
             try:
-                self.walk_to(near[0], near[1], self.world.level, timeout=25, open_doors=True)
+                self.walk_to(near[0], near[1], self.world.level, timeout=1250, open_doors=True)
             except (Unreachable, TimeoutError) as error:
                 print("trade walk to %s failed: %s" % (near, error), flush=True)
-        deadline = time.time() + 10
+        deadline = self.world.ticks + 500
         found = None
-        while time.time() < deadline and found is None:
+        while self.world.ticks < deadline and found is None:
             self.pump(5)
             found = self.find_npc(name)
         if found is None:
@@ -179,7 +179,10 @@ class ActionsMixin:
         return self._trade_from_best_tile(found)
 
     def _trade_from_best_tile(self, slot, rounds=2):
+        deadline = self.world.ticks + 400
         for _round in range(rounds):
+            if self.world.ticks >= deadline:
+                break
             npc = self.world.npcs.get(slot)
             if npc is None:
                 self.pump(5)
@@ -189,20 +192,22 @@ class ActionsMixin:
                 key=lambda tile: abs(tile[0] - self.world.x) + abs(tile[1] - self.world.z),
             )
             for tile_x, tile_z in tiles:
+                if self.world.ticks >= deadline:
+                    break
                 try:
-                    self.walk_to(tile_x, tile_z, self.world.level, timeout=15, open_doors=True)
+                    self.walk_to(tile_x, tile_z, self.world.level, timeout=750, open_doors=True)
                 except (Unreachable, TimeoutError) as error:
                     print("trade tile %d,%d failed: %s" % (tile_x, tile_z, error), flush=True)
                     continue
                 self.op_npc(3, slot)
-                end = time.time() + 8
-                while not self.world.modal and time.time() < end:
+                end = self.world.ticks + 400
+                while not self.world.modal and self.world.ticks < end:
                     self.pump(5)
                 if self.world.modal is not None:
                     return True
         return False
 
-    def take(self, obj_id=None, name=None, timeout=30):
+    def take(self, obj_id=None, name=None, timeout=1500):
 
         self.ensure_nav()
         if name is not None:
@@ -210,9 +215,9 @@ class ActionsMixin:
                 if entry and entry["name"] and name.lower() in entry["name"].lower():
                     obj_id = index
                     break
-        deadline = time.time() + timeout
+        deadline = self.world.ticks + timeout
         items = {}
-        while time.time() < deadline and not items:
+        while self.world.ticks < deadline and not items:
             self.pump(3)
             items = self.world.ground_items(self.world.x, self.world.z, self.world.level, obj_id=obj_id)
         if not items:
@@ -230,7 +235,7 @@ class ActionsMixin:
             stepped = False
             for nx, nz in neighbors:
                 try:
-                    self.walk_to(nx, nz, level, timeout=max(10, deadline - time.time()))
+                    self.walk_to(nx, nz, level, timeout=max(500, deadline - self.world.ticks))
                     stepped = True
                     break
                 except (Unreachable, TimeoutError) as error:
@@ -240,19 +245,15 @@ class ActionsMixin:
                 raise Unreachable("no reachable neighbor near %d,%d" % (x, z))
         had = sum(self.inventory().values())
         self.op_obj(op, x, z, oid)
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = self.world.ticks + timeout
+        while self.world.ticks < deadline:
             self.pump(3)
             if sum(self.inventory().values()) > had:
                 return True
         return False
 
     def inventory(self):
-        items = {}
-        for com, slots in self.world.inv.items():
-            for slot, (obj_id, count) in slots.items():
-                items[obj_id] = items.get(obj_id, 0) + count
-        return items
+        return snapshot_mod.aggregate(self.world.inv)
 
     def bank_deposit_all(self, side_com, keep_ids=(), timeout=80):
         """Deposit the backpack with the bank's "Deposit All" action.
@@ -279,15 +280,12 @@ class ActionsMixin:
         return False
 
     def backpack(self):
-        for com, slots in self.world.inv.items():
-            if self.world.inv_cap.get(com) == 28:
-                return com, slots
-        for com, slots in self.world.inv.items():
-            if len(slots) <= 28:
-                return com, slots
-        return None, {}
+        com = snapshot_mod.backpack_com(self.world.inv, self.world.inv_cap)
+        if com is None:
+            return None, {}
+        return com, self.world.inv.get(com, {})
 
-    def drop(self, obj_id, timeout=15):
+    def drop(self, obj_id, timeout=750):
 
         com, slots = self.backpack()
         for slot, (held, _count) in slots.items():
@@ -300,8 +298,8 @@ class ActionsMixin:
             body.u16(slot)
             body.u16(com)
             self.connection.send(client_op_id("OPHELD%d" % op), body.bytes())
-            deadline = time.time() + timeout
-            while time.time() < deadline:
+            deadline = self.world.ticks + timeout
+            while self.world.ticks < deadline:
                 self.pump(3)
                 _com, now = self.backpack()
                 if sum(count for (carried, count) in now.values() if carried == obj_id) < before:
@@ -316,11 +314,8 @@ class ActionsMixin:
         self.connection.send(client_op_id("RESUME_PAUSEBUTTON"), body.bytes())
 
     def bank_items(self):
-        com = self._com_id("bank_main:inv")
-        items = {}
-        for held, count in self.world.inv.get(com, {}).values():
-            items[held] = items.get(held, 0) + count
-        return items
+        self._com_id("bank_main:inv")
+        return snapshot_mod.bank_items(self.world.inv, self._com_ids)
 
     def open_bank(self, x, z, loc_id, timeout=100):
         self.approach(x, z, radius=1, timeout=60, open_doors=True)
@@ -377,19 +372,7 @@ class ActionsMixin:
         are opened with IF_OPENCHAT), so keep every chat interface id and
         pick the most recent one that carries a "Select an Option" header.
         """
-        items = list(self.world.texts.items())
-        headers = [
-            index for index, (_com, text) in enumerate(items)
-            if "select an option" in text.lower()
-        ]
-        if not headers:
-            return []
-        header = headers[-1]
-        base = items[header][0]
-        return [
-            (com, text) for com, text in items[header + 1:header + 6]
-            if base < com <= base + 5
-        ]
+        return snapshot_mod.chat_options(dict(self.world.texts))
 
     def chat_choose(self, text):
         for com, option in self.world.texts.items():

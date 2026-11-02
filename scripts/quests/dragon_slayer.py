@@ -13,14 +13,13 @@ pot, silk, anti-dragonbreath shield. Combat expected throughout
 no extra gearing or food runs are scripted.
 """
 
-import sys
 
 
 import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape.client import Unreachable
 from scripts.quests import solver
-from scripts.quests.common import run
+from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
 QUEST = quest_requirements.by_key("dragon")
@@ -125,21 +124,21 @@ def solve(bot):
         _maze_room(bot, "dragonslayer_giantrat", "redkey", "reddoor")
         _maze_room(bot, "dragonslayer_ghost", "orangekey", "orangedoor")
         _maze_room(bot, "dragonslayer_skeleton", "yellowkey", "yellowdoor")
-        _try_op(bot, solver.operate_loc, ("funladdertop",), 1, timeout=120)
+        _try_op(bot, solver.operate_loc, ("funladdertop",), 1, timeout=6000)
         _maze_room(bot, "dragonslayer_zombie", "bluekey", "bluedoor")
         _maze_room(bot, "melzar_the_mad", "magentakey", "magentadoor")
         _maze_room(bot, "dragonslayer_demon", "greenkey", "greendoor")
-        solver.operate_loc(bot, ("funchestshut",), 1, timeout=120)
-        solver.operate_loc(bot, ("funchestopen",), 1, timeout=120)
+        solver.operate_loc(bot, ("funchestshut",), 1, timeout=6000)
+        solver.operate_loc(bot, ("funchestopen",), 1, timeout=6000)
     if not _have(bot, "mappart1"):
         raise solver.SolverError("no Melzar map piece at %s" % (bot.position,))
     # Oracle rhyme, then through the magic door (consumes the four items)
     # to the dwarven-mine chest holding part 3.
     if not _have(bot, "mappart3"):
         solver.talk_like(bot, "oracle", ["map", "crandor", "piece"])
-        solver.operate_loc(bot, ("dragon_slayer_magic_door",), 1, timeout=120)
-        solver.operate_loc(bot, ("oraclechestshut",), 1, timeout=120)
-        solver.operate_loc(bot, ("oraclechestopen",), 1, timeout=120)
+        solver.operate_loc(bot, ("dragon_slayer_magic_door",), 1, timeout=6000)
+        solver.operate_loc(bot, ("oraclechestshut",), 1, timeout=6000)
+        solver.operate_loc(bot, ("oraclechestopen",), 1, timeout=6000)
     if not _have(bot, "mappart3"):
         raise solver.SolverError("no oracle map piece at %s" % (bot.position,))
     # Wormbrain in the Port Sarim jail sells part 2 for 10000 coins.
@@ -151,26 +150,26 @@ def solve(bot):
     # join the map and hand it to Ned in Draynor.
     if _varp(bot, "dragonquest") < 3:
         solver.talk_like(bot, "klarense", ["buy", "yep", "sounds good"])
-    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_on",), 1, timeout=120)
-    _try_op(bot, solver.operate_loc, ("dragonshipladdertop",), 1, timeout=120)
+    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_on",), 1, timeout=6000)
+    _try_op(bot, solver.operate_loc, ("dragonshipladdertop",), 1, timeout=6000)
     if _varp(bot, "dragonquestvar") < 3:
         _repair_ship(bot)
-    _try_op(bot, solver.operate_loc, ("dragonshipladder",), 1, timeout=120)
-    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_off",), 1, timeout=120)
+    _try_op(bot, solver.operate_loc, ("dragonshipladder",), 1, timeout=6000)
+    _try_op(bot, solver.operate_loc, ("dragonshipgangplank_off",), 1, timeout=6000)
     _combine_map(bot)
     solver.talk_like(bot, "ned", ["crandor island", "take me", "map", "sailor"])
     # Board in Port Sarim, climb to Ned's cabin and sail to Crandor.
-    solver.operate_loc(bot, ("dragonshipgangplank_on",), 1, timeout=120)
-    solver.operate_loc(bot, ("dragonshipladdertop",), 1, timeout=120)
+    solver.operate_loc(bot, ("dragonshipgangplank_on",), 1, timeout=6000)
+    solver.operate_loc(bot, ("dragonshipladdertop",), 1, timeout=6000)
     solver.talk_like(bot, "dragonslayer_ned", ["yep", "ready", "go"])
     # Into the lair: rock opening, then the gates, then Elvarg himself.
     # The shield must be worn or the dragon fire (max 70) is unsurvivable.
     _wield(bot, "antidragonbreathshield")
-    solver.operate_loc(bot, ("crandor_rock_opening",), 1, timeout=120)
-    _try_op(bot, solver.operate_loc, ("elvarg_gate_right", "elvarg_gate_left"), 1, timeout=120)
+    solver.operate_loc(bot, ("crandor_rock_opening",), 1, timeout=6000)
+    _try_op(bot, solver.operate_loc, ("elvarg_gate_right", "elvarg_gate_left"), 1, timeout=6000)
     solver.attack(bot, ("elvarg",), timeout=1200)
     solver.wait_complete(bot)
 
 
-if __name__ == "__main__":
-    sys.exit(run(QUEST, solve=solve))
+def run(bot, *args):
+    return run_requirements(bot, QUEST, solve=solve)

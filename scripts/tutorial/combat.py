@@ -3,7 +3,6 @@
 Verified through inventory (weapons given, bones looted) and movement.
 """
 
-import time
 
 from lifescape.client import Unreachable
 
@@ -121,7 +120,7 @@ def melee(bot):
                 break
     tutorial_common.check(bot, wait_bones(bot, timeout=100), "rat killed in melee")
     try:
-        bot.take(name="newbiebones", timeout=60)
+        bot.take(name="newbiebones", timeout=3000)
         print("ok bones picked up", flush=True)
     except Unreachable:
         print("ok no bones taken", flush=True)
