@@ -195,16 +195,10 @@ def operate_loc(bot, names, op=1, timeout=60):
     bot.op_loc(op, x, z, loc)
     wait_ticks(bot, 10)
     # An op often opens a plain mesbox (drink, open, search) that halts the
-    # server script until dismissed: click through it so follow-up steps
-    # (and the completion scroll) can land. Main windows are left alone
-    # for wait_complete.
-    for _ in range(12):
-        if bot.world.modal is None or _completion_open(bot):
-            break
-        if bot.world.modal[0] == "main" or bot.chat_options():
-            break
-        bot.chat_continue()
-        bot.pump(5)
+    # server script until dismissed: click through it (and any story that
+    # follows) so follow-up steps and the completion scroll can land.
+    # Main windows are left alone for wait_complete.
+    _drain_dialog(bot)
 
 
 def obj_id(name):
@@ -226,6 +220,24 @@ def take_near(bot, name, timeout=120):
     raise SolverError("cannot pick up %s at %s" % (name, bot.position))
 
 
+def _drain_dialog(bot, extra_ticks=150):
+    """Click through plain chat pages until the modal closes or chooses.
+
+    Follows operating/using when the server keeps talking (mesboxes and
+    multi-page stories). Stops at choice pages and completion scrolls,
+    which belong to the caller. Bounded by ticks, not a fixed click
+    count: tales run dozens of pages.
+    """
+    target = bot.world.ticks + extra_ticks
+    while bot.world.ticks < target:
+        if bot.world.modal is None or _completion_open(bot):
+            return
+        if bot.world.modal[0] == "main" or bot.chat_options():
+            return
+        bot.chat_continue()
+        bot.pump(5)
+
+
 def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
     """Use an inventory item on an NPC (research notes on Sedridor)."""
     go_to_npc(bot, npc_name, near=near)
@@ -244,15 +256,9 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
         use_com, use_slot = C.inv_slot(bot, obj_id(item_name))
         bot.op_npc_u(nid, obj_id(item_name), use_slot, use_com)
         wait_ticks(bot, 10)
-        # Same halt risk as operate_loc: a result mesbox blocks the
-        # server script until dismissed.
-        for _ in range(12):
-            if bot.world.modal is None or _completion_open(bot):
-                break
-            if bot.world.modal[0] == "main" or bot.chat_options():
-                break
-            bot.chat_continue()
-            bot.pump(5)
+        # Same halt risk as operate_loc: a result mesbox or a multi-page
+        # story blocks the server script until dismissed.
+        _drain_dialog(bot)
         return True
     raise SolverError("cannot use %s on %s at %s" % (item_name, npc_name, bot.position))
 
@@ -346,15 +352,9 @@ def use_item_on_loc(bot, item_name, loc_names):
     C.approach_loc(bot, x, z, loc, level)
     C.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
     wait_ticks(bot, 10)
-    # Same halt risk as operate_loc: a result mesbox blocks the server
-    # script until dismissed.
-    for _ in range(12):
-        if bot.world.modal is None or _completion_open(bot):
-            break
-        if bot.world.modal[0] == "main" or bot.chat_options():
-            break
-        bot.chat_continue()
-        bot.pump(5)
+    # Same halt risk as operate_loc: a result mesbox or a multi-page
+    # story blocks the server script until dismissed.
+    _drain_dialog(bot)
 
 
 def withdraw_requirements(bot, requirements):
