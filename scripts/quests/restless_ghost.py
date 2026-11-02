@@ -119,6 +119,14 @@ def solve(bot):
         bot.pump(10)
     except (Unreachable, TimeoutError):
         pass
+    # Dismiss the "you open the coffin" mesbox: nobody else clicks here.
+    for _ in range(6):
+        if bot.world.modal is None:
+            break
+        if bot.chat_options():
+            break
+        bot.chat_continue()
+        bot.pump(5)
     # Same blocked-tile trap for the skull use: neighbour-stand, then click.
     altar = C.find_loc(bot, "restless_ghost_altar", "shutghostcoffin")
     ax, az, alevel, aloc = altar
@@ -133,6 +141,14 @@ def solve(bot):
             continue
     C.use_held_on_loc(bot, ax, az, aloc, solver.obj_id("ghostskull"))
     bot.pump(10)
+    # Click through the skull mesboxes so the completion scroll can land.
+    for _ in range(12):
+        if bot.world.modal is None:
+            break
+        if bot.chat_options() or solver._completion_open(bot):
+            break
+        bot.chat_continue()
+        bot.pump(5)
     try:
         _wear(bot, "amulet_of_strength")
     except Exception:
