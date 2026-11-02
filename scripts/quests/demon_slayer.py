@@ -118,17 +118,17 @@ def solve(bot):
     # Sir Prysin sends us hunting for his three keys.
     _talk_until(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"], KEY_HUNT)
     # Captain Rovin hands over his key for the demon story (no varp: skip when held).
-    if _count(bot, "silverlight_key_2") < 1:
+    if _count(bot, "silverlight_key_2") < 1 and _stage(bot) < SILVERLIGHT:
         solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
-    if _count(bot, "silverlight_key_3") < 1:
+    if _count(bot, "silverlight_key_3") < 1 and _stage(bot) < SILVERLIGHT:
         # Fast path: already standing next to the key in the sewer (retry
         # after a pour). A missing key fails fast with no walking.
         try:
             bot.take(name="silverlight_key_3", timeout=15)
         except (Unreachable, TimeoutError):
             pass
-    if _count(bot, "silverlight_key_3") < 1:
+    if _count(bot, "silverlight_key_3") < 1 and _stage(bot) < SILVERLIGHT:
         if _count(bot, "bucket_water") < 1:
             raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
         drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, "questdrain")
@@ -167,6 +167,9 @@ def solve(bot):
     solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])
     # Wielding Silverlight is what lets the attack land and weakens Delrith.
     _wield(bot, "silverlight")
+    # Delrith waits at the stone circle south of Varrock: walk there first,
+    # as attack() only engages a streamed (nearby) NPC.
+    solver.go_to_npc(bot, "delrith")
     solver.attack(bot, ("delrith",), timeout=180)
     target = bot.world.ticks + 100
     opened = False
