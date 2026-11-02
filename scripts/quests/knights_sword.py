@@ -116,7 +116,8 @@ def solve(bot):
     # Reldo names the Imcando and their love of redberry pie.
     _talk_until(bot, "reldo", ["imcando"], SPOKEN_RELDO)
     # Thurgo only listens after pie: the banked pie was withdrawn already.
-    if _count(bot, "redberry_pie") < 1:
+    # The pie is eaten on delivery, so only fresh runs need one.
+    if _stage(bot) < GIVEN_PIE and _count(bot, "redberry_pie") < 1:
         raise solver.SolverError("no redberry pie for Thurgo at %s" % (bot.position,))
     _talk_until(bot, "thurgo", ["redberry pie"], GIVEN_PIE)
     _talk_until(bot, "thurgo", ["special sword"], SPOKEN_THURGO)

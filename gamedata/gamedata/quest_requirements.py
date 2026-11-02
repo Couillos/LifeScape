@@ -150,7 +150,10 @@ F2P_QUESTS = (
         skills=(_skill("mining", 10),),
         # Journal: "an advantage if I had a combat level of 20" (not a gate).
         recommended_combat=20,
-        items=(_item("redberry_pie"), _item("blurite_ore"), _item("iron_bar", 2)),
+        # No pie: Thurgo eats it at stage 3, so requiring it upfront blocks
+        # any resume after delivery (like hunt rum, prince kit).
+        # Stage-gated check in solve() names it for fresh runs.
+        items=(_item("blurite_ore"), _item("iron_bar", 2)),
     ),
     QuestRequirements(
         key="imp",
