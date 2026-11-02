@@ -127,6 +127,30 @@ class MovementMixin:
         if run is None:
             run = self.want_run()
         self._ensure_nav()
+        if not self._in_portal_route and abs(x - self.world.x) + abs(z - self.world.z) > 120:
+            # Same level number, disconnected region (a cellar shares
+            # level 0 with the surface): no direct walk can arrive, and
+            # grinding one only burns the walk timeout. Probe with the
+            # doors-aware planner first; only a portal route can cross.
+            try:
+                direct = (
+                    self._planner.plan(
+                        self.world.level, self.world.x, self.world.z,
+                        x, z, self._door_closed_at, self._blocked_doors,
+                    )
+                    if self._planner is not None
+                    else True
+                )
+            except Exception:
+                direct = True
+            if not direct:
+                plan = self._plan_portals((self.world.level, self.world.x, self.world.z), (level, x, z))
+                if plan is not None and any(kind == "portal" for kind, _payload in plan):
+                    self._in_portal_route = True
+                    try:
+                        return self._follow_route(plan, (level, x, z), run, timeout, open_doors)
+                    finally:
+                        self._in_portal_route = False
         try:
             return self._walk_direct(x, z, level, run, timeout, open_doors)
         except TimeoutError:
