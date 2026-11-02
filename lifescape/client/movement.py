@@ -654,6 +654,7 @@ class MovementMixin:
             self._sync_open_doors()
         idle_rounds = 0
         leg_timeouts = 0
+        recent_spots = []
         while (self.world.x, self.world.z, self.world.level) != (x, z, self.world.level):
             if time.time() > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
@@ -661,8 +662,12 @@ class MovementMixin:
             # route is refused, not slow (door ping-pong, wall the maps
             # think is open). Fail fast so the caller replans instead of
             # grinding until the walk deadline. A backstop iteration cap
-            # catches loops that keep moving without approaching.
-            if leg_timeouts >= 3 or idle_rounds >= 60:
+            # catches loops that keep moving without approaching, and a
+            # spot-cycle check catches ping-pong between adjacent tiles
+            # whose legs all technically arrive.
+            recent_spots.append((self.world.level, self.world.x, self.world.z))
+            del recent_spots[:-12]
+            if leg_timeouts >= 3 or idle_rounds >= 60 or (len(recent_spots) >= 12 and len(set(recent_spots)) <= 2):
                 raise TimeoutError("walk to %d,%d stuck at %s" % (x, z, self.world.position))
             idle_rounds += 1
             # Rebuilt maps are new objects (_rebuild_opened copies): always
