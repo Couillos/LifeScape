@@ -123,7 +123,7 @@ def solve(bot):
         solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
     if _count(bot, "silverlight_key_3") < 1:
-        drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, ("questdrain",))
+        drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, "questdrain")
         # The drain tile itself is walkable and the use only lands from it:
         # clicked from the north side, the server drops it silently.
         bot.walk_to(drain_x, drain_z, drain_level, timeout=120, open_doors=True)
