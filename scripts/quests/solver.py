@@ -87,6 +87,31 @@ def completion_open(bot):
     return "you have completed" in text or "quest points." in text
 
 
+def _lingering_closed(bot, ticks=150):
+    """True once a closed modal stays closed.
+
+    The server closes one modal right before opening the next (if_close
+    before a mesbox, or a multi-stage handover like the bone loop): only
+    silence means done, interface or message frames mean keep waiting.
+    """
+    linger_until = bot.world.ticks + ticks
+    silent = 0
+    while bot.world.ticks < linger_until:
+        frames = bot.pump(2)
+        if bot.world.modal is not None or completion_open(bot):
+            return False
+        if any(
+            name.startswith("IF_") or name in ("MESSAGE_GAME", "UPDATE_INV_FULL", "UPDATE_INV_PARTIAL")
+            for _op, name, _body in frames
+        ):
+            silent = 0
+        else:
+            silent += 1
+        if silent >= 3:
+            return True
+    return bot.world.modal is None and not completion_open(bot)
+
+
 def finish_dialog_like(bot, keywords, timeout=300):
     """Choose any option containing one of the keywords, else continue."""
     target = bot.world.ticks + timeout
@@ -170,7 +195,9 @@ def finish_dialog_like(bot, keywords, timeout=300):
                 bot.pump(5)
                 return True
             continue
-        return True
+        if _lingering_closed(bot):
+            return True
+        continue
     raise SolverError("dialog did not close at %s" % (bot.position,))
 
 
@@ -244,8 +271,12 @@ def drain_dialog(bot, extra_ticks=150):
     """
     target = bot.world.ticks + extra_ticks
     while bot.world.ticks < target:
-        if bot.world.modal is None or completion_open(bot):
+        if completion_open(bot):
             return
+        if bot.world.modal is None:
+            if _lingering_closed(bot):
+                return
+            continue
         if bot.world.modal[0] == "main" or bot.chat_options():
             return
         bot.chat_continue()
