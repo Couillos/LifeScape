@@ -742,6 +742,13 @@ class MovementMixin:
             return False
         if (self.world.x, self.world.z) in sides:
             return True
+        if (self.world.x, self.world.z) == (spot[0], spot[1]):
+            # The router cannot plan off the doorway tile itself, and every
+            # side ranks pathless from here: step off first so the ranking
+            # below means something and one bad side cannot eat the budget.
+            self._raw_step_off()
+            if (self.world.x, self.world.z) in sides:
+                return True
         routing = self._planning_map or self._opened_map
         ranked = []
         for side in sides:
@@ -753,7 +760,7 @@ class MovementMixin:
             if time.time() > deadline:
                 break
             try:
-                self.walk_to(side_x, side_z, spot[2], timeout=max(3, deadline - time.time()))
+                self.walk_to(side_x, side_z, spot[2], timeout=min(4, max(3, deadline - time.time())))
             except (Unreachable, TimeoutError) as error:
                 print("door side %d,%d failed: %s" % (side_x, side_z, error), flush=True)
                 continue
