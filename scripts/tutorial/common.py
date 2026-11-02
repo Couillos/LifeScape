@@ -76,7 +76,7 @@ def inv_slot(bot, obj):
     raise KeyError("no %d in backpack" % obj)
 
 
-def find_loc(bot, *names, radius=60, timeout=20):
+def find_loc(bot, *names, radius=150, timeout=20):
     """Nearest loc whose debugname contains one of names, on this level.
 
     Only matches within radius tiles: locs are interaction targets, and
@@ -105,7 +105,8 @@ def find_loc(bot, *names, radius=60, timeout=20):
         if best is not None:
             return best[1:]
         if bot.world.ticks >= target or not can_pump:
-            raise Unreachable("no loc %r near %s" % (names, bot.position))
+            where = getattr(bot, "position", (bot.world.level, bot.world.x, bot.world.z))
+            raise Unreachable("no loc %r near %s" % (names, where))
         bot.pump(2)
 
 

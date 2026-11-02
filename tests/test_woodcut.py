@@ -13,7 +13,7 @@ from scripts.woodcut import run
 def stub_bot(x, z, level=0):
     with open(os.path.join(os.path.dirname(__file__), "..", "lifescape", "data", "gametypes.json")) as handle:
         loctypes = json.load(handle)
-    world = SimpleNamespace(x=x, z=z, level=level, ticks=0, locs={}, static_locs={(3268, 3227, 0): (2882, 0, 0)})
+    world = SimpleNamespace(x=x, z=z, level=level, ticks=0, position=(level, x, z), locs={}, static_locs={(3268, 3227, 0): (2882, 0, 0)})
     bot = SimpleNamespace(world=world, loctypes=loctypes)
     bot.ensure_nav = lambda: None
     return bot
