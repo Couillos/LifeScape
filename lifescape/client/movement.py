@@ -1620,9 +1620,14 @@ class MovementMixin:
 
     def _send_walk(self, steps, run):
         self._dbg("send_walk %d steps run=%s" % (len(steps), run))
+        start_x, start_z = self.world.x, self.world.z
+        for x, z in steps:
+            # A random-event teleport invalidates the route mid-walk: fail
+            # fast with a replan instead of an OverflowError traceback.
+            if abs(x - start_x) > 127 or abs(z - start_z) > 127:
+                raise Unreachable("stale route after teleport at %s" % (self.world.position,))
         body = Writer()
         body.u8(1 if run else 0)
-        start_x, start_z = self.world.x, self.world.z
         body.u16(start_x)
         body.u16(start_z)
         for x, z in steps:
