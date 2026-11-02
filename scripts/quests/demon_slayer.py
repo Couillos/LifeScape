@@ -145,11 +145,17 @@ def solve(bot):
             raise solver.SolverError("drain pour rejected at %s" % (bot.position,))
         # The key washes into the Varrock sewer: use that manhole, not the
         # nearest one wherever we stand (tower/draynor covers go elsewhere).
+        # Its loc never streams, so click it blind: the router's own portal
+        # table proves the cover is there, and a miss fails loudly below.
         bot.approach(3237, 3458, radius=4, timeout=600, open_doors=True)
-        solver.operate_loc(bot, ("manholeclosed", "manholeopen"), 1, timeout=120)
+        bot.op_loc(1, 3237, 3458, 881)
+        wait_ticks(bot, 5)
+        solver.drain_dialog(bot)
         if bot.world.z < 9000:
             # Still on the surface: the cover was closed, so climb down now.
-            solver.operate_loc(bot, ("manholeclosed", "manholeopen"), 1, timeout=120)
+            bot.op_loc(1, 3237, 3458, 882)
+            wait_ticks(bot, 5)
+            solver.drain_dialog(bot)
         if bot.world.z < 9000:
             raise solver.SolverError("manhole did not go down at %s" % (bot.position,))
         # The key despawns fast: grab it before anything else.
