@@ -42,6 +42,10 @@ def solve(bot):
         solver.talk_like(bot, "aubury", ["package", "research", "head_wizard", "notes"])
     if stage < 5:
         solver.talk_like(bot, "aubury", ["notes", "head_wizard", "finished"])
+    elif bot.inventory().get(solver.obj_id("research_notes"), 0) == 0:
+        # Notes lost to a full pack (unbankable junk has since been
+        # dropped): Aubury re-issues them on re-talk.
+        solver.talk_like(bot, "aubury", ["notes", "head_wizard", "finished"])
     # The finale is item-on-NPC, not talk: Sedridor only takes the notes
     # through opnpcu.
     solver.use_item_on_npc(bot, "research_notes", "head_wizard", near=(3103, 9571))

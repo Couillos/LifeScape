@@ -28,6 +28,25 @@ BANK_COM = knowledge.com_id("bank_main:inv")
 QUEST_POINTS_VARP = knowledge.varp_id_by_name("qp")
 START_TICKS = 200
 BANK_ATTEMPTS = 6
+# Unbankable random-event junk (macro cubes) piles up on long treks and
+# then silently eats quest item deliveries (full inventory). Drop it:
+# it has no use and the bank refuses it.
+JUNK_ITEMS = ("macro_cube",)
+
+
+def _drop_junk(bot):
+    for name in JUNK_ITEMS:
+        found = knowledge.objs.by_name(name)
+        if not found:
+            continue
+        obj_id = found[0].obj_id
+        while bot.inventory().get(obj_id, 0) > 0:
+            try:
+                if not bot.drop(obj_id, timeout=15):
+                    break
+            except Exception:
+                break
+            bot.pump(3)
 
 
 def _wait_for_state(bot):
@@ -127,6 +146,7 @@ def run(requirements, account=None, solve=None):
     try:
         bot.login(account, account)
         _wait_for_state(bot)
+        _drop_junk(bot)
         try:
             bank_items = {} if _all_carried(bot, requirements) else _open_nearest_bank(bot)
         except (Unreachable, TimeoutError) as error:
