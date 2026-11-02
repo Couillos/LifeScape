@@ -127,7 +127,8 @@ def solve(bot):
         raise solver.SolverError("no disguise (chainbody + med helm) at %s" % (bot.position,))
     if _stage(bot) < SABOTAGED and _count(bot, "cabbage") < 1:
         raise solver.SolverError("no cabbage for the hole at %s" % (bot.position,))
-    solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
+    if _stage(bot) < STARTED:
+        solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
     _wear(bot, "iron_chainbody")
     _wear(bot, "bronze_med_helm")
     _go_level(bot, 0)
