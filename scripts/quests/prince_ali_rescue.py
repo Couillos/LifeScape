@@ -45,6 +45,15 @@ def _stage(bot):
     return max(bot.world.varps.get(PRINCEQUEST, 0), _SAVED_VARPS.get(PRINCEQUEST, 0))
 
 
+def _await_stage(bot, want, timeout=60):
+    """Poll a stage gate: the live varp update can land a tick after the
+    dialogue that set it closes, and a single read falsely fails."""
+    target = bot.world.ticks + timeout
+    while bot.world.ticks < target and _stage(bot) < want:
+        bot.pump(2)
+    return _stage(bot)
+
+
 def use_item_on_npc(bot, item, npc, timeout=1800):
     """OPNPCU: the client has no use-item-on-NPC wrapper, so send it directly.
 
@@ -105,26 +114,26 @@ def solve(bot):
     # then "better go" so the briefing ends instead of looping.
     if stage < 10:
         solver.talk_like(bot, "hassan", ["help", "chancellor", "osman"])
-        stage = _stage(bot)
+        stage = _await_stage(bot, 10)
     if stage < 20:
         solver.talk_like(bot, "osman", ["better", "okay", "luck", "leela", "first", "second"])
-        stage = _stage(bot)
+        stage = _await_stage(bot, 20)
     # Leela confirms the full kit (key, wig, skirt, paste) is carried and
     # advances to prep_finished; with the kit this is a single chat.
     if stage < 30:
         solver.talk_like(bot, "leela", ["help", "free", "prince", "equipment", "guard"])
-        stage = _stage(bot)
+        stage = _await_stage(bot, 30)
     # Joe's beer dialogue drinks all 3 beers by itself and sets guard_drunk.
     if stage < 40:
         if _count(bot, solver.obj_id("beer")) < 3:
             raise solver.SolverError("need 3 beers for Joe at %s" % (bot.position,))
         solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
-        stage = _stage(bot)
+        stage = _await_stage(bot, 40)
     if stage < 40:
         # A mistargeted chat leaves the beers untouched: retry once, then
         # fail fast instead of timing out on Keli (she refuses while sober).
         solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
-        stage = _stage(bot)
+        stage = _await_stage(bot, 40)
     if stage < 40:
         raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
     if stage < 100:
@@ -185,7 +194,7 @@ def solve(bot):
         # eats the ~60 s the open gate lasts.)
         solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"],
                          near=(_dx, _dz + 1))
-        stage = _stage(bot)
+        stage = _await_stage(bot, 100)
     if stage < 100:
         raise solver.SolverError("prince not freed at %s" % (bot.position,))
     # Hassan pays out 700 coins, which completes the quest.
