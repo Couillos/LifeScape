@@ -94,6 +94,9 @@ def solve(bot):
     if not (stage >= 4 and bot.inventory().get(solver.obj_id("ghostskull"), 0) > 0):
         bot.approach(3120, 9567, radius=6, timeout=600, open_doors=True)
         solver.take_near(bot, "ghostskull", timeout=300)
+    # The coffin/altar lives in Lumbridge church, not in the basement: climb
+    # back out before the use-item search (find_loc only sees nearby locs).
+    bot.approach(3249, 3194, radius=6, timeout=600, open_doors=True)
     solver.use_item_on_loc(bot, "ghostskull", ["restless_ghost_altar"])
     try:
         _wear(bot, "amulet_of_strength")
