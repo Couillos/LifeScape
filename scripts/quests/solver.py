@@ -320,13 +320,16 @@ def solve_strange_box(bot, max_rounds=40):
             if question and all(models):
                 break
         if not question or not all(models):
+            print("cube quiz waiting: question=%r models=%s" % (question, models), flush=True)
             continue
         shapes_colours = [_cube_shape_colour(held) for held in models]
         if any(pair is None for pair in shapes_colours):
             continue
         pick = _cube_answer(question, shapes_colours)
         if pick is None:
+            print("cube quiz unparsed: %r" % (question,), flush=True)
             continue
+        print("cube quiz: %r models=%s -> button %d" % (question[:60], models, pick + 1), flush=True)
         bot.if_button(button_coms[pick])
         bot.pump(5)
         # Dismiss the result box (success, next-cube prompt, or fail note).
