@@ -39,6 +39,12 @@ def _count(bot, obj_id):
 
 def _bank_topup(bot):
     """Withdraw the coins buffer plus apron/spade when the bank has them."""
+    coins = solver.obj_id("coins")
+    stocked = _count(bot, coins) >= COINS_TARGET and all(
+        _count(bot, solver.obj_id(name)) >= 1 for name in ("white_apron", "spade")
+    )
+    if stocked:
+        return
     try:
         bank = Q._open_nearest_bank(bot)
     except Exception as error:
