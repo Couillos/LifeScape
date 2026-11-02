@@ -248,8 +248,10 @@ def solve(bot):
             raise solver.SolverError("Redbeard Frank did not replace the key")
 
     # Upstairs via the portal planner (a raw click on these stairs has
-    # been observed to open a choice instead of climbing).
-    bot.walk_to(3230, 3382, 1, timeout=180, open_doors=True)
+    # been observed to open a choice instead of climbing). Already
+    # upstairs (key probe, resume after a break): no trek needed.
+    if bot.world.level != 1:
+        bot.walk_to(3230, 3382, 1, timeout=180, open_doors=True)
     if bot.world.level != 1:
         raise solver.SolverError("did not climb to the Blue Moon Inn upstairs")
     # The chest only answers from its east side: the south tile borders a
