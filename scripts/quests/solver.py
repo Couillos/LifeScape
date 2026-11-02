@@ -73,7 +73,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
     still_texts = None
     still_rounds = 0
     while bot.world.ticks < target:
-        bot.pump(5)
+        bot.pump(2)
         if _completion_open(bot):
             # The quest finished mid-talk: close its scroll so follow-up
             # talks start from a clean slate instead of piling interfaces.
@@ -109,7 +109,8 @@ def finish_dialog_like(bot, keywords, timeout=300):
             # A choice page arrives a tick or two after the NPC line. Never
             # resume a paused choice with RESUME_PAUSEBUTTON: the server's
             # switch_component then falls through to the default branch.
-            if bot.world.ticks - no_option_since < 12:
+            # Keep the grace short (a few ticks): every plain page pays it.
+            if bot.world.ticks - no_option_since < 4:
                 continue
             if bot.world.modal[0] == "main":
                 # A main window with no options (quest scroll, level-up) is
@@ -126,7 +127,7 @@ def finish_dialog_like(bot, keywords, timeout=300):
             else:
                 still_rounds += 1
             if still_rounds >= 3:
-                # No options and nothing new for ~36+ ticks: the server
+                # No options and nothing new for ~9+ ticks: the server
                 # already closed this dialogue and its close packet never
                 # landed (missed IF_CLOSE). Hanging here is always wrong,
                 # so sync to the closed state and carry on; quest

@@ -59,8 +59,11 @@ class MovementMixin:
                     skip.add(payload.name)
                     # Session-wide, with expiry: a locked door or missing key
                     # will fail the same way on every fresh plan, so remember
-                    # it instead of rediscovering it on each walk_to.
-                    self._bad_transitions[payload.name] = time.time() + 600
+                    # it instead of rediscovering it on each walk_to. Short
+                    # expiry: a transition failed for a transient reason
+                    # (closed door, missed click) must become usable again
+                    # quickly, or one hiccup detours the whole session.
+                    self._bad_transitions[payload.name] = time.time() + 180
                     replanned = True
                     break
                 leg_start = tuple(payload.to)
@@ -620,9 +623,23 @@ class MovementMixin:
             self._action_route = []
         if open_doors:
             self._sync_open_doors()
+        idle_rounds = 0
+        last_spot = None
         while (self.world.x, self.world.z, self.world.level) != (x, z, self.world.level):
             if time.time() > deadline:
                 raise TimeoutError("walk to %d,%d timed out at %s" % (x, z, self.world.position))
+            # Tight-loop guard: iterations that neither move nor click fail
+            # fast instead of spinning (and spamming the log) until the
+            # walk deadline. Door clicks and steps reset it via movement;
+            # genuine slow walks move every iteration.
+            spot_now = (self.world.x, self.world.z)
+            if spot_now == last_spot:
+                idle_rounds += 1
+            else:
+                idle_rounds = 0
+                last_spot = spot_now
+            if idle_rounds >= 8:
+                raise TimeoutError("walk to %d,%d stuck at %s" % (x, z, self.world.position))
             # Rebuilt maps are new objects (_rebuild_opened copies): always
             # route on the current one so temp blocks and unseals apply.
             routing_map = self._opened_map if open_doors else self._collision
