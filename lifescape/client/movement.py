@@ -1075,6 +1075,10 @@ class MovementMixin:
             # Already there: find_path compresses the start tile away and
             # reports [], which must not read as unreachable.
             return True
+        # Full-window routing is CPU-heavy and callers loop over many
+        # targets (every bank): keep the connection alive between maps.
+        if getattr(self.connection, "sock", None) is not None:
+            self.pump(1)
         for routing_map in (self._planning_map, self._opened_map):
             if routing_map is None:
                 continue
