@@ -7,6 +7,7 @@ import sys
 import gamedata as knowledge
 from gamedata import quest_requirements
 from lifescape import save as save_mod
+from lifescape.waits import wait_ticks
 from scripts.quests import solver
 from scripts.quests.common import run
 from scripts.tutorial import common as tutorial_common
@@ -121,10 +122,19 @@ def solve(bot):
     if _count(bot, "silverlight_key_2") < 1:
         solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
-    key3 = solver.obj_id("silverlight_key_3")
     if _count(bot, "silverlight_key_3") < 1:
-        bot.approach(3225, 3495, radius=6, timeout=600, open_doors=True)
-        solver.use_item_on_loc(bot, "bucket_water", ("questdrain",))
+        drain_x, drain_z, drain_level, drain_loc = tutorial_common.find_loc(bot, ("questdrain",))
+        # The drain tile itself is walkable and the use only lands from it:
+        # clicked from the north side, the server drops it silently.
+        bot.walk_to(drain_x, drain_z, drain_level, timeout=120, open_doors=True)
+        bot.op_loc(1, drain_x, drain_z, drain_loc)
+        wait_ticks(bot, 5)
+        solver.drain_dialog(bot)
+        tutorial_common.use_held_on_loc(bot, drain_x, drain_z, drain_loc, solver.obj_id("bucket_water"))
+        wait_ticks(bot, 10)
+        solver.drain_dialog(bot)
+        if _count(bot, "bucket_water") > 0:
+            raise solver.SolverError("drain pour rejected at %s" % (bot.position,))
         # The key washes into the Varrock sewer: use that manhole, not the
         # nearest one wherever we stand (tower/draynor covers go elsewhere).
         bot.approach(3237, 3458, radius=4, timeout=600, open_doors=True)
