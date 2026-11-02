@@ -164,7 +164,8 @@ def solve(bot):
         solver.take_near(bot, "silverlight_key_3", timeout=60)
         solver.operate_loc(bot, ("ladder_from_cellar",), 1, timeout=120)
     # Trade all three keys to Sir Prysin for Silverlight.
-    solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])
+    if _stage(bot) < SILVERLIGHT:
+        solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])
     # Wielding Silverlight is what lets the attack land and weakens Delrith.
     _wield(bot, "silverlight")
     # Delrith waits at the stone circle south of Varrock: walk there first,

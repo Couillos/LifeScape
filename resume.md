@@ -1,17 +1,17 @@
 # LifeScape — reprise de session (F2P quests)
 
 ## Objectif
-Finir les 18 quêtes F2P avec un script fiable par quête. **14/18 terminées.**
+Finir les 18 quêtes F2P avec un script fiable par quête. **15/18 terminées.**
 
 ## Terminées (save + daemon OK)
 cook, sheep, doric, priest, gobdip, imp, hetty, romeojuliet, runemysteries,
 haunted, vampire, hunt (pirate=4), prince (princequest=110),
-knights (squire=7).
+knights (squire=7), demon (demonstart=30).
 
 ## En cours
-- **demon_slayer** : prochaine (aucun prérequis QP).
-- **Reste après** : black_knights_fortress (12 QP requis),
-  shield_of_arrav, dragon_slayer en dernier (32 QP requis).
+- **black_knights_fortress** : prochaine (12 QP requis).
+- **Reste après** : shield_of_arrav, dragon_slayer en dernier
+  (32 QP requis).
 
 ## Commandes (que via l'orchestrateur, jamais de pypy direct)
 ```
