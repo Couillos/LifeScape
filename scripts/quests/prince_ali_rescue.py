@@ -45,11 +45,13 @@ def _stage(bot):
     return max(bot.world.varps.get(PRINCEQUEST, 0), _SAVED_VARPS.get(PRINCEQUEST, 0))
 
 
-def use_item_on_npc(bot, item, npc, timeout=180):
+def use_item_on_npc(bot, item, npc, timeout=1800):
     """OPNPCU: the client has no use-item-on-NPC wrapper, so send it directly.
 
     Needed once: rope on Lady Keli. The packet is (npc slot, obj, slot, com),
-    the same field order the server decodes in OpNpcUDecoder.
+    the same field order the server decodes in OpNpcUDecoder. Timeout is in
+    ticks (1800 = ~3 min at 100 ms): Keli patrols, so several chase rounds
+    may be needed before a send lands while adjacent.
     """
     obj = solver.obj_id(item)
     solver.go_to_npc(bot, npc)
@@ -80,6 +82,7 @@ def use_item_on_npc(bot, item, npc, timeout=180):
         body.u16(obj)
         body.u16(slot)
         body.u16(com)
+        bot._dbg("opnpcu slot=%d obj=%d npc=%d,%d" % (nid, obj, person["x"], person["z"]))
         bot.connection.send(client_op_id("OPNPCU"), body.bytes())
         wait_ticks(bot, 10)
     raise solver.SolverError("could not use %s on %s at %s" % (item, npc, bot.position))
