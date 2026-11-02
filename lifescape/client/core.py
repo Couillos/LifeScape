@@ -194,14 +194,17 @@ class BotCore:
         self.connection.send(client_op_id("MESSAGE_PUBLIC"), body.bytes())
 
     def idle(self):
-        self.connection.send(client_op_id("IDLE_TIMER"))
+        # NO_TIMEOUT, never IDLE_TIMER: the server treats IDLE_TIMER as an
+        # idle-logout request and drops us, while NO_TIMEOUT has no handler
+        # and simply counts as a response, keeping long computations alive.
+        self.connection.send(client_op_id("NO_TIMEOUT"))
 
     def pump(self, count=1):
         frames = []
         for _ in range(count):
             # Server timeouts are counted in ticks (100 = 60s at 600ms but
-            # 2s at 20ms): keepalive on a wall clock so fast ticks never
-            # kick an idle bot.
+            # 10s at this dev server's 100ms): send NO_TIMEOUT keepalives on
+            # a wall clock so long planning phases never look dead.
             if self.connection.outgoing is not None and time.time() - self.connection.last_send > 1:
                 self.idle()
         for _ in range(count):
