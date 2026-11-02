@@ -203,6 +203,10 @@ scripts/orchestrator.py test [pattern]
 scripts/orchestrator.py status | show <account> | logs <account> 40
 ```
 
+Ne jamais utiliser `sleep` (ni `wait`, ni boucle d'attente) dans les
+commandes bash : chaque appel `status`/`show`/`logs` voit déjà l'état
+frais, répéter l'appel suffit à suivre un job.
+
 Les comptes tournent en parallèle : un thread de supervision et un process
 worker par compte, donc plusieurs bots peuvent tourner en même temps sans
 se bloquer. Le dashboard (anglais) : `http://5.83.152.180:8765/`.
