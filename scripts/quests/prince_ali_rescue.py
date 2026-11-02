@@ -143,6 +143,14 @@ def solve(bot):
             if _count(bot, solver.obj_id("rope")) < 1:
                 raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
             use_item_on_npc(bot, "rope", "lady_keli")
+            # The rope vanishes a tick after the tie lands: poll briefly, as
+            # an immediate read races the inventory stream and falsely
+            # fails. A genuinely refused tie keeps the rope.
+            target = bot.world.ticks + 30
+            while _count(bot, solver.obj_id("rope")) > 0 and bot.world.ticks < target:
+                bot.pump(2)
+            if _count(bot, solver.obj_id("rope")) > 0:
+                raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
         C.use_held_on_loc(bot, _dx, _dz, _dloc, solver.obj_id("princeskey"))
         wait_ticks(bot, 30)
         solver._drain_dialog(bot)

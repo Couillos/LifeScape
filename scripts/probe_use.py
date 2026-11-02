@@ -49,24 +49,30 @@ def main():
             except Exception as error:
                 print("approach failed: %s" % (error,), flush=True)
         print("at %s" % (bot.position,), flush=True)
+        seen_msgs = len(bot.world.messages)
         bot.op_loc(op, x, z, loc)
         for round_no in range(6):
-            bot.pump(5)
-            dump(bot, "op%d round %d" % (op, round_no))
+            unsets = sum(1 for _op, name, _body in bot.pump(5) if name == "UNSET_MAP_FLAG")
+            for text in bot.world.messages[seen_msgs:]:
+                print("  game msg: %r" % (text[:100],), flush=True)
+            seen_msgs = len(bot.world.messages)
+            dump(bot, "op%d round %d unsets=%d" % (op, round_no, unsets))
             if bot.world.modal is None:
                 break
         if item_name is not None:
             from scripts.quests import solver
             C.use_held_on_loc(bot, x, z, loc, solver.obj_id(item_name))
             print("sent use %s on %s" % (item_name, loc_name), flush=True)
+            seen_msgs = len(bot.world.messages)
             for round_no in range(10):
-                bot.pump(5)
-                dump(bot, "use round %d" % round_no)
+                unsets = sum(1 for _op, name, _body in bot.pump(5) if name == "UNSET_MAP_FLAG")
+                for text in bot.world.messages[seen_msgs:]:
+                    print("  game msg: %r" % (text[:100],), flush=True)
+                seen_msgs = len(bot.world.messages)
+                dump(bot, "use round %d unsets=%d" % (round_no, unsets))
                 if bot.world.modal is None and round_no >= 2:
                     break
-            print("key now: %d message now: %d" % (
-                bot.inventory().get(solver.obj_id("chest_key"), 0),
-                bot.inventory().get(solver.obj_id("piratemessage"), 0)), flush=True)
+            print("%s now: %d" % (item_name, bot.inventory().get(solver.obj_id(item_name), 0)), flush=True)
         return 0
     finally:
         bot.close()
