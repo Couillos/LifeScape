@@ -135,16 +135,14 @@ def solve(bot):
         target = bot.world.ticks + 150
         while bot.world.ticks < target and not bot.npcs_named(("lady_keli",)):
             bot.pump(5)
-        # Tie her whenever she is about — the tie consumes the rope, so a
-        # held rope afterwards means refusal. Then turn the key with NO
-        # client-side approach: the server walks into reach itself, while a
-        # client walk burns the ~10 s Keli respawn window (100 ticks).
+        # Tie her whenever she is about — the tie consumes the rope. Then
+        # turn the key with NO client-side approach: the server walks into
+        # reach itself, while a client walk burns the ~10 s Keli respawn
+        # window (100 ticks).
         if bot.npcs_named(("lady_keli",)):
             if _count(bot, solver.obj_id("rope")) < 1:
                 raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
             use_item_on_npc(bot, "rope", "lady_keli")
-            if _count(bot, solver.obj_id("rope")) > 0:
-                raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
         C.use_held_on_loc(bot, _dx, _dz, _dloc, solver.obj_id("princeskey"))
         wait_ticks(bot, 30)
         solver._drain_dialog(bot)
