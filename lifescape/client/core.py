@@ -86,6 +86,15 @@ class BotCore:
         self._router = route_mod.Router()
         self._portals = []
         self._in_portal_route = False
+        # Verbose trace for pathfinding work: every move, click and ride.
+        # On with LIFESCAPE_DEBUG=1 in the environment, or by creating the
+        # run/debug file (no daemon restart needed: touch run/debug).
+        run_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "run"))
+        self._debug = os.environ.get("LIFESCAPE_DEBUG") == "1" or os.path.exists(os.path.join(run_dir, "debug"))
+
+    def _dbg(self, message):
+        if getattr(self, "_debug", False):
+            print("DBG %s %s" % (self.world.position, message), flush=True)
 
     def login(self, username, password=None, **paths):
         global _active_bot

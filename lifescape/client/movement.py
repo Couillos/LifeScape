@@ -38,6 +38,7 @@ class MovementMixin:
         deadline = time.time() + timeout
         skip = set()
         skip_walks = set()
+        self._dbg("route plan %s" % ([(k, getattr(q, "name", q)) for k, q in plan][:12]))
         while True:
             leg_start = (self.world.level, self.world.x, self.world.z)
             replanned = False
@@ -54,6 +55,7 @@ class MovementMixin:
                         break
                     leg_start = payload
                     continue
+                self._dbg("ride %s" % (payload.name,))
                 if not payload.ride(self):
                     print("transition %s failed at %s, replanning" % (payload.name, self.world.position), flush=True)
                     skip.add(payload.name)
@@ -74,6 +76,7 @@ class MovementMixin:
                 raise Unreachable("no route to %s" % (dest,))
 
     def approach(self, x, z, level=0, radius=2, timeout=60, open_doors=True):
+        self._dbg("approach %d,%d,%d r=%d" % (x, z, level, radius))
         self._ensure_nav()
         try:
             self.walk_to(x, z, level, timeout=timeout, open_doors=open_doors)
@@ -127,6 +130,7 @@ class MovementMixin:
         if run is None:
             run = self.want_run()
         self._ensure_nav()
+        self._dbg("walk_to %d,%d,%d" % (x, z, level))
         if not self._in_portal_route and abs(x - self.world.x) + abs(z - self.world.z) > 120:
             # Same level number, disconnected region (a cellar shares
             # level 0 with the surface): no direct walk can arrive, and
@@ -541,6 +545,7 @@ class MovementMixin:
         if best is None:
             return False
         spot = best[1]
+        self._dbg("door toward %d,%d" % (spot[0], spot[1]))
         if (self.world.x, self.world.z) in [(t[0], t[1]) for t in self._door_footprints.get(id(spot), ())]:
             # Standing on the door tile itself: stepping straight off with a
             # bare packet is the only thing that can work here (the router
@@ -821,6 +826,7 @@ class MovementMixin:
                 print("door side %d,%d failed: %s" % (side_x, side_z, error), flush=True)
                 continue
             if (self.world.x, self.world.z) == (side_x, side_z):
+                self._dbg("door side ok %d,%d" % (side_x, side_z))
                 return True
         return (self.world.x, self.world.z) in sides
 
@@ -880,10 +886,12 @@ class MovementMixin:
                     print("door step to %d,%d failed: %s" % (nx, nz, error), flush=True)
                     continue
             seen_messages = len(self.world.messages)
+            self._dbg("door click %d,%d id=%s" % (x, z, loc_id))
             self._send_oploc(op, x, z, loc_id)
             if self._await_loc_change(x, z, level, loc_id, min(deadline, time.time() + DOOR_WAIT)):
                 if self._try_step_on(x, z, level, time.time() + 2.0):
                     self._unseal(x, z, level)
+                    self._dbg("door through %d,%d" % (x, z))
                     return True
                 continue
             messages = " ".join(self.world.messages[seen_messages:]).lower()
@@ -1580,6 +1588,7 @@ class MovementMixin:
         return route_mod.expand_steps(waypoints, (self.world.x, self.world.z), STEP_CAP)
 
     def _send_walk(self, steps, run):
+        self._dbg("send_walk %d steps run=%s" % (len(steps), run))
         body = Writer()
         body.u8(1 if run else 0)
         start_x, start_z = self.world.x, self.world.z
@@ -1601,6 +1610,7 @@ class MovementMixin:
         while True:
             position = (self.world.x, self.world.z)
             if position == target:
+                self._dbg("leg arrived %s" % (target,))
                 return
             distance = abs(position[0] - target[0]) + abs(position[1] - target[1])
             if distance > best:

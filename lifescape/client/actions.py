@@ -17,6 +17,7 @@ from .core import StateError, Unreachable
 class ActionsMixin:
 
     def op_loc(self, op, x, z, loc_id):
+        self._dbg("oploc%d %d,%d id=%d" % (op, x, z, loc_id))
         body = Writer()
         body.u16(x)
         body.u16(z)
@@ -24,11 +25,13 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPLOC%d" % op), body.bytes())
 
     def op_npc(self, op, slot):
+        self._dbg("opnpc%d slot=%d" % (op, slot))
         body = Writer()
         body.u16(slot)
         self.connection.send(client_op_id("OPNPC%d" % op), body.bytes())
 
     def op_npc_u(self, slot, obj_id, use_slot, com):
+        self._dbg("opnpcu slot=%d obj=%d" % (slot, obj_id))
         body = Writer()
         body.u16(slot)
         body.u16(obj_id)
@@ -44,6 +47,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPOBJ%d" % op), body.bytes())
 
     def op_loc_u(self, x, z, loc_id, obj_id, slot, com):
+        self._dbg("oplocu %d,%d id=%d obj=%d" % (x, z, loc_id, obj_id))
         body = Writer()
         body.u16(x)
         body.u16(z)
@@ -65,6 +69,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPPLAYER%d" % op), body.bytes())
 
     def op_held(self, op, obj, slot, com):
+        self._dbg("opheld%d obj=%d slot=%d" % (op, obj, slot))
         body = Writer()
         body.u16(obj)
         body.u16(slot)
@@ -82,6 +87,7 @@ class ActionsMixin:
         self.connection.send(client_op_id("OPHELDU"), body.bytes())
 
     def inv_button(self, n, obj, slot, com):
+        self._dbg("inv_button%d obj=%d slot=%d" % (n, obj, slot))
         body = Writer()
         body.u16(obj)
         body.u16(slot)
@@ -97,14 +103,17 @@ class ActionsMixin:
         self.connection.send(client_op_id("INV_BUTTOND"), body.bytes())
 
     def if_button(self, com):
+        self._dbg("if_button com=%d" % (com,))
         body = Writer()
         body.u16(com)
         self.connection.send(client_op_id("IF_BUTTON"), body.bytes())
 
     def close_modal(self):
+        self._dbg("close_modal")
         self.connection.send(client_op_id("CLOSE_MODAL"))
 
     def talk_to(self, slot):
+        self._dbg("talk_to slot=%d" % (slot,))
         self.op_npc(1, slot)
 
     def find_npc(self, name):
@@ -300,6 +309,7 @@ class ActionsMixin:
         raise Unreachable("no such item in inventory")
 
     def chat_continue(self):
+        self._dbg("chat_continue")
         body = Writer()
         body.u16(0)
         self.connection.send(client_op_id("RESUME_PAUSEBUTTON"), body.bytes())
