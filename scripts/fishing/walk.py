@@ -1,4 +1,5 @@
 """Fishing walk helpers (split from run.py)."""
+import time
 
 from scripts.fishing.common import *
 

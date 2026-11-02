@@ -12,6 +12,7 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/woodcut/run.py <username> [loads]
 """
 
 import sys
+import time
 
 
 from scripts.woodcut.common import *

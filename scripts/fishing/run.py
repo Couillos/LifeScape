@@ -7,6 +7,7 @@ safe for the combat level, nearest usable bank). Banks across the toll
 gate are a last resort. Stays on one level."""
 
 import sys
+import time
 
 
 from scripts.fishing.common import *

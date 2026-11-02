@@ -13,6 +13,7 @@ Usage: ../lostcity/.pypy/bin/pypy3 scripts/mining/run.py <username> [loads]
 """
 
 import sys
+import time
 
 
 from scripts.mining.common import *

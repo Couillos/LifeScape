@@ -1,4 +1,5 @@
 """Woodcut walk helpers (split from run.py)."""
+import time
 
 from scripts.woodcut.common import *
 from scripts.tutorial import common as tutorial_common
