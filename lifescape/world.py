@@ -69,7 +69,7 @@ class World:
         self.texts = {}
         self.pending_texts = {}
         self.modal_models = {}
-        self.modal_models_seen = 0
+        self.pending_models = {}
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -116,7 +116,7 @@ class World:
         self.texts = {}
         self.pending_texts = {}
         self.modal_models = {}
-        self.modal_models_seen = 0
+        self.pending_models = {}
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -197,6 +197,7 @@ class World:
             self.texts = {}
             self.pending_texts = {}
             self.modal_models = {}
+            self.pending_models = {}
             self.chat_interfaces = []
         elif name == "IF_SETTEXT":
             text = Reader(body)
@@ -210,7 +211,7 @@ class World:
             obj_id = obj.u16()
             obj.u16()  # scale
             self.modal_models[com] = obj_id
-            self.modal_models_seen = getattr(self, "modal_models_seen", 0) + 1
+            self.pending_models[com] = obj_id
         elif name == "P_COUNTDIALOG":
             self.count_dialog = True
         elif name == "SET_PLAYER_OP":
@@ -521,10 +522,12 @@ class World:
         # The server sets an interface's texts just before opening it. Keep
         # only that batch, so options from the previous dialogue disappear.
         # Models ride on main windows only; a chatbox opening must not wipe
-        # them (the quiz box stays open behind chatty interfaces).
+        # them (the quiz box stays open behind chatty interfaces). Models
+        # may also arrive just before the open packet, so stage them the
+        # same way texts are staged.
         self.texts = dict(self.pending_texts)
         if kind != "chat":
-            self.modal_models = {}
+            self.modal_models = dict(self.pending_models)
         self.pending_texts = {}
         self.chat_interfaces = []
 
