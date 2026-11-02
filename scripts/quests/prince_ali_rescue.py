@@ -37,6 +37,10 @@ def _saved_varps():
         return {}
 
 
+def _count(bot, obj_id):
+    return bot.inventory().get(obj_id, 0)
+
+
 def _stage(bot):
     return max(bot.world.varps.get(PRINCEQUEST, 0), _SAVED_VARPS.get(PRINCEQUEST, 0))
 
@@ -103,6 +107,8 @@ def solve(bot):
         stage = _stage(bot)
     # Joe's beer dialogue drinks all 3 beers by itself and sets guard_drunk.
     if stage < 40:
+        if _count(bot, solver.obj_id("beer")) < 3:
+            raise solver.SolverError("need 3 beers for Joe at %s" % (bot.position,))
         solver.talk_like(bot, "joe", ["beer", "fancy", "throat", "thirsty"])
         stage = _stage(bot)
     if stage < 40:

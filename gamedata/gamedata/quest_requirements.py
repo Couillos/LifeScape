@@ -176,7 +176,8 @@ F2P_QUESTS = (
         items=(
             _item("princeskey"),
             _item("rope"),
-            _item("beer", 3),
+            # No beer: all 3 are drunk by the guard mid-quest, so requiring
+            # them upfront can never pass once Joe is done (like hunt rum).
             _item("skinpaste"),
             _item("pink_skirt"),
             _item("blondwig"),
