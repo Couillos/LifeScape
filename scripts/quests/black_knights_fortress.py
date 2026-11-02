@@ -138,7 +138,7 @@ def solve(bot):
     solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
     solver.finish_dialog_like(bot, ["going in", "don't care"])
     # The inner door is upstairs (static spawns put it on level 1).
-    _go_level(1)
+    _go_level(bot, 1)
     solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
     _listen_at_grill(bot)
     if _stage(bot) < SABOTAGED:
