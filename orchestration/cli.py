@@ -5,6 +5,7 @@
     orchestrator.py restart <script> <account> [args...]
     orchestrator.py status [account]
     orchestrator.py show <account>
+    orchestrator.py see <account>
     orchestrator.py logs <account> [lines]
     orchestrator.py test [pattern]
     orchestrator.py shutdown
@@ -84,6 +85,56 @@ def format_status(jobs):
     return "\n".join(rows)
 
 
+def format_seen(state):
+    """One line per thing the bot currently sees, with positions."""
+    if not state:
+        return "no state"
+    pos = state.get("position") or [0, 0, 0]
+    here = (pos[1], pos[2]) if len(pos) > 2 else (0, 0)
+
+    def dist(entry):
+        return abs(entry.get("x", here[0]) - here[0]) + abs(entry.get("z", here[1]) - here[1])
+
+    lines = [
+        "%s hp=%s pos=(%d,%d,%d) %s :: %s" % (
+            state.get("account", "?"),
+            state.get("hitpoints", "-"),
+            pos[0] if len(pos) > 0 else 0, here[0], here[1],
+            state.get("status", "?"),
+            state.get("intention") or "-",
+        )
+    ]
+    for entry in sorted(state.get("npcs", []) or [], key=dist):
+        lines.append("npc  %-24s (%d,%d) d=%d" % (
+            entry.get("name") or entry.get("type", "?"),
+            entry.get("x", "?"), entry.get("z", "?"), dist(entry)))
+    for entry in sorted(state.get("locs", []) or [], key=dist):
+        flags = "".join(part for part in ("act" if entry.get("act") else "", "block" if entry.get("block") else "") if part)
+        lines.append("loc  %-24s (%d,%d) d=%d %s" % (
+            entry.get("name") or entry.get("id", "?"),
+            entry.get("x", "?"), entry.get("z", "?"), dist(entry), flags))
+    for entry in sorted(state.get("objs", []) or [], key=dist):
+        lines.append("obj  %-24s x%-3s (%d,%d) d=%d" % (
+            entry.get("name") or entry.get("id", "?"), entry.get("count", 1),
+            entry.get("x", "?"), entry.get("z", "?"), dist(entry)))
+    for entry in sorted(state.get("players", []) or [], key=dist):
+        lines.append("player %-22s (%d,%d) d=%d" % (
+            entry.get("name") or "?", entry.get("x", "?"), entry.get("z", "?"), dist(entry)))
+    for entry in state.get("inv", []) or []:
+        lines.append("inv  %-24s x%s" % (entry.get("name") or entry.get("id", "?"), entry.get("count", 1)))
+    for entry in state.get("worn", []) or []:
+        lines.append("worn %-24s x%s" % (entry.get("name") or entry.get("id", "?"), entry.get("count", 1)))
+    if state.get("modal") or state.get("modal_name"):
+        lines.append("modal %s %s" % (state.get("modal_name") or "-", state.get("modal")))
+    for line in (state.get("chat") or [])[-8:]:
+        lines.append("chat %s" % str(line)[:160])
+    if state.get("route_target"):
+        lines.append("route_target %s" % (state.get("route_target"),))
+    if state.get("last_event"):
+        lines.append("last_event %s" % (state.get("last_event"),))
+    return "\n".join(lines)
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -117,6 +168,10 @@ def main(argv):
     elif command == "show":
         reply = send_command({"cmd": "show", "account": account})
         print(json.dumps(reply.get("state", {}), indent=2, sort_keys=True))
+        return 0
+    elif command == "see":
+        reply = send_command({"cmd": "show", "account": account})
+        print(format_seen(reply.get("state", {}) or {}))
         return 0
     elif command == "logs":
         lines = int(argv[3]) if len(argv) > 3 else 40

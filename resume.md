@@ -9,9 +9,12 @@ haunted, vampire, hunt (pirate=4), prince (princequest=110),
 knights (squire=7), demon (demonstart=30).
 
 ## En cours
-- **black_knights_fortress** : prochaine (12 QP requis).
-- **Reste après** : shield_of_arrav, dragon_slayer en dernier
-  (32 QP requis).
+- **black_knights_fortress** : stage 1 (spy=1), déguisement porté
+  (chainbody+helm), bot au L1 près porte secrète/trou
+  (`(3030,3510)` / trou `(3031,3507)`), chevaliers aggro
+  ("Die intruder!!!", HP 99). Reste : sabotage → report Amik.
+- **Reste après** : shield_of_arrav (voir note échange ci-dessous),
+  dragon_slayer en dernier (32 QP requis).
 
 ## Commandes (que via l'orchestrateur, jamais de pypy direct)
 ```
@@ -20,7 +23,9 @@ knights (squire=7), demon (demonstart=30).
 ```
 Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 `probe_use` (clic loc + use objet + dump modals/unsets/msgs),
-`probe_vars`, `drop`, `bank_deposit`, `quest_reset`. Comptes test t01…t20,
+`probe_vars`, `drop`, `bank_deposit`, `quest_reset`. `see <compte>` :
+tout ce que le bot voit (positions + distances, inventaire, modal).
+Comptes test t01…t20,
 `admin`/`admin` = compte de dev (jamais de cheats dans les solvers).
 
 ## Règles intangibles
@@ -51,6 +56,22 @@ Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
   lire `world.messages` (ex : porte d'Alidoor refuse au nord/est par garde
   `coordz` → cliquer depuis le sud ; Keli à <10 tuiles bloque, respawn 10 s
   → enchaîner tie→clé→talk dans la foulée, driven par les messages serveur).
+- `find_loc` : rayon 150 + attente streaming 20 ticks (un match global
+  faisait marcher 600 tuiles vers un manhole fantôme).
+- `finish_dialog_like` / `drain_dialog` : ne concluent que sur silence
+  (frames `IF_*`/`MESSAGE_GAME`/inv = serveur vivant). Le modal `None`
+  transitoire (`if_close` avant le mesbox suivant, ex. les 25 os de
+  Traiborn) ne termine plus le dialogue.
+- Escaliers : passer par la table des portails (`solver.ride_loc`, bon
+  côté calculé) au lieu d'un `op_loc` aveugle (reachLoc angulaire).
+- Manhole du palais Varrock absent des locs (live + statique) : cliquer
+  aveugle avec les coords de `transitions.json` + vérification d'effet.
+- `goto` doit viser une tuile marchable (vérifier via collision map),
+  sinon le bot naît dans un mur et rien ne route.
+- Banque pleine = refus silencieux "subscribe for a members account..."
+  (bank_deposit affiche désormais les messages serveur en échec).
+- `worn_only` = état final (le solve habille, le check prouve la
+  possession), pas prérequis porté.
 
 ## Fichiers clés
 - Solvers : `scripts/quests/*.py` (+ `solver.py` helpers, `common.py` runner,
@@ -61,9 +82,10 @@ Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 - Tickrate : `../lostcity/engine/data/config/world.json` (`tickRate`, 100 dev / 600 prod).
 
 ## Point de reprise immédiat
-1. `scripts/orchestrator.py status` (aucun job attendu).
-2. `start quest_demon_slayer admin` (kit : bones/bucket à vérifier dans
-   `gamedata/gamedata/quest_requirements.py`, entrée `demon`).
+1. `scripts/orchestrator.py status` (job blackknight vivant ?).
+2. Sinon `start quest_black_knights_fortress admin` (gates sautent
+   amik+portes si save≥1, sabotage direct si save≥2).
+3. `see admin` pour voir ce que le bot voit (positions + distances).
 
 ## Leçons knights (utiles pour les suivantes)
 - Varp non transmis (`transmit=False`, ex. `squire`) : le gate live ne passe
@@ -73,3 +95,9 @@ Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 - Armoire Vyvin : ne répond que du sud (`stand=(2984,3335,2)`, param `stand`
   de `solver.operate_loc`) ; fouille pilotée par la position de Vyvin
   (rayon 1 sur armoire ET joueur), pas d'attente aveugle.
+
+## Note shield_of_arrav (décision utilisateur)
+- Moitié de shield par échange avec un joueur de l'autre gang : item
+  **à retirer** des prérequis (`arravshield1/2`), le bot utilisera un
+  autre script pour l'obtenir (trade). Ne pas le farmer, ne pas le
+  donner via `probe_give` comme acquis légitime.
