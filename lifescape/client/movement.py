@@ -1472,8 +1472,13 @@ class MovementMixin:
         # Walk edges are straight-line estimates: a staircase can look close
         # and still sit behind battlements, swamps or a missing bridge.
         # Validate every walking leg with the real router and plan again
-        # without the ones that do not go through.
-        for _attempt in range(12):
+        # without the ones that do not go through. Attempts are generous
+        # because each rejection only rules out one decoy edge (dungeon
+        # portals lie close as the crow flies); results are cached so
+        # revalidating the survivors stays cheap.
+        checked = {}
+        for _attempt in range(150):
+            selected = [portal for portal in self._portals if portal.name not in skip]
             selected = [portal for portal in self._portals if portal.name not in skip]
             if not selected:
                 return None
@@ -1483,7 +1488,7 @@ class MovementMixin:
             plan = planner.plan(start, dest, skip_walks)
             if plan is None:
                 return None
-            bad = self._first_bad_walk(plan, start, routing)
+            bad = self._first_bad_walk(plan, start, routing, checked)
             if bad is None:
                 return plan
             print("walk leg %s -> %s looks blocked, replanning without it" % (bad[0], bad[1]), flush=True)
@@ -1499,9 +1504,20 @@ class MovementMixin:
             # onto the nearest reachable tile and finishes from here.
             return True
         if abs(to[1] - frm[1]) > 120 or abs(to[2] - frm[2]) > 120:
-            # Beyond the router window: cannot judge here, and the walker
-            # executes in chunks with a replan on failure anyway.
-            return True
+            # Beyond the router window the destination truncates, so an
+            # end-near-target check is meaningless. Fail only when the
+            # flood proves disconnection: a small enclosed region (wrong
+            # dungeon, far shore) exhausts inside the window, while open
+            # ground fills it. Without this the walker follows impossible
+            # straight lines into dead ends.
+            path = self._router.find_path(routing, frm[0], frm[1], frm[2], to[1], to[2], max_waypoints=10000)
+            if path:
+                end = path[-1]
+                before = abs(frm[1] - to[1]) + abs(frm[2] - to[2])
+                after = abs(end[1] - to[1]) + abs(end[2] - to[2])
+                return before - after >= 15
+            visited = sum(1 for distance in self._router.distances if distance < route_mod.FAR)
+            return visited >= 20000
         # Full waypoint list: the default cap truncates long routes mid-way,
         # which would look like a dead end that is not one.
         path = self._router.find_path(routing, frm[0], frm[1], frm[2], to[1], to[2], max_waypoints=10000)
@@ -1510,12 +1526,19 @@ class MovementMixin:
         end = path[-1]
         return abs(end[1] - to[1]) + abs(end[2] - to[2]) <= 2
 
-    def _first_bad_walk(self, plan, start, routing):
+    def _first_bad_walk(self, plan, start, routing, checked=None):
         """First (frm, to) walking leg with no real path, if any."""
         pos = start
         for kind, payload in plan:
             if kind == "walk":
-                if not self._walk_leg_ok(routing, pos, payload):
+                key = (pos, tuple(payload) if not hasattr(payload, "to") else tuple(payload.to))
+                if checked is not None and key in checked:
+                    ok = checked[key]
+                else:
+                    ok = self._walk_leg_ok(routing, pos, payload)
+                    if checked is not None:
+                        checked[key] = ok
+                if not ok:
                     return (pos, payload)
                 pos = payload
             else:
