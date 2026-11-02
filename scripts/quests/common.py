@@ -177,7 +177,10 @@ def run(requirements, account=None, solve=None):
                 if not solved:
                     # The completion message is easy to miss (it can arrive
                     # while a follow-up dialogue is open): the live quest
-                    # varps are proof enough.
+                    # varps are proof enough. Pump once more first: the
+                    # server often applies the stage on queued ticks after
+                    # the last dialogue click lands.
+                    bot.pump(20)
                     solved = all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps)
             except (Unreachable, TimeoutError, solver.SolverError) as error:
                 print("quest solve failed: %s" % (error,), flush=True)
