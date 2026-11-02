@@ -193,7 +193,10 @@ def check(requirements, state):
         in_inventory = state.inventory.get(item.obj_id, 0)
         worn = state.worn.get(item.obj_id, 0)
         in_bank = state.bank.get(item.obj_id, 0)
-        satisfied = worn >= item.count if item.worn_only else in_inventory + worn + in_bank >= item.count
+        # worn_only means the solve must end up wearing it (it equips the
+        # kit itself): carried anywhere suffices to start, since a pack or
+        # bank item can still be worn in time.
+        satisfied = in_inventory + worn + in_bank >= item.count
         if not satisfied:
             reasons.append(ItemMissing(
                 item=item.item,

@@ -60,14 +60,20 @@ class CheckTest(unittest.TestCase):
         reason = report.reasons[0]
         self.assertEqual((reason.inventory, reason.bank, reason.owned, reason.required), (1, 4, 5, 20))
 
-    def test_black_knight_armour_must_be_worn(self):
+    def test_black_knight_armour_may_start_in_pack(self):
+        # worn_only marks the end state (solve equips the kit itself), so
+        # carried anywhere suffices to start; a missing kit still reports
+        # needs_worn.
         quest = quest_requirements.by_key("blackknight")
-        in_pack = check(quest, state(quest_points=12, inventory={1101: 1, 1139: 1, 1965: 1}))
-        self.assertFalse(in_pack.met)
-        self.assertEqual([(reason.item, reason.needs_worn) for reason in in_pack.reasons],
-                         [("iron_chainbody", True), ("bronze_med_helm", True)])
+        in_pack = check(quest, state(quest_points=12, inventory={1101: 1, 1139: 1}))
+        self.assertTrue(in_pack.met)
 
-        worn = check(quest, state(quest_points=12, worn={1101: 1, 1139: 1}, inventory={1965: 1}))
+        missing = check(quest, state(quest_points=12, inventory={1101: 1}))
+        self.assertFalse(missing.met)
+        self.assertEqual([(reason.item, reason.needs_worn) for reason in missing.reasons],
+                         [("bronze_med_helm", True)])
+
+        worn = check(quest, state(quest_points=12, worn={1101: 1, 1139: 1}))
         self.assertTrue(worn.met)
 
     def test_combat_level_too_low_is_hard(self):

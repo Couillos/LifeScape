@@ -80,12 +80,11 @@ F2P_QUESTS = (
         members=False,
         completion_varps=_completion(("spy", 4)),
         quest_points=12,
-        # Worn at the fortress door by solve(); the checker only proves the
-        # kit exists anywhere (worn_only would demand it worn before solve
-        # even equips it). No cabbage: it goes down the hole at stage 3,
-        # so requiring it upfront blocks any resume after the sabotage
-        # (like knights pie/materials, demon bones/water).
-        items=(_item("iron_chainbody"), _item("bronze_med_helm")),
+        # Worn at the fortress door by solve(); worn_only only marks the
+        # end state (carried anywhere suffices to start). No cabbage: it
+        # goes down the hole at stage 3, so requiring it upfront blocks any
+        # resume after the sabotage (like knights pie/materials).
+        items=(_item("iron_chainbody", worn_only=True), _item("bronze_med_helm", worn_only=True)),
     ),
     QuestRequirements(
         key="cook",
