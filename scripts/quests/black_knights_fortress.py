@@ -15,6 +15,7 @@ import sys
 
 from lifescape import save as save_mod
 from lifescape.client import Unreachable
+from lifescape.waits import wait_ticks
 
 from gamedata import quest_requirements
 import gamedata as knowledge
@@ -142,6 +143,20 @@ def solve(bot):
         bot.pump(5)
         solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
         solver.finish_dialog_like(bot, ["going in", "don't care"])
+        # The banquet door only opens on a guard chat and shuts again:
+        # knock until through, then verify by position (east side).
+        for _ in range(8):
+            try:
+                bot.walk_to(3022, 3515, 0, timeout=30, open_doors=True)
+            except (Unreachable, TimeoutError):
+                pass
+            if bot.world.x > 3020:
+                break
+            solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
+            solver.finish_dialog_like(bot, ["going in", "don't care"])
+            wait_ticks(bot, 10)
+        else:
+            raise solver.SolverError("banquet door never opened at %s" % (bot.position,))
         # The inner door is upstairs (static spawns put it on level 1).
         _go_level(bot, 1)
         solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
