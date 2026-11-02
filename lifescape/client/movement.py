@@ -705,13 +705,15 @@ class MovementMixin:
                 self._await_leg(leg, min(deadline, time.time() + len(leg) * 2 + 10))
             except TimeoutError as error:
                 print("walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
-                if (self.world.x, self.world.z) == before and (leg[-1][0], leg[-1][1]) != (x, z):
-                    # Zero progress and not the final approach: the server
-                    # refused the first step, usually a closed door the plan
-                    # missed (diagonal corner-cut) or mapped open. Click the
-                    # blocker first; stale-open and step-off come after.
+                if (self.world.x, self.world.z) == before:
+                    # Zero progress: the server refused the first step,
+                    # usually a closed door the plan missed (diagonal
+                    # corner-cut) or mapped open. Click the blocker first;
+                    # stale-open and step-off come after. Applies to the
+                    # final approach too: its target can sit behind a door.
                     if self._open_door_toward(leg[0]):
                         continue
+                if (self.world.x, self.world.z) == before and (leg[-1][0], leg[-1][1]) != (x, z):
                     # A stale "open" can hide a door the server closed behind
                     # us (we may even stand on it). Expose it and step off
                     # before barring any tile: blocking the escape route
