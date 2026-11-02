@@ -3,7 +3,8 @@
 Shows whether the server runs the script (mesbox text) or drops the click.
 Never used by bots.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_use.py <account> <loc> [item] [op]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_use.py <account> <loc> [item] [op] [standx] [standz]
+Stand tile forces the click position instead of the nearest approach.
 """
 
 import os
@@ -33,16 +34,20 @@ def main():
     account, loc_name = sys.argv[1], sys.argv[2]
     item_name = sys.argv[3] if len(sys.argv) > 3 else None
     op = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    stand = (int(sys.argv[5]), int(sys.argv[6])) if len(sys.argv) > 6 else None
     bot = Bot()
     try:
         bot.login(account, account)
         bot.pump(10)
         x, z, level, loc = C.find_loc(bot, loc_name)
         print("loc %s at %d,%d,%d id=%d" % (loc_name, x, z, level, loc), flush=True)
-        try:
-            bot.approach(x, z, level=level, radius=2, timeout=120, open_doors=True)
-        except Exception as error:
-            print("approach failed: %s" % (error,), flush=True)
+        if stand is not None:
+            bot.walk_to(stand[0], stand[1], level, timeout=120, open_doors=True)
+        else:
+            try:
+                bot.approach(x, z, level=level, radius=2, timeout=120, open_doors=True)
+            except Exception as error:
+                print("approach failed: %s" % (error,), flush=True)
         print("at %s" % (bot.position,), flush=True)
         bot.op_loc(op, x, z, loc)
         for round_no in range(6):
