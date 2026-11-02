@@ -84,9 +84,14 @@ def _talk_until(bot, name, keywords, want, tries=3):
 
 
 def _vyvin_close(bot):
-    """True while Vyvin guards the cupboard (the server checks radius 1)."""
+    """True while Vyvin guards the cupboard (the server checks radius 1).
+
+    The anchor is ambiguous (cupboard or player), so both must be clear.
+    """
     for _nid, npc in bot.npcs_named(("sir_vyvin",)):
         if max(abs(npc["x"] - 2984), abs(npc["z"] - 3336)) <= 1:
+            return True
+        if max(abs(npc["x"] - bot.world.x), abs(npc["z"] - bot.world.z)) <= 1:
             return True
     return False
 
@@ -107,6 +112,11 @@ def _portrait(bot):
             solver.operate_loc(bot, ("vyvincupboardshut",), 1, timeout=60, stand=CUPBOARD_STAND)
         except Exception as error:
             print("cupboard open failed: %s" % (error,), flush=True)
+        if _vyvin_close(bot):
+            # He wandered back while opening: skip the search (HEY costs a
+            # cycle) and wait him out instead.
+            wait_ticks(bot, 10)
+            continue
         try:
             solver.operate_loc(bot, ("vyvincupboardopen",), 1, timeout=60, stand=CUPBOARD_STAND)
         except Exception as error:
