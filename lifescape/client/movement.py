@@ -1519,7 +1519,9 @@ class MovementMixin:
         for _attempt in range(150):
             # Planning is pure CPU and can run for a while on hard routes:
             # keep the connection alive or the server drops us mid-think.
-            self.pump(1)
+            # (Skipped in unit tests, where the bot is never connected.)
+            if getattr(self.connection, "sock", None) is not None:
+                self.pump(1)
             selected = [portal for portal in self._portals if portal.name not in skip]
             if not selected:
                 return None
