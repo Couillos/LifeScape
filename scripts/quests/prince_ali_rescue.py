@@ -84,7 +84,13 @@ def use_item_on_npc(bot, item, npc, timeout=1800):
         body.u16(com)
         bot._dbg("opnpcu slot=%d obj=%d npc=%d,%d" % (nid, obj, person["x"], person["z"]))
         bot.connection.send(client_op_id("OPNPCU"), body.bytes())
+        # An accepted use opens a result mesbox that halts the script until
+        # dismissed: without a continue the tie-up never completes and later
+        # sends are refused while it pends (the earlier 18 s timeout mistook
+        # this for a moving-NPC problem).
         wait_ticks(bot, 10)
+        solver._drain_dialog(bot)
+        bot.pump(5)
     raise solver.SolverError("could not use %s on %s at %s" % (item, npc, bot.position))
 
 
