@@ -142,7 +142,8 @@ def solve(bot):
         _dx, _dz, _dlvl, _dloc = C.find_loc(bot, "alidoor")
         if not bot.can_reach(_dx, _dz - 1, _dlvl, near=0):
             raise solver.SolverError("cell door refused (Keli respawned?) at %s" % (bot.position,))
-        solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"])
+        solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"],
+                         near=(_dx, _dz + 1))
         stage = _stage(bot)
     if stage < 100:
         raise solver.SolverError("prince not freed at %s" % (bot.position,))
