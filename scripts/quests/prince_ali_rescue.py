@@ -136,17 +136,26 @@ def solve(bot):
         while bot.world.ticks < target and not bot.npcs_named(("lady_keli",)):
             bot.pump(5)
         # Tie her whenever she is about — the tie consumes the rope, so a
-        # held rope afterwards means refusal. Then turn the key (harmless
-        # when already unlocked) and free the prince.
+        # held rope afterwards means refusal. Then turn the key with NO
+        # client-side approach: the server walks into reach itself, while a
+        # client walk burns the ~10 s Keli respawn window (100 ticks).
         if bot.npcs_named(("lady_keli",)):
             if _count(bot, solver.obj_id("rope")) < 1:
                 raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
             use_item_on_npc(bot, "rope", "lady_keli")
             if _count(bot, solver.obj_id("rope")) > 0:
                 raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
-        solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
+        C.use_held_on_loc(bot, _dx, _dz, _dloc, solver.obj_id("princeskey"))
+        wait_ticks(bot, 30)
+        solver._drain_dialog(bot)
+        # Step onto the door tile: only possible while unlocked, and the
+        # talk then runs with no wall between us and the prince.
+        try:
+            bot.walk_to(_dx, _dz, _dlvl, timeout=20, open_doors=True)
+        except (Unreachable, TimeoutError):
+            raise solver.SolverError("cell door refused (Keli respawned?) at %s" % (bot.position,))
         solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"],
-                         near=(_dx, _dz + 1))
+                         near=(_dx, _dz))
         stage = _stage(bot)
     if stage < 100:
         raise solver.SolverError("prince not freed at %s" % (bot.position,))
