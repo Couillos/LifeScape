@@ -69,6 +69,7 @@ class World:
         self.texts = {}
         self.pending_texts = {}
         self.modal_models = {}
+        self.modal_models_seen = 0
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -115,6 +116,7 @@ class World:
         self.texts = {}
         self.pending_texts = {}
         self.modal_models = {}
+        self.modal_models_seen = 0
         self.chat_interfaces = []
         self.zone_trace = []
         self.modal = None
@@ -208,6 +210,7 @@ class World:
             obj_id = obj.u16()
             obj.u16()  # scale
             self.modal_models[com] = obj_id
+            self.modal_models_seen = getattr(self, "modal_models_seen", 0) + 1
         elif name == "P_COUNTDIALOG":
             self.count_dialog = True
         elif name == "SET_PLAYER_OP":

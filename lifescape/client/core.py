@@ -263,6 +263,7 @@ class BotCore:
             "inv": self._state_items("inventory:inv"),
             "worn": self._state_items("wornitems:wear"),
             "models": dict(self.world.modal_models),
+            "models_seen": getattr(self.world, "modal_models_seen", 0),
             "bank": self._state_items("bank_main:inv"),
             "chat": [line.text for line in self.world.chat[-6:]],
         }
