@@ -168,6 +168,17 @@ def operate_loc(bot, names, op=1, timeout=60):
     bot.approach(x, z, level=level, radius=2, timeout=timeout, open_doors=True)
     bot.op_loc(op, x, z, loc)
     wait_ticks(bot, 10)
+    # An op often opens a plain mesbox (drink, open, search) that halts the
+    # server script until dismissed: click through it so follow-up steps
+    # (and the completion scroll) can land. Main windows are left alone
+    # for wait_complete.
+    for _ in range(12):
+        if bot.world.modal is None or _completion_open(bot):
+            break
+        if bot.world.modal[0] == "main" or bot.chat_options():
+            break
+        bot.chat_continue()
+        bot.pump(5)
 
 
 def obj_id(name):
@@ -194,6 +205,15 @@ def use_item_on_loc(bot, item_name, loc_names):
     C.approach_loc(bot, x, z, loc, level)
     C.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
     wait_ticks(bot, 10)
+    # Same halt risk as operate_loc: a result mesbox blocks the server
+    # script until dismissed.
+    for _ in range(12):
+        if bot.world.modal is None or _completion_open(bot):
+            break
+        if bot.world.modal[0] == "main" or bot.chat_options():
+            break
+        bot.chat_continue()
+        bot.pump(5)
 
 
 def withdraw_requirements(bot, requirements):
