@@ -1,17 +1,16 @@
 # LifeScape — reprise de session (F2P quests)
 
 ## Objectif
-Finir les 18 quêtes F2P avec un script fiable par quête. **13/18 terminées.**
+Finir les 18 quêtes F2P avec un script fiable par quête. **14/18 terminées.**
 
 ## Terminées (save + daemon OK)
 cook, sheep, doric, priest, gobdip, imp, hetty, romeojuliet, runemysteries,
-haunted, vampire, hunt (pirate=4), prince (princequest=110).
+haunted, vampire, hunt (pirate=4), prince (princequest=110),
+knights (squire=7).
 
 ## En cours
-- **knights (The Knight's Sword)** : stage 2 (squire=1, reldo=2). Kit en poche
-  (pie, blurite_ore, iron_bar x2). Bot près de Thurgo (Mudskipper). Reste :
-  pie → portrait (Vyvin) → ores → squire. Fichier : `scripts/quests/knights_sword.py`.
-- **Reste après** : demon_slayer, black_knights_fortress (12 QP requis),
+- **demon_slayer** : prochaine (aucun prérequis QP).
+- **Reste après** : black_knights_fortress (12 QP requis),
   shield_of_arrav, dragon_slayer en dernier (32 QP requis).
 
 ## Commandes (que via l'orchestrateur, jamais de pypy direct)
@@ -62,8 +61,15 @@ Jobs dev : `goto`, `give`, `probe_give`, `probe_door`, `probe_talk`,
 - Tickrate : `../lostcity/engine/data/config/world.json` (`tickRate`, 100 dev / 600 prod).
 
 ## Point de reprise immédiat
-1. `scripts/orchestrator.py status` (job knights encore vivant ?).
-2. Sinon `start quest_knights_sword admin` (gates sautent squire+reldo via save=2).
-3. Thurgo : donner la pie → portrait (armoire Vyvin, attendre Vyvin) →
-   blurite+barres → squire. Marécage Mudskipper labyrinthique : téléporter
-   à côté si enlisé (`goto admin 3002 3145 0`).
+1. `scripts/orchestrator.py status` (aucun job attendu).
+2. `start quest_demon_slayer admin` (kit : bones/bucket à vérifier dans
+   `gamedata/gamedata/quest_requirements.py`, entrée `demon`).
+
+## Leçons knights (utiles pour les suivantes)
+- Varp non transmis (`transmit=False`, ex. `squire`) : le gate live ne passe
+  jamais mid-run, progression d'un stage par run via le save au logout.
+- Consommables mid-quête (pie étape 3, blurite+barres étape 6) : hors
+  `quest_requirements.py` (items vides + checks de kit par étape dans solve).
+- Armoire Vyvin : ne répond que du sud (`stand=(2984,3335,2)`, param `stand`
+  de `solver.operate_loc`) ; fouille pilotée par la position de Vyvin
+  (rayon 1 sur armoire ET joueur), pas d'attente aveugle.
