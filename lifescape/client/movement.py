@@ -1517,7 +1517,9 @@ class MovementMixin:
         # revalidating the survivors stays cheap.
         checked = {}
         for _attempt in range(150):
-            selected = [portal for portal in self._portals if portal.name not in skip]
+            # Planning is pure CPU and can run for a while on hard routes:
+            # keep the connection alive or the server drops us mid-think.
+            self.pump(1)
             selected = [portal for portal in self._portals if portal.name not in skip]
             if not selected:
                 return None
