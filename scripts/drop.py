@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gamedata"))
 
 from lifescape.client import Bot, Unreachable
+from lifescape.waits import wait_backpack
 
 import gamedata as knowledge
 
@@ -31,6 +32,7 @@ def main():
             print("unknown item %r" % (item,), flush=True)
             return 1
         obj_id = found[0].obj_id
+        wait_backpack(knowledge.com_id("inventory:inv"))
         dropped = 0
         while dropped < count:
             try:
