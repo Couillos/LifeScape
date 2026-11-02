@@ -131,16 +131,17 @@ def solve(bot):
         solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
     _wear(bot, "iron_chainbody")
     _wear(bot, "bronze_med_helm")
-    _go_level(bot, 0)
-    solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=300)
-    if bot.world.modal:
-        raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
-    solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
-    solver.finish_dialog_like(bot, ["going in", "don't care"])
-    # The inner door is upstairs (static spawns put it on level 1).
-    _go_level(bot, 1)
-    solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
-    _listen_at_grill(bot)
+    if _stage(bot) < LISTENED:
+        _go_level(bot, 0)
+        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=300)
+        if bot.world.modal:
+            raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
+        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=120)
+        solver.finish_dialog_like(bot, ["going in", "don't care"])
+        # The inner door is upstairs (static spawns put it on level 1).
+        _go_level(bot, 1)
+        solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=120)
+        _listen_at_grill(bot)
     if _stage(bot) < SABOTAGED:
         _sabotage_potion(bot)
     solver.talk(bot, "sir_amik_varze")
