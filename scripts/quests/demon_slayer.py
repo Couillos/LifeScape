@@ -142,7 +142,10 @@ def solve(bot):
         if bot.world.z < 9000:
             # Still on the surface: the cover was closed, so climb down now.
             solver.operate_loc(bot, ("manholeclosed", "manholeopen"), 1, timeout=120)
-        solver.take_near(bot, "silverlight_key_3", timeout=300)
+        if bot.world.z < 9000:
+            raise solver.SolverError("manhole did not go down at %s" % (bot.position,))
+        # The key despawns fast: grab it before anything else.
+        solver.take_near(bot, "silverlight_key_3", timeout=60)
         solver.operate_loc(bot, ("ladder_from_cellar",), 1, timeout=120)
     # Trade all three keys to Sir Prysin for Silverlight.
     solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])

@@ -219,6 +219,7 @@ class ActionsMixin:
             raise Unreachable("no such item nearby")
         (key, oid), _count = min(items.items(), key=lambda item: abs(item[0][0][0] - self.world.x) + abs(item[0][0][1] - self.world.z))
         (x, z, level) = key
+        self.dbg("take obj=%d at %d,%d,%d" % (oid, x, z, level))
         op = objs_mod.take_op(self.loctypes["obj"], oid)
         before = dict(self.inventory())
         if abs(self.world.x - x) + abs(self.world.z - z) > 1:
