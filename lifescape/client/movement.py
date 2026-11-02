@@ -1578,6 +1578,10 @@ class MovementMixin:
                 if checked is not None and key in checked:
                     ok = checked[key]
                 else:
+                    # Full-window router validation is CPU-heavy: keep the
+                    # connection alive between legs or the server drops us.
+                    if getattr(self.connection, "sock", None) is not None:
+                        self.pump(1)
                     ok = self._walk_leg_ok(routing, pos, payload)
                     if checked is not None:
                         checked[key] = ok
