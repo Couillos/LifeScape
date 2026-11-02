@@ -1480,9 +1480,9 @@ class MovementMixin:
         ]
         # Rank, never filter: the server teleports onto blocked tiles (ship
         # decks, stairwells), so a side whose landing looks wrong can still
-        # be the only one it accepts. Mirror its reachRectangle1 first (no
-        # wall facing the loc), then prefer a walkable landing, then the
-        # real walking distance.
+        # be the only one it accepts. Reachability first (a side nobody can
+        # stand on is useless), then its reachRectangle1 (no wall facing the
+        # loc), then a walkable landing, then the real walking distance.
         routing = self._planning_map or self._opened_map
         stairs = self._stair_tiles or set()
         ranked = []
@@ -1491,12 +1491,12 @@ class MovementMixin:
             if (self.world.level, self.world.x, self.world.z) == (level, side[0], side[1]):
                 # find_path compresses a zero-length route to []: rank
                 # standing-put as the best side instead of unwalkable.
-                ranked.append((walled, not lands_ok(*side), False, 0, -1, side))
+                ranked.append((0, walled, not lands_ok(*side), False, -1, side))
                 continue
             path = self._router.find_path(routing, level, self.world.x, self.world.z, side[0], side[1])
             stair = (side[0], side[1], level) in stairs
-            ranked.append((walled, not lands_ok(*side), stair, 0 if path else 1, len(path), side))
-        return [side for _walled, _landing, _stair, _found, _length, side in sorted(ranked)]
+            ranked.append((0 if path else 1, walled, not lands_ok(*side), stair, len(path), side))
+        return [side for _found, _walled, _landing, _stair, _length, side in sorted(ranked)]
 
     def _stand_beside(self, level, x, z, timeout=45):
         if self.world.level == level and (self.world.x, self.world.z) == (x, z):
