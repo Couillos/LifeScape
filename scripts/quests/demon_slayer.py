@@ -14,7 +14,10 @@ from scripts.tutorial import common as tutorial_common
 QUEST = quest_requirements.by_key("demon")
 
 DEMONSTART = knowledge.varp_id_by_name("demonstart")
+NOT_STARTED = 0
 TALKED_ARIS = 1
+KEY_HUNT = 2
+FIND_BONES = 3
 GOT_TRAIBORN_KEY = 28
 SILVERLIGHT = 29
 COMPLETE = 30  # ^demon_complete in content/scripts/general/configs/quest.constant
@@ -37,6 +40,27 @@ def _saved_varps():
 
 def _stage(bot):
     return max(bot.world.varps.get(DEMONSTART, 0), _SAVED_VARPS.get(DEMONSTART, 0))
+
+
+def _await_stage(bot, want, timeout=60):
+    """Poll a stage gate: the live varp update can land a tick after the
+    dialogue that set it closes, and a single read falsely fails."""
+    target = bot.world.ticks + timeout
+    while bot.world.ticks < target and _stage(bot) < want:
+        bot.pump(2)
+    return _stage(bot)
+
+
+def _talk_until(bot, name, keywords, want, tries=3):
+    """Talk until the demonstart varp reaches want; a wrong option otherwise cascades."""
+    for _ in range(tries):
+        if _await_stage(bot, want) >= want:
+            return
+        solver.talk_like(bot, name, keywords)
+        if _await_stage(bot, want) >= want:
+            return
+    if _await_stage(bot, want) < want:
+        raise solver.SolverError("talking to %s never reached stage %d (at %d)" % (name, want, _stage(bot)))
 
 
 def _count(bot, name):
@@ -79,14 +103,17 @@ def solve(bot):
     if _count(bot, "silverlight_key_3") < 1 and _count(bot, "bucket_water") < 1:
         raise solver.SolverError("need a bucket of water for the drain at %s" % (bot.position,))
     # Gypsy Aris starts the quest for 1 coin and names Sir Prysin.
-    solver.talk_like(bot, "aris", ["here you go", "delrith", "silverlight", "incantation", "best"])
+    _talk_until(bot, "aris", ["here you go", "delrith", "silverlight", "incantation", "best"], TALKED_ARIS)
     # Sir Prysin sends us hunting for his three keys.
-    solver.talk_like(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"])
-    # Captain Rovin hands over his key for the demon story.
-    solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
+    _talk_until(bot, "sir_prysin", ["aris", "silverlight", "crystal", "keys", "hunting", "key", "rovin", "wizard"], KEY_HUNT)
+    # Captain Rovin hands over his key for the demon story (no varp: skip when held).
+    if _count(bot, "silverlight_key_2") < 1:
+        solver.talk_like(bot, "captain_rovin", ["important", "demon", "invade", "silverlight", "key"])
     # Wizard Traiborn wants 25 bones for his key: agree first, then hand them over.
-    solver.talk_like(bot, "traiborn", ["knocking", "bones", "key"])
-    solver.talk_like(bot, "traiborn", ["bones", "give"])
+    if _stage(bot) < FIND_BONES:
+        solver.talk_like(bot, "traiborn", ["knocking", "bones", "key"])
+    if _stage(bot) < GOT_TRAIBORN_KEY:
+        solver.talk_like(bot, "traiborn", ["bones", "give"])
     # Prysin's own key went down the kitchen drain: wash it into the sewer.
     key3 = solver.obj_id("silverlight_key_3")
     if bot.inventory().get(key3, 0) < 1:
