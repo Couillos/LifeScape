@@ -127,16 +127,25 @@ def solve(bot):
         stage = _stage(bot)
     if stage < 40:
         raise solver.SolverError("Joe did not drink the beers at %s" % (bot.position,))
-    # Tie up Keli, unlock the cell door, hand over key + disguise.
-    if stage < 50:
+    # Tie up Keli whenever she is about: fresh (stage < 50) or respawned
+    # (the cell door refuses while she is within 10 tiles, even at 50).
+    # The tie consumes the rope, so a held rope afterwards means refusal.
+    if stage < 100 and bot.npcs_named(("lady_keli",)):
         if _count(bot, solver.obj_id("rope")) < 1:
             raise solver.SolverError("need rope for Keli at %s" % (bot.position,))
         use_item_on_npc(bot, "rope", "lady_keli")
+        if _count(bot, solver.obj_id("rope")) > 0:
+            raise solver.SolverError("Keli refused the rope at %s" % (bot.position,))
         stage = _stage(bot)
     if stage < 100:
         solver.use_item_on_loc(bot, "princeskey", ("alidoor",))
+        _dx, _dz, _dlvl, _dloc = C.find_loc(bot, "alidoor")
+        if not bot.can_reach(_dx, _dz - 1, _dlvl, near=0):
+            raise solver.SolverError("cell door refused (Keli respawned?) at %s" % (bot.position,))
         solver.talk_like(bot, "prince_ali_prison", ["rescue", "disguise", "key", "leela"])
         stage = _stage(bot)
+    if stage < 100:
+        raise solver.SolverError("prince not freed at %s" % (bot.position,))
     # Hassan pays out 700 coins, which completes the quest.
     if stage < 110:
         solver.talk_like(bot, "hassan", ["reward", "payment", "rescued", "emir"])
