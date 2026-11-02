@@ -520,9 +520,11 @@ class World:
             self.chat_interfaces = self.chat_interfaces[-8:]
         # The server sets an interface's texts just before opening it. Keep
         # only that batch, so options from the previous dialogue disappear.
-        # Models arrive after the open; start fresh the same way.
+        # Models ride on main windows only; a chatbox opening must not wipe
+        # them (the quiz box stays open behind chatty interfaces).
         self.texts = dict(self.pending_texts)
-        self.modal_models = {}
+        if kind != "chat":
+            self.modal_models = {}
         self.pending_texts = {}
         self.chat_interfaces = []
 
