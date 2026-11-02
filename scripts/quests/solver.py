@@ -210,6 +210,12 @@ def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
         if nid is None:
             bot.pump(5)
             continue
+        npc = bot.world.npcs[nid]
+        try:
+            bot.approach(npc["x"], npc["z"], radius=2, timeout=20, open_doors=True)
+        except (Unreachable, TimeoutError):
+            continue
+        nid = bot.find_npc(npc_name) or nid
         use_com, use_slot = C.inv_slot(bot, obj_id(item_name))
         bot.op_npc_u(nid, obj_id(item_name), use_slot, use_com)
         wait_ticks(bot, 10)
