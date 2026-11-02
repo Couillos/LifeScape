@@ -242,6 +242,23 @@ def operate_loc(bot, names, op=1, timeout=60, stand=None):
     drain_dialog(bot)
 
 
+def ride_loc(bot, names, op=1, timeout=60):
+    """Ride a stair/ladder/trapdoor through the portal table.
+
+    A raw click from the wrong side is dropped silently (reachLoc
+    angle); the portal table knows which side to stand on. Falls back
+    to a plain click when no portal knows the tile.
+    """
+    x, z, level, loc = tutorial_common.find_loc(bot, *names)
+    bot.approach(x, z, level=level, radius=2, timeout=timeout, open_doors=True)
+    if bot.ride_transition_at(x, z, level):
+        wait_ticks(bot, 5)
+        return
+    bot.op_loc(op, x, z, loc)
+    wait_ticks(bot, 10)
+    drain_dialog(bot)
+
+
 def obj_id(name):
     entries = knowledge.objs.by_name(name)
     if not entries:

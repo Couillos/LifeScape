@@ -75,9 +75,9 @@ def _wear(bot, name):
 
 def _climb_toward(bot, level):
     if bot.world.level > level:
-        solver.operate_loc(bot, ("laddertop", "spiralstairstop", "stairstop"), 1, timeout=120)
+        solver.ride_loc(bot, ("laddertop", "spiralstairstop", "stairstop"), 1, timeout=120)
     elif bot.world.level < level:
-        solver.operate_loc(bot, ("ladder", "spiralstairs", "stairs"), 1, timeout=120)
+        solver.ride_loc(bot, ("ladder", "spiralstairs", "stairs"), 1, timeout=120)
     else:
         raise solver.SolverError("no path on level %d at %s" % (level, bot.position))
 
