@@ -50,6 +50,7 @@ def main():
                 print("  option %s: %r" % (com, text[:100]), flush=True)
             if bot.world.modal is None:
                 print("modal closed, done", flush=True)
+                print("live varps: %s" % (sorted((k, v) for k, v in bot.world.varps.items() if v)), flush=True)
                 return 0
             if options:
                 choice = None
