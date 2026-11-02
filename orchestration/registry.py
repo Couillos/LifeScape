@@ -47,6 +47,7 @@ SCRIPTS = {
     "drop": "scripts/drop.py",
     "probe_door": "scripts/probe_door.py",
     "probe_give": "scripts/probe_give.py",
+    "probe_talk": "scripts/probe_talk.py",
     "probe_vars": "scripts/probe_vars.py",
     "quest_reset": "scripts/quest_reset.py",
     "reset_quests": "scripts/reset_quests.py",

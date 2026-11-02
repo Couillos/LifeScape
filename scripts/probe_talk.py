@@ -1,50 +1,76 @@
-"""Talk to the nearest NPC and show what the dialog looks like.
+"""Dev tool: talk to an NPC and dump every modal text/option (staff testing).
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_talk.py [username]
+Traces full dialogue flow for debugging quest branches. Never used by bots.
+
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/probe_talk.py <account> <npc> [answer ...]
+Answers are substrings matched like solver keywords (first match wins,
+else first option); use "CONTINUE" to force chat_continue rounds.
 """
 
 import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from lifescape.client import Bot
 
 
-def nearest_npc(bot):
-    best = None
-    for nid, npc in bot.world.npcs.items():
-        dist = abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z)
-        if best is None or dist < best[0]:
-            best = (dist, nid)
-    return best
-
-
 def main():
-    username = sys.argv[1] if len(sys.argv) > 1 else "t06"
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    account, name, answers = sys.argv[1], sys.argv[2], sys.argv[3:]
     bot = Bot()
     try:
-        bot.login(username)
-        print("start %s" % (bot.position,), flush=True)
-        deadline = time.time() + 30
-        while not bot.world.npcs and time.time() < deadline:
-            bot.pump(5)
-        print("npcs: %s" % ({nid: (n["x"], n["z"]) for nid, n in bot.world.npcs.items()},), flush=True)
-        dist, nid = nearest_npc(bot)
+        bot.login(account, account)
+        nid = bot.find_npc(name)
+        if nid is None:
+            bot.pump(10)
+            nid = bot.find_npc(name)
+        if nid is None:
+            print("no such npc in view: %r" % (name,), flush=True)
+            return 1
         npc = bot.world.npcs[nid]
-        print("talking to npc %d at (%d,%d)" % (nid, npc["x"], npc["z"]), flush=True)
-        bot.walk_to(npc["x"], npc["z"])
-        npc = bot.world.npcs[nid]
-        bot.op_npc(1, nid)
-        for _ in range(6):
-            for op, name, body in bot.pump(5):
-                if name in ("IF_OPENCHAT", "IF_OPENMAIN", "IF_SETTEXT", "MESSAGE_GAME", "P_COUNTDIALOG"):
-                    print("dialog %s (%d) %r" % (name, op, body), flush=True)
-            print("modal=%s texts=%d chat=%s" % (bot.world.modal, len(bot.world.texts), bot.world.chat[-3:]), flush=True)
+        try:
+            bot.approach(npc["x"], npc["z"], radius=2, timeout=60, open_doors=True)
+        except Exception as error:
+            print("approach failed: %s" % (error,), flush=True)
+        nid = bot.find_npc(name) or nid
+        bot.talk_to(nid)
+        bot.pump(5)
+        answered = set()
+        for round_no in range(80):
+            texts = [(com, text) for com, text in bot.chat_texts()]
+            options = [(com, text) for com, text in bot.chat_options() if text not in answered]
+            print("--- round %d modal=%s" % (round_no, bot.world.modal), flush=True)
+            for com, text in texts[-6:]:
+                print("  text %s: %r" % (com, text[:100]), flush=True)
+            for com, text in options:
+                print("  option %s: %r" % (com, text[:100]), flush=True)
+            if bot.world.modal is None:
+                print("modal closed, done", flush=True)
+                return 0
+            if options:
+                choice = None
+                for keyword in answers:
+                    choice = next(((c, t) for c, t in options if keyword.lower() in t.lower()), None)
+                    if choice is not None:
+                        break
+                if choice is None:
+                    choice = options[0]
+                print("click option %s %r" % (choice[0], choice[1][:60]), flush=True)
+                bot.if_button(choice[0])
+                answered.add(choice[1])
+            else:
+                bot.chat_continue()
+            bot.pump(3)
+            time.sleep(0.2)
+        print("rounds exhausted", flush=True)
+        return 1
     finally:
         bot.close()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
