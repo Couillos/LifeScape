@@ -164,7 +164,9 @@ F2P_QUESTS = (
         name="Pirate's Treasure",
         members=False,
         completion_varps=_completion(("hunt", 4)),
-        items=(_item("karamja_rum"), _item("banana", 10)),
+        # No rum: it is bought on Karamja mid-quest and customs seizes
+        # any carried bottle, so requiring it upfront can never pass.
+        items=(_item("banana", 10),),
     ),
     QuestRequirements(
         key="prince",
