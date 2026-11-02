@@ -1051,6 +1051,12 @@ class MovementMixin:
         index_by_tile = {tile: index for index, tile in enumerate(steps)}
         best = None
         for spot in self._wall_doors:
+            if spot[2] != self.world.level:
+                # Footprints are matched as bare (x, z) tiles below: without
+                # this guard a door on another floor (tower L2 over L0)
+                # matches the current path, and opening it calls walk_to on
+                # the wrong level, which a portal route always refuses.
+                continue
             if id(spot) in self._blocked_doors:
                 continue
             if id(spot) in self._opening:
