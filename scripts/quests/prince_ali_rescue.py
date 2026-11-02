@@ -121,6 +121,10 @@ def solve(bot):
     # Leela confirms the full kit (key, wig, skirt, paste) is carried and
     # advances to prep_finished; with the kit this is a single chat.
     if stage < 30:
+        missing = [name for name in ("princeskey", "blondwig", "pink_skirt", "skinpaste")
+                   if _count(bot, solver.obj_id(name)) < 1]
+        if missing:
+            raise solver.SolverError("need %s for Leela at %s" % (",".join(missing), bot.position))
         solver.talk_like(bot, "leela", ["help", "free", "prince", "equipment", "guard"])
         stage = _await_stage(bot, 30)
     # Joe's beer dialogue drinks all 3 beers by itself and sets guard_drunk.
@@ -149,6 +153,8 @@ def solve(bot):
         # plain game messages, no modal). A refused tie keeps the rope, so
         # a flicker-exited tie simply retries with the rope still held.
         key = solver.obj_id("princeskey")
+        if _count(bot, key) < 1:
+            raise solver.SolverError("need princeskey for the cell at %s" % (bot.position,))
         unlocked = False
         for _attempt in range(4):
             if bot.npcs_named(("lady_keli",)):

@@ -174,13 +174,10 @@ F2P_QUESTS = (
         members=False,
         completion_varps=_completion(("princequest", 110)),
         items=(
-            _item("princeskey"),
-            # No rope: it is consumed tying Keli mid-quest (like beer).
-            # No beer: all 3 are drunk by the guard mid-quest, so requiring
-            # them upfront can never pass once Joe is done (like hunt rum).
-            _item("skinpaste"),
-            _item("pink_skirt"),
-            _item("blondwig"),
+            # No kit: key/wig/skirt/paste are handed to the prince at 100,
+            # rope ties Keli, beers drunk by Joe — all mid-quest consumables
+            # (like hunt rum). Stage-gated checks in solve() name what a
+            # fresh run actually needs.
         ),
     ),
     QuestRequirements(
