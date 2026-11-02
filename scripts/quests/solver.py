@@ -201,6 +201,31 @@ def take_near(bot, name, timeout=120):
     raise SolverError("cannot pick up %s at %s" % (name, bot.position))
 
 
+def use_item_on_npc(bot, item_name, npc_name, near=None, timeout=120):
+    """Use an inventory item on an NPC (research notes on Sedridor)."""
+    go_to_npc(bot, npc_name, near=near)
+    target = bot.world.ticks + timeout
+    while bot.world.ticks < target:
+        nid = bot.find_npc(npc_name)
+        if nid is None:
+            bot.pump(5)
+            continue
+        use_com, use_slot = C.inv_slot(bot, obj_id(item_name))
+        bot.op_npc_u(nid, obj_id(item_name), use_slot, use_com)
+        wait_ticks(bot, 10)
+        # Same halt risk as operate_loc: a result mesbox blocks the
+        # server script until dismissed.
+        for _ in range(12):
+            if bot.world.modal is None or _completion_open(bot):
+                break
+            if bot.world.modal[0] == "main" or bot.chat_options():
+                break
+            bot.chat_continue()
+            bot.pump(5)
+        return True
+    raise SolverError("cannot use %s on %s at %s" % (item_name, npc_name, bot.position))
+
+
 def use_item_on_loc(bot, item_name, loc_names):
     x, z, level, loc = C.find_loc(bot, *loc_names)
     C.approach_loc(bot, x, z, loc, level)

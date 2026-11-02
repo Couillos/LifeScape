@@ -31,11 +31,15 @@ def solve(bot):
     # completed stages never need re-talking.
     if _saved_stage() < 1:
         solver.talk_like(bot, "duke_of_lumbridge", ["talisman", "help", "runes", "yes"])
-    solver.talk_like(bot, "head_wizard", ["talisman", "duke", "help", "yes"])
-    solver.talk_like(bot, "head_wizard", ["package", "research", "aubury"])
+    # Sedridor opens with "looking for the head wizard" (the "Nothing
+    # thanks" first option is a dead end), then takes the talisman with
+    # "here you are" and hands the package on "certainly".
+    solver.talk_like(bot, "head_wizard", ["looking for the head wizard", "here you are", "certainly", "yes"])
     solver.talk_like(bot, "aubury", ["package", "research", "head_wizard", "notes"])
     solver.talk_like(bot, "aubury", ["notes", "head_wizard", "finished"])
-    solver.talk_like(bot, "head_wizard", ["notes", "aubury", "research"])
+    # The finale is item-on-NPC, not talk: Sedridor only takes the notes
+    # through opnpcu.
+    solver.use_item_on_npc(bot, "research_notes", "head_wizard", near=(3103, 9571))
     solver.wait_complete(bot)
 
 

@@ -28,6 +28,14 @@ class ActionsMixin:
         body.u16(slot)
         self.connection.send(client_op_id("OPNPC%d" % op), body.bytes())
 
+    def op_npc_u(self, slot, obj_id, use_slot, com):
+        body = Writer()
+        body.u16(slot)
+        body.u16(obj_id)
+        body.u16(use_slot)
+        body.u16(com)
+        self.connection.send(client_op_id("OPNPCU"), body.bytes())
+
     def op_obj(self, op, x, z, obj_id):
         body = Writer()
         body.u16(x)
