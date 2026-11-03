@@ -566,8 +566,10 @@ class BotCore:
             setattr(self, cache_name, index)
         zone_x, zone_z = self.world.x >> 3, self.world.z >> 3
         found = []
-        for dz in (-1, 0, 1):
-            for dx in (-1, 0, 1):
+        # the spectator canvas shows 33x33 tiles: a 3x3 zone scan (±8 tiles)
+        # leaves its corners without walls, so scan 5x5 zones
+        for dz in (-2, -1, 0, 1, 2):
+            for dx in (-2, -1, 0, 1, 2):
                 found.extend(index.get((self.world.level, zone_x + dx, zone_z + dz), ()))
         return found
 
@@ -586,13 +588,13 @@ class BotCore:
         radius = 16  # the canvas shows 33x33 tiles around the player
         tiles = {}
         for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in self._static_locs_near():
-            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > radius:
+            if max(abs(loc_x - self.world.x), abs(loc_z - self.world.z)) > radius:
                 continue
             tiles[(loc_x, loc_z, _loc_layer(loc_shape))] = (loc_id, loc_shape, loc_angle)
         for (loc_x, loc_z, loc_level), value in self.world.locs.items():
             if loc_level != level:
                 continue
-            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > radius:
+            if max(abs(loc_x - self.world.x), abs(loc_z - self.world.z)) > radius:
                 continue
             if value is None:
                 continue
@@ -612,6 +614,7 @@ class BotCore:
                 "z": loc_z,
                 "id": loc_id,
                 "act": bool(ops and any(ops)),
+                "active": bool(entry.get("active")) if entry else False,
                 "block": bool(entry.get("blockwalk")) if entry else False,
                 "shape": loc_shape,
                 "angle": loc_angle,

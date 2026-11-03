@@ -266,8 +266,13 @@ function syncRtBtn() {
 }
 const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
-const TILE = 16;      // px per tile
+const TILE = 16;      // px per tile on screen
 const R = 16;         // drawn radius, in tiles
+const BUF_TILE = 4;   // the client minimap buffer is 4 px per tile
+const BUF_SIZE = (R * 2 + 1) * BUF_TILE;
+const mapBuffer = document.createElement('canvas');
+mapBuffer.width = mapBuffer.height = BUF_SIZE;
+const bctx = mapBuffer.getContext('2d');
 
 const esc = (s) => String(s ?? "");
 const statusClass = (s) => ["running","reconnecting","busy","starting","failed","disconnected","finished","stopped"].includes(s) ? s : "";
@@ -404,6 +409,7 @@ function draw() {
   }
   const pos = interpPos();
   const cx = cv.width / 2, cy = cv.height / 2;
+  ctx.imageSmoothingEnabled = false; // mapscene sprites are pixel art
   // Text is collected while shapes draw and painted in one pass at the end:
   // later tiles would otherwise cover earlier labels in dense areas.
   const labels = [];
@@ -431,30 +437,41 @@ function draw() {
 
   const halfTile = TILE / 2;
   const map = last.map;
+  // The client minimap is a 4 px per tile image. Build the same buffer and
+  // scale it up, so ground, walls and sprites keep the client's exact
+  // proportions instead of being redrawn at 16 px per tile.
+  const originX = Math.round(pos.px) - R;
+  const originZ = Math.round(pos.pz) - R;
+  const northZ = originZ + R * 2;
+  bctx.clearRect(0, 0, BUF_SIZE, BUF_SIZE);
   if (map) {
     for (let row = 0; row < map.size; row++) {
       const tz = map.z + row;
-      const sy = cy - (tz - pos.pz) * TILE;
-      if (sy < -TILE || sy > cv.height + TILE) continue;
+      const by = (northZ - tz) * BUF_TILE;
+      if (by < -BUF_TILE || by > BUF_SIZE) continue;
       for (let col = 0; col < map.size; col++) {
         const tx = map.x + col;
-        const sx = cx + (tx - pos.px) * TILE;
-        if (sx < -TILE || sx > cv.width + TILE) continue;
+        const bx = (tx - originX) * BUF_TILE;
+        if (bx < -BUF_TILE || bx > BUF_SIZE) continue;
         const cell = map.tiles[row][col];
         if (typeof cell === "number") {
-          ctx.fillStyle = map.palette[cell] || '#000000';
-          ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
+          bctx.fillStyle = map.palette[cell] || '#000000';
+          bctx.fillRect(bx, by, BUF_TILE, BUF_TILE);
           continue;
         }
-        // partial overlay: 4x4 cells, as the client minimap paints them
-        const sub = TILE / 4;
         for (let index = 0; index < 16; index++) {
-          ctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.o : cell.u] || '#000000';
-          ctx.fillRect(sx - halfTile + (index & 3) * sub, sy - halfTile + (index >> 2) * sub, sub, sub);
+          bctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.o : cell.u] || '#000000';
+          bctx.fillRect(bx + (index & 3), by + (index >> 2), 1, 1);
         }
       }
     }
   }
+  const scenery = window.SpectateScenery;
+  if (scenery) {
+    scenery.drawScenery(bctx, {cx: 0, cy: 0, tile: BUF_TILE, half: BUF_TILE / 2, originX: originX, northZ: northZ, px: pos.px, pz: pos.pz, w: BUF_SIZE, h: BUF_SIZE}, last.locs, last.objs, last.flora, labels, true);
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(mapBuffer, cx + (originX - pos.px) * TILE, cy - (northZ + 1 - pos.pz) * TILE, BUF_SIZE * (TILE / BUF_TILE), BUF_SIZE * (TILE / BUF_TILE));
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
   ctx.lineWidth = 1;
   if (window.showGrid) {
@@ -509,35 +526,12 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  const scenery = window.SpectateScenery;
-  if (scenery) {
-    scenery.drawScenery(ctx, {cx, cy, tile: TILE, half: halfTile, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
-  } else {
-  const labelled = new Set();
-  let labelCount = 0;
-  for (const loc of last.locs || []) {
-    const sx = cx + (loc.x - pos.px) * TILE, sy = cy - (loc.z - pos.pz) * TILE;
-    if (sx < -30 || sy < -12 || sx > cv.width + 30 || sy > cv.height + 12) continue;
-    if (loc.block) {
-      ctx.fillStyle = '#6d6d6d';
-      ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
-      ctx.strokeStyle = '#3a3a3a';
-      ctx.strokeRect(sx - halfTile + 0.5, sy - halfTile + 0.5, TILE - 1, TILE - 1);
-    } else {
-      ctx.fillStyle = loc.act ? '#3f8f3f' : '#2a5a3a';
-      ctx.fillRect(sx - 3, sy - 3, 6, 6);
+  if (!window.SpectateScenery) {
+    const halfTile = TILE / 2;
+    for (const obj of last.objs || []) {
+      square(obj.x, obj.z, '#fd3', esc(obj.name) || ('object #' + obj.id));
     }
-    // label only actionable scenery, close and not already named: the map is
-    // dense enough that every name would overlap.
-    if (loc.act && labelCount < 14 && Math.abs(loc.x - pos.px) + Math.abs(loc.z - pos.pz) <= 6 && !labelled.has(loc.name)) {
-      labelled.add(loc.name);
-      labelCount += 1;
-      labels.push([sx + 5, sy - 4, '#8d9', '9px monospace', esc(loc.name || ('scenery #' + loc.id)).slice(0, 22)]);
-    }
-  }
-  for (const obj of last.objs || []) {
-    square(obj.x, obj.z, '#fd3', esc(obj.name) || ('object #' + obj.id));
-  }
+    void halfTile;
   }
   const cross = (x, z) => {
     const sx = cx + (x - pos.px) * TILE, sy = cy - (z - pos.pz) * TILE;

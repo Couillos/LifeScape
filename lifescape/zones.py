@@ -84,7 +84,8 @@ def load_labels(pack_dir):
         z = int.from_bytes(data[pos + 2:pos + 4], "big")
         kind = data[pos + 4]
         pos += 5
-        labels.append((name, x, z, kind))
+        # "/" is a worldmap line break, show it as a space.
+        labels.append((name.replace("/", " "), x, z, kind))
     return labels
 
 
