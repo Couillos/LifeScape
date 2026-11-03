@@ -28,8 +28,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import mapcache
+from .minimap import Minimap
 
 MAP_CACHE = mapcache.MapCache()
+MAP_MINIMAP = Minimap(MAP_CACHE)
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 WS_INTERVAL = 0.2
@@ -156,17 +158,10 @@ def _state_payload(dispatch, account, previous_signature=None):
     if account:
         state = dict((dispatch({"cmd": "live", "account": account}) or {}).get("state") or {})
         _annotate_mapscene(state)
-        position = state.get("position")
-        if position:
-            try:
-                state["map"] = MAP_CACHE.grid(position[0], position[1], position[2])
-            except Exception:
-                state.pop("map", None)
         signature = _heavy_signature(state)
         if signature == previous_signature:
             # nothing moved: the browser keeps what it already has
             state.pop("locs", None)
-            state.pop("map", None)
             state["partial"] = True
         else:
             _compact_locs(state)
@@ -312,7 +307,6 @@ INDEX_HTML = """<!doctype html>
     <div class="panel logpanel"><pre id="log"></pre></div>
   </div>
 </div>
-<script src="/spectate_scenery.js"></script>
 <script>
 (() => {
 // Everything stays inside this closure: a browser extension injected into
@@ -343,14 +337,10 @@ const TILE = 16;      // px per tile on screen
 const R = 16;         // drawn radius, in tiles
 const BUF_TILE = 4;   // the client minimap buffer is 4 px per tile
 const BUF_SIZE = (R * 2 + 1) * BUF_TILE;
-const mapBuffer = document.createElement('canvas');
-mapBuffer.width = mapBuffer.height = BUF_SIZE;
-const bctx = mapBuffer.getContext('2d');
-// ground and lines are separate layers: the ground is smoothed up to screen
-// size (that is what makes tiles look soft) while the walls stay crisp
-const groundBuffer = document.createElement('canvas');
-groundBuffer.width = groundBuffer.height = BUF_SIZE;
-const gctx = groundBuffer.getContext('2d');
+// the map image is rendered by the server with the client's own minimap
+// passes; only the request key and the loaded image live here
+let mapImage = null;
+let mapRequested = null;
 
 const esc = (s) => String(s ?? "");
 const statusClass = (s) => ["running","reconnecting","busy","starting","failed","disconnected","finished","stopped"].includes(s) ? s : "";
@@ -526,42 +516,19 @@ function draw() {
     if (label) labels.push([sx + 6, sy + 4, '#ccc', '10px monospace', label]);
   };
 
-  const halfTile = TILE / 2;
-  const map = last.map;
-  // The client minimap is a 4 px per tile image. Build the same buffer and
-  // scale it up, so ground, walls and sprites keep the client's exact
-  // proportions instead of being redrawn at 16 px per tile.
+  // Ground, walls and mapscene sprites come from the server image: it is
+  // built with the client's own passes, so the canvas is the client minimap
+  // instead of a redraw that drifts on overlays and sprite order.
   const originX = Math.round(pos.px) - R;
   const originZ = Math.round(pos.pz) - R;
   const northZ = originZ + R * 2;
-  bctx.clearRect(0, 0, BUF_SIZE, BUF_SIZE);
-  gctx.fillStyle = '#000000';
-  gctx.fillRect(0, 0, BUF_SIZE, BUF_SIZE);
-  if (map) {
-    for (let row = 0; row < map.size; row++) {
-      const tz = map.z + row;
-      const by = (northZ - tz) * BUF_TILE;
-      if (by < -BUF_TILE || by > BUF_SIZE) continue;
-      for (let col = 0; col < map.size; col++) {
-        const tx = map.x + col;
-        const bx = (tx - originX) * BUF_TILE;
-        if (bx < -BUF_TILE || bx > BUF_SIZE) continue;
-        const cell = map.tiles[row][col];
-        if (typeof cell === "number") {
-          gctx.fillStyle = map.palette[cell] || '#000000';
-          gctx.fillRect(bx, by, BUF_TILE, BUF_TILE);
-          continue;
-        }
-        for (let index = 0; index < 16; index++) {
-          gctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.u : cell.o] || '#000000';
-          gctx.fillRect(bx + (index & 3), by + (index >> 2), 1, 1);
-        }
-      }
-    }
-  }
-  const scenery = window.SpectateScenery;
-  if (scenery) {
-    scenery.drawScenery(bctx, {cx: 0, cy: 0, tile: BUF_TILE, half: BUF_TILE / 2, originX: originX, northZ: northZ, px: pos.px, pz: pos.pz, w: BUF_SIZE, h: BUF_SIZE}, last.locs, last.objs, last.flora, labels, true);
+  const level = (last.position && last.position[0]) || 0;
+  const mapKey = originX + ',' + originZ + ',' + level;
+  if (mapKey !== mapRequested) {
+    mapRequested = mapKey;
+    const image = new Image();
+    image.onload = () => { mapImage = image; paint(); };
+    image.src = 'minimap.png?x=' + originX + '&z=' + originZ + '&level=' + level + '&size=' + (R * 2 + 1);
   }
   const step = TILE / BUF_TILE;
   // snap the blit to a whole buffer pixel: with a fractional offset the
@@ -570,9 +537,10 @@ function draw() {
   const mapLeft = Math.round((cx + (originX - pos.px) * TILE) / step) * step;
   const mapTop = Math.round((cy - (northZ + 1 - pos.pz) * TILE) / step) * step;
   const mapSize = BUF_SIZE * step;
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(groundBuffer, mapLeft, mapTop, mapSize, mapSize);
-  ctx.drawImage(mapBuffer, mapLeft, mapTop, mapSize, mapSize);
+  if (mapImage) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mapImage, mapLeft, mapTop, mapSize, mapSize);
+  }
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
   ctx.lineWidth = 1;
   if (window.showGrid) {
@@ -591,7 +559,7 @@ function draw() {
   }
 
   // pathfinding: the route the bot is following + its destination
-  const route = last.route || [];
+  const route = window.showOverlay ? (last.route || []) : [];
   if (route.length) {
     ctx.strokeStyle = '#3af';
     ctx.lineWidth = 1;
@@ -607,7 +575,7 @@ function draw() {
       ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
     }
   }
-  if (last.route_target) {
+  if (window.showOverlay && last.route_target) {
     const [target_x, target_z] = last.route_target;
     const sx = cx + (target_x - pos.px) * TILE, sy = cy - (target_z - pos.pz) * TILE;
     ctx.fillStyle = '#3af';
@@ -615,7 +583,7 @@ function draw() {
     ctx.arc(sx, sy, 4, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (last.route_action) {
+  if (window.showOverlay && last.route_action) {
     const action = last.route_action;
     const ax = cx + (action.x - pos.px) * TILE, ay = cy - (action.z - pos.pz) * TILE;
     ctx.strokeStyle = '#2bff2b'; ctx.lineWidth = 3;
@@ -627,35 +595,40 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  if (!window.SpectateScenery) {
+  if (window.showOverlay) {
     const halfTile = TILE / 2;
     for (const obj of last.objs || []) {
       square(obj.x, obj.z, '#fd3', esc(obj.name) || ('object #' + obj.id));
     }
     void halfTile;
   }
-  const cross = (x, z) => {
-    const sx = cx + (x - pos.px) * TILE, sy = cy - (z - pos.pz) * TILE;
-    ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(sx - 7, sy - 7); ctx.lineTo(sx + 7, sy + 7);
-    ctx.moveTo(sx + 7, sy - 7); ctx.lineTo(sx - 7, sy + 7);
-    ctx.stroke(); ctx.lineWidth = 1;
-  };
-  if (last.hint && last.hint[0] === 'coord') {
-    cross(last.hint[1], last.hint[2]);
-  } else if (last.hint && last.hint[0] === 'npc') {
-    const hinted = (last.npcs || []).find(n => n.nid === last.hint[1]);
-    if (hinted) cross(hinted.x, hinted.z);
-  }
-  for (const npc of last.npcs || []) dot(npc.x, npc.z, '#ff0', esc(npc.name) || ('npc #' + npc.nid));
-  for (const player of last.players || []) dot(player.x, player.z, '#3af', player.name);
-  const [sx, sy] = dot(pos.px, pos.pz, '#fff', (last.account_name || last.account || '?') + ' lvl ' + (last.combat ?? '?'), true);
-  for (const [lx, ly, color, font, str] of labels) {
-    if (lx < -100 || ly < -12 || lx > cv.width + 100 || ly > cv.height + 12) continue;
-    ctx.font = font;
-    ctx.fillStyle = color;
-    ctx.fillText(str, lx, ly);
+  // The canvas is the map only: dots, labels and the route are drawn only
+  // when explicitly enabled, so the render can be compared tile for tile
+  // with the client's own minimap image.
+  if (window.showOverlay) {
+    const cross = (x, z) => {
+      const sx = cx + (x - pos.px) * TILE, sy = cy - (z - pos.pz) * TILE;
+      ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sx - 7, sy - 7); ctx.lineTo(sx + 7, sy + 7);
+      ctx.moveTo(sx + 7, sy - 7); ctx.lineTo(sx - 7, sy + 7);
+      ctx.stroke(); ctx.lineWidth = 1;
+    };
+    if (last.hint && last.hint[0] === 'coord') {
+      cross(last.hint[1], last.hint[2]);
+    } else if (last.hint && last.hint[0] === 'npc') {
+      const hinted = (last.npcs || []).find(n => n.nid === last.hint[1]);
+      if (hinted) cross(hinted.x, hinted.z);
+    }
+    for (const npc of last.npcs || []) dot(npc.x, npc.z, '#ff0', esc(npc.name) || ('npc #' + npc.nid));
+    for (const player of last.players || []) dot(player.x, player.z, '#3af', player.name);
+    dot(pos.px, pos.pz, '#fff', (last.account_name || last.account || '?') + ' lvl ' + (last.combat ?? '?'), true);
+    for (const [lx, ly, color, font, str] of labels) {
+      if (lx < -100 || ly < -12 || lx > cv.width + 100 || ly > cv.height + 12) continue;
+      ctx.font = font;
+      ctx.fillStyle = color;
+      ctx.fillText(str, lx, ly);
+    }
   }
   paint();
 }
@@ -949,31 +922,6 @@ setInterval(load, 60000);
 """
 
 
-_SCENERY_SCRIPT = None
-_SCENERY_VERSION = None
-
-
-def _scenery_script():
-    global _SCENERY_SCRIPT
-    if _SCENERY_SCRIPT is None:
-        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spectate_scenery.js")
-        with open(script_path, "rb") as handle:
-            _SCENERY_SCRIPT = handle.read()
-    return _SCENERY_SCRIPT
-
-
-def _scenery_version():
-    global _SCENERY_VERSION
-    if _SCENERY_VERSION is None:
-        _SCENERY_VERSION = hashlib.md5(_scenery_script()).hexdigest()[:12]
-    return _SCENERY_VERSION
-
-
-# Cache-bust the module: the file changes with the code, and the dashboard
-# must pick it up without waiting out a cache entry.
-INDEX_HTML = INDEX_HTML.replace(
-    'src="/spectate_scenery.js"', 'src="/spectate_scenery.js?v=%s"' % _scenery_version()
-)
 
 
 class WebHandler(BaseHTTPRequestHandler):
@@ -991,22 +939,21 @@ class WebHandler(BaseHTTPRequestHandler):
                 account = parts[2] if len(parts) > 2 else ""
                 reply = self.dispatch({"cmd": "show", "account": account})
                 state = reply.get("state") if isinstance(reply, dict) else None
-                position = state.get("position") if state else None
-                if position:
-                    try:
-                        state["map"] = MAP_CACHE.grid(position[0], position[1], position[2])
-                    except Exception:
-                        state.pop("map", None)
                 _annotate_mapscene(state)
                 return self.reply_json(reply)
             if parts == ["items"]:
                 return self.reply(200, ITEMS_HTML, "text/html; charset=utf-8")
-            if parts == ["spectate_scenery.js"]:
+            if parts == ["minimap.png"]:
+                query = parse_qs(parsed.query)
+                level = int((query.get("level") or ["0"])[0])
+                x = int((query.get("x") or ["0"])[0])
+                z = int((query.get("z") or ["0"])[0])
+                size = int((query.get("size") or ["33"])[0])
                 return self.reply(
                     200,
-                    _scenery_script(),
-                    "application/javascript; charset=utf-8",
-                    cache_control="public, max-age=3600",
+                    MAP_MINIMAP.png(level, x, z, size),
+                    "image/png",
+                    cache_control="no-store",
                 )
             if len(parts) == 2 and parts[0] == "mapscene" and parts[1].endswith(".png"):
                 sprite = MAP_CACHE.mapscene_png(int(parts[1][:-4])) if parts[1][:-4].isdigit() else None

@@ -45,8 +45,8 @@ class SessionWebTest(unittest.TestCase):
         self.assertNotIn("cleaning", web.INDEX_HTML)
         self.assertNotIn("repairing", web.INDEX_HTML)
 
-    def test_web_renders_scenery_module_without_detail_mode(self):
-        self.assertIn("spectate_scenery.js", web.INDEX_HTML)
+    def test_web_renders_map_image_without_detail_mode(self):
+        self.assertIn("minimap.png", web.INDEX_HTML)
         self.assertNotIn("detailbtn", web.INDEX_HTML)
         self.assertNotIn("detaily", web.INDEX_HTML)
 

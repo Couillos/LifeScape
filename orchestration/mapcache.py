@@ -1,16 +1,15 @@
-"""Ground colours read from the packed game cache, the way the game paints them.
+"""Ground pixels read from the packed game cache, the way the client paints them.
 
 The ground file of each map square stores, per 64x64 level, an underlay
-and an overlay floor id. Each flo id maps to the colour the terrain is
-painted with: the flo rgb, or, for textured floors (water, planks,
-rock), the average colour of the texture in ``content/textures``. The
-overlay wins when present, like the 3D ground the client minimap is
-rendered from. ``mapview/worldmap.jag`` is deliberately not used: its
-``floorcol.dat`` is the world-map palette, visibly darker and redder
-than the in-game ground.
+and an overlay floor id plus the map flags. Each flo id maps to a colour
+through the client's own chain: blended underlay over the neighbourhood,
+or the flo overlay colour (its texture average for textured floors) in
+the cells of the overlay mask. ``mapview/worldmap.jag`` is deliberately
+not used: its ``floorcol.dat`` is the world-map palette, visibly darker
+and redder than the in-game ground.
 
 Stdlib only. Each map square is parsed once and cached in memory; the
-daemon serves a small colour grid around the bot, never the whole map.
+spectator renders the window it is about to show, never the whole map.
 """
 
 import bz2
@@ -176,12 +175,15 @@ class MapCache:
     def __init__(self):
         self._floor_rgb = None
         self._floor_textures = None
+        self._floor_coloured = None
         self._texture_averages = {}
+        self._textures_jag = None
         self._palette = None
         self._hsl_cache = {}
         self._blend_cache = {}
         self._mapscene_png = {}
         self._mapscene_size = {}
+        self._mapscene_sprite = {}
         self._loc_type_table = None
         self._media = None
         self._squares = {}
@@ -238,20 +240,22 @@ class MapCache:
         except (OSError, ValueError):
             data = None
         if not data and os.path.exists(os.path.join(PACK_DIR, "client", "config")):
-            return [], []
+            return [], [], []
         if not data:
             path = os.path.join(PACK_DIR, "server", "flo.dat")
             with open(path, "rb") as handle:
                 data = handle.read()
         if len(data) < 2:
-            return [], []
+            return [], [], []
         count = (data[0] << 8) | data[1]
         position = 2
         colours = []
         textures = []
+        coloured = []
         for _index in range(count):
             rgb = 0
             texture = -1
+            has_colour = False
             while position < len(data):
                 opcode = data[position]
                 position += 1
@@ -259,6 +263,7 @@ class MapCache:
                     break
                 if opcode == 1:
                     rgb = (data[position] << 16) | (data[position + 1] << 8) | data[position + 2]
+                    has_colour = True
                     position += 3
                 elif opcode == 2:
                     texture = data[position]
@@ -271,15 +276,17 @@ class MapCache:
                     position += 1
             colours.append(rgb)
             textures.append(texture)
-        return colours, textures
+            coloured.append(has_colour)
+        return colours, textures, coloured
 
     def _ensure_flo(self):
         if self._floor_rgb is None or self._floor_textures is None:
             with self._lock:
                 if self._floor_rgb is None or self._floor_textures is None:
-                    colours, textures = self._load_flo()
+                    colours, textures, coloured = self._load_flo()
                     self._floor_rgb = colours
                     self._floor_textures = textures
+                    self._floor_coloured = coloured
 
     def _floor(self):
         self._ensure_flo()
@@ -288,6 +295,10 @@ class MapCache:
     def _flo_texture(self):
         self._ensure_flo()
         return self._floor_textures
+
+    def _flo_has_colour(self, floor_id):
+        self._ensure_flo()
+        return 0 <= floor_id < len(self._floor_coloured) and self._floor_coloured[floor_id]
 
     # -- ground palette ---------------------------------------------------
 
@@ -325,6 +336,10 @@ class MapCache:
     @staticmethod
     def _decode_loc_type(data, position):
         entry = {"mapscene": -1, "width": 1, "length": 1, "mapfunction": -1}
+        explicit_active = None
+        has_model = False
+        first_shape = None
+        has_op = False
         while position < len(data):
             opcode = data[position]
             position += 1
@@ -332,6 +347,9 @@ class MapCache:
                 break
             if opcode == 1:
                 count = data[position]
+                has_model = count > 0
+                if count:
+                    first_shape = data[position + 3]  # model g2, shape g1
                 position += 1 + count * 3
             elif opcode in (2, 3):
                 position += 1
@@ -340,6 +358,7 @@ class MapCache:
                 position += 1
             elif opcode == 5:
                 count = data[position]
+                has_model = count > 0
                 position += 1 + count * 2
             elif opcode == 14:
                 entry["width"] = data[position]
@@ -349,14 +368,20 @@ class MapCache:
                 position += 1
             elif opcode in (17, 18, 21, 22, 23):
                 pass  # flags without payload (blockwalk/blockrange/hillskew/sharelight/occlude)
-            elif opcode in (19, 28, 29, 39):
+            elif opcode == 19:
+                explicit_active = data[position] == 1
+                position += 1
+            elif opcode in (28, 29, 39):
                 position += 1
             elif opcode == 24:
                 position += 2
             elif 30 <= opcode < 39:
                 position += 1
+                start = position
                 while position < len(data) and data[position] != 10:
                     position += 1
+                if position > start:
+                    has_op = True
                 position += 1
             elif opcode == 40:
                 count = data[position]
@@ -376,8 +401,12 @@ class MapCache:
                 position += 2  # g2b, not g1: getting this wrong desyncs the loc
             elif opcode in (73, 74):
                 pass
-            else:
-                break
+            # the client's LocType has no other opcodes and simply reads on,
+            # so an unknown one must not end the decode here either
+        if explicit_active is None:
+            entry["active"] = (has_model and (first_shape is None or first_shape == 10)) or has_op
+        else:
+            entry["active"] = explicit_active
         return entry
 
     def mapscene_for(self, loc_id):
@@ -390,8 +419,12 @@ class MapCache:
 
     def _mapscene_index(self, sprite_index):
         """(width, height, offset_x, offset_y, encoding, data_offset, palette)."""
+        return self._media_sprite_index("mapscene.dat", sprite_index)
+
+    def _media_sprite_index(self, dat_name, sprite_index):
+        """Decode one Pix8 header from a media jag (mapscene.dat, texture.dat)."""
         try:
-            container = self._jagfile_read(self._media_jag(), "mapscene.dat")
+            container = self._jagfile_read(self._media_jag(), dat_name)
             index = self._jagfile_read(self._media_jag(), "index.dat")
         except (OSError, ValueError):
             return None
@@ -444,6 +477,28 @@ class MapCache:
         self._mapscene_png[sprite_index] = png
         return png
 
+    def mapscene_sprite(self, sprite_index):
+        """(width, height, xof, yof, pixels, palette) for a mapscene sprite."""
+        if sprite_index in self._mapscene_sprite:
+            return self._mapscene_sprite[sprite_index]
+        meta = self._mapscene_index(sprite_index)
+        sprite = None
+        if meta is not None:
+            width, height, offset_x, offset_y, encoding, data_position, palette = meta
+            container = self._jagfile_read(self._media_jag(), "mapscene.dat")
+            if container is not None and data_position + width * height <= len(container):
+                pixels = [0] * (width * height)
+                if encoding == 0:
+                    for index in range(width * height):
+                        pixels[index] = container[data_position + index] & 0xFF
+                else:
+                    for x in range(width):
+                        for y in range(height):
+                            pixels[x + y * width] = container[data_position + x * height + y] & 0xFF
+                sprite = (width, height, offset_x, offset_y, pixels, palette)
+        self._mapscene_sprite[sprite_index] = sprite
+        return sprite
+
     def mapscene_origin(self, sprite_index):
         """(x, y) offset the sprite itself carries (Pix8.xof/yof)."""
         meta = self._mapscene_index(sprite_index)
@@ -475,6 +530,46 @@ class MapCache:
         if os.path.isdir(candidate):
             return candidate
         return os.path.normpath(os.path.join(ROOT, "..", "lostcity", "content"))
+
+    def _texture_average(self, texture_id):
+        """Pix3D.getTextureAverage: mean of the gamma-corrected palette."""
+        if texture_id in self._texture_averages:
+            return self._texture_averages[texture_id]
+        palette = self._texture_palette(texture_id)
+        if palette is None:
+            self._texture_averages[texture_id] = 1
+            return 1
+        total = [0, 0, 0]
+        for colour in palette:
+            corrected = _gamma(colour, _BRIGHTNESS)
+            total[0] += (corrected >> 16) & 0xFF
+            total[1] += (corrected >> 8) & 0xFF
+            total[2] += corrected & 0xFF
+        count = len(palette)
+        rgb = ((total[0] // count) << 16) | ((total[1] // count) << 8) | (total[2] // count)
+        self._texture_averages[texture_id] = _gamma(rgb, 1.4) or 1
+        return self._texture_averages[texture_id]
+
+    def _texture_palette(self, texture_id):
+        """Palette of one texture (Pix8.depack from the textures jag)."""
+        try:
+            if self._textures_jag is None:
+                self._textures_jag = self._jagfile_named("textures")
+            jag = self._textures_jag
+            dat = self._jagfile_read(jag, "%d.dat" % texture_id)
+            index = self._jagfile_read(jag, "index.dat")
+        except (OSError, ValueError):
+            return None
+        if not dat or not index:
+            return None
+        position = (dat[0] << 8) | dat[1]
+        palette_size = index[position + 4]
+        palette = [0] * max(1, palette_size)
+        cursor = position + 5
+        for slot in range(1, palette_size):
+            palette[slot] = (index[cursor] << 16) | (index[cursor + 1] << 8) | index[cursor + 2]
+            cursor += 3
+        return palette
 
     def tex_names(self):
         """texture id -> texture name, from ``content/pack/texture.pack``."""
@@ -556,29 +651,6 @@ class MapCache:
                         self._texture_averages[texture_name] = None
         return self._texture_averages[texture_name]
 
-    def palette(self):
-        """flo id -> "#rrggbb" the client minimap paints, cached once.
-
-        Same chain as the client: flo rgb -> HSL -> colourTable index ->
-        HSL bitmap -> gamma. Textured floors use the texture average with
-        gamma 1.4 (Pix3D.getTextureAverage).
-        """
-        if self._palette is None:
-            with self._lock:
-                if self._palette is None:
-                    names = self.tex_names()
-                    palette = []
-                    for floor_id, rgb in enumerate(self._floor()):
-                        colour = None
-                        texture_id = self._flo_texture()[floor_id]
-                        if texture_id >= 0 and names.get(texture_id):
-                            colour = self._texture_colour(names[texture_id])
-                        if colour is None:
-                            colour = self._overlay_colour(floor_id)
-                        palette.append("#%02x%02x%02x" % ((colour >> 16) & 0xFF, (colour >> 8) & 0xFF, colour & 0xFF))
-                    self._palette = palette
-        return self._palette
-
     # -- map squares ----------------------------------------------------
 
     def _load_square(self, square_x, square_z):
@@ -588,7 +660,7 @@ class MapCache:
             if name not in archive.namelist():
                 return None
             data = archive.read(name)
-        grounds = [[(-1, -1, -1, 0)] * (MAP_SIZE * MAP_SIZE) for _level in range(LEVELS)]
+        grounds = [[(-1, -1, -1, 0, 0)] * (MAP_SIZE * MAP_SIZE) for _level in range(LEVELS)]
         position = 0
         for level in range(LEVELS):
             for x in range(MAP_SIZE):
@@ -597,6 +669,7 @@ class MapCache:
                     overlay = -1
                     shape = -1
                     rotation = 0
+                    flags = 0
                     while position < len(data):
                         opcode = data[position]
                         position += 1
@@ -612,10 +685,10 @@ class MapCache:
                             shape = (opcode - 2) // 4
                             rotation = (opcode - 2) & 3
                         elif opcode <= 81:
-                            pass
+                            flags = opcode - 49  # ClientBuild: mapl
                         else:
                             underlay = opcode - 82  # (opcode - 81) - 1
-                    grounds[level][x * MAP_SIZE + z] = (underlay, overlay, shape, rotation)
+                    grounds[level][x * MAP_SIZE + z] = (underlay, overlay, shape, rotation, flags)
         return grounds
 
     def _square(self, square_x, square_z):
@@ -633,15 +706,22 @@ class MapCache:
     def _tile_ids(self, level, tile_x, tile_z):
         square = self._square(tile_x >> 6, tile_z >> 6)
         if square is None or not 0 <= level < LEVELS:
-            return -1, -1, -1, 0
+            return -1, -1, -1, 0, 0
         return square[level][(tile_x & 63) * MAP_SIZE + (tile_z & 63)]
 
     def _flo_hsl(self, floor_id):
-        """Flo HSL, chroma and chroma-weighted hue, cached."""
+        """Flo HSL, chroma and chroma-weighted hue, cached.
+
+        Textured floors carry no colour, so the client never runs getHsl on
+        them and every field stays 0 (chroma included, which feeds the
+        neighbourhood blend).
+        """
         hsl = self._hsl_cache.get(floor_id)
         if hsl is None:
-            rgb = self._floor()[floor_id] if 0 <= floor_id < len(self._floor()) else 0
-            hsl = _floor_colour(rgb)
+            if self._flo_has_colour(floor_id):
+                hsl = _floor_colour(self._floor()[floor_id])
+            else:
+                hsl = (0, 0, 0, 0, 0)
             self._hsl_cache[floor_id] = hsl
         return hsl
 
@@ -652,12 +732,26 @@ class MapCache:
         scaled = max(2, min(126, int((96 * (index & 0x7F)) / 128)))
         return _colour_table((index & 0xFF80) + scaled)
 
-    def _blend(self, level, tile_x, tile_z):
-        """ClientBuild: underlay colour blended over a 11x11 window of tiles.
+    def _flo_overlay_colour(self, floor_id):
+        """Colour the client paints on the mask cells of an overlay tile.
 
-        The client keeps running HSL sums over five tiles each way and
-        converts the average, which is why neighbouring tiles of the same
-        flo id never share one flat colour.
+        ClientBuild: a textured flo takes Pix3D.getTextureAverage, a magenta
+        flo paints nothing (0), anything else getOCol(overlayHsl, 96).
+        """
+        if 0 <= floor_id < len(self._floor()):
+            texture = self._flo_texture()[floor_id]
+            if texture >= 0:
+                return self._texture_average(texture)
+            if self._floor()[floor_id] == 0xFF00FF:
+                return 0
+        return self._overlay_colour(floor_id)
+
+    def _blend(self, level, tile_x, tile_z):
+        """ClientBuild: underlay colour blended over a 10x10 window of tiles.
+
+        The client keeps a running sum that adds the column/row five ahead
+        before removing the one five behind, so the window it averages is
+        x-4..x+5 and z-4..z+5, not centred on the tile.
         """
         key = (level, tile_x, tile_z)
         colour = self._blend_cache.get(key)
@@ -665,9 +759,9 @@ class MapCache:
             return colour
         hue_total = sat_total = lig_total = chroma_total = 0
         count = 0
-        for delta_z in range(-5, 6):
-            for delta_x in range(-5, 6):
-                underlay, _overlay, _shape, _rotation = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
+        for delta_z in range(-4, 6):
+            for delta_x in range(-4, 6):
+                underlay, _overlay, _shape, _rotation, _flags = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
                 if underlay < 0:
                     continue
                 underlay_hue, saturation, lightness, chroma, _weighted = self._flo_hsl(underlay)
@@ -688,70 +782,256 @@ class MapCache:
         self._blend_cache[key] = colour
         return colour
 
-    def colour_at(self, level, tile_x, tile_z):
-        """Colour the client minimap paints: overlay if present, else blended underlay."""
-        underlay, overlay, _shape, _rotation = self._tile_ids(level, tile_x, tile_z)
-        rgba = self._floor()
-        palette = self.palette()
-        if 0 <= overlay < len(rgba):
-            if rgba[overlay] == 0xFF00FF:
-                return _EMPTY  # magenta flo: the client paints nothing here
-            if overlay < len(palette):
-                return palette[overlay]
-        if 0 <= underlay < len(rgba) and rgba[underlay] != 0xFF00FF:
-            return "#%06x" % self._blend(level, tile_x, tile_z)
-        return _EMPTY
+    def _quick_colour(self, level, tile_x, tile_z):
+        """Flat colour for a plain/diagonal tile, or None for a masked tile.
+
+        World.setGround turns floors < 1 into a QuickGround: no overlay flo
+        paints the blended underlay, floors 0 paints the flo overlay colour
+        over the whole tile. Only floors >= 1 get a 4x4 mask.
+        """
+        underlay, overlay, shape, _rotation, _flags = self._tile_ids(level, tile_x, tile_z)
+        if overlay < 0:
+            return self._blend(level, tile_x, tile_z) if underlay >= 0 else 0
+        if shape <= 0:
+            return self._flo_overlay_colour(overlay)
+        return None
+
+    # -- minimap ground buffer -------------------------------------------
+
+    def _paint_ground_tile(self, pixels, stride, level, tile_x, tile_z, x, y):
+        """World.render2DGround for one tile, into a 4 px per tile buffer."""
+        underlay, overlay, shape, rotation, _flags = self._tile_ids(level, tile_x, tile_z)
+        if overlay < 0 or shape <= 0:
+            colour = self._quick_colour(level, tile_x, tile_z)
+            if colour:
+                for row in range(4):
+                    base = (y + row) * stride + x
+                    for col in range(4):
+                        pixels[base + col] = colour
+            return
+
+        blend = self._blend(level, tile_x, tile_z) if underlay >= 0 else 0
+        colour = self._flo_overlay_colour(overlay)
+        cells = MINIMAP_SHAPE[shape + 1]
+        turned = MINIMAP_ROTATE[rotation & 3]
+        for row in range(4):
+            base = (y + row) * stride + x
+            for col in range(4):
+                if cells[turned[row * 4 + col]]:
+                    pixels[base + col] = colour
+                elif blend:
+                    pixels[base + col] = blend
+
+    def render_ground(self, level, world_x0, world_z0, size):
+        """The client minimap ground pass for a size x size window.
+
+        Row 0 is the northern edge, like the client buffer, and each tile
+        covers 4x4 pixels.
+        """
+        border = size * 4
+        pixels = [0] * (border * border)
+        for row in range(size):
+            world_z = world_z0 + row
+            y = (size - 1 - row) * 4
+            for col in range(size):
+                world_x = world_x0 + col
+                x = col * 4
+                flags = self._tile_ids(level, world_x, world_z)[4]
+                if (flags & 0x18) == 0:
+                    self._paint_ground_tile(pixels, border, level, world_x, world_z, x, y)
+                if level < LEVELS - 1 and self._tile_ids(level + 1, world_x, world_z)[4] & 0x08:
+                    self._paint_ground_tile(pixels, border, level + 1, world_x, world_z, x, y)
+        return pixels
 
     # -- spectator payload ----------------------------------------------
 
-    def grid(self, level, tile_x, tile_z, radius=16):
-        """Compact grid around (tile_x,tile_z): palette + one entry per tile.
+    def _load_square(self, square_x, square_z):
+        path = os.path.join(PACK_DIR, ".cache", "maps-server.zip")
+        with zipfile.ZipFile(path) as archive:
+            name = "m%d_%d" % (square_x, square_z)
+            if name not in archive.namelist():
+                return None
+            data = archive.read(name)
+        grounds = [[(-1, -1, -1, 0, 0)] * (MAP_SIZE * MAP_SIZE) for _level in range(LEVELS)]
+        position = 0
+        for level in range(LEVELS):
+            for x in range(MAP_SIZE):
+                for z in range(MAP_SIZE):
+                    underlay = -1
+                    overlay = -1
+                    shape = -1
+                    rotation = 0
+                    flags = 0
+                    while position < len(data):
+                        opcode = data[position]
+                        position += 1
+                        if opcode == 0:
+                            break
+                        if opcode == 1:
+                            position += 1
+                            break
+                        if opcode <= 49:
+                            # the map byte is flo id + 1 (ClientBuild: FloType.list[t2 - 1])
+                            overlay = data[position] - 1
+                            position += 1
+                            shape = (opcode - 2) // 4
+                            rotation = (opcode - 2) & 3
+                        elif opcode <= 81:
+                            flags = opcode - 49  # ClientBuild: mapl
+                        else:
+                            underlay = opcode - 82  # (opcode - 81) - 1
+                    grounds[level][x * MAP_SIZE + z] = (underlay, overlay, shape, rotation, flags)
+        return grounds
 
-        A tile is either a palette index (flat colour) or {"u","o","m"}:
-        the client paints partial overlay shapes as a 4x4 mask mixing the
-        overlay and underlay colours (World.render2DGround).
+    def _square(self, square_x, square_z):
+        # Cache the misses too: a square missing from the pack (random-event
+        # areas are not in it) used to reopen the zip once per tile, which
+        # made one spectator frame take seconds.
+        key = (square_x, square_z)
+        if key in self._squares:
+            return self._squares[key]
+        with self._lock:
+            if key not in self._squares:
+                self._squares[key] = self._load_square(square_x, square_z)
+        return self._squares[key]
+
+    def _tile_ids(self, level, tile_x, tile_z):
+        square = self._square(tile_x >> 6, tile_z >> 6)
+        if square is None or not 0 <= level < LEVELS:
+            return -1, -1, -1, 0, 0
+        return square[level][(tile_x & 63) * MAP_SIZE + (tile_z & 63)]
+
+    def _flo_hsl(self, floor_id):
+        """Flo HSL, chroma and chroma-weighted hue, cached.
+
+        Textured floors carry no colour, so the client never runs getHsl on
+        them and every field stays 0 (chroma included, which feeds the
+        neighbourhood blend).
         """
-        size = radius * 2 + 1
-        origin_x = tile_x - radius
-        origin_z = tile_z - radius
-        palette = []
-        index_of = {}
+        hsl = self._hsl_cache.get(floor_id)
+        if hsl is None:
+            if self._flo_has_colour(floor_id):
+                hsl = _floor_colour(self._floor()[floor_id])
+            else:
+                hsl = (0, 0, 0, 0, 0)
+            self._hsl_cache[floor_id] = hsl
+        return hsl
 
-        def index_for(colour):
-            index = index_of.get(colour)
-            if index is None:
-                index = len(palette)
-                index_of[colour] = index
-                palette.append(colour)
-            return index
+    def _overlay_colour(self, floor_id):
+        """Overlay colour: flo overlayHsl -> colourTable (getOCol 96)."""
+        hue, saturation, lightness, _chroma, _underlay_hue = self._flo_hsl(floor_id)
+        index = _hsl_index(hue, saturation, lightness)
+        scaled = max(2, min(126, int((96 * (index & 0x7F)) / 128)))
+        return _colour_table((index & 0xFF80) + scaled)
 
-        rows = []
-        for delta_z in range(size):
-            row = []
-            for delta_x in range(size):
-                tx = origin_x + delta_x
-                tz = origin_z + delta_z
-                underlay, overlay, shape, rotation = self._tile_ids(level, tx, tz)
-                flat = self.colour_at(level, tx, tz)
-                if overlay < 0 or flat == _EMPTY:
-                    row.append(index_for(flat))
+    def _flo_overlay_colour(self, floor_id):
+        """Colour the client paints on the mask cells of an overlay tile.
+
+        ClientBuild: a textured flo takes Pix3D.getTextureAverage, a magenta
+        flo paints nothing (0), anything else getOCol(overlayHsl, 96).
+        """
+        if 0 <= floor_id < len(self._floor()):
+            texture = self._flo_texture()[floor_id]
+            if texture >= 0:
+                return self._texture_average(texture)
+            if self._floor()[floor_id] == 0xFF00FF:
+                return 0
+        return self._overlay_colour(floor_id)
+
+    def _blend(self, level, tile_x, tile_z):
+        """ClientBuild: underlay colour blended over a 10x10 window of tiles.
+
+        The client keeps a running sum that adds the column/row five ahead
+        before removing the one five behind, so the window it averages is
+        x-4..x+5 and z-4..z+5, not centred on the tile.
+        """
+        key = (level, tile_x, tile_z)
+        colour = self._blend_cache.get(key)
+        if colour is not None:
+            return colour
+        hue_total = sat_total = lig_total = chroma_total = 0
+        count = 0
+        for delta_z in range(-4, 6):
+            for delta_x in range(-4, 6):
+                underlay, _overlay, _shape, _rotation, _flags = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
+                if underlay < 0:
                     continue
-                if shape <= 0:
-                    row.append(index_for(flat))  # plain overlay: whole tile
-                    continue
-                mask = 0
-                cells = MINIMAP_SHAPE[shape + 1] if shape + 1 < len(MINIMAP_SHAPE) else MINIMAP_SHAPE[0]
-                rotated = MINIMAP_ROTATE[rotation & 3]
-                for cell in range(16):
-                    if cells[rotated[cell]]:
-                        mask |= 1 << cell
-                row_entry = {"u": index_for(self._blend(level, tx, tz)), "o": index_for(flat), "m": mask}
-                row.append(row_entry)
-            rows.append(row)
-        return {
-            "x": origin_x,
-            "z": origin_z,
-            "size": size,
-            "palette": palette,
-            "tiles": rows,
-        }
+                underlay_hue, saturation, lightness, chroma, _weighted = self._flo_hsl(underlay)
+                hue_total += _weighted
+                sat_total += saturation
+                lig_total += lightness
+                chroma_total += chroma
+                count += 1
+        if count == 0 or chroma_total == 0:
+            colour = _EMPTY_VALUE
+        else:
+            hue = int((hue_total * 256) / chroma_total) & 0xFF
+            saturation = sat_total // count
+            lightness = lig_total // count
+            colour = _blended_colour(hue, saturation, lightness)
+        if len(self._blend_cache) > 20000:
+            self._blend_cache.clear()
+        self._blend_cache[key] = colour
+        return colour
+
+    def _quick_colour(self, level, tile_x, tile_z):
+        """Flat colour for a plain/diagonal tile, or None for a masked tile.
+
+        World.setGround turns floors < 1 into a QuickGround: no overlay flo
+        paints the blended underlay, floors 0 paints the flo overlay colour
+        over the whole tile. Only floors >= 1 get a 4x4 mask.
+        """
+        underlay, overlay, shape, _rotation, _flags = self._tile_ids(level, tile_x, tile_z)
+        if overlay < 0:
+            return self._blend(level, tile_x, tile_z) if underlay >= 0 else 0
+        if shape <= 0:
+            return self._flo_overlay_colour(overlay)
+        return None
+
+    # -- minimap ground buffer -------------------------------------------
+
+    def _paint_ground_tile(self, pixels, stride, level, tile_x, tile_z, x, y):
+        """World.render2DGround for one tile, into a 4 px per tile buffer."""
+        underlay, overlay, shape, rotation, _flags = self._tile_ids(level, tile_x, tile_z)
+        if overlay < 0 or shape <= 0:
+            colour = self._quick_colour(level, tile_x, tile_z)
+            if colour:
+                for row in range(4):
+                    base = (y + row) * stride + x
+                    for col in range(4):
+                        pixels[base + col] = colour
+            return
+
+        blend = self._blend(level, tile_x, tile_z) if underlay >= 0 else 0
+        colour = self._flo_overlay_colour(overlay)
+        cells = MINIMAP_SHAPE[shape + 1]
+        turned = MINIMAP_ROTATE[rotation & 3]
+        for row in range(4):
+            base = (y + row) * stride + x
+            for col in range(4):
+                if cells[turned[row * 4 + col]]:
+                    pixels[base + col] = colour
+                elif blend:
+                    pixels[base + col] = blend
+
+    def render_ground(self, level, world_x0, world_z0, size):
+        """The client minimap ground pass for a size x size window.
+
+        Row 0 is the northern edge, like the client buffer, and each tile
+        covers 4x4 pixels.
+        """
+        border = size * 4
+        pixels = [0] * (border * border)
+        for row in range(size):
+            world_z = world_z0 + row
+            y = (size - 1 - row) * 4
+            for col in range(size):
+                world_x = world_x0 + col
+                x = col * 4
+                flags = self._tile_ids(level, world_x, world_z)[4]
+                if (flags & 0x18) == 0:
+                    self._paint_ground_tile(pixels, border, level, world_x, world_z, x, y)
+                if level < LEVELS - 1 and self._tile_ids(level + 1, world_x, world_z)[4] & 0x08:
+                    self._paint_ground_tile(pixels, border, level + 1, world_x, world_z, x, y)
+        return pixels
+

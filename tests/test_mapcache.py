@@ -9,38 +9,25 @@ class MapCacheTest(unittest.TestCase):
         cache = MapCache()
         self.assertGreater(len(cache._floor()), 100)
 
-    def test_lumbridge_grid_has_grass_and_dirt(self):
-        grid = MapCache().grid(0, 3222, 3218, 4)
-        self.assertEqual(grid["size"], 9)
-        self.assertEqual(len(grid["tiles"]), 9)
-        self.assertEqual(len(grid["tiles"][0]), 9)
-        colours = set(grid["palette"])
-        self.assertTrue(any(colour != "#121212" for colour in colours))
+    def test_overlay_colour_uses_the_client_chain(self):
+        cache = MapCache()
+        # flo 48 muddygrass through the HSL table + gamma 0.8
+        self.assertEqual(cache._flo_overlay_colour(48), 0x54600E)
+        # water is a textured floor: the texture palette average, gamma 1.4
+        self.assertEqual(cache._flo_overlay_colour(5), 0x576A92)
 
-    def test_missing_map_square_still_returns_a_grid(self):
-        grid = MapCache().grid(0, 100, 100, 2)
-        self.assertEqual(grid["size"], 5)
-        self.assertIn("#000000", grid["palette"])
+    def test_lumbridge_ground_contains_water(self):
+        pixels = MapCache().render_ground(0, 3224, 3200, 24)
+        self.assertIn(0x576A92, pixels)
 
-    def test_grid_uses_terrain_colours(self):
-        grid = MapCache().grid(0, 3222, 3218)
-        # water = texture average with gamma 1.4, like the client minimap
-        self.assertIn("#5671ac", grid["palette"])
-
-    def test_palette_uses_the_client_chain(self):
-        palette = MapCache().palette()
-        # flo 48 muddygrass through the HSL table + gamma 0.8, like Pix3D.colourTable
-        self.assertEqual(palette[48], "#54600e")
-        # water uses its texture average with gamma 1.4 (textured floor)
-        self.assertEqual(palette[5], "#5671ac")
+    def test_missing_map_square_renders_black(self):
+        self.assertEqual(set(MapCache().render_ground(0, 96, 96, 4)), {0})
 
     def test_underlay_is_blended_over_neighbours(self):
         cache = MapCache()
         # two tiles of the same flo id in different neighbourhoods differ,
-        # because the client averages the HSL of the 11x11 surrounding tiles
-        first = cache.colour_at(0, 3210, 3200)
-        second = cache.colour_at(0, 3190, 3180)
-        self.assertNotEqual(first, second)
+        # because the client averages the HSL of the 10x10 surrounding tiles
+        self.assertNotEqual(cache._blend(0, 3210, 3200), cache._blend(0, 3190, 3180))
 
 
 if __name__ == "__main__":
