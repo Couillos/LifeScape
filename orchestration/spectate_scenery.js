@@ -88,12 +88,20 @@
     ctx.fill();
   }
 
+  const layerOf = (shape) => (shape <= 3 ? 0 : shape <= 8 ? 1 : shape === 22 ? 3 : 2);
+
   function drawScenery(ctx, view, locs, objs, flora, labels, buffer) {
     const labelled = new Set();
     let labelCount = 0;
     const tile = view.tile;
 
-    for (const loc of locs || []) {
+    // the client paints tile by tile, south to north then west to east, and
+    // within a tile wall -> scenery -> ground decor; a southern wall must not
+    // cover a northern sprite, so keep that order here too
+    const ordered = (locs || []).slice().sort((a, b) =>
+      (a.z - b.z) || (a.x - b.x) || (layerOf(a.shape) - layerOf(b.shape)));
+
+    for (const loc of ordered) {
       const [left, top] = tileOrigin(view, loc);
       if (left < -40 || top < -40 || left > view.w + 40 || top > view.h + 40) continue;
 

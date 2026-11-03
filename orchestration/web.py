@@ -89,18 +89,89 @@ def _annotate_mapscene(state):
     return state
 
 
-def _state_payload(dispatch, account):
-    payload = {"jobs": dispatch({"cmd": "status"}).get("jobs") or []}
+_LOC_FIELDS = ("x", "z", "id", "shape", "angle", "act", "active", "block", "width", "length", "mapscene", "mapsceneX", "mapsceneY", "cosmetic")
+
+
+def _heavy_signature(state):
+    """Cheap signature of the fields that only change when the bot moves.
+
+    ``locs`` is by far the biggest part of the payload (hundreds of entries),
+    so it is only resent when this signature changes instead of five times a
+    second.
+    """
+    locs = state.get("locs") or []
+    signature = [(loc.get("x"), loc.get("z"), loc.get("id"), loc.get("shape"), loc.get("angle")) for loc in locs]
+    return (state.get("position"), state.get("zone"), len(locs), hash(tuple(signature)))
+
+
+def _compact_locs(state):
+    """Encode locs as arrays plus one id -> name table.
+
+    The dict form repeats the key names of ~14 fields for hundreds of locs,
+    which dominated the websocket traffic.
+    """
+    locs = state.get("locs")
+    if not locs:
+        return
+    names = {}
+    table = []
+    for loc in locs:
+        loc_id = loc.get("id")
+        if loc_id not in names:
+            names[loc_id] = loc.get("name") or ""
+        row = []
+        for field in _LOC_FIELDS:
+            value = loc.get(field)
+            row.append(int(value) if isinstance(value, bool) else value)
+        table.append(row)
+    state["locs"] = table
+    state["loc_names"] = names
+    state["loc_fields"] = list(_LOC_FIELDS)
+
+
+_JOB_LIST_FIELDS = (
+    "account",
+    "account_name",
+    "combat",
+    "position",
+    "modal",
+    "intention",
+    "status",
+    "script",
+    "hitpoints",
+    "zone",
+    "ticks",
+    "last_error",
+    "last_event",
+    "updated",
+)
+
+
+def _state_payload(dispatch, account, previous_signature=None):
+    jobs = dispatch({"cmd": "status"}).get("jobs") or []
+    # the job list only needs the few fields the sidebar draws: the rest
+    # (locs, inv, npcs...) duplicates the followed account's state and used
+    # to make every frame ~100 KB
+    payload = {"jobs": [{key: job.get(key) for key in _JOB_LIST_FIELDS} for job in jobs]}
     if account:
         state = (dispatch({"cmd": "live", "account": account}) or {}).get("state") or {}
+        _annotate_mapscene(state)
         position = state.get("position")
         if position:
             try:
                 state["map"] = MAP_CACHE.grid(position[0], position[1], position[2])
             except Exception:
                 state.pop("map", None)
-        _annotate_mapscene(state)
+        signature = _heavy_signature(state)
+        if signature == previous_signature:
+            # nothing moved: the browser keeps what it already has
+            state.pop("locs", None)
+            state.pop("map", None)
+            state["partial"] = True
+        else:
+            _compact_locs(state)
         payload["state"] = state
+        payload["signature"] = signature
     return payload
 
 
@@ -114,11 +185,13 @@ def ws_session(sock, dispatch):
     account = ""
     last_send = 0.0
     log_mark = None
+    signature = None
     while True:
         now = time.time()
         if now - last_send >= WS_INTERVAL:
             try:
-                payload = _state_payload(dispatch, account)
+                payload = _state_payload(dispatch, account, signature)
+                signature = payload.pop("signature", None)
                 if account:
                     try:
                         _merged, _partial, log_path = _paths.user_paths(account)
@@ -364,8 +437,21 @@ function connectSocket() {
     }
     if (data.logs) setLog(data.logs);
     if (data.state && data.state.account) {
-      if (last !== data.state) { prev = last; prevTime = performance.now(); }
-      last = data.state;
+      const incoming = data.state;
+      if (Array.isArray(incoming.locs) && incoming.loc_fields) {
+        // compact form: arrays + one id -> name table
+        const fields = incoming.loc_fields;
+        const names = incoming.loc_names || {};
+        incoming.locs = incoming.locs.map(row => {
+          const loc = {};
+          fields.forEach((field, index) => { loc[field] = row[index]; });
+          if (!loc.name) loc.name = names[loc.id] || "";
+          return loc;
+        });
+      }
+      const merged = incoming.partial && last ? Object.assign({}, last, incoming) : incoming;
+      if (last !== merged) { prev = last; prevTime = performance.now(); }
+      last = merged;
       setTitle("Following: " + (last.account_name || selected), last.zone);
       updatePanels();
     } else if (selected) {
