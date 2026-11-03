@@ -563,12 +563,13 @@ function draw() {
   if (scenery) {
     scenery.drawScenery(bctx, {cx: 0, cy: 0, tile: BUF_TILE, half: BUF_TILE / 2, originX: originX, northZ: northZ, px: pos.px, pz: pos.pz, w: BUF_SIZE, h: BUF_SIZE}, last.locs, last.objs, last.flora, labels, true);
   }
-  const mapLeft = cx + (originX - pos.px) * TILE;
-  const mapTop = cy - (northZ + 1 - pos.pz) * TILE;
-  const mapSize = BUF_SIZE * (TILE / BUF_TILE);
-  // nearest-neighbour, like the client's blit: smoothing upscales the ground
-  // by ~4 px in every direction, which spills across the 1 px wall lines and
-  // makes tiles look like they cross the walls
+  const step = TILE / BUF_TILE;
+  // snap the blit to a whole buffer pixel: with a fractional offset the
+  // 4x nearest-neighbour upscale samples some columns 5 times and others
+  // once, which breaks wall lines into 1 px segments and shifts joints
+  const mapLeft = Math.round((cx + (originX - pos.px) * TILE) / step) * step;
+  const mapTop = Math.round((cy - (northZ + 1 - pos.pz) * TILE) / step) * step;
+  const mapSize = BUF_SIZE * step;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(groundBuffer, mapLeft, mapTop, mapSize, mapSize);
   ctx.drawImage(mapBuffer, mapLeft, mapTop, mapSize, mapSize);
