@@ -9,13 +9,13 @@ haunted, vampire, hunt (pirate=4), prince (princequest=110),
 knights (squire=7), demon (demonstart=30).
 
 ## En cours
-- **black_knights_fortress** : save `spy=1` (varp 130) = étape « démarré ».
-  Entrée porte 1 OK. **Bloqué sur `bkfortressdoor2` (3020,3515,0)** : la porte
-  du banquet ne s'ouvre que sur le dialogue du `fortressguard` (choix « I
-  don't care. I'm going in anyway. »), mais le routeur générique la traite
-  comme une porte normale, clique, ne voit aucun changement de loc et la
-  bloque 120 s (« door 3020,3515 refused the click »). Il faut exclure ces
-  portes-dialogue de la machinerie de portes du SDK.
+- **black_knights_fortress** : save `spy=1` (varp 130). L'entrée (door1) et la
+  salle de banquet (door2, dialogue du garde) passent. **Bloqué sur
+  `bkfortressdoor3` (3025,3511,1)** : le bot monte à l'étage et se retrouve
+  dans la pièce Est (`3030,3511,1`), séparée de la porte par `oldcastlewall` ;
+  les échelles de l'étage partent en `(3023,3513)` et `(3025,3513)` vers le
+  niveau 2. Prochaine étape : cartographier la connexion réelle entre la salle
+  de banquet, les échelles L1→L2 et la porte 3 (puis grille, sabotage, Amik).
 - **Reste après** : shield_of_arrav (échange à 2 comptes, voir note),
   dragon_slayer en dernier (32 QP requis).
 
@@ -26,6 +26,15 @@ reprend la quête. Avant, un event en plein run téléportait le bot et toutes
 les étapes suivantes échouaient (c'est arrivé deux fois sur BKF).
 `rescue_cube` monte à 200 cubes : le serveur en ajoute un toutes les 150 ticks,
 la borne de 40 laissait toujours un cube derrière.
+
+## Maze : plus de piège
+Le serveur ferme l'événement quand `%xplamp` atteint 0 (plus de récompense) et
+renvoie le joueur à son point de départ ; le timer est armé dans
+`start_macro_maze` (le bloc `[mapzone]` ne s'exécute pas quand l'event
+téléporte). Les portes scriptées (dialogue) ne sont plus blocklistées par le
+SDK : tout modal après un clic rend la main au script. `rescue_maze` attend la
+fin de l'event si le solver échoue (borné en ticks). Validé live : sortie →
+event → retour exact au point de départ.
 
 ## Régressions corrigées côté sessions (à garder en tête)
 - Un run de quête force `bot.relogin()` : la save n'est écrite qu'au logout,

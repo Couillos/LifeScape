@@ -592,6 +592,12 @@ class MovementMixin:
                 self.recent_doors[(spot[0], spot[1])] = self.world.ticks
                 self._door_failures.pop(id(spot), None)
                 return True
+            if self.world.modal is not None:
+                # The door answered with a window (guard, password, refusal):
+                # that is a scripted door, not a door this layer can open.
+                # Leave the window to the caller and never blocklist it.
+                print("door %d,%d answered with a window" % (spot[0], spot[1]), flush=True)
+                return False
             print("door %d,%d refused the click" % (spot[0], spot[1]), flush=True)
             self.recent_doors[(spot[0], spot[1])] = self.world.ticks
             if self._door_failures.get(id(spot), 0) + 1 >= 2:
@@ -925,6 +931,10 @@ class MovementMixin:
                 return True
             self.reseal(x, z, level)
             if self.world.modal is not None:
+                # Scripted door: the click opened a dialogue or a refusal
+                # box, not a door. Hand the window to the caller untouched.
+                print("door %d,%d answered with a window" % (x, z), flush=True)
+                return False
                 # A refused click (wrong side, locked) lands in a mesbox:
                 # dismiss it now or every later side clicks behind a modal.
                 self.close_modal()
