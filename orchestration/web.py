@@ -154,7 +154,7 @@ def _state_payload(dispatch, account, previous_signature=None):
     # to make every frame ~100 KB
     payload = {"jobs": [{key: job.get(key) for key in _JOB_LIST_FIELDS} for job in jobs]}
     if account:
-        state = (dispatch({"cmd": "live", "account": account}) or {}).get("state") or {}
+        state = dict((dispatch({"cmd": "live", "account": account}) or {}).get("state") or {})
         _annotate_mapscene(state)
         position = state.get("position")
         if position:
