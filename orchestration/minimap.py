@@ -21,11 +21,9 @@ ACTIVE_RGB = 0xEE0000
 INACTIVE_RGB = 0xEEEEEE
 
 WALL_STRAIGHT = 0
-WALL_DIAGONAL_CORNER = 1
 WALL_L = 2
 WALL_SQUARE_CORNER = 3
 WALL_DIAGONAL = 9
-GROUND_DECOR = 22
 
 MAP_FLAG_VIS_BELOW = 0x08
 MAP_FLAG_FORCE_HIGH_DETAIL = 0x10
@@ -35,8 +33,6 @@ _WEST_COLUMN = ((0, 0), (0, 1), (0, 2), (0, 3))
 _NORTH_ROW = ((0, 0), (1, 0), (2, 0), (3, 0))
 _EAST_COLUMN = ((3, 0), (3, 1), (3, 2), (3, 3))
 _SOUTH_ROW = ((0, 3), (1, 3), (2, 3), (3, 3))
-_L_COLUMN = ((0, 0), (0, 1), (0, 2), (0, 3))
-_L_ROW = ((0, 0), (1, 0), (2, 0), (3, 0))
 
 
 class Minimap:
@@ -76,15 +72,15 @@ class Minimap:
     def _draw_details(self, pixels, level, world_x0, world_z0, size):
         stride = size * 4
         layers = self._loc_layers()
+        info = self.cache._loc_types()
         for world_z in range(world_z0, world_z0 + size):
             for world_x in range(world_x0, world_x0 + size):
                 if (self.cache._tile_ids(level, world_x, world_z)[4] & 0x18) == 0:
-                    self._draw_detail(pixels, stride, level, layers, world_x, world_z, world_x0, world_z0, size)
+                    self._draw_detail(pixels, stride, level, layers, info, world_x, world_z, world_x0, world_z0, size)
                 if level < LEVELS - 1 and self.cache._tile_ids(level + 1, world_x, world_z)[4] & MAP_FLAG_VIS_BELOW:
-                    self._draw_detail(pixels, stride, level + 1, layers, world_x, world_z, world_x0, world_z0, size)
+                    self._draw_detail(pixels, stride, level + 1, layers, info, world_x, world_z, world_x0, world_z0, size)
 
-    def _draw_detail(self, pixels, stride, level, layers, world_x, world_z, world_x0, world_z0, size):
-        info = self.cache._loc_types()
+    def _draw_detail(self, pixels, stride, level, layers, info, world_x, world_z, world_x0, world_z0, size):
         tx = (world_x - world_x0) * 4
         ty = (size - 1 - (world_z - world_z0)) * 4
 
