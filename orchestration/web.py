@@ -273,6 +273,11 @@ const BUF_SIZE = (R * 2 + 1) * BUF_TILE;
 const mapBuffer = document.createElement('canvas');
 mapBuffer.width = mapBuffer.height = BUF_SIZE;
 const bctx = mapBuffer.getContext('2d');
+// ground and lines are separate layers: the ground is smoothed up to screen
+// size (that is what makes tiles look soft) while the walls stay crisp
+const groundBuffer = document.createElement('canvas');
+groundBuffer.width = groundBuffer.height = BUF_SIZE;
+const gctx = groundBuffer.getContext('2d');
 
 const esc = (s) => String(s ?? "");
 const statusClass = (s) => ["running","reconnecting","busy","starting","failed","disconnected","finished","stopped"].includes(s) ? s : "";
@@ -444,6 +449,8 @@ function draw() {
   const originZ = Math.round(pos.pz) - R;
   const northZ = originZ + R * 2;
   bctx.clearRect(0, 0, BUF_SIZE, BUF_SIZE);
+  gctx.fillStyle = '#000000';
+  gctx.fillRect(0, 0, BUF_SIZE, BUF_SIZE);
   if (map) {
     for (let row = 0; row < map.size; row++) {
       const tz = map.z + row;
@@ -455,13 +462,13 @@ function draw() {
         if (bx < -BUF_TILE || bx > BUF_SIZE) continue;
         const cell = map.tiles[row][col];
         if (typeof cell === "number") {
-          bctx.fillStyle = map.palette[cell] || '#000000';
-          bctx.fillRect(bx, by, BUF_TILE, BUF_TILE);
+          gctx.fillStyle = map.palette[cell] || '#000000';
+          gctx.fillRect(bx, by, BUF_TILE, BUF_TILE);
           continue;
         }
         for (let index = 0; index < 16; index++) {
-          bctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.o : cell.u] || '#000000';
-          bctx.fillRect(bx + (index & 3), by + (index >> 2), 1, 1);
+          gctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.u : cell.o] || '#000000';
+          gctx.fillRect(bx + (index & 3), by + (index >> 2), 1, 1);
         }
       }
     }
@@ -470,8 +477,16 @@ function draw() {
   if (scenery) {
     scenery.drawScenery(bctx, {cx: 0, cy: 0, tile: BUF_TILE, half: BUF_TILE / 2, originX: originX, northZ: northZ, px: pos.px, pz: pos.pz, w: BUF_SIZE, h: BUF_SIZE}, last.locs, last.objs, last.flora, labels, true);
   }
+  const mapLeft = cx + (originX - pos.px) * TILE;
+  const mapTop = cy - (northZ + 1 - pos.pz) * TILE;
+  const mapSize = BUF_SIZE * (TILE / BUF_TILE);
+  // soft ground, crisp walls: smoothing the ground alone keeps the tile
+  // shading gentle without dissolving the wall lines into it
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(groundBuffer, mapLeft, mapTop, mapSize, mapSize);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(mapBuffer, cx + (originX - pos.px) * TILE, cy - (northZ + 1 - pos.pz) * TILE, BUF_SIZE * (TILE / BUF_TILE), BUF_SIZE * (TILE / BUF_TILE));
+  ctx.drawImage(mapBuffer, mapLeft, mapTop, mapSize, mapSize);
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
   ctx.lineWidth = 1;
   if (window.showGrid) {
@@ -608,14 +623,17 @@ function updatePanels() {
   document.getElementById('skills').textContent = (last.skills || []).map(s => `${SKILLS[s.id] || ('stat' + s.id)} ${s.level} (${s.xp}xp)`).join('\\n') || '(no skills)';
 
   const locCounts = {};
+  let sceneryCount = 0;
   for (const loc of last.locs || []) {
+    if (loc.cosmetic) continue; // decorative ground: drawn on the map, not listed
+    sceneryCount += 1;
     const name = loc.name || ('scenery #' + loc.id);
     locCounts[name] = (locCounts[name] || 0) + 1;
   }
   const locLines = Object.entries(locCounts).map(([name, count]) => (count > 1 ? count + 'x ' : '') + name);
   const objLines = (last.objs || []).map(o => (o.name || ('object #' + o.id)) + ' @ ' + o.x + ',' + o.z);
   document.getElementById('scenery').textContent =
-    `Scenery (${(last.locs || []).length}):\\n` + (locLines.slice(0, 60).join('\\n') || '(none)') +
+    `Scenery (${sceneryCount}):\\n` + (locLines.slice(0, 60).join('\\n') || '(none)') +
     `\\n\\nGround items (${(last.objs || []).length}):\\n` + (objLines.join('\\n') || '(none)');
 }
 

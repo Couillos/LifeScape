@@ -60,6 +60,7 @@ class World:
         self.npc_order = []
         self.locs = {}
         self.static_locs = {}
+        self.static_locs_layered = {}
         self.static_actions = {}
         self.objs = {}
         self.static_objs = {}

@@ -292,12 +292,27 @@ def load_maps(pack_dir, loctypes, members=True):
     collision = CollisionMap()
     static_locs = {}
     static_actions = {}
+    static_layers = {}
     maps = _map_files(pack_dir)
     for square_x, square_z, ground, locs in maps:
         _load_ground(collision, ground, square_x, square_z, members)
         lands = _read_lands(ground)
-        _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions)
-    return collision, static_locs, static_actions
+        _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions, static_layers)
+    return collision, static_locs, static_actions, static_layers
+
+
+def load_static_locs(pack_dir, loctypes, members=True):
+    """Static locs per draw layer, without building the collision map.
+
+    The spectator needs walls and scenery for the canvas, not routing, and
+    the full nav load costs seconds and a lot of memory per session.
+    """
+    static_locs = {}
+    static_actions = {}
+    static_layers = {}
+    for square_x, square_z, ground, locs in _map_files(pack_dir):
+        _load_locs(None, _read_lands(ground), locs, square_x, square_z, loctypes, members, static_locs, static_actions, static_layers)
+    return static_locs, static_actions, static_layers
 
 
 def step_open(collision, x, z, level, dx, dz):
@@ -383,7 +398,7 @@ def _load_ground(collision, ground, square_x, square_z, members):
                 collision.change_floor(absolute_x, absolute_z, actual, True)
 
 
-def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions):
+def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, static_locs, static_actions, static_layers=None):
     packet = Reader(locs)
     loc_id = -1
     offset = packet.smarts()
@@ -410,13 +425,17 @@ def _load_locs(collision, lands, locs, square_x, square_z, loctypes, members, st
             shape = info >> 2
             angle = info & 0x3
             static_locs[(absolute_x, absolute_z, actual)] = (loc_id, shape, angle)
+            if static_layers is not None:
+                # one entry per draw layer, like the client's tile slots: a
+                # ground decor must not hide the wall standing on the same tile
+                static_layers[(absolute_x, absolute_z, actual, layer_of(shape))] = (loc_id, shape, angle)
             loc = loctypes["loc"][loc_id] if loc_id < len(loctypes["loc"]) else None
             if loc is not None and any(loc.get("ops") or ()):
                 # Actionable locs keep their own table: static_locs holds one
                 # loc per tile and a decorative loc on the same tile (the maze
                 # statue shares its corner with dug-up soil) would hide it.
                 static_actions.setdefault((absolute_x, absolute_z, actual), (loc_id, shape, angle))
-            if loc is None or not loc["blockwalk"]:
+            if collision is None or loc is None or not loc["blockwalk"]:
                 continue
             change_loc_collision(
                 collision, shape, angle, loc["blockrange"], loc["length"], loc["width"], loc["active"], absolute_x, absolute_z, actual, True

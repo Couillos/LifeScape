@@ -36,7 +36,7 @@ def main():
         json.dump(pairs, handle)
 
     print("loading maps...", flush=True)
-    world, _static, _actions = collision.load_maps(PACK_DIR, collision.load_types(TYPES))
+    world, _static, _actions, _layers = collision.load_maps(PACK_DIR, collision.load_types(TYPES))
     router = route.Router()
     print("routing in python...", flush=True)
     own = [router.find_path(world, level, sx, sz, dx, dz) for level, sx, sz, dx, dz in pairs]

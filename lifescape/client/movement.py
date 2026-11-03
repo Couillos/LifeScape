@@ -1368,8 +1368,9 @@ class MovementMixin:
         if self.collision is not None:
             return
         self.loctypes = collision_mod.load_types(self.paths["types"])
-        self.collision, static_locs, static_actions = collision_mod.load_maps(self.paths["pack_dir"], self.loctypes)
+        self.collision, static_locs, static_actions, static_layers = collision_mod.load_maps(self.paths["pack_dir"], self.loctypes)
         self.world.static_locs = static_locs
+        self.world.static_locs_layered = static_layers
         self.world.static_actions = static_actions
         self.world.static_objs = {}
         for x, z, level, oid, count in objs_mod.load_static_objs(self.paths["pack_dir"]):

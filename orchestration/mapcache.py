@@ -687,8 +687,10 @@ class MapCache:
         underlay, overlay, _shape, _rotation = self._tile_ids(level, tile_x, tile_z)
         rgba = self._floor()
         palette = self.palette()
-        if 0 <= overlay < len(palette):
-            if not (overlay < len(rgba) and rgba[overlay] == 0xFF00FF):
+        if 0 <= overlay < len(rgba):
+            if rgba[overlay] == 0xFF00FF:
+                return _EMPTY  # magenta flo: the client paints nothing here
+            if overlay < len(palette):
                 return palette[overlay]
         if 0 <= underlay < len(rgba) and rgba[underlay] != 0xFF00FF:
             return "#%06x" % self._blend(level, tile_x, tile_z)

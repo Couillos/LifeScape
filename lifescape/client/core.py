@@ -105,6 +105,7 @@ class BotCore:
         self._snapshot_lock = threading.Lock()
         self._com_ids = None
         self._static_loc_index = None
+        self._static_layer_index = None
         self._static_obj_index = None
         self._route = []
         self._route_target = None
@@ -219,6 +220,7 @@ class BotCore:
             # static labels, load once per session
             self._ensure_labels()
         self._static_loc_index = None
+        self._static_layer_index = None
         self._static_obj_index = None
         self.wall_doors = None
         self.door_footprints = None
@@ -574,6 +576,9 @@ class BotCore:
         return found
 
     def _static_locs_near(self):
+        layered = getattr(self.world, "static_locs_layered", None)
+        if layered:
+            return self._static_near(layered, "_static_layer_index", lambda key, value: (key[:3], (value[0], value[1], value[2])))
         return self._static_near(self.world.static_locs, "_static_loc_index", lambda key, value: (key, (value[0], value[1], value[2])))
 
     def _static_objs_near(self):
@@ -581,10 +586,16 @@ class BotCore:
 
     def _state_locs(self):
         level = self.world.level
-        if not self.world.static_locs and self.paths.get("pack_dir"):
+        if not self.world.static_locs and self.paths and self.paths.get("pack_dir"):
             # the spectator paints walls and scenery from the static map, and
-            # a bot that only logged in never built it; nav is idempotent
-            self.ensure_nav()
+            # a bot that only logged in never loaded it; the locs-only loader
+            # avoids building the whole navigation map for a viewer
+            if self.loctypes is None:
+                self.loctypes = collision_mod.load_types(self.paths["types"])
+            static_locs, static_actions, static_layers = collision_mod.load_static_locs(self.paths["pack_dir"], self.loctypes)
+            self.world.static_locs = static_locs
+            self.world.static_actions = static_actions
+            self.world.static_locs_layered = static_layers
         radius = 16  # the canvas shows 33x33 tiles around the player
         tiles = {}
         for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in self._static_locs_near():

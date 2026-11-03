@@ -38,7 +38,11 @@ class NamingTest(unittest.TestCase):
             ]
         }
         naming.resolve_state(state)
-        self.assertEqual([loc["name"] for loc in state["locs"]], ["Newbie door1"])
+        # cosmetic scenery stays in the payload (the map canvas paints it),
+        # but it is flagged so the side panel hides it
+        listed = [loc["name"] for loc in state["locs"] if not loc.get("cosmetic")]
+        self.assertEqual(listed, ["Newbie door1"])
+        self.assertTrue(state["locs"][0]["cosmetic"])
 
     def test_flowerbeds_move_to_flora_instead_of_vanishing(self):
         state = {
@@ -48,7 +52,7 @@ class NamingTest(unittest.TestCase):
             ]
         }
         naming.resolve_state(state)
-        self.assertEqual(state["locs"], [])
+        self.assertEqual([loc["name"] for loc in state["locs"] if not loc.get("cosmetic")], [])
         self.assertEqual(len(state["flora"]), 1)
         self.assertEqual(state["flora"][0]["name"], "Sunflower")
 

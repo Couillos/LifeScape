@@ -83,8 +83,11 @@ def resolve_state(state):
     for loc in state.get("locs") or []:
         if _flowerbed(loc):
             flora.append({"x": loc.get("x"), "z": loc.get("z"), "id": loc.get("id"), "name": loc.get("name")})
-        elif not _cosmetic(loc):
-            kept_locs.append(loc)
+            continue
+        # keep cosmetic scenery: the map canvas needs it (a fern can carry a
+        # mapscene sprite); only the side panel hides it
+        loc["cosmetic"] = _cosmetic(loc)
+        kept_locs.append(loc)
     state["locs"] = kept_locs
     if flora:
         state["flora"] = flora

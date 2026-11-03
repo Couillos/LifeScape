@@ -104,8 +104,8 @@
 
       const shape = loc.shape;
       const angle = (loc.angle || 0) & 3;
-      if ((shape >= 4 && shape <= 8) || shape === 1) {
-        continue; // the client draws no wall decor and no diagonal corner
+      if ((shape >= 4 && shape <= 8)) {
+        continue; // the client draws no wall decor
       }
 
       if (loc.mapscene >= 0) {
@@ -120,6 +120,7 @@
         if (shape === 2) wallBar(ctx, left, top, (angle + 1) & 3);
         painted = true;
       } else if (shape === 3) {
+        // square corner only: the client draws nothing for a diagonal corner
         ctx.fillStyle = loc.active ? WALL_ACTIVE : WALL_GREY;
         wallCorner(ctx, left, top, angle);
         painted = true;
