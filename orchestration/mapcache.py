@@ -347,7 +347,9 @@ class MapCache:
             elif opcode == 15:
                 entry["length"] = data[position]
                 position += 1
-            elif opcode in (17, 18, 19, 21, 22, 23, 28, 29, 39):
+            elif opcode in (17, 18, 21, 22, 23):
+                pass  # flags without payload (blockwalk/blockrange/hillskew/sharelight/occlude)
+            elif opcode in (19, 28, 29, 39):
                 position += 1
             elif opcode == 24:
                 position += 2
@@ -368,8 +370,12 @@ class MapCache:
                 if opcode == 68:
                     entry["mapscene"] = (data[position] << 8) | data[position + 1]
                 position += 2
-            elif opcode in (69, 70, 71, 72, 73, 74, 75):
+            elif opcode in (69, 75):
                 position += 1
+            elif opcode in (70, 71, 72):
+                position += 2  # g2b, not g1: getting this wrong desyncs the loc
+            elif opcode in (73, 74):
+                pass
             else:
                 break
         return entry

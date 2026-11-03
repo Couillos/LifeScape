@@ -566,12 +566,11 @@ function draw() {
   const mapLeft = cx + (originX - pos.px) * TILE;
   const mapTop = cy - (northZ + 1 - pos.pz) * TILE;
   const mapSize = BUF_SIZE * (TILE / BUF_TILE);
-  // soft ground, crisp walls: smoothing the ground alone keeps the tile
-  // shading gentle without dissolving the wall lines into it
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(groundBuffer, mapLeft, mapTop, mapSize, mapSize);
+  // nearest-neighbour, like the client's blit: smoothing upscales the ground
+  // by ~4 px in every direction, which spills across the 1 px wall lines and
+  // makes tiles look like they cross the walls
   ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(groundBuffer, mapLeft, mapTop, mapSize, mapSize);
   ctx.drawImage(mapBuffer, mapLeft, mapTop, mapSize, mapSize);
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
   ctx.lineWidth = 1;
