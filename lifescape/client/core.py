@@ -47,6 +47,19 @@ class StaleConnection(ConnectionError):
 _active_bot = None
 
 
+def _loc_layer(shape):
+    """LocLayer of a shape, as the client splits its four draw layers."""
+    if shape is None:
+        return 0
+    if 0 <= shape <= 3:
+        return 0  # walls
+    if 4 <= shape <= 8:
+        return 1  # wall decor
+    if shape == 22:
+        return 3  # ground decor
+    return 2      # ground
+
+
 def _exit_on_terminate(_signum, _frame):
     # SIGTERM default kills the process outright, skipping every finally and
     # leaving the session to the server's idle timeout. PyPy ignores an
@@ -566,22 +579,26 @@ class BotCore:
 
     def _state_locs(self):
         level = self.world.level
+        if not self.world.static_locs and self.paths.get("pack_dir"):
+            # the spectator paints walls and scenery from the static map, and
+            # a bot that only logged in never built it; nav is idempotent
+            self.ensure_nav()
+        radius = 16  # the canvas shows 33x33 tiles around the player
         tiles = {}
         for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in self._static_locs_near():
-            tiles[(loc_x, loc_z)] = (loc_id, loc_shape, loc_angle)
+            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > radius:
+                continue
+            tiles[(loc_x, loc_z, _loc_layer(loc_shape))] = (loc_id, loc_shape, loc_angle)
         for (loc_x, loc_z, loc_level), value in self.world.locs.items():
             if loc_level != level:
                 continue
-            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > 8:
+            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > radius:
                 continue
             if value is None:
-                tiles.pop((loc_x, loc_z), None)
-            else:
-                tiles[(loc_x, loc_z)] = (value[0], value[1], value[2])
-        found = []
-        for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in tiles.items():
-            if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > 8:
                 continue
+            tiles[(loc_x, loc_z, _loc_layer(value[1]))] = (value[0], value[1], value[2])
+        found = []
+        for (loc_x, loc_z, _layer), (loc_id, loc_shape, loc_angle) in tiles.items():
             entry = None
             if self.loctypes is not None and loc_id < len(self.loctypes["loc"]):
                 entry = self.loctypes["loc"][loc_id]
@@ -602,7 +619,7 @@ class BotCore:
                 "length": entry.get("length", 1) if entry else 1,
             })
         found.sort(key=lambda loc: abs(loc["x"] - self.world.x) + abs(loc["z"] - self.world.z))
-        return found[:400]
+        return found[:1200]
 
     def _state_objs(self):
         level = self.world.level

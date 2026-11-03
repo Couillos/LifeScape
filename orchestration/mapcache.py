@@ -25,13 +25,38 @@ from .paths import PACK_DIR, ROOT
 MAP_SIZE = 64
 LEVELS = 4
 
-_EMPTY = "#121212"
-_EMPTY_VALUE = 0x121212
+_EMPTY = "#000000"
+_EMPTY_VALUE = 0x000000
+
+# World.ts MINIMAP_SHAPE / MINIMAP_ROTATE: the client paints an overlay tile
+# as 4x4 pixels, one per mask cell, mixing overlay and underlay colour.
+MINIMAP_SHAPE = (
+    (0,) * 16,
+    (1,) * 16,
+    (1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1),
+    (1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0),
+    (0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1),
+    (0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+    (1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1),
+    (1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0),
+    (0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0),
+    (1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1),
+    (1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0),
+    (0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1),
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1),
+)
+
+MINIMAP_ROTATE = (
+    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+    (12, 8, 4, 0, 13, 9, 5, 1, 14, 10, 6, 2, 15, 11, 7, 3),
+    (15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+    (3, 7, 11, 15, 2, 6, 10, 14, 1, 5, 9, 13, 0, 4, 8, 12),
+)
 
 # Client minimap palette chain (Client-TS, branch 274): the client builds a
 # 512x128 HSL colour table, gamma-corrects it, and indexes it from the flo
 # HSL. Reproduced here so the spectator paints the same colours.
-_BRIGHTNESS = 1.0
+_BRIGHTNESS = 0.8
 
 
 def _gamma(rgb, gamma):
@@ -413,6 +438,11 @@ class MapCache:
         self._mapscene_png[sprite_index] = png
         return png
 
+    def mapscene_origin(self, sprite_index):
+        """(x, y) offset the sprite itself carries (Pix8.xof/yof)."""
+        meta = self._mapscene_index(sprite_index)
+        return (meta[2], meta[3]) if meta else (0, 0)
+
     def mapscene_size(self, sprite_index):
         """(width, height) of a mapscene sprite, or None."""
         if sprite_index in self._mapscene_size:
@@ -552,13 +582,15 @@ class MapCache:
             if name not in archive.namelist():
                 return None
             data = archive.read(name)
-        grounds = [[(-1, -1)] * (MAP_SIZE * MAP_SIZE) for _level in range(LEVELS)]
+        grounds = [[(-1, -1, -1, 0)] * (MAP_SIZE * MAP_SIZE) for _level in range(LEVELS)]
         position = 0
         for level in range(LEVELS):
             for x in range(MAP_SIZE):
                 for z in range(MAP_SIZE):
                     underlay = -1
                     overlay = -1
+                    shape = -1
+                    rotation = 0
                     while position < len(data):
                         opcode = data[position]
                         position += 1
@@ -568,13 +600,16 @@ class MapCache:
                             position += 1
                             break
                         if opcode <= 49:
-                            overlay = data[position]
+                            # the map byte is flo id + 1 (ClientBuild: FloType.list[t2 - 1])
+                            overlay = data[position] - 1
                             position += 1
+                            shape = (opcode - 2) // 4
+                            rotation = (opcode - 2) & 3
                         elif opcode <= 81:
                             pass
                         else:
-                            underlay = opcode - 81
-                    grounds[level][x * MAP_SIZE + z] = (underlay, overlay)
+                            underlay = opcode - 82  # (opcode - 81) - 1
+                    grounds[level][x * MAP_SIZE + z] = (underlay, overlay, shape, rotation)
         return grounds
 
     def _square(self, square_x, square_z):
@@ -592,7 +627,7 @@ class MapCache:
     def _tile_ids(self, level, tile_x, tile_z):
         square = self._square(tile_x >> 6, tile_z >> 6)
         if square is None or not 0 <= level < LEVELS:
-            return -1, -1
+            return -1, -1, -1, 0
         return square[level][(tile_x & 63) * MAP_SIZE + (tile_z & 63)]
 
     def _flo_hsl(self, floor_id):
@@ -626,8 +661,8 @@ class MapCache:
         count = 0
         for delta_z in range(-5, 6):
             for delta_x in range(-5, 6):
-                underlay, _overlay = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
-                if underlay <= 0:
+                underlay, _overlay, _shape, _rotation = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
+                if underlay < 0:
                     continue
                 underlay_hue, saturation, lightness, chroma, _weighted = self._flo_hsl(underlay)
                 hue_total += _weighted
@@ -649,36 +684,61 @@ class MapCache:
 
     def colour_at(self, level, tile_x, tile_z):
         """Colour the client minimap paints: overlay if present, else blended underlay."""
-        underlay, overlay = self._tile_ids(level, tile_x, tile_z)
+        underlay, overlay, _shape, _rotation = self._tile_ids(level, tile_x, tile_z)
         rgba = self._floor()
         palette = self.palette()
         if 0 <= overlay < len(palette):
             if not (overlay < len(rgba) and rgba[overlay] == 0xFF00FF):
                 return palette[overlay]
-        if 0 < underlay < len(rgba) and rgba[underlay] != 0xFF00FF:
+        if 0 <= underlay < len(rgba) and rgba[underlay] != 0xFF00FF:
             return "#%06x" % self._blend(level, tile_x, tile_z)
         return _EMPTY
 
     # -- spectator payload ----------------------------------------------
 
     def grid(self, level, tile_x, tile_z, radius=16):
-        """Compact colour grid around (tile_x,tile_z): palette + rows of indices."""
+        """Compact grid around (tile_x,tile_z): palette + one entry per tile.
+
+        A tile is either a palette index (flat colour) or {"u","o","m"}:
+        the client paints partial overlay shapes as a 4x4 mask mixing the
+        overlay and underlay colours (World.render2DGround).
+        """
         size = radius * 2 + 1
         origin_x = tile_x - radius
         origin_z = tile_z - radius
         palette = []
         index_of = {}
+
+        def index_for(colour):
+            index = index_of.get(colour)
+            if index is None:
+                index = len(palette)
+                index_of[colour] = index
+                palette.append(colour)
+            return index
+
         rows = []
         for delta_z in range(size):
             row = []
             for delta_x in range(size):
-                colour = self.colour_at(level, origin_x + delta_x, origin_z + delta_z)
-                index = index_of.get(colour)
-                if index is None:
-                    index = len(palette)
-                    index_of[colour] = index
-                    palette.append(colour)
-                row.append(index)
+                tx = origin_x + delta_x
+                tz = origin_z + delta_z
+                underlay, overlay, shape, rotation = self._tile_ids(level, tx, tz)
+                flat = self.colour_at(level, tx, tz)
+                if overlay < 0 or flat == _EMPTY:
+                    row.append(index_for(flat))
+                    continue
+                if shape <= 0:
+                    row.append(index_for(flat))  # plain overlay: whole tile
+                    continue
+                mask = 0
+                cells = MINIMAP_SHAPE[shape + 1] if shape + 1 < len(MINIMAP_SHAPE) else MINIMAP_SHAPE[0]
+                rotated = MINIMAP_ROTATE[rotation & 3]
+                for cell in range(16):
+                    if cells[rotated[cell]]:
+                        mask |= 1 << cell
+                row_entry = {"u": index_for(self._blend(level, tx, tz)), "o": index_for(flat), "m": mask}
+                row.append(row_entry)
             rows.append(row)
         return {
             "x": origin_x,

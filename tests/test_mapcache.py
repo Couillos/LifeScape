@@ -20,7 +20,7 @@ class MapCacheTest(unittest.TestCase):
     def test_missing_map_square_still_returns_a_grid(self):
         grid = MapCache().grid(0, 100, 100, 2)
         self.assertEqual(grid["size"], 5)
-        self.assertIn("#121212", grid["palette"])
+        self.assertIn("#000000", grid["palette"])
 
     def test_grid_uses_terrain_colours(self):
         grid = MapCache().grid(0, 3222, 3218)
@@ -29,8 +29,8 @@ class MapCacheTest(unittest.TestCase):
 
     def test_palette_uses_the_client_chain(self):
         palette = MapCache().palette()
-        # flo 48 muddygrass through the HSL table + gamma, like Pix3D.colourTable
-        self.assertEqual(palette[48], "#404c07")
+        # flo 48 muddygrass through the HSL table + gamma 0.8, like Pix3D.colourTable
+        self.assertEqual(palette[48], "#54600e")
         # water uses its texture average with gamma 1.4 (textured floor)
         self.assertEqual(palette[5], "#5671ac")
 

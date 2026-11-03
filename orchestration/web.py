@@ -76,9 +76,16 @@ def _ws_recv(sock):
 
 
 def _annotate_mapscene(state):
-    """loc id -> mapscene sprite, so the browser can draw the minimap icons."""
+    """loc id -> mapscene sprite and its own origin, so the browser can draw it."""
     for loc in state.get("locs") or []:
-        loc["mapscene"] = MAP_CACHE.mapscene_for(loc.get("id", -1))
+        sprite = MAP_CACHE.mapscene_for(loc.get("id", -1))
+        loc["mapscene"] = sprite
+        if sprite >= 0:
+            meta = MAP_CACHE.mapscene_size(sprite) or (0, 0)
+            offset = MAP_CACHE.mapscene_origin(sprite)
+            loc["mapsceneX"], loc["mapsceneY"] = offset
+        else:
+            loc["mapsceneX"], loc["mapsceneY"] = 0, 0
     return state
 
 
@@ -433,8 +440,18 @@ function draw() {
         const tx = map.x + col;
         const sx = cx + (tx - pos.px) * TILE;
         if (sx < -TILE || sx > cv.width + TILE) continue;
-        ctx.fillStyle = map.palette[map.tiles[row][col]] || '#121212';
-        ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
+        const cell = map.tiles[row][col];
+        if (typeof cell === "number") {
+          ctx.fillStyle = map.palette[cell] || '#000000';
+          ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
+          continue;
+        }
+        // partial overlay: 4x4 cells, as the client minimap paints them
+        const sub = TILE / 4;
+        for (let index = 0; index < 16; index++) {
+          ctx.fillStyle = map.palette[(cell.m >> index) & 1 ? cell.o : cell.u] || '#000000';
+          ctx.fillRect(sx - halfTile + (index & 3) * sub, sy - halfTile + (index >> 2) * sub, sub, sub);
+        }
       }
     }
   }

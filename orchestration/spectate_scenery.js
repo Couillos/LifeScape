@@ -34,8 +34,8 @@
     const length = loc.length || 1;
     const offsetX = ((width * 4 - image.naturalWidth) / 2) | 0;
     const offsetY = ((length * 4 - image.naturalHeight) / 2) | 0;
-    const left = sx - view.tile / 2 + offsetX * scale;
-    const top = sy - view.tile / 2 + ((1 - length) * 4 + offsetY) * scale;
+    const left = sx - view.tile / 2 + (offsetX + (loc.mapsceneX || 0)) * scale;
+    const top = sy - view.tile / 2 + ((1 - length) * 4 + offsetY + (loc.mapsceneY || 0)) * scale;
     ctx.drawImage(image, left, top, image.naturalWidth * scale, image.naturalHeight * scale);
     return true;
   }
@@ -118,6 +118,8 @@
       if (shape === 0 || shape === 2) {
         ctx.fillStyle = loc.act ? WALL_ACTIVE : WALL_GREY;
         wallBar(ctx, left, top, size, angle);
+        // WALL_L is two bars meeting at the corner (Client drawDetail)
+        if (shape === 2) wallBar(ctx, left, top, size, (angle + 1) & 3);
         continue;
       }
       if (shape === 3) {
@@ -131,19 +133,11 @@
         continue;
       }
 
-      if (loc.block) {
-        // building mass: the minimap draws these as a lit stone body
-        const wide = angle === 1 || angle === 3;
-        const sizeX = (wide ? (loc.length || 1) : (loc.width || 1)) * size;
-        const sizeZ = (wide ? (loc.width || 1) : (loc.length || 1)) * size;
-        ctx.fillStyle = "rgba(150,150,150,0.55)";
-        ctx.fillRect(left, top - sizeZ + size, sizeX, sizeZ);
-      } else if (loc.act) {
+      // the client draws nothing for scenery without a mapscene: no grey
+      // mass, the ground and walls already describe the building
+      if (loc.act) {
         ctx.fillStyle = "#c8a15a";
         ctx.fillRect(sx - size * 0.22, sy - size * 0.22, size * 0.44, size * 0.44);
-      } else {
-        ctx.fillStyle = "#2f6b3c";
-        ctx.fillRect(sx - size * 0.18, sy - size * 0.18, size * 0.36, size * 0.36);
       }
 
       if (loc.act && labelCount < 14 && Math.abs(loc.x - view.px) + Math.abs(loc.z - view.pz) <= 6 && !labelled.has(loc.name)) {
