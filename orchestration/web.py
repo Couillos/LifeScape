@@ -97,9 +97,6 @@ def ws_session(sock, dispatch):
     """
     from . import paths as _paths
     account = ""
-    detail_on = False
-    detail_y = 8
-    detail_sent_y = None
     last_send = 0.0
     log_mark = None
     while True:
@@ -107,16 +104,6 @@ def ws_session(sock, dispatch):
         if now - last_send >= WS_INTERVAL:
             try:
                 payload = _state_payload(dispatch, account)
-                if detail_on:
-                    if detail_sent_y != detail_y:
-                        try:
-                            payload["detail"] = MAP_CACHE.detail_table(detail_y)
-                        except (OSError, ValueError):
-                            payload.pop("detail", None)
-                        else:
-                            detail_sent_y = detail_y
-                else:
-                    detail_sent_y = None
                 if account:
                     try:
                         _merged, _partial, log_path = _paths.user_paths(account)
@@ -157,12 +144,6 @@ def ws_session(sock, dispatch):
             except ValueError:
                 continue
             account = request.get("account") or ""
-            prefs = request.get("detail") or {}
-            detail_on = bool(prefs.get("on", False))
-            try:
-                detail_y = min(32, max(1, int(prefs.get("y", 8))))
-            except (TypeError, ValueError):
-                detail_y = 8
 
 
 INDEX_HTML = """<!doctype html>
@@ -212,9 +193,6 @@ INDEX_HTML = """<!doctype html>
   <div style="display:flex;gap:12px;align-items:center">
     <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide accounts">☰ Accounts</button>
     <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
-    <button id="detailbtn" title="Paint tiles y×y from the true cache colours (textures) instead of the flat colour mapping.">Detail: off</button>
-    <input id="detaily" type="range" min="1" max="32" step="1" value="8" title="Detail resolution: tiles are painted y×y from the cache textures." style="width:84px;display:none" aria-label="Detail resolution">
-    <span id="detailval" class="meta" style="display:none">8</span>
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
     <a href="/items" style="color:#04A800;text-decoration:none">Item holdings</a>
   </div>
@@ -245,7 +223,7 @@ INDEX_HTML = """<!doctype html>
     <div class="panel logpanel"><pre id="log"></pre></div>
   </div>
 </div>
-<script src="/spectate_detail.js"></script>
+<script src="/spectate_scenery.js"></script>
 <script>
 (() => {
 // Everything stays inside this closure: a browser extension injected into
@@ -311,10 +289,7 @@ async function select(account) {
 
 function follow(account) {
   if (socket !== null && socket.readyState === WebSocket.OPEN) {
-    const prefs = window.SpectateDetail ? window.SpectateDetail.prefs() : null;
-    const message = {account: account || ""};
-    if (prefs) message.detail = prefs;
-    socket.send(JSON.stringify(message));
+    socket.send(JSON.stringify({account: account || ""}));
   }
 }
 
@@ -357,7 +332,6 @@ function connectSocket() {
       }
     }
     if (data.logs) setLog(data.logs);
-    if (data.detail && window.SpectateDetail) window.SpectateDetail.setTable(data.detail);
     if (data.state && data.state.account) {
       if (last !== data.state) { prev = last; prevTime = performance.now(); }
       last = data.state;
@@ -437,8 +411,6 @@ function draw() {
   const halfTile = TILE / 2;
   const map = last.map;
   if (map) {
-    const detail = window.SpectateDetail;
-    const detailOn = detail && detail.on && map.flo;
     for (let row = 0; row < map.size; row++) {
       const tz = map.z + row;
       const sy = cy - (tz - pos.pz) * TILE;
@@ -447,9 +419,7 @@ function draw() {
         const tx = map.x + col;
         const sx = cx + (tx - pos.px) * TILE;
         if (sx < -TILE || sx > cv.width + TILE) continue;
-        const fallback = map.palette[map.tiles[row][col]] || '#121212';
-        if (detailOn && detail.drawTile(ctx, sx - halfTile, sy - halfTile, TILE, map.flo[row][col], fallback)) continue;
-        ctx.fillStyle = fallback;
+        ctx.fillStyle = map.palette[map.tiles[row][col]] || '#121212';
         ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
       }
     }
@@ -509,9 +479,9 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  const sceneryDetail = window.SpectateDetail && window.SpectateDetail.on ? window.SpectateDetail : null;
-  if (sceneryDetail) {
-    sceneryDetail.drawScenery(ctx, {cx, cy, tile: TILE, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
+  const scenery = window.SpectateScenery;
+  if (scenery) {
+    scenery.drawScenery(ctx, {cx, cy, tile: TILE, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
   } else {
   const labelled = new Set();
   let labelCount = 0;
@@ -628,7 +598,6 @@ function updatePanels() {
 
 connectSocket();
 paint();
-if (window.SpectateDetail) window.SpectateDetail.onPrefsChange = () => follow(selected);
 document.getElementById("rtbtn").onclick = () => {
   rt = !rt;
   try { localStorage.setItem("spectate-rt", rt ? "1" : "0"); } catch (e) { /* private mode */ }
@@ -853,30 +822,30 @@ setInterval(load, 60000);
 """
 
 
-_DETAIL_SCRIPT = None
-_DETAIL_VERSION = None
+_SCENERY_SCRIPT = None
+_SCENERY_VERSION = None
 
 
-def _detail_script():
-    global _DETAIL_SCRIPT
-    if _DETAIL_SCRIPT is None:
-        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spectate_detail.js")
+def _scenery_script():
+    global _SCENERY_SCRIPT
+    if _SCENERY_SCRIPT is None:
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spectate_scenery.js")
         with open(script_path, "rb") as handle:
-            _DETAIL_SCRIPT = handle.read()
-    return _DETAIL_SCRIPT
+            _SCENERY_SCRIPT = handle.read()
+    return _SCENERY_SCRIPT
 
 
-def _detail_version():
-    global _DETAIL_VERSION
-    if _DETAIL_VERSION is None:
-        _DETAIL_VERSION = hashlib.md5(_detail_script()).hexdigest()[:12]
-    return _DETAIL_VERSION
+def _scenery_version():
+    global _SCENERY_VERSION
+    if _SCENERY_VERSION is None:
+        _SCENERY_VERSION = hashlib.md5(_scenery_script()).hexdigest()[:12]
+    return _SCENERY_VERSION
 
 
 # Cache-bust the module: the file changes with the code, and the dashboard
 # must pick it up without waiting out a cache entry.
 INDEX_HTML = INDEX_HTML.replace(
-    'src="/spectate_detail.js"', 'src="/spectate_detail.js?v=%s"' % _detail_version()
+    'src="/spectate_scenery.js"', 'src="/spectate_scenery.js?v=%s"' % _scenery_version()
 )
 
 
@@ -904,10 +873,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.reply_json(reply)
             if parts == ["items"]:
                 return self.reply(200, ITEMS_HTML, "text/html; charset=utf-8")
-            if parts == ["spectate_detail.js"]:
+            if parts == ["spectate_scenery.js"]:
                 return self.reply(
                     200,
-                    _detail_script(),
+                    _scenery_script(),
                     "application/javascript; charset=utf-8",
                     cache_control="public, max-age=3600",
                 )
