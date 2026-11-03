@@ -26,6 +26,102 @@ MAP_SIZE = 64
 LEVELS = 4
 
 _EMPTY = "#121212"
+_EMPTY_VALUE = 0x121212
+
+# Client minimap palette chain (Client-TS, branch 274): the client builds a
+# 512x128 HSL colour table, gamma-corrects it, and indexes it from the flo
+# HSL. Reproduced here so the spectator paints the same colours.
+_BRIGHTNESS = 1.0
+
+
+def _gamma(rgb, gamma):
+    value = 0
+    for shift in (16, 8, 0):
+        channel = (rgb >> shift) & 0xFF
+        value |= (int(pow(channel / 256.0, gamma) * 256.0) & 0xFF) << shift
+    return value
+
+
+def _hsl_to_rgb(hue, saturation, lightness):
+    red = green = blue = lightness
+    if saturation != 0.0:
+        if lightness < 0.5:
+            second = lightness * (saturation + 1.0)
+        else:
+            second = lightness + saturation - lightness * saturation
+        first = lightness * 2.0 - second
+        values = []
+        for shift in (1.0 / 3.0, 0.0, -1.0 / 3.0):
+            position = hue + shift
+            if position > 1.0:
+                position -= 1.0
+            elif position < 0.0:
+                position += 1.0
+            if position * 6.0 < 1.0:
+                values.append(first + (second - first) * 6.0 * position)
+            elif position * 2.0 < 1.0:
+                values.append(second)
+            elif position * 3.0 < 2.0:
+                values.append(first + (second - first) * (2.0 / 3.0 - position) * 6.0)
+            else:
+                values.append(first)
+        red, green, blue = values
+    return (int(red * 256.0) << 16) + (int(green * 256.0) << 8) + int(blue * 256.0)
+
+
+def _colour_table(index):
+    """Pix3D.colourTable[index] for the default brightness."""
+    hue = ((index >> 7) // 8) / 64.0 + 0.0078125
+    saturation = ((index >> 7) & 0x7) / 8.0 + 0.0625
+    lightness = (index & 0x7F) / 128.0
+    return _gamma(_hsl_to_rgb(hue, saturation, lightness), _BRIGHTNESS)
+
+
+def _hsl_index(hue, saturation, lightness):
+    for threshold in (179, 192, 217, 243):
+        if lightness > threshold:
+            saturation //= 2
+    return ((hue // 4) << 10) + ((saturation // 32) << 7) + (lightness // 2)
+
+
+def _floor_colour(rgb):
+    """Flo rgb -> HSL, the way FloType stores it."""
+    red = ((rgb >> 16) & 0xFF) / 256.0
+    green = ((rgb >> 8) & 0xFF) / 256.0
+    blue = (rgb & 0xFF) / 256.0
+    low = min(red, green, blue)
+    high = max(red, green, blue)
+    lightness = (low + high) / 2.0
+    hue = saturation = 0.0
+    if low != high:
+        if lightness < 0.5:
+            saturation = (high - low) / (high + low)
+        else:
+            saturation = (high - low) / (2.0 - high - low)
+        if red == high:
+            hue = (green - blue) / (high - low)
+        elif green == high:
+            hue = (blue - red) / (high - low) + 2.0
+        else:
+            hue = (red - green) / (high - low) + 4.0
+    hue /= 6.0
+    hue_i = int(hue * 256.0)
+    saturation_i = max(0, min(255, int(saturation * 256.0)))
+    lightness_i = max(0, min(255, int(lightness * 256.0)))
+    if lightness > 0.5:
+        chroma = int((1.0 - lightness) * saturation * 512.0)
+    else:
+        chroma = int(lightness * saturation * 512.0)
+    chroma = max(1, chroma)
+    underlay_hue = int(hue * chroma)
+    return hue_i, saturation_i, lightness_i, chroma, underlay_hue
+
+
+def _blended_colour(hue, saturation, lightness):
+    """ClientBuild: neighbourhood-average HSL -> colourTable (getUCol 96)."""
+    index = _hsl_index(hue & 0xFF, saturation, lightness)
+    scaled = max(2, min(126, int((96 * (index & 0x7F)) / 128)))
+    return _colour_table((index & 0xFF80) + scaled)
 
 
 class MapCache:
@@ -34,6 +130,8 @@ class MapCache:
         self._floor_textures = None
         self._texture_averages = {}
         self._palette = None
+        self._hsl_cache = {}
+        self._blend_cache = {}
         self._squares = {}
         self._lock = threading.RLock()
 
@@ -220,13 +318,20 @@ class MapCache:
             with self._lock:
                 if texture_name not in self._texture_averages:
                     try:
-                        self._texture_averages[texture_name] = self._decode_average(texture_name)
+                        mean = self._decode_average(texture_name)
+                        rgb = (mean[0] << 16) | (mean[1] << 8) | mean[2]
+                        self._texture_averages[texture_name] = _gamma(rgb, 1.4) or 1
                     except (OSError, ValueError, struct.error, zlib.error):
                         self._texture_averages[texture_name] = None
         return self._texture_averages[texture_name]
 
     def palette(self):
-        """flo id -> "#rrggbb" the terrain is painted with, cached once."""
+        """flo id -> "#rrggbb" the client minimap paints, cached once.
+
+        Same chain as the client: flo rgb -> HSL -> colourTable index ->
+        HSL bitmap -> gamma. Textured floors use the texture average with
+        gamma 1.4 (Pix3D.getTextureAverage).
+        """
         if self._palette is None:
             with self._lock:
                 if self._palette is None:
@@ -238,8 +343,8 @@ class MapCache:
                         if texture_id >= 0 and names.get(texture_id):
                             colour = self._texture_colour(names[texture_id])
                         if colour is None:
-                            colour = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
-                        palette.append("#%02x%02x%02x" % colour)
+                            colour = self._overlay_colour(floor_id)
+                        palette.append("#%02x%02x%02x" % ((colour >> 16) & 0xFF, (colour >> 8) & 0xFF, colour & 0xFF))
                     self._palette = palette
         return self._palette
 
@@ -295,17 +400,68 @@ class MapCache:
             return -1, -1
         return square[level][(tile_x & 63) * MAP_SIZE + (tile_z & 63)]
 
+    def _flo_hsl(self, floor_id):
+        """Flo HSL, chroma and chroma-weighted hue, cached."""
+        hsl = self._hsl_cache.get(floor_id)
+        if hsl is None:
+            rgb = self._floor()[floor_id] if 0 <= floor_id < len(self._floor()) else 0
+            hsl = _floor_colour(rgb)
+            self._hsl_cache[floor_id] = hsl
+        return hsl
+
+    def _overlay_colour(self, floor_id):
+        """Overlay colour: flo overlayHsl -> colourTable (getOCol 96)."""
+        hue, saturation, lightness, _chroma, _underlay_hue = self._flo_hsl(floor_id)
+        index = _hsl_index(hue, saturation, lightness)
+        scaled = max(2, min(126, int((96 * (index & 0x7F)) / 128)))
+        return _colour_table((index & 0xFF80) + scaled)
+
+    def _blend(self, level, tile_x, tile_z):
+        """ClientBuild: underlay colour blended over a 11x11 window of tiles.
+
+        The client keeps running HSL sums over five tiles each way and
+        converts the average, which is why neighbouring tiles of the same
+        flo id never share one flat colour.
+        """
+        key = (level, tile_x, tile_z)
+        colour = self._blend_cache.get(key)
+        if colour is not None:
+            return colour
+        hue_total = sat_total = lig_total = chroma_total = 0
+        count = 0
+        for delta_z in range(-5, 6):
+            for delta_x in range(-5, 6):
+                underlay, _overlay = self._tile_ids(level, tile_x + delta_x, tile_z + delta_z)
+                if underlay <= 0:
+                    continue
+                underlay_hue, saturation, lightness, chroma, _weighted = self._flo_hsl(underlay)
+                hue_total += _weighted
+                sat_total += saturation
+                lig_total += lightness
+                chroma_total += chroma
+                count += 1
+        if count == 0 or chroma_total == 0:
+            colour = _EMPTY_VALUE
+        else:
+            hue = int((hue_total * 256) / chroma_total) & 0xFF
+            saturation = sat_total // count
+            lightness = lig_total // count
+            colour = _blended_colour(hue, saturation, lightness)
+        if len(self._blend_cache) > 20000:
+            self._blend_cache.clear()
+        self._blend_cache[key] = colour
+        return colour
+
     def colour_at(self, level, tile_x, tile_z):
-        """Terrain colour: overlay first, else underlay, as the game paints it."""
+        """Colour the client minimap paints: overlay if present, else blended underlay."""
         underlay, overlay = self._tile_ids(level, tile_x, tile_z)
+        rgba = self._floor()
         palette = self.palette()
-        rgbs = self._floor()
-        for floor_id in (overlay, underlay):
-            if floor_id < 0 or floor_id >= len(palette):
-                continue
-            if floor_id < len(rgbs) and rgbs[floor_id] == 0xFF00FF:
-                continue  # invisible floor: see through to the layer below
-            return palette[floor_id]
+        if 0 <= overlay < len(palette):
+            if not (overlay < len(rgba) and rgba[overlay] == 0xFF00FF):
+                return palette[overlay]
+        if 0 < underlay < len(rgba) and rgba[underlay] != 0xFF00FF:
+            return "#%06x" % self._blend(level, tile_x, tile_z)
         return _EMPTY
 
     # -- spectator payload ----------------------------------------------
