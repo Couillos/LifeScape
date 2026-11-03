@@ -8,6 +8,7 @@ and call SDK methods inside it without reconnecting.
     orchestrator.py unload <account>
     orchestrator.py close <account>
     orchestrator.py call <account> <method> [args...]
+    orchestrator.py debug <account> <x> <z> [level]
     orchestrator.py shell <account>
     orchestrator.py status [account]
     orchestrator.py show <account>
@@ -97,6 +98,50 @@ def format_status(jobs):
     return "\n".join(rows)
 
 
+def format_ascii(state, radius=12):
+    """Player-centred ASCII scene, north (+z) up. For a start: walls from
+    the streamed locs, not the collision map, so unknown tiles read open."""
+    pos = state.get("position") or [0, 0, 0]
+    here = (pos[1], pos[2]) if len(pos) > 2 else (0, 0)
+    blocked, doors = set(), set()
+    for entry in state.get("locs", []) or []:
+        tile = (entry.get("x"), entry.get("z"))
+        if tile[0] is None:
+            continue
+        if entry.get("block"):
+            blocked.add(tile)
+        elif entry.get("act"):
+            doors.add(tile)
+    route = set()
+    for step in state.get("route", []) or []:
+        try:
+            route.add((step[0], step[1]))
+        except (IndexError, TypeError):
+            continue
+    target = state.get("route_target")
+    target_tile = tuple(target[-2:]) if target and len(target) >= 2 else None
+    marks = {here: "@"}
+    for entry in state.get("objs", []) or []:
+        marks.setdefault((entry.get("x"), entry.get("z")), "o")
+    if target_tile:
+        marks.setdefault(target_tile, "X")
+    for step in route:
+        marks.setdefault(step, "*")
+    for tile in doors:
+        marks.setdefault(tile, "D")
+    for tile in blocked:
+        marks.setdefault(tile, "#")
+    for entry in state.get("players", []) or []:
+        marks[(entry.get("x"), entry.get("z"))] = "P"
+    for entry in state.get("npcs", []) or []:
+        marks[(entry.get("x"), entry.get("z"))] = "N"
+    marks[here] = "@"
+    rows = []
+    for dz in range(radius, -radius - 1, -1):
+        rows.append("".join(marks.get((here[0] + dx, here[1] + dz), ".") for dx in range(-radius, radius + 1)))
+    return ["map @=(%d,%d) N=npc P=player *=route X=target o=obj D=door #=wall" % here] + rows
+
+
 def format_seen(state):
     """One line per thing the bot currently sees, with positions."""
     if not state:
@@ -117,6 +162,15 @@ def format_seen(state):
         ),
         "zone %s (%s)" % (state.get("zone") or "-", state.get("zone_dist", "-")),
     ]
+    if state.get("ticks") is not None or state.get("updated"):
+        stamp = ""
+        if state.get("updated"):
+            try:
+                stamp = " @ %s" % time.strftime("%H:%M:%S", time.localtime(state["updated"]))
+            except (TypeError, ValueError):
+                pass
+        lines.append("tick %s%s" % (state.get("ticks", "-"), stamp))
+    lines.extend(format_ascii(state))
     for entry in sorted(state.get("npcs", []) or [], key=dist):
         lines.append("npc  %-24s (%d,%d) d=%d" % (
             entry.get("name") or entry.get("type", "?"),
@@ -141,8 +195,11 @@ def format_seen(state):
         lines.append("modal %s %s" % (state.get("modal_name") or "-", state.get("modal")))
     for line in (state.get("chat") or [])[-8:]:
         lines.append("chat %s" % str(line)[:160])
-    for line in (state.get("messages") or [])[-6:]:
-        lines.append("msg  %s" % str(line)[:160])
+    messages = (state.get("messages") or [])[-6:]
+    ticks = (state.get("message_ticks") or [])[-6:]
+    for index, line in enumerate(messages):
+        tag = "t=%s" % ticks[index] if index < len(ticks) else "-"
+        lines.append("msg [%s] %s" % (tag, str(line)[:160]))
     if state.get("route_target"):
         lines.append("route_target %s" % (state.get("route_target"),))
     if state.get("last_event"):
@@ -234,6 +291,21 @@ def main(argv):
         reply = send_command({"cmd": "call", "account": account, "method": method, "args": argv[4:]})
         print(json.dumps(reply, indent=2, sort_keys=True))
         return 0 if reply.get("ok") else 1
+    elif command == "debug":
+        # Pathfinding diagnosis without unloading the running script: the
+        # worker runs Bot.debug_walk on the pump thread and answers here.
+        if len(argv) < 5:
+            print("usage: orchestrator.py debug <account> <x> <z> [level]", file=sys.stderr)
+            return 2
+        level = argv[5] if len(argv) > 5 else None
+        args = [argv[3], argv[4]] + ([level] if level is not None else [])
+        reply = send_command({"cmd": "call", "account": account, "method": "debug_walk", "args": args})
+        if not reply.get("ok"):
+            print(json.dumps(reply, indent=2, sort_keys=True), file=sys.stderr)
+            return 1
+        result = reply.get("result") or {}
+        print("\n".join(result.get("lines") or [json.dumps(result, sort_keys=True)]))
+        return 0
     elif command == "shell":
         return shell(account)
     elif command == "status":

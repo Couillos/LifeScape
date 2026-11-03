@@ -168,6 +168,20 @@ class WorldTest(unittest.TestCase):
         self.assertEqual(world.inv_cap.get(0x0C8E), 28)
         self.assertEqual(world.inv.get(0x0C8E), {})
 
+    def test_game_messages_carry_their_tick(self):
+        from lifescape.buffer import Writer
+        world = World()
+        world.ticks = 41
+        first = Writer()
+        first.jstr("hello")
+        world.feed(200, "MESSAGE_GAME", first.bytes())
+        world.ticks = 42
+        second = Writer()
+        second.jstr("I can't reach that!")
+        world.feed(200, "MESSAGE_GAME", second.bytes())
+        self.assertEqual(world.messages, ["hello", "I can't reach that!"])
+        self.assertEqual(world.message_ticks, [41, 42])
+
     def test_backpack_prefers_capacity_28(self):
         bot = Bot()
         bot.world.inv = {1688: {}, 3214: {0: (1351, 1)}}

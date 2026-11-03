@@ -67,7 +67,9 @@ HOLE_LEVEL = 1  # "Hole 3031 3508 1" header in quest_blackknight.rs2
 # - bksecretdoor faces SOUTH with the hole room to its south: walk onto
 #   its own tile (the north side stays open) and Push from there.
 GRILL_STAND = (3025, 3507, 0)
-DOOR3_STAND = (3025, 3512, 0)
+DOOR1_STAND = (3016, 3513, 0)
+DOOR2_STAND = (3019, 3515, 0)
+DOOR3_STAND = (3025, 3512, 1)
 SECRET_STAND = (3030, 3510, 1)
 FORTRESS_GATE = (3016, 3515, 0)
 BANQUET_HALL = (3028, 3513, 0)
@@ -102,12 +104,14 @@ def _wear(bot, name):
         raise solver.SolverError("cannot wear %s at %s" % (name, bot.position))
 
 
-def _go_level(bot, level):
+def _go_level(bot, level, prefer=(), avoid=()):
     """Ride any ladder/stairs between the fortress floors.
 
     Tries every same-level ladder/stair by distance: the banquet ladder
-    (3021,3510) only answers from its east side, so a pinned ladder
-    strands the bot where the nearest one climbs fine.
+    (3021,3510) only answers from its east tile and that tile is not
+    walkable, so no approach can stand a click there. `prefer` names
+    (x, z) tiles tried first, `avoid` names broken ones skipped: the way
+    up is the hall tower ladder (3022,3518), not the west spiral stairs.
     """
     from scripts.tutorial import common as tutorial_common
 
@@ -126,16 +130,25 @@ def _go_level(bot, level):
             if any(name in label for name in names):
                 cands.append((abs(x - bot.world.x) + abs(z - bot.world.z), x, z, lvl, loc[0]))
         cands.sort()
+        if avoid:
+            cands = [cand for cand in cands if (cand[1], cand[2]) not in avoid]
+        if prefer:
+            cands.sort(key=lambda cand: (prefer.index((cand[1], cand[2])) if (cand[1], cand[2]) in prefer else len(prefer), cand[0]))
+        print("go_level wants %d from %s: %s" % (
+            level, bot.position, [(x, z) for _, x, z, _, _ in cands[:4]]), flush=True)
         climbed = False
         for _, x, z, lvl, loc in cands[:4]:
+            print("go_level trying %d,%d from %s" % (x, z, bot.position), flush=True)
             try:
                 bot.approach(x, z, level=lvl, radius=2, timeout=1500, open_doors=True)
             except (Unreachable, TimeoutError):
+                print("go_level %d,%d unreachable" % (x, z), flush=True)
                 continue
             if bot.ride_transition_at(x, z, lvl):
                 wait_ticks(bot, 5)
                 climbed = True
                 break
+            print("go_level %d,%d ride refused, clicking" % (x, z), flush=True)
             try:
                 bot.op_loc(1, x, z, loc)
                 wait_ticks(bot, 5)
@@ -175,7 +188,14 @@ def _go_to_fortress(bot):
     bot.intend("walking to the Black Knights' Fortress")
     # Stage south of the fortress first: the west outer doors never open
     # and the planner burns minutes on them before replanning around.
+    # Detour around the Champions' Guild first: the planner cuts through
+    # its interior (doors assumed open) but championdoor needs 32 live QP
+    # and refuses on a fresh login, stalling the walk the same way.
     try:
+        if bot.world.level == 0 and (bot.world.x > 3175 or bot.world.z < 3355):
+            bot.walk_to(3175, 3355, 0, timeout=9000, open_doors=True)
+    except (Unreachable, TimeoutError):
+        pass
         if bot.world.level == 0 and bot.world.z < 3512:
             bot.walk_to(3016, 3500, 0, timeout=4000, open_doors=True)
     except (Unreachable, TimeoutError):
@@ -240,20 +260,32 @@ def _ensure_inside(bot):
     _go_level(bot, 0)
     if _in_banquet_hall(bot):
         return
-    if not _past_south_door(bot):
-        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=15000)
-        if bot.world.modal and bot.world.modal[0] != "main":
-            raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
-        # A wilderness warning (plain main window) is informational, not a
-        # refusal: dismiss it instead of aborting the infiltration.
-        bot.close_modal()
-        bot.pump(5)
-    if not _in_banquet_hall(bot):
-        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
-        solver.finish_dialog_like(bot, ["going in", "don't care"])
-    # The banquet door only opens on a guard chat and shuts again:
-    # knock until through, then verify by position (east side).
+    # The doors shut again behind the bot and an approach can wander back
+    # outside mid-loop, so the south door is re-checked every round: a
+    # one-shot check before the loop strands the bot outside for good.
     for _ in range(8):
+        if _in_banquet_hall(bot):
+            return
+        print("banquet round from %s" % (bot.position,), flush=True)
+        if not _past_south_door(bot):
+            solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=15000, stand=DOOR1_STAND)
+            if bot.world.modal and bot.world.modal[0] != "main":
+                raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
+            # A wilderness warning (plain main window) is informational, not a
+            # refusal: dismiss it instead of aborting the infiltration.
+            bot.close_modal()
+            bot.pump(5)
+            continue
+        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000, stand=DOOR2_STAND)
+        solver.finish_dialog_like(bot, ["going in", "don't care"])
+        # The banquet door only opens on a guard chat and shuts again
+        # fast: blast the two tiles through raw (no planning dither eats
+        # the window), then walk the hall. A planned walk to the banquet
+        # usually arrives after it shut and grinds the closed door.
+        try:
+            bot.walk_steps([(3020, 3515), (3021, 3515)], timeout_ticks=30)
+        except (Unreachable, TimeoutError):
+            pass
         if _in_banquet_hall(bot):
             return
         try:
@@ -262,8 +294,6 @@ def _ensure_inside(bot):
             pass
         if _in_banquet_hall(bot):
             return
-        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
-        solver.finish_dialog_like(bot, ["going in", "don't care"])
         wait_ticks(bot, 10)
     raise solver.SolverError("banquet door never opened at %s" % (bot.position,))
 
@@ -296,7 +326,10 @@ def _ensure_L1_east(bot):
         return
     _ensure_inside(bot)
     randomevents.greet(bot)
-    _go_level(bot, 1)
+    # Up via the hall tower ladder (3022,3518): the banquet ladder only
+    # answers from its east tile and that tile is not walkable, so no
+    # approach can ever stand a click there.
+    _go_level(bot, 1, prefer=[(3022, 3518)], avoid=[(3021, 3510)])
     solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=6000, stand=DOOR3_STAND)
 
 
@@ -313,20 +346,22 @@ def solve(bot):
         raise solver.SolverError("no cabbage for the hole at %s" % (bot.position,))
     if _stage(bot) < STARTED:
         solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
-    # Greet event hosts before the long walk: an ignored host fail-teleports
-    # the bot mid-route and every later step fails far from the fortress.
-    randomevents.greet(bot)
-    _go_to_fortress(bot)
-    randomevents.greet(bot)
-    _wear(bot, "iron_chainbody")
-    _wear(bot, "bronze_med_helm")
-    if _stage(bot) < LISTENED:
-        _ensure_inside(bot)
-        # The grill listens from the kitchen north of the banquet hall; the
-        # inner door and the secret wall are upstairs.
-        _listen_at_grill(bot)
-        _ensure_L1_east(bot)
     if _stage(bot) < SABOTAGED:
+        # Greet event hosts before the long walk: an ignored host fail-teleports
+        # the bot mid-route and every later step fails far from the fortress.
+        # Past the sabotage the endgame (leave, report) starts wherever the
+        # bot stands: walking back to the fortress here ping-pongs with Amik.
+        randomevents.greet(bot)
+        _go_to_fortress(bot)
+        randomevents.greet(bot)
+        _wear(bot, "iron_chainbody")
+        _wear(bot, "bronze_med_helm")
+        if _stage(bot) < LISTENED:
+            _ensure_inside(bot)
+            # The grill listens from the kitchen north of the banquet hall; the
+            # inner door and the secret wall are upstairs.
+            _listen_at_grill(bot)
+            _ensure_L1_east(bot)
         _ensure_L1_east(bot)
         solver.solve_strange_box(bot)
         _sabotage_potion(bot)

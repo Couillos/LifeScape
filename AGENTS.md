@@ -222,8 +222,30 @@ scripts/orchestrator.py shell <account>
 # suite unitaire, exécutée comme session éphémère (logs + code de sortie)
 scripts/orchestrator.py test [pattern]
 # suivi
-scripts/orchestrator.py status | show <account> | logs <account> 40
+scripts/orchestrator.py status | show <account> | see <account> | logs <account> 40
 ```
+
+`see` affiche en plus une scène ASCII 25×25 centrée sur le bot (nord en
+haut : `@` bot, `N` pnj, `P` joueur, `*` route, `X` cible, `o` objet,
+`D` décor actionnable, `#` mur — murs lus des décors streamés, le vide
+lit ouvert), le tick jeu + heure du snapshot, et chaque message jeu avec
+son tick (`msg [t=123]`). Les lignes de log worker sont préfixées
+`[HH:MM:SS]` (les lignes `@@EVENT` restent intactes pour le daemon).
+Les logs de jambes pathfinding portent `dest=(x,z,niveau)` du `walk_to`
+en cours (imbrication restaurée) : comparer avec la tuile d'arrivée.
+
+Debug pathfinding sans marcher : `run <account> debug_walk <x> <z>
+[level]` (script supervisé, session idle) ou `debug <account> <x> <z>
+[level]` (commande CLI : le worker joue `Bot.debug_walk` sur le pump
+thread, le script en cours n'est jamais déchargé). Sortie : statique
+autour de la cible, trajets brut/portes-ouvertes, frontière injoignable
+avec bloqueurs nommés, portes à 15 tuiles avec état live
+ouvert/appris ; lecture seule. `run <account> probe_tiles
+<x> <z> [level] [radius]` (marchabilité statique + pas vers l'ouest).
+Quand le routeur dit mur mais la carte statique dit ouvert, c'est de
+l'état dynamique empoisonné (porte apprise, unseal, mur invisible) :
+`learned_total`/`unsealed` dans debug_walk, session neuve (`close` puis
+`open`) pour repartir propre.
 
 ## Debugger, tester, lancer (sessions)
 

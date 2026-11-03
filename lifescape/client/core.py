@@ -109,6 +109,7 @@ class BotCore:
         self._static_obj_index = None
         self._route = []
         self._route_target = None
+        self._walk_dest = None
         self._action_route = []
         self._route_action = None
         self.collision = None
@@ -237,6 +238,7 @@ class BotCore:
         self._planner = None
         self._route = []
         self._route_target = None
+        self._walk_dest = None
         self._action_route = []
         self._route_action = None
 
@@ -508,6 +510,7 @@ class BotCore:
             "bank": self._state_items("bank_main:inv"),
             "chat": [line.text for line in self.world.chat[-6:]],
             "messages": [str(line) for line in self.world.messages[-6:]],
+            "message_ticks": list(self.world.message_ticks[-6:]),
             "texts": {str(com): text for com, text in list(self.world.texts.items())[-12:]},
         }
         try:

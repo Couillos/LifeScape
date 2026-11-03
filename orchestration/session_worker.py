@@ -586,10 +586,41 @@ def describe_open_error(error):
     return "unreachable: %s" % (error,)
 
 
+class _TimestampedStdout:
+    """Prefix every log line with wall-clock time, transparently.
+
+    The daemon tails this stream for the log panel and parses @@EVENT
+    lines by prefix, so event lines pass through untouched.
+    """
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+        self._fresh = True
+
+    def write(self, text):
+        if not isinstance(text, str):
+            return self._wrapped.write(text)
+        out = []
+        for chunk in text.splitlines(keepends=True):
+            body, newline = (chunk[:-1], True) if chunk.endswith("\n") else (chunk, False)
+            if self._fresh and body and not body.startswith("@@EVENT "):
+                out.append("[%s] " % time.strftime("%H:%M:%S"))
+            out.append(chunk)
+            self._fresh = newline
+        return self._wrapped.write("".join(out))
+
+    def flush(self):
+        return self._wrapped.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: -m orchestration.session_worker <account>", file=sys.stderr)
         return 2
+    sys.stdout = _TimestampedStdout(sys.stdout)
     ensure_project_paths()
     worker = SessionWorker(sys.argv[1])
     return worker.start()

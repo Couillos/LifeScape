@@ -80,6 +80,7 @@ class World:
         self.count_dialog = False
         self.player_ops = {}
         self.messages = []
+        self.message_ticks = []
         self.chat = []
         self.private = []
         self.logged_out = False
@@ -127,6 +128,7 @@ class World:
         self.count_dialog = False
         self.player_ops = {}
         self.messages = []
+        self.message_ticks = []
         self.chat = []
         self.private = []
         self.logged_out = False
@@ -174,6 +176,7 @@ class World:
             self.energy = Reader(body).u8()
         elif name == "MESSAGE_GAME":
             self.messages.append(Reader(body).jstr())
+            self.message_ticks.append(self.ticks)
         elif name == "HINT_ARROW":
             self._hint_arrow(body)
         elif name == "TUT_FLASH":

@@ -487,11 +487,16 @@ function setLog(lines) {
 
 function interpPos() {
   if (!last) return null;
-  const [, x, z] = last.position || [0,0,0];
+  const [level, x, z] = last.position || [0,0,0];
   if (!prev) return {px: x, pz: z};
-  const t = Math.min(1, (performance.now() - prevTime) / 250);
   const previous = prev.position || last.position || [0, x, z];
   const px = previous[1], pz = previous[2];
+  // Glide only along a short straight step: lerping across a corner or a
+  // teleport cuts diagonally and the dot leaves the route trace.
+  if (previous[0] !== level || Math.abs(x - px) + Math.abs(z - pz) > 2 || (x !== px && z !== pz)) {
+    return {px: x, pz: z};
+  }
+  const t = Math.min(1, (performance.now() - prevTime) / 250);
   return {px: px + (x - px) * t, pz: pz + (z - pz) * t};
 }
 
@@ -551,7 +556,7 @@ function draw() {
       mapOriginX = originX;
       mapOriginZ = originZ;
       mapRequested = null;
-      draw();
+      paint();
     };
     image.onerror = () => { mapRequested = null; };
     image.src = 'minimap.png?x=' + originX + '&z=' + originZ + '&level=' + level + '&size=' + (R * 2 + 1);

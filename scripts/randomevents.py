@@ -322,8 +322,11 @@ def _try_edge(bot, doors, here, nxt, blocked, attempts):
                 return True
         except (Unreachable, TimeoutError) as err:
             print("step to %s failed: %s" % (nxt, err), flush=True)
-        if here in doors and bot._raw_step_off():
-            return True
+        # Directed raw step at the planned tile only: an undirected step-off
+        # picks the nearest walkable neighbour (i.e. backwards) and the
+        # solver bounces between the two tiles forever.
+        if bot.try_step_on(nxt[0], nxt[1], bot.world.level, bot.world.ticks + 75):
+            return (bot.world.x, bot.world.z) == nxt
         blocked.add((here, nxt))
         return False
     if _dialog_open(bot):

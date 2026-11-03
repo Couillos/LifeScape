@@ -3,6 +3,7 @@
 The mixin assumes the core session and state helpers are on the same Bot.
 """
 
+import functools
 import json
 import os
 import time
@@ -28,7 +29,101 @@ class _DoorOpened(Exception):
     instead of replaying the stale chunk that just failed."""
 
 
+def _tracks_destination(func):
+    """Remember walk_to's destination for the leg logs, nesting-safe.
+
+    Door openings and approach candidates walk nested walk_tos; each leg
+    line names the walk it belongs to so a landing can be compared with
+    what that walk wanted.
+    """
+    def wrapper(self, x, z, level=0, *args, **kwargs):
+        previous = getattr(self, "_walk_dest", None)
+        self._walk_dest = (x, z, level)
+        try:
+            return func(self, x, z, level, *args, **kwargs)
+        finally:
+            self._walk_dest = previous
+    return functools.wraps(func)(wrapper)
+
+
 class MovementMixin:
+
+    def _dest_suffix(self):
+        dest = getattr(self, "_walk_dest", None)
+        return "" if dest is None else " dest=(%d,%d,%d)" % dest
+
+    def debug_walk(self, x, z, level=None):
+        """Diagnose one walk without walking it. Read-only, for the CLI.
+
+        Returns JSON-able data plus preformatted lines: static tiles
+        around the target, raw and doors-open router paths, the
+        unreachable frontier with blocker names, and every known door
+        within 15 tiles with its live state. Runs on the pump thread
+        through call, so a running script is never unloaded.
+        """
+        x, z = int(x), int(z)
+        level = self.world.level if level is None else int(level)
+        self.ensure_nav()
+        try:
+            loc_name = self.loctypes["loc"]
+        except Exception:
+            loc_name = []
+        here = (self.world.level, self.world.x, self.world.z)
+        static = []
+        for dz in range(2, -3, -1):
+            try:
+                row = "".join(
+                    "." if collision_mod.tile_walkable(self.collision.get(x + dx, z + dz, level)) else "#"
+                    for dx in range(-2, 3)
+                )
+            except Exception:
+                row = "?????"
+            static.append((z + dz, row))
+        paths = {}
+        for label, routing_map in (("raw", self.collision), ("doors-open", self.opened_map)):
+            try:
+                found = self.router.find_path(routing_map, level, here[1], here[2], x, z)
+            except Exception:
+                found = None
+            paths[label] = None if not found else len(found)
+        try:
+            frontier = self.router.unreachable_report(
+                self.opened_map, level, here[1], here[2], x, z, self.loc_name_at)
+        except Exception as error:
+            frontier = {"error": repr(error)}
+        doors = []
+        for spot in self.wall_doors or ():
+            if spot[2] != level or abs(spot[0] - x) + abs(spot[1] - z) > 15:
+                continue
+            try:
+                entry = loc_name[spot[9]] if spot[9] < len(loc_name) else {}
+                name = (entry.get("name") if isinstance(entry, dict) else None) or "#%s" % spot[9]
+            except Exception:
+                name = "#%s" % spot[9]
+            try:
+                closed = not self._door_closed_at(spot)
+            except Exception:
+                closed = "?"
+            doors.append({"name": name, "x": spot[0], "z": spot[1],
+                          "closed": closed, "learned": id(spot) in self._blocked_doors})
+        lines = [
+            "walk (%d,%d,%d) -> (%d,%d,%d)" % (here[0], here[1], here[2], level, x, z),
+        ]
+        lines += ["static %d %s" % row for row in static]
+        lines.append("raw path: %s" % paths["raw"])
+        lines.append("doors-open path: %s" % paths["doors-open"])
+        lines.append("frontier nearest=%s blockers=%s dest_blocked=%s dest_name=%s" % (
+            frontier.get("nearest"), frontier.get("blockers", frontier.get("error")),
+            frontier.get("dest_blocked"), frontier.get("dest_name")))
+        for door in doors:
+            lines.append("door %-24s (%d,%d) closed=%s learned=%s" % (
+                door["name"], door["x"], door["z"], door["closed"], door["learned"]))
+        lines.append("doors shown=%d learned_total=%d unsealed=%d" % (
+            len(doors), len(self._blocked_doors), len(self.unsealed_doors)))
+        return {"from": list(here), "to": [level, x, z], "static": static,
+                "paths": paths, "frontier": frontier, "doors": doors,
+                "learned_total": len(self._blocked_doors),
+                "unsealed": len(self.unsealed_doors), "lines": lines}
 
     def _follow_route(self, plan, dest, run, timeout, open_doors):
         # A transition can be blocked (locked gate, quest item). Drop it and
@@ -91,7 +186,7 @@ class MovementMixin:
             # while an adjacent tile already satisfies the radius.
             self.walk_to(x, z, level, timeout=min(timeout, 750), open_doors=open_doors)
         except (Unreachable, TimeoutError) as error:
-            print("exact approach to %d,%d failed: %s" % (x, z, error), flush=True)
+            print("exact approach to %d,%d failed: %s%s" % (x, z, error, self._dest_suffix()), flush=True)
         if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
             return True
         deadline = self.world.ticks + timeout
@@ -114,7 +209,7 @@ class MovementMixin:
             try:
                 self.walk_to(cx, cz, level, timeout=max(250, deadline - self.world.ticks), open_doors=open_doors)
             except (Unreachable, TimeoutError) as error:
-                print("approach candidate %d,%d failed: %s" % (cx, cz, error), flush=True)
+                print("approach candidate %d,%d failed: %s%s" % (cx, cz, error, self._dest_suffix()), flush=True)
                 continue
             if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
                 return True
@@ -122,6 +217,7 @@ class MovementMixin:
             radius, x, z, self.world.position
         ))
 
+    @_tracks_destination
     def walk_to(self, x, z, level=0, run=None, timeout=9000, open_doors=True):
         # Movement, doors and known ladder/trapdoor links are the SDK's job:
         # a script only names the destination.
@@ -183,7 +279,7 @@ class MovementMixin:
                         self._in_portal_route = False
             # A door we believe open can be closed on the server: retry with
             # the raw map, which routes around it instead of through it.
-            print("walk with doors open stalled, retrying on the raw map", flush=True)
+            print("walk with doors open stalled, retrying on the raw map%s" % (self._dest_suffix(),), flush=True)
             return self._walk_direct(x, z, level, run, min(timeout, 1500), False)
         except Unreachable:
             if self._in_portal_route:
@@ -210,9 +306,10 @@ class MovementMixin:
                     routing_map, level, self.world.x, self.world.z, x, z, self.loc_name_at
                 )
                 if report["nearest"] == (self.world.x, self.world.z):
-                    print("nothing reachable toward %d,%d from %s: %s" % (
+                    print("nothing reachable toward %d,%d from %s: %s%s" % (
                         x, z, (self.world.x, self.world.z),
                         self.explain_unreachable(x, z, open_doors),
+                        self._dest_suffix(),
                     ), flush=True)
                     return True
         deadline = self.world.ticks + timeout
@@ -411,7 +508,7 @@ class MovementMixin:
                 self._await_leg(chunk, limit)
                 continue
             except TimeoutError as error:
-                print("walk leg stalled: %s" % (error,), flush=True)
+                print("walk leg stalled: %s%s" % (error, self._dest_suffix()), flush=True)
                 # A refused step is almost always a closed door ahead: open
                 # it, then replan from the new position. Replaying the same
                 # chunk would stall on the very same tile forever.
@@ -661,7 +758,7 @@ class MovementMixin:
                 except _DoorOpened:
                     continue
                 except TimeoutError as error:
-                    print("planned route timed out at %s: %s" % (self.world.position, error), flush=True)
+                    print("planned route timed out at %s: %s%s" % (self.world.position, error, self._dest_suffix()), flush=True)
                 if attempt == 0:
                     if self._forget_unsealed_near(radius=8):
                         continue
@@ -760,7 +857,7 @@ class MovementMixin:
             try:
                 self._await_leg(leg, min(deadline, self.world.ticks + len(leg) * 100 + 500))
             except TimeoutError as error:
-                print("walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
+                print("walk leg to %s timed out, recomputing: %s%s" % (leg[-1], error, self._dest_suffix()), flush=True)
                 if (self.world.x, self.world.z) == before:
                     leg_timeouts += 1
                     if leg_timeouts >= 3:
@@ -819,7 +916,7 @@ class MovementMixin:
             try:
                 self._await_leg(leg, min(deadline, self.world.ticks + len(leg) * 100 + 500))
             except TimeoutError as error:
-                print("raw walk leg to %s timed out, recomputing: %s" % (leg[-1], error), flush=True)
+                print("raw walk leg to %s timed out, recomputing: %s%s" % (leg[-1], error, self._dest_suffix()), flush=True)
                 continue
         return True
 
@@ -1720,7 +1817,7 @@ class MovementMixin:
         while True:
             position = (self.world.x, self.world.z)
             if position == target:
-                self.dbg("leg arrived %s" % (target,))
+                self.dbg("leg arrived %s%s" % (target, self._dest_suffix()))
                 return
             distance = abs(position[0] - target[0]) + abs(position[1] - target[1])
             if distance > best:
