@@ -124,6 +124,29 @@ def _blended_colour(hue, saturation, lightness):
     return _colour_table((index & 0xFF80) + scaled)
 
 
+def _png_rgba(width, height, pixels, palette):
+    """RGBA PNG for a paletted sprite; palette index 0 stays transparent."""
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            index = pixels[x + y * width]
+            if index == 0 or index >= len(palette):
+                raw += b"\x00\x00\x00\x00"
+            else:
+                rgb = palette[index]
+                raw += bytes(((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, 255))
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(bytes(raw)))
+    png += chunk(b"IEND", b"")
+    return png
+
+
 class MapCache:
     def __init__(self):
         self._floor_rgb = None
@@ -132,6 +155,10 @@ class MapCache:
         self._palette = None
         self._hsl_cache = {}
         self._blend_cache = {}
+        self._mapscene_png = {}
+        self._mapscene_size = {}
+        self._loc_type_table = None
+        self._media = None
         self._squares = {}
         self._lock = threading.RLock()
 
@@ -238,6 +265,174 @@ class MapCache:
         return self._floor_textures
 
     # -- ground palette ---------------------------------------------------
+
+    def _loc_types(self):
+        """loc id -> {mapscene, width, length, mapfunction} from the cache.
+
+        The client draws the mapscene sprite on the minimap instead of the
+        ground (LocType, opcode 68), which is how buildings show as one
+        image rather than a grid of floor colours.
+        """
+        if self._loc_type_table is None:
+            with self._lock:
+                if self._loc_type_table is None:
+                    table = {}
+                    try:
+                        container = self._jagfile()
+                        data = self._jagfile_read(container, "loc.dat")
+                        index = self._jagfile_read(container, "loc.idx")
+                    except (OSError, ValueError):
+                        data = index = None
+                    if data and index:
+                        count = (index[0] << 8) | index[1]
+                        offsets = []
+                        offset = 2
+                        cursor = 2
+                        for _id in range(count):
+                            offsets.append(offset)
+                            offset += (index[cursor] << 8) | index[cursor + 1]
+                            cursor += 2
+                        for id in range(count):
+                            table[id] = self._decode_loc_type(data, offsets[id])
+                    self._loc_type_table = table
+        return self._loc_type_table
+
+    @staticmethod
+    def _decode_loc_type(data, position):
+        entry = {"mapscene": -1, "width": 1, "length": 1, "mapfunction": -1}
+        while position < len(data):
+            opcode = data[position]
+            position += 1
+            if opcode == 0:
+                break
+            if opcode == 1:
+                count = data[position]
+                position += 1 + count * 3
+            elif opcode in (2, 3):
+                position += 1
+                while position < len(data) and data[position] != 10:
+                    position += 1
+                position += 1
+            elif opcode == 5:
+                count = data[position]
+                position += 1 + count * 2
+            elif opcode == 14:
+                entry["width"] = data[position]
+                position += 1
+            elif opcode == 15:
+                entry["length"] = data[position]
+                position += 1
+            elif opcode in (17, 18, 19, 21, 22, 23, 28, 29, 39):
+                position += 1
+            elif opcode == 24:
+                position += 2
+            elif 30 <= opcode < 39:
+                position += 1
+                while position < len(data) and data[position] != 10:
+                    position += 1
+                position += 1
+            elif opcode == 40:
+                count = data[position]
+                position += 1 + count * 4
+            elif opcode == 60:
+                entry["mapfunction"] = (data[position] << 8) | data[position + 1]
+                position += 2
+            elif opcode in (62, 64):
+                pass
+            elif opcode in (65, 66, 67, 68):
+                if opcode == 68:
+                    entry["mapscene"] = (data[position] << 8) | data[position + 1]
+                position += 2
+            elif opcode in (69, 70, 71, 72, 73, 74, 75):
+                position += 1
+            else:
+                break
+        return entry
+
+    def mapscene_for(self, loc_id):
+        entry = self._loc_types().get(loc_id)
+        return entry["mapscene"] if entry else -1
+
+    def loc_dimensions(self, loc_id):
+        entry = self._loc_types().get(loc_id)
+        return (entry["width"], entry["length"]) if entry else (1, 1)
+
+    def _mapscene_index(self, sprite_index):
+        """(width, height, offset_x, offset_y, encoding, data_offset, palette)."""
+        try:
+            container = self._jagfile_read(self._media_jag(), "mapscene.dat")
+            index = self._jagfile_read(self._media_jag(), "index.dat")
+        except (OSError, ValueError):
+            return None
+        if not container or not index:
+            return None
+        position = (container[0] << 8) | container[1]
+        palette_size = index[position + 4]
+        palette = [0] * max(1, palette_size)
+        cursor = position + 5
+        for slot in range(1, palette_size):
+            palette[slot] = (index[cursor] << 16) | (index[cursor + 1] << 8) | index[cursor + 2]
+            cursor += 3
+        position = cursor
+        data_position = 2
+        for _skip in range(sprite_index):
+            position += 2
+            skip_w = (index[position] << 8) | index[position + 1]
+            skip_h = (index[position + 2] << 8) | index[position + 3]
+            data_position += skip_w * skip_h
+            position += 5
+        offset_x = index[position]
+        offset_y = index[position + 1]
+        width = (index[position + 2] << 8) | index[position + 3]
+        height = (index[position + 4] << 8) | index[position + 5]
+        encoding = index[position + 6]
+        if width <= 0 or height <= 0 or width > 512 or height > 512:
+            return None
+        return width, height, offset_x, offset_y, encoding, data_position, palette
+
+    def mapscene_png(self, sprite_index):
+        """PNG bytes for one mapscene sprite, decoded from the media jag."""
+        if sprite_index in self._mapscene_png:
+            return self._mapscene_png[sprite_index]
+        meta = self._mapscene_index(sprite_index)
+        if meta is None:
+            return None
+        width, height, _offset_x, _offset_y, encoding, data_position, palette = meta
+        container = self._jagfile_read(self._media_jag(), "mapscene.dat")
+        if container is None or data_position + width * height > len(container):
+            return None
+        pixels = [0] * (width * height)
+        if encoding == 0:
+            for index in range(width * height):
+                pixels[index] = container[data_position + index] & 0xFF
+        else:
+            for x in range(width):
+                for y in range(height):
+                    pixels[x + y * width] = container[data_position + x * height + y] & 0xFF
+        png = _png_rgba(width, height, pixels, palette)
+        self._mapscene_png[sprite_index] = png
+        return png
+
+    def mapscene_size(self, sprite_index):
+        """(width, height) of a mapscene sprite, or None."""
+        if sprite_index in self._mapscene_size:
+            return self._mapscene_size[sprite_index]
+        meta = self._mapscene_index(sprite_index)
+        if meta is None:
+            return None
+        size = (meta[0], meta[1])
+        self._mapscene_size[sprite_index] = size
+        return size
+
+    def _media_jag(self):
+        if self._media is None:
+            self._media = self._jagfile_named("media")
+        return self._media
+
+    def _jagfile_named(self, name):
+        path = os.path.join(PACK_DIR, "client", name)
+        with open(path, "rb") as handle:
+            return handle.read()
 
     def _content_dir(self):
         candidate = os.path.normpath(os.path.join(PACK_DIR, "..", "..", "..", "content"))

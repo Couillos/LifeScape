@@ -75,6 +75,13 @@ def _ws_recv(sock):
     return opcode, data
 
 
+def _annotate_mapscene(state):
+    """loc id -> mapscene sprite, so the browser can draw the minimap icons."""
+    for loc in state.get("locs") or []:
+        loc["mapscene"] = MAP_CACHE.mapscene_for(loc.get("id", -1))
+    return state
+
+
 def _state_payload(dispatch, account):
     payload = {"jobs": dispatch({"cmd": "status"}).get("jobs") or []}
     if account:
@@ -85,6 +92,7 @@ def _state_payload(dispatch, account):
                 state["map"] = MAP_CACHE.grid(position[0], position[1], position[2])
             except Exception:
                 state.pop("map", None)
+        _annotate_mapscene(state)
         payload["state"] = state
     return payload
 
@@ -174,6 +182,7 @@ INDEX_HTML = """<!doctype html>
   .failed, .disconnected { background: #e05a5a; } .finished, .stopped { background: #6b7280; }
   #detail { flex: 2 1 420px; min-width: 300px; }
   #title { color: #888; margin-bottom: 6px; }
+  #zonename { color: #ff0; margin-left: 8px; }
   canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; }
   #side { flex: 1 1 280px; min-width: 260px; max-width: 420px; }
   .panel { background: #0a0a0a; border: 1px solid #333; padding: 6px; margin-top: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; }
@@ -204,7 +213,7 @@ INDEX_HTML = """<!doctype html>
     <ul id="players"><li class="muted">loading…</li></ul>
   </div>
   <div id="detail">
-    <div id="title" class="muted">Click a bot to follow it.</div>
+    <div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="zonename"></span></div>
     <canvas id="map" width="560" height="560"></canvas>
     <div class="panel"><pre id="infotext"></pre></div>
   </div>
@@ -278,11 +287,16 @@ function renderList(jobs) {
   return jobs;
 }
 
+function setTitle(text, zone) {
+  document.getElementById("titletext").textContent = text;
+  document.getElementById("zonename").textContent = zone || "";
+}
+
 async function select(account) {
   selected = account;
   autoSelected = true;
   last = null; prev = null;
-  document.getElementById("title").textContent = "Following: " + account.replace(/_/g, " ");
+  setTitle("Following: " + account.replace(/_/g, " "), "");
   if (window.innerWidth <= 900) toggleList(true);
   follow(account);
 }
@@ -335,10 +349,10 @@ function connectSocket() {
     if (data.state && data.state.account) {
       if (last !== data.state) { prev = last; prevTime = performance.now(); }
       last = data.state;
-      document.getElementById("title").textContent = "Following: " + (last.account_name || selected);
+      setTitle("Following: " + (last.account_name || selected), last.zone);
       updatePanels();
     } else if (selected) {
-      document.getElementById("title").textContent = selected + " (offline)";
+      setTitle(selected + " (offline)", "");
     }
     setLink("live " + new Date().toLocaleTimeString(), true);
   };
@@ -421,32 +435,24 @@ function draw() {
         if (sx < -TILE || sx > cv.width + TILE) continue;
         ctx.fillStyle = map.palette[map.tiles[row][col]] || '#121212';
         ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
-        // minimap grain: the official map paints per-tile marks, so flat
-        // areas never look perfectly uniform; the hash keeps it stable.
-        const grain = (((tx * 374761393 + tz * 668265263) >>> 0) % 13) - 6;
-        if (grain !== 0) {
-          ctx.fillStyle = grain > 0 ? `rgba(255,255,255,${grain / 100})` : `rgba(0,0,0,${-grain / 100})`;
-          ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
-        }
       }
     }
   }
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
-  const bx = Math.floor(pos.px), bz = Math.floor(pos.pz);
   ctx.lineWidth = 1;
-  for (let m = -R - 1; m <= R + 1; m++) {
-    const majorX = (((bx + m) % 4) + 4) % 4 === 0;
-    const majorZ = (((bz + m) % 4) + 4) % 4 === 0;
-    ctx.strokeStyle = majorX ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)';
-    ctx.beginPath();
-    ctx.moveTo(cx + (m + 0.5 - fx) * TILE, cy - (-R - 1.5 - fz) * TILE);
-    ctx.lineTo(cx + (m + 0.5 - fx) * TILE, cy - (R + 1.5 - fz) * TILE);
-    ctx.stroke();
-    ctx.strokeStyle = majorZ ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)';
-    ctx.beginPath();
-    ctx.moveTo(cx + (-R - 1.5 - fx) * TILE, cy - (m + 0.5 - fz) * TILE);
-    ctx.lineTo(cx + (R + 1.5 - fx) * TILE, cy - (m + 0.5 - fz) * TILE);
-    ctx.stroke();
+  if (window.showGrid) {
+    // optional help overlay: the minimap itself has no tile grid
+    for (let m = -R - 1; m <= R + 1; m++) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+      ctx.beginPath();
+      ctx.moveTo(cx + (m + 0.5 - fx) * TILE, cy - (-R - 1.5 - fz) * TILE);
+      ctx.lineTo(cx + (m + 0.5 - fx) * TILE, cy - (R + 1.5 - fz) * TILE);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + (-R - 1.5 - fx) * TILE, cy - (m + 0.5 - fz) * TILE);
+      ctx.lineTo(cx + (R + 1.5 - fx) * TILE, cy - (m + 0.5 - fz) * TILE);
+      ctx.stroke();
+    }
   }
 
   // pathfinding: the route the bot is following + its destination
@@ -549,7 +555,6 @@ function updatePanels() {
   const hint = last.hint_name || (last.hint ? (Array.isArray(last.hint) ? last.hint.join(' ') : JSON.stringify(last.hint)) : null);
   const lines = [];
   lines.push(`${last.account_name || last.account} @ ${x},${z},${level} (combat ${last.combat ?? '?'}, energy ${last.energy ?? '?'}, hp ${last.hitpoints ?? '?'})`);
-  lines.push(`zone: ${last.zone ? esc(last.zone) + ' (' + (last.zone_dist ?? '?') + ')' : '-'}`);
   lines.push(`intent: ${last.intention || '-'}`);
   lines.push(`status: ${last.status || '?'}`);
   lines.push(`script: ${last.script || '-'}`);
@@ -877,6 +882,7 @@ class WebHandler(BaseHTTPRequestHandler):
                         state["map"] = MAP_CACHE.grid(position[0], position[1], position[2])
                     except Exception:
                         state.pop("map", None)
+                _annotate_mapscene(state)
                 return self.reply_json(reply)
             if parts == ["items"]:
                 return self.reply(200, ITEMS_HTML, "text/html; charset=utf-8")
@@ -887,6 +893,11 @@ class WebHandler(BaseHTTPRequestHandler):
                     "application/javascript; charset=utf-8",
                     cache_control="public, max-age=3600",
                 )
+            if len(parts) == 2 and parts[0] == "mapscene" and parts[1].endswith(".png"):
+                sprite = MAP_CACHE.mapscene_png(int(parts[1][:-4])) if parts[1][:-4].isdigit() else None
+                if sprite is None:
+                    return self.reply_json({"ok": False, "error": "not found"}, status=404)
+                return self.reply(200, sprite, "image/png", cache_control="public, max-age=86400")
             if parts == ["api", "items", "history"]:
                 reply = self.dispatch({"cmd": "items"})
                 return self.reply_json(reply.get("data", reply))
