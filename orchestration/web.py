@@ -321,11 +321,21 @@ let prevTime = 0;
 let autoSelected = false;
 let rt = false;
 try { rt = localStorage.getItem("spectate-rt") === "1"; } catch (e) { rt = false; }
+let frameTimer = null;
+let framePending = false;
 function paint() {
   // Canvas redraws are throttled to 1 Hz by default; real-time mode
   // redraws every animation frame. Data (panels, jobs) always stays live.
-  if (rt) requestAnimationFrame(draw);
-  else setTimeout(draw, 1000);
+  // One scheduled redraw at a time: a map image landing mid-second must
+  // redraw now, not queue another second on top of the pending one.
+  if (rt) {
+    if (framePending) return;
+    framePending = true;
+    requestAnimationFrame(() => { framePending = false; draw(); });
+  } else {
+    if (frameTimer !== null) return;
+    frameTimer = setTimeout(() => { frameTimer = null; draw(); }, 1000);
+  }
 }
 function syncRtBtn() {
   const btn = document.getElementById("rtbtn");
@@ -338,8 +348,12 @@ const R = 16;         // drawn radius, in tiles
 const BUF_TILE = 4;   // the client minimap buffer is 4 px per tile
 const BUF_SIZE = (R * 2 + 1) * BUF_TILE;
 // the map image is rendered by the server with the client's own minimap
-// passes; only the request key and the loaded image live here
+// passes. The blit uses the origin the image was built for, so the map and
+// the dots (drawn from the live position) never slide against each other.
 let mapImage = null;
+let mapOriginX = 0;
+let mapOriginZ = 0;
+let mapLoadedKey = null;
 let mapRequested = null;
 // dots, labels and the route are drawn over the map image; turn this off to
 // compare the map pixels alone against the client minimap
@@ -497,16 +511,18 @@ function draw() {
   // Text is collected while shapes draw and painted in one pass at the end:
   // later tiles would otherwise cover earlier labels in dense areas.
   const labels = [];
+  const DOT_RADIUS = 5;     // every marker is the size of the player dot
+  const LABEL_FONT = 'bold 12px monospace';
   const dot = (x, z, color, label, big, sayText) => {
     const sx = cx + (x - pos.px) * TILE;
     const sy = cy - (z - pos.pz) * TILE;
     if (sx < -20 || sy < -20 || sx > cv.width + 20 || sy > cv.height + 20) return [sx, sy];
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(sx, sy, big ? 5 : 3.5, 0, Math.PI * 2);
+    ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
     ctx.fill();
-    if (sayText) labels.push([sx + 7, sy - 9, '#fa5', '10px monospace', esc(sayText).slice(0, 40)]);
-    if (label) labels.push([sx + 7, sy + 4, '#ccc', '10px monospace', label]);
+    if (sayText) labels.push([sx + 8, sy - 10, '#fa5', LABEL_FONT, esc(sayText).slice(0, 40)]);
+    if (label) labels.push([sx + 8, sy + 4, '#ccc', LABEL_FONT, label]);
     return [sx, sy];
   };
   const square = (x, z, color, label, big) => {
@@ -514,9 +530,9 @@ function draw() {
     const sy = cy - (z - pos.pz) * TILE;
     if (sx < -20 || sy < -20 || sx > cv.width + 20 || sy > cv.height + 20) return;
     ctx.fillStyle = color;
-    const size = big ? 7 : 5;
+    const size = DOT_RADIUS * 2 - 1;
     ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-    if (label) labels.push([sx + 6, sy + 4, '#ccc', '10px monospace', label]);
+    if (label) labels.push([sx + 8, sy + 4, '#ccc', LABEL_FONT, label]);
   };
 
   // Ground, walls and mapscene sprites come from the server image: it is
@@ -524,21 +540,28 @@ function draw() {
   // instead of a redraw that drifts on overlays and sprite order.
   const originX = Math.round(pos.px) - R;
   const originZ = Math.round(pos.pz) - R;
-  const northZ = originZ + R * 2;
   const level = (last.position && last.position[0]) || 0;
   const mapKey = originX + ',' + originZ + ',' + level;
-  if (mapKey !== mapRequested) {
+  if (mapKey !== mapLoadedKey && mapKey !== mapRequested) {
     mapRequested = mapKey;
     const image = new Image();
-    image.onload = () => { mapImage = image; paint(); };
+    image.onload = () => {
+      mapImage = image;
+      mapLoadedKey = mapKey;
+      mapOriginX = originX;
+      mapOriginZ = originZ;
+      mapRequested = null;
+      draw();
+    };
+    image.onerror = () => { mapRequested = null; };
     image.src = 'minimap.png?x=' + originX + '&z=' + originZ + '&level=' + level + '&size=' + (R * 2 + 1);
   }
   const step = TILE / BUF_TILE;
   // snap the blit to a whole buffer pixel: with a fractional offset the
   // 4x nearest-neighbour upscale samples some columns 5 times and others
   // once, which breaks wall lines into 1 px segments and shifts joints
-  const mapLeft = Math.round((cx + (originX - pos.px) * TILE) / step) * step;
-  const mapTop = Math.round((cy - (northZ + 1 - pos.pz) * TILE) / step) * step;
+  const mapLeft = Math.round((cx + (mapOriginX - pos.px) * TILE) / step) * step;
+  const mapTop = Math.round((cy - (mapOriginZ + R * 2 + 1 - pos.pz) * TILE) / step) * step;
   const mapSize = BUF_SIZE * step;
   if (mapImage) {
     ctx.imageSmoothingEnabled = false;
