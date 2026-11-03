@@ -598,6 +598,8 @@ class BotCore:
                 "block": bool(entry.get("blockwalk")) if entry else False,
                 "shape": loc_shape,
                 "angle": loc_angle,
+                "width": entry.get("width", 1) if entry else 1,
+                "length": entry.get("length", 1) if entry else 1,
             })
         found.sort(key=lambda loc: abs(loc["x"] - self.world.x) + abs(loc["z"] - self.world.z))
         return found[:400]

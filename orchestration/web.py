@@ -421,6 +421,13 @@ function draw() {
         if (sx < -TILE || sx > cv.width + TILE) continue;
         ctx.fillStyle = map.palette[map.tiles[row][col]] || '#121212';
         ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
+        // minimap grain: the official map paints per-tile marks, so flat
+        // areas never look perfectly uniform; the hash keeps it stable.
+        const grain = (((tx * 374761393 + tz * 668265263) >>> 0) % 13) - 6;
+        if (grain !== 0) {
+          ctx.fillStyle = grain > 0 ? `rgba(255,255,255,${grain / 100})` : `rgba(0,0,0,${-grain / 100})`;
+          ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
+        }
       }
     }
   }
@@ -481,7 +488,7 @@ function draw() {
 
   const scenery = window.SpectateScenery;
   if (scenery) {
-    scenery.drawScenery(ctx, {cx, cy, tile: TILE, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
+    scenery.drawScenery(ctx, {cx, cy, tile: TILE, half: halfTile, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
   } else {
   const labelled = new Set();
   let labelCount = 0;

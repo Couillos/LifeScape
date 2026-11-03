@@ -29,6 +29,7 @@
   }
 
   function drawScenery(ctx, view, locs, objs, flora, labels) {
+    const half = view.half || view.tile / 2; // never NaN: NaN coords paint nothing
     const labelled = new Set();
     let labelCount = 0;
     for (const loc of locs || []) {
@@ -40,12 +41,19 @@
         continue;
       }
       if (loc.block && WALL_SHAPES.has(loc.shape)) {
-        wallBar(ctx, sx, sy, view.half, (loc.angle || 0) & 3);
+        wallBar(ctx, sx, sy, half, (loc.angle || 0) & 3);
       } else if (loc.block) {
+        // solid obstacle: paint the whole footprint (rotated like
+        // collision does: swapped on north/south angles), the way the
+        // minimap shows building masses instead of single tiles.
+        const wide = ((loc.angle || 0) & 3) === 1 || ((loc.angle || 0) & 3) === 3;
+        const sizeX = wide ? (loc.length || 1) : (loc.width || 1);
+        const sizeZ = wide ? (loc.width || 1) : (loc.length || 1);
+        const left = sx - half, top = sy - half - (sizeZ - 1) * view.tile;
         ctx.fillStyle = '#565656';
-        ctx.fillRect(sx - view.half, sy - view.half, view.tile, view.tile);
+        ctx.fillRect(left, top, sizeX * view.tile, sizeZ * view.tile);
         ctx.strokeStyle = '#333333';
-        ctx.strokeRect(sx - view.half + 0.5, sy - view.half + 0.5, view.tile - 1, view.tile - 1);
+        ctx.strokeRect(left + 0.5, top + 0.5, sizeX * view.tile - 1, sizeZ * view.tile - 1);
       } else if (loc.act) {
         ctx.fillStyle = '#8a6d3b'; // open door, ladder, gate: live state
         ctx.fillRect(sx - 4, sy - 4, 8, 8);
