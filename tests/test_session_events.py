@@ -48,7 +48,7 @@ class WorkerEventTest(unittest.TestCase):
 
         self.assertEqual(registry.RESCUES["maze"], "rescue_maze")
         self.assertEqual(registry.RESCUES["tower"], "rescue_down")
-        self.assertNotIn("mime", registry.RESCUES)
+        self.assertEqual(registry.RESCUES["mime"], "rescue_mime")
 
 
 class DaemonRescueTest(unittest.TestCase):
@@ -85,7 +85,7 @@ class DaemonRescueTest(unittest.TestCase):
         self.assertEqual([request["cmd"] for request in self.sent], ["unload", "run"])
 
     def test_unmapped_event_runs_fallback(self):
-        self.daemon.handle_event(self.job, {"kind": "random_event", "event": "mime", "resolved": False})
+        self.daemon.handle_event(self.job, {"kind": "random_event", "event": "swarm", "resolved": False})
         self.assertEqual(self.job.rescue_for, "rescue_fallback")
 
     def test_successful_rescue_resumes_interrupted_script(self):
@@ -110,7 +110,7 @@ class DaemonRescueTest(unittest.TestCase):
         other.script = "mining"
         other.script_args = []
         other.status = "running"
-        self.daemon.handle_event(other, {"kind": "random_event", "event": "mime", "resolved": False})
+        self.daemon.handle_event(other, {"kind": "random_event", "event": "swarm", "resolved": False})
         self.assertEqual(other.rescue_for, "rescue_fallback")
 
     def test_second_event_waits_for_ongoing_rescue(self):

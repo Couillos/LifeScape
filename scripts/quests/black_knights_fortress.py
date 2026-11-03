@@ -18,6 +18,7 @@ from lifescape.waits import wait_ticks
 
 from gamedata import quest_requirements
 import gamedata as knowledge
+from scripts import randomevents
 from scripts.quests import solver
 from scripts.quests.common import run as run_requirements
 
@@ -59,61 +60,244 @@ def _count(bot, name):
 
 GRILL_LEVEL = 0  # "Grate 3025 3508 0" header in quest_blackknight.rs2
 HOLE_LEVEL = 1  # "Hole 3031 3508 1" header in quest_blackknight.rs2
+# Reach tables (engine ReachStrategy.ts, verified against the packed map):
+# - witchgrill is a straight wall decor (shape 5): only its own tile.
+# - bkfortressdoor3 is a straight wall facing EAST: west is never valid;
+#   click from the north/south tile (x == door.x also skips the aggro).
+# - bksecretdoor faces SOUTH with the hole room to its south: walk onto
+#   its own tile (the north side stays open) and Push from there.
+GRILL_STAND = (3025, 3507, 0)
+DOOR3_STAND = (3025, 3512, 0)
+SECRET_STAND = (3030, 3510, 1)
+FORTRESS_GATE = (3016, 3515, 0)
+BANQUET_HALL = (3028, 3513, 0)
+
+
+def _worn_count(bot, name):
+    obj = solver.obj_id(name)
+    worn_com = knowledge.com_id("wornitems:wear")
+    return sum(count for held, count in bot.world.inv.get(worn_com, {}).values() if held == obj)
 
 
 def _wear(bot, name):
-    """Wear a disguise piece; already-worn is fine (withdraw proved it exists)."""
-    obj = solver.obj_id(name)
-    try:
-        slot = solver.find_item_slot(bot, obj)
-    except solver.SolverError:
+    """Wear a disguise piece, verifying the server applied it.
+
+    A door click in the same tick as the wear sees the old state and the
+    guard refuses entry, so poll the worn container before carrying on.
+    """
+    if _worn_count(bot, name) > 0:
         return
-    com, _slots = bot.backpack()
-    bot.op_held(2, obj, slot, com)
-    bot.pump(10)
-
-
-def _climb_toward(bot, level):
-    if bot.world.level > level:
-        solver.ride_loc(bot, ("laddertop", "spiralstairstop", "stairstop"), 1, timeout=6000)
-    elif bot.world.level < level:
-        solver.ride_loc(bot, ("ladder", "spiralstairs", "stairs"), 1, timeout=6000)
-    else:
-        raise solver.SolverError("no path on level %d at %s" % (level, bot.position))
+    obj = solver.obj_id(name)
+    for _ in range(6):
+        try:
+            slot = solver.find_item_slot(bot, obj)
+        except solver.SolverError:
+            break
+        com, _slots = bot.backpack()
+        bot.op_held(2, obj, slot, com)
+        bot.pump(10)
+        if _worn_count(bot, name) > 0:
+            return
+    if _worn_count(bot, name) < 1:
+        raise solver.SolverError("cannot wear %s at %s" % (name, bot.position))
 
 
 def _go_level(bot, level):
+    """Ride any ladder/stairs between the fortress floors.
+
+    Tries every same-level ladder/stair by distance: the banquet ladder
+    (3021,3510) only answers from its east side, so a pinned ladder
+    strands the bot where the nearest one climbs fine.
+    """
+    from scripts.tutorial import common as tutorial_common
+
     for _ in range(6):
         if bot.world.level == level:
             return
-        _climb_toward(bot, level)
+        names = ("laddertop", "spiralstairstop", "stairstop") if bot.world.level > level else ("ladder", "spiralstairs", "stairs")
+        cands = []
+        seen = dict(bot.world.static_locs)
+        seen.update(getattr(bot.world, "static_actions", None) or {})
+        seen.update(bot.world.locs)
+        for (x, z, lvl), loc in seen.items():
+            if loc is None or lvl != bot.world.level:
+                continue
+            label = bot.loctypes["loc"][loc[0]]["name"] if loc[0] < len(bot.loctypes["loc"]) else ""
+            if any(name in label for name in names):
+                cands.append((abs(x - bot.world.x) + abs(z - bot.world.z), x, z, lvl, loc[0]))
+        cands.sort()
+        climbed = False
+        for _, x, z, lvl, loc in cands[:4]:
+            try:
+                bot.approach(x, z, level=lvl, radius=2, timeout=1500, open_doors=True)
+            except (Unreachable, TimeoutError):
+                continue
+            if bot.ride_transition_at(x, z, lvl):
+                wait_ticks(bot, 5)
+                climbed = True
+                break
+            try:
+                bot.op_loc(1, x, z, loc)
+                wait_ticks(bot, 5)
+            except Exception:
+                continue
+            if bot.world.level == level:
+                climbed = True
+                break
+        if not climbed:
+            raise solver.SolverError("no ladder answers from %s" % (bot.position,))
     raise solver.SolverError("cannot reach level %d from %s" % (level, bot.position))
 
 
 def _listen_at_grill(bot):
+    # The kitchen is NOT reachable from the banquet hall: the direct wall
+    # door (3028,3510) is permanently locked ("It's locked") and the
+    # planner stalls on it. Always loop through door2's west side first.
+    if not (bot.world.level == 0 and (bot.world.x, bot.world.z) == (3019, 3515)):
+        bot.walk_to(3019, 3515, 0, timeout=9000, open_doors=True)
     for _ in range(4):
+        if bot.world.level != GRILL_LEVEL:
+            _go_level(bot, GRILL_LEVEL)
+            continue
         try:
-            solver.operate_loc(bot, ("witchgrill",), 1, timeout=6000)
+            solver.operate_loc(bot, ("witchgrill",), 1, timeout=6000, stand=GRILL_STAND)
             break
-        except Unreachable:
-            _climb_toward(bot, GRILL_LEVEL)
+        except (Unreachable, TimeoutError):
+            continue
     else:
         raise solver.SolverError("cannot reach the fortress grill from %s" % (bot.position,))
     solver.finish_dialog_like(bot, ["cabbage", "potion", "draynor"])
 
 
-def _sabotage_potion(bot):
-    for _ in range(4):
-        if bot.world.level == HOLE_LEVEL:
-            break
-        _climb_toward(bot, HOLE_LEVEL)
+def _go_to_fortress(bot):
+    if bot.world.level == FORTRESS_GATE[2] and abs(bot.world.x - FORTRESS_GATE[0]) + abs(bot.world.z - FORTRESS_GATE[1]) <= 20:
+        return
+    bot.intend("walking to the Black Knights' Fortress")
+    # Stage south of the fortress first: the west outer doors never open
+    # and the planner burns minutes on them before replanning around.
     try:
-        solver.use_item_on_loc(bot, "cabbage", ("blackknighthole",))
+        if bot.world.level == 0 and bot.world.z < 3512:
+            bot.walk_to(3016, 3500, 0, timeout=4000, open_doors=True)
+    except (Unreachable, TimeoutError):
+        pass
+    try:
+        bot.walk_to(FORTRESS_GATE[0], FORTRESS_GATE[1], FORTRESS_GATE[2], timeout=2000, open_doors=True)
+    except (Unreachable, TimeoutError):
+        # The gate tile itself hosts the open door half the time (and a
+        # wall when it is shut): standing next to it is arriving.
+        if abs(bot.world.x - FORTRESS_GATE[0]) + abs(bot.world.z - FORTRESS_GATE[1]) > 5:
+            raise
+
+
+def _use_cabbage_on_hole(bot):
+    """Use the cabbage on the hole from a reach-valid stand.
+
+    approach_loc stops within radius 2, which includes diagonal tiles the
+    server refuses (reachRectangle1 is orthogonal only): name the stands.
+    """
+    from scripts.tutorial import common as tutorial_common
+    x, z, level, loc = tutorial_common.find_loc(bot, "blackknighthole")
+    seen = len(bot.world.messages)
+    for stand_x, stand_z in ((3031, 3506), (3030, 3507), (3031, 3508)):
+        try:
+            bot.walk_to(stand_x, stand_z, level, timeout=3000, open_doors=True)
+        except (Unreachable, TimeoutError):
+            continue
+        tutorial_common.use_held_on_loc(bot, x, z, loc, solver.obj_id("cabbage"))
+        wait_ticks(bot, 10)
+        if any("drop a cabbage" in text.lower() for text in bot.world.messages[seen:]):
+            return
+        seen = len(bot.world.messages)
+    raise Unreachable("cabbage use refused at the hole from %s" % (bot.position,))
+
+
+def _sabotage_potion(bot):
+    _go_level(bot, HOLE_LEVEL)
+    try:
+        _use_cabbage_on_hole(bot)
     except Unreachable:
-        # Hole room hides behind the secret wall: push it, then retry.
-        solver.operate_loc(bot, ("bksecretdoor",), 1, timeout=6000)
-        solver.use_item_on_loc(bot, "cabbage", ("blackknighthole",))
+        # Hole room hides behind the secret wall: step onto the wall tile
+        # (its north side stays open) and push from there, then retry.
+        solver.operate_loc(bot, ("bksecretdoor",), 1, timeout=6000, stand=SECRET_STAND)
+        _use_cabbage_on_hole(bot)
     solver.finish_dialog_like(bot, ["sabotaged", "successfully"])
+
+
+def _in_banquet_hall(bot):
+    return bot.world.level == 0 and bot.world.x > 3020 and bot.world.z >= 3512
+
+
+def _past_south_door(bot):
+    """True once past bkfortressdoor1 (gate, corridor, kitchen, banquet)."""
+    return bot.world.x > 3016 or (bot.world.x == 3016 and bot.world.z > 3514)
+
+
+def _ensure_inside(bot):
+    """Walk into the banquet hall, entering the fortress when still outside."""
+    if _in_banquet_hall(bot):
+        return
+    randomevents.greet(bot)
+    _go_level(bot, 0)
+    if _in_banquet_hall(bot):
+        return
+    if not _past_south_door(bot):
+        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=15000)
+        if bot.world.modal and bot.world.modal[0] != "main":
+            raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
+        # A wilderness warning (plain main window) is informational, not a
+        # refusal: dismiss it instead of aborting the infiltration.
+        bot.close_modal()
+        bot.pump(5)
+    if not _in_banquet_hall(bot):
+        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
+        solver.finish_dialog_like(bot, ["going in", "don't care"])
+    # The banquet door only opens on a guard chat and shuts again:
+    # knock until through, then verify by position (east side).
+    for _ in range(8):
+        if _in_banquet_hall(bot):
+            return
+        try:
+            bot.walk_to(BANQUET_HALL[0], BANQUET_HALL[1], BANQUET_HALL[2], timeout=1500, open_doors=True)
+        except (Unreachable, TimeoutError):
+            pass
+        if _in_banquet_hall(bot):
+            return
+        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
+        solver.finish_dialog_like(bot, ["going in", "don't care"])
+        wait_ticks(bot, 10)
+    raise solver.SolverError("banquet door never opened at %s" % (bot.position,))
+
+
+def _leave_L1_east(bot):
+    """Walk out of the fortress east side after the sabotage.
+
+    Validated live, tile by tile: the secret wall only teleports south,
+    but its north side was never walled, so walking north across its tile
+    just works; the door-3 click from the east lands on the door tile,
+    whose west side was never walled either.
+    """
+    if bot.world.level != 1 or bot.world.x < 3024:
+        return
+    try:
+        bot.walk_to(3030, 3511, 1, timeout=3000, open_doors=True)
+    except (Unreachable, TimeoutError):
+        bot.walk_to(3030, 3509, 1, timeout=3000, open_doors=True)
+        bot.walk_to(3030, 3510, 1, timeout=1500, open_doors=True)
+        bot.walk_to(3030, 3511, 1, timeout=1500, open_doors=True)
+    solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=6000, stand=(3026, 3511, 1))
+    if not bot.step_to(3024, 3511, timeout_ticks=120):
+        raise solver.SolverError("inner door shut before stepping through at %s" % (bot.position,))
+    _go_level(bot, 0)
+
+
+def _ensure_L1_east(bot):
+    """Stand east of the inner door (hole-room side), entering if needed."""
+    if bot.world.level == 1 and bot.world.x >= 3026 and 3505 <= bot.world.z <= 3513:
+        return
+    _ensure_inside(bot)
+    randomevents.greet(bot)
+    _go_level(bot, 1)
+    solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=6000, stand=DOOR3_STAND)
 
 
 def solve(bot):
@@ -129,39 +313,26 @@ def solve(bot):
         raise solver.SolverError("no cabbage for the hole at %s" % (bot.position,))
     if _stage(bot) < STARTED:
         solver.talk_like(bot, "sir_amik_varze", ["quest", "laugh", "give it a go"])
+    # Greet event hosts before the long walk: an ignored host fail-teleports
+    # the bot mid-route and every later step fails far from the fortress.
+    randomevents.greet(bot)
+    _go_to_fortress(bot)
+    randomevents.greet(bot)
     _wear(bot, "iron_chainbody")
     _wear(bot, "bronze_med_helm")
     if _stage(bot) < LISTENED:
-        _go_level(bot, 0)
-        solver.operate_loc(bot, ("bkfortressdoor1",), 1, timeout=15000)
-        if bot.world.modal and bot.world.modal[0] != "main":
-            raise solver.SolverError("fortress door refused entry: wear iron_chainbody + bronze_med_helm")
-        # A wilderness warning (plain main window) is informational, not a
-        # refusal: dismiss it instead of aborting the infiltration.
-        bot.close_modal()
-        bot.pump(5)
-        solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
-        solver.finish_dialog_like(bot, ["going in", "don't care"])
-        # The banquet door only opens on a guard chat and shuts again:
-        # knock until through, then verify by position (east side).
-        for _ in range(8):
-            try:
-                bot.walk_to(3022, 3515, 0, timeout=1500, open_doors=True)
-            except (Unreachable, TimeoutError):
-                pass
-            if bot.world.x > 3020:
-                break
-            solver.operate_loc(bot, ("bkfortressdoor2",), 1, timeout=6000)
-            solver.finish_dialog_like(bot, ["going in", "don't care"])
-            wait_ticks(bot, 10)
-        else:
-            raise solver.SolverError("banquet door never opened at %s" % (bot.position,))
-        # The inner door is upstairs (static spawns put it on level 1).
-        _go_level(bot, 1)
-        solver.operate_loc(bot, ("bkfortressdoor3",), 1, timeout=6000)
+        _ensure_inside(bot)
+        # The grill listens from the kitchen north of the banquet hall; the
+        # inner door and the secret wall are upstairs.
         _listen_at_grill(bot)
+        _ensure_L1_east(bot)
     if _stage(bot) < SABOTAGED:
+        _ensure_L1_east(bot)
+        solver.solve_strange_box(bot)
         _sabotage_potion(bot)
+    if _stage(bot) < COMPLETE:
+        _leave_L1_east(bot)
+    solver.solve_strange_box(bot)
     solver.talk(bot, "sir_amik_varze")
 
 

@@ -1,11 +1,11 @@
 """Socket, login handshake and framed opcodes for revision 274."""
 
+import errno
 import os
 import random
 import select
 import socket
 import time
-
 from .buffer import Writer
 from .cache import login_crcs
 from .isaac import Isaac
@@ -142,7 +142,14 @@ class Connection:
         readable, _writable, _error = select.select([self.sock], [], [], 0)
         if not readable:
             return False
-        chunk = self.sock.recv(65536)
+        try:
+            chunk = self.sock.recv(65536)
+        except OSError as error:
+            # select can report readable and the recv still find nothing
+            # (spurious wakeup): only EAGAIN is benign, anything else raises.
+            if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                raise
+            return False
         if not chunk:
             raise ConnectionError("server closed the socket")
         self._buffer += chunk
@@ -162,6 +169,14 @@ class Connection:
             except socket.timeout:
                 if time.time() > deadline:
                     raise
+                continue
+            except OSError as error:
+                # Same spurious wakeup as available(): a timeout socket can
+                # surface EAGAIN instead of socket.timeout.
+                if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    raise
+                if time.time() > deadline:
+                    raise TimeoutError("read timed out")
                 continue
             if not chunk:
                 raise ConnectionError("server closed the socket")

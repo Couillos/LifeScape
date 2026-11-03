@@ -84,6 +84,8 @@ def format_status(jobs):
     for job in jobs:
         position = job.get("position")
         place = "%d,%d" % (position[1], position[2]) if position else "-"
+        if job.get("zone"):
+            place += " %s" % job["zone"]
         rows.append("%-14s %-14s %-13s hp=%-4s %-10s %s" % (
             job.get("account", "?"),
             job.get("script") or "-",
@@ -112,7 +114,8 @@ def format_seen(state):
             pos[0] if len(pos) > 0 else 0, here[0], here[1],
             state.get("status", "?"),
             state.get("intention") or "-",
-        )
+        ),
+        "zone %s (%s)" % (state.get("zone") or "-", state.get("zone_dist", "-")),
     ]
     for entry in sorted(state.get("npcs", []) or [], key=dist):
         lines.append("npc  %-24s (%d,%d) d=%d" % (

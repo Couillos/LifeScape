@@ -45,6 +45,11 @@ class SessionWebTest(unittest.TestCase):
         self.assertNotIn("cleaning", web.INDEX_HTML)
         self.assertNotIn("repairing", web.INDEX_HTML)
 
+    def test_web_renders_detail_mode_controls(self):
+        self.assertIn("detailbtn", web.INDEX_HTML)
+        self.assertIn("detaily", web.INDEX_HTML)
+        self.assertIn("spectate_detail.js", web.INDEX_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,7 @@ SCRIPTS = {
     "quest_vampire_slayer": "scripts/quests/vampire_slayer.py",
     "quest_witchs_potion": "scripts/quests/witchs_potion.py",
     "rescue_maze": "scripts/rescue_maze.py",
+    "rescue_mime": "scripts/rescue_mime.py",
     "rescue_cube": "scripts/rescue_cube.py",    "rescue_down": "scripts/rescue_down.py",
     "rescue_fallback": "scripts/rescue_fallback.py",
     "check_transitions": "scripts/check_transitions.py",
@@ -48,6 +49,9 @@ SCRIPTS = {
     "drop": "scripts/drop.py",
     "probe_door": "scripts/probe_door.py",
     "probe_maze": "scripts/probe_maze.py",
+    "probe_maze_door": "scripts/probe_maze_door.py",
+    "probe_maze_solve": "scripts/probe_maze_solve.py",
+    "probe_mime_trace": "scripts/probe_mime_trace.py",
     "probe_give": "scripts/probe_give.py",
     "probe_talk": "scripts/probe_talk.py",
     "probe_use": "scripts/probe_use.py",
@@ -60,7 +64,7 @@ SCRIPTS = {
 
 # Unresolved random event -> rescue script. Events with no dedicated rescue
 # fall back to rescue_fallback (bounded relogin + event check loop).
-RESCUES = {"maze": "rescue_maze", "tower": "rescue_down", "cube": "rescue_cube"}
+RESCUES = {"maze": "rescue_maze", "tower": "rescue_down", "cube": "rescue_cube", "mime": "rescue_mime"}
 
 
 _mtime = None

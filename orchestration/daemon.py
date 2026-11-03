@@ -276,6 +276,7 @@ class Orchestrator:
         sock_path, _ready = session_paths(account)
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(timeout)
+        reader = writer = None
         try:
             try:
                 client.connect(sock_path)
@@ -284,8 +285,15 @@ class Orchestrator:
             writer = client.makefile("w")
             writer.write(json.dumps(request) + "\n")
             writer.flush()
-            return json.loads(client.makefile("r").readline() or "{}")
+            reader = client.makefile("r")
+            return json.loads(reader.readline() or "{}")
         finally:
+            for stream in (reader, writer):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
             client.close()
 
     def apply_session(self, job, session):
@@ -589,6 +597,9 @@ class Orchestrator:
 
     def serve_client(self, connection):
         with connection:
+            # makefile() dups the fd: close both explicitly (PyPy's GC is
+            # lazy, an unclosed pair leaks 2 fds per command and select()
+            # breaks past FD_SETSIZE).
             reader = connection.makefile("r")
             writer = connection.makefile("w")
             try:
@@ -596,8 +607,17 @@ class Orchestrator:
                 reply = self.dispatch(request)
             except Exception as error:
                 reply = {"ok": False, "error": repr(error)}
-            writer.write(json.dumps(reply) + "\n")
-            writer.flush()
+            try:
+                writer.write(json.dumps(reply) + "\n")
+                writer.flush()
+            except OSError:
+                pass
+            finally:
+                for stream in (reader, writer):
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
     def test_command(self, pattern):
         reply = self.open_job("tests", no_login=True)

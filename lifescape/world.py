@@ -366,7 +366,7 @@ class World:
             dz = signed(stream.bits(5), 5)
             jump = stream.bits(1)
             extended = stream.bits(1)
-            self.npcs[nid] = {"type": ntype, "x": self.x + dx, "z": self.z + dz, "level": self.level, "name": None}
+            self.npcs[nid] = {"type": ntype, "x": self.x + dx, "z": self.z + dz, "level": self.level, "name": None, "anim": None}
             if nid not in self.npc_order:
                 self.npc_order.append(nid)
             if extended:
@@ -444,7 +444,12 @@ class World:
             self._read_appearance(data, pid)
         elif not player and bit == 0x20:
             self.npcs[pid]["type"] = data.u16()
-        elif bit in (0x2,):
+        elif not player and bit == 0x2:
+            # NpcInfoAnim: u16 seq + u8 delay. The mime rescue reads the
+            # emote the mime just played from here.
+            self.npcs[pid]["anim"] = data.u16()
+            data.u8()
+        elif player and bit == 0x2:
             data.raw(3)
         elif bit == 0x4:
             data.u16()

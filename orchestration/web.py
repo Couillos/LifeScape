@@ -6,6 +6,8 @@ Stdlib only. Served by the daemon on LIFESCAPE_WEB_PORT (default 8765):
     /api/status          orchestrator jobs
     /api/state/<account> merged state + bot snapshot (spectate payload)
     /api/logs/<account>?lines=60   log tail
+    /ws                  everything the dashboard needs: the page never
+                         polls HTTP, one socket pushes jobs, state and logs
 
 The right side mirrors the game server's /spectate: a canvas map with
 the same tile grid, dots for players/npcs, squares for scenery and
@@ -18,6 +20,7 @@ user is already at the bottom.
 import base64
 import hashlib
 import json
+import os
 import select
 import threading
 import time
@@ -87,14 +90,50 @@ def _state_payload(dispatch, account):
 
 
 def ws_session(sock, dispatch):
-    """Push jobs + the followed account's state until the client leaves."""
+    """Push jobs + the followed account's state until the client leaves.
+
+    The log tail rides along when the file grows, so the page never polls
+    HTTP: one socket carries jobs, state and logs.
+    """
+    from . import paths as _paths
     account = ""
+    detail_on = False
+    detail_y = 8
+    detail_sent_y = None
     last_send = 0.0
+    log_mark = None
     while True:
         now = time.time()
         if now - last_send >= WS_INTERVAL:
             try:
-                sock.sendall(_ws_frame(json.dumps(_state_payload(dispatch, account)).encode()))
+                payload = _state_payload(dispatch, account)
+                if detail_on:
+                    if detail_sent_y != detail_y:
+                        try:
+                            payload["detail"] = MAP_CACHE.detail_table(detail_y)
+                        except (OSError, ValueError):
+                            payload.pop("detail", None)
+                        else:
+                            detail_sent_y = detail_y
+                else:
+                    detail_sent_y = None
+                if account:
+                    try:
+                        _merged, _partial, log_path = _paths.user_paths(account)
+                        stat = os.stat(log_path)
+                        mark = (stat.st_mtime_ns, stat.st_size)
+                    except OSError:
+                        mark = None
+                    if mark is not None and mark != log_mark:
+                        try:
+                            reply = dispatch({"cmd": "logs", "account": account, "lines": 120})
+                            lines = reply.get("lines", []) if isinstance(reply, dict) else []
+                        except Exception:
+                            lines = None
+                        if lines is not None:
+                            payload["logs"] = lines
+                            log_mark = mark
+                sock.sendall(_ws_frame(json.dumps(payload).encode()))
             except OSError:
                 return
             last_send = now
@@ -118,6 +157,12 @@ def ws_session(sock, dispatch):
             except ValueError:
                 continue
             account = request.get("account") or ""
+            prefs = request.get("detail") or {}
+            detail_on = bool(prefs.get("on", False))
+            try:
+                detail_y = min(32, max(1, int(prefs.get("y", 8))))
+            except (TypeError, ValueError):
+                detail_y = 8
 
 
 INDEX_HTML = """<!doctype html>
@@ -166,6 +211,10 @@ INDEX_HTML = """<!doctype html>
 <div id="bar">
   <div style="display:flex;gap:12px;align-items:center">
     <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide accounts">☰ Accounts</button>
+    <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
+    <button id="detailbtn" title="Paint tiles y×y from the true cache colours (textures) instead of the flat colour mapping.">Detail: off</button>
+    <input id="detaily" type="range" min="1" max="32" step="1" value="8" title="Detail resolution: tiles are painted y×y from the cache textures." style="width:84px;display:none" aria-label="Detail resolution">
+    <span id="detailval" class="meta" style="display:none">8</span>
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
     <a href="/items" style="color:#04A800;text-decoration:none">Item holdings</a>
   </div>
@@ -196,6 +245,7 @@ INDEX_HTML = """<!doctype html>
     <div class="panel logpanel"><pre id="log"></pre></div>
   </div>
 </div>
+<script src="/spectate_detail.js"></script>
 <script>
 (() => {
 // Everything stays inside this closure: a browser extension injected into
@@ -207,6 +257,19 @@ let selected = null;
 let last = null;      // current snapshot
 let prev = null;      // previous snapshot, for interpolation
 let prevTime = 0;
+let autoSelected = false;
+let rt = false;
+try { rt = localStorage.getItem("spectate-rt") === "1"; } catch (e) { rt = false; }
+function paint() {
+  // Canvas redraws are throttled to 1 Hz by default; real-time mode
+  // redraws every animation frame. Data (panels, jobs) always stays live.
+  if (rt) requestAnimationFrame(draw);
+  else setTimeout(draw, 1000);
+}
+function syncRtBtn() {
+  const btn = document.getElementById("rtbtn");
+  if (btn) btn.textContent = rt ? "Real-time: on" : "Real-time: off";
+}
 const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
 const TILE = 16;      // px per tile
@@ -237,30 +300,26 @@ function renderList(jobs) {
   return jobs;
 }
 
-async function loadList() {
-  let jobs = [];
-  try { jobs = (await (await fetch("/api/status")).json()).jobs || []; } catch (e) {}
-  return renderList(jobs);
-}
-
 async function select(account) {
   selected = account;
+  autoSelected = true;
   last = null; prev = null;
   document.getElementById("title").textContent = "Following: " + account.replace(/_/g, " ");
   if (window.innerWidth <= 900) toggleList(true);
   follow(account);
-  await loadDetail();
 }
 
 function follow(account) {
   if (socket !== null && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({account: account || ""}));
+    const prefs = window.SpectateDetail ? window.SpectateDetail.prefs() : null;
+    const message = {account: account || ""};
+    if (prefs) message.detail = prefs;
+    socket.send(JSON.stringify(message));
   }
 }
 
 let socket = null;
 let socketRetry = 500;
-let pollTimer = null;
 
 function setLink(text, good) {
   const stamp = document.getElementById("stamp");
@@ -268,23 +327,8 @@ function setLink(text, good) {
   stamp.style.color = good ? "#46c46f" : "#d9a441";
 }
 
-function startPolling() {
-  if (pollTimer !== null) return;
-  pollTimer = setInterval(async () => {
-    await loadList();
-    if (selected) { await loadDetail(); updatePanels(); }
-  }, 2000);
-}
-
-function stopPolling() {
-  if (pollTimer === null) return;
-  clearInterval(pollTimer);
-  pollTimer = null;
-}
-
 function scheduleReconnect() {
   setLink("reconnecting…", false);
-  startPolling();
   setTimeout(connectSocket, socketRetry);
   socketRetry = Math.min(socketRetry * 2, 5000);
 }
@@ -300,14 +344,20 @@ function connectSocket() {
   }
   socket.onopen = () => {
     socketRetry = 500;
-    stopPolling();
     setLink("live " + new Date().toLocaleTimeString(), true);
     follow(selected);
   };
   socket.onmessage = (event) => {
     let data;
     try { data = JSON.parse(event.data); } catch (e) { return; }
-    if (data.jobs) renderList(data.jobs);
+    if (data.jobs) {
+      renderList(data.jobs);
+      if (!autoSelected && data.jobs.length) {
+        select(data.jobs[0].account);
+      }
+    }
+    if (data.logs) setLog(data.logs);
+    if (data.detail && window.SpectateDetail) window.SpectateDetail.setTable(data.detail);
     if (data.state && data.state.account) {
       if (last !== data.state) { prev = last; prevTime = performance.now(); }
       last = data.state;
@@ -320,25 +370,6 @@ function connectSocket() {
   };
   socket.onerror = () => { if (socket) socket.close(); };
   socket.onclose = () => { socket = null; scheduleReconnect(); };
-}
-
-async function loadDetail() {
-  if (!selected) return;
-  try {
-    const response = await fetch("/api/state/" + encodeURIComponent(selected));
-    const data = await response.json();
-    if (!data.state || !data.state.account) {
-      document.getElementById("title").textContent = selected + " (no state)";
-      return;
-    }
-    if (last) { prev = last; prevTime = performance.now(); }
-    last = data.state;
-    document.getElementById("title").textContent = "Following: " + (last.account_name || selected);
-  } catch (e) { /* keep the previous snapshot */ }
-  try {
-    const lines = (await (await fetch("/api/logs/" + encodeURIComponent(selected) + "?lines=120")).json()).lines || [];
-    setLog(lines);
-  } catch (e) {}
 }
 
 function setLog(lines) {
@@ -373,11 +404,14 @@ function draw() {
     ctx.fillStyle = '#888';
     ctx.font = '14px monospace';
     ctx.fillText('Waiting for data…', 20, 280);
-    requestAnimationFrame(draw);
+    paint();
     return;
   }
   const pos = interpPos();
   const cx = cv.width / 2, cy = cv.height / 2;
+  // Text is collected while shapes draw and painted in one pass at the end:
+  // later tiles would otherwise cover earlier labels in dense areas.
+  const labels = [];
   const dot = (x, z, color, label, big, sayText) => {
     const sx = cx + (x - pos.px) * TILE;
     const sy = cy - (z - pos.pz) * TILE;
@@ -386,9 +420,8 @@ function draw() {
     ctx.beginPath();
     ctx.arc(sx, sy, big ? 5 : 3.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.font = '10px monospace';
-    if (sayText) { ctx.fillStyle = '#fa5'; ctx.fillText(esc(sayText).slice(0, 40), sx + 7, sy - 9); }
-    if (label) { ctx.fillStyle = '#ccc'; ctx.fillText(label, sx + 7, sy + 4); }
+    if (sayText) labels.push([sx + 7, sy - 9, '#fa5', '10px monospace', esc(sayText).slice(0, 40)]);
+    if (label) labels.push([sx + 7, sy + 4, '#ccc', '10px monospace', label]);
     return [sx, sy];
   };
   const square = (x, z, color, label, big) => {
@@ -398,12 +431,14 @@ function draw() {
     ctx.fillStyle = color;
     const size = big ? 7 : 5;
     ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-    if (label) { ctx.fillStyle = '#ccc'; ctx.font = '10px monospace'; ctx.fillText(label, sx + 6, sy + 4); }
+    if (label) labels.push([sx + 6, sy + 4, '#ccc', '10px monospace', label]);
   };
 
   const halfTile = TILE / 2;
   const map = last.map;
   if (map) {
+    const detail = window.SpectateDetail;
+    const detailOn = detail && detail.on && map.flo;
     for (let row = 0; row < map.size; row++) {
       const tz = map.z + row;
       const sy = cy - (tz - pos.pz) * TILE;
@@ -412,7 +447,9 @@ function draw() {
         const tx = map.x + col;
         const sx = cx + (tx - pos.px) * TILE;
         if (sx < -TILE || sx > cv.width + TILE) continue;
-        ctx.fillStyle = map.palette[map.tiles[row][col]] || '#121212';
+        const fallback = map.palette[map.tiles[row][col]] || '#121212';
+        if (detailOn && detail.drawTile(ctx, sx - halfTile, sy - halfTile, TILE, map.flo[row][col], fallback)) continue;
+        ctx.fillStyle = fallback;
         ctx.fillRect(sx - halfTile, sy - halfTile, TILE, TILE);
       }
     }
@@ -472,9 +509,12 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
-  ctx.font = '9px monospace';
+  const sceneryDetail = window.SpectateDetail && window.SpectateDetail.on ? window.SpectateDetail : null;
+  if (sceneryDetail) {
+    sceneryDetail.drawScenery(ctx, {cx, cy, tile: TILE, px: pos.px, pz: pos.pz, w: cv.width, h: cv.height}, last.locs, last.objs, last.flora, labels);
+  } else {
   const labelled = new Set();
-  let labels = 0;
+  let labelCount = 0;
   for (const loc of last.locs || []) {
     const sx = cx + (loc.x - pos.px) * TILE, sy = cy - (loc.z - pos.pz) * TILE;
     if (sx < -30 || sy < -12 || sx > cv.width + 30 || sy > cv.height + 12) continue;
@@ -489,15 +529,15 @@ function draw() {
     }
     // label only actionable scenery, close and not already named: the map is
     // dense enough that every name would overlap.
-    if (loc.act && labels < 14 && Math.abs(loc.x - pos.px) + Math.abs(loc.z - pos.pz) <= 6 && !labelled.has(loc.name)) {
+    if (loc.act && labelCount < 14 && Math.abs(loc.x - pos.px) + Math.abs(loc.z - pos.pz) <= 6 && !labelled.has(loc.name)) {
       labelled.add(loc.name);
-      labels += 1;
-      ctx.fillStyle = '#8d9';
-      ctx.fillText(esc(loc.name || ('scenery #' + loc.id)).slice(0, 22), sx + 5, sy - 4);
+      labelCount += 1;
+      labels.push([sx + 5, sy - 4, '#8d9', '9px monospace', esc(loc.name || ('scenery #' + loc.id)).slice(0, 22)]);
     }
   }
   for (const obj of last.objs || []) {
     square(obj.x, obj.z, '#fd3', esc(obj.name) || ('object #' + obj.id));
+  }
   }
   const cross = (x, z) => {
     const sx = cx + (x - pos.px) * TILE, sy = cy - (z - pos.pz) * TILE;
@@ -516,7 +556,13 @@ function draw() {
   for (const npc of last.npcs || []) dot(npc.x, npc.z, '#ff0', esc(npc.name) || ('npc #' + npc.nid));
   for (const player of last.players || []) dot(player.x, player.z, '#3af', player.name);
   const [sx, sy] = dot(pos.px, pos.pz, '#fff', (last.account_name || last.account || '?') + ' lvl ' + (last.combat ?? '?'), true);
-  requestAnimationFrame(draw);
+  for (const [lx, ly, color, font, str] of labels) {
+    if (lx < -100 || ly < -12 || lx > cv.width + 100 || ly > cv.height + 12) continue;
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.fillText(str, lx, ly);
+  }
+  paint();
 }
 
 function updatePanels() {
@@ -525,9 +571,14 @@ function updatePanels() {
   const modal = last.modal_name || (last.modal ? (Array.isArray(last.modal) ? last.modal.join(' ') : JSON.stringify(last.modal)) : null);
   const hint = last.hint_name || (last.hint ? (Array.isArray(last.hint) ? last.hint.join(' ') : JSON.stringify(last.hint)) : null);
   const lines = [];
-  lines.push(`${last.account_name || last.account} @ ${x},${z} level ${level} (combat ${last.combat ?? '?'}, energy ${last.energy ?? '?'}, hp ${last.hitpoints ?? '?'})`);
+  lines.push(`${last.account_name || last.account} @ ${x},${z},${level} (combat ${last.combat ?? '?'}, energy ${last.energy ?? '?'}, hp ${last.hitpoints ?? '?'})`);
+  lines.push(`zone: ${last.zone ? esc(last.zone) + ' (' + (last.zone_dist ?? '?') + ')' : '-'}`);
   lines.push(`intent: ${last.intention || '-'}`);
-  lines.push(`status: ${last.status || '?'} | script ${last.script || '-'} | ticks ${last.ticks ?? '?'} | pid ${last.pid ?? last.session_pid ?? '?'} | restarts ${last.restarts ?? 0}`);
+  lines.push(`status: ${last.status || '?'}`);
+  lines.push(`script: ${last.script || '-'}`);
+  lines.push(`ticks: ${last.ticks ?? '?'}`);
+  lines.push(`pid: ${last.pid ?? last.session_pid ?? '?'}`);
+  lines.push(`restarts: ${last.restarts ?? 0}`);
   if (last.last_error) lines.push(`last error: ${JSON.stringify(last.last_error)}`);
   lines.push(modal ? `window open: ${modal}` : 'no window open');
   if (hint) lines.push(`hint arrow: ${hint}`);
@@ -575,29 +626,15 @@ function updatePanels() {
     `\\n\\nGround items (${(last.objs || []).length}):\\n` + (objLines.join('\\n') || '(none)');
 }
 
-async function refresh() {
-  const jobs = await loadList();
-  if (!selected && jobs.length) {
-    await select(jobs[0].account);
-  } else {
-    await loadDetail();
-    updatePanels();
-  }
-  document.getElementById("stamp").textContent = 'updated ' + new Date().toLocaleTimeString();
-}
-
-async function loadLog() {
-  if (!selected) return;
-  try {
-    const lines = (await (await fetch("/api/logs/" + encodeURIComponent(selected) + "?lines=120")).json()).lines || [];
-    setLog(lines);
-  } catch (e) {}
-}
-
-refresh();
 connectSocket();
-setInterval(loadLog, 3000);
-requestAnimationFrame(draw);
+paint();
+if (window.SpectateDetail) window.SpectateDetail.onPrefsChange = () => follow(selected);
+document.getElementById("rtbtn").onclick = () => {
+  rt = !rt;
+  try { localStorage.setItem("spectate-rt", rt ? "1" : "0"); } catch (e) { /* private mode */ }
+  syncRtBtn();
+};
+syncRtBtn();
 window.spectator = { select: select, toggle: toggleList };
 })();
 </script>
@@ -816,6 +853,33 @@ setInterval(load, 60000);
 """
 
 
+_DETAIL_SCRIPT = None
+_DETAIL_VERSION = None
+
+
+def _detail_script():
+    global _DETAIL_SCRIPT
+    if _DETAIL_SCRIPT is None:
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spectate_detail.js")
+        with open(script_path, "rb") as handle:
+            _DETAIL_SCRIPT = handle.read()
+    return _DETAIL_SCRIPT
+
+
+def _detail_version():
+    global _DETAIL_VERSION
+    if _DETAIL_VERSION is None:
+        _DETAIL_VERSION = hashlib.md5(_detail_script()).hexdigest()[:12]
+    return _DETAIL_VERSION
+
+
+# Cache-bust the module: the file changes with the code, and the dashboard
+# must pick it up without waiting out a cache entry.
+INDEX_HTML = INDEX_HTML.replace(
+    'src="/spectate_detail.js"', 'src="/spectate_detail.js?v=%s"' % _detail_version()
+)
+
+
 class WebHandler(BaseHTTPRequestHandler):
     dispatch = None
 
@@ -840,6 +904,13 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.reply_json(reply)
             if parts == ["items"]:
                 return self.reply(200, ITEMS_HTML, "text/html; charset=utf-8")
+            if parts == ["spectate_detail.js"]:
+                return self.reply(
+                    200,
+                    _detail_script(),
+                    "application/javascript; charset=utf-8",
+                    cache_control="public, max-age=3600",
+                )
             if parts == ["api", "items", "history"]:
                 reply = self.dispatch({"cmd": "items"})
                 return self.reply_json(reply.get("data", reply))
@@ -870,11 +941,11 @@ class WebHandler(BaseHTTPRequestHandler):
         except (OSError, ConnectionError):
             pass
 
-    def reply(self, status, body, content_type):
+    def reply(self, status, body, content_type, cache_control="no-store"):
         payload = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)

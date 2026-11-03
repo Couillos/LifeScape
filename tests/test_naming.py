@@ -40,6 +40,18 @@ class NamingTest(unittest.TestCase):
         naming.resolve_state(state)
         self.assertEqual([loc["name"] for loc in state["locs"]], ["Newbie door1"])
 
+    def test_flowerbeds_move_to_flora_instead_of_vanishing(self):
+        state = {
+            "locs": [
+                {"id": 1257, "name": "", "act": False},  # grass_light_1
+                {"id": 1190, "name": "", "act": False},  # sunflower
+            ]
+        }
+        naming.resolve_state(state)
+        self.assertEqual(state["locs"], [])
+        self.assertEqual(len(state["flora"]), 1)
+        self.assertEqual(state["flora"][0]["name"], "Sunflower")
+
     def test_account_gets_a_display_name(self):
         state = naming.resolve_state({"account": "olivia_king"})
         self.assertEqual(state["account_name"], "Olivia king")

@@ -90,6 +90,52 @@
   ]
  },
  {
+  "climb_loc": 2616,
+  "climb_op": 1,
+  "delta": null,
+  "disabled": null,
+  "footprint": [
+   [
+    3115,
+    3357
+   ],
+   [
+    3116,
+    3357
+   ],
+   [
+    3115,
+    3358
+   ],
+   [
+    3116,
+    3358
+   ],
+   [
+    3115,
+    3359
+   ],
+   [
+    3116,
+    3359
+   ]
+  ],
+  "from": [
+   0,
+   3115,
+   3357
+  ],
+  "kind": "stair",
+  "loc": 2616,
+  "name": "cryptstairsdown_3",
+  "open_to": null,
+  "to": [
+   0,
+   3077,
+   9771
+  ]
+ },
+ {
   "climb_loc": 2617,
   "climb_op": 1,
   "delta": null,
@@ -127,7 +173,7 @@
   ],
   "kind": "stair",
   "loc": 2617,
-  "name": "cryptstairsup_3",
+  "name": "cryptstairsup_4",
   "open_to": null,
   "to": [
    0,
@@ -153,7 +199,7 @@
   ],
   "kind": "ladder",
   "loc": 2592,
-  "name": "dragonshipladder_4",
+  "name": "dragonshipladder_5",
   "open_to": null,
   "to": [
    1,
@@ -179,7 +225,7 @@
   ],
   "kind": "ladder",
   "loc": 2592,
-  "name": "dragonshipladder_5",
+  "name": "dragonshipladder_6",
   "open_to": null,
   "to": [
    1,
@@ -205,7 +251,7 @@
   ],
   "kind": "ladder",
   "loc": 2592,
-  "name": "dragonshipladder_6",
+  "name": "dragonshipladder_7",
   "open_to": null,
   "to": [
    1,
@@ -231,7 +277,7 @@
   ],
   "kind": "ladder",
   "loc": 2590,
-  "name": "dragonshipladdertop_7",
+  "name": "dragonshipladdertop_8",
   "open_to": null,
   "to": [
    1,
@@ -261,7 +307,7 @@
   ],
   "kind": "ladder",
   "loc": 2605,
-  "name": "funladdertop_8",
+  "name": "funladdertop_9",
   "open_to": null,
   "to": [
    0,
@@ -287,7 +333,7 @@
   ],
   "kind": "ladder",
   "loc": 60,
-  "name": "jewellersladder_9",
+  "name": "jewellersladder_10",
   "open_to": null,
   "to": [
    1,
@@ -317,7 +363,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_10",
+  "name": "ladder_11",
   "open_to": null,
   "to": [
    1,
@@ -347,7 +393,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_11",
+  "name": "ladder_12",
   "open_to": null,
   "to": [
    1,
@@ -377,7 +423,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_12",
+  "name": "ladder_13",
   "open_to": null,
   "to": [
    1,
@@ -407,7 +453,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_13",
+  "name": "ladder_14",
   "open_to": null,
   "to": [
    1,
@@ -437,7 +483,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_14",
+  "name": "ladder_15",
   "open_to": null,
   "to": [
    2,
@@ -467,7 +513,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_15",
+  "name": "ladder_16",
   "open_to": null,
   "to": [
    2,
@@ -497,7 +543,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_16",
+  "name": "ladder_17",
   "open_to": null,
   "to": [
    2,
@@ -527,7 +573,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_17",
+  "name": "ladder_18",
   "open_to": null,
   "to": [
    2,
@@ -557,7 +603,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_18",
+  "name": "ladder_19",
   "open_to": null,
   "to": [
    2,
@@ -587,7 +633,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_19",
+  "name": "ladder_20",
   "open_to": null,
   "to": [
    1,
@@ -617,7 +663,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_20",
+  "name": "ladder_21",
   "open_to": null,
   "to": [
    1,
@@ -647,7 +693,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_21",
+  "name": "ladder_22",
   "open_to": null,
   "to": [
    1,
@@ -677,7 +723,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_22",
+  "name": "ladder_23",
   "open_to": null,
   "to": [
    1,
@@ -707,7 +753,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_23",
+  "name": "ladder_24",
   "open_to": null,
   "to": [
    1,
@@ -737,7 +783,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_24",
+  "name": "ladder_25",
   "open_to": null,
   "to": [
    1,
@@ -767,7 +813,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_25",
+  "name": "ladder_26",
   "open_to": null,
   "to": [
    2,
@@ -797,7 +843,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_26",
+  "name": "ladder_27",
   "open_to": null,
   "to": [
    2,
@@ -827,7 +873,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_27",
+  "name": "ladder_28",
   "open_to": null,
   "to": [
    3,
@@ -857,7 +903,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_28",
+  "name": "ladder_29",
   "open_to": null,
   "to": [
    3,
@@ -887,7 +933,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_29",
+  "name": "ladder_30",
   "open_to": null,
   "to": [
    2,
@@ -917,7 +963,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_30",
+  "name": "ladder_31",
   "open_to": null,
   "to": [
    2,
@@ -947,7 +993,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_31",
+  "name": "ladder_32",
   "open_to": null,
   "to": [
    3,
@@ -977,7 +1023,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_32",
+  "name": "ladder_33",
   "open_to": null,
   "to": [
    3,
@@ -1007,7 +1053,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_33",
+  "name": "ladder_34",
   "open_to": null,
   "to": [
    1,
@@ -1037,7 +1083,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_34",
+  "name": "ladder_35",
   "open_to": null,
   "to": [
    1,
@@ -1067,7 +1113,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_35",
+  "name": "ladder_36",
   "open_to": null,
   "to": [
    1,
@@ -1097,7 +1143,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_36",
+  "name": "ladder_37",
   "open_to": null,
   "to": [
    2,
@@ -1127,7 +1173,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_37",
+  "name": "ladder_38",
   "open_to": null,
   "to": [
    1,
@@ -1157,7 +1203,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_38",
+  "name": "ladder_39",
   "open_to": null,
   "to": [
    2,
@@ -1187,7 +1233,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_39",
+  "name": "ladder_40",
   "open_to": null,
   "to": [
    1,
@@ -1217,7 +1263,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_40",
+  "name": "ladder_41",
   "open_to": null,
   "to": [
    1,
@@ -1247,7 +1293,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_41",
+  "name": "ladder_42",
   "open_to": null,
   "to": [
    1,
@@ -1277,7 +1323,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_42",
+  "name": "ladder_43",
   "open_to": null,
   "to": [
    2,
@@ -1307,7 +1353,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_43",
+  "name": "ladder_44",
   "open_to": null,
   "to": [
    1,
@@ -1337,7 +1383,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_44",
+  "name": "ladder_45",
   "open_to": null,
   "to": [
    1,
@@ -1367,7 +1413,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_45",
+  "name": "ladder_46",
   "open_to": null,
   "to": [
    1,
@@ -1397,7 +1443,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_46",
+  "name": "ladder_47",
   "open_to": null,
   "to": [
    1,
@@ -1427,7 +1473,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_47",
+  "name": "ladder_48",
   "open_to": null,
   "to": [
    2,
@@ -1457,7 +1503,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_48",
+  "name": "ladder_49",
   "open_to": null,
   "to": [
    1,
@@ -1487,7 +1533,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_49",
+  "name": "ladder_50",
   "open_to": null,
   "to": [
    1,
@@ -1517,7 +1563,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_50",
+  "name": "ladder_51",
   "open_to": null,
   "to": [
    1,
@@ -1547,7 +1593,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_51",
+  "name": "ladder_52",
   "open_to": null,
   "to": [
    1,
@@ -1577,7 +1623,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_52",
+  "name": "ladder_53",
   "open_to": null,
   "to": [
    1,
@@ -1607,7 +1653,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_53",
+  "name": "ladder_54",
   "open_to": null,
   "to": [
    1,
@@ -1637,7 +1683,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_54",
+  "name": "ladder_55",
   "open_to": null,
   "to": [
    1,
@@ -1667,7 +1713,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_55",
+  "name": "ladder_56",
   "open_to": null,
   "to": [
    1,
@@ -1697,7 +1743,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_56",
+  "name": "ladder_57",
   "open_to": null,
   "to": [
    1,
@@ -1727,7 +1773,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_57",
+  "name": "ladder_58",
   "open_to": null,
   "to": [
    1,
@@ -1757,7 +1803,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_58",
+  "name": "ladder_59",
   "open_to": null,
   "to": [
    1,
@@ -1787,7 +1833,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_59",
+  "name": "ladder_60",
   "open_to": null,
   "to": [
    3,
@@ -1817,7 +1863,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_60",
+  "name": "ladder_61",
   "open_to": null,
   "to": [
    1,
@@ -1847,7 +1893,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_61",
+  "name": "ladder_62",
   "open_to": null,
   "to": [
    1,
@@ -1877,7 +1923,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_62",
+  "name": "ladder_63",
   "open_to": null,
   "to": [
    1,
@@ -1907,7 +1953,7 @@
   ],
   "kind": "ladder",
   "loc": 1747,
-  "name": "ladder_63",
+  "name": "ladder_64",
   "open_to": null,
   "to": [
    1,
@@ -1937,7 +1983,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_64",
+  "name": "ladder_cellar_65",
   "open_to": null,
   "to": [
    0,
@@ -1967,7 +2013,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_65",
+  "name": "ladder_cellar_66",
   "open_to": null,
   "to": [
    0,
@@ -1997,7 +2043,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_66",
+  "name": "ladder_cellar_67",
   "open_to": null,
   "to": [
    0,
@@ -2027,7 +2073,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_67",
+  "name": "ladder_cellar_68",
   "open_to": null,
   "to": [
    0,
@@ -2057,7 +2103,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_68",
+  "name": "ladder_cellar_69",
   "open_to": null,
   "to": [
    0,
@@ -2087,7 +2133,7 @@
   ],
   "kind": "ladder",
   "loc": 1754,
-  "name": "ladder_cellar_69",
+  "name": "ladder_cellar_70",
   "open_to": null,
   "to": [
    0,
@@ -2117,7 +2163,7 @@
   ],
   "kind": "ladder",
   "loc": 1759,
-  "name": "ladder_cellar_inside_down_70",
+  "name": "ladder_cellar_inside_down_71",
   "open_to": null,
   "to": [
    0,
@@ -2147,7 +2193,7 @@
   ],
   "kind": "ladder",
   "loc": 1759,
-  "name": "ladder_cellar_inside_down_71",
+  "name": "ladder_cellar_inside_down_72",
   "open_to": null,
   "to": [
    0,
@@ -2177,7 +2223,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_72",
+  "name": "ladder_directional_73",
   "open_to": null,
   "to": [
    1,
@@ -2207,7 +2253,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_73",
+  "name": "ladder_directional_74",
   "open_to": null,
   "to": [
    2,
@@ -2237,7 +2283,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_74",
+  "name": "ladder_directional_75",
   "open_to": null,
   "to": [
    1,
@@ -2267,7 +2313,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_75",
+  "name": "ladder_directional_76",
   "open_to": null,
   "to": [
    1,
@@ -2297,7 +2343,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_76",
+  "name": "ladder_directional_77",
   "open_to": null,
   "to": [
    1,
@@ -2327,7 +2373,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_77",
+  "name": "ladder_directional_78",
   "open_to": null,
   "to": [
    2,
@@ -2357,7 +2403,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_78",
+  "name": "ladder_directional_79",
   "open_to": null,
   "to": [
    1,
@@ -2387,7 +2433,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_79",
+  "name": "ladder_directional_80",
   "open_to": null,
   "to": [
    1,
@@ -2417,7 +2463,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_80",
+  "name": "ladder_directional_81",
   "open_to": null,
   "to": [
    2,
@@ -2447,7 +2493,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_81",
+  "name": "ladder_directional_82",
   "open_to": null,
   "to": [
    2,
@@ -2477,7 +2523,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_82",
+  "name": "ladder_directional_83",
   "open_to": null,
   "to": [
    2,
@@ -2507,7 +2553,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_83",
+  "name": "ladder_directional_84",
   "open_to": null,
   "to": [
    1,
@@ -2537,7 +2583,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_84",
+  "name": "ladder_directional_85",
   "open_to": null,
   "to": [
    2,
@@ -2567,7 +2613,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_85",
+  "name": "ladder_directional_86",
   "open_to": null,
   "to": [
    1,
@@ -2597,7 +2643,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_86",
+  "name": "ladder_directional_87",
   "open_to": null,
   "to": [
    1,
@@ -2627,7 +2673,7 @@
   ],
   "kind": "ladder",
   "loc": 1750,
-  "name": "ladder_directional_87",
+  "name": "ladder_directional_88",
   "open_to": null,
   "to": [
    2,
@@ -2657,7 +2703,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_88",
+  "name": "laddermiddle_89",
   "open_to": null,
   "to": [
    2,
@@ -2687,7 +2733,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_89",
+  "name": "laddermiddle_90",
   "open_to": null,
   "to": [
    0,
@@ -2700,36 +2746,6 @@
   "climb_op": 2,
   "delta": [
    1,
-   0,
-   0
-  ],
-  "disabled": null,
-  "footprint": [
-   [
-    3022,
-    3638
-   ]
-  ],
-  "from": [
-   1,
-   3022,
-   3638
-  ],
-  "kind": "ladder",
-  "loc": 1748,
-  "name": "laddermiddle_90",
-  "open_to": null,
-  "to": [
-   2,
-   3022,
-   3638
-  ]
- },
- {
-  "climb_loc": 1748,
-  "climb_op": 3,
-  "delta": [
-   -1,
    0,
    0
   ],
@@ -2750,6 +2766,36 @@
   "name": "laddermiddle_91",
   "open_to": null,
   "to": [
+   2,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_92",
+  "open_to": null,
+  "to": [
    0,
    3022,
    3638
@@ -2760,36 +2806,6 @@
   "climb_op": 2,
   "delta": [
    1,
-   0,
-   0
-  ],
-  "disabled": null,
-  "footprint": [
-   [
-    3036,
-    3625
-   ]
-  ],
-  "from": [
-   1,
-   3036,
-   3625
-  ],
-  "kind": "ladder",
-  "loc": 1748,
-  "name": "laddermiddle_92",
-  "open_to": null,
-  "to": [
-   2,
-   3036,
-   3625
-  ]
- },
- {
-  "climb_loc": 1748,
-  "climb_op": 3,
-  "delta": [
-   -1,
    0,
    0
   ],
@@ -2810,6 +2826,36 @@
   "name": "laddermiddle_93",
   "open_to": null,
   "to": [
+   2,
+   3036,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3625
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_94",
+  "open_to": null,
+  "to": [
    0,
    3036,
    3625
@@ -2820,36 +2866,6 @@
   "climb_op": 2,
   "delta": [
    1,
-   0,
-   0
-  ],
-  "disabled": null,
-  "footprint": [
-   [
-    3036,
-    3638
-   ]
-  ],
-  "from": [
-   1,
-   3036,
-   3638
-  ],
-  "kind": "ladder",
-  "loc": 1748,
-  "name": "laddermiddle_94",
-  "open_to": null,
-  "to": [
-   2,
-   3036,
-   3638
-  ]
- },
- {
-  "climb_loc": 1748,
-  "climb_op": 3,
-  "delta": [
-   -1,
    0,
    0
   ],
@@ -2870,6 +2886,36 @@
   "name": "laddermiddle_95",
   "open_to": null,
   "to": [
+   2,
+   3036,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3036,
+    3638
+   ]
+  ],
+  "from": [
+   1,
+   3036,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_96",
+  "open_to": null,
+  "to": [
    0,
    3036,
    3638
@@ -2880,36 +2926,6 @@
   "climb_op": 2,
   "delta": [
    1,
-   0,
-   0
-  ],
-  "disabled": null,
-  "footprint": [
-   [
-    3022,
-    3625
-   ]
-  ],
-  "from": [
-   2,
-   3022,
-   3625
-  ],
-  "kind": "ladder",
-  "loc": 1748,
-  "name": "laddermiddle_96",
-  "open_to": null,
-  "to": [
-   3,
-   3022,
-   3625
-  ]
- },
- {
-  "climb_loc": 1748,
-  "climb_op": 3,
-  "delta": [
-   -1,
    0,
    0
   ],
@@ -2930,6 +2946,36 @@
   "name": "laddermiddle_97",
   "open_to": null,
   "to": [
+   3,
+   3022,
+   3625
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3625
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3625
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_98",
+  "open_to": null,
+  "to": [
    1,
    3022,
    3625
@@ -2940,36 +2986,6 @@
   "climb_op": 2,
   "delta": [
    1,
-   0,
-   0
-  ],
-  "disabled": null,
-  "footprint": [
-   [
-    3022,
-    3638
-   ]
-  ],
-  "from": [
-   2,
-   3022,
-   3638
-  ],
-  "kind": "ladder",
-  "loc": 1748,
-  "name": "laddermiddle_98",
-  "open_to": null,
-  "to": [
-   3,
-   3022,
-   3638
-  ]
- },
- {
-  "climb_loc": 1748,
-  "climb_op": 3,
-  "delta": [
-   -1,
    0,
    0
   ],
@@ -2990,6 +3006,36 @@
   "name": "laddermiddle_99",
   "open_to": null,
   "to": [
+   3,
+   3022,
+   3638
+  ]
+ },
+ {
+  "climb_loc": 1748,
+  "climb_op": 3,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3638
+   ]
+  ],
+  "from": [
+   2,
+   3022,
+   3638
+  ],
+  "kind": "ladder",
+  "loc": 1748,
+  "name": "laddermiddle_100",
+  "open_to": null,
+  "to": [
    1,
    3022,
    3638
@@ -3017,7 +3063,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_100",
+  "name": "laddermiddle_101",
   "open_to": null,
   "to": [
    3,
@@ -3047,7 +3093,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_101",
+  "name": "laddermiddle_102",
   "open_to": null,
   "to": [
    1,
@@ -3077,7 +3123,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_102",
+  "name": "laddermiddle_103",
   "open_to": null,
   "to": [
    3,
@@ -3107,7 +3153,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_103",
+  "name": "laddermiddle_104",
   "open_to": null,
   "to": [
    1,
@@ -3137,7 +3183,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_104",
+  "name": "laddermiddle_105",
   "open_to": null,
   "to": [
    2,
@@ -3167,7 +3213,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_105",
+  "name": "laddermiddle_106",
   "open_to": null,
   "to": [
    0,
@@ -3197,7 +3243,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_106",
+  "name": "laddermiddle_107",
   "open_to": null,
   "to": [
    2,
@@ -3227,7 +3273,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_107",
+  "name": "laddermiddle_108",
   "open_to": null,
   "to": [
    0,
@@ -3257,7 +3303,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_108",
+  "name": "laddermiddle_109",
   "open_to": null,
   "to": [
    2,
@@ -3287,7 +3333,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_109",
+  "name": "laddermiddle_110",
   "open_to": null,
   "to": [
    0,
@@ -3317,7 +3363,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_110",
+  "name": "laddermiddle_111",
   "open_to": null,
   "to": [
    2,
@@ -3347,7 +3393,7 @@
   ],
   "kind": "ladder",
   "loc": 1748,
-  "name": "laddermiddle_111",
+  "name": "laddermiddle_112",
   "open_to": null,
   "to": [
    0,
@@ -3377,7 +3423,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_112",
+  "name": "laddertop_113",
   "open_to": null,
   "to": [
    0,
@@ -3407,7 +3453,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_113",
+  "name": "laddertop_114",
   "open_to": null,
   "to": [
    0,
@@ -3437,7 +3483,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_114",
+  "name": "laddertop_115",
   "open_to": null,
   "to": [
    0,
@@ -3467,7 +3513,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_115",
+  "name": "laddertop_116",
   "open_to": null,
   "to": [
    0,
@@ -3497,7 +3543,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_116",
+  "name": "laddertop_117",
   "open_to": null,
   "to": [
    0,
@@ -3527,7 +3573,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_117",
+  "name": "laddertop_118",
   "open_to": null,
   "to": [
    0,
@@ -3557,7 +3603,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_118",
+  "name": "laddertop_119",
   "open_to": null,
   "to": [
    1,
@@ -3587,7 +3633,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_119",
+  "name": "laddertop_120",
   "open_to": null,
   "to": [
    1,
@@ -3617,7 +3663,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_120",
+  "name": "laddertop_121",
   "open_to": null,
   "to": [
    1,
@@ -3647,7 +3693,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_121",
+  "name": "laddertop_122",
   "open_to": null,
   "to": [
    1,
@@ -3677,7 +3723,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_122",
+  "name": "laddertop_123",
   "open_to": null,
   "to": [
    1,
@@ -3707,7 +3753,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_123",
+  "name": "laddertop_124",
   "open_to": null,
   "to": [
    1,
@@ -3737,7 +3783,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_124",
+  "name": "laddertop_125",
   "open_to": null,
   "to": [
    1,
@@ -3767,7 +3813,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_125",
+  "name": "laddertop_126",
   "open_to": null,
   "to": [
    1,
@@ -3797,7 +3843,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_126",
+  "name": "laddertop_127",
   "open_to": null,
   "to": [
    1,
@@ -3827,7 +3873,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_127",
+  "name": "laddertop_128",
   "open_to": null,
   "to": [
    1,
@@ -3857,7 +3903,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_128",
+  "name": "laddertop_129",
   "open_to": null,
   "to": [
    1,
@@ -3887,7 +3933,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_129",
+  "name": "laddertop_130",
   "open_to": null,
   "to": [
    0,
@@ -3917,7 +3963,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_130",
+  "name": "laddertop_131",
   "open_to": null,
   "to": [
    0,
@@ -3947,7 +3993,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_131",
+  "name": "laddertop_132",
   "open_to": null,
   "to": [
    0,
@@ -3977,7 +4023,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_132",
+  "name": "laddertop_133",
   "open_to": null,
   "to": [
    0,
@@ -4007,7 +4053,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_133",
+  "name": "laddertop_134",
   "open_to": null,
   "to": [
    0,
@@ -4037,7 +4083,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_134",
+  "name": "laddertop_135",
   "open_to": null,
   "to": [
    0,
@@ -4067,7 +4113,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_135",
+  "name": "laddertop_136",
   "open_to": null,
   "to": [
    1,
@@ -4097,7 +4143,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_136",
+  "name": "laddertop_137",
   "open_to": null,
   "to": [
    1,
@@ -4127,7 +4173,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_137",
+  "name": "laddertop_138",
   "open_to": null,
   "to": [
    2,
@@ -4157,7 +4203,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_138",
+  "name": "laddertop_139",
   "open_to": null,
   "to": [
    2,
@@ -4187,7 +4233,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_139",
+  "name": "laddertop_140",
   "open_to": null,
   "to": [
    0,
@@ -4217,7 +4263,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_140",
+  "name": "laddertop_141",
   "open_to": null,
   "to": [
    0,
@@ -4247,7 +4293,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_141",
+  "name": "laddertop_142",
   "open_to": null,
   "to": [
    0,
@@ -4277,7 +4323,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_142",
+  "name": "laddertop_143",
   "open_to": null,
   "to": [
    0,
@@ -4307,7 +4353,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_143",
+  "name": "laddertop_144",
   "open_to": null,
   "to": [
    1,
@@ -4337,7 +4383,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_144",
+  "name": "laddertop_145",
   "open_to": null,
   "to": [
    0,
@@ -4367,7 +4413,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_145",
+  "name": "laddertop_146",
   "open_to": null,
   "to": [
    0,
@@ -4397,7 +4443,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_146",
+  "name": "laddertop_147",
   "open_to": null,
   "to": [
    0,
@@ -4427,7 +4473,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_147",
+  "name": "laddertop_148",
   "open_to": null,
   "to": [
    1,
@@ -4457,7 +4503,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_148",
+  "name": "laddertop_149",
   "open_to": null,
   "to": [
    2,
@@ -4487,7 +4533,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_149",
+  "name": "laddertop_150",
   "open_to": null,
   "to": [
    2,
@@ -4517,7 +4563,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_150",
+  "name": "laddertop_151",
   "open_to": null,
   "to": [
    2,
@@ -4547,7 +4593,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_151",
+  "name": "laddertop_152",
   "open_to": null,
   "to": [
    2,
@@ -4577,7 +4623,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_152",
+  "name": "laddertop_153",
   "open_to": null,
   "to": [
    0,
@@ -4607,7 +4653,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_153",
+  "name": "laddertop_154",
   "open_to": null,
   "to": [
    0,
@@ -4637,7 +4683,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_154",
+  "name": "laddertop_155",
   "open_to": null,
   "to": [
    1,
@@ -4667,7 +4713,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_155",
+  "name": "laddertop_156",
   "open_to": null,
   "to": [
    0,
@@ -4697,7 +4743,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_156",
+  "name": "laddertop_157",
   "open_to": null,
   "to": [
    0,
@@ -4727,7 +4773,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_157",
+  "name": "laddertop_158",
   "open_to": null,
   "to": [
    0,
@@ -4757,7 +4803,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_158",
+  "name": "laddertop_159",
   "open_to": null,
   "to": [
    1,
@@ -4787,7 +4833,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_159",
+  "name": "laddertop_160",
   "open_to": null,
   "to": [
    0,
@@ -4817,7 +4863,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_160",
+  "name": "laddertop_161",
   "open_to": null,
   "to": [
    1,
@@ -4847,7 +4893,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_161",
+  "name": "laddertop_162",
   "open_to": null,
   "to": [
    1,
@@ -4877,7 +4923,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_162",
+  "name": "laddertop_163",
   "open_to": null,
   "to": [
    1,
@@ -4907,7 +4953,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_163",
+  "name": "laddertop_164",
   "open_to": null,
   "to": [
    0,
@@ -4937,7 +4983,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_164",
+  "name": "laddertop_165",
   "open_to": null,
   "to": [
    0,
@@ -4967,7 +5013,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_165",
+  "name": "laddertop_166",
   "open_to": null,
   "to": [
    0,
@@ -4997,7 +5043,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_166",
+  "name": "laddertop_167",
   "open_to": null,
   "to": [
    0,
@@ -5027,7 +5073,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_167",
+  "name": "laddertop_168",
   "open_to": null,
   "to": [
    0,
@@ -5057,7 +5103,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_168",
+  "name": "laddertop_169",
   "open_to": null,
   "to": [
    0,
@@ -5087,7 +5133,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_169",
+  "name": "laddertop_170",
   "open_to": null,
   "to": [
    0,
@@ -5117,7 +5163,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_170",
+  "name": "laddertop_171",
   "open_to": null,
   "to": [
    0,
@@ -5147,7 +5193,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_171",
+  "name": "laddertop_172",
   "open_to": null,
   "to": [
    0,
@@ -5177,7 +5223,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_172",
+  "name": "laddertop_173",
   "open_to": null,
   "to": [
    2,
@@ -5207,7 +5253,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_173",
+  "name": "laddertop_174",
   "open_to": null,
   "to": [
    0,
@@ -5237,7 +5283,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_174",
+  "name": "laddertop_175",
   "open_to": null,
   "to": [
    1,
@@ -5267,7 +5313,7 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_175",
+  "name": "laddertop_176",
   "open_to": null,
   "to": [
    0,
@@ -5297,12 +5343,552 @@
   ],
   "kind": "ladder",
   "loc": 1746,
-  "name": "laddertop_176",
+  "name": "laddertop_177",
   "open_to": null,
   "to": [
    0,
    3310,
    3509
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2946,
+    3363
+   ]
+  ],
+  "from": [
+   1,
+   2946,
+   3363
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_178",
+  "open_to": null,
+  "to": [
+   0,
+   2946,
+   3363
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2954,
+    3390
+   ]
+  ],
+  "from": [
+   2,
+   2954,
+   3390
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_179",
+  "open_to": null,
+  "to": [
+   1,
+   2954,
+   3390
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2962,
+    3394
+   ]
+  ],
+  "from": [
+   3,
+   2962,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_180",
+  "open_to": null,
+  "to": [
+   2,
+   2962,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2969,
+    3394
+   ]
+  ],
+  "from": [
+   3,
+   2969,
+   3394
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_181",
+  "open_to": null,
+  "to": [
+   2,
+   2969,
+   3394
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3035,
+    3344
+   ]
+  ],
+  "from": [
+   1,
+   3035,
+   3344
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_182",
+  "open_to": null,
+  "to": [
+   0,
+   3035,
+   3344
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    3354
+   ]
+  ],
+  "from": [
+   1,
+   3059,
+   3354
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_183",
+  "open_to": null,
+  "to": [
+   0,
+   3059,
+   3354
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3059,
+    3357
+   ]
+  ],
+  "from": [
+   1,
+   3059,
+   3357
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_184",
+  "open_to": null,
+  "to": [
+   0,
+   3059,
+   3357
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3050,
+    3355
+   ]
+  ],
+  "from": [
+   2,
+   3050,
+   3355
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_185",
+  "open_to": null,
+  "to": [
+   1,
+   3050,
+   3355
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3015,
+    3519
+   ]
+  ],
+  "from": [
+   1,
+   3015,
+   3519
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_186",
+  "open_to": null,
+  "to": [
+   0,
+   3015,
+   3519
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3022,
+    3518
+   ]
+  ],
+  "from": [
+   1,
+   3022,
+   3518
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_187",
+  "open_to": null,
+  "to": [
+   0,
+   3022,
+   3518
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3016,
+    3519
+   ]
+  ],
+  "from": [
+   2,
+   3016,
+   3519
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_188",
+  "open_to": null,
+  "to": [
+   1,
+   3016,
+   3519
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3023,
+    3513
+   ]
+  ],
+  "from": [
+   2,
+   3023,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_189",
+  "open_to": null,
+  "to": [
+   1,
+   3023,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3025,
+    3513
+   ]
+  ],
+  "from": [
+   2,
+   3025,
+   3513
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_190",
+  "open_to": null,
+  "to": [
+   1,
+   3025,
+   3513
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3096,
+    3433
+   ]
+  ],
+  "from": [
+   1,
+   3096,
+   3433
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_191",
+  "open_to": null,
+  "to": [
+   0,
+   3096,
+   3433
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3097,
+    3433
+   ]
+  ],
+  "from": [
+   2,
+   3097,
+   3433
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_192",
+  "open_to": null,
+  "to": [
+   1,
+   3097,
+   3433
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3183,
+    3447
+   ]
+  ],
+  "from": [
+   1,
+   3183,
+   3447
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_193",
+  "open_to": null,
+  "to": [
+   0,
+   3183,
+   3447
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3202,
+    3416
+   ]
+  ],
+  "from": [
+   1,
+   3202,
+   3416
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_194",
+  "open_to": null,
+  "to": [
+   0,
+   3202,
+   3416
+  ]
+ },
+ {
+  "climb_loc": 1749,
+  "climb_op": 1,
+  "delta": [
+   -1,
+   0,
+   0
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3225,
+    3472
+   ]
+  ],
+  "from": [
+   2,
+   3225,
+   3472
+  ],
+  "kind": "ladder",
+  "loc": 1749,
+  "name": "laddertop_directional_195",
+  "open_to": null,
+  "to": [
+   1,
+   3225,
+   3472
   ]
  },
  {
@@ -5343,7 +5929,7 @@
   ],
   "kind": "other",
   "loc": 1734,
-  "name": "loc_1734_177",
+  "name": "loc_1734_196",
   "open_to": null,
   "to": [
    0,
@@ -5389,7 +5975,7 @@
   ],
   "kind": "other",
   "loc": 1734,
-  "name": "loc_1734_178",
+  "name": "loc_1734_197",
   "open_to": null,
   "to": [
    0,
@@ -5419,7 +6005,7 @@
   ],
   "kind": "other",
   "loc": 1736,
-  "name": "loc_1736_179",
+  "name": "loc_1736_198",
   "open_to": null,
   "to": [
    0,
@@ -5449,7 +6035,7 @@
   ],
   "kind": "trapdoor",
   "loc": 881,
-  "name": "manholeclosed_180",
+  "name": "manholeclosed_199",
   "open_to": 882,
   "to": [
    0,
@@ -5479,7 +6065,7 @@
   ],
   "kind": "ladder",
   "loc": 2113,
-  "name": "miningguildladder_181",
+  "name": "miningguildladder_200",
   "open_to": null,
   "to": [
    0,
@@ -5509,7 +6095,7 @@
   ],
   "kind": "ladder",
   "loc": 2113,
-  "name": "miningguildladder_182",
+  "name": "miningguildladder_201",
   "open_to": null,
   "to": [
    0,
@@ -5539,7 +6125,7 @@
   ],
   "kind": "ladder",
   "loc": 2113,
-  "name": "miningguildladder_183",
+  "name": "miningguildladder_202",
   "open_to": null,
   "to": [
    0,
@@ -5569,7 +6155,7 @@
   ],
   "kind": "ladder",
   "loc": 2113,
-  "name": "miningguildladder_184",
+  "name": "miningguildladder_203",
   "open_to": null,
   "to": [
    0,
@@ -5599,7 +6185,7 @@
   ],
   "kind": "ladder",
   "loc": 2641,
-  "name": "monasteryladder_185",
+  "name": "monasteryladder_204",
   "open_to": null,
   "to": [
    1,
@@ -5629,7 +6215,7 @@
   ],
   "kind": "ladder",
   "loc": 2641,
-  "name": "monasteryladder_186",
+  "name": "monasteryladder_205",
   "open_to": null,
   "to": [
    1,
@@ -5659,7 +6245,7 @@
   ],
   "kind": "ladder",
   "loc": 3028,
-  "name": "newbieladder1_187",
+  "name": "newbieladder1_206",
   "open_to": null,
   "to": [
    0,
@@ -5689,7 +6275,7 @@
   ],
   "kind": "ladder",
   "loc": 3030,
-  "name": "newbieladder2_188",
+  "name": "newbieladder2_207",
   "open_to": null,
   "to": [
    0,
@@ -5719,7 +6305,7 @@
   ],
   "kind": "ladder",
   "loc": 3029,
-  "name": "newbieladdertop1_189",
+  "name": "newbieladdertop1_208",
   "open_to": null,
   "to": [
    0,
@@ -5749,7 +6335,7 @@
   ],
   "kind": "ladder",
   "loc": 3031,
-  "name": "newbieladdertop2_190",
+  "name": "newbieladdertop2_209",
   "open_to": null,
   "to": [
    0,
@@ -5775,7 +6361,7 @@
   ],
   "kind": "stair",
   "loc": 1737,
-  "name": "outdoorstairs_wooden_bottom_191",
+  "name": "outdoorstairs_wooden_bottom_210",
   "open_to": null,
   "to": [
    1,
@@ -5801,7 +6387,7 @@
   ],
   "kind": "ladder",
   "loc": 2405,
-  "name": "phoenixladder_192",
+  "name": "phoenixladder_211",
   "open_to": null,
   "to": [
    0,
@@ -5827,7 +6413,7 @@
   ],
   "kind": "ladder",
   "loc": 132,
-  "name": "puzzle_ladder_193",
+  "name": "puzzle_ladder_212",
   "open_to": null,
   "to": [
    0,
@@ -5853,7 +6439,7 @@
   ],
   "kind": "ladder",
   "loc": 133,
-  "name": "puzzle_ladder_top_194",
+  "name": "puzzle_ladder_top_213",
   "open_to": null,
   "to": [
    0,
@@ -5895,7 +6481,7 @@
   ],
   "kind": "other",
   "loc": 4031,
-  "name": "shantay_pass_henge_doorway_195",
+  "name": "shantay_pass_henge_doorway_214",
   "open_to": null,
   "to": [
    0,
@@ -5925,7 +6511,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_196",
+  "name": "ship_ladder_215",
   "open_to": null,
   "to": [
    1,
@@ -5955,7 +6541,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_197",
+  "name": "ship_ladder_216",
   "open_to": null,
   "to": [
    1,
@@ -5985,7 +6571,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_198",
+  "name": "ship_ladder_217",
   "open_to": null,
   "to": [
    1,
@@ -6015,7 +6601,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_199",
+  "name": "ship_ladder_218",
   "open_to": null,
   "to": [
    1,
@@ -6045,7 +6631,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_200",
+  "name": "ship_ladder_219",
   "open_to": null,
   "to": [
    1,
@@ -6075,7 +6661,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_201",
+  "name": "ship_ladder_220",
   "open_to": null,
   "to": [
    1,
@@ -6105,7 +6691,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_202",
+  "name": "ship_ladder_221",
   "open_to": null,
   "to": [
    1,
@@ -6135,7 +6721,7 @@
   ],
   "kind": "ladder",
   "loc": 272,
-  "name": "ship_ladder_203",
+  "name": "ship_ladder_222",
   "open_to": null,
   "to": [
    1,
@@ -6165,7 +6751,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_204",
+  "name": "ship_laddertop_223",
   "open_to": null,
   "to": [
    0,
@@ -6195,7 +6781,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_205",
+  "name": "ship_laddertop_224",
   "open_to": null,
   "to": [
    0,
@@ -6225,7 +6811,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_206",
+  "name": "ship_laddertop_225",
   "open_to": null,
   "to": [
    0,
@@ -6255,7 +6841,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_207",
+  "name": "ship_laddertop_226",
   "open_to": null,
   "to": [
    0,
@@ -6285,7 +6871,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_208",
+  "name": "ship_laddertop_227",
   "open_to": null,
   "to": [
    0,
@@ -6315,7 +6901,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_209",
+  "name": "ship_laddertop_228",
   "open_to": null,
   "to": [
    0,
@@ -6345,7 +6931,7 @@
   ],
   "kind": "ladder",
   "loc": 273,
-  "name": "ship_laddertop_210",
+  "name": "ship_laddertop_229",
   "open_to": null,
   "to": [
    0,
@@ -6375,7 +6961,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_211",
+  "name": "shipladder_angled_230",
   "open_to": null,
   "to": [
    2,
@@ -6405,7 +6991,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_212",
+  "name": "shipladder_angled_231",
   "open_to": null,
   "to": [
    2,
@@ -6435,7 +7021,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_213",
+  "name": "shipladder_angled_232",
   "open_to": null,
   "to": [
    2,
@@ -6465,7 +7051,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_214",
+  "name": "shipladder_angled_233",
   "open_to": null,
   "to": [
    2,
@@ -6495,7 +7081,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_215",
+  "name": "shipladder_angled_234",
   "open_to": null,
   "to": [
    2,
@@ -6525,7 +7111,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_216",
+  "name": "shipladder_angled_235",
   "open_to": null,
   "to": [
    2,
@@ -6555,7 +7141,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_217",
+  "name": "shipladder_angled_236",
   "open_to": null,
   "to": [
    2,
@@ -6585,7 +7171,7 @@
   ],
   "kind": "ladder",
   "loc": 245,
-  "name": "shipladder_angled_218",
+  "name": "shipladder_angled_237",
   "open_to": null,
   "to": [
    2,
@@ -6615,7 +7201,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_219",
+  "name": "shipladder_top_angled_238",
   "open_to": null,
   "to": [
    1,
@@ -6645,7 +7231,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_220",
+  "name": "shipladder_top_angled_239",
   "open_to": null,
   "to": [
    1,
@@ -6675,7 +7261,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_221",
+  "name": "shipladder_top_angled_240",
   "open_to": null,
   "to": [
    1,
@@ -6705,7 +7291,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_222",
+  "name": "shipladder_top_angled_241",
   "open_to": null,
   "to": [
    1,
@@ -6735,7 +7321,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_223",
+  "name": "shipladder_top_angled_242",
   "open_to": null,
   "to": [
    1,
@@ -6765,7 +7351,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_224",
+  "name": "shipladder_top_angled_243",
   "open_to": null,
   "to": [
    1,
@@ -6795,7 +7381,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_225",
+  "name": "shipladder_top_angled_244",
   "open_to": null,
   "to": [
    1,
@@ -6825,7 +7411,7 @@
   ],
   "kind": "ladder",
   "loc": 246,
-  "name": "shipladder_top_angled_226",
+  "name": "shipladder_top_angled_245",
   "open_to": null,
   "to": [
    1,
@@ -6863,7 +7449,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_227",
+  "name": "spiralstairs_246",
   "open_to": null,
   "to": [
    1,
@@ -6901,7 +7487,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_228",
+  "name": "spiralstairs_247",
   "open_to": null,
   "to": [
    1,
@@ -6939,7 +7525,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_229",
+  "name": "spiralstairs_248",
   "open_to": null,
   "to": [
    1,
@@ -6977,7 +7563,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_230",
+  "name": "spiralstairs_249",
   "open_to": null,
   "to": [
    2,
@@ -7015,7 +7601,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_231",
+  "name": "spiralstairs_250",
   "open_to": null,
   "to": [
    3,
@@ -7053,7 +7639,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_232",
+  "name": "spiralstairs_251",
   "open_to": null,
   "to": [
    1,
@@ -7091,7 +7677,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_233",
+  "name": "spiralstairs_252",
   "open_to": null,
   "to": [
    1,
@@ -7129,7 +7715,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_234",
+  "name": "spiralstairs_253",
   "open_to": null,
   "to": [
    1,
@@ -7167,7 +7753,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_235",
+  "name": "spiralstairs_254",
   "open_to": null,
   "to": [
    1,
@@ -7205,7 +7791,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_236",
+  "name": "spiralstairs_255",
   "open_to": null,
   "to": [
    1,
@@ -7243,7 +7829,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_237",
+  "name": "spiralstairs_256",
   "open_to": null,
   "to": [
    1,
@@ -7281,7 +7867,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_238",
+  "name": "spiralstairs_257",
   "open_to": null,
   "to": [
    3,
@@ -7319,7 +7905,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_239",
+  "name": "spiralstairs_258",
   "open_to": null,
   "to": [
    3,
@@ -7357,7 +7943,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_240",
+  "name": "spiralstairs_259",
   "open_to": null,
   "to": [
    1,
@@ -7395,7 +7981,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_241",
+  "name": "spiralstairs_260",
   "open_to": null,
   "to": [
    1,
@@ -7433,7 +8019,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_242",
+  "name": "spiralstairs_261",
   "open_to": null,
   "to": [
    1,
@@ -7471,7 +8057,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_243",
+  "name": "spiralstairs_262",
   "open_to": null,
   "to": [
    2,
@@ -7509,7 +8095,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_244",
+  "name": "spiralstairs_263",
   "open_to": null,
   "to": [
    1,
@@ -7547,7 +8133,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_245",
+  "name": "spiralstairs_264",
   "open_to": null,
   "to": [
    1,
@@ -7585,7 +8171,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_246",
+  "name": "spiralstairs_265",
   "open_to": null,
   "to": [
    1,
@@ -7623,7 +8209,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_247",
+  "name": "spiralstairs_266",
   "open_to": null,
   "to": [
    1,
@@ -7661,7 +8247,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_248",
+  "name": "spiralstairs_267",
   "open_to": null,
   "to": [
    1,
@@ -7699,7 +8285,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_249",
+  "name": "spiralstairs_268",
   "open_to": null,
   "to": [
    1,
@@ -7737,7 +8323,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_250",
+  "name": "spiralstairs_269",
   "open_to": null,
   "to": [
    1,
@@ -7775,7 +8361,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_251",
+  "name": "spiralstairs_270",
   "open_to": null,
   "to": [
    1,
@@ -7813,7 +8399,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_252",
+  "name": "spiralstairs_271",
   "open_to": null,
   "to": [
    3,
@@ -7851,7 +8437,7 @@
   ],
   "kind": "stair",
   "loc": 1738,
-  "name": "spiralstairs_253",
+  "name": "spiralstairs_272",
   "open_to": null,
   "to": [
    1,
@@ -7889,7 +8475,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_254",
+  "name": "spiralstairsmiddle_273",
   "open_to": null,
   "to": [
    2,
@@ -7927,7 +8513,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_255",
+  "name": "spiralstairsmiddle_274",
   "open_to": null,
   "to": [
    0,
@@ -7965,7 +8551,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_256",
+  "name": "spiralstairsmiddle_275",
   "open_to": null,
   "to": [
    2,
@@ -8003,7 +8589,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_257",
+  "name": "spiralstairsmiddle_276",
   "open_to": null,
   "to": [
    0,
@@ -8041,7 +8627,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_258",
+  "name": "spiralstairsmiddle_277",
   "open_to": null,
   "to": [
    2,
@@ -8079,7 +8665,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_259",
+  "name": "spiralstairsmiddle_278",
   "open_to": null,
   "to": [
    0,
@@ -8117,7 +8703,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_260",
+  "name": "spiralstairsmiddle_279",
   "open_to": null,
   "to": [
    2,
@@ -8155,7 +8741,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_261",
+  "name": "spiralstairsmiddle_280",
   "open_to": null,
   "to": [
    0,
@@ -8193,7 +8779,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_262",
+  "name": "spiralstairsmiddle_281",
   "open_to": null,
   "to": [
    2,
@@ -8231,7 +8817,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_263",
+  "name": "spiralstairsmiddle_282",
   "open_to": null,
   "to": [
    0,
@@ -8269,7 +8855,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_264",
+  "name": "spiralstairsmiddle_283",
   "open_to": null,
   "to": [
    3,
@@ -8307,7 +8893,7 @@
   ],
   "kind": "stair",
   "loc": 1739,
-  "name": "spiralstairsmiddle_265",
+  "name": "spiralstairsmiddle_284",
   "open_to": null,
   "to": [
    1,
@@ -8333,7 +8919,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_266",
+  "name": "spiralstairstop_285",
   "open_to": null,
   "to": [
    0,
@@ -8359,7 +8945,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_267",
+  "name": "spiralstairstop_286",
   "open_to": null,
   "to": [
    0,
@@ -8385,7 +8971,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_268",
+  "name": "spiralstairstop_287",
   "open_to": null,
   "to": [
    0,
@@ -8411,7 +8997,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_269",
+  "name": "spiralstairstop_288",
   "open_to": null,
   "to": [
    1,
@@ -8437,7 +9023,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_270",
+  "name": "spiralstairstop_289",
   "open_to": null,
   "to": [
    2,
@@ -8463,7 +9049,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_271",
+  "name": "spiralstairstop_290",
   "open_to": null,
   "to": [
    0,
@@ -8489,7 +9075,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_272",
+  "name": "spiralstairstop_291",
   "open_to": null,
   "to": [
    0,
@@ -8515,7 +9101,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_273",
+  "name": "spiralstairstop_292",
   "open_to": null,
   "to": [
    0,
@@ -8541,7 +9127,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_274",
+  "name": "spiralstairstop_293",
   "open_to": null,
   "to": [
    0,
@@ -8567,7 +9153,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_275",
+  "name": "spiralstairstop_294",
   "open_to": null,
   "to": [
    0,
@@ -8593,7 +9179,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_276",
+  "name": "spiralstairstop_295",
   "open_to": null,
   "to": [
    0,
@@ -8619,7 +9205,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_277",
+  "name": "spiralstairstop_296",
   "open_to": null,
   "to": [
    2,
@@ -8645,7 +9231,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_278",
+  "name": "spiralstairstop_297",
   "open_to": null,
   "to": [
    2,
@@ -8671,7 +9257,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_279",
+  "name": "spiralstairstop_298",
   "open_to": null,
   "to": [
    0,
@@ -8697,7 +9283,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_280",
+  "name": "spiralstairstop_299",
   "open_to": null,
   "to": [
    0,
@@ -8723,7 +9309,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_281",
+  "name": "spiralstairstop_300",
   "open_to": null,
   "to": [
    1,
@@ -8749,7 +9335,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_282",
+  "name": "spiralstairstop_301",
   "open_to": null,
   "to": [
    1,
@@ -8775,7 +9361,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_283",
+  "name": "spiralstairstop_302",
   "open_to": null,
   "to": [
    0,
@@ -8801,7 +9387,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_284",
+  "name": "spiralstairstop_303",
   "open_to": null,
   "to": [
    1,
@@ -8827,7 +9413,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_285",
+  "name": "spiralstairstop_304",
   "open_to": null,
   "to": [
    1,
@@ -8853,7 +9439,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_286",
+  "name": "spiralstairstop_305",
   "open_to": null,
   "to": [
    0,
@@ -8879,7 +9465,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_287",
+  "name": "spiralstairstop_306",
   "open_to": null,
   "to": [
    0,
@@ -8905,7 +9491,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_288",
+  "name": "spiralstairstop_307",
   "open_to": null,
   "to": [
    0,
@@ -8931,7 +9517,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_289",
+  "name": "spiralstairstop_308",
   "open_to": null,
   "to": [
    1,
@@ -8957,7 +9543,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_290",
+  "name": "spiralstairstop_309",
   "open_to": null,
   "to": [
    2,
@@ -8983,7 +9569,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_291",
+  "name": "spiralstairstop_310",
   "open_to": null,
   "to": [
    2,
@@ -9009,7 +9595,7 @@
   ],
   "kind": "stair",
   "loc": 1740,
-  "name": "spiralstairstop_292",
+  "name": "spiralstairstop_311",
   "open_to": null,
   "to": [
    0,
@@ -9059,7 +9645,7 @@
   ],
   "kind": "stair",
   "loc": 1730,
-  "name": "spookystairs_293",
+  "name": "spookystairs_312",
   "open_to": null,
   "to": [
    1,
@@ -9101,7 +9687,7 @@
   ],
   "kind": "stair",
   "loc": 1731,
-  "name": "spookystairstop_294",
+  "name": "spookystairstop_313",
   "open_to": null,
   "to": [
    0,
@@ -9147,7 +9733,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_295",
+  "name": "stairs_314",
   "open_to": null,
   "to": [
    1,
@@ -9197,7 +9783,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_296",
+  "name": "stairs_315",
   "open_to": null,
   "to": [
    1,
@@ -9247,7 +9833,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_297",
+  "name": "stairs_316",
   "open_to": null,
   "to": [
    1,
@@ -9293,7 +9879,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_298",
+  "name": "stairs_317",
   "open_to": null,
   "to": [
    2,
@@ -9339,7 +9925,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_299",
+  "name": "stairs_318",
   "open_to": null,
   "to": [
    1,
@@ -9385,7 +9971,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_300",
+  "name": "stairs_319",
   "open_to": null,
   "to": [
    1,
@@ -9431,7 +10017,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_301",
+  "name": "stairs_320",
   "open_to": null,
   "to": [
    1,
@@ -9477,7 +10063,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_302",
+  "name": "stairs_321",
   "open_to": null,
   "to": [
    1,
@@ -9523,7 +10109,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_303",
+  "name": "stairs_322",
   "open_to": null,
   "to": [
    1,
@@ -9569,7 +10155,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_304",
+  "name": "stairs_323",
   "open_to": null,
   "to": [
    1,
@@ -9615,7 +10201,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_305",
+  "name": "stairs_324",
   "open_to": null,
   "to": [
    1,
@@ -9661,7 +10247,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_306",
+  "name": "stairs_325",
   "open_to": null,
   "to": [
    1,
@@ -9707,7 +10293,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_307",
+  "name": "stairs_326",
   "open_to": null,
   "to": [
    1,
@@ -9753,7 +10339,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_308",
+  "name": "stairs_327",
   "open_to": null,
   "to": [
    1,
@@ -9799,7 +10385,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_309",
+  "name": "stairs_328",
   "open_to": null,
   "to": [
    1,
@@ -9845,7 +10431,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_310",
+  "name": "stairs_329",
   "open_to": null,
   "to": [
    1,
@@ -9891,7 +10477,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_311",
+  "name": "stairs_330",
   "open_to": null,
   "to": [
    1,
@@ -9937,7 +10523,7 @@
   ],
   "kind": "stair",
   "loc": 1722,
-  "name": "stairs_312",
+  "name": "stairs_331",
   "open_to": null,
   "to": [
    1,
@@ -9983,7 +10569,7 @@
   ],
   "kind": "stair",
   "loc": 1733,
-  "name": "stairs_cellar_313",
+  "name": "stairs_cellar_332",
   "open_to": null,
   "to": [
    0,
@@ -10029,7 +10615,7 @@
   ],
   "kind": "stair",
   "loc": 1733,
-  "name": "stairs_cellar_314",
+  "name": "stairs_cellar_333",
   "open_to": null,
   "to": [
    0,
@@ -10067,7 +10653,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_315",
+  "name": "stairstop_334",
   "open_to": null,
   "to": [
    0,
@@ -10109,7 +10695,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_316",
+  "name": "stairstop_335",
   "open_to": null,
   "to": [
    0,
@@ -10151,7 +10737,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_317",
+  "name": "stairstop_336",
   "open_to": null,
   "to": [
    0,
@@ -10189,7 +10775,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_318",
+  "name": "stairstop_337",
   "open_to": null,
   "to": [
    1,
@@ -10227,7 +10813,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_319",
+  "name": "stairstop_338",
   "open_to": null,
   "to": [
    0,
@@ -10265,7 +10851,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_320",
+  "name": "stairstop_339",
   "open_to": null,
   "to": [
    0,
@@ -10303,7 +10889,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_321",
+  "name": "stairstop_340",
   "open_to": null,
   "to": [
    0,
@@ -10341,7 +10927,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_322",
+  "name": "stairstop_341",
   "open_to": null,
   "to": [
    0,
@@ -10379,7 +10965,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_323",
+  "name": "stairstop_342",
   "open_to": null,
   "to": [
    0,
@@ -10417,7 +11003,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_324",
+  "name": "stairstop_343",
   "open_to": null,
   "to": [
    0,
@@ -10455,7 +11041,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_325",
+  "name": "stairstop_344",
   "open_to": null,
   "to": [
    0,
@@ -10493,7 +11079,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_326",
+  "name": "stairstop_345",
   "open_to": null,
   "to": [
    0,
@@ -10531,7 +11117,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_327",
+  "name": "stairstop_346",
   "open_to": null,
   "to": [
    0,
@@ -10569,7 +11155,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_328",
+  "name": "stairstop_347",
   "open_to": null,
   "to": [
    0,
@@ -10607,7 +11193,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_329",
+  "name": "stairstop_348",
   "open_to": null,
   "to": [
    0,
@@ -10645,7 +11231,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_330",
+  "name": "stairstop_349",
   "open_to": null,
   "to": [
    0,
@@ -10683,7 +11269,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_331",
+  "name": "stairstop_350",
   "open_to": null,
   "to": [
    0,
@@ -10721,7 +11307,7 @@
   ],
   "kind": "stair",
   "loc": 1723,
-  "name": "stairstop_332",
+  "name": "stairstop_351",
   "open_to": null,
   "to": [
    0,
@@ -10751,7 +11337,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1568,
-  "name": "trapdoor_333",
+  "name": "trapdoor_352",
   "open_to": 1570,
   "to": [
    0,
@@ -10781,7 +11367,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1568,
-  "name": "trapdoor_334",
+  "name": "trapdoor_353",
   "open_to": 1570,
   "to": [
    0,
@@ -10811,7 +11397,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1568,
-  "name": "trapdoor_335",
+  "name": "trapdoor_354",
   "open_to": 1570,
   "to": [
    2,
@@ -10841,7 +11427,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1568,
-  "name": "trapdoor_336",
+  "name": "trapdoor_355",
   "open_to": 1570,
   "to": [
    2,
@@ -10871,7 +11457,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1568,
-  "name": "trapdoor_337",
+  "name": "trapdoor_356",
   "open_to": 1570,
   "to": [
    2,
@@ -10901,7 +11487,7 @@
   ],
   "kind": "trapdoor",
   "loc": 1570,
-  "name": "trapdoor_open_338",
+  "name": "trapdoor_open_357",
   "open_to": null,
   "to": [
    0,
@@ -10943,7 +11529,7 @@
   ],
   "kind": "portal",
   "loc": 492,
-  "name": "volcano_entrance_339",
+  "name": "volcano_entrance_358",
   "open_to": null,
   "to": [
    0,
@@ -10969,7 +11555,7 @@
   ],
   "kind": "ladder",
   "loc": 2148,
-  "name": "wizards_tower_ladder_340",
+  "name": "wizards_tower_ladder_359",
   "open_to": null,
   "to": [
    0,
@@ -10995,7 +11581,7 @@
   ],
   "kind": "ladder",
   "loc": 2147,
-  "name": "wizards_tower_laddertop_341",
+  "name": "wizards_tower_laddertop_360",
   "open_to": null,
   "to": [
    0,
@@ -11041,7 +11627,7 @@
   ],
   "kind": "stair",
   "loc": 1725,
-  "name": "woodenstairs_342",
+  "name": "woodenstairs_361",
   "open_to": null,
   "to": [
    1,
@@ -11087,7 +11673,7 @@
   ],
   "kind": "stair",
   "loc": 1725,
-  "name": "woodenstairs_343",
+  "name": "woodenstairs_362",
   "open_to": null,
   "to": [
    1,
@@ -11137,7 +11723,7 @@
   ],
   "kind": "stair",
   "loc": 1725,
-  "name": "woodenstairs_344",
+  "name": "woodenstairs_363",
   "open_to": null,
   "to": [
    1,
@@ -11175,7 +11761,7 @@
   ],
   "kind": "stair",
   "loc": 1726,
-  "name": "woodenstairstop_345",
+  "name": "woodenstairstop_364",
   "open_to": null,
   "to": [
    0,
@@ -11213,7 +11799,7 @@
   ],
   "kind": "stair",
   "loc": 1726,
-  "name": "woodenstairstop_346",
+  "name": "woodenstairstop_365",
   "open_to": null,
   "to": [
    0,
@@ -11255,7 +11841,7 @@
   ],
   "kind": "stair",
   "loc": 1726,
-  "name": "woodenstairstop_347",
+  "name": "woodenstairstop_366",
   "open_to": null,
   "to": [
    0,

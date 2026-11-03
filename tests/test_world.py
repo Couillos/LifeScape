@@ -67,6 +67,24 @@ class WorldTest(unittest.TestCase):
         world._read_mask_set(data, 7, player=False)
         self.assertEqual(world.npcs[7]["type"], 943)
 
+    def test_npc_anim_updates_anim(self):
+        # Mask 0x02 (ANIM): u16 seq + u8 delay. The mime rescue reads the
+        # emote the mime plays from here; the block size is unchanged.
+        world = World()
+        world.npcs[7] = {"type": 100, "x": 0, "z": 0, "level": 0, "name": None}
+        data = Reader(bytes([0x02, 0x03, 0x6C, 0x00]))
+        world._read_mask_set(data, 7, player=False)
+        self.assertEqual(world.npcs[7]["anim"], 876)
+        self.assertEqual(data.pos, 4)
+
+    def test_player_anim_still_skipped(self):
+        world = World()
+        world.players[3] = {"x": 0, "z": 0, "level": 0, "jump": 0, "name": None}
+        data = Reader(bytes([0x02, 0x03, 0x6C, 0x00]))
+        world._read_mask_set(data, 3, player=True)
+        self.assertNotIn("anim", world.players[3])
+        self.assertEqual(data.pos, 4)
+
     def test_npcs_survive_rebuild(self):
         world = World()
         world.npcs[7] = {"type": 100, "x": 3100, "z": 3095, "level": 0, "name": None}

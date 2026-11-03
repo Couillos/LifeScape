@@ -13,6 +13,7 @@ import time
 from .. import collision as collision_mod
 from .. import route as route_mod
 from .. import spots as spots_mod
+from .. import zones as zones_mod
 from ..buffer import Writer
 from ..connection import Connection, LoginError, default_paths
 from ..protocol import client_op_id
@@ -98,6 +99,7 @@ class BotCore:
         self._route_action = None
         self.collision = None
         self.loctypes = None
+        self.zone_labels = None
         self.wall_doors = None
         self.door_footprints = None
         self.stair_tiles = None
@@ -200,6 +202,9 @@ class BotCore:
         self.zone = (0, 0)
         self.collision = None
         self.loctypes = None
+        if getattr(self, "zone_labels", None) is None:
+            # static labels, load once per session
+            self._ensure_labels()
         self._static_loc_index = None
         self._static_obj_index = None
         self.wall_doors = None
@@ -449,12 +454,15 @@ class BotCore:
         self._ensure_names()
         self._state_tick = self.world.ticks
         self._state_written = time.time()
+        found = self.zone_name()
         state = {
             "account": self.username,
             "script": os.environ.get("LIFESCAPE_SCRIPT", ""),
             "pid": os.getpid(),
             "intention": self._intent,
             "position": self.world.position,
+            "zone": found[0] if found else None,
+            "zone_dist": int(round(found[1])) if found and found[1] is not None else None,
             "hitpoints": self.world.stats.get(3, (1, 0))[0],
             "ticks": self.world.ticks,
             "updated": time.time(),
@@ -551,7 +559,7 @@ class BotCore:
         return found
 
     def _static_locs_near(self):
-        return self._static_near(self.world.static_locs, "_static_loc_index", lambda key, value: (key, value[0]))
+        return self._static_near(self.world.static_locs, "_static_loc_index", lambda key, value: (key, (value[0], value[1], value[2])))
 
     def _static_objs_near(self):
         return self._static_near(self.world.static_objs, "_static_obj_index", lambda key, value: (key[0], (key[1], value)))
@@ -559,8 +567,8 @@ class BotCore:
     def _state_locs(self):
         level = self.world.level
         tiles = {}
-        for (loc_x, loc_z), loc_id in self._static_locs_near():
-            tiles[(loc_x, loc_z)] = loc_id
+        for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in self._static_locs_near():
+            tiles[(loc_x, loc_z)] = (loc_id, loc_shape, loc_angle)
         for (loc_x, loc_z, loc_level), value in self.world.locs.items():
             if loc_level != level:
                 continue
@@ -569,9 +577,9 @@ class BotCore:
             if value is None:
                 tiles.pop((loc_x, loc_z), None)
             else:
-                tiles[(loc_x, loc_z)] = value[0]
+                tiles[(loc_x, loc_z)] = (value[0], value[1], value[2])
         found = []
-        for (loc_x, loc_z), loc_id in tiles.items():
+        for (loc_x, loc_z), (loc_id, loc_shape, loc_angle) in tiles.items():
             if abs(loc_x - self.world.x) + abs(loc_z - self.world.z) > 8:
                 continue
             entry = None
@@ -588,6 +596,8 @@ class BotCore:
                 "id": loc_id,
                 "act": bool(ops and any(ops)),
                 "block": bool(entry.get("blockwalk")) if entry else False,
+                "shape": loc_shape,
+                "angle": loc_angle,
             })
         found.sort(key=lambda loc: abs(loc["x"] - self.world.x) + abs(loc["z"] - self.world.z))
         return found[:400]
@@ -633,6 +643,31 @@ class BotCore:
             self.loctypes = collision_mod.load_types(self.paths["types"])
         except (OSError, ValueError):
             pass
+
+    def _ensure_labels(self):
+        if self.zone_labels is not None or not self.paths or not self.paths.get("pack_dir"):
+            return
+        try:
+            self.zone_labels = zones_mod.load_labels(self.paths["pack_dir"])
+        except (OSError, ValueError) as error:
+            print("zone labels unavailable: %s" % (error,), flush=True)
+            self.zone_labels = []
+
+    def zone_name(self):
+        """(name, distance, type) for the bot's tile, or None.
+
+        Random-event instances come first: the world map has no labels
+        there. type is None for events (no shipped type to report).
+        """
+        _level, x, z = self.world.position
+        event = zones_mod.event_area(x, z)
+        if event is not None:
+            return ("Random event (%s)" % event, None, None)
+        if self.zone_labels is None:
+            self._ensure_labels()
+        if not self.zone_labels:
+            return None
+        return zones_mod.nearest(self.zone_labels, x, z)
 
     def _state_items(self, com_name):
         com = self._com_id(com_name)

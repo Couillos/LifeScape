@@ -81,6 +81,10 @@ class MovementMixin:
     def approach(self, x, z, level=0, radius=2, timeout=3000, open_doors=True):
         self.dbg("approach %d,%d,%d r=%d" % (x, z, level, radius))
         self.ensure_nav()
+        # Already close enough: the exact walk below would grind a blocked
+        # target tile (a closed door) for its whole budget first.
+        if self.world.level == level and abs(self.world.x - x) + abs(self.world.z - z) <= radius:
+            return True
         try:
             # Exact first, but briefly: a blocked target (wall, locked door)
             # can never be stood on, and grinding it burns the whole budget
@@ -1663,6 +1667,29 @@ class MovementMixin:
             if (self.world.x, self.world.z) == (x, z):
                 return True
         return False
+
+    def walk_steps(self, steps, timeout_ticks=120, run=None):
+        """Walk an explicit tile route, no router involved.
+
+        The maze cannot be routed (its corridors are walllow tiles that the
+        collision map blocks), but the walk packet takes the whole leg, so
+        a caller that already knows the tiles sends them in one go. Returns
+        True when the last tile was reached.
+        """
+        steps = [tuple(step) for step in steps]
+        if not steps:
+            return True
+        self.ensure_nav()
+        if run is None:
+            run = self.want_run()
+        self._send_walk(steps, run)
+        deadline = self.world.ticks + max(1, timeout_ticks)
+        target = steps[-1]
+        while self.world.ticks < deadline:
+            self.pump(1)
+            if (self.world.x, self.world.z) == target:
+                return True
+        return (self.world.x, self.world.z) == target
 
     def _send_walk(self, steps, run):
         self.dbg("send_walk %d steps run=%s" % (len(steps), run))

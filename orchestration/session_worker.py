@@ -216,17 +216,27 @@ class SessionWorker:
 
     def serve_client(self, connection):
         with connection:
+            # makefile() dups the fd: close both explicitly (PyPy's GC is
+            # lazy, an unclosed pair leaks 2 fds per command and select()
+            # breaks past FD_SETSIZE).
+            reader = connection.makefile("r")
+            writer = connection.makefile("w")
             try:
-                request = json.loads(connection.makefile("r").readline() or "{}")
-                reply = self.dispatch(request)
-            except Exception as error:
-                reply = {"ok": False, "error": repr(error)}
-            try:
-                writer = connection.makefile("w")
+                try:
+                    request = json.loads(reader.readline() or "{}")
+                    reply = self.dispatch(request)
+                except Exception as error:
+                    reply = {"ok": False, "error": repr(error)}
                 writer.write(json.dumps(reply) + "\n")
                 writer.flush()
             except OSError:
                 pass
+            finally:
+                for stream in (reader, writer):
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
     def dispatch(self, request):
         command = request.get("cmd")

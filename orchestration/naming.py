@@ -31,6 +31,13 @@ def _cosmetic(loc):
     return any(word in name for word in COSMETIC)
 
 
+def _flowerbed(loc):
+    """Planted or wild flowers: dotted on the detailed map, never listed."""
+    if loc.get("act"):
+        return False
+    return "flower" in str(loc.get("name") or "").lower()
+
+
 def _com_name(modal):
     if not modal or not isinstance(modal, (list, tuple)) or len(modal) < 2:
         return None
@@ -71,5 +78,14 @@ def resolve_state(state):
         if not obj.get("name"):
             obj["name"] = knowledge.obj_name_by_id(obj.get("id")) or ""
         obj["name"] = humanize(obj.get("name"))
-    state["locs"] = [loc for loc in state.get("locs") or [] if not _cosmetic(loc)]
+    kept_locs = []
+    flora = []
+    for loc in state.get("locs") or []:
+        if _flowerbed(loc):
+            flora.append({"x": loc.get("x"), "z": loc.get("z"), "id": loc.get("id"), "name": loc.get("name")})
+        elif not _cosmetic(loc):
+            kept_locs.append(loc)
+    state["locs"] = kept_locs
+    if flora:
+        state["flora"] = flora
     return state

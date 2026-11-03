@@ -133,6 +133,12 @@ def run(bot, requirements, solve=None):
     # A random event during a quest run teleports the bot away and every
     # later step fails. Hand it to the rescue instead of failing the run.
     event = randomevents.event_at(bot)
+    if event == "cube":
+        # Cubes rain all run long: solve the backlog inline and carry on
+        # instead of bouncing to the rescue and back for every box.
+        _wait_for_state(bot)
+        solver.solve_strange_box(bot)
+        event = randomevents.event_at(bot)
     if event is not None:
         randomevents.report(bot, event, False)
         raise RuntimeError("%s random event pending: the rescue must clear it first" % event)
@@ -189,6 +195,13 @@ def run(bot, requirements, solve=None):
                 bot.pump(20)
                 solved = all(bot.world.varps.get(varp_id) == value for varp_id, value in requirements.completion_varps)
         except (Unreachable, TimeoutError, solver.SolverError) as error:
+            # A random event mid-run (teleport or cube rain) breaks every
+            # later step the same way: hand it to the rescue like the
+            # start-of-run check instead of failing the quest.
+            event = randomevents.event_at(bot)
+            if event is not None:
+                randomevents.report(bot, event, False)
+                raise RuntimeError("%s random event pending: the rescue must clear it first" % event)
             print("quest solve failed: %s" % (error,), flush=True)
             report_result(bot.username, requirements.key, False, error)
         else:

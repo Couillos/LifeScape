@@ -161,19 +161,67 @@ def angle_body(body, angle):
     return None
 
 
+def _switch_tail(body):
+    """Code after the first switch_coord block (its generic path).
+
+    Some handlers only special-case one coord and let the rest fall
+    through to shared code below the switch (e.g. laddertop_directional:
+    the Black Knights ladder has its own case, every other laddertop
+    shares the climb below).
+    """
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if "switch_coord" not in line:
+            continue
+        depth = 0
+        started = False
+        for rest in range(index, len(lines)):
+            for char in lines[rest]:
+                if char == "{":
+                    depth += 1
+                    started = True
+                elif char == "}":
+                    depth -= 1
+                    if started and depth == 0:
+                        return "\n".join(lines[rest + 1:])
+        return None
+    return None
+
+
 def case_body(body, frm):
-    """Body of the switch_coord case for ``frm``, or the default case."""
+    """Body of the switch_coord case for ``frm``, or the default case.
+
+    A case arm is usually one line, but some span several (e.g. the Black
+    Knights ladder, whose case holds a climb plus an aggro call): when the
+    case line itself carries nothing, gather the following lines up to the
+    next case or the closing brace.
+    """
     key = packed(*frm)
     fallback = None
-    for line in body.splitlines():
-        stripped = line.strip()
+    lines = body.splitlines()
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
         match = re.match(r"case\s+([0-9_]+|default)\s*:\s*(.*)$", stripped)
+        index += 1
         if not match:
             continue
+        chunk = match.group(2)
+        if not chunk.strip() or chunk.strip().startswith("//"):
+            extra = []
+            while index < len(lines):
+                ahead = lines[index].strip()
+                if re.match(r"case\s+([0-9_]+|default)\s*:", ahead) or ahead == "}":
+                    break
+                extra.append(lines[index])
+                index += 1
+            chunk = chunk + "\n" + "\n".join(extra)
         if match.group(1) == key:
-            return match.group(2)
+            return chunk
         if match.group(1) == "default" and fallback is None:
-            fallback = match.group(2)
+            fallback = chunk
+    if fallback is None:
+        fallback = _switch_tail(body)
     return fallback
 
 
