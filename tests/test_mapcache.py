@@ -22,9 +22,16 @@ class MapCacheTest(unittest.TestCase):
         self.assertEqual(grid["size"], 5)
         self.assertIn("#121212", grid["palette"])
 
-    def test_grid_carries_official_minimap_colours(self):
+    def test_grid_uses_terrain_colours(self):
         grid = MapCache().grid(0, 3222, 3218)
-        self.assertIn("#4f648d", grid["palette"])  # water, per floorcol.dat
+        # water = average of content/textures/water.png, like the painted ground
+        self.assertIn("#768fc1", grid["palette"])
+
+    def test_palette_matches_the_3d_ground_colours(self):
+        palette = MapCache().palette()
+        self.assertEqual(palette[48], "#58680b")  # muddygrass rgb
+        self.assertEqual(palette[12], "#993333")  # redfloor rgb
+        self.assertEqual(palette[5], "#768fc1")   # water texture average
 
 
 if __name__ == "__main__":

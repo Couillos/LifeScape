@@ -1,10 +1,13 @@
-"""Official minimap colours read from the packed game cache.
+"""Ground colours read from the packed game cache, the way the game paints them.
 
 The ground file of each map square stores, per 64x64 level, an underlay
-and an overlay floor id. ``mapview/worldmap.jag`` (``floorcol.dat``
-inside) maps those ids to the exact colours of the game minimap: the
-overlay colour when present, else the underlay colour. This is what the
-spectator paints, tile for tile, over the player's whole view.
+and an overlay floor id. Each flo id maps to the colour the terrain is
+painted with: the flo rgb, or, for textured floors (water, planks,
+rock), the average colour of the texture in ``content/textures``. The
+overlay wins when present, like the 3D ground the client minimap is
+rendered from. ``mapview/worldmap.jag`` is deliberately not used: its
+``floorcol.dat`` is the world-map palette, visibly darker and redder
+than the in-game ground.
 
 Stdlib only. Each map square is parsed once and cached in memory; the
 daemon serves a small colour grid around the bot, never the whole map.
@@ -12,10 +15,12 @@ daemon serves a small colour grid around the bot, never the whole map.
 
 import bz2
 import os
+import struct
 import threading
 import zipfile
+import zlib
 
-from .paths import PACK_DIR
+from .paths import PACK_DIR, ROOT
 
 MAP_SIZE = 64
 LEVELS = 4
@@ -26,9 +31,11 @@ _EMPTY = "#121212"
 class MapCache:
     def __init__(self):
         self._floor_rgb = None
-        self._minimap_colours = None
+        self._floor_textures = None
+        self._texture_averages = {}
+        self._palette = None
         self._squares = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     # -- config ---------------------------------------------------------
 
@@ -87,12 +94,14 @@ class MapCache:
             with open(path, "rb") as handle:
                 data = handle.read()
         if len(data) < 2:
-            return []
+            return [], []
         count = (data[0] << 8) | data[1]
         position = 2
         colours = []
+        textures = []
         for _index in range(count):
             rgb = 0
+            texture = -1
             while position < len(data):
                 opcode = data[position]
                 position += 1
@@ -102,7 +111,8 @@ class MapCache:
                     rgb = (data[position] << 16) | (data[position + 1] << 8) | data[position + 2]
                     position += 3
                 elif opcode == 2:
-                    position += 1  # texture id: the minimap has its own colour
+                    texture = data[position]
+                    position += 1
                 elif opcode == 5:
                     pass
                 elif opcode == 6:
@@ -110,47 +120,128 @@ class MapCache:
                         position += 1
                     position += 1
             colours.append(rgb)
-        return colours
+            textures.append(texture)
+        return colours, textures
 
     def _ensure_flo(self):
-        if self._floor_rgb is None:
+        if self._floor_rgb is None or self._floor_textures is None:
             with self._lock:
-                if self._floor_rgb is None:
-                    self._floor_rgb = self._load_flo()
+                if self._floor_rgb is None or self._floor_textures is None:
+                    colours, textures = self._load_flo()
+                    self._floor_rgb = colours
+                    self._floor_textures = textures
 
     def _floor(self):
         self._ensure_flo()
         return self._floor_rgb
 
-    def _load_minimap(self):
-        """Official minimap colours: the second value per flo in floorcol.dat."""
-        try:
-            path = os.path.join(PACK_DIR, "mapview", "worldmap.jag")
-            with open(path, "rb") as handle:
-                container = handle.read()
-            data = self._jagfile_read(container, "floorcol.dat")
-        except (OSError, ValueError):
-            data = None
-        if not data or len(data) < 2:
-            return []
-        count = (data[0] << 8) | data[1]
-        position = 2
-        colours = []
-        for _index in range(count):
-            if position + 8 > len(data):
-                break
-            position += 4  # first value: shading base, unused flat
-            value = int.from_bytes(data[position:position + 4], "big")
-            position += 4
-            colours.append(value & 0xFFFFFF)
-        return colours
+    def _flo_texture(self):
+        self._ensure_flo()
+        return self._floor_textures
 
-    def _minimap(self):
-        if self._minimap_colours is None:
+    # -- ground palette ---------------------------------------------------
+
+    def _content_dir(self):
+        candidate = os.path.normpath(os.path.join(PACK_DIR, "..", "..", "..", "content"))
+        if os.path.isdir(candidate):
+            return candidate
+        return os.path.normpath(os.path.join(ROOT, "..", "lostcity", "content"))
+
+    def tex_names(self):
+        """texture id -> texture name, from ``content/pack/texture.pack``."""
+        names = {}
+        try:
+            with open(os.path.join(self._content_dir(), "pack", "texture.pack"), encoding="ascii") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or "=" not in line:
+                        continue
+                    texture_id, texture_name = line.split("=", 1)
+                    try:
+                        names[int(texture_id)] = texture_name
+                    except ValueError:
+                        continue
+        except OSError:
+            pass
+        return names
+
+    def _decode_average(self, texture_name):
+        """Mean rgb of a texture: what a flat 2D view should show for it."""
+        path = os.path.join(self._content_dir(), "textures", texture_name + ".png")
+        png = open(path, "rb").read()
+        position = 8
+        width = height = color_type = None
+        compressed = bytearray()
+        while position + 8 <= len(png):
+            length = struct.unpack(">I", png[position:position + 4])[0]
+            kind = png[position + 4:position + 8]
+            body = png[position + 8:position + 8 + length]
+            if kind == b"IHDR":
+                width, height, _depth, color_type = struct.unpack(">IIBB", body[:10])
+            elif kind == b"IDAT":
+                compressed += body
+            elif kind == b"IEND":
+                break
+            position += 12 + length
+        channels = 3 if color_type == 2 else 4
+        raw = zlib.decompress(bytes(compressed))
+        stride = width * channels
+        totals = [0, 0, 0]
+        previous = bytearray(stride)
+        offset = 0
+        for _row in range(height):
+            kind = raw[offset]
+            current = bytearray(raw[offset + 1:offset + 1 + stride])
+            offset += 1 + stride
+            for index in range(stride):
+                left = current[index - channels] if index >= channels else 0
+                up = previous[index]
+                upper_left = previous[index - channels] if index >= channels else 0
+                if kind == 1:
+                    current[index] = (current[index] + left) & 0xFF
+                elif kind == 2:
+                    current[index] = (current[index] + up) & 0xFF
+                elif kind == 3:
+                    current[index] = (current[index] + ((left + up) >> 1)) & 0xFF
+                elif kind == 4:
+                    guess = left + up - upper_left
+                    dl, du, dd = abs(guess - left), abs(guess - up), abs(guess - upper_left)
+                    current[index] = (current[index] + (left if dl <= du and dl <= dd else up if du <= dd else upper_left)) & 0xFF
+            previous = current
+            for index in range(0, stride, channels):
+                totals[0] += current[index]
+                totals[1] += current[index + 1]
+                totals[2] += current[index + 2]
+        pixels = width * height
+        return tuple(total // pixels for total in totals)
+
+    def _texture_colour(self, texture_name):
+        if texture_name not in self._texture_averages:
             with self._lock:
-                if self._minimap_colours is None:
-                    self._minimap_colours = self._load_minimap()
-        return self._minimap_colours
+                if texture_name not in self._texture_averages:
+                    try:
+                        self._texture_averages[texture_name] = self._decode_average(texture_name)
+                    except (OSError, ValueError, struct.error, zlib.error):
+                        self._texture_averages[texture_name] = None
+        return self._texture_averages[texture_name]
+
+    def palette(self):
+        """flo id -> "#rrggbb" the terrain is painted with, cached once."""
+        if self._palette is None:
+            with self._lock:
+                if self._palette is None:
+                    names = self.tex_names()
+                    palette = []
+                    for floor_id, rgb in enumerate(self._floor()):
+                        colour = None
+                        texture_id = self._flo_texture()[floor_id]
+                        if texture_id >= 0 and names.get(texture_id):
+                            colour = self._texture_colour(names[texture_id])
+                        if colour is None:
+                            colour = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+                        palette.append("#%02x%02x%02x" % colour)
+                    self._palette = palette
+        return self._palette
 
     # -- map squares ----------------------------------------------------
 
@@ -205,17 +296,16 @@ class MapCache:
         return square[level][(tile_x & 63) * MAP_SIZE + (tile_z & 63)]
 
     def colour_at(self, level, tile_x, tile_z):
-        """Official minimap colour: overlay first, else underlay."""
+        """Terrain colour: overlay first, else underlay, as the game paints it."""
         underlay, overlay = self._tile_ids(level, tile_x, tile_z)
-        minimap = self._minimap()
+        palette = self.palette()
         rgbs = self._floor()
         for floor_id in (overlay, underlay):
-            if floor_id < 0 or floor_id >= len(minimap):
+            if floor_id < 0 or floor_id >= len(palette):
                 continue
             if floor_id < len(rgbs) and rgbs[floor_id] == 0xFF00FF:
                 continue  # invisible floor: see through to the layer below
-            rgb = minimap[floor_id]
-            return "#%02x%02x%02x" % ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+            return palette[floor_id]
         return _EMPTY
 
     # -- spectator payload ----------------------------------------------
