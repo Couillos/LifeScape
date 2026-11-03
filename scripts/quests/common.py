@@ -128,6 +128,14 @@ def run(bot, requirements, solve=None):
     # solver replays steps it already did. Logging out and back in refreshes
     # it (a fresh worker used to do this implicitly, one process per run).
     bot.relogin()
+    from scripts import randomevents
+
+    # A random event during a quest run teleports the bot away and every
+    # later step fails. Hand it to the rescue instead of failing the run.
+    event = randomevents.event_at(bot)
+    if event is not None:
+        randomevents.report(bot, event, False)
+        raise RuntimeError("%s random event pending: the rescue must clear it first" % event)
     _wait_for_state(bot)
     _drop_junk(bot)
     # A random-event box replicates until solved and then eats quest

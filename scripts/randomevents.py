@@ -280,6 +280,18 @@ def cube_in_pack(bot):
     return bool(cube) and bot.inventory().get(cube[0].obj_id, 0) > 0
 
 
+def event_at(bot):
+    """Random event that must be cleared before a script can work: maze,
+    mime or cube. Zone checks that depend on walking live in check()."""
+    if in_maze(bot):
+        return "maze"
+    if in_mime(bot):
+        return "mime"
+    if cube_in_pack(bot):
+        return "cube"
+    return None
+
+
 def report(bot, event, resolved, detail=None):
     """Tell the orchestrator (log event) what a random event needs."""
     payload = {"kind": "random_event", "event": event, "resolved": bool(resolved), "at": bot.position}

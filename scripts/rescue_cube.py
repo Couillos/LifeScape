@@ -14,7 +14,7 @@ from scripts.quests.solver import solve_strange_box
 
 def run(bot, *args):
     bot.intend("rescue: cube")
-    solved = solve_strange_box(bot)
+    solved = solve_strange_box(bot, max_rounds=200)
     cube = knowledge.objs.by_name("macro_cube")[0].obj_id
     left = bot.inventory().get(cube, 0)
     print("cube: %s, %d left" % ("solved" if solved else "unfinished", left), flush=True)

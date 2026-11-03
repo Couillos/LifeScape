@@ -10,13 +10,22 @@ knights (squire=7), demon (demonstart=30).
 
 ## En cours
 - **black_knights_fortress** : save `spy=1` (varp 130) = étape « démarré ».
-  Entrée OK après le fix save (porte 1 → banquet → étage), **bloqué sur la
-  porte intérieure** `bkfortressdoor3` en `(3025,3511,1)` : depuis la salle de
-  banquet montée, le bot est en `(3030,3510,1)` et le chemin est coupé
-  (`oldcastlewall`, `laddertop_directional`) — il faut trouver la bonne
-  montée/le bon couloir de l'étage avant la grille puis le sabotage.
+  Entrée porte 1 OK. **Bloqué sur `bkfortressdoor2` (3020,3515,0)** : la porte
+  du banquet ne s'ouvre que sur le dialogue du `fortressguard` (choix « I
+  don't care. I'm going in anyway. »), mais le routeur générique la traite
+  comme une porte normale, clique, ne voit aucun changement de loc et la
+  bloque 120 s (« door 3020,3515 refused the click »). Il faut exclure ces
+  portes-dialogue de la machinerie de portes du SDK.
 - **Reste après** : shield_of_arrav (échange à 2 comptes, voir note),
   dragon_slayer en dernier (32 QP requis).
+
+## Random events pendant une quête (corrigé)
+`common.run` appelle `randomevents.event_at` : si un maze/mime/cube est en
+cours, il rapporte l'événement et s'arrête, le daemon lance le rescue puis
+reprend la quête. Avant, un event en plein run téléportait le bot et toutes
+les étapes suivantes échouaient (c'est arrivé deux fois sur BKF).
+`rescue_cube` monte à 200 cubes : le serveur en ajoute un toutes les 150 ticks,
+la borne de 40 laissait toujours un cube derrière.
 
 ## Régressions corrigées côté sessions (à garder en tête)
 - Un run de quête force `bot.relogin()` : la save n'est écrite qu'au logout,
