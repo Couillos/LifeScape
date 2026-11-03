@@ -184,6 +184,7 @@ class MapCache:
         self._mapscene_png = {}
         self._mapscene_size = {}
         self._mapscene_sprite = {}
+        self._mapscene_meta = {}
         self._loc_type_table = None
         self._media = None
         self._squares = {}
@@ -419,7 +420,13 @@ class MapCache:
 
     def _mapscene_index(self, sprite_index):
         """(width, height, offset_x, offset_y, encoding, data_offset, palette)."""
-        return self._media_sprite_index("mapscene.dat", sprite_index)
+        # the spectator re-reads this for every loc of every frame; the
+        # media jag read + bz2 unpack is far too expensive for that
+        meta = self._mapscene_meta.get(sprite_index)
+        if meta is None:
+            meta = self._media_sprite_index("mapscene.dat", sprite_index)
+            self._mapscene_meta[sprite_index] = meta
+        return meta
 
     def _media_sprite_index(self, dat_name, sprite_index):
         """Decode one Pix8 header from a media jag (mapscene.dat, texture.dat)."""

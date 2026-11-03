@@ -341,6 +341,9 @@ const BUF_SIZE = (R * 2 + 1) * BUF_TILE;
 // passes; only the request key and the loaded image live here
 let mapImage = null;
 let mapRequested = null;
+// dots, labels and the route are drawn over the map image; turn this off to
+// compare the map pixels alone against the client minimap
+window.showOverlay = true;
 
 const esc = (s) => String(s ?? "");
 const statusClass = (s) => ["running","reconnecting","busy","starting","failed","disconnected","finished","stopped"].includes(s) ? s : "";
@@ -602,9 +605,7 @@ function draw() {
     }
     void halfTile;
   }
-  // The canvas is the map only: dots, labels and the route are drawn only
-  // when explicitly enabled, so the render can be compared tile for tile
-  // with the client's own minimap image.
+  // dots, labels and the route, over the client-rendered map image
   if (window.showOverlay) {
     const cross = (x, z) => {
       const sx = cx + (x - pos.px) * TILE, sy = cy - (z - pos.pz) * TILE;
