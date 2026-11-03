@@ -629,7 +629,7 @@ function draw() {
   if (window.showOverlay) {
     const halfTile = TILE / 2;
     for (const obj of last.objs || []) {
-      square(obj.x, obj.z, '#fd3', esc(obj.name) || ('object #' + obj.id));
+      dot(obj.x, obj.z, '#f00', esc(obj.name) || ('object #' + obj.id));
     }
     void halfTile;
   }

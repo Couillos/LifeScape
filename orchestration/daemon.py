@@ -338,9 +338,57 @@ class Orchestrator:
         self.read_events(job)
         with job.guard():
             self.maybe_rescue_from_worker(job, session)
+            self.detect_state_events(job)
             self.rescue_step(job)
             self.auto_idle_finished(job)
         self.write_state(job)
+
+    def detect_state_events(self, job):
+        """Launch a rescue for a teleport event no script reported.
+
+        Detection reads the live state file, so it covers every session
+        state: idle, walkto/probes/goto, even a failed one. Quest scripts
+        own their events through check() (inline solve, then report), and
+        an active rescue must never be clobbered, so both are skipped.
+        Cubes never teleport: only idle sessions get the cube rescue, a
+        walkto keeps walking with boxes in its pack. The synthesized event
+        reuses handle_event, hence the same unload/mapping/resume path.
+        """
+        from scripts import randomevents
+        if job.rescue_for is not None:
+            return
+        script = job.script or ""
+        if script.startswith(("quest_", "rescue_")):
+            return
+        if job.status in ("failed", "disconnected", "reconnecting", "busy", "starting", "stopped"):
+            return
+        merged_path, partial_path, _log = user_paths(job.account)
+        state = read_json(merged_path, {}) or {}
+        state.update(read_json(partial_path, {}) or {})
+        pos = state.get("position") or []
+        event = None
+        if len(pos) > 2:
+            _level, x, z = pos[0], pos[1], pos[2]
+            if randomevents.MAZE_X[0] <= x < randomevents.MAZE_X[1] and \
+                    randomevents.MAZE_Z[0] <= z < randomevents.MAZE_Z[1]:
+                event = "maze"
+            elif randomevents.MIME_X[0] <= x < randomevents.MIME_X[1] and \
+                    randomevents.MIME_Z[0] <= z < randomevents.MIME_Z[1]:
+                event = "mime"
+            elif (_level, x, z) in randomevents.FAIL_TELEPORTS:
+                event = "tower"
+        if event is None and not script:
+            inv = state.get("inv") or []
+            if any((entry.get("name") if isinstance(entry, dict) else entry) == "macro_cube" for entry in inv):
+                event = "cube"
+        if event is None:
+            return
+        now = time.time()
+        if now - getattr(job, "_event_detect_at", 0) < 60:
+            return
+        job._event_detect_at = now
+        print("job %s: state-detected %s at %s" % (job.account, event, pos), flush=True)
+        self.handle_event(job, {"kind": "random_event", "event": event, "resolved": False})
 
     def read_events(self, job):
         _merged, _partial, log_path = user_paths(job.account)

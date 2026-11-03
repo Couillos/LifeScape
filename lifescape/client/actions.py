@@ -207,6 +207,133 @@ class ActionsMixin:
                     return True
         return False
 
+    # -- player-to-player trade window ------------------------------------
+    # Comp ids are pack data (interface_trade, rev 274), like the mime
+    # buttons: trademain 34xx, tradeconfirm 35xx, tradeside 3322.
+    TRADE_ACCEPT = 3420
+    TRADE_CONFIRM_ACCEPT = 3546
+    TRADE_STATUS = 3431
+    TRADE_OFFER = 3415
+    TRADE_PARTNER_OFFER = 3416
+    TRADE_PACK = 3322
+
+    def trade_modal(self):
+        """'main', 'confirm' or None from the open window.
+
+        The trade side panel root is com 3323 (tradeside:inv is 3322);
+        shops use main_side too but with their own root, so match exact.
+        """
+        modal = self.world.modal
+        if modal is None:
+            return None
+        kind = modal[0] if len(modal) > 0 else None
+        com = modal[1] if len(modal) > 1 else None
+        if kind == "main_side" and com == 3323:
+            return "main"
+        if kind == "main" and com == 3443:
+            return "confirm"
+        return None
+
+    def find_player(self, name):
+        """Server slot of a nearby player, by (case-insensitive) name."""
+        best = None
+        for pid, player in self.world.players.items():
+            label = player.get("name") or ""
+            if name.lower() not in label.lower():
+                continue
+            dist = abs(player["x"] - self.world.x) + abs(player["z"] - self.world.z)
+            if best is None or dist < best[0]:
+                best = (dist, pid)
+        return best[1] if best else None
+
+    def trade_request(self, name, timeout=600):
+        """Mutual trade request: knock until the trademain window opens
+        (the partner must knock back). One knock per quiet wait: rapid
+        re-clicks cancel the pending engine interaction before it fires."""
+        target = self.world.ticks + timeout
+        while self.world.ticks < target:
+            if self.trade_modal() is not None:
+                return True
+            pid = self.find_player(name)
+            if pid is None:
+                self.dbg("trade_request %s: no such player in view" % name)
+                self.pump(5)
+                continue
+            npc = self.world.players.get(pid)
+            if npc is not None and abs(npc["x"] - self.world.x) + abs(npc["z"] - self.world.z) > 1:
+                try:
+                    self.approach(npc["x"], npc["z"], radius=1, timeout=750, open_doors=True)
+                except (Unreachable, TimeoutError):
+                    pass
+            try:
+                self.op_player(4, pid)
+            except (ConnectionError, OSError):
+                raise
+            except Exception as error:
+                self.dbg("trade_request %s: click failed %s" % (name, error))
+            for _ in range(30):
+                self.pump(5)
+                if self.trade_modal() is not None:
+                    return True
+        return self.trade_modal() is not None
+
+    def trade_offer(self, obj_id, count=1, timeout=300):
+        """Offer count of obj from the backpack (inv_button op 1)."""
+        com, slots = self.backpack()
+        if com is None:
+            return False
+        slot = next((at for at, (held, _n) in slots.items() if held == obj_id), None)
+        if slot is None:
+            return False
+        target = self.world.ticks + timeout
+        while self.world.ticks < target:
+            if self.world.modal is None:
+                return False
+            offered = sum(n for held, n in self.world.inv.get(self.TRADE_OFFER, {}).values() if held == obj_id)
+            if offered >= count:
+                return True
+            self.inv_button(1, obj_id, slot, self.TRADE_PACK)
+            self.pump(10)
+            com, slots = self.backpack()
+            if com is not None:
+                slot = next((at for at, (held, _n) in slots.items() if held == obj_id), slot)
+        offered = sum(n for held, n in self.world.inv.get(self.TRADE_OFFER, {}).values() if held == obj_id)
+        return offered >= count
+
+    def trade_partner_offer(self):
+        """{obj_id: count} offered by the partner, {} when unknown."""
+        out = {}
+        for held, count in self.world.inv.get(self.TRADE_PARTNER_OFFER, {}).values():
+            out[held] = out.get(held, 0) + count
+        return out
+
+    def trade_status_text(self):
+        for com, text in self.chat_texts():
+            if com == self.TRADE_STATUS:
+                return text
+        return ""
+
+    def trade_accept(self, timeout=600):
+        """Click accept (stage 1 or confirm) until the window moves on."""
+        before = self.trade_modal()
+        if before is None:
+            return False
+        target = self.world.ticks + timeout
+        while self.world.ticks < target:
+            now = self.trade_modal()
+            if now is None or now != before:
+                return True
+            self.if_button(self.TRADE_ACCEPT if before == "main" else self.TRADE_CONFIRM_ACCEPT)
+            self.pump(10)
+        now = self.trade_modal()
+        return now is None or now != before
+
+    def trade_close(self):
+        if self.world.modal is not None:
+            self.close_modal()
+            self.pump(5)
+        return self.world.modal is None
+
     def take(self, obj_id=None, name=None, timeout=1500):
 
         self.ensure_nav()

@@ -136,6 +136,7 @@ class SessionWorker:
         self.last_code = None
         self.script_thread = None
         self.closing = False
+        self._last_watch = 0
         self._lock = threading.RLock()
         self._net_lock = threading.RLock()
         self._relogin_abort = threading.Event()
@@ -520,6 +521,32 @@ class SessionWorker:
             pass
         except (LoginError, ConnectionError, OSError):
             self.reconnect_flow()
+        self.idle_watch()
+
+    def idle_watch(self):
+        """Keep an idle session alive: greet adjacent event hosts and swat
+        hostile event spawns, then report teleport events so the daemon
+        launches their rescue. Throttled in ticks; never raises (the serve
+        loop must survive it). Quest and utility scripts own their own
+        event checks and never reach this (script_thread is set)."""
+        try:
+            if self.script_thread is not None:
+                return
+            if not self.connected or self.status in ("busy", "reconnecting", "disconnected", "starting"):
+                return
+            if self.bot.world.ticks - self._last_watch < 50:
+                return
+            self._last_watch = self.bot.world.ticks
+            from scripts import randomevents
+            randomevents.greet_near(self.bot)
+            randomevents.survive(self.bot, ticks=100)
+            event = randomevents.event_at(self.bot)
+            if event is None and randomevents.in_fail_teleport(self.bot):
+                event = "tower"
+            if event is not None:
+                randomevents.report(self.bot, event, False)
+        except Exception as error:
+            print("idle watch failed, session kept: %r" % (error,), flush=True)
 
     def reconnect_flow(self):
         """Bounded relogin on the calling thread: no other thread pumps

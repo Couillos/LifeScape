@@ -223,7 +223,11 @@ F2P_QUESTS = (
         name="Shield of Arrav",
         members=False,
         completion_varps=_completion(("blackarmgang", 4), ("phoenixgang", 10)),
-        items=(_item("arravshield1"), _item("arravshield2")),
+        # No shield halves: each gang's store yields only its own half and
+        # the other half comes from a partner of the other gang (drop),
+        # so requiring them upfront blocks every solo run. Coins likewise:
+        # only the Phoenix path bribes Baraek (20, topped up in solve()).
+        items=(),
     ),
     QuestRequirements(
         key="vampire",

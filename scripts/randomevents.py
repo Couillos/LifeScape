@@ -56,6 +56,32 @@ def in_mime(bot):
     return MIME_X[0] <= bot.world.x < MIME_X[1] and MIME_Z[0] <= bot.world.z < MIME_Z[1]
 
 
+def greet_near(bot, timeout=300):
+    """Talk to event hosts within 2 tiles. No walking after them: an idle
+    session must not wander off, and far hosts end in the daemon's rescues
+    (their fail-teleport lands on a mapped tower, maze or mime stage)."""
+    for name in EVENT_HOSTS:
+        try:
+            slot = bot.find_npc(name)
+        except Exception:
+            continue
+        if slot is None:
+            continue
+        npc = bot.world.npcs.get(slot)
+        if npc is None:
+            continue
+        if abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z) > 2:
+            continue
+        print("greeting nearby event host %s" % name, flush=True)
+        try:
+            bot.op_npc(1, slot)
+        except (Unreachable, TimeoutError):
+            continue
+        except Exception:
+            continue
+        tutorial_common.finish_dialog(bot, (), timeout=timeout)
+
+
 def greet(bot, timeout=3000):
     """Talk to event hosts on sight. Their talk paths ask nothing."""
     for name in EVENT_HOSTS:
@@ -485,11 +511,21 @@ def climb_out(bot):
         if bot.world.level == 0:
             print("ok on ground at %s" % (bot.position,), flush=True)
             return True
-        try:
-            x, z, _level, loc = tutorial_common.find_loc(bot, "ladder", "stair")
-        except Unreachable:
+        # Down-ladders first (laddertop/stop): the nearest ladder may lead
+        # further up, and riding up then down the same shaft oscillates
+        # until the attempts run out instead of reaching the ground.
+        spot = None
+        for names in (("laddertop", "spiralstairstop", "stairstop"),
+                      ("ladder", "spiralstairs", "stairs")):
+            try:
+                spot = tutorial_common.find_loc(bot, *names)
+                break
+            except Unreachable:
+                continue
+        if spot is None:
             print("no ladder or stair near %s" % (bot.position,), flush=True)
             return False
+        x, z, _level, loc = spot
         print("ladder at (%d,%d)" % (x, z), flush=True)
         reached = False
         for _round in range(3):
