@@ -1,6 +1,6 @@
 """Differential test: our router vs the server's own BFS on real maps.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/diff_routes.py [count]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/dev/diff_routes.py [count]
 """
 
 import json

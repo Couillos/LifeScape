@@ -58,9 +58,17 @@ class RunTest(unittest.TestCase):
         self.assertFalse(bot_with_stats({}, energy=99).want_run())
 
     def test_combat_level_from_world_stats(self):
-        bot = bot_with_stats({0: (40, 0), 1: (40, 0), 2: (40, 0), 3: (40, 0), 4: (1, 0), 5: (1, 0), 6: (1, 0)})
+        xp40 = spots.exp_for_level(40)
+        xp1 = spots.exp_for_level(1)
+        bot = bot_with_stats({0: (40, xp40), 1: (40, xp40), 2: (40, xp40), 3: (40, xp40), 4: (1, xp1), 5: (1, xp1), 6: (1, xp1)})
         self.assertEqual(bot.combat_level(), 46)
         self.assertIsNone(bot_with_stats({8: (30, 1000)}).combat_level())
+
+    def test_combat_level_uses_max_hitpoints_not_current(self):
+        xp40 = spots.exp_for_level(40)
+        xp1 = spots.exp_for_level(1)
+        stats = {0: (40, xp40), 1: (40, xp40), 2: (40, xp40), 3: (5, xp40), 4: (1, xp1), 5: (1, xp1), 6: (1, xp1)}
+        self.assertEqual(bot_with_stats(stats).combat_level(), 46)
 
 
 if __name__ == "__main__":

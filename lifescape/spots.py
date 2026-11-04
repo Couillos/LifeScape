@@ -24,8 +24,45 @@ PRAYER = 5
 MAGIC = 6
 
 
+# Server Player.ts levelExperience, en unites wire : l'encodeur
+# UpdateStat envoie (exp / 10), donc la table est classique (pas x10).
+_XP_TABLE = []
+_acc = 0
+for _i in range(99):
+    _level = _i + 1
+    _delta = int(_level + pow(2.0, _level / 7.0) * 300.0)
+    _acc += _delta
+    _XP_TABLE.append(_acc // 4)
+del _acc, _i, _level, _delta
+
+
+def level_for_xp(exp):
+    """Server getLevelByExp: max level for an xp drop (base level)."""
+    try:
+        exp = int(exp)
+    except (TypeError, ValueError):
+        return 1
+    for index in range(98, -1, -1):
+        if exp >= _XP_TABLE[index]:
+            return min(index + 2, 99)
+    return 1
+
+
+def exp_for_level(level):
+    """Server getExpByLevel: xp for a base level (0 for level 1)."""
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return 0
+    if level <= 1:
+        return 0
+    if level > 99:
+        level = 99
+    return _XP_TABLE[level - 2]
+
+
 def combat_level(levels):
-    """Server getCombatLevel formula on base levels (current approximates)."""
+    """Server getCombatLevel formula on base levels (never current HP)."""
     try:
         attack = levels[ATTACK]
         defence = levels[DEFENCE]

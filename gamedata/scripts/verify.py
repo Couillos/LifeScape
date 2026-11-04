@@ -64,7 +64,9 @@ def check_cross_refs():
                 missing_objs.add(stock.obj)
     check(not missing_objs, "shop stocks resolve: %s" % sorted(missing_objs)[:5])
 
-    bad_spells = [spell.spell for spell in knowledge.all_spells() if not spell.com or knowledge.com_id(spell.com) is None]
+    # Only combat-tab spells carry a comp; interface spells (teleports,
+    # alchemy, ...) and NPC attacks have none.
+    bad_spells = [spell.spell for spell in knowledge.all_spells() if spell.com and knowledge.com_id(spell.com) is None]
     check(not bad_spells, "spell comps resolve: %s" % bad_spells[:5])
 
     bad_recipes = 0
@@ -149,6 +151,13 @@ def check_cross_refs():
 
     wind = knowledge.spell_by_name("wind_strike")
     check(len(wind) == 1 and wind[0].runes == {"mindrune": 1, "airrune": 1} and wind[0].level == 1, "wind strike facts")
+
+    grab = knowledge.spell_by_name("telekinetic_grab")
+    check(len(grab) == 1 and grab[0].level == 33 and grab[0].members is False and grab[0].com is None, "telegrab facts")
+    varrock = knowledge.spell_by_name("varrock_teleport")
+    check(len(varrock) == 1 and varrock[0].level == 25 and varrock[0].members is False, "varrock teleport facts")
+    camelot = knowledge.spell_by_name("camelot_teleport")
+    check(len(camelot) == 1 and camelot[0].members is True, "camelot teleport members")
 
     dagger = [recipe for recipe in knowledge.recipes_making("bronze_dagger", "smith")]
     check(len(dagger) == 1 and dagger[0].inputs == {"bronze_bar": 1}, "bronze dagger recipe")

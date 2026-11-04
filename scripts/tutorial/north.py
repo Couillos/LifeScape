@@ -116,9 +116,8 @@ def catch_shrimp(bot, timeout=200):
         nid = bot.find_npc("newbiefishing")
         if nid is None:
             continue
-        npc = bot.world.npcs[nid]
         try:
-            bot.approach(npc["x"], npc["z"], open_doors=True)
+            bot.approach_npc(nid, open_doors=True)
         except Unreachable:
             continue
         bot.op_npc(1, nid)

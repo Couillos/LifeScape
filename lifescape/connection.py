@@ -46,6 +46,9 @@ class Connection:
         # Short slices so a signal (kill/^C) is handled promptly instead of
         # waiting out a blocking recv; _read_exact still enforces self.timeout.
         self.sock.settimeout(0.5)
+        trace_path = os.environ.get("LIFESCAPE_TRACE")
+        if trace_path:
+            self.trace = open(trace_path, "a")
 
     def close(self):
         if self.sock is not None:

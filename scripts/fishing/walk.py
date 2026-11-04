@@ -51,6 +51,8 @@ def walk_checked(bot, dest_x, dest_z, timeout=15000):
         trail = []
         bot.trail = trail
     while (bot.world.x, bot.world.z) != (dest_x, dest_z):
+        if not tile_walkable(bot, dest_x, dest_z) and max(abs(bot.world.x - dest_x), abs(bot.world.z - dest_z)) <= 2:
+            return True
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
             bot.last_greet = bot.world.ticks
             randomevents.greet(bot)

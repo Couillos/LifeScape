@@ -151,6 +151,20 @@ class RunThreadTest(unittest.TestCase):
         self.assertIn("relogin", worker.last_error["where"])
 
 
+class CmdRunTest(unittest.TestCase):
+    def test_fresh_run_clears_previous_error(self):
+        worker = make_worker()
+        worker.last_error = {"where": "old", "type": "ValueError", "message": "boom", "at": []}
+        with unittest.mock.patch.object(session_worker.registry, "load_run",
+                                         return_value=(lambda bot, *args: 0, "run")):
+            reply = worker.cmd_run("woodcut", ["1"])
+        self.assertTrue(reply["ok"])
+        self.assertIsNone(worker.last_error)
+        thread = worker.script_thread
+        if thread is not None:
+            thread.join(timeout=10)
+
+
 class UnloadTest(unittest.TestCase):
     def test_no_thread_is_already_idle(self):
         worker = make_worker()

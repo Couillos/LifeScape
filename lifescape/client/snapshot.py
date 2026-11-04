@@ -54,5 +54,13 @@ def bank_items(inv, com_ids):
 
 
 def combat_level(stats):
-    levels = {index: level for index, (level, _xp) in stats.items()}
+    # UPDATE_STAT carries (current level, xp): combat uses the max level
+    # derived from xp (server baseLevels), so losing HP never drops it.
+    levels = {}
+    for index, value in stats.items():
+        try:
+            _level, xp = value
+        except (TypeError, ValueError):
+            continue
+        levels[index] = spots_mod.level_for_xp(xp)
     return spots_mod.combat_level(levels)

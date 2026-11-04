@@ -10,6 +10,8 @@ rescue or the fallback; see the printed event).
 Covered:
 - macro_mage / macro_geni: talking gives the gift/lamp and prevents
   both the maze/mime/box events and the fail-teleport for ignoring.
+  A genie lamp in the inventory is rubbed at once: runecraft when Rune
+  Mysteries is done, else prayer.
 - macro_dwarf: talking gives food and prevents him turning aggressive.
 - maze: ratcheted out via short legs to the centre statue on sight
   (walllow doors open one-sided, wallhigh never; refusals dismissed).
@@ -59,7 +61,13 @@ def in_mime(bot):
 def greet_near(bot, timeout=300):
     """Talk to event hosts within 2 tiles. No walking after them: an idle
     session must not wander off, and far hosts end in the daemon's rescues
-    (their fail-teleport lands on a mapped tower, maze or mime stage)."""
+    (their fail-teleport lands on a mapped tower, maze or mime stage).
+
+    No walking here either: this runs inside the pump hook, and walking
+    pumps, which would recurse into the hook. Clicks only go out from an
+    orthogonal tile: the server refuses NPC clicks from a diagonal
+    ("I can't reach that!"), so a diagonal host is left for the running
+    script's greet(), which steps over."""
     for name in EVENT_HOSTS:
         try:
             slot = bot.find_npc(name)
@@ -70,10 +78,13 @@ def greet_near(bot, timeout=300):
         npc = bot.world.npcs.get(slot)
         if npc is None:
             continue
-        if abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z) > 2:
+        if abs(npc["x"] - bot.world.x) + abs(npc["z"] - bot.world.z) != 1:
             continue
         print("greeting nearby event host %s" % name, flush=True)
         try:
+            slot = bot.find_npc(name)
+            if slot is None:
+                continue
             bot.op_npc(1, slot)
         except (Unreachable, TimeoutError):
             continue
@@ -96,12 +107,17 @@ def greet(bot, timeout=3000):
             continue
         print("greeting event host %s" % name, flush=True)
         try:
-            bot.approach(npc["x"], npc["z"], radius=2, timeout=3000, open_doors=True)
+            # Orthogonal tiles only: the server refuses NPC clicks from a
+            # diagonal ("I can't reach that!"), and approach() stops at
+            # Manhattan distance, so a diagonal host was clicked forever
+            # from the wrong tile and escalated unanswered.
+            bot.approach_npc(slot, timeout=timeout, open_doors=True)
             slot = bot.find_npc(name)
             if slot is None:
                 continue
             bot.op_npc(1, slot)
-        except (Unreachable, TimeoutError):
+        except (Unreachable, TimeoutError) as error:
+            print("event host %s unreachable: %s" % (name, error), flush=True)
             continue
         except Exception:
             continue
@@ -505,66 +521,196 @@ def solve_maze(bot):
     return not in_maze(bot)
 
 
+def _portal_key(row):
+    return (tuple(row["from"]), tuple(row["to"]), row.get("climb_loc"), row.get("climb_op", 1))
+
+
+def _step_off_spot(bot):
+    """Quitter un fail-teleport au sol : le trigger est la tuile exacte."""
+    for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nx, nz = bot.world.x + dx, bot.world.z + dz
+        try:
+            walkable = collision_mod.tile_walkable(bot.collision.get(nx, nz, bot.world.level))
+        except (KeyError, IndexError):
+            continue
+        if not walkable:
+            continue
+        before = (bot.world.x, bot.world.z)
+        try:
+            if bot.try_step_on(nx, nz, bot.world.level, bot.world.ticks + 50):
+                print("off fail spot to %s" % (bot.position,), flush=True)
+                return True
+        except (Unreachable, TimeoutError):
+            continue
+        if (bot.world.x, bot.world.z) != before:
+            return True
+    return False
+
+
 def climb_out(bot):
-    """Climb down ladders until back on level 0. Returns True there."""
-    for _attempt in range(6):
+    """Climb down ladders until back on level 0. Returns True there.
+
+    Reliable version: uses the transition table (same data the live
+    check_transitions validates) instead of a single nearest ladder.
+    Tries every down-transition nearest-first, never rides the same one
+    twice, then falls back to the nearest ladder loc.
+    """
+    ridden = set()
+    for _attempt in range(12):
         if bot.world.level == 0:
+            if in_fail_teleport(bot) and not _step_off_spot(bot):
+                return False
             print("ok on ground at %s" % (bot.position,), flush=True)
             return True
-        # Down-ladders first (laddertop/stop): the nearest ladder may lead
-        # further up, and riding up then down the same shaft oscillates
-        # until the attempts run out instead of reaching the ground.
-        spot = None
-        for names in (("laddertop", "spiralstairstop", "stairstop"),
-                      ("ladder", "spiralstairs", "stairs")):
-            try:
-                spot = tutorial_common.find_loc(bot, *names)
-                break
-            except Unreachable:
+        here = (bot.world.x, bot.world.z)
+        downs = []
+        for row in getattr(bot, "_portal_rows", None) or ():
+            if row.get("disabled"):
                 continue
-        if spot is None:
-            print("no ladder or stair near %s" % (bot.position,), flush=True)
-            return False
-        x, z, _level, loc = spot
-        print("ladder at (%d,%d)" % (x, z), flush=True)
-        reached = False
-        for _round in range(3):
+            frm, to = tuple(row["from"]), tuple(row["to"])
+            if frm[0] != bot.world.level or to[0] >= frm[0]:
+                continue
+            key = _portal_key(row)
+            if key in ridden:
+                continue
+            downs.append((abs(frm[1] - here[0]) + abs(frm[2] - here[1]), key, row))
+        downs.sort()
+        rode = False
+        for _dist, key, row in downs:
             try:
-                bot.walk_to(x, z, bot.world.level, timeout=1500, open_doors=True)
-                reached = True
-                break
-            except (Unreachable, TimeoutError):
-                pass
-            try:
-                if not bot.open_nearby_door(bot.world.ticks + 3000):
-                    pass
-            except Exception:
-                pass
-            try:
-                bot.approach(x, z, radius=3, open_doors=True)
-                reached = True
-                break
+                if bot._ride_portal(row):
+                    print("down %s, now %s" % (row.get("name"), bot.position), flush=True)
+                    ridden.add(key)
+                    rode = True
+                    break
             except (Unreachable, TimeoutError):
                 continue
-        if not reached:
-            print("ladder unreachable", flush=True)
-            return False
-        before = bot.world.level
-        if bot.ride_transition_at(x, z, before):
-            print("now %s" % (bot.position,), flush=True)
+        if rode:
             continue
-        bot.op_loc(1, x, z, loc)
-        target = bot.world.ticks + 50
-        while bot.world.ticks < target and bot.world.level == before:
-            bot.pump(5)
-        print("now %s" % (bot.position,), flush=True)
+        if _climb_single(bot, ridden):
+            continue
+        print("nothing down from %s" % (bot.position,), flush=True)
+        return False
     return bot.world.level == 0
+
+
+def _climb_single(bot, ridden):
+    """Dernier recours : la premiere echelle venue (ancien comportement)."""
+    spot = None
+    for names in (("laddertop", "spiralstairstop", "stairstop"),
+                  ("ladder", "spiralstairs", "stairs")):
+        try:
+            spot = tutorial_common.find_loc(bot, *names)
+            break
+        except Unreachable:
+            continue
+    if spot is None:
+        print("no ladder or stair near %s" % (bot.position,), flush=True)
+        return False
+    x, z, _level, loc = spot
+    print("ladder at (%d,%d)" % (x, z), flush=True)
+    try:
+        bot.walk_to(x, z, bot.world.level, timeout=1500, open_doors=True)
+    except (Unreachable, TimeoutError):
+        try:
+            bot.approach(x, z, bot.world.level, radius=3, open_doors=True)
+        except (Unreachable, TimeoutError):
+            return False
+    before = bot.world.level
+    if bot.ride_transition_at(x, z, before):
+        return True
+    bot.op_loc(1, x, z, loc)
+    target = bot.world.ticks + 50
+    while bot.world.ticks < target and bot.world.level == before:
+        bot.pump(5)
+    print("now %s" % (bot.position,), flush=True)
+    return bot.world.level != before
 
 
 def cube_in_pack(bot):
     """True when a strange box is waiting to be solved in the inventory."""
     cube = knowledge.objs.by_name("macro_cube")
     return bool(cube) and bot.inventory().get(cube[0].obj_id, 0) > 0
+
+
+def lamp_in_pack(bot):
+    """True when a genie lamp is waiting to be rubbed in the inventory."""
+    lamp = knowledge.objs.by_name("macro_genilamp")
+    return bool(lamp) and bot.inventory().get(lamp[0].obj_id, 0) > 0
+
+
+# ^runemysteries_complete in content/scripts/general/configs/quest.constant:
+# the lamp only grants runecraft XP once the quest is done.
+RUNE_MYSTERIES_COMPLETE = 6
+
+
+def rub_genie_lamp(bot):
+    """Rub every genie lamp: runecraft when the quest is done, else prayer.
+
+    The genie hands the lamp for talking to him; rubbing opens the xplamp
+    picker, so click the skill then confirm in line (no rescue needed).
+    One rub consumes one lamp, so loop until none is left (bounded:
+    the next check() retries whatever is still there).
+    Runecraft XP needs Rune Mysteries complete (the server refuses
+    otherwise), prayer needs nothing. Returns True when a lamp was used.
+    """
+    lamps = knowledge.objs.by_name("macro_genilamp")
+    if not lamps:
+        return True
+    lamp_id = lamps[0].obj_id
+    if bot.inventory().get(lamp_id, 0) == 0:
+        return True
+    if (bot.world.varps.get(knowledge.varp_id_by_name("runemysteries")) or 0) >= RUNE_MYSTERIES_COMPLETE:
+        skill, skill_com = "runecraft", knowledge.com_id("xplamp:runecraft")
+    else:
+        skill, skill_com = "prayer", knowledge.com_id("xplamp:prayer")
+    confirm_com = knowledge.com_id("xplamp:confirm")
+    if skill_com is None or confirm_com is None:
+        print("genie lamp: xplamp buttons missing", flush=True)
+        return False
+    start_count = bot.inventory().get(lamp_id, 0)
+    for _attempt in range(5):
+        if bot.inventory().get(lamp_id, 0) == 0:
+            break
+        try:
+            inv_com, slot = tutorial_common.inv_slot(bot, lamp_id)
+        except KeyError:
+            break
+        bot.op_held(1, lamp_id, slot, inv_com)
+        target = bot.world.ticks + 60
+        while bot.world.ticks < target:
+            bot.pump(3)
+            if bot.world.modal is not None and bot.world.modal[0] == "main":
+                break
+        if bot.world.modal is None:
+            print("genie lamp: picker did not open", flush=True)
+            break
+        seen_messages = len(bot.world.messages)
+        bot.if_button(skill_com)
+        bot.pump(5)
+        refused = " ".join(bot.world.messages[seen_messages:]).lower()
+        if "rune mysteries" in refused or "druid" in refused or "members" in refused:
+            print(f"genie lamp: {skill} refused", flush=True)
+            bot.close_modal()
+            bot.pump(3)
+            break
+        bot.if_button(confirm_com)
+        before = bot.inventory().get(lamp_id, 0)
+        target = bot.world.ticks + 60
+        while bot.world.ticks < target:
+            bot.pump(3)
+            if bot.inventory().get(lamp_id, 0) < before:
+                break
+            if bot.world.modal is not None:
+                try:
+                    bot.chat_continue()
+                except Exception:
+                    pass
+    if bot.inventory().get(lamp_id, 0) < start_count:
+        print(f"genie lamp: wish granted to {skill}", flush=True)
+        return True
+    print("genie lamp: still in inventory", flush=True)
+    return False
 
 
 def event_at(bot):
@@ -591,6 +737,13 @@ def check(bot):
     """Shared per-iteration event check. True means keep botting."""
     greet(bot)
     survive(bot)
+    if lamp_in_pack(bot):
+        try:
+            rub_genie_lamp(bot)
+        except (ConnectionError, OSError):
+            raise
+        except Exception as error:
+            print(f"genie lamp failed: {error}", flush=True)
     if in_mime(bot):
         print("in mime event at %s, needs a performer" % (bot.position,), flush=True)
         report(bot, "mime", False)

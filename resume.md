@@ -120,10 +120,10 @@ attendu : plus d'oscillation, arrivée dans le rect centre → `end_macro_maze`
 → retour au point de départ avec `solve=True` sous ~1900 ticks.
 
 ### Outils de test ajoutés
-- `scripts/probe_maze_solve.py` (+ registry `probe_maze_solve`) : résout le
+- `scripts/dev/probe_maze_solve.py` (+ registry `probe_maze_solve`) : résout le
   cube en attente, lance `~maze`, résout, imprime
   `maze solve=<bool> ticks=<n>` et `maze: <t> ticks in, <x>% left`.
-- `scripts/probe_maze_door.py` (+ `probe_maze_door`) : téléporte autour
+- `scripts/dev/probe_maze_door.py` (+ `probe_maze_door`) : téléporte autour
   d'une porte et dump pas brut / clic / pas de sortie pour chaque côté.
 - `probe_use` affiche maintenant `id shape angle` des locs proches.
 
@@ -244,8 +244,8 @@ Comptes test t01…t20,
 - Solvers : `scripts/quests/*.py` (+ `solver.py` helpers, `common.py` runner,
   `gamedata/gamedata/quest_requirements.py` prérequis).
 - SDK : `lifescape/client/{core,actions,movement}.py`, `lifescape/{route,doors,portals.py}`,
-  `lifescape/data/transitions.json` (généré par `scripts/dump_transitions.py`).
-- Sondes : `scripts/probe_*.py`, registre `orchestration/registry.py`.
+  `lifescape/data/transitions.json` (généré par `scripts/dev/dump_transitions.py`).
+- Sondes : `scripts/dev/probe_*.py`, registre `orchestration/registry.py`.
 - Tickrate : `../lostcity/engine/data/config/world.json` (`tickRate`, 20 dev / 600 prod).
 
 ## Point de reprise immédiat

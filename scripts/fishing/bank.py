@@ -2,6 +2,8 @@
 
 from scripts.fishing.common import *
 from scripts.tutorial import common as tutorial_common
+
+from lifescape import banks as banks_mod
 from scripts.fishing.pack import *
 from scripts.fishing.walk import *
 from scripts.fishing.spots import *
@@ -32,7 +34,8 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0, withdraw_tool
     trip_hitpoints = hitpoints(bot)
     for _attempt in range(2):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
+            stand = banks_mod.stand_for(bank.x, bank.z, bank.level) or (bank.x, bank.z)
+            reached = walk_checked(bot, stand[0], stand[1], timeout=15000)
         except Unreachable:
             reached = False
         if reached:

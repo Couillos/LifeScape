@@ -2,6 +2,8 @@
 
 from scripts.mining.common import *
 from scripts.tutorial import common as tutorial_common
+
+from lifescape import banks as banks_mod
 from scripts.mining.pack import *
 from scripts.mining.walk import *
 from scripts.mining.spots import *
@@ -54,7 +56,8 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0):
     bot.intend("walking to the bank at (%d,%d)" % (bank.x, bank.z))
     for _attempt in range(3):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
+            stand = banks_mod.stand_for(bank.x, bank.z, bank.level) or (bank.x, bank.z)
+            reached = walk_checked(bot, stand[0], stand[1], timeout=15000)
         except (Unreachable, TimeoutError):
             reached = False
         if reached:

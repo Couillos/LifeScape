@@ -10,6 +10,8 @@ the door is open.
 from dataclasses import dataclass
 
 from . import collision as collision_mod
+from . import f2p as f2p_mod
+from . import steps as steps_mod
 
 
 @dataclass(frozen=True)
@@ -33,33 +35,25 @@ class Plan:
 class DoorMap:
     """Collision view where a set of door tiles is open for planning."""
 
-    def __init__(self, base, door_tiles):
+    def __init__(self, base, door_tiles, freemap=None):
         self.base = base
         self.door_tiles = door_tiles
+        self.freemap = freemap
 
     def get(self, x, z, level):
+        if self.freemap is not None and not f2p_mod.is_f2p(self.freemap, x, z):
+            return collision_mod.WALK_BLOCKED
         if (x, z, level) in self.door_tiles:
             return collision_mod.OPEN
         return self.base.get(x, z, level)
 
 
-def expand_all(waypoints, start):
-    steps = []
-    here = start
-    for _level, waypoint_x, waypoint_z in waypoints:
-        while here != (waypoint_x, waypoint_z):
-            dx = (waypoint_x > here[0]) - (waypoint_x < here[0])
-            dz = (waypoint_z > here[1]) - (waypoint_z < here[1])
-            here = (here[0] + dx, here[1] + dz)
-            steps.append(here)
-    return steps
-
-
 class Planner:
-    def __init__(self, router, collision, loc_types, wall_doors):
+    def __init__(self, router, collision, loc_types, wall_doors, freemap=None):
         self.router = router
         self.collision = collision
         self.loc_types = loc_types
+        self.freemap = freemap
         self.wall_doors = tuple(wall_doors)
         self.door_tiles = {}
         self.single_tiles = {}
@@ -88,17 +82,17 @@ class Planner:
         # their open halves can block the doorway on the client map.
         base = self.collision if base is None else base
         path = self.router.find_path(
-            DoorMap(base, set(self.single_tiles) - blocked_tiles),
+            DoorMap(base, set(self.single_tiles) - blocked_tiles, self.freemap),
             level, start_x, start_z, dest_x, dest_z,
         )
         if not path:
             path = self.router.find_path(
-                DoorMap(base, set(self.door_tiles) - blocked_tiles),
+                DoorMap(base, set(self.door_tiles) - blocked_tiles, self.freemap),
                 level, start_x, start_z, dest_x, dest_z,
             )
         if not path:
             return None
-        steps = tuple(expand_all(path, (start_x, start_z)))
+        steps = tuple(steps_mod.expand_waypoints(path, (start_x, start_z)))
         actions = []
         seen = set()
         for index, (step_x, step_z) in enumerate(steps):

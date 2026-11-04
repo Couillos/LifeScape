@@ -126,7 +126,9 @@ F2P_QUESTS = (
             _item("bowl_unfired"),
             _item("lobster_pot"),
             _item("silk"),
-            _item("antidragonbreathshield"),
+            # No anti-dragonbreath shield: the Duke hands it over mid-quest
+            # (needs Oziach's lead), so requiring it upfront blocks every
+            # run; solve() checks it before the lair instead.
         ),
     ),
     QuestRequirements(

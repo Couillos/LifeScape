@@ -22,15 +22,36 @@ from scripts.quests import solver
 from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
+import os
+
+from lifescape import save as save_mod
+
 QUEST = quest_requirements.by_key("dragon")
 
 WORN_COM = knowledge.com_id("wornitems:wear")
 DRAGONQUEST = knowledge.varp_id_by_name("dragonquest")
+HIRED = knowledge.varp_id_by_name("dragon_ned_hired")
 COMPLETE = 10  # ^dragon_complete
+
+# Save-backed stages: quest varps are not transmitted, so gates consult
+# the persisted stage too (same as BKF/shield). Item gates below cover
+# the map pieces; varp gates cover talks and the ship.
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or ""
+    if not account:
+        return {}
+    try:
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
 
 
 def _varp(bot, name):
-    return bot.world.varps.get(knowledge.varp_id_by_name(name), 0)
+    varp = knowledge.varp_id_by_name(name)
+    return max(bot.world.varps.get(varp, 0), _SAVED_VARPS.get(varp, 0))
 
 
 def _count(bot, obj_id):
@@ -101,25 +122,55 @@ def _repair_ship(bot):
         solver.use_item_on_loc(bot, "woodplank", ("shiphole",))
 
 
+def _hired(bot):
+    return max(bot.world.varps.get(HIRED, 0), _SAVED_VARPS.get(HIRED, 0)) >= 1
+
+
 def solve(bot):
-    if bot.world.varps.get(DRAGONQUEST, 0) == COMPLETE:
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
+    if _varp(bot, "dragonquest") == COMPLETE:
         return
+    # One stage per run (logout persists the next): a drop mid-quest
+    # would otherwise replay every talk from the guild. Item gates skip
+    # finished loot; varp gates skip finished talks.
     # Champions' Guild -> Oziach: the guildmaster names him, Oziach hands
     # over the maze key and the three map leads (plus the shield lead).
-    solver.talk_like(bot, "guildmaster", ["rune plate", "plate mail", "oziach"])
-    solver.talk_like(bot, "oziach", ["rune plate", "sell", "guildmaster", "prove", "fun",
-                                     "shield", "first", "second", "third", "dragon",
-                                     "everything", "together", "fare"])
+    # Stage-gated: replays would drag the bot back across the map.
+    if _varp(bot, "dragonquest") < 1:
+        solver.talk_like(bot, "guildmaster", ["rune plate", "plate mail", "oziach"])
+        return
+    if _varp(bot, "dragonquest") < 2:
+        # Stage north of the compound first, but only when far: nearby the
+        # talk approach walks in directly, and staging would drag the bot
+        # on a long detour for nothing.
+        if abs(bot.world.x - 3069) + abs(bot.world.z - 3517) > 30:
+            try:
+                bot.walk_to(3069, 3522, 0, timeout=9000, open_doors=True)
+            except (Unreachable, TimeoutError):
+                pass
+        solver.talk_like(bot, "oziach", ["rune plate", "sell", "guildmaster", "prove", "fun",
+                                         "shield", "first", "second", "third", "dragon",
+                                         "everything", "together", "fare"])
+        return
     # Anti-dragonbreath shield from the Duke (needs Oziach's shield lead).
     if not _have(bot, "antidragonbreathshield"):
         solver.talk_like(bot, "duke_of_lumbridge", ["shield", "dragon", "breath"])
+        return
     if not _have(bot, "antidragonbreathshield"):
         raise solver.SolverError("no anti-dragonbreath shield at %s" % (bot.position,))
     # Hire Ned in Draynor; he sails once the ship is repaired and mapped.
-    solver.talk_like(bot, "ned", ["sailor", "crandor", "take me", "map"])
+    if not _hired(bot):
+        solver.talk_like(bot, "ned", ["sailor", "crandor", "take me", "map"])
+        return
     # Melzar's maze: rat -> ghost -> skeleton, then down the ladder for
     # zombie -> Melzar -> lesser demon, then the chest holds part 1.
+    # Stage at the maze door first (find_loc only sees 150 tiles).
     if not _have(bot, "mappart1"):
+        try:
+            bot.walk_to(2941, 3252, 0, timeout=9000, open_doors=True)
+        except (Unreachable, TimeoutError):
+            pass
         solver.use_item_on_loc(bot, "melzarkey", ("melzardoor",))
         _maze_room(bot, "dragonslayer_giantrat", "redkey", "reddoor")
         _maze_room(bot, "dragonslayer_ghost", "orangekey", "orangedoor")
@@ -130,6 +181,7 @@ def solve(bot):
         _maze_room(bot, "dragonslayer_demon", "greenkey", "greendoor")
         solver.operate_loc(bot, ("funchestshut",), 1, timeout=6000)
         solver.operate_loc(bot, ("funchestopen",), 1, timeout=6000)
+        return
     if not _have(bot, "mappart1"):
         raise solver.SolverError("no Melzar map piece at %s" % (bot.position,))
     # Oracle rhyme, then through the magic door (consumes the four items)
@@ -139,17 +191,20 @@ def solve(bot):
         solver.operate_loc(bot, ("dragon_slayer_magic_door",), 1, timeout=6000)
         solver.operate_loc(bot, ("oraclechestshut",), 1, timeout=6000)
         solver.operate_loc(bot, ("oraclechestopen",), 1, timeout=6000)
+        return
     if not _have(bot, "mappart3"):
         raise solver.SolverError("no oracle map piece at %s" % (bot.position,))
     # Wormbrain in the Port Sarim jail sells part 2 for 10000 coins.
     if not _have(bot, "mappart2"):
         solver.talk_like(bot, "wormbrain", ["piece of map", "pay", "alright", "10,000"])
+        return
     if not _have(bot, "mappart2"):
         raise solver.SolverError("no Wormbrain map piece at %s" % (bot.position,))
     # Buy the Lady Lumbridge from Klarense, patch her three holes, then
     # join the map and hand it to Ned in Draynor.
     if _varp(bot, "dragonquest") < 3:
         solver.talk_like(bot, "klarense", ["buy", "yep", "sounds good"])
+        return
     _try_op(bot, solver.operate_loc, ("dragonshipgangplank_on",), 1, timeout=6000)
     _try_op(bot, solver.operate_loc, ("dragonshipladdertop",), 1, timeout=6000)
     if _varp(bot, "dragonquestvar") < 3:

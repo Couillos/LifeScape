@@ -5,6 +5,8 @@ and call SDK methods inside it without reconnecting.
 
     orchestrator.py open <account>
     orchestrator.py run <account> <script> [args...]
+    orchestrator.py pause <account>
+    orchestrator.py resume <account>
     orchestrator.py unload <account>
     orchestrator.py close <account>
     orchestrator.py call <account> <method> [args...]
@@ -286,6 +288,10 @@ def main(argv):
         reply = send_command({"cmd": "run", "account": account, "script": script, "args": argv[4:]})
     elif command == "unload":
         reply = send_command({"cmd": "unload", "account": account})
+    elif command == "pause":
+        reply = send_command({"cmd": "pause", "account": account})
+    elif command == "resume":
+        reply = send_command({"cmd": "resume", "account": account})
     elif command == "call":
         method = argv[3] if len(argv) > 3 else ""
         reply = send_command({"cmd": "call", "account": account, "method": method, "args": argv[4:]})

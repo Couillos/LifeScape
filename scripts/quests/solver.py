@@ -7,6 +7,7 @@ run. Item gathering is deliberately out of scope.
 """
 
 
+from lifescape import collision as collision_mod
 from lifescape.client import Unreachable
 from lifescape.waits import wait_ticks
 
@@ -410,8 +411,29 @@ def solve_strange_box(bot, max_rounds=40):
 
 def use_item_on_loc(bot, item_name, loc_names):
     x, z, level, loc = tutorial_common.find_loc(bot, *loc_names)
-    tutorial_common.approach_loc(bot, x, z, loc, level)
-    tutorial_common.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
+    # Key doors only answer from some sides (reachWall angle): try the
+    # orthogonal adjacent tiles nearest-first, stopping at the first use
+    # the server does not refuse with "I can't reach that!". A blind
+    # approach parks on the nearest reachable tile, which is often a
+    # refused side, and the key is only consumed on success.
+    stands = sorted(
+        [(x + dx, z + dz) for dx, dz in ((0, 1), (0, -1), (1, 0), (-1, 0))],
+        key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
+    )
+    seen = len(bot.world.messages)
+    for stand_x, stand_z in stands:
+        try:
+            if not collision_mod.tile_walkable(bot.collision.get(stand_x, stand_z, level)):
+                continue
+            bot.walk_to(stand_x, stand_z, level, timeout=1500, open_doors=True)
+        except (Unreachable, TimeoutError):
+            continue
+        tutorial_common.use_held_on_loc(bot, x, z, loc, obj_id(item_name))
+        wait_ticks(bot, 10)
+        fresh = " ".join(str(line) for line in bot.world.messages[seen:])
+        if "can't reach" not in fresh.lower():
+            break
+        seen = len(bot.world.messages)
     wait_ticks(bot, 10)
     # Same halt risk as operate_loc: a result mesbox or a multi-page
     # story blocks the server script until dismissed.

@@ -2,6 +2,8 @@
 
 from scripts.woodcut.common import *
 from scripts.tutorial import common as tutorial_common
+
+from lifescape import banks as banks_mod
 from scripts.woodcut.pack import *
 from scripts.woodcut.walk import *
 from scripts.woodcut.spots import *
@@ -22,6 +24,11 @@ def open_bank(bot, bank):
 
 def bank_all_but(bot, side_com, keep_ids):
     print("depositing the load", flush=True)
+    # The genie lamp is unbankable: depositing it always fails, so keep it.
+    # The next randomevents.check() rubs it for XP instead.
+    lamp = knowledge.objs.by_name("macro_genilamp")
+    if lamp:
+        keep_ids = set(keep_ids) | {lamp[0].obj_id}
     return bot.bank_deposit_all(side_com, keep_ids)
 
 
@@ -36,7 +43,8 @@ def bank_trip(bot, bank, side_com, main_com, keep_ids, withdraw=0, withdraw_logs
     opened = False
     for _attempt in range(3):
         try:
-            reached = walk_checked(bot, bank.x, bank.z, timeout=15000)
+            stand = banks_mod.stand_for(bank.x, bank.z, bank.level) or (bank.x, bank.z)
+            reached = walk_checked(bot, stand[0], stand[1], timeout=15000)
         except (Unreachable, TimeoutError):
             # Booth tiles sit inside walls; standing next to one is close
             # enough since open_bank approaches the booth itself.

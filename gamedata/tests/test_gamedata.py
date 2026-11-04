@@ -91,6 +91,8 @@ class GamedataTest(unittest.TestCase):
         self.assertFalse(knowledge.npc_by_name("hans")[0].members)
         self.assertFalse(knowledge.spell_by_name("wind_strike")[0].members)
         self.assertTrue(knowledge.spell_by_name("wind_wave")[0].members)
+        self.assertFalse(knowledge.spell_by_name("telekinetic_grab")[0].members)
+        self.assertTrue(knowledge.spell_by_name("camelot_teleport")[0].members)
         self.assertFalse(knowledge.shop_by_name("axeshop")[0].members)
         self.assertIsNone(knowledge.quest_by_name("quest_cook")[0].members)
         self.assertFalse(knowledge.recipes_making("bronze_dagger", "smith")[0].members)

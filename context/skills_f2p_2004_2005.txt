@@ -1,0 +1,195 @@
+F2P SKILL TRAINING — 2004-2005 ERA (RS2, pre-market)
+================================================
+Project context: LostCity revision 274 (2004). 15 F2P skills: Attack,
+Defence, Strength, Hitpoints, Ranged, Prayer, Magic, Cooking,
+Woodcutting, Fishing, Firemaking, Crafting, Smithing,
+Mining, Runecraft (Fletching training is members-only, see below). No market yet (our homemade exchange, to be implemented
+later). Methods only, no hourly
+rates, no prices.
+
+SOURCE WARNING
+--------------
+The 2004-2005 forums are mostly gone. Compiled from:
+- Tip.It "F2P TRAINING GUIDE! melee range or mage" (13 Dec 2008, but
+  pre-market mechanics valid for 2004: cows, monks, hill giants,
+  lessers, moss giants, gear by defence level, scimitar rule, strength
+  amulet)
+  https://forum.tip.it/topic/212391-f2p-training-guide-info-for-all-levels-melee-range-or-mage/
+- OSRS Wiki "Free-to-play Magic training" (structure + spell levels,
+  same spellbook in 2004)
+  https://oldschool.runescape.wiki/w/Free-to-play_Magic_training
+- OSRS Wiki "Free-to-play Smithing training" (platebody rule, Knight's
+  Sword 12,725 Smithing XP 1->29, anvil south of Varrock west bank)
+  https://oldschool.runescape.wiki/w/Free-to-play_Smithing_training
+- OSRS Wiki "Free-to-play Fishing training" (net->bait->fly progression,
+  Lumbridge/Barbarian Village spots)
+  https://oldschool.runescape.wiki/w/Free-to-play_Fishing_training
+- Steam "F2P - Melee Training Guide" (wiki pull: best scimitar you can
+  equip, amulet of strength vs power, chainbody vs crush, goblins 1-10)
+  https://steamcommunity.com/sharedfiles/filedetails/?id=2568172580
+- LostHQ skill guides index (made for Lost City 2004, JS-driven, not
+  scrapable): https://2004.losthq.rs/?p=skillguides
+- RuneHQ skill index: https://www.runehq.com/skill
+
+GENERAL
+-------
+- Combat XP: 4 XP per damage in the trained stance (Attack, Strength or
+  Defence), shared XP in Controlled stance, plus Hitpoints XP per damage
+  on every hit. Scimitar is the
+  fastest training weapon (Tip.It: tested better than battleaxe).
+- Gear rule (Tip.It): best armour for your Defence (iron 1, steel 5,
+  black 10, mithril 20, addy 30, rune 40), best scimitar for your
+  Attack, strength amulet always. No trimmed/dhide for show (same
+  bonuses, wasted money), no wizard robes for melee.
+- Pures: green d'hide chaps/vambs at 40+ Ranged with 1 Defence.
+- Free food: monks at the Edgeville monastery heal you by talking to
+  them; fishing your own food (salmon or better); lobsters fished on
+  Karamja for the volcano trip.
+
+MELEE (Attack / Strength / Defence / Hitpoints)
+------------------------------------------------
+Low levels / pures:
+- Cows (Lumbridge): start here, keep cowhides for cash.
+- Monks (Edgeville monastery): free healing by talking, no food needed.
+- Hill giants (Edgeville Dungeon, brass key, stairs room): big bones +
+  limpwurt roots income on the side, bury bones for Prayer XP, keep
+  runes. Rangers compete for spawns.
+Higher levels:
+- Gear: rune full helm, strength amulet, rune platebody/legs, rune
+  kiteshield, green d'hide vambraces (at 40 Ranged), rune scimitar,
+  team cape. Only the scimmy for training.
+- Lesser demons (82, Karamja volcano: Port Sarim boat 30 gp, west to the
+  volcano): good alchable drops (rune meds). Bring alch runes (natures;
+  fires drop there). Lobsters fished on site, or noted supplies +
+  general-store "bank" trick.
+- Moss giants (level 42, Wilderness): big bones, solid mid-level XP.
+  Bank at Edgeville.
+- Ice warriors/giants: listed for higher levels.
+- Goblins (level 2, across the Lumbridge bridge): levels 1-10.
+
+RANGED
+------
+- Gear: best bow + arrows you can use; 40 Ranged unlocks green d'hide
+  vambraces (also for melee pures). Ranged armour is cheap (crafted or
+  dropped).
+- Low: chickens (feathers for Fishing bait money), cows, hill giants
+  (safe spots).
+- High: moss giants (safe spots), lessers (Karamja).
+- Safe-spotting keeps food use down.
+
+MAGIC (standard spellbook, same in 2004)
+-----------------------------------------
+- Levels: Wind Strike 1, confusion/weakening curses, Wind Bolt 17, Curse
+  19, Bind 20, Low Alch 21, teleports (Varrock 25, Lumbridge 31, Falador
+  37), Superheat 43, High Alch 55.
+- Training path: strike/bolt spells on monsters (hill giants, monks,
+  lessers) -> Curse for cheap XP with body runes -> Low/High
+  Alchemy on drops (rune meds from lessers) -> teleports for utility XP.
+- 33 Magic unlocks wine telegrab (money method, see money doc).
+- Cheap route: splashing Curses; expensive route: alching + teleporting.
+- Amulet of magic for accuracy; wizard robes.
+
+PRAYER
+------
+- Bury bones where you train: regular bones, big bones (hill/moss/ice
+  giants). No F2P altars in 2004.
+- Prayer gear: holy symbol, monk robes.
+
+COOKING
+-------
+- Quest start: Cook's Assistant for early levels.
+- Progression: shrimps -> sardines/herring -> trout/salmon (fly-caught,
+  cook at the Barbarian Village permanent fire) -> tuna -> lobsters ->
+  swordfish.
+- Cook what you fish. Cook on a range (Lumbridge Castle, Varrock,
+  Al-Kharid) for fewer burns.
+
+WOODCUTTING
+------------
+- Trees -> oaks (15) -> willows (30, Draynor, best XP to 60+) ->
+  yews (60, money logs).
+- Axes: best you can wield (rune needs 41 Woodcutting). F2P spots:
+  Varrock palace, Draynor willows, Edgeville yews, Rimmington yews.
+- Drop logs for XP, bank yews for sale.
+
+FLETCHING (members-only training in 274)
+-----------------------------------------
+- Not trainable in F2P: the dump flags shafts, unstrung bows and
+  bowstrings members. F2P can still use basic gear, all flagged F2P:
+  shortbow, longbow, oak bows, bronze/iron arrows (see Ranged).
+
+FISHING
+-------
+- Small net: shrimps (1) + anchovies (15) at Lumbridge/Al Kharid/
+  Draynor/Port Sarim. Drop for speed or bank at Al Kharid.
+- Bait rod: sardines (5) + herring (10).
+- Fly rod + feathers: trout (20) + salmon (30) at Lumbridge/Barbarian
+  Village. Drop for speed; cook-then-drop trains Cooking too.
+- Harpoon/cage: tuna (35) -> lobsters (40, Karamja) -> swordfish (50,
+  Karamja).
+- Bait from fishing shops; feathers from chickens or shops.
+
+FIREMAKING
+-----------
+- Burn logs in order: normal -> oak -> willow (dropped in bulk, the
+  classic power method) -> yew.
+- Tinderbox + logs anywhere; Varrock/Draynor lines.
+
+CRAFTING
+---------
+- Quests: Sheep Shearer (wool), Goblin Diplomacy (dye).
+- Early: leather (cowhides at the Al-Kharid tannery -> gloves/boots),
+  gold jewellery at a furnace (rings, amulets, holy symbols), silver
+  items as levels allow.
+- Money route: leather and gold rings (see money doc).
+- Guild: Crafting Guild (40 Crafting) for silver/gold ores (see money
+  doc).
+
+SMITHING
+---------
+- The Knight's Sword quest: 12,725 XP, 1 -> 29. Do it immediately.
+- Rule: always the highest platebody you can make (XP per bar is fixed,
+  platebodies use 5 bars). Bronze platebodies 18/29-33, then iron,
+  steel, mithril, addy, rune.
+- Smelt where the furnace is near a bank (Al-Kharid has furnace+bank
+  together); anvil south of Varrock west bank is the closest
+  anvil-to-bank in F2P.
+- Bars: bronze -> iron -> steel (iron+coal) -> gold -> mithril ->
+  addy -> rune (85).
+
+MINING
+-------
+- Copper+tin (Varrock SE/Lumbridge swamp) -> iron (Al Kharid, Rimmington,
+  Dwarven Mine) -> silver (Crafting Guild, Al Kharid) -> coal (Mining
+  Guild 60, Falador/Dwarven) -> gold (Crafting Guild) -> mithril ->
+  addy -> runite (85, wild 46).
+- Pickaxe: best you can wield. Doric's Quest gives
+  early Mining XP + access to Doric's anvils.
+- Powermine iron for XP (drop ores), bank coal/gold.
+
+RUNECRAFT
+----------
+- Rune Mysteries quest to start; Aubury in Varrock teleports you to the
+  essence mine.
+- Altars: air (south Varrock, start here) -> mind -> water -> earth ->
+  fire -> body (20). Air/earth stay the F2P staple in 2004. Tiaras and
+  talismans grant altar entry.
+- Method: mine essence, walk to the altar, craft, bank, repeat. Air
+  tiara for direct entry. Runner-assisted crafting via face-to-face
+  trade is era-plausible (trade existed, no market needed).
+
+F2P QUESTS WITH SKILL XP (2004, start here before grinding)
+------------------------------------------------------------
+- Cook's Assistant: 300 Cooking XP (dump).
+- Sheep Shearer: 150 Crafting XP (dump).
+- Rune Mysteries: unlocks Runecrafting.
+- The Knight's Sword: 12,725 Smithing XP (1->29) — verified.
+- Doric's Quest: 1,300 Mining XP (dump) + anvil use.
+- Goblin Diplomacy: 200 Crafting XP (dump).
+- Pirate's Treasure, Prince Ali Rescue, Shield of Arrav, The Restless
+  Ghost (Prayer XP), Ernest the Chicken, Vampyre Slayer (4,825 Attack XP,
+  dump), Witch's Potion (325 Magic XP, dump): do every F2P quest first; several give
+  combat XP that skips the slow early levels.
+- XP numbers come from the dump (raw/10); quest F2P status is canonical
+  (the dump flags every quest members=None, so it cannot tell);
+  LostHQ quest guides target rev 274: https://2004.losthq.rs/

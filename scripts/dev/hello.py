@@ -1,6 +1,6 @@
 """Log in, say hello, show what the server sends, leave.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/hello.py [username] [password]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/dev/hello.py [username] [password]
 """
 
 import sys

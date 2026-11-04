@@ -131,14 +131,18 @@ def run(bot, *args):
             print("no stage match for instruction: %r flash=%s hint=%s" % (common.instruction(bot)[:200], bot.world.side_flash, bot.world.hint), flush=True)
             if common.instruction(bot).strip():
                 raise SystemExit("tutorial stuck: unmapped instruction at %s" % (bot.position,))
-            if not used_cache:
-                used_cache = True
-                cached = common.load_stage(bot.username)
-                if cached in STEP_ACTIONS:
-                    print("resume cached stage %s" % cached, flush=True)
-                    STEP_ACTIONS[cached](bot)
-                    continue
+            # An empty box right after a step is usually just the server
+            # rewriting it: a side-tab click re-runs the tutorial proc and
+            # resends the current step. Replaying the cached step first
+            # redoes work the server already counted (a cooked shrimp).
             if not common.refresh_instruction(bot):
+                if not used_cache:
+                    used_cache = True
+                    cached = common.load_stage(bot.username)
+                    if cached in STEP_ACTIONS:
+                        print("resume cached stage %s" % cached, flush=True)
+                        STEP_ACTIONS[cached](bot)
+                        continue
                 blanks += 1
             else:
                 blanks = 0

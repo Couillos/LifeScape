@@ -128,7 +128,11 @@ def approach_loc(bot, x, z, loc_id, level=None):
     level = bot.world.level if level is None else level
     cands = sorted(
         [(x + dx, z + dz) for dx in range(-radius, radius + 1) for dz in range(-radius, radius + 1)],
-        key=lambda tile: abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z),
+        # Item/loc uses only answer from adjacent tiles (a reachable tile
+        # two away gets "I can't reach that!"): stand next to the loc
+        # first, further reachable tiles stay as fallback.
+        key=lambda tile: (abs(tile[0] - x) + abs(tile[1] - z) > 1,
+                          abs(tile[0] - bot.world.x) + abs(tile[1] - bot.world.z)),
     )
     reachable = []
     for cx, cz in cands:

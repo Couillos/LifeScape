@@ -502,6 +502,8 @@ class BotCore:
     def _write_state(self):
         if self._state_path is None:
             return
+        from . import snapshot as snapshot_mod
+
         self._ensure_names()
         self._state_tick = self.world.ticks
         self._state_written = time.time()
@@ -518,7 +520,7 @@ class BotCore:
             "ticks": self.world.ticks,
             "updated": time.time(),
             "modal": self.world.modal,
-            "combat": spots_mod.combat_level({index: level for index, (level, _xp) in self.world.stats.items()}),
+            "combat": snapshot_mod.combat_level(self.world.stats),
             "energy": self.world.energy,
             "hint": self.world.hint,
             "hint_type": self._hint_type(),

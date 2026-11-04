@@ -6,7 +6,7 @@ import unittest
 from lifescape.world import to_base37
 
 from orchestration import save_reader
-from scripts import make_accounts
+from scripts.dev import make_accounts
 
 VALID_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789_")
 

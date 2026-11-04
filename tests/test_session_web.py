@@ -8,6 +8,11 @@ from orchestration.daemon import Orchestrator
 from orchestration.jobs import Job
 
 
+def _static(name):
+    with open(os.path.join(os.path.dirname(web.__file__), "static", name)) as handle:
+        return handle.read()
+
+
 class SessionWebTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.mkdtemp()
@@ -37,18 +42,32 @@ class SessionWebTest(unittest.TestCase):
         self.assertNotIn("needs_human", payload)
 
     def test_web_renders_new_statuses_and_last_error(self):
-        self.assertIn("reconnecting", web.INDEX_HTML)
-        self.assertIn("disconnected", web.INDEX_HTML)
-        self.assertIn("last error", web.INDEX_HTML)
-        self.assertNotIn("needs_human", web.INDEX_HTML)
-        self.assertNotIn("restarting", web.INDEX_HTML)
-        self.assertNotIn("cleaning", web.INDEX_HTML)
-        self.assertNotIn("repairing", web.INDEX_HTML)
+        page = _static("index.html")
+        script = _static("spectator.js")
+        self.assertIn("reconnecting", script)
+        self.assertIn("disconnected", script)
+        self.assertIn("last error", script)
+        self.assertNotIn("needs_human", page + script)
+        self.assertNotIn("restarting", page + script)
+        self.assertNotIn("cleaning", page + script)
+        self.assertNotIn("repairing", page + script)
 
     def test_web_renders_map_image_without_detail_mode(self):
-        self.assertIn("minimap.png", web.INDEX_HTML)
-        self.assertNotIn("detailbtn", web.INDEX_HTML)
-        self.assertNotIn("detaily", web.INDEX_HTML)
+        page = _static("index.html")
+        script = _static("spectator.js")
+        self.assertIn("minimap.png", script)
+        self.assertNotIn("detailbtn", page + script)
+        self.assertNotIn("detaily", page + script)
+
+    def test_web_serves_session_controls(self):
+        page = _static("index.html")
+        script = _static("spectator.js")
+        for marker in ("btn-open", "btn-run", "btn-stop", "btn-pause", "btn-resume", "btn-close", "drawer-close", "/api/pause"):
+            self.assertIn(marker, page + script)
+        # same widget on both sides: two <select> dropdowns, no free-text field
+        self.assertIn('<select id="account"', page)
+        self.assertIn('<select id="script"', page)
+        self.assertNotIn("<datalist", page)
 
 
 if __name__ == "__main__":

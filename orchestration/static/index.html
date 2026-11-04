@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectator - LifeScape bots</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; margin: 10px 0 4px; color: #ff0; font-weight: 700; }
+  #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
+  #bar .meta { color: #888; font-size: 12px; }
+  #bar button { line-height: 18px; }
+  button { font: inherit; color: #eee; background: #1b1b1b; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+  button:hover { background: #262626; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #0a0a0a; border: 1px solid #333; padding: 6px 8px; margin-bottom: 10px; }
+  #controls input, #controls select { font: inherit; color: #eee; background: #000; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; }
+  #controls select { max-width: 200px; }
+  #controls #args { width: 170px; }
+  #controls #args { width: 170px; }
+  #controls .sep { color: #555; }
+  #ctlmsg { color: #d9a441; min-height: 1em; }
+  #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  body:not(.list-hidden) { padding-left: 316px; }
+  #list { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 280px; max-width: 85vw;
+    background: #050505; border-right: 1px solid #444; padding: 12px; margin: 0; overflow-y: auto; }
+  body.list-hidden #list { transform: translateX(-105%); }
+  #list ul { list-style: none; padding: 0; margin: 8px 0; }
+  @media (max-width: 700px) {
+    body:not(.list-hidden) { padding-left: 0; }
+  }
+  #list li { margin: 3px 0; }
+  #list li a { text-decoration: none; }
+  #list li a.cur { font-weight: bold; color: #ff0; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: #555; }
+  .running { background: #46c46f; } .reconnecting, .busy, .starting { background: #d9a441; }
+  .failed, .disconnected { background: #e05a5a; } .finished, .stopped { background: #6b7280; }
+  .pill { font-size: 11px; font-weight: 700; padding: 1px 9px; border-radius: 9px; margin-left: 8px; vertical-align: 1px; }
+  .pill.running { background: #46c46f; color: #000; } .pill.crashed { background: #e05a5a; color: #000; }
+  .pill.paused { background: #d9a441; color: #000; } .pill.stopped { background: #6b7280; color: #000; }
+  .pill.empty { background: none; border: 1px solid #555; color: #888; }
+  #detail { flex: 2 1 420px; min-width: 300px; }
+  #title { color: #888; margin-bottom: 6px; }
+  #zonename { color: #ff0; margin-left: 8px; }
+  canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; }
+  #side { flex: 1 1 280px; min-width: 260px; max-width: 420px; }
+  .panel { background: #0a0a0a; border: 1px solid #333; padding: 6px; margin-top: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; }
+  .panel pre { white-space: pre-wrap; margin: 0; font-family: monospace; }
+  .logpanel { background: none; border: 0; padding: 0; max-height: none; overflow: visible; }
+  #log { max-height: 260px; overflow-y: auto; padding: 6px; border: 1px solid #333; background: #0a0a0a; }
+  .muted { color: #888; }
+  @media (max-width: 900px) {
+    #layout { flex-direction: column; }
+    #detail, #side { max-width: none; width: 100%; flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body class="list-hidden">
+<div id="bar">
+  <div style="display:flex;gap:12px;align-items:center">
+    <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide sessions">☰ Sessions</button>
+    <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
+    <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
+    <a href="/items" style="color:#04A800;text-decoration:none">Item holdings</a>
+  </div>
+  <span class="meta" id="stamp"></span>
+</div>
+<div id="controls">
+  <select id="account" title="Session account (defaults to the followed bot)"></select>
+  <button id="btn-open" title="Create a session: log the player in">open</button>
+  <button id="btn-close" title="Cut the session: log out and drop the connection">close</button>
+  <span class="sep">|</span>
+  <select id="script" title="Script to launch"></select>
+  <input id="args" placeholder="args…" title="Script args, space-separated (JSON when it parses)">
+  <button id="btn-run" title="Launch the script in the session">run</button>
+  <button id="btn-stop" title="Stop the script, keep the session connected">stop</button>
+  <button id="btn-pause" title="Freeze the script, keep the connection">pause</button>
+  <button id="btn-resume" title="Unfreeze the script">resume</button>
+  <span id="ctlmsg"></span>
+</div>
+<div id="layout">
+  <div id="list">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div><span id="count">0</span> bot(s) supervised</div>
+      <button id="drawer-close" title="Close sessions">×</button>
+    </div>
+    <ul id="players"><li class="muted">loading…</li></ul>
+  </div>
+  <div id="detail">
+    <div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="zonename"></span></div>
+    <canvas id="map" width="560" height="560"></canvas>
+    <div class="panel"><pre id="infotext"></pre></div>
+  </div>
+  <div id="side">
+    <h2>Dialogue / window</h2>
+    <div class="panel"><pre id="dialog"></pre></div>
+    <h2>Messages</h2>
+    <div class="panel"><pre id="chat"></pre></div>
+    <h2>Inventory</h2>
+    <div class="panel"><pre id="inv"></pre></div>
+    <h2>Skills</h2>
+    <div class="panel"><pre id="skills"></pre></div>
+    <h2>Scenery &amp; ground items</h2>
+    <div class="panel"><pre id="scenery"></pre></div>
+    <h2>Log</h2>
+    <div class="panel logpanel"><pre id="log"></pre></div>
+  </div>
+</div>
+<script src="/spectator.js"></script>
+</body>
+</html>

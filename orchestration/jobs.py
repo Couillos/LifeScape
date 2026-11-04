@@ -25,6 +25,7 @@ class Job:
         self.script_args = list(args)
         self.args = list(self.script_args)
         self.phase = "running" if script else "idle"
+        self.paused = False
         self.process = None
         self.status = "starting"
         self.started = time.time()
@@ -60,6 +61,7 @@ class Job:
             "script_args": list(self.args),
             "args": list(self.args),
             "phase": self.phase,
+            "paused": self.paused,
             "status": self.status,
             "session_pid": self.process.pid if self.process is not None else None,
             "started": self.started,

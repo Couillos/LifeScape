@@ -1,6 +1,6 @@
 """Log several test accounts in at once, prove they can run side by side.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/parallel_login.py [count]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/dev/parallel_login.py [count]
 """
 
 import sys

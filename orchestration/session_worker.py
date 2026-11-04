@@ -304,6 +304,9 @@ class SessionWorker:
             self.phase = "running"
             self.status = "running"
             self.last_code = None
+            # A new script supersedes the previous error: without this the
+            # crashed pill would stick after a fresh run.
+            self.last_error = None
             os.environ["LIFESCAPE_SCRIPT"] = script
             thread = threading.Thread(target=self.run_thread, args=(run_fn, script, list(args)), daemon=True)
             self.script_thread = thread

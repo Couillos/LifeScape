@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Item holdings - LifeScape</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  #list { min-width: 260px; max-width: 340px; flex: 1 1 260px; }
+  #list ul { list-style: none; padding: 0; margin: 8px 0; max-height: 56vh; overflow-y: auto; }
+  #list li { margin: 2px 0; cursor: pointer; }
+  #list li.cur { font-weight: bold; color: #ff0; }
+  #list li .qty { color: #888; }
+  #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  #pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 4px; }
+  #pager button { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; }
+  #detail { flex: 2 1 520px; min-width: 340px; }
+  canvas { background: #111; border: 1px solid #444; width: 100%; height: auto; display: block; }
+  .muted { color: #888; }
+</style>
+</head>
+<body>
+<h1>Item holdings <span class="muted">(<a href="/">back to bots</a>)</span></h1>
+<div id="layout">
+  <div id="list">
+    <h2>Items held</h2>
+    <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
+    <ul id="items"></ul>
+    <div id="pager">
+      <button onclick="page(-1)">‹</button>
+      <span id="pageinfo"></span>
+      <button onclick="page(1)">›</button>
+    </div>
+  </div>
+  <div id="detail">
+    <h2 id="title">Total items</h2>
+    <canvas id="chart" width="720" height="340"></canvas>
+  </div>
+</div>
+<script src="/items.js"></script>
+</body>
+</html>

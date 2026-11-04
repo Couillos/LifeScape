@@ -51,6 +51,41 @@ def known_accounts():
     ]
 
 
+def tail_lines(path, lines, window=131072):
+    """Last lines of a (possibly huge) log without reading it whole.
+
+    The dashboard polls logs on every websocket tick: readlines() on a
+    hundreds-of-MB file costs seconds of CPU per call and pins the
+    daemon at 100%. Seeking to the tail bounds the work to ~window.
+    """
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            offset = max(0, size - max(window, lines * 2048))
+            handle.seek(offset)
+            data = handle.read()
+    except OSError:
+        return []
+    found = data.decode("utf-8", "replace").splitlines()
+    if offset and found:
+        found = found[1:]  # first line started mid-line
+    return found[-lines:] if lines else []
+
+
+def _daemon_alive():
+    """True when a live daemon answers on the orchestrator socket."""
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(2)
+    try:
+        client.connect(SOCKET_PATH)
+        return True
+    except OSError:
+        return False
+    finally:
+        client.close()
+
+
 class AttachedProcess:
     """A session worker that outlived the daemon: signal by pid."""
 
@@ -221,6 +256,28 @@ class Orchestrator:
             self.write_state(job)
         return reply
 
+    def pause_job(self, account):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session for %s" % account}
+        reply = self.send_worker(account, {"cmd": "pause"}, timeout=WORKER_TIMEOUT)
+        if reply.get("ok"):
+            self.apply_session(job, reply.get("session", {}))
+            self.write_state(job)
+        return reply
+
+    def resume_job(self, account):
+        with self.lock:
+            job = self.jobs.get(account)
+        if job is None:
+            return {"ok": False, "error": "no session for %s" % account}
+        reply = self.send_worker(account, {"cmd": "resume"}, timeout=WORKER_TIMEOUT)
+        if reply.get("ok"):
+            self.apply_session(job, reply.get("session", {}))
+            self.write_state(job)
+        return reply
+
     def call_job(self, account, method, args):
         with self.lock:
             job = self.jobs.get(account)
@@ -259,6 +316,7 @@ class Orchestrator:
         job.status = "stopped"
         job.phase = "idle"
         job.script = None
+        job.paused = False
         job.supervise = False
         if isinstance(session, dict):
             if session.get("last_error"):
@@ -305,6 +363,7 @@ class Orchestrator:
             job.script = session.get("script", job.script)
             job.script_args = session.get("script_args", job.script_args)
             job.args = list(job.script_args)
+            job.paused = bool(session.get("paused", job.paused))
             job.status = session.get("status", job.status)
             if session.get("last_error") is not None:
                 job.last_error = session["last_error"]
@@ -341,7 +400,13 @@ class Orchestrator:
             self.detect_state_events(job)
             self.rescue_step(job)
             self.auto_idle_finished(job)
-        self.write_state(job)
+        # The merged state file is only read by show/CLI: rescue detection
+        # above already ran, so a 2 s-old file is fine and this halves the
+        # fsync churn of the 0.5 s supervision loop.
+        now = time.time()
+        if now - getattr(job, "_state_written_at", 0) >= 2.0:
+            job._state_written_at = now
+            self.write_state(job)
 
     def detect_state_events(self, job):
         """Launch a rescue for a teleport event no script reported.
@@ -353,6 +418,11 @@ class Orchestrator:
         Cubes never teleport: only idle sessions get the cube rescue, a
         walkto keeps walking with boxes in its pack. The synthesized event
         reuses handle_event, hence the same unload/mapping/resume path.
+
+        Towers are walkable ground (Edgeville, banks): a bot may stand on
+        a fail spot legitimately. Only a teleport arrival counts (position
+        jump), otherwise every pass re-fires on the same tiles forever.
+        Maze/mime stages are instances: any presence there is a yank.
         """
         from scripts import randomevents
         if job.rescue_for is not None:
@@ -376,7 +446,10 @@ class Orchestrator:
                     randomevents.MIME_Z[0] <= z < randomevents.MIME_Z[1]:
                 event = "mime"
             elif (_level, x, z) in randomevents.FAIL_TELEPORTS:
-                event = "tower"
+                last = getattr(job, "_event_last_pos", None)
+                if last is None or abs(x - last[0]) + abs(z - last[1]) > 100:
+                    event = "tower"
+            job._event_last_pos = (x, z)
         if event is None and not script:
             inv = state.get("inv") or []
             if any((entry.get("name") if isinstance(entry, dict) else entry) == "macro_cube" for entry in inv):
@@ -617,16 +690,25 @@ class Orchestrator:
 
     def serve(self):
         if os.path.exists(SOCKET_PATH):
-            os.unlink(SOCKET_PATH)
+            if _daemon_alive():
+                print("daemon already running, refusing to start", flush=True)
+                return 1
+            try:
+                os.unlink(SOCKET_PATH)
+            except OSError:
+                pass  # stale socket, take over below
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(SOCKET_PATH)
         server.listen(8)
         self.server = server
         with open(PID_PATH, "w") as handle:
             handle.write(str(os.getpid()))
+        # The web port must bind before workers are adopted: a bind
+        # failure exits here with every session untouched, instead of
+        # leaving a half-started daemon that already unloaded scripts.
+        web.start_web(self.dispatch, int(os.environ.get("LIFESCAPE_WEB_PORT", "8765")))
         self.restore_jobs()
         holdings.start_scheduler()
-        web.start_web(self.dispatch, int(os.environ.get("LIFESCAPE_WEB_PORT", "8765")))
         print("orchestrator listening on %s" % SOCKET_PATH, flush=True)
         try:
             while self.running:
@@ -698,6 +780,10 @@ class Orchestrator:
             return self.run_job(account, request.get("script") or "", request.get("args") or [])
         if command == "unload":
             return self.unload_job(account)
+        if command == "pause":
+            return self.pause_job(account)
+        if command == "resume":
+            return self.resume_job(account)
         if command == "close":
             return self.close_job(account)
         if command == "call":
@@ -720,6 +806,13 @@ class Orchestrator:
             return {"ok": True, "jobs": described}
         if command == "items":
             return {"ok": True, "data": holdings.snapshot()}
+        if command == "scripts":
+            registry.reload_if_changed()
+            return {"ok": True, "scripts": sorted(registry.SCRIPTS)}
+        if command == "accounts":
+            live = sorted(self.jobs)
+            known = sorted(set(known_accounts()) | set(live))
+            return {"ok": True, "accounts": known, "live": live}
         if command == "show":
             merged_path, _partial, _log = user_paths(account)
             return {"ok": True, "state": naming.resolve_state(read_json(merged_path, {}))}
@@ -731,12 +824,7 @@ class Orchestrator:
         if command == "logs":
             _merged, _partial, log_path = user_paths(account)
             lines = int(request.get("lines") or 40)
-            try:
-                with open(log_path, "r", errors="replace") as handle:
-                    tail = handle.readlines()[-lines:]
-            except OSError:
-                tail = []
-            return {"ok": True, "lines": [line.rstrip("\n") for line in tail]}
+            return {"ok": True, "lines": tail_lines(log_path, lines)}
         if command == "test":
             return self.test_command(request.get("args") or [])
         if command == "shutdown":

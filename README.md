@@ -8,8 +8,8 @@ Interpréteur imposé : `../lostcity/.pypy/bin/pypy3`.
 
 ```sh
 ../lostcity/.pypy/bin/pypy3 scripts/hello.py            # login + chat
-../lostcity/.pypy/bin/pypy3 scripts/probe_walk.py t01 10 0  # marcher
-../lostcity/.pypy/bin/pypy3 scripts/probe_tutorial.py t02  # guide + porte
+../lostcity/.pypy/bin/pypy3 scripts/dev/probe_walk.py t01 10 0  # marcher
+../lostcity/.pypy/bin/pypy3 scripts/dev/probe_tutorial.py t02  # guide + porte
 ../lostcity/.pypy/bin/pypy3 scripts/parallel_login.py 5   # 5 bots
 ../lostcity/.pypy/bin/pypy3 scripts/tutorial/run.py t24  # tuto complet
 ../lostcity/.pypy/bin/pypy3 -m unittest discover tests     # 36 tests

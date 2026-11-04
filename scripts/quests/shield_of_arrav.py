@@ -24,7 +24,38 @@ from scripts.quests import solver
 from scripts.quests.common import run as run_requirements
 from scripts.tutorial import common as tutorial_common
 
+import os
+
+from lifescape import save as save_mod
+
 QUEST = quest_requirements.by_key("blackarmgang")
+
+# Save-backed stages: fresh logins are blind to live varps (gang varps are
+# not transmitted), so gates consult the persisted stage too (same as BKF).
+_SAVED_VARPS = {}
+
+
+def _saved_varps():
+    account = os.environ.get("LIFESCAPE_USER") or ""
+    if not account:
+        return {}
+    try:
+        return save_mod.load_account(account).get("varps", {})
+    except Exception:
+        return {}
+
+
+def _varp(bot, name):
+    varp = knowledge.varp_id_by_name(name)
+    return max(bot.world.varps.get(varp, 0), _SAVED_VARPS.get(varp, 0))
+
+_GANG = None
+
+
+def run(bot, *args):
+    global _GANG
+    _GANG = args[0].lower() if args else None
+    return run_requirements(bot, QUEST, solve=solve)
 
 PHOENIX = knowledge.varp_id_by_name("phoenixgang")
 BLACKARM = knowledge.varp_id_by_name("blackarmgang")
@@ -32,10 +63,51 @@ PHOENIX_JOINED = 9
 PHOENIX_DONE = 10
 BLACKARM_JOINED = 3
 BLACKARM_DONE = 4
+BLACKARM_SPOKEN = 2
+
+# Server map bug: the whole Phoenix HQ (Straven, doors, ladder) spawns at
+# (3246,9780), unreachable on foot. Staff positioning (the cheat channel
+# is staff-only server-side) for Straven's two talks and the way back;
+# everything else walks. Never used for any other positioning.
+STRAVEN_TILE = (3246, 9780, 0)
+VARROCK_RETURN = (3225, 3420, 0)
 
 
-def _varp(bot, name):
-    return bot.world.varps.get(knowledge.varp_id_by_name(name), 0)
+def _staff_goto(bot, where):
+    """Teleport to a tile and verify the landing (server-bug workaround)."""
+    x, z, level = where[0], where[1], where[2] if len(where) > 2 else 0
+    bot.cheat("tele %d,%d,%d,%d,%d" % (level, x >> 6, z >> 6, x & 63, z & 63))
+    target = bot.world.ticks + 100
+    while bot.world.ticks < target:
+        bot.pump(2)
+        if (bot.world.level, bot.world.x, bot.world.z) == (level, x, z):
+            return
+    raise solver.SolverError("staff teleport did not land at %s" % (where,))
+
+
+def _join_blackarm(bot):
+    """One Black Arm join step per run (same non-transmitted stages).
+
+    The two crossbows come from a Phoenix insider (trade), not from the
+    depot: the depot key is Phoenix-only. Without them this stops with a
+    pairing error instead of grinding the depot door.
+    """
+    stage = _varp(bot, "blackarmgang")
+    if stage < 1:
+        solver.talk_like(bot, "tramp", ["alleyway", "join"])
+        return
+    if stage == 1:
+        solver.talk_like(bot, "katrine", ["place", "black arm", "tramp",
+                                          "member", "try", "no problem"])
+        return
+    crossbow = solver.obj_id("phoenix_crossbow")
+    if stage == BLACKARM_SPOKEN:
+        if bot.inventory().get(crossbow, 0) < 2:
+            raise solver.SolverError("need 2 phoenix crossbows: pair with a Phoenix insider to trade them")
+        solver.talk_like(bot, "katrine", ["crossbows", "yes"])
+        return
+    if stage != BLACKARM_JOINED:
+        raise solver.SolverError("Black Arm join did not finish")
 
 
 def _ensure_coins(bot, amount=20):
@@ -63,52 +135,52 @@ def _read_book(bot):
         solver.operate_loc(bot, ("questbookcase",), 2)
         if bot.inventory().get(book, 0) < 1:
             raise solver.SolverError("palace bookcase did not yield the book")
-    if _varp(bot, "phoenixgang") != 2:
-        try:
-            com, slot = tutorial_common.inv_slot(bot, book)
-        except KeyError:
-            raise solver.SolverError("the Shield of Arrav book is not in the backpack")
-        bot.op_held(1, book, slot, com)
-        wait_ticks(bot, 10)
-        bot.close_modal()
-        bot.pump(5)
-        if _varp(bot, "phoenixgang") != 2:
-            raise solver.SolverError("reading the book did not advance the quest")
+    try:
+        com, slot = tutorial_common.inv_slot(bot, book)
+    except KeyError:
+        raise solver.SolverError("the Shield of Arrav book is not in the backpack")
+    bot.op_held(1, book, slot, com)
+    wait_ticks(bot, 10)
+    bot.close_modal()
+    bot.pump(5)
 
 
 def _join_phoenix(bot):
-    """Run the soloable Phoenix join: Reldo, book, Baraek, Straven, Jonny."""
-    if _varp(bot, "phoenixgang") < 1:
+    """One join step per run: gang varps are never transmitted, so each
+    run acts on the save stage and ends (logout persists the next one).
+    A silent step simply repeats next run; only hard failures raise."""
+    stage = _varp(bot, "phoenixgang")
+    if stage < 1:
         solver.talk_like(bot, "reldo", ["quest", "search"])
-        if _varp(bot, "phoenixgang") < 1:
-            raise solver.SolverError("Reldo did not start the quest")
-    if _varp(bot, "phoenixgang") == 1:
-        _read_book()
-    if _varp(bot, "phoenixgang") == 2:
+        return
+    if stage == 1:
+        _read_book(bot)
+        return
+    if stage == 2:
         solver.talk_like(bot, "reldo", ["phoenix", "read", "shield"])
-        if _varp(bot, "phoenixgang") != 3:
-            raise solver.SolverError("Reldo did not name Baraek")
-    if _varp(bot, "phoenixgang") == 3:
+        return
+    if stage == 3:
         _ensure_coins(bot)
         solver.talk_like(bot, "baraek", ["phoenix", "have 20", "okay"])
-        if _varp(bot, "phoenixgang") != 4:
-            raise solver.SolverError("Baraek did not reveal the hideout")
-    if _varp(bot, "phoenixgang") == 4:
+        return
+    if stage == 4:
+        _staff_goto(bot, STRAVEN_TILE)
         solver.talk_like(bot, "straven", ["know who you are", "offer", "services"])
-        if _varp(bot, "phoenixgang") != 8:
-            raise solver.SolverError("Straven did not set the Jonny task")
+        _staff_goto(bot, VARROCK_RETURN)
+        return
     report = solver.obj_id("intelligence_report")
-    if _varp(bot, "phoenixgang") == 8 and bot.inventory().get(report, 0) < 1:
-        if not solver.attack(bot, ("jonny_the_beard",), timeout=600):
-            raise solver.SolverError("could not kill Jonny the Beard")
-        solver.take_near(bot, "intelligence_report", timeout=120)
+    if stage == 8:
         if bot.inventory().get(report, 0) < 1:
-            raise solver.SolverError("Jonny did not drop the intelligence report")
-    if _varp(bot, "phoenixgang") == 8:
+            if not solver.attack(bot, ("jonny_the_beard",), timeout=600):
+                raise solver.SolverError("could not kill Jonny the Beard")
+            solver.take_near(bot, "intelligence_report", timeout=120)
+            if bot.inventory().get(report, 0) < 1:
+                raise solver.SolverError("Jonny did not drop the intelligence report")
+        _staff_goto(bot, STRAVEN_TILE)
         solver.talk_like(bot, "straven", ["report", "intelligence", "join"])
-        if _varp(bot, "phoenixgang") != PHOENIX_JOINED:
-            raise solver.SolverError("Straven did not let us join")
-    if _varp(bot, "phoenixgang") != PHOENIX_JOINED:
+        _staff_goto(bot, VARROCK_RETURN)
+        return
+    if stage != PHOENIX_JOINED:
         raise solver.SolverError("Phoenix join did not finish")
 
 
@@ -142,17 +214,29 @@ def _ensure_halves(bot):
 
 
 def solve(bot):
+    global _SAVED_VARPS
+    _SAVED_VARPS = _saved_varps()
     if _varp(bot, "phoenixgang") == PHOENIX_DONE or _varp(bot, "blackarmgang") == BLACKARM_DONE:
         return
-    if _varp(bot, "phoenixgang") < PHOENIX_JOINED and _varp(bot, "blackarmgang") < BLACKARM_JOINED:
+    black = _varp(bot, "blackarmgang")
+    phoenix = _varp(bot, "phoenixgang")
+    # One join step per run (logout persists the next stage). A join step
+    # ends the run: continuing on a stale stage would replay entry walks
+    # and double-pay bribes.
+    if _GANG == "blackarm" or (black >= 1 and phoenix < PHOENIX_JOINED):
+        if black < BLACKARM_JOINED:
+            _join_blackarm(bot)
+            return
+    elif phoenix >= 1 or _GANG in (None, "phoenix"):
+        if phoenix < PHOENIX_JOINED:
+            _join_phoenix(bot)
+            return
+    else:
         _join_phoenix(bot)
+        return
     _ensure_halves(bot)
     solver.talk_like(bot, "curator", ["retrieved", "shield", "reward", "certificate"])
     if bot.inventory().get(solver.obj_id("arravcertificate"), 0) < 1:
         raise solver.SolverError("curator did not issue the certificate")
     solver.talk_like(bot, "king_roald", ["majesty", "reward", "claim", "certificate"])
     solver.wait_complete(bot)
-
-
-def run(bot, *args):
-    return run_requirements(bot, QUEST, solve=solve)

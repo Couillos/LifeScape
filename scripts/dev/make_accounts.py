@@ -1,6 +1,6 @@
 """Create test accounts with realistic random names and randomized looks.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/make_accounts.py [count]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/dev/make_accounts.py [count]
 
 Password is the username (test convention). For each account: pick a
 unique realistic name, store it with a server-compatible bcrypt hash,

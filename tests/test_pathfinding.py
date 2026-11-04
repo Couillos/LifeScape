@@ -58,6 +58,9 @@ class PathfindingTest(unittest.TestCase):
             loc_name_at = Bot.loc_name_at
             unreachable_hints = Bot.unreachable_hints
             explain_unreachable = Bot.explain_unreachable
+            _report = Bot._report
+            _routing = Bot._routing
+            _describe_target = Bot._describe_target
 
         fake = FakeBot()
         message = Bot.explain_unreachable(fake, 5, 0, False)

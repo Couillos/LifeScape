@@ -18,6 +18,35 @@ Jamais de noms de variables de 1 ou 2 caractères (`x`, `z`, `b`,
 qui lit le code (`door_x`, `chicken_id`, `chat_line`,
 `magic_level`). Idem pour les fonctions et les modules.
 
+## Contraintes du code (de `../lostcity/AGENTS.md`)
+
+- Python pur, lisible par un humain, compatible PyPy.
+- Zéro dépendance externe : uniquement la bibliothèque standard embarquée
+  (socket, struct, hashlib, zlib, base64, sqlite3, unittest, ...).
+- Interdit : pip, paquets tiers, extensions C, code généré.
+- Imports toujours en début de fichier, jamais dans les fonctions.
+- Formatage chaînes : f-string uniquement, jamais `%` avec argument.
+- Architecture claire, un rôle par module, arborescence qui dit ce que fait quoi.
+- Code qui s'explique tout seul : noms explicites, petites fonctions.
+  Commentaires rares, seulement pour le "pourquoi" jamais pour le "quoi".
+- Référence protocole : le code du serveur (`Engine-TS`, branche 274),
+  jamais de suppositions, vérifier dans le code puis valider en live.
+- Régénérer les définitions après mise à jour du serveur/jeu :
+  `cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/lifescape/data/gametypes.json`.
+  Outils engine liés : `tools/lifescape-*.mts` (dump, diff routage/flags).
+
+## Optimisation : faible empreinte RAM et CPU
+
+Tout développement doit être optimisé, objectif faible empreinte
+RAM et CPU : pas d'allocation ni de boucle inutile, pas de
+polling serré, réutiliser les structures existantes.
+
+## Aucun fallback sans demande explicite
+
+Ne jamais ajouter de fallback (silencieux ou non) sans demander
+d'abord à l'utilisateur : en cas d'échec, remonter l'erreur et
+attendre sa décision.
+
 ## SDK : gestion d'erreur irréprochable
 
 Le SDK (`lifescape/`) est la couche critique : toute erreur doit être
@@ -97,7 +126,7 @@ ni un id d'opcode : il appelle une méthode du SDK (`bot.op_loc`,
 `bot.op_npc_t`, `bot.if_button`, `bot.close`...). Une fonctionnalité
 ajoutée au SDK doit rester utilisable par n'importe quel script et
 contexte, pas seulement par celui qui l'a motivée. Les sondes de
-diagnostic (`scripts/probe_*.py`) peuvent descendre au niveau paquet,
+diagnostic (`scripts/dev/probe_*.py`) peuvent descendre au niveau paquet,
 mais jamais un script de bot commité.
 
 

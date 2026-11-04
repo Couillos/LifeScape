@@ -1,6 +1,6 @@
 """Capture raw server frames to a file for offline decoder work.
 
-Usage: ../lostcity/.pypy/bin/pypy3 scripts/capture.py [username] [frames] [outfile]
+Usage: ../lostcity/.pypy/bin/pypy3 scripts/dev/capture.py [username] [frames] [outfile]
 """
 
 import json

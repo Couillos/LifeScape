@@ -3,6 +3,17 @@
 from scripts.woodcut.common import *
 from scripts.tutorial import common as tutorial_common
 
+from lifescape import collision as collision_mod
+
+
+def dest_blocked(bot, check_x, check_z):
+    """Cible non marchable (mur, table, booth) : s'arreter a cote."""
+    try:
+        return not collision_mod.tile_walkable(bot.collision.get(check_x, check_z, bot.world.level))
+    except (KeyError, IndexError):
+        return False
+
+
 def walk_checked(bot, dest_x, dest_z, timeout=15000):
     # Failure backstop on purpose in wall seconds (walk_to takes seconds):
     # pacing waits above are all tick-based, this only bounds a stuck walk.
@@ -13,6 +24,8 @@ def walk_checked(bot, dest_x, dest_z, timeout=15000):
         trail = []
         bot.trail = trail
     while (bot.world.x, bot.world.z) != (dest_x, dest_z):
+        if dest_blocked(bot, dest_x, dest_z) and max(abs(bot.world.x - dest_x), abs(bot.world.z - dest_z)) <= 2:
+            return True
         if bot.world.ticks - getattr(bot, "_last_greet", -50) > 50:
             bot.last_greet = bot.world.ticks
             randomevents.greet(bot)

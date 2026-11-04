@@ -1,0 +1,163 @@
+F2P MONEY MAKING — 2004-2005 ERA (RS2, pre-market)
+================================================
+Project context: LostCity revision 274 (2004). No market yet (our homemade
+exchange, to be implemented later), no generalized bank notes, face-to-face trading mostly
+in Varrock / worlds 1-5. Methods only in this doc, by design: no
+hourly rates, no prices.
+
+SOURCE WARNING
+--------------
+The 2004-2005 forums (RuneHQ, Tip.It, RSC Community, Sythe) are mostly
+gone or block scraping. This file compiles:
+- RuneHQ "Money Making Guide" (specialreport&id=0460, 2004 mechanics,
+  still online, F2P sections kept: Combat/Runecraft/Craft/Mining/Smithing/
+  Fishing/Woodcutting/Merchanting)
+  https://www.runehq.com/guide.php?type=specialreport&id=0460
+- Tip.It "F2P Money Making Guide" (22 Nov 2006, no-market world: rune
+  trimmed, god armour, cowhides, big bones, swordfish, lobsters)
+  https://forum.tip.it/topic/74625-f2p-money-making-guide/
+- Tip.It "The guide to f2p money making" (9 Mar 2007, but 2004 methods:
+  merchanting W1, world 16 air runners, runite mining, wine telegrab,
+  air runecrafting, Crafting Guild silver/gold)
+  https://forum.tip.it/topic/99801-the-guide-to-f2p-money-making/
+- Tip.It "Best F2P ways to make money" (replies: big bones, wine
+  telegrab, coal/iron under Falador, iron vs coal xp+profit debate)
+  https://forum.tip.it/topic/312783-best-f2p-ways-to-make-money/
+- Reddit r/runescape "How I earned money in 2004" (mined iron ores in
+  Al Kharid mine -> smelted bars -> smithed weapons/armour -> sold in
+  general stores; difficult and tedious, no market)
+  https://www.reddit.com/r/runescape/comments/87wgrx/how_i_earned_money_in_2004/
+- Reddit r/2007scape "mega rich in 2004-2006, how?" (merchanting was
+  king, no market so crazy margins; runecrafting cash cow)
+  https://www.reddit.com/r/2007scape/comments/bh54sy/people_that_were_mega_rich_in_20042006_in_rs_how/
+- OSRS Wiki "Money making guide/Free-to-play" (modern, market prices wrong
+  for 2004, useful only for the method list)
+  https://oldschool.runescape.wiki/w/Money_making_guide/Free-to-play
+- Extra search: "lobsters + yews 05 f2p cash" (40 Fishing / 60
+  Woodcutting), red spider eggs in Varrock sewers with no requirements.
+
+2004 RULES
+---------
+- Faster respawn in crowded worlds (wines, rocks): guides recommend
+  worlds 1-7.
+- Fish: only Stiles (south of the Karamja volcano, Musa Point) swaps
+  tuna/lobster/swordfish for bank notes. Everything else is banked on
+  foot: Karamja ship -> Port Sarim -> Falador/Varrock bank. Count the
+  walk into the profit.
+- Telegrab magic: without it, the chaos mages attack you.
+- Edgeville Dungeon door (hill giants): brass key required.
+- F2P runite: a single spot, level 46 Wilderness north of the Lava
+  Maze, slow respawn depending on world. Dangerous.
+- Rune essence: Rune Mysteries quest required.
+
+METHODS BY LEVEL
+----------------
+
+0. STARTER, NO REQUIREMENTS
+- Cowhides: Lumbridge cow pen, bank in Al-Kharid or Lumby, stockpile in
+  bulk, sell at Al-Kharid bank. Source: Tip.It 2006.
+- Feathers: shrimp fishing in Lumbridge, resell feathers to fishers/
+  shops.
+- Al Kharid iron (2004 account): mine a full load of iron ores, smelt
+  bars, smith weapons/armour, sell to the general store. Small profit
+  but available at level 1. The witness insists: difficult and tedious.
+- Red spider eggs (Varrock sewers): picked up with no skill, resold for
+  Herblore use. Aggressive spiders.
+
+1. MERCHANTING (the king 2004-2006, no market)
+- Principle: buy low, sell high, worlds 1/3/4/5. Needs starting capital.
+- Quoted world rule: W1 low price/demand, W3 medium, W4 high. Buy W1,
+  sell W4. Varies with time of day.
+- Quoted F2P items: rune trimmed sets and pieces, rune gold sets,
+  god armour (zammy and sara full sets, volatile prices), rares (wide
+  spreads, fast movers).
+- Companies: pay farmers for ores, bars and Zamorak wines, resell
+  higher.
+- Tip.It + RS forums to sell higher than in game.
+- Trap: without price knowledge you lose everything. Scamming = ban,
+  mods hang around merchanting worlds.
+
+2. Wines of Zamorak (TELEGRAB) — 33 Magic (37 recommended)
+- Chaos Temple north-west of Falador, near the wild. Air staff + law
+  runes (+ water at 37). Crowded worlds 1-7 for fast respawn.
+- Loop: telegrab -> full inventory -> Falador teleport -> west bank ->
+  back. Minimum weight to keep running.
+- Resale on the forums. Also Magic XP.
+- Variant: buy wines off farmers, resell higher.
+
+3. BIG BONES + ROOTS
+- Hill giants (28, Edgeville Dungeon, brass key), moss giants (42),
+  ice giants.
+- Stockpile in bulk in the bank, sell on world 1.
+- Limpwurt roots (hill giants): sought after for Herblore.
+
+4. MINING
+- Coal: under Falador, the classic goal.
+- Iron: several replies call it better than coal for XP + profit
+  (fast respawn).
+- Crafting Guild silver/gold (40 Crafting + rune pick). Heavy
+  competition on gold, stick to silver.
+- Mithril/addy: hop worlds (slow respawn).
+- Runite at 85 Mining: high-value ore, but 1 F2P spot (wild 46),
+  slow respawn. World hopping mandatory.
+- Rune essence: easy low-level mining after Rune Mysteries, steady
+  demand from runecrafters.
+
+5. RUNECRAFTING
+- Classic air: altar south of Varrock, air tiara, minimum weight.
+  Earnings scale with level (multiple runes per essence at high
+  levels).
+- World 16 runners: people open your noted essence for a tip. High
+  volume and fast XP, increasingly worthwhile at high Runecrafting.
+- Air/earth stay the F2P staple in 2004.
+
+6. FISHING
+- Lobsters/swordfish at Karamja (Musa Point). Note exchange at Stiles
+  (tuna/lobster/swordfish only).
+- Era trick: buy cheap off fishers training their level, resell higher.
+- The queen F2P method with yews: "lobsters and yews back in 05".
+- Tuna for Cooking/levelling, not for sale.
+
+7. WOODCUTTING
+- Yews at 60 WC: the F2P reference with lobsters ("40+ fishing, 60+
+  woodcutting"). Sell logs to fletchers.
+- Willows for XP, not profit.
+
+8. SMITHING
+- Steel bars (iron + coal): the profitable F2P smithing method.
+- Gold bars: smelt/resell.
+- Full addy at 88 only. Otherwise slow XP and barely profitable.
+
+9. COMBAT
+- Low level: chaos druids (herbs), cows (hides).
+- Mid: hill giants (big bones + limpwurts), moss giants.
+- High: lesser demons (82), rare drops. Crowded spots, kill-stealers.
+
+10. MISC CRAFTING
+- Leather (cowhides at the Al-Kharid tannery into gloves/boots) and gold
+  rings at a furnace. Slow but fully F2P (dump flags flax, bowstrings
+  and arrow shafts members, so no bowstring spinning in F2P).
+
+QUALITATIVE SUMMARY (no-market world, no figures)
+----------------------------------------------
+- No reqs: cows/hides, feathers, iron->general store: pocket money.
+- Mid level: big bones, coal/iron, wine telegrab: steady solid income.
+- High level/capital: air runners, trickle runite, merchanting with
+  capital + price knowledge: the biggest gains.
+- Duo quoted everywhere in 05: lobsters + yews.
+
+RAW SOURCE NOTES (scraped 2026-11-04)
+--------------------------------------
+- runehq id=0460: Big Three = Mining/Smithing/Fishing; steel the best
+  smithing use; lesser/moss/hill giants + limpwurts; chaos druid herbs.
+- tip.it 74625: cowhides Al-Kharid; cheap swordies/lobs bought off
+  trainers and resold; big bones on W1; worlds 1/3/5; rune trimmed/god
+  armour ranges above.
+- tip.it 99801: merchanting W1 + forums; W16 essence runners; runite in
+  the wild; wine Magic requirements; level-scaled air crafting;
+  Crafting Guild silver/gold.
+- tip.it 312783: big bones; wines best money+XP combo; coal with rune
+  pick; iron vs coal debate.
+- reddit 87wgrx: Al Kharid irons -> bars -> general store.
+- reddit bh54sy: merchanting king, crazy margins with no market;
+  runecrafting cash cow.
