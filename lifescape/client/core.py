@@ -40,8 +40,13 @@ class StopRequested(BaseException):
     """
 
 
-class StaleConnection(ConnectionError):
-    """A send from a script thread that outlived its unload (orphan)."""
+class StaleConnection(BaseException):
+    """A send from a script thread that outlived its unload (orphan).
+
+    BaseException like StopRequested: a script's ``except ConnectionError:
+    relogin`` must not catch it, or the muted orphan would relogin and
+    keep playing after its unload returned.
+    """
 
 
 _active_bot = None
@@ -99,6 +104,7 @@ class BotCore:
         self._commands_lock = threading.Lock()
         self._command_seq = 0
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
         self._generation = 0
         self._muted_idents = set()
         self._snapshot = {}
@@ -110,9 +116,12 @@ class BotCore:
         self._route = []
         self._route_target = None
         self._walk_dest = None
+        self.on_pump = None
         self._action_route = []
         self._route_action = None
         self.collision = None
+        self.allow_paid_paths = False
+        self.freemap = None
         self.loctypes = None
         self.zone_labels = None
         self.wall_doors = None
@@ -216,6 +225,8 @@ class BotCore:
         self._last_send_tick = 0  # fresh ticks: never mute keepalives after a relogin
         self.zone = (0, 0)
         self.collision = None
+        self.allow_paid_paths = False
+        self.freemap = None
         self.loctypes = None
         if getattr(self, "zone_labels", None) is None:
             # static labels, load once per session
@@ -239,6 +250,7 @@ class BotCore:
         self._route = []
         self._route_target = None
         self._walk_dest = None
+        self.on_pump = None
         self._action_route = []
         self._route_action = None
 
@@ -333,6 +345,12 @@ class BotCore:
         self.connection.send(client_op_id("NO_TIMEOUT"))
 
     def pump(self, count=1):
+        # Pause freezes the script where it is: no recv, so ticks freeze
+        # too and wait_ticks bounds do not expire mid-pause. The keepalive
+        # thread keeps sending NO_TIMEOUT so the server holds the session.
+        while self._pause_event.is_set():
+            self._check_stop()
+            time.sleep(0.1)
         self._check_stop()
         self._drain_command()
         frames = []
@@ -365,6 +383,13 @@ class BotCore:
         # paced in ticks so a slow tick rate never makes it stutter.
         if self._state_path is not None and self.world.ticks - self._state_tick >= 10:
             self._write_state()
+        if self.on_pump is not None:
+            try:
+                self.on_pump(self)
+            except (ConnectionError, OSError, StopRequested, SystemExit, KeyboardInterrupt):
+                raise
+            except Exception as error:
+                print("pump hook failed: %r" % (error,), flush=True)
         return frames
 
     def request_stop(self):
@@ -376,6 +401,15 @@ class BotCore:
 
     def clear_stop(self):
         self._stop_event.clear()
+
+    def set_paused(self, paused):
+        if paused:
+            self._pause_event.set()
+        else:
+            self._pause_event.clear()
+
+    def paused(self):
+        return self._pause_event.is_set()
 
     def invalidate_sends(self, thread=None):
         """Mute an unloaded thread's future sends without touching the socket.

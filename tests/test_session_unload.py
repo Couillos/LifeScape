@@ -22,6 +22,7 @@ class StubBot:
     def __init__(self):
         self.world = StubWorld()
         self._stopped = False
+        self._paused = False
         self._commands = []
         self._route_target = None
         self.pumps = 0
@@ -42,6 +43,12 @@ class StubBot:
 
     def stop_requested(self):
         return self._stopped
+
+    def set_paused(self, paused):
+        self._paused = bool(paused)
+
+    def paused(self):
+        return self._paused
 
     def drop_command(self, command):
         command["cancelled"] = True
@@ -186,6 +193,7 @@ class UnloadTest(unittest.TestCase):
             worker = make_worker()
             worker.phase = "running"
             worker.script = "fishing"
+            worker.status = "running"
             thread = threading.Thread(target=time.sleep, args=(30,), daemon=True)
             worker.script_thread = thread
             thread.start()
@@ -194,6 +202,67 @@ class UnloadTest(unittest.TestCase):
             session_worker.UNLOAD_TICKS, session_worker.WALL_BACKSTOP = old_ticks, old_backstop
         self.assertTrue(reply["ok"])
         self.assertEqual(worker.bot.invalidated, 1)
+        # The orphan keeps the stop flag and its registration: the idle
+        # pump stays out and no verify pump runs on the shared socket.
+        self.assertEqual(worker.status, "busy")
+        self.assertEqual(worker.script, "fishing")
+        self.assertTrue(thread.is_alive())
+        self.assertIs(worker.script_thread, thread)
+        self.assertTrue(worker.bot.stop_requested())
+        self.assertEqual(worker.bot.pumps, 0)
+
+    def test_orphan_death_reports_idle_and_releases_stop(self):
+        old_ticks, old_backstop = session_worker.UNLOAD_TICKS, session_worker.WALL_BACKSTOP
+        session_worker.UNLOAD_TICKS, session_worker.WALL_BACKSTOP = 5, 0.3
+        release = threading.Event()
+        from lifescape.client.core import StopRequested
+
+        def slow(bot, *args):
+            release.wait(10)
+            raise StopRequested("late stop")
+
+        try:
+            worker = make_worker()
+            worker.phase = "running"
+            worker.script = "fishing"
+            worker.status = "running"
+            thread = threading.Thread(target=worker.run_thread, args=(slow, "fishing", []))
+            worker.script_thread = thread
+            thread.start()
+            reply = worker.cmd_unload()
+            self.assertTrue(reply["ok"])
+            self.assertEqual(worker.status, "busy")
+            release.set()
+            thread.join(5)
+        finally:
+            session_worker.UNLOAD_TICKS, session_worker.WALL_BACKSTOP = old_ticks, old_backstop
+        self.assertFalse(thread.is_alive())
+        self.assertIsNone(worker.script)
+        self.assertEqual(worker.phase, "idle")
+        self.assertEqual(worker.status, "idle")
+        self.assertFalse(worker.bot.stop_requested())
+
+    def test_stale_connection_escapes_script_relogin_handlers(self):
+        # A muted orphan must die, not relogin and keep playing: fishing
+        # and friends catch ConnectionError to relogin, so StaleConnection
+        # must not be one (nor a plain Exception).
+        self.assertNotIsInstance(StaleConnection("stale"), Exception)
+        relogged = []
+
+        def dab(bot, *args):
+            try:
+                raise StaleConnection("stale send from an unloaded script thread")
+            except ConnectionError:
+                relogged.append(True)
+                bot.relogin()
+
+        worker = make_worker()
+        worker.phase = "running"
+        worker.script = "fishing"
+        worker.run_thread(dab, "fishing", [])
+        self.assertEqual(relogged, [])
+        self.assertIsNone(worker.script)
+        self.assertEqual(worker.status, "idle")
 
     def test_unload_reports_busy_while_stopping(self):
         arrived = threading.Event()

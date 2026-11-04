@@ -130,6 +130,7 @@ class SessionWorker:
         self.phase = "idle"  # idle | running
         self.script = None
         self.script_args = []
+        self.paused = False
         self.status = "starting"  # idle|running|busy|reconnecting|finished|failed|disconnected|starting|stopped
         self.last_error = None
         self.last_event = None
@@ -170,6 +171,12 @@ class SessionWorker:
             self.connected = True
         else:
             self.bot = Bot()
+        # Adjacent-only event maintenance on every pump, in every phase:
+        # idle sessions and bare walks (no check() of their own) greet
+        # hosts and swat swarm/triffids instead of dying or getting
+        # yanked. Teleport events stay the daemon's rescues (state file).
+        self._pump_watch_tick = 0
+        self.bot.on_pump = self._pump_watch
         with self._lock:
             self.status = "idle"
         self.write_ready(True, "")
@@ -252,6 +259,10 @@ class SessionWorker:
             return self.cmd_run(request.get("script") or "", request.get("args") or [])
         if command == "unload":
             return self.cmd_unload()
+        if command == "pause":
+            return self.cmd_pause()
+        if command == "resume":
+            return self.cmd_resume()
         if command == "call":
             return self.cmd_call(request.get("method") or "", request.get("args") or [], request.get("admin", False))
         if command == "close":
@@ -265,6 +276,7 @@ class SessionWorker:
                 "phase": self.phase,
                 "script": self.script,
                 "script_args": list(self.script_args),
+                "paused": self.paused,
                 "status": self.status,
                 "session_pid": os.getpid(),
                 "last_error": self.last_error,
@@ -328,6 +340,7 @@ class SessionWorker:
                     self.script_thread = None
                     self.phase = "idle"
                     self.script = None
+                    self.paused = False
                     return
                 self.status = "reconnecting"
             if self.reconnect_flow():
@@ -335,12 +348,14 @@ class SessionWorker:
                     self.script_thread = None
                     self.phase = "idle"
                     self.script = None
+                    self.paused = False
                     self.status = "idle"
             else:
                 with self._lock:
                     self.script_thread = None
                     self.phase = "idle"
                     self.script = None
+                    self.paused = False
             return
         except Exception as error:
             traceback.print_exc()
@@ -357,6 +372,7 @@ class SessionWorker:
             self.phase = "idle"
             self.script = None
             self.script_args = []
+            self.paused = False
             os.environ["LIFESCAPE_SCRIPT"] = ""
             if kind == "finished":
                 self.status = "finished"
@@ -374,9 +390,16 @@ class SessionWorker:
                 self.status = "idle"
                 if error is not None:
                     self.last_error = error
+            # The stop is consumed: an orphaned thread that outlived its
+            # unload kept the flag set, clear it now that it is dead so
+            # the idle pump resumes (a no-op when no stop was asked).
+            self.bot.clear_stop()
 
     def cmd_unload(self):
+        if self.bot is not None:
+            self.bot.set_paused(False)
         with self._lock:
+            self.paused = False
             thread = self.script_thread
             if thread is None or not thread.is_alive():
                 self.phase = "idle"
@@ -395,10 +418,18 @@ class SessionWorker:
             if self.bot.world.ticks - start_tick >= UNLOAD_TICKS or time.time() - start_wall > WALL_BACKSTOP:
                 break
             thread.join(0.2)
-        orphan = thread.is_alive()
-        if orphan:
+        if thread.is_alive():
             self.bot.invalidate_sends(thread)
             thread.join(2)
+        if thread.is_alive():
+            # Orphan: the script ignores the stop flag (CPU loop with no
+            # pump). Keep the flag set and the thread registered: the idle
+            # pump stays out (a concurrent pump would desync the cipher),
+            # the thread dies on its next pump/send, and run_thread then
+            # clears the flag and reports idle. Clearing here would let the
+            # orphan keep playing after unload returned.
+            print("script thread survived unload, its sends are muted", flush=True)
+            return {"ok": True, "session": self.describe()}
         with self._lock:
             for command in list(self.bot._commands):
                 self.bot.drop_command(command)
@@ -423,8 +454,30 @@ class SessionWorker:
             os.environ["LIFESCAPE_SCRIPT"] = ""
             if self.status in ("running", "busy"):
                 self.status = "idle"
-        if orphan:
-            print("script thread survived unload, its sends are muted", flush=True)
+        return {"ok": True, "session": self.describe()}
+
+    def cmd_pause(self):
+        with self._lock:
+            thread = self.script_thread
+            alive = thread is not None and thread.is_alive()
+            if not alive:
+                return {"ok": False, "error": "nothing to pause on %s" % self.account}
+            if self.paused:
+                return {"ok": False, "error": "%s is already paused" % self.account}
+            self.paused = True
+        if self.bot is not None:
+            self.bot.set_paused(True)
+        self.log("=== session pause %s ===" % self.account)
+        return {"ok": True, "session": self.describe()}
+
+    def cmd_resume(self):
+        with self._lock:
+            if not self.paused:
+                return {"ok": False, "error": "%s is not paused" % self.account}
+            self.paused = False
+        if self.bot is not None:
+            self.bot.set_paused(False)
+        self.log("=== session resume %s ===" % self.account)
         return {"ok": True, "session": self.describe()}
 
     # -- call ------------------------------------------------------------
@@ -522,6 +575,17 @@ class SessionWorker:
         except (LoginError, ConnectionError, OSError):
             self.reconnect_flow()
         self.idle_watch()
+
+    def _pump_watch(self, bot):
+        if bot.world.ticks - self._pump_watch_tick < 25:
+            return
+        self._pump_watch_tick = bot.world.ticks
+        modal = bot.world.modal
+        if modal is not None and modal[0] not in ("overlay", "side"):
+            return
+        from scripts import randomevents
+        randomevents.greet_near(bot)
+        randomevents.survive(bot, ticks=100)
 
     def idle_watch(self):
         """Keep an idle session alive: greet adjacent event hosts and swat
