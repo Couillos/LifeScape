@@ -11,7 +11,7 @@ use lifescape_sdk::waits::{wait_hitpoints, wait_ticks};
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
+    bank_trip, bank_trip_resilient, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
     GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS,
 };
@@ -389,7 +389,8 @@ fn chop_load(
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
-    let idle_since = bot.world.ticks;
+    let mut idle_since = bot.world.ticks;
+    let mut unreachable_streak = 0u32;
     let mut last_hitpoints = hitpoints(bot);
     let mut flees = 0u32;
     let mut spot: Option<(knowledge::trees::TreeTier, i32, i32)> = None;
@@ -399,9 +400,15 @@ fn chop_load(
         if free_slots(bot) <= usize::from(pack_total(bot, coins) > 0) {
             return Ok((true, level));
         }
-        if best_axe(bot).is_none() && !recover_axe(bot, coins, bank)? {
-            println!("axe lost, banking load");
-            return Ok((true, level));
+        if best_axe(bot).is_none() {
+            // Recovery walks (shop, bank) are not chopping: don't bill
+            // them to the no-log stall budget.
+            let spent = bot.world.ticks;
+            if !recover_axe(bot, coins, bank)? {
+                println!("axe lost, banking load");
+                return Ok((true, level));
+            }
+            idle_since += bot.world.ticks - spent;
         }
         level = learn_level(bot, WC_STAT, level);
         if let (Some((tier, _, _)), Some(best)) = (&spot, pick_tier(tiers, level)) {
@@ -476,6 +483,9 @@ fn chop_load(
         };
         let (result, gained) = work_spot(bot, spot_x, spot_z, &log_ids, had_logs)?;
         had_logs += gained;
+        if result != WorkOutcome::Unreachable {
+            unreachable_streak = 0;
+        }
         match result {
             WorkOutcome::Gone => {
                 println!("tree quiet, next one");
@@ -483,7 +493,18 @@ fn chop_load(
                 spot = None;
             }
             WorkOutcome::NoTool => spot = None,
-            WorkOutcome::Unreachable | WorkOutcome::LevelLocked => {
+            WorkOutcome::Unreachable => {
+                banned.insert((spot_x, spot_z), now + 500);
+                spot = None;
+                unreachable_streak += 1;
+                // Pocket landing (yank mid-run): every spot fails at the
+                // walk. Ride out once, then re-pick from the new region;
+                // the stall bound below stays the loud exit.
+                if unreachable_streak >= 8 && crate::skill_common::escape_pocket(bot)? {
+                    unreachable_streak = 0;
+                }
+            }
+            WorkOutcome::LevelLocked => {
                 banned.insert((spot_x, spot_z), now + 500);
                 spot = None;
             }
@@ -499,6 +520,9 @@ fn chop_load(
             WorkOutcome::Full | WorkOutcome::Moved | WorkOutcome::NoBait => {
                 spot = None;
             }
+        }
+        if gained > 0 {
+            idle_since = bot.world.ticks;
         }
         if bot.world.ticks - idle_since > STALL_TICKS {
             println!("stall: no logs for {STALL_TICKS} ticks");
@@ -587,7 +611,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             )?;
         }
         let keep: Vec<u16> = known_axe_ids(bot).into_iter().collect();
-        bank_coins = bank_trip(bot, &bank, &keep, cheapest as u32)?;
+        bank_coins = bank_trip_resilient(bot, &mut bank, &keep, cheapest as u32, &log_ids.iter().copied().collect::<Vec<_>>())?;
         for cand in cands {
             if buy_stock(bot, &cand, 1)? > 0 {
                 println!("ok upgraded to {cand}");

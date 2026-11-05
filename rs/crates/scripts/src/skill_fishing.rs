@@ -338,7 +338,7 @@ fn fish_load(
     }
     let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
     let mut bait_ban_until = 0u64;
-    let idle_since = bot.world.ticks;
+    let mut idle_since = bot.world.ticks;
     let mut last_hitpoints = hitpoints(bot);
     let mut flees = 0u32;
     let mut walk_hurts = 0u32;
@@ -449,7 +449,9 @@ fn fish_load(
             .collect();
         let had_fish: u32 = wanted.iter().map(|id| pack_total(bot, *id)).sum();
         let (result, gained) = work_spot(bot, &tier, spot_x, spot_z, &wanted, had_fish)?;
-        let _ = gained;
+        if gained > 0 {
+            idle_since = bot.world.ticks;
+        }
         match result {
             WorkOutcome::Full => return Ok((true, level)),
             WorkOutcome::Moved | WorkOutcome::Gone | WorkOutcome::Threat => {
@@ -462,7 +464,12 @@ fn fish_load(
                 spot = None;
             }
             WorkOutcome::NoBait => {
-                if restock_bait(bot, &tier, coins, bank)? {
+                // Restock walks (shop) are not fishing: don't bill them
+                // to the no-fish stall budget.
+                let spent = bot.world.ticks;
+                let restocked = restock_bait(bot, &tier, coins, bank)?;
+                idle_since += bot.world.ticks - spent;
+                if restocked {
                     println!("bait restocked, resuming");
                     continue;
                 }

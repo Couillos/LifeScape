@@ -166,6 +166,13 @@ impl Bot {
         self.intent = intention.to_string();
     }
 
+    /// One-line action trace (session log): every game action the bot
+    /// sends, with the game tick. The worker prefixes wall-clock time.
+    /// Read-only for planning: never call this from a planning view.
+    pub fn act(&self, text: String) {
+        println!("act t={} {text}", self.world.ticks);
+    }
+
     /// Pump `count` ticks: recv frames, feed the world, keep the session
     /// alive. Every game wait loops on this, never on wall-clock sleep.
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {
@@ -206,6 +213,7 @@ impl Bot {
     }
 
     pub fn say(&mut self, text: &str) -> Result<()> {
+        self.act(format!("say {text}"));
         let mut body = crate::buffer::Writer::new();
         body.u8(0);
         body.u8(0);

@@ -133,14 +133,17 @@ Aucun script commité ne doit utiliser de cheats (`bot.cheat`,
 `::...`) : les cheats servent uniquement aux vérifications manuelles
 et au développement, jamais dans du code.
 
-## Fonctionnalités réutilisables → SDK
+## Fonctionnalités réutilisables → SDK, scripts minces
 
-Quand un script a besoin d'un mécanisme qui servirait à d'autres
-scripts (parler/marchander avec un PNJ, boucle de récolte, dépôt et
-retrait en banque, achat/vente en magasin...), l'implémenter dans le
-SDK (`rs/crates/sdk/`), pas en copie locale dans le script. Les scripts
-composent avec le SDK + `gamedata` ; ils ne dupliquent jamais de
-logique partagée. Même règle pour les données : tout ce qui vient du
+Les scripts restent les plus petits possible : un script de skill ne
+contient que la logique liée au skill (boucle couper → banque → upgrade),
+jamais d'edge cases sur les locs, portes, murs, compteurs, transitions
+ou détours — tout le générique réutilisable vit dans le SDK
+(`rs/crates/sdk/`), pas en copie locale dans le script : parler/marchander
+avec un PNJ, boucle de récolte, dépôt et retrait en banque, achat/vente
+en magasin, joignabilité d'une cible, chevauchée d'une transition...
+Les scripts composent avec le SDK + `gamedata` ; ils ne dupliquent jamais
+de logique partagée. Même règle pour les données : tout ce qui vient du
 jeu va dans `lifescape-gamedata` (dump + requêtes typées), jamais en dur
 dans un script.
 
@@ -353,6 +356,11 @@ structures restent affichés.
 
 ## Banque et pathfinding
 
+- Le tracé bleu du spectate représente TOUJOURS le chemin que le bot va
+  emprunter : le bot marche les cases publiées dans l'ordre, et s'arrête
+  sur la dernière case praticable atteinte en cas de refus, avec la
+  raison forte (case bloquante, décor live). Jamais de marche ailleurs
+  que le tracé, jamais de replan silencieux qui diverge de l'affichage.
 - `Bot::bank_deposit_all(side_com, keep_ids)` : cette révision n'a pas
   de bouton « déposer tout l'inventaire » ; l'action groupée est
   « Deposit All » par slot. Le SDK envoie tous les clics d'un coup,

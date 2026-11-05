@@ -31,13 +31,27 @@ fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
             .get("ops")
             .as_arr()
             .is_some_and(|ops| ops.iter().any(|op| !matches!(op, Value::Null)));
-        let open_op = row
+        let name = row.get("name").as_str().unwrap_or("");
+        let category = row.get("category").as_i64().unwrap_or(-1);
+        let mut open_op = row
             .get("ops")
             .as_arr()
             .and_then(|ops| ops.iter().position(|op| {
                 op.as_str().is_some_and(|name| name.eq_ignore_ascii_case("open"))
             }))
             .map(|index| index as u8 + 1);
+        // Maze routing exceptions (server scripts are the truth):
+        // - maze walls outside category 16 advertise Open but the script
+        //   answers "I can't open that" (macro_event_maze.rs2); only
+        //   category 16 (macro_maze_wall_door: walllow, safe1..safe4)
+        //   swings. Checked against gametypes.json: 3628..3632.
+        // - maze chests advertise Open but looting one never lets anyone
+        //   pass, so they must read as walls for planning.
+        let lower = name.to_lowercase();
+        let maze_wall = lower.starts_with("macro_maze_wall") || lower.starts_with("macor_maze_wall");
+        if (maze_wall && category != 16) || lower.starts_with("macro_maze_chest") {
+            open_op = None;
+        }
         let toll = row
             .get("name")
             .as_str()

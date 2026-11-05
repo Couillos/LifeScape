@@ -13,7 +13,6 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::{wait_backpack, wait_hitpoints, wait_ticks};
 use lifescape_sdk::{Bot, Error};
 
-use crate::randomevent::{event_at, report};
 use crate::{ScriptError, ScriptResult};
 
 pub const BACKPACK_SIZE: usize = 28;
@@ -24,7 +23,7 @@ pub const FLEE_BAN_TICKS: u64 = 500;
 pub const GONE_BAN_TICKS: u64 = 250;
 /// Nearby transition scan: pockets (basements, upper floors) only hold
 /// their own ladder within a few dozen tiles.
-const RIDE_SCAN_TILES: i32 = 40;
+const RIDE_SCAN_TILES: i32 = 400;
 /// Ride only when the ladder gets us this much closer to a bank. Small
 /// detours through doors are the router's job, not a teleport's.
 const RIDE_MIN_GAIN: i64 = 100;
@@ -106,11 +105,11 @@ pub fn combat_level(bot: &Bot) -> i64 {
     i64::from(bot.combat_level().unwrap_or(3))
 }
 
-/// Random-event gate: prints the `@@EVENT` payload and fails so the
+/// Random-event gate: greets hosts on sight, rubs the lamp, solves what
+/// resolves inline and prints the `@@EVENT` payload otherwise, so the
 /// orchestrator unloads this script and runs the mapped rescue.
-pub fn check_events(bot: &Bot) -> ScriptResult {
-    if let Some(kind) = event_at(bot) {
-        println!("{}", report(bot, kind, false));
+pub fn check_events(bot: &mut Bot) -> ScriptResult {
+    if !crate::randomevent_full::check(bot)? {
         return Err(ScriptError::Usage(format!("random event unresolved at {:?}", bot.position())));
     }
     Ok(0)
@@ -278,6 +277,18 @@ fn ride_row(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<bool, S
     Ok(false)
 }
 
+/// Ride out of a disconnected pocket toward the banks: a mapped ladder
+/// or stairs whose far side is much closer to a bank than here (basement
+/// to the surface, upper floors down). True when it moved us somewhere
+/// with a better bank urge; the caller re-picks from the new position.
+pub fn escape_pocket(bot: &mut Bot) -> Result<bool, ScriptError> {
+    let here_best = closest_bank_dist(bot.world.x, bot.world.z, bot.world.level);
+    let Some(row) = shortcut_out(bot, here_best) else {
+        return Ok(false);
+    };
+    ride_row(bot, &row)
+}
+
 /// Nearest free (non-members, same level) bank booth by Manhattan distance.
 /// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
@@ -289,11 +300,7 @@ fn ride_row(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<bool, S
 /// ride it first, then pick from the new position.
 pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError> {
     for _ in 0..MAX_RIDES {
-        let here_best = closest_bank_dist(bot.world.x, bot.world.z, bot.world.level);
-        let Some(row) = shortcut_out(bot, here_best) else {
-            break;
-        };
-        if !ride_row(bot, &row)? {
+        if !escape_pocket(bot)? {
             break;
         }
     }
@@ -491,6 +498,28 @@ pub fn bank_withdraw_items(
     bot.pump(5)?;
     let after: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
     Ok(after.saturating_sub(before))
+}
+
+/// Bank a load, re-discovering the bank when the trip leaves produce
+/// behind (teleport mid-run, pocket start). One retry from the fresh
+/// bank, then loud: the load is stuck, not silently unbanked.
+pub fn bank_trip_resilient(
+    bot: &mut Bot,
+    bank: &mut knowledge::banks::Bank,
+    keep: &[u16],
+    withdraw_coins: u32,
+    product_ids: &[u16],
+) -> Result<u32, ScriptError> {
+    let mut bank_coins = bank_trip(bot, bank, keep, withdraw_coins)?;
+    if product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
+        println!("bank unreachable from {:?}, re-discovering", bot.position());
+        *bank = nearest_bank(bot)?;
+        bank_coins = bank_trip(bot, bank, keep, withdraw_coins)?;
+        if product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
+            return Err(ScriptError::Usage(format!("bank unreachable, load stuck at {:?}", bot.position())));
+        }
+    }
+    Ok(bank_coins)
 }
 
 /// Walk to a bank, open the booth, deposit everything but `keep`, withdraw

@@ -9,7 +9,7 @@ use lifescape_sdk::waits::wait_ticks;
 
 use super::quest_common as kit;
 use super::randomevent;
-use super::randomevent_full::{climb_out, solve_maze};
+use super::randomevent_full::climb_out;
 use crate::{ScriptError, ScriptResult};
 
 fn verify(bot: &Bot, what: &str) -> ScriptResult {
@@ -34,14 +34,13 @@ fn rescue_maze(bot: &mut Bot) -> ScriptResult {
         println!("not in maze, nothing to do");
         return verify(bot, "maze");
     }
-    if solve_maze(bot)? {
+    if super::maze::solve(bot)? {
         return verify(bot, "maze");
     }
     // No server timeout frees the bot (upstream has no auto-exit): one
-    // last door-knock round, then fail loudly instead of looping forever.
-    // A stuck maze needs manual help or better door planning.
-    println!("maze unsolved by routing, one more door round");
-    if solve_maze(bot)? {
+    // last round, then fail loudly instead of looping forever.
+    println!("maze unsolved by search, one more door round");
+    if super::maze::solve(bot)? {
         return verify(bot, "maze");
     }
     if randomevent::in_maze(bot) {

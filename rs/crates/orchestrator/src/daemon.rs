@@ -269,8 +269,59 @@ impl Orchestrator {
         reply
     }
 
-    fn simple_worker_cmd(&self, account: &str, cmd: &str) -> Value {
+    /// Manual hold: stop the running script and run no rescue until
+    /// resumed. The session stays open for manual `call` piloting.
+    fn hold_job(&self, account: &str) -> Value {
         let job = match self.jobs.lock().unwrap().get(account).cloned() {
+            Some(job) => job,
+            None => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&format!("no session, open {account} first"))),
+                ]);
+            }
+        };
+        job.inner.lock().unwrap().held = true;
+        let reply = self.send_worker(
+            account,
+            &object(vec![("cmd", str_value("unload"))]),
+            Duration::from_secs(WORKER_TIMEOUT),
+        );
+        let reply = reply.unwrap_or_else(|error| {
+            object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))])
+        });
+        if reply.get("ok").as_bool() == Some(true) {
+            job.apply_session(reply.get("session"));
+            job.inner.lock().unwrap().held = true;
+            self.write_state(&job);
+        }
+        reply
+    }
+
+    /// Release a manual hold (and resume a worker pause when there is one).
+    fn resume_job(&self, account: &str) -> Value {
+        let job = match self.jobs.lock().unwrap().get(account).cloned() {
+            Some(job) => job,
+            None => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&format!("no session, open {account} first"))),
+                ]);
+            }
+        };
+        let was_held = std::mem::replace(&mut job.inner.lock().unwrap().held, false);
+        let reply = self.simple_worker_cmd(account, "resume");
+        if reply.get("ok").as_bool() == Some(true) {
+            return reply;
+        }
+        if was_held {
+            self.write_state(&job);
+            return object(vec![("ok", Value::Bool(true)), ("job", job.describe())]);
+        }
+        reply
+    }
+
+    fn simple_worker_cmd(&self, account: &str, cmd: &str) -> Value {        let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
             None => {
                 return object(vec![
@@ -498,7 +549,8 @@ impl Orchestrator {
             }
             "unload" => return self.simple_worker_cmd(account, "unload"),
             "pause" => return self.simple_worker_cmd(account, "pause"),
-            "resume" => return self.simple_worker_cmd(account, "resume"),
+            "resume" => return self.resume_job(account),
+            "hold" => return self.hold_job(account),
             "close" => return self.close_job(account),
             "call" => {
                 let method = request.get("method").as_str().unwrap_or("");

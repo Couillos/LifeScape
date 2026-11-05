@@ -16,6 +16,7 @@ fn op_name(kind: &str, op: u8) -> String {
 
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
+        self.act(format!("op_loc{op} {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(x as u16);
         body.u16(z as u16);
@@ -24,12 +25,15 @@ impl Bot {
     }
 
     pub fn op_npc(&mut self, op: u8, slot: u16) -> Result<()> {
+        let npc_label = self.world.npcs.get(&slot).map(|npc| (self.tables.npc_name)(npc.npc_type).unwrap_or_default()).unwrap_or_default();
+        self.act(format!("op_npc{op} {npc_label} slot={slot}"));
         let mut body = Writer::new();
         body.u16(u16::from(slot));
         self.send_named(&op_name("OPNPC", op), &body.bytes())
     }
 
     pub fn op_npc_u(&mut self, slot: u16, obj_id: u16, use_slot: u16, com: u16) -> Result<()> {
+        self.act(format!("op_npc_u slot={slot} obj={obj_id}"));
         let mut body = Writer::new();
         body.u16(u16::from(slot));
         body.u16(obj_id);
@@ -39,6 +43,7 @@ impl Bot {
     }
 
     pub fn op_obj(&mut self, op: u8, x: i32, z: i32, obj_id: u16) -> Result<()> {
+        self.act(format!("op_obj{op} {} id={obj_id} at ({x},{z})", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(x as u16);
         body.u16(z as u16);
@@ -47,6 +52,7 @@ impl Bot {
     }
 
     pub fn op_loc_u(&mut self, x: i32, z: i32, loc_id: u16, obj_id: u16, slot: u16, com: u16) -> Result<()> {
+        self.act(format!("op_loc_u {} id={loc_id} + {} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default(), (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(x as u16);
         body.u16(z as u16);
@@ -58,6 +64,7 @@ impl Bot {
     }
 
     pub fn op_npc_t(&mut self, slot: u16, spell_com: u16) -> Result<()> {
+        self.act(format!("op_npc_t slot={slot}"));
         let mut body = Writer::new();
         body.u16(u16::from(slot));
         body.u16(spell_com);
@@ -65,12 +72,14 @@ impl Bot {
     }
 
     pub fn op_player(&mut self, op: u8, slot: u16) -> Result<()> {
+        self.act(format!("op_player{op} slot={slot}"));
         let mut body = Writer::new();
         body.u16(u16::from(slot));
         self.send_named(&op_name("OPPLAYER", op), &body.bytes())
     }
 
     pub fn op_held(&mut self, op: u8, obj: u16, slot: u8, com: u16) -> Result<()> {
+        self.act(format!("op_held{op} {} x1 slot={slot}", (self.tables.obj_name)(obj).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(obj);
         body.u16(u16::from(slot));
@@ -79,6 +88,7 @@ impl Bot {
     }
 
     pub fn op_held_u(&mut self, obj: u16, slot: u8, com: u16, use_obj: u16, use_slot: u8, use_com: u16) -> Result<()> {
+        self.act(format!("op_held_u {} + {}", (self.tables.obj_name)(obj).unwrap_or_default(), (self.tables.obj_name)(use_obj).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(obj);
         body.u16(u16::from(slot));
@@ -90,6 +100,7 @@ impl Bot {
     }
 
     pub fn inv_button(&mut self, n: u8, obj: u16, slot: u8, com: u16) -> Result<()> {
+        self.act(format!("inv_button{n} {} slot={slot} com={com}", (self.tables.obj_name)(obj).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(obj);
         body.u16(u16::from(slot));
@@ -98,6 +109,7 @@ impl Bot {
     }
 
     pub fn inv_button_d(&mut self, com: u16, slot: u8, target: u16, mode: u8) -> Result<()> {
+        self.act(format!("inv_button_d com={com} slot={slot}"));
         let mut body = Writer::new();
         body.u16(com);
         body.u16(u16::from(slot));
@@ -107,12 +119,14 @@ impl Bot {
     }
 
     pub fn if_button(&mut self, com: u16) -> Result<()> {
+        self.act(format!("if_button com={com}"));
         let mut body = Writer::new();
         body.u16(com);
         self.send_named("IF_BUTTON", &body.bytes())
     }
 
     pub fn close_modal(&mut self) -> Result<()> {
+        self.act("close_modal".to_string());
         self.send_named("CLOSE_MODAL", &[])
     }
 
@@ -159,14 +173,20 @@ impl Bot {
     pub const TRADE_PARTNER_OFFER: u16 = 3416;
     pub const TRADE_PACK: u16 = 3322;
 
-    /// 'main', 'confirm' or None from the open window.
+    /// 'main', 'confirm' or None from the open window. Interface ids come
+    /// from the component tables (the live revision moved the trade side
+    /// panel); hardcoded ids are fallback only.
     pub fn trade_modal(&self) -> Option<&'static str> {
         let modal = self.world.modal.as_ref()?;
-        match (modal.layer.as_str(), modal.interface_id) {
-            ("main_side", 3323) => Some("main"),
-            ("main", 3443) => Some("confirm"),
-            _ => None,
+        let side = (self.tables.com_id)("tradeside").unwrap_or(3321);
+        let confirm = (self.tables.com_id)("tradeconfirm").unwrap_or(3443);
+        if modal.layer.as_str() == "main_side" && modal.interface_id == side {
+            return Some("main");
         }
+        if modal.layer.as_str() == "main" && modal.interface_id == confirm {
+            return Some("confirm");
+        }
+        None
     }
 
     /// Server slot of a nearby player, by (case-insensitive) name.
@@ -190,6 +210,7 @@ impl Bot {
     /// partner must knock back). One knock per quiet wait: rapid re-clicks
     /// cancel the pending engine interaction before it fires.
     pub fn trade_request(&mut self, name: &str, timeout: u64) -> Result<bool> {
+        self.act(format!("trade_request {name}"));
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
             if self.trade_modal().is_some() {
@@ -219,6 +240,7 @@ impl Bot {
 
     /// Offer `count` of an object from the backpack (inv_button op 1).
     pub fn trade_offer(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<bool> {
+        self.act(format!("trade_offer {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
             if self.world.modal.is_none() {
@@ -238,8 +260,12 @@ impl Bot {
             let Some(slot) = slots.iter().find(|(_, (held, _))| *held == obj_id).map(|(slot, _)| *slot) else {
                 return Ok(false);
             };
-            self.inv_button(1, obj_id, slot, Self::TRADE_PACK)?;
-            self.pump(10)?;
+            // Offer in 10s, then 5s, then 1s (ops 3/2/1 on the trade
+            // side): one coin per click never reaches a big count.
+            let need = count - offered;
+            let op = if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
+            self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
+            self.pump(5)?;
         }
         let offered: u32 = self
             .world
@@ -267,6 +293,7 @@ impl Bot {
 
     /// Click accept (stage 1 or confirm) until the window moves on.
     pub fn trade_accept(&mut self, timeout: u64) -> Result<bool> {
+        self.act("trade_accept".to_string());
         let Some(before) = self.trade_modal() else { return Ok(false) };
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
@@ -283,6 +310,7 @@ impl Bot {
     }
 
     pub fn trade_close(&mut self) -> Result<bool> {
+        self.act("trade_close".to_string());
         if self.world.modal.is_some() {
             self.close_modal()?;
             self.pump(5)?;
@@ -293,6 +321,7 @@ impl Bot {
     /// Pick up ground items: walks to a neighbor tile, clicks, waits for
     /// the carried total to grow. Tick-bounded, no sleep.
     pub fn take(&mut self, obj_id: Option<u16>, name: Option<&str>, timeout: u64) -> Result<bool> {
+        self.act(format!("take {:?}", name));
         let mut wanted = obj_id;
         if let Some(name) = name {
             let needle = name.to_lowercase();
@@ -352,6 +381,7 @@ impl Bot {
     /// Deposit the backpack with the bank's "Deposit All" action (op 4 per
     /// slot, one burst, then one retry of leftovers). Tick-bounded.
     pub fn bank_deposit_all(&mut self, side_com: u16, keep_ids: &[u16], timeout: u64) -> Result<bool> {
+        self.act(format!("bank_deposit_all keep={} timeout={timeout}", keep_ids.len()));
         for _ in 0..2 {
             let (_, slots) = self.backpack();
             let pending: Vec<(u8, u16)> =
@@ -384,6 +414,7 @@ impl Bot {
     }
 
     pub fn drop(&mut self, obj_id: u16, timeout: u64) -> Result<bool> {
+        self.act(format!("drop {} id={obj_id}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let (com, slots) = self.backpack();
         let Some(com) = com else { return Err(Error::Unreachable("backpack not streamed".to_string())) };
         let Some(&(slot, _)) = slots.iter().find(|(_, (held, _))| *held == obj_id) else {
@@ -406,6 +437,7 @@ impl Bot {
     }
 
     pub fn chat_continue(&mut self) -> Result<()> {
+        self.act("chat_continue".to_string());
         let mut body = Writer::new();
         body.u16(0);
         self.send_named("RESUME_PAUSEBUTTON", &body.bytes())
@@ -416,7 +448,34 @@ impl Bot {
     }
 
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
+        self.act(format!("open_bank {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
         self.approach(x, z, self.world.level, 1, 60)?;
+        if self.click_bank(x, z, loc_id, timeout)? {
+            return Ok(true);
+        }
+        // Booths sit behind counters: the nearest tile within 1 can face
+        // a wall ("I can't reach that"). Walk around and click the booth
+        // from every neighboring side, nearest first.
+        let mut tiles: Vec<(i32, i32)> = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
+            .filter(|tile| *tile != (x, z))
+            .collect();
+        tiles.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
+        for (tile_x, tile_z) in tiles {
+            if self.approach(tile_x, tile_z, self.world.level, 0, 150).is_err() {
+                continue;
+            }
+            if self.click_bank(x, z, loc_id, timeout)? {
+                return Ok(true);
+            }
+        }
+        Err(Error::Timeout(format!("bank did not open at {x},{z} from {:?} ({} ticks)", self.position(), timeout)))
+    }
+
+    /// Click the booth op and wait for the bank interface. Ok(false) when
+    /// the engine ignored the click (wrong side of a counter); only send
+    /// errors and missing tables propagate.
+    fn click_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
         self.op_loc(2, x, z, loc_id)?;
         let com = (self.tables.com_id)("bank_main:inv")
             .ok_or_else(|| Error::State("bank_main:inv missing from component table".to_string()))?;
@@ -427,11 +486,12 @@ impl Bot {
                 return Ok(true);
             }
         }
-        Err(Error::Timeout(format!("bank did not open at {x},{z} from {:?} ({} ticks)", self.position(), timeout)))
+        Ok(false)
     }
 
     /// Withdraw at least `count`, using the 10/5/1 buttons (all for coins).
     pub fn bank_withdraw(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<u32> {
+        self.act(format!("bank_withdraw {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let main_com = (self.tables.com_id)("bank_main:inv")
             .ok_or_else(|| Error::State("bank_main:inv missing from component table".to_string()))?;
         let mut remaining = count;
@@ -471,6 +531,7 @@ impl Bot {
     }
 
     pub fn cheat(&mut self, text: &str) -> Result<()> {
+        self.act(format!("cheat {text}"));
         let mut body = Writer::new();
         let command = text.strip_prefix("::").unwrap_or(text);
         body.jstr(command, 10);
@@ -489,6 +550,7 @@ impl Bot {
     }
 
     pub fn chat_choose(&mut self, text: &str) -> Result<u16> {
+        self.act(format!("chat_choose {text}"));
         let needle = text.to_lowercase();
         let found = self.world.texts.iter().find(|(_, option)| option.to_lowercase().contains(&needle)).map(|(com, _)| *com);
         match found {

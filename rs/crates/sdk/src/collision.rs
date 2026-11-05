@@ -450,6 +450,15 @@ pub fn change_loc_collision(
     }
 }
 
+/// Priority for the single-slot static table: actionable/blocking locs
+/// (doors, centre statue) win over stacked ground decor (maze dug soil).
+fn score(def: Option<LocDef>) -> u8 {
+    match def {
+        None => 0,
+        Some(entry) => u8::from(entry.blockwalk) * 2 + u8::from(entry.has_ops),
+    }
+}
+
 /// True when a size-1 mover can step one tile straight (diagonals rejected,
 /// exactly like the Python version which only handles the four cardinals).
 pub fn step_open(
@@ -1121,7 +1130,22 @@ fn load_locs(
             }
             let shape = info >> 2;
             let angle = info & 0x3;
-            static_locs.insert((absolute_x, absolute_z, actual), (loc_id as u16, shape, angle));
+            // One tile can stack several locs (maze walls under dug soil):
+            // keep the actionable/blocking one so find_loc and the door
+            // table still see the centre statue and the walllow doors.
+            let key = (absolute_x, absolute_z, actual);
+            let newcomer = (loc_id as u16, shape, angle);
+            let newcomer_score = score(loctypes.get(loc_id as usize).and_then(|slot| *slot));
+            let keep = match static_locs.get(&key) {
+                None => true,
+                Some((old_id, _, _)) => {
+                    newcomer_score
+                        > score(loctypes.get(*old_id as usize).and_then(|slot| *slot))
+                }
+            };
+            if keep {
+                static_locs.insert(key, newcomer);
+            }
             static_layers.insert(
                 (absolute_x, absolute_z, actual, layer_of(shape)),
                 (loc_id as u16, shape, angle),

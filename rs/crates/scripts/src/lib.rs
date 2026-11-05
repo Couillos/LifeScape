@@ -5,6 +5,7 @@
 
 pub mod devtools;
 pub mod devtools_check;
+pub mod maze;
 pub mod skill_common;
 pub mod skill_fishing;
 pub mod skill_combat;

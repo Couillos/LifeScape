@@ -66,6 +66,7 @@ impl Orchestrator {
             self.handle_event(job, &event);
         }
         self.rescue_step(job);
+        self.clear_event_if_gone(job);
         self.auto_idle_finished(job);
         let write = {
             let mut inner = job.inner.lock().unwrap();
@@ -142,6 +143,10 @@ impl Orchestrator {
             if resolved {
                 return;
             }
+            // Manual hold: record the event for visibility, run nothing.
+            if inner.held {
+                return;
+            }
             if inner.rescue_for.is_some() {
                 return;
             }
@@ -209,6 +214,9 @@ impl Orchestrator {
 
     fn maybe_rescue_from_worker(&self, job: &Arc<Job>, session: Option<&Value>) {
         let Some(session) = session else { return };
+        if job.inner.lock().unwrap().held {
+            return;
+        }
         {
             let mut inner = job.inner.lock().unwrap();
             if inner.rescue_for.is_some() {
@@ -241,7 +249,57 @@ impl Orchestrator {
         self.start_rescue(job, "rescue_fallback");
     }
 
-    /// A teleport event no script reported: synthesize it for handle_event.
+    /// The rescue ran: drop the daemon event when the live state shows
+    /// none (maze/mime rooms, fail tiles, carried cube). Rescues replay
+    /// a stale unresolved event every tick otherwise.
+    fn clear_event_if_gone(&self, job: &Arc<Job>) {
+        let state = {
+            let (merged_path, partial_path, _log) = paths::user_paths(&job.account);
+            let merged = paths::read_json(&merged_path).unwrap_or(Value::Null);
+            match (merged, paths::read_json(&partial_path)) {
+                (Value::Obj(mut base), Some(Value::Obj(extra))) => {
+                    base.extend(extra);
+                    Value::Obj(base)
+                }
+                (base, _) => base,
+            }
+        };
+        if state.as_obj().is_none() {
+            return;
+        }
+        let fresh = state
+            .get("updated")
+            .as_f64()
+            .is_some_and(|at| now_secs() - at < 10.0);
+        if !fresh {
+            return;
+        }
+        let pos = state.get("position").as_arr().cloned().unwrap_or_default();
+        let (level, x, z) = (
+            pos.first().and_then(|v| v.as_i64()).unwrap_or(-1),
+            pos.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
+            pos.get(2).and_then(|v| v.as_i64()).unwrap_or(0),
+        );
+        let mut present = MAZE_X.0 <= x && x < MAZE_X.1 && MAZE_Z.0 <= z && z < MAZE_Z.1
+            || MIME_X.0 <= x && x < MIME_X.1 && MIME_Z.0 <= z && z < MIME_Z.1
+            || FAIL_TELEPORTS.contains(&(level, x, z));
+        if !present {
+            let inv = state.get("inv").as_arr().cloned().unwrap_or_default();
+            present = inv.iter().any(|entry| {
+                entry.get("name").as_str() == Some("macro_cube") || entry.as_str() == Some("macro_cube")
+            });
+        }
+        if present {
+            return;
+        }
+        let mut inner = job.inner.lock().unwrap();
+        if let Some(Value::Obj(mut obj)) = inner.last_event.take() {
+            if obj.get("resolved").and_then(|v| v.as_bool()) != Some(true) {
+                obj.insert("resolved".to_string(), Value::Bool(true));
+            }
+            inner.last_event = Some(Value::Obj(obj));
+        }
+    }
     fn detect_state_events(&self, job: &Arc<Job>) -> Option<Value> {
         let script = {
             let inner = job.inner.lock().unwrap();

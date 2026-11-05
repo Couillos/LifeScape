@@ -510,13 +510,71 @@ fn shell(account: &str) -> i32 {
     0
 }
 
+/// Direct run without daemon nor session worker: login, run one script,
+/// logout. Same Bot setup as a session (live tables, map index,
+/// transitions) so routing behaves the same; nothing is published
+/// (no heartbeat, no logs, no spectate). For fast live tests only.
+fn run_direct(args: &[String]) -> i32 {
+    if args.len() < 2 {
+        eprintln!("usage: orchestrator direct <account> <script> [args...]");
+        return 2;
+    }
+    let account = &args[0];
+    let script = &args[1];
+    let script_args = args[2..].to_vec();
+    if !lifescape_scripts::names().iter().any(|name| name == script) {
+        eprintln!("direct: unknown script {script:?}");
+        return 2;
+    }
+    let engine = std::env::var("LIFESCAPE_ENGINE_DIR").ok().filter(|dir| !dir.is_empty()).unwrap_or_else(|| {
+        let sibling = crate::paths::root().join("../lostcity/engine");
+        if sibling.is_dir() {
+            sibling.to_string_lossy().to_string()
+        } else {
+            "../lostcity/engine".to_string()
+        }
+    });
+    let host = std::env::var("LIFESCAPE_SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("LIFESCAPE_SERVER_PORT").ok().and_then(|raw| raw.parse().ok()).unwrap_or(43594);
+    let mut bot = lifescape_sdk::Bot::new(&host, port, &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
+    lifescape_scripts::tables_live::attach_live_tables(&mut bot);
+    match crate::staticmap::build_pack(&engine) {
+        Ok(pack) => bot.maps = Some(pack),
+        Err(error) => eprintln!("direct: static locs missing ({error}); straight legs only"),
+    }
+    match crate::staticmap::load_transitions() {
+        Ok(rows) => bot.transitions = rows,
+        Err(error) => eprintln!("direct: transitions missing ({error}); nearest ladder only"),
+    }
+    if let Err(error) = bot.login(account, None) {
+        eprintln!("direct: login {account} failed: {error}");
+        return 1;
+    }
+    println!("direct: {account} logged in at {:?} t={}", bot.position(), bot.world.ticks);
+    let code = match lifescape_scripts::run(script, &mut bot, &script_args) {
+        Ok(code) => {
+            println!("direct: {script} exit {code} at {:?} t={}", bot.position(), bot.world.ticks);
+            code
+        }
+        Err(error) => {
+            eprintln!("direct: {script} failed at {:?} t={}: {error}", bot.position(), bot.world.ticks);
+            1
+        }
+    };
+    bot.close();
+    code
+}
+
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|close|shutdown|daemon|map ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map ...");
         return 2;
     }
     if argv[1].as_str() == "map" {
         return crate::mapcli::map_cli(&argv[2..].to_vec());
+    }
+    if argv[1].as_str() == "direct" {
+        return run_direct(&argv[2..].to_vec());
     }
     if !ensure_daemon() {
         eprintln!("orchestrator failed to start");
@@ -552,7 +610,7 @@ pub fn cli(argv: &[String]) -> i32 {
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
-        "unload" | "pause" | "resume" => {
+        "unload" | "pause" | "resume" | "hold" => {
             let reply = send(object(vec![("cmd", str_value(command)), ("account", str_value(&account))]));
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }

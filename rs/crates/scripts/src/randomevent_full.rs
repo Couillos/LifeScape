@@ -295,118 +295,18 @@ fn climb_single(bot: &mut Bot) -> Result<bool, ScriptError> {
         Ok(bot.world.level != before)
 }
 
-/// Walk the maze to the centre statue in straight legs, clicking the
-/// nearest refusing walllow door on the way. True when out.
-pub fn solve_maze(bot: &mut Bot) -> Result<bool, ScriptError> {
-    if !randomevent::in_maze(bot) {
-        return Ok(true);
+/// Print the `@@EVENT` line once per (event, position). The check runs
+/// every few ticks; without this a landing spams one line per loop and
+/// the daemon replays a rescue per line.
+fn report_once(bot: &Bot, event: randomevent::EventKind, resolved: bool) {
+    use std::sync::{Mutex, OnceLock};
+    static LAST: OnceLock<Mutex<Option<(String, (i32, i32, i32))>>> = OnceLock::new();
+    let key = (format!("{event:?}"), bot.position());
+    let mut last = LAST.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    if last.as_ref() != Some(&key) {
+        println!("{}", randomevent::report(bot, event, resolved));
+        *last = Some(key);
     }
-    if bot.maps.is_some() && bfs_to_centre(bot)? {
-        return Ok(!randomevent::in_maze(bot));
-    }
-    let Ok((goal_x, goal_z, _goal_level, goal_loc)) = kit::find_loc(bot, &["macro_maze_complete"], 150) else {
-        println!("maze centre missing from the map table");
-        return Ok(false);
-    };
-    println!("maze: walking to centre {goal_x},{goal_z} from {:?}", bot.position());
-    // No BFS window reached it (doors read closed, or no loaded map):
-    // straight legs at the centre plus door clicks, then click the
-    // finish statue (upstream has no position check and no timeout exit).
-    let deadline = bot.world.ticks + 15000;
-    let mut stalled = 0u32;
-    while randomevent::in_maze(bot) && bot.world.ticks < deadline {
-        if bot.world.modal.is_some() {
-            bot.close_modal()?;
-            bot.pump(3)?;
-        }
-        let before = (bot.world.x, bot.world.z);
-        if bot.walk_to(goal_x, goal_z, 0, 120).is_ok() {
-            bot.op_loc(1, goal_x, goal_z, goal_loc)?;
-            let target = bot.world.ticks + 30;
-            while bot.world.ticks < target && randomevent::in_maze(bot) {
-                bot.pump(2)?;
-            }
-            return Ok(!randomevent::in_maze(bot));
-        }
-        let mut doors: Vec<(i32, i32, i32, u16)> = Vec::new();
-        let (here_x, here_z) = (bot.world.x, bot.world.z);
-        bot.ensure_area(here_x, here_z, 32);
-        for (tile, loc) in bot.world.static_locs.iter().map(|(tile, loc)| (*tile, Some(*loc))).chain(bot.world.locs.iter().map(|(tile, loc)| (*tile, *loc))) {
-            let Some((loc_id, _, _)) = loc else { continue };
-            if tile.2 != 0 || (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs() > 15 {
-                continue;
-            }
-            let label = lifescape_gamedata::loc_by_id(loc_id as usize).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
-            if label.starts_with("macro_maze_walllow") || label.starts_with("macor_maze_walllow") {
-                doors.push((tile.0, tile.1, tile.2, loc_id));
-            }
-        }
-        doors.sort_by_key(|door| (door.0 - bot.world.x).abs() + (door.1 - bot.world.z).abs());
-        if let Some((door_x, door_z, door_level, door_loc)) = doors.first().copied() {
-            if bot.approach(door_x, door_z, door_level, 1, 300).is_ok() {
-                bot.op_loc(1, door_x, door_z, door_loc)?;
-                bot.pump(20)?;
-            }
-        } else {
-            bot.pump(10)?;
-        }
-        if (bot.world.x, bot.world.z) == before {
-            stalled += 1;
-            if stalled >= 6 {
-                println!("maze: no progress at {:?}", bot.position());
-                return Ok(false);
-            }
-        } else {
-            stalled = 0;
-        }
-    }
-    Ok(!randomevent::in_maze(bot))
-}
-
-/// Shared per-iteration event check. True means keep botting; false means
-/// the bot must stop for a scripted rescue (the worker unloads the script
-/// and the daemon runs the mapped rescue).
-/// Click the maze centre statue once standing near it. Upstream ends the
-/// event only through this statue (no position check, no timeout exit).
-fn click_centre_statue(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let Ok((statue_x, statue_z, statue_level, statue_loc)) = kit::find_loc(bot, &["macro_maze_complete"], 15) else {
-        return Ok(false);
-    };
-    if bot.approach(statue_x, statue_z, statue_level, 1, 300).is_err() {
-        return Ok(false);
-    }
-    bot.op_loc(1, statue_x, statue_z, statue_loc)?;
-    let target = bot.world.ticks + 30;
-    while bot.world.ticks < target && randomevent::in_maze(bot) {
-        bot.pump(2)?;
-    }
-    Ok(!randomevent::in_maze(bot))
-}
-
-/// Route to a walkable tile of the maze centre rect with the loaded
-/// collision map, then click the finish statue.
-fn bfs_to_centre(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let collision = bot.collision.clone();
-    for centre_z in 4573..=4577 {
-        for centre_x in 2909..=2913 {
-            let mut router = lifescape_sdk::route::Router::new();
-            if router.find_path_to_tile(&collision, 0, bot.world.x, bot.world.z, centre_x, centre_z).is_empty() {
-                continue;
-            }
-            println!("maze: routing to centre tile ({centre_x},{centre_z}) from {:?}", bot.position());
-            bot.intend(&format!("maze: walking to the centre ({centre_x},{centre_z})"));
-            let _ = bot.walk_to(centre_x, centre_z, 0, 600);
-            if click_centre_statue(bot)? {
-                return Ok(true);
-            }
-            let target = bot.world.ticks + 30;
-            while bot.world.ticks < target && randomevent::in_maze(bot) {
-                bot.pump(2)?;
-            }
-            return Ok(!randomevent::in_maze(bot));
-        }
-    }
-    Ok(false)
 }
 
 pub fn check(bot: &mut Bot) -> Result<bool, ScriptError> {
@@ -417,22 +317,22 @@ pub fn check(bot: &mut Bot) -> Result<bool, ScriptError> {
     }
     if randomevent::in_mime(bot) {
         println!("in mime event at {:?}, needs a performer", bot.position());
-        println!("{}", randomevent::report(bot, EventKind::Mime, false));
+        report_once(bot, randomevent::EventKind::Mime, false);
         return Ok(false);
     }
     if randomevent::cube_in_pack(bot) {
         println!("strange box in inventory, handing it to the cube rescue");
-        println!("{}", randomevent::report(bot, EventKind::Cube, false));
+        report_once(bot, randomevent::EventKind::Cube, false);
         return Ok(false);
     }
     if randomevent::in_maze(bot) {
-        let solved = solve_maze(bot)?;
-        println!("{}", randomevent::report(bot, EventKind::Maze, solved));
+        let solved = super::maze::solve(bot)?;
+        report_once(bot, randomevent::EventKind::Maze, solved);
         return Ok(solved);
     }
     if randomevent::in_fail_teleport(bot) {
         let escaped = bot.world.level == 0 || climb_out(bot)?;
-        println!("{}", randomevent::report(bot, EventKind::Tower, escaped));
+        report_once(bot, randomevent::EventKind::Tower, escaped);
         return Ok(escaped);
     }
     Ok(true)

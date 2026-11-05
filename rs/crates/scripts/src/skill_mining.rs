@@ -396,7 +396,7 @@ fn mine_load(
 ) -> Result<(bool, i64), ScriptError> {
     let ore_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
-    let idle_since = bot.world.ticks;
+    let mut idle_since = bot.world.ticks;
     let mut last_hitpoints = hitpoints(bot);
     let mut flees = 0u32;
     let mut spot: Option<(knowledge::rocks::RockTier, i32, i32)> = None;
@@ -406,9 +406,15 @@ fn mine_load(
         if free_slots(bot) <= usize::from(pack_total(bot, coins) > 0) {
             return Ok((true, level));
         }
-        if best_pickaxe(bot).is_none() && !recover_pickaxe(bot, coins, bank)? {
-            println!("pickaxe lost, banking load");
-            return Ok((true, level));
+        if best_pickaxe(bot).is_none() {
+            // Recovery walks (shop, bank) are not mining: don't bill
+            // them to the no-ore stall budget.
+            let spent = bot.world.ticks;
+            if !recover_pickaxe(bot, coins, bank)? {
+                println!("pickaxe lost, banking load");
+                return Ok((true, level));
+            }
+            idle_since += bot.world.ticks - spent;
         }
         level = learn_level(bot, MINING_STAT, level);
         if let (Some((tier, _, _)), Some(best)) = (&spot, pick_tier(tiers, level)) {
@@ -506,6 +512,9 @@ fn mine_load(
             WorkOutcome::Full | WorkOutcome::Moved | WorkOutcome::NoBait => {
                 spot = None;
             }
+        }
+        if gained > 0 {
+            idle_since = bot.world.ticks;
         }
         if bot.world.ticks - idle_since > STALL_TICKS {
             println!("stall: no ore for {STALL_TICKS} ticks");

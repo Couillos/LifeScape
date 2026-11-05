@@ -123,6 +123,7 @@ struct SessionInner {
     script_alive: bool,
     last_watch_tick: u64,
     last_heartbeat_tick: u64,
+    last_msg_logged: usize,
 }
 
 struct Shared {
@@ -182,6 +183,19 @@ impl Shared {
 /// aborts and the script unwinds instead of finishing its action.
 fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
     let tick = bot.world.ticks;
+    {
+        let mut inner = shared.inner.lock().unwrap();
+        if bot.world.messages.len() < inner.last_msg_logged {
+            inner.last_msg_logged = 0;
+        }
+        while inner.last_msg_logged < bot.world.messages.len() {
+            let index = inner.last_msg_logged;
+            let text = bot.world.messages.get(index).cloned().unwrap_or_default();
+            let at = bot.world.message_ticks.get(index).copied().unwrap_or(tick);
+            worker_out(&format!("msg [t={at}] {text}"));
+            inner.last_msg_logged = index + 1;
+        }
+    }
     let last = shared.inner.lock().unwrap().last_heartbeat_tick;
     if tick.saturating_sub(last) >= HEARTBEAT_TICKS {
         let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
@@ -779,6 +793,7 @@ pub fn run_session(account: &str) -> i32 {
             script_alive: false,
             last_watch_tick: 0,
             last_heartbeat_tick: 0,
+            last_msg_logged: 0,
         }),
         bot: Mutex::new(bot),
         heartbeat: Mutex::new(None),

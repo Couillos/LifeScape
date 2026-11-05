@@ -45,6 +45,9 @@ pub struct JobInner {
     pub status: String,
     pub session_pid: Option<u32>,
     pub started: f64,
+    /// Manual hold: the daemon runs no rescue while set (see `hold`).
+    /// Transient, never persisted: a daemon restart releases every hold.
+    pub held: bool,
     pub last_error: Option<Value>,
     pub last_event: Option<Value>,
     pub requirements: Option<Value>,
@@ -76,6 +79,7 @@ impl Job {
                 status: "starting".to_string(),
                 session_pid: None,
                 started: now_secs(),
+                held: false,
                 last_error: None,
                 last_event: None,
                 requirements: None,
@@ -155,6 +159,7 @@ impl Job {
             ("args", args),
             ("phase", str_value(&inner.phase)),
             ("paused", Value::Bool(inner.paused)),
+            ("held", Value::Bool(inner.held)),
             ("status", str_value(&inner.status)),
             ("session_pid", pid),
             ("started", Value::Float(inner.started)),
@@ -351,7 +356,7 @@ mod tests {
         let job = Job::new("t01");
         let state = job.describe();
         for key in [
-            "account", "script", "script_args", "args", "phase", "paused", "status", "session_pid",
+            "account", "script", "script_args", "args", "phase", "paused", "held", "status", "session_pid",
             "started", "intention", "position", "zone", "hitpoints", "ticks", "updated", "combat",
             "energy", "modal", "hint", "hint_type", "flash", "route", "route_target", "skills",
             "worn", "npcs", "locs", "flora", "objs", "players", "inv", "bank", "chat", "messages",

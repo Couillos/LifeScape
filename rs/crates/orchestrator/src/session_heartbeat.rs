@@ -154,9 +154,12 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str) -> Value {
         items.sort_by_key(|(slot, _)| *slot);
         items.into_iter().map(|(_, entry)| entry).collect()
     };
-    let chat: Vec<Value> = bot.world.chat.iter().rev().take(6).map(|line| str_value(&line.text)).collect();
-    let messages: Vec<Value> = bot.world.messages.iter().rev().take(6).map(|line| str_value(line)).collect();
-    let message_ticks: Vec<Value> = bot.world.message_ticks.iter().rev().take(6).map(|tick| Value::Int(*tick as i64)).collect();
+    let paired: Vec<(&String, &u64)> = bot.world.messages.iter().zip(bot.world.message_ticks.iter()).collect();
+    let start = paired.len().saturating_sub(25);
+    let chat_msgs: Vec<Value> = bot.world.chat.iter().rev().take(25).map(|line| str_value(&line.text)).collect();
+    let chat: Vec<Value> = chat_msgs.into_iter().rev().collect();
+    let messages: Vec<Value> = paired[start..].iter().map(|(line, _)| str_value(line)).collect();
+    let message_ticks: Vec<Value> = paired[start..].iter().map(|(_, tick)| Value::Int(**tick as i64)).collect();
     let mut texts: Vec<(u16, &String)> = bot.world.texts.iter().map(|(com, text)| (*com, text)).collect();
     texts.sort();
     let mut text_map = std::collections::BTreeMap::new();
