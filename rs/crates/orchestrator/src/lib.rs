@@ -1,0 +1,18 @@
+#![forbid(unsafe_code)]
+pub mod paths;
+pub mod json;
+pub mod jobs;
+pub mod registry;
+pub mod mapcache;
+pub mod mapcli;
+pub mod minimap;
+pub mod png;
+pub mod web;
+pub mod zones;
+pub mod cli;
+pub mod daemon;
+pub mod supervise;
+pub mod session;
+pub mod session_calls;
+pub mod session_heartbeat;
+pub mod staticmap;

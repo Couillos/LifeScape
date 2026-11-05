@@ -350,9 +350,9 @@ def _try_edge(bot, doors, here, nxt, blocked, attempts):
     """Cross one door edge. Returns True when it moved, else False.
 
     The SDK's open_door already stands on a reach-valid side, clicks, and
-    steps through (proven by probe_door on this very maze). Raw clicks from
-    our own guess were silently dropped by the server's reach check, so the
-    SDK is the primary path; one plain retry, then the edge is learned.
+    steps through. Raw clicks from our own guess were silently dropped by
+    the server's reach check, so the SDK is the primary path; one plain
+    retry, then the edge is learned.
     """
     spot = doors.get(nxt, doors.get(here))
     if spot is None or here in doors:

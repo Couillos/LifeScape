@@ -1,0 +1,15 @@
+[package]
+name = "lifescape-scripts"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_scripts"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-sdk = { path = "../sdk" }
+lifescape-gamedata = { path = "../gamedata" }
+
+[lints]
+workspace = true

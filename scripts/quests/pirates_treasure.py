@@ -253,7 +253,7 @@ def solve(bot):
         raise solver.SolverError("did not climb to the Blue Moon Inn upstairs")
     # The chest only answers from its east side: the south tile borders a
     # wall the server's reach check refuses, so nearest-approach (south)
-    # silently drops both clicks (verified live with probe_use).
+    # silently drops both clicks (verified live).
     if _count(bot, message) < 1:
         _x, _z, _level, _loc = tutorial_common.find_loc(bot, "piratechest")
         bot.walk_to(_x + 1, _z, _level, timeout=6000, open_doors=True)

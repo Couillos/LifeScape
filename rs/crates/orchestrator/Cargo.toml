@@ -1,0 +1,20 @@
+[package]
+name = "lifescape-orchestrator"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "orchestrator"
+path = "src/main.rs"
+
+[lib]
+name = "lifescape_orchestrator"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-gamedata = { path = "../gamedata" }
+lifescape-sdk = { path = "../sdk" }
+lifescape-scripts = { path = "../scripts" }
+
+[lints]
+workspace = true

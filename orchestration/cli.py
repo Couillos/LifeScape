@@ -16,7 +16,6 @@ and call SDK methods inside it without reconnecting.
     orchestrator.py show <account>
     orchestrator.py see <account>
     orchestrator.py logs <account> [lines]
-    orchestrator.py test [pattern]
     orchestrator.py shutdown
     orchestrator.py ping
 
@@ -331,13 +330,6 @@ def main(argv):
         reply = send_command({"cmd": "logs", "account": account, "lines": lines})
         print("\n".join(reply.get("lines", [])))
         return 0
-    elif command == "test":
-        reply = send_command({"cmd": "test", "args": argv[2:]}, timeout=660)
-        for line in reply.get("log_tail", []) or []:
-            print(line)
-        state = reply.get("state", {}) or {}
-        print("tests: %s" % (state.get("status", "?")))
-        return 0 if reply.get("ok") else 1
     elif command == "shutdown":
         reply = send_command({"cmd": "shutdown"})
     elif command == "ping":

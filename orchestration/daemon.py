@@ -574,9 +574,9 @@ class Orchestrator:
     def auto_idle_finished(self, job):
         """Finished is transient: the daemon unloads it back to idle.
 
-        The worker keeps finished until observed so the test command and
-        the dashboard see it; the next supervision pass returns the
-        session to idle without dropping the connection, keeping last_code.
+        The worker keeps finished until observed so the dashboard sees
+        it; the next supervision pass returns the session to idle
+        without dropping the connection, keeping last_code.
         """
         if job.rescue_for is not None:
             return
@@ -749,28 +749,6 @@ class Orchestrator:
                     except OSError:
                         pass
 
-    def test_command(self, pattern):
-        reply = self.open_job("tests", no_login=True)
-        if not reply.get("ok"):
-            return reply
-        reply = self.send_worker("tests", {"cmd": "run", "script": "tests", "args": pattern}, timeout=WORKER_TIMEOUT)
-        if not reply.get("ok"):
-            self.close_job("tests")
-            return reply
-        deadline = time.time() + 600
-        state = {}
-        while time.time() < deadline:
-            time.sleep(0.5)
-            state = self.dispatch({"cmd": "show", "account": "tests"}).get("state", {})
-            if state.get("status") in ("finished", "failed"):
-                break
-            if state.get("status") == "idle" and state.get("last_code") is not None:
-                break
-        code = 0 if state.get("status") == "finished" or (state.get("status") == "idle" and state.get("last_code") == 0) else 1
-        tail = self.dispatch({"cmd": "logs", "account": "tests", "lines": 60}).get("lines", [])
-        self.close_job("tests")
-        return {"ok": code == 0, "state": state, "log_tail": tail}
-
     def dispatch(self, request):
         command = request.get("cmd")
         account = request.get("account") or ""
@@ -825,8 +803,6 @@ class Orchestrator:
             _merged, _partial, log_path = user_paths(account)
             lines = int(request.get("lines") or 40)
             return {"ok": True, "lines": tail_lines(log_path, lines)}
-        if command == "test":
-            return self.test_command(request.get("args") or [])
         if command == "shutdown":
             with self.lock:
                 jobs = list(self.jobs.values())

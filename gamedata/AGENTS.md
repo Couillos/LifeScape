@@ -1,7 +1,9 @@
 # gamedata
 
 Base de connaissances du jeu, en dehors du SDK LifeScape, utilisée par les
-scripts (`scripts/`) et par l'agent qui développe les scripts.
+scripts (`rs/crates/scripts/`) et par l'agent qui développe les scripts.
+Implémentation : crate Rust `lifescape-gamedata` (`rs/crates/gamedata/`),
+stdlib uniquement, zéro dépendance.
 
 Contenu : tous les objets (ids, noms, textes, actions, prix, high/low alch),
 PNJ (ids, noms, positions de spawn), décors, composants d'interface, vendeurs,
@@ -26,14 +28,19 @@ dump depuis `free2play.csv`, level ignoré comme en prod. Spécial arbres :
 
 ## Règles (mêmes contraintes que LifeScape, car importé par ses scripts)
 
-- Python pur, lisible par un humain, compatible PyPy
-  (`../../lostcity/.pypy/bin/pypy3`). Zéro dépendance externe : uniquement
-  la bibliothèque standard embarquée.
-- Imports toujours en début de fichier, jamais dans les fonctions.
-- Un rôle par module, un fichier < 1000 lignes, découper avant la limite.
-- Noms explicites (jamais 1-2 caractères), petites fonctions.
+- Rust lisible par un humain, édition 2021, `#![forbid(unsafe_code)]`.
+  Zéro dépendance externe : uniquement la std. Pas de serde : le mini
+  lecteur JSON de `lib.rs` suffit.
+- Un rôle par module (`banks.rs`, `combat_spots.rs`, `equipment.rs`,
+  `fishing.rs`, `food.rs`, `quests.rs`, `quest_requirements.rs`,
+  `recipes.rs`, `rocks.rs`, `shops.rs`, `spawns.rs`, `spells.rs`,
+  `trees.rs`, `varps.rs` + types `Obj`/`Npc`/`Loc` dans `lib.rs`),
+  un fichier < 1000 lignes, découper avant la limite.
+- Noms explicites (jamais 1-2 caractères), petites fonctions, mêmes noms
+  snake_case que le Python d'origine (`all_banks`, `nearest_bank`,
+  `best_spot`, `tier_for_level`, ...).
 - Données : `data/*.json` générés par dump, JAMAIS édités à la main.
-  Seul le code dans `gamedata/` est écrit à la main.
+  Seul le code dans `rs/crates/gamedata/src/` est écrit à la main.
 - Timeouts et sleeps calibrés sur des durées mesurées en live
   (voir `../AGENTS.md` et `../../lostcity/AGENTS.md`).
 
@@ -43,13 +50,16 @@ dump depuis `free2play.csv`, level ignoré comme en prod. Spécial arbres :
 cd ../../lostcity/engine && npx tsx tools/gamedata-dump.mts ../../LifeScape/gamedata/data/
 ```
 
+Les JSON restent lus depuis `gamedata/data/*.json` via `table()` :
+aucun changement de chemin côté Rust.
+
 ## Vérifier (boucle de vérification)
 
 ```sh
-../../lostcity/.pypy/bin/pypy3 scripts/verify.py            # statique + live
-../../lostcity/.pypy/bin/pypy3 -m unittest discover tests   # si tests ajoutés
+cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata
+cargo build --manifest-path rs/Cargo.toml
 ```
 
-`verify.py` compare le dump aux sources serveur, rejoue des vecteurs
-connus et fait des contrôles live rapides (login bot, positions, shops).
-Tant qu'un contrôle échoue, corriger le dump ou le code, puis relancer.
+Chaque module rejoue 2–3 vecteurs connus (banques, stuff, nourritures,
+quêtes, recettes, shops, spawns, sorts, varps...). Tant qu'un contrôle
+échoue, corriger le dump ou le code, puis relancer.
