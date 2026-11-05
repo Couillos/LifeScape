@@ -124,6 +124,10 @@ struct SessionInner {
     last_watch_tick: u64,
     last_heartbeat_tick: u64,
     last_msg_logged: usize,
+    /// Every tile the bot stood on (x, z, tick), pushed on each pump.
+    /// Lets tests check the walker stays on its planned legs; capped,
+    /// oldest half dropped.
+    trail: Vec<(i32, i32, u64)>,
 }
 
 struct Shared {
@@ -183,7 +187,7 @@ impl Shared {
 /// aborts and the script unwinds instead of finishing its action.
 fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
     let tick = bot.world.ticks;
-    {
+    let trail: Vec<(i32, i32, u64)> = {
         let mut inner = shared.inner.lock().unwrap();
         if bot.world.messages.len() < inner.last_msg_logged {
             inner.last_msg_logged = 0;
@@ -195,11 +199,18 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
             worker_out(&format!("msg [t={at}] {text}"));
             inner.last_msg_logged = index + 1;
         }
-    }
+        if inner.trail.last().is_none_or(|last| (last.0, last.1) != (bot.world.x, bot.world.z)) {
+            inner.trail.push((bot.world.x, bot.world.z, tick));
+            if inner.trail.len() > 4000 {
+                inner.trail.drain(..2000);
+            }
+        }
+        inner.trail.clone()
+    };
     let last = shared.inner.lock().unwrap().last_heartbeat_tick;
     if tick.saturating_sub(last) >= HEARTBEAT_TICKS {
         let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
-        let state = heartbeat_value(bot, &shared.account, &script);
+        let state = heartbeat_value(bot, &shared.account, &script, &trail);
         if paths::write_json(&shared.state_path, &state).is_err() {
             return !shared.stop_requested.load(Ordering::SeqCst);
         }
@@ -214,7 +225,8 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
 fn write_heartbeat(shared: &Arc<Shared>) {
     let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
     let Ok(bot) = shared.bot.try_lock() else { return };
-    let state = heartbeat_value(&bot, &shared.account, &script);
+    let trail = shared.inner.lock().unwrap().trail.clone();
+    let state = heartbeat_value(&bot, &shared.account, &script, &trail);
     if paths::write_json(&shared.state_path, &state).is_err() {
         worker_out(&format!("state write failed ({})", shared.state_path.display()));
         return;
@@ -273,6 +285,7 @@ fn cmd_run(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
         inner.last_code = None;
         inner.last_error = None;
         inner.script_alive = true;
+        inner.trail.clear();
     }
     shared.stop_requested.store(false, Ordering::SeqCst);
     std::env::set_var("LIFESCAPE_SCRIPT", script);
@@ -794,6 +807,7 @@ pub fn run_session(account: &str) -> i32 {
             last_watch_tick: 0,
             last_heartbeat_tick: 0,
             last_msg_logged: 0,
+            trail: Vec::new(),
         }),
         bot: Mutex::new(bot),
         heartbeat: Mutex::new(None),

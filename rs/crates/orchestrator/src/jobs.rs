@@ -177,6 +177,7 @@ impl Job {
             ("flash", bot.get("flash").clone()),
             ("route", arr_or_empty(bot.get("route"))),
             ("route_target", bot.get("route_target").clone()),
+            ("trail", arr_or_empty(bot.get("trail"))),
             ("skills", arr_or_empty(bot.get("skills"))),
             ("worn", arr_or_empty(bot.get("worn"))),
             ("npcs", arr_or_empty(bot.get("npcs"))),
@@ -361,7 +362,7 @@ mod tests {
             "energy", "modal", "hint", "hint_type", "flash", "route", "route_target", "skills",
             "worn", "npcs", "locs", "flora", "objs", "players", "inv", "bank", "chat", "messages",
             "message_ticks", "texts", "log", "last_event", "requirements", "last_error",
-            "last_code",
+            "last_code", "trail",
         ] {
             assert!(state.as_obj().unwrap().contains_key(key), "missing {key}");
         }

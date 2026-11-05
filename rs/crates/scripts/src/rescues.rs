@@ -162,15 +162,17 @@ fn solve_strange_box(bot: &mut Bot, max_rounds: u32) -> Result<bool, ScriptError
         // yet (server splits stacks every 16 ticks): pump and retry, never
         // report success on a lookup miss.
         let Ok((inv_com, slot)) = kit::inv_slot(bot, cube) else {
-            bot.pump(3)?;
+            bot.pump(2)?;
             continue;
         };
         bot.op_held(1, cube, slot, inv_com)?;
-        let target = bot.world.ticks + 60;
+        // Quiz UI lands in a tick or two; the replicator adds one every
+        // 150, so poll tight instead of sitting out a 60-tick wait.
+        let target = bot.world.ticks + 12;
         let mut question: Option<String> = None;
         let mut models: Vec<Option<u16>> = vec![None; 3];
         while bot.world.ticks < target {
-            bot.pump(3)?;
+            bot.pump(1)?;
             let mut texts = bot.chat_texts();
             texts.sort();
             question = texts.into_iter().find(|(com, _)| *com == question_com).map(|(_, text)| text);
@@ -193,13 +195,13 @@ fn solve_strange_box(bot: &mut Bot, max_rounds: u32) -> Result<bool, ScriptError
         };
         println!("cube quiz: {:?} -> button {}", &asked[..asked.len().min(60)], pick + 1);
         bot.if_button(button_coms[pick])?;
-        bot.pump(5)?;
-        for _ in 0..12 {
+        bot.pump(2)?;
+        for _ in 0..6 {
             if bot.world.modal.is_none() {
                 break;
             }
             bot.chat_continue()?;
-            bot.pump(3)?;
+            bot.pump(1)?;
         }
     }
     Ok(bot.inventory().get(&cube).copied().unwrap_or(0) == 0)
@@ -226,7 +228,30 @@ fn rescue_down(bot: &mut Bot) -> ScriptResult {
     bot.pump(10)?;
     bot.intend("rescue: tower");
     println!("start {:?}", bot.position());
-    if climb_out(bot)? { Ok(0) } else { Ok(1) }
+    if !climb_out(bot)? {
+        return Ok(1);
+    }
+    // climb_out succeeds on level 0 without moving, but the fail spot is
+    // positional: standing on it re-reports the event forever. Step off.
+    if randomevent::in_fail_teleport(bot) {
+        let (level, here_x, here_z) = bot.position();
+        let mut off = false;
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+            let (next_x, next_z) = (here_x + dx, here_z + dz);
+            if randomevent::FAIL_TELEPORTS.contains(&(level, next_x, next_z)) {
+                continue;
+            }
+            if bot.step_to(next_x, next_z, 30).unwrap_or(false) && !randomevent::in_fail_teleport(bot) {
+                off = true;
+                break;
+            }
+        }
+        if !off {
+            println!("tower: stuck on the fail spot at {:?}", bot.position());
+            return Ok(1);
+        }
+    }
+    verify(bot, "tower")
 }
 
 fn rescue_fallback(bot: &mut Bot) -> ScriptResult {

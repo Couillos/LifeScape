@@ -256,7 +256,7 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
         "step_to" => {
             let target_x = need_i64(&args, 0, method)? as i32;
             let target_z = need_i64(&args, 1, method)? as i32;
-            let timeout = need_u64(&args, 2, method, 100)?;
+            let timeout = need_u64(&args, 2, method, 30)?;
             bot.step_to(target_x, target_z, timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "walk_steps" => {

@@ -11,7 +11,7 @@ use crate::json::{Value, object, str_value};
 use crate::session::now_secs;
 use crate::zones;
 
-pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str) -> Value {
+pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(i32, i32, u64)]) -> Value {
     let (level, pos_x, pos_z) = bot.position();
     let hitpoints = bot.world.stats.get(&3).map(|(level, _)| Value::Int(i64::from(*level))).unwrap_or(Value::Null);
     let combat = bot.combat_level().map(|level| Value::Int(i64::from(level))).unwrap_or(Value::Null);
@@ -194,6 +194,21 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str) -> Value {
         ("route", Value::Arr(route)),
         ("route_target", route_target),
         ("route_action", Value::Null),
+        (
+            "trail",
+            Value::Arr(
+                trail
+                    .iter()
+                    .map(|(trail_x, trail_z, trail_tick)| {
+                        Value::Arr(vec![
+                            Value::Int(i64::from(*trail_x)),
+                            Value::Int(i64::from(*trail_z)),
+                            Value::Int(*trail_tick as i64),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
         ("skills", Value::Arr(skills)),
         ("npcs", Value::Arr(npcs)),
         ("locs", Value::Arr(locs)),
