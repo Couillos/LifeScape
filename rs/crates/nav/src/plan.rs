@@ -111,11 +111,13 @@ pub struct CustomEdgeRef {
     pub name: String,
 }
 
-/// Opening click before the climb (trapdoor lid, manhole cover...).
+/// Opening click before the climb (trapdoor lid, manhole cover...):
+/// `loc`/`op` to click, `open_to` the loc id the click must reveal.
 #[derive(Clone, Debug)]
 pub struct OpenStep {
     pub loc: u16,
     pub op: u8,
+    pub open_to: u16,
 }
 
 /// One plan piece, in walking order.
@@ -642,10 +644,10 @@ fn prepare_edges(search: &mut Search) -> (U64Map<Vec<RideEdge>>, U64Map<Vec<Cust
             continue;
         }
         let pre_open = match row.open_to {
-            Some(_) => {
+            Some(open_to) => {
                 let op = search.world.loc_def(row.loc as usize).and_then(|def| def.open_op);
                 match op {
-                    Some(op) => Some(OpenStep { loc: row.loc, op }),
+                    Some(op) => Some(OpenStep { loc: row.loc, op, open_to }),
                     None => continue,
                 }
             }

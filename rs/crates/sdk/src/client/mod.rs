@@ -8,6 +8,7 @@ pub mod approach;
 pub mod doors;
 pub mod movement;
 pub mod snapshot_view;
+pub mod travel;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -65,11 +66,10 @@ pub struct Bot {
     /// Game-table lookups (names, sizes, component ids). `NOTABLES` by
     /// default: every lookup misses, NPC size falls back to 1.
     pub tables: Tables,
-    /// Full collision map when the session loaded the pack maps; `walk_to`
-    /// chains BFS windows through it, otherwise it walks straight legs.
     /// Full collision map, painted square by square as the session
     /// explores (see `ensure_area`). Starts empty: unknown tiles read
-    /// as blocked until their square loads.
+    /// as blocked until their square loads. `travel_to` plans on the
+    /// static world; this map carries live door states for execution.
     pub collision: CollisionMap,
     /// Openable blocking locs seen while painting, by tile. The router
     /// plans through them; the walker clicks the ones it must cross.
@@ -96,6 +96,12 @@ pub struct Bot {
     /// Known stair/ladder/trapdoor rides, loaded from the transition dump.
     /// Empty without it: climbs fall back to the nearest ladder loc.
     pub transitions: Vec<TransitionRow>,
+    /// Static collision for the planner, wired by the session at open.
+    /// `travel_to` refuses loud without it: no plan, no walk.
+    pub nav_world: Option<Arc<lifescape_nav::static_world::StaticWorld>>,
+    /// Planner tables (transitions, verdicts, door rules), wired by the
+    /// session at open alongside `nav_world`.
+    pub nav_tables: Option<Arc<lifescape_nav::tables::Tables>>,
     /// Heartbeat hook, installed by the session worker (default: none).
     pub on_pump: Option<PumpHook>,
     /// Inline-pause gate, installed by the session worker (default: none).
@@ -130,6 +136,8 @@ impl Bot {
             allow_wild: false,
             maps: None,
             transitions: Vec::new(),
+            nav_world: None,
+            nav_tables: None,
             on_pump: None,
             pause_gate: None,
             zone_label: "?".to_string(),
