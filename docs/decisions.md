@@ -12,3 +12,6 @@
 - 2026-11-06 — Péage PaidOnly synthétique validé : Al-Kharid contournable à pied (détour 220 tuiles via `route`), branche couverte par `paid_only.rs`. Rejeté : or PaidOnly réel (aucun péage isolé en F2P).
 - 2026-11-06 — Exemption budget 300 ms pour NoRoute-par-épuisement : `chateau_scell` met 3669 ms à prouver Disconnected (release) ; budget = plans réussis (max 140 ms). Rejeté : borner la preuve d'échec.
 - 2026-11-06 — Coûts 10/20/50 gardés : DOOR 10, TRANSITION 20, UNVERIFIED 50 ; calibration live reportée phase 7 (prober). Rejeté : calibrer sans mesures d'arrivée.
+- 2026-11-06 — Bornes d'exécution mesurées live : DOOR_SWING_WAIT 23 (swing vu à 17 ticks), RIDE_WAIT 41 (atterrissages 2-9, 26 max en live), CROSS_WAIT 7 (pas 1-4), PRE_OPEN_WAIT 17 (couvercle souvent déjà ouvert, calibration prober phase 7). Rejeté : bornes rondes sans source.
+- 2026-11-06 — STALL 13 : 19 jambes live à 0,6-6 ticks/tuile (médiane 2), 13 = silence > 2x pire écart + marge pompe. Rejeté : seuil rond (10/15 sans source).
+- 2026-11-06 — Budget temporel cost*4+347 ticks : 4 = 2x médiane marche, 347 = file portes + stalls ; aucun Timeout sur les runs live phase 5. Rejeté : budget fixe (ordres de grandeur différents).
