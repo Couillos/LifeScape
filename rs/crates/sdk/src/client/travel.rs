@@ -34,8 +34,9 @@ const RIDE_WAIT: u64 = 41;
 /// Trapdoor pre-open watch: the lid flips within a few ticks, 17 leaves
 /// the swing plus two slow pumps.
 const PRE_OPEN_WAIT: u64 = 17;
-/// Crossing step for an already-open door: the tile is adjacent, 7 leaves
-/// a re-closed fast door plus margin.
+/// Crossing step for an open door: the tiles are adjacent, measured
+/// 1-2 ticks, 7 leaves a re-closed fast door plus margin. Same bound
+/// serves the single orthogonal sidestep before a click.
 const CROSS_WAIT: u64 = 7;
 /// Walk budget per planned cost unit: walking runs ~1 tile per 2 ticks,
 /// 4 per unit plus 347 base leaves stalls and door queues inside.
@@ -328,6 +329,17 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
         }
+        // Live state around the door: painted square, so the stand
+        // check below reads the world instead of empty maps.
+        self.ensure_area(door.x, door.z, 3);
+        // The engine only answers orthogonal clicks (a diagonal stand
+        // gets "I can't reach that"): sidestep onto an orthogonal
+        // neighbour of the door first, same when starting on its tile.
+        self.orthogonal_stand(door, deadline)?;
+        // The sidestep may have landed past the door already.
+        if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+            return Ok(());
+        }
         // Already open: the live loc left the closed id (swapped away or
         // cleared). Step through at once, no click.
         if self.door_live_open(door) {
@@ -383,6 +395,47 @@ impl Bot {
             Some((id, _, _)) => id != door.loc,
             None => self.world.loc_removed(door.x, door.z, door.level),
         }
+    }
+
+    /// Orthogonal stand for the click: the engine refuses diagonal door
+    /// clicks. Steps at most one tile onto an orthogonal neighbour of
+    /// the door (never through it); loud when none is walkable.
+    fn orthogonal_stand(
+        &mut self,
+        door: &lifescape_nav::plan::DoorRef,
+        deadline: u64,
+    ) -> Result<()> {
+        let here = (self.world.x, self.world.z, self.world.level);
+        if here.2 == door.level
+            && (here.0 - door.x).abs() + (here.1 - door.z).abs() == 1
+        {
+            return Ok(());
+        }
+        self.sync_live_doors();
+        let mut sides = [(door.x + 1, door.z), (door.x - 1, door.z), (door.x, door.z + 1), (door.x, door.z - 1)];
+        sides.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
+        for (side_x, side_z) in sides {
+            if self.world.ticks > deadline {
+                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
+            }
+            if (side_x, side_z) == (here.0, here.1) {
+                continue;
+            }
+            if (side_x - here.0).abs() + (side_z - here.1).abs() != 1 || here.2 != door.level {
+                continue;
+            }
+            if !crate::collision::step_open(&self.collision, here.0, here.1, here.2, side_x - here.0, side_z - here.1) {
+                continue;
+            }
+            match self.step_to(side_x, side_z, CROSS_WAIT) {
+                Ok(true) => return Ok(()),
+                _ => continue,
+            }
+        }
+        Err(Error::DoorDidNotOpen(format!(
+            "door loc {} at ({},{},{}) has no orthogonal stand from {:?}; last game: {}",
+            door.loc, door.x, door.z, door.level, self.position(), last_message(self),
+        )))
     }
 
     /// Walk the open door: one step onto the tile (unless on it), one off
