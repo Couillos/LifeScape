@@ -335,7 +335,7 @@ impl Bot {
         // The engine only answers orthogonal clicks (a diagonal stand
         // gets "I can't reach that"): sidestep onto an orthogonal
         // neighbour of the door first, same when starting on its tile.
-        self.orthogonal_stand(door, deadline)?;
+        self.door_stand(door, deadline)?;
         // The sidestep may have landed past the door already.
         if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
             return Ok(());
@@ -397,34 +397,34 @@ impl Bot {
         }
     }
 
-    /// Orthogonal stand for the click: the engine refuses diagonal door
-    /// clicks. Steps at most one tile onto an orthogonal neighbour of
-    /// the door (never through it); loud when none is walkable.
-    fn orthogonal_stand(
+    /// Click stand for the door: a tile the engine accepts (its own
+    /// reach rule for the door's shape and angle — an off-side stand
+    /// gets "I can't reach that") and orthogonal to the door tile.
+    /// Steps at most one tile; loud when no neighbour qualifies.
+    fn door_stand(
         &mut self,
         door: &lifescape_nav::plan::DoorRef,
         deadline: u64,
     ) -> Result<()> {
-        let here = (self.world.x, self.world.z, self.world.level);
-        if here.2 == door.level
-            && (here.0 - door.x).abs() + (here.1 - door.z).abs() == 1
-        {
+        if self.stand_ok(door, self.world.x, self.world.z, self.world.level) {
             return Ok(());
         }
         self.sync_live_doors();
-        let mut sides = [(door.x + 1, door.z), (door.x - 1, door.z), (door.x, door.z + 1), (door.x, door.z - 1)];
+        let here = (self.world.x, self.world.z);
+        let mut sides =
+            [(door.x + 1, door.z), (door.x - 1, door.z), (door.x, door.z + 1), (door.x, door.z - 1)];
         sides.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
         for (side_x, side_z) in sides {
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
             }
-            if (side_x, side_z) == (here.0, here.1) {
+            if (side_x - here.0).abs() + (side_z - here.1).abs() != 1 || self.world.level != door.level {
                 continue;
             }
-            if (side_x - here.0).abs() + (side_z - here.1).abs() != 1 || here.2 != door.level {
+            if !self.stand_ok(door, side_x, side_z, door.level) {
                 continue;
             }
-            if !crate::collision::step_open(&self.collision, here.0, here.1, here.2, side_x - here.0, side_z - here.1) {
+            if !crate::collision::step_open(&self.collision, here.0, here.1, door.level, side_x - here.0, side_z - here.1) {
                 continue;
             }
             match self.step_to(side_x, side_z, CROSS_WAIT) {
@@ -433,9 +433,45 @@ impl Bot {
             }
         }
         Err(Error::DoorDidNotOpen(format!(
-            "door loc {} at ({},{},{}) has no orthogonal stand from {:?}; last game: {}",
+            "door loc {} at ({},{},{}) has no clickable stand from {:?}; last game: {}",
             door.loc, door.x, door.z, door.level, self.position(), last_message(self),
         )))
+    }
+
+    /// True when the engine would take a click from this tile: orthogonal
+    /// neighbour of the door tile whose stand passes the server's reach
+    /// rule for the door's live (else static) shape and angle.
+    fn stand_ok(&self, door: &lifescape_nav::plan::DoorRef, x: i32, z: i32, level: i32) -> bool {
+        if level != door.level || (x - door.x).abs() + (z - door.z).abs() != 1 {
+            return false;
+        }
+        let (_, shape, angle) = match self
+            .world
+            .loc_at(door.x, door.z, door.level)
+            .or_else(|| self.world.static_locs.get(&(door.x, door.z, door.level)).copied())
+        {
+            Some(found) => found,
+            None => return true,
+        };
+        let (width, height) = self
+            .maps
+            .as_ref()
+            .and_then(|pack| pack.loc_def(door.loc as usize))
+            .map(|def| (i32::from(def.length), i32::from(def.width)))
+            .unwrap_or((1, 1));
+        lifescape_nav::reach::reached(
+            &|ax, az, level| self.collision.get(ax, az, level),
+            door.level,
+            x,
+            z,
+            door.x,
+            door.z,
+            width,
+            height,
+            i32::from(angle),
+            i32::from(shape),
+            0,
+        )
     }
 
     /// Walk the open door: one step onto the tile (unless on it), one off
