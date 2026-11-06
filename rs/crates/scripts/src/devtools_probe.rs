@@ -108,8 +108,10 @@ fn await_stream(bot: &mut Bot) -> Result<(), ScriptError> {
     }
     Ok(())
 }
-fn last_message(bot: &Bot) -> String {
-    bot.world.messages.last().cloned().unwrap_or_default()
+/// Last game message that arrived since the click: the ride's own
+/// answer, never a stale line from an earlier row.
+fn new_message(bot: &Bot, since: usize) -> String {
+    bot.world.messages.get(since..).unwrap_or(&[]).last().cloned().unwrap_or_default()
 }
 
 fn arrived_tile(bot: &Bot) -> Tile {
@@ -257,7 +259,7 @@ fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: O
         result,
         arrived: arrived_tile(bot),
         ticks: bot.world.ticks.saturating_sub(started),
-        message: last_message(bot),
+        message: new_message(bot, seen_messages),
         choice,
         date: date.to_string(),
     };
