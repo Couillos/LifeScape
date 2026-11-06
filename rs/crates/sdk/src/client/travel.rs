@@ -24,9 +24,10 @@ const COINS_OBJ: u16 = 995;
 /// transmit=true, so the live value is always on hand).
 const QP_VARP: u16 = 101;
 
-/// Door swing watch: the click teleports within a few ticks, 17 leaves
-/// the swing plus two slow pumps.
-const DOOR_SWING_WAIT: u64 = 17;
+/// Door swing watch: the click resolves through the interaction queue
+/// (measured 17 ticks send-to-visible in a freshly streamed area), 23
+/// leaves that plus a slow-pump margin.
+const DOOR_SWING_WAIT: u64 = 23;
 /// Ride landing watch: measured 2-9 ticks live across stairs, trapdoors
 /// and dungeon ladders, 41 leaves two slow server round-trips.
 const RIDE_WAIT: u64 = 41;
