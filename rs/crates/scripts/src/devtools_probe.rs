@@ -87,6 +87,27 @@ fn is_fatal(err: &ScriptError) -> bool {
     )
 }
 
+/// Region stream catch-up after a teleport: cross-region jumps deliver
+/// `REBUILD_NORMAL` with the fresh locs; same-region hops just burn the
+/// bound. Lid reads below need post-teleport data, never the
+/// pre-teleport cache (which wrongly skipped two pre-opens mid-run).
+const STREAM_SETTLE: u64 = 13;
+
+/// True when a death message arrived since the click: the respawn, not
+/// the transition, explains the landing. Those rows leave no verdict.
+fn died_since(messages: &[String], since: usize) -> bool {
+    messages.get(since..).unwrap_or(&[]).iter().any(|line| line.to_lowercase().contains("oh dear you are dead"))
+}
+
+fn await_stream(bot: &mut Bot) -> Result<(), ScriptError> {
+    for _ in 0..STREAM_SETTLE {
+        let frames = bot.pump(1)?;
+        if frames.iter().any(|frame| frame.name == "REBUILD_NORMAL") {
+            break;
+        }
+    }
+    Ok(())
+}
 fn last_message(bot: &Bot) -> String {
     bot.world.messages.last().cloned().unwrap_or_default()
 }
@@ -152,8 +173,9 @@ fn entry_key(value: &Value) -> Option<(u16, i32, i32, i32)> {
 }
 
 /// Merge new entries into the existing file body: tested rows are
-/// replaced, untested rows survive, unparseable rows are kept as-is.
-fn merge_verified(existing: Option<&str>, fresh: &[Entry]) -> Result<String, String> {
+/// replaced, skipped rows lose any earlier verdict, untested rows
+/// survive, unparseable rows are kept as-is.
+fn merge_verified(existing: Option<&str>, fresh: &[Entry], remove: &[(u16, i32, i32, i32)]) -> Result<String, String> {
     let mut kept: Vec<Value> = Vec::new();
     let mut order: Vec<(u16, i32, i32, i32)> = Vec::new();
     let mut table: std::collections::HashMap<(u16, i32, i32, i32), Value> = std::collections::HashMap::new();
@@ -179,6 +201,10 @@ fn merge_verified(existing: Option<&str>, fresh: &[Entry]) -> Result<String, Str
         }
         table.insert(key, entry_value(entry));
     }
+    for key in remove {
+        table.remove(key);
+        order.retain(|known| known != key);
+    }
     order.sort();
     let mut out: Vec<Value> = order.into_iter().filter_map(|key| table.remove(&key)).collect();
     out.append(&mut kept);
@@ -196,6 +222,7 @@ fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: O
             stand.x, stand.z, stand.level
         )));
     }
+    await_stream(bot)?;
     if let Some(open_to) = open_to {
         let lid = if view.loc != 0 { view.loc } else { climb_loc };
         if bot.world.loc_at(view.from.x, view.from.z, view.from.level).map(|loc| loc.0) != Some(open_to) {
@@ -215,6 +242,7 @@ fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: O
         }
     }
     let (start_level, start_x, start_z) = bot.position();
+    let seen_messages = bot.world.messages.len();
     let (click_x, click_z) = footprint
         .iter()
         .min_by_key(|(tile_x, tile_z)| (tile_x - stand.x).abs() + (tile_z - stand.z).abs())
@@ -249,10 +277,16 @@ fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: O
         }
         let jumped = level != start_level || (x - start_x).abs().max((z - start_z).abs()) > 2;
         if jumped {
+            if died_since(&bot.world.messages, seen_messages) {
+                return Err(ScriptError::Usage("died mid-probe (respawned), no verdict".to_string()));
+            }
             return Ok(entry(bot, "wrong_destination", String::new()));
         }
     }
     let (level, x, z) = bot.position();
+    if died_since(&bot.world.messages, seen_messages) {
+        return Err(ScriptError::Usage("died mid-probe (respawned), no verdict".to_string()));
+    }
     if (level, x, z) == (start_level, start_x, start_z) {
         Ok(entry(bot, "no_move", String::new()))
     } else {
@@ -324,6 +358,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
     ));
     let date = civil_date();
     let mut entries: Vec<Entry> = Vec::new();
+    let mut remove: Vec<(u16, i32, i32, i32)> = Vec::new();
     for (position, target) in targets.iter().enumerate() {
         let row = &tables.transitions[target.index];
         bot.log(&format!(
@@ -371,6 +406,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
                     return Err(err);
                 }
                 bot.log(&format!("  -> skip: {err}"));
+                remove.push((row.loc, row.from.level, row.from.x, row.from.z));
                 skipped += 1;
             }
         }
@@ -408,7 +444,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         return Ok(0);
     }
     let existing = std::fs::read_to_string(VERIFIED_PATH).ok();
-    let body = merge_verified(existing.as_deref(), &entries)
+    let body = merge_verified(existing.as_deref(), &entries, &remove)
         .map_err(|err| ScriptError::Sdk(Error::Io(format!("merge {VERIFIED_PATH}: {err}"))))?;
     save_report(VERIFIED_PATH, &body)?;
     bot.log(&format!("wrote {VERIFIED_PATH} ({} probed rows merged)", entries.len()));
@@ -417,7 +453,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_date_of, merge_verified, row_matches, Entry, RowView};
+    use super::{civil_date_of, died_since, merge_verified, row_matches, Entry, RowView};
     use lifescape_sdk::plan::Tile;
 
     fn view() -> RowView<'static> {
@@ -456,9 +492,17 @@ mod tests {
     }
 
     #[test]
+    fn death_is_detected_since_the_click() {
+        let messages = vec!["Welcome to RuneScape.".to_string(), "Oh dear you are dead!".to_string()];
+        assert!(died_since(&messages, 1));
+        assert!(!died_since(&messages, 2));
+        assert!(died_since(&messages, 0));
+    }
+
+    #[test]
     fn merge_replaces_tested_and_keeps_others() {
         let old = r#"[{"loc":5,"from":[0,1,2],"result":"no_move","arrived":[0,1,2],"ticks":41,"message":"","choice":"","date":"2026-11-01"},{"loc":9,"from":[0,7,7],"result":"ok","arrived":[0,8,8],"ticks":3,"message":"","choice":"","date":"2026-11-01"}]"#;
-        let body = merge_verified(Some(old), &[entry("ok")]).expect("merge");
+        let body = merge_verified(Some(old), &[entry("ok")], &[]).expect("merge");
         let parsed = lifescape_json::parse(&body).expect("parses");
         let rows = parsed.as_arr().expect("array");
         assert_eq!(rows.len(), 2);
@@ -469,13 +513,20 @@ mod tests {
 
     #[test]
     fn merge_starts_from_empty_without_file() {
-        let body = merge_verified(None, &[entry("needs_choice")]).expect("merge");
+        let body = merge_verified(None, &[entry("needs_choice")], &[]).expect("merge");
         let parsed = lifescape_json::parse(&body).expect("parses");
         let rows = parsed.as_arr().expect("array");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("from").as_arr().map(Vec::len), Some(3));
     }
 
+    #[test]
+    fn merge_drops_skipped_verdicts() {
+        let old = r#"[{"loc":5,"from":[0,1,2],"result":"wrong_destination","arrived":[0,9,9],"ticks":22,"message":"Oh dear you are dead!","choice":"","date":"2026-11-06"}]"#;
+        let body = merge_verified(Some(old), &[], &[(5, 0, 1, 2)]).expect("merge");
+        let parsed = lifescape_json::parse(&body).expect("parses");
+        assert!(parsed.as_arr().expect("array").is_empty());
+    }
     /// The planner must read back exactly what the prober writes: same
     /// `from` order, same result words, same verdict effects.
     #[test]
@@ -508,7 +559,7 @@ mod tests {
             choice: String::new(),
             date: "2026-11-06".to_string(),
         };
-        let body = merge_verified(None, &[ok, bad]).expect("merge");
+        let body = merge_verified(None, &[ok, bad], &[]).expect("merge");
         std::fs::write(dir.join("transitions_verified.json"), &body).expect("verified");
         let tables = lifescape_nav::tables::Tables::load(&dir).expect("tables");
         assert_eq!(tables.verdict(5, Tile { x: 1, z: 2, level: 0 }), Some(lifescape_nav::tables::Verdict::Ok));
