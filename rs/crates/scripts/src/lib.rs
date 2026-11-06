@@ -63,19 +63,6 @@ impl From<Error> for ScriptError {
     }
 }
 
-/// Placeholder until the Python logic of the same name is ported.
-pub struct StubScript(pub &'static str);
-
-impl Script for StubScript {
-    fn name(&self) -> &'static str {
-        self.0
-    }
-    fn run(&self, bot: &mut Bot, _args: &[String]) -> ScriptResult {
-        bot.log(&format!("{}: not yet ported", self.0));
-        Err(ScriptError::NotPorted(self.0))
-    }
-}
-
 // -- real scripts --------------------------------------------------------
 
 struct Hello;
@@ -157,10 +144,8 @@ impl Script for DebugWalk {
 }
 
 // -- registry ---------------------------------------------------------------
-// Stub entries share StubScript; only the four real scripts above have
-// their own types.
 
-/// Every launchable script name, same set as the Python registry.
+/// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
         "fishing", "mining", "woodcut", "melee", "tutorial",
@@ -177,53 +162,66 @@ pub fn names() -> Vec<&'static str> {
     ]
 }
 
+// Dispatch table: every name in `names()` resolves here, unknown names do
+// not. Wrapping keeps one match: the table below is the dispatch.
+
+type Runner = fn(&mut Bot, &[String]) -> ScriptResult;
+
+fn runner(name: &str) -> Option<Runner> {
+    match name {
+        "hello" => Some(|bot, args| Hello.run(bot, args)),
+        "goto" => Some(|bot, args| Goto.run(bot, args)),
+        "walkto" => Some(|bot, args| Walkto.run(bot, args)),
+        "debug_walk" => Some(|bot, args| DebugWalk.run(bot, args)),
+        "fishing" => Some(|bot, args| skill_fishing::run_fishing(bot, args)),
+        "mining" => Some(|bot, args| skill_mining::run_mining(bot, args)),
+        "woodcut" => Some(|bot, args| skill_woodcutting::run_woodcut(bot, args)),
+        "melee" => Some(|bot, args| skill_combat::run_melee(bot, args)),
+        "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
+        "quest_black_knights_fortress" => Some(|bot, args| quests_b::run_quest("blackknight", bot, args)),
+        "quest_cooks_assistant" => Some(|bot, args| quests_a::run_quest("cook", bot, args)),
+        "quest_demon_slayer" => Some(|bot, args| quests_b::run_quest("demon", bot, args)),
+        "quest_dorics_quest" => Some(|bot, args| quests_a::run_quest("doric", bot, args)),
+        "quest_dragon_slayer" => Some(|bot, args| quests_b::run_quest("dragon", bot, args)),
+        "quest_ernest_the_chicken" => Some(|bot, args| quests_a::run_quest("haunted", bot, args)),
+        "quest_goblin_diplomacy" => Some(|bot, args| quests_a::run_quest("gobdip", bot, args)),
+        "quest_imp_catcher" => Some(|bot, args| quests_a::run_quest("imp", bot, args)),
+        "quest_knights_sword" => Some(|bot, args| quests_b::run_quest("squire", bot, args)),
+        "quest_pirates_treasure" => Some(|bot, args| quests_b::run_quest("hunt", bot, args)),
+        "quest_prince_ali_rescue" => Some(|bot, args| quests_b::run_quest("prince", bot, args)),
+        "quest_restless_ghost" => Some(|bot, args| quests_b::run_quest("priest", bot, args)),
+        "quest_romeo_and_juliet" => Some(|bot, args| quests_a::run_quest("romeojuliet", bot, args)),
+        "quest_rune_mysteries" => Some(|bot, args| quests_a::run_quest("runemysteries", bot, args)),
+        "quest_sheep_shearer" => Some(|bot, args| quests_a::run_quest("sheep", bot, args)),
+        "quest_shield_of_arrav" => Some(|bot, args| quests_b::run_quest("blackarmgang", bot, args)),
+        "quest_vampire_slayer" => Some(|bot, args| quests_b::run_quest("vampire", bot, args)),
+        "quest_witchs_potion" => Some(|bot, args| quests_a::run_quest("hetty", bot, args)),
+        "rescue_maze" => Some(|bot, args| rescues::run_rescue("maze", bot, args)),
+        "rescue_mime" => Some(|bot, args| rescues::run_rescue("mime", bot, args)),
+        "rescue_cube" => Some(|bot, args| rescues::run_rescue("cube", bot, args)),
+        "rescue_down" => Some(|bot, args| rescues::run_rescue("down", bot, args)),
+        "rescue_greet" => Some(|bot, args| rescues::run_rescue("greet", bot, args)),
+        "rescue_fallback" => Some(|bot, args| rescues::run_rescue("fallback", bot, args)),
+        "check_transitions" => Some(|bot, args| devtools::run_devtool("check_transitions", bot, args)),
+        "check_doors" => Some(|bot, args| devtools::run_devtool("check_doors", bot, args)),
+        "check_routes" => Some(|bot, args| devtools::run_devtool("check_routes", bot, args)),
+        "walktour" => Some(|bot, args| devtools::run_devtool("walktour", bot, args)),
+        "bank_deposit" => Some(|bot, args| devtools::run_devtool("bank_deposit", bot, args)),
+        "drop" => Some(|bot, args| devtools::run_devtool("drop", bot, args)),
+        "trade_swap" => Some(|bot, args| devtools::run_devtool("trade_swap", bot, args)),
+        "quest_reset" => Some(|bot, args| devtools::run_devtool("quest_reset", bot, args)),
+        "reset_quests" => Some(|bot, args| devtools::run_devtool("reset_quests", bot, args)),
+        "give" => Some(|bot, args| devtools::run_devtool("give", bot, args)),
+        _ => None,
+    }
+}
+
 /// Run one script by registry name. Unknown names report errors;
 /// nothing falls back silently.
 pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
-    match name {
-        "hello" => Hello.run(bot, args),
-        "goto" => Goto.run(bot, args),
-        "walkto" => Walkto.run(bot, args),
-        "debug_walk" => DebugWalk.run(bot, args),
-        "fishing" => skill_fishing::run_fishing(bot, args),
-        "mining" => skill_mining::run_mining(bot, args),
-        "woodcut" => skill_woodcutting::run_woodcut(bot, args),
-        "melee" => skill_combat::run_melee(bot, args),
-        "tutorial" => tutorial::run_tutorial(bot, args),
-        "quest_black_knights_fortress" => quests_b::run_quest("blackknight", bot, args),
-        "quest_cooks_assistant" => quests_a::run_quest("cook", bot, args),
-        "quest_demon_slayer" => quests_b::run_quest("demon", bot, args),
-        "quest_dorics_quest" => quests_a::run_quest("doric", bot, args),
-        "quest_dragon_slayer" => quests_b::run_quest("dragon", bot, args),
-        "quest_ernest_the_chicken" => quests_a::run_quest("haunted", bot, args),
-        "quest_goblin_diplomacy" => quests_a::run_quest("gobdip", bot, args),
-        "quest_imp_catcher" => quests_a::run_quest("imp", bot, args),
-        "quest_knights_sword" => quests_b::run_quest("squire", bot, args),
-        "quest_pirates_treasure" => quests_b::run_quest("hunt", bot, args),
-        "quest_prince_ali_rescue" => quests_b::run_quest("prince", bot, args),
-        "quest_restless_ghost" => quests_b::run_quest("priest", bot, args),
-        "quest_romeo_and_juliet" => quests_a::run_quest("romeojuliet", bot, args),
-        "quest_rune_mysteries" => quests_a::run_quest("runemysteries", bot, args),
-        "quest_sheep_shearer" => quests_a::run_quest("sheep", bot, args),
-        "quest_shield_of_arrav" => quests_b::run_quest("blackarmgang", bot, args),
-        "quest_vampire_slayer" => quests_b::run_quest("vampire", bot, args),
-        "quest_witchs_potion" => quests_a::run_quest("hetty", bot, args),
-        "rescue_maze" => rescues::run_rescue("maze", bot, args),
-        "rescue_mime" => rescues::run_rescue("mime", bot, args),
-        "rescue_cube" => rescues::run_rescue("cube", bot, args),
-        "rescue_down" => rescues::run_rescue("down", bot, args),
-        "rescue_greet" => rescues::run_rescue("greet", bot, args),
-        "rescue_fallback" => rescues::run_rescue("fallback", bot, args),
-        "check_transitions" | "check_doors" | "check_routes" | "walktour"
-        | "bank_deposit" | "drop" | "trade_swap" | "quest_reset"
-        | "reset_quests" | "give" => devtools::run_devtool(name, bot, args),
-        _ => {
-            if let Some(known) = names().into_iter().find(|known| *known == name) {
-                StubScript(known).run(bot, args)
-            } else {
-                Err(ScriptError::Usage(format!("unknown script {name:?}")))
-            }
-        }
+    match runner(name) {
+        Some(execute) => execute(bot, args),
+        None => Err(ScriptError::Usage(format!("unknown script {name:?}"))),
     }
 }
 
@@ -245,5 +243,13 @@ mod tests {
             assert!(names().contains(&name), "registry misses {name}");
         }
         assert_eq!(names().len(), 43);
+    }
+
+    #[test]
+    fn every_name_dispatches() {
+        for name in names() {
+            assert!(super::runner(name).is_some(), "registry name {name} has no runner");
+        }
+        assert!(super::runner("nope").is_none(), "unknown names must not dispatch");
     }
 }

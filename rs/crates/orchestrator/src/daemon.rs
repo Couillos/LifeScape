@@ -350,8 +350,17 @@ impl Orchestrator {
                 ("error", str_value(&format!("session for {account} died, open {account} again"))),
             ]);
         }
-        if let Err(error) = registry::script_path(script) {
-            return object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]);
+        if !registry::script_known(script) {
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "unknown script '{script}' (known: {})",
+                        registry::script_names_sorted().join(", ")
+                    )),
+                ),
+            ]);
         }
         let reply = self.send_worker(
             account,
