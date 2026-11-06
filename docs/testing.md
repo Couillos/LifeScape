@@ -5,7 +5,7 @@ Unitaires : `cargo test --manifest-path rs/Cargo.toml` (tout), ou `-p lifescape-
 Chaque module gamedata rejoue 2-3 vecteurs connus ; tant qu'un contrôle échoue,
 corriger le dump ou le code puis relancer.
 
-Live sur `t01` uniquement (jamais `admin`/`bite` pour les tests) :
+Runs légitimes sur `t01` (jamais `bite`) ; diagnostics dev (`debug_walk`, `check_*`, `probe_*`, `give`, `goto`, cheat) sur `admin` uniquement :
 `open`, `run`, `call`, `unload`, `close`, `show` ×2 (ticks qui avancent).
 Une théorie protocole = un diagnostic live (`debug_walk`, `check_doors`,
 `check_transitions`, `check_routes`, `call`/`shell`) avant d'entrer dans le SDK.

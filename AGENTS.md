@@ -4,6 +4,7 @@ Framework Rust (stdlib uniquement, zéro dépendance) pour écrire des scripts
 de botting sur notre instance LostCityRS (révision 274).
 Toolchain : Rust stable local, `cargo` seul. Tout passe par le workspace `rs/`.
 Référence canonique : `../lostcity/AGENTS.md`. Le serveur est la source de vérité.
+Ticks serveur : voir `../lostcity/engine/data/config/world.json` ; attentes en ticks.
 
 ## 1. Projet
 
