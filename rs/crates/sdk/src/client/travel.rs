@@ -523,9 +523,8 @@ impl Bot {
             })?;
         }
         if let Some(open) = pre_open {
-            let click = click_tile(ride, stand);
-            if self.world.loc_at(click.0, click.1, ride.from.level).map(|loc| loc.0) != Some(open.open_to) {
-                self.op_loc(open.op, click.0, click.1, open.loc).map_err(|err| {
+            if self.world.loc_at(ride.from.x, ride.from.z, ride.from.level).map(|loc| loc.0) != Some(open.open_to) {
+                self.op_loc(open.op, ride.from.x, ride.from.z, open.loc).map_err(|err| {
                     if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
                         err
                     } else {
@@ -536,7 +535,7 @@ impl Bot {
                 let mut opened = false;
                 while self.world.ticks < watched {
                     self.pump(1)?;
-                    if self.world.loc_at(click.0, click.1, ride.from.level).map(|loc| loc.0)
+                    if self.world.loc_at(ride.from.x, ride.from.z, ride.from.level).map(|loc| loc.0)
                         == Some(open.open_to)
                     {
                         opened = true;
@@ -554,8 +553,10 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("ride {} timed out at {:?}", ride.name, self.position())));
         }
-        let click = click_tile(ride, stand);
-        self.op_loc(ride.op, click.0, click.1, ride.climb_loc)?;
+        // Click the table anchor: the dump records the answering tile
+        // there. The engine may walk a step or two into reach first, so
+        // only a real jump (level change or far tile) ends the watch.
+        self.op_loc(ride.op, ride.from.x, ride.from.z, ride.climb_loc)?;
         let start = (self.world.x, self.world.z, self.world.level);
         let watched = self.world.ticks + RIDE_WAIT;
         while self.world.ticks < watched {
@@ -575,7 +576,9 @@ impl Bot {
             if (self.world.x, self.world.z, self.world.level) == (expect.x, expect.z, expect.level) {
                 return Ok(());
             }
-            if (self.world.x, self.world.z, self.world.level) != start {
+            let jumped = self.world.level != start.2
+                || (self.world.x - start.0).abs().max((self.world.z - start.1).abs()) > 2;
+            if jumped {
                 return Err(Error::RideWrongDestination(format!(
                     "ride {} landed at {:?}, want ({},{},{}); last game: {}",
                     ride.name, self.position(), expect.x, expect.z, expect.level, last_message(self),
@@ -585,29 +588,19 @@ impl Bot {
                 return Err(Error::Timeout(format!("ride {} timed out at {:?}", ride.name, self.position())));
             }
         }
-        Err(Error::RideDidNotMove(format!(
-            "ride {} never left {:?} in {RIDE_WAIT} ticks; last game: {}",
-            ride.name,
-            self.position(),
-            last_message(self),
+        if (self.world.x, self.world.z, self.world.level) == start {
+            return Err(Error::RideDidNotMove(format!(
+                "ride {} never left {:?} in {RIDE_WAIT} ticks; last game: {}",
+                ride.name,
+                self.position(),
+                last_message(self),
+            )));
+        }
+        Err(Error::RideWrongDestination(format!(
+            "ride {} drifted to {:?}, want ({},{},{}); last game: {}",
+            ride.name, self.position(), expect.x, expect.z, expect.level, last_message(self),
         )))
     }
-}
-
-/// Footprint tile nearest the stand: the part of a multi-tile stair the
-/// bot can touch. Clicking the table `from` two tiles away makes the
-/// server walk over first, which a strict ride watch reads as failure.
-fn click_tile(ride: &lifescape_nav::plan::TransitionRef, stand: Tile) -> (i32, i32) {
-    let mut best = (ride.from.x, ride.from.z);
-    let mut best_dist = (stand.x - best.0).abs() + (stand.z - best.1).abs();
-    for tile in &ride.footprint {
-        let dist = (stand.x - tile.0).abs() + (stand.z - tile.1).abs();
-        if dist < best_dist {
-            best_dist = dist;
-            best = *tile;
-        }
-    }
-    best
 }
 
 /// One-line plan summary for the `nav seg` log.
