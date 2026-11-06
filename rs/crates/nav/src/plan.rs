@@ -492,6 +492,14 @@ impl Search<'_> {
     }
 }
 
+/// Search keepalive gate: the visit-count abort stays (operator stop
+/// must bite even on a fast search), plus a wall-clock yield so a slow
+/// search — live doors, toll detours — still proves the session alive
+/// server-side instead of going quiet past the 100-tick reap.
+fn yield_due(visits: usize, last_yield: std::time::Instant) -> bool {
+    visits % 16384 == 0 || (visits % 16 == 0 && last_yield.elapsed() >= std::time::Duration::from_secs(1))
+}
+
 fn dijkstra(
     world: &StaticWorld,
     tables: &Tables,
@@ -529,6 +537,12 @@ fn dijkstra(
     let mut best = from;
     let mut best_rank = from.fallback_rank(dest, 0);
     let mut visits = 0usize;
+    // Wall-clock yield: a huge search (live doors, toll detours) can run
+    // seconds without hitting the visit-count yield below, and the live
+    // caller only emits its keepalive from the yield callback — a quiet
+    // search reads as a dead session server-side (reaped after 100
+    // ticks). Yield at most once a second, on top of the count check.
+    let mut last_yield = std::time::Instant::now();
     let loop_start = std::time::Instant::now();
     let mut heap_max = 0usize;
     let dest_key = dest.key();
@@ -539,8 +553,11 @@ fn dijkstra(
             continue;
         }
         visits += 1;
-        if visits % 16384 == 0 && !yield_() {
-            return Outcome::Aborted;
+        if yield_due(visits, last_yield) {
+            last_yield = std::time::Instant::now();
+            if !yield_() {
+                return Outcome::Aborted;
+            }
         }
         if heap.len() > heap_max {
             heap_max = heap.len();
@@ -922,6 +939,22 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
 
 #[cfg(test)]
 mod tests {
+    use super::yield_due;
+    use std::time::{Duration, Instant};
+
+    /// The keepalive gate: count abort every 16384 visits, wall-clock
+    /// yield every 16 visits past one second, silence otherwise.
+    #[test]
+    fn yield_gate_count_and_clock() {
+        let fresh = Instant::now();
+        let old = Instant::now() - Duration::from_secs(2);
+        assert!(yield_due(16384, fresh), "count abort bites even on a fast search");
+        assert!(yield_due(2048, old), "slow search yields past one second");
+        assert!(!yield_due(2048, fresh), "no yield mid-second");
+        assert!(!yield_due(100, old), "no yield off the visit grid");
+        assert!(!yield_due(17, old), "no yield off the 16-visit grid");
+    }
+
     /// Fallback rank: a same-level neighbour beats the tile straight
     /// above a blocked booth, however cheap the ladder ride is.
     #[test]
