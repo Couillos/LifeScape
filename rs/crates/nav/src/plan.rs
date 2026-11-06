@@ -792,6 +792,26 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
     out
 }
 
+/// Deterministic reach-valid stands for one transition row, probe order
+/// first. The prober rides from the first element; the planner uses the
+/// same list, so one verdict covers every stand edge. Paid doors read
+/// open and no requirement tags are held: geometric candidates, of which
+/// the planner may use a subset.
+pub fn ride_stands(world: &StaticWorld, tables: &Tables, options: &NavOptions, row: &Transition) -> Vec<Tile> {
+    let mut search = Search {
+        world,
+        tables,
+        options,
+        ignore_requires: false,
+        allow_paid: true,
+        ignore_f2p: false,
+        base_flags: U64Map::default(),
+        open_flags: U64Map::default(),
+        doors: U64Map::default(),
+    };
+    stands(&mut search, row)
+}
+
 fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)>, cost: u32) -> Plan {
     let mut segments = Vec::new();
     let mut walk: Vec<Tile> = Vec::new();

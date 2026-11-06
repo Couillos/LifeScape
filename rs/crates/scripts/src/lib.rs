@@ -5,6 +5,7 @@
 
 pub mod devtools;
 pub mod devtools_check;
+pub mod devtools_probe;
 pub mod maze;
 pub mod skill_common;
 pub mod skill_trade;
@@ -167,7 +168,7 @@ pub fn names() -> Vec<&'static str> {
         "rescue_maze", "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
         "check_transitions", "check_doors", "check_routes", "goto", "walkto", "walktour",
         "bank_deposit", "drop", "debug_walk", "trade_swap", "quest_reset", "reset_quests",
-        "give", "hello",
+        "give", "hello", "probe_transitions",
     ]
 }
 
@@ -212,6 +213,7 @@ fn runner(name: &str) -> Option<Runner> {
         "rescue_greet" => Some(|bot, args| rescues::run_rescue("greet", bot, args)),
         "rescue_fallback" => Some(|bot, args| rescues::run_rescue("fallback", bot, args)),
         "check_transitions" => Some(|bot, args| devtools::run_devtool("check_transitions", bot, args)),
+        "probe_transitions" => Some(|bot, args| devtools::run_devtool("probe_transitions", bot, args)),
         "check_doors" => Some(|bot, args| devtools::run_devtool("check_doors", bot, args)),
         "check_routes" => Some(|bot, args| devtools::run_devtool("check_routes", bot, args)),
         "walktour" => Some(|bot, args| devtools::run_devtool("walktour", bot, args)),
@@ -248,10 +250,11 @@ mod tests {
             "check_transitions", "check_doors", "check_routes", "goto",
             "walkto", "walktour", "bank_deposit", "drop", "debug_walk",
             "trade_swap", "quest_reset", "reset_quests", "give", "hello",
+            "probe_transitions",
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 43);
+        assert_eq!(names().len(), 44);
     }
 
     #[test]

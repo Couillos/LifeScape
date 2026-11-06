@@ -29,6 +29,7 @@ pub const DEVTOOL_NAMES: &[&str] = &[
     "give",
     "make_accounts",
     "parallel_login",
+    "probe_transitions",
     "quest_reset",
     "reset_quests",
     "trade_swap",
@@ -62,6 +63,7 @@ pub fn run_devtool(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
             "parallel_login opens N fresh connections with distinct credentials; the session hides \
              host/port/pack/key and owns exactly one connection, so this must stay a standalone runner",
         )),
+        "probe_transitions" => crate::devtools_probe::dev_probe_transitions(bot, args),
         "quest_reset" => dev_quest_reset(bot, args),
         "reset_quests" => dev_reset_quests(bot, args),
         "trade_swap" => dev_trade_swap(bot, args),
