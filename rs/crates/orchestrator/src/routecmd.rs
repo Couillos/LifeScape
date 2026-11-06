@@ -4,13 +4,15 @@
 //! transition dump plus prober verdicts and door rules, runs nav::plan
 //! and prints the segments. `--ascii` draws every walk leg.
 
+use std::sync::Arc;
+
 use lifescape_nav::plan::{self, NavOptions, Segment, Tile};
 use lifescape_nav::static_world::StaticWorld;
 use lifescape_nav::tables::Tables;
 
 use crate::paths;
 
-fn engine_dir() -> String {
+pub fn engine_dir() -> String {
     std::env::var("LIFESCAPE_ENGINE_DIR").unwrap_or_else(|_| {
         let root = crate::paths::root();
         root.join("../lostcity/engine").to_string_lossy().to_string()
@@ -55,6 +57,26 @@ fn ascii_walk(tiles: &[Tile]) {
     }
 }
 
+/// Static world plus planner tables, no daemon, no session, no login.
+pub fn load_offline() -> Result<(Arc<StaticWorld>, Tables), String> {
+    let root = paths::root();
+    let data_dir = root.join("gamedata").join("data");
+    let engine = engine_dir();
+    let zip = std::path::Path::new(&engine).join("data").join("pack").join(".cache").join("maps-server.zip");
+    let defs = match crate::staticmap::load_loctypes(&data_dir.join("gametypes.json")) {
+        Ok(defs) => defs,
+        Err(err) => return Err(err),
+    };
+    let world = StaticWorld::open(&zip, defs).map_err(|err| err.to_string())?;
+    let content = std::path::Path::new(&engine).join("../content");
+    match lifescape_nav::f2p::load_zones(&content.join("maps").join("free2play.csv")) {
+        Ok(zones) => world.set_f2p(zones),
+        Err(err) => eprintln!("route: f2p bounds missing ({err}), everything reads inside"),
+    }
+    let tables = Tables::load(&data_dir).map_err(|err| err)?;
+    Ok((world, tables))
+}
+
 pub fn route_cmd(args: &[String]) -> i32 {
     let usage = "usage: orchestrator route <x1> <z1> <niv1> <x2> <z2> <niv2> [--paid] [--ascii]";
     let (mut paid, mut ascii) = (false, false);
@@ -80,31 +102,8 @@ pub fn route_cmd(args: &[String]) -> i32 {
         Tile { x: nums[0], z: nums[1], level: nums[2] },
         Tile { x: nums[3], z: nums[4], level: nums[5] },
     );
-    let root = paths::root();
-    let data_dir = root.join("gamedata").join("data");
-    let engine = engine_dir();
-    let zip = std::path::Path::new(&engine).join("data").join("pack").join(".cache").join("maps-server.zip");
-    let defs = match crate::staticmap::load_loctypes(&data_dir.join("gametypes.json")) {
-        Ok(defs) => defs,
-        Err(err) => {
-            eprintln!("route: {err}");
-            return 1;
-        }
-    };
-    let world = match StaticWorld::open(&zip, defs) {
-        Ok(world) => world,
-        Err(err) => {
-            eprintln!("route: {err}");
-            return 1;
-        }
-    };
-    let content = std::path::Path::new(&engine).join("../content");
-    match lifescape_nav::f2p::load_zones(&content.join("maps").join("free2play.csv")) {
-        Ok(zones) => world.set_f2p(zones),
-        Err(err) => eprintln!("route: f2p bounds missing ({err}), everything reads inside"),
-    }
-    let tables = match Tables::load(&data_dir) {
-        Ok(tables) => tables,
+    let (world, tables) = match load_offline() {
+        Ok(loaded) => loaded,
         Err(err) => {
             eprintln!("route: {err}");
             return 1;

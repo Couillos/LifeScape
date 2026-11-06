@@ -567,7 +567,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|route|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -588,6 +588,9 @@ pub fn cli(argv: &[String]) -> i32 {
     }
     if argv[1].as_str() == "route" {
         return crate::routecmd::route_cmd(&argv[2..].to_vec());
+    }
+    if argv[1].as_str() == "replay-nav" {
+        return crate::replaynav::replay_nav_cmd(&argv[2..].to_vec());
     }
     if argv[1].as_str() == "direct" {
         return run_direct(&argv[2..].to_vec());

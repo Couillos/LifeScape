@@ -93,7 +93,7 @@ impl Bot {
                 no.disabled_transitions_nearby.len(),
             );
             let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
-            self.fail(from, dest, &options, None, None, TravelErrorKind::NoRoute, &expected, &observed)
+            self.fail(from, dest, &options, None, None, &expected, &Error::Travel(observed))
         })?;
         Ok((world, tables, options, plan))
     }
@@ -185,16 +185,7 @@ impl Bot {
             Err((failed, err)) if is_replanable(&err) => {
                 let edge = ban_for(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))], self);
                 let expected = seg_summary(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))]);
-                let first = self.fail(
-                    start,
-                    dest,
-                    &options,
-                    Some(&plan),
-                    Some(failed),
-                    TravelErrorKind::of(&err),
-                    &expected,
-                    &err.to_string(),
-                );
+                let first = self.fail(start, dest, &options, Some(&plan), Some(failed), &expected, &err);
                 self.log(&format!("nav fail seg {}/{segments} at {:?}: {err} (dossier: {})", failed + 1, self.position(), dossier_text(&first)));
                 if let Some(edge) = edge {
                     options.excluded_edges.insert(edge);
@@ -218,31 +209,13 @@ impl Bot {
                     }
                     Err((second, second_err)) => {
                         let expected = seg_summary(&retry.segments[second.min(retry.segments.len().saturating_sub(1))]);
-                        Err(self.fail(
-                            start,
-                            dest,
-                            &options,
-                            Some(&retry),
-                            Some(second),
-                            TravelErrorKind::of(&second_err),
-                            &expected,
-                            &second_err.to_string(),
-                        ))
+                        Err(self.fail(start, dest, &options, Some(&retry), Some(second), &expected, &second_err))
                     }
                 }
             }
             Err((failed, err)) => {
                 let expected = plan.segments.get(failed).map(seg_summary).unwrap_or_else(|| format!("route to ({},{},{})", dest.x, dest.z, dest.level));
-                Err(self.fail(
-                    start,
-                    dest,
-                    &options,
-                    Some(&plan),
-                    Some(failed),
-                    TravelErrorKind::of(&err),
-                    &expected,
-                    &err.to_string(),
-                ))
+                Err(self.fail(start, dest, &options, Some(&plan), Some(failed), &expected, &err))
             }
         }
     }
@@ -749,21 +722,6 @@ pub(crate) fn test_nav_context() -> (Arc<StaticWorld>, Arc<Tables>) {
     (world, Arc::new(tables))
 }
 
-#[cfg(test)]
-pub(crate) fn test_nav_context() -> (Arc<StaticWorld>, Arc<Tables>) {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
-    let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-    let data = root.join("LifeScape/gamedata/data");
-    let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
-    let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
-    let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
-    let world = StaticWorld::open(&zip, defs).expect("static world");
-    let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
-    world.set_f2p(zones);
-    let tables = Tables::load(&data).expect("tables");
-    (world, Arc::new(tables))
-}
-
 /// Dossier field budgets (§6.4): trail marks, live window, messages.
 const TRAIL_TAKE: usize = 50;
 const DIFF_RADIUS: i32 = 10;
@@ -773,6 +731,10 @@ impl Bot {
     /// Build the §6.4 failure, write its dossier, log the path, and hand
     /// the wrapped error to the caller. A failed write never fails the
     /// caller: the error still carries kind, segment and positions.
+    /// Transport and operator stops (Io, Login, Interrupted) keep their
+    /// exact type: the session reconnect/stop arms match on them, and a
+    /// dossier wrapper would hide the reconnect signal. Their dossier is
+    /// still written and logged.
     fn fail(
         &self,
         from: Tile,
@@ -780,10 +742,11 @@ impl Bot {
         options: &NavOptions,
         plan: Option<&Plan>,
         failed_segment: Option<usize>,
-        kind: TravelErrorKind,
         expected: &str,
-        observed: &str,
+        inner: &Error,
     ) -> Error {
+        let kind = TravelErrorKind::of(inner);
+        let observed = inner.to_string();
         let position = (self.world.x, self.world.z, self.world.level);
         let tick = self.world.ticks;
         let skip = self.trail.len().saturating_sub(TRAIL_TAKE);
@@ -798,7 +761,7 @@ impl Bot {
             failed_segment,
             kind,
             expected,
-            observed,
+            &observed,
             &trail,
             &self.live_locs(),
             &self.static_live_diff(),
@@ -809,13 +772,16 @@ impl Bot {
             Some(path) => self.log(&format!("nav dossier {}", path.display())),
             None => self.log("nav dossier unwritten (io error), error stands"),
         }
+        if matches!(kind, TravelErrorKind::Io | TravelErrorKind::Interrupted) {
+            return inner.clone();
+        }
         Error::TravelFailure(TravelError {
             kind,
             segment_index: failed_segment,
             position,
             tick,
             expected: expected.to_string(),
-            observed: observed.to_string(),
+            observed,
             dossier,
         })
     }
@@ -1117,4 +1083,92 @@ fn write_dossier_file(account: &str, tick: u64, value: &Value) -> Option<std::pa
     let path = dir.join(format!("{account}-{tick}.json"));
     std::fs::write(&path, json::stringify(value)).ok()?;
     Some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_plan() -> Plan {
+        Plan { segments: Vec::new(), cost: 0, adjusted_dest: None }
+    }
+
+    #[test]
+    fn dossier_carries_every_replay_input() {
+        let from = Tile { x: 1, z: 2, level: 0 };
+        let dest = Tile { x: 3, z: 4, level: 0 };
+        let mut options = NavOptions::default();
+        options.satisfied.insert("coins:10".to_string());
+        let plan = empty_plan();
+        let value = dossier_json(
+            "t01",
+            42,
+            from,
+            dest,
+            &options,
+            Some(&plan),
+            Some(0),
+            TravelErrorKind::StepRefused,
+            "Walk 3 tiles",
+            "step refused",
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(value.get("account").as_str(), Some("t01"));
+        assert_eq!(value.get("tick").as_i64(), Some(42));
+        assert_eq!(value.get("tick_ms").as_i64(), Some(TICK_MS as i64));
+        assert_eq!(value.get("from").get("x").as_i64(), Some(1));
+        assert_eq!(value.get("dest").get("z").as_i64(), Some(4));
+        assert_eq!(value.get("failed_segment").as_i64(), Some(0));
+        assert_eq!(value.get("error").get("kind").as_str(), Some("StepRefused"));
+        assert_eq!(value.get("plan").get("cost").as_i64(), Some(0));
+        for key in ["options", "trail", "live_locs", "static_live_diff", "messages"] {
+            assert!(!value.get(key).is_null(), "dossier needs {key}");
+        }
+        assert_eq!(value.get("options").get("satisfied").as_arr().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn dossier_without_plan_marks_no_route() {
+        let value = dossier_json(
+            "t01",
+            7,
+            Tile { x: 0, z: 0, level: 0 },
+            Tile { x: 9, z: 9, level: 0 },
+            &NavOptions::default(),
+            None,
+            None,
+            TravelErrorKind::NoRoute,
+            "route",
+            "no route",
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert!(value.get("plan").is_null());
+        assert!(value.get("failed_segment").is_null());
+        assert_eq!(value.get("error").get("kind").as_str(), Some("NoRoute"));
+    }
+
+    #[test]
+    fn error_kind_covers_every_executor_outcome() {
+        assert_eq!(TravelErrorKind::of(&Error::StepRefused("x".to_string())), TravelErrorKind::StepRefused);
+        assert_eq!(TravelErrorKind::of(&Error::DoorDidNotOpen("x".to_string())), TravelErrorKind::DoorDidNotOpen);
+        assert_eq!(TravelErrorKind::of(&Error::RideDidNotMove("x".to_string())), TravelErrorKind::RideDidNotMove);
+        assert_eq!(
+            TravelErrorKind::of(&Error::RideWrongDestination("x".to_string())),
+            TravelErrorKind::RideWrongDestination
+        );
+        assert_eq!(
+            TravelErrorKind::of(&Error::NeedsDialogueChoice("x".to_string())),
+            TravelErrorKind::NeedsDialogueChoice
+        );
+        assert_eq!(TravelErrorKind::of(&Error::Timeout("x".to_string())), TravelErrorKind::Timeout);
+        assert_eq!(TravelErrorKind::of(&Error::Interrupted("x".to_string())), TravelErrorKind::Interrupted);
+        assert_eq!(TravelErrorKind::of(&Error::Io("x".to_string())), TravelErrorKind::Io);
+        assert_eq!(TravelErrorKind::of(&Error::Travel("x".to_string())), TravelErrorKind::NoRoute);
+    }
 }
