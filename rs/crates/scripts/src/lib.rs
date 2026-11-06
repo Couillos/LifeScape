@@ -60,6 +60,26 @@ impl From<Error> for ScriptError {
     }
 }
 
+/// Real planner context for offline tests: static world plus tables from
+/// the repo dumps (same layout as the nav golden tests). Offline walks
+/// then plan for real and fail at the dead socket, like live walks with
+/// no connection would.
+#[cfg(test)]
+pub(crate) fn wire_nav(bot: &mut Bot) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+    let data = root.join("LifeScape/gamedata/data");
+    let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+    let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+    let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+    let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+    let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+    world.set_f2p(zones);
+    let tables = lifescape_nav::tables::Tables::load(&data).expect("tables");
+    bot.nav_world = Some(world);
+    bot.nav_tables = Some(std::sync::Arc::new(tables));
+}
+
 // -- real scripts --------------------------------------------------------
 
 struct Hello;
@@ -97,18 +117,10 @@ impl Script for Goto {
     }
     fn run(&self, bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (x, z, level) = parse_target(args)?;
-        bot.intend(&format!("teleport to {x},{z},{level}"));
-        bot.cheat(&format!("tele {},{},{},{},{}", level, x >> 6, z >> 6, x & 63, z & 63))?;
-        let target = bot.world.ticks + 100;
-        while bot.world.ticks < target {
-            bot.pump(2)?;
-            if bot.position() == (level, x, z) {
-                bot.log(&format!("at {:?}", bot.position()));
-                return Ok(0);
-            }
-        }
-        bot.log(&format!("teleport did not land: {:?}", bot.position()));
-        Ok(1)
+        bot.log(&format!("goto ({x},{z},{level}) from {:?}", bot.position()));
+        bot.travel_to(lifescape_sdk::plan::Tile { x, z, level })?;
+        bot.log(&format!("arrived {:?}", bot.position()));
+        Ok(0)
     }
 }
 

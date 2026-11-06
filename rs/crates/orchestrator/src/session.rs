@@ -973,6 +973,37 @@ pub fn run_session(account: &str) -> i32 {
         }
         Err(error) => shared.log(&format!("transitions missing ({error}); ladders by nearest loc only")),
     }
+    // Planner world and tables for travel_to: static collision plus the
+    // transition dump, verdicts and door rules. Missing pieces fail loud
+    // at travel time, never silently.
+    {
+        let mut bot = shared.bot.lock().unwrap();
+        let data_dir = crate::paths::root().join("gamedata").join("data");
+        let engine_path = std::path::Path::new(&engine);
+        let zip = engine_path.join("data").join("pack").join(".cache").join("maps-server.zip");
+        match crate::staticmap::load_loctypes(&data_dir.join("gametypes.json")) {
+            Ok(defs) => match lifescape_nav::static_world::StaticWorld::open(&zip, defs) {
+                Ok(world) => {
+                    let content = engine_path.join("../content");
+                    match lifescape_nav::f2p::load_zones(&content.join("maps").join("free2play.csv")) {
+                        Ok(zones) => world.set_f2p(zones),
+                        Err(error) => shared.log(&format!("f2p bounds missing ({error}); travel plans everywhere")),
+                    }
+                    bot.nav_world = Some(world);
+                    shared.log("static world ready for travel_to");
+                }
+                Err(error) => shared.log(&format!("static world missing ({error}); travel_to refuses")),
+            },
+            Err(error) => shared.log(&format!("loctypes missing ({error}); travel_to refuses")),
+        }
+        match lifescape_nav::tables::Tables::load(&data_dir) {
+            Ok(tables) => {
+                shared.log(&format!("planner tables ready: {} transitions", tables.transitions.len()));
+                bot.nav_tables = Some(Arc::new(tables));
+            }
+            Err(error) => shared.log(&format!("planner tables missing ({error}); travel_to refuses")),
+        }
+    }
     shared.inner.lock().unwrap().status = "idle".to_string();
     write_heartbeat(&shared);
     let _ = std::fs::write(&ready_path, json::stringify(&object(vec![("ok", Value::Bool(true)), ("error", str_value(""))])));
