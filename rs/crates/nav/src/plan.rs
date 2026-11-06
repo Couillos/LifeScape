@@ -103,6 +103,10 @@ pub struct TransitionRef {
     pub op: u8,
     pub from: Tile,
     pub to: Tile,
+    /// Every tile the loc covers: only one of them answers the climb op,
+    /// and the table `from` is not always that one. The executor clicks
+    /// the footprint tile nearest its stand.
+    pub footprint: Vec<(i32, i32)>,
 }
 
 /// Which hand-added edge a step takes.
@@ -330,6 +334,7 @@ fn transition_ref(row: &Transition) -> TransitionRef {
         op: row.climb_op,
         from: row.from,
         to: row.to,
+        footprint: row.footprint.clone(),
     }
 }
 
