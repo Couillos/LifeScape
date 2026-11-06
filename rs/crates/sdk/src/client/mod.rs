@@ -9,6 +9,7 @@ pub mod doors;
 pub mod movement;
 pub mod snapshot_view;
 pub mod travel;
+pub mod travel_dossier;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
