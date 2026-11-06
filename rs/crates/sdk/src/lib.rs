@@ -1,17 +1,14 @@
 //! LifeScape SDK: socket, handshake, ISAAC, framed 274 opcodes, live
 //! world state, tick pump and game actions. Std-only, `forbid(unsafe)`.
+//!
+//! Static navigation (collision, search, planning) lives in `lifescape-nav`
+//! and is re-exported here so existing paths keep working.
 
-pub mod bfs;
-pub mod buffer;
 pub mod client;
-pub mod collision;
 pub mod connection;
 pub mod error;
 pub mod isaac;
-pub mod nav;
 pub mod protocol;
-pub mod reach;
-pub mod route;
 pub mod rsa;
 pub mod save;
 pub mod snapshot;
@@ -19,6 +16,8 @@ pub mod tables;
 pub mod waits;
 pub mod words;
 pub mod world;
+
+pub use lifescape_nav::{bfs, buffer, collision, nav, reach, route};
 
 pub use client::Bot;
 pub use client::movement::TransitionRow;

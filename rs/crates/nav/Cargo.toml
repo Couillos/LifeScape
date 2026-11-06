@@ -1,0 +1,14 @@
+[package]
+name = "lifescape-nav"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_nav"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-json = { path = "../json" }
+
+[lints]
+workspace = true
