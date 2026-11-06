@@ -237,6 +237,24 @@ pub fn all_objs() -> Vec<Obj> {
     table("objs").iter().enumerate().map(|(id, row)| obj_from_row(id, row)).collect()
 }
 
+/// Lowercased debug-name → ids, built once. By-name lookups stay O(1):
+/// gear planning resolves hundreds of names per spot, and rebuilding
+/// the whole obj table per lookup starves the session silent past the
+/// server's 100-tick reap (~11 s observed on the woodcut goblin hunt).
+static OBJ_BY_NAME: OnceLock<HashMap<String, Vec<usize>>> = OnceLock::new();
+
+fn obj_name_index() -> &'static HashMap<String, Vec<usize>> {
+    OBJ_BY_NAME.get_or_init(|| {
+        let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+        for (id, row) in table("objs").iter().enumerate() {
+            if let Json::Str(name) = row.get("name") {
+                index.entry(name.to_lowercase()).or_default().push(id);
+            }
+        }
+        index
+    })
+}
+
 /// Object by id, or None when out of range.
 pub fn obj_by_id(obj_id: usize) -> Option<Obj> {
     table("objs").get(obj_id).map(|row| obj_from_row(obj_id, row))
@@ -250,15 +268,19 @@ pub fn obj_display_name(obj_id: usize) -> Option<String> {
 /// Exact (case-insensitive) name match.
 pub fn objs_by_name(name: &str) -> Vec<Obj> {
     let wanted = name.to_lowercase();
-    all_objs().into_iter().filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase() == wanted).collect()
+    obj_name_index().get(&wanted).map(|ids| ids.iter().filter_map(|id| obj_by_id(*id)).collect()).unwrap_or_default()
 }
 
 /// Substring (case-insensitive) name search.
 pub fn objs_search(fragment: &str) -> Vec<Obj> {
     let wanted = fragment.to_lowercase();
-    all_objs()
-        .into_iter()
-        .filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase().contains(&wanted))
+    table("objs")
+        .iter()
+        .enumerate()
+        .filter_map(|(id, row)| match row.get("name") {
+            Json::Str(name) if name.to_lowercase().contains(&wanted) => obj_by_id(id),
+            _ => None,
+        })
         .collect()
 }
 
@@ -444,5 +466,27 @@ mod tests {
             super::Json::Obj(fields) => assert_eq!(fields.len(), 2),
             _ => panic!("expected object"),
         }
+    }
+
+    /// The by-name obj index answers exactly like the old full scan
+    /// (coins is the canonical probe) and stays fast when gear planning
+    /// resolves hundreds of names per spot: the whole equipment table
+    /// must resolve well inside one server tick budget.
+    #[test]
+    fn obj_name_index_matches_and_stays_fast() {
+        let coins = super::objs_by_name("coins");
+        assert_eq!(coins.len(), 1, "one coins row, got {}", coins.len());
+        assert_eq!(coins[0].obj_id, 995);
+        let equips = super::equipment::all_wearables();
+        assert!(!equips.is_empty(), "wearables load");
+        let start = std::time::Instant::now();
+        let mut hits = 0usize;
+        for entry in &equips {
+            if super::objs_by_name(&entry.name).into_iter().next().is_some() {
+                hits += 1;
+            }
+        }
+        assert!(hits > 0, "some wearables resolve");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "678 lookups under 2 s, took {:?}", start.elapsed());
     }
 }
