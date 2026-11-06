@@ -16,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 use crate::minimap::Minimap;
 use crate::paths;
 

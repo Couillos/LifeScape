@@ -40,7 +40,7 @@ pub struct Quest {
 
 fn quest_from_row(row: &crate::Json) -> Quest {
     let skills = match row.get("skill_reqs") {
-        Some(crate::Json::Arr(items)) => items
+        crate::Json::Arr(items) => items
             .iter()
             .map(|item| SkillReq {
                 skill: opt_str(item, "skill").unwrap_or_default(),
@@ -51,7 +51,7 @@ fn quest_from_row(row: &crate::Json) -> Quest {
         _ => Vec::new(),
     };
     let checks = match row.get("item_checks") {
-        Some(crate::Json::Arr(items)) => items
+        crate::Json::Arr(items) => items
             .iter()
             .map(|item| ItemCheck {
                 container: opt_str(item, "container").unwrap_or_default(),
@@ -61,13 +61,13 @@ fn quest_from_row(row: &crate::Json) -> Quest {
         _ => Vec::new(),
     };
     let gates = match row.get("qp_gates") {
-        Some(crate::Json::Arr(items)) => {
+        crate::Json::Arr(items) => {
             items.iter().map(|item| (opt_str(item, "op").unwrap_or_default(), num(item, "value", 0))).collect()
         }
         _ => Vec::new(),
     };
     let rewards = match row.get("xp_rewards") {
-        Some(crate::Json::Arr(items)) => items
+        crate::Json::Arr(items) => items
             .iter()
             .map(|item| XpReward { skill: opt_str(item, "skill").unwrap_or_default(), xp: num(item, "xp", 0) })
             .collect(),

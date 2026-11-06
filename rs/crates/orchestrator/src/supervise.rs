@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::daemon::{Orchestrator, Watchdog, WORKER_TIMEOUT};
 use crate::jobs::{Job, now_secs};
-use crate::json::{Value, object, str_value};
+use lifescape_json::{Value, object, str_value};
 
 // Random-event geography, decoded from the streamed random events.
 const MAZE_X: (i64, i64) = (2880, 2944);

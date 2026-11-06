@@ -18,7 +18,7 @@ pub struct RockTier {
 pub fn all_rock_tiers() -> Vec<RockTier> {
     table("rocks")
         .iter()
-        .filter(|row| **row != crate::Json::Null)
+        .filter(|row| !row.is_null())
         .map(|row| RockTier {
             rocks: str_list(row, "rocks"),
             level: num(row, "level", 0),

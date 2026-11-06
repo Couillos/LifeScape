@@ -7,5 +7,8 @@ edition = "2021"
 name = "lifescape_gamedata"
 path = "src/lib.rs"
 
+[dependencies]
+lifescape-json = { path = "../json" }
+
 [lints]
 workspace = true

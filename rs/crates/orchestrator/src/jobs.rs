@@ -13,7 +13,7 @@
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::json::{Value, object, str_value};
+use lifescape_json::{Value, object, str_value};
 use crate::paths;
 
 pub fn now_secs() -> f64 {

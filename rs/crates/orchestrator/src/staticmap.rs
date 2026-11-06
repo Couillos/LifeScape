@@ -12,14 +12,14 @@ use std::path::Path;
 
 use lifescape_sdk::collision::{LocDef, MapPack, zip_spans};
 
-use crate::json::Value;
+use lifescape_json::Value;
 use crate::paths;
 
 /// Loc defs for every loc id in the engine dump (`gamedata/data/gametypes.json`).
 /// Null rows stay None; the map loader skips locs without a def.
 pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
     let text = std::fs::read_to_string(gametypes_path).map_err(|err| format!("read {}: {err}", gametypes_path.display()))?;
-    let parsed = crate::json::parse(&text).map_err(|err| format!("parse {}: {err}", gametypes_path.display()))?;
+    let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", gametypes_path.display()))?;
     let rows = parsed.get("loc").as_arr().ok_or_else(|| format!("{} has no loc table", gametypes_path.display()))?;
     let mut defs = Vec::with_capacity(rows.len());
     for (loc_id, row) in rows.iter().enumerate() {
@@ -85,7 +85,7 @@ pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>
 pub fn load_transitions() -> Result<Vec<lifescape_sdk::TransitionRow>, String> {
     let path = paths::root().join("gamedata").join("data").join("transitions.json");
     let text = std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    let parsed = crate::json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
+    let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
     let rows = parsed.as_arr().ok_or_else(|| format!("{} is not an array", path.display()))?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {

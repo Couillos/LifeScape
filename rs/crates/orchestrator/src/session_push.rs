@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 
 /// One push never holds the pump longer than this.
@@ -109,7 +109,7 @@ pub(crate) fn push_event(
 #[cfg(test)]
 mod tests {
     use super::{event_frame, snapshot_frame};
-    use crate::json::{Value, object, str_value};
+    use lifescape_json::{Value, object, str_value};
 
     #[test]
     fn event_frame_carries_tick_and_position() {

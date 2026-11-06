@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use lifescape_orchestrator::{json, paths, web};
+use lifescape_json::{self as json, Value, object, str_value};
+use lifescape_orchestrator::{paths, web};
 use lifescape_orchestrator::cli::cli;
 use lifescape_orchestrator::daemon::Orchestrator;
-use lifescape_orchestrator::json::{Value, object, str_value};
 
 fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));

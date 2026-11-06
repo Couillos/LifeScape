@@ -142,165 +142,12 @@ struct TransitionRow {
     disabled: bool,
 }
 
-#[derive(Debug, Clone)]
-enum MiniJson {
-    Null,
-    Int(i64),
-    Str(String),
-    Arr(Vec<MiniJson>),
-}
-
-struct MiniParser<'text> {
-    bytes: &'text [u8],
-    pos: usize,
-}
-
-impl<'text> MiniParser<'text> {
-    fn parse(text: &'text str) -> Result<MiniJson, String> {
-        let mut parser = MiniParser { bytes: text.as_bytes(), pos: 0 };
-        let value = parser.value()?;
-        parser.gap();
-        if parser.pos != parser.bytes.len() {
-            return Err("trailing bytes".to_string());
-        }
-        Ok(value)
+fn int_triplet(value: &lifescape_json::Value) -> Option<[i64; 3]> {
+    let items = value.as_arr()?;
+    if items.len() != 3 {
+        return None;
     }
-
-    fn gap(&mut self) {
-        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_whitespace() {
-            self.pos += 1;
-        }
-    }
-
-    fn value(&mut self) -> Result<MiniJson, String> {
-        self.gap();
-        match self.bytes.get(self.pos) {
-            Some(b'n') => self.word("null", MiniJson::Null),
-            Some(b't') => self.word("true", MiniJson::Int(1)),
-            Some(b'f') => self.word("false", MiniJson::Int(0)),
-            Some(b'"') => Ok(MiniJson::Str(self.string()?)),
-            Some(b'[') => {
-                self.pos += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.gap();
-                    if self.bytes.get(self.pos) == Some(&b']') {
-                        self.pos += 1;
-                        return Ok(MiniJson::Arr(items));
-                    }
-                    if !items.is_empty() {
-                        if self.bytes.get(self.pos) != Some(&b',') {
-                            return Err("expected , in array".to_string());
-                        }
-                        self.pos += 1;
-                    }
-                    items.push(self.value()?);
-                }
-            }
-            Some(b'{') => {
-                // Objects collapse to their values in key order; the caller
-                // reads rows positionally, so keys are matched by name here.
-                self.pos += 1;
-                let mut fields = Vec::new();
-                loop {
-                    self.gap();
-                    if self.bytes.get(self.pos) == Some(&b'}') {
-                        self.pos += 1;
-                        return Ok(MiniJson::Arr(fields));
-                    }
-                    if !fields.is_empty() {
-                        if self.bytes.get(self.pos) != Some(&b',') {
-                            return Err("expected , in object".to_string());
-                        }
-                        self.pos += 1;
-                        self.gap();
-                    }
-                    if self.bytes.get(self.pos) != Some(&b'"') {
-                        return Err("expected string key".to_string());
-                    }
-                    let key = self.string()?;
-                    self.gap();
-                    if self.bytes.get(self.pos) != Some(&b':') {
-                        return Err("expected : after key".to_string());
-                    }
-                    self.pos += 1;
-                    let value = self.value()?;
-                    fields.push(MiniJson::Arr(vec![MiniJson::Str(key), value]));
-                }
-            }
-            Some(byte) if *byte == b'-' || byte.is_ascii_digit() => Ok(MiniJson::Int(self.number()?)),
-            _ => Err("unexpected value".to_string()),
-        }
-    }
-
-    fn word(&mut self, word: &str, value: MiniJson) -> Result<MiniJson, String> {
-        if self.bytes[self.pos..].starts_with(word.as_bytes()) {
-            self.pos += word.len();
-            Ok(value)
-        } else {
-            Err("bad literal".to_string())
-        }
-    }
-
-    fn number(&mut self) -> Result<i64, String> {
-        let start = self.pos;
-        if self.bytes.get(self.pos) == Some(&b'-') {
-            self.pos += 1;
-        }
-        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
-            self.pos += 1;
-        }
-        std::str::from_utf8(&self.bytes[start..self.pos])
-            .map_err(|_| "bad number".to_string())?
-            .parse()
-            .map_err(|_| "bad number".to_string())
-    }
-
-    fn string(&mut self) -> Result<String, String> {
-        self.pos += 1; // opening quote
-        let mut out = String::new();
-        loop {
-            let byte = *self.bytes.get(self.pos).ok_or("unterminated string".to_string())?;
-            self.pos += 1;
-            match byte {
-                b'"' => return Ok(out),
-                b'\\' => {
-                    let esc = *self.bytes.get(self.pos).ok_or("bad escape".to_string())?;
-                    self.pos += 1;
-                    match esc {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'n' => out.push('\n'),
-                        b't' => out.push('\t'),
-                        b'r' => out.push('\r'),
-                        _ => out.push('?'),
-                    }
-                }
-                other => out.push(other as char),
-            }
-        }
-    }
-}
-
-fn field<'a>(fields: &'a [MiniJson], key: &str) -> Option<&'a MiniJson> {
-    fields.iter().find_map(|entry| match entry {
-        MiniJson::Arr(pair) if pair.len() == 2 => match &pair[0] {
-            MiniJson::Str(name) if name == key => Some(&pair[1]),
-            _ => None,
-        },
-        _ => None,
-    })
-}
-
-fn int_triplet(value: &MiniJson) -> Option<[i64; 3]> {
-    match value {
-        MiniJson::Arr(items) if items.len() == 3 => match (&items[0], &items[1], &items[2]) {
-            (MiniJson::Int(a), MiniJson::Int(b), MiniJson::Int(c)) => Some([*a, *b, *c]),
-            _ => None,
-        },
-        _ => None,
-    }
+    Some([items[0].as_i64()?, items[1].as_i64()?, items[2].as_i64()?])
 }
 
 fn load_transitions() -> Result<Vec<TransitionRow>, ScriptError> {
@@ -314,55 +161,47 @@ fn load_transitions() -> Result<Vec<TransitionRow>, ScriptError> {
     let text = text.ok_or_else(|| {
         ScriptError::Usage("transitions.json not found (run orchestrator dump-transitions gamedata/data/transitions.json first)".to_string())
     })?;
-    let parsed = MiniParser::parse(&text).map_err(|err| ScriptError::Usage(format!("bad transitions.json: {err}")))?;
-    let MiniJson::Arr(rows) = parsed else { return Err(ScriptError::Usage("transitions.json is not an array".to_string())) };
+    let parsed = lifescape_json::parse(&text).map_err(|err| ScriptError::Usage(format!("bad transitions.json: {err}")))?;
+    let rows = parsed.as_arr().ok_or_else(|| ScriptError::Usage("transitions.json is not an array".to_string()))?;
     let mut out = Vec::new();
     for row in rows {
-        let MiniJson::Arr(fields) = row else { continue };
-        let triplet = |key: &str| field(&fields, key).and_then(int_triplet);
+        let triplet = |key: &str| int_triplet(row.get(key));
         let (Some(from), Some(to)) = (triplet("from"), triplet("to")) else { continue };
-        let int = |key: &str| match field(&fields, key) {
-            Some(MiniJson::Int(n)) => *n,
-            _ => 0,
-        };
-        let footprint = match field(&fields, "footprint") {
-            Some(MiniJson::Arr(tiles)) => tiles
+        let int = |key: &str| row.get(key).as_i64().unwrap_or(0);
+        let footprint = match row.get("footprint") {
+            lifescape_json::Value::Arr(tiles) => tiles
                 .iter()
-                .filter_map(|tile| match tile {
-                    MiniJson::Arr(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
-                        (MiniJson::Int(a), MiniJson::Int(b)) => Some([*a, *b]),
-                        _ => None,
-                    },
-                    _ => None,
+                .filter_map(|tile| {
+                    let pair = tile.as_arr()?;
+                    if pair.len() != 2 {
+                        return None;
+                    }
+                    Some([pair[0].as_i64()?, pair[1].as_i64()?])
                 })
                 .collect(),
             _ => vec![[from[1], from[2]]],
         };
         out.push(TransitionRow {
-            name: match field(&fields, "name") {
-                Some(MiniJson::Str(name)) => name.clone(),
-                _ => format!("{}-{}-{}", from[0], from[1], from[2]),
-            },
-            kind: match field(&fields, "kind") {
-                Some(MiniJson::Str(kind)) => kind.clone(),
-                _ => "other".to_string(),
-            },
+            name: row
+                .get("name")
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{}-{}-{}", from[0], from[1], from[2])),
+            kind: row.get("kind").as_str().unwrap_or("other").to_string(),
             from,
             to,
             loc: int("loc") as u16,
             climb_loc: int("climb_loc") as u16,
             climb_op: int("climb_op").max(1) as u8,
-            open_to: match field(&fields, "open_to") {
-                Some(MiniJson::Int(id)) => Some(*id as u16),
-                _ => None,
-            },
-            delta: field(&fields, "delta").and_then(int_triplet),
+            open_to: row.get("open_to").as_i64().map(|id| id as u16),
+            delta: triplet("delta"),
             footprint,
-            disabled: !matches!(field(&fields, "disabled"), None | Some(MiniJson::Null)),
+            disabled: !row.get("disabled").is_null(),
         });
     }
     Ok(out)
 }
+
 
 fn test_transition(bot: &mut Bot, row: &TransitionRow) -> Result<String, ScriptError> {
     let (level, x, z) = (row.from[0] as i32, row.from[1] as i32, row.from[2] as i32);
@@ -672,13 +511,11 @@ pub(crate) fn dev_dump_bank_stands(bot: &mut Bot, _args: &[String]) -> ScriptRes
 
 #[cfg(test)]
 mod tests {
-    use super::MiniParser;
-
     #[test]
-    fn mini_json_reads_rows() {
-        let parsed = MiniParser::parse(r#"[{"name":"rope","from":[0,1,2],"to":[0,3,4],"disabled":null}]"#).expect("parses");
+    fn json_reads_rows() {
+        let parsed = lifescape_json::parse(r#"[{"name":"rope","from":[0,1,2],"to":[0,3,4],"disabled":null}]"#).expect("parses");
         match parsed {
-            super::MiniJson::Arr(rows) => assert_eq!(rows.len(), 1),
+            lifescape_json::Value::Arr(rows) => assert_eq!(rows.len(), 1),
             _ => panic!("expected array"),
         }
     }

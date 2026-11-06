@@ -120,7 +120,7 @@ pub fn spot_npc_ids(category: &str) -> Vec<usize> {
     table("npcs")
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.get("name").and_then(crate::Json::as_str).is_some_and(|name| name.ends_with(tail.as_str())))
+        .filter(|(_, row)| row.get("name").as_str().is_some_and(|name| name.ends_with(tail.as_str())))
         .map(|(npc_id, _)| npc_id)
         .collect()
 }

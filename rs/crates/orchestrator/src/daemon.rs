@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::jobs::{Job, now_secs, resolve_state};
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 use crate::registry;
 

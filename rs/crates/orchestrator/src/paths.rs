@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::json::{self, Value};
+use lifescape_json::{self as json, Value};
 
 static TRANSACTION: AtomicU64 = AtomicU64::new(0);
 

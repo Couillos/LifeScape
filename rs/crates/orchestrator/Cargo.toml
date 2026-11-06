@@ -12,6 +12,7 @@ name = "lifescape_orchestrator"
 path = "src/lib.rs"
 
 [dependencies]
+lifescape-json = { path = "../json" }
 lifescape-gamedata = { path = "../gamedata" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-scripts = { path = "../scripts" }

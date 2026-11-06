@@ -16,10 +16,7 @@ pub struct Recipe {
 }
 
 fn recipe_from_row(row: &Json) -> Recipe {
-    let source = match row.get("extra") {
-        Some(extra) => opt_str(extra, "row").unwrap_or_default(),
-        None => String::new(),
-    };
+    let source = opt_str(row.get("extra"), "row").unwrap_or_default();
     Recipe {
         kind: opt_str(row, "kind").unwrap_or_default(),
         level: num(row, "level", 0),
@@ -35,7 +32,7 @@ fn recipe_from_row(row: &Json) -> Recipe {
 pub fn all_recipes(kind: Option<&str>) -> Vec<Recipe> {
     table("recipes")
         .iter()
-        .filter(|row| kind.is_none_or(|wanted| row.get("kind").and_then(Json::as_str) == Some(wanted)))
+        .filter(|row| kind.is_none_or(|wanted| row.get("kind").as_str() == Some(wanted)))
         .map(recipe_from_row)
         .collect()
 }

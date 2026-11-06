@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 pub mod paths;
-pub mod json;
 pub mod jobs;
 pub mod registry;
 pub mod mapcache;

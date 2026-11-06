@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use lifescape_sdk::buffer::Reader;
 use lifescape_sdk::collision::{CollisionMap, change_loc_collision, zip_index, zip_slice};
 
-use crate::json::{self, Value};
+use lifescape_json::{self as json, Value};
 use crate::paths;
 
 /// One static loc placement on free-to-play ground.
@@ -825,7 +825,7 @@ pub fn dump_transitions(output: &Path) -> Result<(usize, usize), String> {
 #[cfg(test)]
 mod tests {
     use super::dump_transitions;
-    use crate::json;
+    use lifescape_json as json;
     use crate::paths;
     use std::collections::HashSet;
 

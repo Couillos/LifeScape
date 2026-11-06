@@ -34,7 +34,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use lifescape_sdk::client::Snapshot;
 use lifescape_sdk::Bot;
 
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 use crate::session_calls::{execute_write, method_lists, read_from_snapshot};
 use crate::session_heartbeat::heartbeat_value;

@@ -46,9 +46,9 @@ fn keeper_from_row(row: &Json) -> Keeper {
 
 fn int_or_string(row: &Json, key: &str) -> i64 {
     match row.get(key) {
-        Some(Json::Int(value)) => *value,
-        Some(Json::Float(value)) => *value as i64,
-        Some(Json::Str(text)) => text.parse::<i64>().unwrap_or(0),
+        Json::Int(value) => *value,
+        Json::Float(value) => *value as i64,
+        Json::Str(text) => text.parse::<i64>().unwrap_or(0),
         _ => 0,
     }
 }
@@ -58,7 +58,7 @@ fn shop_rows() -> (Vec<Json>, Vec<Json>) {
         Some(Json::Obj(fields)) => {
             let shops = fields
                 .iter()
-                .find(|(name, _)| name == "shops")
+                .find(|(name, _)| name.as_str() == "shops")
                 .and_then(|(_, value)| match value {
                     Json::Arr(rows) => Some(rows.clone()),
                     _ => None,
@@ -66,7 +66,7 @@ fn shop_rows() -> (Vec<Json>, Vec<Json>) {
                 .unwrap_or_default();
             let keepers = fields
                 .iter()
-                .find(|(name, _)| name == "keepers")
+                .find(|(name, _)| name.as_str() == "keepers")
                 .and_then(|(_, value)| match value {
                     Json::Arr(rows) => Some(rows.clone()),
                     _ => None,
@@ -86,7 +86,7 @@ pub fn all_shops() -> Vec<Shop> {
         .map(|row| {
             let name = opt_str(row, "name").unwrap_or_default();
             let stocks = match row.get("stocks") {
-                Some(Json::Arr(items)) => items
+                Json::Arr(items) => items
                     .iter()
                     .map(|item| Stock {
                         obj: opt_str(item, "obj").unwrap_or_default(),
@@ -98,14 +98,14 @@ pub fn all_shops() -> Vec<Shop> {
             };
             let mine: Vec<Keeper> = keepers
                 .iter()
-                .filter(|keeper| keeper.get("shop").and_then(Json::as_str) == Some(name.as_str()))
+                .filter(|keeper| keeper.get("shop").as_str() == Some(name.as_str()))
                 .map(keeper_from_row)
                 .collect();
             Shop {
                 name,
                 scope: opt_str(row, "scope"),
                 size: int_or_string(row, "size"),
-                restock: row.get("restock").and_then(Json::as_str).is_some_and(|text| {
+                restock: row.get("restock").as_str().is_some_and(|text| {
                     matches!(text.to_lowercase().as_str(), "yes" | "true" | "1")
                 }),
                 stocks,
@@ -129,7 +129,7 @@ pub fn keeper_for_npc(npc_name: &str) -> Vec<Keeper> {
     let (_, keepers) = shop_rows();
     keepers
         .iter()
-        .filter(|keeper| keeper.get("npc").and_then(Json::as_str).is_some_and(|npc| npc.to_lowercase() == wanted))
+        .filter(|keeper| keeper.get("npc").as_str().is_some_and(|npc| npc.to_lowercase() == wanted))
         .map(keeper_from_row)
         .collect()
 }

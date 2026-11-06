@@ -26,18 +26,9 @@ pub mod varps;
 // Mini JSON reader (std-only)
 // ---------------------------------------------------------------------------
 
-/// A JSON value. Objects keep insertion order in a flat vec: table rows
-/// are small, linear scan is cheaper than hashing here.
-#[derive(Debug, Clone)]
-pub enum Json {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(String),
-    Arr(Vec<Json>),
-    Obj(Vec<(String, Json)>),
-}
+/// JSON rows share the workspace value model: objects keep sorted keys
+/// and a missing key reads as null. Parsing lives in `lifescape-json`.
+pub use lifescape_json::Value as Json;
 
 #[derive(Debug, Clone)]
 pub struct JsonError(pub String);
@@ -50,191 +41,6 @@ impl std::fmt::Display for JsonError {
 
 impl std::error::Error for JsonError {}
 
-struct Parser<'text> {
-    bytes: &'text [u8],
-    pos: usize,
-}
-
-impl<'text> Parser<'text> {
-    fn new(text: &'text str) -> Parser<'text> {
-        Parser { bytes: text.as_bytes(), pos: 0 }
-    }
-
-    fn error(&self, what: &str) -> JsonError {
-        JsonError(format!("{what} at byte {}", self.pos))
-    }
-
-    fn skip_gap(&mut self) {
-        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_whitespace() {
-            self.pos += 1;
-        }
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
-    }
-
-    fn value(&mut self) -> Result<Json, JsonError> {
-        self.skip_gap();
-        match self.peek() {
-            Some(b'n') => self.literal("null", Json::Null),
-            Some(b't') => self.literal("true", Json::Bool(true)),
-            Some(b'f') => self.literal("false", Json::Bool(false)),
-            Some(b'"') => Ok(Json::Str(self.string()?)),
-            Some(b'[') => {
-                self.pos += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.skip_gap();
-                    if self.peek() == Some(b']') {
-                        self.pos += 1;
-                        return Ok(Json::Arr(items));
-                    }
-                    if !items.is_empty() {
-                        if self.peek() != Some(b',') {
-                            return Err(self.error("expected , in array"));
-                        }
-                        self.pos += 1;
-                    }
-                    items.push(self.value()?);
-                }
-            }
-            Some(b'{') => {
-                self.pos += 1;
-                let mut fields = Vec::new();
-                loop {
-                    self.skip_gap();
-                    if self.peek() == Some(b'}') {
-                        self.pos += 1;
-                        return Ok(Json::Obj(fields));
-                    }
-                    if !fields.is_empty() {
-                        if self.peek() != Some(b',') {
-                            return Err(self.error("expected , in object"));
-                        }
-                        self.pos += 1;
-                        self.skip_gap();
-                    }
-                    if self.peek() != Some(b'"') {
-                        return Err(self.error("expected string key"));
-                    }
-                    let key = self.string()?;
-                    self.skip_gap();
-                    if self.peek() != Some(b':') {
-                        return Err(self.error("expected : after key"));
-                    }
-                    self.pos += 1;
-                    fields.push((key, self.value()?));
-                }
-            }
-            Some(byte) if byte == b'-' || byte.is_ascii_digit() => self.number(),
-            _ => Err(self.error("unexpected value")),
-        }
-    }
-
-    fn literal(&mut self, word: &str, value: Json) -> Result<Json, JsonError> {
-        if self.bytes[self.pos..].starts_with(word.as_bytes()) {
-            self.pos += word.len();
-            Ok(value)
-        } else {
-            Err(self.error("bad literal"))
-        }
-    }
-
-    fn number(&mut self) -> Result<Json, JsonError> {
-        let start = self.pos;
-        if self.peek() == Some(b'-') {
-            self.pos += 1;
-        }
-        while self.pos < self.bytes.len()
-            && (self.bytes[self.pos].is_ascii_digit()
-                || matches!(self.bytes[self.pos], b'.' | b'e' | b'E' | b'+' | b'-'))
-        {
-            self.pos += 1;
-        }
-        let raw = std::str::from_utf8(&self.bytes[start..self.pos]).map_err(|_| self.error("bad number"))?;
-        if let Ok(int) = raw.parse::<i64>() {
-            return Ok(Json::Int(int));
-        }
-        raw.parse::<f64>().map(Json::Float).map_err(|_| self.error("bad number"))
-    }
-
-    fn string(&mut self) -> Result<String, JsonError> {
-        // Bytes are UTF-8; escapes map back to chars, \uXXXX included.
-        // Bulk-copies whole runs between escapes: per-char decoding would
-        // turn the 1 MB tables into a multi-second stall (and the server
-        // drops a client that stops answering).
-        debug_assert_eq!(self.peek(), Some(b'"'));
-        self.pos += 1;
-        let mut out = String::new();
-        loop {
-            let start = self.pos;
-            while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' && self.bytes[self.pos] != b'\\' {
-                self.pos += 1;
-            }
-            if self.pos >= self.bytes.len() {
-                return Err(self.error("unterminated string"));
-            }
-            if self.pos > start {
-                let chunk = std::str::from_utf8(&self.bytes[start..self.pos]).map_err(|_| self.error("bad utf-8"))?;
-                out.push_str(chunk);
-            }
-            if self.bytes[self.pos] == b'"' {
-                self.pos += 1;
-                return Ok(out);
-            }
-            self.pos += 1; // backslash
-            match self.peek() {
-                Some(b'"') => out.push('"'),
-                Some(b'\\') => out.push('\\'),
-                Some(b'/') => out.push('/'),
-                Some(b'b') => out.push('\u{0008}'),
-                Some(b'f') => out.push('\u{000C}'),
-                Some(b'n') => out.push('\n'),
-                Some(b'r') => out.push('\r'),
-                Some(b't') => out.push('\t'),
-                Some(b'u') => {
-                    if self.pos + 4 >= self.bytes.len() {
-                        return Err(self.error("bad \\u escape"));
-                    }
-                    let digits = std::str::from_utf8(&self.bytes[self.pos + 1..self.pos + 5])
-                        .map_err(|_| self.error("bad \\u escape"))?;
-                    let code = u32::from_str_radix(digits, 16).map_err(|_| self.error("bad \\u escape"))?;
-                    out.push(char::from_u32(code).ok_or_else(|| self.error("bad \\u escape"))?);
-                    self.pos += 4;
-                }
-                _ => return Err(self.error("bad escape")),
-            }
-            self.pos += 1;
-        }
-    }
-}
-
-impl Json {
-    pub(crate) fn get(&self, key: &str) -> Option<&Json> {
-        if let Json::Obj(fields) = self {
-            fields.iter().find(|(name, _)| name == key).map(|(_, value)| value)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn as_str(&self) -> Option<&str> {
-        if let Json::Str(text) = self { Some(text) } else { None }
-    }
-
-    pub(crate) fn as_i64(&self) -> Option<i64> {
-        match self {
-            Json::Int(value) => Some(*value),
-            Json::Float(value) => Some(*value as i64),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_bool(&self) -> Option<bool> {
-        if let Json::Bool(value) = self { Some(*value) } else { None }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Shared row helpers (std-only, no allocation beyond the result)
@@ -242,33 +48,33 @@ impl Json {
 
 /// Optional string field, owned.
 pub(crate) fn opt_str(row: &Json, key: &str) -> Option<String> {
-    row.get(key).and_then(Json::as_str).map(str::to_string)
+    row.get(key).as_str().map(str::to_string)
 }
 
 /// Integer field with a default when missing.
 pub(crate) fn num(row: &Json, key: &str, default: i64) -> i64 {
-    row.get(key).and_then(Json::as_i64).unwrap_or(default)
+    row.get(key).as_i64().unwrap_or(default)
 }
 
 /// Nullable integer field.
 pub(crate) fn opt_num(row: &Json, key: &str) -> Option<i64> {
-    row.get(key).and_then(Json::as_i64)
+    row.get(key).as_i64()
 }
 
 /// Boolean field with a default when missing.
 pub(crate) fn flag(row: &Json, key: &str, default: bool) -> bool {
-    row.get(key).and_then(Json::as_bool).unwrap_or(default)
+    row.get(key).as_bool().unwrap_or(default)
 }
 
 /// Nullable boolean field (single `members` flag, never invented).
 pub(crate) fn opt_flag(row: &Json, key: &str) -> Option<bool> {
-    row.get(key).and_then(Json::as_bool)
+    row.get(key).as_bool()
 }
 
 /// List-of-strings field, skipping nulls.
 pub(crate) fn str_list(row: &Json, key: &str) -> Vec<String> {
     match row.get(key) {
-        Some(Json::Arr(items)) => items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect(),
+        Json::Arr(items) => items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect(),
         _ => Vec::new(),
     }
 }
@@ -276,7 +82,7 @@ pub(crate) fn str_list(row: &Json, key: &str) -> Vec<String> {
 /// String->int map field (runes, bonuses, requirements, inputs...).
 pub(crate) fn str_int_map(row: &Json, key: &str) -> Vec<(String, i64)> {
     match row.get(key) {
-        Some(Json::Obj(fields)) => fields
+        Json::Obj(fields) => fields
             .iter()
             .filter_map(|(name, value)| value.as_i64().map(|number| (name.clone(), number)))
             .collect(),
@@ -321,8 +127,7 @@ fn data_dir() -> std::path::PathBuf {
 fn load_value(name: &str) -> Result<Json, JsonError> {
     let path = data_dir().join(format!("{name}.json"));
     let text = std::fs::read_to_string(&path).map_err(|err| JsonError(format!("cannot read {}: {err}", path.display())))?;
-    let mut parser = Parser::new(&text);
-    parser.value()
+    lifescape_json::parse(&text).map_err(|err| JsonError(format!("cannot parse {}: {err}", path.display())))
 }
 
 /// Every dump table, parsed once and shared. Arrays and objects alike:
@@ -356,12 +161,12 @@ pub fn table(name: &str) -> &'static [Json] {
 }
 
 fn row_name(row: &Json) -> Option<String> {
-    row.get("name").and_then(Json::as_str).map(str::to_string)
+    row.get("name").as_str().map(str::to_string)
 }
 
 fn row_ops(row: &Json, key: &str) -> Vec<Option<String>> {
     match row.get(key) {
-        Some(Json::Arr(items)) => items
+        Json::Arr(items) => items
             .iter()
             .map(|item| match item {
                 Json::Null => None,
@@ -395,7 +200,7 @@ pub struct Obj {
 }
 
 fn obj_from_row(obj_id: usize, row: &Json) -> Obj {
-    if *row == Json::Null {
+    if row.is_null() {
         return Obj {
             obj_id,
             name: None,
@@ -414,16 +219,16 @@ fn obj_from_row(obj_id: usize, row: &Json) -> Obj {
     Obj {
         obj_id,
         name: row_name(row),
-        display: row.get("display").and_then(Json::as_str).map(str::to_string).or_else(|| row_name(row)),
-        desc: row.get("desc").and_then(Json::as_str).map(str::to_string),
+        display: row.get("display").as_str().map(str::to_string).or_else(|| row_name(row)),
+        desc: row.get("desc").as_str().map(str::to_string),
         ops: row_ops(row, "ops"),
         inv_ops: row_ops(row, "iops"),
-        price: row.get("price").and_then(Json::as_i64).unwrap_or(0),
-        alch_high: row.get("alch_high").and_then(Json::as_i64).unwrap_or(0),
-        alch_low: row.get("alch_low").and_then(Json::as_i64).unwrap_or(0),
-        stackable: row.get("stackable").and_then(Json::as_bool).unwrap_or(false),
-        members: row.get("members").and_then(Json::as_bool),
-        respawn_ticks: row.get("respawn_ticks").and_then(Json::as_i64).unwrap_or(100),
+        price: row.get("price").as_i64().unwrap_or(0),
+        alch_high: row.get("alch_high").as_i64().unwrap_or(0),
+        alch_low: row.get("alch_low").as_i64().unwrap_or(0),
+        stackable: row.get("stackable").as_bool().unwrap_or(false),
+        members: row.get("members").as_bool(),
+        respawn_ticks: row.get("respawn_ticks").as_i64().unwrap_or(100),
     }
 }
 
@@ -480,14 +285,14 @@ pub struct Npc {
 }
 
 fn npc_from_row(npc_id: usize, row: &Json) -> Npc {
-    if *row == Json::Null {
+    if row.is_null() {
         return Npc { npc_id, name: None, size: 1, ops: Vec::new(), members: None, hunts_players: false, huntrange: 0, vislevel: 0, spawns: Vec::new() };
     }
     let mut spawns = Vec::new();
-    if let Some(Json::Arr(items)) = row.get("spawns") {
+    if let Json::Arr(items) = row.get("spawns") {
         for item in items {
             if let (Some(x), Some(z), Some(level)) =
-                (item.get("x").and_then(Json::as_i64), item.get("z").and_then(Json::as_i64), item.get("level").and_then(Json::as_i64))
+                (item.get("x").as_i64(), item.get("z").as_i64(), item.get("level").as_i64())
             {
                 spawns.push(NpcSpawn { x, z, level });
             }
@@ -496,12 +301,12 @@ fn npc_from_row(npc_id: usize, row: &Json) -> Npc {
     Npc {
         npc_id,
         name: row_name(row),
-        size: row.get("size").and_then(Json::as_i64).unwrap_or(1),
+        size: row.get("size").as_i64().unwrap_or(1),
         ops: row_ops(row, "ops"),
-        members: row.get("members").and_then(Json::as_bool),
-        hunts_players: row.get("hunts_players").and_then(Json::as_bool).unwrap_or(false),
-        huntrange: row.get("huntrange").and_then(Json::as_i64).unwrap_or(0),
-        vislevel: row.get("vislevel").and_then(Json::as_i64).unwrap_or(0),
+        members: row.get("members").as_bool(),
+        hunts_players: row.get("hunts_players").as_bool().unwrap_or(false),
+        huntrange: row.get("huntrange").as_i64().unwrap_or(0),
+        vislevel: row.get("vislevel").as_i64().unwrap_or(0),
         spawns,
     }
 }
@@ -557,7 +362,7 @@ pub struct LocSpawn {
 }
 
 fn loc_from_row(loc_id: usize, row: &Json) -> Loc {
-    if *row == Json::Null {
+    if row.is_null() {
         return Loc {
             loc_id,
             name: None,
@@ -571,23 +376,23 @@ fn loc_from_row(loc_id: usize, row: &Json) -> Loc {
         };
     }
     let mut spawns = Vec::new();
-    if let Some(Json::Arr(items)) = row.get("spawns") {
+    if let Json::Arr(items) = row.get("spawns") {
         for item in items {
             if let (Some(x), Some(z), Some(level)) =
-                (item.get("x").and_then(Json::as_i64), item.get("z").and_then(Json::as_i64), item.get("level").and_then(Json::as_i64))
+                (item.get("x").as_i64(), item.get("z").as_i64(), item.get("level").as_i64())
             {
-                spawns.push(LocSpawn { x, z, level, members: item.get("members").and_then(Json::as_bool) });
+                spawns.push(LocSpawn { x, z, level, members: item.get("members").as_bool() });
             }
         }
     }
     Loc {
         loc_id,
         name: row_name(row),
-        width: row.get("width").and_then(Json::as_i64).unwrap_or(1),
-        length: row.get("length").and_then(Json::as_i64).unwrap_or(1),
-        blockwalk: row.get("blockwalk").and_then(Json::as_bool).unwrap_or(false),
-        blockrange: row.get("blockrange").and_then(Json::as_bool).unwrap_or(false),
-        active: row.get("active").and_then(Json::as_i64).unwrap_or(0),
+        width: row.get("width").as_i64().unwrap_or(1),
+        length: row.get("length").as_i64().unwrap_or(1),
+        blockwalk: row.get("blockwalk").as_bool().unwrap_or(false),
+        blockrange: row.get("blockrange").as_bool().unwrap_or(false),
+        active: row.get("active").as_i64().unwrap_or(0),
         ops: row_ops(row, "ops"),
         spawns,
     }
@@ -613,23 +418,15 @@ pub fn locs_by_name(name: &str) -> Vec<Loc> {
 pub fn com_id(name: &str) -> Option<u16> {
     let wanted = name.to_lowercase();
     for row in table("comps") {
-        if row.get("name").and_then(Json::as_str).is_some_and(|label| label.to_lowercase() == wanted) {
-            return row.get("id").and_then(Json::as_i64).map(|id| id as u16);
+        if row.get("name").as_str().is_some_and(|label| label.to_lowercase() == wanted) {
+            return row.get("id").as_i64().map(|id| id as u16);
         }
     }
     None
 }
 
-impl PartialEq for Json {
-    fn eq(&self, other: &Self) -> bool {
-        matches!((self, other), (Json::Null, Json::Null))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::Parser;
-
     #[test]
     fn hunter_flags_parsed() {
         let spider = super::npcs_by_name("giantspider1").into_iter().next().expect("spider in dumps");
@@ -642,8 +439,7 @@ mod tests {
 
     #[test]
     fn parses_mixed_values() {
-        let mut parser = Parser::new(r#"{"a": [1, -2, true, null, "x\"y", 1.5], "b": {}}"#);
-        let value = parser.value().expect("parses");
+        let value = lifescape_json::parse(r#"{"a": [1, -2, true, null, "x\"y", 1.5], "b": {}}"#).expect("parses");
         match value {
             super::Json::Obj(fields) => assert_eq!(fields.len(), 2),
             _ => panic!("expected object"),

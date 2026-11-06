@@ -12,7 +12,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::daemon::WORKER_TIMEOUT;
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 
 fn send_command(request: &Value, timeout: Duration) -> Result<Value, String> {

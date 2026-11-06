@@ -5,12 +5,20 @@ version = 4
 [[package]]
 name = "lifescape-gamedata"
 version = "0.1.0"
+dependencies = [
+ "lifescape-json",
+]
+
+[[package]]
+name = "lifescape-json"
+version = "0.1.0"
 
 [[package]]
 name = "lifescape-orchestrator"
 version = "0.1.0"
 dependencies = [
  "lifescape-gamedata",
+ "lifescape-json",
  "lifescape-scripts",
  "lifescape-sdk",
 ]
@@ -20,6 +28,7 @@ name = "lifescape-scripts"
 version = "0.1.0"
 dependencies = [
  "lifescape-gamedata",
+ "lifescape-json",
  "lifescape-sdk",
 ]
 

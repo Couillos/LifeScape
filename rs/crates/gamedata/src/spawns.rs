@@ -28,18 +28,18 @@ pub struct ObjSpawn {
 pub fn all_npc_spawns(npc_id: Option<usize>) -> Vec<NpcSpawn> {
     let mut out = Vec::new();
     for (row_id, row) in table("npcs").iter().enumerate() {
-        if row == &Json::Null {
+        if row.is_null() {
             continue;
         }
         if npc_id.is_some_and(|wanted| wanted != row_id) {
             continue;
         }
-        if let Some(Json::Arr(spots)) = row.get("spawns") {
+        if let Json::Arr(spots) = row.get("spawns") {
             for spot in spots {
                 if let (Some(x), Some(z), Some(level)) = (
-                    spot.get("x").and_then(Json::as_i64),
-                    spot.get("z").and_then(Json::as_i64),
-                    spot.get("level").and_then(Json::as_i64),
+                    spot.get("x").as_i64(),
+                    spot.get("z").as_i64(),
+                    spot.get("level").as_i64(),
                 ) {
                     out.push(NpcSpawn {
                         x,
@@ -71,7 +71,7 @@ pub fn all_obj_spawns(obj_id: Option<usize>) -> Vec<ObjSpawn> {
         // Dump flag wins; otherwise fall back to the object flag.
         let members = row
             .get("members")
-            .and_then(Json::as_bool)
+            .as_bool()
             .or_else(|| entry.as_ref().and_then(|found| found.members))
             .unwrap_or(false);
         out.push(ObjSpawn {

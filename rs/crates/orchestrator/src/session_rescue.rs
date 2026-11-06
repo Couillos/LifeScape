@@ -19,7 +19,7 @@ use lifescape_sdk::client::Snapshot;
 use lifescape_sdk::Bot;
 use lifescape_scripts::randomevent::{self, EventKind};
 
-use crate::json::{object, str_value, Value};
+use lifescape_json::{object, str_value, Value};
 use crate::session::{now_secs, script_error_type, Shared};
 
 /// One posed rescue: the registry script name plus where it was seen.

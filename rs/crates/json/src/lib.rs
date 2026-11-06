@@ -1,8 +1,10 @@
+#![forbid(unsafe_code)]
 //! Minimal JSON value model, std-only.
 //!
-//! Covers exactly what the daemon/web payloads need: objects with sorted
-//! keys (sorted, like JSON `sort_keys`), arrays, strings, ints,
-//! floats, bools and null. No escapes beyond the JSON spec.
+//! Single parse/write point for the workspace: daemon/web payloads,
+//! game data dumps and dev check reports. Objects keep sorted
+//! keys (like JSON `sort_keys`), plus arrays, strings, ints,
+//! floats, bools and null.
 
 use std::collections::BTreeMap;
 

@@ -18,7 +18,7 @@ pub struct TreeTier {
 pub fn all_tiers() -> Vec<TreeTier> {
     table("trees")
         .iter()
-        .filter(|row| **row != crate::Json::Null)
+        .filter(|row| !row.is_null())
         .map(|row| TreeTier {
             trees: str_list(row, "trees"),
             level: num(row, "level", 0),

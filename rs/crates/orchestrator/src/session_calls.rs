@@ -10,7 +10,7 @@ use lifescape_sdk::client::Snapshot;
 use lifescape_sdk::Bot;
 use lifescape_scripts::tables_live::LIVETABLES;
 
-use crate::json::{self, Value, object, str_value};
+use lifescape_json::{self as json, Value, object, str_value};
 
 /// Snapshot reads served from the heartbeat, never from the live bot.
 const READ_METHODS: &[&str] = &[
@@ -513,7 +513,7 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
 #[cfg(test)]
 mod tests {
     use super::{call_timeout, coerce_arg, execute_write, method_lists, read_from_snapshot, CALL_TICK_BOUND};
-    use crate::json::{self, Value, str_value};
+    use lifescape_json::{self as json, Value, str_value};
     use lifescape_sdk::client::Snapshot;
 
     fn snapshot_fixture() -> Snapshot {
