@@ -167,6 +167,9 @@ pub enum NoRouteReason {
     NeedsRequirement,
     PaidOnly,
     OutsideF2p,
+    /// The search stopped at a yield point (keepalive or operator stop):
+    /// no diagnosis, the caller maps it to `Interrupted`, never a dossier.
+    Aborted,
 }
 
 impl NoRouteReason {
@@ -176,6 +179,7 @@ impl NoRouteReason {
             NoRouteReason::NeedsRequirement => "NeedsRequirement",
             NoRouteReason::PaidOnly => "PaidOnly",
             NoRouteReason::OutsideF2p => "OutsideF2p",
+            NoRouteReason::Aborted => "Aborted",
         }
     }
 }
@@ -226,6 +230,20 @@ enum PrevEdge {
 /// enclosed pockets (verified for the single current entry), so no
 /// such detour exists; revisit if a requirement door ever gets one.
 pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, options: &NavOptions) -> Result<Plan, NoRoute> {
+    plan_yielding(world, tables, from, dest, options, &mut || true)
+}
+
+/// Same search with a yield point every 16384 visits: the live caller
+/// pumps its keepalive there (the plan runs on the only socket reader).
+/// `false` stops every pending search at once with `Aborted`.
+pub fn plan_yielding(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    yield_: &mut dyn FnMut() -> bool,
+) -> Result<Plan, NoRoute> {
     if options.f2p_only && !world.in_f2p(dest.x, dest.z) {
         return Err(NoRoute {
             closest_reachable: from,
@@ -235,7 +253,8 @@ pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, option
         });
     }
     // A: requirements lifted (tolls still apply unless paid).
-    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false) {
+    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, yield_) {
+        Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
             let mut blocked = Vec::new();
             for (_, edge) in &chain {
@@ -264,7 +283,8 @@ pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, option
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
-        match dijkstra(world, tables, from, dest, options, true, true, false) {
+        match dijkstra(world, tables, from, dest, options, true, true, false, yield_) {
+            Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(chain, _, best) => {
                 let mut tolls = Vec::new();
                 for (_, edge) in &chain {
@@ -292,7 +312,8 @@ pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, option
     if options.f2p_only {
         // C: bounds lifted, requirements enforced. Reaching the dest this
         // way proves the F2P fence is the blocker.
-        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true) {
+        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, yield_) {
+            Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(_, _, best) => {
                 return Err(NoRoute {
                     closest_reachable: best,
@@ -305,7 +326,8 @@ pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, option
         }
     }
     // D: fully filtered search, for the closest reachable tile.
-    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false) {
+    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, yield_) {
+        Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(_, _, best) => best,
         Outcome::Closest(best) => best,
     };
@@ -315,6 +337,16 @@ pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, option
         disabled_transitions_nearby: disabled_nearby(tables, dest),
         reason: NoRouteReason::Disconnected,
     })
+}
+
+/// No diagnosis: the search never ran to a verdict.
+fn aborted(from: Tile) -> NoRoute {
+    NoRoute {
+        closest_reachable: from,
+        blocked_by_requirements: Vec::new(),
+        disabled_transitions_nearby: Vec::new(),
+        reason: NoRouteReason::Aborted,
+    }
 }
 
 fn disabled_nearby(tables: &Tables, dest: Tile) -> Vec<TransitionRef> {
@@ -341,6 +373,7 @@ fn transition_ref(row: &Transition) -> TransitionRef {
 enum Outcome {
     Found(Vec<(Tile, PrevEdge)>, u32, Tile),
     Closest(Tile),
+    Aborted,
 }
 
 struct Search<'a> {
@@ -459,6 +492,7 @@ fn dijkstra(
     ignore_requires: bool,
     allow_paid: bool,
     ignore_f2p: bool,
+    yield_: &mut dyn FnMut() -> bool,
 ) -> Outcome {
     let setup_start = std::time::Instant::now();
     let mut search = Search {
@@ -496,6 +530,9 @@ fn dijkstra(
             continue;
         }
         visits += 1;
+        if visits % 16384 == 0 && !yield_() {
+            return Outcome::Aborted;
+        }
         if heap.len() > heap_max {
             heap_max = heap.len();
         }

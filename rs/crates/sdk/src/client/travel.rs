@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_nav::plan::{self, EdgeId, NavOptions, Plan, Segment, Tile};
+use lifescape_nav::plan::{self, EdgeId, NavOptions, NoRouteReason, Plan, Segment, Tile};
 use lifescape_nav::static_world::StaticWorld;
 use lifescape_nav::tables::Tables;
 
@@ -64,7 +64,7 @@ impl Bot {
         self.run_with_replan(dest, world, tables, options, plan, timeout)
     }
 
-    fn plan_travel(&self, dest: Tile) -> Result<(Arc<StaticWorld>, Arc<Tables>, NavOptions, Plan)> {
+    fn plan_travel(&mut self, dest: Tile) -> Result<(Arc<StaticWorld>, Arc<Tables>, NavOptions, Plan)> {
         let world = self.nav_world.clone().ok_or_else(|| {
             Error::State("travel_to without static world (the session wires it at open)".to_string())
         })?;
@@ -73,7 +73,10 @@ impl Bot {
         })?;
         let options = self.nav_options(&tables);
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-        let plan = plan::plan(&world, &tables, from, dest, &options).map_err(|no| {
+        let plan = plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()).map_err(|no| {
+            if no.reason == NoRouteReason::Aborted {
+                return Error::Interrupted(format!("plan aborted at {:?}", self.position()));
+            }
             let mut blocked: Vec<String> =
                 no.blocked_by_requirements.iter().map(|(edge, tags)| format!("{edge:?} missing {tags:?}")).collect();
             blocked.sort();
@@ -96,6 +99,21 @@ impl Bot {
             self.fail(from, dest, &options, None, None, &expected, &Error::Travel(observed))
         })?;
         Ok((world, tables, options, plan))
+    }
+
+    /// Yield point for long plans: the plan runs on the only socket
+    /// reader, so each yield emits the keepalive the server needs (it
+    /// reaps after 60 s without any response). The session stop hook
+    /// aborts the same way. False stops every pending search; the caller
+    /// maps it to `Interrupted`, never a dossier.
+    fn plan_yield(&mut self) -> bool {
+        if self.keepalive_if_due().is_err() {
+            return false;
+        }
+        if let Some(hook) = self.on_pump.clone() {
+            return hook(self);
+        }
+        true
     }
 
     /// Options from live state: toll wallet, carried items, quest points.
@@ -191,8 +209,11 @@ impl Bot {
                     options.excluded_edges.insert(edge);
                 }
                 let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-                let retry = match plan::plan(&world, &tables, from, dest, &options) {
+                let retry = match plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()) {
                     Ok(retry) => retry,
+                    Err(no) if no.reason == NoRouteReason::Aborted => {
+                        return Err(Error::Interrupted(format!("replan aborted at {:?}", self.position())));
+                    }
                     Err(no) => {
                         self.log(&format!("nav replan: {} (original failure stands)", no.reason.as_str()));
                         return Err(first);
@@ -803,6 +824,38 @@ mod tests {
 
     fn empty_plan() -> Plan {
         Plan { segments: Vec::new(), cost: 0, adjusted_dest: None }
+    }
+
+    fn offline_bot(x: i32, z: i32) -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        let (world, tables) = test_nav_context();
+        bot.nav_world = Some(world);
+        bot.nav_tables = Some(tables);
+        bot.world.x = x;
+        bot.world.z = z;
+        bot.world.level = 0;
+        bot
+    }
+
+    #[test]
+    fn aborted_plan_is_interrupted() {
+        let mut bot = offline_bot(3222, 3222);
+        // No socket: the first yield's keepalive fails, aborting the search.
+        // Interrupted here (not Travel/Disconnected) proves the yield fired
+        // mid-search: without it this dest runs 238k visits to Disconnected.
+        let err = match bot.plan_travel(Tile { x: 3100, z: 3100, level: 0 }) {
+            Ok(_) => panic!("a refused yield must abort, not plan"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::Interrupted(_)), "abort maps to Interrupted, got {err:?}");
+    }
+
+    #[test]
+    fn short_plan_stays_offline() {
+        let mut bot = offline_bot(3228, 3214);
+        // Pure planning, no yield point reached: no socket, no keepalive, Ok.
+        let (_, _, _, plan) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("short plan stays offline");
+        assert!(!plan.segments.is_empty(), "the door route has segments");
     }
 
     #[test]
