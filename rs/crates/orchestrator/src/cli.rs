@@ -510,16 +510,34 @@ fn shell(account: &str) -> i32 {
     0
 }
 
+/// True when a session worker answers on the account socket. A plain
+/// connect is enough: a stale socket file refuses, a live worker
+/// accepts. Split by path so tests bind a temp socket, never run/.
+fn session_worker_alive(account: &str) -> bool {
+    let (sock_path, _) = crate::paths::session_paths(account);
+    worker_socket_alive(&sock_path)
+}
+
+fn worker_socket_alive(sock_path: &std::path::Path) -> bool {
+    UnixStream::connect(sock_path).is_ok()
+}
+
 /// Direct run without daemon nor session worker: login, run one script,
 /// logout. Same Bot setup as a session (live tables, map index,
 /// transitions) so routing behaves the same; nothing is published
 /// (no heartbeat, no logs, no spectate). For fast live tests only.
+/// Refuses when a session worker is alive on the account: two live
+/// logins fight over the name ("already logged in" storms).
 fn run_direct(args: &[String]) -> i32 {
     if args.len() < 2 {
         eprintln!("usage: orchestrator direct <account> <script> [args...]");
         return 2;
     }
     let account = &args[0];
+    if session_worker_alive(account) {
+        eprintln!("direct: session worker alive on {account}; unload it first");
+        return 2;
+    }
     let script = &args[1];
     let script_args = args[2..].to_vec();
     if !lifescape_scripts::names().iter().any(|name| name == script) {
@@ -686,5 +704,34 @@ pub fn cli(argv: &[String]) -> i32 {
             eprintln!("unknown command '{command}'");
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_socket_alive;
+    use std::os::unix::net::UnixListener;
+
+    fn temp_sock(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("lifescape-test-{}-{name}", std::process::id()))
+    }
+
+    /// Single-session guard: a bound socket reads alive, a missing or
+    /// stale path reads dead — `direct` refuses only the live worker.
+    #[test]
+    fn worker_socket_guard() {
+        let missing = temp_sock("missing.sock");
+        let _ = std::fs::remove_file(&missing);
+        assert!(!worker_socket_alive(&missing), "no socket means no worker");
+
+        let stale = temp_sock("stale.sock");
+        std::fs::write(&stale, b"stale").unwrap();
+        assert!(!worker_socket_alive(&stale), "stale file is not a worker");
+        std::fs::remove_file(&stale).unwrap();
+
+        let live = temp_sock("live.sock");
+        let _ = std::fs::remove_file(&live);
+        let _listener = UnixListener::bind(&live).unwrap();
+        assert!(worker_socket_alive(&live), "bound socket means a live worker");
     }
 }

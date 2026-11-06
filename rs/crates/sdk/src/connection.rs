@@ -673,7 +673,8 @@ impl Connection {
 
     fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(length);
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + self.timeout.min(Self::READ_BUDGET);
+        let mut keepalive_sent = false;
         while out.len() < length {
             if !self.buffer.is_empty() {
                 let take = (length - out.len()).min(self.buffer.len());
@@ -684,11 +685,20 @@ impl Connection {
             let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
             let mut chunk = vec![0u8; length - out.len()];
             match stream.read(&mut chunk) {
-                Ok(0) => return Err(Error::Io("server closed the socket".to_string())),
+                Ok(0) => return Err(Error::Io(format!("server closed the socket (sent_total={} last_op={} ops=[{}])", self.sent_total, self.last_op, self.ops_ring()))),
                 Ok(got) => out.extend_from_slice(&chunk[..got]),
                 Err(err) if err.kind() == std::io::ErrorKind::TimedOut || err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() > deadline {
-                        return Err(Error::Timeout(format!("read timed out after {}s", self.timeout.as_secs())));
+                    let now = Instant::now();
+                    // One forced keepalive per stalled read: enough to
+                    // prove the session alive, never a burst. Pre-login
+                    // reads have no cipher yet (no session server-side),
+                    // so there is nothing to keep alive — just wait.
+                    if !keepalive_sent && self.outgoing.is_some() && self.last_send.is_none_or(|prev| now.duration_since(prev) >= Self::READ_KEEPALIVE_AFTER) {
+                        keepalive_sent = true;
+                        let _ = self.send("NO_TIMEOUT", &[]);
+                    }
+                    if now > deadline {
+                        return Err(Error::Timeout(format!("read timed out after {}s", self.timeout.min(Self::READ_BUDGET).as_secs())));
                     }
                 }
                 Err(err) => return Err(Error::from(err)),
@@ -702,6 +712,16 @@ impl Connection {
 /// opcode byte, exactly what [`Connection::send_by_id`] puts on the wire.
 /// Kept separate so framing stays testable without a live session.
 fn frame_packet(op_id: u8, size: i16, payload: &[u8], shift: i32) -> Result<Vec<u8>> {
+    /// Read exactly `length` bytes, looping on partial and empty reads.
+    /// Never silent for a server-tick budget: the server reaps a session
+    /// quiet for 100 ticks (6 s at 60 ms), so a read stalled past half
+    /// that budget forces a NO_TIMEOUT keepalive on the same socket
+    /// (full duplex: client frames and server frames interleave freely).
+    /// The whole wait stays under the reap budget: past it the session
+    /// is dead server-side, fail loud instead of feeding a silent loop.
+    const READ_BUDGET: Duration = Duration::from_secs(5);
+    const READ_KEEPALIVE_AFTER: Duration = Duration::from_secs(3);
+
     let frame = match size {
         -1 => {
             if payload.len() > 255 {
@@ -774,3 +794,50 @@ mod tests {
         assert!(frame_packet(209, 0, &[1], 0).is_err());
     }
 }
+
+    /// The read budget stays under the server's 100-tick silence reap
+    /// (6 s): a stalled read must fail loud before the server kills us.
+    #[test]
+    fn read_budget_under_silence_reap() {
+        assert!(Connection::READ_BUDGET < Duration::from_secs(6), "read bound under 100 server ticks");
+    }
+
+    /// Stalled read proves the session alive: on a quiet socket the
+    /// forced NO_TIMEOUT lands server-side quickly, and bytes sent late
+    /// are still read (the budget only trips on real silence).
+    #[test]
+    fn stalled_read_forces_keepalive_inside_budget() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::mpsc::channel;
+
+        use crate::isaac::Isaac;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+        let port = listener.local_addr().expect("local addr").port();
+        let start = Instant::now();
+        let (keepalive_tx, keepalive_rx) = channel();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_read_timeout(Some(Duration::from_secs(6))).expect("server read timeout");
+            // The client must speak first: a quiet read forces NO_TIMEOUT.
+            let mut probe = [0u8; 1];
+            sock.read_exact(&mut probe).expect("forced keepalive arrives");
+            keepalive_tx.send(start.elapsed()).expect("report keepalive time");
+            // Answer late, still inside the 5 s read budget.
+            std::thread::sleep(Duration::from_millis(3500) - start.elapsed().min(Duration::from_millis(3400)));
+            sock.write_all(&[0x58]).expect("late byte");
+        });
+
+        let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+        client.set_read_timeout(Some(Duration::from_millis(500))).expect("client read timeout");
+        let mut conn = Connection::new(Duration::from_secs(10));
+        conn.stream = Some(client);
+        conn.outgoing = Some(Isaac::new([1, 2, 3, 4]));
+        let byte = conn.read_exact(1).expect("late byte still read");
+        assert_eq!(byte, vec![0x58]);
+        let forced_after = keepalive_rx.recv_timeout(Duration::from_secs(6)).expect("keepalive report");
+        assert!(forced_after < Duration::from_secs(3), "keepalive forced early in the stall, after {forced_after:?}");
+        assert!(start.elapsed() < Connection::READ_BUDGET + Duration::from_secs(1), "whole read inside budget + margin");
+        server.join().expect("server thread");
+    }

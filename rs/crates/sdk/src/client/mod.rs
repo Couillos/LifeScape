@@ -180,11 +180,14 @@ impl Bot {
     /// Log in, retrying while the server still holds the previous session.
     /// Attempts and spacing are a process guard in seconds: ticks are
     /// frozen outside a connection, so no tick bound can apply here.
+    /// The wait grows instead of hammering at a fixed period: the name
+    /// frees when the old session logs out, and a fixed retry resonates
+    /// with the 100-tick silence reap.
     pub fn login(&mut self, username: &str, password: Option<&str>) -> Result<()> {
         self.username = username.to_string();
         let password = password.unwrap_or(username).to_string();
         let mut last: Error = Error::Login("no attempt".to_string());
-        for _ in 0..15 {
+        for attempt in 0u32..15 {
             self.conn.close();
             self.conn.connect(&self.host, self.port)?;
             match self.conn.login(&self.username, &password, &self.pack_dir, &self.key_path, 274) {
@@ -202,7 +205,7 @@ impl Bot {
                 }
                 Err(Error::Login(message)) if message.contains("already logged in") => {
                     last = Error::Login(message);
-                    std::thread::sleep(Duration::from_secs(2));
+                    std::thread::sleep(Self::relogin_backoff(attempt));
                 }
                 Err(other) => return Err(other),
             }
@@ -214,6 +217,12 @@ impl Bot {
     pub fn relogin(&mut self) -> Result<()> {
         self.conn.close();
         self.login(&self.username.clone(), None)
+    }
+
+    /// Wait before re-probing a held name: 2 s, 4 s, then 8 s capped.
+    /// Pure so the growth is unit-testable without a live server.
+    fn relogin_backoff(attempt: u32) -> Duration {
+        Duration::from_secs(2 << attempt.min(2))
     }
 
     fn drain_startup(&mut self) -> Result<()> {
@@ -407,3 +416,11 @@ mod tests {
         assert_eq!(bot.tag(), "[t=447 Lumbridge]");
     }
 }
+
+    /// Held-name probe backs off (2 s, 4 s, 8 s capped) instead of
+    /// hammering at a fixed period.
+    #[test]
+    fn relogin_backoff_grows_then_caps() {
+        let waits: Vec<u64> = (0..8).map(|attempt| Bot::relogin_backoff(attempt).as_secs()).collect();
+        assert_eq!(waits, vec![2, 4, 8, 8, 8, 8, 8, 8]);
+    }
