@@ -36,15 +36,40 @@ fn can_move(tile_flag: u32, block_flag: u32) -> bool {
     (tile_flag & block_flag) == collision::OPEN
 }
 
-fn flag_at(
-    collision: &impl CollisionSource,
-    base_x: i32,
-    base_z: i32,
-    local_x: i32,
-    local_z: i32,
-    level: i32,
-) -> u32 {
-    collision.get(base_x + local_x, base_z + local_z, level)
+/// One-step move rule, exact server logic: cardinals only test the
+/// destination tile, diagonals also test both orthogonal intermediates.
+/// Shared by the window search below and the multi-level planner so the
+/// two never drift apart. `at` reads absolute tile flags.
+pub fn can_step(at: &impl Fn(i32, i32) -> u32, from_x: i32, from_z: i32, to_x: i32, to_z: i32) -> bool {
+    let step_x = to_x - from_x;
+    let step_z = to_z - from_z;
+    match (step_x, step_z) {
+        (1, 0) => can_move(at(to_x, to_z), collision::BLOCK_EAST),
+        (-1, 0) => can_move(at(to_x, to_z), collision::BLOCK_WEST),
+        (0, 1) => can_move(at(to_x, to_z), collision::BLOCK_NORTH),
+        (0, -1) => can_move(at(to_x, to_z), collision::BLOCK_SOUTH),
+        (1, 1) => {
+            can_move(at(to_x, to_z), collision::BLOCK_NORTH_EAST)
+                && can_move(at(to_x, from_z), collision::BLOCK_EAST)
+                && can_move(at(from_x, to_z), collision::BLOCK_NORTH)
+        }
+        (1, -1) => {
+            can_move(at(to_x, to_z), collision::BLOCK_SOUTH_EAST)
+                && can_move(at(to_x, from_z), collision::BLOCK_EAST)
+                && can_move(at(from_x, to_z), collision::BLOCK_SOUTH)
+        }
+        (-1, 1) => {
+            can_move(at(to_x, to_z), collision::BLOCK_NORTH_WEST)
+                && can_move(at(to_x, from_z), collision::BLOCK_WEST)
+                && can_move(at(from_x, to_z), collision::BLOCK_NORTH)
+        }
+        (-1, -1) => {
+            can_move(at(to_x, to_z), collision::BLOCK_SOUTH_WEST)
+                && can_move(at(to_x, from_z), collision::BLOCK_WEST)
+                && can_move(at(from_x, to_z), collision::BLOCK_SOUTH)
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -126,107 +151,54 @@ impl Bfs {
                 return true;
             }
             let distance = self.distances[Self::index(cur_x, cur_z)] + 1;
+            let abs_x = cur_x + base_x;
+            let abs_z = cur_z + base_z;
+            let at = |x: i32, z: i32| collision.get(x, z, level);
             if cur_x > 0 && self.directions[Self::index(cur_x - 1, cur_z)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x - 1, cur_z, level),
-                    collision::BLOCK_WEST,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z)
             {
                 self.append(cur_x - 1, cur_z, EAST, distance);
             }
             if cur_x < limit && self.directions[Self::index(cur_x + 1, cur_z)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x + 1, cur_z, level),
-                    collision::BLOCK_EAST,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z)
             {
                 self.append(cur_x + 1, cur_z, WEST, distance);
             }
             if cur_z > 0 && self.directions[Self::index(cur_x, cur_z - 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z - 1, level),
-                    collision::BLOCK_SOUTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x, abs_z - 1)
             {
                 self.append(cur_x, cur_z - 1, NORTH, distance);
             }
             if cur_z < limit && self.directions[Self::index(cur_x, cur_z + 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z + 1, level),
-                    collision::BLOCK_NORTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x, abs_z + 1)
             {
                 self.append(cur_x, cur_z + 1, SOUTH, distance);
             }
             if cur_x > 0
                 && cur_z > 0
                 && self.directions[Self::index(cur_x - 1, cur_z - 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x - 1, cur_z - 1, level),
-                    collision::BLOCK_SOUTH_WEST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x - 1, cur_z, level),
-                    collision::BLOCK_WEST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z - 1, level),
-                    collision::BLOCK_SOUTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z - 1)
             {
                 self.append(cur_x - 1, cur_z - 1, NORTH | EAST, distance);
             }
             if cur_x < limit
                 && cur_z > 0
                 && self.directions[Self::index(cur_x + 1, cur_z - 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x + 1, cur_z - 1, level),
-                    collision::BLOCK_SOUTH_EAST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x + 1, cur_z, level),
-                    collision::BLOCK_EAST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z - 1, level),
-                    collision::BLOCK_SOUTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z - 1)
             {
                 self.append(cur_x + 1, cur_z - 1, NORTH | WEST, distance);
             }
             if cur_x > 0
                 && cur_z < limit
                 && self.directions[Self::index(cur_x - 1, cur_z + 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x - 1, cur_z + 1, level),
-                    collision::BLOCK_NORTH_WEST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x - 1, cur_z, level),
-                    collision::BLOCK_WEST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z + 1, level),
-                    collision::BLOCK_NORTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z + 1)
             {
                 self.append(cur_x - 1, cur_z + 1, SOUTH | EAST, distance);
             }
             if cur_x < limit
                 && cur_z < limit
                 && self.directions[Self::index(cur_x + 1, cur_z + 1)] == 0
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x + 1, cur_z + 1, level),
-                    collision::BLOCK_NORTH_EAST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x + 1, cur_z, level),
-                    collision::BLOCK_EAST,
-                )
-                && can_move(
-                    flag_at(collision, base_x, base_z, cur_x, cur_z + 1, level),
-                    collision::BLOCK_NORTH,
-                )
+                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z + 1)
             {
                 self.append(cur_x + 1, cur_z + 1, SOUTH | WEST, distance);
             }

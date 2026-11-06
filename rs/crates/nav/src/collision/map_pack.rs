@@ -314,6 +314,7 @@ impl MapPack {
         &mut self,
         collision: &mut CollisionMap,
         static_locs: &mut StaticLocs,
+        static_layers: &mut StaticLayers,
         doors: &mut HashMap<(i32, i32, i32), (u16, u8, u8)>,
         toll_gates: &mut HashSet<(i32, i32, i32)>,
         square_x: i32,
@@ -330,7 +331,6 @@ impl MapPack {
             return false;
         };
         let mut actions = StaticLocs::new();
-        let mut layers = StaticLayers::new();
         if paint_square(
             Some(collision),
             &ground,
@@ -340,7 +340,7 @@ impl MapPack {
             &self.defs,
             static_locs,
             &mut actions,
-            &mut layers,
+            static_layers,
         )
         .is_err()
         {
@@ -361,8 +361,9 @@ impl MapPack {
         toll_gates: &mut HashSet<(i32, i32, i32)>,
     ) {
         let squares = self.square_list();
+        let mut layers = StaticLayers::new();
         for (square_x, square_z) in squares {
-            self.ensure_square(collision, static_locs, doors, toll_gates, square_x, square_z);
+            self.ensure_square(collision, static_locs, &mut layers, doors, toll_gates, square_x, square_z);
         }
     }
 

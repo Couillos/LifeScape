@@ -8,14 +8,16 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use crate::collision::{CollisionMap, LocDef, MapPack, StaticLocs, OPEN};
+use crate::collision::{CollisionMap, LocDef, MapPack, StaticLayers, StaticLocs, OPEN};
 
 struct PagedState {
     pack: MapPack,
     collision: CollisionMap,
     static_locs: StaticLocs,
+    static_layers: StaticLayers,
     doors: HashMap<(i32, i32, i32), (u16, u8, u8)>,
     toll_gates: HashSet<(i32, i32, i32)>,
+    f2p: Option<HashSet<(i32, i32)>>,
 }
 
 /// Static collision over all levels, backed by the server map pack.
@@ -37,8 +39,10 @@ impl StaticWorld {
                 pack,
                 collision: CollisionMap::new(),
                 static_locs: HashMap::new(),
+                static_layers: HashMap::new(),
                 doors: HashMap::new(),
                 toll_gates: HashSet::new(),
+                f2p: None,
             }),
         }))
     }
@@ -55,9 +59,89 @@ impl StaticWorld {
             return OPEN;
         }
         let mut state = self.state.write().expect("static world lock poisoned");
-        let PagedState { pack, collision, static_locs, doors, toll_gates } = &mut *state;
-        pack.ensure_square(collision, static_locs, doors, toll_gates, tile_x >> 6, tile_z >> 6);
+        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
+        pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, tile_x >> 6, tile_z >> 6);
         collision.get(tile_x, tile_z, level)
+    }
+
+    fn ensure(&self, tile_x: i32, tile_z: i32) {
+        if !self.has_square(tile_x >> 6, tile_z >> 6) {
+            return;
+        }
+        let mut state = self.state.write().expect("static world lock poisoned");
+        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
+        pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, tile_x >> 6, tile_z >> 6);
+    }
+
+    /// Closed door recorded at this tile, if any: (loc id, shape, angle).
+    pub fn door_at(&self, tile_x: i32, tile_z: i32, level: i32) -> Option<(u16, u8, u8)> {
+        self.ensure(tile_x, tile_z);
+        self.state.read().expect("static world lock poisoned").doors.get(&(tile_x, tile_z, level)).copied()
+    }
+
+    /// Static loc placement at this tile, if any: (loc id, shape, angle).
+    pub fn loc_at(&self, tile_x: i32, tile_z: i32, level: i32) -> Option<(u16, u8, u8)> {
+        self.ensure(tile_x, tile_z);
+        self.state.read().expect("static world lock poisoned").static_locs.get(&(tile_x, tile_z, level)).copied()
+    }
+
+    /// Every static loc stacked on this tile, all draw layers:
+    /// (loc id, shape, angle). A tile can stack decor over a wall, so the
+    /// single `loc_at` pick is not always the blocking one.
+    pub fn locs_at(&self, tile_x: i32, tile_z: i32, level: i32) -> Vec<(u16, u8, u8)> {
+        self.ensure(tile_x, tile_z);
+        let state = self.state.read().expect("static world lock poisoned");
+        let mut out = Vec::new();
+        for layer in 0..4 {
+            if let Some(entry) = state.static_layers.get(&(tile_x, tile_z, level, layer)) {
+                out.push(*entry);
+            }
+        }
+        out
+    }
+
+    /// Loctype row for one loc id, when the pack knows it.
+    pub fn loc_def(&self, loc_id: usize) -> Option<LocDef> {
+        self.state.read().expect("static world lock poisoned").pack.loc_def(loc_id).copied()
+    }
+
+    /// True when this door tile charges a toll (Al-Kharid gate).
+    pub fn is_toll(&self, tile_x: i32, tile_z: i32, level: i32) -> bool {
+        self.ensure(tile_x, tile_z);
+        self.state.read().expect("static world lock poisoned").toll_gates.contains(&(tile_x, tile_z, level))
+    }
+
+    /// Flags with the door recorded here opened: the exact wall removal
+    /// (`unpaint_door`), never a blanket OPEN (other walls on the tile
+    /// stay). Toll gates stay shut unless paid paths are allowed.
+    pub fn open_flag(&self, tile_x: i32, tile_z: i32, level: i32, allow_paid: bool) -> u32 {
+        let base = self.get(tile_x, tile_z, level);
+        let door = self.door_at(tile_x, tile_z, level);
+        let Some((id, shape, angle)) = door else { return base };
+        if !allow_paid && self.is_toll(tile_x, tile_z, level) {
+            return base;
+        }
+        let state = self.state.read().expect("static world lock poisoned");
+        let mut probe = CollisionMap::new();
+        probe.set(tile_x, tile_z, level, base);
+        state.pack.unpaint_door(&mut probe, id, shape, angle, tile_x, tile_z, level);
+        probe.get(tile_x, tile_z, level)
+    }
+
+    /// Free-to-play 8x8 zones (`tile >> 3`), parsed from the engine
+    /// `free2play.csv`. Unset means no bounds: every tile is inside.
+    pub fn set_f2p(&self, zones: HashSet<(i32, i32)>) {
+        self.state.write().expect("static world lock poisoned").f2p = Some(zones);
+    }
+
+    /// True when this tile is on free-to-play ground (level ignored, like
+    /// the engine's own check), or when no bounds were set.
+    pub fn in_f2p(&self, tile_x: i32, tile_z: i32) -> bool {
+        let state = self.state.read().expect("static world lock poisoned");
+        match &state.f2p {
+            None => true,
+            Some(zones) => zones.contains(&(tile_x >> 3, tile_z >> 3)),
+        }
     }
 }
 
