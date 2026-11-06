@@ -75,6 +75,15 @@ impl Tile {
     fn chebyshev(self, other: Tile) -> i32 {
         (self.x - other.x).abs().max((self.z - other.z).abs())
     }
+
+    /// Rank for the closest-reachable fallback (blocked destination,
+    /// no-route diagnosis): level first, so a same-level neighbour
+    /// always beats the tile straight above a booth or counter.
+    /// Exact-destination search is untouched (dijkstra still settles by
+    /// cost); only the fallback/adjust choice changes.
+    fn fallback_rank(self, other: Tile, cost: u32) -> (i32, i32, u32) {
+        ((self.level - other.level).abs(), self.chebyshev(other), cost)
+    }
 }
 
 fn unkey(key: u64) -> Tile {
@@ -518,7 +527,7 @@ fn dijkstra(
     dist.insert(from.key(), 0);
     heap.push((Reverse(0), Reverse(from.key())));
     let mut best = from;
-    let mut best_rank = (from.chebyshev(dest), 0u32);
+    let mut best_rank = from.fallback_rank(dest, 0);
     let mut visits = 0usize;
     let loop_start = std::time::Instant::now();
     let mut heap_max = 0usize;
@@ -540,7 +549,7 @@ fn dijkstra(
             break;
         }
         let here = unkey(key);
-        let rank = (here.chebyshev(dest), cost);
+        let rank = here.fallback_rank(dest, cost);
         if rank < best_rank {
             best_rank = rank;
             best = here;
@@ -561,7 +570,7 @@ fn dijkstra(
             // so tiles far past the current best can never improve it.
             // The true closest is never pruned: its distance stays under
             // every best seen so far.
-            if !dest_walkable && next.chebyshev(dest) > best_rank.0 + 64 {
+            if !dest_walkable && next.level == dest.level && next.chebyshev(dest) > best_rank.1 + 64 {
                 continue;
             }
             if !search.in_bounds(next) {
@@ -909,4 +918,18 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
     // Merging happens above: one Walk per run between rides and doors.
     let adjusted_dest = if cursor.key() != dest.key() { Some(cursor) } else { None };
     Plan { segments, cost, adjusted_dest }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Fallback rank: a same-level neighbour beats the tile straight
+    /// above a blocked booth, however cheap the ladder ride is.
+    #[test]
+    fn fallback_rank_prefers_same_level() {
+        use super::Tile;
+        let dest = Tile { x: 3186, z: 3446, level: 0 };
+        let upstairs = Tile { x: 3186, z: 3446, level: 1 };
+        let beside = Tile { x: 3185, z: 3446, level: 0 };
+        assert!(beside.fallback_rank(dest, 3) < upstairs.fallback_rank(dest, 23), "bank booth stays on its level");
+    }
 }
