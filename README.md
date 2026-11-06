@@ -1,75 +1,54 @@
 # LifeScape
 
-Framework Python (PyPy, stdlib uniquement) pour écrire des scripts
+Framework Rust (stdlib uniquement, zéro dépendance) pour écrire des scripts
 de botting sur notre instance LostCityRS (révision 274).
 
-Instructions canoniques : `../lostcity/AGENTS.md`.
-Interpréteur imposé : `../lostcity/.pypy/bin/pypy3`.
+Toolchain : Rust stable, `cargo` seul. Layout `rs/` (workspace) :
+
+- `crates/sdk/` (`lifescape-sdk`) : protocole 274, monde live, pathfinding,
+  actions, erreurs typées.
+- `crates/gamedata/` (`lifescape-gamedata`) : dumps typés du jeu
+  (`gamedata/data/*.json`).
+- `crates/orchestrator/` (`lifescape-orchestrator`, binaire `orchestrator`) :
+  daemon, workers de session, CLI, dashboard HTTP/WS.
+- `crates/scripts/` (`lifescape-scripts`) : trait `Script` + registre compilé
+  des scripts (`woodcut`, `combat`, `trade`, `bank`...).
+
+Instructions canoniques : `AGENTS.md` (+ `../lostcity/AGENTS.md`).
 
 ```sh
-../lostcity/.pypy/bin/pypy3 scripts/hello.py            # login + chat
-../lostcity/.pypy/bin/pypy3 scripts/dev/probe_walk.py t01 10 0  # marcher
-../lostcity/.pypy/bin/pypy3 scripts/dev/probe_tutorial.py t02  # guide + porte
-../lostcity/.pypy/bin/pypy3 scripts/parallel_login.py 5   # 5 bots
-../lostcity/.pypy/bin/pypy3 scripts/tutorial/run.py t24  # tuto complet
-../lostcity/.pypy/bin/pypy3 -m unittest discover tests     # 36 tests
+cargo build --manifest-path rs/Cargo.toml
+cargo test --manifest-path rs/Cargo.toml
+./rs/target/debug/orchestrator open <compte>
+./rs/target/debug/orchestrator run <compte> woodcut 1
+./rs/target/debug/orchestrator status | show <compte> | logs <compte> 40
+./rs/target/debug/orchestrator unload <compte> | close <compte>
+./rs/target/debug/orchestrator shutdown
 ```
 
-## SDK (`lifescape/`)
+Dashboard : http://5.83.152.180:8765/ (état live + spectate).
+Tout passe par l'orchestrateur : un worker par compte, un job par compte,
+relogin + reprise auto. Ne jamais lancer de bot en direct.
 
-Connexion et protocole :
+## Règles à connaître
 
-- `buffer.py` : lecture/écriture binaire big-endian, chaînes `jstr`, bits.
-- `isaac.py` : chiffrement ISAAC des opcodes, vecteurs du serveur.
-- `rsa.py` : RSA brut, N/E lus dans la clé privée du serveur.
-- `cache.py` : lecture du cache packé, les 9 CRC du login.
-- `protocol.py` : tables d'opcodes 274 dans les deux sens.
-- `words.py` : packing chat 4-bit + phrases, à l'identique du serveur.
-- `connection.py` : socket, handshake, login, trames chiffrées.
-- `client.py` : `Bot` (login, relogin, chat, marche, portes,
-  objets, NPC, dialogues, options, bank/combat via les mêmes primitives).
+- Attentes en ticks serveur, jamais en secondes ni `thread::sleep`
+  (le serveur tourne en ticks de 60 ms en dev).
+- Scripts stateless : adaptés à toute position, inventaire et banque.
+- Aucun cheat dans le code commité ; compte `admin` réservé aux tests live.
+- Serveur de jeu sur ports localhost uniquement (`127.0.0.1:43594`).
 
+## Diagnostic réseau
 
-## Tutoriel de bout en bout (`scripts/tutorial/`)
+`LIFESCAPE_PKTLOG=1` (exporté avant `open`, le daemon redémarre avec)
+trace chaque paquet `C>S` / `S>C` (nom, opcode, taille, horodatage) dans
+le log de session. `LIFESCAPE_SERVER_HOST`/`LIFESCAPE_SERVER_PORT`
+choisissent le serveur (défaut `127.0.0.1:43594`).
 
-`run.py [username]` termine l'île des tutoriels (~15 min, validé live
-jusqu'au téléport à Lumbridge). Boucle détection → action, reprenable
-à tout moment, même après re-log :
+## Données
 
-- étape = texte d'instruction (coms 6180-6184) + flèche (`world.hint`)
-  + onglet qui clignote (`world.side_flash`) ; jamais le varp 281
-  (non transmis) ni l'inventaire (chaque étape vérifie son matériel) ;
-- paquet `scripts/tutorial/` : un rôle par module (`common`, `north`,
-  `mine`, `combat`, `south`, `run`) ; voir `FEEDBACK.md` pour le retour
-  d'expérience SDK complet.
-
-État du monde (`world.py`) : position, joueurs/NPC proches nommés,
-objets au sol, locs (statiques + dynamiques), inventaire, stats,
-varps, énergie, interfaces, textes, flèche d'indice (`hint`),
-onglet qui clignote (`side_flash`), chat privé/public, options.
-
-Pathfinding (`collision.py`, `route.py`, `doors.py`, `portals.py`) :
-
-- collisions lues du build serveur, BFS identique au serveur
-  (différentiellement testé : 30/30 chemins + tous les flags),
-- portes génériques + custom ouvertes automatiquement en marchant,
-- portails déclarés par l'utilisateur (escaliers, bateaux) avec Dijkstra.
-
-Données (`lifescape/data/gametypes.json`) : définitions d'objets/NPC/objets
-dumpées depuis le code du serveur. Régénérer après mise à jour du contenu :
+Régénérer après mise à jour du serveur/jeu :
 
 ```sh
-cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts \
-  ../../LifeScape/lifescape/data/gametypes.json
+cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/lifescape/data/gametypes.json
 ```
-
-## Scripts (`scripts/`)
-
-Sondes live (une par usage) et exemples : login, chat, marche, porte,
-dialogue guide, prise/dépôt d'objet, capture de trames, comparaisons
-contre le moteur (`diff_routes.py`), parallèle.
-
-## Tests (`tests/`)
-
-Unitaires pypy + rejeu de captures live. Règle : une théorie protocole
-= une sonde live avant d'entrer dans le SDK.
