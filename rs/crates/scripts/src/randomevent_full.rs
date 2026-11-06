@@ -176,156 +176,64 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
     Ok(false)
 }
 
+/// Climb back to the surface after a fail-teleport: ride the mapped
+/// down-exits nearest-first via `travel_to` (same guards as before: 30
+/// tiles, closest 5, 12 rounds). A dead socket or operator stop aborts
+/// typed; a refused ride logs its typed cause and tries the next exit,
+/// and no mapped exit nearby ends the rescue round (Ok(false)) instead
+/// of guessing a ladder. A choice dialogue on an exit surfaces as
+/// `Error::Travel(NeedsDialogueChoice)` in the log line, never silent.
 pub fn climb_out(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let mut ridden: std::collections::HashSet<String> = std::collections::HashSet::new();
     for _ in 0..12 {
         if bot.world.level == 0 {
             bot.log(&format!("ok on ground at {:?}", bot.position()));
             return Ok(true);
         }
-        // Known down-transitions nearest-first (exact loc and op each).
-        // Bounded to the local area and to the closest few: a whole-world
-        // scan with a walk attempt per row burns minutes for nothing.
-        let mut downs: Vec<(i32, usize)> = Vec::new();
-        for (index, row) in bot.transitions.iter().enumerate() {
-            if row.disabled || row.from_tile.0 != bot.world.level || row.to_tile.0 >= row.from_tile.0 {
+        let tables = bot.nav_tables.clone().ok_or_else(|| {
+            ScriptError::Usage(format!("climb_out without planner tables at {:?}", bot.position()))
+        })?;
+        // Known down-exits nearest-first (exact table rows, like before).
+        // Bounded to the local area and to the closest few: planning one
+        // ride per row is cheap, walking to every row in the world is not.
+        let mut downs: Vec<(i32, _)> = Vec::new();
+        for row in &tables.transitions {
+            if row.disabled || row.from.level != bot.world.level || row.to.level >= row.from.level {
                 continue;
             }
-            if ridden.contains(&row.name) {
-                continue;
-            }
-            let dist = (row.from_tile.1 - bot.world.x).abs() + (row.from_tile.2 - bot.world.z).abs();
+            let dist = (row.from.x - bot.world.x).abs() + (row.from.z - bot.world.z).abs();
             if dist > 30 {
                 continue;
             }
-            downs.push((dist, index));
+            downs.push((dist, row.clone()));
         }
-        downs.sort();
+        downs.sort_by_key(|(dist, _)| *dist);
         downs.truncate(5);
+        if downs.is_empty() {
+            bot.log(&format!("nothing down from {:?}", bot.position()));
+            return Ok(false);
+        }
         let mut rode = false;
-        for (_, index) in downs {
-            let row = bot.transitions[index].clone();
-            if ride_transition(bot, &row)? {
-                ridden.insert(row.name.clone());
-                rode = true;
-                break;
+        for (_, row) in downs {
+            match bot.travel_to(row.to) {
+                Ok(()) => {
+                    bot.log(&format!("down {} to {:?}", row.name, bot.position()));
+                    rode = true;
+                    break;
+                }
+                Err(
+                    error @ (lifescape_sdk::Error::Interrupted(_)
+                    | lifescape_sdk::Error::Io(_)
+                    | lifescape_sdk::Error::Login(_)),
+                ) => return Err(error.into()),
+                Err(error) => bot.log(&format!("exit {} refused: {error}", row.name)),
             }
         }
-        if rode {
-            continue;
+        if !rode {
+            bot.log(&format!("nothing down from {:?}", bot.position()));
+            return Ok(false);
         }
-        if climb_single(bot)? {
-            continue;
-        }
-        bot.log(&format!("nothing down from {:?}", bot.position()));
-        return Ok(false);
     }
     Ok(bot.world.level == 0)
-}
-
-/// Ride one transition row: stand beside its tile, click its op, wait for
-/// the level to drop. True when it moved us down. Every failure says why:
-/// no silent fallback to a guessed ladder.
-fn ride_transition(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<bool, ScriptError> {
-    let (level, from_x, from_z) = row.from_tile;
-    // Multi-tile stairs answer a click only on some of their tiles: try the
-    // table's tile first, then the rest of the footprint.
-    let mut candidates: Vec<(i32, i32)> = vec![(from_x, from_z)];
-    for tile in &row.footprint {
-        if *tile != (from_x, from_z) {
-            candidates.push(*tile);
-        }
-    }
-    for (click_x, click_z) in candidates {
-        // The live map is the truth: the table's loc id and op are hints,
-        // the tile may hold a twin (stairs vs stairs-top) with its own ops.
-        let loc_id = bot
-            .world
-            .loc_at(click_x, click_z, level)
-            .map(|(id, _, _)| id)
-            .or_else(|| bot.world.static_locs.get(&(click_x, click_z, level)).map(|(id, _, _)| *id))
-            .unwrap_or(row.loc);
-        let op = downward_op(bot, loc_id).unwrap_or(row.op);
-        // Dead socket, not a bad tile: typed instead of trying tiles.
-        if let Err(error) = bot.approach(click_x, click_z, level, 1, 800) {
-            if matches!(
-                error,
-                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-            ) {
-                return Err(error.into());
-            }
-            bot.log(&format!("transition {} tile ({click_x},{click_z}) unreachable: {error}", row.name));
-            continue;
-        }
-        let before = bot.world.level;
-        if let Err(error) = bot.op_loc(op, click_x, click_z, loc_id) {
-            if matches!(
-                error,
-                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-            ) {
-                return Err(error.into());
-            }
-            bot.log(&format!("transition {} op {op} loc {loc_id} failed: {error}", row.name));
-            continue;
-        }
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target && bot.world.level == before {
-            bot.pump(2)?;
-        }
-        if bot.world.level < before {
-            bot.log(&format!("down {} to {:?}", row.name, bot.position()));
-            return Ok(true);
-        }
-        bot.log(&format!("transition {} loc {loc_id} op {op} at ({click_x},{click_z}) left level {before}", row.name));
-    }
-    Ok(false)
-}
-
-/// 1-based op that goes down on this loc: "climb-down" preferred, then
-/// plain "climb" (stairs toggle), else None when the dump says neither.
-fn downward_op(bot: &Bot, loc_id: u16) -> Option<u8> {
-    let def = bot.maps.as_ref()?.loc_def(loc_id as usize)?;
-    let ops = lifescape_gamedata::loc_by_id(loc_id as usize)?.ops;
-    let _ = def;
-    let mut fallback = None;
-    for (index, name) in ops.iter().enumerate() {
-        let Some(label) = name.as_deref() else { continue };
-        let lower = label.to_lowercase();
-        if lower.contains("climb-down") || lower.contains("climb down") {
-            return Some(index as u8 + 1);
-        }
-        if lower == "climb" && fallback.is_none() {
-            fallback = Some(index as u8 + 1);
-        }
-    }
-    fallback
-}
-
-fn climb_single(bot: &mut Bot) -> Result<bool, ScriptError> {
-        let names: &[&str] = &["laddertop", "spiralstairstop", "stairstop", "ladder", "spiralstairs", "stairs"];
-        let Ok((x, z, level, loc)) = kit::find_loc(bot, names, 150) else {
-            bot.log(&format!("no ladder or stair near {:?}", bot.position()));
-            return Ok(false);
-        };
-        bot.log(&format!("ladder at ({x},{z})"));
-        // Dead socket, not a far ladder: typed instead of giving up.
-        if let Err(error) = bot.approach(x, z, level, 3, 1500) {
-            if matches!(
-                error,
-                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-            ) {
-                return Err(error.into());
-            }
-            return Ok(false);
-        }
-        let before = bot.world.level;
-        bot.op_loc(1, x, z, loc)?;
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target && bot.world.level == before {
-            bot.pump(5)?;
-        }
-        bot.log(&format!("now {:?}", bot.position()));
-        Ok(bot.world.level != before)
 }
 
 pub fn check(bot: &mut Bot) -> Result<bool, ScriptError> {

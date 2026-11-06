@@ -33,14 +33,6 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 /// Past 3 hurts the trip aborts loudly instead of walking into death.
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
-/// Nearby transition scan: pockets (basements, upper floors) only hold
-/// their own ladder within a few dozen tiles.
-const RIDE_SCAN_TILES: i32 = 400;
-/// Ride only when the ladder gets us this much closer to a bank. Small
-/// detours through doors are the router's job, not a teleport's.
-const RIDE_MIN_GAIN: i64 = 100;
-/// Max ladder rides per bank lookup: one pocket exit, rarely two chained.
-const MAX_RIDES: u32 = 3;
 
 /// Spot work result, shared by the three gathering scripts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,123 +159,15 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
     Ok(bot.world.modal.is_none())
 }
 
-/// Closest free same-level bank booth by Manhattan distance, or i64::MAX
-/// when no booth fits. Pure scan (no walking): the gain test for a ladder
-/// ride and the toll-aware pick below share it.
-fn closest_bank_dist(here_x: i32, here_z: i32, level: i32) -> i64 {
-    let mut best = i64::MAX;
-    for bank in knowledge::banks::all_banks() {
-        if bank.members || bank.level != i64::from(level) {
-            continue;
-        }
-        let dist = (bank.x - i64::from(here_x)).abs() + (bank.z - i64::from(here_z)).abs();
-        if dist < best {
-            best = dist;
-        }
-    }
-    best
-}
-
-/// A mapped transition worth riding: same level, close enough to walk to,
-/// and landing much closer to a bank than we are (basement ladder to the
-/// surface, upper floor down to the bankhall...). None when the walk
-/// already wins: the router owns small detours, not a teleport.
-fn shortcut_out(bot: &Bot, here_best: i64) -> Option<lifescape_sdk::TransitionRow> {
-    let mut cands: Vec<(i32, lifescape_sdk::TransitionRow)> = Vec::new();
-    for row in &bot.transitions {
-        if row.disabled || row.from_tile.0 != bot.world.level {
-            continue;
-        }
-        let walk = (row.from_tile.1 - bot.world.x).abs() + (row.from_tile.2 - bot.world.z).abs();
-        if walk > RIDE_SCAN_TILES {
-            continue;
-        }
-        let there_best = closest_bank_dist(row.to_tile.1, row.to_tile.2, row.to_tile.0);
-        if there_best == i64::MAX {
-            continue;
-        }
-        if here_best.saturating_sub(i64::from(walk).saturating_add(there_best)) > RIDE_MIN_GAIN {
-            cands.push((walk, row.clone()));
-        }
-    }
-    cands.sort_by_key(|(walk, _)| *walk);
-    cands.into_iter().map(|(_, row)| row).next()
-}
-
-/// Ride one transition row: stand on its tile (footprint included, multi-
-/// tile stairs answer a click on one tile only), click the table's op,
-/// wait for the position to move. True when we left the tile: same-level
-/// rides move x/z, floor rides move level, both count. A failed ride is
-/// Ok(false), never a guess elsewhere; only an operator stop propagates.
-fn ride_row(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<bool, ScriptError> {
-    let (level, from_x, from_z) = row.from_tile;
-    bot.intend(&format!("riding {} out", row.name));
-    let mut tiles = vec![(from_x, from_z)];
-    for tile in &row.footprint {
-        if *tile != (from_x, from_z) {
-            tiles.push(*tile);
-        }
-    }
-    for (click_x, click_z) in tiles {
-        if let Err(err) = bot.approach(click_x, click_z, level, 1, 800) {
-            if matches!(err, Error::Interrupted(_) | Error::Io(_) | Error::Login(_)) {
-                return Err(err.into());
-            }
-            continue;
-        }
-        let loc_id = bot
-            .world
-            .loc_at(click_x, click_z, level)
-            .map(|(id, _, _)| id)
-            .or_else(|| bot.world.static_locs.get(&(click_x, click_z, level)).map(|entry| entry.0))
-            .unwrap_or(row.loc);
-        let before = bot.position();
-        match bot.op_loc(row.op, click_x, click_z, loc_id) {
-            Err(Error::Interrupted(_)) => return Err(Error::Interrupted(format!("ride {} stopped", row.name)).into()),
-            Err(err @ (Error::Io(_) | Error::Login(_))) => return Err(err.into()),
-            Err(_) => continue,
-            Ok(_) => {}
-        }
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target && bot.position() == before {
-            bot.pump(2)?;
-        }
-        if bot.position() != before {
-            bot.log(&format!("rode {} to {:?}", row.name, bot.position()));
-            return Ok(true);
-        }
-    }
-    bot.log(&format!("ride {} failed from {:?}", row.name, bot.position()));
-    Ok(false)
-}
-
-/// Ride out of a disconnected pocket toward the banks: a mapped ladder
-/// or stairs whose far side is much closer to a bank than here (basement
-/// to the surface, upper floors down). True when it moved us somewhere
-/// with a better bank urge; the caller re-picks from the new position.
-pub fn escape_pocket(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let here_best = closest_bank_dist(bot.world.x, bot.world.z, bot.world.level);
-    let Some(row) = shortcut_out(bot, here_best) else {
-        return Ok(false);
-    };
-    ride_row(bot, &row)
-}
-
 /// Nearest free (non-members, same level) bank booth by Manhattan distance.
 /// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
 /// Needs the toll gate's fence line, read off the loaded toll doors.
 ///
-/// Transition-aware: Manhattan means nothing across disconnected regions
-/// (a basement shares its level with the surface but no walk). When a
-/// mapped ladder/stairs nearby leads somewhere much closer to a bank,
-/// ride it first, then pick from the new position.
+/// Pocket exits (basements, upper floors) are the planner's job now:
+/// `bank_trip` walks there via `travel_to`, which rides mapped
+/// transitions itself, instead of a script-side ladder scan.
 pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError> {
-    for _ in 0..MAX_RIDES {
-        if !escape_pocket(bot)? {
-            break;
-        }
-    }
     let (here_x, here_z) = (bot.world.x, bot.world.z);
     bot.ensure_area(here_x, here_z, 150);
     let gate_x = bot
@@ -795,8 +679,8 @@ pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bank_trip, bank_trip_resilient, closest_bank_dist, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth,
-        register_transit_hurt, require_deposit_cleared, shortcut_out,
+        bank_trip, bank_trip_resilient, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth, nearest_bank,
+        register_transit_hurt, require_deposit_cleared,
     };
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -814,39 +698,28 @@ mod tests {
         assert_eq!(near, (3015, 3354, 2213));
     }
 
-    fn ladder_row() -> lifescape_sdk::TransitionRow {
-        lifescape_sdk::TransitionRow {
-            name: "wizards_tower_ladder_359".to_string(),
-            from_tile: (0, 3103, 9576),
-            to_tile: (0, 3105, 3162),
-            loc: 2148,
-            op: 1,
-            footprint: vec![(3103, 9576)],
-            disabled: false,
-        }
-    }
-
+    /// Picking is pure: standing on a booth spawn returns that booth,
+    /// and the bot never moves (pocket exits ride inside `travel_to` now,
+    /// not in a script-side ladder scan).
     #[test]
-    fn basement_offers_ladder_surface_does_not() {
+    fn nearest_bank_picks_closest_without_moving() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        bot.transitions.push(ladder_row());
-        // Pocket start: nearest booth is Edgeville by bogus Manhattan, but
-        // the ladder lands next to Draynor: ride it.
-        bot.world.x = 3098;
-        bot.world.z = 9567;
+        let want = lifescape_gamedata::banks::all_banks()
+            .into_iter()
+            .find(|bank| !bank.members && bank.level == 0)
+            .expect("a free bank");
         bot.world.level = 0;
-        let here_best = closest_bank_dist(3098, 9567, 0);
-        assert!(here_best > 6000, "basement Manhattan means nothing ({here_best})");
-        let row = shortcut_out(&bot, here_best).expect("ladder out of the basement");
-        assert_eq!(row.name, "wizards_tower_ladder_359");
-        // Surface start: Draynor wins outright, the ladder back down helps
-        // nobody.
-        bot.world.x = 3105;
-        bot.world.z = 3162;
-        let surface_best = closest_bank_dist(3105, 3162, 0);
-        assert!(surface_best < 100, "Draynor is next door ({surface_best})");
-        assert!(shortcut_out(&bot, surface_best).is_none(), "no ride from the surface");
+        bot.world.x = want.x as i32;
+        bot.world.z = want.z as i32;
+        let before = (bot.world.x, bot.world.z);
+        let got = nearest_bank(&mut bot).expect("a bank resolves");
+        assert_eq!((got.x, got.z, got.level), (want.x, want.z, want.level), "booth underfoot wins");
+        assert_eq!((bot.world.x, bot.world.z), before, "picking never walks");
+        bot.world.x = 2900;
+        bot.world.z = 3200;
+        let far = nearest_bank(&mut bot).expect("a bank resolves");
+        assert!(!far.members && far.level == 0, "free surface bank, got: {far:?}");
     }
 
     /// Shared death helper: case-insensitive, index-tracked.

@@ -656,10 +656,17 @@ fn chop_load(
                 spot = None;
                 unreachable_streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the
-                // walk. Ride out once, then re-pick from the new region;
-                // the stall bound below stays the loud exit.
-                if unreachable_streak >= 8 && crate::skill_common::escape_pocket(bot)? {
-                    unreachable_streak = 0;
+                // walk. Travel back to the bank once, then re-pick from
+                // the new region; the stall bound below stays the loud exit.
+                if unreachable_streak >= 8 {
+                    let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
+                    match bot.travel_to(dest) {
+                        Ok(()) => unreachable_streak = 0,
+                        Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
+                            return Err(error.into());
+                        }
+                        Err(error) => bot.log(&format!("pocket escape refused: {error}")),
+                    }
                 }
             }
             WorkOutcome::LevelLocked => {

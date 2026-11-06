@@ -374,9 +374,8 @@ fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec
             continue;
         }
         for spawn in &entry.spawns {
-            // shortcut: underground spots are unreachable with the
-            // single-level router (walk_to never changes level); only
-            // same-level spawns are fought.
+            // shortcut: same-level spawns only; the fighter never rides
+            // down to a dungeon camp. Revisit if one is wanted.
             if spawn.level != i64::from(bot.world.level) {
                 continue;
             }
