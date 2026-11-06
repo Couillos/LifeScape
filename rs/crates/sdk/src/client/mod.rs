@@ -353,6 +353,16 @@ impl Bot {
         outcome
     }
 
+    /// Unpaced send: door crossing only (travel.rs `step_door_through`).
+    /// Every other caller uses the paced `send_named`.
+    pub(crate) fn send_named_now(&mut self, name: &str, payload: &[u8]) -> Result<()> {
+        let outcome = self.conn.send_immediate(name, payload);
+        if outcome.is_ok() {
+            self.last_send_tick = self.world.ticks;
+        }
+        outcome
+    }
+
     /// Paint every map square touching the radius around (x, z).
     /// No pack index means no maps: nothing is painted.
     pub fn ensure_area(&mut self, x: i32, z: i32, radius: i32) {
@@ -415,7 +425,6 @@ mod tests {
         bot.zone_label = "Lumbridge".to_string();
         assert_eq!(bot.tag(), "[t=447 Lumbridge]");
     }
-}
 
     /// Held-name probe backs off (2 s, 4 s, 8 s capped) instead of
     /// hammering at a fixed period.
@@ -424,3 +433,4 @@ mod tests {
         let waits: Vec<u64> = (0..8).map(|attempt| Bot::relogin_backoff(attempt).as_secs()).collect();
         assert_eq!(waits, vec![2, 4, 8, 8, 8, 8, 8, 8]);
     }
+}

@@ -567,13 +567,35 @@ impl Connection {
 
     /// Send one client op by name: the payload is framed per the opcode
     /// table and the opcode byte ISAAC-shifted, like the 274 client.
+    /// Paced (see `send_raw`): at most one packet per server tick.
     pub fn send(&mut self, name: &str, payload: &[u8]) -> Result<()> {
+        self.send_inner(name, payload, true)
+    }
+
+    /// Unpaced send: door crossing only (`step_door_through`). The swing
+    /// watch already spent ticks; the crossing MOVE must leave at once,
+    /// before the self-closing door shuts (see §6.2 call site).
+    pub fn send_immediate(&mut self, name: &str, payload: &[u8]) -> Result<()> {
+        self.send_inner(name, payload, false)
+    }
+
+    fn send_inner(&mut self, name: &str, payload: &[u8], paced: bool) -> Result<()> {
         let (op_id, size) = client_op(name).ok_or_else(|| Error::Protocol(format!("unknown client op {name}")))?;
         self.last_op = name.to_string();
+        self.recent_ops.push(name.to_string());
+        if self.recent_ops.len() > 12 {
+            self.recent_ops.drain(..self.recent_ops.len() - 12);
+        }
         if pktlog_enabled() {
             eprintln!("C>S {name} id={op_id} len={} head={} w={:.2} pid={}", payload.len(), hex_head(payload), wall_secs(), std::process::id());
         }
-        self.send_by_id(op_id, size, payload)
+        let shift = self.outgoing.as_mut().ok_or_else(|| Error::Login("not logged in".to_string()))?.next_int();
+        let packet = frame_packet(op_id, size, payload, shift)?;
+        if paced {
+            self.send_raw(&packet)
+        } else {
+            self.send_raw_now(&packet)
+        }
     }
 
     /// Send by numeric op id (the [`client_op`](crate::protocol::client_op) table).
@@ -582,10 +604,6 @@ impl Connection {
         let packet = frame_packet(op_id, size, payload, shift)?;
         self.send_raw(&packet)
     }
-        self.recent_ops.push(name.to_string());
-        if self.recent_ops.len() > 12 {
-            self.recent_ops.drain(..self.recent_ops.len() - 12);
-        }
 
     /// Decode the next server frame (opcode ISAAC-shifted, then sized body).
     pub fn recv(&mut self) -> Result<Frame> {
@@ -638,17 +656,30 @@ impl Connection {
     }
 
     fn send_raw(&mut self, data: &[u8]) -> Result<()> {
-        // Minimum spacing between packets: retry storms without tick
-        // consumption machine-gun the server into kicking the session.
-        // Paced sends degrade them to a drip; normal play (pumps and
-        // waits between clicks) never notices the 50 ms floor.
-        const MIN_SEND_GAP: Duration = Duration::from_millis(50);
+        // Paced sends: at most one packet per server tick. The tick is
+        // 60 ms (`node.tickRate` in ../lostcity world.json); two sends
+        // closer than that can share a tick, and a same-tick burst is
+        // the prime FIN suspect (graceful logout on MOVE bursts). 70 ms
+        // is one tick plus margin; legs already take ~13 ticks each, so
+        // normal play never notices. Door crossings bypass via
+        // `send_immediate` (they race a self-closing door, §6.2).
+        const MIN_SEND_GAP: Duration = Duration::from_millis(70);
         if let Some(previous) = self.last_send {
             let elapsed = previous.elapsed();
             if elapsed < MIN_SEND_GAP {
                 std::thread::sleep(MIN_SEND_GAP - elapsed);
             }
         }
+        self.write_packet(data)
+    }
+
+    /// Unpaced write: door crossing only (via `send_immediate`). Still
+    /// records the send so the next paced send waits the full gap after it.
+    fn send_raw_now(&mut self, data: &[u8]) -> Result<()> {
+        self.write_packet(data)
+    }
+
+    fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
         let outcome = stream.write_all(data).map_err(|error| {
             let now = Instant::now();
@@ -670,6 +701,16 @@ impl Connection {
         self.last_send = Some(now);
         outcome
     }
+
+    /// Read exactly `length` bytes, looping on partial and empty reads.
+    /// Never silent for a server-tick budget: the server reaps a session
+    /// quiet for 100 ticks (6 s at 60 ms), so a read stalled past half
+    /// that budget forces a NO_TIMEOUT keepalive on the same socket
+    /// (full duplex: client frames and server frames interleave freely).
+    /// The whole wait stays under the reap budget: past it the session
+    /// is dead server-side, fail loud instead of feeding a silent loop.
+    const READ_BUDGET: Duration = Duration::from_secs(5);
+    const READ_KEEPALIVE_AFTER: Duration = Duration::from_secs(3);
 
     fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(length);
@@ -712,16 +753,6 @@ impl Connection {
 /// opcode byte, exactly what [`Connection::send_by_id`] puts on the wire.
 /// Kept separate so framing stays testable without a live session.
 fn frame_packet(op_id: u8, size: i16, payload: &[u8], shift: i32) -> Result<Vec<u8>> {
-    /// Read exactly `length` bytes, looping on partial and empty reads.
-    /// Never silent for a server-tick budget: the server reaps a session
-    /// quiet for 100 ticks (6 s at 60 ms), so a read stalled past half
-    /// that budget forces a NO_TIMEOUT keepalive on the same socket
-    /// (full duplex: client frames and server frames interleave freely).
-    /// The whole wait stays under the reap budget: past it the session
-    /// is dead server-side, fail loud instead of feeding a silent loop.
-    const READ_BUDGET: Duration = Duration::from_secs(5);
-    const READ_KEEPALIVE_AFTER: Duration = Duration::from_secs(3);
-
     let frame = match size {
         -1 => {
             if payload.len() > 255 {
@@ -793,7 +824,6 @@ mod tests {
         assert_eq!(frame_packet(207, -1, &[1, 2, 3], 5).unwrap(), vec![212, 3, 1, 2, 3]);
         assert!(frame_packet(209, 0, &[1], 0).is_err());
     }
-}
 
     /// The read budget stays under the server's 100-tick silence reap
     /// (6 s): a stalled read must fail loud before the server kills us.
@@ -841,3 +871,4 @@ mod tests {
         assert!(start.elapsed() < Connection::READ_BUDGET + Duration::from_secs(1), "whole read inside budget + margin");
         server.join().expect("server thread");
     }
+}

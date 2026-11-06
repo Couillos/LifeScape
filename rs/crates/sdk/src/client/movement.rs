@@ -39,7 +39,7 @@ pub struct DebugReport {
 }
 
 impl Bot {
-    pub(crate) fn send_and_await(&mut self, leg: &[(i32, i32)], run: bool, deadline: u64) -> Result<()> {
+    pub(crate) fn send_and_await(&mut self, leg: &[(i32, i32)], run: bool, deadline: u64, immediate: bool) -> Result<()> {
         if leg.is_empty() {
             return Ok(());
         }
@@ -47,7 +47,7 @@ impl Bot {
             self.act(format!("walk leg {} steps ({},{})>({},{})", leg.len(), first.0, first.1, last.0, last.1));
         }
         let (start_x, start_z, start_level) = (self.world.x, self.world.z, self.world.level);
-        let outcome = match self.send_walk(leg, run) {
+        let outcome = match self.send_walk(leg, run, immediate) {
             Err(err) => Err(err),
             Ok(()) => self.await_leg(leg, deadline),
         };
@@ -119,7 +119,7 @@ impl Bot {
         None
     }
 
-    pub(crate) fn send_walk(&mut self, steps: &[(i32, i32)], run: bool) -> Result<()> {
+    pub(crate) fn send_walk(&mut self, steps: &[(i32, i32)], run: bool, immediate: bool) -> Result<()> {
         let (start_x, start_z) = (self.world.x, self.world.z);
         for (x, z) in steps {
             // A random-event teleport invalidates the route mid-walk.
@@ -135,7 +135,12 @@ impl Bot {
             body.i8((x - start_x) as i8);
             body.i8((z - start_z) as i8);
         }
-        self.send_named("MOVE_GAMECLICK", &body.bytes())
+        let outcome = if immediate {
+            self.send_named_now("MOVE_GAMECLICK", &body.bytes())
+        } else {
+            self.send_named("MOVE_GAMECLICK", &body.bytes())
+        };
+        outcome
     }
 
     pub(crate) fn await_leg(&mut self, leg: &[(i32, i32)], deadline: u64) -> Result<()> {

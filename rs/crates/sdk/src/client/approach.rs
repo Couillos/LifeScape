@@ -168,7 +168,7 @@ impl Bot {
             return Err(Error::Unreachable(format!("step_to is one tile, not {:?} -> {x},{z}", self.position())));
         }
         let run = self.want_run();
-        self.send_walk(&[(x, z)], run)?;
+        self.send_walk(&[(x, z)], run, false)?;
         let deadline = self.world.ticks + timeout;
         while self.world.ticks < deadline {
             self.pump(1)?;
@@ -186,7 +186,7 @@ impl Bot {
         }
         let run = self.want_run();
         for chunk in steps.chunks(STEP_CAP) {
-            self.send_walk(chunk, run)?;
+            self.send_walk(chunk, run, false)?;
             let deadline = self.world.ticks + timeout.max(1);
             let target = chunk[chunk.len() - 1];
             while self.world.ticks < deadline {

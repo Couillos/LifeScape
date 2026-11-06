@@ -294,7 +294,7 @@ impl Bot {
             }
             let end = pending.len().min(STEP_CAP);
             let leg: Vec<(i32, i32)> = pending[..end].to_vec();
-            if let Err(err) = self.send_and_await(&leg, run, deadline) {
+            if let Err(err) = self.send_and_await(&leg, run, deadline, false) {
                 if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
                     return Err(err);
                 }
@@ -454,7 +454,14 @@ impl Bot {
         cross.push((cross_to.x, cross_to.z));
         let run = self.want_run();
         let cross_deadline = deadline.min(self.world.ticks + CROSS_WAIT);
-        if self.send_and_await(&cross, run, cross_deadline).is_err()
+        // Immediate send, exempt from the per-tick pacing: the swing watch
+        // above already spent ticks, and this 1-2-tile MOVE races a
+        // self-closing door (CROSS_WAIT is 7 ticks ≈ 420 ms; a 70 ms pacing
+        // sleep would eat a sixth of that budget after the open is seen).
+        // Arbitrage: a lone crossing packet cannot form a burst, while a
+        // late step strands the bot behind a re-closed door — latency here
+        // is worse than the FIN risk, so the exemption stands.
+        if self.send_and_await(&cross, run, cross_deadline, true).is_err()
             || (self.world.x, self.world.z, self.world.level) != (cross_to.x, cross_to.z, cross_to.level)
         {
             return Err(Error::DoorDidNotOpen(format!(
