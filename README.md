@@ -26,7 +26,7 @@ cargo test --manifest-path rs/Cargo.toml
 ./rs/target/debug/orchestrator shutdown
 ```
 
-Dashboard : http://5.83.152.180:8765/ (état live + spectate).
+Dashboard : http://localhost:8765/ (état live + spectate).
 Tout passe par l'orchestrateur : un worker par compte, un job par compte,
 relogin + reprise auto. Ne jamais lancer de bot en direct.
 

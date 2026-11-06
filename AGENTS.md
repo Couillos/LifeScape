@@ -235,7 +235,7 @@ cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata 
 ```
 
 Docker : service compose `bots` (conteneur `lifescape-bots`), dashboard
-sur **http://5.83.152.180:8765/**. Variables lues par le SDK et le daemon :
+sur **http://localhost:8765/**. Variables lues par le SDK et le daemon :
 `LIFESCAPE_SERVER_HOST`/`LIFESCAPE_SERVER_PORT` (serveur de jeu),
 `LIFESCAPE_WEB_PORT` (8765), `LIFESCAPE_STATE` (posé par le daemon).
 
@@ -333,7 +333,7 @@ Erreurs franches à connaître : `no session` (ouvrir d'abord),
 
 Les comptes tournent en parallèle : un thread de supervision et un process
 worker par compte, donc plusieurs bots peuvent tourner en même temps sans
-se bloquer. Le dashboard (anglais) : `http://5.83.152.180:8765/`.
+se bloquer. Le dashboard (anglais) : `http://localhost:8765/`.
 
 Le service `bots` monte `rs/` (binaire compilé + `gamedata/data/`,
 front `orchestration/static/`) et `./engine` en lecture seule : un
