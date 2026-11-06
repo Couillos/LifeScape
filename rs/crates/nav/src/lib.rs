@@ -5,6 +5,8 @@
 pub mod bfs;
 pub mod buffer;
 pub mod collision;
+pub mod loctypes;
 pub mod nav;
 pub mod reach;
 pub mod route;
+pub mod static_world;

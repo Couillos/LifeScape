@@ -17,7 +17,7 @@ pub mod waits;
 pub mod words;
 pub mod world;
 
-pub use lifescape_nav::{bfs, buffer, collision, nav, reach, route};
+pub use lifescape_nav::{bfs, buffer, collision, loctypes, nav, reach, route, static_world};
 
 pub use client::Bot;
 pub use client::movement::TransitionRow;
