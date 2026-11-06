@@ -392,7 +392,12 @@ fn load_key_numbers(key_path: &str) -> Result<RsaKey> {
 /// nothing when disabled. Never alters wire bytes, only stderr.
 fn pktlog_enabled() -> bool {
     static PKTLOG: OnceLock<bool> = OnceLock::new();
-    *PKTLOG.get_or_init(|| std::env::var("LIFESCAPE_PKTLOG").is_ok_and(|flag| flag == "1"))
+    if *PKTLOG.get_or_init(|| std::env::var("LIFESCAPE_PKTLOG").is_ok_and(|flag| flag == "1")) {
+        return true;
+    }
+    // File flag for live diagnosis without restarting the daemon nor
+    // propagating env to the worker: `touch /tmp/opencode/pktlog-t01`.
+    std::path::Path::new("/tmp/opencode/pktlog-t01").exists()
 }
 
 /// Lowercase hex of the first 12 payload bytes.
@@ -453,11 +458,19 @@ pub struct Connection {
     /// Last op name sent: attached to socket errors to incriminate the
     /// exact packet that preceded the kill.
     last_op: String,
+    // Ring of the last ops sent (names only): attached to socket
+    // errors so a killed session names the packet that preceded the FIN.
+    recent_ops: Vec<String>,
 }
 
 impl Connection {
     pub fn new(timeout: Duration) -> Connection {
-        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new() }
+        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new() }
+    }
+
+    /// Read-only view of the ring for Io error messages.
+    fn ops_ring(&self) -> String {
+        self.recent_ops.join(",")
     }
 
     pub fn is_open(&self) -> bool {
@@ -569,6 +582,10 @@ impl Connection {
         let packet = frame_packet(op_id, size, payload, shift)?;
         self.send_raw(&packet)
     }
+        self.recent_ops.push(name.to_string());
+        if self.recent_ops.len() > 12 {
+            self.recent_ops.drain(..self.recent_ops.len() - 12);
+        }
 
     /// Decode the next server frame (opcode ISAAC-shifted, then sized body).
     pub fn recv(&mut self) -> Result<Frame> {
@@ -609,7 +626,7 @@ impl Connection {
                     Some(start) if start.elapsed() < Duration::from_secs(10) => self.sent_window,
                     _ => 0,
                 };
-                Err(Error::Io(format!("server closed the socket (sent_total={} sent_last10s={} last_op={})", self.sent_total, window, self.last_op)))
+                Err(Error::Io(format!("server closed the socket (sent_total={} sent_last10s={} last_op={} ops=[{}])", self.sent_total, window, self.last_op, self.ops_ring())))
             }
             Ok(got) => {
                 self.buffer.extend_from_slice(&chunk[..got]);
@@ -639,7 +656,7 @@ impl Connection {
                 Some(start) if now.duration_since(start) < Duration::from_secs(10) => self.sent_window,
                 _ => 0,
             };
-            Error::Io(format!("{error} (sent_total={} sent_last10s={} last_op={})", self.sent_total, window, self.last_op))
+            Error::Io(format!("{error} (sent_total={} sent_last10s={} last_op={} ops=[{}])", self.sent_total, window, self.last_op, self.ops_ring()))
         });
         self.sent_total += 1;
         let now = Instant::now();
