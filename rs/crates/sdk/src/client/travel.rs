@@ -382,6 +382,12 @@ impl Bot {
                 return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
             }
         }
+        // Blind swing: live locs do not always stream, so the watch can
+        // miss a real opening. The steps are server-truth — an open door
+        // lets them through, a shut one refuses — so try once, bounded.
+        if self.step_door_through(door, cross_to, deadline).is_ok() {
+            return Ok(());
+        }
         Err(Error::DoorDidNotOpen(format!(
             "door loc {} at ({},{},{}) never swung from {:?}; last game: {}",
             door.loc, door.x, door.z, door.level, self.position(), last_message(self),
