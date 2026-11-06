@@ -29,7 +29,7 @@ cargo build --manifest-path rs/Cargo.toml
 cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata -p lifescape-orchestrator -p lifescape-scripts
 ./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
 ./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | shutdown
-./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--ascii]  # phase 4, pas encore dispo
+./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
 ./rs/target/debug/orchestrator replay-nav <dossier>                        # phase 6, pas encore dispo
 ```
 

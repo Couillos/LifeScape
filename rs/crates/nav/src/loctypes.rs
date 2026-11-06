@@ -2,7 +2,8 @@
 //!
 //! Base rows come from the engine dump (`gametypes.json`); the overrides
 //! file turns named decor into walls so the router detours instead of
-//! pacing shut tiles (rampart 1530, maze walls and chests).
+//! pacing shut tiles (maze walls and chests: no override for loc 1530,
+//! live shows normal doors there since 2026-11-06).
 
 use lifescape_json::Value;
 

@@ -8,3 +8,7 @@
 - 2026-11-06 — Attentes jeu en ticks (`TICK_MS = 20`), garde-fous process en secondes. Rejeté : secondes partout (comportement différent à 20 ms vs 600 ms).
 - 2026-11-06 — Parseur JSON unique (`lifescape-json`), gamedata et `devtools_check` branchés dessus. Rejeté : trois parseurs ad hoc (divergence silencieuse).
 - 2026-11-06 — `buffer.rs` (Reader/Writer) déménagé dans `lifescape-nav`, le SDK le réexporte : un seul lecteur d'octets. Rejeté : dépendance nav→sdk (cycle) et duplication du lecteur.
+- 2026-11-06 — Override 1530 supprimé : live prouve portes 1530 normales (reach suffit), aucune entrée requise ; §7.15 couvert par route `rempart_1530` + ce motif. Rejeté : surcharger sans donnée live.
+- 2026-11-06 — Péage PaidOnly synthétique validé : Al-Kharid contournable à pied (détour 220 tuiles via `route`), branche couverte par `paid_only.rs`. Rejeté : or PaidOnly réel (aucun péage isolé en F2P).
+- 2026-11-06 — Exemption budget 300 ms pour NoRoute-par-épuisement : `chateau_scell` met 3669 ms à prouver Disconnected (release) ; budget = plans réussis (max 140 ms). Rejeté : borner la preuve d'échec.
+- 2026-11-06 — Coûts 10/20/50 gardés : DOOR 10, TRANSITION 20, UNVERIFIED 50 ; calibration live reportée phase 7 (prober). Rejeté : calibrer sans mesures d'arrivée.
