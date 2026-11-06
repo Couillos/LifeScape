@@ -97,8 +97,7 @@ impl Bot {
     /// Options from live state: toll wallet, carried items, quest points.
     /// Tags the data never requires (`quest:<name>`...) stay unsatisfied,
     /// so the planner reports them instead of walking into a refusal.
-    fn nav_options(&self, tables: &Tables) -> NavOptions {
-        let carried = crate::client::aggregate(&self.world.inv);
+    pub(crate) fn nav_options(&self, tables: &Tables) -> NavOptions {        let carried = crate::client::aggregate(&self.world.inv);
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
         let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
         let mut wants: HashSet<&str> = HashSet::new();
@@ -308,10 +307,13 @@ impl Bot {
         Error::StepRefused(format!("{}; walk: {cause}; last game: {}", suspect, last_message(self)))
     }
 
-    /// Door segment: click the opener, watch the live loc, step through.
-    /// Single and double doors swap the loc (walk through at once);
-    /// self-closing doors teleport instead (onto the tile, then through).
-    /// Already open (live loc gone or changed) goes directly to the step.
+    /// Door segment, the single §6.2 model: read the live loc, step
+    /// straight through when already open, else one open click, watch
+    /// the live loc swing, then immediately step across (self-closing
+    /// doors). Two measured extras, both bounded: wall_diagonal doors
+    /// teleport the clicker onto the tile (content script
+    /// `doors.rs2`, second click finishes), and a blind live stream
+    /// can miss a real swing (one crossing attempt, server decides).
     /// Any failure is DoorDidNotOpen.
     fn exec_door(
         &mut self,
@@ -329,17 +331,11 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
         }
-        // Live state around the door: painted square, so the stand
-        // check below reads the world instead of empty maps.
+        // Live state around the door: painted square, so the open check
+        // below reads the world instead of empty maps. The stand itself
+        // is plan-guaranteed (orthogonal, engine reach-valid), never
+        // adjusted here: a bad stand is a plan bug, reported loud.
         self.ensure_area(door.x, door.z, 3);
-        // The engine only answers orthogonal clicks (a diagonal stand
-        // gets "I can't reach that"): sidestep onto an orthogonal
-        // neighbour of the door first, same when starting on its tile.
-        self.door_stand(door, deadline)?;
-        // The sidestep may have landed past the door already.
-        if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-            return Ok(());
-        }
         // Already open: the live loc left the closed id (swapped away or
         // cleared). Step through at once, no click.
         if self.door_live_open(door) {
@@ -401,83 +397,6 @@ impl Bot {
             Some((id, _, _)) => id != door.loc,
             None => self.world.loc_removed(door.x, door.z, door.level),
         }
-    }
-
-    /// Click stand for the door: a tile the engine accepts (its own
-    /// reach rule for the door's shape and angle — an off-side stand
-    /// gets "I can't reach that") and orthogonal to the door tile.
-    /// Steps at most one tile; loud when no neighbour qualifies.
-    fn door_stand(
-        &mut self,
-        door: &lifescape_nav::plan::DoorRef,
-        deadline: u64,
-    ) -> Result<()> {
-        if self.stand_ok(door, self.world.x, self.world.z, self.world.level) {
-            return Ok(());
-        }
-        self.sync_live_doors();
-        let here = (self.world.x, self.world.z);
-        let mut sides =
-            [(door.x + 1, door.z), (door.x - 1, door.z), (door.x, door.z + 1), (door.x, door.z - 1)];
-        sides.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
-        for (side_x, side_z) in sides {
-            if self.world.ticks > deadline {
-                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
-            }
-            if (side_x - here.0).abs() + (side_z - here.1).abs() != 1 || self.world.level != door.level {
-                continue;
-            }
-            if !self.stand_ok(door, side_x, side_z, door.level) {
-                continue;
-            }
-            if !crate::collision::step_open(&self.collision, here.0, here.1, door.level, side_x - here.0, side_z - here.1) {
-                continue;
-            }
-            match self.step_to(side_x, side_z, CROSS_WAIT) {
-                Ok(true) => return Ok(()),
-                _ => continue,
-            }
-        }
-        Err(Error::DoorDidNotOpen(format!(
-            "door loc {} at ({},{},{}) has no clickable stand from {:?}; last game: {}",
-            door.loc, door.x, door.z, door.level, self.position(), last_message(self),
-        )))
-    }
-
-    /// True when the engine would take a click from this tile: orthogonal
-    /// neighbour of the door tile whose stand passes the server's reach
-    /// rule for the door's live (else static) shape and angle.
-    fn stand_ok(&self, door: &lifescape_nav::plan::DoorRef, x: i32, z: i32, level: i32) -> bool {
-        if level != door.level || (x - door.x).abs() + (z - door.z).abs() != 1 {
-            return false;
-        }
-        let (_, shape, angle) = match self
-            .world
-            .loc_at(door.x, door.z, door.level)
-            .or_else(|| self.world.static_locs.get(&(door.x, door.z, door.level)).copied())
-        {
-            Some(found) => found,
-            None => return true,
-        };
-        let (width, height) = self
-            .maps
-            .as_ref()
-            .and_then(|pack| pack.loc_def(door.loc as usize))
-            .map(|def| (i32::from(def.length), i32::from(def.width)))
-            .unwrap_or((1, 1));
-        lifescape_nav::reach::reached(
-            &|ax, az, level| self.collision.get(ax, az, level),
-            door.level,
-            x,
-            z,
-            door.x,
-            door.z,
-            width,
-            height,
-            i32::from(angle),
-            i32::from(shape),
-            0,
-        )
     }
 
     /// Walk the open door: one step onto the tile (unless on it), one off
@@ -648,10 +567,18 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("ride {} timed out at {:?}", ride.name, self.position())));
         }
-        // Click the table anchor: the dump records the answering tile
-        // there. The engine may walk a step or two into reach first, so
-        // only a real jump (level change or far tile) ends the watch.
-        self.op_loc(ride.op, ride.from.x, ride.from.z, ride.climb_loc)?;
+        // Click the loc's answering tile: the footprint tile nearest
+        // the stand (the table `from` is not always that tile on
+        // multi-tile stairs). The engine may walk a step or two into
+        // reach first, so only a real jump (level change or far tile)
+        // ends the watch.
+        let (click_x, click_z) = ride
+            .footprint
+            .iter()
+            .min_by_key(|(tile_x, tile_z)| (tile_x - stand.x).abs() + (tile_z - stand.z).abs())
+            .copied()
+            .unwrap_or((ride.from.x, ride.from.z));
+        self.op_loc(ride.op, click_x, click_z, ride.climb_loc)?;
         let start = (self.world.x, self.world.z, self.world.level);
         let watched = self.world.ticks + RIDE_WAIT;
         while self.world.ticks < watched {
@@ -698,8 +625,8 @@ impl Bot {
     }
 }
 
-/// One-line plan summary for the `nav seg` log.
-fn seg_summary(seg: &Segment) -> String {
+/// One-line plan summary for the `nav seg` log and `debug_walk`.
+pub(crate) fn seg_summary(seg: &Segment) -> String {
     match seg {
         Segment::Walk { tiles } => {
             let (first, last) = (&tiles[0], &tiles[tiles.len() - 1]);

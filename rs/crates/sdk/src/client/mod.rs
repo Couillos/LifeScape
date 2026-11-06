@@ -91,7 +91,8 @@ pub struct Bot {
     /// false: spots within range of something that would attack us are
     /// skipped.
     pub allow_wild: bool,
-    /// Pack index for lazy map loading. `None` means straight legs only.
+    /// Pack index for lazy map loading. `None` means no live painting:
+    /// collision stays as streamed and `ensure_area` is a no-op.
     pub maps: Option<MapPack>,
     /// Known stair/ladder/trapdoor rides, loaded from the transition dump.
     /// Empty without it: climbs fall back to the nearest ladder loc.
@@ -322,7 +323,7 @@ impl Bot {
     }
 
     /// Paint every map square touching the radius around (x, z).
-    /// No pack index means no maps: straight legs only, everywhere.
+    /// No pack index means no maps: nothing is painted.
     pub fn ensure_area(&mut self, x: i32, z: i32, radius: i32) {
         if let Some(pack) = self.maps.as_mut() {
             pack.ensure_area(&mut self.collision, &mut self.world.static_locs, &mut self.doors, &mut self.toll_gates, x, z, radius);

@@ -8,7 +8,6 @@
 use crate::buffer::Writer;
 use crate::client::Bot;
 use crate::error::{Error, Result};
-use crate::route::Router;
 
 /// One row of the generated transition table (`gamedata/data/transitions.json`):
 /// a stair/ladder/trapdoor tile, where it takes you, and which loc op rides it.
@@ -28,9 +27,10 @@ pub struct TransitionRow {
 
 /// Max steps per walk send: the plan's legs are cut into these chunks.
 pub(crate) const STEP_CAP: usize = 24;
-/// A leg with no progress this long is refused, not slow: walking moves
-/// every couple of ticks, so a silent leg is a refused one.
-const STALL_TICKS: u64 = 12;
+/// A leg this silent is refused, not slow: 19 live walk legs land at
+/// 0.6-6 ticks per tile (median 2), so 13 ticks with zero progress is
+/// twice the worst tile gap plus pump margin, never a slow walk.
+const STALL_TICKS: u64 = 13;
 
 /// Read-only walk diagnosis, printed by the `debug_walk` script.
 #[derive(Debug, Clone)]
@@ -86,12 +86,11 @@ impl Bot {
         )
     }
 
-    /// First leg step that explains a refusal: live locs,
-    /// directionally-shut steps and known doors. Entities never block
+    /// First refusal wins: the scan walks the leg in order and names the
+    /// first live loc, known door or shut step. Entities never block
     /// walking server-side (`canMove` ignores `NPC_OCC`/`PLAYER_OCC`),
-    /// so occupants are deliberately not reported. The old probe below
-    /// only sees leg[0]'s flags, so a blocker at step 2..24 reads as a
-    /// refusal on an open tile. Pure diagnosis, no movement.
+    /// so occupants are deliberately not reported. Pure diagnosis, no
+    /// movement.
     pub(crate) fn suspect_tile(&self, leg: &[(i32, i32)], start: (i32, i32, i32)) -> Option<String> {
         let level = start.2;
         let mut prev = (start.0, start.1);
@@ -145,50 +144,21 @@ impl Bot {
         };
         let mut best = (self.world.x - target.0).abs() + (self.world.z - target.1).abs();
         let mut last_move = self.world.ticks;
-        let mut door_tried = false;
         loop {
             let position = (self.world.x, self.world.z);
             if position == target {
                 return Ok(());
             }
             let distance = (position.0 - target.0).abs() + (position.1 - target.1).abs();
-            if distance > best {
-                return Ok(()); // passed it: the next leg recomputes from here
-            }
+            // No early pass-through: a leg only ends on its target (the
+            // postcondition §6.2 requires per leg). A transient detour
+            // keeps walking until it lands; a truly lost leg trips the
+            // stall or deadline watch below, never a silent Ok.
             if distance < best {
                 best = distance;
                 last_move = self.world.ticks;
-                door_tried = false;
             } else if self.world.ticks.saturating_sub(last_move) > STALL_TICKS {
                 return Err(Error::Timeout(format!("leg to {target:?} stalled at {:?}", self.position())));
-            } else if !door_tried && self.world.ticks.saturating_sub(last_move) > 12 {
-                // Stalled against a door the plan read open: the server
-                // re-closes them, so swing it now instead of waiting out
-                // the stall budget and replanning through it again.
-                door_tried = true;
-                let mut shut: Option<(i32, i32, u16)> = None;
-                for (step_x, step_z) in leg {
-                    if (step_x - position.0).abs() + (step_z - position.1).abs() > 2 {
-                        continue;
-                    }
-                    if let Some((loc_id, _, _)) = self.doors.get(&(*step_x, *step_z, self.world.level)).copied() {
-                        if !Self::is_maze_door(loc_id) {
-                            shut = Some((*step_x, *step_z, loc_id));
-                            break;
-                        }
-                    }
-                }
-                if let Some((door_x, door_z, loc_id)) = shut {
-                    if self.open_shut_door(door_x, door_z, self.world.level, loc_id) {
-                        last_move = self.world.ticks;
-                        door_tried = false;
-                    } else {
-                        return Err(Error::Unreachable(format!(
-                            "leg to {target:?} shut at door {loc_id} ({door_x},{door_z}) from {:?}",
-                            self.position()
-                        )));
-                    }
-                }
             }
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("leg to {target:?} timed out at {:?}", self.position())));
@@ -197,10 +167,9 @@ impl Bot {
         }
     }
 
-    /// Diagnose one walk without walking it. Loads the same static windows
-    /// the router plans on, then reports static scenery, the live delta
-    /// and a BFS verdict (reachable, or nearest tile plus blockers) — the
-    /// same inputs walk_to decides on.
+    /// Diagnose one walk without walking it. Reads the static world,
+    /// the live delta around the target, and the planner verdict for
+    /// the same inputs travel_to would use — the plan is the diagnosis.
     pub fn debug_walk(&mut self, x: i32, z: i32, level: i32) -> DebugReport {
         let mut lines = vec![
             format!("from {:?} to ({x},{z},{level})", self.position()),
@@ -216,24 +185,19 @@ impl Bot {
         let (here_x, here_z) = (self.world.x, self.world.z);
         self.ensure_area(here_x, here_z, 70);
         self.ensure_area(x, z, 10);
-        let collision = match &self.maps {
-            Some(pack) => pack.planning_view(&self.collision, &self.doors, &self.toll_gates, self.allow_paid),
-            None => self.collision.clone(),
+        let (here_flags, dest_flags, static_world) = match &self.nav_world {
+            Some(world) => (world.get(here_x, here_z, level), world.get(x, z, level), "yes"),
+            None => (self.collision.get(here_x, here_z, level), self.collision.get(x, z, level), "no"),
         };
-        lines.push(format!(
-            "flags here={:#x} dest={:#x} maps={}",
-            collision.get(here_x, here_z, level),
-            collision.get(x, z, level),
-            if self.maps.is_some() { "yes" } else { "no" },
-        ));
+        lines.push(format!("flags here={here_flags:#x} dest={dest_flags:#x} static={static_world}"));
         let mut statics: Vec<(i32, i32, u16, String, u8, u8, String)> = Vec::new();
         for ((lx, lz, ll), (id, shape, angle)) in &self.world.static_locs {
             if *ll == level && (lx - x).abs() <= 2 && (lz - z).abs() <= 2 {
                 let name = (self.tables.loc_name)(*id).unwrap_or_else(|| format!("#{id}"));
                 let extra = self
-                    .maps
+                    .nav_world
                     .as_ref()
-                    .and_then(|pack| pack.loc_def(*id as usize))
+                    .and_then(|world| world.loc_def(*id as usize))
                     .map(|def| def.open_op.map(|op| format!("open{op}")).unwrap_or_else(|| "fixed".to_string()))
                     .unwrap_or_else(|| "unknown-def".to_string());
                 statics.push((*lx, *lz, *id, name, *shape, *angle, extra));
@@ -259,35 +223,36 @@ impl Bot {
         for (lx, lz, id, name, shape, angle) in locs.iter().take(12) {
             lines.push(format!("  loc {name} id={id} at ({lx},{lz}) shape={shape} angle={angle}"));
         }
-        let mut router = Router::new();
-        let waypoints = router.find_path_to_tile(&collision, level, here_x, here_z, x, z);
-        if waypoints.is_empty() {
-            let report = router.unreachable_report(
-                &collision, level, here_x, here_z, x, z, None, 8, 1, 1, 0, crate::reach::SHAPE_TILE, 0,
-            );
-            lines.push(format!(
-                "UNREACHABLE nearest={:?} dest_blocked={} blockers={:?}",
-                report.nearest, report.dest_blocked, report.blockers,
-            ));
-        } else {
-            lines.push(format!("reachable in {} waypoints", waypoints.len()));
-            let via: Vec<String> = waypoints.iter().take(12).map(|w| format!("({},{})", w.x, w.z)).collect();
-            lines.push(format!("via {}", via.join(" ")));
-            // Doors the walker would have to swing, in walking order.
-            let steps = crate::nav::expand_waypoints(&waypoints, here_x, here_z);
-            let mut on_path: Vec<(i32, i32, u16)> = Vec::new();
-            for (step_x, step_z) in &steps {
-                if let Some((id, _, _)) = self.doors.get(&(*step_x, *step_z, level)) {
-                    if on_path.last().is_none_or(|last| last.0 != *step_x || last.1 != *step_z) {
-                        on_path.push((*step_x, *step_z, *id));
+        match (&self.nav_world, &self.nav_tables) {
+            (Some(world), Some(tables)) => {
+                let from = lifescape_nav::plan::Tile { x: here_x, z: here_z, level: self.world.level };
+                let dest = lifescape_nav::plan::Tile { x, z, level };
+                let options = self.nav_options(tables);
+                match lifescape_nav::plan::plan(world, tables, from, dest, &options) {
+                    Ok(plan) => {
+                        lines.push(format!("reachable in {} segments cost {}", plan.segments.len(), plan.cost));
+                        for seg in plan.segments.iter().take(12) {
+                            lines.push(format!("  {}", super::travel::seg_summary(seg)));
+                        }
+                        if let Some(adjusted) = plan.adjusted_dest {
+                            lines.push(format!("adjusted_dest ({},{},{})", adjusted.x, adjusted.z, adjusted.level));
+                        }
                     }
+                    Err(no) => lines.push(format!(
+                        "UNREACHABLE {} closest=({},{},{}) blocked=[{}]",
+                        no.reason.as_str(),
+                        no.closest_reachable.x,
+                        no.closest_reachable.z,
+                        no.closest_reachable.level,
+                        no.blocked_by_requirements
+                            .iter()
+                            .map(|(edge, tags)| format!("{edge:?} missing {tags:?}"))
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    )),
                 }
             }
-            lines.push(format!("steps={} doors_on_path={}", steps.len(), on_path.len()));
-            for (door_x, door_z, id) in on_path.iter().take(10) {
-                let name = (self.tables.loc_name)(*id).unwrap_or_else(|| format!("#{id}"));
-                lines.push(format!("  path door {name} id={id} at ({door_x},{door_z})"));
-            }
+            _ => lines.push("no static world (travel refuses without it)".to_string()),
         }
         let mut doors: Vec<(i32, (i32, i32, i32))> = Vec::new();
         for tile in self.doors.keys() {
