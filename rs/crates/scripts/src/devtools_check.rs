@@ -666,7 +666,7 @@ pub(crate) fn dev_dump_bank_stands(bot: &mut Bot, _args: &[String]) -> ScriptRes
     }
     body.push(']');
     save_report("run/bank_stands.json", &body)?;
-    bot.log(&format!("wrote run/bank_stands.json ({} clusters, stands not computed: reach module not ported)", clusters.len()));
+    bot.log(&format!("wrote run/bank_stands.json ({} clusters, stands not computed: stand selection not implemented)", clusters.len()));
     Ok(0)
 }
 
