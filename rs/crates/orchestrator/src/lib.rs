@@ -13,6 +13,7 @@ pub mod daemon;
 pub mod supervise;
 pub mod session;
 pub mod dump_transitions;
+pub mod routecmd;
 pub mod session_calls;
 pub mod session_push;
 pub mod session_heartbeat;

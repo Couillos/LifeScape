@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 lifescape-json = { path = "../json" }
 lifescape-gamedata = { path = "../gamedata" }
+lifescape-nav = { path = "../nav" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-scripts = { path = "../scripts" }
 
