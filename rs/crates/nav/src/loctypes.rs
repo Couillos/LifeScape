@@ -8,10 +8,17 @@ use lifescape_json::Value;
 
 use crate::collision::LocDef;
 
+/// True when this override value is a well-formed `[x, z, level]` tile.
+fn is_tile(value: &Value) -> bool {
+    value.as_arr().is_some_and(|items| items.len() == 3 && items.iter().all(|item| item.as_i64().is_some()))
+}
+
 /// Parse the loctype table and apply navigation overrides. Every
 /// override entry needs a `reason` and a `verified` date; an override
 /// pointing outside the loc table fails loud instead of inventing
-/// a mapping.
+/// a mapping. Entries scoped to one tile (`at`) are not stripped here:
+/// the planner (`Tables::is_blocked`) reads those tiles as walls while
+/// the same loc stays usable everywhere else.
 pub fn parse_loctypes(gametypes_text: &str, overrides_text: &str) -> Result<Vec<Option<LocDef>>, String> {
     let gametypes = lifescape_json::parse(gametypes_text).map_err(|err| format!("parse gametypes: {err}"))?;
     let rows = gametypes.get("loc").as_arr().ok_or_else(|| "gametypes has no loc table".to_string())?;
@@ -31,6 +38,14 @@ pub fn parse_loctypes(gametypes_text: &str, overrides_text: &str) -> Result<Vec<
                 let loc = entry.get("loc").as_i64().ok_or_else(|| format!("nav_overrides blocked_locs[{index}] has no loc"))?;
                 if loc < 0 {
                     return Err(format!("nav_overrides blocked_locs[{index}] has a negative loc"));
+                }
+                // One tile only: the planner blocks that tile, the loc
+                // stays open everywhere else. Nothing to strip here.
+                if !entry.get("at").is_null() {
+                    if !is_tile(entry.get("at")) {
+                        return Err(format!("nav_overrides blocked_locs[{index}] has a malformed at tile"));
+                    }
+                    continue;
                 }
                 blocked.push(loc as usize);
             }
@@ -121,8 +136,9 @@ mod tests {
         let gametypes = std::fs::read_to_string(&gametypes_path).expect("read gametypes");
         let overrides = std::fs::read_to_string(&overrides_path).expect("read overrides");
         let defs = parse_loctypes(&gametypes, &overrides).expect("parse loctypes");
-        // Rampart decor 1530: no passage, reads as wall.
-        assert!(defs[1530].as_ref().is_some_and(|def| def.open_op.is_none()));
+        // Rampart 1530 is tile-scoped now: the loc keeps its op
+        // everywhere, the planner walls off the one rampart tile.
+        assert_eq!(defs[1530].as_ref().and_then(|def| def.open_op), Some(1));
         // Maze walls: stripped, except the swinging walllow doors (category 16).
         assert!(defs[3626].as_ref().is_some_and(|def| def.open_op.is_none()));
         assert_eq!(defs[3628].as_ref().and_then(|def| def.open_op), Some(1));

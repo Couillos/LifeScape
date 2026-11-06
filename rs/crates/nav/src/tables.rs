@@ -101,6 +101,16 @@ impl Side {
     }
 }
 
+/// A door tile that never swings (rampart decor with no real passage).
+/// `loc` 0 matches any door on that tile. Entries without a tile are
+/// handled by the loctype table instead (the whole loc loses its op).
+#[derive(Clone, Debug)]
+pub struct BlockedDoor {
+    pub loc: u16,
+    pub at: Tile,
+    pub reason: String,
+}
+
 /// A hand-added edge (pushed secret wall...). None ship yet.
 #[derive(Clone, Debug)]
 pub struct CustomEdge {
@@ -121,6 +131,7 @@ pub struct Tables {
     pub requirements: Vec<Requirement>,
     pub one_way: Vec<OneWay>,
     pub customs: Vec<CustomEdge>,
+    pub blocked: Vec<BlockedDoor>,
 }
 
 impl Tables {
@@ -130,8 +141,8 @@ impl Tables {
     pub fn load(data_dir: &Path) -> Result<Tables, String> {
         let transitions = load_transitions(&data_dir.join("transitions.json"))?;
         let (verified, verified_any_level) = load_verified(&data_dir.join("transitions_verified.json"));
-        let (requirements, one_way, customs) = load_overrides(&data_dir.join("nav_overrides.json"))?;
-        Ok(Tables { transitions, verified, verified_any_level, requirements, one_way, customs })
+        let (requirements, one_way, customs, blocked) = load_overrides(&data_dir.join("nav_overrides.json"))?;
+        Ok(Tables { transitions, verified, verified_any_level, requirements, one_way, customs, blocked })
     }
 
     /// Prober verdict for one transition, if it ever rode it.
@@ -166,6 +177,12 @@ impl Tables {
             }
         }
         true
+    }
+
+    /// True when this door tile never swings: the planner reads it as
+    /// wall even though the loc advertises Open elsewhere.
+    pub fn is_blocked(&self, loc: u16, at: Tile) -> bool {
+        self.blocked.iter().any(|entry| entry.at == at && (entry.loc == 0 || entry.loc == loc))
     }
 }
 
@@ -272,7 +289,7 @@ fn checked_entry<'a>(rows: &'a [Value], key: &str, index: usize) -> Result<&'a V
     rows.get(index).ok_or_else(|| format!("nav_overrides {key}[{index}] is missing"))
 }
 
-fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<CustomEdge>), String> {
+fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<CustomEdge>, Vec<BlockedDoor>), String> {
     let text = std::fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
     let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
     if parsed.as_obj().is_none() {
@@ -339,5 +356,26 @@ fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<Cus
             reason: reason.to_string(),
         });
     }
-    Ok((requirements, one_way, customs))
+    let mut blocked = Vec::new();
+    let rows = parsed.get("blocked_locs").as_arr().cloned().unwrap_or_default();
+    for (index, row) in rows.iter().enumerate() {
+        let reason = row.get("reason").as_str().unwrap_or("");
+        if reason.is_empty() {
+            return Err(format!("nav_overrides blocked_locs[{index}] needs a reason"));
+        }
+        // No tile: the loctype table strips the whole loc. Only
+        // tile-scoped entries land here; a malformed tile fails loud.
+        if row.get("at").is_null() {
+            continue;
+        }
+        let Some(at) = parse_tile(row.get("at")) else {
+            return Err(format!("nav_overrides blocked_locs[{index}] has a malformed at tile"));
+        };
+        blocked.push(BlockedDoor {
+            loc: row.get("loc").as_i64().unwrap_or(0) as u16,
+            at,
+            reason: reason.to_string(),
+        });
+    }
+    Ok((requirements, one_way, customs, blocked))
 }

@@ -1,11 +1,5 @@
 {
-  "blocked_locs": [
-    {
-      "loc": 1530,
-      "reason": "rampart decor: the server refuses every eastward step through it (verified live, repeatedly); no real 1530 passage is known, read as wall so the router detours",
-      "verified": "2026-11-06"
-    }
-  ],
+  "blocked_locs": [],
   "custom_edges": [],
   "maze_locs": [
     {
