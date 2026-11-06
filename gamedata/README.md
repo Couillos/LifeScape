@@ -18,4 +18,4 @@ Accès typé depuis Rust (`lifescape-gamedata`), par id : l'index du
 tableau *est* l'id.
 
 Règles dans `AGENTS.md`. Données dans `data/` : générées, jamais éditées.
-Retour d'expérience transverse dans `../FEEDBACK.md`.
+Historique archivé dans `../docs/journal/` (ne pas utiliser comme référence).

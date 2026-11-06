@@ -1,3 +1,5 @@
+# Archive. Ne pas utiliser comme référence.
+
 # LifeScape — retour d'expérience : tutoriel de bout en bout + SDK
 
 Le tutoriel de l'île des tutoriels (rev 274) passe **de bout en bout en live** :

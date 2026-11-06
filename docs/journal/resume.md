@@ -1,3 +1,5 @@
+# Archive. Ne pas utiliser comme référence.
+
 # LifeScape — reprise de session (F2P quests)
 
 ## Objectif
