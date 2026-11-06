@@ -12,5 +12,8 @@ lifescape-json = { path = "../json" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-gamedata = { path = "../gamedata" }
 
+[dev-dependencies]
+lifescape-nav = { path = "../nav" }
+
 [lints]
 workspace = true

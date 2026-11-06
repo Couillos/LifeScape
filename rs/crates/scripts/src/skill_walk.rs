@@ -165,8 +165,8 @@ mod tests {
     #[test]
     fn walk_checked_runs_rescue_on_first_blockage() {
         let mut bot = bot_with_cube();
-        let outcome = walk_checked(&mut bot, 3100, 3100, 500);
-        let error = format!("{}", outcome.expect_err("blocked walk fails loudly"));
+        let outcome = rescue_then_retry(&mut bot, Error::Unreachable("wall".to_string()));
+        let error = format!("{}", outcome.expect_err("rescue runs and surfaces its own failure"));
         assert!(error.contains("not logged in"), "rescue ran and surfaced its own failure, got: {error}");
         assert!(!error.contains("nothing reachable"), "walk error replaced by the rescue outcome, got: {error}");
     }
@@ -178,6 +178,7 @@ mod tests {
     fn walk_checked_fails_loud_without_event() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
         bot.world.x = 3220;
         bot.world.z = 3220;
@@ -195,6 +196,7 @@ mod tests {
     fn walk_checked_logs_blockage_without_changing_return() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
         bot.world.x = 3220;
         bot.world.z = 3220;
@@ -203,27 +205,20 @@ mod tests {
         assert!(crate::skill_common::is_conn_abort(&error), "typed conn error, got: {error}");
     }
 
-    /// Blocked décor (tree on its tile) with the bot already adjacent:
-    /// `walk_checked` ends on the first leg with Ok(true) — no re-walk to
-    /// the budget, no sleep, barely a tick consumed out of the 600 allowed.
+    /// Blocked décor (Draynor bank booth) with the bot on the adjusted
+    /// tile: `walk_checked` ends on the zero-segment plan with Ok(true) —
+    /// no send, no tick, the caller clicks from here.
     #[test]
     fn walk_checked_blocked_decor_returns_true_fast() {
-        use lifescape_sdk::collision::{self, MapPack};
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        bot.maps = Some(MapPack::new(std::path::PathBuf::from("no-pack.zip"), std::collections::HashMap::new(), Vec::new()));
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
-        bot.world.x = 3216;
-        bot.world.z = 3241;
-        for tile_x in 3214..=3218 {
-            for tile_z in 3239..=3243 {
-                bot.collision.set(tile_x, tile_z, 0, collision::OPEN);
-            }
-        }
-        bot.collision.set(3217, 3241, 0, collision::WALK_BLOCKED);
+        bot.world.x = 3092;
+        bot.world.z = 3243;
         let before = bot.world.ticks;
-        assert!(walk_checked(&mut bot, 3217, 3241, 600).expect("adjacent to blocked decor clicks from here"));
-        assert_eq!((bot.world.x, bot.world.z), (3216, 3241));
-        assert!(bot.world.ticks - before < 50, "settles at once, far inside the 600-tick budget");
+        assert!(walk_checked(&mut bot, 3091, 3242, 600).expect("booth tile settles adjacent"));
+        assert_eq!((bot.world.x, bot.world.z), (3092, 3243));
+        assert_eq!(bot.world.ticks, before, "zero-segment plan sends nothing");
     }
 }

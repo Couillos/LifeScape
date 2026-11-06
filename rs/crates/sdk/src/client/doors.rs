@@ -1038,20 +1038,22 @@ mod tests {
         assert_eq!(bot.doors.get(&(3226, 3223, 0)), Some(&(1530, 0, 2)), "record kept");
     }
 
-    /// An already-open door with no reachable route and no socket: the
-    /// first leg fails typed (reconnect) instead of pacing dead detours to
-    /// the no-route report. The record stays for the next crossing.
+    /// An already-open door with no socket: the walk plans for real, then
+    /// the first send fails typed (reconnect) before any pump. The record
+    /// stays for the next crossing.
     #[test]
     fn already_open_door_without_route_fails_loud() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         bot.maps = Some(door_pack());
         bot.world.level = 0;
-        bot.world.x = 0;
-        bot.world.z = 0;
-        bot.collision.set(0, 0, 0, collision::OPEN);
+        bot.world.x = 3220;
+        bot.world.z = 3220;
         bot.doors.insert((5, 0, 0), (1530, 0, 2));
         bot.world.locs.insert((5, 0, 0), None);
-        let err = bot.walk_to(30, 0, 0, 600).unwrap_err();
+        let (world, tables) = crate::client::travel::test_nav_context();
+        bot.nav_world = Some(world);
+        bot.nav_tables = Some(tables);
+        let err = bot.walk_to(3200, 3227, 0, 600).unwrap_err();
         let message = format!("{err}");
         assert!(message.contains("not logged in"), "typed conn error, got: {message}");
         assert_eq!(bot.world.ticks, 0, "failure pumps nothing");

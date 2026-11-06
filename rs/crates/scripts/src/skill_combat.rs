@@ -678,6 +678,7 @@ mod tests {
     fn prepare_offline_aborts_typed() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
         bot.world.x = 3220;
         bot.world.z = 3220;

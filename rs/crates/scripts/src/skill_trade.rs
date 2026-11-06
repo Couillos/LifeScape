@@ -396,9 +396,10 @@ mod tests {
     fn unreachable_spawn_returns_false() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
-        bot.world.x = 0;
-        bot.world.z = 0;
+        bot.world.x = 3220;
+        bot.world.z = 3220;
         assert!(bot.world.npcs.is_empty(), "empty world, keeper absent");
         let outcome = trade_to_keeper(&mut bot, "no_such_keeper", (0, 3200, 3227));
         let error = outcome.expect_err("dead socket aborts typed");
@@ -429,6 +430,7 @@ mod tests {
     fn live_keeper_offline_aborts_typed() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
         bot.world.level = 0;
         bot.world.x = 3095;
         bot.world.z = 3240;
