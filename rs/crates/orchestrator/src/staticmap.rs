@@ -15,7 +15,7 @@ use lifescape_sdk::collision::{LocDef, MapPack, zip_spans};
 use crate::json::Value;
 use crate::paths;
 
-/// Loc defs for every loc id in the engine dump (`lifescape/data/gametypes.json`).
+/// Loc defs for every loc id in the engine dump (`gamedata/data/gametypes.json`).
 /// Null rows stay None; the map loader skips locs without a def.
 pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
     let text = std::fs::read_to_string(gametypes_path).map_err(|err| format!("read {}: {err}", gametypes_path.display()))?;
@@ -80,10 +80,10 @@ pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>
     Ok(defs)
 }
 
-/// Transition rows for stair/ladder rides (`lifescape/data/transitions.json`).
+/// Transition rows for stair/ladder rides (`gamedata/data/transitions.json`).
 /// Parsed once per session; the file is small and static.
 pub fn load_transitions() -> Result<Vec<lifescape_sdk::TransitionRow>, String> {
-    let path = paths::root().join("lifescape").join("data").join("transitions.json");
+    let path = paths::root().join("gamedata").join("data").join("transitions.json");
     let text = std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
     let parsed = crate::json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
     let rows = parsed.as_arr().ok_or_else(|| format!("{} is not an array", path.display()))?;
@@ -131,7 +131,7 @@ pub fn load_transitions() -> Result<Vec<lifescape_sdk::TransitionRow>, String> {
 pub fn build_pack(engine_dir: &str) -> Result<MapPack, String> {
     let pack_dir = Path::new(engine_dir).join("data").join("pack");
     let _timer = if std::env::var("MAP_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
-    let gametypes = paths::root().join("lifescape").join("data").join("gametypes.json");
+    let gametypes = paths::root().join("gamedata").join("data").join("gametypes.json");
     let defs = load_loctypes(&gametypes)?;
     let zipped = pack_dir.join(".cache").join("maps-server.zip");
     if !zipped.is_file() {
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn bankbooth_def_matches_server_dump() {
-        let path = paths::root().join("lifescape").join("data").join("gametypes.json");
+        let path = paths::root().join("gamedata").join("data").join("gametypes.json");
         let defs = load_loctypes(&path).expect("gametypes parse");
         assert!(defs.len() >= 2214, "loc table holds the bankbooth");
         let booth = defs[2213].as_ref().expect("bankbooth def");
@@ -173,7 +173,7 @@ mod tests {
         let pack_dir = root.join("../lostcity/engine/data/pack");
         let bytes = std::fs::read(pack_dir.join(".cache").join("maps-server.zip")).unwrap();
         let index = zip_index(&bytes).unwrap();
-        let defs = load_loctypes(&root.join("lifescape").join("data").join("gametypes.json")).unwrap();
+        let defs = load_loctypes(&root.join("gamedata").join("data").join("gametypes.json")).unwrap();
         let mut collision = CollisionMap::new();
         let mut locs = std::collections::HashMap::new();
         for (mx, mz) in [(47, 52), (48, 50), (48, 51)] {

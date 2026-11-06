@@ -51,7 +51,7 @@ qui lit le code (`door_x`, `chicken_id`, `chat_line`,
 - Référence protocole : le code du serveur (`Engine-TS`, branche 274),
   jamais de suppositions, vérifier dans le code puis valider en live.
 - Régénérer les définitions après mise à jour du serveur/jeu :
-  `cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/lifescape/data/gametypes.json`.
+  `cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/gamedata/data/gametypes.json`.
   Outils engine liés : `tools/lifescape-*.mts` (dump, diff routage/flags).
 
 ## Optimisation : faible empreinte RAM et CPU

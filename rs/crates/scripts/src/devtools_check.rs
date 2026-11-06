@@ -306,14 +306,14 @@ fn int_triplet(value: &MiniJson) -> Option<[i64; 3]> {
 
 fn load_transitions() -> Result<Vec<TransitionRow>, ScriptError> {
     let mut text = None;
-    for path in ["lifescape/data/transitions.json", "gamedata/data/transitions.json"] {
+    for path in ["gamedata/data/transitions.json"] {
         if let Ok(body) = std::fs::read_to_string(path) {
             text = Some(body);
             break;
         }
     }
     let text = text.ok_or_else(|| {
-        ScriptError::Usage("transitions.json not found (run scripts/dev/dump_transitions.py first)".to_string())
+        ScriptError::Usage("transitions.json not found (run orchestrator dump-transitions gamedata/data/transitions.json first)".to_string())
     })?;
     let parsed = MiniParser::parse(&text).map_err(|err| ScriptError::Usage(format!("bad transitions.json: {err}")))?;
     let MiniJson::Arr(rows) = parsed else { return Err(ScriptError::Usage("transitions.json is not an array".to_string())) };

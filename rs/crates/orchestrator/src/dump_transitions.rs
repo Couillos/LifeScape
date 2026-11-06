@@ -55,7 +55,7 @@ fn content_dir() -> PathBuf {
 }
 
 fn gametypes_path() -> PathBuf {
-    paths::root().join("lifescape").join("data").join("gametypes.json")
+    paths::root().join("gamedata").join("data").join("gametypes.json")
 }
 
 /// Zone keys (x_zone, z_zone) of the free-to-play map, level ignored.
@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn output_matches_committed_table() {
-        let reference_path = paths::root().join("lifescape").join("data").join("transitions.json");
+        let reference_path = paths::root().join("gamedata").join("data").join("transitions.json");
         let reference_text = std::fs::read_to_string(&reference_path).expect("read committed transitions");
         let out_path = std::env::temp_dir().join(format!("transitions-test-{}.json", std::process::id()));
         let (rows, _skipped) = dump_transitions(&out_path).expect("dump transitions");

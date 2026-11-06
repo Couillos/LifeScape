@@ -13,7 +13,7 @@ use crate::client::Bot;
 use crate::error::{Error, Result};
 use crate::route::Router;
 
-/// One row of the generated transition table (`lifescape/data/transitions.json`):
+/// One row of the generated transition table (`gamedata/data/transitions.json`):
 /// a stair/ladder/trapdoor tile, where it takes you, and which loc op rides it.
 /// Parsed once per session by the worker; walking only rides them.
 #[derive(Clone, Debug)]

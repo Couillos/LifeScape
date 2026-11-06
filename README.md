@@ -50,5 +50,5 @@ choisissent le serveur (défaut `127.0.0.1:43594`).
 Régénérer après mise à jour du serveur/jeu :
 
 ```sh
-cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/lifescape/data/gametypes.json
+cd ../lostcity/engine && npx tsx tools/lifescape-dump.mts ../../LifeScape/gamedata/data/gametypes.json
 ```
