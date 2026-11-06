@@ -17,7 +17,7 @@ use crate::paths;
 
 /// Loc defs for every loc id in the engine dump (`lifescape/data/gametypes.json`).
 /// Null rows stay None; the map loader skips locs without a def.
-fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
+pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
     let text = std::fs::read_to_string(gametypes_path).map_err(|err| format!("read {}: {err}", gametypes_path.display()))?;
     let parsed = crate::json::parse(&text).map_err(|err| format!("parse {}: {err}", gametypes_path.display()))?;
     let rows = parsed.get("loc").as_arr().ok_or_else(|| format!("{} has no loc table", gametypes_path.display()))?;

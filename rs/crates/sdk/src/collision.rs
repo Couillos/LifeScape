@@ -144,6 +144,12 @@ impl CollisionMap {
         self.zones.contains_key(&zone_index(tile_x, tile_z, level))
     }
 
+    /// Zone flags keyed like the server. Offline tools walk them with
+    /// unsigned 8x8 bases, exactly like the packed format iteration.
+    pub fn raw_zones(&self) -> &HashMap<u32, [u32; 64]> {
+        &self.zones
+    }
+
     /// Every tile carrying any flag, used to read a painted door footprint.
     pub fn flagged_tiles(&self) -> Vec<(i32, i32, i32)> {
         // Inverse of zone_index, with sign extension for negative squares.

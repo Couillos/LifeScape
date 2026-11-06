@@ -567,8 +567,21 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|dump-transitions ...");
         return 2;
+    }
+    if argv[1].as_str() == "dump-transitions" {
+        let Some(output) = argv.get(2) else {
+            eprintln!("usage: orchestrator dump-transitions <sortie>");
+            return 2;
+        };
+        return match crate::dump_transitions::dump_transitions(std::path::Path::new(output)) {
+            Ok(_) => 0,
+            Err(error) => {
+                eprintln!("dump-transitions: {error}");
+                1
+            }
+        };
     }
     if argv[1].as_str() == "map" {
         return crate::mapcli::map_cli(&argv[2..].to_vec());
