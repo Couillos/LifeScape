@@ -366,7 +366,6 @@ pub(crate) fn mark_resumed(inner: &mut SessionInner, name: &str, args: &[String]
 pub(crate) fn script_error_type(error: &lifescape_scripts::ScriptError) -> &'static str {
     match error {
         lifescape_scripts::ScriptError::Sdk(_) => "Sdk",
-        lifescape_scripts::ScriptError::NotPorted(_) => "NotPorted",
         lifescape_scripts::ScriptError::Usage(_) => "Usage",
     }
 }

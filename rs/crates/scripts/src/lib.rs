@@ -40,8 +40,6 @@ pub type ScriptResult = Result<i32, ScriptError>;
 #[derive(Debug)]
 pub enum ScriptError {
     Sdk(Error),
-    /// Logic not implemented yet for this script name.
-    NotPorted(&'static str),
     Usage(String),
 }
 
@@ -49,7 +47,6 @@ impl std::fmt::Display for ScriptError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScriptError::Sdk(err) => write!(formatter, "sdk: {err}"),
-            ScriptError::NotPorted(name) => write!(formatter, "{name}: not yet ported"),
             ScriptError::Usage(text) => write!(formatter, "usage: {text}"),
         }
     }
