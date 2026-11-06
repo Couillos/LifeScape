@@ -22,6 +22,24 @@ pub enum Error {
     /// Operator asked the run to stop (unload/close): unwinds the script
     /// to the next pump instead of finishing the current action.
     Interrupted(String),
+    /// The planner found no route: carries the diagnosis (reason, closest
+    /// reachable tile, missing requirements, nearby disabled transitions).
+    Travel(String),
+    /// A walk leg made no progress for the stall bound: carries the leg,
+    /// the suspect tile and the last game message.
+    StepRefused(String),
+    /// A planned door never opened (or its crossing step failed): carries
+    /// the door, the position and the last game message.
+    DoorDidNotOpen(String),
+    /// A transition ride never moved the bot: carries the transition,
+    /// the stand and the last game message.
+    RideDidNotMove(String),
+    /// A transition ride landed somewhere unexpected: carries expected
+    /// versus observed position.
+    RideWrongDestination(String),
+    /// A choice dialogue opened mid-ride: carries the prompt and options.
+    /// The executor never picks; the caller (or prober data) decides.
+    NeedsDialogueChoice(String),
 }
 
 impl std::fmt::Display for Error {
@@ -34,6 +52,12 @@ impl std::fmt::Display for Error {
             Error::State(detail) => write!(formatter, "state: {detail}"),
             Error::Timeout(detail) => write!(formatter, "timeout: {detail}"),
             Error::Interrupted(detail) => write!(formatter, "interrupted: {detail}"),
+            Error::Travel(detail) => write!(formatter, "travel: {detail}"),
+            Error::StepRefused(detail) => write!(formatter, "step refused: {detail}"),
+            Error::DoorDidNotOpen(detail) => write!(formatter, "door did not open: {detail}"),
+            Error::RideDidNotMove(detail) => write!(formatter, "ride did not move: {detail}"),
+            Error::RideWrongDestination(detail) => write!(formatter, "ride wrong destination: {detail}"),
+            Error::NeedsDialogueChoice(detail) => write!(formatter, "needs dialogue choice: {detail}"),
         }
     }
 }
