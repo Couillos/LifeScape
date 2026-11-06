@@ -6,7 +6,7 @@
 use lifescape_sdk::Bot;
 
 use super::quest_common as kit;
-use super::randomevent::{self, EventKind};
+use super::randomevent::{self};
 use crate::{ScriptError, ScriptResult};
 
 pub const EVENT_HOSTS: [&str; 3] = ["macro_mage", "macro_geni", "macro_dwarf"];
@@ -17,15 +17,28 @@ pub const HOSTILE_EVENTS: [&str; 2] = ["macro_swarm", "macro_triffidseed_angry"]
 pub fn greet(bot: &mut Bot, timeout: u64) -> Result<(), ScriptError> {
     for name in EVENT_HOSTS {
         let Some(slot) = bot.find_npc(name) else { continue };
-        println!("greeting event host {name}");
+        bot.log(&format!("greeting event host {name}"));
         // Orthogonal tiles only: the server refuses NPC clicks from a
-        // diagonal, and approach stops at Manhattan distance.
-        if bot.approach_npc(slot, timeout).is_err() {
-            println!("event host {name} unreachable");
+        // diagonal, and approach stops at Manhattan distance. A dead
+        // socket still aborts typed instead of trying hosts.
+        if let Err(error) = bot.approach_npc(slot, timeout) {
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
+            bot.log(&format!("event host {name} unreachable"));
             continue;
         }
         let Some(slot) = bot.find_npc(name) else { continue };
-        if bot.op_npc(1, slot).is_err() {
+        if let Err(error) = bot.op_npc(1, slot) {
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
             continue;
         }
         let _ = kit::finish_dialog_like(bot, &[], timeout);
@@ -42,7 +55,7 @@ pub fn greet_near(bot: &mut Bot, timeout: u64) -> Result<(), ScriptError> {
         if (npc.x - bot.world.x).abs() + (npc.z - bot.world.z).abs() != 1 {
             continue;
         }
-        println!("greeting nearby event host {name}");
+        bot.log(&format!("greeting nearby event host {name}"));
         let Some(slot) = bot.find_npc(name) else { continue };
         if bot.op_npc(1, slot).is_err() {
             continue;
@@ -109,7 +122,7 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
         ("prayer", lifescape_gamedata::com_id("xplamp:prayer"))
     };
     let (Some(skill_com), Some(confirm_com)) = (skill_com, lifescape_gamedata::com_id("xplamp:confirm")) else {
-        println!("genie lamp: xplamp buttons missing");
+        bot.log("genie lamp: xplamp buttons missing");
         return Ok(false);
     };
     let start = bot.inventory().get(&lamp).copied().unwrap_or(0);
@@ -127,7 +140,7 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
             }
         }
         if bot.world.modal.is_none() {
-            println!("genie lamp: picker did not open");
+            bot.log("genie lamp: picker did not open");
             break;
         }
         let seen = bot.world.messages.len();
@@ -137,7 +150,7 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
             let lower = line.to_lowercase();
             lower.contains("rune mysteries") || lower.contains("druid") || lower.contains("members")
         }) {
-            println!("genie lamp: {skill} refused");
+            bot.log(&format!("genie lamp: {skill} refused"));
             bot.close_modal()?;
             bot.pump(3)?;
             break;
@@ -156,10 +169,10 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
         }
     }
     if bot.inventory().get(&lamp).copied().unwrap_or(0) < start {
-        println!("genie lamp: wish granted to {skill}");
+        bot.log(&format!("genie lamp: wish granted to {skill}"));
         return Ok(true);
     }
-    println!("genie lamp: still in inventory");
+    bot.log("genie lamp: still in inventory");
     Ok(false)
 }
 
@@ -167,7 +180,7 @@ pub fn climb_out(bot: &mut Bot) -> Result<bool, ScriptError> {
     let mut ridden: std::collections::HashSet<String> = std::collections::HashSet::new();
     for _ in 0..12 {
         if bot.world.level == 0 {
-            println!("ok on ground at {:?}", bot.position());
+            bot.log(&format!("ok on ground at {:?}", bot.position()));
             return Ok(true);
         }
         // Known down-transitions nearest-first (exact loc and op each).
@@ -204,7 +217,7 @@ pub fn climb_out(bot: &mut Bot) -> Result<bool, ScriptError> {
         if climb_single(bot)? {
             continue;
         }
-        println!("nothing down from {:?}", bot.position());
+        bot.log(&format!("nothing down from {:?}", bot.position()));
         return Ok(false);
     }
     Ok(bot.world.level == 0)
@@ -233,13 +246,26 @@ fn ride_transition(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<
             .or_else(|| bot.world.static_locs.get(&(click_x, click_z, level)).map(|(id, _, _)| *id))
             .unwrap_or(row.loc);
         let op = downward_op(bot, loc_id).unwrap_or(row.op);
+        // Dead socket, not a bad tile: typed instead of trying tiles.
         if let Err(error) = bot.approach(click_x, click_z, level, 1, 800) {
-            println!("transition {} tile ({click_x},{click_z}) unreachable: {error}", row.name);
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
+            bot.log(&format!("transition {} tile ({click_x},{click_z}) unreachable: {error}", row.name));
             continue;
         }
         let before = bot.world.level;
         if let Err(error) = bot.op_loc(op, click_x, click_z, loc_id) {
-            println!("transition {} op {op} loc {loc_id} failed: {error}", row.name);
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
+            bot.log(&format!("transition {} op {op} loc {loc_id} failed: {error}", row.name));
             continue;
         }
         let target = bot.world.ticks + 50;
@@ -247,10 +273,10 @@ fn ride_transition(bot: &mut Bot, row: &lifescape_sdk::TransitionRow) -> Result<
             bot.pump(2)?;
         }
         if bot.world.level < before {
-            println!("down {} to {:?}", row.name, bot.position());
+            bot.log(&format!("down {} to {:?}", row.name, bot.position()));
             return Ok(true);
         }
-        println!("transition {} loc {loc_id} op {op} at ({click_x},{click_z}) left level {before}", row.name);
+        bot.log(&format!("transition {} loc {loc_id} op {op} at ({click_x},{click_z}) left level {before}", row.name));
     }
     Ok(false)
 }
@@ -278,11 +304,18 @@ fn downward_op(bot: &Bot, loc_id: u16) -> Option<u8> {
 fn climb_single(bot: &mut Bot) -> Result<bool, ScriptError> {
         let names: &[&str] = &["laddertop", "spiralstairstop", "stairstop", "ladder", "spiralstairs", "stairs"];
         let Ok((x, z, level, loc)) = kit::find_loc(bot, names, 150) else {
-            println!("no ladder or stair near {:?}", bot.position());
+            bot.log(&format!("no ladder or stair near {:?}", bot.position()));
             return Ok(false);
         };
-        println!("ladder at ({x},{z})");
-        if bot.approach(x, z, level, 3, 1500).is_err() {
+        bot.log(&format!("ladder at ({x},{z})"));
+        // Dead socket, not a far ladder: typed instead of giving up.
+        if let Err(error) = bot.approach(x, z, level, 3, 1500) {
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
             return Ok(false);
         }
         let before = bot.world.level;
@@ -291,61 +324,35 @@ fn climb_single(bot: &mut Bot) -> Result<bool, ScriptError> {
         while bot.world.ticks < target && bot.world.level == before {
             bot.pump(5)?;
         }
-        println!("now {:?}", bot.position());
+        bot.log(&format!("now {:?}", bot.position()));
         Ok(bot.world.level != before)
-}
-
-/// Print the `@@EVENT` line once per (event, position). The check runs
-/// every few ticks; without this a landing spams one line per loop and
-/// the daemon replays a rescue per line.
-fn report_once(bot: &Bot, event: randomevent::EventKind, resolved: bool) {
-    use std::sync::{Mutex, OnceLock};
-    static LAST: OnceLock<Mutex<Option<(String, (i32, i32, i32))>>> = OnceLock::new();
-    let key = (format!("{event:?}"), bot.position());
-    let mut last = LAST.get_or_init(|| Mutex::new(None)).lock().unwrap();
-    if last.as_ref() != Some(&key) {
-        println!("{}", randomevent::report(bot, event, resolved));
-        *last = Some(key);
-    }
 }
 
 pub fn check(bot: &mut Bot) -> Result<bool, ScriptError> {
     greet(bot, 3000)?;
     survive(bot, 600)?;
     if lamp_in_pack(bot) && rub_genie_lamp(bot).is_err() {
-        println!("genie lamp failed");
+        bot.log("genie lamp failed");
     }
     if randomevent::in_mime(bot) {
-        println!("in mime event at {:?}, needs a performer", bot.position());
-        report_once(bot, randomevent::EventKind::Mime, false);
+        bot.log(&randomevent::event_line(bot, randomevent::EventKind::Mime, false));
         return Ok(false);
     }
     if randomevent::cube_in_pack(bot) {
-        println!("strange box in inventory, handing it to the cube rescue");
-        report_once(bot, randomevent::EventKind::Cube, false);
+        bot.log(&randomevent::event_line(bot, randomevent::EventKind::Cube, false));
         return Ok(false);
     }
     if randomevent::in_maze(bot) {
         let solved = super::maze::solve(bot)?;
-        report_once(bot, randomevent::EventKind::Maze, solved);
+        bot.log(&randomevent::event_line(bot, randomevent::EventKind::Maze, solved));
         return Ok(solved);
     }
     if randomevent::in_fail_teleport(bot) {
         let escaped = bot.world.level == 0 || climb_out(bot)?;
-        report_once(bot, randomevent::EventKind::Tower, escaped);
+        bot.log(&randomevent::event_line(bot, randomevent::EventKind::Tower, escaped));
         return Ok(escaped);
     }
     Ok(true)
-}
-
-/// Report the pending event (if any) as an `@@EVENT` line without
-/// resolving it. Used at quest start: a teleporting event breaks every
-/// later step, so the run aborts into the mapped rescue instead.
-pub fn report_pending(bot: &Bot) -> Option<EventKind> {
-    randomevent::event_at(bot).map(|event| {
-        println!("{}", randomevent::report(bot, event, false));
-        event
-    })
 }
 
 /// Tick-bound wait for the bot to be free of events (fallback rescue

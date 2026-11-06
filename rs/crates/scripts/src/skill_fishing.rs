@@ -159,10 +159,15 @@ fn work_spot(
     product_ids: &[u16],
     had_fish: u32,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
-    if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 4
-        && !walk_checked(bot, spot_x, spot_z, 6000).unwrap_or(false)
-    {
-        return Ok((WorkOutcome::Unreachable, 0));
+    if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 4 {
+        // Dead socket or operator stop, not an unreachable spot: typed
+        // all the way to the session instead of a quiet Unreachable.
+        match walk_checked(bot, spot_x, spot_z, 6000) {
+            Ok(true) => {}
+            Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
+            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
+        }
     }
     if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 2 {
         let mut neighbors: Vec<(i32, i32)> = (-1..=1)
@@ -172,9 +177,20 @@ fn work_spot(
         neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
         let mut stepped = false;
         for (next_x, next_z) in neighbors {
-            if bot.walk_to(next_x, next_z, bot.world.level, 100).is_ok() {
-                stepped = true;
-                break;
+            match bot.walk_to(next_x, next_z, bot.world.level, 100) {
+                Ok(()) => {
+                    stepped = true;
+                    break;
+                }
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) => {}
             }
             if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 4 {
                 return Ok((WorkOutcome::Unreachable, 0));
@@ -189,7 +205,7 @@ fn work_spot(
     };
     let _ = (live_x, live_z);
     let mut gained = 0u32;
-    println!("click {} at ({spot_x},{spot_z})", tier.action);
+    bot.log(&format!("click {} at ({spot_x},{spot_z})", tier.action));
     bot.intend(&format!("fishing {}", tier.products.first().unwrap_or(&"?")));
     bot.op_npc(tier.op as u8, slot)?;
     let mut seen_msgs = bot.world.messages.len();
@@ -352,12 +368,12 @@ fn fish_load(
         let best = knowledge::fishing::best_fish_tier(level);
         if let (Some(picked), Some(top)) = (&spot, best) {
             if picked.0.level < top.level {
-                println!("level up, switching tier");
+                bot.log("level up, switching tier");
                 spot = None;
             }
         }
         if hitpoints(bot) == 0 {
-            println!("died, respawning");
+            bot.log("died, respawning");
             bot.intend("died, respawning");
             let target = bot.world.ticks + 40;
             while bot.world.ticks < target && hitpoints(bot) == 0 {
@@ -369,13 +385,13 @@ fn fish_load(
         }
         if hitpoints(bot) < last_hitpoints {
             flees += 1;
-            println!("hurt, fleeing");
+            bot.log("hurt, fleeing");
             bot.intend("fleeing a hunter");
             if let Some((_, spot_x, spot_z)) = &spot {
                 banned.insert((*spot_x, *spot_z), bot.world.ticks + FLEE_BAN_TICKS);
             }
             if flees > MAX_FLEES_PER_LOAD {
-                println!("too many attacks, aborting load");
+                bot.log("too many attacks, aborting load");
                 return Ok((false, level));
             }
             wait_ticks(bot, 200)?;
@@ -404,24 +420,24 @@ fn fish_load(
                     picked = Some((tier, spot_x, spot_z, use_bank));
                     break;
                 }
-                println!("no fish spot, waiting for respawns");
+                bot.log("no fish spot, waiting for respawns");
                 bot.intend("waiting for a safe fishing spot");
                 wait_ticks(bot, 15)?;
             }
             let Some((tier, spot_x, spot_z, use_bank)) = picked else {
-                println!("no fish spot left");
+                bot.log("no fish spot left");
                 return Ok((false, level));
             };
             *bank = use_bank;
             if !ensure_gear(bot, &tier, side_shop, main_shop, coins, bank, &mut bait_ban_until)? {
                 if pack_total(bot, obj_id(bot, tier.tool).unwrap_or(0)) == 0 {
-                    println!("no gear for {}", tier.tool);
+                    bot.log(&format!("no gear for {}", tier.tool));
                     return Ok((false, level));
                 }
                 spot = None;
                 continue;
             }
-            println!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?"));
+            bot.log(&format!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?")));
             bot.intend(&format!("walking to the fishing spot at ({spot_x},{spot_z})"));
             match walk_checked(bot, spot_x, spot_z, 15000) {
                 Ok(true) => {}
@@ -434,6 +450,7 @@ fn fish_load(
                     }
                     continue;
                 }
+                Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
                 Err(_) => {
                     banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
                     continue;
@@ -455,7 +472,7 @@ fn fish_load(
         match result {
             WorkOutcome::Full => return Ok((true, level)),
             WorkOutcome::Moved | WorkOutcome::Gone | WorkOutcome::Threat => {
-                println!("spot quiet, next one");
+                bot.log("spot quiet, next one");
                 banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
                 spot = None;
             }
@@ -470,10 +487,10 @@ fn fish_load(
                 let restocked = restock_bait(bot, &tier, coins, bank)?;
                 idle_since += bot.world.ticks - spent;
                 if restocked {
-                    println!("bait restocked, resuming");
+                    bot.log("bait restocked, resuming");
                     continue;
                 }
-                println!("bait out, dropping to net tier");
+                bot.log("bait out, dropping to net tier");
                 bait_ban_until = bot.world.ticks + 1000;
                 spot = None;
                 if free_slots(bot) == 0 {
@@ -481,12 +498,12 @@ fn fish_load(
                 }
             }
             WorkOutcome::Blocked => {
-                println!("unknown dialog blocking fish, aborting load");
+                bot.log("unknown dialog blocking fish, aborting load");
                 return Ok((false, level));
             }
         }
         if bot.world.ticks - idle_since > STALL_TICKS {
-            println!("stall: no fish for {STALL_TICKS} ticks");
+            bot.log(&format!("stall: no fish for {STALL_TICKS} ticks"));
             return Ok((false, level));
         }
     }
@@ -509,7 +526,7 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let coins = obj_id(bot, "coins")?;
     let mut level = learn_level(bot, FISH_STAT, 1);
     let mut bank = nearest_bank(bot)?;
-    println!("bank at ({},{})", bank.x, bank.z);
+    bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut bank_coins = 0u32;
     if best_tool(bot).is_none() {
         let keep = vec![coins];
@@ -517,7 +534,7 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if best_tool(bot).is_none() {
             let net_price = obj_price("net") as u32;
             if pack_total(bot, coins) >= net_price && buy_stock(bot, "net", 1)? > 0 {
-                println!("ok bootstrapped net");
+                bot.log("ok bootstrapped net");
             } else {
                 return Err(ScriptError::Usage(format!(
                     "cannot bootstrap: no tool, {} coins",
@@ -542,12 +559,12 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bank_coins = bank_trip(bot, &bank, &keep, 0)?;
         for cand in cands {
             if buy_stock(bot, &cand, 1)? > 0 {
-                println!("ok upgraded to {cand}");
+                bot.log(&format!("ok upgraded to {cand}"));
                 break;
             }
         }
         done += 1;
-        println!("ok load {done} banked (fishing={level})");
+        bot.log(&format!("ok load {done} banked (fishing={level})"));
     }
     Ok(0)
 }

@@ -223,16 +223,16 @@ const TOUR_STOPS: &[(&str, i32, i32)] = &[("Lumbridge", 3222, 3218), ("Falador",
 fn dev_walktour(bot: &mut Bot, _args: &[String]) -> ScriptResult {
     for (name, x, z) in TOUR_STOPS {
         bot.intend(&format!("walktour leg to {name}"));
-        println!("leg {:?} -> {name} ({x},{z})", bot.position());
+        bot.log(&format!("leg {:?} -> {name} ({x},{z})", bot.position()));
         bot.walk_to(*x, *z, 0, 9000)?;
         let (level, bx, bz) = bot.position();
-        println!("arrived {name} at ({level},{bx},{bz})");
+        bot.log(&format!("arrived {name} at ({level},{bx},{bz})"));
         if (bx, bz) != (*x, *z) {
-            println!("MISS {name}: ({bx},{bz}) instead of ({x},{z})");
+            bot.log(&format!("MISS {name}: ({bx},{bz}) instead of ({x},{z})"));
             return Ok(1);
         }
     }
-    println!("tour complete");
+    bot.log("tour complete");
     Ok(0)
 }
 
@@ -256,7 +256,7 @@ fn dev_bank_deposit(bot: &mut Bot, args: &[String]) -> ScriptResult {
     for name in args {
         match obj_id_exact(name) {
             Ok(id) => keep.push(id),
-            Err(_) => println!("unknown keep item {name:?}, not kept"),
+            Err(_) => bot.log(&format!("unknown keep item {name:?}, not kept")),
         }
     }
     bot.intend("depositing backpack");
@@ -280,24 +280,24 @@ fn dev_bank_deposit(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (booth_x, booth_z, booth_loc) = match booths.first() {
         Some(booth) => *booth,
         None => {
-            println!("no bank booth in live view");
+            bot.log("no bank booth in live view");
             return Ok(1);
         }
     };
     if !bot.open_bank(booth_x, booth_z, booth_loc, 100)? {
-        println!("bank did not open at {booth_x},{booth_z}");
+        bot.log(&format!("bank did not open at {booth_x},{booth_z}"));
         return Ok(1);
     }
     let Some(side_com) = (bot.tables.com_id)("bank_side:inv") else {
         return Err(ScriptError::Usage("bank_side:inv missing from component table".to_string()));
     };
     if !bot.bank_deposit_all(side_com, &keep, 80)? {
-        println!("deposit did not clear the backpack");
+        bot.log("deposit did not clear the backpack");
         for text in bot.world.messages.iter().rev().take(5) {
-            println!("game msg: {:?}", text.chars().take(100).collect::<String>());
+            bot.log(&format!("game msg: {:?}", text.chars().take(100).collect::<String>()));
         }
     }
-    println!("backpack now holds {} slots", bot.backpack().1.len());
+    bot.log(&format!("backpack now holds {} slots", bot.backpack().1.len()));
     Ok(0)
 }
 
@@ -318,7 +318,7 @@ fn dev_drop(bot: &mut Bot, args: &[String]) -> ScriptResult {
         wait_ticks(bot, 3)?;
         dropped += 1;
     }
-    println!("dropped {} x{dropped}", args[0]);
+    bot.log(&format!("dropped {} x{dropped}", args[0]));
     Ok(0)
 }
 
@@ -336,11 +336,11 @@ fn dev_give(bot: &mut Bot, args: &[String]) -> ScriptResult {
     while bot.world.ticks < deadline {
         bot.pump(2)?;
         if bot.inventory().get(&obj_id).copied().unwrap_or(0) >= before + count {
-            println!("have {} x{}", args[0], bot.inventory().get(&obj_id).copied().unwrap_or(0));
+            bot.log(&format!("have {} x{}", args[0], bot.inventory().get(&obj_id).copied().unwrap_or(0)));
             return Ok(0);
         }
     }
-    println!("give failed: {:?}", bot.inventory());
+    bot.log(&format!("give failed: {:?}", bot.inventory()));
     Ok(0)
 }
 
@@ -370,7 +370,7 @@ fn dev_quest_reset(bot: &mut Bot, _args: &[String]) -> ScriptResult {
                 break;
             }
         }
-        println!("{name} {}", if confirmed { "ok" } else { "NOT-CONFIRMED" });
+        bot.log(&format!("{name} {}", if confirmed { "ok" } else { "NOT-CONFIRMED" }));
     }
     Ok(0)
 }
@@ -380,7 +380,7 @@ fn dev_reset_quests(bot: &mut Bot, _args: &[String]) -> ScriptResult {
     bot.intend("resetting quests");
     bot.cheat("~resetquests")?;
     wait_ticks(bot, 1000)?;
-    println!("reset sent, at {:?}", bot.position());
+    bot.log(&format!("reset sent, at {:?}", bot.position()));
     Ok(0)
 }
 
@@ -400,7 +400,7 @@ fn dev_trade_swap(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.intend(&format!("trade with {partner}"));
     if let Some(id) = give {
         if bot.inventory().get(&id).copied().unwrap_or(0) < give_n {
-            println!("no {} x{give_n} to give", args[1]);
+            bot.log(&format!("no {} x{give_n} to give", args[1]));
             return Ok(1);
         }
     }
@@ -411,14 +411,14 @@ fn dev_trade_swap(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     }
     if bot.trade_modal().is_none() {
-        println!("no trade window with {partner}");
+        bot.log(&format!("no trade window with {partner}"));
         return Ok(1);
     }
-    println!("trade window open with {partner}");
+    bot.log(&format!("trade window open with {partner}"));
     while bot.world.ticks < deadline && bot.trade_modal() == Some("main") {
         if let Some(id) = give {
             if !bot.trade_offer(id, give_n, 120)? {
-                println!("offer failed");
+                bot.log("offer failed");
                 return Ok(1);
             }
         }
@@ -432,11 +432,11 @@ fn dev_trade_swap(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.pump(5)?;
     }
     if bot.trade_modal() != Some("confirm") {
-        println!("no confirm screen");
+        bot.log("no confirm screen");
         bot.trade_close()?;
         return Ok(1);
     }
-    println!("confirm screen, accepting");
+    bot.log("confirm screen, accepting");
     while bot.world.ticks < deadline && bot.trade_modal().is_some() {
         bot.trade_accept(120)?;
         bot.pump(5)?;
@@ -444,9 +444,9 @@ fn dev_trade_swap(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.pump(10)?;
     let have = want.map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
     let kept = give.map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
-    println!("after swap: want={have} kept-give={kept}");
+    bot.log(&format!("after swap: want={have} kept-give={kept}"));
     if want.is_some_and(|_| have < want_n) {
-        println!("swap failed: no {}", args[3]);
+        bot.log(&format!("swap failed: no {}", args[3]));
         return Ok(1);
     }
     Ok(0)
@@ -472,7 +472,7 @@ fn dev_capture(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     let body = format!("[{}]", frames.join(","));
     save_report(&outfile, &body)?;
-    println!("wrote {} frames to {outfile}", frames.len());
+    bot.log(&format!("wrote {} frames to {outfile}", frames.len()));
     Ok(0)
 }
 #[cfg(test)]

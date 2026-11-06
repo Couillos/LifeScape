@@ -22,7 +22,7 @@ fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
     let parsed = crate::json::parse(&text).map_err(|err| format!("parse {}: {err}", gametypes_path.display()))?;
     let rows = parsed.get("loc").as_arr().ok_or_else(|| format!("{} has no loc table", gametypes_path.display()))?;
     let mut defs = Vec::with_capacity(rows.len());
-    for row in rows {
+    for (loc_id, row) in rows.iter().enumerate() {
         if matches!(row, Value::Null) {
             defs.push(None);
             continue;
@@ -50,6 +50,16 @@ fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
         let lower = name.to_lowercase();
         let maze_wall = lower.starts_with("macro_maze_wall") || lower.starts_with("macor_maze_wall");
         if (maze_wall && category != 16) || lower.starts_with("macro_maze_chest") {
+            open_op = None;
+        }
+        // Rampart "door" 1530 advertises Open and flips live, but the server
+        // refuses every eastward step through it (verified live, repeatedly,
+        // across sessions): the castle ramparts have no gate there, only
+        // decor. Read it as a wall like maze chests, so the router detours
+        // instead of pacing a tile that never opens. If a real 1530 passage
+        // is ever needed, it fails loud (Unreachable + blockers: see the
+        // walker's no-route report), never silent.
+        if loc_id == 1530 {
             open_op = None;
         }
         let toll = row

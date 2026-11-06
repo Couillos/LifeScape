@@ -27,7 +27,11 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
         })
     };
     let reply = if request.as_obj().is_some() && request.get("ok").is_null() {
-        dispatch_open(orch, &request)
+        match request.get("type").as_str() {
+            // Worker push frames (snapshots/events): no CLI round-trip.
+            Some("snapshot") | Some("event") => orch.ingest_push(&request),
+            _ => dispatch_open(orch, &request),
+        }
     } else {
         // A parse error already carries ok:false; never dispatch it.
         request

@@ -19,8 +19,12 @@ pub struct CombatSpot {
 const EDGEVILLE_DUNGEON: Entrance = Entrance { surface: (3097, 3468) };
 const VARROCK_SEWERS: Entrance = Entrance { surface: (3237, 3458) };
 
-const SPOTS: [CombatSpot; 8] = [
+const SPOTS: [CombatSpot; 9] = [
     CombatSpot { key: "chickens", npc_names: &["chicken"], min_level: 1, max_level: 9, entrance: None },
+    // Right after chickens so best_spot() progression never changes
+    // (chickens keeps level 0, cows keeps level 1): explicit keys bypass
+    // it anyway.
+    CombatSpot { key: "goblins", npc_names: &["goblin"], min_level: 1, max_level: 12, entrance: None },
     CombatSpot { key: "cows", npc_names: &["cow"], min_level: 1, max_level: 12, entrance: None },
     CombatSpot {
         key: "al_kharid_warriors",
@@ -92,6 +96,7 @@ mod tests {
         assert_eq!(best_spot(1).key, "cows");
         assert_eq!(best_spot(25).key, "dark_wizards");
         assert_eq!(by_key("cows").expect("cows").npc_names, &["cow"]);
+        assert_eq!(by_key("goblins").expect("goblins").npc_names, &["goblin"]);
         let hill = by_key("hill_giants").expect("hill giants");
         assert_eq!(hill.entrance.expect("entrance").surface, (3097, 3468));
         assert!(by_key("dragons").is_none());

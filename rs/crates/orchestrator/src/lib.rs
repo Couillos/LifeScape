@@ -14,5 +14,7 @@ pub mod daemon;
 pub mod supervise;
 pub mod session;
 pub mod session_calls;
+pub mod session_push;
 pub mod session_heartbeat;
+pub mod session_rescue;
 pub mod staticmap;

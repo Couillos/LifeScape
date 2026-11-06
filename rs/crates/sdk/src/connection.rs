@@ -1,7 +1,8 @@
 //! Socket, login handshake and framed opcodes for revision 274.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::buffer::Writer;
@@ -384,6 +385,38 @@ fn load_key_numbers(key_path: &str) -> Result<RsaKey> {
 }
 
 // ---------------------------------------------------------------------------
+// Packet log (stderr trace, silent unless LIFESCAPE_PKTLOG=1)
+// ---------------------------------------------------------------------------
+
+/// Env flag read once, so the hot path stays one cached load and formats
+/// nothing when disabled. Never alters wire bytes, only stderr.
+fn pktlog_enabled() -> bool {
+    static PKTLOG: OnceLock<bool> = OnceLock::new();
+    *PKTLOG.get_or_init(|| std::env::var("LIFESCAPE_PKTLOG").is_ok_and(|flag| flag == "1"))
+}
+
+/// Lowercase hex of the first 12 payload bytes.
+fn hex_head(payload: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let head = &payload[..payload.len().min(12)];
+    let mut text = String::with_capacity(head.len() * 2);
+    for byte in head {
+        text.push(DIGITS[(byte >> 4) as usize] as char);
+        text.push(DIGITS[(byte & 0x0F) as usize] as char);
+    }
+    text
+}
+
+/// Wall clock seconds for pktlog lines: tick tags alone cannot order
+/// sends against a silent socket (ticks freeze offline).
+fn wall_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|span| span.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+// ---------------------------------------------------------------------------
 // Connection
 // ---------------------------------------------------------------------------
 
@@ -410,11 +443,21 @@ pub struct Connection {
     buffer: Vec<u8>,
     packet_index: u64,
     timeout: Duration,
+    last_send: Option<Instant>,
+    /// Packets sent on this socket, and in the last 10 wall seconds:
+    /// attached to socket errors so a killed session tells volume
+    /// (flood-kick suspect) versus time at death.
+    sent_total: u64,
+    sent_window_start: Option<Instant>,
+    sent_window: u64,
+    /// Last op name sent: attached to socket errors to incriminate the
+    /// exact packet that preceded the kill.
+    last_op: String,
 }
 
 impl Connection {
     pub fn new(timeout: Duration) -> Connection {
-        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout }
+        Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new() }
     }
 
     pub fn is_open(&self) -> bool {
@@ -423,7 +466,15 @@ impl Connection {
 
     pub fn connect(&mut self, host: &str, port: u16) -> Result<()> {
         let address = format!("{host}:{port}");
-        let stream = TcpStream::connect(&address).map_err(|err| Error::Io(format!("cannot connect to {address}: {err}")))?;
+        // Bounded dial: a server that accepts TCP but never answers login
+        // must not wedge relogin forever (ticks are frozen offline).
+        let addrs: Vec<std::net::SocketAddr> = address
+            .to_socket_addrs()
+            .map_err(|err| Error::Io(format!("cannot resolve {address}: {err}")))?
+            .collect();
+        let first = addrs.first().ok_or_else(|| Error::Io(format!("cannot resolve {address}: no address")))?;
+        let stream = TcpStream::connect_timeout(first, Duration::from_secs(5))
+            .map_err(|err| Error::Io(format!("cannot connect to {address}: {err}")))?;
         stream.set_read_timeout(Some(Duration::from_millis(500))).map_err(Error::from)?;
         self.stream = Some(stream);
         self.buffer.clear();
@@ -505,32 +556,17 @@ impl Connection {
     /// table and the opcode byte ISAAC-shifted, like the 274 client.
     pub fn send(&mut self, name: &str, payload: &[u8]) -> Result<()> {
         let (op_id, size) = client_op(name).ok_or_else(|| Error::Protocol(format!("unknown client op {name}")))?;
+        self.last_op = name.to_string();
+        if pktlog_enabled() {
+            eprintln!("C>S {name} id={op_id} len={} head={} w={:.2} pid={}", payload.len(), hex_head(payload), wall_secs(), std::process::id());
+        }
         self.send_by_id(op_id, size, payload)
     }
 
     /// Send by numeric op id (the [`client_op`](crate::protocol::client_op) table).
     pub fn send_by_id(&mut self, op_id: u8, size: i16, payload: &[u8]) -> Result<()> {
-        let frame = match size {
-            -1 => {
-                let mut framed = vec![payload.len() as u8];
-                framed.extend_from_slice(payload);
-                framed
-            }
-            -2 => {
-                let mut framed = (payload.len() as u16).to_be_bytes().to_vec();
-                framed.extend_from_slice(payload);
-                framed
-            }
-            fixed => {
-                if payload.len() != fixed as usize {
-                    return Err(Error::Protocol(format!("op {op_id} needs {fixed} bytes, got {}", payload.len())));
-                }
-                payload.to_vec()
-            }
-        };
         let shift = self.outgoing.as_mut().ok_or_else(|| Error::Login("not logged in".to_string()))?.next_int();
-        let mut packet = vec![(u32::from(op_id).wrapping_add(shift as u32) & 0xFF) as u8];
-        packet.extend_from_slice(&frame);
+        let packet = frame_packet(op_id, size, payload, shift)?;
         self.send_raw(&packet)
     }
 
@@ -550,6 +586,9 @@ impl Connection {
             fixed => fixed as usize,
         };
         let body = if length > 0 { self.read_exact(length)? } else { Vec::new() };
+        if pktlog_enabled() {
+            eprintln!("S>C {name} op={opcode} len={} head={} w={:.2} pid={}", body.len(), hex_head(&body), wall_secs(), std::process::id());
+        }
         Ok(Frame { opcode, name: name.to_string(), body })
     }
 
@@ -565,7 +604,13 @@ impl Connection {
         let outcome = stream.read(&mut chunk);
         let _ = stream.set_nonblocking(false);
         match outcome {
-            Ok(0) => Err(Error::Io("server closed the socket".to_string())),
+            Ok(0) => {
+                let window = match self.sent_window_start {
+                    Some(start) if start.elapsed() < Duration::from_secs(10) => self.sent_window,
+                    _ => 0,
+                };
+                Err(Error::Io(format!("server closed the socket (sent_total={} sent_last10s={} last_op={})", self.sent_total, window, self.last_op)))
+            }
             Ok(got) => {
                 self.buffer.extend_from_slice(&chunk[..got]);
                 Ok(true)
@@ -576,8 +621,37 @@ impl Connection {
     }
 
     fn send_raw(&mut self, data: &[u8]) -> Result<()> {
+        // Minimum spacing between packets: retry storms without tick
+        // consumption machine-gun the server into kicking the session.
+        // Paced sends degrade them to a drip; normal play (pumps and
+        // waits between clicks) never notices the 50 ms floor.
+        const MIN_SEND_GAP: Duration = Duration::from_millis(50);
+        if let Some(previous) = self.last_send {
+            let elapsed = previous.elapsed();
+            if elapsed < MIN_SEND_GAP {
+                std::thread::sleep(MIN_SEND_GAP - elapsed);
+            }
+        }
         let stream = self.stream.as_mut().ok_or_else(|| Error::Io("no socket".to_string()))?;
-        stream.write_all(data).map_err(Error::from)
+        let outcome = stream.write_all(data).map_err(|error| {
+            let now = Instant::now();
+            let window = match self.sent_window_start {
+                Some(start) if now.duration_since(start) < Duration::from_secs(10) => self.sent_window,
+                _ => 0,
+            };
+            Error::Io(format!("{error} (sent_total={} sent_last10s={} last_op={})", self.sent_total, window, self.last_op))
+        });
+        self.sent_total += 1;
+        let now = Instant::now();
+        match self.sent_window_start {
+            Some(start) if now.duration_since(start) < Duration::from_secs(10) => self.sent_window += 1,
+            _ => {
+                self.sent_window_start = Some(now);
+                self.sent_window = 1;
+            }
+        }
+        self.last_send = Some(now);
+        outcome
     }
 
     fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
@@ -607,9 +681,40 @@ impl Connection {
     }
 }
 
+/// Pure packet framing, no socket: sized body plus the ISAAC-shifted
+/// opcode byte, exactly what [`Connection::send_by_id`] puts on the wire.
+/// Kept separate so framing stays testable without a live session.
+fn frame_packet(op_id: u8, size: i16, payload: &[u8], shift: i32) -> Result<Vec<u8>> {
+    let frame = match size {
+        -1 => {
+            if payload.len() > 255 {
+                return Err(Error::Protocol(format!("op {op_id} needs <256 bytes, got {}", payload.len())));
+            }
+            let mut framed = vec![payload.len() as u8];
+            framed.extend_from_slice(payload);
+            framed
+        }
+        -2 => {
+            let mut framed = (payload.len() as u16).to_be_bytes().to_vec();
+            framed.extend_from_slice(payload);
+            framed
+        }
+        fixed => {
+            if payload.len() != fixed as usize {
+                return Err(Error::Protocol(format!("op {op_id} needs {fixed} bytes, got {}", payload.len())));
+            }
+            payload.to_vec()
+        }
+    };
+    let mut packet = vec![(u32::from(op_id).wrapping_add(shift as u32) & 0xFF) as u8];
+    packet.extend_from_slice(&frame);
+    Ok(packet)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Big, base64_decode, crc32};
+    use super::{Big, base64_decode, crc32, frame_packet, Connection};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn modpow_matches_u64() {
@@ -629,5 +734,26 @@ mod tests {
     #[test]
     fn base64_pem_shape() {
         assert_eq!(base64_decode("TWFu").unwrap(), b"Man");
+    }
+
+    /// Bounded dial: a closed port refuses at once (typed Io), never wedging
+    /// the relogin path while ticks are frozen.
+    #[test]
+    fn connect_refused_fails_fast_typed() {
+        let mut conn = Connection::new(Duration::from_secs(10));
+        let start = Instant::now();
+        let err = conn.connect("127.0.0.1", 1).expect_err("closed port refuses");
+        assert!(format!("{err}").contains("cannot connect"), "typed Io, got: {err}");
+        assert!(start.elapsed() < Duration::from_secs(5), "dial bounded");
+        assert!(!conn.is_open(), "failed dial leaves no socket");
+    }
+
+    /// Framing puts exactly the documented bytes on the wire: shifted
+    /// opcode, then the size prefix, and rejects bad payloads instead.
+    #[test]
+    fn frame_packet_sizes_and_shift() {
+        assert_eq!(frame_packet(209, 0, &[], 0).unwrap(), vec![209]);
+        assert_eq!(frame_packet(207, -1, &[1, 2, 3], 5).unwrap(), vec![212, 3, 1, 2, 3]);
+        assert!(frame_packet(209, 0, &[1], 0).is_err());
     }
 }

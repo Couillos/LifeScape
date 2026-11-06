@@ -166,7 +166,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
         while bot.world.ticks < target {
             bot.pump(1)?;
             if (bot.world.x, bot.world.z) == beyond {
-                println!("ok {door_name}");
+                bot.log(&format!("ok {door_name}"));
                 return Ok(());
             }
         }
@@ -246,7 +246,7 @@ fn design(bot: &mut Bot) -> Result<(), ScriptError> {
         bot.pump(5)?;
     }
     if bot.world.modal.is_none() {
-        println!("ok no design screen, already validated");
+        bot.log("ok no design screen, already validated");
         return Ok(());
     }
     bot.if_button(COM_DESIGN_ACCEPT)?;
@@ -298,7 +298,7 @@ fn light_fire(bot: &mut Bot) -> Result<(), ScriptError> {
             bot.pump(5)?;
             if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
                 if (fire_x - here.0).abs() + (fire_z - here.1).abs() <= 1 {
-                    println!("ok fire lit");
+                    bot.log("ok fire lit");
                     return Ok(());
                 }
             }
@@ -371,7 +371,7 @@ fn bake_bread(bot: &mut Bot) -> Result<(), ScriptError> {
 fn click_tab(bot: &mut Bot, tab: u8, what: &str) -> Result<(), ScriptError> {
     bot.tut_clickside(tab)?;
     bot.pump(10)?;
-    println!("ok {what} opened");
+    bot.log(&format!("ok {what} opened"));
     Ok(())
 }
 
@@ -444,7 +444,7 @@ fn melee(bot: &mut Bot) -> Result<(), ScriptError> {
         let Some(slot) = bot.find_npc("newbiegiantrat") else { continue };
         tries += 1;
         if tries % 10 == 1 {
-            println!("melee try {tries} at {:?} rat={slot}", bot.position());
+            bot.log(&format!("melee try {tries} at {:?} rat={slot}", bot.position()));
         }
         let seen = bot.world.messages.len();
         if let Some(npc) = bot.world.npcs.get(&slot) {
@@ -458,7 +458,7 @@ fn melee(bot: &mut Bot) -> Result<(), ScriptError> {
     }
     check(bot.position(), wait_bones(bot, &bones, 100)?, "rat killed in melee")?;
     let _ = bot.take(None, Some("newbiebones"), 3000);
-    println!("ok bones picked up");
+    bot.log("ok bones picked up");
     Ok(())
 }
 
@@ -485,7 +485,7 @@ fn ranged_kill(bot: &mut Bot) -> Result<(), ScriptError> {
         let Some(found) = slot else { continue };
         bot.op_npc(2, found)?;
         if wait_bones(bot, &bones, 150)? {
-            println!("ok rat killed at range");
+            bot.log("ok rat killed at range");
             return Ok(());
         }
     }
@@ -518,7 +518,7 @@ fn wind_strike(bot: &mut Bot) -> Result<(), ScriptError> {
         while bot.world.ticks < inner {
             bot.pump(2)?;
             if !bot.world.npcs.contains_key(&found) {
-                println!("ok chicken killed with magic");
+                bot.log("ok chicken killed with magic");
                 return Ok(());
             }
         }
@@ -528,7 +528,7 @@ fn wind_strike(bot: &mut Bot) -> Result<(), ScriptError> {
 
 fn terrova_runes(bot: &mut Bot) -> Result<(), ScriptError> {
     if has(bot, "airrune", 1) && has(bot, "mindrune", 1) {
-        println!("ok runes already held");
+        bot.log("ok runes already held");
         return Ok(());
     }
     talk_step(bot, "magic_instructor", (3141, 3089), &["Yes."], "terrova runes")?;
@@ -582,7 +582,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             click_tab(bot, 12, "controls tab")?;
             bot.if_button(COM_RUN)?;
             bot.pump(15)?;
-            println!("ok run toggled (verified at quest door)");
+            bot.log("ok run toggled (verified at quest door)");
             Ok(())
         }
         "quest_door" => pass_door(bot, "newbie_door4", (3086, 3128)),
@@ -619,7 +619,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             click_tab(bot, TAB_WORN, "worn tab")?;
             let dagger = obj("bronze_dagger")?;
             if kit::inv_slot(bot, dagger).is_err() {
-                println!("ok dagger already wielded");
+                bot.log("ok dagger already wielded");
                 return Ok(());
             }
             equip_held(bot, "bronze_dagger")
@@ -636,7 +636,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "rat_cage" => {
             for _ in 0..5 {
                 if (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 6 {
-                    println!("ok inside rat pit");
+                    bot.log("ok inside rat pit");
                     return Ok(());
                 }
                 if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor5"], 150) {
@@ -698,7 +698,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         }
         "final" => {
             if bot.world.x > 3200 {
-                println!("ok already on the mainland");
+                bot.log("ok already on the mainland");
                 return Ok(());
             }
             let start = (bot.world.x, bot.world.z, bot.world.level);
@@ -707,7 +707,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             while bot.world.ticks < target {
                 bot.pump(5)?;
                 if (bot.world.x, bot.world.z, bot.world.level) != start {
-                    println!("ok teleported to mainland");
+                    bot.log("ok teleported to mainland");
                     return Ok(());
                 }
             }
@@ -730,7 +730,7 @@ fn pass_door_at(bot: &mut Bot, x: i32, z: i32, loc: u16, beyond: (i32, i32), wha
 
 /// Run the tutorial island from any stage to the mainland teleport.
 pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
-    println!("start {:?}", bot.position());
+    bot.log(&format!("start {:?}", bot.position()));
     design(bot)?;
     bot.close_modal()?;
     bot.pump(5)?;
@@ -748,7 +748,7 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
     let mut repeats = 0u32;
     loop {
         if bot.world.x > 3200 && bot.world.level == 0 {
-            println!("done {:?}", bot.position());
+            bot.log(&format!("done {:?}", bot.position()));
             return Ok(0);
         }
         if bot.world.ticks - started > 3000 {
@@ -762,7 +762,7 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
                 bot.pump(5)?;
                 continue;
             }
-            println!("no stage match for instruction: {:?}", &instruction(bot)[..instruction(bot).len().min(200)]);
+            bot.log(&format!("no stage match for instruction: {:?}", &instruction(bot)[..instruction(bot).len().min(200)]));
             if instruction(bot).trim().is_empty() {
                 // Empty box right after a step: re-click the tab to resend
                 // the current stage before giving up.
@@ -788,7 +788,7 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
         } else {
             last_key = stage.to_string();
             repeats = 0;
-            println!("stage {stage} hint={:?} flash={:?}", bot.world.hint, bot.world.side_flash);
+            bot.log(&format!("stage {stage} hint={:?} flash={:?}", bot.world.hint, bot.world.side_flash));
         }
         step(bot, stage)?;
         bot.pump(5)?;

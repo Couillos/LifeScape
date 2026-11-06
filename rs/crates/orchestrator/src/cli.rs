@@ -656,7 +656,10 @@ pub fn cli(argv: &[String]) -> i32 {
             0
         }
         "shutdown" => {
-            let reply = send(object(vec![("cmd", str_value("shutdown"))]));
+            // Fans out over every session (5s close + 8s kill grace each):
+            // needs headroom past the per-command worker timeout.
+            let reply = send_command(&object(vec![("cmd", str_value("shutdown"))]), Duration::from_secs(100))
+                .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]));
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }

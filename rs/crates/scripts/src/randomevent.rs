@@ -13,15 +13,36 @@ pub enum EventKind {
     Mime,
     Cube,
     Tower,
+    /// A visible event host (mage, genie, dwarf): greeted, never zoned.
+    Host,
 }
 
 /// Unresolved event -> rescue script (same mapping as the Python RESCUES).
+/// Single mapping: the short key is the long name without its prefix.
 pub fn rescue_for(event: EventKind) -> &'static str {
     match event {
         EventKind::Maze => "rescue_maze",
         EventKind::Tower => "rescue_down",
         EventKind::Cube => "rescue_cube",
         EventKind::Mime => "rescue_mime",
+        EventKind::Host => "rescue_greet",
+    }
+}
+
+/// Short rescue key for `rescues::run_rescue` (same mapping, no prefix).
+pub fn rescue_key(event: EventKind) -> &'static str {
+    rescue_for(event).strip_prefix("rescue_").unwrap_or("fallback")
+}
+
+/// Human event name for log lines (`event maze resolved=false`). The
+/// worker owns the structured push; scripts never print control markers.
+fn event_name(event: EventKind) -> &'static str {
+    match event {
+        EventKind::Maze => "maze",
+        EventKind::Mime => "mime",
+        EventKind::Cube => "cube",
+        EventKind::Tower => "tower",
+        EventKind::Host => "host",
     }
 }
 
@@ -36,11 +57,21 @@ fn in_rect(x: i32, z: i32, rect: (i32, i32, i32, i32)) -> bool {
 }
 
 pub fn in_maze(bot: &Bot) -> bool {
-    in_rect(bot.world.x, bot.world.z, MAZE_RECT)
+    in_maze_at(bot.world.x, bot.world.z)
+}
+
+/// Same check from a bare position (worker observer reads snapshots).
+pub fn in_maze_at(x: i32, z: i32) -> bool {
+    in_rect(x, z, MAZE_RECT)
 }
 
 pub fn in_mime(bot: &Bot) -> bool {
-    in_rect(bot.world.x, bot.world.z, MIME_RECT)
+    in_mime_at(bot.world.x, bot.world.z)
+}
+
+/// Same check from a bare position (worker observer reads snapshots).
+pub fn in_mime_at(x: i32, z: i32) -> bool {
+    in_rect(x, z, MIME_RECT)
 }
 
 /// Fail-teleport spots (macro_event_fail_teleports_free): standing on one
@@ -57,7 +88,12 @@ pub const FAIL_TELEPORTS: [(i32, i32, i32); 25] = [
 ];
 
 pub fn in_fail_teleport(bot: &Bot) -> bool {
-    FAIL_TELEPORTS.contains(&bot.position())
+    in_fail_teleport_at(bot.position())
+}
+
+/// Same check from a bare position (worker observer reads snapshots).
+pub fn in_fail_teleport_at(position: (i32, i32, i32)) -> bool {
+    FAIL_TELEPORTS.contains(&position)
 }
 
 /// True when a strange box waits in the inventory.
@@ -82,19 +118,17 @@ pub fn event_at(bot: &Bot) -> Option<EventKind> {
     }
 }
 
-/// Orchestrator event payload (`@@EVENT` line), hand-built JSON.
-pub fn report(bot: &Bot, event: EventKind, resolved: bool) -> String {
-    let (level, x, z) = bot.position();
-    format!(
-        "@@EVENT {{\"kind\":\"random_event\",\"event\":\"{}\",\"resolved\":{},\"at\":[{level},{x},{z}]}}",
-        match event {
-            EventKind::Maze => "maze",
-            EventKind::Mime => "mime",
-            EventKind::Cube => "cube",
-            EventKind::Tower => "tower",
-        },
-        if resolved { "true" } else { "false" }
-    )
+/// Human event line for script logs (`event maze resolved=false`). The
+/// worker poses the rescue and pushes the structured frame; scripts only
+/// log.
+pub fn event_line(bot: &Bot, event: EventKind, resolved: bool) -> String {
+    event_line_at(bot.position(), event, resolved)
+}
+
+/// Same line from a bare position (worker observer reads snapshots).
+pub fn event_line_at(position: (i32, i32, i32), event: EventKind, resolved: bool) -> String {
+    let (level, x, z) = position;
+    format!("event {} resolved={} at [{level},{x},{z}]", event_name(event), if resolved { "true" } else { "false" })
 }
 
 #[cfg(test)]
@@ -107,6 +141,29 @@ mod tests {
         assert_eq!(rescue_for(EventKind::Tower), "rescue_down");
         assert_eq!(rescue_for(EventKind::Cube), "rescue_cube");
         assert_eq!(rescue_for(EventKind::Mime), "rescue_mime");
+        assert_eq!(rescue_for(EventKind::Host), "rescue_greet");
         assert!(FAIL_TELEPORTS.contains(&(1, 3278, 3500)));
+    }
+
+    #[test]
+    fn short_keys_match_run_rescue() {
+        assert_eq!(super::rescue_key(EventKind::Maze), "maze");
+        assert_eq!(super::rescue_key(EventKind::Tower), "down");
+        assert_eq!(super::rescue_key(EventKind::Cube), "cube");
+        assert_eq!(super::rescue_key(EventKind::Mime), "mime");
+        assert_eq!(super::rescue_key(EventKind::Host), "greet");
+        for kind in [EventKind::Maze, EventKind::Tower, EventKind::Cube, EventKind::Mime, EventKind::Host] {
+            let long = super::rescue_for(kind);
+            assert_eq!(long.strip_prefix("rescue_"), Some(super::rescue_key(kind)));
+        }
+    }
+
+    #[test]
+    fn event_line_carries_name_and_spot() {
+        let line = super::event_line_at((0, 3200, 3200), EventKind::Maze, false);
+        assert!(line.contains("maze"), "{line}");
+        assert!(line.contains("resolved=false"), "{line}");
+        assert!(line.contains("[0,3200,3200]"), "{line}");
+        assert!(!line.contains("@@EVENT"), "{line}");
     }
 }

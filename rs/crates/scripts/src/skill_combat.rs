@@ -281,18 +281,30 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
         return Ok(false);
     };
     bot.intend(&format!("banking at ({bank_x},{bank_z})"));
-    if !walk_checked(bot, bank_x, bank_z, 15000).unwrap_or(false) {
-        let available = available_gear(bot);
-        let plan = gear_plan(bot, &available);
-        equip_plan(bot, &plan)?;
-        return Ok(false);
+    // Dead socket or operator stop, not a missed bank: typed to the
+    // session instead of a quiet equip-and-continue.
+    match walk_checked(bot, bank_x, bank_z, 15000) {
+        Ok(true) => {}
+        Ok(false) => {
+            let available = available_gear(bot);
+            let plan = gear_plan(bot, &available);
+            equip_plan(bot, &plan)?;
+            return Ok(false);
+        }
+        Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+        Err(_) => {
+            let available = available_gear(bot);
+            let plan = gear_plan(bot, &available);
+            equip_plan(bot, &plan)?;
+            return Ok(false);
+        }
     }
     let Some((booth_x, booth_z, booth_loc)) = crate::skill_common::live_bank_booth(bot, bank_x, bank_z) else {
-        println!("bank did not open at {:?}", bot.position());
+        bot.log(&format!("bank did not open at {:?}", bot.position()));
         return Ok(false);
     };
     if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-        println!("bank did not open at {:?}", bot.position());
+        bot.log(&format!("bank did not open at {:?}", bot.position()));
         return Ok(false);
     }
     let bank_main = (bot.tables.com_id)("bank_main:inv")
@@ -347,7 +359,7 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
     bot.close_modal()?;
     bot.pump(5)?;
     for (slot, name) in equip_plan(bot, &plan)?.iter() {
-        println!("equipped {name} (slot {slot})");
+        bot.log(&format!("equipped {name} (slot {slot})"));
     }
     let _ = level;
     Ok(true)
@@ -410,10 +422,20 @@ fn attack_nearest(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot) -> 
     let Some((slot, x, z)) = cands.first().copied() else {
         return Ok(None);
     };
-    if (x - bot.world.x).abs() + (z - bot.world.z).abs() > 6
-        && bot.approach(x, z, bot.world.level, 1, 1500).is_err()
-    {
-        return Ok(None);
+    if (x - bot.world.x).abs() + (z - bot.world.z).abs() > 6 {
+        // Dead socket, not a far foe: typed instead of Ok(None).
+        match bot.approach(x, z, bot.world.level, 1, 1500) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) =>
+            {
+                return Err(error.into())
+            }
+            Err(_) => return Ok(None),
+        }
     }
     bot.op_npc(2, slot)?;
     Ok(Some(slot))
@@ -436,8 +458,19 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
         if name.is_empty() || name.to_lowercase().contains("bones") {
             continue;
         }
-        if bot.take(Some(oid), None, 600).unwrap_or(false) {
-            taken += 1;
+        // Dead socket, not a missed pickup: typed instead of skipping.
+        match bot.take(Some(oid), None, 600) {
+            Ok(true) => taken += 1,
+            Ok(false) => {}
+            Err(error)
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) =>
+            {
+                return Err(error.into())
+            }
+            Err(_) => {}
         }
     }
     bury_bones(bot)?;
@@ -495,7 +528,7 @@ fn fight(
                 continue;
             }
             kills += 1;
-            println!("kill {kills} at {:?}", bot.position());
+            bot.log(&format!("kill {kills} at {:?}", bot.position()));
             target_npc = None;
             loot_ground(bot)?;
             if kills % STYLE_KILLS == 0 {
@@ -512,7 +545,15 @@ fn fight(
             last_attack = bot.world.ticks;
             let _ = slot;
         } else if (bot.world.x - target.0).abs() + (bot.world.z - target.1).abs() > 8 {
-            let _ = bot.approach(target.0, target.1, bot.world.level, 1, 1500);
+            // Dead socket, not an empty field: typed instead of pacing.
+            if let Err(error) = bot.approach(target.0, target.1, bot.world.level, 1, 1500) {
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) {
+                    return Err(error.into());
+                }
+            }
             wait_ticks(bot, 5)?;
         } else {
             wait_ticks(bot, 5)?;
@@ -539,12 +580,15 @@ fn run_spot(
     }
     let targets = ranked_clusters(bot, spot);
     if targets.is_empty() {
-        println!("no spawn for {}", spot.key);
+        bot.log(&format!("no spawn for {}", spot.key));
         return Ok(0);
     }
     let mut total = 0u32;
     for (center_x, center_z, count) in targets {
-        println!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key);
+        // Pace retries: instant walk failures consume no ticks, so an
+        // unpaced loop machine-guns the server into kicking us.
+        bot.pump(2)?;
+        bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
         while kills_limit == 0 || total < kills_limit {
             if !no_bank {
                 prepare_at_bank(bot)?;
@@ -552,14 +596,19 @@ fn run_spot(
                 let available = available_gear(bot);
                 equip_plan(bot, &gear_plan(bot, &available))?;
             }
-            if walk_checked(bot, center_x, center_z, 15000).unwrap_or(false) {
+            // A dead socket must reconnect, not limp to the next cluster:
+            // propagate connection failures, swallow the rest as before.
+            match walk_checked(bot, center_x, center_z, 15000) {
+                Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                Err(_) | Ok(false) => break,
+                Ok(true) => {}
+            }
+            {
                 let (kills, banked) = fight(bot, spot, (center_x, center_z), kills_limit - total, ticks_limit)?;
                 total += kills;
                 if !banked || (kills_limit > 0 && total >= kills_limit) {
                     return Ok(total);
                 }
-            } else {
-                break;
             }
         }
     }
@@ -607,12 +656,33 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
             named
         }
     };
-    println!("melee={} spots={}", melee_level(bot), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(","));
+    bot.log(&format!("melee={} spots={}", melee_level(bot), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));
     for spot in picked {
-        println!("=== {} ===", spot.key);
+        bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("melee at {}", spot.key));
         let total = run_spot(bot, &spot, kills, ticks, no_bank)?;
-        println!("ok {} killed {total}", spot.key);
+        bot.log(&format!("ok {} killed {total}", spot.key));
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_at_bank;
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    /// No socket: the bank walk fails typed (reconnect) instead of a quiet
+    /// equip-and-continue that strands the fighter ungeared mid-field.
+    #[test]
+    fn prepare_offline_aborts_typed() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3220;
+        bot.world.z = 3220;
+        bot.world.stats.insert(3, (10, 0));
+        let error = prepare_at_bank(&mut bot).expect_err("dead socket aborts typed");
+        assert!(crate::skill_common::is_walk_abort(&error), "typed for the reconnect arm, got: {error}");
+    }
 }

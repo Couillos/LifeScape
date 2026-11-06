@@ -107,6 +107,52 @@ impl Router {
         )
     }
 
+    /// Nearest reachable tile to a BLOCKED dest, BFS-ranked like the
+    /// server (`closest_approach`: smallest spread around the dest, path
+    /// distance breaking ties). Some(dest) when the dest itself is
+    /// reached (door read open in the planning view); None when the dest
+    /// lies outside the src window or nothing near it was visited (the
+    /// caller keeps walking closer, then resolves again).
+    pub fn closest_to_blocked(
+        &mut self,
+        collision: &impl CollisionSource,
+        level: i32,
+        src_x: i32,
+        src_z: i32,
+        dest_x: i32,
+        dest_z: i32,
+    ) -> Option<(i32, i32)> {
+        let base_x = src_x - bfs::HALF;
+        let base_z = src_z - bfs::HALF;
+        let local_dest_x = dest_x - base_x;
+        let local_dest_z = dest_z - base_z;
+        if !(0 <= local_dest_x && local_dest_x < bfs::SEARCH && 0 <= local_dest_z && local_dest_z < bfs::SEARCH) {
+            return None;
+        }
+        self.bfs.reset();
+        let found = self.bfs.search(
+            collision,
+            base_x,
+            base_z,
+            level,
+            local_dest_x,
+            local_dest_z,
+            1,
+            1,
+            0,
+            crate::reach::SHAPE_TILE,
+            0,
+        );
+        if found {
+            return Some((dest_x, dest_z));
+        }
+        if self.bfs.closest_approach(local_dest_x, local_dest_z, 1, 1, 0) {
+            Some((base_x + self.bfs.cur_x, base_z + self.bfs.cur_z))
+        } else {
+            None
+        }
+    }
+
     /// Why it cannot get there: closest reachable tile plus blockers.
     pub fn unreachable_report(
         &mut self,
@@ -247,6 +293,57 @@ mod tests {
         assert!(!path.is_empty(), "open map must yield waypoints");
         let last = path.last().unwrap();
         assert_eq!((last.level, last.x, last.z), (0, 1010, 1005));
+    }
+
+    #[test]
+    fn blocked_dest_resolves_to_adjacent_walkable() {
+        let dest_x = 1005;
+        let dest_z = 1003;
+        let mut map = CollisionMap::new();
+        for tile_x in (dest_x - 20)..=(dest_x + 20) {
+            for tile_z in (dest_z - 20)..=(dest_z + 20) {
+                map.set(tile_x, tile_z, 0, collision::OPEN);
+            }
+        }
+        map.set(dest_x, dest_z, 0, collision::WALK_BLOCKED);
+        let mut router = Router::new();
+        let near = router
+            .closest_to_blocked(&map, 0, 1000, 1000, dest_x, dest_z)
+            .expect("blocked dest resolves to a neighbour");
+        assert!((near.0 - dest_x).abs() + (near.1 - dest_z).abs() >= 1, "never the blocked tile itself, got {near:?}");
+        assert!(collision::tile_walkable(map.get(near.0, near.1, 0)), "resolved tile is walkable");
+    }
+
+    #[test]
+    fn blocked_dest_prefers_reachable_side_over_walled_side() {
+        // West of the dest is open ground behind a solid wall: locally
+        // walkable but unreachable. BFS must pick the reachable east side,
+        // not the crow-flies nearest tile.
+        let dest_x = 1005;
+        let dest_z = 1003;
+        let mut map = CollisionMap::new();
+        for tile_x in (dest_x - 20)..=(dest_x + 20) {
+            for tile_z in (dest_z - 20)..=(dest_z + 20) {
+                map.set(tile_x, tile_z, 0, collision::OPEN);
+            }
+        }
+        map.set(dest_x, dest_z, 0, collision::WALK_BLOCKED);
+        for tile_z in (dest_z - 20)..=(dest_z + 20) {
+            map.set(dest_x - 1, tile_z, 0, collision::WALK_BLOCKED);
+        }
+        let mut router = Router::new();
+        let near = router
+            .closest_to_blocked(&map, 0, 1010, 1003, dest_x, dest_z)
+            .expect("east side stays reachable");
+        assert_eq!(near, (dest_x + 1, dest_z));
+    }
+
+    #[test]
+    fn dest_outside_window_resolves_to_none() {
+        let mut map = CollisionMap::new();
+        map.set(1000, 1000, 0, collision::OPEN);
+        let mut router = Router::new();
+        assert_eq!(router.closest_to_blocked(&map, 0, 1000, 1000, 2000, 2000), None);
     }
 
     #[test]

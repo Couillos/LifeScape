@@ -354,9 +354,13 @@ impl Bot {
             let mut stepped = false;
             for (nx, nz) in neighbors {
                 let rest = deadline.saturating_sub(self.world.ticks).max(500);
-                if self.walk_to(nx, nz, level, rest).is_ok() {
-                    stepped = true;
-                    break;
+                match self.walk_to(nx, nz, level, rest) {
+                    Ok(()) => {
+                        stepped = true;
+                        break;
+                    }
+                    Err(err) if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) => return Err(err),
+                    Err(_) => {}
                 }
             }
             if !stepped {

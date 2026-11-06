@@ -4,12 +4,14 @@
 //! session (login, pump, snapshot, close).
 
 pub mod actions;
+pub mod approach;
+pub mod doors;
 pub mod movement;
 pub mod snapshot_view;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::collision::{CollisionMap, MapPack};
 use crate::client::movement::TransitionRow;
@@ -23,11 +25,22 @@ use crate::world::World;
 /// script runs; `None` (default) keeps the SDK dependency-free and silent.
 /// Must never pump: it runs with the bot already borrowed. Returning
 /// false aborts the pump with `Error::Interrupted` (operator unload/close).
-pub type PumpHook = Arc<dyn Fn(&Bot) -> bool + Send + Sync>;
+pub type PumpHook = Arc<dyn Fn(&mut Bot) -> bool + Send + Sync>;
+
+/// Inline-pause gate, run at the end of every successful `pump` after the
+/// hook. The session worker installs one: when a random event is pending
+/// it runs the mapped rescue on this same thread and bot, then the caller
+/// loop resumes where it was. Returning false aborts the pump with
+/// `Error::Interrupted` (operator unload/close). `None` by default.
+pub type PauseGate = Arc<dyn Fn(&mut Bot) -> bool + Send + Sync>;
 
 pub use snapshot_view::Snapshot;
 
 const KEEPALIVE_TICKS: u64 = 50;
+/// Wall-clock twin of the tick keepalive: tick intake can stall behind a
+/// slow drain, and the server counts silence in its own ticks. Whichever
+/// fires first keeps the session alive.
+const KEEPALIVE_WALL: Duration = Duration::from_secs(3);
 const DRAIN_PER_PUMP: usize = 256;
 
 /// High-level bot: login, pump ticks, act, read live state.
@@ -43,6 +56,9 @@ pub struct Bot {
     pack_dir: String,
     key_path: String,
     last_send_tick: u64,
+    /// Last keepalive wall time: intake lag must not stretch the silence
+    /// the server sees past its 100-tick timeout.
+    last_keepalive: Option<Instant>,
     /// Current leg route, published for spectators.
     pub route: Vec<(i32, i32)>,
     pub route_target: Option<(i32, i32)>,
@@ -61,9 +77,20 @@ pub struct Bot {
     pub doors: HashMap<(i32, i32, i32), (u16, u8, u8)>,
     /// Tiles from `doors` whose opening charges a toll.
     pub toll_gates: HashSet<(i32, i32, i32)>,
+    /// Doors already opened and verified live by the current `approach`
+    /// call. A second encounter in the same call fails fast instead of
+    /// re-clicking dynamic state. Cleared on entry of the outermost
+    /// `approach`; nested door-stand approaches share it via
+    /// `approach_depth`.
+    pub approach_opened: HashSet<(i32, i32, i32)>,
+    pub approach_depth: u32,
     /// Opt-in to paid paths (toll gates). Default false: routing and bank
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
+    /// Opt-in to hunter zones (tree spots near aggressive NPCs). Default
+    /// false: spots within range of something that would attack us are
+    /// skipped.
+    pub allow_wild: bool,
     /// Pack index for lazy map loading. `None` means straight legs only.
     pub maps: Option<MapPack>,
     /// Known stair/ladder/trapdoor rides, loaded from the transition dump.
@@ -71,6 +98,11 @@ pub struct Bot {
     pub transitions: Vec<TransitionRow>,
     /// Heartbeat hook, installed by the session worker (default: none).
     pub on_pump: Option<PumpHook>,
+    /// Inline-pause gate, installed by the session worker (default: none).
+    pub pause_gate: Option<PauseGate>,
+    /// Zone label for log stamps (`zones::zone_name`), refreshed by the
+    /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
+    pub zone_label: String,
 }
 
 impl Bot {
@@ -85,16 +117,22 @@ impl Bot {
             pack_dir: pack_dir.to_string(),
             key_path: key_path.to_string(),
             last_send_tick: 0,
+            last_keepalive: None,
             route: Vec::new(),
             route_target: None,
             tables: NOTABLES,
             collision: CollisionMap::new(),
             doors: HashMap::new(),
             toll_gates: HashSet::new(),
+            approach_opened: HashSet::new(),
+            approach_depth: 0,
             allow_paid: false,
+            allow_wild: false,
             maps: None,
             transitions: Vec::new(),
             on_pump: None,
+            pause_gate: None,
+            zone_label: "?".to_string(),
         }
     }
 
@@ -127,6 +165,7 @@ impl Bot {
                     self.world = World::new();
                     self.world.static_locs = static_locs;
                     self.last_send_tick = 0;
+                    self.last_keepalive = None;
                     self.drain_startup()?;
                     self.intend("connected");
                     return Ok(());
@@ -170,7 +209,29 @@ impl Bot {
     /// sends, with the game tick. The worker prefixes wall-clock time.
     /// Read-only for planning: never call this from a planning view.
     pub fn act(&self, text: String) {
-        println!("act t={} {text}", self.world.ticks);
+        println!("act {} {text}", self.tag());
+    }
+
+    /// Script log line with wall clock and the exact game tick. The
+    /// script holds the bot, so the tick needs no lookup.
+    pub fn log(&self, text: &str) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|span| span.as_secs())
+            .unwrap_or(0);
+        println!(
+            "[{:02}:{:02}:{:02}] {} {text}",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60,
+            self.tag()
+        );
+    }
+
+    /// Tick + zone stamp shared by every ticked log line: `[t=<tick> <zone>]`,
+    /// "?" when unknown. Single source of format for SDK-side lines.
+    pub fn tag(&self) -> String {
+        format!("[t={} {}]", self.world.ticks, self.zone_label)
     }
 
     /// Pump `count` ticks: recv frames, feed the world, keep the session
@@ -178,9 +239,7 @@ impl Bot {
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {
         let mut frames = Vec::new();
         for _ in 0..count {
-            if self.world.ticks.saturating_sub(self.last_send_tick) >= KEEPALIVE_TICKS {
-                self.idle()?;
-            }
+            self.keepalive_if_due()?;
             let frame = self.conn.recv()?;
             self.world.feed(&frame.name, &frame.body)?;
             frames.push(frame);
@@ -188,9 +247,7 @@ impl Bot {
                 if !self.conn.available()? {
                     break;
                 }
-                if self.world.ticks.saturating_sub(self.last_send_tick) >= KEEPALIVE_TICKS {
-                    self.idle()?;
-                }
+                self.keepalive_if_due()?;
                 let frame = self.conn.recv()?;
                 self.world.feed(&frame.name, &frame.body)?;
                 frames.push(frame);
@@ -198,6 +255,11 @@ impl Bot {
         }
         if let Some(hook) = self.on_pump.clone() {
             if !hook(self) {
+                return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));
+            }
+        }
+        if let Some(gate) = self.pause_gate.clone() {
+            if !gate(self) {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));
             }
         }
@@ -225,6 +287,22 @@ impl Bot {
     /// an idle-logout request). Counts as a response, nothing more.
     pub fn idle(&mut self) -> Result<()> {
         self.send_named("NO_TIMEOUT", &[])
+    }
+
+    /// Keepalive when due by ticks or wall clock, whichever comes first.
+    /// The wall leg covers intake stalls: a client that drains slower than
+    /// the server still looks alive to the 100-tick silence timeout.
+    fn keepalive_if_due(&mut self) -> Result<()> {
+        let now = Instant::now();
+        let wall_due = match self.last_keepalive {
+            Some(seen) => now.duration_since(seen) >= KEEPALIVE_WALL,
+            None => true,
+        };
+        if wall_due || self.world.ticks.saturating_sub(self.last_send_tick) >= KEEPALIVE_TICKS {
+            self.idle()?;
+            self.last_keepalive = Some(now);
+        }
+        Ok(())
     }
 
     fn send_named(&mut self, name: &str, payload: &[u8]) -> Result<()> {
@@ -283,4 +361,18 @@ impl Bot {
 /// Aggregate carried items: {obj_id: count} across open inventories.
 pub fn aggregate(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>) -> HashMap<u16, u32> {
     crate::snapshot::aggregate(inv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_stamps_tick_and_zone() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        assert_eq!(bot.tag(), "[t=0 ?]");
+        bot.world.ticks = 447;
+        bot.zone_label = "Lumbridge".to_string();
+        assert_eq!(bot.tag(), "[t=447 Lumbridge]");
+    }
 }

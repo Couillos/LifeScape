@@ -1,7 +1,7 @@
 //! One supervised account: persistent session plus its script state.
 //!
 //! Mirrors orchestration/jobs.py: the worker owns the session truth, the
-//! job mirrors it for the CLI/dashboard and carries rescue bookkeeping.
+//! job mirrors it for the CLI/dashboard and carries event telemetry.
 //! Phases idle|running; statuses starting|idle|running|busy|reconnecting|
 //! finished|failed|disconnected|stopped.
 //!
@@ -52,14 +52,11 @@ pub struct JobInner {
     pub last_event: Option<Value>,
     pub requirements: Option<Value>,
     pub last_code: Option<Value>,
-    pub interrupted: Option<(String, Vec<Value>)>,
-    pub rescue_for: Option<String>,
-    pub worker_rescue_at: Option<Value>,
     pub supervise: bool,
-    pub log_offset: u64,
+    /// Last pushed snapshot (worker push frames): the front reads this,
+    /// the disk is only the adoption fallback when no push arrived yet.
+    pub live: Option<Value>,
     pub state_written_at: f64,
-    pub event_last_pos: Option<(i64, i64)>,
-    pub event_detect_at: f64,
 }
 
 pub struct Job {
@@ -84,14 +81,9 @@ impl Job {
                 last_event: None,
                 requirements: None,
                 last_code: None,
-                interrupted: None,
-                rescue_for: None,
-                worker_rescue_at: None,
                 supervise: true,
-                log_offset: 0,
+                live: None,
                 state_written_at: 0.0,
-                event_last_pos: None,
-                event_detect_at: 0.0,
             }),
         }
     }
@@ -132,7 +124,10 @@ impl Job {
     /// Same keys as jobs.py describe().
     pub fn describe(&self) -> Value {
         let (_merged, partial, log_path) = paths::user_paths(&self.account);
-        let bot = paths::read_json(&partial).unwrap_or(Value::Null);
+        // Pushed snapshots first (tens of ms fresh); the heartbeat file is
+        // only the last-breath fallback before the first push arrives.
+        let live = self.inner.lock().unwrap().live.clone();
+        let bot = live.unwrap_or_else(|| paths::read_json(&partial).unwrap_or(Value::Null));
         let inner = self.inner.lock().unwrap();
         let mut intention = bot.get("intention").as_str().unwrap_or("").to_string();
         if inner.phase == "running"

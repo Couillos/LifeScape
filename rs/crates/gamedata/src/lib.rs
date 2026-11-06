@@ -473,12 +473,15 @@ pub struct Npc {
     pub size: i64,
     pub ops: Vec<Option<String>>,
     pub members: Option<bool>,
+    pub hunts_players: bool,
+    pub huntrange: i64,
+    pub vislevel: i64,
     pub spawns: Vec<NpcSpawn>,
 }
 
 fn npc_from_row(npc_id: usize, row: &Json) -> Npc {
     if *row == Json::Null {
-        return Npc { npc_id, name: None, size: 1, ops: Vec::new(), members: None, spawns: Vec::new() };
+        return Npc { npc_id, name: None, size: 1, ops: Vec::new(), members: None, hunts_players: false, huntrange: 0, vislevel: 0, spawns: Vec::new() };
     }
     let mut spawns = Vec::new();
     if let Some(Json::Arr(items)) = row.get("spawns") {
@@ -496,6 +499,9 @@ fn npc_from_row(npc_id: usize, row: &Json) -> Npc {
         size: row.get("size").and_then(Json::as_i64).unwrap_or(1),
         ops: row_ops(row, "ops"),
         members: row.get("members").and_then(Json::as_bool),
+        hunts_players: row.get("hunts_players").and_then(Json::as_bool).unwrap_or(false),
+        huntrange: row.get("huntrange").and_then(Json::as_i64).unwrap_or(0),
+        vislevel: row.get("vislevel").and_then(Json::as_i64).unwrap_or(0),
         spawns,
     }
 }
@@ -623,6 +629,16 @@ impl PartialEq for Json {
 #[cfg(test)]
 mod tests {
     use super::Parser;
+
+    #[test]
+    fn hunter_flags_parsed() {
+        let spider = super::npcs_by_name("giantspider1").into_iter().next().expect("spider in dumps");
+        assert!(spider.hunts_players, "spiders hunt");
+        assert!(spider.huntrange >= 1, "spider range, got {}", spider.huntrange);
+        assert_eq!(spider.vislevel, 2, "spider level");
+        let bob = super::npcs_by_name("bob").into_iter().next().expect("bob in dumps");
+        assert!(!bob.hunts_players, "shopkeepers do not hunt");
+    }
 
     #[test]
     fn parses_mixed_values() {

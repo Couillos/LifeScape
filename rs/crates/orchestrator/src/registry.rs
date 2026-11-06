@@ -48,26 +48,14 @@ pub const SCRIPTS: &[(&str, &str)] = &[
     ("give", "scripts/dev/give.py"),
 ];
 
-/// Unresolved random event -> rescue script.
-pub const RESCUES: &[(&str, &str)] = &[
-    ("maze", "rescue_maze"),
-    ("tower", "rescue_down"),
-    ("cube", "rescue_cube"),
-    ("mime", "rescue_mime"),
-];
+/// Random events map to their rescue in the scripts crate
+/// (`lifescape_scripts::randomevent::rescue_for`); the worker poses them
+/// directly, so no daemon-side table is kept here.
 
 pub fn script_names_sorted() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = SCRIPTS.iter().map(|(name, _)| *name).collect();
     names.sort_unstable();
     names
-}
-
-pub fn rescue_for(event: &str) -> &'static str {
-    RESCUES
-        .iter()
-        .find(|(name, _)| *name == event)
-        .map(|(_, rescue)| *rescue)
-        .unwrap_or("rescue_fallback")
 }
 
 pub fn script_path(name: &str) -> Result<String, String> {
@@ -90,8 +78,5 @@ mod tests {
         assert!(script_path("fishing").unwrap().ends_with("scripts/fishing/run.py"));
         let error = script_path("nope").unwrap_err();
         assert!(error.starts_with("unknown script 'nope' (known: "));
-        assert_eq!(rescue_for("maze"), "rescue_maze");
-        assert_eq!(rescue_for("tower"), "rescue_down");
-        assert_eq!(rescue_for("???"), "rescue_fallback");
     }
 }

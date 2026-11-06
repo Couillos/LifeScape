@@ -7,6 +7,8 @@ pub mod devtools;
 pub mod devtools_check;
 pub mod maze;
 pub mod skill_common;
+pub mod skill_trade;
+pub mod skill_walk;
 pub mod skill_fishing;
 pub mod skill_combat;
 pub mod skill_mining;
@@ -68,8 +70,8 @@ impl Script for StubScript {
     fn name(&self) -> &'static str {
         self.0
     }
-    fn run(&self, _bot: &mut Bot, _args: &[String]) -> ScriptResult {
-        println!("{}: not yet ported", self.0);
+    fn run(&self, bot: &mut Bot, _args: &[String]) -> ScriptResult {
+        bot.log(&format!("{}: not yet ported", self.0));
         Err(ScriptError::NotPorted(self.0))
     }
 }
@@ -87,9 +89,9 @@ impl Script for Hello {
         bot.idle()?;
         for frame in bot.pump(25)? {
             if frame.name == "MESSAGE_GAME" {
-                println!("game message: {}", String::from_utf8_lossy(&frame.body));
+                bot.log(&format!("game message: {}", String::from_utf8_lossy(&frame.body)));
             } else {
-                println!("recv {} ({}) len={}", frame.name, frame.opcode, frame.body.len());
+                bot.log(&format!("recv {} ({}) len={}", frame.name, frame.opcode, frame.body.len()));
             }
         }
         Ok(0)
@@ -117,11 +119,11 @@ impl Script for Goto {
         while bot.world.ticks < target {
             bot.pump(2)?;
             if bot.position() == (level, x, z) {
-                println!("at {:?}", bot.position());
+                bot.log(&format!("at {:?}", bot.position()));
                 return Ok(0);
             }
         }
-        println!("teleport did not land: {:?}", bot.position());
+        bot.log(&format!("teleport did not land: {:?}", bot.position()));
         Ok(1)
     }
 }
@@ -133,9 +135,9 @@ impl Script for Walkto {
     }
     fn run(&self, bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (x, z, level) = parse_target(args)?;
-        println!("from {:?} to {x},{z},{level}", bot.position());
+        bot.log(&format!("from {:?} to {x},{z},{level}", bot.position()));
         bot.walk_to(x, z, level, 9000)?;
-        println!("arrived {:?} (target {x},{z})", bot.position());
+        bot.log(&format!("arrived {:?} (target {x},{z})", bot.position()));
         Ok(0)
     }
 }
@@ -148,7 +150,7 @@ impl Script for DebugWalk {
     fn run(&self, bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (x, z, level) = parse_target(args)?;
         for line in bot.debug_walk(x, z, level).lines {
-            println!("{line}");
+            bot.log(&format!("{line}"));
         }
         Ok(0)
     }
@@ -168,7 +170,7 @@ pub fn names() -> Vec<&'static str> {
         "quest_pirates_treasure", "quest_prince_ali_rescue", "quest_restless_ghost",
         "quest_romeo_and_juliet", "quest_rune_mysteries", "quest_sheep_shearer",
         "quest_shield_of_arrav", "quest_vampire_slayer", "quest_witchs_potion",
-        "rescue_maze", "rescue_mime", "rescue_cube", "rescue_down", "rescue_fallback",
+        "rescue_maze", "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
         "check_transitions", "check_doors", "check_routes", "goto", "walkto", "walktour",
         "bank_deposit", "drop", "debug_walk", "trade_swap", "quest_reset", "reset_quests",
         "give", "hello",
@@ -210,6 +212,7 @@ pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
         "rescue_mime" => rescues::run_rescue("mime", bot, args),
         "rescue_cube" => rescues::run_rescue("cube", bot, args),
         "rescue_down" => rescues::run_rescue("down", bot, args),
+        "rescue_greet" => rescues::run_rescue("greet", bot, args),
         "rescue_fallback" => rescues::run_rescue("fallback", bot, args),
         "check_transitions" | "check_doors" | "check_routes" | "walktour"
         | "bank_deposit" | "drop" | "trade_swap" | "quest_reset"
@@ -234,13 +237,13 @@ mod tests {
         for name in [
             "fishing", "mining", "woodcut", "melee", "tutorial",
             "quest_cooks_assistant", "quest_dragon_slayer", "rescue_maze",
-            "rescue_mime", "rescue_cube", "rescue_down", "rescue_fallback",
+            "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
             "check_transitions", "check_doors", "check_routes", "goto",
             "walkto", "walktour", "bank_deposit", "drop", "debug_walk",
             "trade_swap", "quest_reset", "reset_quests", "give", "hello",
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 42);
+        assert_eq!(names().len(), 43);
     }
 }

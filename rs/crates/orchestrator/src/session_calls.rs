@@ -97,8 +97,19 @@ fn need_i64(args: &[Value], slot: usize, method: &str) -> Result<i64, String> {
 }
 
 fn need_u64(args: &[Value], slot: usize, method: &str, default: u64) -> Result<u64, String> {
-    let Some(raw) = args.get(slot) else { return Ok(default) };
+    let Some(raw) = args.get(slot) else { return Ok(default.min(CALL_TICK_BOUND)) };
     num_i64(raw).and_then(|num| u64::try_from(num).ok()).ok_or_else(|| format!("{method}: arg {slot} must be a number"))
+}
+
+/// Tick bound for every blocking session call: a call must always answer
+/// inside the daemon's worker timeout (40s), or the CLI surfaces a raw
+/// EAGAIN ("Resource temporarily unavailable") and the worker stays busy
+/// behind it. Long treks belong in supervised scripts, not in calls.
+pub(crate) const CALL_TICK_BOUND: u64 = 500;
+
+/// Timeout arg clamped to the call bound (see `CALL_TICK_BOUND`).
+fn call_timeout(args: &[Value], slot: usize, method: &str, default: u64) -> Result<u64, String> {
+    need_u64(args, slot, method, default).map(|timeout| timeout.min(CALL_TICK_BOUND))
 }
 
 fn need_str<'args>(args: &'args [Value], slot: usize, method: &str) -> Result<&'args str, String> {
@@ -234,7 +245,7 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             let target_x = need_i64(&args, 0, method)? as i32;
             let target_z = need_i64(&args, 1, method)? as i32;
             let level = args.get(2).and_then(num_i64).map(|num| num as i32).unwrap_or_else(|| bot.world.level);
-            let timeout = need_u64(&args, 3, method, 9000)?;
+            let timeout = call_timeout(&args, 3, method, 9000)?;
             bot.walk_to(target_x, target_z, level, timeout).map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
@@ -243,24 +254,24 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             let target_z = need_i64(&args, 1, method)? as i32;
             let level = args.get(2).and_then(num_i64).map(|num| num as i32).unwrap_or_else(|| bot.world.level);
             let radius = args.get(3).and_then(num_i64).map(|num| num as i32).unwrap_or(1);
-            let timeout = need_u64(&args, 4, method, 9000)?;
+            let timeout = call_timeout(&args, 4, method, 9000)?;
             bot.approach(target_x, target_z, level, radius, timeout).map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
         "approach_npc" => {
             let slot = need_i64(&args, 0, method)? as u16;
-            let timeout = need_u64(&args, 1, method, 9000)?;
+            let timeout = call_timeout(&args, 1, method, 9000)?;
             bot.approach_npc(slot, timeout).map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
         "step_to" => {
             let target_x = need_i64(&args, 0, method)? as i32;
             let target_z = need_i64(&args, 1, method)? as i32;
-            let timeout = need_u64(&args, 2, method, 30)?;
+            let timeout = call_timeout(&args, 2, method, 30)?;
             bot.step_to(target_x, target_z, timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "walk_steps" => {
-            let timeout = args.last().and_then(num_i64).map(|num| num.max(0) as u64).unwrap_or(9000);
+            let timeout = args.last().and_then(num_i64).map(|num| (num.max(0) as u64).min(CALL_TICK_BOUND)).unwrap_or(CALL_TICK_BOUND);
             let steps: Vec<(i32, i32)> = match args.first() {
                 Some(Value::Str(text)) => text
                     .split(';')
@@ -378,7 +389,7 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             // One arg: id or name. Three args: id, name, timeout.
             if args.len() >= 3 {
                 let held = args.first().and_then(num_i64).and_then(|num| u16::try_from(num).ok());
-                let timeout = need_u64(&args, 2, method, 9000)?;
+                let timeout = call_timeout(&args, 2, method, 9000)?;
                 match args.get(1) {
                     Some(Value::Str(text)) if !text.is_empty() => bot.take(held, Some(text.as_str()), timeout),
                     _ => bot.take(held, None, timeout),
@@ -387,22 +398,22 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
                 .map(Value::Bool)
             } else {
                 let (held, name) = parse_id_or_name(&args, 0, method)?;
-                let timeout = need_u64(&args, 1, method, 9000)?;
+                let timeout = call_timeout(&args, 1, method, 9000)?;
                 bot.take(held, name.as_deref(), timeout).map_err(|error| error.to_string()).map(Value::Bool)
             }
         }
         "drop" => {
-            let timeout = need_u64(&args, 1, method, 9000)?;
+            let timeout = call_timeout(&args, 1, method, 9000)?;
             bot.drop(need_i64(&args, 0, method)? as u16, timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "open_bank" => {
-            let timeout = need_u64(&args, 3, method, 9000)?;
+            let timeout = call_timeout(&args, 3, method, 9000)?;
             bot.open_bank(need_i64(&args, 0, method)? as i32, need_i64(&args, 1, method)? as i32, need_i64(&args, 2, method)? as u16, timeout)
                 .map_err(|error| error.to_string())
                 .map(Value::Bool)
         }
         "bank_withdraw" => {
-            let timeout = need_u64(&args, 2, method, 9000)?;
+            let timeout = call_timeout(&args, 2, method, 9000)?;
             bot.bank_withdraw(need_i64(&args, 0, method)? as u16, need_i64(&args, 1, method)? as u32, timeout)
                 .map_err(|error| error.to_string())
                 .map(|count| Value::Int(i64::from(count)))
@@ -418,21 +429,21 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
                     .collect::<Result<Vec<u16>, String>>()?,
                 Some(_) => return Err(format!("{method}: keep ids must be an array or \"1,2\"")),
             };
-            let timeout = need_u64(&args, 2, method, 9000)?;
+            let timeout = call_timeout(&args, 2, method, 9000)?;
             bot.bank_deposit_all(need_i64(&args, 0, method)? as u16, &keep, timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "trade_request" => {
-            let timeout = need_u64(&args, 1, method, 9000)?;
+            let timeout = call_timeout(&args, 1, method, 9000)?;
             bot.trade_request(need_str(&args, 0, method)?, timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "trade_offer" => {
-            let timeout = need_u64(&args, 2, method, 9000)?;
+            let timeout = call_timeout(&args, 2, method, 9000)?;
             bot.trade_offer(need_i64(&args, 0, method)? as u16, need_i64(&args, 1, method)? as u32, timeout)
                 .map_err(|error| error.to_string())
                 .map(Value::Bool)
         }
         "trade_accept" => {
-            let timeout = need_u64(&args, 0, method, 9000)?;
+            let timeout = call_timeout(&args, 0, method, 9000)?;
             bot.trade_accept(timeout).map_err(|error| error.to_string()).map(Value::Bool)
         }
         "trade_close" => {
@@ -501,7 +512,7 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{coerce_arg, execute_write, method_lists, read_from_snapshot};
+    use super::{call_timeout, coerce_arg, execute_write, method_lists, read_from_snapshot, CALL_TICK_BOUND};
     use crate::json::{self, Value, str_value};
     use lifescape_sdk::client::Snapshot;
 
@@ -551,6 +562,17 @@ mod tests {
     fn cli_strings_coerce_like_the_worker() {
         assert_eq!(coerce_arg(&str_value("12")), Value::Int(12));
         assert_eq!(coerce_arg(&str_value("walk")), str_value("walk"));
+    }
+
+    #[test]
+    fn call_timeouts_stay_inside_the_worker_timeout() {
+        // A 9000-tick call outlives the daemon's 40s worker timeout and
+        // wedges the session behind a raw EAGAIN: clamp to the bound.
+        let huge = vec![Value::Int(9000)];
+        assert_eq!(call_timeout(&huge, 0, "walk_to", 9000).expect("number"), CALL_TICK_BOUND);
+        assert_eq!(call_timeout(&[], 0, "walk_to", 9000).expect("default"), CALL_TICK_BOUND);
+        assert_eq!(call_timeout(&[Value::Int(100)], 0, "step_to", 30).expect("small"), 100);
+        assert!(call_timeout(&[Value::Str("x".to_string())], 0, "walk_to", 9000).is_err());
     }
 
     #[test]

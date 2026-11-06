@@ -3,8 +3,8 @@
 //! Mirrors orchestration/daemon.py (socket serving lives in main.rs,
 //! supervision in supervise.rs).
 //!
-//! It owns session lifetime (open/close), the log tail that carries
-//! ``@@EVENT`` markers, and the unix-socket dispatch the CLI talks to.
+//! It owns session lifetime (open/close), the in-memory snapshots the
+//! workers push, and the unix-socket dispatch the CLI talks to.
 //! It never speaks the game protocol.
 
 use std::collections::HashMap;
@@ -21,6 +21,37 @@ use crate::paths;
 use crate::registry;
 
 pub const WORKER_TIMEOUT: u64 = 40;
+
+/// Frozen-session watchdog: heartbeats older than this (wall clock) mean
+/// the worker pumps nothing anymore (wedged thread, dead socket never
+/// noticed) no matter what the game ticks say.
+const WATCHDOG_STALE_SECS: f64 = 45.0;
+/// Poison window: this many watchdog restarts inside it parks the job
+/// for the operator instead of respawning forever.
+const WATCHDOG_WINDOW_SECS: f64 = 300.0;
+const WATCHDOG_MAX_RESTARTS: usize = 3;
+
+/// Frozen-session watchdog state, kept in the supervisor thread (no
+/// struct churn): last heartbeat wall time, recent restart times.
+pub(crate) struct Watchdog {
+    last_hb: Option<f64>,
+    restarts: Vec<f64>,
+}
+
+impl Watchdog {
+    pub(crate) fn new() -> Self {
+        Watchdog { last_hb: None, restarts: Vec::new() }
+    }
+}
+
+/// Pure staleness decision: heartbeat older than the bound (wall clock),
+/// never-seen heartbeat never counts (login edge).
+pub(crate) fn watchdog_due(last_hb: Option<f64>, now: f64) -> bool {
+    match last_hb {
+        Some(at) => now - at >= WATCHDOG_STALE_SECS,
+        None => false,
+    }
+}
 
 const STOP_GRACE: f64 = 8.0;
 const OPEN_TIMEOUT: f64 = 150.0;
@@ -100,6 +131,85 @@ impl Orchestrator {
     fn kill_process(&self, account: &str) {
         if let Some(mut proc) = self.procs.lock().unwrap().remove(account) {
             proc.terminate_gracefully();
+        }
+    }
+
+    /// Frozen-session watchdog, called from the supervisor thread: when
+    /// heartbeats stop arriving although the session should be live, the
+    /// worker pumps nothing anymore (wedged thread, dead socket never
+    /// noticed) and no in-worker timeout can fire. Kill the worker,
+    /// respawn it, and resume the running script if any (stateless
+    /// scripts restart cleanly from anywhere). Poison-capped: repeated
+    /// wedges park the job loudly instead of respawning forever.
+    pub(crate) fn watchdog_tick(&self, job: &Arc<Job>, state: &mut Watchdog) {
+        let (phase, script, args, status, paused, held, updated) = {
+            let inner = job.inner.lock().unwrap();
+            let updated = inner.live.as_ref().and_then(|frame| frame.get("updated").as_f64());
+            (
+                inner.phase.clone(),
+                inner.script.clone(),
+                inner.script_args.clone(),
+                inner.status.clone(),
+                inner.paused,
+                inner.held,
+                updated,
+            )
+        };
+        if paused || held {
+            return;
+        }
+        if matches!(status.as_str(), "reconnecting" | "disconnected" | "starting" | "busy") {
+            return;
+        }
+        let Some(at) = updated else {
+            return;
+        };
+        let now = crate::jobs::now_secs();
+        if at > state.last_hb.unwrap_or(0.0) {
+            state.last_hb = Some(at);
+            return;
+        }
+        if !watchdog_due(state.last_hb, now) {
+            return;
+        }
+        state.restarts.retain(|seen| now - seen < WATCHDOG_WINDOW_SECS);
+        if state.restarts.len() >= WATCHDOG_MAX_RESTARTS {
+            job.inner.lock().unwrap().last_error = Some(object(vec![
+                ("where", str_value("watchdog")),
+                ("type", str_value("watchdog")),
+                ("message", str_value("session wedged repeatedly, parked for operator")),
+                ("at", Value::Arr(vec![])),
+            ]));
+            return;
+        }
+        state.restarts.push(now);
+        println!("watchdog {}: no heartbeat for {:.0}s, restarting worker", job.account, now - at);
+        self.kill_process(&job.account);
+        std::thread::sleep(Duration::from_millis(1500));
+        if let Err(error) = self.spawn(job, false) {
+            println!("watchdog {}: respawn failed: {error}", job.account);
+            return;
+        }
+        let deadline = crate::jobs::now_secs() + 15.0;
+        let mut ready = false;
+        while crate::jobs::now_secs() < deadline {
+            match self.send_worker(&job.account, &object(vec![("cmd", str_value("status"))]), Duration::from_secs(3)) {
+                Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
+                    ready = true;
+                    break;
+                }
+                _ => std::thread::sleep(Duration::from_millis(500)),
+            }
+        }
+        if !ready {
+            println!("watchdog {}: respawned worker never answered", job.account);
+            return;
+        }
+        if phase == "running" {
+            if let Some(name) = script {
+                println!("watchdog {}: resuming {name} after restart", job.account);
+                self.run_job(&job.account, &name, &args);
+            }
         }
     }
 
@@ -240,13 +350,6 @@ impl Orchestrator {
                 ("error", str_value(&format!("session for {account} died, open {account} again"))),
             ]);
         }
-        if job.inner.lock().unwrap().rescue_for.is_some() {
-            let rescue = job.inner.lock().unwrap().rescue_for.clone().unwrap_or_default();
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("busy: rescue {rescue} in progress"))),
-            ]);
-        }
         if let Err(error) = registry::script_path(script) {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]);
         }
@@ -269,8 +372,9 @@ impl Orchestrator {
         reply
     }
 
-    /// Manual hold: stop the running script and run no rescue until
-    /// resumed. The session stays open for manual `call` piloting.
+    /// Manual hold: stop the running script and let the worker idle drain
+    /// run no rescue until resumed. The session stays open for manual
+    /// `call` piloting.
     fn hold_job(&self, account: &str) -> Value {
         let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
@@ -284,7 +388,7 @@ impl Orchestrator {
         job.inner.lock().unwrap().held = true;
         let reply = self.send_worker(
             account,
-            &object(vec![("cmd", str_value("unload"))]),
+            &object(vec![("cmd", str_value("hold"))]),
             Duration::from_secs(WORKER_TIMEOUT),
         );
         let reply = reply.unwrap_or_else(|error| {
@@ -401,10 +505,14 @@ impl Orchestrator {
         };
         job.inner.lock().unwrap().supervise = false;
         let mut session = Value::Null;
+        // Best-effort graceful logout only: a wedged worker cannot ack (it
+        // reads commands at safe-points), and kill_process below always
+        // follows. Waiting the full worker timeout per session is what made
+        // multi-session shutdowns outlive every timeout above them.
         match self.send_worker(
             account,
             &object(vec![("cmd", str_value("close"))]),
-            Duration::from_secs(WORKER_TIMEOUT),
+            Duration::from_secs(5),
         ) {
             Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
                 session = reply.get("session").clone();
@@ -452,7 +560,13 @@ impl Orchestrator {
         buf.push('\n');
         (&stream).write_all(buf.as_bytes()).map_err(|e| e.to_string())?;
         let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).map_err(|e| e.to_string())?;
+        BufReader::new(&stream).read_line(&mut line).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                format!("worker for {account} did not answer in time (busy script or wedged session)")
+            } else {
+                error.to_string()
+            }
+        })?;
         if line.trim().is_empty() {
             return Ok(object(vec![]));
         }
@@ -462,6 +576,63 @@ impl Orchestrator {
     pub(crate) fn write_state(&self, job: &Arc<Job>) {
         let (merged_path, _partial, _log) = paths::user_paths(&job.account);
         let _ = paths::write_json(&merged_path, &job.describe());
+    }
+
+    /// Worker push frames (`session_push`): snapshots refresh the memory
+    /// cache the front reads, events update telemetry and persist the
+    /// merged state at once. Fire-and-forget from the worker side: a lost
+    /// frame is a missed heartbeat, the next pump pushes again.
+    pub fn ingest_push(&self, frame: &Value) -> Value {
+        let account = frame.get("account").as_str().unwrap_or("").to_string();
+        if account.is_empty() {
+            return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
+        }
+        let job = match self.jobs.lock().unwrap().get(&account).cloned() {
+            Some(job) => job,
+            None => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&format!("no session for {account}"))),
+                ]);
+            }
+        };
+        match frame.get("type").as_str().unwrap_or("") {
+            "snapshot" => {
+                job.inner.lock().unwrap().live = Some(frame.get("snapshot").clone());
+                object(vec![("ok", Value::Bool(true))])
+            }
+            "event" => {
+                let kind = frame.get("kind").as_str().unwrap_or("").to_string();
+                let name = frame.get("event").as_str().unwrap_or("unknown").to_string();
+                let resolved = frame.get("resolved").as_bool().unwrap_or(false);
+                let tick = frame.get("tick").as_i64().unwrap_or(0);
+                let args = frame.get("args").as_arr().cloned().unwrap_or_default();
+                println!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push)");
+                {
+                    let mut inner = job.inner.lock().unwrap();
+                    if kind == "script_error" {
+                        inner.last_error = Some(object(vec![
+                            ("where", str_value(frame.get("script").as_str().unwrap_or(""))),
+                            ("type", str_value("script_error")),
+                            ("message", str_value(frame.get("message").as_str().unwrap_or(""))),
+                            ("at", frame.get("at").clone()),
+                        ]));
+                    }
+                    let mut entry = std::collections::BTreeMap::new();
+                    entry.insert("event".to_string(), str_value(&name));
+                    entry.insert("resolved".to_string(), Value::Bool(resolved));
+                    entry.insert("args".to_string(), Value::Arr(args));
+                    entry.insert("at".to_string(), Value::Float(now_secs()));
+                    inner.last_event = Some(Value::Obj(entry));
+                }
+                self.write_state(&job);
+                object(vec![("ok", Value::Bool(true))])
+            }
+            other => object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value(&format!("unknown push type {other:?}"))),
+            ]),
+        }
     }
 
     /// Adopt live session workers as idle, without their scripts.
@@ -523,8 +694,6 @@ impl Orchestrator {
                 if inner.status == "running" {
                     inner.status = "idle".to_string();
                 }
-                let (_merged, _partial, log_path) = paths::user_paths(&account);
-                inner.log_offset = std::fs::metadata(&log_path).map(|meta| meta.len()).unwrap_or(0);
             }
             self.jobs.lock().unwrap().insert(account.clone(), job.clone());
             self.start_supervisor(job);
@@ -625,22 +794,34 @@ impl Orchestrator {
                 ]);
             }
             "show" => {
-                let (merged_path, _partial, _log) = paths::user_paths(account);
-                let state = paths::read_json(&merged_path).unwrap_or(Value::Null);
-                let state = if state.as_obj().is_some() { state } else { object(vec![]) };
+                // Memory first (pushed snapshots); the files are only the
+                // adoption fallback when no worker is attached.
+                let state = match self.jobs.lock().unwrap().get(account).cloned() {
+                    Some(job) => job.describe(),
+                    None => {
+                        let (merged_path, _partial, _log) = paths::user_paths(account);
+                        let state = paths::read_json(&merged_path).unwrap_or(Value::Null);
+                        if state.as_obj().is_some() { state } else { object(vec![]) }
+                    }
+                };
                 return object(vec![("ok", Value::Bool(true)), ("state", resolve_state(state))]);
             }
             "live" => {
-                let (merged_path, partial_path, _log) = paths::user_paths(account);
-                let merged = paths::read_json(&merged_path).unwrap_or(Value::Null);
-                let state = match (merged, paths::read_json(&partial_path)) {
-                    (Value::Obj(mut base), Some(Value::Obj(extra))) => {
-                        base.extend(extra);
-                        Value::Obj(base)
+                let state = match self.jobs.lock().unwrap().get(account).cloned() {
+                    Some(job) => job.describe(),
+                    None => {
+                        let (merged_path, partial_path, _log) = paths::user_paths(account);
+                        let merged = paths::read_json(&merged_path).unwrap_or(Value::Null);
+                        let state = match (merged, paths::read_json(&partial_path)) {
+                            (Value::Obj(mut base), Some(Value::Obj(extra))) => {
+                                base.extend(extra);
+                                Value::Obj(base)
+                            }
+                            (base, _) => base,
+                        };
+                        if state.as_obj().is_some() { state } else { object(vec![]) }
                     }
-                    (base, _) => base,
                 };
-                let state = if state.as_obj().is_some() { state } else { object(vec![]) };
                 return object(vec![("ok", Value::Bool(true)), ("state", resolve_state(state))]);
             }
             "logs" => {
@@ -728,5 +909,17 @@ fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
         found[found.len() - lines..].to_vec()
     } else {
         found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::watchdog_due;
+
+    #[test]
+    fn watchdog_fires_only_on_stale_heartbeat() {
+        assert!(!watchdog_due(None, 1000.0), "never seen is login edge, not death");
+        assert!(!watchdog_due(Some(990.0), 1000.0), "10s fresh is healthy");
+        assert!(watchdog_due(Some(900.0), 1000.0), "100s stale is wedged");
     }
 }

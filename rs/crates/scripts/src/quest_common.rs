@@ -142,7 +142,15 @@ pub fn talk(bot: &mut Bot, name: &str, near: Option<(i32, i32)>, timeout: u64) -
 fn scan_and_talk(bot: &mut Bot, name: &str, near: Option<(i32, i32)>, timeout: u64) -> Result<bool, ScriptError> {
     if let Some((near_x, near_z)) = near {
         if (bot.world.x - near_x).abs() + (bot.world.z - near_z).abs() > 4 {
-            let _ = bot.walk_to(near_x, near_z, bot.world.level, 1250);
+            // Dead socket, not a far NPC: typed instead of scanning blind.
+            if let Err(error) = bot.walk_to(near_x, near_z, bot.world.level, 1250) {
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) {
+                    return Err(error.into());
+                }
+            }
         }
     }
     let target = bot.world.ticks + timeout;
@@ -161,7 +169,20 @@ fn scan_and_talk(bot: &mut Bot, name: &str, near: Option<(i32, i32)>, timeout: u
         let mut tiles: Vec<(i32, i32)> = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (npc_x + dx, npc_z + dz))).filter(|tile| *tile != (npc_x, npc_z)).collect();
         tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
         for (tile_x, tile_z) in tiles {
-            if bot.walk_to(tile_x, tile_z, bot.world.level, 750).is_ok() && click_npc(bot, slot)? {
+            // Dead socket, not a bad angle: typed instead of trying sides.
+            match bot.walk_to(tile_x, tile_z, bot.world.level, 750) {
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) => continue,
+                Ok(()) => {}
+            }
+            if click_npc(bot, slot)? {
                 return Ok(true);
             }
         }
@@ -389,8 +410,18 @@ pub fn use_item_on_loc(bot: &mut Bot, item_name: &str, loc_names: &[&str]) -> Re
     stands.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
     let seen = bot.world.messages.len();
     for (stand_x, stand_z) in stands {
-        if bot.walk_to(stand_x, stand_z, level, 1500).is_err() {
-            continue;
+        // Dead socket, not a bad side: typed instead of trying stands.
+        match bot.walk_to(stand_x, stand_z, level, 1500) {
+            Err(error)
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) =>
+            {
+                return Err(error.into())
+            }
+            Err(_) => continue,
+            Ok(()) => {}
         }
         let (use_com, use_slot) = inv_slot(bot, obj)?;
         bot.op_loc_u(loc_x, loc_z, loc, obj, u16::from(use_slot), use_com)?;
@@ -439,6 +470,16 @@ pub fn take_near(bot: &mut Bot, name: &str, timeout: u64) -> Result<(), ScriptEr
         match bot.take(None, Some(name), 1000) {
             Ok(true) => return Ok(()),
             Ok(false) => wait_ticks(bot, 5)?,
+            // Dead socket, not an empty floor: typed instead of retrying
+            // to the bound and failing "cannot pick up".
+            Err(error)
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) =>
+            {
+                return Err(error.into())
+            }
             Err(_) => wait_ticks(bot, 5)?,
         }
     }
@@ -472,9 +513,16 @@ pub fn attack(bot: &mut Bot, names: &[&str], timeout: u64) -> Result<(), ScriptE
         }
         foes.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
         let (slot, foe_x, foe_z) = foes[0];
-        if (foe_x - bot.world.x).abs() + (foe_z - bot.world.z).abs() > 5
-            && bot.approach(foe_x, foe_z, bot.world.level, 2, 1500).is_err()
-        {
+        if (foe_x - bot.world.x).abs() + (foe_z - bot.world.z).abs() > 5 {
+            // Dead socket, not a far foe: typed instead of pacing.
+            if let Err(error) = bot.approach(foe_x, foe_z, bot.world.level, 2, 1500) {
+                if matches!(
+                    error,
+                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                ) {
+                    return Err(error.into());
+                }
+            }
             bot.pump(5)?;
             continue;
         }
@@ -537,7 +585,14 @@ pub fn open_nearest_bank(bot: &mut Bot) -> Result<std::collections::HashMap<u16,
     let mut last_error = String::new();
     for bank in banks.iter().take(6) {
         bot.intend(&format!("walking to bank {},{}", bank.x, bank.z));
-        if bot.approach(bank.x as i32, bank.z as i32, bank.level as i32, 2, 9000).is_err() {
+        // Dead socket, not a far bank: typed instead of trying banks.
+        if let Err(error) = bot.approach(bank.x as i32, bank.z as i32, bank.level as i32, 2, 9000) {
+            if matches!(
+                error,
+                lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+            ) {
+                return Err(error.into());
+            }
             last_error = format!("bank {},{} unreachable", bank.x, bank.z);
             continue;
         }
@@ -555,13 +610,13 @@ pub fn open_nearest_bank(bot: &mut Bot) -> Result<std::collections::HashMap<u16,
     Err(ScriptError::Sdk(Error::Unreachable(format!("no reachable bank, last error: {last_error}"))))
 }
 
-/// Report a typed quest result as an `@@EVENT` line for the orchestrator.
+/// Human quest result for the script log (`quest <key> solved=true`). The
+/// worker owns the structured event push; scripts only log.
 pub fn report_result(bot: &Bot, quest: &str, solved: bool, error: Option<&str>) {
-    let mut payload = format!("@@EVENT {{\"kind\":\"quest_result\",\"account\":\"{}\",\"quest\":\"{quest}\",\"solved\":{}}}", bot.username, if solved { "true" } else { "false" });
-    if let Some(detail) = error {
-        payload = payload.trim_end_matches('}').to_string() + &format!(",\"error\":\"{detail}\"}}");
+    match error {
+        Some(detail) => bot.log(&format!("quest {quest} solved={solved} error={detail}")),
+        None => bot.log(&format!("quest {quest} solved={solved}")),
     }
-    println!("{payload}");
 }
 
 /// Shared requirement gate + solver driver: relogin, junk-free pack, bank
@@ -573,12 +628,12 @@ pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: 
     let _ = bot.pump(10)?;
     // Requirement check against live state: skills, carried items, bank.
     if !requirements_met(bot, requirements)? {
-        println!("{}: requirements not met", requirements.name);
+        bot.log(&format!("{}: requirements not met", requirements.name));
         report_result(bot, &requirements.key, false, Some("requirements not met"));
         return Ok(0);
     }
     if quest_done(bot, requirements) {
-        println!("{}: already complete", requirements.name);
+        bot.log(&format!("{}: already complete", requirements.name));
         report_result(bot, &requirements.key, true, None);
         return Ok(0);
     }
@@ -589,11 +644,11 @@ pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: 
         Ok(()) => {
             let solved = wait_complete(bot, 300)? || quest_done(bot, requirements);
             report_result(bot, &requirements.key, solved, None);
-            println!("{}: {}", requirements.name, if solved { "completed" } else { "solver ran but no completion message" });
+            bot.log(&format!("{}: {}", requirements.name, if solved { "completed" } else { "solver ran but no completion message" }));
             Ok(0)
         }
         Err(err) => {
-            println!("quest solve failed: {err}");
+            bot.log(&format!("quest solve failed: {err}"));
             report_result(bot, &requirements.key, false, Some(&err.to_string()));
             Ok(0)
         }
@@ -640,4 +695,25 @@ fn skill_index(name: &str) -> Option<u8> {
         "thieving", "slayer", "farming", "runecraft",
     ];
     ORDER.iter().position(|skill| *skill == name.to_lowercase()).map(|index| index as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_near;
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    /// No socket and no such item: the pickup fails typed (the first pump
+    /// already reports the dead socket) instead of retrying to the bound
+    /// and failing "cannot pick up".
+    #[test]
+    fn take_near_offline_aborts_typed() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3220;
+        bot.world.z = 3220;
+        let error = take_near(&mut bot, "logs", 60).expect_err("dead socket aborts typed");
+        assert!(!error.to_string().contains("cannot pick up"), "no masking, got: {error}");
+    }
 }

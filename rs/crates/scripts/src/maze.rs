@@ -143,7 +143,7 @@ fn plan(
     let mut queue = VecDeque::new();
     seen.insert(start);
     queue.push_back(start);
-    eprintln!("maze plan: start={:?} doors={} statue=({},{})", start, doors.len(), statue_x, statue_z);
+    bot.log(&format!("maze plan: start={:?} doors={} statue=({},{})", start, doors.len(), statue_x, statue_z));
     let mut goal: Option<(i32, i32)> = None;
     let mut expanded = 0usize;
     // Bounds: the maze square plus a margin (BFS stays inside anyway).
@@ -204,7 +204,7 @@ fn plan(
                     goal = Some(current);
                     break;
                 } else if near && card_or_inside {
-                    eprintln!("maze near-miss {:?} edge shut", current);
+                    bot.log(&format!("maze near-miss {:?} edge shut", current));
                 }
         }
         // Walk edges.
@@ -254,7 +254,7 @@ fn plan(
                 if !in_bounds(dest) || seen.contains(&dest) {
                     continue;
                 }
-                eprintln!("maze door edge {:?} -> {:?} -> {:?}", current, (door_x, door_z), dest);
+                bot.log(&format!("maze door edge {:?} -> {:?} -> {:?}", current, (door_x, door_z), dest));
                 seen.insert(dest);
                 parent.insert(dest, (current, Edge::Door(*door_x, *door_z, level)));
                 queue.push_back(dest);
@@ -277,17 +277,7 @@ fn plan(
                 }
             }
         }
-        eprintln!(
-            "maze plan: NO PATH expanded={} seen={} x=[{},{}] z=[{},{}] doorstands={} from {:?}",
-            expanded,
-            seen.len(),
-            x0,
-            x1,
-            z0,
-            z1,
-            stands,
-            start
-        );
+        bot.log(&format!("maze plan: NO PATH expanded={} seen={} x=[{},{}] z=[{},{}] doorstands={} from {:?}", expanded, seen.len(), x0, x1, z0, z1, stands, start));
     }
     let goal = goal?;
     // Reconstruct tile path with edge kinds, then compress walk runs.
@@ -331,7 +321,7 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
     bot.ensure_area(bot.world.x, bot.world.z, 70);
     bot.ensure_area(2911, 4575, 10);
     let Ok((statue_x, statue_z, _statue_level, statue_loc)) = kit::find_loc(bot, &["macro_maze_complete"], 150) else {
-        println!("maze centre missing from the map table");
+        bot.log("maze centre missing from the map table");
         return Ok(false);
     };
     let (statue_w, statue_l) = lifescape_gamedata::loc_by_id(statue_loc as usize)
@@ -354,7 +344,7 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
         }
         let before = (bot.world.x, bot.world.z);
         let Some(actions) = plan(bot, statue_x, statue_z, statue_w, statue_l, &tried) else {
-            println!("maze: no planned path to the centre from {:?}", bot.position());
+            bot.log(&format!("maze: no planned path to the centre from {:?}", bot.position()));
             return Ok(false);
         };
         for action in actions {
@@ -374,7 +364,20 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
                     }
                 }
                 MazeAction::OpenDoor(door_x, door_z, door_level) => {
-                    println!("maze: opening door ({door_x},{door_z}) from {:?}", bot.position());
+                    // Live diagnostic before the click: exact loc, bot
+                    // position, chosen side and why (entry, live-or-static
+                    // angle, axis). Same wording as the SDK per-click line.
+                    let (diag_loc, _diag_shape, diag_angle) =
+                        bot.doors.get(&(door_x, door_z, door_level)).copied().unwrap_or((3628, 0, 0));
+                    let diag_live = bot.world.loc_at(door_x, door_z, door_level);
+                    let diag_entry = Bot::maze_entry_side(diag_loc).unwrap_or(0);
+                    let (diag_angle_eff, diag_source) =
+                        Bot::maze_effective_angle(diag_live, diag_loc, diag_angle);
+                    bot.log(&Bot::maze_door_diag(
+                        door_x, door_z, door_level, diag_live,
+                        bot.world.x, bot.world.z, bot.world.level,
+                        diag_entry, diag_angle_eff, diag_source, bot.world.x, bot.world.z,
+                    ));
                     match bot.open_maze_door(door_x, door_z, door_level) {
                         Ok(true) => {}
                         Ok(false) => {
@@ -405,7 +408,7 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
         if (bot.world.x, bot.world.z) == before {
             stuck += 1;
             if stuck >= 3 {
-                println!("maze: no progress from {:?}", bot.position());
+                bot.log(&format!("maze: no progress from {:?}", bot.position()));
                 return Ok(false);
             }
         } else {

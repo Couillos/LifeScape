@@ -1,13 +1,12 @@
-//! Legs: walk_to, approach, single steps and the read-only debug_walk.
+//! Legs: walk_to over planned routes, one pump per tick, bounded in ticks.
 //!
 //! The server walks the steps it is sent; this router drives it with
-//! straight-line legs, one pump per tick, bounded in ticks. It opens no
-//! doors and rides no portals: a leg that stalls is reported with
-//! position, target and ticks, never silently detoured.
+//! straight-line legs. Door handling lives in `doors` (open like the manual
+//! player does, adjacent and at once); portals are never ridden: a leg that
+//! stalls is reported with position, target and ticks, never silently detoured.
 //!
-//! shortcut: no local collision map (pack reader not ported), so blocked
-//! targets are diagnosed from live state only; add BFS over the collision
-//! map when pack loading lands.
+//! A blocked target tile (tree, booth, counter) resolves once to its
+//! BFS-nearest reachable tile; only a truly unreachable target fails loud.
 
 use crate::buffer::Writer;
 use crate::client::Bot;
@@ -30,7 +29,7 @@ pub struct TransitionRow {
     pub disabled: bool,
 }
 
-const STEP_CAP: usize = 24;
+pub(crate) const STEP_CAP: usize = 24;
 /// A leg with no progress this long is refused, not slow: walking moves
 /// every couple of ticks, so a silent leg is a refused one.
 const STALL_TICKS: u64 = 12;
@@ -52,6 +51,20 @@ impl Bot {
     /// lateral hop (straight mode) or replanned (routed mode), then
     /// reported with full context. Closed doors fail loudly: door opening
     /// is not ported yet.
+    ///
+    /// Last resort before any routed give-up (`walking in circles`,
+    /// `detours`, `stalled`, `no route`) with zero net movement: one
+    /// server-truth sidestep in each cardinal direction (`bump_step`).
+    /// The planner's collision can read shut where the server still walks
+    /// (Draynor market stalls); the server's answer to a direct step is
+    /// truth. One bump+replan cycle per call, then the original error.
+    /// Walkable targets and passing walks never bump: tick for tick the
+    /// old paths.
+    ///
+    /// Contract: Ok means the exact tile is reached, or — when the target
+    /// tile itself collides (tree, booth, counter) — the BFS-nearest
+    /// reachable tile (resolved once in `walk_routed`). Walkable targets
+    /// behave exactly as before, tick for tick.
     pub fn walk_to(&mut self, x: i32, z: i32, level: i32, timeout: u64) -> Result<()> {
         // Stall detection (a few ticks without progress) reports stuck
         // walks; this overall budget only caps absurd detours, so scale
@@ -85,7 +98,7 @@ impl Bot {
             let leg = self.straight_chunk(x, z);
             self.route = leg.clone();
             if let Err(err) = self.send_and_await(&leg, run, deadline) {
-                if crate::error::is_interrupted(&err) {
+                if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
                     self.route.clear();
                     self.route_target = None;
                     return Err(err);
@@ -147,8 +160,78 @@ impl Bot {
         if let (Some(first), Some(last)) = (leg.first(), leg.last()) {
             self.act(format!("walk leg {} steps ({},{})>({},{})", leg.len(), first.0, first.1, last.0, last.1));
         }
-        self.send_walk(leg, run)?;
-        self.await_leg(leg, deadline)
+        let (start_x, start_z, start_level) = (self.world.x, self.world.z, self.world.level);
+        let outcome = match self.send_walk(leg, run) {
+            Err(err) => Err(err),
+            Ok(()) => self.await_leg(leg, deadline),
+        };
+        // Refusal probe, read-only: a chunk ending on its start tile moved
+        // nowhere, so the server refused the step (or nothing was sent) —
+        // never a slow walk. Stops and deadline timeouts report elsewhere.
+        let stopped = matches!(&outcome, Err(err) if crate::error::is_interrupted(err));
+        if !stopped
+            && !matches!(&outcome, Err(Error::Io(_) | Error::Login(_)))
+            && self.world.ticks <= deadline
+            && (self.world.x, self.world.z, self.world.level) == (start_x, start_z, start_level)
+        {
+            if let Some(suspect) = self.suspect_tile(leg, (start_x, start_z, start_level)) {
+                self.log(&format!("walk blocked: {suspect}"));
+            } else {
+                let (step_x, step_z) = leg[0];
+                let live = self.world.loc_at(step_x, step_z, self.world.level);
+                let flags = self.collision.get(step_x, step_z, self.world.level);
+                self.log(&Self::refused_line(leg, (start_x, start_z, start_level), live, flags));
+            }
+        }
+        outcome
+    }
+
+    /// One refusal line, pure so tests lock it: the first step tile carries
+    /// the prime suspect (no progress means step one never succeeded), the
+    /// live loc names a re-closed door and the flags a blocking wall.
+    pub(crate) fn refused_line(leg: &[(i32, i32)], start: (i32, i32, i32), live: Option<(u16, u8, u8)>, flags: u32) -> String {
+        let live_text = match live {
+            Some((loc_id, shape, angle)) => format!("loc {loc_id} shape={shape} angle={angle}"),
+            None => "none".to_string(),
+        };
+        format!(
+            "step refused: wanted {leg:?} from ({},{},{}) live={live_text} flags={flags:#x}",
+            start.0, start.1, start.2
+        )
+    }
+
+    /// First leg step that explains a refusal: live locs,
+    /// directionally-shut steps and known doors. Entities never block
+    /// walking server-side (`canMove` ignores `NPC_OCC`/`PLAYER_OCC`),
+    /// so occupants are deliberately not reported. The old probe below
+    /// only sees leg[0]'s flags, so a blocker at step 2..24 reads as a
+    /// refusal on an open tile. Pure diagnosis, no movement.
+    pub(crate) fn suspect_tile(&self, leg: &[(i32, i32)], start: (i32, i32, i32)) -> Option<String> {
+        let level = start.2;
+        let mut prev = (start.0, start.1);
+        for (index, tile) in leg.iter().enumerate() {
+            let (tile_x, tile_z) = *tile;
+            let (dx, dz) = (tile_x - prev.0, tile_z - prev.1);
+            // Live ground decor (shape 22: soil, grass, rugs) never blocks
+            // feet; reporting it cried wolf on every courtyard stall.
+            if let Some((loc, shape, angle)) = self.world.loc_at(tile_x, tile_z, level) {
+                if shape != 22 {
+                    return Some(format!("step {index} live loc {loc} shape={shape} angle={angle} at ({tile_x},{tile_z})"));
+                }
+            }
+            if self.doors.contains_key(&(tile_x, tile_z, level)) {
+                return Some(format!("step {index} known door at ({tile_x},{tile_z})"));
+            }
+            if (dx == 0 || dz == 0)
+                && !crate::collision::step_open(&self.collision, prev.0, prev.1, level, dx, dz)
+            {
+                let here = self.collision.get(prev.0, prev.1, level);
+                let there = self.collision.get(tile_x, tile_z, level);
+                return Some(format!("step {index} shut ({},{})->({tile_x},{tile_z}) flags={here:#x}/{there:#x}", prev.0, prev.1));
+            }
+            prev = (tile_x, tile_z);
+        }
+        None
     }
 
     /// One perpendicular hop to slide off a clipped corner. Ok(true) when
@@ -165,12 +248,15 @@ impl Bot {
             if hop.is_empty() {
                 continue;
             }
-            if self.send_walk(&hop, run).is_err() {
+            if let Err(err) = self.send_walk(&hop, run) {
+                if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
+                    return Err(err);
+                }
                 continue;
             }
             match self.await_leg(&hop, deadline) {
                 Ok(()) => return Ok(true),
-                Err(err) if crate::error::is_interrupted(&err) => return Err(err),
+                Err(err) if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) => return Err(err),
                 Err(_) => {}
             }
         }
@@ -181,451 +267,74 @@ impl Bot {
     /// `approach_direction` param): 0 opens from any side, 1 needs the
     /// `check_axis` side, 2 the other. None when not a maze door.
     /// Public for the maze solver's own route planning.
-    pub fn maze_entry_side(loc_id: u16) -> Option<u8> {
-        match loc_id {
-            3628 => Some(0), // macro_maze_walllow
-            3629 => Some(1), // macro_maze_walllow_safe1
-            3630 => Some(2), // macro_maze_walllow_safe2
-            3631 => Some(2), // macro_maze_walllow_safe3
-            3632 => Some(1), // macor_maze_walllow_safe4
-            _ => None,
-        }
+
+
+    /// Bump-escape trigger, pure so tests lock it: only a give-up with
+    /// zero net movement (still on the call's entry tile) may sidestep,
+    /// and only once per `walk_to` call.
+    fn bump_armed(entry: (i32, i32, i32), current: (i32, i32, i32), bumped: bool) -> bool {
+        !bumped && entry == current
     }
 
-    /// True for the five maze walllow doors (content `all.loc`, category
-    /// `macro_maze_wall_door`), the only maze locs that swing.
-    pub fn is_maze_door(loc_id: u16) -> bool {
-        Self::maze_entry_side(loc_id).is_some()
-    }
-
-    /// Repaint known doors from their live state before planning: the base
-    /// map goes stale on every swing, and planning through a tile the
-    /// server reads shut sends legs the server refuses. Not streamed yet
-    /// keeps its static paint.
-    fn sync_live_doors(&mut self) {
-        let Some(pack) = &self.maps else { return };
-        for ((door_x, door_z, door_level), (loc_id, shape, angle)) in self.doors.clone() {
-            match self.world.loc_at(door_x, door_z, door_level) {
-                Some((id, _, _)) if id == loc_id => {
-                    if let Some(def) = pack.loc_def(loc_id as usize) {
-                        crate::collision::change_loc_collision(
-                            &mut self.collision, shape, angle, def.blockrange, def.length, def.width, def.active, door_x, door_z, door_level, true,
-                        );
-                    }
-                }
-                Some(_) => {
-                    pack.unpaint_door(&mut self.collision, loc_id, shape, angle, door_x, door_z, door_level);
-                }
-                None => {}
-            }
-        }
-    }
-
-    /// Open one known shut door we stand next to (walk legs step one
-    /// tile at a time, so adjacency holds): click and verify live, like
-    /// the maze swing but for ordinary doors that re-close behind us.
-    /// Already-open (live id flipped) costs nothing. True when the step
-    /// may go through; toll gates without allowance stay shut.
-    fn open_shut_door(&mut self, door_x: i32, door_z: i32, door_level: i32, loc_id: u16) -> bool {
-        if self.toll_gates.contains(&(door_x, door_z, door_level)) && !self.allow_paid {
-            return false;
-        }
-        if !matches!(self.world.loc_at(door_x, door_z, door_level), Some((id, _, _)) if id == loc_id) {
-            return true;
-        }
-        let Some(op) = self.maps.as_ref().and_then(|pack| pack.loc_def(loc_id as usize)).and_then(|def| def.open_op) else {
-            return false;
-        };
-        self.intend(&format!("opening the door at ({door_x},{door_z})"));
-        if self.op_loc(op, door_x, door_z, loc_id).is_err() {
-            return false;
-        }
-        if !self.door_opened(door_x, door_z, door_level, loc_id) {
-            println!("door loc {loc_id} at ({door_x},{door_z}) did not open, leaving it shut");
-            return false;
-        }
-        // Unpaint the freed tile so steps pass: the live loc moved away
-        // but the base map still paints it shut.
-        if let Some(pack) = &self.maps {
-            let (_, shape, angle) = self.doors.get(&(door_x, door_z, door_level)).copied().unwrap_or((loc_id, 0, 0));
-            pack.unpaint_door(&mut self.collision, loc_id, shape, angle, door_x, door_z, door_level);
-        }
-        true
-    }
-
-    /// Stand on a cardinal tile of a maze door, on its entry side: the
-    /// server refuses wall clicks from diagonals ("can't reach that")
-    /// and one-way doors from the wrong side, and a click from the wrong
-    /// side only bounces back onto the door. True once standing on one.
-    /// Walks explicit BFS steps (capped): walk_to's fan would wander off
-    /// opening random doors instead of stepping next door.
-    fn approach_maze_door(
-        &mut self,
-        door_x: i32,
-        door_z: i32,
-        door_level: i32,
-        loc_id: u16,
-        angle: u8,
-        _timeout: u64,
-    ) -> bool {
-        let entry = Self::maze_entry_side(loc_id).unwrap_or(0);
-        // check_axis (door_procs.rs2): W/E doors read the same-X tiles,
-        // N/S doors the same-Z ones. Only the entry side can swing
-        // through (entry 2 needs the off side, everything else the axis).
-        let axis: Vec<(i32, i32)> = match angle {
-            0 | 2 => vec![(door_x, door_z + 1), (door_x, door_z - 1)],
-            _ => vec![(door_x + 1, door_z), (door_x - 1, door_z)],
-        };
-        let off: Vec<(i32, i32)> = match angle {
-            0 | 2 => vec![(door_x + 1, door_z), (door_x - 1, door_z)],
-            _ => vec![(door_x, door_z + 1), (door_x, door_z - 1)],
-        };
-        let mut cands = if entry == 2 { off } else { axis };
-        cands.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
-        self.ensure_area(self.world.x, self.world.z, 70);
-        let planning = match &self.maps {
-            Some(pack) => pack.planning_view(&self.collision, &self.doors, &self.toll_gates, self.allow_paid),
-            None => self.collision.clone(),
-        };
-        for (stand_x, stand_z) in cands {
-            if self.world.level == door_level && (self.world.x, self.world.z) == (stand_x, stand_z) {
-                return true;
-            }
-            let mut router = Router::new();
-            let waypoints = router.find_path_to_tile(&planning, door_level, self.world.x, self.world.z, stand_x, stand_z);
-            if waypoints.is_empty() {
-                eprintln!("maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): no planned path");
-                continue;
-            }
-            let steps = crate::nav::expand_waypoints(&waypoints, self.world.x, self.world.z);
-            if steps.len() > 12 {
-                eprintln!("maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): path too long", );
-                continue;
-            }
-            let _ = self.walk_path(&steps, 60);
-            eprintln!("maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): walked to {:?}", self.position());
-            if self.world.level == door_level && (self.world.x, self.world.z) == (stand_x, stand_z) {
-                return true;
-            }
-        }
-        // Exact stands can read shut in live collision while a plain
-        // neighbour is one step away: the server walks the last step
-        // itself on click (p_walk in macro_event_maze.rs2), so any
-        // cardinal tile clicks. Prefer the entry side for one-way doors.
-        let mut neighbours = vec![
-            (door_x + 1, door_z),
-            (door_x - 1, door_z),
-            (door_x, door_z + 1),
-            (door_x, door_z - 1),
-        ];
-        neighbours.sort_by_key(|(stand_x, stand_z)| {
-            let side = match angle {
-                0 | 2 => *stand_x == door_x,
-                _ => *stand_z == door_z,
-            };
-            let wanted = entry == 0 || (entry == 1 && side) || (entry == 2 && !side);
-            ((!wanted) as u8, (stand_x - self.world.x).abs() + (stand_z - self.world.z).abs())
-        });
-        for (stand_x, stand_z) in neighbours {
-            if self.world.level == door_level && (self.world.x, self.world.z) == (stand_x, stand_z) {
-                return true;
-            }
-            if self.world.level == door_level
-                && (self.world.x - stand_x).abs() + (self.world.z - stand_z).abs() == 1
-                && crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level, stand_x - self.world.x, stand_z - self.world.z)
-                && self.step_to(stand_x, stand_z, 8).unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        // Already cardinally adjacent (or on the door): click from here.
-        if self.world.level == door_level && (self.world.x - door_x).abs() + (self.world.z - door_z).abs() <= 1 {
-            return true;
-        }
-        false
-    }
-
-    /// Stand to click a door: maze doors need their correct cardinal
-    /// side, every other door takes the generic adjacent approach.
-    fn open_door_stand(
-        &mut self,
-        door_x: i32,
-        door_z: i32,
-        door_level: i32,
-        loc_id: u16,
-        angle: u8,
-        timeout: u64,
-    ) -> bool {
-        if Self::is_maze_door(loc_id) {
-            self.approach_maze_door(door_x, door_z, door_level, loc_id, angle, timeout)
-        } else {
-            self.approach(door_x, door_z, door_level, 1, timeout).is_ok()
-        }
-    }
-
-    /// Nearest known maze walllow door within `radius` tiles, if any.
-    pub fn nearest_maze_door(&self, radius: i32) -> Option<(i32, i32, i32)> {
-        let mut best: Option<(i32, (i32, i32, i32))> = None;
-        for (tile, (loc_id, _, _)) in self.doors.iter() {
-            if tile.2 != self.world.level || !Self::is_maze_door(*loc_id) {
-                continue;
-            }
-            let dist = (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs();
-            if dist <= radius && best.is_none_or(|known| dist < known.0) {
-                best = Some((dist, *tile));
-            }
-        }
-        best.map(|(_, tile)| tile)
-    }
-
-    /// Open one maze walllow door: stand on its entry side, click, and if
-    /// the swing parks us on the door tile, click once more from there
-    /// (standing on the door reads as the through side, so the second
-    /// click always teleports through). True when the server responded
-    /// (parked or through: either way replan from the new tile); only a
-    /// door that leaves us exactly in place reads shut and blacklists.
-    pub fn open_maze_door(&mut self, door_x: i32, door_z: i32, door_level: i32) -> Result<bool> {
-        let Some((loc_id, shape, angle)) = self.doors.remove(&(door_x, door_z, door_level)) else {
-            return Err(Error::Unreachable(format!("no known door at ({door_x},{door_z},{door_level})")));
-        };
-        if Self::maze_entry_side(loc_id).is_none() {
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return Err(Error::Unreachable(format!("loc {loc_id} at ({door_x},{door_z}) is not a maze door")));
-        }
-        let Some(op) = self.maps.as_ref().and_then(|pack| pack.loc_def(loc_id as usize)).and_then(|def| def.open_op) else {
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return Ok(false);
-        };
-        if !self.approach_maze_door(door_x, door_z, door_level, loc_id, angle, 800) {
-            println!("maze door {loc_id} at ({door_x},{door_z}) unreachable from {:?}", self.position());
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return Ok(false);
-        }
-        println!("opening maze door loc {loc_id} at ({door_x},{door_z},{door_level})");
-        self.intend(&format!("opening the maze door at ({door_x},{door_z})"));
-        let start = (self.world.x, self.world.z);
-        // Through-destination of the swing (door_open for straight walls).
-        let dest = match (shape, angle) {
-            (0, 0) => (door_x - 1, door_z),
-            (0, 1) => (door_x, door_z + 1),
-            (0, 2) => (door_x + 1, door_z),
-            (0, 3) => (door_x, door_z - 1),
-            _ => (door_x, door_z),
-        };
-        // Up to three clicks: an off-side first click parks us on the
-        // door tile, and the swing turns the loc to inviswall for a few
-        // ticks (open_and_close_door) — a click inside that window is
-        // ignored, so wait for the walllow back before clicking again.
-        for _ in 0..3 {
-            let before = (self.world.x, self.world.z);
-            if self.op_loc(op, door_x, door_z, loc_id).is_err() {
-                break;
-            }
-            let target = self.world.ticks + 6;
-            while self.world.ticks < target {
-                if self.pump(1).is_err() {
-                    break;
-                }
-                let now = (self.world.x, self.world.z);
-                if now == dest && now != before {
-                    self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
+    /// One server-truth sidestep in each cardinal direction, no planning:
+    /// the planner's collision is the suspect, so it is not consulted.
+    /// Each step is tick-bounded (4 pumps, `step_to`'s own bound); a refused
+    /// step tries the next side. True on the first step the server walks.
+    /// Only an operator stop is an Err; every refusal is just the next side.
+    fn bump_step(&mut self) -> Result<bool> {
+        for (step_x, step_z) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (next_x, next_z) = (self.world.x + step_x, self.world.z + step_z);
+            match self.step_to(next_x, next_z, 4) {
+                Ok(true) => {
+                    println!("{} bump stepped to ({next_x},{next_z})", self.tag());
                     return Ok(true);
                 }
-                if now == (door_x, door_z) {
-                    break;
-                }
+                Ok(false) => {}
+                Err(err) if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) => return Err(err),
+                Err(_) => {}
             }
-            if (self.world.x, self.world.z) != (door_x, door_z) {
-                break;
-            }
-            let revert = self.world.ticks + 8;
-            while self.world.ticks < revert {
-                if self.pump(1).is_err() {
-                    break;
-                }
-                if matches!(self.world.loc_at(door_x, door_z, door_level), Some((id, _, _)) if id == loc_id) {
-                    break;
-                }
-            }
-        }
-        self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-        if (self.world.x, self.world.z) != start {
-            // Parked or through without matching the computed dest (stale
-            // angle): the door responded, replan from here instead of
-            // blacklisting a working door.
-            return Ok(true);
-        }
-        println!("maze door loc {loc_id} at ({door_x},{door_z}) did not open, leaving it shut");
-        if self.world.modal.as_ref().is_some_and(|modal| modal.layer != "overlay") {
-            let _ = self.close_modal();
-            let _ = self.pump(2);
         }
         Ok(false)
     }
 
-    /// Open the nearest known door that sits ON the planned path: a route
-    /// may cross a door ten tiles ahead, and retrying the same refused step
-    /// while standing next to nothing is a dead end. Each door is tried once.
-    /// The click is verified live (id/shape flip): an unverified door stays
-    /// shut in the plan and never resets the stall counter.
-    fn open_door_on_path(&mut self, tiles: &[(i32, i32)]) -> bool {
-        let mut best: Option<(usize, (i32, i32, i32))> = None;
-        for (index, (tile_x, tile_z)) in tiles.iter().enumerate() {
-            let key = (*tile_x, *tile_z, self.world.level);
-            if !self.doors.contains_key(&key) {
-                continue;
+    /// Shared by every `walk_routed` give-up: when the planner quits
+    /// without net movement and no bump fired yet, try one server-truth
+    /// sidestep. Ok(true): the bump moved, replan once (`still` reset,
+    /// `bumped` set). Ok(false): still walled in, return the original
+    /// error unchanged. Err: operator stop, return it at once.
+    fn bump_escape(&mut self, entry: (i32, i32, i32), bumped: &mut bool, still: &mut u32) -> Result<bool> {
+        if !Self::bump_armed(entry, (self.world.x, self.world.z, self.world.level), *bumped) {
+            return Ok(false);
+        }
+        match self.bump_step() {
+            Ok(true) => {
+                *bumped = true;
+                *still = 0;
+                Ok(true)
             }
-            if !self.allow_paid && self.toll_gates.contains(&key) {
-                continue;
-            }
-            if best.as_ref().is_none_or(|(known, _)| index < *known) {
-                best = Some((index, key));
-            }
+            Ok(false) => Ok(false),
+            Err(err) => Err(err),
         }
-        let Some((_, (door_x, door_z, door_level))) = best else {
-            return false;
-        };
-        let Some((loc_id, shape, angle)) = self.doors.remove(&(door_x, door_z, door_level)) else {
-            return false;
-        };
-        let tolled = self.toll_gates.contains(&(door_x, door_z, door_level));
-        let Some(op) = self.maps.as_ref()
-            .and_then(|pack| pack.loc_def(loc_id as usize))
-            .and_then(|def| def.open_op) else {
-            return false;
-        };
-        if self.open_door_stand(door_x, door_z, door_level, loc_id, angle, 800) {
-        } else {
-            println!("door {loc_id} at ({door_x},{door_z}) unreachable from {:?}", self.position());
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return false;
-        }
-        println!("opening door loc {loc_id} on path at ({door_x},{door_z},{door_level})");
-        self.intend(&format!("opening the door at ({door_x},{door_z})"));
-        if self.op_loc(op, door_x, door_z, loc_id).is_err() {
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return false;
-        }
-        let _ = self.pump(4);
-        if tolled && self.allow_paid && self.world.modal.is_some() {
-            let _ = self.chat_choose("Yes, ok.");
-            let _ = self.pump(10);
-        }
-        if !self.door_opened(door_x, door_z, door_level, loc_id) {
-            println!("door loc {loc_id} on path at ({door_x},{door_z}) did not open, leaving it shut");
-            if self.world.modal.is_some() {
-                let _ = self.close_modal();
-                let _ = self.pump(2);
-            }
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return false;
-        }
-        // Maze walllow doors re-lock behind us: keep them known (see
-        // open_nearest_door), only lasting doors leave the plan.
-        if Self::is_maze_door(loc_id) {
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            return true;
-        }
-        // Ordinary doors re-close too: keep the record so the next
-        // crossing re-verifies live instead of walking a tile the
-        // server reads shut.
-        self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-        if let Some(pack) = &self.maps {
-            pack.unpaint_door(&mut self.collision, loc_id, shape, angle, door_x, door_z, door_level);
-        }
-        true
     }
 
-    /// True once the live loc stops showing the closed id (doors flip id,
-    /// shape or vanish when they swing). Bounded watch: a click the engine
-    /// ignored reads as shut, never as open.
-    fn door_opened(&mut self, door_x: i32, door_z: i32, door_level: i32, closed_id: u16) -> bool {
-        let target = self.world.ticks + 12;
-        while self.world.ticks < target {
-            match self.world.loc_at(door_x, door_z, door_level) {
-                Some((id, _, _)) if id == closed_id => {}
-                _ => return true,
-            }
-            if self.pump(2).is_err() {
-                return false;
-            }
-        }
-        !matches!(
-            self.world.loc_at(door_x, door_z, door_level),
-            Some((id, _, _)) if id == closed_id
-        )
-    }
-
-    /// Click open the nearest closed door within `radius` tiles and unpaint
-    /// it from the live collision map. True when a door opened for real
-    /// (verified live): the caller replans and walks through. Each door is
-    /// tried once (re-clicking would shut it again).
-    fn open_nearest_door(&mut self, radius: i32) -> bool {
-        let mut cands: Vec<(i32, (i32, i32, i32))> = Vec::new();
-        for (tile, _) in self.doors.iter() {
-            if tile.2 != self.world.level {
-                continue;
-            }
-            if !self.allow_paid && self.toll_gates.contains(tile) {
-                continue;
-            }
-            let dist = (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs();
-            if dist <= radius {
-                cands.push((dist, *tile));
-            }
-        }
-        cands.sort();
-        for (_, (door_x, door_z, door_level)) in cands {
-            let Some((loc_id, shape, angle)) = self.doors.remove(&(door_x, door_z, door_level)) else {
-                continue;
-            };
-            let tolled = self.toll_gates.contains(&(door_x, door_z, door_level));
-            let Some(op) = self.maps.as_ref()
-                .and_then(|pack| pack.loc_def(loc_id as usize))
-                .and_then(|def| def.open_op) else {
-                continue;
-            };
-            println!("opening door loc {loc_id} at ({door_x},{door_z},{door_level})");
-            self.intend(&format!("opening the door at ({door_x},{door_z})"));
-            if self.open_door_stand(door_x, door_z, door_level, loc_id, angle, 300) {
-            } else {
-                self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-                continue;
-            }
-            if self.op_loc(op, door_x, door_z, loc_id).is_err() {
-                self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-                continue;
-            }
-            let _ = self.pump(4);
-            if tolled && self.allow_paid && self.world.modal.is_some() {
-                let _ = self.chat_choose("Yes, ok.");
-                let _ = self.pump(10);
-            }
-            if !self.door_opened(door_x, door_z, door_level, loc_id) {
-                println!("door loc {loc_id} at ({door_x},{door_z}) did not open, leaving it shut");
-                if self.world.modal.is_some() {
-                    let _ = self.close_modal();
-                    let _ = self.pump(2);
-                }
-                self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-                continue;
-            }
-            // Maze walllow doors re-lock behind us: keep them known so the
-            // next crossing can swing them again instead of planning
-            // through a tile the server reads shut.
-            if Self::is_maze_door(loc_id) {
-                self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-                return true;
-            }
-            // Same for ordinary doors: the server re-closes them, so keep
-            // the record for the next crossing to re-verify live.
-            self.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-            if let Some(pack) = &self.maps {
-                pack.unpaint_door(&mut self.collision, loc_id, shape, angle, door_x, door_z, door_level);
-            }
-            return true;
-        }
-        false
+    /// Hop rank: closeness to the goal first (routing unchanged), then
+    /// fewest visits. Detouring back through a walked tile loses ties,
+    /// which kills the plan-A/plan-B flip-flop (`walking in circles`)
+    /// without banning real backtracks (a lone planned option still
+    /// wins whatever its rank).
+    pub(crate) fn hop_rank(
+        goal_x: i32,
+        goal_z: i32,
+        src_x: i32,
+        src_z: i32,
+        hop: (i32, i32),
+        visits: &std::collections::HashMap<(i32, i32), u32>,
+    ) -> (i32, u32) {
+        let (hop_dx, hop_dz) = hop;
+        let to_x = goal_x - (src_x + hop_dx);
+        let to_z = goal_z - (src_z + hop_dz);
+        let seen = visits.get(&(src_x + hop_dx, src_z + hop_dz)).copied().unwrap_or(0);
+        (to_x.abs() + to_z.abs(), seen)
     }
 
     /// BFS-windowed walk through a loaded collision map. Each window plans
@@ -641,8 +350,20 @@ impl Bot {
         let mut doors_opened = 0u32;
         let mut best_reach = i32::MAX;
         let mut detours = 0u32;
+        // Bump-escape anchor: the entry tile, plus whether the single
+        // bump+replan cycle already fired. Only a give-up with zero net
+        // movement may bump, and only once.
+        let entry = (self.world.x, self.world.z, self.world.level);
+        let mut bumped = false;
         let mut visits: std::collections::HashMap<(i32, i32), u32> = std::collections::HashMap::new();
-        while !self.arrived(x, z, level) {
+        // Blocked-target goal, resolved once: the exact tile of a tree,
+        // booth or counter collides, so `arrived` on it never converges
+        // (the walk paced until `walking in circles`). The goal switches to
+        // the BFS-nearest reachable tile; walkable targets keep the exact
+        // tile, tick for tick as before.
+        let mut goal_x = x;
+        let mut goal_z = z;
+        while !self.arrived(goal_x, goal_z, level) {
             if self.world.ticks > deadline || hops > 120 {
                 self.route.clear();
                 self.route_target = None;
@@ -655,6 +376,19 @@ impl Bot {
             let seen = visits.entry((src_x, src_z)).or_insert(0);
             *seen += 1;
             if *seen >= 3 {
+                // Planner loops without the server refusing a step: the
+                // map may read shut where the server walks. One sidestep
+                // on the entry tile only; moved walks replan, walled-in
+                // walks keep this exact error.
+                match self.bump_escape(entry, &mut bumped, &mut still) {
+                    Err(err) => {
+                        self.route.clear();
+                        self.route_target = None;
+                        return Err(err);
+                    }
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                }
                 self.route.clear();
                 self.route_target = None;
                 return Err(Error::Unreachable(format!(
@@ -678,21 +412,41 @@ impl Bot {
                 Some(pack) => pack.planning_view(&self.collision, &self.doors, &self.toll_gates, self.allow_paid),
                 None => self.collision.clone(),
             };
+            // First iteration that sees the dest inside the window (at once
+            // for a near target): a blocked dest switches the goal to its
+            // BFS-nearest reachable tile and finishes Ok there. Still
+            // unresolvable (too far for one window, or no visited tile near
+            // it) keeps the exact goal and fails loud below with its
+            // blockers — never a silent fallback.
+            if (goal_x, goal_z) == (x, z) && !crate::collision::tile_walkable(collision.get(x, z, level)) {
+                if let Some(near) = router.closest_to_blocked(&collision, level, src_x, src_z, x, z) {
+                    goal_x = near.0;
+                    goal_z = near.1;
+                    if (src_x, src_z) == (goal_x, goal_z) {
+                        self.route.clear();
+                        self.route_target = None;
+                        return Ok(());
+                    }
+                }
+            }
             // March toward the target in short hops: each hop plans inside
             // its own window, so detours (bridges, gates) within ~40 tiles
             // are found instead of demanding one window for the whole trek.
-            let (dx, dz) = (x - src_x, z - src_z);
+            let (dx, dz) = (goal_x - src_x, goal_z - src_z);
             // Fan of hop targets: the direct step first, then 16 bearings at
-            // two radii, most promising (closest to the destination) first.
+            // 40 tiles, most promising (closest to the destination) first.
             // A single window cannot solve a whole trek: bridges, gates and
             // castle walls force detours the fan discovers step by step.
+            // No 80-tile ring: the BFS window only spans +-64 tiles, so
+            // farther hops plan to window edges instead of real paths and
+            // the walk swings instead of committing.
             let mut candidates: Vec<(i32, i32)> = Vec::new();
             let direct_x = dx.clamp(-55, 55);
             let direct_z = dz.clamp(-55, 55);
             if (direct_x, direct_z) != (0, 0) {
                 candidates.push((direct_x, direct_z));
             }
-            for radius in [40.0f64, 80.0] {
+            for radius in [40.0f64] {
                 for step in 0..16 {
                     let angle = std::f64::consts::TAU * f64::from(step) / 16.0;
                     let hop_x = src_x + (radius * angle.cos()).round() as i32;
@@ -702,11 +456,7 @@ impl Bot {
                     }
                 }
             }
-            candidates.sort_by_key(|(hop_dx, hop_dz)| {
-                let to_x = x - (src_x + hop_dx);
-                let to_z = z - (src_z + hop_dz);
-                to_x.abs() + to_z.abs()
-            });
+            candidates.sort_by_key(|hop| Self::hop_rank(goal_x, goal_z, src_x, src_z, *hop, &visits));
             // Detours are allowed but bounded: leaving a courtyard or a
             // walled yard costs a few hops that do not get closer, while a
             // run of them means the target is genuinely unreachable.
@@ -723,13 +473,22 @@ impl Bot {
                 }
             }
             if hopped.is_some() {
-                let reach = (x - (src_x + chosen.0)).abs() + (z - (src_z + chosen.1)).abs();
+                let reach = (goal_x - (src_x + chosen.0)).abs() + (goal_z - (src_z + chosen.1)).abs();
                 if reach < best_reach {
                     best_reach = reach;
                     detours = 0;
                 } else {
                     detours += 1;
                     if detours > 10 {
+                        match self.bump_escape(entry, &mut bumped, &mut still) {
+                            Err(err) => {
+                                self.route.clear();
+                                self.route_target = None;
+                                return Err(err);
+                            }
+                            Ok(true) => continue,
+                            Ok(false) => {}
+                        }
                         self.route.clear();
                         self.route_target = None;
                         return Err(Error::Unreachable(format!(
@@ -743,9 +502,18 @@ impl Bot {
             let tiles = match hopped {
                 Some(tiles) if !tiles.is_empty() => tiles,
                 _ => {
-                    if doors_opened < 8 && self.open_nearest_door(15) {
-                        doors_opened += 1;
-                        continue;
+                    // No plan at all: known doors already read open in the
+                    // view, so a nearby click cannot create a route (the
+                    // blockage is not a known door). Fail loud with the
+                    // blockers instead of pacing speculative opens.
+                    match self.bump_escape(entry, &mut bumped, &mut still) {
+                        Err(err) => {
+                            self.route.clear();
+                            self.route_target = None;
+                            return Err(err);
+                        }
+                        Ok(true) => continue,
+                        Ok(false) => {}
                     }
                     let report = router.unreachable_report(
                         &collision, level, src_x, src_z, x, z, None, 8, 1, 1, 0, crate::reach::SHAPE_TILE, 0,
@@ -758,7 +526,7 @@ impl Bot {
                     )));
                 }
             };
-            let final_hop = tiles.last() == Some(&(x, z));
+            let final_hop = tiles.last() == Some(&(goal_x, goal_z));
             self.route = tiles.clone();
             let goal = tiles.last().copied();
             for chunk in tiles.chunks(STEP_CAP) {
@@ -768,15 +536,18 @@ impl Bot {
                     return Err(Error::Timeout(format!("walk to {x},{z} timed out at {:?} ({} ticks)", self.position(), timeout)));
                 }
                 if let Err(err) = self.send_and_await(chunk, run, deadline) {
-                    if crate::error::is_interrupted(&err) {
+                    if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
                         self.route.clear();
                         self.route_target = None;
                         return Err(err);
                     }
+                    // Silent break replans blind: log what stopped the leg
+                    // (server refusal, stall, timeout slice) with position.
+                    self.log(&format!("leg stopped: {err} at {:?}", self.position()));
                     break;
                 }
             }
-            if self.arrived(x, z, level) {
+            if self.arrived(goal_x, goal_z, level) {
                 break;
             }
             // Final hop that ends somewhere else: the target tile itself
@@ -788,16 +559,21 @@ impl Bot {
             }
             if (self.world.x, self.world.z) == (src_x, src_z) {
                 if std::env::var("WALK_DEBUG").is_ok() {
-                    eprintln!("walk stalled at {:?} (still={still})", self.position());
+                    eprintln!("{} walk stalled at {:?} (still={still})", self.tag(), self.position());
                 }
-                if doors_opened < 8 && self.open_nearest_door(3) {
+                // Nothing next to us: the refused step may need a door
+                // further along the route (adjacent ones open on the spot;
+                // speculative nearby opens only fed the pacing).
+                if doors_opened < 12 && self.open_door_on_path(&self.route.clone(), false) {
                     doors_opened += 1;
                     still = 0;
                     continue;
                 }
-                // Nothing next to us: the refused step may need a door
-                // further along the route.
-                if doors_opened < 12 && self.open_door_on_path(&self.route.clone()) {
+                // Fully stalled with no near door helping: the first
+                // route-door may sit ten tiles out, where whole-click
+                // refusals stall and the near opener never fires. Walk to
+                // it and open it there instead of pacing the same legs.
+                if doors_opened < 12 && self.open_door_on_path(&self.route.clone(), true) {
                     doors_opened += 1;
                     still = 0;
                     continue;
@@ -807,6 +583,18 @@ impl Bot {
                 still = 0;
             }
             if still >= 3 {
+                // Legs sent, server never moved us, doors hold nothing:
+                // last chance is the direct sidestep before the stall
+                // error. A bump that moves replans once from there.
+                match self.bump_escape(entry, &mut bumped, &mut still) {
+                    Err(err) => {
+                        self.route.clear();
+                        self.route_target = None;
+                        return Err(err);
+                    }
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                }
                 self.route.clear();
                 self.route_target = None;
                 return Err(Error::Timeout(format!("walk to {x},{z} stalled at {:?} ({} ticks)", self.position(), timeout)));
@@ -818,243 +606,16 @@ impl Bot {
     }
 
     /// Walk within `radius` of a tile (blocked targets count as reached).
-    pub fn approach(&mut self, x: i32, z: i32, level: i32, radius: i32, timeout: u64) -> Result<()> {
-        self.act(format!("approach ({x},{z},{level}) r={radius} timeout={timeout}"));
-        if self.world.level == level && (self.world.x - x).abs() + (self.world.z - z).abs() <= radius {
-            return Ok(());
-        }
-        let dist = (self.world.x - x).abs() + (self.world.z - z).abs();
-        let exact_budget = timeout.min(dist as u64 * 10 + 60);
-        let mut cause = String::new();
-        if let Err(err) = self.walk_to(x, z, level, exact_budget) {
-            if crate::error::is_interrupted(&err) {
-                return Err(err);
-            }
-            cause = format!(" exact: {err}");
-        }
-        if self.world.level == level && (self.world.x - x).abs() + (self.world.z - z).abs() <= radius {
-            return Ok(());
-        }
-        let deadline = self.world.ticks + timeout;
-        let here = (self.world.x, self.world.z);
-        let mut candidates = Vec::new();
-        for dx in -radius..=radius {
-            for dz in -radius..=radius {
-                candidates.push((x + dx, z + dz));
-            }
-        }
-        candidates.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
-        for (cx, cz) in candidates {
-            if (cx, cz) == here && self.world.level == level {
-                return Ok(());
-            }
-            let rest = deadline.saturating_sub(self.world.ticks).max(250);
-            match self.walk_to(cx, cz, level, rest) {
-                Err(err) if crate::error::is_interrupted(&err) => return Err(err),
-                Err(err) if cause.is_empty() => {
-                    cause = format!(" via ({cx},{cz}): {err}");
-                }
-                Ok(())
-                    if self.world.level == level
-                        && (self.world.x - x).abs() + (self.world.z - z).abs() <= radius =>
-                {
-                    return Ok(());
-                }
-                _ => {}
-            }
-        }
-        Err(Error::Unreachable(format!("nothing reachable within {radius} of {x},{z} from {:?}.{cause}", self.position())))
-    }
+    ///
+    /// Tries the exact tile first, then a nearest-first fan of (2r+1)^2
+    /// candidates. Two guards keep a stuck fan loud instead of pacing on
+    /// dynamic doors: doors already opened and verified by this call fail
+    /// fast on second encounter (see `approach_opened`), and the fan
+    /// aborts after 10 candidates without getting closer to (x,z) with
+    /// `no progress toward ...` (mirror of `walk_routed`'s `detours>10`).
+    /// Passing walks behave tick for tick as before (no extra pump).
 
-    /// Stand on an orthogonally adjacent tile of an NPC: the server only
-    /// accepts NPC clicks from a side, never from a diagonal.
-    pub fn approach_npc(&mut self, slot: u16, timeout: u64) -> Result<()> {
-        let deadline = self.world.ticks + timeout;
-        while self.world.ticks < deadline {
-            let Some(npc) = self.world.npcs.get(&slot) else {
-                return Err(Error::Unreachable(format!("NPC {slot} left view at {:?}", self.position())));
-            };
-            if npc.level != self.world.level {
-                return Err(Error::Unreachable(format!("NPC {slot} is on level {} at {:?}", npc.level, self.position())));
-            }
-            if (npc.x - self.world.x).abs() + (npc.z - self.world.z).abs() == 1 {
-                return Ok(());
-            }
-            let size = (self.tables.npc_size)(npc.npc_type).max(1) as i32;
-            let mut ring = Vec::new();
-            for dz in 0..size {
-                ring.push((npc.x - 1, npc.z + dz));
-                ring.push((npc.x + size, npc.z + dz));
-            }
-            for dx in 0..size {
-                ring.push((npc.x + dx, npc.z - 1));
-                ring.push((npc.x + dx, npc.z + size));
-            }
-            ring.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
-            let mut moved = false;
-            for (cx, cz) in ring {
-                if self.world.ticks >= deadline {
-                    break;
-                }
-                if (cx, cz) == (self.world.x, self.world.z) {
-                    continue;
-                }
-                let rest = deadline.saturating_sub(self.world.ticks).max(250);
-                if self.walk_to(cx, cz, self.world.level, rest).is_ok() {
-                    moved = true;
-                    break;
-                }
-            }
-            if !moved {
-                self.pump(1)?;
-            }
-            if let Some(npc) = self.world.npcs.get(&slot) {
-                if npc.level == self.world.level && (npc.x - self.world.x).abs() + (npc.z - self.world.z).abs() == 1 {
-                    return Ok(());
-                }
-            }
-        }
-        Err(Error::Unreachable(format!("no clickable tile for NPC {slot} from {:?}", self.position())))
-    }
-
-    /// Walk one adjacent tile, without routing. True when the server moved us.
-    pub fn step_to(&mut self, x: i32, z: i32, timeout: u64) -> Result<bool> {
-        if (self.world.x, self.world.z) == (x, z) {
-            return Ok(true);
-        }
-        if (x - self.world.x).abs() + (z - self.world.z).abs() != 1 {
-            return Err(Error::Unreachable(format!("step_to is one tile, not {:?} -> {x},{z}", self.position())));
-        }
-        let run = self.want_run();
-        self.send_walk(&[(x, z)], run)?;
-        let deadline = self.world.ticks + timeout;
-        while self.world.ticks < deadline {
-            self.pump(1)?;
-            if (self.world.x, self.world.z) == (x, z) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// Walk an explicit tile route, no router involved. True at the last tile.
-    pub fn walk_steps(&mut self, steps: &[(i32, i32)], timeout: u64) -> Result<bool> {
-        if steps.is_empty() {
-            return Ok(true);
-        }
-        let run = self.want_run();
-        for chunk in steps.chunks(STEP_CAP) {
-            self.send_walk(chunk, run)?;
-            let deadline = self.world.ticks + timeout.max(1);
-            let target = chunk[chunk.len() - 1];
-            while self.world.ticks < deadline {
-                self.pump(1)?;
-                if (self.world.x, self.world.z) == target {
-                    break;
-                }
-            }
-        }
-        Ok((self.world.x, self.world.z) == steps[steps.len() - 1])
-    }
-
-    /// Walk explicit steps one tile at a time, swinging shut maze doors
-    /// that block the way. No router, no fan: diagonal steps split into
-    /// cardinals (open edge first), a shut edge swings a maze door when
-    /// there is one, and anything else stops at once so the caller
-    /// replans instead of detouring blindly. True when every step is
-    /// done (a teleport mid-route stops early for the same reason).
-    pub fn walk_path(&mut self, steps: &[(i32, i32)], timeout: u64) -> Result<bool> {
-        let deadline = self.world.ticks + timeout.max(1);
-        self.sync_live_doors();
-        let mut index = 0;
-        while index < steps.len() {
-            if self.world.ticks > deadline {
-                return Err(Error::Timeout(format!(
-                    "walk_path timed out at {:?} ({} ticks)",
-                    self.position(),
-                    timeout
-                )));
-            }
-            let (step_x, step_z) = steps[index];
-            if (self.world.x, self.world.z) == (step_x, step_z) {
-                index += 1;
-                continue;
-            }
-            let (dx, dz) = (step_x - self.world.x, step_z - self.world.z);
-            // Cardinal legs for this step, open edge first.
-            let mut legs: Vec<(i32, i32)> = Vec::new();
-            if dx != 0 && dz != 0 {
-                let x_open = crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level, dx.signum(), 0);
-                let z_open = crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level, 0, dz.signum());
-                if x_open {
-                    legs.push((dx.signum(), 0));
-                    legs.push((0, dz.signum()));
-                } else if z_open {
-                    legs.push((0, dz.signum()));
-                    legs.push((dx.signum(), 0));
-                }
-            } else if dx != 0 || dz != 0 {
-                legs.push((dx.signum(), dz.signum()));
-            } else {
-                index += 1;
-                continue;
-            }
-            if legs.is_empty() {
-                // Corner shut on both edges: swing a maze door there if
-                // there is one, then replan from wherever that leaves us.
-                for (tile_x, tile_z) in [(self.world.x + dx.signum(), self.world.z), (self.world.x, self.world.z + dz.signum())] {
-                    if let Some((loc_id, _, _)) = self.doors.get(&(tile_x, tile_z, self.world.level)).copied() {
-                        if Self::is_maze_door(loc_id) {
-                            let _ = self.open_maze_door(tile_x, tile_z, self.world.level);
-                            break;
-                        }
-                    }
-                }
-                return Ok(false);
-            }
-            let mut advanced = false;
-            for (move_x, move_z) in legs {
-                if (self.world.x, self.world.z) == (step_x, step_z) {
-                    break;
-                }
-                let (next_x, next_z) = (self.world.x + move_x, self.world.z + move_z);
-                eprintln!("maze walk leg ({},{})->({},{}) flags={:#x}", self.world.x, self.world.z, next_x, next_z, self.collision.get(next_x, next_z, self.world.level));
-                if !crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level, move_x, move_z) {
-                    eprintln!("maze walk leg blocked, door?");
-                    if let Some((loc_id, _, _)) = self.doors.get(&(next_x, next_z, self.world.level)).copied() {
-                        if Self::is_maze_door(loc_id) {
-                            let _ = self.open_maze_door(next_x, next_z, self.world.level);
-                            break;
-                        }
-                        if !self.open_shut_door(next_x, next_z, self.world.level, loc_id) {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                match self.step_to(next_x, next_z, 8) {
-                    Ok(true) => {
-                        advanced = true;
-                    }
-                    Ok(false) => {
-                        eprintln!("maze walk leg refused");
-                        break;
-                    }
-                    Err(error) if crate::error::is_interrupted(&error) => return Err(error),
-                    Err(_) => break,
-                }
-            }
-            if (self.world.x, self.world.z) == (step_x, step_z) {
-                index += 1;
-            } else if !advanced {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn send_walk(&mut self, steps: &[(i32, i32)], run: bool) -> Result<()> {
+    pub(crate) fn send_walk(&mut self, steps: &[(i32, i32)], run: bool) -> Result<()> {
         let (start_x, start_z) = (self.world.x, self.world.z);
         for (x, z) in steps {
             // A random-event teleport invalidates the route mid-walk.
@@ -1073,7 +634,7 @@ impl Bot {
         self.send_named("MOVE_GAMECLICK", &body.bytes())
     }
 
-    fn await_leg(&mut self, leg: &[(i32, i32)], deadline: u64) -> Result<()> {
+    pub(crate) fn await_leg(&mut self, leg: &[(i32, i32)], deadline: u64) -> Result<()> {
         let Some(target) = leg.last().copied() else {
             return Ok(());
         };
@@ -1259,5 +820,175 @@ impl Bot {
         let near_npcs = self.world.npcs.values().filter(|npc| npc.level == level && (npc.x - x).abs() + (npc.z - z).abs() <= 8).count();
         lines.push(format!("live npcs within 8 of target: {near_npcs}"));
         DebugReport { lines }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collision::{self, MapPack};
+
+    /// Pack index with no squares: `ensure_area` loads nothing, so the
+    /// hand-painted collision below survives untouched (offline stand-in
+    /// for a loaded map window, no server needed).
+    fn empty_pack() -> MapPack {
+        MapPack::new(std::path::PathBuf::from("no-pack.zip"), std::collections::HashMap::new(), Vec::new())
+    }
+
+    /// Open 5x5 field with one blocked décor tile in the middle.
+    fn field_with_blocked(bot: &mut Bot, dest_x: i32, dest_z: i32) {
+        for tile_x in (dest_x - 3)..=(dest_x + 3) {
+            for tile_z in (dest_z - 3)..=(dest_z + 3) {
+                bot.collision.set(tile_x, tile_z, 0, collision::OPEN);
+            }
+        }
+        bot.collision.set(dest_x, dest_z, 0, collision::WALK_BLOCKED);
+    }
+
+    /// Blocked target, bot already on the adjacent tile: the router
+    /// resolves the BFS-nearest tile (here) and returns Ok without ever
+    /// sending a step — no pacing, no `walking in circles`.
+    #[test]
+    fn blocked_target_already_adjacent_returns_ok() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.maps = Some(empty_pack());
+        bot.world.level = 0;
+        bot.world.x = 3216;
+        bot.world.z = 3241;
+        field_with_blocked(&mut bot, 3217, 3241);
+        assert!(bot.walk_to(3217, 3241, 0, 600).is_ok());
+        assert_eq!((bot.world.x, bot.world.z), (3216, 3241));
+    }
+
+    /// Walkable target, bot already there: Ok in both modes (straight legs
+    /// without maps, routed with maps). The resolution only kicks in for
+    /// blocked tiles, so this path is byte-for-byte the old one.
+    #[test]
+    fn exact_target_already_there_returns_ok() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 3215;
+        bot.world.z = 3241;
+        assert!(bot.walk_to(3215, 3241, 0, 600).is_ok());
+        bot.maps = Some(empty_pack());
+        bot.collision.set(3215, 3241, 0, collision::OPEN);
+        assert!(bot.walk_to(3215, 3241, 0, 600).is_ok());
+    }
+
+
+
+    /// Refusal line format, locked offline: full chunk debug, start tile,
+    /// live loc on the first step (or none), collision flags of that tile.
+    #[test]
+    fn refused_line_format_locked() {
+        let shut = Bot::refused_line(&[(3226, 3223), (3225, 3223)], (3226, 3222, 0), Some((1530, 0, 2)), collision::WALK_BLOCKED);
+        assert_eq!(
+            shut,
+            "step refused: wanted [(3226, 3223), (3225, 3223)] from (3226,3222,0) live=loc 1530 shape=0 angle=2 flags=0x240100"
+        );
+        let open = Bot::refused_line(&[(1, 0)], (0, 0, 0), None, collision::OPEN);
+        assert_eq!(open, "step refused: wanted [(1, 0)] from (0,0,0) live=none flags=0x0");
+    }
+
+    /// Suspect scan, pure: a live loc on step 1 (not leg[0]) names step 1,
+    /// a clean leg finds nothing, and entities never count (the server
+    /// walks through NPCs and players).
+    #[test]
+    fn suspect_tile_names_true_blocker_not_leg_zero() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 0;
+        bot.world.z = 0;
+        for tile in [(0, 0), (1, 0), (2, 0), (1, 1), (0, 1)] {
+            bot.collision.set(tile.0, tile.1, 0, collision::OPEN);
+        }
+        assert!(bot.suspect_tile(&[(1, 0), (2, 0)], (0, 0, 0)).is_none(), "clean leg");
+        bot.world.locs.insert((2, 0, 0), Some((99, 10, 0)));
+        let found = bot.suspect_tile(&[(1, 0), (2, 0)], (0, 0, 0)).expect("live loc found");
+        assert!(found.contains("step 1") && found.contains("live loc 99"), "got: {found}");
+    }
+
+    /// Bump trigger, pure: armed only on the entry tile and only before
+    /// Hop rank prefers fresh tiles on ties: closeness first (routing
+    /// unchanged), then fewest visits, so a walked tile loses the
+    /// plan-A/plan-B tie instead of flip-flopping.
+    #[test]
+    fn hop_rank_prefers_unvisited_on_ties() {
+        use std::collections::HashMap;
+        let mut visits: HashMap<(i32, i32), u32> = HashMap::new();
+        visits.insert((40, 0), 2);
+        let back = Bot::hop_rank(40, 40, 0, 0, (40, 0), &visits);
+        let fresh = Bot::hop_rank(40, 40, 0, 0, (0, 40), &visits);
+        assert_eq!(back.0, fresh.0, "same closeness ties");
+        assert!(fresh < back, "fresh tile wins the tie, got {fresh:?} vs {back:?}");
+        let mut order = vec![(40, 0), (0, 40)];
+        order.sort_by_key(|hop| Bot::hop_rank(40, 40, 0, 0, *hop, &visits));
+        assert_eq!(order, vec![(0, 40), (40, 0)]);
+    }
+
+    /// Bump trigger, pure: armed only on the entry tile and only before
+    /// the single bump+replan cycle fired. Moved walks and second
+    /// give-ups never bump.
+    #[test]
+    fn bump_armed_only_on_entry_once() {
+        let entry = (3095, 3240, 0);
+        assert!(Bot::bump_armed(entry, (3095, 3240, 0), false), "give-up at entry arms");
+        assert!(!Bot::bump_armed(entry, (3095, 3241, 0), false), "net movement disarms");
+        assert!(!Bot::bump_armed(entry, (3095, 3240, 0), true), "second give-up disarms");
+    }
+
+    /// Offline every direct step is refused at the send (no socket, never
+    /// logged in), so the bump surfaces the typed connection error instead
+    /// of pacing dead sides: the session reconnects, never `Ok(false)`.
+    #[test]
+    fn bump_step_walled_in_returns_false_without_moving() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 0;
+        bot.world.z = 0;
+        let start_ticks = bot.world.ticks;
+        let err = bot.bump_step().expect_err("dead socket aborts typed");
+        assert!(format!("{err}").contains("not logged in"), "typed conn error, got: {err}");
+        assert_eq!((bot.world.x, bot.world.z), (0, 0), "bump never moved");
+        assert_eq!(bot.world.ticks, start_ticks, "abort pumps nothing");
+    }
+
+    /// Open field, walkable target, but every send fails offline: the first
+    /// chunk surfaces the typed connection error at once (reconnect), never
+    /// the old `walking in circles` pacing — same text, no movement, no
+    /// ticks, route cleared.
+    #[test]
+    fn circles_without_movement_keeps_original_error() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.maps = Some(empty_pack());
+        bot.world.level = 0;
+        bot.world.x = 0;
+        bot.world.z = 0;
+        for tile_x in -3..=7 {
+            for tile_z in -3..=3 {
+                bot.collision.set(tile_x, tile_z, 0, collision::OPEN);
+            }
+        }
+        let err = bot.walk_to(4, 0, 0, 600).unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("not logged in"), "typed conn error, got: {message}");
+        assert_eq!((bot.world.x, bot.world.z), (0, 0), "no net movement");
+        assert_eq!(bot.world.ticks, 0, "abort pumps nothing");
+        assert!(bot.route.is_empty(), "route cleared");
+        assert_eq!(bot.route_target, None, "target cleared");
+    }
+
+    /// Straight legs without maps surface the dead socket typed too: the
+    /// first send fails, never a stall Timeout after the budget burns.
+    #[test]
+    fn straight_walk_offline_aborts_typed_not_timeout() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 0;
+        bot.world.z = 0;
+        let err = bot.walk_to(4, 0, 0, 600).unwrap_err();
+        assert!(format!("{err}").contains("not logged in"), "typed conn error, got: {err}");
+        assert!(bot.route.is_empty(), "route cleared");
+        assert_eq!(bot.route_target, None, "target cleared");
     }
 }

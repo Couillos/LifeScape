@@ -80,16 +80,16 @@ pub(crate) fn dev_check_doors(bot: &mut Bot, args: &[String]) -> ScriptResult {
             Ok(text) => text,
             Err(err) => format!("error: {err}"),
         };
-        println!("{:4}/{:<30} {:<12} {outcome}", index + 1, label, name);
+        bot.log(&format!("{:4}/{:<30} {:<12} {outcome}", index + 1, label, name));
         if outcome != "ok" {
             let _ = cheat_teleport(bot, 0, 3222, 3218, 500);
         }
         outcomes.push((label, outcome));
     }
     let bad: Vec<_> = outcomes.iter().filter(|(_, outcome)| outcome != "ok").collect();
-    println!("doors={} ok={} failed={}", outcomes.len(), outcomes.len() - bad.len(), bad.len());
+    bot.log(&format!("doors={} ok={} failed={}", outcomes.len(), outcomes.len() - bad.len(), bad.len()));
     for (label, outcome) in &bad {
-        println!("  {label:<30} {outcome}");
+        bot.log(&format!("  {label:<30} {outcome}"));
     }
     let mut body = String::from("{");
     for (i, (label, outcome)) in outcomes.iter().enumerate() {
@@ -416,21 +416,21 @@ pub(crate) fn dev_check_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         rows.retain(|row| row.kind == *kind);
     }
     rows = rows.into_iter().skip(filter.skip).take(if filter.limit > 0 { filter.limit } else { usize::MAX }).collect();
-    println!("testing {} transitions", rows.len());
+    bot.log(&format!("testing {} transitions", rows.len()));
     let mut outcomes: Vec<(String, String)> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let outcome = match test_transition(bot, row) {
             Ok(text) => text,
             Err(err) => format!("error: {err}"),
         };
-        println!("{:4}/{} {:<34} {outcome}", index + 1, rows.len(), row.name);
+        bot.log(&format!("{:4}/{} {:<34} {outcome}", index + 1, rows.len(), row.name));
         if outcome != "ok" {
             let _ = cheat_teleport(bot, 0, 3222, 3218, 500);
         }
         outcomes.push((format!("{},{},{}>{},{},{}@{}.{}", row.from[0], row.from[1], row.from[2], row.to[0], row.to[1], row.to[2], row.climb_loc, row.climb_op), outcome));
     }
     let bad = outcomes.iter().filter(|(_, outcome)| outcome != "ok").count();
-    println!("tested={} ok={} failed={}", outcomes.len(), outcomes.len() - bad, bad);
+    bot.log(&format!("tested={} ok={} failed={}", outcomes.len(), outcomes.len() - bad, bad));
     let mut body = String::from("{");
     for (i, (key, outcome)) in outcomes.iter().enumerate() {
         body.push_str(&format!("\"{}\":\"{}\"{}", escape_json(key), escape_json(outcome), if i + 1 < outcomes.len() { "," } else { "" }));
@@ -562,20 +562,20 @@ pub(crate) fn dev_check_routes(bot: &mut Bot, args: &[String]) -> ScriptResult {
             expect: "diagnose",
         });
     } else {
-        println!("no toll gate in live locs, skipping");
+        bot.log("no toll gate in live locs, skipping");
     }
     if let Some(only) = &filter.only {
         legs.retain(|leg| leg.name.contains(only));
     }
     legs = legs.into_iter().skip(filter.skip).take(if filter.limit > 0 { filter.limit } else { usize::MAX }).collect();
-    println!("testing {} legs", legs.len());
+    bot.log(&format!("testing {} legs", legs.len()));
     let mut outcomes: Vec<(String, String)> = Vec::new();
     for (index, leg) in legs.iter().enumerate() {
         let outcome = match test_leg(bot, leg) {
             Ok(text) => text,
             Err(err) => format!("error: {err}"),
         };
-        println!("{:4}/{} {:<22} {outcome}", index + 1, legs.len(), leg.name);
+        bot.log(&format!("{:4}/{} {:<22} {outcome}", index + 1, legs.len(), leg.name));
         if !outcome.starts_with("ok") {
             let _ = cheat_teleport(bot, 0, 3222, 3218, 500);
         }
@@ -589,7 +589,7 @@ pub(crate) fn dev_check_routes(bot: &mut Bot, args: &[String]) -> ScriptResult {
             skipped += 1;
         }
     }
-    println!("tested={} ok={} failed={} skipped={}", outcomes.len(), ok, outcomes.len() - ok - skipped, skipped);
+    bot.log(&format!("tested={} ok={} failed={} skipped={}", outcomes.len(), ok, outcomes.len() - ok - skipped, skipped));
     let mut body = String::from("{");
     for (i, (name, outcome)) in outcomes.iter().enumerate() {
         body.push_str(&format!("\"{}\":\"{}\"{}", escape_json(name), escape_json(outcome), if i + 1 < outcomes.len() { "," } else { "" }));
@@ -668,7 +668,7 @@ pub(crate) fn dev_dump_bank_stands(bot: &mut Bot, _args: &[String]) -> ScriptRes
     }
     body.push(']');
     save_report("run/bank_stands.json", &body)?;
-    println!("wrote run/bank_stands.json ({} clusters, stands not computed: reach module not ported)", clusters.len());
+    bot.log(&format!("wrote run/bank_stands.json ({} clusters, stands not computed: reach module not ported)", clusters.len()));
     Ok(0)
 }
 

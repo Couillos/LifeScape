@@ -176,7 +176,7 @@ fn use_handle_on_head(bot: &mut Bot, handle: u16, head: u16) -> Result<bool, Scr
     while bot.world.ticks < target {
         bot.pump(5)?;
         if best_pickaxe(bot).is_some() {
-            println!("ok pickaxe reattached");
+            bot.log("ok pickaxe reattached");
             return Ok(true);
         }
     }
@@ -208,10 +208,15 @@ fn work_spot(
     ore_ids: &[u16],
     had_ore: u32,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
-    if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 4
-        && !walk_checked(bot, rock_x, rock_z, 6000).unwrap_or(false)
-    {
-        return Ok((WorkOutcome::Unreachable, 0));
+    if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 4 {
+        // Dead socket or operator stop, not an unreachable rock: typed
+        // all the way to the session instead of a quiet Unreachable.
+        match walk_checked(bot, rock_x, rock_z, 6000) {
+            Ok(true) => {}
+            Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
+            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
+        }
     }
     if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 1 {
         let mut neighbors: Vec<(i32, i32)> = (-1..=1)
@@ -221,9 +226,20 @@ fn work_spot(
         neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
         let mut stepped = false;
         for (next_x, next_z) in neighbors {
-            if bot.walk_to(next_x, next_z, bot.world.level, 100).is_ok() {
-                stepped = true;
-                break;
+            match bot.walk_to(next_x, next_z, bot.world.level, 100) {
+                Ok(()) => {
+                    stepped = true;
+                    break;
+                }
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) => {}
             }
             if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 4 {
                 return Ok((WorkOutcome::Unreachable, 0));
@@ -241,7 +257,7 @@ fn work_spot(
     let hitpoints_before = hitpoints(bot);
     loop {
         if need_click {
-            println!("click rock at ({rock_x},{rock_z})");
+            bot.log(&format!("click rock at ({rock_x},{rock_z})"));
             bot.intend(&format!("mining a rock at ({rock_x},{rock_z})"));
             bot.op_loc(1, rock_x, rock_z, rock_loc)?;
             seen_msgs = bot.world.messages.len();
@@ -330,7 +346,7 @@ fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<boo
         bot.close_modal()?;
         bot.pump(5)?;
         if best_pickaxe(bot).is_some() {
-            println!("ok withdrew banked pickaxe");
+            bot.log("ok withdrew banked pickaxe");
             return Ok(true);
         }
         return Ok(false);
@@ -350,7 +366,7 @@ fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<boo
     bot.close_modal()?;
     bot.pump(5)?;
     if reattach(bot)? {
-        println!("ok restored pickaxe from banked pieces");
+        bot.log("ok restored pickaxe from banked pieces");
         return Ok(true);
     }
     Ok(false)
@@ -365,7 +381,7 @@ fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> 
     }
     let bronze_price = obj_price("bronze_pickaxe") as u32;
     if pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
-        println!("ok replacement pickaxe bought");
+        bot.log("ok replacement pickaxe bought");
         return Ok(true);
     }
     let Some(home) = nearest_bank(bot).ok() else {
@@ -377,11 +393,11 @@ fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> 
         return Ok(false);
     }
     if best_pickaxe(bot).is_none() && restore_from_bank(bot, &home)? {
-        println!("ok replacement pickaxe restored from bank");
+        bot.log("ok replacement pickaxe restored from bank");
         return Ok(true);
     }
     if best_pickaxe(bot).is_some() {
-        println!("ok replacement pickaxe restored");
+        bot.log("ok replacement pickaxe restored");
         return Ok(true);
     }
     Ok(pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0)
@@ -411,7 +427,7 @@ fn mine_load(
             // them to the no-ore stall budget.
             let spent = bot.world.ticks;
             if !recover_pickaxe(bot, coins, bank)? {
-                println!("pickaxe lost, banking load");
+                bot.log("pickaxe lost, banking load");
                 return Ok((true, level));
             }
             idle_since += bot.world.ticks - spent;
@@ -419,12 +435,12 @@ fn mine_load(
         level = learn_level(bot, MINING_STAT, level);
         if let (Some((tier, _, _)), Some(best)) = (&spot, pick_tier(tiers, level)) {
             if best.level > tier.level {
-                println!("level up, switching tier");
+                bot.log("level up, switching tier");
                 spot = None;
             }
         }
         if hitpoints(bot) == 0 {
-            println!("died, respawning");
+            bot.log("died, respawning");
             bot.intend("died, respawning");
             let target = bot.world.ticks + 40;
             while bot.world.ticks < target && hitpoints(bot) == 0 {
@@ -436,13 +452,13 @@ fn mine_load(
         }
         if hitpoints(bot) < last_hitpoints {
             flees += 1;
-            println!("hurt, fleeing");
+            bot.log("hurt, fleeing");
             bot.intend("fleeing a hunter");
             if let Some((_, spot_x, spot_z)) = &spot {
                 banned.insert((*spot_x, *spot_z), bot.world.ticks + FLEE_BAN_TICKS);
             }
             if flees > MAX_FLEES_PER_LOAD {
-                println!("too many attacks, aborting load");
+                bot.log("too many attacks, aborting load");
                 return Ok((false, level));
             }
             wait_hitpoints(bot, hitpoints(bot).saturating_add(1), 200)?;
@@ -464,21 +480,21 @@ fn mine_load(
                     picked = Some(found);
                     break;
                 }
-                println!("no rock spot, waiting for respawns");
+                bot.log("no rock spot, waiting for respawns");
                 bot.intend("waiting for a safe rock spot");
                 wait_ticks(bot, 15)?;
             }
             let Some((tier, spot_x, spot_z)) = picked else {
-                println!("no rock spot left");
+                bot.log("no rock spot left");
                 return Ok((false, level));
             };
             had_ore = ore_ids.iter().map(|id| pack_total(bot, *id)).sum();
-            println!("mining {} at ({spot_x},{spot_z})", tier.product);
+            bot.log(&format!("mining {} at ({spot_x},{spot_z})", tier.product));
             bot.intend(&format!("mining {} at ({spot_x},{spot_z})", tier.product));
             spot = Some((tier, spot_x, spot_z));
         } else if let Some((tier, spot_x, spot_z)) = &spot {
             if !rock_still_there(bot, *spot_x, *spot_z, tier) {
-                println!("rock gone at ({spot_x},{spot_z})");
+                bot.log(&format!("rock gone at ({spot_x},{spot_z})"));
                 banned.insert((*spot_x, *spot_z), now + GONE_BAN_TICKS);
                 spot = None;
                 continue;
@@ -491,7 +507,7 @@ fn mine_load(
         had_ore += gained;
         match result {
             WorkOutcome::Gone => {
-                println!("rock quiet, next one");
+                bot.log("rock quiet, next one");
                 banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
                 spot = None;
             }
@@ -501,12 +517,12 @@ fn mine_load(
                 spot = None;
             }
             WorkOutcome::Threat => {
-                println!("hunter close, re-picking a spot");
+                bot.log("hunter close, re-picking a spot");
                 banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
                 spot = None;
             }
             WorkOutcome::Blocked => {
-                println!("unknown dialog blocking mine, aborting load");
+                bot.log("unknown dialog blocking mine, aborting load");
                 return Ok((false, level));
             }
             WorkOutcome::Full | WorkOutcome::Moved | WorkOutcome::NoBait => {
@@ -517,7 +533,7 @@ fn mine_load(
             idle_since = bot.world.ticks;
         }
         if bot.world.ticks - idle_since > STALL_TICKS {
-            println!("stall: no ore for {STALL_TICKS} ticks");
+            bot.log(&format!("stall: no ore for {STALL_TICKS} ticks"));
             return Ok((false, level));
         }
     }
@@ -528,7 +544,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let loads: u32 = args.first().and_then(|arg| arg.parse().ok()).unwrap_or(0);
     if args.iter().any(|arg| arg == "toll") {
         bot.allow_paid = true;
-        println!("toll gates allowed for this run");
+        bot.log("toll gates allowed for this run");
     }
     crate::skill_common::wait_pack_streamed(bot)?;
     check_events(bot)?;
@@ -536,16 +552,16 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let tiers = usable_tiers();
     let mut level = learn_level(bot, MINING_STAT, 1);
     let mut bank = nearest_bank(bot)?;
-    println!("bank at ({},{})", bank.x, bank.z);
+    bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut bank_coins = 0u32;
     if best_pickaxe(bot).is_none() || pack_ids(bot).iter().any(|id| !known_pick_ids(bot).contains(id) && *id != coins) {
         if reattach(bot)? {
-            println!("ok pickaxe reattached from pack, no bootstrap needed");
+            bot.log("ok pickaxe reattached from pack, no bootstrap needed");
         }
         let keep: Vec<u16> = known_pick_ids(bot).into_iter().collect();
         bank_coins = bank_trip(bot, &bank, &keep, 0)?;
         if best_pickaxe(bot).is_none() && restore_from_bank(bot, &bank)? {
-            println!("ok pickaxe restored from bank");
+            bot.log("ok pickaxe restored from bank");
         }
         if best_pickaxe(bot).is_none() {
             let bronze_price = obj_price("bronze_pickaxe") as u32;
@@ -559,7 +575,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
             }
             if pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
-                println!("ok bootstrapped bronze pickaxe");
+                bot.log("ok bootstrapped bronze pickaxe");
             } else {
                 return Err(ScriptError::Usage(format!(
                     "cannot bootstrap: no pickaxe, {} coins",
@@ -585,7 +601,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bank_coins = bank_trip(bot, &bank, &keep, cheapest as u32)?;
         for cand in cands {
             if buy_stock(bot, &cand, 1)? > 0 {
-                println!("ok upgraded to {cand}");
+                bot.log(&format!("ok upgraded to {cand}"));
                 break;
             }
         }
@@ -594,7 +610,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Err(ScriptError::Usage(format!("no pickaxe and cannot rebuy, aborting at {:?}", bot.position())));
         }
         done += 1;
-        println!("ok load {done} banked (mining={level})");
+        bot.log(&format!("ok load {done} banked (mining={level})"));
     }
     let _ = bank_coins;
     Ok(0)

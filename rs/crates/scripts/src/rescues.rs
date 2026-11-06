@@ -1,5 +1,8 @@
-//! Random-event rescues: maze, mime, cube, down, fallback. Ports of
-//! `scripts/rescue_{maze,mime,cube,down,fallback}.py`.
+//! Random-event rescues: maze, mime, cube, down, greet, fallback. Ports of
+//! `scripts/rescue_{maze,mime,cube,down,fallback}.py` plus the host
+//! greeting (mage, genie, dwarf talk paths ask nothing: approach, talk,
+//! take the reward instead of the fail-teleport or, ignored, the dwarf's
+//! stones).
 //!
 //! Each rescue returns 0 when no random event is pending afterwards (and
 //! reports the handoff otherwise), 1 when the bound is exhausted.
@@ -15,12 +18,12 @@ use crate::{ScriptError, ScriptResult};
 fn verify(bot: &Bot, what: &str) -> ScriptResult {
     match randomevent::event_at(bot) {
         None => {
-            println!("{what} rescue done, free at {:?}", bot.position());
+            bot.log(&format!("{what} rescue done, free at {:?}", bot.position()));
             Ok(0)
         }
         Some(event) => {
-            println!("{}", randomevent::report(bot, event, false));
-            println!("{what} rescue handed off at {:?}", bot.position());
+            bot.log(&randomevent::event_line(bot, event, false));
+            bot.log(&format!("{what} rescue handed off at {:?}", bot.position()));
             Ok(1)
         }
     }
@@ -29,23 +32,19 @@ fn verify(bot: &Bot, what: &str) -> ScriptResult {
 fn rescue_maze(bot: &mut Bot) -> ScriptResult {
     bot.pump(10)?;
     bot.intend("rescue: maze");
-    println!("start {:?}", bot.position());
+    bot.log(&format!("start {:?}", bot.position()));
     if !randomevent::in_maze(bot) {
-        println!("not in maze, nothing to do");
+        bot.log("not in maze, nothing to do");
         return verify(bot, "maze");
     }
     if super::maze::solve(bot)? {
         return verify(bot, "maze");
     }
-    // No server timeout frees the bot (upstream has no auto-exit): one
-    // last round, then fail loudly instead of looping forever.
-    println!("maze unsolved by search, one more door round");
-    if super::maze::solve(bot)? {
-        return verify(bot, "maze");
-    }
+    // No maze timeout to wait out (verified live: the server does not
+    // release an unsolved maze). Fail loud immediately with position.
     if randomevent::in_maze(bot) {
         return Err(ScriptError::Usage(format!(
-            "maze stuck at {:?}: centre unreachable, doors need planning",
+            "maze stuck at {:?}: centre unreachable",
             bot.position()
         )));
     }
@@ -78,9 +77,9 @@ fn mime_anim(bot: &Bot) -> Option<u16> {
 fn rescue_mime(bot: &mut Bot) -> ScriptResult {
     bot.pump(10)?;
     bot.intend("rescue: mime");
-    println!("start {:?}", bot.position());
+    bot.log(&format!("start {:?}", bot.position()));
     if !randomevent::in_mime(bot) {
-        println!("not in mime, nothing to do");
+        bot.log("not in mime, nothing to do");
         return verify(bot, "mime");
     }
     // Every cycle the mime plays one of 8 emotes (NPC anim mask), then the
@@ -104,7 +103,7 @@ fn rescue_mime(bot: &mut Bot) -> ScriptResult {
         if open {
             if let Some(seq) = captured {
                 if let Some(emote) = seq_to_emote(seq) {
-                    println!("copying emote {emote} (seq {seq})");
+                    bot.log(&format!("copying emote {emote} (seq {seq})"));
                     bot.if_button(EMOTE_COM_BASE + emote)?;
                     captured = None;
                     bot.pump(2)?;
@@ -113,10 +112,10 @@ fn rescue_mime(bot: &mut Bot) -> ScriptResult {
         }
     }
     if randomevent::in_mime(bot) {
-        println!("mime still active");
+        bot.log("mime still active");
         return Ok(1);
     }
-    println!("mime solved, back at {:?}", bot.position());
+    bot.log(&format!("mime solved, back at {:?}", bot.position()));
     verify(bot, "mime")
 }
 
@@ -182,7 +181,7 @@ fn solve_strange_box(bot: &mut Bot, max_rounds: u32) -> Result<bool, ScriptError
             }
         }
         let (Some(asked), [Some(first), Some(second), Some(third)]) = (question.clone(), [models[0], models[1], models[2]]) else {
-            println!("cube quiz waiting: question={question:?} models={models:?}");
+            bot.log(&format!("cube quiz waiting: question={question:?} models={models:?}"));
             continue;
         };
         let shown: Vec<(usize, usize)> = [first, second, third].iter().filter_map(|held| cube_shape_colour(*held)).collect();
@@ -190,10 +189,10 @@ fn solve_strange_box(bot: &mut Bot, max_rounds: u32) -> Result<bool, ScriptError
             continue;
         }
         let Some(pick) = cube_answer(&asked, &shown) else {
-            println!("cube quiz unparsed: {:?}", &asked[..asked.len().min(60)]);
+            bot.log(&format!("cube quiz unparsed: {:?}", &asked[..asked.len().min(60)]));
             continue;
         };
-        println!("cube quiz: {:?} -> button {}", &asked[..asked.len().min(60)], pick + 1);
+        bot.log(&format!("cube quiz: {:?} -> button {}", &asked[..asked.len().min(60)], pick + 1));
         bot.if_button(button_coms[pick])?;
         bot.pump(2)?;
         for _ in 0..6 {
@@ -216,10 +215,10 @@ fn rescue_cube(bot: &mut Bot) -> ScriptResult {
     let cube = kit::obj_id("macro_cube")?;
     let left = bot.inventory().get(&cube).copied().unwrap_or(0);
     if solved && left == 0 {
-        println!("cube: cleared");
+        bot.log("cube: cleared");
         Ok(0)
     } else {
-        println!("cube: {}, {left} left", if solved { "solved" } else { "unfinished" });
+        bot.log(&format!("cube: {}, {left} left", if solved { "solved" } else { "unfinished" }));
         Ok(1)
     }
 }
@@ -227,7 +226,7 @@ fn rescue_cube(bot: &mut Bot) -> ScriptResult {
 fn rescue_down(bot: &mut Bot) -> ScriptResult {
     bot.pump(10)?;
     bot.intend("rescue: tower");
-    println!("start {:?}", bot.position());
+    bot.log(&format!("start {:?}", bot.position()));
     if !climb_out(bot)? {
         return Ok(1);
     }
@@ -241,13 +240,26 @@ fn rescue_down(bot: &mut Bot) -> ScriptResult {
             if randomevent::FAIL_TELEPORTS.contains(&(level, next_x, next_z)) {
                 continue;
             }
-            if bot.step_to(next_x, next_z, 30).unwrap_or(false) && !randomevent::in_fail_teleport(bot) {
+            // Dead socket, not a bad step: typed instead of pacing steps.
+            match bot.step_to(next_x, next_z, 30) {
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) | Ok(false) => continue,
+                Ok(true) => {}
+            }
+            if !randomevent::in_fail_teleport(bot) {
                 off = true;
                 break;
             }
         }
         if !off {
-            println!("tower: stuck on the fail spot at {:?}", bot.position());
+            bot.log(&format!("tower: stuck on the fail spot at {:?}", bot.position()));
             return Ok(1);
         }
     }
@@ -257,7 +269,7 @@ fn rescue_down(bot: &mut Bot) -> ScriptResult {
 fn rescue_fallback(bot: &mut Bot) -> ScriptResult {
     bot.intend("rescue: fallback");
     if bot.relogin().is_err() {
-        println!("fallback relogin failed");
+        bot.log("fallback relogin failed");
         return Ok(1);
     }
     wait_ticks(bot, 5)?;
@@ -267,22 +279,52 @@ fn rescue_fallback(bot: &mut Bot) -> ScriptResult {
     while bot.world.ticks < target {
         bot.pump(5)?;
         if randomevent::event_at(bot).is_none() && bot.world.level == 0 {
-            println!("fallback clear at {:?}", bot.position());
+            bot.log(&format!("fallback clear at {:?}", bot.position()));
             return Ok(0);
         }
     }
-    println!("fallback exhausted at {:?}", bot.position());
+    bot.log(&format!("fallback exhausted at {:?}", bot.position()));
     Ok(1)
 }
 
-/// Run one rescue by key (`maze`, `mime`, `cube`, `down`, `fallback`).
+/// Greet every visible event host (approach + talk + reward dialog),
+/// then wait bounded for the goodbye despawn. Rounds are short on
+/// purpose: one long approach would wedge the worker past every timeout
+/// above it, and the observer re-poses anyway. The idle observer poses
+/// this for hosts the adjacent-only `greet_near` cannot reach (diagonal,
+/// two tiles out); running scripts keep their own `greet()` fast path.
+/// Returns 0 when no host is left staring, 1 when one lingers.
+fn rescue_greet(bot: &mut Bot) -> ScriptResult {
+    bot.intend("rescue: greet");
+    for _ in 0..6 {
+        super::randomevent_full::greet(bot, 150)?;
+        let target = bot.world.ticks + 30;
+        while bot.world.ticks < target
+            && super::randomevent_full::EVENT_HOSTS.iter().any(|name| bot.find_npc(name).is_some())
+        {
+            bot.pump(3)?;
+        }
+        if super::randomevent_full::EVENT_HOSTS
+            .iter()
+            .all(|name| bot.find_npc(name).is_none())
+        {
+            bot.log(&format!("greet rescue done, free at {:?}", bot.position()));
+            return Ok(0);
+        }
+    }
+    bot.log(&format!("greet rescue handed off at {:?}", bot.position()));
+    Ok(1)
+}
+
+/// Run one rescue by key (`maze`, `mime`, `cube`, `down`, `greet`, `fallback`).
 pub fn run_rescue(key: &str, bot: &mut Bot, _args: &[String]) -> ScriptResult {
     match key {
         "maze" => rescue_maze(bot),
         "mime" => rescue_mime(bot),
         "cube" => rescue_cube(bot),
         "down" => rescue_down(bot),
+        "greet" => rescue_greet(bot),
         "fallback" => rescue_fallback(bot),
-        _ => Err(ScriptError::Usage(format!("unknown rescue {key:?} (want maze|mime|cube|down|fallback)"))),
+        _ => Err(ScriptError::Usage(format!("unknown rescue {key:?} (want maze|mime|cube|down|greet|fallback)"))),
     }
 }
