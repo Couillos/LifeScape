@@ -306,11 +306,11 @@ impl Bot {
         Error::StepRefused(format!("{}; walk: {cause}; last game: {}", suspect, last_message(self)))
     }
 
-    /// Door segment: the server teleports on click (entering straight
-    /// through, or onto the door tile first), so this clicks and watches
-    /// for the teleport, never walks through a shut door. Already open
-    /// (live-synced step is free) goes directly to the step. Any failure
-    /// is DoorDidNotOpen.
+    /// Door segment: click the opener, watch the live loc, step through.
+    /// Single and double doors swap the loc (walk through at once);
+    /// self-closing doors teleport instead (onto the tile, then through).
+    /// Already open (live loc gone or changed) goes directly to the step.
+    /// Any failure is DoorDidNotOpen.
     fn exec_door(
         &mut self,
         door: &lifescape_nav::plan::DoorRef,
@@ -327,18 +327,10 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
         }
-        self.sync_live_doors();
-        if crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level,
-            cross_to.x - self.world.x, cross_to.z - self.world.z)
-            && (cross_to.x - self.world.x).abs().max((cross_to.z - self.world.z).abs()) == 1
-        {
-            let run = self.want_run();
-            let cross_deadline = deadline.min(self.world.ticks + CROSS_WAIT);
-            if self.send_and_await(&[(cross_to.x, cross_to.z)], run, cross_deadline).is_ok()
-                && (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level)
-            {
-                return Ok(());
-            }
+        // Already open: the live loc left the closed id (swapped away or
+        // cleared). Step through at once, no click.
+        if self.door_live_open(door) {
+            return self.step_door_through(door, cross_to, deadline);
         }
         let open_op = self
             .maps
@@ -351,32 +343,92 @@ impl Bot {
                     door.loc, door.x, door.z, door.level, self.position(), last_message(self),
                 ))
             })?;
-        // Two clicks at most: from beside the door the swing parks us on
-        // the door tile, and from there the same click teleports through.
-        for _ in 0..2 {
+        // One click only: the swing shows in the live loc within a few
+        // ticks. A second click would toggle a swapped door shut again,
+        // so never re-click for the walk-through model; the teleport
+        // model moves us instead, which the watch below sees first.
+        self.op_loc(open_op, door.x, door.z, door.loc)?;
+        if self.take_toll_option()? {
+            return self.finish_door(door, cross_to, deadline);
+        }
+        let watched = self.world.ticks + DOOR_SWING_WAIT;
+        while self.world.ticks < watched {
+            self.pump(1)?;
             if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
                 return Ok(());
             }
-            self.op_loc(open_op, door.x, door.z, door.loc)?;
-            if self.take_toll_option()? {
-                continue;
+            if (self.world.x, self.world.z) == (door.x, door.z) && self.world.level == door.level {
+                // Teleported onto the tile: one more click goes through.
+                return self.finish_teleport_door(door, open_op, cross_to, deadline);
             }
-            let watched = self.world.ticks + DOOR_SWING_WAIT;
-            while self.world.ticks < watched {
-                self.pump(1)?;
-                if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-                    return Ok(());
-                }
-                if (self.world.x, self.world.z) == (door.x, door.z) {
-                    break;
-                }
-                if self.world.ticks > deadline {
-                    return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
-                }
+            if self.door_live_open(door) {
+                // Swapped open: step through at once, before it re-closes.
+                return self.step_door_through(door, cross_to, deadline);
+            }
+            if self.world.ticks > deadline {
+                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
             }
         }
-        if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
-            return Ok(());
+        Err(Error::DoorDidNotOpen(format!(
+            "door loc {} at ({},{},{}) never swung from {:?}; last game: {}",
+            door.loc, door.x, door.z, door.level, self.position(), last_message(self),
+        )))
+    }
+
+    /// True when the live state no longer shows the closed id on the door
+    /// tile: swapped to the open variant or explicitly cleared.
+    fn door_live_open(&self, door: &lifescape_nav::plan::DoorRef) -> bool {
+        match self.world.loc_at(door.x, door.z, door.level) {
+            Some((id, _, _)) => id != door.loc,
+            None => self.world.loc_removed(door.x, door.z, door.level),
+        }
+    }
+
+    /// Walk the open door: one step onto the tile (unless on it), one off
+    /// to cross_to, immediately. A refused step is DoorDidNotOpen.
+    fn step_door_through(
+        &mut self,
+        door: &lifescape_nav::plan::DoorRef,
+        cross_to: Tile,
+        deadline: u64,
+    ) -> Result<()> {
+        let mut cross = Vec::new();
+        if (self.world.x, self.world.z) != (door.x, door.z) {
+            cross.push((door.x, door.z));
+        }
+        cross.push((cross_to.x, cross_to.z));
+        let run = self.want_run();
+        let cross_deadline = deadline.min(self.world.ticks + CROSS_WAIT);
+        if self.send_and_await(&cross, run, cross_deadline).is_err()
+            || (self.world.x, self.world.z, self.world.level) != (cross_to.x, cross_to.z, cross_to.level)
+        {
+            return Err(Error::DoorDidNotOpen(format!(
+                "door loc {} open but crossing to ({},{},{}) failed from {:?}; last game: {}",
+                door.loc, cross_to.x, cross_to.z, cross_to.level, self.position(), last_message(self),
+            )));
+        }
+        Ok(())
+    }
+
+    /// Teleport model, second half: parked on the door tile, click once
+    /// more and land past it. No walking, no third click.
+    fn finish_teleport_door(
+        &mut self,
+        door: &lifescape_nav::plan::DoorRef,
+        open_op: u8,
+        cross_to: Tile,
+        deadline: u64,
+    ) -> Result<()> {
+        self.op_loc(open_op, door.x, door.z, door.loc)?;
+        let watched = self.world.ticks + DOOR_SWING_WAIT;
+        while self.world.ticks < watched {
+            self.pump(1)?;
+            if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+                return Ok(());
+            }
+            if self.world.ticks > deadline {
+                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
+            }
         }
         Err(Error::DoorDidNotOpen(format!(
             "door loc {} at ({},{},{}) left us at {:?}, want ({},{},{}); last game: {}",
@@ -384,6 +436,34 @@ impl Bot {
             last_message(self),
         )))
     }
+
+    /// After a toll payment the swing is underway: land on cross_to by
+    /// teleport or step, whichever the handler does.
+    fn finish_door(
+        &mut self,
+        door: &lifescape_nav::plan::DoorRef,
+        cross_to: Tile,
+        deadline: u64,
+    ) -> Result<()> {
+        let watched = self.world.ticks + DOOR_SWING_WAIT;
+        while self.world.ticks < watched {
+            self.pump(1)?;
+            if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+                return Ok(());
+            }
+            if self.door_live_open(door) {
+                return self.step_door_through(door, cross_to, deadline);
+            }
+            if self.world.ticks > deadline {
+                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
+            }
+        }
+        Err(Error::DoorDidNotOpen(format!(
+            "toll door loc {} at ({},{},{}) left us at {:?}; last game: {}",
+            door.loc, door.x, door.z, door.level, self.position(), last_message(self),
+        )))
+    }
+
 
     /// Toll dialog after a paid-door click: pick the affirmative option so
     /// the swing proceeds. True when an option was picked (re-watch the
