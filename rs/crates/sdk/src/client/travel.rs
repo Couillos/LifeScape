@@ -24,14 +24,17 @@ const COINS_OBJ: u16 = 995;
 /// transmit=true, so the live value is always on hand).
 const QP_VARP: u16 = 101;
 
-/// Pre-open watch (trapdoor lid, manhole cover): measured 1-3 ticks live,
-/// 17 leaves the swing plus two slow pumps.
-const PRE_OPEN_WAIT: u64 = 17;
+/// Door swing watch: the click teleports within a few ticks, 17 leaves
+/// the swing plus two slow pumps.
+const DOOR_SWING_WAIT: u64 = 17;
 /// Ride landing watch: measured 2-9 ticks live across stairs, trapdoors
 /// and dungeon ladders, 41 leaves two slow server round-trips.
 const RIDE_WAIT: u64 = 41;
-/// Crossing step right after a swing: the tile is adjacent, measured
-/// 1-2 ticks, 7 leaves a re-closed fast door plus margin.
+/// Trapdoor pre-open watch: the lid flips within a few ticks, 17 leaves
+/// the swing plus two slow pumps.
+const PRE_OPEN_WAIT: u64 = 17;
+/// Crossing step for an already-open door: the tile is adjacent, 7 leaves
+/// a re-closed fast door plus margin.
 const CROSS_WAIT: u64 = 7;
 /// Walk budget per planned cost unit: walking runs ~1 tile per 2 ticks,
 /// 4 per unit plus 347 base leaves stalls and door queues inside.
@@ -161,6 +164,10 @@ impl Bot {
         timeout: u64,
     ) -> Result<()> {
         let deadline = self.world.ticks + timeout;
+        // Live state around the start: painted collision, door registry
+        // and static locs, so suspect lines and door syncs see the world
+        // instead of empty maps.
+        self.ensure_area(self.world.x, self.world.z, 70);
         self.publish_plan(&plan, dest);
         let segments = plan.segments.len().max(1);
         match self.run_plan(&plan, &tables, segments, deadline) {
@@ -299,9 +306,11 @@ impl Bot {
         Error::StepRefused(format!("{}; walk: {cause}; last game: {}", suspect, last_message(self)))
     }
 
-    /// Door segment: already open (live-synced step is free) means cross
-    /// at once; else click, watch the swing, cross immediately before a
-    /// fast door re-closes. Any failure is DoorDidNotOpen.
+    /// Door segment: the server teleports on click (entering straight
+    /// through, or onto the door tile first), so this clicks and watches
+    /// for the teleport, never walks through a shut door. Already open
+    /// (live-synced step is free) goes directly to the step. Any failure
+    /// is DoorDidNotOpen.
     fn exec_door(
         &mut self,
         door: &lifescape_nav::plan::DoorRef,
@@ -319,37 +328,96 @@ impl Bot {
             return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
         }
         self.sync_live_doors();
-        if !self.open_shut_door(door.x, door.z, door.level, door.loc) {
+        if crate::collision::step_open(&self.collision, self.world.x, self.world.z, self.world.level,
+            cross_to.x - self.world.x, cross_to.z - self.world.z)
+            && (cross_to.x - self.world.x).abs().max((cross_to.z - self.world.z).abs()) == 1
+        {
+            let run = self.want_run();
+            let cross_deadline = deadline.min(self.world.ticks + CROSS_WAIT);
+            if self.send_and_await(&[(cross_to.x, cross_to.z)], run, cross_deadline).is_ok()
+                && (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level)
+            {
+                return Ok(());
+            }
+        }
+        let open_op = self
+            .maps
+            .as_ref()
+            .and_then(|pack| pack.loc_def(door.loc as usize))
+            .and_then(|def| def.open_op)
+            .ok_or_else(|| {
+                Error::DoorDidNotOpen(format!(
+                    "door loc {} at ({},{},{}) has no open op at {:?}; last game: {}",
+                    door.loc, door.x, door.z, door.level, self.position(), last_message(self),
+                ))
+            })?;
+        // Two clicks at most: from beside the door the swing parks us on
+        // the door tile, and from there the same click teleports through.
+        for _ in 0..2 {
+            if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+                return Ok(());
+            }
+            self.op_loc(open_op, door.x, door.z, door.loc)?;
+            if self.take_toll_option()? {
+                continue;
+            }
+            let watched = self.world.ticks + DOOR_SWING_WAIT;
+            while self.world.ticks < watched {
+                self.pump(1)?;
+                if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+                    return Ok(());
+                }
+                if (self.world.x, self.world.z) == (door.x, door.z) {
+                    break;
+                }
+                if self.world.ticks > deadline {
+                    return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
+                }
+            }
+        }
+        if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+            return Ok(());
+        }
+        Err(Error::DoorDidNotOpen(format!(
+            "door loc {} at ({},{},{}) left us at {:?}, want ({},{},{}); last game: {}",
+            door.loc, door.x, door.z, door.level, self.position(), cross_to.x, cross_to.z, cross_to.level,
+            last_message(self),
+        )))
+    }
+
+    /// Toll dialog after a paid-door click: pick the affirmative option so
+    /// the swing proceeds. True when an option was picked (re-watch the
+    /// swing); a dialog with no yes/pay option is DoorDidNotOpen.
+    fn take_toll_option(&mut self) -> Result<bool> {
+        let options = self.chat_options();
+        if options.is_empty() {
+            return Ok(false);
+        }
+        if !self.allow_paid {
             return Err(Error::DoorDidNotOpen(format!(
-                "door loc {} at ({},{},{}) did not open from {:?}; last game: {}",
-                door.loc,
-                door.x,
-                door.z,
-                door.level,
+                "toll dialog at {:?} with paid paths off: {}; last game: {}",
                 self.position(),
+                options.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join(" / "),
                 last_message(self),
             )));
         }
-        let mut cross = Vec::new();
-        if (self.world.x, self.world.z) != (door.x, door.z) {
-            cross.push((door.x, door.z));
+        let picked = options.iter().find(|(_, text)| {
+            let lower = text.to_lowercase();
+            lower.contains("yes") || lower.contains("pay") || lower == "ok."
+        });
+        match picked {
+            Some((_, text)) => {
+                let text = text.clone();
+                self.chat_choose(&text)?;
+                Ok(true)
+            }
+            None => Err(Error::DoorDidNotOpen(format!(
+                "toll dialog at {:?} has no yes/pay option: {}; last game: {}",
+                self.position(),
+                options.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join(" / "),
+                last_message(self),
+            ))),
         }
-        cross.push((cross_to.x, cross_to.z));
-        let run = self.want_run();
-        let cross_deadline = deadline.min(self.world.ticks + CROSS_WAIT);
-        if self.send_and_await(&cross, run, cross_deadline).is_err() {
-            return Err(Error::DoorDidNotOpen(format!(
-                "door loc {} swung but crossing to ({},{},{}) failed from {:?}; last game: {}",
-                door.loc, cross_to.x, cross_to.z, cross_to.level, self.position(), last_message(self),
-            )));
-        }
-        if (self.world.x, self.world.z, self.world.level) != (cross_to.x, cross_to.z, cross_to.level) {
-            return Err(Error::DoorDidNotOpen(format!(
-                "door loc {} crossed to {:?}, want ({},{},{}); last game: {}",
-                door.loc, self.position(), cross_to.x, cross_to.z, cross_to.level, last_message(self),
-            )));
-        }
-        Ok(())
     }
 
     /// Ride segment: stand on `stand`, pre-open trapdoors, click the
