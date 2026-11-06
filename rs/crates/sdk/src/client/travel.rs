@@ -276,7 +276,17 @@ impl Bot {
             let here = (self.world.x, self.world.z);
             match pending.iter().position(|tile| *tile == here) {
                 Some(seen) => pending = pending.split_off(seen + 1),
-                None => pending = pending.split_off(end.min(pending.len())),
+                // Off the leg after a completed send: the plan no longer
+                // describes where we are, so fail loud instead of dropping
+                // the leg. StepRefused replans once from here (walks ban
+                // nothing); a second miss returns this to the caller.
+                None => {
+                    return Err(Error::StepRefused(format!(
+                        "walk left the leg at {:?}, want {pending:?}; last game: {}",
+                        self.position(),
+                        last_message(self),
+                    )));
+                }
             }
         }
         let last = tiles[tiles.len() - 1];
@@ -667,26 +677,19 @@ fn is_replanable(err: &Error) -> bool {
     )
 }
 
-/// The edge to ban for one replan: the failing segment's own edge, or
-/// the closest known door when a plain walk stalls against one.
-fn ban_for(seg: &Segment, bot: &Bot) -> Option<EdgeId> {
+/// The edge to ban for one replan: the failing segment's own edge.
+/// A walk leg is many steps, not one edge, so it bans nothing: the
+/// single replan from the new position is the retry, and a nearby live
+/// door stays unbanned until a plan names it (banning it blamed the
+/// wrong edge when a stall came from a re-closed door elsewhere).
+fn ban_for(seg: &Segment, _bot: &Bot) -> Option<EdgeId> {
     match seg {
         Segment::OpenDoor { door, .. } => {
             Some(EdgeId::Door { loc: door.loc, x: door.x, z: door.z, level: door.level })
         }
         Segment::Ride { transition, .. } => Some(EdgeId::Ride(transition.name.clone())),
         Segment::Custom { edge, .. } => Some(EdgeId::Custom(edge.name.clone())),
-        Segment::Walk { .. } => bot
-            .doors
-            .keys()
-            .filter(|tile| {
-                (tile.0 - bot.world.x).abs().max((tile.1 - bot.world.z).abs()) <= 2 && tile.2 == bot.world.level
-            })
-            .min_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs())
-            .map(|tile| {
-                let (loc, _, _) = bot.doors[tile];
-                EdgeId::Door { loc, x: tile.0, z: tile.1, level: tile.2 }
-            }),
+        Segment::Walk { .. } => None,
     }
 }
 
