@@ -1,0 +1,29 @@
+{
+  "blocked_locs": [
+    {
+      "loc": 1530,
+      "reason": "rampart decor: the server refuses every eastward step through it (verified live, repeatedly); no real 1530 passage is known, read as wall so the router detours",
+      "verified": "2026-11-06"
+    }
+  ],
+  "custom_edges": [],
+  "maze_locs": [
+    {
+      "name_prefix": "macro_maze_wall",
+      "reason": "maze event walls advertise Open but macro_event_maze.rs2 answers \"I can't open that\"; only category-16 walllow doors swing",
+      "verified": "2026-11-06"
+    },
+    {
+      "name_prefix": "macor_maze_wall",
+      "reason": "server typo for walllow_safe4, same rule as macro_maze_wall",
+      "verified": "2026-11-06"
+    },
+    {
+      "name_prefix": "macro_maze_chest",
+      "reason": "maze chests advertise Open but looting one never lets anyone pass, read as walls for planning",
+      "verified": "2026-11-06"
+    }
+  ],
+  "one_way_doors": [],
+  "requirements": []
+}

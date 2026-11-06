@@ -12,72 +12,21 @@ use std::path::Path;
 
 use lifescape_sdk::collision::{LocDef, MapPack, zip_spans};
 
-use lifescape_json::Value;
+use lifescape_sdk::loctypes;
 use crate::paths;
 
 /// Loc defs for every loc id in the engine dump (`gamedata/data/gametypes.json`).
 /// Null rows stay None; the map loader skips locs without a def.
+/// Decor that reads as wall lives in `gamedata/data/nav_overrides.json`.
 pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>, String> {
     let text = std::fs::read_to_string(gametypes_path).map_err(|err| format!("read {}: {err}", gametypes_path.display()))?;
-    let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", gametypes_path.display()))?;
-    let rows = parsed.get("loc").as_arr().ok_or_else(|| format!("{} has no loc table", gametypes_path.display()))?;
-    let mut defs = Vec::with_capacity(rows.len());
-    for (loc_id, row) in rows.iter().enumerate() {
-        if matches!(row, Value::Null) {
-            defs.push(None);
-            continue;
-        }
-        let has_ops = row
-            .get("ops")
-            .as_arr()
-            .is_some_and(|ops| ops.iter().any(|op| !matches!(op, Value::Null)));
-        let name = row.get("name").as_str().unwrap_or("");
-        let category = row.get("category").as_i64().unwrap_or(-1);
-        let mut open_op = row
-            .get("ops")
-            .as_arr()
-            .and_then(|ops| ops.iter().position(|op| {
-                op.as_str().is_some_and(|name| name.eq_ignore_ascii_case("open"))
-            }))
-            .map(|index| index as u8 + 1);
-        // Maze routing exceptions (server scripts are the truth):
-        // - maze walls outside category 16 advertise Open but the script
-        //   answers "I can't open that" (macro_event_maze.rs2); only
-        //   category 16 (macro_maze_wall_door: walllow, safe1..safe4)
-        //   swings. Checked against gametypes.json: 3628..3632.
-        // - maze chests advertise Open but looting one never lets anyone
-        //   pass, so they must read as walls for planning.
-        let lower = name.to_lowercase();
-        let maze_wall = lower.starts_with("macro_maze_wall") || lower.starts_with("macor_maze_wall");
-        if (maze_wall && category != 16) || lower.starts_with("macro_maze_chest") {
-            open_op = None;
-        }
-        // Rampart "door" 1530 advertises Open and flips live, but the server
-        // refuses every eastward step through it (verified live, repeatedly,
-        // across sessions): the castle ramparts have no gate there, only
-        // decor. Read it as a wall like maze chests, so the router detours
-        // instead of pacing a tile that never opens. If a real 1530 passage
-        // is ever needed, it fails loud (Unreachable + blockers: see the
-        // walker's no-route report), never silent.
-        if loc_id == 1530 {
-            open_op = None;
-        }
-        let toll = row
-            .get("name")
-            .as_str()
-            .is_some_and(|name| name.to_lowercase().contains("toll"));
-        defs.push(Some(LocDef {
-            blockwalk: row.get("blockwalk").as_bool().unwrap_or(false),
-            blockrange: row.get("blockrange").as_bool().unwrap_or(false),
-            length: row.get("length").as_i64().unwrap_or(1) as i32,
-            width: row.get("width").as_i64().unwrap_or(1) as i32,
-            active: row.get("active").as_i64().unwrap_or(0) as i32,
-            has_ops,
-            open_op,
-            toll,
-        }));
-    }
-    Ok(defs)
+    let overrides_path = gametypes_path
+        .parent()
+        .map(|dir| dir.join("nav_overrides.json"))
+        .ok_or_else(|| format!("no parent dir for {}", gametypes_path.display()))?;
+    let overrides_text =
+        std::fs::read_to_string(&overrides_path).map_err(|err| format!("read {}: {err}", overrides_path.display()))?;
+    loctypes::parse_loctypes(&text, &overrides_text)
 }
 
 /// Transition rows for stair/ladder rides (`gamedata/data/transitions.json`).

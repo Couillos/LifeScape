@@ -105,3 +105,31 @@ pub fn parse_loctypes(gametypes_text: &str, overrides_text: &str) -> Result<Vec<
     }
     Ok(defs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overrides_match_previous_hardcodes() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let gametypes_path = root.join("gamedata/data/gametypes.json");
+        let overrides_path = root.join("gamedata/data/nav_overrides.json");
+        if !gametypes_path.is_file() || !overrides_path.is_file() {
+            return;
+        }
+        let gametypes = std::fs::read_to_string(&gametypes_path).expect("read gametypes");
+        let overrides = std::fs::read_to_string(&overrides_path).expect("read overrides");
+        let defs = parse_loctypes(&gametypes, &overrides).expect("parse loctypes");
+        // Rampart decor 1530: no passage, reads as wall.
+        assert!(defs[1530].as_ref().is_some_and(|def| def.open_op.is_none()));
+        // Maze walls: stripped, except the swinging walllow doors (category 16).
+        assert!(defs[3626].as_ref().is_some_and(|def| def.open_op.is_none()));
+        assert_eq!(defs[3628].as_ref().and_then(|def| def.open_op), Some(1));
+        assert_eq!(defs[3632].as_ref().and_then(|def| def.open_op), Some(1));
+        // Maze chests: never a path.
+        assert!(defs[3635].as_ref().is_some_and(|def| def.open_op.is_none()));
+        // Untouched doors keep their op.
+        assert_eq!(defs[3].as_ref().and_then(|def| def.open_op), Some(1));
+    }
+}

@@ -19,6 +19,8 @@ restent minces et stateless. Ticks serveur : voir `../lostcity/engine/data/confi
 - `lifescape-gamedata` (`rs/crates/gamedata/`, données `gamedata/data/`) : accès typé aux dumps ; jamais de réseau ni de script.
 - `lifescape-orchestrator` (`rs/crates/orchestrator/`, binaire `orchestrator`) : daemon, sessions, CLI, dashboard ; jamais de protocole jeu.
 - `lifescape-scripts` (`rs/crates/scripts/`) : registre compilé des scripts minces ; jamais de paquet ni d'opcode.
+- `lifescape-json` (`rs/crates/json/`) : parseur/écrivain JSON unique, std only ; aucune logique métier.
+- `lifescape-nav` (`rs/crates/nav/`) : collision statique, recherche locale, planification pure ; aucun réseau ni état live.
 
 ## 3. Commandes
 
