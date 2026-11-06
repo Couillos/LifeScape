@@ -15,4 +15,5 @@ Cible phases 3-7 (rien n'est implémenté) :
 - phase 5 : `Bot::travel_to` qui exécute un plan segment par segment avec
   postcondition ; `walk_to` devient une enveloppe.
 - phase 6 : dossier d'échec sous `run/failures/` + `orchestrator replay-nav` (verdicts A/B/C).
-- phase 7 : prober `probe_transitions` écrivant le fichier de vérification (nouveau, à créer).
+- phase 7 : prober `probe_transitions` écrivant `gamedata/data/transitions_verified.json`
+  (244 ok, 98 no_move exclus, 2 skips sans verdict ; voir `docs/decisions.md`).
