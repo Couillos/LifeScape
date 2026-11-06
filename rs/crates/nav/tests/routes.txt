@@ -7,13 +7,26 @@
 # stand=<x>,<z>, avoids=<x>,<z>).
 # 1. longue marche meme niveau en exterieur (Lumbridge -> Varrock est).
 longue_marche | 3222,3222,0 | 3250,3420,0 | - | reachable ; walk_tiles<=400
-# 2. entree dans un batiment par une porte fermee (chateau de Lumbridge).
-entree_chateau | 3219,3218,0 | 3215,3218,0 | - | reachable ; uses_loc=1516 ; doors<=1
-# 3. montee 0>1>2 par escaliers (chateau de Lumbridge, spiralstairs).
-etages_chateau | 3222,3222,0 | 3208,3220,2 | - | reachable ; rides>=2 ; levels=0>1>2
-# 4. descente d'echelle vers un donjon (trappe du cellier, +6400).
-cave_trappe | 3209,3214,0 | 3210,9616,0 | - | reachable ; rides>=1 ; levels=0
+# 2. entree par une porte fermee (1530 angle EST, stand est valide).
+# L'ancien or (chateau 1516/1519, angle OUEST) exigeait l'impossible :
+# ces portes doubles ne se cliquent que depuis l'ouest (moteur : mur
+# droit angle 0, stands valides ouest/nord/sud), or l'ouest est a
+# l'interieur et nord/sud impraticables. Donjon scelle depuis
+# l'exterieur dans cette revision ; l'entree demandera une decision
+# contenu (angles de la carte). La regression est figee en 16.
+entree_1530 | 3228,3214,0 | 3224,3214,0 | - | reachable ; uses_loc=1530 ; doors<=1
+# 3. montee 0>1>2 par echelles (tour est du chateau, 1747 puis 1748).
+# L'ancien or (escaliers du chateau) exigeait l'entree scellee (voir 2).
+etages_echelle | 3228,3215,0 | 3229,3212,2 | - | reachable ; rides>=2 ; levels=0>1>2
+# 4. descente de trappe vers un donjon (+6400). L'ancien or (cellier du
+# chateau 3209,9616) demarrait dans le donjon scelle (voir 2) ; la
+# mecanique est la meme ici (trappe 1568, open_to 1570, delta +6400).
+# Pas de sortie dans le dump pour ce donjon (ni 9616, ni egouts 9858) :
+# le prober phase 7 devra la decouvrir en live (ne pas l'inventer).
+cave_trappe | 3097,3469,0 | 3097,9868,0 | - | reachable ; rides>=1 ; levels=0
 # 5. trappe a deux temps avec open_to (egouts de Varrock, 881->882).
+# Meme remarque sortie : echelle ladder_from_cellar 1755 vue en live en
+# (3237,9858), absente du dump ; au prober phase 7 de l'ajouter.
 egouts_varrock | 3237,3456,0 | 3238,9858,0 | - | reachable ; rides>=1 ; uses_loc=882
 # 6. transition a delta relatif au joueur (echelle du chateau, +1 niveau).
 echelle_delta | 3228,3215,0 | 3228,3213,1 | - | reachable ; rides>=1 ; uses_loc=1747 ; levels=0>1
@@ -44,3 +57,8 @@ isolee_entrana | 2820,3357,0 | 3222,3222,0 | - | unreachable=Disconnected
 bk_porte3_nord | 3025,3512,1 | 3025,3511,1 | - | reachable ; uses_loc=2339 ; stand=3025,3512
 # 15. rempart 1530 : le plan contourne sans ouvrir de porte.
 rempart_1530 | 3224,3223,0 | 3228,3226,0 | - | reachable ; doors<=0 ; walk_tiles>=6 ; avoids=3226,3223
+# 16. regression donjon scelle : les doubles portes 1516/1519 (mur droit
+# angle OUEST) ne se cliquent que depuis l'ouest, soit l'interieur.
+# L'entree du chateau est impossible dans cette revision (stand
+# orthogonal valide requis, aucun praticable depuis l'exterieur).
+chateau_scell | 3219,3218,0 | 3215,3218,0 | - | unreachable=Disconnected

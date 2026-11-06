@@ -54,9 +54,10 @@ fn ground_bytes() -> Vec<u8> {
 }
 
 /// Un seul loc : la porte a peage en (BASE+11, BASE+19), mur droit vers
-/// l'est (info = shape 0, angle 2), coordonnee 11*64+19 = 723.
+/// l'ouest (info = shape 0, angle 0 : le moteur ne prend le clic que
+/// depuis l'ouest, le sens de la traversee), coordonnee 11*64+19 = 723.
 fn loc_bytes() -> Vec<u8> {
-    vec![11, 0x82, 0xD4, 0x02, 0x00, 0x00]
+    vec![11, 0x82, 0xD4, 0x00, 0x00, 0x00]
 }
 
 /// Zip minimal a entrees stockees : le lecteur du pack ne prend que ca.
@@ -135,6 +136,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         requirements: Vec::new(),
         one_way: Vec::new(),
         customs: Vec::new(),
+        blocked: Vec::new(),
     };
     (world, tables, path)
 }

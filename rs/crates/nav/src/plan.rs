@@ -378,10 +378,13 @@ impl Search<'_> {
         found
     }
 
-    /// A door this search may swing: openable, untolled (or paid), and
-    /// with its requirement tags in hand.
+    /// A door this search may swing: openable, untolled (or paid), with
+    /// its requirement tags in hand, and not hand-blocked tile by tile.
     fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
         let (id, shape, angle) = self.door_at(tile)?;
+        if self.tables.is_blocked(id, tile) {
+            return None;
+        }
         let def = self.world.loc_def(id as usize)?;
         def.open_op?;
         if self.world.is_toll(tile.x, tile.z, tile.level) && !self.allow_paid {
@@ -542,9 +545,43 @@ fn dijkstra(
             let Some(door_tile) = door_tile else {
                 continue;
             };
-            let (id, _, _) = search.usable_door(door_tile).expect("door just checked");
+            let (id, shape, angle) = match search.usable_door(door_tile) {
+                Some(found) => found,
+                None => continue,
+            };
             if !search.tables.side_ok(id, door_tile, here) {
                 continue;
+            }
+            // Clickable stand only: the engine takes the op from an
+            // orthogonal neighbour passing its reach rule for the door's
+            // shape and angle (a diagonal or wrong-sided stand reads
+            // "I can't reach that!" live). Stepping off the door tile
+            // itself (stand == door) is the same opening's second half:
+            // the click already happened from the previous stand, which
+            // passed this check when stepping on. Flags are the closed
+            // view: every nearby door is still shut at click time.
+            if (here.x - door_tile.x).abs() + (here.z - door_tile.z).abs() > 1 {
+                continue;
+            }
+            let (width, height) =
+                search.world.loc_def(id as usize).map(|def| (def.length, def.width)).unwrap_or((1, 1));
+            if (here.x, here.z) != (door_tile.x, door_tile.z) {
+                let stand_flag = search.base(here);
+                if !reach::reached(
+                    &|_, _, _| stand_flag,
+                    here.level,
+                    here.x,
+                    here.z,
+                    door_tile.x,
+                    door_tile.z,
+                    width,
+                    height,
+                    i32::from(angle),
+                    i32::from(shape),
+                    0,
+                ) {
+                    continue;
+                }
             }
             let edge = EdgeId::Door { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level };
             if options.excluded_edges.contains(&edge) {

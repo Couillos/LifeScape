@@ -119,8 +119,7 @@ fn touches(plan: &Plan, x: i32, z: i32) -> bool {
     false
 }
 
-fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {
-    let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let cols: Vec<&str> = line.split('|').map(str::trim).collect();
     assert_eq!(cols.len(), 5, "route needs 5 | columns, got {line:?}");
     let (name, from, dest, options_raw, assertions_raw) = (cols[0], parse_tile(cols[1]), parse_tile(cols[2]), cols[3], cols[4]);
     let mut options = NavOptions::default();
@@ -166,7 +165,10 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {
         ),
     };
     println!("{name}: {summary} [{ms}ms]");
-    if !cfg!(debug_assertions) {
+    // The latency budget guards plans (live travel must stay snappy);
+    // a NoRoute-by-exhaustion is bounded by MAX_VISITS, not time, and
+    // its milliseconds stay printed above for the record.
+    if result.is_ok() && !cfg!(debug_assertions) {
         assert!(ms < 300, "route {name}: plan took {ms}ms, budget is 300ms");
     }
     for assertion in assertions_raw.split(';').map(str::trim).filter(|part| !part.is_empty()) {
@@ -241,6 +243,47 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {
             assert!(!touches(plan, pair[0], pair[1]), "route {name}: plan touches ({},{})", pair[0], pair[1]);
         } else {
             panic!("route {name}: unknown assertion {assertion:?}");
+        }
+    }
+    // Every door stand must be a tile the engine would take the click
+    // from: orthogonal neighbour passing the server reach rule for the
+    // door's shape and angle. A diagonal or wrong-sided stand reads
+    // "I can't reach that!" live (castle double doors 1516/1519).
+    if let Ok(plan) = &result {
+        for seg in &plan.segments {
+            if let Segment::OpenDoor { door, stand, cross_to } = seg {
+                let manhattan = (stand.x - door.x).abs() + (stand.z - door.z).abs();
+                assert_eq!(manhattan, 1, "route {name}: door {} stand ({},{}) is not orthogonal", door.loc, stand.x, stand.z);
+                let (_, shape, angle) = world
+                    .door_at(door.x, door.z, door.level)
+                    .unwrap_or_else(|| panic!("route {name}: door {} has no static shape", door.loc));
+                let (width, height) = world
+                    .loc_def(door.loc as usize)
+                    .map(|def| (def.length, def.width))
+                    .unwrap_or((1, 1));
+                let flag = world.get(stand.x, stand.z, stand.level);
+                assert!(
+                    lifescape_nav::reach::reached(
+                        &|_, _, _| flag,
+                        stand.level,
+                        stand.x,
+                        stand.z,
+                        door.x,
+                        door.z,
+                        width,
+                        height,
+                        i32::from(angle),
+                        i32::from(shape),
+                        0,
+                    ),
+                    "route {name}: door {} stand ({},{}) fails the reach rule (cross=({},{})",
+                    door.loc,
+                    stand.x,
+                    stand.z,
+                    cross_to.x,
+                    cross_to.z,
+                );
+            }
         }
     }
 }
