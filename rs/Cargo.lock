@@ -45,5 +45,6 @@ dependencies = [
 name = "lifescape-sdk"
 version = "0.1.0"
 dependencies = [
+ "lifescape-json",
  "lifescape-nav",
 ]

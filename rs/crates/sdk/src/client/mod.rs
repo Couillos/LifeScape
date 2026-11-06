@@ -43,6 +43,8 @@ const KEEPALIVE_TICKS: u64 = 50;
 /// fires first keeps the session alive.
 const KEEPALIVE_WALL: Duration = Duration::from_secs(3);
 const DRAIN_PER_PUMP: usize = 256;
+/// Trail marks kept for the failure dossier (one per moved/ticked pump).
+const TRAIL_CAP: usize = 256;
 
 /// High-level bot: login, pump ticks, act, read live state.
 pub struct Bot {
@@ -103,6 +105,9 @@ pub struct Bot {
     /// Planner tables (transitions, verdicts, door rules), wired by the
     /// session at open alongside `nav_world`.
     pub nav_tables: Option<Arc<lifescape_nav::tables::Tables>>,
+    /// Last positions with their tick, oldest first, capped
+    /// (`TRAIL_CAP`): the failure dossier ships the last 50.
+    pub trail: Vec<(u64, i32, i32, i32)>,
     /// Heartbeat hook, installed by the session worker (default: none).
     pub on_pump: Option<PumpHook>,
     /// Inline-pause gate, installed by the session worker (default: none).
@@ -139,6 +144,7 @@ impl Bot {
             transitions: Vec::new(),
             nav_world: None,
             nav_tables: None,
+            trail: Vec::new(),
             on_pump: None,
             pause_gate: None,
             zone_label: "?".to_string(),
@@ -154,6 +160,20 @@ impl Bot {
 
     pub fn position(&self) -> (i32, i32, i32) {
         self.world.position()
+    }
+
+    /// Positions kept for the failure dossier: one mark per pump that
+    /// moved or ticked, oldest first. Caps at `TRAIL_CAP`.
+    pub(crate) fn note_trail(&mut self) {
+        let mark = (self.world.ticks, self.world.x, self.world.z, self.world.level);
+        if self.trail.last().is_some_and(|last| *last == mark) {
+            return;
+        }
+        self.trail.push(mark);
+        if self.trail.len() > TRAIL_CAP {
+            let drop = self.trail.len() - TRAIL_CAP;
+            self.trail.drain(..drop);
+        }
     }
 
     /// Log in, retrying while the server still holds the previous session.
@@ -267,6 +287,7 @@ impl Bot {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));
             }
         }
+        self.note_trail();
         if let Some(gate) = self.pause_gate.clone() {
             if !gate(self) {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));

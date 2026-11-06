@@ -40,6 +40,70 @@ pub enum Error {
     /// A choice dialogue opened mid-ride: carries the prompt and options.
     /// The executor never picks; the caller (or prober data) decides.
     NeedsDialogueChoice(String),
+    /// Final navigation failure with its replay dossier (§6.4): the kind,
+    /// the failing segment, where the bot stood, what was wanted versus
+    /// seen, and the dossier path when one was written.
+    TravelFailure(TravelError),
+}
+
+/// Final navigation failure kind (§6.4): one per executor outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TravelErrorKind {
+    NoRoute,
+    StepRefused,
+    DoorDidNotOpen,
+    RideDidNotMove,
+    RideWrongDestination,
+    NeedsDialogueChoice,
+    Timeout,
+    Interrupted,
+    Io,
+}
+
+impl TravelErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TravelErrorKind::NoRoute => "NoRoute",
+            TravelErrorKind::StepRefused => "StepRefused",
+            TravelErrorKind::DoorDidNotOpen => "DoorDidNotOpen",
+            TravelErrorKind::RideDidNotMove => "RideDidNotMove",
+            TravelErrorKind::RideWrongDestination => "RideWrongDestination",
+            TravelErrorKind::NeedsDialogueChoice => "NeedsDialogueChoice",
+            TravelErrorKind::Timeout => "Timeout",
+            TravelErrorKind::Interrupted => "Interrupted",
+            TravelErrorKind::Io => "Io",
+        }
+    }
+
+    /// Executor classification of a terminal error. Plan-side failures
+    /// (custom edge with no live executor, unreachable, state) file under
+    /// NoRoute: the plan asked for something unexecutable.
+    pub fn of(error: &Error) -> TravelErrorKind {
+        match error {
+            Error::StepRefused(_) => TravelErrorKind::StepRefused,
+            Error::DoorDidNotOpen(_) => TravelErrorKind::DoorDidNotOpen,
+            Error::RideDidNotMove(_) => TravelErrorKind::RideDidNotMove,
+            Error::RideWrongDestination(_) => TravelErrorKind::RideWrongDestination,
+            Error::NeedsDialogueChoice(_) => TravelErrorKind::NeedsDialogueChoice,
+            Error::Timeout(_) => TravelErrorKind::Timeout,
+            Error::Interrupted(_) => TravelErrorKind::Interrupted,
+            Error::Io(_) | Error::Login(_) => TravelErrorKind::Io,
+            _ => TravelErrorKind::NoRoute,
+        }
+    }
+}
+
+/// One failed `travel_to`: what broke, where, and the replay dossier.
+#[derive(Debug, Clone)]
+pub struct TravelError {
+    pub kind: TravelErrorKind,
+    pub segment_index: Option<usize>,
+    /// (x, z, level): explicit order, unlike `World::position`.
+    pub position: (i32, i32, i32),
+    pub tick: u64,
+    pub expected: String,
+    pub observed: String,
+    pub dossier: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Display for Error {
@@ -58,6 +122,17 @@ impl std::fmt::Display for Error {
             Error::RideDidNotMove(detail) => write!(formatter, "ride did not move: {detail}"),
             Error::RideWrongDestination(detail) => write!(formatter, "ride wrong destination: {detail}"),
             Error::NeedsDialogueChoice(detail) => write!(formatter, "needs dialogue choice: {detail}"),
+            Error::TravelFailure(failure) => write!(
+                formatter,
+                "travel failure {} seg={:?} at {:?} t={} expected={} observed={} dossier={:?}",
+                failure.kind.as_str(),
+                failure.segment_index,
+                failure.position,
+                failure.tick,
+                failure.expected,
+                failure.observed,
+                failure.dossier,
+            ),
         }
     }
 }
