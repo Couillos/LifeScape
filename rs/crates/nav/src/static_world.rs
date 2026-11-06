@@ -128,6 +128,15 @@ impl StaticWorld {
         probe.get(tile_x, tile_z, level)
     }
 
+    /// Remove one door's wall footprint from a caller-owned map. The
+    /// scratch map must already hold the surrounding tiles: wall locs
+    /// paint shared edges onto their neighbours, so unpainting one tile
+    /// alone leaves the neighbour-side bits set.
+    pub fn unpaint_into(&self, map: &mut CollisionMap, loc: u16, shape: u8, angle: u8, tile_x: i32, tile_z: i32, level: i32) {
+        let state = self.state.read().expect("static world lock poisoned");
+        state.pack.unpaint_door(map, loc, shape, angle, tile_x, tile_z, level);
+    }
+
     /// Free-to-play 8x8 zones (`tile >> 3`), parsed from the engine
     /// `free2play.csv`. Unset means no bounds: every tile is inside.
     pub fn set_f2p(&self, zones: HashSet<(i32, i32)>) {

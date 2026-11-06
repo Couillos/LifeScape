@@ -39,8 +39,9 @@ fn can_move(tile_flag: u32, block_flag: u32) -> bool {
 /// One-step move rule, exact server logic: cardinals only test the
 /// destination tile, diagonals also test both orthogonal intermediates.
 /// Shared by the window search below and the multi-level planner so the
-/// two never drift apart. `at` reads absolute tile flags.
-pub fn can_step(at: &impl Fn(i32, i32) -> u32, from_x: i32, from_z: i32, to_x: i32, to_z: i32) -> bool {
+/// two never drift apart. `at` reads absolute tile flags. `FnMut` so
+/// planners can memoize flag reads without changing the rule.
+pub fn can_step(at: &mut impl FnMut(i32, i32) -> u32, from_x: i32, from_z: i32, to_x: i32, to_z: i32) -> bool {
     let step_x = to_x - from_x;
     let step_z = to_z - from_z;
     match (step_x, step_z) {
@@ -153,52 +154,52 @@ impl Bfs {
             let distance = self.distances[Self::index(cur_x, cur_z)] + 1;
             let abs_x = cur_x + base_x;
             let abs_z = cur_z + base_z;
-            let at = |x: i32, z: i32| collision.get(x, z, level);
+            let mut at = |x: i32, z: i32| collision.get(x, z, level);
             if cur_x > 0 && self.directions[Self::index(cur_x - 1, cur_z)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z)
+                && can_step(&mut at, abs_x, abs_z, abs_x - 1, abs_z)
             {
                 self.append(cur_x - 1, cur_z, EAST, distance);
             }
             if cur_x < limit && self.directions[Self::index(cur_x + 1, cur_z)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z)
+                && can_step(&mut at, abs_x, abs_z, abs_x + 1, abs_z)
             {
                 self.append(cur_x + 1, cur_z, WEST, distance);
             }
             if cur_z > 0 && self.directions[Self::index(cur_x, cur_z - 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x, abs_z - 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x, abs_z - 1)
             {
                 self.append(cur_x, cur_z - 1, NORTH, distance);
             }
             if cur_z < limit && self.directions[Self::index(cur_x, cur_z + 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x, abs_z + 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x, abs_z + 1)
             {
                 self.append(cur_x, cur_z + 1, SOUTH, distance);
             }
             if cur_x > 0
                 && cur_z > 0
                 && self.directions[Self::index(cur_x - 1, cur_z - 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z - 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x - 1, abs_z - 1)
             {
                 self.append(cur_x - 1, cur_z - 1, NORTH | EAST, distance);
             }
             if cur_x < limit
                 && cur_z > 0
                 && self.directions[Self::index(cur_x + 1, cur_z - 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z - 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x + 1, abs_z - 1)
             {
                 self.append(cur_x + 1, cur_z - 1, NORTH | WEST, distance);
             }
             if cur_x > 0
                 && cur_z < limit
                 && self.directions[Self::index(cur_x - 1, cur_z + 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x - 1, abs_z + 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x - 1, abs_z + 1)
             {
                 self.append(cur_x - 1, cur_z + 1, SOUTH | EAST, distance);
             }
             if cur_x < limit
                 && cur_z < limit
                 && self.directions[Self::index(cur_x + 1, cur_z + 1)] == 0
-                && can_step(&at, abs_x, abs_z, abs_x + 1, abs_z + 1)
+                && can_step(&mut at, abs_x, abs_z, abs_x + 1, abs_z + 1)
             {
                 self.append(cur_x + 1, cur_z + 1, SOUTH | WEST, distance);
             }

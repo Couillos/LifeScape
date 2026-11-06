@@ -25,5 +25,13 @@
     }
   ],
   "one_way_doors": [],
-  "requirements": []
+  "requirements": [
+    {
+      "loc": 1805,
+      "at": [3191, 3363, 0],
+      "requires": ["qp:32"],
+      "reason": "championdoor: the content script turns away anyone under 32 quest points (area_varrock champions_guild.rs2)",
+      "verified": "2026-11-06"
+    }
+  ]
 }

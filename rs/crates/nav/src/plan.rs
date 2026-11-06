@@ -1,0 +1,811 @@
+//! Multi-level planner: walk plus doors plus transition rides.
+//!
+//! Dijkstra over tiles (`BinaryHeap`, never A*: dungeon offsets and
+//! portals break Chebyshev admissibility). Walk edges reuse the exact
+//! server step rule (`bfs::can_step`); door edges remove exactly the
+//! closed door's wall (neighbour-aware unpaint, never blanket OPEN);
+//! transition edges start on `reach.rs` stands. One function, no
+//! network, no bot.
+
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+
+use crate::bfs::can_step;
+use crate::collision::{tile_walkable, CollisionMap};
+use crate::reach;
+use crate::static_world::StaticWorld;
+use crate::tables::{Tables, Transition, Verdict};
+
+/// Identity hash with a bit mixer: tile keys pack level/z/x, so the
+/// raw low bits are just the x coordinate and whole columns would
+/// share one bucket. The mixer spreads every bit over the key.
+#[derive(Default)]
+struct IdHash(u64);
+
+impl Hasher for IdHash {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.0 ^= u64::from_le_bytes(word);
+        }
+    }
+
+    fn write_u64(&mut self, key: u64) {
+        self.0 = key;
+    }
+
+    fn finish(&self) -> u64 {
+        let mut mixed = self.0.wrapping_add(0x9e3779b97f4a7c15);
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d049bb133111eb);
+        mixed ^ (mixed >> 31)
+    }
+}
+
+type U64Map<T> = HashMap<u64, T, BuildHasherDefault<IdHash>>;
+
+/// Door crossing: 10 walk steps worth of swinging and stepping.
+pub const DOOR_COST: u32 = 10;
+/// One transition ride: 20 walk steps of climbing and waiting.
+pub const TRANSITION_COST: u32 = 20;
+/// Riding blind: the prober never saw this transition work.
+pub const UNVERIFIED_PENALTY: u32 = 50;
+
+/// Search budget: explored tiles before calling the area disconnected.
+const MAX_VISITS: usize = 500_000;
+
+/// One map tile on one level.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Tile {
+    pub x: i32,
+    pub z: i32,
+    pub level: i32,
+}
+
+impl Tile {
+    fn key(self) -> u64 {
+        let level = (self.level as u64) & 0xFF;
+        let z = ((self.z + 8192) as u64) & 0x1F_FFFF;
+        let x = ((self.x + 8192) as u64) & 0x1F_FFFF;
+        (level << 42) | (z << 21) | x
+    }
+
+    fn chebyshev(self, other: Tile) -> i32 {
+        (self.x - other.x).abs().max((self.z - other.z).abs())
+    }
+}
+
+fn unkey(key: u64) -> Tile {
+    Tile {
+        level: ((key >> 42) & 0xFF) as i32,
+        z: (((key >> 21) & 0x1F_FFFF) as i32) - 8192,
+        x: ((key & 0x1F_FFFF) as i32) - 8192,
+    }
+}
+
+/// Which closed door a step swings through.
+#[derive(Clone, Debug)]
+pub struct DoorRef {
+    pub loc: u16,
+    pub x: i32,
+    pub z: i32,
+    pub level: i32,
+}
+
+/// Which transition row a ride takes.
+#[derive(Clone, Debug)]
+pub struct TransitionRef {
+    pub name: String,
+    pub loc: u16,
+    pub climb_loc: u16,
+    pub op: u8,
+    pub from: Tile,
+    pub to: Tile,
+}
+
+/// Which hand-added edge a step takes.
+#[derive(Clone, Debug)]
+pub struct CustomEdgeRef {
+    pub name: String,
+}
+
+/// Opening click before the climb (trapdoor lid, manhole cover...).
+#[derive(Clone, Debug)]
+pub struct OpenStep {
+    pub loc: u16,
+    pub op: u8,
+}
+
+/// One plan piece, in walking order.
+#[derive(Clone, Debug)]
+pub enum Segment {
+    Walk { tiles: Vec<Tile> },
+    OpenDoor { door: DoorRef, stand: Tile, cross_to: Tile },
+    Ride { transition: TransitionRef, stand: Tile, pre_open: Option<OpenStep>, expect: Tile },
+    Custom { edge: CustomEdgeRef, stand: Tile, expect: Tile },
+}
+
+/// A full route: segments in order plus their summed edge costs.
+#[derive(Clone, Debug)]
+pub struct Plan {
+    pub segments: Vec<Segment>,
+    pub cost: u32,
+    /// Set when the destination tile itself is blocked (tree, counter):
+    /// the route ends on the closest reachable tile instead.
+    pub adjusted_dest: Option<Tile>,
+}
+
+/// Planner inputs: tolls, F2P bounds, owned tags, banned edges.
+#[derive(Clone, Debug, Default)]
+pub struct NavOptions {
+    pub allow_paid: bool,
+    pub f2p_only: bool,
+    pub satisfied: HashSet<String>,
+    pub excluded_edges: HashSet<EdgeId>,
+}
+
+/// One banned edge, for the single executor replan.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum EdgeId {
+    Door { loc: u16, x: i32, z: i32, level: i32 },
+    Ride(String),
+    Custom(String),
+}
+
+/// Why no route exists.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoRouteReason {
+    Disconnected,
+    NeedsRequirement,
+    PaidOnly,
+    OutsideF2p,
+}
+
+impl NoRouteReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoRouteReason::Disconnected => "Disconnected",
+            NoRouteReason::NeedsRequirement => "NeedsRequirement",
+            NoRouteReason::PaidOnly => "PaidOnly",
+            NoRouteReason::OutsideF2p => "OutsideF2p",
+        }
+    }
+}
+
+/// A failed plan plus the diagnosis for `replay-nav`.
+#[derive(Clone, Debug)]
+pub struct NoRoute {
+    pub closest_reachable: Tile,
+    pub blocked_by_requirements: Vec<(EdgeId, Vec<String>)>,
+    pub disabled_transitions_nearby: Vec<TransitionRef>,
+    pub reason: NoRouteReason,
+}
+
+#[derive(Clone, Debug)]
+struct RideEdge {
+    index: usize,
+    dest: Tile,
+    cost: u32,
+    pre_open: Option<OpenStep>,
+}
+
+#[derive(Clone, Debug)]
+struct CustomPrepared {
+    index: usize,
+    dest: Tile,
+    cost: u32,
+}
+
+#[derive(Clone, Debug)]
+enum PrevEdge {
+    Walk,
+    Door(DoorRef),
+    Ride { index: usize, dest: Tile, pre_open: Option<OpenStep> },
+    Custom { index: usize, dest: Tile },
+}
+
+/// Plan one route. Pure: same inputs, same plan, byte for byte.
+///
+/// The first search lifts requirements: its paths are a superset of the
+/// fully-filtered ones, so a lifted path using no requirement edge is
+/// already the optimal full-filter plan (any better full path would be
+/// a better lifted path). Requirement and toll verdicts fall out of the
+/// lifted paths without extra full searches.
+///
+/// Known limit: when the lifted-optimal path crosses a requirement
+/// door with missing tags, the answer is NeedsRequirement without
+/// searching for a longer tag-free detour. Requirement doors guard
+/// enclosed pockets (verified for the single current entry), so no
+/// such detour exists; revisit if a requirement door ever gets one.
+pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, options: &NavOptions) -> Result<Plan, NoRoute> {
+    if options.f2p_only && !world.in_f2p(dest.x, dest.z) {
+        return Err(NoRoute {
+            closest_reachable: from,
+            blocked_by_requirements: Vec::new(),
+            disabled_transitions_nearby: disabled_nearby(tables, dest),
+            reason: NoRouteReason::OutsideF2p,
+        });
+    }
+    // A: requirements lifted (tolls still apply unless paid).
+    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false) {
+        Outcome::Found(chain, cost, best) => {
+            let mut blocked = Vec::new();
+            for (_, edge) in &chain {
+                if let PrevEdge::Door(door) = edge {
+                    let missing = tables.missing(door.loc, Tile { x: door.x, z: door.z, level: door.level }, &options.satisfied);
+                    if !missing.is_empty() {
+                        let blocked_edge = EdgeId::Door { loc: door.loc, x: door.x, z: door.z, level: door.level };
+                        if !blocked.iter().any(|(known, _)| *known == blocked_edge) {
+                            blocked.push((blocked_edge, missing));
+                        }
+                    }
+                }
+            }
+            if blocked.is_empty() {
+                return Ok(assemble(tables, from, dest, chain, cost));
+            }
+            return Err(NoRoute {
+                closest_reachable: best,
+                blocked_by_requirements: blocked,
+                disabled_transitions_nearby: disabled_nearby(tables, dest),
+                reason: NoRouteReason::NeedsRequirement,
+            });
+        }
+        Outcome::Closest(_) => {}
+    }
+    if !options.allow_paid {
+        // B: tolls lifted too. A path here that the searches above lack
+        // must swing a toll gate: coins, not walls, block the way.
+        match dijkstra(world, tables, from, dest, options, true, true, false) {
+            Outcome::Found(chain, _, best) => {
+                let mut tolls = Vec::new();
+                for (_, edge) in &chain {
+                    if let PrevEdge::Door(door) = edge {
+                        if world.is_toll(door.x, door.z, door.level) {
+                            let toll_edge = EdgeId::Door { loc: door.loc, x: door.x, z: door.z, level: door.level };
+                            if !tolls.iter().any(|(known, _)| *known == toll_edge) {
+                                tolls.push((toll_edge, vec!["coins:10".to_string()]));
+                            }
+                        }
+                    }
+                }
+                if !tolls.is_empty() {
+                    return Err(NoRoute {
+                        closest_reachable: best,
+                        blocked_by_requirements: tolls,
+                        disabled_transitions_nearby: disabled_nearby(tables, dest),
+                        reason: NoRouteReason::PaidOnly,
+                    });
+                }
+            }
+            Outcome::Closest(_) => {}
+        }
+    }
+    if options.f2p_only {
+        // C: bounds lifted, requirements enforced. Reaching the dest this
+        // way proves the F2P fence is the blocker.
+        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true) {
+            Outcome::Found(_, _, best) => {
+                return Err(NoRoute {
+                    closest_reachable: best,
+                    blocked_by_requirements: Vec::new(),
+                    disabled_transitions_nearby: disabled_nearby(tables, dest),
+                    reason: NoRouteReason::OutsideF2p,
+                });
+            }
+            Outcome::Closest(_) => {}
+        }
+    }
+    // D: fully filtered search, for the closest reachable tile.
+    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false) {
+        Outcome::Found(_, _, best) => best,
+        Outcome::Closest(best) => best,
+    };
+    Err(NoRoute {
+        closest_reachable: closest,
+        blocked_by_requirements: Vec::new(),
+        disabled_transitions_nearby: disabled_nearby(tables, dest),
+        reason: NoRouteReason::Disconnected,
+    })
+}
+
+fn disabled_nearby(tables: &Tables, dest: Tile) -> Vec<TransitionRef> {
+    tables
+        .transitions
+        .iter()
+        .filter(|row| row.disabled && (row.from.x - dest.x).abs() + (row.from.z - dest.z).abs() <= 40)
+        .map(transition_ref)
+        .collect()
+}
+
+fn transition_ref(row: &Transition) -> TransitionRef {
+    TransitionRef {
+        name: row.name.clone(),
+        loc: row.loc,
+        climb_loc: row.climb_loc,
+        op: row.climb_op,
+        from: row.from,
+        to: row.to,
+    }
+}
+
+enum Outcome {
+    Found(Vec<(Tile, PrevEdge)>, u32, Tile),
+    Closest(Tile),
+}
+
+struct Search<'a> {
+    world: &'a StaticWorld,
+    tables: &'a Tables,
+    options: &'a NavOptions,
+    ignore_requires: bool,
+    allow_paid: bool,
+    ignore_f2p: bool,
+    base_flags: U64Map<u32>,
+    open_flags: U64Map<u32>,
+    doors: U64Map<Option<(u16, u8, u8)>>,
+}
+
+impl Search<'_> {
+    fn in_bounds(&self, tile: Tile) -> bool {
+        !self.options.f2p_only || self.ignore_f2p || self.world.in_f2p(tile.x, tile.z)
+    }
+
+    fn base(&mut self, tile: Tile) -> u32 {
+        if let Some(flags) = self.base_flags.get(&tile.key()) {
+            return *flags;
+        }
+        let flags = self.world.get(tile.x, tile.z, tile.level);
+        self.base_flags.insert(tile.key(), flags);
+        flags
+    }
+
+    fn door_at(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
+        if let Some(found) = self.doors.get(&tile.key()) {
+            return *found;
+        }
+        let found = self.world.door_at(tile.x, tile.z, tile.level);
+        self.doors.insert(tile.key(), found);
+        found
+    }
+
+    /// A door this search may swing: openable, untolled (or paid), and
+    /// with its requirement tags in hand.
+    fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
+        let (id, shape, angle) = self.door_at(tile)?;
+        let def = self.world.loc_def(id as usize)?;
+        def.open_op?;
+        if self.world.is_toll(tile.x, tile.z, tile.level) && !self.allow_paid {
+            return None;
+        }
+        if !self.ignore_requires && !self.tables.missing(id, tile, &self.options.satisfied).is_empty() {
+            return None;
+        }
+        Some((id, shape, angle))
+    }
+
+    /// Collision with usable doors swung open: the exact wall removal
+    /// over the tiles it touches, never a blanket OPEN. Wall locs paint
+    /// shared edges onto their neighbours, so the scratch map carries
+    /// the 3x3 around the tile and every usable door inside unpaints
+    /// into it before the centre tile is read. 3x3 is exact: paint
+    /// reaches at most the neighbour tiles, so any door touching the
+    /// centre always shows one of its tiles inside the window.
+    fn open(&mut self, tile: Tile) -> u32 {
+        if let Some(flags) = self.open_flags.get(&tile.key()) {
+            return *flags;
+        }
+        let mut doors = Vec::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
+                if let Some(found) = self.usable_door(near) {
+                    doors.push((near, found));
+                }
+            }
+        }
+        let flags = if doors.is_empty() {
+            self.base(tile)
+        } else {
+            let mut scratch = CollisionMap::new();
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
+                    scratch.set(near.x, near.z, near.level, self.base(near));
+                }
+            }
+            for (near, (id, shape, angle)) in doors {
+                self.world.unpaint_into(&mut scratch, id, shape, angle, near.x, near.z, near.level);
+            }
+            scratch.get(tile.x, tile.z, tile.level)
+        };
+        self.open_flags.insert(tile.key(), flags);
+        flags
+    }
+
+    /// Walk step in the planning view (usable doors read open).
+    fn step_open(&mut self, from: Tile, to: Tile) -> bool {
+        let level = from.level;
+        let mut step = |x: i32, z: i32| self.open(Tile { x, z, level });
+        can_step(&mut step, from.x, from.z, to.x, to.z)
+    }
+
+    /// Walk step with every door shut.
+    fn step_closed(&mut self, from: Tile, to: Tile) -> bool {
+        let level = from.level;
+        let mut step = |x: i32, z: i32| self.base(Tile { x, z, level });
+        can_step(&mut step, from.x, from.z, to.x, to.z)
+    }
+}
+
+fn dijkstra(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    ignore_requires: bool,
+    allow_paid: bool,
+    ignore_f2p: bool,
+) -> Outcome {
+    let setup_start = std::time::Instant::now();
+    let mut search = Search {
+        world,
+        tables,
+        options,
+        ignore_requires,
+        allow_paid,
+        ignore_f2p,
+        base_flags: U64Map::default(),
+        open_flags: U64Map::default(),
+        doors: U64Map::default(),
+
+    };
+    let dest_walkable = tile_walkable(search.open(dest));
+    let (rides, customs) = prepare_edges(&mut search);
+    if std::env::var("PLAN_DEBUG").is_ok() {
+        eprintln!("plan setup {:?} rides={}", setup_start.elapsed(), rides.len());
+    }
+    let mut dist: U64Map<u32> = U64Map::default();
+    let mut prev: U64Map<(u64, PrevEdge)> = U64Map::default();
+    let mut heap: BinaryHeap<(Reverse<u32>, Reverse<u64>)> = BinaryHeap::new();
+    dist.insert(from.key(), 0);
+    heap.push((Reverse(0), Reverse(from.key())));
+    let mut best = from;
+    let mut best_rank = (from.chebyshev(dest), 0u32);
+    let mut visits = 0usize;
+    let loop_start = std::time::Instant::now();
+    let mut heap_max = 0usize;
+    let dest_key = dest.key();
+    // Lowest cost first, lowest tile key breaking ties: the same world
+    // always yields the same plan.
+    while let Some((Reverse(cost), Reverse(key))) = heap.pop() {
+        if dist.get(&key).is_some_and(|known| *known != cost) {
+            continue;
+        }
+        visits += 1;
+        if heap.len() > heap_max {
+            heap_max = heap.len();
+        }
+        if visits > MAX_VISITS {
+            break;
+        }
+        let here = unkey(key);
+        let rank = (here.chebyshev(dest), cost);
+        if rank < best_rank {
+            best_rank = rank;
+            best = here;
+        }
+        if key == dest_key && dest_walkable {
+            if std::env::var("PLAN_DEBUG").is_ok() {
+                eprintln!(
+                    "plan found visits={visits} heap_max={heap_max} {:?}",
+                    loop_start.elapsed(),
+                );
+            }
+            return Outcome::Found(rebuild(&prev, from, dest), cost, dest);
+        }
+        // Walk and door neighbours, eight directions in fixed order.
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+            let next = Tile { x: here.x + dx, z: here.z + dz, level: here.level };
+            // Blocked destination: the closest tile is the whole answer,
+            // so tiles far past the current best can never improve it.
+            // The true closest is never pruned: its distance stays under
+            // every best seen so far.
+            if !dest_walkable && next.chebyshev(dest) > best_rank.0 + 64 {
+                continue;
+            }
+            if !search.in_bounds(next) {
+                continue;
+            }
+            let next_key = next.key();
+            // A step onto a usable door tile always swings it: the live
+            // server refuses entry onto a closed door from any side, so
+            // even an along-the-wall step is a door edge, never a walk.
+            if search.usable_door(next).is_none() && search.step_closed(here, next) {
+                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
+                continue;
+            }
+            if !search.step_open(here, next) {
+                continue;
+            }
+            let door_tile = [next, here].into_iter().find(|tile| search.usable_door(*tile).is_some());
+            let Some(door_tile) = door_tile else {
+                continue;
+            };
+            let (id, _, _) = search.usable_door(door_tile).expect("door just checked");
+            if !search.tables.side_ok(id, door_tile, here) {
+                continue;
+            }
+            let edge = EdgeId::Door { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level };
+            if options.excluded_edges.contains(&edge) {
+                continue;
+            }
+            relax(
+                &mut dist,
+                &mut prev,
+                &mut heap,
+                key,
+                next_key,
+                cost + DOOR_COST,
+                PrevEdge::Door(DoorRef { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level }),
+            );
+        }
+        // Transition and custom rides from this stand.
+        if let Some(edges) = rides.get(&key) {
+            for edge in edges {
+                if options.excluded_edges.contains(&EdgeId::Ride(tables.transitions[edge.index].name.clone())) {
+                    continue;
+                }
+                let ride = PrevEdge::Ride { index: edge.index, dest: edge.dest, pre_open: edge.pre_open.clone() };
+                relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, ride);
+            }
+        }
+        if let Some(edges) = customs.get(&key) {
+            for edge in edges {
+                if options.excluded_edges.contains(&EdgeId::Custom(tables.customs[edge.index].name.clone())) {
+                    continue;
+                }
+                let custom = PrevEdge::Custom { index: edge.index, dest: edge.dest };
+                relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, custom);
+            }
+        }
+    }
+    // Blocked destination (tree, counter): the closest tile is the plan.
+    if !dest_walkable && best.key() != dest_key && dist.contains_key(&best.key()) {
+        let cost = dist[&best.key()];
+        if std::env::var("PLAN_DEBUG").is_ok() {
+            eprintln!("plan adjusted visits={visits} {:?}", loop_start.elapsed());
+        }
+        let found_best = best;
+        return Outcome::Found(rebuild(&prev, from, best), cost, found_best);
+    }
+    if std::env::var("PLAN_DEBUG").is_ok() {
+        eprintln!("plan closest visits={visits} {:?}", loop_start.elapsed());
+    }
+    Outcome::Closest(best)
+}
+
+fn relax(
+    dist: &mut U64Map<u32>,
+    prev: &mut U64Map<(u64, PrevEdge)>,
+    heap: &mut BinaryHeap<(Reverse<u32>, Reverse<u64>)>,
+    from_key: u64,
+    next_key: u64,
+    cost: u32,
+    edge: PrevEdge,
+) {
+    if dist.get(&next_key).is_some_and(|known| *known <= cost) {
+        return;
+    }
+    dist.insert(next_key, cost);
+    prev.insert(next_key, (from_key, edge));
+    heap.push((Reverse(cost), Reverse(next_key)));
+}
+
+fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Tile, PrevEdge)> {
+    let mut chain = Vec::new();
+    while at.key() != from.key() {
+        let Some((parent, _)) = prev.get(&at.key()) else {
+            break;
+        };
+        let parent_tile = unkey(*parent);
+        let Some((_, edge)) = prev.get(&at.key()) else {
+            break;
+        };
+        let edge = match edge {
+            PrevEdge::Walk => PrevEdge::Walk,
+            PrevEdge::Door(door) => PrevEdge::Door(DoorRef { loc: door.loc, x: door.x, z: door.z, level: door.level }),
+            PrevEdge::Ride { index, dest, pre_open } => {
+                PrevEdge::Ride { index: *index, dest: *dest, pre_open: pre_open.clone() }
+            }
+            PrevEdge::Custom { index, dest } => PrevEdge::Custom { index: *index, dest: *dest },
+        };
+        chain.push((at, edge));
+        at = parent_tile;
+    }
+    chain.reverse();
+    chain
+}
+
+/// Stands per ride: walkable tiles around the loc footprint where the op
+/// is valid per `reach.rs` for the footprint, shape and angle.
+fn prepare_edges(search: &mut Search) -> (U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>) {
+    let mut rides: U64Map<Vec<RideEdge>> = U64Map::default();
+    for (index, row) in search.tables.transitions.iter().enumerate() {
+        if row.disabled {
+            continue;
+        }
+        if search.tables.verdict(row.loc, row.from).is_some_and(Verdict::excludes) {
+            continue;
+        }
+        let pre_open = match row.open_to {
+            Some(_) => {
+                let op = search.world.loc_def(row.loc as usize).and_then(|def| def.open_op);
+                match op {
+                    Some(op) => Some(OpenStep { loc: row.loc, op }),
+                    None => continue,
+                }
+            }
+            None => None,
+        };
+        let cost = TRANSITION_COST
+            + if search.tables.verdict(row.loc, row.from).is_some_and(Verdict::verified) {
+                0
+            } else {
+                UNVERIFIED_PENALTY
+            };
+        for stand in stands(search, row) {
+            let dest = match row.delta {
+                Some((dl, dx, dz)) => Tile { x: stand.x + dx, z: stand.z + dz, level: stand.level + dl },
+                None => row.to,
+            };
+            if !search.in_bounds(dest) {
+                continue;
+            }
+            rides.entry(stand.key()).or_default().push(RideEdge { index, dest, cost, pre_open: pre_open.clone() });
+        }
+    }
+    let mut customs: U64Map<Vec<CustomPrepared>> = U64Map::default();
+    for (index, edge) in search.tables.customs.iter().enumerate() {
+        if !search.ignore_requires && !edge.requires.iter().all(|tag| search.options.satisfied.contains(tag)) {
+            continue;
+        }
+        let cost = TRANSITION_COST + UNVERIFIED_PENALTY;
+        customs.entry(edge.stand.key()).or_default().push(CustomPrepared { index, dest: edge.to, cost });
+    }
+    (rides, customs)
+}
+
+fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
+    let (mut shape, mut angle) = (10, 0);
+    let mut anchor_tiles = row.footprint.clone();
+    anchor_tiles.push((row.from.x, row.from.z));
+    let mut found = false;
+    'loc: for (x, z) in &anchor_tiles {
+        for (id, entry_shape, entry_angle) in search.world.locs_at(*x, *z, row.from.level) {
+            if id == row.loc {
+                shape = entry_shape as i32;
+                angle = entry_angle as i32;
+                found = true;
+                break 'loc;
+            }
+        }
+    }
+    if !found {
+        // The table tile is not always the answering tile on multi-tile
+        // stairs: steer by whatever loc sits on the anchor instead.
+        if let Some((_, entry_shape, entry_angle)) = search.world.loc_at(row.from.x, row.from.z, row.from.level) {
+            shape = entry_shape as i32;
+            angle = entry_angle as i32;
+        }
+    }
+    let (mut width, mut height) = (1, 1);
+    if let Some(def) = search.world.loc_def(row.loc as usize) {
+        width = def.length;
+        height = def.width;
+    }
+    let mut candidates: Vec<(i32, i32)> = Vec::new();
+    for (x, z) in &anchor_tiles {
+        // Reach never needs more than the footprint and its ring: wall,
+        // decor and rect stands are all on or beside the loc.
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let tile = (*x + dx, *z + dz);
+                if !candidates.contains(&tile) {
+                    candidates.push(tile);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (x, z) in candidates {
+        let stand = Tile { x, z, level: row.from.level };
+        if !search.in_bounds(stand) {
+            continue;
+        }
+        if !tile_walkable(search.open(stand)) {
+            continue;
+        }
+        if reach::reached(
+            &|ax, az, level| search.world.get(ax, az, level),
+            row.from.level,
+            x,
+            z,
+            row.from.x,
+            row.from.z,
+            width,
+            height,
+            angle,
+            shape,
+            0,
+        ) {
+            out.push(stand);
+        }
+    }
+    out
+}
+
+fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)>, cost: u32) -> Plan {
+    let mut segments = Vec::new();
+    let mut walk: Vec<Tile> = Vec::new();
+    let mut cursor = from;
+    for (at, edge) in chain {
+        match edge {
+            PrevEdge::Walk => {
+                walk.push(at);
+                cursor = at;
+            }
+            PrevEdge::Door(door) => {
+                if !walk.is_empty() {
+                    segments.push(Segment::Walk { tiles: std::mem::take(&mut walk) });
+                }
+                // Onto the door tile then off it past the same door reads
+                // as one opening, not two.
+                let same = matches!(segments.last(), Some(Segment::OpenDoor { door: prev, .. })
+                    if prev.loc == door.loc && prev.x == door.x && prev.z == door.z && prev.level == door.level);
+                if same {
+                    if let Some(Segment::OpenDoor { cross_to, .. }) = segments.last_mut() {
+                        *cross_to = at;
+                    }
+                } else {
+                    segments.push(Segment::OpenDoor { stand: cursor, cross_to: at, door });
+                }
+                cursor = at;
+            }
+            PrevEdge::Ride { index, dest, pre_open } => {
+                if !walk.is_empty() {
+                    segments.push(Segment::Walk { tiles: std::mem::take(&mut walk) });
+                }
+                let row = &tables.transitions[index];
+                segments.push(Segment::Ride {
+                    stand: cursor,
+                    expect: dest,
+                    pre_open,
+                    transition: transition_ref(row),
+                });
+                cursor = dest;
+            }
+            PrevEdge::Custom { index, dest } => {
+                if !walk.is_empty() {
+                    segments.push(Segment::Walk { tiles: std::mem::take(&mut walk) });
+                }
+                let edge = &tables.customs[index];
+                segments.push(Segment::Custom {
+                    edge: CustomEdgeRef { name: edge.name.clone() },
+                    stand: cursor,
+                    expect: dest,
+                });
+                cursor = dest;
+            }
+        }
+    }
+    if !walk.is_empty() {
+        segments.push(Segment::Walk { tiles: walk });
+    }
+    // Merging happens above: one Walk per run between rides and doors.
+    let adjusted_dest = if cursor.key() != dest.key() { Some(cursor) } else { None };
+    Plan { segments, cost, adjusted_dest }
+}
