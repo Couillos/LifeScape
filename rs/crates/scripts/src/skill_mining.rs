@@ -1,6 +1,6 @@
 //! Miner: best F2P rock for the level, banks full loads, sells ore to fund
 //! pickaxe upgrades, reattaches lost heads instead of rebuying.
-//! Same shape as `scripts/mining/run.py`.
+//! (Gather loop, bank trip, sell, upgrade.)
 
 #![forbid(unsafe_code)]
 
@@ -22,11 +22,11 @@ const NEAR_BANK_TILES: i64 = 150;
 const ROUND_IDLE_TICKS: u64 = 12;
 const HANDLE_NAME: &str = "macro_pickaxehandle";
 
-/// Best pickaxe first (mirrors the Python PICK_ORDER).
+/// Best pickaxe first.
 pub const PICK_ORDER: [&str; 6] =
     ["rune_pickaxe", "adamant_pickaxe", "mithril_pickaxe", "steel_pickaxe", "iron_pickaxe", "bronze_pickaxe"];
 /// Wield/mining level reqs (content pickaxes config; the obj dump carries
-/// no params, so the six values live here like in Python).
+/// no params, so the six values live here).
 pub const PICK_REQS: [(&str, i64); 6] =
     [("bronze_pickaxe", 0), ("iron_pickaxe", 0), ("steel_pickaxe", 6), ("mithril_pickaxe", 21), ("adamant_pickaxe", 31), ("rune_pickaxe", 41)];
 

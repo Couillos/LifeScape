@@ -1,4 +1,4 @@
-//! Classic F2P melee-and-loot spots. Mirrors `gamedata/combat_spots.py`.
+//! Classic F2P melee-and-loot spots.
 
 /// Surface tile used to reach an underground spot.
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn spot_progression() {
-        // Python: best_spot(1) == chickens, best_spot(25) == dark_wizards.
+        // best_spot(1) == chickens, best_spot(25) == dark_wizards.
         assert_eq!(best_spot(0).key, "chickens");
         assert_eq!(best_spot(1).key, "cows");
         assert_eq!(best_spot(25).key, "dark_wizards");

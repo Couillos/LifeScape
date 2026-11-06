@@ -1,11 +1,11 @@
 //! One supervised account: persistent session plus its script state.
 //!
-//! Mirrors orchestration/jobs.py: the worker owns the session truth, the
+//! The worker owns the session truth, the
 //! job mirrors it for the CLI/dashboard and carries event telemetry.
 //! Phases idle|running; statuses starting|idle|running|busy|reconnecting|
 //! finished|failed|disconnected|stopped.
 //!
-//! Naming helpers (orchestration/naming.py) live here too: the API returns
+//! Naming helpers live here too: the API returns
 //! resolved names, never raw ids. Without the gamedata tables only the
 //! names already present in the snapshot can be shown, so unknown ids stay
 //! blank instead of resolving.
@@ -121,7 +121,7 @@ impl Job {
     }
 
     /// Merged daemon + bot view, written to run/users/<account>.json.
-    /// Same keys as jobs.py describe().
+    /// Same keys as the heartbeat state.
     pub fn describe(&self) -> Value {
         let (_merged, partial, log_path) = paths::user_paths(&self.account);
         // Pushed snapshots first (tens of ms fresh); the heartbeat file is
@@ -198,7 +198,7 @@ impl Job {
     }
 }
 
-// -- naming (orchestration/naming.py) -------------------------------------
+// -- naming (id to display name) ------------------------------------------
 
 const COSMETIC: &[&str] = &[
     "grass", "twig", "flower", "daisy", "weed", "fern", "petal", "leaf", "leaves", "clover", "rug",

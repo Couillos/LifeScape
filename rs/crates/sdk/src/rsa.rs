@@ -1,6 +1,6 @@
 //! Raw RSA with the game public key, no padding, stdlib only.
 //!
-//! Ports `lifescape/rsa.py`: the login block is encrypted as one big
+//! The login block is encrypted as one big
 //! integer (`ciphertext = plain^e mod n`), sent as a length byte followed
 //! by the big-endian bytes. Big integers are little-endian `Vec<u32>`
 //! limbs; division is binary long division, fast enough for login keys.
@@ -220,7 +220,7 @@ impl RsaKey {
     }
 
     /// Raw `plain^e mod n`, with a leading zero byte when the top bit is
-    /// set, exactly like the Python `encrypt`.
+    /// set, exactly like the login handshake needs.
     pub fn encrypt(&self, plain: &[u8]) -> Result<Vec<u8>, String> {
         let raw = BigUint::from_be_bytes(plain);
         if raw.cmp_limbs(&self.modulus) != Ordering::Less {
@@ -246,7 +246,7 @@ pub fn load_public_key(pem: &str) -> Result<RsaKey, String> {
 }
 
 /// Loads modulus+exponent from a PEM private key (PKCS#8), mirroring
-/// Python `load_private_numbers` (`numbers[1]`, `numbers[2]`).
+/// Private key numbers: modulus is `numbers[1]`, exponent `numbers[2]`.
 pub fn load_private_numbers(pem: &str) -> Result<RsaKey, String> {
     let der = pem_body(pem)?;
     let (_, outer, _) = read_tlv(&der, 0)?;
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn encrypt_matches_reference_pow() {
-        // Python: pow(0x010203, 0x10001, 0x10001 * 0x101) == 0x010203.
+        // pow(0x010203, 0x10001, 0x10001 * 0x101) == 0x010203.
         let modulus_value = 0x10001u64 * 0x101u64;
         let modulus_bytes = modulus_value.to_be_bytes();
         let key = RsaKey::new(&modulus_bytes[4..], &[0x01, 0x00, 0x01]);

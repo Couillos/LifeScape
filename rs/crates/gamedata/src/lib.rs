@@ -1,7 +1,7 @@
 //! Game data tables: typed accessors over the generated JSON dumps.
 //!
-//! Data files live in `gamedata/data/*.json` (arrays indexed by id, like
-//! the Python side: the row index *is* the id). This crate ships a small
+//! Data files live in `gamedata/data/*.json` (arrays indexed by id:
+//! the row index *is* the id). This crate ships a small
 //! std-only JSON reader so the workspace stays dependency-free.
 
 use std::collections::HashMap;
@@ -377,7 +377,7 @@ fn row_ops(row: &Json, key: &str) -> Vec<Option<String>> {
 // Typed rows: objs / npcs / locs
 // ---------------------------------------------------------------------------
 
-/// Game object, mirroring `gamedata/objs.py::Obj`.
+/// Game object (id plus optional debug name).
 #[derive(Debug, Clone)]
 pub struct Obj {
     pub obj_id: usize,
@@ -457,7 +457,7 @@ pub fn objs_search(fragment: &str) -> Vec<Obj> {
         .collect()
 }
 
-/// NPC spawn point, mirroring `gamedata/npcs.py::SpawnPoint`.
+/// NPC spawn point (tile plus facing and level).
 #[derive(Debug, Clone)]
 pub struct NpcSpawn {
     pub x: i64,
@@ -465,7 +465,7 @@ pub struct NpcSpawn {
     pub level: i64,
 }
 
-/// Non-player character, mirroring `gamedata/npcs.py::Npc`.
+/// Non-player character (debug name, combat stats, spawn table).
 #[derive(Debug, Clone)]
 pub struct Npc {
     pub npc_id: usize,
@@ -531,7 +531,7 @@ pub fn npcs_search(fragment: &str) -> Vec<Npc> {
         .collect()
 }
 
-/// Scenery, mirroring `gamedata/locs.py::Loc`.
+/// Static scenery (footprint, collision flags, ops, spawns).
 #[derive(Debug, Clone)]
 pub struct Loc {
     pub loc_id: usize,
@@ -545,7 +545,7 @@ pub struct Loc {
     pub spawns: Vec<LocSpawn>,
 }
 
-/// One static scenery spawn, mirroring `gamedata/locs.py::SpawnLoc`.
+/// One static scenery spawn (tile, replacement and respawn timer).
 /// `members` stays null when the dump says nothing (locs carry no
 /// server flag; banks derive it from the position instead).
 #[derive(Debug, Clone)]

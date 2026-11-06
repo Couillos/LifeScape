@@ -1,4 +1,4 @@
-//! Wearable stats and level requirements. Mirrors `gamedata/equipment.py`.
+//! Wearable stats and level requirements.
 
 use crate::{Json, num, opt_str, str_int_map, table_value};
 
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn excalibur_gates() {
-        // Python: excalibur wearpos 3, requires attack 20.
+        // excalibur wearpos 3, requires attack 20.
         let excal = by_name("excalibur").expect("excalibur");
         assert_eq!(excal.wearpos, 3);
         assert!(excal.requirements.contains(&("attack".to_string(), 20)));
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn table_shape() {
-        // Python: 678 wearables; unknown stats fail the gate.
+        // 678 wearables; unknown stats fail the gate.
         assert_eq!(super::all_wearables().len(), 678);
         let mut gated = by_name("excalibur").expect("excalibur");
         gated.requirements.push(("quest_points".to_string(), 1));

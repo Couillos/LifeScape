@@ -1,6 +1,6 @@
 //! Router: local 128 BFS + server ReachStrategy.
 //!
-//! Exact port of lifescape/route.py. Wall/object targets stop on the
+//! Wall/object targets stop on the
 //! interaction tile, not on top of it. Long distances need portals.
 
 use crate::bfs::{self, Bfs, CollisionSource};

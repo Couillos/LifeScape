@@ -465,8 +465,8 @@ fn score(def: Option<LocDef>) -> u8 {
     }
 }
 
-/// True when a size-1 mover can step one tile straight (diagonals rejected,
-/// exactly like the Python version which only handles the four cardinals).
+/// True when a size-1 mover can step one tile straight (diagonals rejected:
+/// only the four cardinals are single steps).
 pub fn step_open(
     collision: &CollisionMap,
     tile_x: i32,
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn unknown_tiles_read_null_and_count_as_blocked() {
-        // Matches Python: missing zones read NULL (0x7FFFFFFF), which has
+        // Missing zones read NULL (0x7FFFFFFF), which has
         // every flag bit set, so unknown tiles are not walkable.
         let collision = CollisionMap::new();
         assert_eq!(collision.get(100, 100, 0), NULL);

@@ -1,6 +1,6 @@
 //! Supervised bot scripts: one trait, one compiled registry.
 //!
-//! Names match the legacy Python registry exactly. Every entry runs for
+//! Every script the orchestrator can launch. Every entry runs for
 //! real through the SDK; unknown names report errors, never silent stubs.
 
 pub mod devtools;
@@ -34,13 +34,13 @@ pub trait Script {
     fn run(&self, bot: &mut Bot, args: &[String]) -> ScriptResult;
 }
 
-/// Script exit: Ok(code) like the Python `run` return, Err for failures.
+/// Script exit: Ok(code) on success, Err for failures.
 pub type ScriptResult = Result<i32, ScriptError>;
 
 #[derive(Debug)]
 pub enum ScriptError {
     Sdk(Error),
-    /// Logic not ported yet from the Python script of the same name.
+    /// Logic not implemented yet for this script name.
     NotPorted(&'static str),
     Usage(String),
 }
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn registry_covers_legacy_scripts() {
-        // orchestration/registry.py::SCRIPTS plus hello.
+        // all supervised entry points, checked against names().
         for name in [
             "fishing", "mining", "woodcut", "melee", "tutorial",
             "quest_cooks_assistant", "quest_dragon_slayer", "rescue_maze",

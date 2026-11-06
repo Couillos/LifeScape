@@ -1,5 +1,4 @@
 //! Player variables (varps): id, name and persistence.
-//! Mirrors `gamedata/varps.py`.
 
 use crate::{Json, flag, num, opt_str, table};
 
@@ -45,7 +44,7 @@ mod tests {
 
     #[test]
     fn varp_vectors() {
-        // Python: 359 varps; cookquest is id 29 (scope 1,
+        // 359 varps; cookquest is id 29 (scope 1,
         // not transmitted).
         assert_eq!(all_varps().len(), 359);
         let cook = by_name("cookquest").expect("cookquest");

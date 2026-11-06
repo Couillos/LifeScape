@@ -1,5 +1,4 @@
 //! Static spawns: NPC positions and ground-item pops with cooldowns.
-//! Mirrors `gamedata/spawns.py`.
 
 use crate::{Json, flag, num, obj_by_id, table};
 
@@ -110,7 +109,7 @@ mod tests {
 
     #[test]
     fn spawn_vectors() {
-        // Python: 7322 NPC spawns, 1151 ground spawns; near
+        // 7322 NPC spawns, 1151 ground spawns; near
         // (3200, 3200, 0) +/-15: 16 NPCs, 1 ground spawn
         // (mind rune at 3206,3208).
         assert_eq!(all_npc_spawns(None).len(), 7322);

@@ -1,7 +1,7 @@
-//! Typed requirements for the free-to-play quests. Mirrors
-//! `gamedata/quest_requirements.py`. Item names resolve against the object
+//! Typed requirements for the free-to-play quests. Item names resolve
+//! against the object
 //! table, completion varps against the varp table; unknown names fail
-//! loudly (like the Python `KeyError`), never silently.
+//! loudly, never silently.
 
 use std::sync::OnceLock;
 
@@ -334,7 +334,7 @@ pub fn all_f2p_quests() -> Vec<QuestRequirements> {
     f2p_quests().clone()
 }
 
-/// F2P quest by key, or None (Python raises `KeyError` instead).
+/// F2P quest by key, or None when the key is unknown.
 pub fn by_key(key: &str) -> Option<QuestRequirements> {
     f2p_quests().iter().find(|quest| quest.key == key).cloned()
 }
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn f2p_vectors() {
-        // Python: 18 quests; cook needs bucket_milk (obj 1927);
+        // 18 quests; cook needs bucket_milk (obj 1927);
         // squire gates mining 10 with recommended combat 20.
         assert_eq!(all_f2p_quests().len(), 18);
         let cook = by_key("cook").expect("cook");
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn worn_and_heavy_gates() {
-        // Python: blackknight armour is worn-only; dragon needs 12000
+        // blackknight armour is worn-only; dragon needs 12000
         // coins (obj 995); blackarmgang spans two completion varps.
         let knight = by_key("blackknight").expect("blackknight");
         assert_eq!(knight.quest_points, 12);

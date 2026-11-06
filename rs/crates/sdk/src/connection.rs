@@ -253,7 +253,7 @@ fn crc32(data: &[u8]) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
-// Packed cache reads (mirrors lifescape/cache.py)
+// Packed cache reads (sector index plus data file)
 // ---------------------------------------------------------------------------
 
 const SECTOR_SIZE: usize = 520;
@@ -270,8 +270,8 @@ fn read_at(path: &str, pos: u64, length: usize) -> Result<Vec<u8>> {
     use std::io::Seek;
     let mut handle = std::fs::File::open(path).map_err(|err| Error::Io(format!("cannot open {path}: {err}")))?;
     handle.seek(std::io::SeekFrom::Start(pos)).map_err(|err| Error::Io(format!("cannot seek {path}: {err}")))?;
-    // Plain reads, like the Python side: a short tail at EOF is data, not
-    // an error (the last sector of a file is usually partial).
+    // A short tail at EOF is data, not an error (the last sector of
+    // a file is usually partial).
     let mut out = Vec::new();
     let mut chunk = [0u8; 4096];
     while out.len() < length {
@@ -329,7 +329,7 @@ pub fn login_crcs(pack_dir: &str) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// RSA (raw, no padding: cipher = plain^e mod n, like the Python side)
+// RSA (raw, no padding: cipher = plain^e mod n)
 // ---------------------------------------------------------------------------
 
 /// Game key: raw modular exponentiation, stdlib only.
@@ -507,7 +507,7 @@ impl Connection {
         if self.read_exact(8)? != vec![0u8; 8] || self.read_exact(1)? != vec![0u8] {
             return Err(Error::Login("bad handshake reply".to_string()));
         }
-        self.read_exact(8)?; // server seed, unused like the Python side
+        self.read_exact(8)?; // server seed, unused by the client
 
         let mut rsa_plain = Writer::new();
         rsa_plain.u8(10);

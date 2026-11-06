@@ -1,6 +1,6 @@
 //! Door-aware navigation planning over the cached collision map.
 //!
-//! Exact port of lifescape/nav.py (plus steps.expand_waypoints). The planner
+//! The planner
 //! treats every openable door footprint as walkable while planning, then
 //! annotates the first tile of each door crossed. The walker walks up to a
 //! door, opens it, and continues with the same plan.
@@ -65,7 +65,7 @@ impl<C: CollisionSource> CollisionSource for DoorMap<'_, C> {
     }
 }
 
-/// Static door footprint, mirroring the Python wall-door spot tuple
+/// Static door footprint: the wall-door spot tuple
 /// (x, z, level, shape, angle, blockrange, length, width, active, loc).
 #[derive(Clone, Debug)]
 pub struct DoorSpot {

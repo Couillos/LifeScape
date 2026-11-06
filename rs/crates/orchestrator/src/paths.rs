@@ -1,4 +1,4 @@
-//! Filesystem layout and JSON helpers, mirroring orchestration/paths.py.
+//! Filesystem layout and JSON helpers for the daemon state.
 //!
 //! Everything the daemon writes lives under ``run/`` at the project root:
 //! run/users/<account>.json + .bot.json, run/logs/<account>.log,

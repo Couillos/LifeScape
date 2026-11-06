@@ -1,5 +1,5 @@
-//! Fishing table: spot categories, level reqs, tools, bait, products, XP.
-//! Mirrors `gamedata/fishing.py` (F2P rows only; XP is raw tenths).
+//! Fishing table: spot categories, level reqs, tools, bait, products, XP
+//! (F2P rows only; XP is raw tenths).
 
 use crate::table;
 
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn tier_progression() {
-        // Python: best(1) saltfish op 1, best(40) rarefish cage,
+        // best(1) saltfish op 1, best(40) rarefish cage,
         // affordable(25) has 4 tiers, saltfish spots start at 316.
         let first = best_fish_tier(1).expect("tier");
         assert_eq!((first.category, first.op), ("saltfish", 1));

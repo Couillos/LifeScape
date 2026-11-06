@@ -1,5 +1,4 @@
 //! Bank access points: booth loc spawns with location-derived members.
-//! Mirrors `gamedata/banks.py`.
 
 use crate::all_locs;
 
@@ -57,7 +56,7 @@ mod tests {
 
     #[test]
     fn booth_count_and_nearest() {
-        // Vectors replayed from Python: len(all_banks()) == 68,
+        // len(all_banks()) == 68,
         // nearest_bank(3200, 3200) is the Varrock west booth.
         assert_eq!(all_banks().len(), 68);
         let near = nearest_bank(3200, 3200, 0).expect("a bank");

@@ -1,4 +1,4 @@
-//! Food healing values. Mirrors `gamedata/food.py`.
+//! Food healing values.
 
 use std::sync::OnceLock;
 
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn healing_values() {
-        // Python: shark heals 20, unknown heals 0,
+        // shark heals 20, unknown heals 0,
         // best of trout/shark/lobster is shark.
         assert_eq!(heal("shark"), 20);
         assert_eq!(heal("nope"), 0);

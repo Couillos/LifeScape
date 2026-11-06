@@ -1,6 +1,6 @@
 //! Woodcutter: best trees for the level, banks full loads, sells logs to fund
 //! axe upgrades, reattaches lost heads instead of rebuying.
-//! Same shape as `scripts/woodcut/run.py`.
+//! (Gather loop, bank trip, sell, upgrade.)
 
 #![forbid(unsafe_code)]
 
@@ -22,7 +22,7 @@ const NEAR_BANK_TILES: i64 = 150;
 const ROUND_IDLE_TICKS: u64 = 12;
 const HANDLE_NAME: &str = "macro_hatchethandle";
 
-/// Best axe first (mirrors the Python AXE_ORDER).
+/// Best axe first.
 pub const AXE_ORDER: [&str; 7] =
     ["rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe"];
 

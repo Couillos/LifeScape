@@ -1,6 +1,6 @@
 //! Local BFS, server copy: 128 window, 4096 ring.
 //!
-//! Exact port of lifescape/bfs.py. The BFS only knows tiles; "have we
+//! Local search over the collision flags. The BFS only knows tiles; "have we
 //! arrived?" is delegated to reach::reached (wall = next to it,
 //! object = around it).
 
@@ -383,7 +383,7 @@ mod tests {
         let field = OpenField;
         let mut bfs = run_search(&field, 1010, 1005);
         let waypoints = bfs.compress(1000 - HALF, 1000 - HALF, 0, HALF, HALF, 25);
-        assert_eq!(waypoints.len(), 2, "parity with lifescape/bfs.py on this scenario");
+        assert_eq!(waypoints.len(), 2, "known-good compression on this scenario");
         let last = waypoints.last().unwrap();
         assert_eq!((last.x, last.z), (1010, 1005));
         assert!(waypoints.len() <= 25);
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(
             (reached_x, reached_z),
             (1003, 1003),
-            "parity with lifescape/bfs.py on this scenario"
+            "known-good compression on this scenario"
         );
         assert!(
             collision::tile_walkable(map.get(reached_x, reached_z, 0)),

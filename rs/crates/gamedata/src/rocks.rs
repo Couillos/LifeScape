@@ -1,5 +1,5 @@
-//! Mining table: rock loc names, level reqs, ore products, XP.
-//! Mirrors `gamedata/rocks.py` (XP is raw tenths).
+//! Mining table: rock loc names, level reqs, ore products, XP
+//! (XP is raw tenths).
 
 use crate::{num, opt_flag, opt_str, str_list, table};
 
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn rock_vectors() {
-        // Python: 17 tiers; level 1 mines blankrune, level 30 coal
+        // 17 tiers; level 1 mines blankrune, level 30 coal
         // (500 xp, product is F2P).
         assert_eq!(all_rock_tiers().len(), 17);
         assert_eq!(rock_tier_for_level(1).expect("tier").product, "blankrune");

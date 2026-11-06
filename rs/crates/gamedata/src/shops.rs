@@ -1,4 +1,4 @@
-//! Shops: stock, restock rates, and keeper NPCs. Mirrors `gamedata/shops.py`.
+//! Shops: stock, restock rates, and keeper NPCs.
 
 use crate::{Json, num, opt_num, opt_str, table_value};
 
@@ -110,7 +110,7 @@ pub fn all_shops() -> Vec<Shop> {
                 }),
                 stocks,
                 keepers: mine,
-                // Python never fills this in either: no server flag.
+                // No server flag fills this in: it stays empty.
                 members: None,
             }
         })
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn shop_vectors() {
-        // Python: 203 shops; scimitarshop is shared/size 40/restocking,
+        // 203 shops; scimitarshop is shared/size 40/restocking,
         // first stock is 5x bronze_scimitar, keeper is Zeke (541).
         assert_eq!(all_shops().len(), 203);
         let scim = by_name("scimitarshop");

@@ -1,6 +1,6 @@
 //! F2P quests, batch A: cook, doric, gobdip, imp, sheep, hetty,
-//! romeojuliet, runemysteries, haunted. Each `solve_*` mirrors its
-//! `scripts/quests/*.py` counterpart step for step.
+//! romeojuliet, runemysteries, haunted. Each `solve_*` follows its quest
+//! script step for step.
 
 use lifescape_gamedata::quest_requirements;
 use lifescape_sdk::Bot;

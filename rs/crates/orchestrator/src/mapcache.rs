@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! Ground colours, loc types and mapscene sprites from the pack,
-//! mirroring orchestration/mapcache.py. The client jags are bzip2
+//! Ground colours, loc types and mapscene sprites from the pack.
+//! The client jags are bzip2
 //! compressed (std-only decoder inside); the stored map-squares zip is
 //! walked in minimap.rs by the ground renderer that reads it.
 
@@ -11,8 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 use crate::png;
 
 /// Engine data layout: `LIFESCAPE_ENGINE_DIR` wins, else the
-/// `lostcity/engine` sibling of the project root (same rule as
-/// orchestration/paths.py), then `data/pack` inside it.
+/// `lostcity/engine` sibling of the project root, then `data/pack` inside it.
 pub(crate) fn pack_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("LIFESCAPE_ENGINE_DIR") {
         if !dir.is_empty() {
@@ -541,7 +540,7 @@ impl MapCache {
         let (mut rgb, mut texture, mut coloured) = (Vec::new(), Vec::new(), Vec::new());
         let data = self.config_file().and_then(|container| jag_read(&container, "flo.dat")).or_else(|| {
             // No client jag (dev checkout without a pack): the server dump
-            // parses with the same opcodes, like the Python fallback.
+            // parses with the same opcodes.
             std::fs::read(self.pack.join("server").join("flo.dat")).ok()
         });
         if let Some(data) = data.filter(|data| data.len() >= 2) {
@@ -927,7 +926,7 @@ mod tests {
     use super::*;
 
     fn bz2(raw: &[u8]) -> Vec<u8> {
-        //Like Python: the stored stream drops the magic, tests add it back.
+        // The stored stream drops the magic, tests add it back.
         let mut full = b"BZh9".to_vec();
         full.extend_from_slice(raw);
         bz2_decode(&full).expect("valid bzip2 must decode")

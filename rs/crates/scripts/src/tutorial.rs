@@ -1,6 +1,6 @@
 //! Tutorial island driver: detect the stage from the server-shown
 //! instruction box, then do what that stage asks. Works from any point
-//! mid-quest. Port of `scripts/tutorial/*.py`.
+//! mid-quest.
 //!
 //! Stage signal: the instruction box (coms 6180-6184), never the tutorial
 //! varp (the server does not transmit it) and never the inventory.

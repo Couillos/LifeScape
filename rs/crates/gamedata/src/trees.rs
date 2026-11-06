@@ -1,5 +1,5 @@
-//! Woodcutting table: tree loc names, level reqs, log products, XP.
-//! Mirrors `gamedata/trees.py` (XP is raw tenths).
+//! Woodcutting table: tree loc names, level reqs, log products, XP
+//! (XP is raw tenths).
 
 use crate::{num, opt_flag, opt_str, str_list, table};
 
@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn tree_vectors() {
-        // Python: 6 tiers; level 0 cuts logs, level 30 willow_logs
+        // 6 tiers; level 0 cuts logs, level 30 willow_logs
         // (675 xp, product is F2P).
         assert_eq!(all_tiers().len(), 6);
         assert_eq!(tier_for_level(0).expect("tier").product, "logs");

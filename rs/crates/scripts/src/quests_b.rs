@@ -1,6 +1,6 @@
 //! F2P quests, batch B: blackknight, demon, squire, hunt, prince,
-//! priest, dragon, blackarmgang, vampire. Mirrors the matching
-//! `scripts/quests/*.py` solvers step for step.
+//! priest, dragon, blackarmgang, vampire. Each `solve_*` follows its quest
+//! script step for step.
 
 use lifescape_gamedata::quest_requirements;
 use lifescape_sdk::{Bot, Error};
@@ -151,7 +151,7 @@ fn solve_demon(bot: &mut Bot) -> Result<(), ScriptError> {
         solver::drain_dialog(bot, 150)?;
         bot.approach(3237, 3458, 0, 4, 600)?;
         // Manhole covers never stream: click the portal-table loc ids
-        // blind (881 up-cover, 882 down-hole), same as the Python solver.
+        // blind (881 up-cover, 882 down-hole).
         bot.op_loc(1, 3237, 3458, 881)?;
         wait_ticks(bot, 5)?;
         solver::drain_dialog(bot, 150)?;
@@ -740,8 +740,8 @@ fn join_phoenix(bot: &mut Bot) -> Result<(), ScriptError> {
 }
 
 // shortcut: the Phoenix HQ spawns at an unreachable tile (server map bug);
-// the Python solver teleports via a staff cheat. Committed Rust scripts
-// must not cheat, so walk there and fail loudly when the map refuses.
+// committed scripts must not cheat, so walk there and fail loudly when
+// the map refuses.
 fn straven_goto(bot: &mut Bot) -> Result<(), ScriptError> {
     bot.intend("walking to Straven in the Phoenix HQ");
     bot.walk_to(3246, 9780, 0, 9000).map_err(|_| {

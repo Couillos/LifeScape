@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Session heartbeat: the atomic `run/users/<account>.bot.json` the
 //! daemon merges into the live state (`Job::describe` reads it back).
-//! Same keys the Python `_write_state` publishes, so the dashboard and
+//! Same keys the heartbeat writer publishes, so the dashboard and
 //! `show`/`see` keep working unchanged.
 
 use lifescape_sdk::Bot;

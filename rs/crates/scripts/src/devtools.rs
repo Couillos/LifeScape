@@ -1,4 +1,4 @@
-//! Staff/dev tools ported from `scripts/dev/*.py` (supervised session only).
+//! Staff/dev tools for supervised sessions (live checks and account setup).
 //!
 //! Already live elsewhere, not repeated here: `debug_walk`, `goto`,
 //! `hello`, `walkto` (see `lib.rs`). Everything below runs inside the
@@ -45,14 +45,13 @@ pub fn run_devtool(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
         "check_routes" => crate::devtools_check::dev_check_routes(bot, args),
         "check_transitions" => crate::devtools_check::dev_check_transitions(bot, args),
         "diff_routes" => Err(impossible(
-            "diff_routes needs the node engine (tools/lifescape-routes.mts) and the Python collision maps, \
+            "diff_routes needs the node engine (tools/lifescape-routes.mts) and the packed collision maps, \
              neither is reachable from a supervised Rust session",
         )),
         "drop" => dev_drop(bot, args),
         "dump_bank_stands" => crate::devtools_check::dev_dump_bank_stands(bot, args),
         "dump_transitions" => Err(impossible(
-            "dump_transitions parses lostcity/content .rs2 scripts plus the packed map files; \
-             the content parser and map reader are Python-only, porting them is a separate job",
+            "dump_transitions runs outside sessions: orchestrator dump-transitions <sortie>",
         )),
         "give" => dev_give(bot, args),
         "make_accounts" => Err(impossible(

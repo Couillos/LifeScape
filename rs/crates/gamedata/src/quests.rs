@@ -1,4 +1,4 @@
-//! Quests scraped from quest scripts. Mirrors `gamedata/quests.py`.
+//! Quests scraped from quest scripts.
 
 use crate::{num, opt_flag, opt_str, str_list, table};
 
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn quest_rows() {
-        // Python: 64 quests; first row is quest_arena (members null,
+        // 64 quests; first row is quest_arena (members null,
         // 14 files); quest_cook resolves by exact name.
         let all = all_quests();
         assert_eq!(all.len(), 64);

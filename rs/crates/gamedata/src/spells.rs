@@ -1,5 +1,4 @@
 //! Combat spells: level, runes, XP, max hit, interface component.
-//! Mirrors `gamedata/spells.py`.
 
 use crate::{flag, num, opt_num, opt_str, str_int_map, table};
 
@@ -54,7 +53,7 @@ mod tests {
 
     #[test]
     fn spell_vectors() {
-        // Python: 57 spells; wind_strike sits on magic:wind_strike,
+        // 57 spells; wind_strike sits on magic:wind_strike,
         // level 1, 55 xp, max hit 2.
         assert_eq!(all_spells().len(), 57);
         let wind = by_name("wind_strike");

@@ -588,7 +588,7 @@ mod tests {
         let pixels = maps.grounds.render_ground(maps.cache(), 0, 3200, 3200, 9);
         assert_eq!(pixels.len(), 36 * 36);
         assert_eq!(pixels[0], 0x53670F);
-        // Full-window checksum from the Python renderer.
+        // Full-window checksum pinned by the reference render.
         assert_eq!(fnv(&pixels), 0x5862_55ce_d1a0_5b95);
     }
 
@@ -601,6 +601,6 @@ mod tests {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 36);
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 36);
-        assert_eq!(png[25], 2); // truecolor, like the Python writer
+        assert_eq!(png[25], 2); // truecolor
     }
 }

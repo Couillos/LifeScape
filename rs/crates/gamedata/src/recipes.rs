@@ -1,5 +1,5 @@
 //! Craft recipes (smith, smelt, cook, leather, gem, fletch, brew).
-//! Mirrors `gamedata/recipes.py`. Levels and XP are raw server values.
+//! Levels and XP are raw server values.
 
 use crate::{Json, num, opt_flag, opt_str, str_int_map, table};
 
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn recipe_vectors() {
-        // Python: 58 cook recipes; steel_bar smelts from iron+coal;
+        // 58 cook recipes; steel_bar smelts from iron+coal;
         // iron_ore feeds 2 recipes.
         assert_eq!(all_recipes(Some("cook")).len(), 58);
         let steel = making("steel_bar", None);

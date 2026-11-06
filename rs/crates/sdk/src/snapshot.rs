@@ -2,7 +2,7 @@
 //!
 //! The same plain data (inventories, chat texts, stats, positions) answers
 //! read-only calls everywhere, so live reads and heartbeat snapshots never
-//! drift apart. Mirrors `lifescape/client/snapshot.py`.
+//! drift apart.
 
 use std::collections::HashMap;
 

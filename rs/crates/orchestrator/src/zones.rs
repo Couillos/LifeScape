@@ -2,7 +2,7 @@
 //! Zone naming from the world map labels the server ships, plus the
 //! random-event instances the labels never cover.
 //!
-//! Mirrors lifescape/zones.py: labels.dat lives in
+//! labels.dat lives in
 //! engine/data/pack/mapview/worldmap.jag (count p2; per label: pjstr name
 //! + p2 x + p2 z + p1 type). Nothing is invented: the nearest shipped label
 //! wins, or none. Random events teleport off the labelled map (maze, mime).
@@ -46,7 +46,7 @@ fn labels_dat() -> Option<Vec<u8>> {
     let packed = big_u24(&raw[3..6]);
     let mut body: Vec<u8> = if unpacked != packed {
         let mut full = b"BZh1".to_vec();
-        // Same extra header skip as zones.py (body[6:] after the split).
+        // The body skips the 6-byte split header (body[6:]).
         full.extend_from_slice(raw.get(12..)?);
         bz2_decode(&full)?
     } else {
@@ -176,8 +176,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_spots_match_python() {
-        // Values from lifescape/zones.py nearest() on the shipped labels.
+    fn known_spots_match_labels() {
+        // Spot checks against the shipped labels.
         let (name, dist) = nearest(3098, 3266).expect("Market claims t01");
         assert_eq!(name, "Market");
         assert!((dist - 16.12).abs() < 0.05, "dist {dist}");

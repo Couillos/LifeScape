@@ -5,8 +5,8 @@
 //! each 64x64 square paints on first touch. Every session reads straight
 //! out of the pack file, so the OS page cache shares the bytes across all
 //! workers: the 14 MB pack lives on disk once, not once per client.
-//! Exactly like the game server's own data (lostcity is the only source
-//! of truth; the legacy Python loader is not a reference).
+//! Built like the game server's own data (lostcity is the only source
+//! of truth).
 
 use std::path::Path;
 

@@ -1,5 +1,5 @@
-//! Shared quest solver kit: port of `scripts/quests/solver.py` (+ the bank
-//! half of `scripts/quests/common.py`). Every wait is a pump loop to an
+//! Shared quest solver kit (dialogue, bank trips, give/take loops).
+//! Every wait is a pump loop to an
 //! observable state plus a tick bound, never wall-clock sleep.
 
 use lifescape_gamedata::{self as gamedata, quest_requirements::QuestRequirements};
@@ -621,8 +621,7 @@ pub fn report_result(bot: &Bot, quest: &str, solved: bool, error: Option<&str>) 
 
 /// Shared requirement gate + solver driver: relogin, junk-free pack, bank
 /// top-up, requirement check against live state, solve, completion wait.
-// shortcut: save-file completion merge lives in the Python orchestration
-// layer; the Rust runner trusts live varps only.
+// shortcut: no save-file completion merge; the runner trusts live varps only.
 pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: impl FnOnce(&mut Bot) -> Result<(), ScriptError>) -> ScriptResult {
     bot.relogin()?;
     let _ = bot.pump(10)?;

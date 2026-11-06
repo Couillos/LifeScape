@@ -10,17 +10,12 @@ Chaque entrée porte son flag members (F2P ou membres).
 # régénérer depuis le serveur (rev 274)
 cd ../../lostcity/engine && npx tsx tools/gamedata-dump.mts ../../LifeScape/gamedata/data/
 
-# boucle de vérification (statique + live)
-../../lostcity/.pypy/bin/pypy3 scripts/verify.py
-../../lostcity/.pypy/bin/pypy3 scripts/verify_live.py t48
+# boucle de vérification : tests Rust du workspace
+cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata
 ```
 
-```python
-from gamedata import objs
-
-sword = objs.by_name("bronze sword")
-print(sword[0].obj_id, sword[0].ops, sword[0].alch_high)
-```
+Accès typé depuis Rust (`lifescape-gamedata`), par id : l'index du
+tableau *est* l'id.
 
 Règles dans `AGENTS.md`. Données dans `data/` : générées, jamais éditées.
 Retour d'expérience transverse dans `../FEEDBACK.md`.

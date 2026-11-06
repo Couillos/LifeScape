@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Orchestrator CLI client, mirroring orchestration/cli.py.
+//! Orchestrator CLI client: sessions stay open, scripts load/unload in place.
 //!
 //! Sessions are persistent: open one per account, then load/unload scripts
 //! and call SDK methods inside it without reconnecting. Every command
@@ -202,7 +202,7 @@ fn format_ascii(state: &Value, radius: i64) -> Vec<String> {
     rows
 }
 
-/// UTC clock: std has no localtime; the Python CLI prints local time.
+/// UTC clock: std has no localtime (the dashboard shows UTC too).
 fn clock_hhmmss(epoch_secs: f64) -> String {
     let secs = epoch_secs as u64;
     format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)

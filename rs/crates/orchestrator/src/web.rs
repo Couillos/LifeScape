@@ -1,4 +1,4 @@
-//! Web view over the orchestrator, mirroring orchestration/web.py.
+//! Web view over the orchestrator: dashboard and HTTP/WS API.
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
 //! /minimap.png /mapscene/<sprite>.png /api/status /api/state/<account>
@@ -187,7 +187,7 @@ pub fn state_payload(dispatch: &Dispatch, account: &str, previous: Option<&Value
     payload
 }
 
-// -- websocket framing (same wire format as web.py) ------------------------
+// -- websocket framing (RFC 6455 server frames) ----------------------------
 
 fn ws_frame(payload: &[u8], opcode: u8) -> Vec<u8> {
     let mut head = vec![0x80 | opcode];
@@ -736,7 +736,7 @@ fn write_response(mut sock: &TcpStream, reply: &Response) {
 }
 
 /// Bind the dashboard (called before sessions are adopted: a bind failure
-/// exits with every session untouched, like web.py).
+/// exits with every session untouched).
 pub fn start_web(dispatch: Dispatch, port: u16) {
     let server = match TcpListener::bind(("0.0.0.0", port)) {
         Ok(server) => server,

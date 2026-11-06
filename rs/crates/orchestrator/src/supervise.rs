@@ -10,7 +10,7 @@ use crate::daemon::{Orchestrator, Watchdog, WORKER_TIMEOUT};
 use crate::jobs::{Job, now_secs};
 use crate::json::{Value, object, str_value};
 
-// Random-event geography, decoded from scripts/randomevents.py.
+// Random-event geography, decoded from the streamed random events.
 const MAZE_X: (i64, i64) = (2880, 2944);
 const MAZE_Z: (i64, i64) = (4544, 4608);
 const MIME_X: (i64, i64) = (1984, 2048);

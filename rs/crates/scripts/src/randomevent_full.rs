@@ -1,7 +1,7 @@
 //! Full random-event handling: greet, survive, lamp, climb, maze legs
 //! and the shared per-iteration check. Extends `randomevent` (which only
-//! names zones and events) with the resolving behaviour from
-//! `scripts/randomevents.py`. All bounds are in ticks, never sleep.
+//! names zones and events) with the resolving behaviour.
+//! All bounds are in ticks, never sleep.
 
 use lifescape_sdk::Bot;
 

@@ -1,5 +1,5 @@
 //! Fisher: best spot for the level, banks full loads, sells fish to fund
-//! tool and bait upgrades. Same shape as `scripts/fishing/run.py`.
+//! tool and bait upgrades (gather loop, bank trip, sell, upgrade).
 
 #![forbid(unsafe_code)]
 

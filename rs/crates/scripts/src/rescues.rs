@@ -1,5 +1,4 @@
-//! Random-event rescues: maze, mime, cube, down, greet, fallback. Ports of
-//! `scripts/rescue_{maze,mime,cube,down,fallback}.py` plus the host
+//! Random-event rescues: maze, mime, cube, down, greet, fallback, plus the host
 //! greeting (mage, genie, dwarf talk paths ask nothing: approach, talk,
 //! take the reward instead of the fail-teleport or, ignored, the dwarf's
 //! stones).
@@ -55,7 +54,7 @@ const MIME_MODAL_INTERFACE: u16 = 6543;
 const EMOTE_COM_BASE: u16 = 6546;
 
 fn seq_to_emote(seq: u16) -> Option<u16> {
-    // seq.pack ids, same table as the Python rescue.
+    // seq.pack ids for the emote interface.
     match seq {
         860 => Some(0), // emote_cry
         857 => Some(1), // emote_think

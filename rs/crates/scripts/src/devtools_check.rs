@@ -124,8 +124,7 @@ fn test_door(bot: &mut Bot, x: i32, z: i32, level: i32, loc_id: u16) -> Result<S
 // Table-driven live test: teleport beside each transition, click the
 // climb op (pre-opening trapdoors), check the landing tile.
 //
-// shortcut: no resume file (the Python `--fresh` resume needs a results
-// parser); no walkability ranking of sides (collision map not ported):
+// shortcut: no resume file, no walkability ranking of sides:
 // sides are tried closest-first and the walk proves them.
 
 #[derive(Debug, Clone)]
@@ -628,8 +627,7 @@ fn test_leg(bot: &mut Bot, leg: &RouteLeg) -> Result<String, ScriptError> {
 
 // -- dump_bank_stands ------------------------------------------------------------
 // Booth clusters from gamedata, the part of the dump that needs no
-// collision map. Stand selection (BFS flood + reach check) stays Python:
-// the flood, door and reach modules are not ported.
+// collision map. Stand selection (BFS flood + reach check) is unported:
 //
 // shortcut: stands are NOT computed; the JSON carries booths + centroid
 // so a staff run can verify stands live instead.

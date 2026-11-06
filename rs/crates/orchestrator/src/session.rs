@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Persistent game session: one connected account, many scripts over time.
 //!
-//! Rust port of `orchestration/session_worker.py`: the same unix-socket
+//! One connected account over the same unix-socket
 //! JSON-lines protocol (ping/status/methods/run/unload/pause/resume/call/
 //! close), the same `describe` keys (`ok`/`error`/`session`), the same
 //! `run/session-<account>.sock` + `.ready` paths and env (`LIFESCAPE_USER`,
@@ -15,8 +15,8 @@
 //! pump while it lives; the main thread serves the socket and pumps only
 //! when idle. Reads come from the last heartbeat snapshot, never from the
 //! live bot off its thread. Writes run on the idle pump thread (the
-//! safe-point); while a script holds the bot they return `busy`, like the
-//! Python wait hitting its 500-tick bound.
+//! safe-point); while a script holds the bot they return `busy` (500-tick
+//! bound on each wait).
 //!
 //! shortcut: no cooperative stop flag in the SDK, so unload cannot freeze
 //! a running walk mid-leg; it waits for the script thread up to
@@ -257,7 +257,7 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
 }
 
 /// Atomic heartbeat for `run/users/<account>.bot.json`: the same keys the
-/// Python `_write_state` publishes, so `Job::describe` keeps working.
+/// the heartbeat writer publishes, so `Job::describe` keeps working.
 fn write_heartbeat(shared: &Arc<Shared>) {
     let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
     let Ok(bot) = shared.bot.try_lock() else { return };

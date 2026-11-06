@@ -1,6 +1,6 @@
 //! Random-event structure: where events happen, what they need.
 //!
-//! Mirrors `scripts/randomevents.py` event detection (maze/mime/cube/
+//! Detects the event (maze/mime/cube/
 //! tower zones and the host/hostile casts). Solving stays in the rescue
 //! scripts; this module only names the event and its rescue.
 
@@ -17,7 +17,7 @@ pub enum EventKind {
     Host,
 }
 
-/// Unresolved event -> rescue script (same mapping as the Python RESCUES).
+/// Unresolved event -> rescue script (short key without prefix).
 /// Single mapping: the short key is the long name without its prefix.
 pub fn rescue_for(event: EventKind) -> &'static str {
     match event {

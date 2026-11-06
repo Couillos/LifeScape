@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 //! Supervisor daemon: one persistent session worker per account.
-//! Mirrors orchestration/daemon.py (socket serving lives in main.rs,
-//! supervision in supervise.rs).
+//! (Socket serving lives in main.rs, supervision in supervise.rs.)
 //!
 //! It owns session lifetime (open/close), the in-memory snapshots the
 //! workers push, and the unix-socket dispatch the CLI talks to.
@@ -83,7 +82,7 @@ impl WorkerProc {
     fn terminate_gracefully(&mut self) {
         let pid = self.pid();
         // std has no SIGTERM: ask politely via /bin/kill, then SIGKILL
-        // after the same grace the Python daemon uses.
+        // after a grace delay (STOP_GRACE).
         if let Some(pid) = pid {
             let _ = Command::new("kill").arg("-TERM").arg(pid.to_string()).output();
         }
@@ -909,8 +908,7 @@ fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
     if lines == 0 {
         return Vec::new();
     }
-    // A trailing newline leaves a final empty element: drop it like
-    // Python's splitlines() does.
+    // A trailing newline leaves a final empty element: drop it.
     if found.last().is_some_and(|line| line.is_empty()) {
         found.pop();
     }

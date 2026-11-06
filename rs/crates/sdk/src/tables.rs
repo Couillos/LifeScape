@@ -1,8 +1,8 @@
 //! Table lookups the SDK needs but must not own.
 //!
-//! Python kept this split clean: `lifescape/` never imported `gamedata`,
-//! names lived in `orchestration/naming.py` and the scripts. The `Tables`
-//! struct restores that split in Rust: plain function pointers, no
+//! The SDK never owns game tables: names and dumps live in the
+//! scripts crate and gamedata. The `Tables` struct carries it:
+//! plain function pointers, no
 //! dependency, no lifetime. The default (`NOTABLES`) behaves like an
 //! unknown table entry: size 1, no names, no component ids.
 

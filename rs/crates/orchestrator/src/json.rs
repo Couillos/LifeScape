@@ -1,7 +1,7 @@
 //! Minimal JSON value model, std-only.
 //!
 //! Covers exactly what the daemon/web payloads need: objects with sorted
-//! keys (parity with Python `sort_keys=True`), arrays, strings, ints,
+//! keys (sorted, like JSON `sort_keys`), arrays, strings, ints,
 //! floats, bools and null. No escapes beyond the JSON spec.
 
 use std::collections::BTreeMap;

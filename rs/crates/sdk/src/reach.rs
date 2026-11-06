@@ -1,6 +1,6 @@
 //! Reach checks: when the bot is "close enough" without stepping on the tile.
 //!
-//! Exact port of lifescape/reach.py (server ReachStrategy, size 1 only:
+//! Reach checks follow the server ReachStrategy (size 1 only:
 //! the bot is always a solo player).
 
 use crate::collision;

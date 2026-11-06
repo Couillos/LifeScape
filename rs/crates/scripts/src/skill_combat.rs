@@ -1,6 +1,6 @@
 //! Melee farmer: best F2P spot for the level, best banked gear, banked food.
 //! Rotates attack/strength/defence, eats when hurt, loots every drop except
-//! bones, banks when the pack fills. Same shape as `scripts/melee/run.py`.
+//! bones, banks when the pack fills (gather loop, bank trip, sell, upgrade).
 
 #![forbid(unsafe_code)]
 
