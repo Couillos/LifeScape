@@ -15,6 +15,7 @@ pub mod skill_fishing;
 pub mod skill_combat;
 pub mod skill_mining;
 pub mod skill_woodcutting;
+pub mod skill_woodcutting_spot;
 pub mod quest_common;
 pub mod quests_a;
 pub mod quests_b;

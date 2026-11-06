@@ -12,6 +12,7 @@ pub mod cli;
 pub mod daemon;
 pub mod supervise;
 pub mod session;
+pub mod session_cmds;
 pub mod dump_transitions;
 pub mod routecmd;
 pub mod replaynav;
