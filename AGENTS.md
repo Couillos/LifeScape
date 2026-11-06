@@ -30,7 +30,7 @@ cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata 
 ./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
 ./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | shutdown
 ./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
-./rs/target/debug/orchestrator replay-nav <dossier>                        # phase 6, pas encore dispo
+./rs/target/debug/orchestrator replay-nav <dossier>
 ```
 
 ## 4. Règles dures
@@ -51,7 +51,7 @@ cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata 
 ## 5. Protocole debug
 
 1. Reproduire : obtenir un dossier d'échec ou une route qui échoue.
-2. Classer : `replay-nav` → A plan faux (bug nav) | B monde ≠ carte (donnée manquante) | C exécution (bug SDK) ; ne lire que la couche indiquée. (`replay-nav` arrive phase 6 ; en attendant : `debug_walk` + `see` + `call`.)
+2. Classer : `replay-nav` → A plan faux (bug nav) | B monde ≠ carte (donnée manquante) | C exécution (bug SDK) ; ne lire que la couche indiquée.
 3. Écrire une seule hypothèse avant de toucher au code, avec l'observation qui la confirmerait ou l'infirmerait.
 4. Vérifier l'hypothèse (code serveur, `see`/`call`, route hors ligne) avant toute modification.
 5. Écrire le test qui échoue d'abord (route en or ou test unitaire), puis corriger un seul crate.

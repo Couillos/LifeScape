@@ -308,7 +308,9 @@ pub fn replay_nav_cmd(args: &[String]) -> i32 {
                     }
                 }
                 Verdict::C => {
-                    println!("verdict: {} — plan coherent ({} pas rejoues, aucun mur statique), rien sur le chemin dans la diff", Verdict::C.as_str(), pairs.len());
+                    println!("verdict: {} — plan coherent ({} pas rejoues, aucun mur statique), rien sur le chemin dans la diff.", Verdict::C.as_str(), pairs.len());
+                    println!("  Chercher cote execution (envoi, attente, postcondition) ou blocage transitoire (PNJ de passage) :");
+                    println!("  si le journal montre un replan suivi de \"arrived\", le blocage etait transitoire et deja absorbe.");
                 }
             }
             0
