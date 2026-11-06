@@ -7,6 +7,7 @@ pub mod devtools;
 pub mod devtools_check;
 pub mod devtools_probe;
 pub mod maze;
+pub mod maze_doors;
 pub mod skill_common;
 pub mod skill_trade;
 pub mod skill_walk;

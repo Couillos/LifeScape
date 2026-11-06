@@ -16,6 +16,7 @@ use lifescape_sdk::collision::LOC;
 
 use super::quest_common as kit;
 use super::randomevent;
+use super::maze_doors;
 use crate::{ScriptError, ScriptResult};
 
 /// check_axis (door_procs.rs2): W/E doors read the same-X tiles, N/S
@@ -126,7 +127,7 @@ fn plan(
         if tried.contains(&(*tile_x, *tile_z, *tile_level)) {
             continue;
         }
-        if Bot::maze_entry_side(*loc_id).is_some() {
+        if maze_doors::maze_entry_side(*loc_id).is_some() {
             doors.push((*tile_x, *tile_z, *loc_id, *shape, *angle));
         }
     }
@@ -225,7 +226,7 @@ fn plan(
             if *shape != 0 {
                 continue;
             }
-            let entry = match Bot::maze_entry_side(*_loc_id) {
+            let entry = match maze_doors::maze_entry_side(*_loc_id) {
                 Some(entry) => entry,
                 None => continue,
             };
@@ -354,8 +355,8 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
             match action {
                 MazeAction::Walk(steps) => {
                     // Explicit steps, no router: the BFS already routed
-                    // through doors; walk_path swings shut ones met.
-                    match bot.walk_path(&steps, 120) {
+                    // through doors; the maze stepper swings shut ones met.
+                    match maze_doors::walk_maze_steps(bot, &steps, 120) {
                         Ok(_) => {}
                         Err(error) if lifescape_sdk::error::is_interrupted(&error) => {
                             return Err(ScriptError::Sdk(error));
@@ -370,15 +371,15 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
                     let (diag_loc, _diag_shape, diag_angle) =
                         bot.doors.get(&(door_x, door_z, door_level)).copied().unwrap_or((3628, 0, 0));
                     let diag_live = bot.world.loc_at(door_x, door_z, door_level);
-                    let diag_entry = Bot::maze_entry_side(diag_loc).unwrap_or(0);
+                    let diag_entry = maze_doors::maze_entry_side(diag_loc).unwrap_or(0);
                     let (diag_angle_eff, diag_source) =
-                        Bot::maze_effective_angle(diag_live, diag_loc, diag_angle);
-                    bot.log(&Bot::maze_door_diag(
+                        maze_doors::maze_effective_angle(diag_live, diag_loc, diag_angle);
+                    bot.log(&maze_doors::maze_door_diag(
                         door_x, door_z, door_level, diag_live,
                         bot.world.x, bot.world.z, bot.world.level,
                         diag_entry, diag_angle_eff, diag_source, bot.world.x, bot.world.z,
                     ));
-                    match bot.open_maze_door(door_x, door_z, door_level) {
+                    match maze_doors::open_maze_door(bot, door_x, door_z, door_level) {
                         Ok(true) => {}
                         Ok(false) => {
                             tried.insert((door_x, door_z, door_level));
