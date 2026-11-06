@@ -21,8 +21,14 @@ echelle_delta | 3228,3215,0 | 3228,3213,1 | - | reachable ; rides>=1 ; uses_loc=
 repaire_sortie | 3243,9783,0 | 3244,3382,0 | - | reachable ; rides>=1 ; levels=0
 # 8. porte a peage : la cloture est contournable a pied dans cette
 # revision (fence x=3268 z=3224..3231, bouts ouverts), donc sans piece le
-# plan fait le detour et avec piece il passe la porte. PaidOnly est
-# indeclenchable geographiquement ; ces deux lignes figent le comportement.
+# plan fait le detour et avec piece il passe la porte. Aucun or PaidOnly
+# n'est possible geographiquement : les seuls locs a peage du jeu sont
+# 2882/2883 (deux moities de la meme porte d'Al-Kharid, categories 17/18,
+# voir border_gate.rs2), et le detour est de 220 tuiles mesurees via
+# `orchestrator route` dans les deux sens. La branche PaidOnly de plan.rs
+# est couverte par le test synthetique tests/paid_only.rs (carre isole
+# dont la porte est le seul passage), pas par ces deux lignes qui figent
+# le comportement reel.
 peage_detour | 3265,3227,0 | 3270,3227,0 | - | reachable ; doors<=0 ; walk_tiles>=200
 peage_payant | 3265,3227,0 | 3270,3227,0 | paid | reachable ; uses_loc=2882 ; walk_tiles<=10
 # 9-10. porte a exigence de quete (guilde des Champions, qp>=32).
