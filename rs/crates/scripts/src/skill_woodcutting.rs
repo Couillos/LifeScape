@@ -12,7 +12,7 @@ use lifescape_sdk::Bot;
 
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, death_message_seen, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
-    obj_price, pack_ids, pack_slot, pack_total, sell_for_target, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
+    obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
     GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS,
 };
 use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there};
@@ -315,6 +315,102 @@ fn respawn_reset(
     Ok(())
 }
 
+/// Server regrow delay in ticks (1 bot tick = 1 server cycle) per tree
+/// table (`woodcutting_trees.dbrow` respawnrate; `loc_change` counts
+/// server cycles): oak/willow 30, maple 120, yew 200, magic 400. Rate-0
+/// tables (normal/burnt/achey logs) regrow at 120+random(80), midpoint
+/// 160. Memory is per tier, not per loc: the rate is defined per tree
+/// table, identical for every spot of the tier at fixed playercount
+/// (`scale_by_playercount` ~= 1.0 solo), so one exact wait calibrates
+/// the whole tier — per-loc memory would need an observation per tree
+/// for the same number. Observed waits replace the default.
+fn default_respawn_ticks(product: &str) -> u64 {
+    match product {
+        "oak_logs" | "willow_logs" => 30,
+        "maple_logs" => 120,
+        "yew_logs" => 200,
+        "magic_logs" => 400,
+        _ => 160,
+    }
+}
+
+/// Pure wait-vs-walk call: Some(wait) when standing still wins, None when
+/// leaving wins. Wait wins only when strictly cheaper than the walk to the
+/// best alternative (`travel_ticks`, Manhattan lower bound — biased toward
+/// leaving) and under the Gone-ban window: waiting longer than the ban
+/// that would have applied is never better than leaving, so over-cap
+/// expectations degrade to None, logged by the caller. No alternative
+/// (None) always waits: there is nowhere cheaper to go.
+fn respawn_wait_ticks(expected: u64, walk_alternative: Option<u64>) -> Option<u64> {
+    if expected > GONE_BAN_TICKS {
+        return None;
+    }
+    match walk_alternative {
+        None => Some(expected),
+        Some(walk) if expected < walk => Some(expected),
+        Some(_) => None,
+    }
+}
+
+/// Depleted stump under us: wait for the regrow or walk to the next spot,
+/// whichever is cheaper. A wait sets the SHORT ban (regrow ETA) so the
+/// repick returns to this tree; leaving keeps the Gone ban (250). The
+/// wait is threat-checked every pump (hurt or corpse breaks it, long ban,
+/// the loop-top flee/death arms handle the rest) and billed to
+/// `idle_since` like any other non-chop time, never to the stall budget.
+#[allow(clippy::too_many_arguments)]
+fn wait_for_respawn(
+    bot: &mut Bot,
+    tier: &knowledge::trees::TreeTier,
+    spot_x: i32,
+    spot_z: i32,
+    banned: &mut HashMap<(i32, i32), u64>,
+    tiers: &[knowledge::trees::TreeTier],
+    bank: &knowledge::banks::Bank,
+    level: i64,
+    memory: &mut HashMap<String, u64>,
+    idle_since: &mut u64,
+) -> Result<(), ScriptError> {
+    let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
+    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+    let alternative = pick_tree_spot(bot, tiers, bank, level, banned)
+        .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
+    let Some(wait) = respawn_wait_ticks(expected, alternative) else {
+        bot.log(&format!(
+            "stump at ({spot_x},{spot_z}): regrow ~{expected}t vs walk {}t, leaving",
+            alternative.map(|walk| walk.to_string()).unwrap_or_else(|| "none".to_string())
+        ));
+        return Ok(());
+    };
+    // Short ban: the repick after the wait may return to this tree.
+    banned.insert((spot_x, spot_z), bot.world.ticks + wait);
+    bot.log(&format!(
+        "waiting respawn {wait}t at ({spot_x},{spot_z}) (regrow ~{expected}t vs walk {}t)",
+        alternative.map(|walk| walk.to_string()).unwrap_or_else(|| "none".to_string())
+    ));
+    bot.intend(&format!("waiting for the tree at ({spot_x},{spot_z}) to regrow"));
+    let start = bot.world.ticks;
+    let hitpoints_before = hitpoints(bot);
+    while bot.world.ticks - start < wait {
+        bot.pump(2)?;
+        if hitpoints(bot) < hitpoints_before || hitpoints(bot) == 0 {
+            bot.log("threat during respawn wait, leaving the stump");
+            banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+            break;
+        }
+        if tree_still_there(bot, spot_x, spot_z, &tier.trees) {
+            break;
+        }
+    }
+    *idle_since += bot.world.ticks - start;
+    let elapsed = bot.world.ticks - start;
+    if elapsed > 0 && tree_still_there(bot, spot_x, spot_z, &tier.trees) {
+        memory.insert(tier.product.clone(), elapsed);
+        bot.log(&format!("regrew at ({spot_x},{spot_z}) after {elapsed}t"));
+    }
+    Ok(())
+}
+
 /// Click once, then only re-click after a quiet round (the server chains
 /// attempts itself while in range).
 fn work_spot(
@@ -455,6 +551,7 @@ fn chop_load(
     coins: u16,
     mut level: i64,
     banned: &mut HashMap<(i32, i32), u64>,
+    respawn: &mut HashMap<String, u64>,
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut idle_since = bot.world.ticks;
@@ -545,7 +642,7 @@ fn chop_load(
                 continue;
             }
         }
-        let Some((_, spot_x, spot_z)) = spot.clone() else {
+        let Some((tier, spot_x, spot_z)) = spot.clone() else {
             continue;
         };
         let (result, gained) = work_spot(bot, spot_x, spot_z, &log_ids, had_logs)?;
@@ -578,8 +675,14 @@ fn chop_load(
         }
         match result {
             WorkOutcome::Gone => {
-                bot.log("tree quiet, next one");
-                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                if is_stump(bot, spot_x, spot_z) {
+                    // Depleted under us: waiting for the regrow beats
+                    // re-banning blind when the walk costs more.
+                    wait_for_respawn(bot, &tier, spot_x, spot_z, banned, tiers, bank, level, respawn, &mut idle_since)?;
+                } else {
+                    bot.log("tree quiet, next one");
+                    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                }
                 spot = None;
             }
             WorkOutcome::NoTool => spot = None,
@@ -862,6 +965,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // Threat bans outlive one load: a killer tree stays banned while its
     // neighbours get cut, instead of repicking the same death every load.
     let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
+    // Observed regrow delays per tier product: one exact wait calibrates
+    // the whole tier (server rate is per tree table), so this outlives
+    // loads like the bans do.
+    let mut respawn: HashMap<String, u64> = HashMap::new();
     while loads == 0 || done < loads {
         // Death may have moved us across the map: re-sync the bank cheaply
         // (no walking) so spots and treks start from the real position.
@@ -886,7 +993,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bot.log("still axeless after re-gear, hunting again");
             continue;
         }
-        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned)?;
+        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn)?;
         level = new_level;
         // A failed load (threats, stumps, stall) retries with bans kept:
         // stumps regrow and hunters wander off.
@@ -956,7 +1063,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, death_since};
+    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, death_since, default_respawn_ticks, respawn_wait_ticks};
     use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1136,6 +1243,38 @@ mod tests {
         let mut spot: Option<(i32, i32)> = Some((3086, 3243));
         spot = None;
         assert!(spot.is_none(), "spot reset after death");
+    }
+
+    /// Defaults mirror the server tree table (`woodcutting_trees.dbrow`
+    /// respawnrate): oak/willow 30, maple 120, yew 200, magic 400, and
+    /// 160 for normal logs (120+random(80), midpoint). Unknown products
+    /// fall back to the normal-tree mean, never a round guess.
+    #[test]
+    fn respawn_defaults_match_server_table() {
+        assert_eq!(default_respawn_ticks("oak_logs"), 30, "oak regrows in 30");
+        assert_eq!(default_respawn_ticks("willow_logs"), 30, "willow regrows in 30");
+        assert_eq!(default_respawn_ticks("maple_logs"), 120, "maple regrows in 120");
+        assert_eq!(default_respawn_ticks("yew_logs"), 200, "yew regrows in 200");
+        assert_eq!(default_respawn_ticks("magic_logs"), 400, "magic regrows in 400");
+        assert_eq!(default_respawn_ticks("logs"), 160, "normal trees average 160");
+        assert_eq!(default_respawn_ticks("something_new"), 160, "unknown falls back to the normal mean");
+    }
+
+    /// Wait-vs-walk on chiffré cases (GONE_BAN_TICKS = 250 cap): oak 30
+    /// vs a 200-tile walk waits 30; yew 200 vs a 50-tile walk leaves;
+    /// magic 400 over the cap leaves even with nowhere better to go
+    /// (the ban repick revisits); a tie walks; no alternative waits.
+    #[test]
+    fn respawn_wait_wins_only_when_strictly_cheaper() {
+        use crate::skill_common::GONE_BAN_TICKS;
+        assert_eq!(respawn_wait_ticks(30, Some(200)), Some(30), "oak 30 < walk 200 waits");
+        assert_eq!(respawn_wait_ticks(200, Some(50)), None, "yew 200 > walk 50 leaves");
+        assert_eq!(respawn_wait_ticks(400, Some(500)), None, "magic 400 over cap leaves");
+        assert_eq!(respawn_wait_ticks(400, None), None, "magic 400 over cap even with nowhere to go");
+        assert_eq!(respawn_wait_ticks(30, Some(30)), None, "tie walks");
+        assert_eq!(respawn_wait_ticks(30, None), Some(30), "nowhere to go waits");
+        assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS, Some(1000)), Some(GONE_BAN_TICKS), "cap itself still waits");
+        assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS + 1, Some(1000)), None, "one over cap leaves");
     }
 
 }
