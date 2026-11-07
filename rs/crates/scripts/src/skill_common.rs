@@ -45,6 +45,24 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
 
+/// Measured live travel speed, one place (admin walkto, Lumbridge-Draynor,
+/// 2026-11-07): 24 tiles in 14 ticks at full energy (0.58, run, client
+/// energy 100->93 proving the drain), 189 flat tiles in ~190 drained
+/// (~1.0, walk). Run bursts need full energy on both sides and collapse
+/// after one leg; walking is the guaranteed rate, so every trip budget
+/// uses it — a run only lands earlier.
+pub const TICKS_PER_TILE: f64 = 1.0;
+/// Full-energy run rate, same sessions: ~0.5 ticks/tile before send
+/// overhead (~2 ticks per walk_to leg). Informational: budgets never
+/// assume it.
+pub const TICKS_PER_TILE_RUNNING: f64 = 0.5;
+
+/// Travel budget in ticks for `tiles` Manhattan tiles at the guaranteed
+/// walk rate (ceil, so a 1-tile step never budgets zero).
+pub fn travel_ticks(tiles: u64) -> u64 {
+    (tiles as f64 * TICKS_PER_TILE).ceil() as u64
+}
+
 /// Spot work result, shared by the three gathering scripts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkOutcome {
@@ -800,6 +818,17 @@ mod tests {
         assert!(bot.world.modal.is_some(), "overlay stays open, only the verdict changes");
         bot.world.modal = None;
         assert!(dismiss_modal(&mut bot).expect("no modal passes"), "no modal passes");
+    }
+
+    /// Travel budget: walk rate (1.0), ceil, never zero — the measured
+    /// live rates live in TICKS_PER_TILE, nowhere else.
+    #[test]
+    fn travel_ticks_uses_walk_rate() {
+        assert_eq!(super::travel_ticks(0), 0, "no tiles, no budget");
+        assert_eq!(super::travel_ticks(1), 1, "a 1-tile step never budgets zero");
+        assert_eq!(super::travel_ticks(24), 24, "24 flat tiles, got: {}", super::travel_ticks(24));
+        assert_eq!(super::travel_ticks(189), 189, "189 flat tiles, got: {}", super::travel_ticks(189));
+        assert!(super::TICKS_PER_TILE_RUNNING < super::TICKS_PER_TILE, "run is faster than walk");
     }
 
     #[test]

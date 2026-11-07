@@ -17,7 +17,7 @@ const NEAR_BANK_TILES: i64 = 150;
 /// spot of the best tier near the current bank is a stump or banned, walk
 /// to the next live cluster of the SAME tier instead of degrading: a yew
 /// pays 175 xp/log vs 67.5 for willow (dump `exp` is xp*10), and 200 tiles
-/// is ~300 walking ticks (measured ~1.5 ticks/tile on flat legs) — about
+/// is ~200 walking ticks (`travel_ticks`, measured 1.0 ticks/tile) — about
 /// one stump-ban window (GONE_BAN_TICKS = 250), so the home rotation has
 /// barely regrown when the hop lands. Past that the walk outlasts the
 /// regrow and willow-at-home wins: degrade instead, logged.
