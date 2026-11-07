@@ -138,6 +138,7 @@ pub(crate) fn pick_tree_spot(
     // skipped (the hurt-driven flee below still handles wanderers).
     let hunters: Vec<(i64, i64, i64)> = if bot.allow_wild { Vec::new() } else { hunter_zones(bot) };
     let mut saw_paid_only = false;
+    let mut saw_f2p_only = false;
     let mut affordable: Vec<&knowledge::trees::TreeTier> = tiers.iter().filter(|tier| tier.level <= level).collect();
     affordable.sort_by_key(|tier| -tier.level);
     let best = affordable.first().copied();
@@ -153,6 +154,12 @@ pub(crate) fn pick_tree_spot(
             }
             if across_toll(bot.world.x, spot_x, fence) {
                 saw_paid_only = true;
+                continue;
+            }
+            // Travel always plans F2P-only: an out-of-F2P spot is a
+            // guaranteed NoRoute dossier (live t01-4572), never a pick.
+            if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
+                saw_f2p_only = true;
                 continue;
             }
             if hunters.iter().any(|(hx, hz, range)| {
@@ -186,6 +193,10 @@ pub(crate) fn pick_tree_spot(
             }
             if across_toll(bot.world.x, spot_x, fence) {
                 saw_paid_only = true;
+                continue;
+            }
+            if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
+                saw_f2p_only = true;
                 continue;
             }
             if hunters.iter().any(|(hx, hz, range)| {
@@ -233,6 +244,8 @@ pub(crate) fn pick_tree_spot(
                     }
                 } else if across_toll(bot.world.x, spot_x, fence) {
                     "toll".to_string()
+                } else if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
+                    "f2p".to_string()
                 } else if hunters.iter().any(|(hunter_x, hunter_z, range)| {
                     (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
                 }) {
@@ -254,6 +267,9 @@ pub(crate) fn pick_tree_spot(
     }
     if saw_paid_only {
         bot.log("tree spots only across toll fence");
+    }
+    if saw_f2p_only {
+        bot.log("tree spots only outside F2P");
     }
     fallback
 }
@@ -442,5 +458,82 @@ mod tests {
             panic!("degrade should find a willow, got None");
         };
         assert_eq!(tier.product, "willow_logs", "bound exceeded, degrade, got: {}", tier.product);
+    }
+
+    /// F2P filter: travel plans F2P-only, so an out-of-F2P spot is never a
+    /// pick (live t01-4572: NoRoute OutsideF2p to a willow at (2906,3385)).
+    /// The same query without a wired world keeps returning the spot: no
+    /// world means no bounds, never silent filtering.
+    #[test]
+    fn f2p_filter_skips_outside_spots() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+        let data = root.join("LifeScape/gamedata/data");
+        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+        world.set_f2p(zones);
+        assert!(!world.in_f2p(2862, 3385), "dossier spot is outside F2P");
+        assert!(!world.in_f2p(2906, 3385), "dossier leg dest is outside F2P");
+        assert!(world.in_f2p(3091, 3242), "Draynor bank booth is inside F2P");
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 2860,
+            z: 3380,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        // Every tree spawn in both pools (near-bank 150 and same-tier
+        // hop 200 around the bot) banned except the out-of-F2P one, so
+        // the unfiltered pick must land on it and the filtered pick must not.
+        // Tier-agnostic: the dossier tile's tier is whatever it is.
+        let mut tree_names = std::collections::HashSet::new();
+        for tier in &tiers {
+            for tree in &tier.trees {
+                tree_names.insert(tree.clone());
+            }
+        }
+        let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
+        for entry in lifescape_gamedata::all_locs() {
+            let name = entry.name.clone().unwrap_or_default().to_lowercase();
+            if !tree_names.contains(&name) {
+                continue;
+            }
+            for spawn in &entry.spawns {
+                if spawn.level == 0 && (spawn.x - 2862).abs() + (spawn.z - 3384).abs() <= 200 {
+                    let pos = (spawn.x as i32, spawn.z as i32);
+                    if pos != (2862, 3385) {
+                        banned.insert(pos, u64::MAX);
+                    }
+                }
+            }
+        }
+        let mut plain = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut plain);
+        plain.world.level = 0;
+        plain.world.x = 2862;
+        plain.world.z = 3384;
+        plain.allow_paid = true;
+        plain.allow_wild = true;
+        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &banned);
+        let Some((_, spot_x, spot_z)) = picked else {
+            panic!("unfiltered pick should land on the only open spot, got None");
+        };
+        assert_eq!((spot_x, spot_z), (2862, 3385), "unfiltered pick lands on it, got: ({spot_x},{spot_z})");
+        let mut wired = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut wired);
+        wired.world.level = 0;
+        wired.world.x = 2862;
+        wired.world.z = 3384;
+        wired.allow_paid = true;
+        wired.allow_wild = true;
+        wired.nav_world = Some(world);
+        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &banned);
+        let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
+        assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
 }
