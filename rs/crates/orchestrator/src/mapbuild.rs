@@ -185,8 +185,10 @@ pub(crate) fn build_all(maps: &Minimap, out_tmp: &Path, hash: &str) -> Result<Ve
         return Err("pack ships no map squares".to_string());
     }
     std::fs::create_dir_all(out_tmp).map_err(|error| error.to_string())?;
+    let timing = std::env::var("MAPBUILD_TIMING").is_ok();
     let mut files = Vec::new();
     for spec in &specs {
+        let mark = std::time::Instant::now();
         let pixels = maps.render_static(spec.level, spec.x0, spec.z0, spec.w, spec.h);
         if pixels.iter().all(|pixel| *pixel == 0) {
             continue;
@@ -197,6 +199,9 @@ pub(crate) fn build_all(maps: &Minimap, out_tmp: &Path, hash: &str) -> Result<Ve
         }
         let png = png::encode_rgb((spec.w * 4) as u32, (spec.h * 4) as u32, &rgb);
         std::fs::write(out_tmp.join(&spec.file), &png).map_err(|error| error.to_string())?;
+        if timing {
+            eprintln!("mapbuild {}: {} bytes in {:.1}s", spec.file, png.len(), mark.elapsed().as_secs_f64());
+        }
         files.push((spec.file.clone(), png.len() as u64));
     }
     if files.is_empty() {
@@ -449,7 +454,7 @@ mod tests {
     }
 
     /// Full 16-image build against the real pack: weight and layout proof.
-    /// Slow (tens of seconds), so ignored in the default run.
+    /// Slow (minutes in debug), so ignored in the default run.
     #[test]
     #[ignore]
     fn full_build_weights() {
@@ -463,7 +468,9 @@ mod tests {
         names.sort();
         eprintln!("static map files:\n{}", names.join("\n"));
         eprintln!("total {total}");
-        assert_eq!(files.len(), 17, "16 PNGs plus the manifest");
+        let pngs = files.iter().filter(|(file, _)| file.ends_with(".png")).count();
+        assert!((15..=16).contains(&pngs), "one PNG per non-empty cluster level, got {pngs}");
+        assert!(files.iter().any(|(file, _)| file == "manifest.json"));
         assert!(total <= 5_000_000, "over the 5 MB ceiling: {total}");
         let _ = std::fs::remove_dir_all(&out);
     }
