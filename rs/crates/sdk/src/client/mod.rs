@@ -247,10 +247,22 @@ impl Bot {
     }
 
     /// One-line action trace (session log): every game action the bot
-    /// sends, with the game tick. The worker prefixes wall-clock time.
+    /// sends, with wall clock and game tick. Carries its own stamp:
+    /// script `println!` bypasses the worker stamp, so the worker
+    /// cannot prefix it (the old comment promised it could).
     /// Read-only for planning: never call this from a planning view.
     pub fn act(&self, text: String) {
-        println!("act {} {text}", self.tag());
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|span| span.as_secs())
+            .unwrap_or(0);
+        println!(
+            "[{:02}:{:02}:{:02}] act {} {text}",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60,
+            self.tag()
+        );
     }
 
     /// Script log line with wall clock and the exact game tick. The
