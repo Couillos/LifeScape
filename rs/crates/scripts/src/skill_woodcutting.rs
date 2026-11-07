@@ -579,12 +579,18 @@ fn chop_load(
                 if unreachable_streak >= 8 {
                     let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
                     match bot.travel_to(dest) {
-                        Ok(()) => unreachable_streak = 0,
+                        Ok(()) => {}
                         Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
                             return Err(error.into());
                         }
                         Err(error) => bot.log(&format!("pocket escape refused: {error}")),
                     }
+                    // One escape per streak: a refused escape re-arms by
+                    // counting, it never re-fires on the next spot. Without
+                    // this the same failing travel_to runs every iteration
+                    // (up to four full-dijkstra exhaustions each) and the
+                    // loop burns a core until the stall bound trips.
+                    unreachable_streak = 0;
                 }
             }
             WorkOutcome::LevelLocked => {
