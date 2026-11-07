@@ -656,7 +656,28 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "smith_anvil" => smith_anvil(bot),
         "mine_exit" => {
             if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor4"], 150) {
-                stand_orthogonal(bot, x, z)?;
+                // The gate faces east: no western stand satisfies the
+                // server's wall reach rule, but the gate tile itself is
+                // standable. Step on (server-validated direct steps, the
+                // router refuses the tile) then click from on top.
+                let _ = bot.approach(x, z, bot.world.level, 1, 1500);
+                for _ in 0..3 {
+                    if (bot.world.x, bot.world.z) == (x, z) {
+                        break;
+                    }
+                    let (dx, dz) = (x - bot.world.x, z - bot.world.z);
+                    let (next_x, next_z) = if dx.abs() >= dz.abs() {
+                        (bot.world.x + dx.signum(), bot.world.z)
+                    } else {
+                        (bot.world.x, bot.world.z + dz.signum())
+                    };
+                    if bot.step_to(next_x, next_z, 30).is_err() {
+                        break;
+                    }
+                }
+                if (bot.world.x, bot.world.z) != (x, z) {
+                    stand_orthogonal(bot, x, z)?;
+                }
                 bot.op_loc(1, x, z, loc)?;
             }
             check(bot.position(), wait_moved(bot, 20)?, "out of the mine")
@@ -682,17 +703,25 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         }
         "combat_tab" => click_tab(bot, 0, "combat tab"),
         "rat_cage" => {
+            // West of the gate line = inside the pit. Never short-circuit
+            // on mere proximity: from outside-near the gate still needs a
+            // click to advance the stage.
+            let (gate_x, gate_z, _level, gate_loc) = kit::find_loc(bot, &["newbiedoor5"], 150)?;
+            let start = (bot.world.x, bot.world.z);
+            let inside = |bot: &Bot| {
+                (bot.world.x, bot.world.z) == (3109, 9519)
+                    || crossed_door(bot, (gate_x, gate_z), start)
+                    || (bot.world.x < gate_x && (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 6)
+            };
             for _ in 0..5 {
-                if (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 6 {
+                if inside(bot) {
                     bot.log("ok inside rat pit");
                     return Ok(());
                 }
-                if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor5"], 150) {
-                    let _ = pass_door_at(bot, x, z, loc, (3109, 9519), "rat cage");
-                }
+                let _ = pass_door_at(bot, gate_x, gate_z, gate_loc, (3109, 9519), "rat cage");
                 bot.pump(5)?;
             }
-            check(bot.position(), false, "inside rat pit")
+            check(bot.position(), inside(bot), "inside rat pit")
         }
         "melee" | "melee_watch" => melee(bot),
         "ranged_prep" => {
