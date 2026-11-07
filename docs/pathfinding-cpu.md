@@ -1,28 +1,28 @@
 # Pathfinding économe CPU — étude (doc seule, aucun code)
 
 Objectif : réduire le CPU du planificateur `lifescape-nav` sans toucher au protocole,
-aux workers live ni aux garanties (plan pur, déterministe, `plan.rs:228`).
+aux workers live ni aux garanties (plan pur, déterministe, `plan.rs:242`).
 
 ## 1. Constat chiffré
 
 ### 1.1 Où part le CPU : un `plan()` = jusqu'à 4 Dijkstra + 4 `prepare_edges`
 
-`plan()` (`rs/crates/nav/src/plan.rs:241-349`) enchaîne jusqu'à 4 recherches Dijkstra
+`plan()` (`rs/crates/nav/src/plan.rs:255-357`) enchaîne jusqu'à 4 recherches Dijkstra
 complètes : A (requirements levés), B (péages levés, si `!allow_paid`), C (bornes F2P
 levées, si `f2p_only`), D (filtre complet, pour le plus proche atteignable). Chaque
 recherche est bornée par `MAX_VISITS = 500_000` (`plan.rs:57`) et appelle
-`prepare_edges()` (`plan.rs:528`, via `dijkstra()` `plan.rs:503-513`).
+`prepare_edges()` (`plan.rs:773`, appelé depuis `dijkstra()` `plan.rs:544`).
 
 | Poste | Chiffre | Source |
 |---|---|---|
-| Visites max par `plan()` | 4 × 500 k = 2 M | `plan.rs:57,241-349` |
+| Visites max par `plan()` | 4 × 500 k = 2 M | `plan.rs:57,255-357` |
 | Coût par visite | ~2 µs | rapport parent (mesures `route --release`) |
 | NoRoute exhaustif (pire cas) | ~3,5 s | rapport parent ; corroboré : `chateau_scell` = 3669 ms release (`docs/decisions.md:13`) |
-| Plans réussis (budget golden) | < 300 ms, max observé 140 ms | `rs/crates/nav/tests/golden.rs:169-174`, `docs/decisions.md:13` |
-| `prepare_edges()` | ~90 ms à froid, **rejoué à chaque Dijkstra** (jusqu'à 4×/plan) | `plan.rs:503-531` ; itère 367 transitions (`gamedata/data/transitions.json`) avec test `reach` par stand |
-| Sans yield, 238 k visites → Disconnected (1 cas de test) | prouve l'épuisement avant `MAX_VISITS` | `rs/crates/sdk/src/client/travel.rs:849-854` |
+| Plans réussis (budget golden) | < 300 ms, max observé 140 ms | `rs/crates/nav/tests/golden.rs:173-175`, `docs/decisions.md:13` |
+| `prepare_edges()` | ~90 ms à froid, **rejoué à chaque Dijkstra** (jusqu'à 4×/plan) | `plan.rs:518-549` ; itère 367 transitions (`gamedata/data/transitions.json`) avec test `reach` par stand |
+| Sans yield, 238 k visites → Disconnected (1 cas de test) | prouve l'épuisement avant `MAX_VISITS` | `rs/crates/sdk/src/client/travel.rs:879-888` |
 | Monde | N ≈ 1,3 M tuiles marchables après fix ciel | rapport parent ; pack = 1932 carrés (`maps-server.zip`) |
-| Durées live | **non loggées** (seul `PLAN_DEBUG=1` affiche visites/ms sur stderr) | `plan.rs:529-531,575-580` |
+| Durées live | **non loggées** (seul `PLAN_DEBUG=1` affiche visites/ms sur stderr) | `plan.rs:547-548,600-604,711-718` |
 
 Mémoire transitoire par recherche : `dist`/`prev` (`HashMap<u64,…>`, jusqu'à 500 k
 entrées) + `BinaryHeap` — dizaines de Mo alloués puis jetés, 4× par `plan()` raté.
@@ -33,16 +33,16 @@ entrées) + `BinaryHeap` — dizaines de Mo alloués puis jetés, 4× par `plan(
 - `travel_to` planifie, puis **replanifie** une fois à l'échec (`rs/crates/sdk/src/client/travel.rs:180-236`,
   replan `travel.rs:212`), et `debug_walk` replanifie pour le diagnostic
   (`rs/crates/sdk/src/client/movement.rs:236`). Chaque appel = `plan()` complet.
-- `Search` (`plan.rs:388-398`) reconstruit ses 3 `HashMap` (`base_flags`, `open_flags`,
+- `Search` (`plan.rs:403-413`) reconstruit ses 3 `HashMap` (`base_flags`, `open_flags`,
   `doors`) à chaque Dijkstra ; `world.get()` prend le verrou **écriture** du monde
   à chaque tuile (`rs/crates/nav/src/static_world.rs:73-75`).
 
 ### 1.3 Redondance inter-workers : N process refont le même Dijkstra
 
 - 1 process OS par session (`rs/crates/orchestrator/src/daemon.rs:2`, spawn via
-  `current_exe` `daemon.rs:215-232`). `Arc<StaticWorld>` n'est partagé **qu'entre
+  `current_exe` `daemon.rs:220-256`). `Arc<StaticWorld>` n'est partagé **qu'entre
   threads d'un même process** (`static_world.rs:7,27-30`) : chaque session recharge
-  monde + tables (`rs/crates/orchestrator/src/session.rs:698-728`) → monde dupliqué en RAM.
+  monde + tables (`rs/crates/orchestrator/src/session.rs:694-747`) → monde dupliqué en RAM.
 - Mesuré (lecture seule, `ps`, 2026-11-07) : daemon 3190943 RSS 127 Mo (VmHWM 127 Mo),
   session `t01` 3222657 RSS **185 Mo**, session `t05` 3318133 RSS **55 Mo**
   (peinture paresseuse des carrés : le monde grossit avec les déplacements).
@@ -63,8 +63,8 @@ entrées) + `BinaryHeap` — dizaines de Mo alloués puis jetés, 4× par `plan(
 | `nav fail` → `nav replan` | 694 → 693 (**~4,2 %** des plans, ~43/h) | 480 replan/fail |
 
 Borne haute : la clé réelle inclut aussi `NavOptions` (`allow_paid`, `satisfied`,
-`excluded_edges` — `plan.rs:156-163`) ; le taux avec clé complète est ≤ 63,5 %.
-À noter : les tables sont chargées **une fois par session** (`session.rs:718-727`),
+`excluded_edges` — `plan.rs:169-176`) ; le taux avec clé complète est ≤ 63,5 %.
+À noter : les tables sont chargées **une fois par session** (`session.rs:717-747`),
 donc hors `excluded_edges` (déjà dans la clé), un plan en cache reste valide toute
 la session — invalidation quasi nulle.
 En multi-bots, `satisfied` varie **par bot** (pièces/inventaire/quête lus sur l'état
@@ -101,16 +101,16 @@ Screeps Overmind : −20-30 % CPU).
 
 1. LRU borné (ex. 128 entrées) dans le worker, clé = `(from, dest, allow_paid,
    f2p_only, satisfied-trié, excluded_edges-trié, version-tables)` → `Plan` cloné.
-   Le `Plan` est petit (segments + tuiles) et `Clone` existe déjà (`plan.rs:146`).
+   Le `Plan` est petit (segments + tuiles) et `Clone` existe déjà (`plan.rs:160-161`).
    `f2p_only` est déjà constant (`true` hardcodé, `travel.rs:165`) : il reste dans
    la clé pour le prix d'un booléen, sans variante P2P à gérer (§5.8).
 2. Compteurs `hit/miss` dans le log `nav plan` (une ligne) pour valider le §1.4
    avec la vraie clé — si hit < 30 %, réduire la voilure avant l'étape 2.
 3. `prepare_edges()` calculé une fois par `plan()` (variantes A/D partagées,
-   `plan.rs:503-528`) — ~20 lignes, gain immédiat sur chaque plan multi-recherche.
+   `plan.rs:544,773`) — ~20 lignes, gain immédiat sur chaque plan multi-recherche.
 
 Gain attendu : ~50 % de Dijkstra évités pour < 5 Mo, zéro invalidation dynamique
-(tables figées par session, `session.rs:718-727`).
+(tables figées par session, `session.rs:717-747`).
 
 **Étape 2 — fond (quand l'étape 1 est mesurée) : graphe grossier portails.**
 
@@ -136,7 +136,7 @@ Ne pas faire de HPA* multi-niveaux : gains décroissants (Botea et al.), 1 nivea
 ---
 *Sources code : `rs/crates/nav/src/plan.rs`, `static_world.rs`, `tests/golden.rs`,
 `rs/crates/sdk/src/client/travel.rs:180-236`, `movement.rs:236`,
-`rs/crates/orchestrator/src/daemon.rs:2,215-232`, `session.rs:698-728`,
+`rs/crates/orchestrator/src/daemon.rs:2,220-256`, `session.rs:694-747`,
 `docs/decisions.md:13`. Mesures live : `run/logs/t01.log`, `admin.log`, `ps`
 (2026-11-07, lecture seule, T01 intouchée).*
 
@@ -308,7 +308,7 @@ partout, pas de tokio — `AGENTS.md §4.1-4.2`).
 
 | Lot | Contenu | Acceptation mesurable |
 |---|---|---|
-| 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:169-174`) ; revert = 1 fonction |
+| 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:173-175`) ; revert = 1 fonction |
 | 2. L1 local (sync) | LRU 128 + clé complète + compteurs `hit/miss` dans `nav plan` (`travel.rs:180-191`) | hit rate live ≥ 30 % (§3.1), sinon stop ; < 5 Mo ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8) ; revert = 1 fichier |
 | 3. Thread plan + contrat async | submit/poll/cancel (§5.2), fallback sync, annulation sur `stop_requested`/`UNLOAD_TICKS` | aucun reap à 100 ticks sur legs > 1 s (logs `t01`-style), p99 `travel_to` ≤ sync + 5 ms sur les mêmes legs golden (chrono `nav timing`, `travel.rs:214-217`), fallback loggé ; file toujours bornée à 2/worker même à N bots (fairness par isolation, §5.8) ; revert = rebrancher `plan_travel` sync |
 | 4. Version données | `DataVersion` au chargement (`session.rs:717-747`), dans chaque clé | test : bump `nav_overrides.json` → 0 hit périmé servi (test unitaire, pas de live) ; revert = version constante |
@@ -394,7 +394,7 @@ hubs partagés — banques (`all_banks()`, 68 booths, `banks.rs:18-36`,
 `banks.rs:62-63`), spots yew/saules près des banques
 (`skill_woodcutting_spot.rs:17-55`), gobelins est-Lumbridge
 (`skill_woodcutting.rs:183-199`), trajets banque↔spot des boucles
-pêche/mine/woodcutting (`skill_common.rs:361-454` `bank_trip`). Deux bots
+pêche/mine/woodcutting (`skill_common.rs:535-688` `bank_trip`). Deux bots
 au même hub avec les mêmes options partageraient le hit — **mais** les
 options diffèrent en pratique (`satisfied` = bourse/inventaire du bot) :
 le hit inter-bots réel est donc ≤ la redondance apparente des paires
