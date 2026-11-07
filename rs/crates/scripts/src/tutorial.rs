@@ -208,11 +208,22 @@ fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i3
     }
 }
 
+/// Candidate stand tiles around a loc, orthogonal adjacents first: walls,
+/// gates, ladders and fires refuse diagonal clicks, so nearest-first wastes
+/// the whole timeout on tiles that can never work.
+fn ordered_stands(x: i32, z: i32, bot_x: i32, bot_z: i32) -> Vec<(i32, i32)> {
+    let mut cands: Vec<(i32, i32)> = (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
+    cands.sort_by_key(|tile| {
+        let orthogonal = (tile.0 == x) != (tile.1 == z);
+        let dist = (tile.0 - bot_x).abs() + (tile.1 - bot_z).abs();
+        ((!orthogonal) as u8, dist)
+    });
+    cands
+}
+
 fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
     let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
-    let mut cands: Vec<(i32, i32)> =
-        (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
-    cands.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    let cands = ordered_stands(x, z, bot.world.x, bot.world.z);
     let target = bot.world.ticks + timeout;
     for (cx, cz) in cands {
         if bot.world.ticks > target {
@@ -239,9 +250,7 @@ fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) ->
 
 fn use_held_on_loc_near(bot: &mut Bot, loc_names: &[&str], tool: u16, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
     let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
-    let mut cands: Vec<(i32, i32)> =
-        (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
-    cands.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    let cands = ordered_stands(x, z, bot.world.x, bot.world.z);
     let target = bot.world.ticks + timeout;
     for (cx, cz) in cands {
         if bot.world.ticks > target {
