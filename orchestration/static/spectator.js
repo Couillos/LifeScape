@@ -177,7 +177,16 @@ function connectSocket() {
       }
       const merged = incoming.partial && last ? Object.assign({}, last, incoming) : incoming;
       last = merged;
-      setTitle("Following: " + (last.account_name || selected), last.zone);
+      // Session gap, not a dead pipe: the socket stays live (stamp below
+      // keeps ticking) while the worker relogs. Say so with the stale
+      // age instead of showing a frozen frame as if it were live.
+      const gap = last.status === "reconnecting" || last.status === "disconnected";
+      const stale = last.updated ? Math.max(0, Date.now() / 1000 - last.updated) : 0;
+      setTitle(
+        "Following: " + (last.account_name || selected) +
+          (gap ? " — " + last.status + "… (data " + Math.round(stale) + "s old)" : ""),
+        last.zone,
+      );
       renderPill();
       updatePanels();
       paint();
