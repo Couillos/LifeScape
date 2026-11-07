@@ -638,7 +638,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "quest_tab" => click_tab(bot, 2, "quest tab"),
         "ladder_down" => {
             if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbieladdertop1"], 150) {
-                bot.approach(x, z, bot.world.level, 1, 1500)?;
+                stand_orthogonal(bot, x, z)?;
                 bot.op_loc(1, x, z, loc)?;
             }
             check(bot.position(), wait_moved(bot, 20)?, "down the mine ladder")
@@ -656,7 +656,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "smith_anvil" => smith_anvil(bot),
         "mine_exit" => {
             if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor4"], 150) {
-                bot.approach(x, z, bot.world.level, 1, 1500)?;
+                stand_orthogonal(bot, x, z)?;
                 bot.op_loc(1, x, z, loc)?;
             }
             check(bot.position(), wait_moved(bot, 20)?, "out of the mine")
@@ -707,7 +707,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "ranged_kill" => ranged_kill(bot),
         "ladder_bank" => {
             if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbieladder2"], 150) {
-                bot.approach(x, z, bot.world.level, 1, 1500)?;
+                stand_orthogonal(bot, x, z)?;
                 bot.op_loc(1, x, z, loc)?;
             }
             check(bot.position(), wait_moved(bot, 20)?, "up the bank ladder")
@@ -763,6 +763,22 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         }
         _ => Err(ScriptError::Usage(format!("tutorial stuck: unknown stage {stage:?}"))),
     }
+}
+
+/// Stand on an orthogonally adjacent tile: ladders and doors refuse
+/// diagonal clicks.
+fn stand_orthogonal(bot: &mut Bot, x: i32, z: i32) -> Result<(), ScriptError> {
+    let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
+    tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    for (tile_x, tile_z) in tiles {
+        if (bot.world.x, bot.world.z) == (tile_x, tile_z) {
+            return Ok(());
+        }
+        if bot.walk_to(tile_x, tile_z, bot.world.level, 1500).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(ScriptError::Sdk(Error::Unreachable(format!("no orthogonal stand near {x},{z} at {:?}", bot.position()))))
 }
 
 fn pass_door_at(bot: &mut Bot, x: i32, z: i32, loc: u16, beyond: (i32, i32), what: &str) -> Result<(), ScriptError> {
