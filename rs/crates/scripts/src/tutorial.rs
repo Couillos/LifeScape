@@ -373,7 +373,9 @@ fn catch_shrimp(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
 
 fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<(), ScriptError> {
     let raw = obj(raw_name)?;
-    check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught for cooking")?;
+    if !has(bot, raw_name, 1) {
+        check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught for cooking")?;
+    }
     check(bot.position(), wait_inv(bot, raw_name, 1, 90)?, &format!("has {raw_name}"))?;
     // Tutorial fires burn out after 100-200 ticks: short cook rounds with a
     // relight between them, never one long hammering of a dead fire.
