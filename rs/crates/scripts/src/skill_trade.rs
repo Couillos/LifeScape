@@ -254,23 +254,43 @@ pub fn sell_for_target(
         return Ok(0);
     }
     let coins_before = pack_total(bot, coins);
-    let Some(first) = product_ids.iter().find(|id| pack_total(bot, **id) > 0).copied() else {
+    if !product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
         bot.close_modal()?;
         return Err(ScriptError::Usage(format!("products vanished after trade opened at {:?}", bot.position())));
     };
-    bot.inv_button(2, first, pack_slot(bot, first)?, side_com)?;
-    let target = bot.world.ticks + 50;
-    while bot.world.ticks < target && pack_total(bot, coins) <= coins_before {
-        bot.pump(5)?;
+    // Probe each product's first unit: a low-cost item sells for 0 coins at
+    // general-store rates (shop.rs2 sell_item moves the item but pays nothing
+    // under 1 gp, silently), so skip worthless stock instead of failing the
+    // whole sale on the first click.
+    let mut unit = 0u32;
+    let mut worthless: Vec<u16> = Vec::new();
+    let held: Vec<u16> = product_ids.iter().filter(|id| pack_total(bot, **id) > 0).copied().collect();
+    for id in held {
+        let Ok(slot) = pack_slot(bot, id) else {
+            continue;
+        };
+        bot.inv_button(2, id, slot, side_com)?;
+        let target = bot.world.ticks + 50;
+        while bot.world.ticks < target && pack_total(bot, coins) <= coins_before {
+            bot.pump(5)?;
+        }
+        unit = pack_total(bot, coins).saturating_sub(coins_before);
+        if unit > 0 {
+            break;
+        }
+        let name = (bot.tables.obj_name)(id).unwrap_or_else(|| format!("obj{id}"));
+        bot.log(&format!("{name} sells for 0, skipping it"));
+        worthless.push(id);
     }
-    let unit = pack_total(bot, coins).saturating_sub(coins_before);
     if unit == 0 {
         bot.close_modal()?;
         bot.pump(5)?;
     }
     let unit = require_trade_gain(unit, "coins", bot)?;
     while pack_total(bot, coins) < coins_before + target_coins {
-        let Some(next) = product_ids.iter().find(|id| pack_total(bot, **id) > 0).copied() else {
+        let Some(next) =
+            product_ids.iter().find(|id| !worthless.contains(id) && pack_total(bot, **id) > 0).copied()
+        else {
             break;
         };
         let need = coins_before + target_coins - pack_total(bot, coins);
