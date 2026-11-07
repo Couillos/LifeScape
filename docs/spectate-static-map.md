@@ -16,8 +16,11 @@ Décision produit : précalculer la map entière **une fois**, la servir en
 fichiers statiques immuables, le client ne fait que crop autour du joueur
 (position déjà reçue par WS à 5 Hz). Zéro requête image par seconde.
 
-Fil rouge : poids faible. Tous les chiffres ci-dessous sont mesurés depuis le
-pack (`/home/josh/dev/lostcity/engine/data/pack/.cache/maps-server.zip`,
+Contrainte : **parité visuelle exacte** avec le rendu actuel — mêmes pixels à
+l'écran que `/minimap.png?size=33` aujourd'hui. Le rendu actuel, c'est
+**4 px par tuile**, murs et sprites mapscene inclus (preuve §3). Tous les
+chiffres ci-dessous sont mesurés à cette parité depuis le pack
+(`/home/josh/dev/lostcity/engine/data/pack/.cache/maps-server.zip`,
 14,5 Mo, 483 carrés `m` + 483 `l`), pas d'intuition. Méthode reproductible
 au §8.
 
@@ -59,7 +62,8 @@ serveur `pack/server/flo.dat` ne contient que des zéros) :
   (dont 10 moyennes de textures : ids 1, 2, 3, 11, 15, 23, 25, 31, 35, 46) ;
 - blends moyennés 10×10 (`minimap.rs:232-273`) : chaque moyenne produit une
   entrée couleur quasi-distincte → **4 690 couleurs distinctes** au total
-  (sol + overlay + murs), dont 4 086 pour le seul L0 du continent ;
+  (sol + overlay + murs), dont ~4 000 pour le seul L0 du continent
+  (3 966 rendues, murs et sprites inclus) ;
 - sprites : 3 861 locs placés → 37 sprites mapscene utilisés, palette
   partagée de 32 entrées (`mapcache.rs:792-803`, index 0 = transparent),
   **31 index réellement référencés**.
@@ -68,50 +72,71 @@ serveur `pack/server/flo.dat` ne contient que des zéros) :
 Recommandation : PNG32 truecolor tel quel — le poids reste faible (§4), la
 quantification est un travail pour rien.
 
-## 3. Résolution : 1 px = 1 tuile suffit
+## 3. Résolution : le rendu actuel est 4 px/tuile, upscalé 4× — parité imposée
 
-Affichage actuel : `TILE = 16`, `R = 16` (`spectator.js:37-38`), canvas 560 px
-(`index.html:94`) → 33 tuiles sur 560 px ≈ **17 px écran par tuile**.
-L'image serveur actuelle fait 4 px/tuile (132 px, `minimap.rs:597`) déjà
-upscalée ~4× par le navigateur ; le CSS impose déjà
-`image-rendering: pixelated` (`index.html:48`).
+Preuves code, de bout en bout :
 
-À 17× d'upscale pixelisé, 4 px/tuile n'apporte rien de visible sur des aplats
-(aucun texte dans la map, les labels sont dessinés par-dessus par le canvas).
-Palier : **1 px/tuile partout**, pas d'intermédiaire (2 px/tuile doublerait
-le poids pour un gain nul à cet upscale).
+- servi : `border = (size * 4)` (`minimap.rs:598`), doc « 4 px per tile »
+  (`minimap.rs:581`) ; `size` vaut 33 par défaut (`web.rs:493`) → image
+  **132 × 132 px** ;
+- demandé : `size = R * 2 + 1 = 33` (`spectator.js:277`, `R = 16`,
+  `spectator.js:38`) ;
+- affiché : `mapSize = 33 * TILE = 528` px (`spectator.js:259-261`,
+  `TILE = 16`, `spectator.js:37`), `drawImage(mapImg, ..., 528, 528)`
+  (`spectator.js:306`) avec `imageSmoothingEnabled = false`
+  (`spectator.js:305`) → **upscale 4× net**, pas de lissage ;
+- contenu : le PNG inclut murs (`draw_wall`, `minimap.rs:611-626`) et
+  sprites mapscene tracés côté serveur (`plot_sprite`, `minimap.rs:542-579`,
+  palette partagée 32 entrées) — le client ne redessine ni murs ni bâtiments.
 
-## 4. Poids mesurés : ~784 Ko au total, une image par grappe et par niveau
+Donc parité = **4 px/tuile, murs + sprites inclus**, crop 132 × 132 px affiché
+528 × 528. Pas de 1 px/tuile : l'utilisateur n'a jamais demandé à changer le
+visuel, et à 4× d'upscale la différence 1 px → 4 px se voit (murs 1 px,
+sprites pixel-art). Le `image-rendering: pixelated` du CSS (`index.html:48`)
+reste tel quel.
 
-Rendu au sol exact (blend + overlay, murs et sprites exclus — quelques Ko,
-même jeu de couleurs) encodé PNG32 :
+## 4. Poids mesurés à parité : ~4,4 Mo au total, une image par grappe et par niveau
 
-| fichier (1 px/tuile) | dimensions | poids |
+Rendu exact à parité (sols + overlays avec masques de forme, murs 1 px,
+37 sprites mapscene tracés comme `plot_sprite`, niveaux supérieurs
+VIS_BELOW) encodé PNG32 compression zlib standard, filtre 0 :
+
+| fichier (4 px/tuile) | dimensions px | poids |
 |---|---|---|
-| continent L0 | 1600 × 1216 | 515 Ko |
-| z144–158 L0 | 1216 × 960 | 112 Ko |
-| z70–77 L0 | 1216 × 512 | 53 Ko |
-| continent L1 / z144 L1 | — | 23 / 29 Ko |
-| autres niveaux (L1–L3, îlots) | — | ≤ 10 Ko chacun |
-| **total 16 fichiers** | — | **~784 Ko** |
+| continent L0 | 6400 × 4864 | 2 594 Ko |
+| z144–158 L0 | 4864 × 3840 | 616 Ko |
+| z70–77 L0 | 4864 × 2048 | 259 Ko |
+| continent L1 / z144 L1 | — | 220 / 230 Ko |
+| autres niveaux (L1–L3, îlots) | — | 1–124 Ko chacun |
+| **total 16 fichiers** | — | **~4 477 Ko (4,37 Mo)** |
 
-À 4 px/tuile, le seul L0 pèse 1 734 Ko (continent 1 229 Ko) pour un rendu
-identique à l'écran → rejeté.
+Référence 1 px/tuile (mêmes contenus, sans murs/sprites) : 690 Ko — donnée
+pour mémoire seulement, le visuel n'est pas le même.
 
 Découpage tranché par les chiffres :
 
-- **une image par niveau monde entier : rejeté.** Bbox 1792 × 9088 px =
-  16 Mpx à décoder (~64 Mo RAM navigateur) pour 88 % de vide.
+- **une image par niveau monde entier : rejeté.** Bbox 1792 × 9088 tuiles à
+  4 px = 7 168 × 36 352 px = 260 Mpx à décoder (~1 Go RAM navigateur).
 - **tuiles 256 px : rejeté.** ~200 fichiers, ~200 requêtes au premier
-  chargement, logique de cache et de recollement côté client pour économiser
-  ~0 Ko (le PNG32 compresse déjà le vide à rien).
-- **retenu : 16 images (5 grappes × niveaux non vides), 1 px/tuile, PNG32**,
+  chargement, logique de recollement côté client, pour un total qui resterait
+  ~4,4 Mo (le PNG compresse déjà le vide à rien).
+- **retenu : 16 images (5 grappes × niveaux non vides), 4 px/tuile, PNG32**,
   servies immuables (nom avec hash du pack, `Cache-Control: public,
   max-age=31536000, immutable`, sur le modèle des sprites
-  `web.rs:507-514` qui ont déjà `max-age=86400`). Premier chargement ~784 Ko,
-  ensuite 0 octet (cache navigateur).
+  `web.rs:507-514` qui ont déjà `max-age=86400`). Premier chargement
+  ~4,4 Mo, ensuite 0 octet (cache navigateur).
 
-## 5. Précalcul : au démarrage du daemon, jamais à la demande
+4,37 Mo < 5 Mo : le seuil d'explosion n'est pas atteint, **aucune
+alternative dégradée n'est proposée** — la parité visuelle passe telle quelle.
+
+Point d'implémentation bloquant : le writer PNG actuel ne compresse pas
+(blocs deflate *stored*, `png.rs:51-72`). À parité non compressée, les 16
+fichiers feraient ~720 Mo (15 M tuiles × 16 px × 3 o). Le lot 1 doit donc
+inclure un writer deflate qui compresse vraiment (au minimum Huffman fixe,
+std only) : les 4,37 Mo ci-dessus supposent une compression zlib standard
+(niveau 6, filtre 0 — même layout que `encode_rgb`, `png.rs:100-109`).
+
+## 5. Précalcul : au démarrage du daemon, SKIP si à jour, jamais écrasé en aveugle
 
 - **Quand : démarrage du daemon** (pas au `cargo build`, pas au premier
   accès). Au build, le pack n'est pas versionné avec le binaire → stale
@@ -120,24 +145,31 @@ Découpage tranché par les chiffres :
   renderer actuel (`pack_dir`, `mapcache.rs:15-26`, `LIFESCAPE_ENGINE_DIR`
   sinon `../lostcity`), on compare le hash du zip à un fichier tampon et on
   régénère si différent.
-- **Où : `orchestration/static/map/`** (à côté des assets servis par
-  `asset()`, `web.rs:410-412`), ex. `map-<hash>/c44-l0.png`. Fichiers
-  servis tels quels, jamais régénérés hors changement de pack.
-- **Coût : une fois.** Référence : l'index loc monde entier prend ~1 s
-  (`minimap.rs:654`, commentaire de test) ; le précalcul complet (parse des
-  483 carrés ~3 s mesurés + blends + encodage PNG) est en dizaines de secondes
-  au pire, à mesurer et noter au premier run. Coût actuel par requête : ~15 ms
-  tiède derrière le verrou global, catastrophe en froid (81 s / 4 concurrents)
-  — supprimé dans tous les cas, la route `/minimap.png` (`web.rs:488-500`,
-  servie `no-store`, `web.rs:497`) est **supprimée**, pas mise en cache.
+- **SKIP : si le tampon égale le hash du zip actuel, on ne touche à rien**
+  (pas de re-parse, pas de réécriture — démarrage instantané).
+- **Où : `orchestration/static/map-<hash>/`** (dossier cache dédié, à côté
+  des assets servis par `asset()`, `web.rs:410-412`), ex.
+  `map-<hash>/c44-l0.png`, plus `map-<hash>.stamp`. Génération dans
+  `map-<hash>.tmp/` puis rename atomique ; **jamais d'écrasement en aveugle**
+  d'un dossier en cours de service. Après bascule, suppression des vieux
+  `map-*` (garder l'avant-dernier le temps d'un redémarrage, pas plus).
+- **Coût : une fois par changement de pack.** Référence : l'index loc monde
+  entier prend ~1 s (`minimap.rs:654`, commentaire de test) ; le précalcul
+  complet (parse des 483 carrés ~3 s mesurés + blends + encodage PNG) est en
+  dizaines de secondes au pire, à mesurer et noter au premier run. Coût
+  actuel par requête : ~15 ms tiède derrière le verrou global, catastrophe
+  en froid (81 s / 4 concurrents) — supprimé dans tous les cas, la route
+  `/minimap.png` (`web.rs:488-500`, servie `no-store`, `web.rs:497`) est
+  **supprimée**, pas mise en cache.
 
 ## 6. Client : crop local, flux restant, fallback
 
 - Crop : au `draw()`, remplacer le fetch `minimap.png?...` (`spectator.js:277`)
-  par `drawImage(img, sx, sy, 33, 33, ...)` depuis l'image statique du niveau
-  courant (origine = `pos - R`, mêmes maths que `originX/originZ`,
-  `spectator.js:256-257`). La position vient déjà de la WS à 5 Hz, aucun
-  nouveau flux. Le décalage de secours (`spectator.js:282-297`) et
+  par `drawImage(img, sx, sy, 132, 132, dx, dy, 528, 528)` depuis l'image
+  statique du niveau courant : `sx = (originX - X0) * 4`, `sy` idem
+  (origines en tuiles comme `originX/originZ`, `spectator.js:256-257`, × 4
+  px/tuile). La position vient déjà de la WS à 5 Hz, aucun nouveau flux. Le
+  décalage de secours (`spectator.js:282-297`) et
   `mapCache`/`mapPending` disparaissent avec les fetches.
 - Zoom/pan : il n'y en a pas aujourd'hui (R fixe) → on n'en ajoute pas.
 - Fallback : si l'image du niveau est absente (404) ou vide, **message texte
@@ -151,10 +183,13 @@ Découpage tranché par les chiffres :
 
 ## 7. Lots ordonnés (chacun testable + revertable)
 
-1. **Générateur + 16 PNG.** Offline (même passes que `minimap.rs:286-336`
-   + `draw_details`), écrit dans `orchestration/static/map-<hash>/`.
-   Test : dimensions et poids par fichier conformes au §4. Revert : supprimer
-   le dossier. Mesurable : temps de génération noté, total ≤ plafond §8.
+1. **Générateur + 16 PNG.** Offline (mêmes passes que `minimap.rs:286-336`
+   + `draw_details`, halo d'une tuile + marge sprites aux bords de grappes),
+   écrit dans `orchestration/static/map-<hash>.tmp/` puis rename.
+   Inclut le writer deflate compressant (le writer actuel `png.rs:51-72`
+   fait du stored : ~720 Mo sinon). Test : dimensions et poids par fichier
+   conformes au §4. Revert : supprimer le dossier. Mesurable : temps de
+   génération noté, total ≤ plafond §8.
 2. **Routeur statique + suppression `/minimap.png`.** Sert les PNG avec
    cache immuable ; la route `web.rs:488-500` et `shared_maps().png`
    disparaissent du chemin requête (le renderer reste pour le debug hors
@@ -175,15 +210,18 @@ crop F2P, changer le format WS ou la forme compacte des locs.
 
 ## 8. Critères d'acceptation (plafonds chiffrés)
 
-- **Poids total servi : ≤ 1 Mo** (mesuré : ~784 Ko ; marge pour les sprites
-  dessinés par-dessus et l'évolution du pack). Méthode : somme des
-  `Content-Length` des 16 PNG (ou `ls -l orchestration/static/map-*/`).
+- **Poids total servi : ≤ 5 Mo** (mesuré : 4,37 Mo à parité ; marge pour
+  l'évolution du pack et l'écart Huffman fixe vs zlib dynamique).
+  Méthode : somme des `Content-Length` des 16 PNG (ou
+  `ls -l orchestration/static/map-*/`). Seuil d'explosion non atteint :
+  aucune alternative dégradée requise.
 - **0 requête `/minimap.png` en 2 min de dashboard ouvert** avec un bot qui
   marche (la route n'existe plus → 404 si un vieux client la demande).
-- **Premier chargement carte : ≤ 1 Mo réseau**, puis 0 octet (304/immutable).
+- **Premier chargement carte : ≤ 5 Mo réseau**, puis 0 octet (304/immutable).
 - **Génération : temps noté au premier run**, une fois par changement de
   pack (pas de plafond strict, ordre de grandeur attendu : dizaines de
-  secondes).
+  secondes) ; **redémarrage sans changement de pack : SKIP** (0 s, tampon
+  hash égal, aucun fichier touché).
 
 Reproduction des chiffres : pack
 `/home/josh/dev/lostcity/engine/data/pack/` (zip `.cache/maps-server.zip`,
@@ -201,8 +239,11 @@ près, poids à ~1 % près).
 - **Pack qui change** : invalidation par hash du zip dans le nom de dossier
   (§5, lot 4). Un pack sans les carrés attendus → grappe absente → fallback
   texte, pas de carte partielle silencieuse.
-- **Mémoire navigateur** : plus grosse image 1600 × 1216 px ≈ 7,8 Mo
-  décodée ; total décodé ~8 Mo. Négligeable.
+- **Mémoire navigateur** : plus grosse image 6400 × 4864 px ≈ 124 Mo
+  décodée (31 Mpx, continent L0 à 4 px/tuile) ; total décodé ~140 Mo si tous
+  les niveaux du continent sont chargés. OK sur desktop (outil dev), à
+  revalider si le spectate part un jour sur mobile : le découpage par
+  grappes/niveaux permet déjà de ne charger que le niveau suivi.
 - **Vide = noir.** Les tuiles non peintes valent 0 (`minimap.rs:278`,
   `render_ground` ne peint rien quand la couleur est 0) : fond noir identique
   au client actuel, pas de transparence (le canvas peint déjà `#111`,
