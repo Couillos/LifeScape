@@ -463,6 +463,15 @@ pub struct Connection {
     recent_ops: Vec<String>,
 }
 
+/// Transient read condition: timeout, would-block, or a signal that
+/// interrupted the poll. All three mean "nothing yet", never a dead
+/// session: the caller keeps waiting on them (a bare EINTR used to kill
+/// the session and freeze spectate until the operator re-ran).
+fn read_wait(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind;
+    matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted)
+}
+
 impl Connection {
     pub fn new(timeout: Duration) -> Connection {
         Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new() }
@@ -650,7 +659,7 @@ impl Connection {
                 self.buffer.extend_from_slice(&chunk[..got]);
                 Ok(true)
             }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock || err.kind() == std::io::ErrorKind::Interrupted => Ok(false),
             Err(err) => Err(Error::from(err)),
         }
     }
@@ -728,7 +737,7 @@ impl Connection {
             match stream.read(&mut chunk) {
                 Ok(0) => return Err(Error::Io(format!("server closed the socket (sent_total={} last_op={} ops=[{}])", self.sent_total, self.last_op, self.ops_ring()))),
                 Ok(got) => out.extend_from_slice(&chunk[..got]),
-                Err(err) if err.kind() == std::io::ErrorKind::TimedOut || err.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(err) if read_wait(err.kind()) => {
                     let now = Instant::now();
                     // One forced keepalive per stalled read: enough to
                     // prove the session alive, never a burst. Pre-login
@@ -781,7 +790,7 @@ fn frame_packet(op_id: u8, size: i16, payload: &[u8], shift: i32) -> Result<Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::{Big, base64_decode, crc32, frame_packet, Connection};
+    use super::{Big, base64_decode, crc32, frame_packet, read_wait, Connection};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -814,6 +823,21 @@ mod tests {
         assert!(format!("{err}").contains("cannot connect"), "typed Io, got: {err}");
         assert!(start.elapsed() < Duration::from_secs(5), "dial bounded");
         assert!(!conn.is_open(), "failed dial leaves no socket");
+    }
+
+    /// A signal mid-poll (EINTR) waits like a timeout, never kills the
+    /// session: real deaths (refused, reset, closed) still fail at once.
+    #[test]
+    fn interrupted_read_waits_does_not_kill() {
+        use std::io::ErrorKind;
+        assert!(read_wait(ErrorKind::TimedOut));
+        assert!(read_wait(ErrorKind::WouldBlock));
+        assert!(read_wait(ErrorKind::Interrupted));
+        assert!(read_wait(std::io::Error::from_raw_os_error(4).kind()));
+        assert!(!read_wait(ErrorKind::ConnectionRefused));
+        assert!(!read_wait(ErrorKind::ConnectionReset));
+        assert!(!read_wait(ErrorKind::BrokenPipe));
+        assert!(!read_wait(ErrorKind::UnexpectedEof));
     }
 
     /// Framing puts exactly the documented bytes on the wire: shifted
