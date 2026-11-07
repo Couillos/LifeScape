@@ -7,7 +7,7 @@ aux workers live ni aux garanties (plan pur, déterministe, `plan.rs:242`).
 
 ### 1.1 Où part le CPU : un `plan()` = jusqu'à 4 Dijkstra + 4 `prepare_edges`
 
-`plan()` (`rs/crates/nav/src/plan.rs:255-357`) enchaîne jusqu'à 4 recherches Dijkstra
+`plan()` (`rs/crates/nav/src/plan.rs:255-364`) enchaîne jusqu'à 4 recherches Dijkstra
 complètes : A (requirements levés), B (péages levés, si `!allow_paid`), C (bornes F2P
 levées, si `f2p_only`), D (filtre complet, pour le plus proche atteignable). Chaque
 recherche est bornée par `MAX_VISITS = 500_000` (`plan.rs:57`) et appelle
@@ -15,7 +15,7 @@ recherche est bornée par `MAX_VISITS = 500_000` (`plan.rs:57`) et appelle
 
 | Poste | Chiffre | Source |
 |---|---|---|
-| Visites max par `plan()` | 4 × 500 k = 2 M | `plan.rs:57,255-357` |
+| Visites max par `plan()` | 4 × 500 k = 2 M | `plan.rs:57,255-364` |
 | Coût par visite | ~2 µs | rapport parent (mesures `route --release`) |
 | NoRoute exhaustif (pire cas) | ~3,5 s | rapport parent ; corroboré : `chateau_scell` = 3669 ms release (`docs/decisions.md:13`) |
 | Plans réussis (budget golden) | < 300 ms, max observé 140 ms | `rs/crates/nav/tests/golden.rs:173-175`, `docs/decisions.md:13` |
@@ -30,9 +30,9 @@ entrées) + `BinaryHeap` — dizaines de Mo alloués puis jetés, 4× par `plan(
 ### 1.2 Redondance intra-worker : chaque plan est recalculé de zéro
 
 - Aucun cache, aucune mémoïsation dans `lifescape-nav` (grep `cache|memo|LRU` : rien).
-- `travel_to` planifie, puis **replanifie** une fois à l'échec (`rs/crates/sdk/src/client/travel.rs:180-236`,
-  replan `travel.rs:212`), et `debug_walk` replanifie pour le diagnostic
-  (`rs/crates/sdk/src/client/movement.rs:236`). Chaque appel = `plan()` complet.
+- `travel_to` planifie, puis **replanifie** une fois à l'échec (`rs/crates/sdk/src/client/travel.rs:180-252`,
+  replan `travel.rs:237`), et `debug_walk` refait un plan diagnostique (pas un replan : même
+  moteur, autres fins, `rs/crates/sdk/src/client/movement.rs:236`). Chaque appel = `plan()` complet.
 - `Search` (`plan.rs:403-413`) reconstruit ses 3 `HashMap` (`base_flags`, `open_flags`,
   `doors`) à chaque Dijkstra ; `world.get()` prend le verrou **écriture** du monde
   à chaque tuile (`rs/crates/nav/src/static_world.rs:73-75`).
@@ -46,7 +46,7 @@ entrées) + `BinaryHeap` — dizaines de Mo alloués puis jetés, 4× par `plan(
 - Mesuré (lecture seule, `ps`, 2026-11-07) : daemon 3190943 RSS 127 Mo (VmHWM 127 Mo),
   session `t01` 3222657 RSS **185 Mo**, session `t05` 3318133 RSS **55 Mo**
   (peinture paresseuse des carrés : le monde grossit avec les déplacements).
-- `plan()` est pure et déterministe (`plan.rs:228` : « mêmes entrées, même plan, octet
+- `plan()` est pure et déterministe (`plan.rs:242` : « mêmes entrées, même plan, octet
   pour octet ») : deux bots au même endroit avec les mêmes options refont **le même
   Dijkstra au bit près**, chacun dans son process.
 
@@ -81,7 +81,7 @@ dynamiques (paramètre, pas topologie), 1 agent par requête.
 |---|---|---|---|---|
 | **A. Cache LRU local au worker (TRANSITOIRE, plus la cible)** | ~50 % intra-worker (§1.4), 0 inter-bots | < 5 Mo/worker mais N× en RAM | < 100 lignes, 1 fichier | Remplacé par le cache global §5.3 ; ne survit qu'en lot transitoire revertable (§5.5). Clé complète exigée dans tous les cas (§5.8) |
 | **B. `prepare_edges()` 1× par `plan()`** (au lieu de 4×) | ~3 × 90 ms économisés à froid par plan multi-recherche | 0 | ~20 lignes | Les rides dépendent de `ignore_requires/allow_paid/ignore_f2p` : 2 variantes max (A/D), pas 4 |
-| **C. Bidirectionnel (déjà envisagé)** | ~2× en espace ouvert, **~1× dans donjons/goulots** (les deux fronts doivent passer les mêmes portes) | 2× structures de visite | Moyenne : règle d'arrêt `topf+topr ≥ µ` subtile avec rides asymétriques | Portes orientées (`side_ok`, `plan.rs:615`) et rides non réversibles : front arrière faux ; cf. vPathfinder « Bottlenecks » |
+| **C. Bidirectionnel (déjà envisagé)** | ~2× en espace ouvert, **~1× dans donjons/goulots** (les deux fronts doivent passer les mêmes portes) | 2× structures de visite | Moyenne : règle d'arrêt `topf+topr ≥ µ` subtile avec rides asymétriques | Portes orientées (`side_ok`, `plan.rs:640`) et rides non réversibles : front arrière faux ; cf. vPathfinder « Bottlenecks » |
 | **D. Graphe grossier portails** (transitions + portes = arêtes, Dijkstra local seul) | ~10× sur longues distances (HPA* : jusqu'à 10×, chemins à 1 % de l'optimum — Botea et al. 2004) | Graphe abstrait (~367 rides + portes, ko) | Élevée : extraction, précalcul intra-cluster, lissage | Portes dynamiques = repondération d'arêtes (OK) ; donjons +6400 = le cas favorable (connectivité contrainte) |
 | **E. Flow fields** | Négatif pour 1 agent | Champ = N tuiles (≈ To à l'échelle monde) | Moyenne | **À écarter** : 1 champ par destination (SupCom2, Godot docs) ; rentable à N agents / 1 but (RTS), pas 1 agent / N buts |
 | **F. Service central de plans (RETENU — décision produit, §5)** | CPU : ~50-60 % de Dijkstra évités via cache GLOBAL (hubs partagés, §5.8) ; RAM : N mondes → 1 monde | 1 monde chaud (~200 Mo max, ré-estimé d'après §1.3) + cache global ~1024 plans (quelques Mo, §5.3) | Moyen : threads std + IPC JSON maison (pattern `send_worker` existant, `daemon.rs:576-597`) ; std only, pas de tokio/serde | IPC estimé < 2 ms vs Dijkstra médian ~70 ms (< 3 %, §5.1) ; SPOF → fallback sync loggé (§5.2) ; invalidation unique mais globale (§5.6) |
@@ -248,6 +248,8 @@ cancel(ticket)                              // unload/stop → abandon propagé
 - Fallback synchrone : service injoignable, file pleine, ou thread tombé →
   `plan()` direct sur le thread script + une ligne de log (`nav plan
   sync-fallback`, même format que `nav timing`, `travel.rs:214-217`).
+  Une seule tentative service par `submit` : le fallback ne resubmit jamais,
+  donc pas de boucle fallback-en-panne — il calcule local, logge, compte.
   Jamais de panne franche : dégrade, logge, compte (compteur `sync-fallback`
   global, §5.3), le watchdog (`daemon.rs:143-213`, seuil 45 s
   `WATCHDOG_STALE_SECS`, `daemon.rs:27`) reste le filet existant.
@@ -273,8 +275,11 @@ gamedata. Rechargement en **double-buffering** : le nouveau `Snapshot` se
 construit à côté (index map rapide, peinture paresseuse — même coût qu'un
 `open` session, `session.rs:696-747`), puis swap atomique (`Arc<Snapshot>`
 sous `Mutex` tenu le temps du swap seul, jamais pendant un Dijkstra). Les
-requêtes en vol gardent l'ancien `Arc` et finissent undisturbed ; la version
-bumpée rend les anciennes entrées cache illisibles (pas de flush aveugle,
+requêtes en vol gardent l'ancien `Arc` et finissent undisturbed, **mais leur
+réponse porte l'ancienne version : le worker la rejette et resubmit une fois
+sur le nouveau `Snapshot` (puis fallback sync si le resubmit échoue — jamais
+de boucle)** ; la version
+bumpée rend en plus les anciennes entrées cache illisibles (pas de flush aveugle,
 éviction LRU naturelle). **Un seul endroit à vider**, pas N.
 
 Cache : deux briques, comme avant, mais GLOBALES :
@@ -285,7 +290,8 @@ Cache : deux briques, comme avant, mais GLOBALES :
   tranche 512/1024/2048) ; `Plan` petit, `Clone` existant
   (`plan.rs:160-161`). Cible : convertir les 63,5 % de répétitions (§1.4,
   borne haute — le taux réel avec clé complète est ≤, §1.4) + les hits
-  inter-bots sur hubs (§5.8) en Dijkstra évités.
+  inter-bots sur hubs (§5.8) en Dijkstra évités. Pire cas borné : 1024 × p99
+  taille reply (soit ~16 Mo si p99 = 16 Ko) — l'éviction LRU garde ce plafond.
 - **L2 — `prepare_edges` partagé** (`plan.rs:773-821`, ~90 ms à froid rejoué
   jusqu'à 4×/plan, §1.1) : calculé 1× par `(version, ignore_requires,
   allow_paid)` — 2 variantes utiles max (A/D, §2 ligne B), pas 4 — et
@@ -357,7 +363,7 @@ Le thread-par-worker n'est PAS un lot : au plus une ÉTAPE TRANSITOIRE
 |---|---|---|
 | 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:173-175`) ; revert = 1 fonction |
 | 2. Service minimal (sans cache) | monde+tables 1× au daemon, 1-2 threads std, IPC JSON newline (pattern `send_worker`, `daemon.rs:576-597`), `submit/poll/cancel`, fallback sync loggé, annulation sur `stop_requested`/`UNLOAD_TICKS` | p99 overhead IPC ≤ 5 ms mesuré (seuil proposé) sur legs golden (chrono `nav timing`, `travel.rs:214-217`) ; aucun reap à 100 ticks sur legs > 1 s ; fallback loggé+compté ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8 — la clé est posée dès ce lot même sans L1) ; revert = rebrancher `plan_travel` sync |
-| 3. Cache global + version | L1 global 1024 + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; test : bump `nav_overrides.json` → 0 hit périmé servi (unitaire, pas de live) ; RAM service ≤ 1 monde chaud + cache (borne §5.1) ; revert = version constante + L1 off |
+| 3. Cache global + version | L1 global 1024 + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; test : bump `nav_overrides.json` → 0 plan périmé servi (ni hit cache ni vol en cours, §5.3 rejet+resubmit) ; RAM service ≤ 1 monde chaud + cache (borne §5.1) ; revert = version constante + L1 off |
 | 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus, `sync-fallback` | décision chiffrée : garder, régler (threads 1/2/4, L1 512/1024/2048, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
 | 5. (conditionnel) Graphe grossier portails | §2 ligne D, 1 niveau | seulement si le lot 4 montre un hit L1 plafonné par la distance (pas par les options) ; sinon : ne pas faire |
 
@@ -369,7 +375,7 @@ Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
 | Risque | Gravité | Mitigation (déjà conçue ci-dessus) |
 |---|---|---|
 | Service down (SPOF) | Moyenne (dégradation, pas panne) | fallback sync local loggé + compté (§5.2) ; le worker ne bloque jamais (file bornée → `Refuse` → sync) ; watchdog 45 s (`daemon.rs:27`) filet existant ; lot 2 sans cache prouve le fallback avant tout cache |
-| Plan périmé servi (invalidation ratée GLOBALE — pire que par worker : 1 flush raté empoisonne TOUS les bots) | Haute | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; **un seul** point de reload (`reload-nav` opérateur + swap atomique, §5.3) au lieu de N ; version servie loggée (écart détectable) ; test de bump (§5.5 lot 3) |
+| Plan périmé servi (invalidation ratée GLOBALE — pire que par worker : 1 flush raté empoisonne TOUS les bots) | Haute | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; **un seul** point de reload (`reload-nav` opérateur + swap atomique, §5.3) au lieu de N ; réponse à version périmée rejetée + resubmit ×1 (vol en cours, §5.3) ; version servie loggée (écart détectable) ; test de bump (§5.5 lot 3) |
 | Plan d'un autre bot servi (fuite inter-bots : requires/autorisations d'autrui) | Haute (péage/quête franchi sans droit, replan banni resservi) | **clé par construction** : `allow_paid` + `satisfied` + `excluded_edges` par bot dans la clé L1 (§5.8, preuve §5.3), jamais normalisés ni ignorés ; test d'isolement (§5.5 lot 2) |
 | Thundering herd au cold start (N bots × cache vide) | Moyenne (pic CPU = N Dijkstra d'un coup sur le service) | file globale 16 → `Refuse` → fallback sync étalé (§5.2) : le pic se répartit entre service et workers ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante) ; pré-peinture des carrés hubs au démarrage (§5.4, §5.8) ; préchauffage optionnel (rejouer les top paires §1.4 au boot — proposé, non tranché) |
 | Taille d'un `Plan` sérialisé sur le fil | Faible (estimé) | pire golden 264 tuiles (`plan.rs:63-64`) ≈ quelques Ko JSON (ré-estimé) ; métrique taille reply au lot 4, alerte si p99 > 16 Ko (seuil proposé) ; au-delà : compacter (tuiles en delta) ou refuser le cache des monstres — non tranché, mesurer d'abord |
@@ -426,7 +432,7 @@ Ce qu'on NE fait toujours PAS :
 
 Contexte : N workers aux objectifs et paths différents (travel pur, bank
 trips pêche/mine/woodcutting, chasse gobelins, tutos, quêtes — cf.
-`skill_common.rs:175` `nearest_bank`, `skill_woodcutting_spot.rs:17-19`
+`skill_common.rs:175` `nearest_bank`, `skill_woodcutting_spot.rs:16-24`
 yew 175 xp vs willow 67,5, `skill_woodcutting.rs:183-199` chasse gobelins à
 l'est de Lumbridge, `tutorial.rs`, `lib.rs:169`), tous F2P. Ce § ne change
 ni l'architecture (§5.1 : service central) ni les lots (§5.5) : il fige le
