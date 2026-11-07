@@ -45,3 +45,22 @@ fn yielding_true_matches_plan() {
     let yielded = plan::plan_yielding(&world, &tables, from, dest, &options, &mut || true).expect("yield-true plans too");
     assert_eq!(format!("{plain:?}"), format!("{yielded:?}"), "yield-true is byte-identical to plan()");
 }
+
+/// The edge setup yields too: a trivial leg whose loop alone never
+/// reaches a yield point (few visits) still aborts on a refused yield,
+/// instead of burning the whole setup deaf to the operator stop.
+#[test]
+fn yielding_false_aborts_during_setup() {
+    let (world, tables) = setup();
+    let from = Tile { x: 3099, z: 3492, level: 0 };
+    let dest = Tile { x: 3098, z: 3493, level: 0 };
+    let mut calls = 0;
+    let failed =
+        plan::plan_yielding(&world, &tables, from, dest, &NavOptions::default(), &mut || {
+            calls += 1;
+            false
+        });
+    let denied = failed.expect_err("a refused yield must abort in setup, not plan");
+    assert_eq!(denied.reason, NoRouteReason::Aborted, "setup abort maps to Aborted");
+    assert!(calls >= 1, "setup must hit a yield point, got {calls}");
+}

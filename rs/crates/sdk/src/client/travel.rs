@@ -114,9 +114,9 @@ impl Bot {
 
     /// Yield point for long plans: the plan runs on the only socket
     /// reader, so each yield emits the keepalive the server needs (it
-    /// reaps after 60 s without any response). The session stop hook
-    /// aborts the same way. False stops every pending search; the caller
-    /// maps it to `Interrupted`, never a dossier.
+    /// reaps after ~6 s of silence: 100 ticks at 60 ms). The session stop
+    /// hook aborts the same way. False stops every pending search; the
+    /// caller maps it to `Interrupted`, never a dossier.
     fn plan_yield(&mut self) -> bool {
         if self.keepalive_if_due().is_err() {
             return false;
@@ -885,6 +885,10 @@ mod tests {
     #[test]
     fn short_plan_stays_offline() {
         let mut bot = offline_bot(3228, 3214);
+        // No socket: pretend a keepalive just went out, so the setup
+        // yield finds nothing due and the pure plan runs offline.
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
         // Pure planning, no yield point reached: no socket, no keepalive, Ok.
         let (_, _, _, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("short plan stays offline");
         assert!(!plan.segments.is_empty(), "the door route has segments");

@@ -64,6 +64,10 @@ const MAX_VISITS: usize = 500_000;
 /// below (worst golden reachable: 264 tiles in ~1.1 s debug, live legs
 /// plan in ~0.2 s); past the budget each pending search stops at its
 /// current best, the same Disconnected answer exhaustion would give.
+/// Edge setup (`prepare_edges`) is finite — one pass over the transition
+/// table, it always terminates — so it carries no deadline, only a yield:
+/// a slow setup still proves the session alive instead of starving the
+/// socket into a server reap, and still honors the operator stop.
 const PLAN_BUDGET: Duration = Duration::from_millis(1500);
 
 /// One map tile on one level.
@@ -537,7 +541,9 @@ fn dijkstra(
 
     };
     let dest_walkable = tile_walkable(search.open(dest));
-    let (rides, customs) = prepare_edges(&mut search);
+    let Some((rides, customs)) = prepare_edges(&mut search, yield_) else {
+        return Outcome::Aborted;
+    };
     if std::env::var("PLAN_DEBUG").is_ok() {
         eprintln!("plan setup {:?} rides={}", setup_start.elapsed(), rides.len());
     }
@@ -757,10 +763,19 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Til
 }
 
 /// Stands per ride: walkable tiles around the loc footprint where the op
-/// is valid per `reach.rs` for the footprint, shape and angle.
-fn prepare_edges(search: &mut Search) -> (U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>) {
+/// is valid per `reach.rs` for the footprint, shape and angle. Yields
+/// every 16 rows: the setup is finite (one pass over the table) but slow
+/// (~0.7 s debug for 367 rows), and with no yield point a slow setup
+/// starves the only socket reader — zero keepalive until the loop, so
+/// the server reaps the session mid-plan. None is the operator stop
+/// (clean Aborted, never a partial edge set: partial edges would plan
+/// through missing rides, silently).
+fn prepare_edges(search: &mut Search, yield_: &mut dyn FnMut() -> bool) -> Option<(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>)> {
     let mut rides: U64Map<Vec<RideEdge>> = U64Map::default();
     for (index, row) in search.tables.transitions.iter().enumerate() {
+        if index % 16 == 0 && !yield_() {
+            return None;
+        }
         if row.disabled {
             continue;
         }
@@ -802,7 +817,7 @@ fn prepare_edges(search: &mut Search) -> (U64Map<Vec<RideEdge>>, U64Map<Vec<Cust
         let cost = TRANSITION_COST + UNVERIFIED_PENALTY;
         customs.entry(edge.stand.key()).or_default().push(CustomPrepared { index, dest: edge.to, cost });
     }
-    (rides, customs)
+    Some((rides, customs))
 }
 
 fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {

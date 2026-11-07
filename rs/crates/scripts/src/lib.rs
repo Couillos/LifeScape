@@ -64,9 +64,9 @@ impl From<Error> for ScriptError {
 }
 
 /// Real planner context for offline tests: static world plus tables from
-/// the repo dumps (same layout as the nav golden tests). Offline walks
-/// then plan for real and fail at the dead socket, like live walks with
-/// no connection would.
+/// the repo dumps (same layout as the nav golden tests). The keepalive is
+/// primed as just-sent so plans run pure and fail at the dead socket,
+/// like live walks with no connection would.
 #[cfg(test)]
 pub(crate) fn wire_nav(bot: &mut Bot) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
@@ -82,6 +82,8 @@ pub(crate) fn wire_nav(bot: &mut Bot) {
     world.set_sky_floors(tables.sky_floors.clone());
     bot.nav_world = Some(world);
     bot.nav_tables = Some(std::sync::Arc::new(tables));
+    bot.last_keepalive = Some(std::time::Instant::now());
+    bot.last_send_tick = bot.world.ticks;
 }
 
 // -- real scripts --------------------------------------------------------

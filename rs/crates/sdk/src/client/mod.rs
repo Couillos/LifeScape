@@ -59,10 +59,12 @@ pub struct Bot {
     port: u16,
     pack_dir: String,
     key_path: String,
-    last_send_tick: u64,
+    /// Last movement tick: public so offline tests can prime it (a bot
+    /// that just sent needs no keepalive to plan purely).
+    pub last_send_tick: u64,
     /// Last keepalive wall time: intake lag must not stretch the silence
     /// the server sees past its 100-tick timeout.
-    last_keepalive: Option<Instant>,
+    pub last_keepalive: Option<Instant>,
     /// Current leg route, published for spectators.
     pub route: Vec<(i32, i32)>,
     pub route_target: Option<(i32, i32)>,

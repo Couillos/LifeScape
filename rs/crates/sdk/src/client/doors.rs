@@ -660,6 +660,10 @@ mod tests {
         let (world, tables) = crate::client::travel::test_nav_context();
         bot.nav_world = Some(world);
         bot.nav_tables = Some(tables);
+        // No socket: keepalive primed as just-sent so the plan runs pure
+        // and the first real send fails typed.
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
         let err = bot.walk_to(3200, 3227, 0, 600).unwrap_err();
         let message = format!("{err}");
         assert!(message.contains("not logged in"), "typed conn error, got: {message}");
