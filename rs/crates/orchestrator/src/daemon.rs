@@ -850,10 +850,19 @@ impl Orchestrator {
             "logs" => {
                 let (_merged, _partial, log_path) = paths::user_paths(account);
                 let lines = request.get("lines").as_i64().unwrap_or(40).max(0) as usize;
-                let tail = tail_lines(&log_path, lines);
+                // Spectate shows the game, not the wire: over-fetch the tail
+                // (a spammy window is mostly pktlog) then drop the packet
+                // lines. The file keeps everything for debug.
+                let fetch = lines.saturating_mul(8).max(lines).min(2000);
+                let tail = tail_lines(&log_path, fetch);
+                let mut game: Vec<String> =
+                    tail.into_iter().filter(|line| !is_pktlog_line(line)).collect();
+                if game.len() > lines {
+                    game.drain(..game.len() - lines);
+                }
                 return object(vec![
                     ("ok", Value::Bool(true)),
-                    ("lines", Value::Arr(tail.iter().map(|line| str_value(line)).collect())),
+                    ("lines", Value::Arr(game.iter().map(|line| str_value(line)).collect())),
                 ]);
             }
             "shutdown" => {
@@ -909,6 +918,13 @@ fn live_binary(exe: &std::path::Path) -> Option<std::path::PathBuf> {
     candidate.is_file().then(|| candidate)
 }
 
+/// Packet-trace line from `connection.rs` pktlog (`C>S ...` / `S>C ...`,
+/// stderr, off unless the file flag or env enables it). Spectate and
+/// `logs` drop these; the session log file keeps them for debug.
+pub(crate) fn is_pktlog_line(line: &str) -> bool {
+    line.starts_with("C>S ") || line.starts_with("S>C ")
+}
+
 /// Last lines of a (possibly huge) log without reading it whole.
 fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
     const WINDOW: u64 = 131072;
@@ -946,7 +962,7 @@ fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{live_binary, watchdog_due};
+    use super::{is_pktlog_line, live_binary, watchdog_due};
 
     #[test]
     fn watchdog_fires_only_on_stale_heartbeat() {
@@ -968,5 +984,18 @@ mod tests {
         assert_eq!(live_binary(&deleted), Some(real.clone()));
         assert_eq!(live_binary(&dir.join("absent")), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn spectate_drops_pktlog_keeps_game() {
+        assert!(is_pktlog_line("C>S OPNPC2 id=233 len=2 head=0316 w=1.0 pid=1"));
+        assert!(is_pktlog_line("S>C NPC_INFO op=197 len=12 head=1b29 w=1.0 pid=1"));
+        assert!(is_pktlog_line("C>S NO_TIMEOUT id=0 len=0 head= w=1.0 pid=1"));
+        assert!(!is_pktlog_line("act [t=4264 Lumbridge] op_npc2 goblin slot=790"));
+        assert!(!is_pktlog_line("msg [t=3818 Lumbridge] I can't reach that!"));
+        assert!(!is_pktlog_line("=== session run t01 woodcut ==="));
+        assert!(!is_pktlog_line(""));
+        // A line merely mentioning the marker mid-text is game content.
+        assert!(!is_pktlog_line("say C>S hello"));
     }
 }
