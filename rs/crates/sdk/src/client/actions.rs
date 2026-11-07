@@ -480,6 +480,7 @@ impl Bot {
     /// the engine ignored the click (wrong side of a counter); only send
     /// errors and missing tables propagate.
     fn click_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
+        let seen = self.world.messages.len();
         self.op_loc(2, x, z, loc_id)?;
         let com = (self.tables.com_id)("bank_main:inv")
             .ok_or_else(|| Error::State("bank_main:inv missing from component table".to_string()))?;
@@ -489,8 +490,20 @@ impl Bot {
             if self.world.inv.contains_key(&com) {
                 return Ok(true);
             }
+            // The engine answers a wrong-side click with "I can't reach
+            // that!" (Player.ts) and never opens: stop burning the timeout.
+            if Self::bank_click_refused(&self.world.messages, seen) {
+                return Ok(false);
+            }
         }
         Ok(false)
+    }
+
+    /// True when a fresh engine message refuses the booth click ("I can't
+    /// reach that!"): the interface will never open, fail fast instead of
+    /// waiting out the timeout.
+    fn bank_click_refused(messages: &[String], seen: usize) -> bool {
+        messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("can't reach"))
     }
 
     /// Withdraw at least `count`, using the 10/5/1 buttons (all for coins).
@@ -602,5 +615,21 @@ impl Bot {
         let mut body = Writer::new();
         body.u64(to_base37(name));
         self.send_named("FRIENDLIST_DEL", &body.bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Refusal is scoped to fresh messages: earlier traffic never fails
+    /// a new click, unrelated chatter never matches.
+    #[test]
+    fn bank_click_refused_only_matches_fresh_refusal() {
+        let messages = vec!["Welcome.".to_string(), "I can't reach that!".to_string()];
+        assert!(!Bot::bank_click_refused(&messages, 2), "nothing fresh");
+        assert!(Bot::bank_click_refused(&messages, 1), "fresh refusal fails fast");
+        let other = vec!["A bank booth.".to_string()];
+        assert!(!Bot::bank_click_refused(&other, 0), "unrelated text passes");
     }
 }
