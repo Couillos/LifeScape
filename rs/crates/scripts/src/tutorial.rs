@@ -172,7 +172,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
                 bot.log(&format!("ok {door_name}"));
                 return Ok(());
             }
-            if (bot.world.x, bot.world.z) != (tile_x, tile_z) && bot.walk_to(tile_x, tile_z, bot.world.level, 1000).is_err() {
+            if !step_onto(bot, tile_x, tile_z, 1000) {
                 continue;
             }
             bot.op_loc(1, x, z, loc)?;
@@ -766,15 +766,23 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
 }
 
 /// Stand on an orthogonally adjacent tile: ladders and doors refuse
-/// diagonal clicks.
+/// diagonal clicks. Arrival is verified: the planner reports Ok without
+/// moving when its mesh refuses the tile.
+fn step_onto(bot: &mut Bot, tile_x: i32, tile_z: i32, timeout: u64) -> bool {
+    if (bot.world.x, bot.world.z) == (tile_x, tile_z) {
+        return true;
+    }
+    if bot.walk_to(tile_x, tile_z, bot.world.level, timeout).is_err() {
+        return false;
+    }
+    (bot.world.x, bot.world.z) == (tile_x, tile_z)
+}
+
 fn stand_orthogonal(bot: &mut Bot, x: i32, z: i32) -> Result<(), ScriptError> {
     let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
     tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
     for (tile_x, tile_z) in tiles {
-        if (bot.world.x, bot.world.z) == (tile_x, tile_z) {
-            return Ok(());
-        }
-        if bot.walk_to(tile_x, tile_z, bot.world.level, 1500).is_ok() {
+        if step_onto(bot, tile_x, tile_z, 1500) {
             return Ok(());
         }
     }
@@ -794,7 +802,7 @@ fn pass_door_at(bot: &mut Bot, x: i32, z: i32, loc: u16, beyond: (i32, i32), wha
             if through(bot) {
                 return Ok(());
             }
-            if (bot.world.x, bot.world.z) != (tile_x, tile_z) && bot.walk_to(tile_x, tile_z, bot.world.level, 1000).is_err() {
+            if !step_onto(bot, tile_x, tile_z, 1000) {
                 continue;
             }
             bot.op_loc(1, x, z, loc)?;
