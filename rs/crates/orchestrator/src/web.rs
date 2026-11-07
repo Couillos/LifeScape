@@ -1,14 +1,17 @@
 //! Web view over the orchestrator: dashboard and HTTP/WS API.
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
-//! /minimap.png /mapscene/<sprite>.png /api/status /api/state/<account>
-//! /api/items/history /api/scripts /api/accounts /api/logs/<account> +
+//! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
+//! /api/map /api/status /api/state/<account> /api/items/history
+//! /api/scripts /api/accounts /api/logs/<account> +
 //! POST /api/open|run|unload|pause|resume|close + /ws pushing every 0.2 s.
 //! Static files are re-read from orchestration/static/ on every request.
 //!
-//! Ground, walls and mapscene sprites come from the packed game data via
-//! mapcache/minimap (same passes as the client), so /minimap.png renders
-//! the real window and /mapscene/<sprite>.png serves the real sprite.
+//! The spectator map is precomputed once at daemon startup (mapbuild: one
+//! PNG per painted cluster per level, 4 px per tile) and served immutable;
+//! the client crops around the player, so the dashboard issues zero map
+//! image requests. Ground, walls and mapscene sprites come from the packed
+//! game data via mapcache/minimap (same passes as the client).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -411,6 +414,27 @@ fn asset(name: &str) -> std::io::Result<Vec<u8>> {
     std::fs::read(paths::static_dir().join(name))
 }
 
+/// One precomputed map file: (dir, file) when the path is exactly
+/// `map-<16 hex>/<name>.png|manifest.json`, nothing otherwise (no
+/// traversal: parts are already split on '/', ".." never matches).
+fn map_asset(parts: &[&str]) -> Option<(String, String)> {
+    if parts.len() != 2 {
+        return None;
+    }
+    let (dir, file) = (parts[0], parts[1]);
+    if dir.len() != 20 || !dir.starts_with("map-") || !dir[4..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let ok = file == "manifest.json"
+        || (file.ends_with(".png")
+            && file.len() <= 64
+            && file.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    if !ok {
+        return None;
+    }
+    Some((dir.to_string(), file.to_string()))
+}
+
 fn parse_query(query: &str) -> HashMap<String, String> {
     let mut params = HashMap::new();
     for pair in query.split('&') {
@@ -485,17 +509,13 @@ fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Response {
                 body: asset("items.js").map_err(|error| error.to_string())?,
             });
         }
-        if parts == ["minimap.png"] {
-            let params = parse_query(query);
-            let level = params.get("level").and_then(|raw| raw.parse::<i32>().ok()).unwrap_or(0).clamp(0, 3);
-            let x = params.get("x").and_then(|raw| raw.parse::<i32>().ok()).unwrap_or(0);
-            let z = params.get("z").and_then(|raw| raw.parse::<i32>().ok()).unwrap_or(0);
-            let size = params.get("size").and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(33).clamp(1, 65);
+        if let Some((dir, file)) = map_asset(&parts) {
+            let body = std::fs::read(paths::static_dir().join(&dir).join(&file)).map_err(|error| error.to_string())?;
             return Ok(Response {
                 status: 200,
-                content_type: "image/png",
-                cache: "no-store",
-                body: shared_maps().png(level, x, z, size),
+                content_type: if file.ends_with(".json") { "application/json" } else { "image/png" },
+                cache: "public, max-age=31536000, immutable",
+                body,
             });
         }
         if parts.len() == 2 && parts[0] == "mapscene" && parts[1].ends_with(".png") {
@@ -515,6 +535,15 @@ fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Response {
         }
         if parts == ["api", "status"] {
             return Ok(ok_json(dispatch(object(vec![("cmd", str_value("status"))]))));
+        }
+        if parts == ["api", "map"] {
+            let pointer = std::fs::read_to_string(paths::static_dir().join("map-current.json")).map_err(|error| error.to_string())?;
+            let parsed = json::parse(&pointer).map_err(|error| error.to_string())?;
+            return Ok(ok_json(object(vec![
+                ("ok", Value::Bool(true)),
+                ("dir", parsed.get("dir").clone()),
+                ("hash", parsed.get("hash").clone()),
+            ])));
         }
         if parts.len() >= 2 && parts[..2] == ["api", "state"] {
             let name = if parts.len() > 2 { parts[2] } else { "" };
@@ -768,6 +797,24 @@ mod tests {
         // RFC 6455 example.
         let accept = base64(&sha1(b"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
         assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    #[test]
+    fn map_asset_accepts_only_hashed_files() {
+        assert_eq!(
+            map_asset(&["map-0123456789abcdef", "c44-l0.png"]),
+            Some(("map-0123456789abcdef".to_string(), "c44-l0.png".to_string()))
+        );
+        assert_eq!(
+            map_asset(&["map-0123456789abcdef", "manifest.json"]),
+            Some(("map-0123456789abcdef".to_string(), "manifest.json".to_string()))
+        );
+        assert_eq!(map_asset(&["map-xyz", "c44-l0.png"]), None);
+        assert_eq!(map_asset(&["map-0123456789abcdef", "x.png", "y"]), None);
+        assert_eq!(map_asset(&["map-0123456789abcdef", ".."]), None);
+        assert_eq!(map_asset(&["map-0123456789abcdef", "c44-l0.jpg"]), None);
+        assert_eq!(map_asset(&["map-0123456789ABCDEF", "c44-l0.png"]), Some(("map-0123456789ABCDEF".to_string(), "c44-l0.png".to_string())));
+        assert_eq!(map_asset(&["map-0123456789abcde", "c44-l0.png"]), None);
     }
 
     #[test]

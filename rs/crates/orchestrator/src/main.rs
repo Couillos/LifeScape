@@ -83,6 +83,12 @@ fn daemon_main() -> i32 {
         .ok()
         .and_then(|raw| raw.parse().ok())
         .unwrap_or(8765);
+    // Precomputed spectator map (SKIP when the pack hash is unchanged):
+    // failures never block the daemon, the client shows fallback text.
+    match lifescape_orchestrator::mapbuild::ensure_static_map(&lifescape_orchestrator::paths::static_dir()) {
+        Ok(report) => println!("{report}"),
+        Err(error) => eprintln!("static map unavailable: {error}"),
+    }
     web::start_web(dispatch, port);
     orch.restore_jobs();
     lifescape_orchestrator::holdings::start_sampler(orch.clone());

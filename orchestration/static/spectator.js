@@ -36,12 +36,37 @@ const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
 const TILE = 16;      // px per tile on screen
 const R = 16;         // drawn radius, in tiles
-// the map image is rendered by the server with the client's own minimap
-// passes. Frames are atomic: draw() only paints when the image for the
-// exact origin/level of `last` is cached, otherwise it keeps the previous
-// complete frame until the image lands (never map xor overlays).
-const mapCache = new Map();
-const mapPending = new Set();
+// The map is precomputed server-side (one PNG per painted cluster per
+// level, 4 px per tile, same passes as the client minimap) and served
+// immutable. The client only crops the 33-tile window around the player
+// (position already arrives over the WS at 5 Hz): zero image requests.
+// Frames are atomic: draw() only paints when the crop is fully covered,
+// otherwise it keeps the previous complete frame.
+let mapState = 'loading'; // loading | ready | missing
+let mapDir = null;
+let mapImages = null; // [{file, level, x0, z0, w, h}] in tiles, from the manifest
+const mapImgs = {}; // file -> Image (one per level file, loaded once)
+async function loadStaticMap() {
+  try {
+    const info = await (await fetch('/api/map')).json();
+    if (!info.ok || !info.dir) throw new Error('no static map');
+    mapDir = '/' + info.dir + '/';
+    const manifest = await (await fetch(mapDir + 'manifest.json')).json();
+    mapImages = manifest.images || [];
+    mapState = 'ready';
+    for (const entry of mapImages) {
+      const image = new Image();
+      image.onload = () => paint();
+      image.onerror = () => { image.broken = true; paint(); };
+      image.src = mapDir + entry.file;
+      mapImgs[entry.file] = image;
+    }
+    paint();
+  } catch (e) {
+    mapState = 'missing';
+    paint();
+  }
+}
 // dots, labels and the route are drawn over the map image; turn this off to
 // compare the map pixels alone against the client minimap
 window.showOverlay = true;
@@ -250,64 +275,68 @@ function draw() {
     if (label) labels.push([sx + 8, sy + 4, '#ccc', LABEL_FONT, label]);
     return [sx, sy];
   };
-  // Ground, walls and mapscene sprites come from the server image: it is
-  // built with the client's own passes, so the canvas is the client minimap
-  // instead of a redraw that drifts on overlays and sprite order.
+  // Ground, walls and mapscene sprites come from the precomputed static
+  // image of the current level: crop the 33-tile window around the player
+  // and upscale 4x (imageSmoothingEnabled stays off, pixel art is kept).
   const originX = pos.px - R;
   const originZ = pos.pz - R;
-  const mapKey = originX + ',' + originZ + ',' + level;
-  // Tile-edge alignment: the server image covers whole tiles, so its edges
-  // sit half a tile outside the outer row centers. Without this the dots
+  // Tile-edge alignment: the file covers whole tiles, so its pixels sit
+  // half a tile outside the outer row centers. Without this the dots
   // and route sat 8 px southwest of the map (a player drawn on a wall it
   // walks beside).
   const mapLeft = cx - R * TILE - TILE / 2;
   const mapTop = cy - (R + 1) * TILE + TILE / 2;
   const mapSize = (R * 2 + 1) * TILE;
-  let mapImg = null, mapDx = 0, mapDz = 0;
-  const exact = mapCache.get(mapKey);
-  if (exact) {
-    mapImg = exact.img;
+  const full = mapImages
+    ? mapImages.find((entry) => entry.level === level
+      && originX >= entry.x0 && originZ >= entry.z0
+      && originX + R * 2 + 1 <= entry.x0 + entry.w
+      && originZ + R * 2 + 1 <= entry.z0 + entry.h)
+    : null;
+  const fullImg = full ? mapImgs[full.file] : null;
+  if (fullImg && !fullImg.broken && fullImg.complete && fullImg.naturalWidth > 0) {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.imageSmoothingEnabled = false;
+    const sx = (originX - full.x0) * 4, sy = (full.z0 + full.h - 1 - (originZ + R * 2)) * 4;
+    ctx.drawImage(fullImg, sx, sy, 132, 132, mapLeft, mapTop, mapSize, mapSize);
+  } else if (full) {
+    // The file exists but its pixels are still loading (or failed): keep
+    // the previous complete frame instead of a black map with overlays.
+    return;
+  } else if (!mapImages || mapState === 'loading') {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Loading static map…', 20, 280);
+    return;
+  } else if (mapImages.every((entry) => entry.level !== level)) {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Static map missing, run daemon with pack', 20, 280);
+    return;
   } else {
-    if (!mapPending.has(mapKey)) {
-      mapPending.add(mapKey);
-      const image = new Image();
-      image.onload = () => {
-        mapPending.delete(mapKey);
-        mapCache.set(mapKey, {img: image, ox: originX, oz: originZ, lvl: level});
-        if (mapCache.size > 48) mapCache.delete(mapCache.keys().next().value);
-        paint();
-      };
-      image.onerror = () => { mapPending.delete(mapKey); };
-      image.src = 'minimap.png?x=' + originX + '&z=' + originZ + '&level=' + level + '&size=' + (R * 2 + 1);
+    // Deep ocean or cluster edge: no file covers the window. Paint black
+    // (what a live render of empty tiles shows) and keep the overlays.
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.imageSmoothingEnabled = false;
+    const overlap = mapImages.find((entry) => entry.level === level
+      && originX < entry.x0 + entry.w && originX + R * 2 + 1 > entry.x0
+      && originZ < entry.z0 + entry.h && originZ + R * 2 + 1 > entry.z0);
+    const overlapImg = overlap ? mapImgs[overlap.file] : null;
+    if (overlapImg && !overlapImg.broken && overlapImg.complete && overlapImg.naturalWidth > 0) {
+      const ix0 = Math.max(originX, overlap.x0), ix1 = Math.min(originX + R * 2 + 1, overlap.x0 + overlap.w);
+      const iz0 = Math.max(originZ, overlap.z0), iz1 = Math.min(originZ + R * 2 + 1, overlap.z0 + overlap.h);
+      ctx.drawImage(overlapImg,
+        (ix0 - overlap.x0) * 4, (overlap.z0 + overlap.h - iz1) * 4, (ix1 - ix0) * 4, (iz1 - iz0) * 4,
+        mapLeft + (ix0 - originX) * TILE, mapTop + (originZ + R * 2 + 1 - iz1) * TILE,
+        (ix1 - ix0) * TILE, (iz1 - iz0) * TILE);
     }
-    // En mouvement l'origine exacte n'est jamais en cache quand son image
-    // arrive : on réutilise la carte même niveau la plus proche en la
-    // décalant, sinon un bot qui marche ne dessine plus rien jusqu'à l'arrêt.
-    let best = null, bestDist = 1e9;
-    for (const entry of mapCache.values()) {
-      if (entry.lvl !== level) continue;
-      const dx = entry.ox - originX, dz = entry.oz - originZ;
-      if (Math.abs(dx) > R * 2 || Math.abs(dz) > R * 2) continue;
-      const dist = Math.abs(dx) + Math.abs(dz);
-      if (dist < bestDist) { bestDist = dist; best = entry; }
-    }
-    if (!best) {
-      // Aucune carte à décaler (premier chargement) : on garde l'ancien
-      // frame complet plutôt qu'un fond noir avec des overlays orphelins.
-      return;
-    }
-    mapImg = best.img;
-    mapDx = best.ox - originX;
-    mapDz = best.oz - originZ;
   }
-  ctx.fillStyle = '#111';
-  ctx.fillRect(0, 0, cv.width, cv.height);
-  // The window origin tracks the player tile, so the blit rect is fixed:
-  // no fractional slide between the map and the integer-tile overlays.
-  // (Fallback ci-dessus : la carte de secours est décalée pour rester
-  // alignée, le bord manquant reste noir une seconde.)
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(mapImg, mapLeft + mapDx * TILE, mapTop - mapDz * TILE, mapSize, mapSize);
   const fx = pos.px - Math.floor(pos.px), fz = pos.pz - Math.floor(pos.pz);
   ctx.lineWidth = 1;
   if (window.showGrid) {
@@ -459,6 +488,7 @@ function updatePanels() {
 }
 
 connectSocket();
+loadStaticMap();
 paint();
 document.getElementById("rtbtn").onclick = () => {
   rt = !rt;

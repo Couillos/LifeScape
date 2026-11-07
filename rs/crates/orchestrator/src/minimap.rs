@@ -76,6 +76,12 @@ fn layer_of(shape: u8) -> u8 {
 
 // -- stored zip ------------------------------------------------------------
 
+/// Map-squares zip on disk: the server pack ships it uncompressed, so no
+/// inflate is needed. Shared by the live renderer and the static builder.
+pub(crate) fn pack_zip() -> PathBuf {
+    pack_dir().join(".cache").join("maps-server.zip")
+}
+
 /// Entries of a stored-only zip: name to (data offset, size). The server
 /// pack ships its map zips uncompressed, so no inflate is needed.
 fn zip_entries(archive: &[u8]) -> HashMap<String, (usize, usize)> {
@@ -180,8 +186,8 @@ struct Grounds {
 }
 
 impl Grounds {
-    fn load(pack: &PathBuf) -> Grounds {
-        let archive = std::fs::read(pack.join(".cache").join("maps-server.zip")).unwrap_or_default();
+    fn load() -> Grounds {
+        let archive = std::fs::read(pack_zip()).unwrap_or_default();
         let entries = zip_entries(&archive);
         Grounds { archive, entries, squares: Mutex::new(HashMap::new()), clock: std::sync::atomic::AtomicU64::new(0), blends: Mutex::new(HashMap::new()) }
     }
@@ -334,16 +340,16 @@ impl Grounds {
         }
     }
 
-    /// Client minimap ground pass for a window; row 0 is the northern edge.
-    /// Flag checks read the packed flags, painted tiles follow the bridge
-    /// shift (`content_tile`).
-    fn render_ground(&self, cache: &MapCache, level: i32, world_x0: i32, world_z0: i32, size: usize) -> Vec<u32> {
-        let border = size * 4;
-        let mut pixels = vec![0u32; border * border];
-        for row in 0..size {
+    /// Client minimap ground pass for a w x h window; row 0 is the
+    /// northern edge. Flag checks read the packed flags, painted tiles
+    /// follow the bridge shift (`content_tile`).
+    fn render_ground(&self, cache: &MapCache, level: i32, world_x0: i32, world_z0: i32, w: usize, h: usize) -> Vec<u32> {
+        let border = w * 4;
+        let mut pixels = vec![0u32; border * h * 4];
+        for row in 0..h {
             let world_z = world_z0 + row as i32;
-            let y = (size - 1 - row) * 4;
-            for col in 0..size {
+            let y = (h - 1 - row) * 4;
+            for col in 0..w {
                 let world_x = world_x0 + col as i32;
                 let x = col * 4;
                 if self.tile(level, world_x, world_z).flags & 0x18 == 0 {
@@ -470,7 +476,7 @@ impl Minimap {
     pub fn new(pack_dir: PathBuf) -> Minimap {
         Minimap {
             cache: MapCache::new(pack_dir.clone()),
-            grounds: Grounds::load(&pack_dir),
+            grounds: Grounds::load(),
             layers: Mutex::new(None),
             frames: Mutex::new(HashMap::new()),
             render_lock: Mutex::new(()),
@@ -493,32 +499,59 @@ impl Minimap {
         layers
     }
 
-    /// RGB pixels for a window, row 0 at world_z0. Details draw from a
-    /// padded window so sprites from nearby tiles still land inside.
-    fn render(&self, level: i32, world_x0: i32, world_z0: i32, size: usize, margin: usize) -> Vec<u32> {
+    /// RGB pixels for a w x h window, row 0 at world_z0. Details draw from
+    /// a padded window so sprites from nearby tiles still land inside.
+    fn render(&self, level: i32, world_x0: i32, world_z0: i32, w: usize, h: usize, margin: usize) -> Vec<u32> {
         let left = world_x0 - margin as i32;
         let top = world_z0 - margin as i32;
-        let span = size + margin * 2;
-        let mut pixels = self.grounds.render_ground(&self.cache, level, left, top, span);
-        self.draw_details(&mut pixels, level, left, top, span);
+        let (span_w, span_h) = (w + margin * 2, h + margin * 2);
+        let mut pixels = self.grounds.render_ground(&self.cache, level, left, top, span_w, span_h);
+        self.draw_details(&mut pixels, level, left, top, span_w, span_h);
         if margin == 0 {
             pixels
         } else {
-            crop(&pixels, span * 4, margin * 4, size * 4)
+            crop(&pixels, span_w * 4, margin * 4, w * 4, h * 4)
         }
     }
 
-    fn draw_details(&self, pixels: &mut [u32], level: i32, world_x0: i32, world_z0: i32, size: usize) {
-        let stride = size * 4;
+    /// Whole static-map file content: same passes as one live frame, kept
+    /// verbatim so crops stay pixel-identical to `/minimap.png` used to be.
+    pub(crate) fn render_static(&self, level: i32, world_x0: i32, world_z0: i32, w: usize, h: usize) -> Vec<u32> {
+        self.render(level, world_x0, world_z0, w, h, 10)
+    }
+
+    /// Packed squares the zip ships, for the static builder's extents.
+    pub(crate) fn map_squares(&self) -> Vec<(i32, i32)> {
+        let mut squares: Vec<(i32, i32)> = self
+            .grounds
+            .entries
+            .keys()
+            .filter(|name| name.starts_with('m'))
+            .filter_map(|name| {
+                let (x, z) = name[1..].split_once('_')?;
+                Some((x.parse().ok()?, z.parse().ok()?))
+            })
+            .collect();
+        squares.sort();
+        squares
+    }
+
+    /// Raw zip bytes backing this renderer, for the stamp hash.
+    pub(crate) fn pack_bytes(&self) -> &[u8] {
+        &self.grounds.archive
+    }
+
+    fn draw_details(&self, pixels: &mut [u32], level: i32, world_x0: i32, world_z0: i32, w: usize, h: usize) {
+        let stride = w * 4;
         let layers = self.loc_layers();
         let Some(layers) = layers.as_ref() else { return };
-        for world_z in world_z0..world_z0 + size as i32 {
-            for world_x in world_x0..world_x0 + size as i32 {
+        for world_z in world_z0..world_z0 + h as i32 {
+            for world_x in world_x0..world_x0 + w as i32 {
                 if self.grounds.tile(level, world_x, world_z).flags & 0x18 == 0 {
-                    self.draw_detail(pixels, stride, level, layers, world_x, world_z, world_x0, world_z0, size);
+                    self.draw_detail(pixels, stride, level, layers, world_x, world_z, world_x0, world_z0, w, h);
                 }
                 if level < LEVELS as i32 - 1 && self.grounds.tile(level + 1, world_x, world_z).flags & MAP_FLAG_VIS_BELOW != 0 {
-                    self.draw_detail(pixels, stride, level + 1, layers, world_x, world_z, world_x0, world_z0, size);
+                    self.draw_detail(pixels, stride, level + 1, layers, world_x, world_z, world_x0, world_z0, w, h);
                 }
             }
         }
@@ -535,14 +568,15 @@ impl Minimap {
         world_z: i32,
         world_x0: i32,
         world_z0: i32,
-        size: usize,
+        w: usize,
+        h: usize,
     ) {
         let tile_x = ((world_x - world_x0) * 4) as usize;
-        let tile_y = ((size as i32 - 1 - (world_z - world_z0)) * 4) as usize;
+        let tile_y = ((h as i32 - 1 - (world_z - world_z0)) * 4) as usize;
         if let Some((loc_id, shape, angle)) = layers.get(&(world_x, world_z, level, LAYER_WALL)) {
             if let Some(loc) = self.cache.loc_entry(*loc_id as i32) {
                 if loc.mapscene >= 0 {
-                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, size);
+                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, w, h);
                 } else {
                     draw_wall(pixels, stride, tile_x, tile_y, *shape, *angle, if loc.active { ACTIVE_RGB } else { INACTIVE_RGB });
                 }
@@ -551,7 +585,7 @@ impl Minimap {
         if let Some((loc_id, shape, angle)) = layers.get(&(world_x, world_z, level, LAYER_GROUND)) {
             if let Some(loc) = self.cache.loc_entry(*loc_id as i32) {
                 if loc.mapscene >= 0 {
-                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, size);
+                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, w, h);
                 } else if *shape == WALL_DIAGONAL {
                     let rgb = if loc.active { ACTIVE_RGB } else { INACTIVE_RGB };
                     let diagonal = if *angle == 0 || *angle == 2 {
@@ -568,7 +602,7 @@ impl Minimap {
         if let Some((loc_id, _, _)) = layers.get(&(world_x, world_z, level, LAYER_GROUND_DECOR)) {
             if let Some(loc) = self.cache.loc_entry(*loc_id as i32) {
                 if loc.mapscene >= 0 {
-                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, size);
+                    self.plot_sprite(pixels, world_x, world_z, &loc, world_x0, world_z0, w, h);
                 }
             }
         }
@@ -582,7 +616,8 @@ impl Minimap {
         loc: &crate::mapcache::LocEntry,
         world_x0: i32,
         world_z0: i32,
-        size: usize,
+        w: usize,
+        h: usize,
     ) {
         let sprite = match self.cache.mapscene_sprite(loc.mapscene) {
             Some(sprite) => sprite,
@@ -591,8 +626,9 @@ impl Minimap {
         let offset_x = (loc.width * 4 - sprite.width as i32) / 2;
         let offset_y = (loc.length * 4 - sprite.height as i32) / 2;
         let left = (world_x - world_x0) * 4 + offset_x + sprite.xof;
-        let top = (size as i32 - 1 - (world_z - world_z0)) * 4 + (1 - loc.length) * 4 + offset_y + sprite.yof;
-        let border = size as i32 * 4;
+        let top = (h as i32 - 1 - (world_z - world_z0)) * 4 + (1 - loc.length) * 4 + offset_y + sprite.yof;
+        let width_px = w as i32 * 4;
+        let border = h as i32 * 4;
         let (width, height) = (sprite.width as usize, sprite.height as usize);
         for y in 0..height {
             let dest_y = top + y as i32;
@@ -601,14 +637,14 @@ impl Minimap {
             }
             for x in 0..width {
                 let dest_x = left + x as i32;
-                if dest_x < 0 || dest_x >= border {
+                if dest_x < 0 || dest_x >= width_px {
                     continue;
                 }
                 let index = sprite.pixels[y * width + x];
                 if index == 0 || usize::from(index) >= sprite.palette.len() {
                     continue;
                 }
-                pixels[dest_y as usize * border as usize + dest_x as usize] = sprite.palette[usize::from(index)];
+                pixels[dest_y as usize * width_px as usize + dest_x as usize] = sprite.palette[usize::from(index)];
             }
         }
     }
@@ -625,7 +661,7 @@ impl Minimap {
         if let Some(frame) = self.frames.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
             return frame.clone();
         }
-        let pixels = self.render(level, world_x, world_z, size, 10);
+        let pixels = self.render(level, world_x, world_z, size, size, 10);
         let mut rgb = Vec::with_capacity(pixels.len() * 3);
         for pixel in pixels {
             rgb.extend_from_slice(&[((pixel >> 16) & 0xFF) as u8, ((pixel >> 8) & 0xFF) as u8, (pixel & 0xFF) as u8]);
@@ -660,11 +696,11 @@ fn draw_wall(pixels: &mut [u32], stride: usize, tile_x: usize, tile_y: usize, sh
     }
 }
 
-fn crop(pixels: &[u32], stride: usize, margin: usize, size: usize) -> Vec<u32> {
-    let mut out = vec![0u32; size * size];
-    for y in 0..size {
+fn crop(pixels: &[u32], stride: usize, margin: usize, w: usize, h: usize) -> Vec<u32> {
+    let mut out = vec![0u32; w * h];
+    for y in 0..h {
         let start = (y + margin) * stride + margin;
-        out[y * size..(y + 1) * size].copy_from_slice(&pixels[start..start + size]);
+        out[y * w..(y + 1) * w].copy_from_slice(&pixels[start..start + w]);
     }
     out
 }
@@ -742,7 +778,7 @@ mod tests {
         // where the shifted wall sits (south edge, angle 3).
         let deck_rgb = maps.cache().flo_overlay_colour(9);
         assert_ne!(deck_rgb, 0, "deck overlay has a colour");
-        let pixels = maps.render(0, 3241, 3222, 7, 0);
+        let pixels = maps.render(0, 3241, 3222, 7, 7, 0);
         let stride = 7 * 4;
         let at = |tile_x: i32, tile_z: i32, dx: usize, dy: usize| {
             pixels[((6 - (tile_z - 3222)) as usize * 4 + dy) * stride + (tile_x - 3241) as usize * 4 + dx]
@@ -754,7 +790,7 @@ mod tests {
     #[test]
     fn ground_matches_reference() {
         let maps = Minimap::new(pack_dir());
-        let pixels = maps.grounds.render_ground(maps.cache(), 0, 3200, 3200, 9);
+        let pixels = maps.grounds.render_ground(maps.cache(), 0, 3200, 3200, 9, 9);
         assert_eq!(pixels.len(), 36 * 36);
         assert_eq!(pixels[0], 0x53670F);
         // Full-window checksum pinned by the reference render.
@@ -764,7 +800,7 @@ mod tests {
     #[test]
     fn minimap_png_matches_reference() {
         let maps = Minimap::new(pack_dir());
-        let pixels = maps.render(0, 3200, 3200, 9, 10);
+        let pixels = maps.render(0, 3200, 3200, 9, 9, 10);
         assert_eq!(fnv(&pixels), 0x9b0b_d800_9182_5b36);
         let png = maps.png(0, 3200, 3200, 9);
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");

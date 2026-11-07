@@ -4,6 +4,7 @@ pub mod jobs;
 pub mod holdings;
 pub mod registry;
 pub mod mapcache;
+pub mod mapbuild;
 pub mod mapcli;
 pub mod minimap;
 pub mod png;
