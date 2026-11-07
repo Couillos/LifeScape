@@ -561,6 +561,20 @@ fn chop_load(
         had_logs += gained;
         if result != WorkOutcome::Unreachable {
             unreachable_streak = 0;
+            // Cluster hop: the spot may sit near another bank, so re-sync
+            // on arrival (cheap, no walking) to keep the trip short. The
+            // check is positional, not flag-based: drift without a hop
+            // resolves to the same bank and is a no-op.
+            let fresh = nearest_bank(bot)?;
+            if (fresh.x, fresh.z, fresh.level) != (bank.x, bank.z, bank.level) {
+                bot.log(&format!(
+                    "cluster change: bank re-synced to ({},{}) near {:?}",
+                    fresh.x,
+                    fresh.z,
+                    bot.position()
+                ));
+                *bank = fresh;
+            }
         }
         match result {
             WorkOutcome::Gone => {
