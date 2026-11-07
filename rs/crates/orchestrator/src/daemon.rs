@@ -212,6 +212,21 @@ impl Orchestrator {
         }
     }
 
+    /// Worker binary for `session` spawn: `current_exe()` keeps pointing
+    /// at the replaced file after `cargo build` ("/proc/self/exe" reads
+    /// "... (deleted)"), so strip that marker and require the path to
+    /// exist. Loud typed error, never a silent fallback: the operator
+    /// restarts the daemon off the fresh build.
+    fn worker_binary(account: &str) -> Result<std::path::PathBuf, String> {
+        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        live_binary(&exe).ok_or_else(|| {
+            format!(
+                "worker binary gone at {} (daemon runs a deleted build; `orchestrator shutdown`, rebuild, then `open {account}` again)",
+                exe.to_string_lossy()
+            )
+        })
+    }
+
     /// Start the session worker and wait for its login (or typed error).
     fn spawn(&self, job: &Arc<Job>, no_login: bool) -> Result<(), String> {
         let (sock_path, ready_path) = paths::session_paths(&job.account);
@@ -224,7 +239,7 @@ impl Orchestrator {
             .append(true)
             .open(&log_path)
             .map_err(|error| error.to_string())?;
-        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        let exe = Self::worker_binary(&job.account)?;
         let mut command = Command::new(exe);
         command
             .arg("session")
@@ -884,6 +899,16 @@ fn known_accounts() -> Vec<String> {
     accounts
 }
 
+/// Live worker binary behind a `current_exe()` path: after `cargo build`
+/// replaces the file, "/proc/self/exe" reads "... (deleted)", so strip
+/// that marker. `None` means the path is really gone (no guessing).
+fn live_binary(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let rendered = exe.to_string_lossy();
+    let live = rendered.strip_suffix(" (deleted)").unwrap_or(&rendered);
+    let candidate = std::path::PathBuf::from(live);
+    candidate.is_file().then(|| candidate)
+}
+
 /// Last lines of a (possibly huge) log without reading it whole.
 fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
     const WINDOW: u64 = 131072;
@@ -921,12 +946,27 @@ fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::watchdog_due;
+    use super::{live_binary, watchdog_due};
 
     #[test]
     fn watchdog_fires_only_on_stale_heartbeat() {
         assert!(!watchdog_due(None, 1000.0), "never seen is login edge, not death");
         assert!(!watchdog_due(Some(990.0), 1000.0), "10s fresh is healthy");
         assert!(watchdog_due(Some(900.0), 1000.0), "100s stale is wedged");
+    }
+
+    /// Deleted-inode re-resolution: a rebuilt binary keeps spawning, a
+    /// truly missing one reads missing (the caller errors loudly).
+    #[test]
+    fn live_binary_strips_deleted_marker() {
+        let dir = std::env::temp_dir().join(format!("lifescape-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("orchestrator");
+        std::fs::write(&real, b"fake").unwrap();
+        assert_eq!(live_binary(&real), Some(real.clone()));
+        let deleted = std::path::PathBuf::from(format!("{} (deleted)", real.display()));
+        assert_eq!(live_binary(&deleted), Some(real.clone()));
+        assert_eq!(live_binary(&dir.join("absent")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
