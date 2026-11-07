@@ -291,22 +291,45 @@ pub fn live_bank_booth(bot: &Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32,
     live_bank_booths(bot, bank_x, bank_z).into_iter().next()
 }
 
+/// Bankbooth loc ids, resolved once from the dump. `live_bank_booths`
+/// used to call `loc_name` (String alloc + lowercase per entry) for every
+/// live and static loc on every bank trip: past ~100k painted entries that
+/// silent scan outlasted the server's 100-tick silence reap (~6 s, no pump
+/// inside) and the session FIN-looped at the booth. The id set keeps the
+/// same predicate with zero per-entry allocs.
+static BANKBOOTH_IDS: std::sync::OnceLock<HashSet<u16>> = std::sync::OnceLock::new();
+
+fn bankbooth_ids() -> &'static HashSet<u16> {
+    BANKBOOTH_IDS.get_or_init(|| {
+        knowledge::all_locs()
+            .into_iter()
+            .filter(|entry| {
+                entry.name.as_deref().is_some_and(|name| {
+                    let label = name.to_lowercase();
+                    label.contains("bankbooth") || label.contains("bank booth")
+                })
+            })
+            .map(|entry| entry.loc_id as u16)
+            .collect()
+    })
+}
+
 /// Every live bankbooth near the booth spawn, nearest first. The dump's
 /// Manhattan pick flips between spawns of one bank (Draynor 3242/3245)
 /// and the nearest spawn can sit behind the counter: the trip tries each
 /// booth in turn instead of grinding the nearest from its blind side.
 pub fn live_bank_booths(bot: &Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u16)> {
     let mut booths: Vec<(i64, (i32, i32, u16))> = Vec::new();
-    let mut near: Option<(i64, String, u16)> = None;
+    let mut near: Option<(i64, u16)> = None;
+    let booth_ids = bankbooth_ids();
     let mut consider = |x: i32, z: i32, level: i32, loc: u16| {
         if level != bot.world.level {
             return;
         }
         let dist = i64::from((x - bank_x).abs() + (z - bank_z).abs());
-        let label = (bot.tables.loc_name)(loc).unwrap_or_default().to_lowercase();
-        if !label.contains("bankbooth") && !label.contains("bank booth") {
-            if near.as_ref().is_none_or(|(known, _, _)| dist < *known) {
-                near = Some((dist, label, loc));
+        if !booth_ids.contains(&loc) {
+            if near.as_ref().is_none_or(|(known, _)| dist < *known) {
+                near = Some((dist, loc));
             }
             return;
         }
@@ -323,6 +346,7 @@ pub fn live_bank_booths(bot: &Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u
     booths.sort();
     booths.dedup();
     if booths.is_empty() {
+        let near = near.map(|(dist, loc)| (dist, (bot.tables.loc_name)(loc).unwrap_or_default(), loc));
         bot.log(&format!("bank search: live={} static={} near={:?}", bot.world.locs.len(), bot.world.static_locs.len(), near));
     }
     booths.into_iter().map(|(_, booth)| booth).collect()
@@ -745,8 +769,8 @@ pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bank_trip, bank_trip_resilient, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth, live_bank_booths,
-        nearest_bank, register_transit_hurt, require_deposit_cleared,
+        bank_trip, bank_trip_resilient, bankbooth_ids, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth,
+        live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared,
     };
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -778,6 +802,22 @@ mod tests {
         let booths = live_bank_booths(&bot, 3091, 3245);
         assert_eq!(booths, vec![(3091, 3245, 2213), (3091, 3243, 2213), (3091, 3242, 2213)], "nearest first, got: {booths:?}");
         assert_eq!(live_bank_booth(&bot, 3091, 3245), Some((3091, 3245, 2213)), "wrapper stays the nearest");
+    }
+
+    /// The id-set fast path matches the old per-entry name predicate:
+    /// booth 2213 resolves, and a nearer non-booth never does (no name
+    /// lookup per entry, so long sessions stop outlasting the reap).
+    #[test]
+    fn booth_scan_ignores_non_booth_without_name_lookups() {
+        assert!(bankbooth_ids().contains(&2213), "booth id resolves");
+        let plain = (0u16..).find(|id| !bankbooth_ids().contains(id)).expect("a non-booth id exists");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.static_locs.insert((3000, 3000, 0), (plain, 0, 0));
+        bot.world.static_locs.insert((3010, 3000, 0), (2213, 0, 0));
+        let booths = live_bank_booths(&bot, 3000, 3000);
+        assert_eq!(booths, vec![(3010, 3000, 2213)], "only the booth resolves, got: {booths:?}");
     }
 
     /// Picking is pure: standing on a booth spawn returns that booth,
