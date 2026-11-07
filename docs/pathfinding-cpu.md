@@ -141,7 +141,8 @@ But : sortir `plan()` du thread script sans changer le plan lui-même
 Deux gains visés, dans l'ordre : (a) plus de pump affamé (le reap à
 100 ticks disparaît par construction) ; (b) ~50 % de Dijkstra évités par le
 cache local (§1.4 : 63,5 % de répétitions exactes (from, dest), borne haute).
-Aucun chiffre nouveau ci-dessous : tous sont repris des §1-2.
+Aucune mesure nouvelle ci-dessous : taux et budgets CPU repris des §1-2,
+bornes (1500 ms, 250 ticks + 30 s, 45 s, file 2, LRU 128) reprises du code cité.
 
 ### 5.1 Architecture : un planificateur par worker, pas de service central
 
@@ -151,7 +152,7 @@ central inter-process.** Le worker session est déjà 1 process OS par compte
 thread script y détient `bot` verrouillé pendant tout le run
 (`session.rs:302-309`, `run_script_thread` `session.rs:337-338`). Le
 planificateur est un second thread du même process, qui reçoit des demandes
-sur un canal borné et rend des `Plan` clonés (`Plan: Clone`, `plan.rs:161`).
+sur un canal borné et rend des `Plan` clonés (`Plan: Clone`, `plan.rs:160-161`).
 Alternative rejetée : service central inter-process (socket Unix + JSON
 maison). Le §2 ligne F tranche déjà : 0 gain CPU (mêmes Dijkstra), latence
 IPC ≥ plan médian, point de défaillance unique, et `std only` interdit
@@ -174,8 +175,10 @@ Propriété des données : le worker possède tout. `StaticWorld` et `Tables`
 n'ont **aucune version aujourd'hui** (`static_world.rs:26-30`,
 `tables.rs:127-139`) : ajouter un `DataVersion` calculé au chargement
 (emprunte fichier `gamedata/data/transitions.json`,
-`nav_overrides.json`, `transitions_verified.json`, `free2play.csv` —
-contenu ou mtimes, au choix de l'implémentation) et stocké à côté des `Arc`.
+`nav_overrides.json`, `transitions_verified.json`, `free2play.csv`, plus le
+pack `maps-server.zip` et `gamedata/data/gametypes.json` (définitions de
+locs qui conditionnent portes et stands) — contenu ou mtimes, au choix de
+l'implémentation) et stocké à côté des `Arc`.
 Chaque demande de plan embarque la version ; le cache n'est jamais vidé en
 aveugle (§5.3). `transitions_verified` (exclusions + pénalité
 `UNVERIFIED_PENALTY`, `plan.rs:773-821`), `nav_overrides` (requirements,
@@ -213,14 +216,15 @@ cancel(ticket)                              // unload/stop → abandon
 - Annulation : `stop_requested` (`session.rs:147`) et la sortie du hook
   `on_pump` (`mod.rs:309-313`) annulent le ticket (`cancel`) exactement
   comme le `yield_() → false` annule la recherche aujourd'hui
-  (`plan.rs:262-268` → `Aborted`, `travel.rs:87-89` → `Interrupted`).
+  (`dijkstra` `plan.rs:574-578` → `Aborted`, remonté en `travel.rs:87-89`
+  → `Interrupted`).
 - Priorité : replan d'exécution (`travel.rs:227-252`) devant plan initial
   (file de 2 : le replan écrase l'attente, jamais le calcul en cours).
 - Fallback synchrone : planificateur saturé ou thread tombé → `plan()`
   direct sur le thread script + une ligne de log (`nav plan sync-fallback`,
   même format que `nav timing`, `travel.rs:214-217`). Jamais de panne
-  franche : dégrade, logge, le watchdog (`daemon.rs:143-213`, 45 s sans
-  heartbeat) reste le filet existant.
+  franche : dégrade, logge, le watchdog (`daemon.rs:143-213`, seuil 45 s
+  `WATCHDOG_STALE_SECS`, `daemon.rs:27`) reste le filet existant.
 
 ### 5.3 Cache : L1 requête exacte, L2 arêtes, invalidation par version
 
@@ -231,7 +235,7 @@ cacher, c'est dupliquer `plan()` en pire. Les deux briques utiles :
 - **L1 — plans complets**, clé = `(from, dest, allow_paid, f2p_only,
   satisfied-trié, excluded_edges-trié, version-données)` (même clé que la
   recommandation §3.1). LRU ~128 entrées, < 5 Mo (§3.1) ; `Plan` petit,
-  `Clone` existant (`plan.rs:161`). Cible : convertir les 63,5 % de
+  `Clone` existant (`plan.rs:160-161`). Cible : convertir les 63,5 % de
   répétitions (§1.4) en hits — avec la clé complète le taux réel est ≤ 63,5 %
   (§1.4, borne haute), d'où la métrique hit/miss obligatoire avant l'étape 2
   (§3.1 : si hit < 30 %, réduire la voilure).
@@ -290,12 +294,13 @@ partout, pas de tokio — `AGENTS.md §4.1-4.2`).
 |---|---|---|
 | 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:169-174`) ; revert = 1 fonction |
 | 2. L1 local (sync) | LRU 128 + clé complète + compteurs `hit/miss` dans `nav plan` (`travel.rs:180-191`) | hit rate live ≥ 30 % (§3.1), sinon stop ; < 5 Mo ; revert = 1 fichier |
-| 3. Thread plan + contrat async | submit/poll/cancel (§5.2), fallback sync, annulation sur `stop_requested`/`UNLOAD_TICKS` | aucun reap à 100 ticks sur legs > 1 s (logs `t01`-style), p99 `travel_to` ≤ sync + 5 ms, fallback loggé ; revert = rebrancher `plan_travel` sync |
+| 3. Thread plan + contrat async | submit/poll/cancel (§5.2), fallback sync, annulation sur `stop_requested`/`UNLOAD_TICKS` | aucun reap à 100 ticks sur legs > 1 s (logs `t01`-style), p99 `travel_to` ≤ sync + 5 ms sur les mêmes legs golden (chrono `nav timing`, `travel.rs:214-217`), fallback loggé ; revert = rebrancher `plan_travel` sync |
 | 4. Version données | `DataVersion` au chargement (`session.rs:717-747`), dans chaque clé | test : bump `nav_overrides.json` → 0 hit périmé servi (test unitaire, pas de live) ; revert = version constante |
 | 5. Métriques + dimensionnement | taille/âge/hit-miss loggés, bornes L1/L2 | décision chiffrée : garder, régler (128 → N), ou arrêter — pas de lot 6 sans ce verdict |
 
 Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
-un seul crate touché par lot (nav → sdk → orchestrator), `main` reste
+un seul crate par lot (nav → sdk → orchestrator), sauf le lot 3 (contrat
+sdk + cycle de vie session : sdk + orchestrator) ; `main` reste
 vert entre lots.
 
 ### 5.6 Risques
@@ -304,7 +309,7 @@ vert entre lots.
 |---|---|---|
 | Plan périmé servi (invalidation ratée) | Haute (bot marche au mur / péage refusé) | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; test de bump (§5.5 lot 4) |
 | Thundering herd au cold start (N bots, cache vide) | Moyenne (pic CPU = N Dijkstra, §1.3) | file bornée → fallback sync étalé (§5.2) ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante) |
-| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | profondeur 2 + replan prioritaire écrase l'attente (§5.2) ; replan reste ≤ 1 par échec (inchangé, `travel.rs:197-206`) |
+| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | profondeur 2 + replan prioritaire écrase l'attente (§5.2) ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
 | Divergence sync/async (fallback ≠ thread) | Moyenne | même `plan()` underneath, le thread n'est qu'un wrapper d'appel (§5 : pas de fork) ; goldens identiques lots 1-3 |
 | Verrou monde pendant Dijkstra (régression contention) | Faible | ordre total file → résultats → cache → monde, monde feuille (§5.4) ; `get` en écriture (`static_world.rs:73-75`) réservé au thread plan |
 | Thread orphelin au close/unload | Faible | cycle de vie calé sur `cmd_unload`/`close_job` (§5.1) ; garde-fous existants `UNLOAD_TICKS` 250 + 30 s (`session_cmds.rs:19-21`) |
