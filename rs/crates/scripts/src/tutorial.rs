@@ -723,8 +723,16 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
                 bot.op_loc(1, x, z, loc)?;
                 bot.pump(10)?;
             }
-            if bot.world.modal.is_some() {
-                finish_dialog(bot, &["Yes."], 300)?;
+            // The banker offers Yes/No; Yes opens the bank, which is a
+            // main-side interface, not a chat dialog: continuing the chat
+            // stalls forever, so answer once and close it.
+            let target = bot.world.ticks + 60;
+            while bot.world.ticks < target && bot.world.modal.is_some() && bot.chat_options().is_empty() {
+                bot.pump(5)?;
+            }
+            if !bot.chat_options().is_empty() {
+                bot.chat_choose("Yes.")?;
+                bot.pump(10)?;
             }
             bot.close_modal()?;
             bot.pump(5)?;
