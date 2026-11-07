@@ -718,17 +718,26 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             check(bot.position(), wait_moved(bot, 20)?, "up the bank ladder")
         }
         "bank_booth" => {
-            if !kit::talk(bot, "banker", None, 150)? {
-                let (x, z, _level, loc) = kit::find_loc(bot, &["newbiebankbooth"], 150)?;
-                bot.approach(x, z, bot.world.level, 2, 1500)?;
-                bot.op_loc(1, x, z, loc)?;
-                bot.pump(10)?;
-            }
-            // The banker offers Yes/No; Yes opens the bank, which is a
-            // main-side interface, not a chat dialog: continuing the chat
-            // stalls forever, so answer once and close it.
-            let target = bot.world.ticks + 60;
-            while bot.world.ticks < target && bot.world.modal.is_some() && bot.chat_options().is_empty() {
+            // The banker offers Yes/No (standard multi2 header); Yes opens
+            // the bank, a main-side interface. Page to the choice, answer
+            // once, then close. A stuck dialog (open but textless) gets
+            // closed and retried.
+            for _ in 0..2 {
+                if !kit::talk(bot, "banker", None, 150)? {
+                    let (x, z, _level, loc) = kit::find_loc(bot, &["newbiebankbooth"], 150)?;
+                    bot.approach(x, z, bot.world.level, 2, 1500)?;
+                    bot.op_loc(1, x, z, loc)?;
+                    bot.pump(10)?;
+                }
+                let target = bot.world.ticks + 90;
+                while bot.world.ticks < target && bot.world.modal.is_some() && bot.chat_options().is_empty() {
+                    bot.chat_continue()?;
+                    bot.pump(5)?;
+                }
+                if !bot.chat_options().is_empty() {
+                    break;
+                }
+                bot.close_modal()?;
                 bot.pump(5)?;
             }
             if !bot.chat_options().is_empty() {
