@@ -146,36 +146,70 @@ fn finish_dialog(bot: &mut Bot, answers: &[&str], timeout: u64) -> Result<bool, 
 
 // shortcut: the Rust SDK tracks no door state (no recent_doors/unseal),
 // so a clicked door is re-walked raw instead of routed as known-open.
+// Doors only answer orthogonal clicks (diagonals refuse), and the server
+// lands the clicker one tile across: through means the far side, not one
+// exact tile.
+fn crossed_door(bot: &Bot, door: (i32, i32), start: (i32, i32)) -> bool {
+    (bot.world.x - door.0) * (start.0 - door.0) + (bot.world.z - door.1) * (start.1 - door.1) < 0
+}
+
 fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), ScriptError> {
     let (x, z, _level, loc) = kit::find_loc(bot, &[door_name], 150)?;
-    for _ in 0..6 {
-        if (bot.world.x, bot.world.z) == beyond {
+    let start = (bot.world.x, bot.world.z);
+    let through = |bot: &Bot| (bot.world.x, bot.world.z) == beyond || crossed_door(bot, (x, z), start);
+    // The server only walks through from the door's own axis (a wrong-side
+    // click parks the bot on the door tile): rotate all four orthogonal
+    // stands instead of hammering the nearest one.
+    for _ in 0..2 {
+        if through(bot) {
+            bot.log(&format!("ok {door_name}"));
             return Ok(());
         }
-        if (bot.world.x - x).abs() + (bot.world.z - z).abs() > 1 {
-            let mut tiles: Vec<(i32, i32)> = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
-            tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
-            for (tile_x, tile_z) in tiles {
-                if bot.walk_to(tile_x, tile_z, bot.world.level, 1000).is_ok() {
-                    break;
-                }
-            }
-        }
-        bot.op_loc(1, x, z, loc)?;
-        let target = bot.world.ticks + 15;
-        while bot.world.ticks < target {
-            bot.pump(1)?;
-            if (bot.world.x, bot.world.z) == beyond {
+        let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
+        tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+        for (tile_x, tile_z) in tiles {
+            if through(bot) {
                 bot.log(&format!("ok {door_name}"));
                 return Ok(());
             }
+            if (bot.world.x, bot.world.z) != (tile_x, tile_z) && bot.walk_to(tile_x, tile_z, bot.world.level, 1000).is_err() {
+                continue;
+            }
+            bot.op_loc(1, x, z, loc)?;
+            let target = bot.world.ticks + 15;
+            while bot.world.ticks < target {
+                bot.pump(1)?;
+                if through(bot) {
+                    bot.log(&format!("ok {door_name}"));
+                    return Ok(());
+                }
+            }
         }
     }
-    check(bot.position(), (bot.world.x, bot.world.z) == beyond, &format!("through {door_name}"))
+    check(bot.position(), through(bot), &format!("through {door_name}"))
+}
+
+/// Loc the server wants clicked: the hint arrow tile when set, else the
+/// bot tile. The hint names the intended tree/rock/door; the nearest one to
+/// the bot is not always it (fences sit between the survival trees).
+fn target_ref(bot: &Bot) -> (i32, i32) {
+    match bot.world.hint {
+        Some(lifescape_sdk::world::Hint::Coord(x, z, _)) => (i32::from(x), i32::from(z)),
+        _ => (bot.world.x, bot.world.z),
+    }
+}
+
+fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i32, i32, i32, u16), ScriptError> {
+    let from = target_ref(bot);
+    match kit::find_loc_from(bot, loc_names, radius, from) {
+        Ok(found) => Ok(found),
+        Err(_) if from != (bot.world.x, bot.world.z) => kit::find_loc(bot, loc_names, radius),
+        Err(failed) => Err(failed),
+    }
 }
 
 fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
-    let (x, z, level, loc) = kit::find_loc(bot, loc_names, 150)?;
+    let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
     let mut cands: Vec<(i32, i32)> =
         (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
     cands.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
@@ -204,7 +238,7 @@ fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) ->
 }
 
 fn use_held_on_loc_near(bot: &mut Bot, loc_names: &[&str], tool: u16, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
-    let (x, z, level, loc) = kit::find_loc(bot, loc_names, 150)?;
+    let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
     let mut cands: Vec<(i32, i32)> =
         (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
     cands.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
@@ -334,9 +368,23 @@ fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<(), ScriptE
     let raw = obj(raw_name)?;
     check(bot.position(), catch_shrimp(bot, 200)?, "shrimp caught for cooking")?;
     check(bot.position(), wait_inv(bot, raw_name, 1, 90)?, &format!("has {raw_name}"))?;
-    light_fire(bot)?;
-    let want_id = obj(want)?;
-    check(bot.position(), use_held_on_loc_near(bot, &["fire"], raw, |candidate| candidate.inventory().contains_key(&want_id), 400)?, &format!("{want} cooked"))
+    // Tutorial fires burn out after 100-200 ticks: short cook rounds with a
+    // relight between them, never one long hammering of a dead fire.
+    for _ in 0..3 {
+        if kit::find_loc(bot, &["fire"], 15).is_err() {
+            bot.log("no fire nearby, lighting");
+            light_fire(bot)?;
+        }
+        let want_id = obj(want)?;
+        if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
+            bot.log(&format!("cooking on fire at {fire_x},{fire_z}"));
+        }
+        if use_held_on_loc_near(bot, &["fire"], raw, |candidate| candidate.inventory().contains_key(&want_id), 100)? {
+            return Ok(());
+        }
+        bot.log(&format!("{want} missed this fire, relighting"));
+    }
+    check(bot.position(), false, &format!("{want} cooked"))
 }
 
 fn chef(bot: &mut Bot) -> Result<(), ScriptError> {
@@ -718,14 +766,29 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
 }
 
 fn pass_door_at(bot: &mut Bot, x: i32, z: i32, loc: u16, beyond: (i32, i32), what: &str) -> Result<(), ScriptError> {
-    for _ in 0..5 {
-        if (bot.world.x, bot.world.z) == beyond {
+    let start = (bot.world.x, bot.world.z);
+    let through = |bot: &Bot| (bot.world.x, bot.world.z) == beyond || crossed_door(bot, (x, z), start);
+    for _ in 0..2 {
+        if through(bot) {
             return Ok(());
         }
-        bot.op_loc(1, x, z, loc)?;
-        bot.pump(10)?;
+        let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
+        tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+        for (tile_x, tile_z) in tiles {
+            if through(bot) {
+                return Ok(());
+            }
+            if (bot.world.x, bot.world.z) != (tile_x, tile_z) && bot.walk_to(tile_x, tile_z, bot.world.level, 1000).is_err() {
+                continue;
+            }
+            bot.op_loc(1, x, z, loc)?;
+            bot.pump(10)?;
+            if through(bot) {
+                return Ok(());
+            }
+        }
     }
-    check(bot.position(), (bot.world.x, bot.world.z) == beyond, &format!("inside {what}"))
+    check(bot.position(), through(bot), &format!("inside {what}"))
 }
 
 /// Run the tutorial island from any stage to the mainland teleport.
@@ -764,11 +827,20 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
             }
             bot.log(&format!("no stage match for instruction: {:?}", &instruction(bot)[..instruction(bot).len().min(200)]));
             if instruction(bot).trim().is_empty() {
-                // Empty box right after a step: re-click the tab to resend
-                // the current stage before giving up.
-                bot.tut_clickside(TUT_TAB)?;
-                bot.pump(10)?;
-                if detect_stage(bot).is_none() {
+                // Empty box right after a step or a relogin: re-click the
+                // tab to resend the current stage, several rounds. Tab
+                // clicks only ever advance to the next required click-tab
+                // stage, so this cannot skip real work.
+                let mut recovered = false;
+                for _ in 0..5 {
+                    bot.tut_clickside(TUT_TAB)?;
+                    bot.pump(15)?;
+                    if detect_stage(bot).is_some() {
+                        recovered = true;
+                        break;
+                    }
+                }
+                if !recovered {
                     return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: no instruction at {:?}", bot.position()))));
                 }
                 continue;

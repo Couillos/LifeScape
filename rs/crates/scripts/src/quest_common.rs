@@ -60,6 +60,14 @@ pub fn worn_count(bot: &Bot, obj: u16) -> u32 {
 /// within `radius` tiles. Pumps briefly first: freshly streamed areas take
 /// a few ticks to arrive.
 pub fn find_loc(bot: &mut Bot, names: &[&str], radius: i32) -> Result<(i32, i32, i32, u16), ScriptError> {
+    let from = (bot.world.x, bot.world.z);
+    find_loc_from(bot, names, radius, from)
+}
+
+/// Same as `find_loc` but measuring nearness from a reference tile instead
+/// of the bot: the tutorial server points its hint arrow at the intended
+/// tree/rock, which is not always the closest one (fences in between).
+pub fn find_loc_from(bot: &mut Bot, names: &[&str], radius: i32, from: (i32, i32)) -> Result<(i32, i32, i32, u16), ScriptError> {
     let wants: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
     let (here_x, here_z) = (bot.world.x, bot.world.z);
     bot.ensure_area(here_x, here_z, radius);
@@ -71,7 +79,7 @@ pub fn find_loc(bot: &mut Bot, names: &[&str], radius: i32) -> Result<(i32, i32,
             if tile.2 != bot.world.level {
                 continue;
             }
-            let dist = (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs();
+            let dist = (tile.0 - from.0).abs() + (tile.1 - from.1).abs();
             if dist > radius {
                 continue;
             }
@@ -87,7 +95,7 @@ pub fn find_loc(bot: &mut Bot, names: &[&str], radius: i32) -> Result<(i32, i32,
             return Ok((x, z, level, loc));
         }
         if bot.world.ticks >= target {
-            return Err(ScriptError::Sdk(Error::Unreachable(format!("no loc {names:?} near {:?} (radius {radius})", bot.position()))));
+            return Err(ScriptError::Sdk(Error::Unreachable(format!("no loc {names:?} near {from:?} (radius {radius})"))));
         }
         bot.pump(2)?;
     }
