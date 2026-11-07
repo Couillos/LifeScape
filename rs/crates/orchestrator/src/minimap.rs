@@ -158,10 +158,23 @@ fn parse_square(data: &[u8]) -> Option<Vec<GroundTile>> {
     Some(tiles)
 }
 
+/// Map squares live here under a bound: a woodcut loop visits dozens of
+/// squares in a few hours, past the old 32-slot random eviction the
+/// working set thrashed (every tile re-parsed its square, 81 s a frame
+/// with 4 concurrent renders) and one 1.2 ms parse under the lock held
+/// every tile lookup behind it.
+const SQUARE_CAP: usize = 128;
+
+struct SquareEntry {
+    tiles: Arc<Vec<GroundTile>>,
+    used: u64,
+}
+
 struct Grounds {
     archive: Vec<u8>,
     entries: HashMap<String, (usize, usize)>,
-    squares: Mutex<HashMap<(i32, i32), Option<Arc<Vec<GroundTile>>>>>,
+    squares: Mutex<HashMap<(i32, i32), SquareEntry>>,
+    clock: std::sync::atomic::AtomicU64,
     blends: Mutex<HashMap<(i32, i32, i32), u32>>,
 }
 
@@ -169,28 +182,41 @@ impl Grounds {
     fn load(pack: &PathBuf) -> Grounds {
         let archive = std::fs::read(pack.join(".cache").join("maps-server.zip")).unwrap_or_default();
         let entries = zip_entries(&archive);
-        Grounds { archive, entries, squares: Mutex::new(HashMap::new()), blends: Mutex::new(HashMap::new()) }
+        Grounds { archive, entries, squares: Mutex::new(HashMap::new()), clock: std::sync::atomic::AtomicU64::new(0), blends: Mutex::new(HashMap::new()) }
     }
 
     /// One map square per level, shared by every tile lookup: the Vec is
     /// cloned once per square (Arc), never once per tile (17k lookups x
-    /// 384 KiB per 33-px frame before this).
+    /// 384 KiB per 33-px frame before this). The parse runs outside the
+    /// lock and a miss caches nothing: under contention every tile lookup
+    /// behind one 1.2 ms critical section stalled the whole server.
     fn square(&self, square_x: i32, square_z: i32) -> Option<Arc<Vec<GroundTile>>> {
-        let mut squares = self.squares.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = squares.get(&(square_x, square_z)) {
-            return cached.clone();
+        let tick = self.clock.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(cached) = self.squares.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get_mut(&(square_x, square_z)) {
+            cached.used = tick;
+            return Some(cached.tiles.clone());
         }
         let name = format!("m{square_x}_{square_z}");
         let parsed = self.entries.get(&name).and_then(|(offset, size)| parse_square(&self.archive[*offset..*offset + *size])).map(Arc::new);
-        squares.insert((square_x, square_z), parsed.clone());
-        while squares.len() > 32 {
-            if let Some(key) = squares.keys().next().copied() {
-                squares.remove(&key);
+        // Off-map squares (None) cache nothing: they used to fill the
+        // slots and evict live squares into a re-parse cascade.
+        let tiles = parsed?;
+        let mut squares = self.squares.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = squares.get_mut(&(square_x, square_z)) {
+            cached.used = tick;
+            return Some(cached.tiles.clone());
+        }
+        squares.insert((square_x, square_z), SquareEntry { tiles: tiles.clone(), used: tick });
+        // Least-recently-used eviction, one scan past the cap: random
+        // eviction could drop a square another render was mid-frame on.
+        while squares.len() > SQUARE_CAP {
+            if let Some(oldest) = squares.iter().min_by_key(|(_, entry)| entry.used).map(|(key, _)| *key) {
+                squares.remove(&oldest);
             } else {
                 break;
             }
         }
-        parsed
+        Some(tiles)
     }
 
     fn tile(&self, level: i32, tile_x: i32, tile_z: i32) -> GroundTile {
@@ -234,8 +260,13 @@ impl Grounds {
             MapCache::blended_colour(hue, (sat_total / count) as u32, (lig_total / count) as u32)
         };
         let mut blends = self.blends.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Evict half, never clear: a full clear left every in-flight
+        // render cold at once and their re-computes piled up.
         if blends.len() > 20000 {
-            blends.clear();
+            let drop: Vec<(i32, i32, i32)> = blends.keys().take(10000).copied().collect();
+            for key in drop {
+                blends.remove(&key);
+            }
         }
         blends.insert((level, tile_x, tile_z), colour);
         colour
@@ -383,10 +414,21 @@ fn load_loc_layers(archive: &[u8], entries: &HashMap<String, (usize, usize)>) ->
 
 // -- minimap -------------------------------------------------------------------
 
+/// Last PNG frames by (level, x, z, size): a browser refetching the same
+/// image after a timeout must not queue another full render behind the
+/// herd. Bounded, one slot evicted per overflow, no eviction cliff.
+const FRAME_CAP: usize = 16;
+
 pub struct Minimap {
     cache: MapCache,
     grounds: Grounds,
     layers: Mutex<Option<HashMap<(i32, i32, i32, u8), (u32, u8, u8)>>>,
+    frames: Mutex<HashMap<(i32, i32, i32, usize), Vec<u8>>>,
+    /// One render at a time: concurrent frames serialise here instead of
+    /// thrashing the square/blend caches against each other (measured
+    /// 81 s for 4 concurrent cold frames, 15 ms serialised). Throughput
+    /// is ~60 warm frames/s, the dashboard needs < 10.
+    render_lock: Mutex<()>,
 }
 
 impl Minimap {
@@ -395,6 +437,8 @@ impl Minimap {
             cache: MapCache::new(pack_dir.clone()),
             grounds: Grounds::load(&pack_dir),
             layers: Mutex::new(None),
+            frames: Mutex::new(HashMap::new()),
+            render_lock: Mutex::new(()),
         }
     }
 
@@ -535,14 +579,32 @@ impl Minimap {
     }
 
     /// PNG for a size x size window at (level, x, z), 4 px per tile.
+    /// Identical concurrent requests share one cached frame instead of
+    /// queueing N renders behind the same herd.
     pub fn png(&self, level: i32, world_x: i32, world_z: i32, size: usize) -> Vec<u8> {
+        let key = (level, world_x, world_z, size);
+        // Single-flight: outer render lock first (leaf locks only
+        // inside), so identical concurrent requests share the one frame
+        // instead of rendering N times.
+        let _render = self.render_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(frame) = self.frames.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
+            return frame.clone();
+        }
         let pixels = self.render(level, world_x, world_z, size, 10);
         let mut rgb = Vec::with_capacity(pixels.len() * 3);
         for pixel in pixels {
             rgb.extend_from_slice(&[((pixel >> 16) & 0xFF) as u8, ((pixel >> 8) & 0xFF) as u8, (pixel & 0xFF) as u8]);
         }
         let border = (size * 4) as u32;
-        png::encode_rgb(border, border, &rgb)
+        let frame = png::encode_rgb(border, border, &rgb);
+        let mut frames = self.frames.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if frames.len() >= FRAME_CAP {
+            if let Some(oldest) = frames.keys().next().copied() {
+                frames.remove(&oldest);
+            }
+        }
+        frames.insert(key, frame.clone());
+        frame
     }
 }
 
@@ -583,6 +645,45 @@ mod tests {
             hash = hash.wrapping_mul(0x100000001B3);
         }
         hash
+    }
+
+    #[test]
+    fn concurrent_frames_stay_fast() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        // Non-regression (front mort 2026-11-07: vague 4 x 81 s, puis
+        // timeouts): concurrent frames must not re-parse squares in a
+        // cascade. Warm up first (one-off whole-world loc index ~1 s),
+        // then identical x 10 share one cached frame and distinct spots
+        // stay in the millisecond range.
+        let maps = Arc::new(Minimap::new(pack_dir()));
+        let _ = maps.png(0, 3200, 3200, 9);
+        let spots = [(0, 3180, 3200), (0, 3000, 3050), (0, 2900, 2900), (0, 3300, 3100)];
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let maps = maps.clone();
+            handles.push(std::thread::spawn(move || {
+                let start = Instant::now();
+                let frame = maps.png(0, 3200, 3200, 33);
+                assert!(!frame.is_empty());
+                start.elapsed()
+            }));
+        }
+        for (index, (level, x, z)) in spots.iter().enumerate() {
+            let maps = maps.clone();
+            let (level, x, z) = (*level, *x + index as i32 * 7, *z);
+            handles.push(std::thread::spawn(move || {
+                let start = Instant::now();
+                let frame = maps.png(level, x, z, 33);
+                assert!(!frame.is_empty());
+                start.elapsed()
+            }));
+        }
+        let mut worst = Duration::ZERO;
+        for handle in handles {
+            worst = worst.max(handle.join().unwrap());
+        }
+        assert!(worst < Duration::from_secs(2), "concurrent frames took {worst:?}");
     }
 
     #[test]
