@@ -156,12 +156,32 @@ fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<boo
 }
 
 /// Broke and axeless: kill goblins east of Lumbridge for coin drops
-/// until the pack funds the axe. Bounded rounds, each a few kills with
-/// no banking (loot stays in the pack for the shared buy below); no
-/// gain stops early. True when the pack now affords the axe.
+/// until the pack funds the axe. Bounded rounds, each a few kills; the hunt
+/// loot stays in the pack for the shared buy below, but anything older
+/// (banked logs from a failed sale, shop junk) is stashed first so combat
+/// never rides with a dead stock. No gain stops early. True when the pack
+/// now affords the axe.
 /// Budget: goblin coin drops average ~1.6/kill (goblin.rs2 drop table, 27
 /// coin rolls per 128), so 30 kills expect ~47 coins and P(<16) is ~2%.
+/// True when the pack holds anything but axes and coins: shop stock or
+/// loot from another job that must not ride into combat (death drops it,
+/// and it clogs the slots the fight needs).
+fn combat_pack_dirty(bot: &Bot, coins: u16) -> bool {
+    let axes = known_axe_ids(bot);
+    pack_ids(bot).iter().any(|id| *id != coins && !axes.contains(id))
+}
+
 fn hunt_goblins(bot: &mut Bot, coins: u16) -> Result<bool, ScriptError> {
+    // Combat pack is combat loot only: logs or shop junk riding along die
+    // with the bot (or clog the pack), and a failed sale above is exactly
+    // how they get there. Stash everything but axes and coins first, so a
+    // missed sale banks its stock instead of marching it into the hunt.
+    if combat_pack_dirty(bot, coins) {
+        let mut keep = known_axe_ids(bot);
+        keep.insert(coins);
+        let bank = nearest_bank(bot)?;
+        bank_trip(bot, &bank, &keep.into_iter().collect::<Vec<_>>(), 0)?;
+    }
     for _ in 0..5 {
         if pack_total(bot, coins) >= 16 {
             return Ok(true);
@@ -864,7 +884,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_products, can_buy_now, chop_keep_ids, death_since};
+    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, death_since};
     use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -910,11 +930,27 @@ mod tests {
         assert_eq!(fresh, 1, "chatter still resyncs the index");
     }
 
+    /// Combat pack rule: logs or shop junk force a stash, axes and coins
+    /// ride along. A missed sale must bank its stock, never march it into
+    /// the hunt.
+    #[test]
+    fn combat_pack_dirty_iff_noncombat_carried() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
+        let logs = crate::skill_common::obj_id(&bot, "logs").expect("logs in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        assert!(!combat_pack_dirty(&bot, coins), "empty pack hunts as-is");
+        bot.world.inv.insert(com, [(0u8, (coins, 3u32))].into_iter().collect());
+        assert!(!combat_pack_dirty(&bot, coins), "coins ride along");
+        bot.world.inv.insert(com, [(0u8, (coins, 3u32)), (1, (logs, 6))].into_iter().collect());
+        assert!(combat_pack_dirty(&bot, coins), "banked logs must stash before the hunt");
+    }
+
     /// Bootstrap sale set: ground loot and logs fund the axe, axes/coins
     /// and the unbankable lamp never sell.
     #[test]
-    fn bootstrap_products_sells_loot_never_axe_or_lamp() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    fn bootstrap_products_sells_loot_never_axe_or_lamp() {        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
         let axe = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");

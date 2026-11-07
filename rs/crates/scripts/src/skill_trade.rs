@@ -99,9 +99,61 @@ pub fn keeper_fallback_log(keeper: &str, spawn: (i32, i32, i32)) -> String {
 /// name matches live NPCs by substring (same as `Bot::find_npc`).
 /// Tries every tile around the keeper like the reference flow does: counters
 /// block the click from most sides, so one angle is rarely enough.
+/// A missing keeper falls back to the shop's other staff (same shop, same
+/// generic Trade op): the dump spawn can go stale while the assistant next
+/// door still streams. Every fallback is logged; giving up stays Ok(false).
 pub fn trade_to_keeper(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32)) -> Result<bool, ScriptError> {
     let main_com = (bot.tables.com_id)("shop_template:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
+    if trade_with(bot, keeper, spawn, main_com)? {
+        return Ok(true);
+    }
+    for (alt, alt_spawn) in shop_mates(bot, keeper) {
+        if alt.eq_ignore_ascii_case(keeper) {
+            continue;
+        }
+        bot.log(&format!("keeper {keeper} missing, trying {alt} at ({},{})", alt_spawn.1, alt_spawn.2));
+        if trade_with(bot, &alt, alt_spawn, main_com)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Other keepers of the keeper's own shop, nearest first: the sale and the
+/// buy both ride the generic Trade op, so any streamed staff opens it.
+fn shop_mates(bot: &Bot, keeper: &str) -> Vec<(String, (i32, i32, i32))> {
+    let wanted = keeper.to_lowercase();
+    let shop = knowledge::shops::all_shops().into_iter().find(|shop| {
+        shop.keepers.iter().any(|row| row.npc.to_lowercase() == wanted)
+    });
+    let Some(shop) = shop else {
+        return Vec::new();
+    };
+    let mut mates: Vec<(i64, (String, (i32, i32, i32)))> = Vec::new();
+    for row in &shop.keepers {
+        if row.npc.to_lowercase() == wanted {
+            continue;
+        }
+        for entry in knowledge::npcs_by_name(&row.npc) {
+            for spawn in &entry.spawns {
+                if spawn.level != i64::from(bot.world.level) {
+                    continue;
+                }
+                let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
+                if dist > TREK_LIMIT {
+                    continue;
+                }
+                let tile = (spawn.level as i32, spawn.x as i32, spawn.z as i32);
+                mates.push((dist, (row.npc.clone(), tile)));
+            }
+        }
+    }
+    mates.sort_by_key(|(dist, _)| *dist);
+    mates.into_iter().map(|(_, found)| found).collect()
+}
+
+fn trade_with(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32), main_com: u16) -> Result<bool, ScriptError> {
     if live_keeper(bot, keeper).is_some() {
         // Streamed keeper: walk its live tile, the static spawn (which can
         // sit inside a wall, e.g. bob's) stays untouched.
@@ -378,7 +430,7 @@ pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, sell_for_target, trade_to_keeper};
+    use super::{buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, sell_for_target, shop_mates, trade_to_keeper};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::world::NpcInfo;
     use lifescape_sdk::Bot;
@@ -479,5 +531,28 @@ mod tests {
         assert!(live_keeper(&bot, "bob").is_none(), "no live tile without a stream");
         let line = keeper_fallback_log("bob", (0, 3232, 3203));
         assert!(line.contains("keeper bob not streamed, trying spawn"), "exact fallback line, got: {line}");
+    }
+
+    /// Missing keeper falls back to the shop's other staff: the Lumbridge
+    /// general store lists the assistant next to keeper 1, the keeper
+    /// itself is excluded, and an unknown keeper has no mates (trade
+    /// behaviour for it is unchanged).
+    #[test]
+    fn missing_keeper_falls_back_to_shop_mate() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3209;
+        bot.world.z = 3247;
+        let mates = shop_mates(&bot, "generalshopkeeper1");
+        assert!(
+            mates.iter().any(|(name, _)| name.eq_ignore_ascii_case("generalassistant1")),
+            "assistant is a mate, got: {mates:?}"
+        );
+        assert!(
+            mates.iter().all(|(name, _)| !name.eq_ignore_ascii_case("generalshopkeeper1")),
+            "keeper itself excluded, got: {mates:?}"
+        );
+        assert!(shop_mates(&bot, "no_such_keeper").is_empty(), "unknown keeper has no mates");
     }
 }
