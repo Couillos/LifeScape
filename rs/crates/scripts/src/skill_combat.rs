@@ -16,12 +16,85 @@ use crate::{ScriptError, ScriptResult};
 const EAT_FRACTION: f64 = 0.55;
 const FOOD_TARGET: usize = 10;
 const LOOT_RADIUS: i32 = 6;
-const STYLE_KILLS: u32 = 3;
-const MELEE_ORDER: [&str; 3] = ["attack", "strength", "defence"];
+/// World ticks a "can't reach" goblin tile stays banned before retry.
+const BLOCKED_BAN_TICKS: u64 = 200;
+/// Worst-case take: the drop lands on the death tick (goblin.rs2 obj_add
+/// right after npc_death), walk <= 6 tiles + click. 600 burned 12 s on every
+/// vanished/unreachable item; failures now log so the bound stays honest.
+const TAKE_TICKS: u64 = 100;
+/// No combat xp and no steps for this long while the foe lives: not
+/// fighting (fence, stale slot, single-way block). ~35 s at the measured
+/// ~5.6 ticks/s; a real engagement lands xp within seconds of contact.
+const FIGHT_STALL_TICKS: u64 = 200;
+/// One foe never holds the bot longer than this, xp trickle or not: a normal
+/// goblin kill costs <= ~600 ticks all-in (t01 live: kills 1-6), so 900 is
+/// 1.5x headroom. The 12-minute goblin 810 grind (xp flowing, nothing dying)
+/// is by definition a bad use of time on an axe rush.
+const KILL_CAP_TICKS: u64 = 900;
 const ARMOUR_SLOTS: [i64; 9] = [0, 1, 2, 4, 5, 7, 9, 10, 12];
 /// Server wearpos slots: 3 is the weapon, 5 the shield.
 const WEAPON_SLOT: i64 = 3;
 const WORN_COM_NAME: &str = "wornitems:wear";
+
+/// Controlled style button per weapon category, when this revision offers
+/// one: slash/spiked/claws index 2, spear 0-2, polearm 0. Controlled trains
+/// attack + strength + defence at once (combat.rs2:151-154, each 133/100 of
+/// base xp). Unarmed has NO controlled entry (unarmed_table), so bare fists
+/// rotate instead of sitting on accurate.
+/// Source: content/scripts/skill_combat/configs/combat.dbrow (slash_table,
+/// spear_table, polearm_table, spiked_table, claws_table) crossed with
+/// content/scripts/skill_combat/scripts/player/player_attackstyles.rs2:37-76
+/// (button suffix -> style index).
+fn controlled_button(category: &str) -> Option<&'static str> {
+    match category {
+        "weapon_slash" => Some("combat_hacksword:hack2"),
+        "weapon_spiked" => Some("combat_spiked:spiked2"),
+        "weapon_claws" => Some("combat_claw:claw2"),
+        "weapon_spear" => Some("combat_spear:spear0"),
+        "weapon_polearm" => Some("combat_polearm:polearm0"),
+        _ => None,
+    }
+}
+
+/// Combat xp across the four fighting stats (attack 0, defence 1, strength 2,
+/// hitpoints 3): any landed hit moves it, so a flat line means no combat.
+fn combat_xp(bot: &Bot) -> i64 {
+    [0u8, 1, 2, 3].iter().filter_map(|index| bot.world.stats.get(index)).map(|(_, xp)| i64::from(*xp)).sum()
+}
+
+/// Level of one melee skill by stat id (0 attack, 1 defence, 2 strength).
+fn melee_stat(bot: &Bot, skill: &str) -> i64 {
+    let index = match skill {
+        "attack" => 0u8,
+        "defence" => 1u8,
+        _ => 2u8,
+    };
+    bot.world.stats.get(&index).map(|(level, _)| i64::from(*level)).unwrap_or(1)
+}
+
+/// Style to switch to, if any: controlled never rotates, otherwise the
+/// weakest skill when it sits a full level below the current one (ties and
+/// balanced skills hold, no click spam).
+fn next_style(bot: &Bot, current: &str) -> Option<&'static str> {
+    if current == "controlled" {
+        return None;
+    }
+    let want = weakest_melee(bot);
+    (want != current && melee_stat(bot, want) < melee_stat(bot, current)).then_some(want)
+}
+
+/// Weakest of attack/strength/defence right now.
+fn weakest_melee(bot: &Bot) -> &'static str {
+    let (attack, strength, defence) =
+        (melee_stat(bot, "attack"), melee_stat(bot, "strength"), melee_stat(bot, "defence"));
+    if attack <= strength && attack <= defence {
+        "attack"
+    } else if strength <= defence {
+        "strength"
+    } else {
+        "defence"
+    }
+}
 
 /// Combat style buttons per weapon category (player_attackstyles data).
 fn style_buttons(category: &str, skill: &str) -> Option<&'static str> {
@@ -214,7 +287,12 @@ fn current_weapon_category(bot: &Bot) -> String {
 
 fn set_style(bot: &mut Bot, skill: &str) -> Result<(), ScriptError> {
     let category = current_weapon_category(bot);
-    if let Some(dotted) = style_buttons(&category, skill) {
+    let dotted = if skill == "controlled" {
+        controlled_button(&category)
+    } else {
+        style_buttons(&category, skill)
+    };
+    if let Some(dotted) = dotted {
         if let Some(com) = (bot.tables.com_id)(dotted) {
             bot.if_button(com)?;
             bot.pump(3)?;
@@ -414,16 +492,21 @@ fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec
     ranked.into_iter().map(|(_, x, z, count)| (x, z, count)).collect()
 }
 
-fn attack_nearest(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot) -> Result<Option<u16>, ScriptError> {
+fn attack_nearest(
+    bot: &mut Bot,
+    spot: &knowledge::combat_spots::CombatSpot,
+    avoid: &mut HashMap<(i32, i32), u64>,
+) -> Result<Option<u16>, ScriptError> {
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut cands = bot.npcs_named(&names);
+    cands.retain(|(_, x, z)| avoid.get(&(*x, *z)).is_none_or(|until| *until <= bot.world.ticks));
     cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
-    let Some((slot, x, z)) = cands.first().copied() else {
-        return Ok(None);
-    };
-    if (x - bot.world.x).abs() + (z - bot.world.z).abs() > 6 {
-        // Dead socket, not a far foe: typed instead of Ok(None).
-        match bot.approach(x, z, bot.world.level, 1, 1500) {
+    // Door-aware acquisition, first reachable wins (max 3 foes): stand
+    // orthogonally adjacent via the router, which opens shut doors on the
+    // way (travel Segment::OpenDoor). NoRoute or a blocked ring bans the
+    // tile and tries the next goblin instead of insisting on this one.
+    for (slot, x, z) in cands.into_iter().take(3) {
+        match bot.approach_npc(slot, 100) {
             Ok(()) => {}
             Err(error)
                 if matches!(
@@ -433,11 +516,16 @@ fn attack_nearest(bot: &mut Bot, spot: &knowledge::combat_spots::CombatSpot) -> 
             {
                 return Err(error.into())
             }
-            Err(_) => return Ok(None),
+            Err(error) => {
+                bot.log(&format!("goblin {slot} at ({x},{z}) unreachable: {error}"));
+                avoid.insert((x, z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                continue;
+            }
         }
+        bot.op_npc(2, slot)?;
+        return Ok(Some(slot));
     }
-    bot.op_npc(2, slot)?;
-    Ok(Some(slot))
+    Ok(None)
 }
 
 fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
@@ -449,6 +537,10 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
         .map(|((tile, oid), _)| (tile, oid))
         .collect();
     items.sort_by_key(|(tile, _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    // Coins first: the goblin bootstrap exists to fund the axe, junk never
+    // starves the coin pickup when the pack is nearly full.
+    let coins = (bot.tables.find_obj_by_name)("coins");
+    items.sort_by_key(|(_, oid)| if Some(*oid) == coins { 0 } else { 1 });
     for (_, oid) in items {
         if free_slots(bot) == 0 {
             break;
@@ -458,9 +550,9 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
             continue;
         }
         // Dead socket, not a missed pickup: typed instead of skipping.
-        match bot.take(Some(oid), None, 600) {
+        match bot.take(Some(oid), None, TAKE_TICKS) {
             Ok(true) => taken += 1,
-            Ok(false) => {}
+            Ok(false) => bot.log(&format!("loot {name} gave nothing at {:?}", bot.position())),
             Err(error)
                 if matches!(
                     error,
@@ -469,7 +561,7 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
             {
                 return Err(error.into())
             }
-            Err(_) => {}
+            Err(error) => bot.log(&format!("loot {name} failed at {:?}: {error}", bot.position())),
         }
     }
     bury_bones(bot)?;
@@ -482,15 +574,35 @@ fn fight(
     target: (i32, i32),
     kills_limit: u32,
     ticks_limit: u64,
+    no_bank: bool,
 ) -> Result<(u32, bool), ScriptError> {
     let mut kills = 0u32;
     let started = bot.world.ticks;
     let mut target_npc: Option<u16> = None;
     let mut last_attack = 0u64;
-    let mut style_index = 0usize;
     let mut last_event_check = bot.world.ticks;
     let mut max_hp = hitpoints(bot).max(10);
-    set_style(bot, MELEE_ORDER[style_index])?;
+    let mut seen_msgs = bot.world.messages.len();
+    let mut unreachable: HashMap<(i32, i32), u64> = HashMap::new();
+    let mut progress_at = bot.world.ticks;
+    let mut progress_xp = combat_xp(bot);
+    let mut progress_pos = (bot.world.x, bot.world.z);
+    let mut engaged_at = bot.world.ticks;
+    let mut attempts = 0u32;
+    // Controlled (all three at once) when the wielded category offers it,
+    // else the weakest skill right now: unarmed has no controlled entry.
+    let mut style: String = if controlled_button(&current_weapon_category(bot)).is_some() {
+        "controlled".to_string()
+    } else {
+        weakest_melee(bot).to_string()
+    };
+    set_style(bot, &style)?;
+    bot.log(&format!(
+        "style {style} (atk={} str={} def={})",
+        melee_stat(bot, "attack"),
+        melee_stat(bot, "strength"),
+        melee_stat(bot, "defence")
+    ));
     loop {
         if ticks_limit > 0 && bot.world.ticks - started >= ticks_limit {
             break;
@@ -512,6 +624,8 @@ fn fight(
             }
             max_hp = hitpoints(bot).max(10);
             target_npc = None;
+            attempts = 0;
+            progress_at = bot.world.ticks;
             continue;
         }
         max_hp = max_hp.max(hp);
@@ -520,6 +634,97 @@ fn fight(
         }
         if let Some(slot) = target_npc {
             if bot.world.npcs.contains_key(&slot) {
+                // One foe never holds the bot past the cap, xp trickle or
+                // not: ban, step toward it (door-aware), repick. A target at
+                // 1 hp retried after the ban expiry, nothing is lost.
+                if bot.world.ticks - engaged_at >= KILL_CAP_TICKS {
+                    let (foe_x, foe_z) =
+                        bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
+                    bot.log(&format!("target {slot} alive {}t, moving on", bot.world.ticks - engaged_at));
+                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    let _ = bot.approach_npc(slot, 60);
+                    target_npc = None;
+                    attempts = 0;
+                    progress_at = bot.world.ticks;
+                    continue;
+                }
+                let blocked = bot.world.messages.get(seen_msgs..).unwrap_or(&[]).iter().any(|line| {
+                    // Server refusals (player_combat.rs2 player_in_combat_check)
+                    // or unreachable foe: repick instead of spamming the same
+                    // click every 5 ticks forever (t01 baseline: 229 "can't
+                    // reach" + 36 "already under attack" for 26 kills).
+                    let lowered = line.to_lowercase();
+                    lowered.contains("can't reach that")
+                        || lowered.contains("already under attack")
+                        || lowered.contains("someone else is fighting")
+                        || lowered.contains("not after you")
+                });
+                let (foe_x, foe_z) =
+                    bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
+                if blocked {
+                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    let _ = bot.approach_npc(slot, 60);
+                    seen_msgs = bot.world.messages.len();
+                    target_npc = None;
+                    attempts = 0;
+                    progress_at = bot.world.ticks;
+                    continue;
+                }
+                // Door-aware step: orthogonal adjacency via the router, which
+                // opens shut doors on the way (goblin in a house, or bot
+                // locked inside: the walk crosses the door instead of
+                // spamming clicks). 3 failed bouts blacklist the foe.
+                match bot.approach_npc(slot, 100) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error,
+                            lifescape_sdk::Error::Interrupted(_)
+                                | lifescape_sdk::Error::Io(_)
+                                | lifescape_sdk::Error::Login(_)
+                        ) =>
+                    {
+                        return Err(error.into())
+                    }
+                    Err(error) => {
+                        attempts += 1;
+                        bot.log(&format!("npc {slot} approach {attempts}/3 failed: {error}"));
+                        if attempts >= 3 {
+                            bot.log(&format!(
+                                "blacklist npc {slot} at ({foe_x},{foe_z}): 3 failed approaches from {:?}",
+                                bot.position()
+                            ));
+                            unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                            target_npc = None;
+                            attempts = 0;
+                            progress_at = bot.world.ticks;
+                        }
+                        continue;
+                    }
+                }
+                // No xp and no steps for a whole stall window while the foe
+                // lives: not fighting (locked in/out around a door the
+                // router could not cross). Ban, step out toward the foe,
+                // repick. Attempts reset on xp only: circling a blocked
+                // house is movement, not progress, or 3 failed bouts would
+                // never blacklist.
+                if combat_xp(bot) != progress_xp {
+                    progress_xp = combat_xp(bot);
+                    progress_pos = (bot.world.x, bot.world.z);
+                    progress_at = bot.world.ticks;
+                    attempts = 0;
+                } else if (bot.world.x, bot.world.z) != progress_pos {
+                    progress_pos = (bot.world.x, bot.world.z);
+                    progress_at = bot.world.ticks;
+                } else if bot.world.ticks - progress_at >= FIGHT_STALL_TICKS {
+                    bot.log(&format!("stall on npc {slot}, repicking"));
+                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    let _ = bot.approach_npc(slot, 60);
+                    target_npc = None;
+                    attempts = 0;
+                    progress_at = bot.world.ticks;
+                    continue;
+                }
                 if bot.world.ticks - last_attack >= 5 {
                     bot.op_npc(2, slot)?;
                     last_attack = bot.world.ticks;
@@ -527,21 +732,34 @@ fn fight(
                 continue;
             }
             kills += 1;
-            bot.log(&format!("kill {kills} at {:?}", bot.position()));
-            target_npc = None;
+            let loot_from = bot.world.ticks;
             loot_ground(bot)?;
-            if kills % STYLE_KILLS == 0 {
-                style_index = (style_index + 1) % MELEE_ORDER.len();
-                set_style(bot, MELEE_ORDER[style_index])?;
+            bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks - loot_from));
+            seen_msgs = bot.world.messages.len();
+            progress_at = bot.world.ticks;
+            attempts = 0;
+            target_npc = None;
+            if let Some(want) = next_style(bot, &style) {
+                style = want.to_string();
+                set_style(bot, &style)?;
+                bot.log(&format!(
+                    "style -> {style} (atk={} str={} def={})",
+                    melee_stat(bot, "attack"),
+                    melee_stat(bot, "strength"),
+                    melee_stat(bot, "defence")
+                ));
             }
-            if free_slots(bot) <= 1 || food_count(bot) == 0 {
+            if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0) {
                 return Ok((kills, true));
             }
             continue;
         }
-        target_npc = attack_nearest(bot, spot)?;
+        unreachable.retain(|_, until| *until > bot.world.ticks);
+        target_npc = attack_nearest(bot, spot, &mut unreachable)?;
         if let Some(slot) = target_npc {
             last_attack = bot.world.ticks;
+            engaged_at = bot.world.ticks;
+            attempts = 0;
             let _ = slot;
         } else if (bot.world.x - target.0).abs() + (bot.world.z - target.1).abs() > 8 {
             // Dead socket, not an empty field: typed instead of pacing.
@@ -603,7 +821,7 @@ fn run_spot(
                 Ok(true) => {}
             }
             {
-                let (kills, banked) = fight(bot, spot, (center_x, center_z), kills_limit - total, ticks_limit)?;
+                let (kills, banked) = fight(bot, spot, (center_x, center_z), kills_limit - total, ticks_limit, no_bank)?;
                 total += kills;
                 if !banked || (kills_limit > 0 && total >= kills_limit) {
                     return Ok(total);
@@ -667,9 +885,54 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_at_bank;
+    use super::{controlled_button, melee_stat, next_style, prepare_at_bank, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    fn stat_bot(attack: u8, defence: u8, strength: u8) -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(0, (attack, 0));
+        bot.world.stats.insert(1, (defence, 0));
+        bot.world.stats.insert(2, (strength, 0));
+        bot
+    }
+
+    /// t01's live state (atk 10, str/def 1): the laggard trains, never the
+    /// leader. Previously the blind 3-kill rotation sat on accurate.
+    #[test]
+    fn weakest_melee_picks_laggard() {
+        let bot = stat_bot(10, 1, 1);
+        assert_eq!(weakest_melee(&bot), "strength");
+        assert_eq!(melee_stat(&bot, "attack"), 10);
+        assert_eq!(next_style(&bot, "attack"), Some("strength"));
+        assert_eq!(next_style(&bot, "strength"), None, "already training the weakest: hold");
+        assert_eq!(next_style(&bot, "controlled"), None, "controlled never rotates");
+    }
+
+    /// Balanced skills hold the current style (no click spam on ties), a
+    /// one-level gap rotates to the laggard.
+    #[test]
+    fn rotation_holds_ties_switches_on_gap() {
+        let tied = stat_bot(5, 5, 5);
+        assert_eq!(next_style(&tied, "attack"), None);
+        let gapped = stat_bot(6, 5, 5);
+        assert_eq!(next_style(&gapped, "attack"), Some("strength"), "5 < 6 trains first");
+        assert_eq!(next_style(&gapped, "strength"), None, "weakest held");
+    }
+
+    /// Controlled exists exactly where the revision's combat.dbrow puts a
+    /// ^style_melee_controlled entry (slash/spear/polearm/spiked/claws);
+    /// unarmed and plain axes have none.
+    #[test]
+    fn controlled_only_where_the_revision_has_it() {
+        assert_eq!(controlled_button("weapon_slash"), Some("combat_hacksword:hack2"));
+        assert_eq!(controlled_button("weapon_spear"), Some("combat_spear:spear0"));
+        assert_eq!(controlled_button("weapon_polearm"), Some("combat_polearm:polearm0"));
+        assert_eq!(controlled_button("unarmed"), None);
+        assert_eq!(controlled_button("weapon_axe"), None);
+        assert_eq!(controlled_button("weapon_blunt"), None);
+    }
 
     /// No socket: the bank walk fails typed (reconnect) instead of a quiet
     /// equip-and-continue that strands the fighter ungeared mid-field.

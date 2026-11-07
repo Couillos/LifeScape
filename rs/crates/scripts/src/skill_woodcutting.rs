@@ -159,15 +159,17 @@ fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<boo
 /// until the pack funds the axe. Bounded rounds, each a few kills with
 /// no banking (loot stays in the pack for the shared buy below); no
 /// gain stops early. True when the pack now affords the axe.
+/// Budget: goblin coin drops average ~1.6/kill (goblin.rs2 drop table, 27
+/// coin rolls per 128), so 30 kills expect ~47 coins and P(<16) is ~2%.
 fn hunt_goblins(bot: &mut Bot, coins: u16) -> Result<bool, ScriptError> {
-    for _ in 0..3 {
+    for _ in 0..5 {
         if pack_total(bot, coins) >= 16 {
             return Ok(true);
         }
         let before = pack_total(bot, coins);
         crate::skill_combat::run_melee(
             bot,
-            &["goblins".to_string(), "--kills".to_string(), "4".to_string(), "--no-bank".to_string()],
+            &["goblins".to_string(), "--kills".to_string(), "6".to_string(), "--no-bank".to_string()],
         )?;
         if pack_total(bot, coins) <= before {
             break;
@@ -547,6 +549,39 @@ fn chop_keep_ids(bot: &Bot) -> Vec<u16> {
     known_axe_ids(bot).into_iter().collect()
 }
 
+/// Sell the pack (logs and ground-loot junk alike) at the nearby general
+/// store and buy the bronze axe when funded. True when the axe is now
+/// held. The hunt loot only exists AFTER the hunt, so the caller runs this
+/// both before and after: selling late beats losing it to the bank trek
+/// (junk stranded, unsold) or to death (dropped).
+fn sell_pack_and_buy(bot: &mut Bot, bank: &mut knowledge::banks::Bank, coins: u16, label: &str) -> Result<bool, ScriptError> {
+    let funded = bootstrap_products(bot, coins);
+    let have = pack_total(bot, coins);
+    if !funded.is_empty() && have < 16 {
+        let names: Vec<String> =
+            funded.iter().map(|id| (bot.tables.obj_name)(*id).unwrap_or_else(|| format!("obj{id}"))).collect();
+        bot.log(&format!("{label}: selling {names:?} for {have} coins at {:?}", bot.position()));
+        match sell_for_target(bot, &funded, coins, 16 - have) {
+            Ok(_) => {}
+            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+            Err(err) => bot.log(&format!("{label} sale failed: {err}, trying the bank")),
+        }
+    }
+    if pack_total(bot, coins) >= 16 {
+        match buy_stock(bot, "bronze_axe", 1) {
+            Ok(bought) if bought > 0 => {
+                bot.log(&format!("ok bootstrapped bronze axe from {label}"));
+                *bank = nearest_bank(bot)?;
+                return Ok(true);
+            }
+            Ok(_) => {}
+            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+            Err(err) => bot.log(&format!("{label} axe buy failed: {err}, trying the bank")),
+        }
+    }
+    Ok(best_axe(bot).is_some())
+}
+
 /// Axe bootstrap, reusable after every death: reattach from the pack,
 /// sell the pack and buy from the keeper, else bank-trip, restore a
 /// banked axe, else withdraw and sell banked logs to fund one. Returns
@@ -569,35 +604,18 @@ fn ensure_axe(
         // and buy from the axe keeper first. Every trek below only runs
         // when the pack cannot fund the axe on its own.
         if best_axe(bot).is_none() {
-            let funded = bootstrap_products(bot, coins);
-            let have = pack_total(bot, coins);
-            if !funded.is_empty() && have < 16 {
-                match sell_for_target(bot, &funded, coins, 16 - have) {
-                    Ok(_) => {}
-                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                    Err(err) => bot.log(&format!("pack sale failed: {err}, trying the bank")),
-                }
-            }
+            let bought = sell_pack_and_buy(bot, &mut *bank, coins, "pack sale")?;
             // Broke with nothing worth selling: earn the axe on goblins
-            // east of Lumbridge first, then buy below as usual.
-            if pack_total(bot, coins) < 16 {
+            // east of Lumbridge first, then sell THAT loot too before
+            // falling to the bank below.
+            if !bought && pack_total(bot, coins) < 16 {
                 match hunt_goblins(bot, coins) {
                     Ok(true) => {}
                     Ok(false) => bot.log("goblin hunt came up short, trying the bank"),
                     Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
                     Err(err) => bot.log(&format!("goblin hunt failed: {err}, trying the bank")),
                 }
-            }
-            if pack_total(bot, coins) >= 16 {
-                match buy_stock(bot, "bronze_axe", 1) {
-                    Ok(bought) if bought > 0 => {
-                        bot.log("ok bootstrapped bronze axe from pack sale");
-                        *bank = nearest_bank(bot)?;
-                    }
-                    Ok(_) => {}
-                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                    Err(err) => bot.log(&format!("pack-sale axe buy failed: {err}, trying the bank")),
-                }
+                let _ = sell_pack_and_buy(bot, &mut *bank, coins, "hunt loot")?;
             }
         }
         if best_axe(bot).is_none() {
