@@ -312,6 +312,7 @@ mod tests {
                 closing: false,
                 script_alive: false,
                 last_heartbeat_tick: 0,
+                last_heartbeat_wall: 0.0,
                 last_msg_logged: 0,
                 last_zone: "?".to_string(),
                 trail: Vec::new(),

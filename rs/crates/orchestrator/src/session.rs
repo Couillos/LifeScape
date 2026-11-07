@@ -42,6 +42,10 @@ use crate::zones;
 
 /// Push throttle, in ticks (same pacing as the old heartbeat writer).
 const HEARTBEAT_TICKS: u64 = 10;
+/// Wall-clock twin of the tick throttle: a long plan freezes ticks
+/// without freezing the worker, so one snapshot per second still flows
+/// with the true (frozen) tick instead of a dead frame.
+const HEARTBEAT_WALL_SECS: f64 = 1.0;
 /// Idle pump cadence, in milliseconds.
 const IDLE_POLL_MS: u64 = 100;
 
@@ -119,6 +123,9 @@ pub(crate) struct SessionInner {
     pub(crate) closing: bool,
     pub(crate) script_alive: bool,
     pub(crate) last_heartbeat_tick: u64,
+    /// Wall time of the last pushed heartbeat: the tick gate alone
+    /// starves the pipe while a long plan freezes ticks.
+    pub(crate) last_heartbeat_wall: f64,
     pub(crate) last_msg_logged: usize,
     /// Zone of the last heartbeat, for stamps when the bot is borrowed.
     /// "?" when unknown: explicit, never a silent fallback.
@@ -204,6 +211,14 @@ impl Shared {
 
 // -- heartbeat ------------------------------------------------------------
 
+/// Due when the route moved (ticks) or the worker proved alive (wall):
+/// a long plan freezes ticks without freezing the worker, and the old
+/// tick-only gate left spectate showing a dead frame as live. Same tick,
+/// fresh `updated`: honest, never faked progress.
+fn heartbeat_due(last_tick: u64, tick: u64, last_wall: f64, now: f64) -> bool {
+    tick.saturating_sub(last_tick) >= HEARTBEAT_TICKS || now - last_wall >= HEARTBEAT_WALL_SECS
+}
+
 /// Throttled heartbeat for a bot borrowed by the script thread: same
 /// payload as `write_heartbeat`, no bot lock needed. Installed as the
 /// bot's pump hook so spectate/route/calls stay live during runs.
@@ -239,11 +254,13 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
         worker_out(shared, &format!("msg [t={at} {zone}] {text}"));
     }
     let last = shared.inner.lock().unwrap().last_heartbeat_tick;
-    if tick.saturating_sub(last) >= HEARTBEAT_TICKS {
+    let last_wall = shared.inner.lock().unwrap().last_heartbeat_wall;
+    if heartbeat_due(last, tick, last_wall, now_secs()) {
         let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
         let state = heartbeat_value(bot, &shared.account, &script, &trail);
         *shared.heartbeat.lock().unwrap() = Some(bot.snapshot());
         shared.inner.lock().unwrap().last_heartbeat_tick = tick;
+        shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
         crate::session_push::push_snapshot(&shared.account, &state);
     }
     !shared.stop_requested.load(Ordering::SeqCst)
@@ -261,6 +278,7 @@ pub(crate) fn write_heartbeat(shared: &Arc<Shared>) {
     let zone = if bot.zone_label.is_empty() { "?".to_string() } else { bot.zone_label.clone() };
     drop(bot);
     shared.inner.lock().unwrap().last_heartbeat_tick = tick;
+    shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
     shared.inner.lock().unwrap().last_zone = zone;
     crate::session_push::push_snapshot(&shared.account, &state);
 }
@@ -627,6 +645,7 @@ pub fn run_session(account: &str) -> i32 {
             closing: false,
             script_alive: false,
             last_heartbeat_tick: 0,
+            last_heartbeat_wall: 0.0,
             last_msg_logged: 0,
             last_zone: "?".to_string(),
             trail: Vec::new(),
@@ -743,7 +762,7 @@ pub fn run_session(account: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{mark_resumed, SessionInner};
+    use super::{heartbeat_due, mark_resumed, SessionInner};
 
     fn idle_inner() -> SessionInner {
         SessionInner {
@@ -760,10 +779,21 @@ mod tests {
             closing: false,
             script_alive: false,
             last_heartbeat_tick: 0,
+            last_heartbeat_wall: 0.0,
             last_msg_logged: 0,
             last_zone: "?".to_string(),
             trail: Vec::new(),
         }
+    }
+
+    /// The wall twin pushes during tick-frozen plans (same tick, stale
+    /// wall); a fresh wall or a short tick run stays quiet.
+    #[test]
+    fn heartbeat_due_covers_tick_frozen_plans() {
+        assert!(heartbeat_due(100, 115, 0.0, 10.0), "ten ticks moved");
+        assert!(heartbeat_due(100, 100, 10.0, 13.5), "same tick, stale wall pushes");
+        assert!(!heartbeat_due(100, 100, 10.0, 10.5), "same tick, fresh wall stays quiet");
+        assert!(!heartbeat_due(100, 109, 10.0, 10.5), "nine ticks are not ten");
     }
 
     /// Resume restores the full running books: a second `run` sees `busy`
