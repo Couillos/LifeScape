@@ -562,6 +562,15 @@ fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec
     ranked.into_iter().map(|(_, x, z, count)| (x, z, count)).collect()
 }
 
+/// Toll-fence side test: the Al-Kharid gate (locs 2882/2883, two halves;
+/// nav/tests/paid_only.rs measures the foot detour at 220 tiles) costs 10
+/// coins a crossing with paid doors on. Melee keeps them off the whole
+/// hunt, so a crossing is always the 220-tile walk, never a payment.
+/// Same side when both tiles sit on the same flank of the gate line.
+fn same_fence_side(line: i32, first: i32, second: i32) -> bool {
+    (first >= line) == (second >= line)
+}
+
 fn attack_nearest(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -570,6 +579,14 @@ fn attack_nearest(
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut cands = bot.npcs_named(&names);
     cands.retain(|(_, x, z)| avoid.get(&(*x, *z)).is_none_or(|until| *until <= bot.world.ticks));
+    // Never target across the toll fence: goblins spawn on both flanks,
+    // so the nearest flips sides every kill and each crossing walks the
+    // ~200-tile foot detour (paid doors stay off all hunt). One side per
+    // pick; the flank follows the bot, not the plan, so no replan loop.
+    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
+        let home = bot.world.x;
+        cands.retain(|(_, x, _)| same_fence_side(line, *x, home));
+    }
     cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
     // Door-aware acquisition, first reachable wins (max 3 foes): stand
     // orthogonally adjacent via the router, which opens shut doors on the
@@ -1133,5 +1150,15 @@ mod tests {
     fn ties_keep_the_cheap_kit() {
         assert!(loss_cost("bronze_sword") < loss_cost("steel_sword"), "bronze cheaper to lose");
         assert_eq!(loss_cost("no_such_item_xyz"), i64::MAX, "unknown prices never win ties");
+    }
+
+    /// Toll-fence side test: the gate line splits flanks (Al-Kharid gate
+    /// halves 2882/2883); same flank hunts together, never across.
+    #[test]
+    fn fence_side_splits_at_the_gate_line() {
+        assert!(super::same_fence_side(3268, 3262, 3255), "west flank together");
+        assert!(super::same_fence_side(3268, 3270, 3300), "east flank together");
+        assert!(!super::same_fence_side(3268, 3262, 3270), "across never targets");
+        assert!(!super::same_fence_side(3268, 3270, 3262), "across either way");
     }
 }
