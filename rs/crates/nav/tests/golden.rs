@@ -30,6 +30,7 @@ fn setup() -> (Arc<StaticWorld>, Tables) {
     let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
     world.set_f2p(zones);
     let tables = Tables::load(&root.join("LifeScape/gamedata/data")).expect("tables");
+    world.set_sky_floors(tables.sky_floors.clone());
     (world, tables)
 }
 

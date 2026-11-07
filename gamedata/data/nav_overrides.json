@@ -27,5 +27,87 @@
       "reason": "championdoor: the content script turns away anyone under 32 quest points (area_varrock champions_guild.rs2)",
       "verified": "2026-11-06"
     }
+  ],
+  "sky_floors": [
+    {
+      "at": [2983, 3350, 3],
+      "reason": "laddertop_138 stand: L3 top the pack leaves OPEN, prober rode laddertop_138 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2995, 3341, 3],
+      "reason": "laddertop_139 stand: L3 top the pack leaves OPEN, prober rode laddertop_139 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [3286, 3191, 2],
+      "reason": "laddertop_175 stand: upper floor the pack leaves OPEN, prober rode laddertop_175 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2953, 3141, 1],
+      "reason": "ship_laddertop_223 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_223 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2954, 3140, 1],
+      "reason": "ship_laddertop_223 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_223 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2954, 3142, 1],
+      "reason": "ship_laddertop_223 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_223 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2957, 3141, 1],
+      "reason": "ship_laddertop_224 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_224 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2958, 3140, 1],
+      "reason": "ship_laddertop_224 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_224 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2958, 3142, 1],
+      "reason": "ship_laddertop_224 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_224 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2961, 3141, 1],
+      "reason": "ship_laddertop_225 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_225 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2962, 3140, 1],
+      "reason": "ship_laddertop_225 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_225 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [2962, 3142, 1],
+      "reason": "ship_laddertop_225 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_225 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [3051, 3229, 1],
+      "reason": "ship_laddertop_229 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_229 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [3052, 3228, 1],
+      "reason": "ship_laddertop_229 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_229 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [3052, 3230, 1],
+      "reason": "ship_laddertop_229 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_229 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    },
+    {
+      "at": [3053, 3229, 1],
+      "reason": "ship_laddertop_229 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_229 live ok (transitions_verified 2026-11-06)",
+      "verified": "2026-11-07"
+    }
   ]
 }

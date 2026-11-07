@@ -1,14 +1,16 @@
 //! Static collision for every level, paged from the server pack.
 //!
 //! Squares paint on first touch: `get` loads the 64x64 square when it
-//! is missing. A square absent from the pack is empty ground, never a
-//! wall. Shared between threads through `Arc`, never copied per call.
+//! is missing. A square absent from the pack reads as ground on level 0
+//! and as void (blocked) above: the server returns NULL for unpainted
+//! zones, and upper levels with no painted data are sky, never floor.
+//! Shared between threads through `Arc`, never copied per call.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use crate::collision::{CollisionMap, LocDef, MapPack, StaticLayers, StaticLocs, OPEN};
+use crate::collision::{CollisionMap, LocDef, MapPack, StaticLayers, StaticLocs, NULL, OPEN};
 
 struct PagedState {
     pack: MapPack,
@@ -18,6 +20,7 @@ struct PagedState {
     doors: HashMap<(i32, i32, i32), (u16, u8, u8)>,
     toll_gates: HashSet<(i32, i32, i32)>,
     f2p: Option<HashSet<(i32, i32)>>,
+    sky_floors: HashSet<(i32, i32, i32)>,
 }
 
 /// Static collision over all levels, backed by the server map pack.
@@ -43,6 +46,7 @@ impl StaticWorld {
                 doors: HashMap::new(),
                 toll_gates: HashSet::new(),
                 f2p: None,
+                sky_floors: HashSet::new(),
             }),
         }))
     }
@@ -53,15 +57,27 @@ impl StaticWorld {
     }
 
     /// Collision flags for one tile on one level. Loads the square on
-    /// first touch; squares absent from the pack read as empty ground.
+    /// first touch; squares absent from the pack read as ground on level 0
+    /// and as void (NULL, blocked) above. Painted-but-empty upper tiles
+    /// (flags OPEN with no floor, roof, wall or loc paint) are sky too:
+    /// the server leaves them OPEN but no walk ever stands there, so the
+    /// planner must not cut through them. `sky_floors` allowlist (real
+    /// floors the pack leaves OPEN, proven live) stays OPEN.
     pub fn get(&self, tile_x: i32, tile_z: i32, level: i32) -> u32 {
-        if !self.has_square(tile_x >> 6, tile_z >> 6) {
+        if level > 0 && self.state.read().expect("static world lock poisoned").sky_floors.contains(&(tile_x, tile_z, level)) {
             return OPEN;
         }
+        if !self.has_square(tile_x >> 6, tile_z >> 6) {
+            return if level > 0 { NULL } else { OPEN };
+        }
         let mut state = self.state.write().expect("static world lock poisoned");
-        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
+        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, sky_floors, .. } = &mut *state;
         pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, tile_x >> 6, tile_z >> 6);
-        collision.get(tile_x, tile_z, level)
+        let flags = collision.get(tile_x, tile_z, level);
+        if level > 0 && flags == OPEN && !sky_floors.contains(&(tile_x, tile_z, level)) {
+            return NULL;
+        }
+        flags
     }
 
     fn ensure(&self, tile_x: i32, tile_z: i32) {
@@ -143,6 +159,13 @@ impl StaticWorld {
         self.state.write().expect("static world lock poisoned").f2p = Some(zones);
     }
 
+    /// Upper tiles that stay walkable despite no painted data (real floors
+    /// the pack leaves OPEN, proven live). Empty means every upper-OPEN
+    /// tile reads as void.
+    pub fn set_sky_floors(&self, floors: HashSet<(i32, i32, i32)>) {
+        self.state.write().expect("static world lock poisoned").sky_floors = floors;
+    }
+
     /// True when this tile is on free-to-play ground (level ignored, like
     /// the engine's own check), or when no bounds were set.
     pub fn in_f2p(&self, tile_x: i32, tile_z: i32) -> bool {
@@ -159,36 +182,43 @@ mod tests {
     use super::*;
 
     fn test_world() -> Option<Arc<StaticWorld>> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
         let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
         if !zip.is_file() {
             return None;
         }
-        let gametypes = std::fs::read_to_string(root.join("gamedata/data/gametypes.json")).ok()?;
+        let gametypes = std::fs::read_to_string(root.join("LifeScape/gamedata/data/gametypes.json")).ok()?;
         let defs = crate::loctypes::parse_loctypes(&gametypes, "{}").ok()?;
         StaticWorld::open(&zip, defs).ok()
     }
 
     #[test]
-    fn lumbridge_open_ground_walks_every_level() {
+    fn lumbridge_open_ground_walks_level0_sky_blocked_above() {
         let Some(world) = test_world() else { return };
         assert!(crate::collision::tile_walkable(world.get(3091, 3235, 0)));
-        for level in 0..4 {
-            let _ = world.get(3091, 3235, level);
+        // Open ground on L0, sky above: no painted data on L1-L3, so
+        // the planner must see void (server NULL), never walkable sky.
+        for level in 1..4 {
+            assert_eq!(world.get(3091, 3235, level), crate::collision::NULL);
+            assert!(!crate::collision::tile_walkable(world.get(3091, 3235, level)));
         }
         assert!(world.has_square(3091 >> 6, 3235 >> 6));
     }
 
     #[test]
-    fn missing_square_reads_empty_never_wall() {
+    fn missing_square_ground_below_void_above() {
         let Some(world) = test_world() else { return };
         let missing = (0..512)
             .map(|nth| (nth, 907))
             .find(|(square_x, square_z)| !world.has_square(*square_x, *square_z))
             .expect("the pack does not cover every square");
-        for level in 0..4 {
-            assert_eq!(world.get(missing.0 << 6, missing.1 << 6, level), OPEN);
-            assert!(crate::collision::tile_walkable(world.get(missing.0 << 6, missing.1 << 6, level)));
+        // L0 keeps the historic ground default; above is void like the
+        // server (CollisionEngine::get returns NULL for unpainted zones).
+        assert_eq!(world.get(missing.0 << 6, missing.1 << 6, 0), OPEN);
+        assert!(crate::collision::tile_walkable(world.get(missing.0 << 6, missing.1 << 6, 0)));
+        for level in 1..4 {
+            assert_eq!(world.get(missing.0 << 6, missing.1 << 6, level), crate::collision::NULL);
+            assert!(!crate::collision::tile_walkable(world.get(missing.0 << 6, missing.1 << 6, level)));
         }
     }
 

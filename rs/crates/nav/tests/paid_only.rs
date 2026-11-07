@@ -5,7 +5,7 @@
 //! de sol bloque sauf deux poches 3x3 reliees par une seule porte a peage.
 //! Sans `paid` le plan echoue en PaidOnly, avec il traverse la porte.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lifescape_nav::collision::LocDef;
 use lifescape_nav::plan::{self, NavOptions, NoRouteReason, Segment, Tile};
@@ -137,6 +137,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         one_way: Vec::new(),
         customs: Vec::new(),
         blocked: Vec::new(),
+        sky_floors: HashSet::new(),
     };
     (world, tables, path)
 }

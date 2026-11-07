@@ -6,7 +6,7 @@
 //! `satisfied`: `quest:<name>`, `item:<id>`, `coins:<n>`, `qp:<n>`
 //! (quest-point total, as checked by the content scripts).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use lifescape_json::Value;
@@ -132,6 +132,10 @@ pub struct Tables {
     pub one_way: Vec<OneWay>,
     pub customs: Vec<CustomEdge>,
     pub blocked: Vec<BlockedDoor>,
+    /// Upper tiles that stay walkable despite no painted data: real floors
+    /// the pack leaves OPEN (ship decks, L3 tops) proven live by the prober.
+    /// `StaticWorld` keeps them OPEN; everything else upper-OPEN stays void.
+    pub sky_floors: HashSet<(i32, i32, i32)>,
 }
 
 impl Tables {
@@ -141,8 +145,8 @@ impl Tables {
     pub fn load(data_dir: &Path) -> Result<Tables, String> {
         let transitions = load_transitions(&data_dir.join("transitions.json"))?;
         let (verified, verified_any_level) = load_verified(&data_dir.join("transitions_verified.json"));
-        let (requirements, one_way, customs, blocked) = load_overrides(&data_dir.join("nav_overrides.json"))?;
-        Ok(Tables { transitions, verified, verified_any_level, requirements, one_way, customs, blocked })
+        let (requirements, one_way, customs, blocked, sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
+        Ok(Tables { transitions, verified, verified_any_level, requirements, one_way, customs, blocked, sky_floors })
     }
 
     /// Prober verdict for one transition, if it ever rode it.
@@ -289,7 +293,7 @@ fn checked_entry<'a>(rows: &'a [Value], key: &str, index: usize) -> Result<&'a V
     rows.get(index).ok_or_else(|| format!("nav_overrides {key}[{index}] is missing"))
 }
 
-fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<CustomEdge>, Vec<BlockedDoor>), String> {
+fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<CustomEdge>, Vec<BlockedDoor>, HashSet<(i32, i32, i32)>), String> {
     let text = std::fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
     let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
     if parsed.as_obj().is_none() {
@@ -377,5 +381,21 @@ fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<Cus
             reason: reason.to_string(),
         });
     }
-    Ok((requirements, one_way, customs, blocked))
+    let mut sky_floors = HashSet::new();
+    let rows = parsed.get("sky_floors").as_arr().cloned().unwrap_or_default();
+    for (index, row) in rows.iter().enumerate() {
+        let reason = row.get("reason").as_str().unwrap_or("");
+        let verified = row.get("verified").as_str().unwrap_or("");
+        if reason.is_empty() || verified.is_empty() {
+            return Err(format!("nav_overrides sky_floors[{index}] needs reason and verified"));
+        }
+        let Some(at) = parse_tile(row.get("at")) else {
+            return Err(format!("nav_overrides sky_floors[{index}] has no at tile"));
+        };
+        if at.level <= 0 {
+            return Err(format!("nav_overrides sky_floors[{index}] is not above ground"));
+        }
+        sky_floors.insert((at.x, at.z, at.level));
+    }
+    Ok((requirements, one_way, customs, blocked, sky_floors))
 }
