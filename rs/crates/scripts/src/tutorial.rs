@@ -654,34 +654,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             check(bot.position(), wait_inv(bot, "hammer", 1, 60)?, "hammer given")
         }
         "smith_anvil" => smith_anvil(bot),
-        "mine_exit" => {
-            if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor4"], 150) {
-                // The gate faces east: no western stand satisfies the
-                // server's wall reach rule, but the gate tile itself is
-                // standable. Step on (server-validated direct steps, the
-                // router refuses the tile) then click from on top.
-                let _ = bot.approach(x, z, bot.world.level, 1, 1500);
-                for _ in 0..3 {
-                    if (bot.world.x, bot.world.z) == (x, z) {
-                        break;
-                    }
-                    let (dx, dz) = (x - bot.world.x, z - bot.world.z);
-                    let (next_x, next_z) = if dx.abs() >= dz.abs() {
-                        (bot.world.x + dx.signum(), bot.world.z)
-                    } else {
-                        (bot.world.x, bot.world.z + dz.signum())
-                    };
-                    if bot.step_to(next_x, next_z, 30).is_err() {
-                        break;
-                    }
-                }
-                if (bot.world.x, bot.world.z) != (x, z) {
-                    stand_orthogonal(bot, x, z)?;
-                }
-                bot.op_loc(1, x, z, loc)?;
-            }
-            check(bot.position(), wait_moved(bot, 20)?, "out of the mine")
-        }
+        "mine_exit" => cross_gate(bot, &["newbiedoor4"], (3095, 9502), "out of the mine"),
         "combat_intro" => talk_step(bot, "combat_instructor", (3107, 9510), &["Nope, I'm ready to move on!"], "combat instructor"),
         "wield_tab" => click_tab(bot, TAB_WORN, "worn tab"),
         "wield" => {
@@ -703,30 +676,32 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         }
         "combat_tab" => click_tab(bot, 0, "combat tab"),
         "rat_cage" => {
-            // West of the gate line = inside the pit. Never short-circuit
-            // on mere proximity: from outside-near the gate still needs a
-            // click to advance the stage.
-            let (gate_x, gate_z, _level, gate_loc) = kit::find_loc(bot, &["newbiedoor5"], 150)?;
-            let start = (bot.world.x, bot.world.z);
-            let inside = |bot: &Bot| {
-                (bot.world.x, bot.world.z) == (3109, 9519)
-                    || crossed_door(bot, (gate_x, gate_z), start)
-                    || (bot.world.x < gate_x && (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 6)
-            };
-            for _ in 0..5 {
-                if inside(bot) {
+            // The pit interior is fixed geography: near (3109,9519) means
+            // inside. Never short-circuit on mere proximity from outside:
+            // the gate still needs a click to advance the stage.
+            for _ in 0..3 {
+                if (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 2 {
                     bot.log("ok inside rat pit");
                     return Ok(());
                 }
-                let _ = pass_door_at(bot, gate_x, gate_z, gate_loc, (3109, 9519), "rat cage");
+                cross_gate(bot, &["newbiedoor5"], (3110, 9518), "inside rat pit")?;
                 bot.pump(5)?;
             }
-            check(bot.position(), inside(bot), "inside rat pit")
+            check(bot.position(), (bot.world.x - 3109).abs() + (bot.world.z - 9519).abs() <= 2, "inside rat pit")
         }
         "melee" | "melee_watch" => melee(bot),
         "ranged_prep" => {
+            // Exit east through the rat gate: click from the inside stand
+            // (the gate faces the pit), the handler parks us on the gate,
+            // then walk out. The gate stays open after the first entry.
             if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbiedoor5"], 150) {
-                let _ = pass_door_at(bot, x, z, loc, (3112, 9518), "rat cage exit");
+                if step_onto(bot, x - 1, z, 1500) {
+                    let _ = bot.op_loc(1, x, z, loc);
+                    bot.pump(10)?;
+                }
+                if (bot.world.x, bot.world.z) == (x, z) && bot.walk_to(x + 1, z, bot.world.level, 3000).is_err() {
+                    let _ = bot.step_to(x + 1, z, 30);
+                }
             }
             talk_step(bot, "combat_instructor", (3107, 9510), &["Nope, I'm ready to move on!"], "combat instructor ranged")?;
             check(bot.position(), wait_inv(bot, "shortbow", 1, 60)?, "bow given")?;
@@ -794,9 +769,67 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
     }
 }
 
-/// Stand on an orthogonally adjacent tile: ladders and doors refuse
-/// diagonal clicks. Arrival is verified: the planner reports Ok without
-/// moving when its mesh refuses the tile.
+/// Click a tutorial wall gate from on top of its tile: gates that face away
+/// refuse every adjacent stand under the server wall reach rule, but their
+/// own tile is standable and clicks from on top always reach. Steps are
+/// direct (server-validated); the router refuses gate tiles. The first
+/// click opens the gate for good (halves deleted), so a missing gate means
+/// walk straight through.
+fn cross_gate(bot: &mut Bot, loc_names: &[&str], beyond: (i32, i32), what: &str) -> Result<(), ScriptError> {
+    let start = (bot.world.x, bot.world.z);
+    let mut last_gate: Option<(i32, i32)> = None;
+    for _ in 0..3 {
+        if (bot.world.x, bot.world.z) == beyond {
+            bot.log(&format!("ok {what}"));
+            return Ok(());
+        }
+        let Ok((x, z, level, loc)) = kit::find_loc(bot, loc_names, 150) else {
+            let _ = bot.walk_to(beyond.0, beyond.1, bot.world.level, 3000);
+            bot.pump(5)?;
+            continue;
+        };
+        last_gate = Some((x, z));
+        if (bot.world.x, bot.world.z) == beyond || crossed_door(bot, (x, z), start) {
+            bot.log(&format!("ok {what}"));
+            return Ok(());
+        }
+        let _ = bot.approach(x, z, level, 1, 1500);
+        for _ in 0..3 {
+            if (bot.world.x, bot.world.z) == (x, z) {
+                break;
+            }
+            let (dx, dz) = (x - bot.world.x, z - bot.world.z);
+            let (next_x, next_z) = if dx.abs() >= dz.abs() {
+                (bot.world.x + dx.signum(), bot.world.z)
+            } else {
+                (bot.world.x, bot.world.z + dz.signum())
+            };
+            if bot.step_to(next_x, next_z, 15).is_err() {
+                break;
+            }
+            bot.pump(2)?;
+        }
+        if (bot.world.x, bot.world.z) != (x, z) {
+            bot.pump(5)?;
+            continue;
+        }
+        bot.op_loc(1, x, z, loc)?;
+        let target = bot.world.ticks + 15;
+        while bot.world.ticks < target {
+            bot.pump(1)?;
+            if (bot.world.x, bot.world.z) == beyond || crossed_door(bot, (x, z), start) {
+                bot.log(&format!("ok {what}"));
+                return Ok(());
+            }
+        }
+    }
+    let done = (bot.world.x, bot.world.z) == beyond
+        || last_gate.is_some_and(|gate| crossed_door(bot, gate, start));
+    check(bot.position(), done, &format!("through {what}"))
+}
+
+/// Step onto an exact tile, verifying arrival: the planner reports Ok
+/// without moving when its mesh refuses the tile.
 fn step_onto(bot: &mut Bot, tile_x: i32, tile_z: i32, timeout: u64) -> bool {
     if (bot.world.x, bot.world.z) == (tile_x, tile_z) {
         return true;
@@ -816,32 +849,6 @@ fn stand_orthogonal(bot: &mut Bot, x: i32, z: i32) -> Result<(), ScriptError> {
         }
     }
     Err(ScriptError::Sdk(Error::Unreachable(format!("no orthogonal stand near {x},{z} at {:?}", bot.position()))))
-}
-
-fn pass_door_at(bot: &mut Bot, x: i32, z: i32, loc: u16, beyond: (i32, i32), what: &str) -> Result<(), ScriptError> {
-    let start = (bot.world.x, bot.world.z);
-    let through = |bot: &Bot| (bot.world.x, bot.world.z) == beyond || crossed_door(bot, (x, z), start);
-    for _ in 0..2 {
-        if through(bot) {
-            return Ok(());
-        }
-        let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
-        tiles.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
-        for (tile_x, tile_z) in tiles {
-            if through(bot) {
-                return Ok(());
-            }
-            if !step_onto(bot, tile_x, tile_z, 1000) {
-                continue;
-            }
-            bot.op_loc(1, x, z, loc)?;
-            bot.pump(10)?;
-            if through(bot) {
-                return Ok(());
-            }
-        }
-    }
-    check(bot.position(), through(bot), &format!("inside {what}"))
 }
 
 /// Run the tutorial island from any stage to the mainland teleport.
