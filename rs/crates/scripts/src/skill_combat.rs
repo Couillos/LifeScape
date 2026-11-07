@@ -954,6 +954,21 @@ fn fight(
     Ok((kills, false))
 }
 
+/// Clusters on the bot's toll-fence flank (see same_fence_side): the
+/// crossing is never paid in melee, so an eastern cluster from a western
+/// hunt is a ~220-tile detour per visit, never a shortcut. Falls back to
+/// every cluster when none shares the flank (an all-across spot still
+/// hunts instead of idling).
+fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)]) -> Vec<(i32, i32, usize)> {
+    let kept: Vec<(i32, i32, usize)> =
+        targets.iter().filter(|(center_x, _, _)| same_fence_side(line, *center_x, home)).copied().collect();
+    if kept.is_empty() {
+        targets.to_vec()
+    } else {
+        kept
+    }
+}
+
 fn run_spot(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -974,6 +989,18 @@ fn run_spot(
     if targets.is_empty() {
         bot.log(&format!("no spawn for {}", spot.key));
         return Ok(0);
+    }
+    // One flank per hunt: cluster centers across the toll fence would
+    // each cost the ~220-tile foot detour (paid doors stay off all
+    // hunt). The per-pick filter in attack_nearest stops the same
+    // oscillation inside the fight; this stops it between clusters.
+    let mut targets = targets;
+    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
+        let kept = same_flank_clusters(line, bot.world.x, &targets);
+        if kept.len() != targets.len() {
+            bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
+        }
+        targets = kept;
     }
     let mut total = 0u32;
     for (center_x, center_z, count) in targets {
@@ -1203,5 +1230,16 @@ mod tests {
         assert!(!super::is_shop_staff(100), "goblin fights");
         assert!(!super::is_shop_staff(41), "chicken fights");
         assert!(!super::is_shop_staff(1), "man fights");
+    }
+
+    /// Cluster flank filter: mixed flanks keep the bot's side only, an
+    /// all-across list falls back to everything (still hunts).
+    #[test]
+    fn clusters_stay_on_the_hunting_flank() {
+        let mixed = vec![(3252, 3243, 16), (3274, 3213, 4)];
+        assert_eq!(super::same_flank_clusters(3268, 3260, &mixed), vec![(3252, 3243, 16)], "east cluster dropped");
+        assert_eq!(super::same_flank_clusters(3268, 3270, &mixed), vec![(3274, 3213, 4)], "west cluster dropped");
+        let east_only = vec![(3274, 3213, 4)];
+        assert_eq!(super::same_flank_clusters(3268, 3260, &east_only), east_only, "all-across still hunts");
     }
 }
