@@ -45,14 +45,21 @@ const CROSS_WAIT: u64 = 7;
 const COST_PER_TICK: u64 = 4;
 const COST_BASE: u64 = 347;
 
+/// Per-phase wall-clock of one plan: a trivial leg must cost
+/// milliseconds, so a seconds-long plan names its spinner here.
+struct PlanTimings {
+    options_ms: u128,
+    plan_ms: u128,
+}
+
 impl Bot {
     /// Travel to a tile on any level: plan, publish the full plan as the
     /// live route, execute every segment in order. `NoRoute` becomes
     /// `Error::Travel` with the planner diagnosis.
     pub fn travel_to(&mut self, dest: Tile) -> Result<()> {
-        let (world, tables, options, plan) = self.plan_travel(dest)?;
+        let (world, tables, options, plan, timings) = self.plan_travel(dest)?;
         let timeout = plan.cost as u64 * COST_PER_TICK + COST_BASE;
-        self.run_with_replan(dest, world, tables, options, plan, timeout)
+        self.run_with_replan(dest, world, tables, options, plan, timings, timeout)
     }
 
     /// Same-level-or-not walk with a caller tick budget. Thin envelope
@@ -60,19 +67,22 @@ impl Bot {
     pub fn walk_to(&mut self, x: i32, z: i32, level: i32, timeout: u64) -> Result<()> {
         self.act(format!("walk_to ({x},{z},{level}) timeout={timeout}"));
         let dest = Tile { x, z, level };
-        let (world, tables, options, plan) = self.plan_travel(dest)?;
-        self.run_with_replan(dest, world, tables, options, plan, timeout)
+        let (world, tables, options, plan, timings) = self.plan_travel(dest)?;
+        self.run_with_replan(dest, world, tables, options, plan, timings, timeout)
     }
 
-    fn plan_travel(&mut self, dest: Tile) -> Result<(Arc<StaticWorld>, Arc<Tables>, NavOptions, Plan)> {
+    fn plan_travel(&mut self, dest: Tile) -> Result<(Arc<StaticWorld>, Arc<Tables>, NavOptions, Plan, PlanTimings)> {
         let world = self.nav_world.clone().ok_or_else(|| {
             Error::State("travel_to without static world (the session wires it at open)".to_string())
         })?;
         let tables = self.nav_tables.clone().ok_or_else(|| {
             Error::State("travel_to without planner tables (the session wires them at open)".to_string())
         })?;
+        let options_start = std::time::Instant::now();
         let options = self.nav_options(&tables);
+        let options_ms = options_start.elapsed().as_millis();
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        let plan_start = std::time::Instant::now();
         let plan = plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()).map_err(|no| {
             if no.reason == NoRouteReason::Aborted {
                 return Error::Interrupted(format!("plan aborted at {:?}", self.position()));
@@ -98,7 +108,8 @@ impl Bot {
             let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
             self.fail(from, dest, &options, None, None, &expected, &Error::Travel(observed))
         })?;
-        Ok((world, tables, options, plan))
+        let plan_ms = plan_start.elapsed().as_millis();
+        Ok((world, tables, options, plan, PlanTimings { options_ms, plan_ms }))
     }
 
     /// Yield point for long plans: the plan runs on the only socket
@@ -184,13 +195,20 @@ impl Bot {
         tables: Arc<Tables>,
         mut options: NavOptions,
         plan: Plan,
+        timings: PlanTimings,
         timeout: u64,
     ) -> Result<()> {
         let deadline = self.world.ticks + timeout;
         // Live state around the start: painted collision, door registry
         // and static locs, so suspect lines and door syncs see the world
         // instead of empty maps.
+        let ensure_start = std::time::Instant::now();
         self.ensure_area(self.world.x, self.world.z, 70);
+        let ensure_ms = ensure_start.elapsed().as_millis();
+        self.log(&format!(
+            "nav timing options={}ms plan={}ms ensure_area={}ms",
+            timings.options_ms, timings.plan_ms, ensure_ms,
+        ));
         self.publish_plan(&plan, dest);
         let start = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         let segments = plan.segments.len().max(1);
@@ -209,6 +227,7 @@ impl Bot {
                     options.excluded_edges.insert(edge);
                 }
                 let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+                let replan_start = std::time::Instant::now();
                 let retry = match plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()) {
                     Ok(retry) => retry,
                     Err(no) if no.reason == NoRouteReason::Aborted => {
@@ -219,7 +238,12 @@ impl Bot {
                         return Err(first);
                     }
                 };
-                self.log(&format!("nav replan {} segments cost {}", retry.segments.len(), retry.cost));
+                self.log(&format!(
+                    "nav replan {} segments cost {} in {}ms",
+                    retry.segments.len(),
+                    retry.cost,
+                    replan_start.elapsed().as_millis(),
+                ));
                 self.publish_plan(&retry, dest);
                 let segments = retry.segments.len().max(1);
                 match self.run_plan(&retry, &tables, segments, deadline) {
@@ -862,7 +886,7 @@ mod tests {
     fn short_plan_stays_offline() {
         let mut bot = offline_bot(3228, 3214);
         // Pure planning, no yield point reached: no socket, no keepalive, Ok.
-        let (_, _, _, plan) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("short plan stays offline");
+        let (_, _, _, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("short plan stays offline");
         assert!(!plan.segments.is_empty(), "the door route has segments");
     }
 
