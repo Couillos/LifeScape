@@ -85,6 +85,7 @@ fn daemon_main() -> i32 {
         .unwrap_or(8765);
     web::start_web(dispatch, port);
     orch.restore_jobs();
+    lifescape_orchestrator::holdings::start_sampler(orch.clone());
     println!("orchestrator listening on {}", paths::socket_path().display());
     for stream in server.incoming() {
         if !orch.running.load(Ordering::SeqCst) {

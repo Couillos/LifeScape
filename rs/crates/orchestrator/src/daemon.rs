@@ -786,7 +786,10 @@ impl Orchestrator {
                 });
                 return object(vec![("ok", Value::Bool(true)), ("jobs", Value::Arr(described))]);
             }
-            "items" => return object(vec![("ok", Value::Bool(true)), ("data", holdings_snapshot())]),
+            "items" => {
+                let described = crate::holdings::described_jobs(self);
+                return object(vec![("ok", Value::Bool(true)), ("data", crate::holdings::snapshot(&described))]);
+            }
             "scripts" => {
                 return object(vec![
                     ("ok", Value::Bool(true)),
@@ -881,18 +884,6 @@ impl Orchestrator {
             ("error", str_value(&format!("unknown command '{command}'"))),
         ])
     }
-}
-
-/// Same keys as holdings.snapshot(); history sampling (sqlite) is not
-/// ported, so samples/total stay empty and items carry no rows.
-fn holdings_snapshot() -> Value {
-    object(vec![
-        ("intervalMinutes", Value::Int(30)),
-        ("samples", Value::Arr(vec![])),
-        ("total", Value::Arr(vec![])),
-        ("liveTotal", Value::Int(0)),
-        ("items", Value::Arr(vec![])),
-    ])
 }
 
 fn known_accounts() -> Vec<String> {

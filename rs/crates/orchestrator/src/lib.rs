@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod paths;
 pub mod jobs;
+pub mod holdings;
 pub mod registry;
 pub mod mapcache;
 pub mod mapcli;
