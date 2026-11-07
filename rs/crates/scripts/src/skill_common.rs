@@ -29,6 +29,12 @@ pub const GONE_BAN_TICKS: u64 = 250;
 /// a full plan on every pick. Live "can't reach" from a passing blockage
 /// rides along: skipping one tree for a while is cheaper than the plan.
 pub const UNREACHABLE_BAN_TICKS: u64 = 30_000;
+/// Adjacent refusal (tile reached, server says "can't reach that", not a
+/// stump): a wall/fence/gate stands between us and the tree. Re-trying in
+/// 30k would loop forever ("essaye des fois"), so the spot sits out ~2h —
+/// long enough to end the run's rotation, short of session-poisoning if the
+/// world changes (a gate that opens).
+pub const STRUCTURAL_BAN_TICKS: u64 = 240_000;
 /// Transit slicing: the bank walk runs in 1500-tick legs for the same
 /// 15000-tick total, checking death and hurt between legs instead of
 /// walking blind into an ambush.

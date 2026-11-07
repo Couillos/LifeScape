@@ -13,9 +13,9 @@ use lifescape_sdk::Bot;
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, death_message_seen, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
-    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, UNREACHABLE_BAN_TICKS,
+    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS,
 };
-use crate::skill_woodcutting_spot::{is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there};
+use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
@@ -521,7 +521,7 @@ fn chop_load(
         if stale {
             let mut picked = None;
             for _ in 0..16 {
-                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, &banned.keys().copied().collect()) {
+                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, banned) {
                     picked = Some(found);
                     break;
                 }
@@ -540,7 +540,7 @@ fn chop_load(
         } else if let Some((tier, spot_x, spot_z)) = &spot {
             if !tree_still_there(bot, *spot_x, *spot_z, &tier.trees) {
                 bot.log(&format!("tree gone at ({spot_x},{spot_z})"));
-                banned.insert((*spot_x, *spot_z), now + GONE_BAN_TICKS);
+                banned.insert((*spot_x, *spot_z), bot.world.ticks + GONE_BAN_TICKS);
                 spot = None;
                 continue;
             }
@@ -579,42 +579,63 @@ fn chop_load(
         match result {
             WorkOutcome::Gone => {
                 bot.log("tree quiet, next one");
-                banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
+                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
                 spot = None;
             }
             WorkOutcome::NoTool => spot = None,
             WorkOutcome::Unreachable => {
-                bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
-                banned.insert((spot_x, spot_z), now + UNREACHABLE_BAN_TICKS);
-                spot = None;
-                unreachable_streak += 1;
-                // Pocket landing (yank mid-run): every spot fails at the
-                // walk. Travel back to the bank once, then re-pick from
-                // the new region; the stall bound below stays the loud exit.
-                if unreachable_streak >= 8 {
-                    let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
-                    match bot.travel_to(dest) {
-                        Ok(()) => {}
-                        Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
-                            return Err(error.into());
-                        }
-                        Err(error) => bot.log(&format!("pocket escape refused: {error}")),
-                    }
-                    // One escape per streak: a refused escape re-arms by
-                    // counting, it never re-fires on the next spot. Without
-                    // this the same failing travel_to runs every iteration
-                    // (up to four full-dijkstra exhaustions each) and the
-                    // loop burns a core until the stall bound trips.
+                // Adjacent refusal, not a walk that fell short: the server
+                // said "can't reach that" with the tree a step away. A
+                // fresh stump depleting between pick and click rides the
+                // short Gone ban (it regrows); a wall/fence/gate between us
+                // and a standing tree sits out long and says so (retrying
+                // in 30k would loop forever). Nav is fine either way: the
+                // streak counts failed walks only.
+                if adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z)
+                    && is_stump(bot, spot_x, spot_z)
+                {
+                    bot.log(&format!("tree stumped at ({spot_x},{spot_z}), next one"));
+                    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                    spot = None;
+                } else if adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z) {
+                    bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
+                    banned.insert((spot_x, spot_z), bot.world.ticks + STRUCTURAL_BAN_TICKS);
                     unreachable_streak = 0;
+                    spot = None;
+                } else {
+                    bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
+                    banned.insert((spot_x, spot_z), bot.world.ticks + UNREACHABLE_BAN_TICKS);
+                    spot = None;
+                    unreachable_streak += 1;
+                    // Pocket landing (yank mid-run): every spot fails at the
+                    // walk. Travel back to the bank once, then re-pick from
+                    // the new region; the stall bound stays the loud exit.
+                    if unreachable_streak >= 8 {
+                        let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
+                        match bot.travel_to(dest) {
+                            Ok(()) => {}
+                            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
+                                return Err(error.into());
+                            }
+                            Err(error) => bot.log(&format!("pocket escape refused: {error}")),
+                        }
+                        // One escape per streak: a refused escape re-arms by
+                        // counting, it never re-fires on the next spot.
+                        // Without this the same failing travel_to runs every
+                        // iteration (up to four full-dijkstra exhaustions
+                        // each) and the loop burns a core until the stall
+                        // bound trips.
+                        unreachable_streak = 0;
+                    }
                 }
             }
             WorkOutcome::LevelLocked => {
-                banned.insert((spot_x, spot_z), now + 500);
+                banned.insert((spot_x, spot_z), bot.world.ticks + 500);
                 spot = None;
             }
             WorkOutcome::Threat => {
                 bot.log("hunter close, re-picking a spot");
-                banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
+                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
                 spot = None;
             }
             WorkOutcome::Blocked => {

@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
@@ -131,7 +131,7 @@ pub(crate) fn pick_tree_spot(
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
-    banned: &HashSet<(i32, i32)>,
+    banned: &HashMap<(i32, i32), u64>,
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
     let fence = if bot.allow_paid { None } else { toll_line(bot) };
     // Hunter filter unless opted out: spots a threat could reach are
@@ -148,7 +148,7 @@ pub(crate) fn pick_tree_spot(
     for tier in affordable {
         let mut nearest: Option<(i64, (i32, i32))> = None;
         for (spot_x, spot_z) in tier_spawns(tier, bank) {
-            if banned.contains(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &tier.trees) {
+            if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &tier.trees) {
                 continue;
             }
             if across_toll(bot.world.x, spot_x, fence) {
@@ -181,7 +181,7 @@ pub(crate) fn pick_tree_spot(
     if let Some(top) = best {
         let mut hop: Option<(i64, (i32, i32))> = None;
         for (spot_x, spot_z) in tier_spawns_wide(top, i64::from(bot.world.level)) {
-            if banned.contains(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &top.trees) {
+            if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &top.trees) {
                 continue;
             }
             if across_toll(bot.world.x, spot_x, fence) {
@@ -205,12 +205,50 @@ pub(crate) fn pick_tree_spot(
             ));
             return Some((top.clone(), spot_x, spot_z));
         }
-        if fallback.is_some()
-            && tiers.iter().any(|tier| tier.level < top.level && tier.level <= level)
-        {
+        if hop.is_none() {
+            // One debug line per failed best-tier repick: every in-range
+            // spot with its disqualification reason (banned-remaining,
+            // stump, gone, toll, hunter). The in-range pool is small (a
+            // dozen spots); far ones collapse to a count. A "hop-missed"
+            // tag would flag a filter/hop disagreement bug.
+            let now = bot.world.ticks;
+            let mut wide = tier_spawns_wide(top, i64::from(bot.world.level));
+            wide.sort();
+            wide.dedup();
+            let mut notes: Vec<String> = Vec::new();
+            let mut far = 0u32;
+            for (spot_x, spot_z) in wide {
+                let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
+                if dist > SAME_TIER_HOP_TILES {
+                    far += 1;
+                    continue;
+                }
+                let why = if let Some(until) = banned.get(&(spot_x, spot_z)) {
+                    format!("banned-{}t", until.saturating_sub(now))
+                } else if !tree_live(bot, spot_x, spot_z, &top.trees) {
+                    if is_stump(bot, spot_x, spot_z) {
+                        "stump".to_string()
+                    } else {
+                        "gone".to_string()
+                    }
+                } else if across_toll(bot.world.x, spot_x, fence) {
+                    "toll".to_string()
+                } else if hunters.iter().any(|(hunter_x, hunter_z, range)| {
+                    (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
+                }) {
+                    "hunter".to_string()
+                } else {
+                    "hop-missed".to_string()
+                };
+                notes.push(format!("({spot_x},{spot_z}){why}+{dist}"));
+            }
+            let degrading = fallback.is_some();
             bot.log(&format!(
-                "no {} reachable under {SAME_TIER_HOP_TILES} tiles, degrading a tier",
-                top.product
+                "no {} reachable under {SAME_TIER_HOP_TILES} tiles{}: {} disqualified [{}], {far} beyond range",
+                top.product,
+                if degrading { ", degrading a tier" } else { "" },
+                notes.len(),
+                notes.join(" "),
             ));
         }
     }
@@ -251,12 +289,30 @@ pub(crate) fn tree_still_there(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: 
     }
 }
 
+/// Server reach is Chebyshev: the 8 neighbouring tiles count as adjacent.
+/// A chop refusal from there means a wall/fence/gate stands between us and
+/// the tree (or a fresh stump), never a walk that fell short.
+pub(crate) fn adjacent_to(bot_x: i32, bot_z: i32, spot_x: i32, spot_z: i32) -> bool {
+    (bot_x - spot_x).abs().max((bot_z - spot_z).abs()) <= 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
-    use std::collections::HashSet;
+    use std::collections::HashMap;
+
+    /// Refusal rule: orthogonal AND diagonal neighbours are adjacent
+    /// (Chebyshev reach), two tiles off is not.
+    #[test]
+    fn adjacent_to_covers_chebyshev_reach() {
+        assert!(adjacent_to(10, 10, 10, 10), "same tile");
+        assert!(adjacent_to(10, 10, 11, 10), "orthogonal");
+        assert!(adjacent_to(10, 10, 11, 11), "diagonal still adjacent");
+        assert!(!adjacent_to(10, 10, 12, 10), "two tiles off walks short");
+        assert!(!adjacent_to(10, 10, 11, 12), "two tiles off walks short");
+    }
 
     /// Threat rule mirrors the server: hunters skip players above twice
     /// their level, so combat 4 still fears spiders (2) but combat 5
@@ -294,13 +350,13 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         bot.allow_paid = false;
-        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &HashSet::new());
+        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &HashMap::new());
         let Some((_, hop_x, _)) = hopped else {
             panic!("hop should find a same-side tree, got None");
         };
         assert!(hop_x < 2920, "hop stays on the bot side of the fence, got x={hop_x}");
         bot.allow_paid = true;
-        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &HashSet::new());
+        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &HashMap::new());
         assert!(some.is_some(), "paid crossing reopens the same spots");
     }
 
@@ -324,7 +380,7 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let banned: HashSet<(i32, i32)> = [
+        let banned: HashMap<(i32, i32), u64> = [
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -334,6 +390,7 @@ mod tests {
             (3165, 3219),
         ]
         .into_iter()
+        .map(|pos| (pos, u64::MAX))
         .collect();
         let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &banned);
         let Some((tier, spot_x, spot_z)) = picked else {
@@ -363,7 +420,7 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let banned: HashSet<(i32, i32)> = [
+        let banned: HashMap<(i32, i32), u64> = [
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -378,6 +435,7 @@ mod tests {
             (2935, 3229),
         ]
         .into_iter()
+        .map(|pos| (pos, u64::MAX))
         .collect();
         let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &banned);
         let Some((tier, _, _)) = picked else {
