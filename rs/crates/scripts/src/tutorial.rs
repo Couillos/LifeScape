@@ -761,12 +761,13 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
                 bot.log("ok already on the mainland");
                 return Ok(());
             }
-            let start = (bot.world.x, bot.world.z, bot.world.level);
             talk_step(bot, "magic_instructor", (3141, 3089), &["Yes."], "terrova final")?;
+            // Only the mainland teleport counts: the approach walk inside
+            // talk_step moves the bot too, which faked success here before.
             let target = bot.world.ticks + 100;
             while bot.world.ticks < target {
                 bot.pump(5)?;
-                if (bot.world.x, bot.world.z, bot.world.level) != start {
+                if bot.world.x > 3200 {
                     bot.log("ok teleported to mainland");
                     return Ok(());
                 }
