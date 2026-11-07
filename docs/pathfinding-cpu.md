@@ -79,12 +79,12 @@ dynamiques (paramètre, pas topologie), 1 agent par requête.
 
 | Option | Gain CPU estimé | RAM | Complexité | Risques / invalidation |
 |---|---|---|---|---|
-| **A. Cache LRU par worker, clé (from, dest, options, version tables)** | ~50-60 % de Dijkstra évités (taux répétition §1.4) | ~64-256 plans (~ko chacun) : < 5 Mo **par worker** (1 process/session, `daemon.rs:243-256` : aucun partage inter-process sans IPC) | < 100 lignes, 1 fichier | Clé doit inclure `excluded_edges` (replans) **+ `allow_paid`/`satisfied` par bot** (§5.8 : isolation inter-bots par construction) ; `satisfied` varie (pièces) → mesurer hit/miss au runtime |
+| **A. Cache LRU local au worker (TRANSITOIRE, plus la cible)** | ~50 % intra-worker (§1.4), 0 inter-bots | < 5 Mo/worker mais N× en RAM | < 100 lignes, 1 fichier | Remplacé par le cache global §5.3 ; ne survit qu'en lot transitoire revertable (§5.5). Clé complète exigée dans tous les cas (§5.8) |
 | **B. `prepare_edges()` 1× par `plan()`** (au lieu de 4×) | ~3 × 90 ms économisés à froid par plan multi-recherche | 0 | ~20 lignes | Les rides dépendent de `ignore_requires/allow_paid/ignore_f2p` : 2 variantes max (A/D), pas 4 |
 | **C. Bidirectionnel (déjà envisagé)** | ~2× en espace ouvert, **~1× dans donjons/goulots** (les deux fronts doivent passer les mêmes portes) | 2× structures de visite | Moyenne : règle d'arrêt `topf+topr ≥ µ` subtile avec rides asymétriques | Portes orientées (`side_ok`, `plan.rs:615`) et rides non réversibles : front arrière faux ; cf. vPathfinder « Bottlenecks » |
 | **D. Graphe grossier portails** (transitions + portes = arêtes, Dijkstra local seul) | ~10× sur longues distances (HPA* : jusqu'à 10×, chemins à 1 % de l'optimum — Botea et al. 2004) | Graphe abstrait (~367 rides + portes, ko) | Élevée : extraction, précalcul intra-cluster, lissage | Portes dynamiques = repondération d'arêtes (OK) ; donjons +6400 = le cas favorable (connectivité contrainte) |
 | **E. Flow fields** | Négatif pour 1 agent | Champ = N tuiles (≈ To à l'échelle monde) | Moyenne | **À écarter** : 1 champ par destination (SupCom2, Godot docs) ; rentable à N agents / 1 but (RTS), pas 1 agent / N buts |
-| **F. Daemon de plans (1 moteur, IPC)** | Supprime la duplication RAM, **0 gain CPU** (mêmes Dijkstra) | −N mondes | Élevée + viole `std only` (pas de tokio/serde, `AGENTS.md §4.1`) | IPC (socket/JSON maison) > coût d'un plan médian (~70 ms) ; point de défaillance unique. En multi-bots multi-process (`daemon.rs:243-256`), un cache partagé exigerait exactement cet IPC : voir §5.8, conclusion inchangée |
+| **F. Service central de plans (RETENU — décision produit, §5)** | CPU : ~50-60 % de Dijkstra évités via cache GLOBAL (hubs partagés, §5.8) ; RAM : N mondes → 1 monde | 1 monde chaud (~200 Mo max, ré-estimé d'après §1.3) + cache global ~1024 plans (quelques Mo, §5.3) | Moyen : threads std + IPC JSON maison (pattern `send_worker` existant, `daemon.rs:576-597`) ; std only, pas de tokio/serde | IPC estimé < 2 ms vs Dijkstra médian ~70 ms (< 3 %, §5.1) ; SPOF → fallback sync loggé (§5.2) ; invalidation unique mais globale (§5.6) |
 | **G. Précalcul total** | 100 % | **To de RAM** | Faible | **À écarter** : ~1 an de calcul (rapport parent), monde > RAM |
 | **H. A* + heuristique euclidienne** | Variable | 0 | Faible | **À écarter** : offsets de donjons + portails cassent l'admissibilité de Chebyshev (déjà tranché, `plan.rs:3-8`) |
 
@@ -95,38 +95,45 @@ DHPA* +1,9× moy., SHPA* statique seule — AIIDE 2010) ; flow fields = 1 but pa
 répétées (defold-graph-pathfinder ; nExBot : LRU 8 entrées + négatif 32 entrées ;
 Screeps Overmind : −20-30 % CPU).
 
-## 3. Recommandation unique, en 2 étapes
+## 3. Recommandation unique : service central, en 3 lots
 
-**Étape 1 — quick win (< 100 lignes, 1 crate, aucun protocole) : cache + setup unique.**
+**Décision produit (non négociée dans ce doc) : UN service central de
+pathfinding, mémoire partagée UNE fois pour tous les bots.** Le reste de ce
+§3 et le §5 en sont la déclinaison.
 
-1. LRU borné (ex. 128 entrées) dans le worker, clé = `(from, dest, allow_paid,
-   f2p_only, satisfied-trié, excluded_edges-trié, version-tables)` → `Plan` cloné.
-   Le `Plan` est petit (segments + tuiles) et `Clone` existe déjà (`plan.rs:160-161`).
-   `f2p_only` est déjà constant (`true` hardcodé, `travel.rs:165`) : il reste dans
-   la clé pour le prix d'un booléen, sans variante P2P à gérer (§5.8).
-2. Compteurs `hit/miss` dans le log `nav plan` (une ligne) pour valider le §1.4
-   avec la vraie clé — si hit < 30 %, réduire la voilure avant l'étape 2.
-3. `prepare_edges()` calculé une fois par `plan()` (variantes A/D partagées,
-   `plan.rs:544,773`) — ~20 lignes, gain immédiat sur chaque plan multi-recherche.
+1. **Lot 1 — L2 seul (sync, ~20 lignes, aucun protocole).**
+   `prepare_edges()` calculé 1× par `plan()` (variantes A/D partagées,
+   `plan.rs:544,773`) au lieu de jusqu'à 4×. Gain immédiat sur chaque plan
+   multi-recherche, indépendant de l'archi, revert = 1 fonction.
+2. **Lot 2 — service central minimal (monde 1×, IPC, fallback).**
+   Le daemon charge `StaticWorld` + `Tables` UNE fois ; threads std ;
+   workers en IPC JSON maison (pattern `send_worker`, `daemon.rs:576-597`) ;
+   service down → fallback sync local loggé, jamais de panne franche.
+   Preuve du transport : p99 overhead IPC ≤ 5 ms mesuré (seuil proposé),
+   à comparer au Dijkstra médian ~70 ms (§2 ligne F, repris).
+3. **Lot 3 — cache global + fairness + métriques.** Clé complète (§5.3),
+   file globale bornée + équité inter-bots (§5.2), compteurs hit/miss.
+   Seuil repris : hit rate global ≥ 30 % (cf. §3 ancien), sinon régler
+   avant tout lot suivant. Graphe grossier portails (§2 ligne D) seulement
+   si le cache global plafonne — pas avant le verdict du lot 3.
 
-Gain attendu : ~50 % de Dijkstra évités pour < 5 Mo, zéro invalidation dynamique
-(tables figées par session, `session.rs:717-747`).
-
-**Étape 2 — fond (quand l'étape 1 est mesurée) : graphe grossier portails.**
-
-Nœuds = stands de rides + tuiles de portes ; arêtes = coûts précalculés intra-zone ;
-requête = Dijkstra abstrait (microsecondes) + Dijkstra local entre portails.
-C'est le profil HPA* 1 niveau, adapté aux donjons (+6400 : connectivité contrainte =
-cas favorable). Invalidation = incrément de version tables sur `nav_overrides.json`.
-Ne pas faire de HPA* multi-niveaux : gains décroissants (Botea et al.), 1 niveau suffit
-à ~0,3 req/s.
+Gain attendu : RAM N×(55-185 Mo, §1.3) → 1 monde chaud (~200 Mo max,
+ré-estimé) dès le lot 2 ; CPU ~50 %+ de Dijkstra évités au lot 3
+(répétitions intra §1.4 + hubs partagés §5.8).
 
 ## 4. Ce qu'il NE faut PAS faire
 
 - **Précalcul total** (toutes paires) : ~1 an de calcul, To de RAM — rapport parent.
 - **Flow fields** : un champ par destination, rentable à N agents/1 but ; ici 1 agent/N buts.
-- **Daemon/IPC ou mémoire partagée inter-process** : aucun gain CPU (mêmes Dijkstra),
-  latence IPC ≥ plan médian, `mmap` = `unsafe` (interdit, `AGENTS.md §4.2`), `std only`.
+- **Thread-par-worker comme cible définitive** : N files, N caches, N mondes
+  dupliqués — le service central (§5) fait mieux avec moins de RAM et un seul
+  endroit à invalider. Le thread local ne survit qu'en lot transitoire
+  revertable (§5.5), jamais comme architecture finale.
+- **Protocole binaire maison pour l'IPC** : le JSON maison (`lifescape-json`,
+  seule dép. nav, `nav/Cargo.toml:10-11`) + framing newline — exactement le
+  pattern `send_worker` (`daemon.rs:576-597`) — suffit à ~0,3 req/s (§2) ;
+  un framing binaire, c'est un nouveau parser à maintenir pour < 1 ms gagné
+  (ré-estimé, §5.1) — écarté.
 - **Bidirectionnel seul** : gain plafonné ~2×, nul dans les goulots ; fronts arrière
   invalides sur rides orientés + portes `side_ok`.
 - **A* euclidien** : heuristique inadmissible ici (déjà tranché `plan.rs:3-8`).
@@ -140,225 +147,290 @@ Ne pas faire de HPA* multi-niveaux : gains décroissants (Botea et al.), 1 nivea
 `docs/decisions.md:13`. Mesures live : `run/logs/t01.log`, `admin.log`, `ps`
 (2026-11-07, lecture seule, T01 intouchée).*
 
-## 5. Plan async mutualisé
+## 5. Service central de pathfinding (architecture retenue)
 
-But : sortir `plan()` du thread script sans changer le plan lui-même
-(`plan()` reste l'unique moteur, `plan.rs:255-257` ; wrapper, pas fork — §5.6).
-Deux gains visés, dans l'ordre : (a) plus de pump affamé (le reap à
-100 ticks disparaît par construction) ; (b) ~50 % de Dijkstra évités par le
-cache local (§1.4 : 63,5 % de répétitions exactes (from, dest), borne haute).
-Aucune mesure nouvelle ci-dessous : taux et budgets CPU repris des §1-2,
-bornes (1500 ms, 250 ticks + 30 s, 45 s, file 2, LRU 128) reprises du code cité.
-Le §5.8 décline ce plan en multi-bots F2P (partageable vs par-bot, clé,
-dimensionnement, fairness) sans changer l'architecture : un planificateur
-par worker reste la décision, renforcée par l'isolation inter-bots.
+But : UN moteur `plan()` partagé (`plan.rs:255-257` reste l'unique moteur ;
+wrapper IPC, pas fork — §5.6), mémoire chargée UNE fois, cache GLOBAL unique.
+Trois gains visés, dans l'ordre : (a) RAM : N mondes dupliqués (§1.3) → 1 monde
+chaud ; (b) CPU : ~50 %+ de Dijkstra évités par le cache global (répétitions
+intra §1.4 + hubs partagés §5.8) ; (c) pump jamais affamé (le reap à 100 ticks
+disparaît par construction : plus de Dijkstra synchrone sur le thread script).
+Aucune mesure live nouvelle ci-dessous : taux et budgets CPU repris des §1-2,
+bornes (1500 ms, 250 ticks + 30 s, 45 s, file globale 16 + cap 2/compte, cache
+global 1024 — bornes proposées sauf mention) reprises du code cité.
+Le §5.8 décline le multi-bots F2P (partageable vs par-bot, clé, dimensionnement
+global, fairness) : 1 monde, 1 file, 1 cache — plus aucune notion worker.
 
-### 5.1 Architecture : un planificateur par worker, pas de service central
+### 5.1 Architecture : service central dans le process daemon, workers en IPC
 
-**Décision : thread planificateur dédié par process session, pas de service
-central inter-process.** Le worker session est déjà 1 process OS par compte
-(`daemon.rs:231-256`, spawn via `current_exe` `daemon.rs:215-228`), et le
-thread script y détient `bot` verrouillé pendant tout le run
-(`session.rs:302-309`, `run_script_thread` `session.rs:337-338`). Le
-planificateur est un second thread du même process, qui reçoit des demandes
-sur un canal borné et rend des `Plan` clonés (`Plan: Clone`, `plan.rs:160-161`).
-Alternative rejetée : service central inter-process (socket Unix + JSON
-maison). Le §2 ligne F tranche déjà : 0 gain CPU (mêmes Dijkstra), latence
-IPC ≥ plan médian, point de défaillance unique, et `std only` interdit
-tokio/serde (`nav/Cargo.toml:10-11` : seule dépendance `lifescape-json`
-maison). Un service central ne se justifierait que par un hit rate
-*inter*-workers mesuré — non mesuré à ce jour (le §1.4 ne compte que
-l'intra-worker `t01.log`) — donc différé jusqu'à preuve, pas écarté par
-principe.
+**Décision : le moteur vit dans le process daemon (threads std, pas de tokio,
+`unsafe` interdit), les workers (1 process/session, `daemon.rs:231-256`) l'appellent
+en IPC.** Le daemon charge `StaticWorld` + `Tables` UNE fois au démarrage
+(aujourd'hui chargés par session, `session.rs:698-747` : c'est cette duplication
+que le service supprime) ; les threads du service se partagent les `Arc`
+(`static_world.rs:35-51` : `open` rend déjà un `Arc`) ; chaque requête
+embarque la version données (§5.3).
 
-Cycle de vie, calé sur la session existante :
-- démarrage après le chargement monde + tables (`session.rs:717-747`),
-  avec clones des `Arc` (`nav_world`, `nav_tables`) et de la version
-  données (§5.3) ;
-- arrêt au `close`/`unload` (`session_cmds.rs:261-277`, `cmd_unload`
-  `session_cmds.rs:78-134`) : le thread sort quand la file se vide ou à
-  l'abandon explicite, jamais de thread orphelin après `close_job`
-  (`daemon.rs:519-563`, kill + suppression du socket).
+Transport : **socket Unix + JSON maison (`lifescape-json`) + framing newline —
+exactement le pattern `send_worker` (`daemon.rs:576-597`).** Pas de binaire
+maison (§4 : écarté), pas de tokio/serde (`nav/Cargo.toml:10-11`, `std only`,
+`AGENTS.md §4.1`), pas de `mmap` (`unsafe` interdit, `AGENTS.md §4.2`).
 
-Propriété des données : le worker possède tout. `StaticWorld` et `Tables`
-n'ont **aucune version aujourd'hui** (`static_world.rs:26-30`,
-`tables.rs:127-139`) : ajouter un `DataVersion` calculé au chargement
-(emprunte fichier `gamedata/data/transitions.json`,
-`nav_overrides.json`, `transitions_verified.json`, `free2play.csv`, plus le
-pack `maps-server.zip` et `gamedata/data/gametypes.json` (définitions de
-locs qui conditionnent portes et stands) — contenu ou mtimes, au choix de
-l'implémentation) et stocké à côté des `Arc`.
-Chaque demande de plan embarque la version ; le cache n'est jamais vidé en
-aveugle (§5.3). `transitions_verified` (exclusions + pénalité
-`UNVERIFIED_PENALTY`, `plan.rs:773-821`), `nav_overrides` (requirements,
-`tables.rs:296-401`) et les options `allow_paid` / `f2p_only` / `satisfied`
-(`NavOptions`, `plan.rs:169-176`) font partie de la clé, pas d'un flush.
+Pourquoi l'IPC ne mange pas le gain (chiffres, pas d'affirmation) :
+requête ≈ 200-500 octets JSON (`from`/`dest` 3 entiers + options + sets triés) ;
+réponse = 1 `Plan` : le pire golden fait 264 tuiles (`plan.rs:63-64`) soit
+quelques Ko JSON (ré-estimé) ; aller-retour socket Unix locale pour < 10 Ko :
+< 1 ms (ré-estimé). Face au Dijkstra médian ~70 ms (§2 ligne F, repris) et au
+budget `PLAN_BUDGET` 1500 ms (`plan.rs:71`), l'overhead estimé est < 2 ms soit
+< 3 % du médian — deux ordres de grandeur sous le gain visé (~50 % de Dijkstra
+évités). Capacité : à 0,3 req/s/bot (§2, repris), 10 bots = 3 req/s face à
+~1000/70 ≈ 14 plans/s sur UN thread plan (dérivé du médian) : marge ×4 avant
+tout pool. Seuil d'acceptation au lot 2 (§5.5) : p99 overhead IPC ≤ 5 ms
+**mesuré** (seuil proposé) — si dépassé, revoir le framing avant le cache.
 
-Isolation multi-bots (conséquence, pas de code en plus) : 1 process par
-session (`daemon.rs:243-256`) × 1 thread plan par process = chaque bot a sa
-file (bornée à 2, §5.2) et son LRU. Un replan-storm ou un cold start d'un bot
-ne touche ni la file ni le cache des autres : fairness par isolation, aucun
-arbitrage global à concevoir. Le revers est symétrique : aucun hit
-inter-bots sans IPC (§5.8) — c'est le prix assumé, pas un oubli.
+Cycle de vie, calé sur le daemon existant :
+- démarrage : chargement monde + tables UNE fois (index map rapide,
+  peinture paresseuse comme en session, `session.rs:696-697`), puis accept
+  des workers ; un worker qui `open` après un redémarrage daemon lit la
+  version courante à sa première requête (version dans chaque réponse).
+- arrêt : au `shutdown` (`daemon.rs:871-879`) le service vide la file puis
+  meurt avec le daemon ; jamais de thread orphelin (même discipline que
+  `close_job`, `daemon.rs:519-563`, kill + suppression du socket).
 
-### 5.2 Contrat d'appel : soumission non-bloquante, poll au `pump`
+**Service down → dégradation, jamais panne franche** : tout `submit` qui
+n'obtient pas de réponse (socket absent, timeout) bascule en fallback
+synchrone local — `plan()` direct sur le thread script (§5.2) + une ligne de
+log (`nav plan sync-fallback`, même format que `nav timing`,
+`travel.rs:214-217`) + compteur dans les métriques globales (§5.3). Le
+watchdog 45 s (`daemon.rs:27`, `WATCHDOG_STALE_SECS`) reste le filet existant.
 
-**Décision : `travel_to` soumet et rend la main ; le `pump` existant fait
-office de poll.** Forme (pseudo-signature, < 10 lignes) :
+### 5.2 Contrat d'appel : soumission IPC non-bloquante, poll au `pump`, fallback sync
+
+**Décision : `travel_to` soumet au service et rend la main ; le `pump` existant
+fait office de poll ; service injoignable → fallback sync local.** Forme
+(pseudo-signature, < 10 lignes, framing JSON newline comme `send_worker`,
+`daemon.rs:576-597`) :
 
 ```
-submit(from, dest, options, version) -> Ticket   // jamais bloquant, file bornée
-poll(ticket) -> EnCours | Pret(Plan) | Echec(NoRoute)  // appelé depuis pump/plan_yield
-cancel(ticket)                              // unload/stop → abandon
+submit(account, from, dest, options) -> Ticket   // IPC, jamais bloquant
+poll(ticket) -> EnCours | Pret(Plan) | Echec(NoRoute) | Refuse  // depuis pump/plan_yield
+cancel(ticket)                              // unload/stop → abandon propagé
 ```
 
 - Soumission : `plan_travel` (`travel.rs:74-113`) construit `from`/`options`
   comme aujourd'hui puis `submit` au lieu d'appeler `plan_yielding`
-  (`travel.rs:86`) en synchrone. File **bornée à 2** (1 en calcul + 1 en
-  attente) : au-delà, refus immédiat → fallback synchrone (§ ci-dessous),
-  jamais d'attente bloquante sur le thread script.
-- Poll : les points de `yield` existants servent de poll —
-  `plan_yield` (`travel.rs:122-134`) et `pump` (`mod.rs:292-321`) vérifient
-  le ticket au lieu d'appeler le keepalive depuis le Dijkstra. Le keepalive
-  (`KEEPALIVE_TICKS = 50`, `KEEPALIVE_WALL = 3 s`, `mod.rs:41-45`) redevient
-  un appel normal sur le thread script entre deux polls : plus de search
-  synchrone de 1,5 s qui affame le socket (budget `PLAN_BUDGET`,
-  `plan.rs:71` ; reap 100 ticks, `travel.rs:116-117`).
+  (`travel.rs:86`) en synchrone. **File globale bornée à 16 + cap 2 tickets
+  en vol par compte** (bornes proposées) : au-delà (file pleine ou cap
+  atteint) → `Refuse` immédiat → fallback sync (§ ci-dessous), jamais
+  d'attente bloquante sur le thread script.
+- Poll : les points de `yield` existants servent de poll — `plan_yield`
+  (`travel.rs:122-134`) et `pump` (`mod.rs:292-321`) vérifient le ticket à
+  chaque tick (échelle ~60 ms, consigne produit) au lieu d'appeler le keepalive
+  depuis le Dijkstra. Le keepalive (`KEEPALIVE_TICKS = 50`, `KEEPALIVE_WALL = 3 s`,
+  `mod.rs:41-45`) redevient un appel normal sur le thread script entre deux
+  polls : plus de search synchrone de 1,5 s qui affame le socket (budget
+  `PLAN_BUDGET`, `plan.rs:71` ; reap 100 ticks, `travel.rs:116-117`).
 - Timeouts : reprise des bornes existantes, rien de nouveau — abandon côté
-  planificateur au `PLAN_BUDGET` (1500 ms, `plan.rs:71`) comme aujourd'hui
-  (`plan.rs:586-592`), abandon côté script à `UNLOAD_TICKS = 250 ticks +
-  garde-fou 30 s` (`session_cmds.rs:19-21`, `cmd_unload`
+  service au `PLAN_BUDGET` (1500 ms, `plan.rs:71`) comme aujourd'hui
+  (`plan.rs:586-592`) ; le `yield_` du Dijkstra branche en plus le flag
+  cancel du ticket (annulation) ; abandon côté script à `UNLOAD_TICKS =
+  250 ticks + garde-fou 30 s` (`session_cmds.rs:19-21`, `cmd_unload`
   `session_cmds.rs:96-103`).
 - Annulation : `stop_requested` (`session.rs:147`) et la sortie du hook
-  `on_pump` (`mod.rs:309-313`) annulent le ticket (`cancel`) exactement
-  comme le `yield_() → false` annule la recherche aujourd'hui
-  (`dijkstra` `plan.rs:574-578` → `Aborted`, remonté en `travel.rs:87-89`
-  → `Interrupted`).
+  `on_pump` (`mod.rs:309-313`) envoient `cancel(ticket)` exactement comme le
+  `yield_() → false` annule la recherche aujourd'hui (`dijkstra`
+  `plan.rs:574-578` → `Aborted`, remonté en `travel.rs:87-89` →
+  `Interrupted`). Ticket en file → retiré ; en calcul → le `yield_`
+  l'interrompt au prochain point de yield.
 - Priorité : replan d'exécution (`travel.rs:227-252`) devant plan initial
-  (file de 2 : le replan écrase l'attente, jamais le calcul en cours).
-- Fallback synchrone : planificateur saturé ou thread tombé → `plan()`
-  direct sur le thread script + une ligne de log (`nav plan sync-fallback`,
-  même format que `nav timing`, `travel.rs:214-217`). Jamais de panne
-  franche : dégrade, logge, le watchdog (`daemon.rs:143-213`, seuil 45 s
+  **du même compte** (le replan écrase l'attente du compte, jamais le calcul
+  d'autrui — §5.8, règle de fairness).
+- Fallback synchrone : service injoignable, file pleine, ou thread tombé →
+  `plan()` direct sur le thread script + une ligne de log (`nav plan
+  sync-fallback`, même format que `nav timing`, `travel.rs:214-217`).
+  Jamais de panne franche : dégrade, logge, compte (compteur `sync-fallback`
+  global, §5.3), le watchdog (`daemon.rs:143-213`, seuil 45 s
   `WATCHDOG_STALE_SECS`, `daemon.rs:27`) reste le filet existant.
 
-### 5.3 Cache : L1 requête exacte, L2 arêtes, invalidation par version
+### 5.3 Données partagées UNE fois + cache GLOBAL unique
 
-**Décision : deux briques, pas de cache de segments.** Les segments assemblés
-(`assemble`, `plan.rs:912-972`) dépendent de l'ordre d'assemblage ; les
-cacher, c'est dupliquer `plan()` en pire. Les deux briques utiles :
+**Décision : un seul `StaticWorld`, un seul `Tables`, une seule version,
+un seul cache — partagés par `Arc` entre les threads du service.**
 
+Données : `StaticWorld` et `Tables` n'ont **aucune version aujourd'hui**
+(`static_world.rs:26-30`, `tables.rs:127-139`) : ajouter un `DataVersion`
+calculé au chargement (emprunte fichier `gamedata/data/transitions.json`,
+`nav_overrides.json`, `transitions_verified.json`, `free2play.csv`, plus le
+pack `maps-server.zip` et `gamedata/data/gametypes.json` (définitions de locs
+qui conditionnent portes et stands) — contenu ou mtimes, au choix de
+l'implémentation), stocké à côté des `Arc` dans un `Snapshot` :
+`Snapshot = (Arc<StaticWorld>, Arc<Tables>, DataVersion)`.
+
+Qui recharge, quand, sans couper les requêtes en vol : **le daemon, sur
+commande opérateur explicite** (`reload-nav`, proposée — pas de watcher
+automatique : du code en plus pour un événement rare), après toute modif
+gamedata. Rechargement en **double-buffering** : le nouveau `Snapshot` se
+construit à côté (index map rapide, peinture paresseuse — même coût qu'un
+`open` session, `session.rs:696-747`), puis swap atomique (`Arc<Snapshot>`
+sous `Mutex` tenu le temps du swap seul, jamais pendant un Dijkstra). Les
+requêtes en vol gardent l'ancien `Arc` et finissent undisturbed ; la version
+bumpée rend les anciennes entrées cache illisibles (pas de flush aveugle,
+éviction LRU naturelle). **Un seul endroit à vider**, pas N.
+
+Cache : deux briques, comme avant, mais GLOBALES :
 - **L1 — plans complets**, clé = `(from, dest, allow_paid, f2p_only,
   satisfied-trié, excluded_edges-trié, version-données)` (même clé que la
-  recommandation §3.1). LRU ~128 entrées, < 5 Mo (§3.1) ; `Plan` petit,
-  `Clone` existant (`plan.rs:160-161`). Cible : convertir les 63,5 % de
-  répétitions (§1.4) en hits — avec la clé complète le taux réel est ≤ 63,5 %
-  (§1.4, borne haute), d'où la métrique hit/miss obligatoire avant l'étape 2
-  (§3.1 : si hit < 30 %, réduire la voilure).
+  recommandation §3 ancien). **LRU global ~1024 plans** (borne proposée :
+  8× l'ancien LRU worker pour absorber N bots sans N×RAM — le lot métriques
+  tranche 512/1024/2048) ; `Plan` petit, `Clone` existant
+  (`plan.rs:160-161`). Cible : convertir les 63,5 % de répétitions (§1.4,
+  borne haute — le taux réel avec clé complète est ≤, §1.4) + les hits
+  inter-bots sur hubs (§5.8) en Dijkstra évités.
 - **L2 — `prepare_edges` partagé** (`plan.rs:773-821`, ~90 ms à froid rejoué
   jusqu'à 4×/plan, §1.1) : calculé 1× par `(version, ignore_requires,
   allow_paid)` — 2 variantes utiles max (A/D, §2 ligne B), pas 4 — et
   réutilisé par les 4 recherches A/B/C/D (`plan.rs:280-357`). ~20 lignes,
-  gain immédiat sur chaque plan multi-recherche (§3.1 point 3), indépendant
-  du thread async : faisable seul en lot 1.
+  gain immédiat sur chaque plan multi-recherche, indépendant du service :
+  faisable seul en lot 1 (§5.5).
 
-Invalidation : aucune clé sans `version-données` ; un bump de version rend
-les anciennes entrées illisibles (pas de flush aveugle, éviction LRU
-naturelle). `Tables::load` (`tables.rs:145-150`, une fois par session,
-`session.rs:737-746`) et `set_f2p`/`set_sky_floors`
-(`static_world.rs:157-167`, `session.rs:726-743`) sont les seuls points de
-bump. `satisfied` (pièces/inventaire, `travel.rs:139-166`) varie à chaque
-appel : il reste dans la clé L1 (pas de normalisation magique), le taux de
-hit mesuré dira s'il faut le compacter (ex.ordonner + hacher, jamais
-l'ignorer — §4 : clé incomplète = replan banni resservi).
+**Preuve d'isolation (même clé = même plan, aucun plan d'un bot ne peut fuiter
+vers un autre).** `plan()` est pure et déterministe (`plan.rs:242` : « mêmes
+entrées, même plan, octet pour octet ») : servir un hit L1, c'est servir
+exactement le plan que le calcul aurait rendu pour ces entrées. La clé
+contient **tous** les champs qui varient par bot — `allow_paid`, `satisfied`
+(pièces/inventaire/QP, `travel.rs:139-163`), `excluded_edges` (ban du replan,
+`travel.rs:232-234`), `from`/`dest`, `f2p_only`, `version-données` — aucun
+chemin de code ne les ignore ni les compacte (§4 : clé incomplète = replan
+banni resservi). Donc deux bots ne partagent un hit que s'ils auraient obtenu
+le même plan au bit près : la fuite est impossible **par construction**, pas
+par discipline. Garde-fou : test d'isolement au lot 2 (§5.5) — deux jeux
+d'options ne différant que par l'un de ces champs → 0 hit croisé — plus test
+de bump au lot 3.
 
-Métriques (une ligne de log par plan, même format que `nav timing`,
-`travel.rs:214-217`) : `hit/miss L1`, `taille`, `âge max`, `hits L2`.
-Bornes mémoire : L1 ≤ 128 plans, L2 ≤ 2 variantes ; dépassement = éviction
-LRU, jamais d'alloc non bornée (les `HashMap`/`BinaryHeap` par recherche,
-§1.1, restent transitoires et inchangés).
+Métriques GLOBALES (une ligne de log par plan, même format que `nav timing`,
+`travel.rs:214-217`) : `hit/miss` L1, taille, âge max, `hits` L2, profondeur
+file, refus, `sync-fallback`. Bornes mémoire : L1 ≤ 1024 plans, L2 ≤ 2
+variantes ; dépassement = éviction LRU, jamais d'alloc non bornée (les
+`HashMap`/`BinaryHeap` par recherche, §1.1, restent transitoires et inchangés).
 
-### 5.4 Concurrence `std only` : threads + `mpsc`, verrous minimaux
+### 5.4 Concurrence `std only` : pool de threads + `mpsc`, verrous minimaux
 
 **Décision : `std::thread` + `std::sync::mpsc` borné, `Mutex` à grains fins,
 jamais de verrou tenu pendant un Dijkstra.** Rappel applicable
 (`nav/Cargo.toml:10-11`, `session.rs:1`, `daemon.rs:1` : `forbid(unsafe_code)`
-partout, pas de tokio — `AGENTS.md §4.1-4.2`).
+partout, pas de tokio — `AGENTS.md §4.1-4.2`). Pool proposé : 2 threads plan
++ 1 accepteur IO (dimensionnement proposé : 1 thread suffit à ~14 plans/s,
+§5.1 ; le 2ᵉ absorbe les pics/NoRoute exhaustifs à 1,5 s ; le lot métriques
+tranche 1/2/4).
 
-- Qui verrouille quoi : file de demandes (`Mutex<VecDeque>` ou `mpsc::sync_channel`,
-  producteur = thread script, consommateur = thread plan) ; table des
-  résultats (`Mutex<HashMap<Ticket, …>>`, écrit par le planificateur, lu au
-  poll) ; cache L1/L2 (`Mutex` dédié, tenu **uniquement** pour lookup/insert,
-  jamais pendant `dijkstra`, `plan.rs:518-721`). `StaticWorld::get` prend
-  déjà le verrou **écriture** à chaque tuile (`static_world.rs:73-75`) :
-  seul le thread plan y touche en masse, le thread script ne fait plus de
-  `plan()` synchrone — la contention lecture/écriture actuelle
-  (`Search.base/open_flags`, `plan.rs:415-493` + `world.get`) disparaît avec
-  elle.
+- Qui verrouille quoi : file GLOBALE (`Mutex<VecDeque>` ou `mpsc::sync_channel`,
+  producteurs = threads IO des requêtes IPC, consommateurs = threads plan) ;
+  table des résultats (`Mutex<HashMap<Ticket, …>>`, écrite par le service, lue
+  au poll) ; cache L1/L2 (`Mutex` dédié, tenu **uniquement** pour lookup/insert,
+  jamais pendant `dijkstra`, `plan.rs:518-721`) ; `Snapshot`
+  (`Mutex` tenu le temps du swap seul, §5.3). `StaticWorld::get` prend
+  déjà le verrou **écriture** à chaque tuile (`static_world.rs:73-75`) : avec
+  2 threads plan sur le même monde partagé, ce verrou est la seule contention
+  résiduelle — lectures courtes + peinture paresseuse une fois par carré ;
+  pré-peindre les carrés des hubs au démarrage (§5.8) pour sortir la peinture
+  du chemin chaud. Si le lot métriques montre de la contention, sharder ou
+  passer `get` en lecture : hors scope, noté en incertitude (§5.7, pied de §5).
 - Ordre des verrous (documenté, total) : `file → résultats → cache →
-  monde`. Jamais l'inverse, jamais deux verrous pris sous le verrou monde
-  (feuille). Pas de `RwLock` ajouté : un seul écrivain (planificateur) par
-  structure, `Mutex` suffit et ne trompe personne sur le partage réel.
+  snapshot/monde`. Jamais l'inverse, jamais deux verrous pris sous le verrou
+  monde (feuille). Pas de `RwLock` ajouté : `Mutex` suffit et ne trompe
+  personne sur le partage réel.
 - Pas de `unsafe`, pas de `mmap` partagé inter-process (§4 : `mmap` =
-  `unsafe`, interdit) : les `Arc<StaticWorld>`/`Arc<Tables>`
-  (`static_world.rs:27-30`, `travel.rs:74-80`) sont clonés entre threads du
-  même process, jamais entre process.
+  `unsafe`, interdit) : les `Arc<StaticWorld>`/`Arc<Tables>` (pattern existant
+  `static_world.rs:27-30`, `travel.rs:74-80`) sont clonés entre threads du
+  **même process daemon**, jamais entre process — l'inter-process passe par
+  l'IPC JSON (§5.1), jamais par de la mémoire partagée.
 
-### 5.5 Lots ordonnés (chacun testable + revertable seul)
+### 5.5 Lots ordonnés : service d'abord, cache ensuite (chacun testable + revertable seul)
+
+Ordre imposé par les dépendances : le cache GLOBAL vit dans le service, donc
+le service (§5.1-5.2) précède le cache (§5.3) ; L2 seul (sync, sans archi)
+passe en premier car il dé-risque `prepare_edges` pour tous les lots suivants.
+Le thread-par-worker n'est PAS un lot : au plus une ÉTAPE TRANSITOIRE
+(L1+L2 sync locaux, revert = 1 fichier) si le service tarde — jamais la cible.
 
 | Lot | Contenu | Acceptation mesurable |
 |---|---|---|
 | 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:173-175`) ; revert = 1 fonction |
-| 2. L1 local (sync) | LRU 128 + clé complète + compteurs `hit/miss` dans `nav plan` (`travel.rs:180-191`) | hit rate live ≥ 30 % (§3.1), sinon stop ; < 5 Mo ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8) ; revert = 1 fichier |
-| 3. Thread plan + contrat async | submit/poll/cancel (§5.2), fallback sync, annulation sur `stop_requested`/`UNLOAD_TICKS` | aucun reap à 100 ticks sur legs > 1 s (logs `t01`-style), p99 `travel_to` ≤ sync + 5 ms sur les mêmes legs golden (chrono `nav timing`, `travel.rs:214-217`), fallback loggé ; file toujours bornée à 2/worker même à N bots (fairness par isolation, §5.8) ; revert = rebrancher `plan_travel` sync |
-| 4. Version données | `DataVersion` au chargement (`session.rs:717-747`), dans chaque clé | test : bump `nav_overrides.json` → 0 hit périmé servi (test unitaire, pas de live) ; revert = version constante |
-| 5. Métriques + dimensionnement | taille/âge/hit-miss loggés, bornes L1/L2 | décision chiffrée : garder, régler (128 → N), ou arrêter — pas de lot 6 sans ce verdict ; dimensionnement N workers = N × L1 (borne < 5 Mo/worker, §5.8), invalidation unique au chargement tables |
+| 2. Service minimal (sans cache) | monde+tables 1× au daemon, 1-2 threads std, IPC JSON newline (pattern `send_worker`, `daemon.rs:576-597`), `submit/poll/cancel`, fallback sync loggé, annulation sur `stop_requested`/`UNLOAD_TICKS` | p99 overhead IPC ≤ 5 ms mesuré (seuil proposé) sur legs golden (chrono `nav timing`, `travel.rs:214-217`) ; aucun reap à 100 ticks sur legs > 1 s ; fallback loggé+compté ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8 — la clé est posée dès ce lot même sans L1) ; revert = rebrancher `plan_travel` sync |
+| 3. Cache global + version | L1 global 1024 + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; test : bump `nav_overrides.json` → 0 hit périmé servi (unitaire, pas de live) ; RAM service ≤ 1 monde chaud + cache (borne §5.1) ; revert = version constante + L1 off |
+| 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus, `sync-fallback` | décision chiffrée : garder, régler (threads 1/2/4, L1 512/1024/2048, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
+| 5. (conditionnel) Graphe grossier portails | §2 ligne D, 1 niveau | seulement si le lot 4 montre un hit L1 plafonné par la distance (pas par les options) ; sinon : ne pas faire |
 
 Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
-un seul crate par lot (nav → sdk → orchestrator), sauf le lot 3 (contrat
-sdk + cycle de vie session : sdk + orchestrator) ; `main` reste
-vert entre lots.
+`main` reste vert entre lots.
 
-### 5.6 Risques
+### 5.6 Risques (service central)
 
 | Risque | Gravité | Mitigation (déjà conçue ci-dessus) |
 |---|---|---|
-| Plan périmé servi (invalidation ratée) | Haute (bot marche au mur / péage refusé) | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; test de bump (§5.5 lot 4) |
-| Plan d'un autre bot servi (fuite inter-bots : requires/autorisations d'autrui) | Haute (péage/quête franchi sans droit, replan banni resservi) | **clé par construction** : `allow_paid` + `satisfied` + `excluded_edges` par bot dans la clé L1 (§5.8), jamais normalisés ni ignorés ; test d'isolement (§5.5 lot 2). L'isolation process (§5.1) borne le risque au seul partage L1 intra-worker |
-| Thundering herd au cold start (N bots, cache vide) | Moyenne (pic CPU = N Dijkstra, §1.3) | file bornée → fallback sync étalé (§5.2) ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante). En multi-bots le pic est global (N process) mais **contenu par worker** : aucun bot n'affame un autre (§5.8) |
-| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | profondeur 2 + replan prioritaire écrase l'attente (§5.2) ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
-| Divergence sync/async (fallback ≠ thread) | Moyenne | même `plan()` underneath, le thread n'est qu'un wrapper d'appel (§5 : pas de fork) ; goldens identiques lots 1-3 |
-| Verrou monde pendant Dijkstra (régression contention) | Faible | ordre total file → résultats → cache → monde, monde feuille (§5.4) ; `get` en écriture (`static_world.rs:73-75`) réservé au thread plan |
-| Thread orphelin au close/unload | Faible | cycle de vie calé sur `cmd_unload`/`close_job` (§5.1) ; garde-fous existants `UNLOAD_TICKS` 250 + 30 s (`session_cmds.rs:19-21`) |
+| Service down (SPOF) | Moyenne (dégradation, pas panne) | fallback sync local loggé + compté (§5.2) ; le worker ne bloque jamais (file bornée → `Refuse` → sync) ; watchdog 45 s (`daemon.rs:27`) filet existant ; lot 2 sans cache prouve le fallback avant tout cache |
+| Plan périmé servi (invalidation ratée GLOBALE — pire que par worker : 1 flush raté empoisonne TOUS les bots) | Haute | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; **un seul** point de reload (`reload-nav` opérateur + swap atomique, §5.3) au lieu de N ; version servie loggée (écart détectable) ; test de bump (§5.5 lot 3) |
+| Plan d'un autre bot servi (fuite inter-bots : requires/autorisations d'autrui) | Haute (péage/quête franchi sans droit, replan banni resservi) | **clé par construction** : `allow_paid` + `satisfied` + `excluded_edges` par bot dans la clé L1 (§5.8, preuve §5.3), jamais normalisés ni ignorés ; test d'isolement (§5.5 lot 2) |
+| Thundering herd au cold start (N bots × cache vide) | Moyenne (pic CPU = N Dijkstra d'un coup sur le service) | file globale 16 → `Refuse` → fallback sync étalé (§5.2) : le pic se répartit entre service et workers ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante) ; pré-peinture des carrés hubs au démarrage (§5.4, §5.8) ; préchauffage optionnel (rejouer les top paires §1.4 au boot — proposé, non tranché) |
+| Taille d'un `Plan` sérialisé sur le fil | Faible (estimé) | pire golden 264 tuiles (`plan.rs:63-64`) ≈ quelques Ko JSON (ré-estimé) ; métrique taille reply au lot 4, alerte si p99 > 16 Ko (seuil proposé) ; au-delà : compacter (tuiles en delta) ou refuser le cache des monstres — non tranché, mesurer d'abord |
+| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | cap 2/compte + replan prioritaire sur l'attente du compte (§5.2, §5.8) : le fautif seul est refusé/basculé sync, les autres ne voient rien ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
+| Divergence sync/async (fallback ≠ service) | Moyenne | même `plan()` underneath des deux côtés, le service n'est qu'un wrapper d'appel (§5 : pas de fork) ; goldens identiques lots 1-2 |
+| Contention verrou monde (2 threads plan, `get` en écriture `static_world.rs:73-75`) | Faible (à mesurer) | ordre total file → résultats → cache → monde, monde feuille (§5.4) ; pré-peinture hubs ; lot 4 tranche (shard/`get` lecture si contention avérée — hors scope) |
+| Snapshot orphelin au reload/shutdown | Faible | requêtes en vol gardent l'ancien `Arc` (double-buffering, §5.3) ; au `shutdown` la file se vide puis le service meurt avec le daemon (§5.1) |
 
-### 5.7 Ce qu'on NE fait PAS (async)
+### 5.7 Service central : OUI — enterrement de l'ancienne conclusion
 
-- **Service central inter-process d'emblée** : §5.1 — pas de hit rate
-  inter-workers mesuré, IPC ≥ plan médian (§2 ligne F), SPOF. En multi-bots
-  multi-process (`daemon.rs:243-256`), un cache partagé exigerait exactement
-  cet IPC ou un changement d'architecture (threads au lieu de process) :
-  réévaluer seulement si le lot 5 montre un hit L1 plafonné par le
-  cross-compte **et** qu'une maquette prouve IPC < plan médian.
+L'ancienne conclusion (§5.1/§5.7 avant revirement, §2 ligne F, §4) disait :
+*pas de service central — 0 gain CPU, IPC ≥ plan médian, SPOF, hit inter-workers
+non mesuré, donc différé*. Elle est **explicitement abandonnée**, pour cinq
+raisons — dont trois montrent que ses prémisses étaient des affirmations
+sans mesure, pas des faits :
+
+1. **Décision produit** : mémoire partagée UNE fois (fin du N×<5 Mo et
+   surtout fin des N mondes dupliqués, §1.3 : 185 Mo vs 55 Mo par session).
+   Même à Dijkstra constants, le service supprime de la RAM réelle — ce que
+   l'ancien §2 ligne F (« 0 gain CPU ») présentait comme une absence de gain
+   en ignorant la RAM.
+2. **« IPC ≥ plan médian » était sans mesure.** Le pattern existe
+   (`send_worker`, `daemon.rs:576-597`) et les payloads sont des Ko (§5.1 :
+   overhead estimé < 3 % du médian ~70 ms, avec seuil mesurable au lot 2,
+   §5.5). L'ancienne conclusion comparait un coût mesuré (Dijkstra) à un
+   coût imaginé (IPC) — le lot 2 remplace l'imagination par un p99.
+3. **Le SPOF a un fallback conçu** (sync local loggé, §5.2 — recyclé de
+   l'ancien contrat thread-par-worker) : service down = dégradation
+   mesurée, pas panne franche.
+4. **Le hit inter-bots a des hubs concrets** (banques 68 booths, spots,
+   gobelins — §5.8) et une isolation prouvée par la clé (§5.3) : l'ancien
+   « non mesuré donc différé » devient « mesuré au lot 3, avec seuil d'arrêt
+   ≥ 30 % ».
+5. **`std only` est compatible** : threads std + JSON maison existant
+   (`lifescape-json`, `nav/Cargo.toml:10-11`), pas de tokio/serde à
+   introduire — l'ancien argument confondait « service » et « tokio ».
+
+Ce qu'on NE fait toujours PAS :
 - **GPU / parallélisation du Dijkstra lui-même** : 1 agent, ~0,3 req/s
-  (§2) — le parallélisme utile est entre requêtes (cache + thread), pas
+  (§2) — le parallélisme utile est entre requêtes (pool + cache), pas
   dans la boucle (`plan.rs:569-707`).
 - **Précalcul total** : ~1 an de calcul, To de RAM (§4, §2 ligne G).
 - **Cache de segments ou de `dist`/`prev`** : assemblage dépendant de
   l'ordre (`plan.rs:912-972`), structures transitoires par recherche
   (§1.1) — L1 plans + L2 arêtes suffisent.
 - **Nouvelle primitive async maison** (future/executor) : `mpsc` borné +
-  poll au `pump` existant (`mod.rs:292-321`) couvrent le besoin ; un
-  mini-runtime, c'est du code à maintenir pour 0,3 req/s.
+  poll au `pump` existant (`mod.rs:292-321`) couvrent le besoin côté worker ;
+  côté service, threads std + file bornée ; un mini-runtime, c'est du code
+  à maintenir pour 0,3 req/s/bot.
+- **Thread-par-worker comme cible finale** (§5.1 ancien : enterré — voir
+  §4 ; transitoire revertable au plus, §5.5).
 
-### 5.8 Multi-bots F2P : partageable vs par-bot, clé, dimensionnement
+### 5.8 Multi-bots F2P : 1 monde, 1 file, 1 cache — plus aucune notion worker
 
 Contexte : N workers aux objectifs et paths différents (travel pur, bank
 trips pêche/mine/woodcutting, chasse gobelins, tutos, quêtes — cf.
 `skill_common.rs:175` `nearest_bank`, `skill_woodcutting_spot.rs:17-19`
 yew 175 xp vs willow 67,5, `skill_woodcutting.rs:183-199` chasse gobelins à
 l'est de Lumbridge, `tutorial.rs`, `lib.rs:169`), tous F2P. Ce § ne change
-ni l'architecture (§5.1 : planificateur par worker) ni les lots (§5.5) :
-il fige le découpage que la clé doit garantir.
+ni l'architecture (§5.1 : service central) ni les lots (§5.5) : il fige le
+découpage que la clé doit garantir, en GLOBAL.
 
 **F2P partout : une seule variante monde.** `f2p_only: true` est hardcodé
 (`travel.rs:165`) — la recherche C (`plan.rs:336-348`) tourne toujours, la
@@ -370,23 +442,17 @@ variante P2P n'existe pas en pratique. Conséquence : un seul graphe statique
 deux bots n'ont les mêmes tags que s'ils portent la même bourse),
 `excluded_edges` (ban du replan, `travel.rs:232-234`, forcément par bot).
 
-| Partageable entre bots (global daemon, mêmes entrées → même sortie) | Par bot (dans la clé L1, jamais normalisé) |
+| Partageable entre bots (UN snapshot daemon, mêmes entrées → même sortie) | Par bot (dans la clé L1, jamais normalisé) |
 |---|---|
 | Graphe statique + `Tables` + verdicts (`transitions_verified`, `nav_overrides`) + `DataVersion` (§5.1/§5.3) | `from` (position), `dest` |
 | L2 `prepare_edges` : 2 variantes max (A/D, §2 ligne B) — indépendant du bot | `allow_paid`, `satisfied` (trié), `excluded_edges` (trié) |
-| Coûts Dijkstra pour options identiques (conséquence, pas un cache global) | `version-données` (commune en pratique, mais dans la clé : §5.3) |
+| Coûts Dijkstra pour options identiques → hits L1 inter-bots (§5.3) | `version-données` (commune en pratique, mais dans la clé : §5.3) |
 
-**Isolation par construction.** Interdit formel : servir à un bot un plan
-calculé avec les requires/autorisations d'un autre (porte à péage franchie
-avec `allow_paid` d'autrui, requirement `coins:/item:/qp:` satisfait par
-l'inventaire d'autrui, arête bannie par le replan d'autrui resservie).
-La clé L1 l'interdit **par construction** — les trois champs par-bot en
-font partie (§5.3), aucun chemin de code ne les ignore ou les compacte
-sans mesure (§4 : clé incomplète = replan banni resservi). Garde-fou :
-test d'isolement au lot 2 (§5.5) — deux jeux d'options ne différant que par
-l'un de ces champs → 0 hit croisé — plus test de bump au lot 4.
+**Isolation par construction** — voir la preuve au §5.3 (déterminisme
+`plan.rs:242` + clé complète ⇒ aucun plan d'un bot ne peut fuiter vers un
+autre). Garde-fou : test d'isolement au lot 2 (§5.5).
 
-**Charge et localité inter-bots (estimations, à mesurer au lot 5).**
+**Charge et localité inter-bots (estimations, à mesurer au lot 3).**
 Référence intra-worker : ~1000 plans/16 h/worker, 63,5 % de répétitions
 exactes `(from, dest)` (§1.4). Localité inter-bots attendue : forte sur les
 hubs partagés — banques (`all_banks()`, 68 booths, `banks.rs:18-36`,
@@ -395,50 +461,48 @@ hubs partagés — banques (`all_banks()`, 68 booths, `banks.rs:18-36`,
 (`skill_woodcutting_spot.rs:17-55`), gobelins est-Lumbridge
 (`skill_woodcutting.rs:183-199`), trajets banque↔spot des boucles
 pêche/mine/woodcutting (`skill_common.rs:535-688` `bank_trip`). Deux bots
-au même hub avec les mêmes options partageraient le hit — **mais** les
+au même hub avec les mêmes options partagent le hit — **mais** les
 options diffèrent en pratique (`satisfied` = bourse/inventaire du bot) :
 le hit inter-bots réel est donc ≤ la redondance apparente des paires
-`(from, dest)`, comme en intra (§1.4 borne haute). Estimation prudente :
-gain inter-bots marginal tant que les inventaires divergent ; le lot 5 le
-mesure (comparer paires `(from, dest)` vs clé complète sur logs N bots).
+`(from, dest)`, comme en intra (§1.4 borne haute). Estimation prudente
+(ré-estimée) : le cache global ajoute +10-20 points de hit au-delà de
+l'intra-worker sur N bots aux hubs communs ; le lot 3 le mesure (comparer
+paires `(from, dest)` vs clé complète sur logs N bots).
 
-**Dimensionnement : LRU par worker, pas de cache daemon partagé.**
-Le daemon reste N process (`daemon.rs:243-256`, 1 process/session) : un
-cache partagé en-mémoire exigerait IPC ou changement d'architecture —
-écarté (§5.7). Donc : RAM = N × L1 (< 5 Mo/worker, §3.1) + N × L2
-(≤ 2 variantes) ; invalidation unique au chargement tables par session
-(`session.rs:718-727`), quasi nulle comme en mono-worker. Aucun réglage
-par bot : 128 entrées/LRU identiques partout, le lot 5 ajuste (128 → N)
-sur hit rate mesuré, pas sur présomption.
+**Dimensionnement GLOBAL : 1 cache, 1 file, 1 monde.** RAM service = 1 monde
+chaud (~200 Mo max, ré-estimé d'après §1.3) + L1 ≤ 1024 plans + L2 ≤ 2
+variantes — contre N×(55-185 Mo + LRU) avant. Invalidation unique : un seul
+reload (`reload-nav`, §5.3), quasi nulle comme en mono-worker. Aucun réglage
+par bot : le lot 4 ajuste (threads 1/2/4, L1 512/1024/2048, file 16±) sur hit
+rate mesuré, pas sur présomption.
 
-**Fairness : par isolation, explicite.** 1 file bornée à 2 par worker +
-1 thread plan par worker (§5.1-5.2) = aucun partage de ressource de
-planification entre bots : le replan-storm d'un bot (échec → replan,
-`travel.rs:227-252`) ne consomme ni la file ni le CPU plan d'un autre, et
-un cold start N bots fait N Dijkstra isolés, jamais une file globale qui
-sature. Pas de priorité inter-bots, pas de famine possible par
-construction — c'est la borne. Seule contention résiduelle : CPU/IO
-machine (N process, §1.3 : 185 Mo session `t01` vs 55 Mo `t05`), hors sujet
-de ce doc.
+**Fairness : règle explicite (plus d'isolation process).** File FIFO globale
+bornée à 16 + **cap 2 tickets en vol par compte** (bornes proposées) :
+quand un bot sature son cap (replan-storm : échec → replan,
+`travel.rs:227-252`), seuls SES submits sont refusés → fallback sync local
+loggé (§5.2) — les autres comptes ne voient ni la file ni le CPU plan du
+fautif. Pas de priorité inter-comptes, pas de famine possible : le replan
+d'exécution n'est prioritaire que sur l'attente **du même compte** (§5.2).
+Cold start N bots × cache vide : la file absorbe 16, le reste bascule sync —
+le pic s'étale au lieu de saturer (§5.6). Seule contention résiduelle :
+CPU/IO machine (service + N workers), hors sujet de ce doc.
 
-**Objectifs différents = requêtes différentes, même contrat.** Travel pur,
+**Objectifs différents = mêmes requêtes, même contrat.** Travel pur,
 bank trips, hunts, tutos : tous passent par `plan_travel`
 (`travel.rs:74-113`) → même `submit`/`poll`/`cancel` (§5.2), même file
-bornée à 2, même fallback sync. Aucune priorité par type de script : le
-replan d'exécution écrase l'attente (§5.2) quel que soit l'objectif, et
-c'est suffisant à ~0,3 req/s/worker (§2).
+globale, même fallback sync. Aucune priorité par type de script, et c'est
+suffisant à ~0,3 req/s/bot (§2).
 
 ---
-*Ajout §5 (2026-11-07) : aucun code modifié, aucune mesure live rejouée
-(T01 intouchée) — chiffres repris des §1-2, chemins:ligne vérifiés à
-l'écriture. Incertitudes ouvertes : hit rate réel avec clé complète
-(≤ 63,5 %, §1.4 borne haute — le lot 2 le mesure) ; hit rate inter-workers
-(inconnu — §5.8 l'estime marginal tant que les inventaires divergent, le
-lot 5 le mesure ; conditionne tout service central futur, désormais écarté
-sauf changement d'architecture §5.7) ; taille réelle d'un `Plan` cloné en
-RAM (borne < 5 Mo du §3.1 à confirmer au lot 2). Mise à jour multi-bots F2P
-(§1.4, §2 lignes A/F, §3 étape 1, §5 intro/§5.1/§5.5-§5.7, nouveau §5.8) :
-`f2p_only: true` hardcodé vérifié (`travel.rs:165`), `allow_paid` par bot
-vérifié (`mod.rs:94,144`), daemon multi-process vérifié (`daemon.rs:243-256`)
-— la prémisse « daemon = UN process » est donc fausse en l'état du code,
-le partage en-mémoire inter-bots supposerait des threads au lieu de process.*
+*Revirement central (2026-11-07, décision produit — §§1-5.8 réécrits) : aucun
+code modifié, aucune mesure live rejouée, aucun run live — chiffres repris des
+§1-2 ou explicitement ré-estimés (marqués), chemins:ligne vérifiés à
+l'écriture. Ancien modèle enterré au §5.7 (raisons du revirement). Incertitudes
+ouvertes : hit rate réel avec clé complète (≤ 63,5 %, §1.4 borne haute — le
+lot 3 le mesure) ; bonus inter-bots du cache global (+10-20 pts ré-estimés,
+§5.8 — le lot 3 le mesure ; seuil d'arrêt ≥ 30 % global) ; overhead IPC p99
+(estimé < 2 ms — le lot 2 le mesure, seuil ≤ 5 ms) ; taille réelle d'un `Plan`
+sérialisé (quelques Ko ré-estimés — le lot 4 le mesure, alerte p99 > 16 Ko) ;
+contention du verrou `get` en écriture (`static_world.rs:73-75`) à 2 threads
+plan (le lot 4 la mesure). L'ancien thread-par-worker subsiste uniquement
+comme ÉTAPE TRANSITOIRE revertable (§5.5), jamais comme cible.*
