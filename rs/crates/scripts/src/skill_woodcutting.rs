@@ -13,7 +13,7 @@ use lifescape_sdk::Bot;
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, death_message_seen, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
-    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS,
+    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, UNREACHABLE_BAN_TICKS,
 };
 use crate::skill_woodcutting_spot::{is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there};
 use crate::{ScriptError, ScriptResult};
@@ -570,7 +570,8 @@ fn chop_load(
             }
             WorkOutcome::NoTool => spot = None,
             WorkOutcome::Unreachable => {
-                banned.insert((spot_x, spot_z), now + 500);
+                bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
+                banned.insert((spot_x, spot_z), now + UNREACHABLE_BAN_TICKS);
                 spot = None;
                 unreachable_streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the

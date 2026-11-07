@@ -24,6 +24,11 @@ pub const STALL_TICKS: u64 = 1000;
 pub const MAX_FLEES_PER_LOAD: u32 = 2;
 pub const FLEE_BAN_TICKS: u64 = 500;
 pub const GONE_BAN_TICKS: u64 = 250;
+/// Unreachable stands (static NoRoute, never a transient crowd): the spot
+/// stays banned ~30 min, past the end of most loads, instead of re-burning
+/// a full plan on every pick. Live "can't reach" from a passing blockage
+/// rides along: skipping one tree for a while is cheaper than the plan.
+pub const UNREACHABLE_BAN_TICKS: u64 = 30_000;
 /// Transit slicing: the bank walk runs in 1500-tick legs for the same
 /// 15000-tick total, checking death and hurt between legs instead of
 /// walking blind into an ambush.
