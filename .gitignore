@@ -6,3 +6,7 @@ run/
 /tmp/
 prd/
 rs/target/
+# Static spectator map: rebuilt by the daemon when the pack hash changes.
+orchestration/static/map-*/
+orchestration/static/map-*.stamp
+orchestration/static/map-current.json
