@@ -79,6 +79,7 @@ pub(crate) fn wire_nav(bot: &mut Bot) {
     let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
     world.set_f2p(zones);
     let tables = lifescape_nav::tables::Tables::load(&data).expect("tables");
+    world.set_sky_floors(tables.sky_floors.clone());
     bot.nav_world = Some(world);
     bot.nav_tables = Some(std::sync::Arc::new(tables));
 }

@@ -74,6 +74,7 @@ pub fn load_offline() -> Result<(Arc<StaticWorld>, Tables), String> {
         Err(err) => eprintln!("route: f2p bounds missing ({err}), everything reads inside"),
     }
     let tables = Tables::load(&data_dir).map_err(|err| err)?;
+    world.set_sky_floors(tables.sky_floors.clone());
     Ok((world, tables))
 }
 

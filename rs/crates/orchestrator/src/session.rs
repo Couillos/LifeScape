@@ -710,6 +710,9 @@ pub fn run_session(account: &str) -> i32 {
         match lifescape_nav::tables::Tables::load(&data_dir) {
             Ok(tables) => {
                 shared.log(&format!("planner tables ready: {} transitions", tables.transitions.len()));
+                if let Some(world) = bot.nav_world.as_ref() {
+                    world.set_sky_floors(tables.sky_floors.clone());
+                }
                 bot.nav_tables = Some(Arc::new(tables));
             }
             Err(error) => shared.log(&format!("planner tables missing ({error}); travel_to refuses")),
