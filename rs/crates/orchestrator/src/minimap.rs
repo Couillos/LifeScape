@@ -31,6 +31,7 @@ const WALL_SQUARE_CORNER: u8 = 3;
 const WALL_DIAGONAL: u8 = 9;
 
 const MAP_FLAG_VIS_BELOW: u32 = 0x08;
+const MAP_FLAG_LINK_BELOW: u32 = 0x02;
 
 /// Overlay mask per shape, as the client paints one tile as 4x4 pixels.
 const MINIMAP_SHAPE: [[u8; 16]; 13] = [
@@ -229,6 +230,25 @@ impl Grounds {
         }
     }
 
+    /// Display level to packed level: the client shifts every bridged
+    /// column down one (`ClientBuild.pushDown`, when `LinkBelow` is set on
+    /// level 1), so level L shows packed L+1 and level 3 shows nothing.
+    /// Flag checks (`VisBelow`, `ForceHighDetail`) keep reading the raw
+    /// packed flags; only the painted content follows the shift.
+    fn content_level(&self, level: i32, tile_x: i32, tile_z: i32) -> i32 {
+        if (0..LEVELS as i32).contains(&level)
+            && self.tile(1, tile_x, tile_z).flags & MAP_FLAG_LINK_BELOW != 0
+        {
+            level + 1
+        } else {
+            level
+        }
+    }
+
+    fn content_tile(&self, level: i32, tile_x: i32, tile_z: i32) -> GroundTile {
+        self.tile(self.content_level(level, tile_x, tile_z), tile_x, tile_z)
+    }
+
     /// ClientBuild blend over a 10x10 window, x-4..x+5 and z-4..z+5.
     fn blend(&self, cache: &MapCache, level: i32, tile_x: i32, tile_z: i32) -> u32 {
         let blends = self.blends.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -315,6 +335,8 @@ impl Grounds {
     }
 
     /// Client minimap ground pass for a window; row 0 is the northern edge.
+    /// Flag checks read the packed flags, painted tiles follow the bridge
+    /// shift (`content_tile`).
     fn render_ground(&self, cache: &MapCache, level: i32, world_x0: i32, world_z0: i32, size: usize) -> Vec<u32> {
         let border = size * 4;
         let mut pixels = vec![0u32; border * border];
@@ -325,10 +347,12 @@ impl Grounds {
                 let world_x = world_x0 + col as i32;
                 let x = col * 4;
                 if self.tile(level, world_x, world_z).flags & 0x18 == 0 {
-                    self.paint_tile(cache, &mut pixels, border, level, world_x, world_z, x, y);
+                    let content = self.content_level(level, world_x, world_z);
+                    self.paint_tile(cache, &mut pixels, border, content, world_x, world_z, x, y);
                 }
                 if level < LEVELS as i32 - 1 && self.tile(level + 1, world_x, world_z).flags & MAP_FLAG_VIS_BELOW != 0 {
-                    self.paint_tile(cache, &mut pixels, border, level + 1, world_x, world_z, x, y);
+                    let content = self.content_level(level + 1, world_x, world_z);
+                    self.paint_tile(cache, &mut pixels, border, content, world_x, world_z, x, y);
                 }
             }
         }
@@ -383,7 +407,11 @@ fn load_loc_layers(archive: &[u8], entries: &HashMap<String, (usize, usize)>) ->
         let locs_name = format!("l{square_x}_{square_z}");
         let (ground_off, ground_len) = entries.get(&ground_name)?;
         let (locs_off, locs_len) = entries.get(&locs_name)?;
-        let _lands = &archive[*ground_off..*ground_off + *ground_len];
+        let grounds = &archive[*ground_off..*ground_off + *ground_len];
+        // Bridge shift needs the packed flags, like the client's pushDown:
+        // a column whose level-1 flags carry LinkBelow shows packed L+1
+        // at level L. Unparsable grounds keep the old unshifted placement.
+        let flags = parse_square(grounds).unwrap_or_default();
         let locs = &archive[*locs_off..*locs_off + *locs_len];
         let mut packet = Cursor { data: locs, position: 0 };
         let mut loc_id: i32 = -1;
@@ -401,8 +429,15 @@ fn load_loc_layers(archive: &[u8], entries: &HashMap<String, (usize, usize)>) ->
                 coord_offset = packet.smarts()?;
                 let shape = info >> 2;
                 let angle = info & 0x3;
+                let bridged = flags
+                    .get(MAP_SIZE * MAP_SIZE + tile_x as usize * MAP_SIZE + tile_z as usize)
+                    .is_some_and(|tile| tile.flags & MAP_FLAG_LINK_BELOW != 0);
+                let actual = if bridged { level - 1 } else { level };
+                if actual < 0 {
+                    continue;
+                }
                 layers.insert(
-                    (tile_x + (square_x << 6), tile_z + (square_z << 6), level, layer_of(shape)),
+                    (tile_x + (square_x << 6), tile_z + (square_z << 6), actual, layer_of(shape)),
                     (loc_id as u32, shape, angle),
                 );
             }
@@ -684,6 +719,36 @@ mod tests {
             worst = worst.max(handle.join().unwrap());
         }
         assert!(worst < Duration::from_secs(2), "concurrent frames took {worst:?}");
+    }
+
+    #[test]
+    fn bridge_deck_renders_at_ground_level() {
+        // Lumbridge bridge (3240..3250, 3225..3226): the pack stores the
+        // deck overlay (id 9) at level 1 with LinkBelow set. The client
+        // shifts the whole column down (ClientBuild.pushDown), so level 0
+        // shows the deck, not the raw level-0 bank. Same shift for locs:
+        // wall 3007 sits at raw level 1 and must surface at level 0.
+        let maps = Minimap::new(pack_dir());
+        assert!(maps.grounds.tile(1, 3244, 3225).flags & MAP_FLAG_LINK_BELOW != 0, "bridge column flagged");
+        assert_eq!(maps.grounds.tile(1, 3244, 3225).overlay, 9, "packed deck overlay");
+        let deck = maps.grounds.content_tile(0, 3244, 3225);
+        assert_eq!(deck.overlay, 9, "level 0 shows the packed level-1 deck");
+        assert_ne!(deck.overlay, maps.grounds.tile(0, 3244, 3225).overlay, "shift changes the paint");
+        let layers = maps.loc_layers();
+        let wall = layers.as_ref().expect("loc layers load").get(&(3240, 3225, 0, LAYER_WALL)).copied();
+        drop(layers);
+        assert_eq!(wall, Some((3007u32, 0u8, 3u8)), "bridge wall surfaces at level 0");
+        // Pixels: deck colour on the open tile, inactive wall bar over it
+        // where the shifted wall sits (south edge, angle 3).
+        let deck_rgb = maps.cache().flo_overlay_colour(9);
+        assert_ne!(deck_rgb, 0, "deck overlay has a colour");
+        let pixels = maps.render(0, 3241, 3222, 7, 0);
+        let stride = 7 * 4;
+        let at = |tile_x: i32, tile_z: i32, dx: usize, dy: usize| {
+            pixels[((6 - (tile_z - 3222)) as usize * 4 + dy) * stride + (tile_x - 3241) as usize * 4 + dx]
+        };
+        assert_eq!(at(3244, 3225, 0, 0), deck_rgb, "deck paints the tile");
+        assert_eq!(at(3244, 3225, 1, 3), INACTIVE_RGB, "shifted wall bar lands on the deck");
     }
 
     #[test]
