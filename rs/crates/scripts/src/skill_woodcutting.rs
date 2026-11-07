@@ -635,8 +635,23 @@ fn ensure_axe(
         // (logs and ground-loot junk alike) at the nearby general store
         // and buy from the axe keeper first. Every trek below only runs
         // when the pack cannot fund the axe on its own.
+        // Sale hiccups are never fatal here: the hunt below is exactly
+        // what funds the axe, so log and keep going.
         if best_axe(bot).is_none() {
-            let bought = sell_pack_and_buy(bot, &mut *bank, coins, "pack sale")?;
+            let bought = match sell_pack_and_buy(bot, &mut *bank, coins, "pack sale") {
+                Ok(bought) => bought,
+                Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+                Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                Err(error)
+                    if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) =>
+                {
+                    return Err(error)
+                }
+                Err(error) => {
+                    bot.log(&format!("pack sale failed: {error}, hunting to fund the axe"));
+                    false
+                }
+            };
             // Broke with nothing worth selling: earn the axe on goblins
             // east of Lumbridge first, then sell THAT loot too before
             // falling to the bank below.
@@ -647,7 +662,20 @@ fn ensure_axe(
                     Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
                     Err(err) => bot.log(&format!("goblin hunt failed: {err}, trying the bank")),
                 }
-                let _ = sell_pack_and_buy(bot, &mut *bank, coins, "hunt loot")?;
+                let _ = match sell_pack_and_buy(bot, &mut *bank, coins, "hunt loot") {
+                    Ok(bought) => bought,
+                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+                    Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                    Err(error)
+                        if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) =>
+                    {
+                        return Err(error)
+                    }
+                    Err(error) => {
+                        bot.log(&format!("hunt loot sale failed: {error}, trying the bank"));
+                        false
+                    }
+                };
             }
         }
         if best_axe(bot).is_none() {
@@ -680,9 +708,10 @@ fn ensure_axe(
             if need_cross && !crate::skill_common::cross_toll_gate(bot)? {
                 return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
             }
-            // Bronze-first bootstrap: one attempt, then an explicit loud
-            // error (live stock may be empty even when the dump lists it).
-            // Callers fall back to the hunt, never to a buy loop.
+            // Bronze-first bootstrap: one attempt, then fall through broke.
+            // Being broke is never fatal: the main loop sees no axe and
+            // hunts again. Only death/conn/interrupt abort. Callers fall
+            // back to the hunt, never to a buy loop.
             if pack_total(bot, coins) >= 16 {
                 match buy_stock(bot, "bronze_axe", 1) {
                     Ok(bought) if bought > 0 => {
@@ -690,11 +719,11 @@ fn ensure_axe(
                         *bank = nearest_bank(bot)?;
                     }
                     Ok(_) => {
-                        return Err(ScriptError::Usage(format!(
-                            "cannot bootstrap: no axe, {} coins (bronze trade failed at {:?})",
+                        bot.log(&format!(
+                            "cannot bootstrap yet: no axe, {} coins (bronze trade failed at {:?}), hunting again",
                             pack_total(bot, coins),
                             bot.position()
-                        )));
+                        ));
                     }
                     Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
                     Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
@@ -702,18 +731,18 @@ fn ensure_axe(
                         return Err(error)
                     }
                     Err(error) => {
-                        return Err(ScriptError::Usage(format!(
-                            "cannot bootstrap: no axe, {} coins (bronze out of stock at {:?}: {error})",
+                        bot.log(&format!(
+                            "cannot bootstrap yet: no axe, {} coins (bronze out of stock at {:?}: {error}), hunting again",
                             pack_total(bot, coins),
                             bot.position()
-                        )));
+                        ));
                     }
                 }
             } else {
-                return Err(ScriptError::Usage(format!(
-                    "cannot bootstrap: no axe, {} coins",
+                bot.log(&format!(
+                    "cannot bootstrap yet: no axe, {} coins, hunting again",
                     pack_total(bot, coins)
-                )));
+                ));
             }
         }
     }
@@ -741,7 +770,6 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let log_ids: HashSet<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut bank_coins = 0u32;
     let mut done = 0u32;
-    let mut toolless = 0u32;
     // Threat bans outlive one load: a killer tree stays banned while its
     // neighbours get cut, instead of repicking the same death every load.
     let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
@@ -752,6 +780,9 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
         check_events(bot)?;
         // Death abort inside means the load was lost: re-gear (rebuy the
         // axe when missing) and retry the load, for as long as it takes.
+        // Broke is not an error either: no axe means hunt again next
+        // iteration (combat xp always progresses). Only conn/interrupt
+        // and structural failures (toll, unreachable bank) fail loud.
         // Anything else fails loud as before.
         match ensure_axe(bot, &mut bank, coins, &log_ids) {
             Ok(Some(coins_)) => bank_coins = coins_,
@@ -761,6 +792,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 continue;
             }
             Err(error) => return Err(error),
+        }
+        if best_axe(bot).is_none() {
+            bot.log("still axeless after re-gear, hunting again");
+            continue;
         }
         let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned)?;
         level = new_level;
@@ -820,10 +855,6 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
                     bot.position()
                 )));
             }
-        }
-        toolless = if best_axe(bot).is_none() { toolless + 1 } else { 0 };
-        if toolless >= 2 {
-            return Err(ScriptError::Usage(format!("no axe and cannot rebuy, aborting at {:?}", bot.position())));
         }
         done += 1;
         bot.log(&format!("ok load {done} banked (wc={level})"));
