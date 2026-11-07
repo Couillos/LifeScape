@@ -151,6 +151,13 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
     if bot.world.modal.is_none() {
         return Ok(true);
     }
+    // Overlay-layer modals (wilderness overlay 193) are informational: the
+    // server keeps answering world clicks while one is open (live: op_loc
+    // answered "I can't reach that!" with the overlay up), so there is
+    // nothing to dismiss and the gather loops must not read it as Blocked.
+    if bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "overlay") {
+        return Ok(true);
+    }
     let congrats = bot.chat_texts().iter().any(|(_, text)| text.to_lowercase().contains("congratulations"));
     if !congrats {
         return Ok(false);
@@ -775,11 +782,25 @@ pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bank_trip, bank_trip_resilient, bankbooth_ids, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth,
-        live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared,
+        bank_trip, bank_trip_resilient, bankbooth_ids, death_message_seen, dismiss_modal, is_conn_abort, is_walk_abort,
+        live_bank_booth, live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared,
     };
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    /// Overlay-layer modals never block: the wilderness overlay (live 193)
+    /// reads as dismissed with no server round-trip, so the gather loops
+    /// reach the real message ("can't reach that") instead of Blocked.
+    #[test]
+    fn overlay_modal_reads_as_dismissed() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "overlay".to_string(), interface_id: 193 });
+        assert!(dismiss_modal(&mut bot).expect("overlay never errors"), "overlay is non-blocking");
+        assert!(bot.world.modal.is_some(), "overlay stays open, only the verdict changes");
+        bot.world.modal = None;
+        assert!(dismiss_modal(&mut bot).expect("no modal passes"), "no modal passes");
+    }
 
     #[test]
     fn booth_found_in_static_locs() {
