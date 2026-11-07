@@ -153,8 +153,14 @@ pub fn trade_to_keeper(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32)) -> R
 }
 
 /// Click rounds against the streamed keeper: approach from every around
-/// tile, open trade, wait for the shop stock com.
+/// tile, open trade, wait for the shop stock com. Waits for the keeper to
+/// stream first (NPCs pop in after the walk, not on arrival): without this
+/// the two angle rounds burn on an empty view and the trade fails though
+/// the keeper stands there a few ticks later.
 fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) -> Result<bool, ScriptError> {
+    while bot.find_npc(keeper).is_none() && bot.world.ticks < deadline {
+        bot.pump(5)?;
+    }
     for _round in 0..2 {
         if bot.world.ticks >= deadline {
             break;

@@ -607,6 +607,8 @@ pub fn bank_trip(
         ));
         death_resume(bot, bank_x, bank_z, bank_level, &keep, withdraw_coins)?;
     }
+    // Safe tile: heal low HP before the booth/next trek, never walk hurt.
+    heal_at_bank(bot)?;
     let booths = live_bank_booths(bot, bank_x, bank_z);
     if booths.is_empty() {
         bot.log(&format!("bank trip: no live bankbooth near ({bank_x},{bank_z})"));
@@ -674,6 +676,45 @@ pub fn bury_bones(bot: &mut Bot) -> Result<(), ScriptError> {
 /// Pump until hitpoints reach `target` (heal wait after a flee).
 pub fn wait_healed(bot: &mut Bot, timeout: u64) -> Result<(), ScriptError> {
     wait_hitpoints(bot, hitpoints(bot).saturating_add(1), timeout)?;
+    Ok(())
+}
+
+/// Bank heal: the bank tile is safe and regen is server-timed, so a low
+/// pack heals here instead of walking hurt into the next gauntlet (the
+/// t2494 14->8 then t3851 death never healed). Threshold 12 HP on a 14-15
+/// max survives two goblin hits (observed max 6: 14->8); the wait is
+/// bounded and logged so the live ticks/HP stay measurable.
+/// Live measure: hurt 11->8 (t5177) then heal 9->12 in 300 ticks
+/// (t5221->t5521), i.e. 100 ticks/HP, matching content health_regen 100
+/// (stat.rs2, login.rs2). Bound 617 = 5 HP x 100 + 117 pump margin.
+pub const HEAL_TARGET_HP: u8 = 12;
+const HEAL_MAX_TICKS: u64 = 617;
+
+/// Heal on the spot when below target. Called at the bank (safe), never
+/// mid-route. Logs the ticks actually spent for the regen measure.
+/// Best-effort: a dead socket or stop still aborts, anything else just
+/// logs (the booth open below surfaces the real failure).
+pub fn heal_at_bank(bot: &mut Bot) -> Result<(), ScriptError> {
+    let hp = hitpoints(bot);
+    if hp >= HEAL_TARGET_HP {
+        return Ok(());
+    }
+    let start = bot.world.ticks;
+    bot.log(&format!("heal at bank: hp {hp}->{HEAL_TARGET_HP} at {:?}", bot.position()));
+    match wait_hitpoints(bot, HEAL_TARGET_HP, HEAL_MAX_TICKS) {
+        Ok(_) => {}
+        Err(lifescape_sdk::Error::Interrupted(reason)) => {
+            return Err(ScriptError::Sdk(lifescape_sdk::Error::Interrupted(reason)))
+        }
+        Err(error) => {
+            bot.log(&format!("heal wait interrupted ({error}), continuing to booth"));
+        }
+    }
+    bot.log(&format!(
+        "healed to {} in {} ticks (from {hp})",
+        hitpoints(bot),
+        bot.world.ticks - start
+    ));
     Ok(())
 }
 

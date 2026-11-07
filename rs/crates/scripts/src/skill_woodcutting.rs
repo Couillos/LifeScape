@@ -204,6 +204,38 @@ fn cheapest_upgrade(bot: &Bot) -> (Vec<String>, i64) {
     (cands, cheapest)
 }
 
+/// One axe buy attempt with bronze fallback: tries the affordable cands
+/// best-first, one attempt each, downgrading on any shop failure (empty
+/// live stock, short coins). Conn/death/interrupt still abort; anything
+/// else logs and tries the next cheaper axe. Returns the bought name or
+/// None when nothing affordable succeeded. Never loops: one pass, no retry.
+fn buy_axe_upgrade(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, ScriptError> {
+    let have = pack_total(bot, obj_id(bot, "coins")?);
+    for cand in cands {
+        let price = obj_price(cand);
+        if price <= 0 || have < price as u32 {
+            bot.log(&format!("skip {cand}: costs {price}, have {have}"));
+            continue;
+        }
+        match buy_stock(bot, cand, 1) {
+            Ok(bought) if bought > 0 => {
+                bot.log(&format!("ok upgraded to {cand}"));
+                return Ok(Some(cand.clone()));
+            }
+            Ok(_) => {
+                bot.log(&format!("{cand} trade failed at {:?}, trying cheaper", bot.position()));
+            }
+            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+            Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+            Err(error) if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) => return Err(error),
+            Err(error) => {
+                bot.log(&format!("{cand} buy failed ({error}), trying cheaper"));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// True when death happened since `seen`: hp flatlined or the server
 /// death line arrived. Returns the resynced index (everything observed so
 /// far) so the next call neither replays nor skips a line.
@@ -648,9 +680,35 @@ fn ensure_axe(
             if need_cross && !crate::skill_common::cross_toll_gate(bot)? {
                 return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
             }
-            if pack_total(bot, coins) >= 16 && buy_stock(bot, "bronze_axe", 1)? > 0 {
-                bot.log("ok bootstrapped bronze axe");
-                *bank = nearest_bank(bot)?;
+            // Bronze-first bootstrap: one attempt, then an explicit loud
+            // error (live stock may be empty even when the dump lists it).
+            // Callers fall back to the hunt, never to a buy loop.
+            if pack_total(bot, coins) >= 16 {
+                match buy_stock(bot, "bronze_axe", 1) {
+                    Ok(bought) if bought > 0 => {
+                        bot.log("ok bootstrapped bronze axe");
+                        *bank = nearest_bank(bot)?;
+                    }
+                    Ok(_) => {
+                        return Err(ScriptError::Usage(format!(
+                            "cannot bootstrap: no axe, {} coins (bronze trade failed at {:?})",
+                            pack_total(bot, coins),
+                            bot.position()
+                        )));
+                    }
+                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
+                    Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                    Err(error) if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) => {
+                        return Err(error)
+                    }
+                    Err(error) => {
+                        return Err(ScriptError::Usage(format!(
+                            "cannot bootstrap: no axe, {} coins (bronze out of stock at {:?}: {error})",
+                            pack_total(bot, coins),
+                            bot.position()
+                        )));
+                    }
+                }
             } else {
                 return Err(ScriptError::Usage(format!(
                     "cannot bootstrap: no axe, {} coins",
@@ -722,21 +780,16 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 (cheapest as u32).saturating_sub(bank_coins + have),
             )?;
             if can_buy_now(pack_total(bot, coins), cheapest, &cands) {
-                let mut upgraded = false;
-                for cand in &cands {
-                    if buy_stock(bot, cand, 1)? > 0 {
-                        bot.log(&format!("ok upgraded to {cand}"));
-                        upgraded = true;
-                        break;
+                match buy_axe_upgrade(bot, &cands)? {
+                    Some(_) => {}
+                    None => {
+                        bot.log(&format!(
+                            "upgrade missed: {} too costly or keeper unreachable at {:?}, {} coins banked next trip, never carried to spot",
+                            cands.join("+"),
+                            bot.position(),
+                            pack_total(bot, coins)
+                        ));
                     }
-                }
-                if !upgraded {
-                    bot.log(&format!(
-                        "upgrade missed: {} too costly or keeper unreachable at {:?}, {} coins banked next trip, never carried to spot",
-                        cands.join("+"),
-                        bot.position(),
-                        pack_total(bot, coins)
-                    ));
                 }
             }
         }
@@ -752,11 +805,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             Err(error) => return Err(error),
         }
-        for cand in cands {
-            if buy_stock(bot, &cand, 1)? > 0 {
-                bot.log(&format!("ok upgraded to {cand}"));
-                break;
-            }
+        // Post-bank upgrade: only what the pack affords, best-first with
+        // bronze fallback inside. No coins means no walk to Bob at all.
+        if pack_total(bot, coins) > 0 {
+            let _ = buy_axe_upgrade(bot, &cands)?;
         }
         if pack_total(bot, coins) > 0 {
             // Failed buys must not ride to the spot: stash now or abort.
@@ -782,8 +834,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 #[cfg(test)]
 mod tests {
     use super::{bootstrap_products, can_buy_now, chop_keep_ids, death_since};
-    use crate::skill_common::{death_message_seen, WorkOutcome};
-    use crate::tables_live::attach_live_tables;
+    use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
     /// Death since an index: the mid-work message fires on every work
@@ -869,6 +920,21 @@ mod tests {
         assert!(!can_buy_now(109, 500, &cands), "109 coins stay reserved for the bank");
         assert!(!can_buy_now(999, 500, &[]), "no candidates, nothing to buy");
         assert!(!can_buy_now(999, 0, &cands), "no price, nothing to buy");
+    }
+
+    /// Bootstrap fallback order: with 16 coins only bronze is affordable
+    /// (bronze 16, iron 56, steel 200 from the dump). The upgrade loop must
+    /// skip the dearer axes instead of fatally trying iron first.
+    #[test]
+    fn fallback_order_skips_unaffordable_with_16() {
+        use crate::skill_common::obj_price;
+        let bronze = obj_price("bronze_axe");
+        let iron = obj_price("iron_axe");
+        let steel = obj_price("steel_axe");
+        assert_eq!((bronze, iron, steel), (16, 56, 200), "dump prices, got: {bronze}/{iron}/{steel}");
+        let cands = ["steel_axe", "iron_axe", "bronze_axe"];
+        let affordable: Vec<&&str> = cands.iter().filter(|name| obj_price(name) <= 16).collect();
+        assert_eq!(affordable, vec![&"bronze_axe"], "16 coins fund bronze only, got: {affordable:?}");
     }
 
     /// Bank keep holds axes only: coins always land in the bank, never
