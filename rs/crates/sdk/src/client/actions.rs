@@ -451,6 +451,15 @@ impl Bot {
         crate::snapshot::bank_items(&self.world.inv, (self.tables.com_id)("bank_main:inv"))
     }
 
+    /// Consecutive fan refusals (walk or click) before the booth is
+    /// declared unusable from here: two refusals still precede a success
+    /// live (booth 3243 opened on its 3rd fan side after 2 refused clicks
+    /// and a refused walk), the 3rd consecutive refusal never did — it is
+    /// a counter or wall, not a busy booth. Measured 127-128 ticks per
+    /// refused 1-tile walk (6 live samples), so 3 bounds the fan waste to
+    /// ~400 ticks instead of ~1790.
+    const BANK_FAN_MAX_REFUSALS: u32 = 3;
+
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("open_bank {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
         self.approach(x, z, self.world.level, 1, 60)?;
@@ -459,21 +468,38 @@ impl Bot {
         }
         // Booths sit behind counters: the nearest tile within 1 can face
         // a wall ("I can't reach that"). Walk around and click the booth
-        // from every neighboring side, nearest first.
+        // from neighboring sides, nearest first — but stop after consecutive
+        // refusals: the booth is behind a counter here, try the next booth
+        // instead of grinding all 8 sides (~1790 ticks measured live).
         let mut tiles: Vec<(i32, i32)> = (-1..=1)
             .flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
             .filter(|tile| *tile != (x, z))
             .collect();
         tiles.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
+        let mut refusals = 0u32;
         for (tile_x, tile_z) in tiles {
             if self.approach(tile_x, tile_z, self.world.level, 0, 150).is_err() {
+                refusals += 1;
+                if Self::bank_fan_refused(refusals) {
+                    return Ok(false);
+                }
                 continue;
             }
             if self.click_bank(x, z, loc_id, timeout)? {
                 return Ok(true);
             }
+            refusals += 1;
+            if Self::bank_fan_refused(refusals) {
+                return Ok(false);
+            }
         }
         Err(Error::Timeout(format!("bank did not open at {x},{z} from {:?} ({} ticks)", self.position(), timeout)))
+    }
+
+    /// True once refusals prove the booth unusable from here. Pure so the
+    /// threshold is locked by test, not by live luck.
+    fn bank_fan_refused(refusals: u32) -> bool {
+        refusals >= Self::BANK_FAN_MAX_REFUSALS
     }
 
     /// Click the booth op and wait for the bank interface. Ok(false) when
@@ -631,5 +657,29 @@ mod tests {
         assert!(Bot::bank_click_refused(&messages, 1), "fresh refusal fails fast");
         let other = vec!["A bank booth.".to_string()];
         assert!(!Bot::bank_click_refused(&other, 0), "unrelated text passes");
+    }
+
+    /// Two consecutive refusals still precede a success live (booth 3243
+    /// opened on its 3rd fan side): only the 3rd consecutive refusal aborts.
+    #[test]
+    fn bank_fan_aborts_on_third_consecutive_refusal() {
+        assert!(!Bot::bank_fan_refused(0), "no refusal keeps trying");
+        assert!(!Bot::bank_fan_refused(1), "first refusal keeps trying");
+        assert!(!Bot::bank_fan_refused(2), "second refusal keeps trying");
+        assert!(Bot::bank_fan_refused(3), "third consecutive aborts");
+        assert!(Bot::bank_fan_refused(8), "late refusal aborts");
+    }
+
+    /// A dead socket still propagates typed instead of degrading into
+    /// Ok(false): adjacent to the booth the approach short-circuits, the
+    /// click send fails loud, never masked as a refusal.
+    #[test]
+    fn open_bank_offline_propagates_send_error() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 3091;
+        bot.world.z = 3246;
+        let err = bot.open_bank(3091, 3245, 2213, 50).expect_err("dead socket fails loud");
+        assert!(format!("{err}").contains("not logged in"), "typed conn error, got: {err}");
     }
 }

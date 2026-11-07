@@ -283,7 +283,15 @@ fn gate_id(bot: &Bot, gate: (i32, i32, i32)) -> Result<u16, ScriptError> {
 /// Live bankbooth loc nearest to the booth spawn (loc id comes from the
 /// live stream, never assumed from the dump).
 pub fn live_bank_booth(bot: &Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32, u16)> {
-    let mut best: Option<(i64, (i32, i32, u16))> = None;
+    live_bank_booths(bot, bank_x, bank_z).into_iter().next()
+}
+
+/// Every live bankbooth near the booth spawn, nearest first. The dump's
+/// Manhattan pick flips between spawns of one bank (Draynor 3242/3245)
+/// and the nearest spawn can sit behind the counter: the trip tries each
+/// booth in turn instead of grinding the nearest from its blind side.
+pub fn live_bank_booths(bot: &Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u16)> {
+    let mut booths: Vec<(i64, (i32, i32, u16))> = Vec::new();
     let mut near: Option<(i64, String, u16)> = None;
     let mut consider = |x: i32, z: i32, level: i32, loc: u16| {
         if level != bot.world.level {
@@ -297,9 +305,7 @@ pub fn live_bank_booth(bot: &Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32,
             }
             return;
         }
-        if best.as_ref().is_none_or(|(known, _)| dist < *known) {
-            best = Some((dist, (x, z, loc)));
-        }
+        booths.push((dist, (x, z, loc)));
     };
     for ((x, z, level), slot) in &bot.world.locs {
         if let Some((loc, _, _)) = slot {
@@ -309,10 +315,12 @@ pub fn live_bank_booth(bot: &Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32,
     for ((x, z, level), (loc, _, _)) in &bot.world.static_locs {
         consider(*x, *z, *level, *loc);
     }
-    if best.is_none() {
+    booths.sort();
+    booths.dedup();
+    if booths.is_empty() {
         bot.log(&format!("bank search: live={} static={} near={:?}", bot.world.locs.len(), bot.world.static_locs.len(), near));
     }
-    best.map(|(_, found)| found)
+    booths.into_iter().map(|(_, booth)| booth).collect()
 }
 
 /// Withdraw up to `count` items total, across `ids`, from the bank at
@@ -599,7 +607,8 @@ pub fn bank_trip(
         ));
         death_resume(bot, bank_x, bank_z, bank_level, &keep, withdraw_coins)?;
     }
-    let Some((booth_x, booth_z, booth_loc)) = live_bank_booth(bot, bank_x, bank_z) else {
+    let booths = live_bank_booths(bot, bank_x, bank_z);
+    if booths.is_empty() {
         bot.log(&format!("bank trip: no live bankbooth near ({bank_x},{bank_z})"));
         if bank_work_pending(bot, &keep, withdraw_coins) {
             return Err(ScriptError::Usage(format!(
@@ -608,8 +617,19 @@ pub fn bank_trip(
             )));
         }
         return Ok(0);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+    }
+    // Nearest booth first, every refusal falls through to the next: the
+    // dump's Manhattan pick can name a spawn behind the counter while its
+    // neighbour faces us (Draynor 3242/3245). Only all-refused is loud.
+    let mut opened = false;
+    for (booth_x, booth_z, booth_loc) in booths {
+        if bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+            opened = true;
+            break;
+        }
+        bot.log(&format!("bank trip: booth ({booth_x},{booth_z}) refused from here, trying next"));
+    }
+    if !opened {
         bot.log(&format!("bank trip: bank did not open at {:?}", bot.position()));
         if bank_work_pending(bot, &keep, withdraw_coins) {
             return Err(ScriptError::Usage(format!(
@@ -679,8 +699,8 @@ pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bank_trip, bank_trip_resilient, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth, nearest_bank,
-        register_transit_hurt, require_deposit_cleared,
+        bank_trip, bank_trip_resilient, death_message_seen, is_conn_abort, is_walk_abort, live_bank_booth, live_bank_booths,
+        nearest_bank, register_transit_hurt, require_deposit_cleared,
     };
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -696,6 +716,22 @@ mod tests {
         bot.world.static_locs.insert((3200, 3200, 0), (2213, 0, 0));
         let near = live_bank_booth(&bot, 3015, 3354).expect("nearest of two booths");
         assert_eq!(near, (3015, 3354, 2213));
+    }
+
+    /// Draynor has three booth spawns on one wall: all three come back
+    /// nearest-first so the trip can fall through past a counter-blocked
+    /// pick instead of grinding it (the trip #2 hole).
+    #[test]
+    fn booths_list_every_spawn_nearest_first() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        for booth_z in [3242, 3243, 3245] {
+            bot.world.static_locs.insert((3091, booth_z, 0), (2213, 0, 0));
+        }
+        let booths = live_bank_booths(&bot, 3091, 3245);
+        assert_eq!(booths, vec![(3091, 3245, 2213), (3091, 3243, 2213), (3091, 3242, 2213)], "nearest first, got: {booths:?}");
+        assert_eq!(live_bank_booth(&bot, 3091, 3245), Some((3091, 3245, 2213)), "wrapper stays the nearest");
     }
 
     /// Picking is pure: standing on a booth spawn returns that booth,
