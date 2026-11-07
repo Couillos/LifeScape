@@ -336,6 +336,9 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                 use lifescape_sdk::error::Error as SdkError;
                 let reconnect = matches!(&script_error, lifescape_scripts::ScriptError::Sdk(SdkError::Io(_)) | lifescape_scripts::ScriptError::Sdk(SdkError::Login(_)));
                 if reconnect {
+                    // The trigger would otherwise vanish: relogin only
+                    // logs its own outcome, so a flap loop is undiagnosable.
+                    worker_out(shared, &format!("{script} reconnect on {script_error}"));
                     return ("reconnect".to_string(), None, None);
                 }
                 if matches!(&script_error, lifescape_scripts::ScriptError::Sdk(SdkError::Interrupted(_))) {
@@ -514,6 +517,11 @@ fn idle_pump(shared: &Arc<Shared>) {
         }
     }
     let pump_outcome = shared.bot.lock().unwrap().pump(1).map(|_| ());
+    if let Err(error) = &pump_outcome {
+        // Same invisibility as the script path: log the trigger, the
+        // relogin outcome alone cannot explain a flap loop.
+        shared.log(&format!("idle pump failed: {error}"));
+    }
     if pump_outcome.is_err() {
         reconnect_flow(shared);
         return;
