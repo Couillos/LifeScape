@@ -288,7 +288,7 @@ partout, pas de tokio — `AGENTS.md §4.1-4.2`).
 
 | Lot | Contenu | Acceptation mesurable |
 |---|---|---|
-| 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:503-528`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:169-174`) ; revert = 1 fonction |
+| 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:169-174`) ; revert = 1 fonction |
 | 2. L1 local (sync) | LRU 128 + clé complète + compteurs `hit/miss` dans `nav plan` (`travel.rs:180-191`) | hit rate live ≥ 30 % (§3.1), sinon stop ; < 5 Mo ; revert = 1 fichier |
 | 3. Thread plan + contrat async | submit/poll/cancel (§5.2), fallback sync, annulation sur `stop_requested`/`UNLOAD_TICKS` | aucun reap à 100 ticks sur legs > 1 s (logs `t01`-style), p99 `travel_to` ≤ sync + 5 ms, fallback loggé ; revert = rebrancher `plan_travel` sync |
 | 4. Version données | `DataVersion` au chargement (`session.rs:717-747`), dans chaque clé | test : bump `nav_overrides.json` → 0 hit périmé servi (test unitaire, pas de live) ; revert = version constante |
