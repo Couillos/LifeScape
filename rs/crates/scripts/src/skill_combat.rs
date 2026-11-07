@@ -144,10 +144,67 @@ fn weapon_weight(category: &str) -> f64 {
     }
 }
 
-fn gear_score(entry: &knowledge::equipment::Wearable, slot: i64) -> f64 {
+/// Attack bonus the bot's next button actually trains with, per weapon
+/// category: the revision ties each combat button to one damagetype
+/// (slash/stab/crush), and the bot presses the button for the skill it
+/// trains (style_buttons) or the controlled button when the category
+/// offers one. Unknown pairs fall back to the best bonus.
+/// Sources (read-only): content/scripts/skill_combat/configs/combat.dbrow
+/// (weapon_*_table damagestyle/damagetype rows: slash_table is
+/// acc/agg/con/def on slash/slash/stab/slash, stab_table acc/agg/agg/def
+/// on stab/stab/slash/stab, blunt_table all crush, axe_table
+/// acc/agg/agg/def on slash/slash/crush/slash, pickaxe_table on
+/// stab/stab/crush/stab, spear_table all controlled on
+/// stab/slash/crush/stab, spiked_table acc/agg/con/def on
+/// crush/crush/stab/crush, claws_table like slash, polearm_table
+/// con/agg/def on stab/slash/stab, unarmed/staff all crush) crossed with
+/// content/.../player/player_attackstyles.rs2 (button suffix -> style).
+fn style_damage_key(category: &str, style: &str) -> Option<&'static str> {
+    match (category, style) {
+        ("weapon_slash" | "weapon_claws", "controlled") => Some("stab"),
+        ("weapon_slash" | "weapon_claws", _) => Some("slash"),
+        ("weapon_stab", _) => Some("stab"),
+        ("weapon_blunt", _) => Some("crush"),
+        ("weapon_axe" | "weapon_2h_sword", _) => Some("slash"),
+        ("weapon_pickaxe", _) => Some("stab"),
+        ("weapon_spear", _) => Some("stab"),
+        ("weapon_spiked", "controlled") => Some("stab"),
+        ("weapon_polearm", "controlled") => Some("stab"),
+        ("weapon_polearm", "defence") => Some("stab"),
+        ("weapon_polearm", _) => Some("slash"),
+        ("unarmed", _) => Some("crush"),
+        _ => None,
+    }
+}
+
+/// Replacement cost of a wearable (shop price from the objs dump, 0 when
+/// the dump carries none, unknown names last): the tie-break when two
+/// items score equal is the cheaper one to lose on a death far from a
+/// bank. No gender gate exists in this revision (equipment.json
+/// requirements only ever name attack/defence/strength).
+fn loss_cost(name: &str) -> i64 {
+    knowledge::objs_by_name(name).first().map(|entry| entry.price).unwrap_or(i64::MAX)
+}
+
+/// Gear score, slot by slot. Weapon: the style's own attack bonus plus
+/// twice the strength bonus (expected DPS at the current style), scaled
+/// by the category speed proxy. Armour: summed defence plus twice
+/// strength plus prayer (survival). Level gates come from
+/// equipment.json requirements via requirements_met (wield gates in
+/// content/scripts/levelrequire/scripts/tier1|5|10|20|30|40.rs2:
+/// iron attack 1, steel 5, black 10, mithril 20, adamant 30, rune 40 —
+/// bronze ungated outside the tutorial); ties keep the cheaper kit.
+fn gear_score(bot: &Bot, entry: &knowledge::equipment::Wearable, slot: i64) -> f64 {
     if slot == WEAPON_SLOT {
-        let attack = entry.attack.iter().map(|(_, bonus)| *bonus).max().unwrap_or(0) as f64;
         let category = entry.category.as_deref().unwrap_or("");
+        // Controlled trains everything when the category offers it,
+        // otherwise the weakest skill right now: the same button fight()
+        // will press, so the bonus scored is the bonus trained with.
+        let style = if controlled_button(category).is_some() { "controlled" } else { weakest_melee(bot) };
+        let attack = match style_damage_key(category, style) {
+            Some(key) => entry.attack.iter().find(|(name, _)| name == key).map(|(_, bonus)| *bonus).unwrap_or(0),
+            None => entry.attack.iter().map(|(_, bonus)| *bonus).max().unwrap_or(0),
+        } as f64;
         return (attack + 2.0 * entry.strength as f64) * weapon_weight(category);
     }
     entry.defence.iter().map(|(_, bonus)| *bonus).sum::<i64>() as f64 + 2.0 * entry.strength as f64
@@ -214,7 +271,15 @@ fn gear_plan(bot: &Bot, available: &HashMap<u16, String>) -> HashMap<i64, Vec<kn
         }
     }
     for (slot, cands) in plan.iter_mut() {
-        cands.sort_by(|a, b| gear_score(b, *slot).partial_cmp(&gear_score(a, *slot)).unwrap_or(std::cmp::Ordering::Equal));
+        // Best score wins, ties keep the cheaper kit (death far from a
+        // bank drops the pack: risk without a bonus is just cost).
+        cands.sort_by(|a, b| {
+            gear_score(bot, b, *slot)
+                .partial_cmp(&gear_score(bot, a, *slot))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| loss_cost(&a.name).cmp(&loss_cost(&b.name)))
+                .then_with(|| a.name.cmp(&b.name))
+        });
         if *slot == WEAPON_SLOT {
             // Prefer a one-handed weapon so the shield slot stays useful.
             cands.sort_by_key(|entry| knowledge::equipment::covers_slot(entry, 5));
@@ -581,6 +646,30 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
     Ok(taken)
 }
 
+/// Re-wear the best kit from what is actually carried (pack + worn):
+/// after a death the pack dropped, after a loot the best changed. One
+/// evaluation per event, never per kill or per tick; no bank trip and
+/// never a buy — the bank only enters at prepare_at_bank on the way in.
+/// Logs the slots that changed, quiet when nothing does.
+fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
+    let before: HashMap<i64, u16> = ARMOUR_SLOTS
+        .into_iter()
+        .chain([WEAPON_SLOT])
+        .filter_map(|slot| worn_obj(bot, slot).map(|obj| (slot, obj)))
+        .collect();
+    let available = available_gear(bot);
+    let plan = gear_plan(bot, &available);
+    equip_plan(bot, &plan)?;
+    for slot in ARMOUR_SLOTS.into_iter().chain([WEAPON_SLOT]) {
+        if worn_obj(bot, slot) != before.get(&slot).copied() {
+            let name =
+                worn_obj(bot, slot).and_then(|obj| (bot.tables.obj_name)(obj)).unwrap_or_default();
+            bot.log(&format!("{why}: now wearing {name} (slot {slot})"));
+        }
+    }
+    Ok(())
+}
+
 fn fight(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -639,6 +728,9 @@ fn fight(
             target_npc = None;
             attempts = 0;
             progress_at = bot.world.ticks;
+            // Death drops the pack: re-wear from what survived, pack only,
+            // never a buy loop.
+            rewear(bot, "death")?;
             continue;
         }
         max_hp = max_hp.max(hp);
@@ -766,8 +858,13 @@ fn fight(
             }
             kills += 1;
             let loot_from = bot.world.ticks;
-            loot_ground(bot)?;
+            let taken = loot_ground(bot)?;
             bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks - loot_from));
+            // Loot can change the best: one re-evaluation when something
+            // was picked up, never on empty kills.
+            if taken > 0 {
+                rewear(bot, "loot")?;
+            }
             seen_msgs = bot.world.messages.len();
             progress_at = bot.world.ticks;
             attempts = 0;
@@ -840,6 +937,9 @@ fn run_spot(
         bot.pump(2)?;
         bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
         while kills_limit == 0 || total < kills_limit {
+            // Hunt entry: the one full evaluation (pack + bank when near
+            // one, pack only with --no-bank). Inside the hunt only a loot
+            // that was picked up or a death re-evaluates (see fight()).
             if !no_bank {
                 prepare_at_bank(bot)?;
             } else {
@@ -918,7 +1018,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{controlled_button, melee_stat, next_style, prepare_at_bank, weakest_melee};
+    use super::{controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -980,5 +1080,58 @@ mod tests {
         bot.world.stats.insert(3, (10, 0));
         let error = prepare_at_bank(&mut bot).expect_err("dead socket aborts typed");
         assert!(crate::skill_common::is_walk_abort(&error), "typed for the reconnect arm, got: {error}");
+    }
+
+    fn slash_weapon(slash: i64, stab: i64) -> lifescape_gamedata::equipment::Wearable {
+        lifescape_gamedata::equipment::Wearable {
+            name: "test_slash".to_string(),
+            wearpos: 3,
+            wearpos2: -1,
+            wearpos3: -1,
+            category: Some("weapon_slash".to_string()),
+            attack: vec![("stab".to_string(), stab), ("slash".to_string(), slash)],
+            defence: Vec::new(),
+            strength: 0,
+            prayer: 0,
+            requirements: Vec::new(),
+        }
+    }
+
+    /// Style bonus, not max bonus: a slash weapon on controlled trains
+    /// stab (dbrow slash_table button 2), so the stab-heavy blade wins
+    /// even when its slash is worse.
+    #[test]
+    fn weapon_score_uses_the_trained_bonus() {
+        let bot = stat_bot(5, 5, 5);
+        let slashy = slash_weapon(8, 0);
+        let stabby = slash_weapon(0, 8);
+        assert_eq!(style_damage_key("weapon_slash", "controlled"), Some("stab"));
+        assert_eq!(style_damage_key("weapon_slash", "attack"), Some("slash"));
+        assert!(
+            gear_score(&bot, &stabby, super::WEAPON_SLOT) > gear_score(&bot, &slashy, super::WEAPON_SLOT),
+            "controlled trains stab: the stab blade must win"
+        );
+    }
+
+    /// Style map covers the buttons the bot presses (dbrow damagetypes x
+    /// player_attackstyles suffixes); unknown categories fall back to max.
+    #[test]
+    fn style_damage_follows_the_pressed_button() {
+        assert_eq!(style_damage_key("weapon_stab", "attack"), Some("stab"));
+        assert_eq!(style_damage_key("weapon_blunt", "defence"), Some("crush"));
+        assert_eq!(style_damage_key("weapon_axe", "strength"), Some("slash"));
+        assert_eq!(style_damage_key("weapon_pickaxe", "attack"), Some("stab"));
+        assert_eq!(style_damage_key("weapon_spear", "attack"), Some("stab"));
+        assert_eq!(style_damage_key("weapon_polearm", "controlled"), Some("stab"));
+        assert_eq!(style_damage_key("unarmed", "defence"), Some("crush"));
+        assert_eq!(style_damage_key("weapon_bow", "attack"), None, "ranged: max fallback");
+    }
+
+    /// Equal scores keep the cheaper kit: bronze before steel (dump shop
+    /// prices 26 vs 325), unknown names last.
+    #[test]
+    fn ties_keep_the_cheap_kit() {
+        assert!(loss_cost("bronze_sword") < loss_cost("steel_sword"), "bronze cheaper to lose");
+        assert_eq!(loss_cost("no_such_item_xyz"), i64::MAX, "unknown prices never win ties");
     }
 }
