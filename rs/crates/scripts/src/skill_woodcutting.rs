@@ -26,6 +26,14 @@ const HANDLE_NAME: &str = "macro_hatchethandle";
 pub const AXE_ORDER: [&str; 7] =
     ["rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe"];
 
+/// Rank in AXE_ORDER (0 = best). The server's checker takes the best
+/// carried axe at any woodcutting level (woodcut.rs2
+/// woodcutting_axe_checker: the level-gated shortlist is commented out,
+/// 2004 behaviour), so rank alone decides.
+fn axe_rank(name: &str) -> Option<usize> {
+    AXE_ORDER.iter().position(|axe| *axe == name)
+}
+
 fn best_axe(bot: &Bot) -> Option<String> {
     let held = pack_ids(bot);
     for name in AXE_ORDER {
@@ -86,6 +94,23 @@ fn use_handle_on_head(bot: &mut Bot, handle: u16, head: u16) -> Result<bool, Scr
     Ok(false)
 }
 
+/// Best-ranked banked axe slot (pack holds one axe: an upgrade banks the
+/// old one, a restore withdraws the best, never a second).
+fn best_banked_axe(slots: &HashMap<u8, (u16, u32)>, axes: &HashSet<u16>) -> Option<(u8, u16)> {
+    slots
+        .iter()
+        .filter(|(_, (held, _))| axes.contains(held))
+        .min_by_key(|(_, (held, _))| {
+            // Debug name from the dump ("steel_axe"), not the live display
+            // label ("Steel axe"): Tables::obj_name is display-only.
+            knowledge::obj_by_id(usize::from(*held))
+                .and_then(|entry| entry.name)
+                .and_then(|name| axe_rank(&name))
+                .unwrap_or(usize::MAX)
+        })
+        .map(|(slot, (held, _))| (*slot, *held))
+}
+
 /// Withdraw a banked axe (or its handle+head) and reattach it.
 /// Cheaper than rebuying. Reopens the bank: call after a bank trip.
 /// Booth business from across the map fails fast instead of fanning
@@ -122,8 +147,8 @@ fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<boo
     };
     let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
     let axes = known_axe_ids(bot);
-    if let Some((slot, (held, _))) = slots.iter().find(|(_, (held, _))| axes.contains(held)) {
-        let (slot, held) = (*slot, *held);
+    // One axe in the pack: withdraw the best banked axe, never a second.
+    if let Some((slot, held)) = best_banked_axe(&slots, &axes) {
         bot.inv_button(1, held, slot, main_com)?;
         bot.pump(10)?;
         bot.close_modal()?;
@@ -595,10 +620,12 @@ fn can_buy_now(have_coins: u32, cheapest: i64, cands: &[String]) -> bool {
     !cands.is_empty() && cheapest > 0 && have_coins >= cheapest as u32
 }
 
-/// Pack ids that survive the bank trip: axes only. Coins and produce are
-/// always banked, never carried to the spot.
+/// Pack ids that survive the bank trip: the single best axe only. An
+/// upgrade or a restore leaves the old axe behind in the bank instead of
+/// doubling up: the server chops with the best carried axe at any level,
+/// so a second axe is dead weight that death would drop anyway.
 fn chop_keep_ids(bot: &Bot) -> Vec<u16> {
-    known_axe_ids(bot).into_iter().collect()
+    best_axe(bot).and_then(|name| obj_id(bot, &name).ok()).into_iter().collect()
 }
 
 /// Sell the pack (logs and ground-loot junk alike) at the nearby general
@@ -862,10 +889,13 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         // Post-bank upgrade: only what the pack affords, best-first with
         // bronze fallback inside. No coins means no walk to Bob at all.
+        // The shop trip can leave two axes in the pack (old + upgrade):
+        // stash then, so the spot sees one axe and no coins.
         if pack_total(bot, coins) > 0 {
             let _ = buy_axe_upgrade(bot, &cands)?;
         }
-        if pack_total(bot, coins) > 0 {
+        let axes_held: u32 = known_axe_ids(bot).iter().map(|id| pack_total(bot, *id)).sum();
+        if pack_total(bot, coins) > 0 || axes_held > 1 {
             // Failed buys must not ride to the spot: stash now or abort.
             let keep_now: Vec<u16> = chop_keep_ids(bot);
             bank_trip(bot, &bank, &keep_now, 0)?;
@@ -1004,16 +1034,41 @@ mod tests {
         assert_eq!(affordable, vec![&"bronze_axe"], "16 coins fund bronze only, got: {affordable:?}");
     }
 
-    /// Bank keep holds axes only: coins always land in the bank, never
-    /// ride to the spot.
+    /// Bank keep holds one axe only: the best carried. Coins always land
+    /// in the bank, never ride to the spot; inferior axes are banked, not
+    /// doubled up (the server chops with the best carried axe at any
+    /// level, so a second axe is dead weight).
     #[test]
     fn chop_keep_never_holds_coins() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
+        let bronze = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let steel = crate::skill_common::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(com, [(0u8, (bronze, 1u32)), (1, (steel, 1))].into_iter().collect());
         let keep = chop_keep_ids(&bot);
-        assert!(!keep.is_empty(), "axes resolve from the tables");
+        assert_eq!(keep, vec![steel], "one axe in the pack: the best, got: {keep:?}");
         assert!(!keep.contains(&coins), "coins always banked, never carried");
+        assert!(!keep.contains(&bronze), "inferior axe banked, never doubled");
+    }
+
+    /// Restore withdraws the best banked axe, never a second or a worse
+    /// one (rank order is AXE_ORDER best-first).
+    #[test]
+    fn bank_restore_withdraws_best_rank() {
+        use super::{axe_rank, best_banked_axe, known_axe_ids};
+        use std::collections::HashMap;
+        assert!(axe_rank("steel_axe") < axe_rank("bronze_axe"), "steel outranks bronze");
+        assert_eq!(axe_rank("no_such_axe"), None, "unknown axes never rank");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let bronze = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let steel = crate::skill_common::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
+        let axes = known_axe_ids(&bot);
+        let slots: HashMap<u8, (u16, u32)> = [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
+        assert_eq!(best_banked_axe(&slots, &axes), Some((7, steel)), "best banked axe wins");
+        assert_eq!(best_banked_axe(&HashMap::new(), &axes), None, "empty bank restores nothing");
     }
 
     /// Death by message: hp stream can lag, the chat line still resets the
