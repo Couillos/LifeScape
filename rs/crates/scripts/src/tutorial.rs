@@ -874,8 +874,8 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
             bot.log(&format!("done {:?}", bot.position()));
             return Ok(0);
         }
-        if bot.world.ticks - started > 3000 {
-            return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: 3000 ticks elapsed at {:?}", bot.position()))));
+        if bot.world.ticks - started > 20000 {
+            return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: 20000 ticks elapsed at {:?}", bot.position()))));
         }
         let Some(stage) = detect_stage(bot) else {
             bot.pump(10)?;
