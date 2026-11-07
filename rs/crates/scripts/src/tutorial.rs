@@ -911,6 +911,16 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
                     }
                 }
                 if !recovered {
+                    // The silent advance: completed -> open_player_controls
+                    // sends no text (enable_run early-returns), so tab
+                    // clicks alone never reshow a box here. The run button
+                    // advances that stage with text, and is a harmless run
+                    // toggle anywhere else.
+                    bot.if_button(COM_RUN)?;
+                    bot.pump(15)?;
+                    recovered = detect_stage(bot).is_some();
+                }
+                if !recovered {
                     return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: no instruction at {:?}", bot.position()))));
                 }
                 continue;
