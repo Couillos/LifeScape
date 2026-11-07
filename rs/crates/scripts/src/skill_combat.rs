@@ -18,6 +18,11 @@ const FOOD_TARGET: usize = 10;
 const LOOT_RADIUS: i32 = 6;
 /// World ticks a "can't reach" goblin tile stays banned before retry.
 const BLOCKED_BAN_TICKS: u64 = 200;
+/// Ban for a foe behind a door the server proved uncrossable (door opens,
+/// the step through is refused): the tile stays out for the whole fight.
+/// A spot that fails in a loop is worse than a spot skipped: each new
+/// indoor goblin burns one approach, never a campaign.
+const DOOR_BAN_TICKS: u64 = u64::MAX;
 /// Worst-case take: the drop lands on the death tick (goblin.rs2 obj_add
 /// right after npc_death), walk <= 6 tiles + click. 600 burned 12 s on every
 /// vanished/unreachable item; failures now log so the bound stays honest.
@@ -517,6 +522,14 @@ fn attack_nearest(
                 return Err(error.into())
             }
             Err(error) => {
+                // Uncrossable door (verified open, step refused): the house
+                // is out for this fight, not the foe. One approach burned
+                // per tile, never a retry campaign.
+                if matches!(error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
+                    bot.log(&format!("goblin {slot} at ({x},{z}) behind uncrossable door, excluding: {error}"));
+                    avoid.insert((x, z), DOOR_BAN_TICKS);
+                    continue;
+                }
                 bot.log(&format!("goblin {slot} at ({x},{z}) unreachable: {error}"));
                 avoid.insert((x, z), bot.world.ticks + BLOCKED_BAN_TICKS);
                 continue;
@@ -663,7 +676,16 @@ fn fight(
                     bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
                 if blocked {
                     unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
-                    let _ = bot.approach_npc(slot, 60);
+                    // The step toward a door-blocked foe re-burns the door
+                    // (click + watch, refused again): inspect it, and when
+                    // the server proves the door uncrossable the tile stays
+                    // out for the whole fight instead of 200 ticks.
+                    if let Err(step_error) = bot.approach_npc(slot, 60) {
+                        if matches!(step_error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
+                            bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) behind uncrossable door, excluding"));
+                            unreachable.insert((foe_x, foe_z), DOOR_BAN_TICKS);
+                        }
+                    }
                     seen_msgs = bot.world.messages.len();
                     target_npc = None;
                     attempts = 0;
@@ -687,6 +709,17 @@ fn fight(
                         return Err(error.into())
                     }
                     Err(error) => {
+                        // Door proved uncrossable: no 3-bout retry (each bout
+                        // is a click + watch the server refuses). Exclude the
+                        // tile for the fight and repick at once.
+                        if matches!(error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
+                            bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) behind uncrossable door, excluding: {error}"));
+                            unreachable.insert((foe_x, foe_z), DOOR_BAN_TICKS);
+                            target_npc = None;
+                            attempts = 0;
+                            progress_at = bot.world.ticks;
+                            continue;
+                        }
                         attempts += 1;
                         bot.log(&format!("npc {slot} approach {attempts}/3 failed: {error}"));
                         if attempts >= 3 {
