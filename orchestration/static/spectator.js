@@ -256,8 +256,12 @@ function draw() {
   const originX = pos.px - R;
   const originZ = pos.pz - R;
   const mapKey = originX + ',' + originZ + ',' + level;
-  const mapLeft = cx - R * TILE;
-  const mapTop = cy - (R + 1) * TILE;
+  // Tile-edge alignment: the server image covers whole tiles, so its edges
+  // sit half a tile outside the outer row centers. Without this the dots
+  // and route sat 8 px southwest of the map (a player drawn on a wall it
+  // walks beside).
+  const mapLeft = cx - R * TILE - TILE / 2;
+  const mapTop = cy - (R + 1) * TILE + TILE / 2;
   const mapSize = (R * 2 + 1) * TILE;
   let mapImg = null, mapDx = 0, mapDz = 0;
   const exact = mapCache.get(mapKey);
