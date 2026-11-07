@@ -288,6 +288,15 @@ impl World {
         } else {
             reader.u16()?
         };
+        // The server closes the overlay with component -1, sent unsigned
+        // (65535): `openMainOverlay(-1)` → `IfOpenOverlay(p2)`. That is a
+        // close, not a dialogue: without this the bot believes a modal is
+        // open forever (e.g. after accepting a level-up splash) and every
+        // chop aborts on a phantom dialog.
+        if kind == "overlay" && interface_id == 65535 {
+            self.modal = None;
+            return Ok(());
+        }
         self.modal = Some(Modal { layer: kind.to_string(), interface_id });
         if kind == "chat" {
             if !self.chat_interfaces.contains(&interface_id) {
@@ -801,5 +810,19 @@ mod tests {
         world.static_objs.insert(((1, 2, 0), 5), 3);
         world.objs.insert(((1, 2, 0), 5), None);
         assert!(world.ground_items(1, 2, 0, 15, None).is_empty());
+    }
+
+    #[test]
+    fn overlay_minus_one_closes_modal() {
+        let mut world = World::new();
+        // Level-up splash opens...
+        world.feed("IF_OPENOVERLAY", &[0, 193]).unwrap();
+        assert!(world.modal.is_some(), "splash opens the modal");
+        // ...then the server closes it with component -1, sent unsigned.
+        world.feed("IF_OPENOVERLAY", &[0xFF, 0xFF]).unwrap();
+        assert!(world.modal.is_none(), "65535 overlay must clear, not stick");
+        // A real overlay still opens normally afterwards.
+        world.feed("IF_OPENOVERLAY", &[0, 193]).unwrap();
+        assert!(world.modal.is_some(), "real overlays still open");
     }
 }
