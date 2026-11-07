@@ -480,6 +480,13 @@ fn melee(bot: &mut Bot) -> Result<(), ScriptError> {
     let mut tries = 0u32;
     while bot.world.ticks < deadline {
         bot.pump(5)?;
+        // Bones drop on the kill and despawn fast: stop fighting as soon as
+        // they are visible instead of waiting out the target slot (which a
+        // respawned rat can reuse, hiding the kill). Only once attacking,
+        // so stale bones from an old kill cannot fake it.
+        if target.is_some() && !bot.world.ground_items(bot.world.x, bot.world.z, bot.world.level, 15, Some(bones)).is_empty() {
+            break;
+        }
         if let Some(slot) = target {
             if bot.world.npcs.contains_key(&slot) {
                 continue;
