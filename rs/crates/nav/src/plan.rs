@@ -10,6 +10,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
+use std::time::Duration;
 
 use crate::bfs::can_step;
 use crate::collision::{tile_walkable, CollisionMap};
@@ -55,6 +56,15 @@ pub const UNVERIFIED_PENALTY: u32 = 50;
 
 /// Search budget: explored tiles before calling the area disconnected.
 const MAX_VISITS: usize = 500_000;
+
+/// Wall-clock budget for one `plan` call, every search included: an
+/// exhaustive NoRoute once burned ~25 s of worker CPU (up to four
+/// 500k-visit searches back to back), freezing ticks, snapshots and
+/// spectate while the status stayed `running`. Legit plans stay far
+/// below (worst golden reachable: 264 tiles in ~1.1 s debug, live legs
+/// plan in ~0.2 s); past the budget each pending search stops at its
+/// current best, the same Disconnected answer exhaustion would give.
+const PLAN_BUDGET: Duration = Duration::from_millis(1500);
 
 /// One map tile on one level.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -253,6 +263,7 @@ pub fn plan_yielding(
     options: &NavOptions,
     yield_: &mut dyn FnMut() -> bool,
 ) -> Result<Plan, NoRoute> {
+    let deadline = std::time::Instant::now() + PLAN_BUDGET;
     if options.f2p_only && !world.in_f2p(dest.x, dest.z) {
         return Err(NoRoute {
             closest_reachable: from,
@@ -262,7 +273,7 @@ pub fn plan_yielding(
         });
     }
     // A: requirements lifted (tolls still apply unless paid).
-    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, yield_) {
+    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
             let mut blocked = Vec::new();
@@ -292,7 +303,7 @@ pub fn plan_yielding(
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
-        match dijkstra(world, tables, from, dest, options, true, true, false, yield_) {
+        match dijkstra(world, tables, from, dest, options, true, true, false, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(chain, _, best) => {
                 let mut tolls = Vec::new();
@@ -321,7 +332,7 @@ pub fn plan_yielding(
     if options.f2p_only {
         // C: bounds lifted, requirements enforced. Reaching the dest this
         // way proves the F2P fence is the blocker.
-        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, yield_) {
+        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(_, _, best) => {
                 return Err(NoRoute {
@@ -335,7 +346,7 @@ pub fn plan_yielding(
         }
     }
     // D: fully filtered search, for the closest reachable tile.
-    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, yield_) {
+    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(_, _, best) => best,
         Outcome::Closest(best) => best,
@@ -510,6 +521,7 @@ fn dijkstra(
     allow_paid: bool,
     ignore_f2p: bool,
     yield_: &mut dyn FnMut() -> bool,
+    deadline: std::time::Instant,
 ) -> Outcome {
     let setup_start = std::time::Instant::now();
     let mut search = Search {
@@ -563,6 +575,13 @@ fn dijkstra(
             heap_max = heap.len();
         }
         if visits > MAX_VISITS {
+            break;
+        }
+        // Shared wall budget (PLAN_BUDGET): an exhaustive miss stops at
+        // its current best instead of burning the worker. Same
+        // Disconnected answer as visit exhaustion; the operator stop
+        // (yield false above) still wins as Aborted.
+        if visits % 1024 == 0 && std::time::Instant::now() >= deadline {
             break;
         }
         let here = unkey(key);

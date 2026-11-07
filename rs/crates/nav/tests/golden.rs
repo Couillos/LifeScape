@@ -167,8 +167,9 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
     };
     println!("{name}: {summary} [{ms}ms]");
     // The latency budget guards plans (live travel must stay snappy);
-    // a NoRoute-by-exhaustion is bounded by MAX_VISITS, not time, and
-    // its milliseconds stay printed above for the record.
+    // a NoRoute-by-exhaustion is bounded by MAX_VISITS and the plan
+    // wall-clock budget, not by finding a route, and its milliseconds
+    // stay printed above for the record.
     if result.is_ok() && !cfg!(debug_assertions) {
         assert!(ms < 300, "route {name}: plan took {ms}ms, budget is 300ms");
     }
