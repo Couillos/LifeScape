@@ -571,6 +571,22 @@ fn same_fence_side(line: i32, first: i32, second: i32) -> bool {
     (first >= line) == (second >= line)
 }
 
+/// Shop and bank staff are never targets: keepers, assistants, Bob and
+/// bankers (some at 1 HP) must survive our hunts. Excluded by op
+/// category — any Trade/Bank right-click — never by name, so a new shop
+/// inherits the guard. Valid foes carry Attack instead (goblin npc 100:
+/// [None, Attack, None, ...]).
+/// Source (read-only): gamedata npcs.json ops, e.g. generalshopkeeper1
+/// (npc 520) and generalassistant1 (521) carry Trade at op index 2.
+fn is_shop_staff(npc_type: u16) -> bool {
+    knowledge::npc_by_id(usize::from(npc_type)).is_some_and(|entry| {
+        entry.ops.iter().flatten().any(|op| {
+            let lowered = op.to_lowercase();
+            lowered.contains("trade") || lowered.contains("bank")
+        })
+    })
+}
+
 fn attack_nearest(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -579,6 +595,12 @@ fn attack_nearest(
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut cands = bot.npcs_named(&names);
     cands.retain(|(_, x, z)| avoid.get(&(*x, *z)).is_none_or(|until| *until <= bot.world.ticks));
+    // Shop staff are never foes, by op category (Trade/Bank), not name:
+    // a keeper next to the hunt (Bob by the axe shop, the Lumbridge
+    // general store pair) is never a valid click.
+    cands.retain(|(slot, _, _)| {
+        bot.world.npcs.get(slot).is_none_or(|npc| !is_shop_staff(npc.npc_type))
+    });
     // Never target across the toll fence: goblins spawn on both flanks,
     // so the nearest flips sides every kill and each crossing walks the
     // ~200-tile foot detour (paid doors stay off all hunt). One side per
@@ -722,6 +744,12 @@ fn fight(
         melee_stat(bot, "strength"),
         melee_stat(bot, "defence")
     ));
+    // One line per hunt: which flank we hold (or that no gate is mapped
+    // yet, so the per-pick filter stays off and crossings stay possible).
+    match crate::skill_common::toll_gate_x(bot) {
+        Some(line) => bot.log(&format!("toll fence line {line}, hunting the {} flank", if bot.world.x >= line { "east" } else { "west" })),
+        None => bot.log("toll fence: no gates mapped, cross-fence picks unfiltered"),
+    }
     loop {
         if ticks_limit > 0 && bot.world.ticks - started >= ticks_limit {
             break;
@@ -1160,5 +1188,20 @@ mod tests {
         assert!(super::same_fence_side(3268, 3270, 3300), "east flank together");
         assert!(!super::same_fence_side(3268, 3262, 3270), "across never targets");
         assert!(!super::same_fence_side(3268, 3270, 3262), "across either way");
+    }
+
+    /// Shop staff are excluded by op category, never by name: the
+    /// Lumbridge general store pair (520/521), Bob (519) and bankers
+    /// carry Trade/Bank; every valid foe (goblin 100, chicken 41, man 1)
+    /// carries Attack instead.
+    #[test]
+    fn shop_staff_never_targeted_by_category() {
+        assert!(super::is_shop_staff(520), "Lumbridge keeper");
+        assert!(super::is_shop_staff(521), "Lumbridge assistant");
+        assert!(super::is_shop_staff(519), "Bob the axe seller");
+        assert!(super::is_shop_staff(494), "banker");
+        assert!(!super::is_shop_staff(100), "goblin fights");
+        assert!(!super::is_shop_staff(41), "chicken fights");
+        assert!(!super::is_shop_staff(1), "man fights");
     }
 }
