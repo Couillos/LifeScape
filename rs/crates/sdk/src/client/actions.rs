@@ -478,7 +478,14 @@ impl Bot {
         tiles.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
         let mut refusals = 0u32;
         for (tile_x, tile_z) in tiles {
-            if self.approach(tile_x, tile_z, self.world.level, 0, 150).is_err() {
+            if let Err(err) = self.approach(tile_x, tile_z, self.world.level, 0, 150) {
+                // Dead socket, not a detour: only Unreachable/Timeout prove
+                // a counter or wall. Anything else (Io/Login/Interrupted)
+                // propagates so the session reconnects instead of degrading
+                // into Ok(false) after 3 swallowed errors.
+                if !Self::bank_fan_counts_as_refusal(&err) {
+                    return Err(err);
+                }
                 refusals += 1;
                 if Self::bank_fan_refused(refusals) {
                     return Ok(false);
@@ -500,6 +507,17 @@ impl Bot {
     /// threshold is locked by test, not by live luck.
     fn bank_fan_refused(refusals: u32) -> bool {
         refusals >= Self::BANK_FAN_MAX_REFUSALS
+    }
+
+    /// True when a fan walk error proves the booth unusable from here:
+    /// only Unreachable/Timeout are refusals (counter, wall). Transport
+    /// and operator stops (Io/Login/Interrupted, anything else) propagate
+    /// so the session reconnects instead of stranding on Ok(false). Pure
+    /// so the classification is locked by test: the fan itself is
+    /// unreachable offline (the click send fails first), but every error
+    /// it can meet goes through here.
+    fn bank_fan_counts_as_refusal(error: &Error) -> bool {
+        matches!(error, Error::Unreachable(_) | Error::Timeout(_))
     }
 
     /// Click the booth op and wait for the bank interface. Ok(false) when
@@ -681,5 +699,32 @@ mod tests {
         bot.world.z = 3246;
         let err = bot.open_bank(3091, 3245, 2213, 50).expect_err("dead socket fails loud");
         assert!(format!("{err}").contains("not logged in"), "typed conn error, got: {err}");
+    }
+
+    /// Socket dead mid-fan degrades into Ok(false) under the old
+    /// `.is_err()` count: 3 swallowed Io errors read as 3 refusals and
+    /// `bank_trip` strands instead of reconnecting. Only true refusals
+    /// count now, so transport/operator stops propagate. The fan loop
+    /// itself is unreachable offline (the click send fails before it),
+    /// so this locks the classification every fan error goes through.
+    #[test]
+    fn bank_fan_propagates_dead_socket_instead_of_refusing() {
+        for err in [
+            Error::Io("not logged in".to_string()),
+            Error::Login("stale session".to_string()),
+            Error::Interrupted("run stopped".to_string()),
+            Error::State("bank_main:inv missing".to_string()),
+            Error::Protocol("bad frame".to_string()),
+        ] {
+            assert!(!Bot::bank_fan_counts_as_refusal(&err), "propagates, never a refusal: {err}");
+        }
+    }
+
+    /// 3 true refusals still abort the booth as before: Unreachable (wall,
+    /// counter) and Timeout (stalled leg) are the only fan refusals.
+    #[test]
+    fn bank_fan_counts_only_true_refusals() {
+        assert!(Bot::bank_fan_counts_as_refusal(&Error::Unreachable("counter".to_string())), "wall counts");
+        assert!(Bot::bank_fan_counts_as_refusal(&Error::Timeout("stalled leg".to_string())), "stall counts");
     }
 }
