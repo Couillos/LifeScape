@@ -116,13 +116,19 @@ impl Bot {
     /// reader, so each yield emits the keepalive the server needs (it
     /// reaps after ~6 s of silence: 100 ticks at 60 ms). The session stop
     /// hook aborts the same way. False stops every pending search; the
-    /// caller maps it to `Interrupted`, never a dossier.
+    /// caller maps it to `Interrupted`, never a dossier. Both failures log
+    /// their source: a silent abort here ends the run, so the run must
+    /// say whether the socket or the operator stopped it.
     fn plan_yield(&mut self) -> bool {
-        if self.keepalive_if_due().is_err() {
+        if let Err(err) = self.keepalive_if_due() {
+            self.log(&format!("plan yield: no keepalive ({err}), aborting"));
             return false;
         }
         if let Some(hook) = self.on_pump.clone() {
-            return hook(self);
+            if !hook(self) {
+                self.log("plan yield: stopped by operator hook, aborting");
+                return false;
+            }
         }
         true
     }
