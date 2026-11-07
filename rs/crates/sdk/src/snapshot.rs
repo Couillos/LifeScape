@@ -66,8 +66,12 @@ pub fn bank_items(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>, bank_com: Option<
     }
 }
 
-/// (com, text) option rows under the latest "Select an Option" header.
-pub fn chat_options(texts: &HashMap<u16, String>) -> Vec<(u16, String)> {
+/// (com, text) option rows: under the latest "Select an Option" header, or
+/// the fixed multi2/3/4/5 option coms when that choice interface is open.
+/// Custom headers (Terrova's "Do you want to go to the mainland?", the
+/// tutorial recaps) never say "Select an Option", so the header rule alone
+/// blinds the bot to them.
+pub fn chat_options(texts: &HashMap<u16, String>, chat_modal: Option<u16>) -> Vec<(u16, String)> {
     let mut items: Vec<(u16, &String)> = texts.iter().map(|(com, text)| (*com, text)).collect();
     items.sort();
     let mut headers: Vec<usize> = items
@@ -76,15 +80,36 @@ pub fn chat_options(texts: &HashMap<u16, String>) -> Vec<(u16, String)> {
         .filter(|(_, (_, text))| text.to_lowercase().contains("select an option"))
         .map(|(index, _)| index)
         .collect();
-    let Some(header) = headers.pop() else {
-        return Vec::new();
+    let mut out: Vec<(u16, String)> = Vec::new();
+    if let Some(header) = headers.pop() {
+        let base = items[header].0;
+        out.extend(
+            items[header + 1..header + 6.min(items.len() - header)]
+                .iter()
+                .filter(|(com, _)| *com > base && *com <= base + 5)
+                .map(|(com, text)| (*com, (*text).clone())),
+        );
+    }
+    // Fixed option coms (comps.json): multi2 2461-2462, multi3 2471-2473,
+    // multi4 2482-2485, multi5 2494-2498. Only while that choice interface
+    // is the open chat modal, so answered choices never leak into later
+    // dialogs as stale options.
+    let fixed: &[u16] = match chat_modal {
+        Some(2459) => &[2461, 2462],
+        Some(2469) => &[2471, 2472, 2473],
+        Some(2480) => &[2482, 2483, 2484, 2485],
+        Some(2492) => &[2494, 2495, 2496, 2497, 2498],
+        _ => &[],
     };
-    let base = items[header].0;
-    items[header + 1..header + 6.min(items.len() - header)]
-        .iter()
-        .filter(|(com, _)| *com > base && *com <= base + 5)
-        .map(|(com, text)| (*com, (*text).clone()))
-        .collect()
+    for com in fixed {
+        if let Some(text) = texts.get(com) {
+            if !text.trim().is_empty() && !out.iter().any(|(known, _)| known == com) {
+                out.push((*com, text.clone()));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 fn xp_table() -> [u32; 99] {
@@ -137,9 +162,18 @@ mod tests {
     #[test]
     fn options_under_header() {
         let texts = HashMap::from([(100, "Select an Option".to_string()), (101, "Yes".to_string()), (110, "No".to_string())]);
-        let options = chat_options(&texts);
+        let options = chat_options(&texts, None);
         assert_eq!(options.len(), 1);
         assert_eq!(options[0].1, "Yes");
+    }
+
+    #[test]
+    fn options_on_fixed_multi2_coms() {
+        let texts = HashMap::from([(2460, "Do you want to go to the mainland?".to_string()), (2461, "Yes.".to_string()), (2462, "No.".to_string())]);
+        assert!(chat_options(&texts, None).is_empty(), "custom header alone is not options");
+        let options = chat_options(&texts, Some(2459));
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].1, "Yes.");
     }
 
     #[test]

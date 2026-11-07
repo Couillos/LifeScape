@@ -186,10 +186,13 @@ pub(crate) fn read_from_snapshot(snapshot: &Snapshot, method: &str) -> Result<Va
             ))
         }
         "chat_options" => Ok(Value::Arr(
-            lifescape_sdk::snapshot::chat_options(&snapshot.texts)
-                .into_iter()
-                .map(|(com, text)| Value::Arr(vec![Value::Int(i64::from(com)), str_value(&text)]))
-                .collect(),
+            {
+                let chat_modal = snapshot.modal.as_ref().filter(|modal| modal.layer == "chat").map(|modal| modal.interface_id);
+                lifescape_sdk::snapshot::chat_options(&snapshot.texts, chat_modal)
+                    .into_iter()
+                    .map(|(com, text)| Value::Arr(vec![Value::Int(i64::from(com)), str_value(&text)]))
+                    .collect::<Vec<Value>>()
+            },
         )),
         "combat_level" => Ok(lifescape_sdk::snapshot::combat_level(&snapshot.stats)
             .map(|level| Value::Int(i64::from(level)))

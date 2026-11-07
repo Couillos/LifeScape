@@ -631,7 +631,8 @@ impl Bot {
 
     /// (com, text) option rows under the latest "Select an Option" header.
     pub fn chat_options(&self) -> Vec<(u16, String)> {
-        crate::snapshot::chat_options(&self.world.texts)
+        let chat_modal = self.world.modal.as_ref().filter(|modal| modal.layer == "chat").map(|modal| modal.interface_id);
+        crate::snapshot::chat_options(&self.world.texts, chat_modal)
     }
 
     pub fn chat_choose(&mut self, text: &str) -> Result<u16> {
