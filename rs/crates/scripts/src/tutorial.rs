@@ -349,9 +349,10 @@ fn catch_shrimp(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
     while bot.world.ticks < target {
         bot.pump(5)?;
         let Some(slot) = bot.find_npc("newbiefishing") else { continue };
-        if bot.approach_npc(slot, 1500).is_err() {
-            continue;
-        }
+        // Best-effort step closer, then click regardless: the server paths
+        // to the spot when needed, and the static mesh disagrees with the
+        // server about the pond shore (approach alone never arrives).
+        let _ = bot.approach_npc(slot, 30);
         bot.op_npc(1, slot)?;
         let inner = bot.world.ticks + 50;
         while bot.world.ticks < inner {
