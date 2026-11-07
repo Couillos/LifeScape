@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::mapcache::{MapCache, pack_dir};
 use crate::png;
@@ -160,24 +160,28 @@ fn parse_square(data: &[u8]) -> Option<Vec<GroundTile>> {
 
 struct Grounds {
     archive: Vec<u8>,
-    squares: Mutex<HashMap<(i32, i32), Option<Vec<GroundTile>>>>,
+    entries: HashMap<String, (usize, usize)>,
+    squares: Mutex<HashMap<(i32, i32), Option<Arc<Vec<GroundTile>>>>>,
     blends: Mutex<HashMap<(i32, i32, i32), u32>>,
 }
 
 impl Grounds {
     fn load(pack: &PathBuf) -> Grounds {
         let archive = std::fs::read(pack.join(".cache").join("maps-server.zip")).unwrap_or_default();
-        Grounds { archive, squares: Mutex::new(HashMap::new()), blends: Mutex::new(HashMap::new()) }
+        let entries = zip_entries(&archive);
+        Grounds { archive, entries, squares: Mutex::new(HashMap::new()), blends: Mutex::new(HashMap::new()) }
     }
 
-    fn square(&self, square_x: i32, square_z: i32) -> Option<Vec<GroundTile>> {
+    /// One map square per level, shared by every tile lookup: the Vec is
+    /// cloned once per square (Arc), never once per tile (17k lookups x
+    /// 384 KiB per 33-px frame before this).
+    fn square(&self, square_x: i32, square_z: i32) -> Option<Arc<Vec<GroundTile>>> {
         let mut squares = self.squares.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cached) = squares.get(&(square_x, square_z)) {
             return cached.clone();
         }
-        let entries = zip_entries(&self.archive);
         let name = format!("m{square_x}_{square_z}");
-        let parsed = entries.get(&name).and_then(|(offset, size)| parse_square(&self.archive[*offset..*offset + *size]));
+        let parsed = self.entries.get(&name).and_then(|(offset, size)| parse_square(&self.archive[*offset..*offset + *size])).map(Arc::new);
         squares.insert((square_x, square_z), parsed.clone());
         while squares.len() > 32 {
             if let Some(key) = squares.keys().next().copied() {
@@ -332,8 +336,7 @@ impl<'a> Cursor<'a> {
 }
 
 /// (x, z, level, layer) to (loc id, shape, angle), as the client places them.
-fn load_loc_layers(archive: &[u8]) -> Option<HashMap<(i32, i32, i32, u8), (u32, u8, u8)>> {
-    let entries = zip_entries(archive);
+fn load_loc_layers(archive: &[u8], entries: &HashMap<String, (usize, usize)>) -> Option<HashMap<(i32, i32, i32, u8), (u32, u8, u8)>> {
     let mut squares: Vec<(i32, i32)> = entries
         .keys()
         .filter(|name| name.starts_with('m'))
@@ -406,7 +409,7 @@ impl Minimap {
     fn loc_layers(&self) -> std::sync::MutexGuard<'_, Option<HashMap<(i32, i32, i32, u8), (u32, u8, u8)>>> {
         let mut layers = self.layers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if layers.is_none() {
-            *layers = load_loc_layers(&self.grounds.archive);
+            *layers = load_loc_layers(&self.grounds.archive, &self.grounds.entries);
         }
         layers
     }

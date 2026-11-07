@@ -13,16 +13,18 @@ let frameTimer = null;
 let framePending = false;
 function paint() {
   // Both modes paint atomic frames only (see draw): real-time redraws
-  // every animation frame, 1 Hz redraws at most once a second.
-  // One scheduled redraw at a time: a map image landing mid-second must
-  // redraw now, not queue another second on top of the pending one.
+  // every animation frame, 4 Hz redraws at most every 250 ms (server
+  // frames land in ~200 ms, so 1 Hz left the image a second behind the
+  // coords riding the same message).
+  // One scheduled redraw at a time: a map image landing mid-slice must
+  // redraw now, not queue another slice on top of the pending one.
   if (rt) {
     if (framePending) return;
     framePending = true;
     requestAnimationFrame(() => { framePending = false; draw(); });
   } else {
     if (frameTimer !== null) return;
-    frameTimer = setTimeout(() => { frameTimer = null; draw(); }, 1000);
+    frameTimer = setTimeout(() => { frameTimer = null; draw(); }, 250);
   }
 }
 function syncRtBtn() {
