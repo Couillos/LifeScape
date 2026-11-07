@@ -5,7 +5,7 @@
 
 use crate::buffer::Writer;
 use crate::client::Bot;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, TravelErrorKind};
 use std::collections::HashMap;
 
 use crate::words::to_base37;
@@ -460,6 +460,16 @@ impl Bot {
     /// ~400 ticks instead of ~1790.
     const BANK_FAN_MAX_REFUSALS: u32 = 3;
 
+    /// One fan side step, in ticks. A fan tile is adjacent: successes land
+    /// in 2-12 ticks live (28 samples, worst 28 after a stall burst), a
+    /// refusal trips the 13-tick stall watch twice (send + the one replan)
+    /// in the low 30s. 41 = worst success (28) + one stall window (13):
+    /// a good side always fits, a dead side fails in ~41 instead of
+    /// ~85-128 (the old approach ran an exact walk plus a 250-floored fan
+    /// walk per tile). Same decision (try every side, abort at 3
+    /// refusals), just faster.
+    const BANK_FAN_STEP_TICKS: u64 = 41;
+
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("open_bank {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
         self.approach(x, z, self.world.level, 1, 60)?;
@@ -478,19 +488,21 @@ impl Bot {
         tiles.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
         let mut refusals = 0u32;
         for (tile_x, tile_z) in tiles {
-            if let Err(err) = self.approach(tile_x, tile_z, self.world.level, 0, 150) {
-                // Dead socket, not a detour: only Unreachable/Timeout prove
-                // a counter or wall. Anything else (Io/Login/Interrupted)
-                // propagates so the session reconnects instead of degrading
-                // into Ok(false) after 3 swallowed errors.
-                if !Self::bank_fan_counts_as_refusal(&err) {
-                    return Err(err);
+            // One bounded walk, not an approach: the tile is adjacent, so
+            // a 41-tick walk covers the worst live success (28) plus the
+            // stall/replan settle of a refusal (low 30s). approach would
+            // run an exact walk plus a 250-floored fan walk per tile and
+            // burn ~85-128 ticks on each dead side.
+            match self.walk_to(tile_x, tile_z, self.world.level, Self::BANK_FAN_STEP_TICKS) {
+                Ok(()) => {}
+                Err(err) if Self::bank_fan_counts_as_refusal(&err) => {
+                    refusals += 1;
+                    if Self::bank_fan_refused(refusals) {
+                        return Ok(false);
+                    }
+                    continue;
                 }
-                refusals += 1;
-                if Self::bank_fan_refused(refusals) {
-                    return Ok(false);
-                }
-                continue;
+                Err(err) => return Err(err),
             }
             if self.click_bank(x, z, loc_id, timeout)? {
                 return Ok(true);
@@ -517,7 +529,19 @@ impl Bot {
     /// unreachable offline (the click send fails first), but every error
     /// it can meet goes through here.
     fn bank_fan_counts_as_refusal(error: &Error) -> bool {
-        matches!(error, Error::Unreachable(_) | Error::Timeout(_))
+        match error {
+            Error::Unreachable(_) | Error::Timeout(_) | Error::StepRefused(_) => true,
+            // walk_to wraps its failures with a replay dossier: a refused
+            // step (server shut), a stalled leg (no progress in 41 ticks)
+            // and no route (planner says wall) all prove counter-or-wall.
+            // Every other kind (door, ride, choice) and transport stops
+            // propagate loud instead of stranding on Ok(false).
+            Error::TravelFailure(failure) => matches!(
+                failure.kind,
+                TravelErrorKind::NoRoute | TravelErrorKind::StepRefused | TravelErrorKind::Timeout
+            ),
+            _ => false,
+        }
     }
 
     /// Click the booth op and wait for the bank interface. Ok(false) when
@@ -726,5 +750,30 @@ mod tests {
     fn bank_fan_counts_only_true_refusals() {
         assert!(Bot::bank_fan_counts_as_refusal(&Error::Unreachable("counter".to_string())), "wall counts");
         assert!(Bot::bank_fan_counts_as_refusal(&Error::Timeout("stalled leg".to_string())), "stall counts");
+        assert!(Bot::bank_fan_counts_as_refusal(&Error::StepRefused("shut".to_string())), "raw refused step counts");
+        for kind in [TravelErrorKind::NoRoute, TravelErrorKind::StepRefused, TravelErrorKind::Timeout] {
+            assert!(
+                Bot::bank_fan_counts_as_refusal(&travel_failure(kind)),
+                "walk_to dossier {:?} counts",
+                kind
+            );
+        }
+        for kind in
+            [TravelErrorKind::DoorDidNotOpen, TravelErrorKind::RideDidNotMove, TravelErrorKind::Io, TravelErrorKind::Interrupted]
+        {
+            assert!(!Bot::bank_fan_counts_as_refusal(&travel_failure(kind)), "walk_to dossier {:?} propagates", kind);
+        }
+    }
+
+    fn travel_failure(kind: TravelErrorKind) -> Error {
+        Error::TravelFailure(crate::error::TravelError {
+            kind,
+            segment_index: None,
+            position: (0, 0, 0),
+            tick: 0,
+            expected: String::new(),
+            observed: String::new(),
+            dossier: None,
+        })
     }
 }
