@@ -136,19 +136,25 @@ impl Bot {
 
     /// Nearest visible NPC whose type name contains `name`.
     pub fn find_npc(&self, name: &str) -> Option<u16> {
+        self.find_npcs(name).into_iter().next()
+    }
+
+    /// Every visible NPC whose type name contains `name`, nearest first.
+    /// One spot can go stale (ghost slot, fished-out side); callers that
+    /// need a catch rotate through these instead of hammering one.
+    pub fn find_npcs(&self, name: &str) -> Vec<u16> {
         let wanted = name.to_lowercase();
-        let mut best: Option<(i32, u16)> = None;
+        let mut found: Vec<(i32, u16)> = Vec::new();
         for (nid, npc) in &self.world.npcs {
             let label = (self.tables.npc_name)(npc.npc_type).unwrap_or_default();
             if !label.to_lowercase().contains(&wanted) {
                 continue;
             }
             let dist = (npc.x - self.world.x).abs() + (npc.z - self.world.z).abs();
-            if best.is_none_or(|(known, _)| dist < known) {
-                best = Some((dist, *nid));
-            }
+            found.push((dist, *nid));
         }
-        best.map(|(_, nid)| nid)
+        found.sort();
+        found.into_iter().map(|(_, nid)| nid).collect()
     }
 
     /// (slot, x, z) for every visible NPC whose type name is in `names`.

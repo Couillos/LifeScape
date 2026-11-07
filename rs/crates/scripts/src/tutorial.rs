@@ -346,28 +346,34 @@ fn catch_shrimp(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
     let raw = obj("newbieraw_shrimp")?;
     let had = bot.inventory().get(&raw).copied().unwrap_or(0);
     let target = bot.world.ticks + timeout;
+    // One spot can go stale (ghost slot answers nothing): rotate through
+    // all visible spots instead of hammering the nearest forever.
+    let mut dud: Vec<u16> = Vec::new();
     while bot.world.ticks < target {
         bot.pump(5)?;
-        let Some(slot) = bot.find_npc("newbiefishing") else { continue };
-        // Best-effort step closer, then click regardless: the server paths
-        // to the spot when needed, and the static mesh disagrees with the
-        // server about the pond shore (approach alone never arrives).
+        let mut spots: Vec<u16> = bot.find_npcs("newbiefishing").into_iter().filter(|slot| !dud.contains(slot)).collect();
+        if spots.is_empty() {
+            dud.clear();
+            spots = bot.find_npcs("newbiefishing");
+        }
+        let Some(slot) = spots.into_iter().next() else { continue };
         let _ = bot.approach_npc(slot, 30);
         bot.op_npc(1, slot)?;
-        let inner = bot.world.ticks + 50;
+        let inner = bot.world.ticks + 60;
         while bot.world.ticks < inner {
             bot.pump(5)?;
             if bot.inventory().get(&raw).copied().unwrap_or(0) > had {
                 return Ok(true);
             }
         }
+        dud.push(slot);
     }
     Ok(false)
 }
 
 fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<(), ScriptError> {
     let raw = obj(raw_name)?;
-    check(bot.position(), catch_shrimp(bot, 200)?, "shrimp caught for cooking")?;
+    check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught for cooking")?;
     check(bot.position(), wait_inv(bot, raw_name, 1, 90)?, &format!("has {raw_name}"))?;
     // Tutorial fires burn out after 100-200 ticks: short cook rounds with a
     // relight between them, never one long hammering of a dead fire.
@@ -531,19 +537,21 @@ fn wait_bones(bot: &mut Bot, bones: &u16, timeout: u64) -> Result<bool, ScriptEr
 
 fn ranged_kill(bot: &mut Bot) -> Result<(), ScriptError> {
     let bones = obj("newbiebones")?;
+    // Rotate spots: one ghost slot must not eat all four shots.
+    let mut dud: Vec<u16> = Vec::new();
     for _ in 0..4 {
-        let mut slot = None;
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target && slot.is_none() {
-            bot.pump(5)?;
-            slot = bot.find_npc("newbiegiantrat");
+        let mut spots: Vec<u16> = bot.find_npcs("newbiegiantrat").into_iter().filter(|slot| !dud.contains(slot)).collect();
+        if spots.is_empty() {
+            dud.clear();
+            spots = bot.find_npcs("newbiegiantrat");
         }
-        let Some(found) = slot else { continue };
+        let Some(found) = spots.into_iter().next() else { continue };
         bot.op_npc(2, found)?;
         if wait_bones(bot, &bones, 150)? {
             bot.log("ok rat killed at range");
             return Ok(());
         }
+        dud.push(found);
     }
     check(bot.position(), false, "ranged rat kill")
 }
@@ -609,7 +617,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             talk_step(bot, "survival", (3103, 3095), &[], "survival again")?;
             check(bot.position(), wait_inv(bot, "net", 1, 60)?, "net given")
         }
-        "catch" => check(bot.position(), catch_shrimp(bot, 200)?, "shrimp caught"),
+        "catch" => check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught"),
         "cook_burnt" => cook_on_fire(bot, "newbieraw_shrimp", "burntfish1"),
         "cook_fresh" => cook_on_fire(bot, "newbieraw_shrimp", "shrimp"),
         "survival_gate" => {
