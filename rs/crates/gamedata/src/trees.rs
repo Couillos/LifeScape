@@ -29,10 +29,14 @@ pub fn all_tiers() -> Vec<TreeTier> {
         .collect()
 }
 
-/// Highest tier whose level requirement is reached, or None.
+/// Highest F2P tier whose level requirement is reached, or None.
+/// Members tiers never qualify (same rule as the spot picker).
 pub fn tier_for_level(woodcutting_level: i64) -> Option<TreeTier> {
     let mut best: Option<TreeTier> = None;
     for tier in all_tiers() {
+        if tier.product_members == Some(true) {
+            continue;
+        }
         if tier.level <= woodcutting_level && best.as_ref().is_none_or(|current| tier.level > current.level) {
             best = Some(tier);
         }
@@ -54,6 +58,7 @@ mod tests {
         assert_eq!(willow.product, "willow_logs");
         assert_eq!(willow.exp, 675);
         assert_eq!(willow.product_members, Some(false));
+        assert_eq!(tier_for_level(99).expect("capped at yew").product, "yew_logs");
         assert!(tier_for_level(-1).is_none());
     }
 }

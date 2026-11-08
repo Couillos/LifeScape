@@ -14,7 +14,7 @@ use crate::skill_common::{
     bury_bones, check_events, free_slots, heal_at_bank, hitpoints, live_bank_booths, nearest_bank, obj_id,
     walk_checked,
 };
-use crate::skill_gather::{BanSet, same_side};
+use crate::skill_gather::{fight_engaged, BanSet, same_side};
 use crate::{ScriptError, ScriptResult};
 
 const EAT_FRACTION: f64 = 0.55;
@@ -713,33 +713,13 @@ const FOE_SHORTLIST: usize = 3;
 /// keeps the Manhattan order; the sort itself lives in
 /// `lifescape_nav::walk_rank`.
 fn rank_foes(bot: &mut Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
-    if window.is_empty() {
-        return window;
-    }
-    let first = window[0];
     let level = bot.world.level;
-    let head = window.len().min(FOE_SHORTLIST);
-    let dests: Vec<lifescape_nav::plan::Tile> = window[..head]
-        .iter()
-        .map(|(_, x, z)| lifescape_nav::plan::Tile { x: *x, z: *z, level })
-        .collect();
-    let costs = bot.walk_costs(&dests);
-    let mut by_foe: HashMap<(u16, i32, i32), Option<u32>> = HashMap::new();
-    for (cand, cost) in window[..head].iter().copied().zip(costs) {
-        by_foe.insert(cand, cost);
-    }
-    let costed = lifescape_nav::walk_rank::rank_walk_shortlist(window, FOE_SHORTLIST, |cand| {
-        by_foe.get(cand).copied().unwrap_or(None)
-    });
-    if costed[0].1.0 != first.0 {
-        if let Some(cost) = costed[0].0 {
-            bot.log(&format!(
-                "walk-refine: nearest foe {} at ({},{}) loses to {} at ({},{}) walk {cost}",
-                first.0, first.1, first.2, costed[0].1.0, costed[0].1.1, costed[0].1.2
-            ));
-        }
-    }
-    costed.into_iter().map(|(_, cand)| cand).collect()
+    crate::skill_walk::refine_walking(bot, window, FOE_SHORTLIST, "foe", |(_, x, z)| {
+        lifescape_nav::plan::Tile { x: *x, z: *z, level }
+    })
+    .into_iter()
+    .map(|(_, cand)| cand)
+    .collect()
 }
 
 fn attack_nearest(
@@ -880,6 +860,10 @@ fn fight(
     let mut last_attack = 0u64;
     let mut last_event_check = bot.world.ticks;
     let mut max_hp = hitpoints(bot).max(10);
+    let mut prev_hp = hitpoints(bot);
+    let mut fighting = false;
+    let mut acquire_xp = combat_xp(bot);
+    let mut acquire_anim: Option<u16> = None;
     let mut seen_msgs = bot.world.messages.len();
     let mut unreachable: BanSet = BanSet::new();
     let mut progress_at = bot.world.ticks;
@@ -1053,10 +1037,31 @@ fn fight(
                     progress_at = bot.world.ticks;
                     continue;
                 }
-                if bot.world.ticks.saturating_sub(last_attack) >= 5 {
-                    bot.op_npc(2, slot)?;
-                    last_attack = bot.world.ticks;
+                // One click per target: the engaged loop chains itself.
+                // Re-click only while nothing proves the fight started
+                // (a swallowed click recovers in <= 5 ticks). Evidence:
+                // xp flowing, hp taken, or the target animating — its
+                // attack anim streams, ours never does. No positive
+                // "you're fighting" message exists server-side (all
+                // combat lines are refusals), so this is the whole
+                // signal; FIGHT_STALL/KILL_CAP stay the backstops.
+                if !fighting && bot.world.ticks.saturating_sub(last_attack) >= 5 {
+                    if fight_engaged(
+                        combat_xp(bot),
+                        acquire_xp,
+                        hitpoints(bot),
+                        prev_hp,
+                        bot.world.npcs.get(&slot).and_then(|npc| npc.anim),
+                        acquire_anim,
+                    ) {
+                        fighting = true;
+                        bot.log(&format!("engaged npc {slot}, holding clicks"));
+                    } else {
+                        bot.op_npc(2, slot)?;
+                        last_attack = bot.world.ticks;
+                    }
                 }
+                prev_hp = hitpoints(bot);
                 continue;
             }
             kills += 1;
@@ -1104,6 +1109,12 @@ fn fight(
         unreachable.retain(bot.world.ticks);
         target_npc = attack_nearest(bot, spot, &mut unreachable)?;
         if let Some(slot) = target_npc {
+            // Fresh engagement baseline per target: the click in
+            // attack_nearest just went out, evidence starts now.
+            fighting = false;
+            acquire_xp = combat_xp(bot);
+            prev_hp = hitpoints(bot);
+            acquire_anim = bot.world.npcs.get(&slot).and_then(|npc| npc.anim);
             last_attack = bot.world.ticks;
             engaged_at = bot.world.ticks;
             attempts = 0;

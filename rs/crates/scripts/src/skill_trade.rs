@@ -11,7 +11,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{is_death_abort, obj_id, pack_slot, pack_total, TREK_LIMIT};
+use crate::skill_common::{is_conn_abort, is_death_abort, obj_id, obj_price, pack_slot, pack_total, TREK_LIMIT};
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
@@ -416,6 +416,38 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     require_trade_gain(gained, obj_name, bot)
 }
 
+/// One upgrade buy attempt with bronze-first fallback: tries the affordable
+/// cands best-first, one attempt each, downgrading on any shop failure
+/// (empty live stock, short coins). Conn/death/interrupt still abort;
+/// anything else logs and tries the next cheaper cand. Returns the bought
+/// name or None when nothing affordable succeeded. Never loops: one pass.
+pub fn buy_best_affordable(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, ScriptError> {
+    let have = pack_total(bot, obj_id(bot, "coins")?);
+    for cand in cands {
+        let price = obj_price(cand);
+        if price <= 0 || have < price as u32 {
+            bot.log(&format!("skip {cand}: costs {price}, have {have}"));
+            continue;
+        }
+        match buy_stock(bot, cand, 1) {
+            Ok(bought) if bought > 0 => {
+                bot.log(&format!("ok upgraded to {cand}"));
+                return Ok(Some(cand.clone()));
+            }
+            Ok(_) => {
+                bot.log(&format!("{cand} trade failed at {:?}, trying cheaper", bot.position()));
+            }
+            Err(error) if is_death_abort(&error) => return Err(error),
+            Err(error) if is_conn_abort(&error) => return Err(error),
+            Err(error) if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) => return Err(error),
+            Err(error) => {
+                bot.log(&format!("{cand} buy failed ({error}), trying cheaper"));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Sell-button batches for an amount: 10s, then 5s, then 1s.
 pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
     let mut batches = Vec::new();
@@ -430,7 +462,7 @@ pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, sell_for_target, shop_mates, trade_to_keeper};
+    use super::{buy_best_affordable, buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, sell_for_target, shop_mates, trade_to_keeper};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::world::NpcInfo;
     use lifescape_sdk::Bot;
@@ -554,5 +586,19 @@ mod tests {
             "keeper itself excluded, got: {mates:?}"
         );
         assert!(shop_mates(&bot, "no_such_keeper").is_empty(), "unknown keeper has no mates");
+    }
+
+    /// Affordable upgrade shortlist never walks when nothing is affordable:
+    /// empty cands and a broke pack both return None with no shop walk (an
+    /// offline walk would fail, so None proves nothing was attempted).
+    #[test]
+    fn buy_best_affordable_skips_without_sending() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert_eq!(buy_best_affordable(&mut bot, &[]).expect("no cands buys nothing"), None);
+        assert_eq!(
+            buy_best_affordable(&mut bot, &["bronze_axe".to_string()]).expect("broke pack buys nothing"),
+            None
+        );
     }
 }

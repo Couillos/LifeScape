@@ -664,7 +664,7 @@ fn dijkstra(
                 Some(found) => found,
                 None => continue,
             };
-            if !search.tables.side_ok(id, door_tile, here) {
+            if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
             // Clickable stand only: the engine takes the op from an

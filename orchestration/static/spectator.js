@@ -469,6 +469,8 @@ function updatePanels() {
   const fmt = (items, empty) => (items && items.length)
     ? items.map(i => (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object')).join('\n')
     : empty;
+  const carried = (last.inv || []).reduce((n, i) => n + (i.count || 0), 0);
+  document.getElementById('invtitle').textContent = `Inventory (${carried})`;
   document.getElementById('inv').textContent = 'Backpack:\n' + fmt(last.inv, '(empty)') + '\n\nWorn:\n' + fmt(last.worn, '(nothing)');
   document.getElementById('skills').textContent = (last.skills || []).map(s => `${SKILLS[s.id] || ('stat' + s.id)} ${s.level} (${s.xp}xp)`).join('\n') || '(no skills)';
 

@@ -61,7 +61,7 @@ pub struct Requirement {
     pub reason: String,
 }
 
-/// A door that only swings from one side. No entries ship yet.
+/// A door that only swings from one side.
 #[derive(Clone, Debug)]
 pub struct OneWay {
     pub loc: u16,
@@ -70,13 +70,18 @@ pub struct OneWay {
     pub reason: String,
 }
 
-/// North/south/east/west side of a door tile.
+/// North/south/east/west side of a door tile, plus the negated north
+/// side: the haunted manor doors refuse by `coordz` alone (server opens
+/// from any stand level with the door, never from north of it), which
+/// no strict side expresses (the live entry stand sits level with the
+/// door tile).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     North,
     South,
     East,
     West,
+    NotNorth,
 }
 
 impl Side {
@@ -86,6 +91,7 @@ impl Side {
             "south" => Some(Side::South),
             "east" => Some(Side::East),
             "west" => Some(Side::West),
+            "not-north" => Some(Side::NotNorth),
             _ => None,
         }
     }
@@ -97,6 +103,7 @@ impl Side {
             Side::South => stand.z < door.z,
             Side::East => stand.x > door.x,
             Side::West => stand.x < door.x,
+            Side::NotNorth => stand.z <= door.z,
         }
     }
 }

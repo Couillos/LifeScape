@@ -12,6 +12,84 @@ use lifescape_sdk::{Bot, Error};
 use crate::skill_common::{check_events, hitpoints};
 use crate::ScriptError;
 
+/// Remote walking-cost refinement, shared by the foe/spot pickers (network
+/// in `skill_walk`, never in gather/nav): one `walk_costs` batch over the
+/// Manhattan-ordered head (never more than `shortlist` plans), pure
+/// `lifescape_nav::walk_rank` reorder, single upset log with `label`.
+/// Unwired or all-disconnected keeps the Manhattan order. Callers pass
+/// Manhattan order in and their own K (`FOE_SHORTLIST`, `WALK_SHORTLIST`).
+pub fn refine_walking<T>(
+    bot: &mut Bot,
+    cands: Vec<T>,
+    shortlist: usize,
+    label: &str,
+    to_tile: impl Fn(&T) -> lifescape_nav::plan::Tile,
+) -> Vec<(Option<u32>, T)>
+where
+    T: Eq + std::hash::Hash + Copy,
+{
+    if cands.len() < 2 {
+        return cands.into_iter().map(|cand| (None, cand)).collect();
+    }
+    let first = cands[0];
+    let from = to_tile(&first);
+    if cands.len() > shortlist {
+        bot.log(&format!("walk-refine {label}: {} cands, planning top-{shortlist} Manhattan (bound)", cands.len()));
+    }
+    let head = cands.len().min(shortlist);
+    let dests: Vec<lifescape_nav::plan::Tile> = cands[..head].iter().map(&to_tile).collect();
+    let costs = bot.walk_costs(&dests);
+    let mut by_cand: std::collections::HashMap<T, Option<u32>> = std::collections::HashMap::new();
+    for (cand, cost) in cands[..head].iter().copied().zip(costs) {
+        by_cand.insert(cand, cost);
+    }
+    let ranked = lifescape_nav::walk_rank::rank_walk_shortlist(cands, shortlist, |cand| {
+        by_cand.get(cand).copied().unwrap_or(None)
+    });
+    let (cost, winner) = (ranked[0].0, ranked[0].1);
+    if winner != first {
+        if let Some(walk) = cost {
+            let into = to_tile(&winner);
+            bot.log(&format!(
+                "walk-refine {label}: Manhattan ({},{}) loses to ({},{}) walk {walk}",
+                from.x, from.z, into.x, into.z
+            ));
+        }
+    }
+    ranked
+}
+
+/// One step toward the target through the 3x3 ring (nearest-first,
+/// `walk_to` 100 each): shared by the gather `work_spot` loops. Conn
+/// aborts propagate typed; other failures try the next tile. True when a
+/// step landed, false when no ring tile was reachable (caller bans). Far
+/// drift (>4) aborts the ring early.
+pub fn step_adjacent(bot: &mut Bot, target_x: i32, target_z: i32) -> Result<bool, ScriptError> {
+    let mut neighbors: Vec<(i32, i32)> = (-1..=1)
+        .flat_map(|dx| (-1..=1).map(move |dz| (target_x + dx, target_z + dz)))
+        .filter(|tile| *tile != (target_x, target_z))
+        .collect();
+    neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    for (next_x, next_z) in neighbors {
+        match bot.walk_to(next_x, next_z, bot.world.level, 100) {
+            Ok(()) => return Ok(true),
+            Err(error)
+                if matches!(
+                    error,
+                    Error::Interrupted(_) | Error::Io(_) | Error::Login(_)
+                ) =>
+            {
+                return Err(error.into())
+            }
+            Err(_) => {}
+        }
+        if (bot.world.x - target_x).abs() + (bot.world.z - target_z).abs() > 4 {
+            return Ok(false);
+        }
+    }
+    Ok(false)
+}
+
 /// Cooperative blockage recovery: the transparent pause gate cannot fire
 /// from inside a failed `walk_to` (no way to pause under the error), so
 /// the script runs the rescue itself, on this thread, then retries its
@@ -220,5 +298,97 @@ mod tests {
         assert!(walk_checked(&mut bot, 3091, 3242, 600).expect("booth tile settles adjacent"));
         assert_eq!((bot.world.x, bot.world.z), (3092, 3243));
         assert_eq!(bot.world.ticks, before, "zero-segment plan sends nothing");
+    }
+
+    /// Unwired Manhattan: no service means no costs, order untouched.
+    #[test]
+    fn refine_unwired_keeps_manhattan() {
+        use super::refine_walking;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let cands = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
+        let ranked = refine_walking(&mut bot, cands, 3, "foe", |(_, x, z)| {
+            lifescape_nav::plan::Tile { x: *x, z: *z, level: 0 }
+        });
+        let order: Vec<_> = ranked.into_iter().map(|(_, cand)| cand).collect();
+        assert_eq!(order, vec![(7u16, 3252, 3237), (9u16, 3203, 3246)]);
+    }
+
+    /// Lure battu: Manhattan-nearest loses to the walk-cheap foe, one
+    /// remote batch, L1-cached on repeat.
+    #[test]
+    fn refine_lure_loses_with_service() {
+        use super::refine_walking;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-walk-refine".to_string()),
+            &lifescape_nav::service::test_socket("walk-refine"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "refine"));
+        bot.plan_data_version = Some("test-walk-refine".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        let ranked = refine_walking(&mut bot, vec![(7u16, 3252, 3237), (9u16, 3203, 3246)], 3, "foe", |(_, x, z)| {
+            lifescape_nav::plan::Tile { x: *x, z: *z, level: 0 }
+        });
+        let order: Vec<_> = ranked.into_iter().map(|(_, cand)| cand).collect();
+        assert_eq!(order, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "walk-cheap wins, got: {order:?}");
+    }
+
+    /// Borne K: 5 cands with shortlist 2 cost at most 2 plans (tail rides
+    /// along in order, never costed).
+    #[test]
+    fn refine_bounds_batch_to_shortlist() {
+        use super::refine_walking;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-walk-bound".to_string()),
+            &lifescape_nav::service::test_socket("walk-bound"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "bound"));
+        bot.plan_data_version = Some("test-walk-bound".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        let before = service.stats();
+        let cands = vec![(1u16, 3252, 3237), (2u16, 3203, 3246), (3u16, 3220, 3220), (4u16, 3210, 3210), (5u16, 3200, 3200)];
+        let ranked = refine_walking(&mut bot, cands, 2, "foe", |(_, x, z)| {
+            lifescape_nav::plan::Tile { x: *x, z: *z, level: 0 }
+        });
+        assert_eq!(ranked.len(), 5, "tail rides along, never dropped");
+        let after = service.stats();
+        assert!(after.misses - before.misses <= 2, "never more plans than the shortlist, got: {:?}", after);
+    }
+
+    /// Dead socket, not a missed step: conn abort propagates typed.
+    #[test]
+    fn step_adjacent_offline_propagates_conn() {
+        use super::step_adjacent;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3220;
+        bot.world.z = 3220;
+        let error = step_adjacent(&mut bot, 3225, 3225).expect_err("dead socket fails typed");
+        assert!(crate::skill_common::is_conn_abort(&error), "typed conn error, got: {error}");
     }
 }

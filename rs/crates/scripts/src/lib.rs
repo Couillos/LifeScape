@@ -10,6 +10,7 @@ pub mod maze;
 pub mod maze_doors;
 pub mod skill_common;
 pub mod skill_gather;
+pub mod skill_loop;
 pub mod skill_trade;
 pub mod skill_walk;
 pub mod skill_fishing;

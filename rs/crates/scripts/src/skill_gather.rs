@@ -1,6 +1,10 @@
 //! Shared gather/combat helpers: ban clocks, message classes, tool ranks,
-//! toll-fence side tests. Pure state reads only (no walk, no send, no pump);
+//! toll-fence side tests. State reads only (no walk, no send, no pump);
 //! network and game-loop policy stay in the calling scripts.
+//!
+//! Tool recovery (`reattach_tool`) is the one exception: a pack-only op
+//! (no walk, no bank modal) shared by the axe and pickaxe loops. Bank
+//! restores stay caller-side on top of `best_banked_by_rank`.
 //!
 //! `skill_common` is frozen (file-size rule), so this is the second shared
 //! module, not an addition to it.
@@ -9,12 +13,14 @@
 
 use std::collections::{HashMap, HashSet};
 
+use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    death_message_seen, hitpoints, obj_id, obj_price, pack_ids, FLEE_BAN_TICKS, MAX_FLEES_PER_LOAD,
+    death_message_seen, hitpoints, obj_id, obj_price, pack_ids, pack_slot, pack_total, FLEE_BAN_TICKS, MAX_FLEES_PER_LOAD,
     WorkOutcome,
 };
+use crate::ScriptError;
 
 /// Per-tile ban clocks shared by the gather loops and the melee hunt:
 /// `ban` records, `is_banned` reads against the live tick, `retain` drops
@@ -111,13 +117,18 @@ pub fn across_toll(bot_x: i32, spot_x: i32, line: Option<i32>) -> bool {
 }
 
 /// Server refusal lines shared by the three gather clicks: direct refusals
-/// ("can't reach that"), level gates, missing tools, missing bait. `None`
+/// ("can't reach that"), level gates, missing tools, missing bait, and the
+/// full-pack line ("too full to hold any more": woodcut/mining server
+/// wording; fishing has its own "can't carry any more"). `None`
 /// when the line is chatter or progress (gain, depletion and combat
 /// engagement stay caller-side; combat keeps its own under-attack parser).
 pub fn classify_message(line: &str) -> Option<WorkOutcome> {
     let lowered = line.to_lowercase();
     if lowered.contains("can't reach that") {
         return Some(WorkOutcome::UnreachableSpot);
+    }
+    if lowered.contains("too full to hold any more") {
+        return Some(WorkOutcome::Full);
     }
     if lowered.contains("level of") || (lowered.contains("need at least") && lowered.contains("fishing")) {
         return Some(WorkOutcome::LevelLocked);
@@ -134,6 +145,29 @@ pub fn classify_message(line: &str) -> Option<WorkOutcome> {
         return Some(WorkOutcome::NoBait);
     }
     None
+}
+
+/// Server start-of-work acks per skill: the action loop runs on the
+/// server's side. Own anim can never be the detector: the server only
+/// masks OTHER players (self is excluded from its own build area, so
+/// no self entry ever carries ANIM), and the client already skips the
+/// player 0x2 block. Swing-ack + still-live resource is the "player is
+/// working" signal instead: quiet then means a dry streak, not a dead
+/// spot — keep waiting, the load-level STALL_TICKS bound stays the
+/// backstop. Same helper for woodcut/mining/fishing/smithing (no
+/// smithing caller yet: its ack plugs in when the script exists).
+pub const WOODCUT_ACKS: [&str; 1] = ["swing your axe"];
+pub const MINING_ACKS: [&str; 1] = ["swing your pick"];
+pub const FISHING_ACKS: [&str; 2] = ["cast out your line", "attempt to catch"];
+
+/// True when a work-start ack arrived since `seen` (the message count
+/// right after the click). Case-insensitive substring, like the
+/// refusal vocabulary in `classify_message`.
+pub fn work_acked(bot: &Bot, seen: usize, acks: &[&str]) -> bool {
+    bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|line| {
+        let lowered = line.to_lowercase();
+        acks.iter().any(|ack| lowered.contains(ack))
+    })
 }
 
 /// Best-first tool order (`AXE_ORDER`, `PICK_ORDER`, fishing tools by max
@@ -215,9 +249,92 @@ pub fn death_since(bot: &Bot, seen: usize) -> (bool, usize) {
     (died, bot.world.messages.len())
 }
 
+/// True when the fight started since the click: xp flowing, hp taken,
+/// or the target animating (its attack anim streams — ours never does,
+/// and no positive "you're fighting" message exists server-side, all
+/// combat lines are refusals). Pure so the loop stays thin; the caller
+/// owns the snapshots and the re-click throttle. Ready for smithing-
+/// style loops too: any started-loop-vs-dead-click verdict.
+pub fn fight_engaged(
+    xp_now: i64,
+    xp_at_click: i64,
+    hp_now: u8,
+    hp_before: u8,
+    anim_now: Option<u16>,
+    anim_at_click: Option<u16>,
+) -> bool {
+    xp_now != xp_at_click || hp_now < hp_before || anim_now != anim_at_click
+}
+
+/// Reattach a carried handle + head instead of rebuying (axe and pickaxe
+/// loops share it). Pack ops only, no bank modal: resolve the handle, try
+/// each carried head with `head_suffix`, verify through `spec` (a plain
+/// ref, never a closure over `&Bot`, so no double-borrow). Ok(false) when
+/// the handle or every head is missing: nothing sent.
+pub fn reattach_tool(bot: &mut Bot, handle_name: &str, head_suffix: &str, spec: &ToolSpec) -> Result<bool, ScriptError> {
+    let Ok(handle) = obj_id(bot, handle_name) else {
+        return Ok(false);
+    };
+    if pack_total(bot, handle) == 0 {
+        return Ok(false);
+    }
+    let heads: Vec<u16> = knowledge::all_objs()
+        .into_iter()
+        .filter(|entry| entry.name.as_deref().unwrap_or("").ends_with(head_suffix))
+        .filter_map(|entry| entry.name.clone())
+        .filter_map(|name| obj_id(bot, &name).ok())
+        .collect();
+    for head in heads {
+        if pack_total(bot, head) == 0 {
+            continue;
+        }
+        if use_handle_on_head(bot, handle, head, spec)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn use_handle_on_head(bot: &mut Bot, handle: u16, head: u16, spec: &ToolSpec) -> Result<bool, ScriptError> {
+    let Some(pack_com) = bot.backpack().0 else {
+        return Ok(false);
+    };
+    let (Ok(handle_slot), Ok(head_slot)) = (pack_slot(bot, handle), pack_slot(bot, head)) else {
+        return Ok(false);
+    };
+    bot.op_held_u(handle, handle_slot, pack_com, head, head_slot, pack_com)?;
+    let target = bot.world.ticks + 50;
+    while bot.world.ticks < target {
+        bot.pump(5)?;
+        if spec.best_held(bot).is_some() {
+            bot.log("ok tool reattached");
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Best-ranked banked tool slot (the pack holds one tool: an upgrade banks
+/// the old one, a restore withdraws the best, never a second). Pure: rank
+/// decides through a `fn` pointer (no closure, no `&Bot` capture); names
+/// come from the dump (`obj_by_id` debug names, not display labels).
+pub fn best_banked_by_rank(
+    slots: &HashMap<u8, (u16, u32)>,
+    known: &HashSet<u16>,
+    rank: fn(&str) -> Option<usize>,
+) -> Option<(u8, u16)> {
+    slots
+        .iter()
+        .filter(|(_, (held, _))| known.contains(held))
+        .min_by_key(|(_, (held, _))| {
+            knowledge::obj_by_id(usize::from(*held)).and_then(|entry| entry.name).and_then(|name| rank(&name)).unwrap_or(usize::MAX)
+        })
+        .map(|(slot, (held, _))| (*slot, *held))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{across_toll, classify_message, death_since, note_gain, on_hurt, same_side, stall_expired, starved_oldest, BanSet, ToolSpec};
+    use super::{across_toll, best_banked_by_rank, classify_message, death_since, fight_engaged, note_gain, on_hurt, reattach_tool, same_side, stall_expired, starved_oldest, work_acked, BanSet, ToolSpec, FISHING_ACKS, MINING_ACKS, WOODCUT_ACKS};
     use crate::skill_common::WorkOutcome;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -266,6 +383,8 @@ mod tests {
         assert_eq!(classify_message("You do not have a pickaxe to mine this."), Some(WorkOutcome::NoTool));
         assert_eq!(classify_message("You need a rod to catch these."), Some(WorkOutcome::NoTool));
         assert_eq!(classify_message("You don't have any bait left."), Some(WorkOutcome::NoBait));
+        assert_eq!(classify_message("Your inventory is too full to hold any more logs."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("Your inventory is too full to hold any more iron ore."), Some(WorkOutcome::Full));
         assert_eq!(classify_message("You get some oak logs."), None, "progress stays caller-side");
         assert_eq!(classify_message("There is no ore currently available."), None, "depletion stays caller-side");
     }
@@ -366,5 +485,67 @@ mod tests {
         bot.world.stats.insert(3, (0, 0));
         let (flat, _) = death_since(&bot, fresh2);
         assert!(flat, "hp 0 detects death alone");
+    }
+
+    /// Engagement evidence: each channel alone proves the fight (xp
+    /// only flows on our hits, hp only drops on damage taken, target
+    /// anim only changes when it acts); all quiet means the click
+    /// never landed.
+    #[test]
+    fn fight_engaged_reads_any_channel() {
+        assert!(!fight_engaged(100, 100, 18, 18, None, None), "silence is not engagement");
+        assert!(fight_engaged(120, 100, 18, 18, None, None), "xp flow is engagement");
+        assert!(fight_engaged(100, 100, 15, 18, None, None), "damage taken is engagement");
+        assert!(fight_engaged(100, 100, 18, 18, Some(7), None), "target animating is engagement");
+        assert!(!fight_engaged(100, 100, 19, 18, None, None), "regen/heal is not engagement");
+    }
+
+    /// Work-start ack: per-skill vocab, case-insensitive, only lines
+    /// after the click count (seen-indexed, never replays old swings).
+    #[test]
+    fn work_acked_detects_swing_since_click() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.messages.push("You swing your axe at the tree.".to_string());
+        let seen = bot.world.messages.len();
+        bot.world.messages.push("You get some yew logs.".to_string());
+        assert!(!work_acked(&bot, seen, &WOODCUT_ACKS), "loot is not a start ack");
+        assert!(!work_acked(&bot, seen, &MINING_ACKS), "axe swing is not a pick swing");
+        bot.world.messages.push("YOU SWING YOUR PICK AT THE ROCK.".to_string());
+        assert!(work_acked(&bot, seen, &MINING_ACKS), "case-insensitive pick ack");
+        assert!(!work_acked(&bot, 0, &FISHING_ACKS), "no cast, no ack");
+        bot.world.messages.push("You attempt to catch a fish.".to_string());
+        assert!(work_acked(&bot, seen, &FISHING_ACKS), "attempt counts as fishing ack");
+    }
+
+    /// Reattach without a handle never sends: unknown handle and empty
+    /// pack both return Ok(false) before any `op_held_u` (an offline send
+    /// would fail, so Ok(false) proves nothing was attempted).
+    #[test]
+    fn reattach_without_handle_never_sends() {
+        const ORDER: [&str; 2] = ["steel_pickaxe", "bronze_pickaxe"];
+        const SPEC: ToolSpec = ToolSpec { order: &ORDER };
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert!(!reattach_tool(&mut bot, "no_such_handle", "_pickaxehead", &SPEC).expect("unknown handle never sends"));
+        assert!(!reattach_tool(&mut bot, "macro_pickaxehandle", "_pickaxehead", &SPEC).expect("empty pack never sends"));
+    }
+
+    /// Bank restore withdraws the best-ranked tool, never a second or a
+    /// worse one (rank fn decides, dump debug names, unknown never ranks).
+    #[test]
+    fn banked_best_rank_prefers_steel() {
+        fn rank(name: &str) -> Option<usize> {
+            ["steel_pickaxe", "bronze_pickaxe"].iter().position(|tool| *tool == name)
+        }
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let bronze = crate::skill_common::obj_id(&bot, "bronze_pickaxe").expect("bronze_pickaxe in tables");
+        let steel = crate::skill_common::obj_id(&bot, "steel_pickaxe").expect("steel_pickaxe in tables");
+        let known: std::collections::HashSet<u16> = [bronze, steel].into_iter().collect();
+        let slots: std::collections::HashMap<u8, (u16, u32)> =
+            [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
+        assert_eq!(best_banked_by_rank(&slots, &known, rank), Some((7, steel)), "best banked tool wins");
+        assert_eq!(best_banked_by_rank(&std::collections::HashMap::new(), &known, rank), None, "empty bank restores nothing");
     }
 }

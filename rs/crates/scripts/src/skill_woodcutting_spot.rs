@@ -13,15 +13,14 @@ use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
 
-/// Same-tier cluster hop, in tiles (Manhattan, bot -> spot). When every
-/// spot of the best tier near the current bank is a stump or banned, walk
-/// to the next live cluster of the SAME tier instead of degrading: a yew
-/// pays 175 xp/log vs 67.5 for willow (dump `exp` is xp*10), and 200 tiles
-/// is ~200 walking ticks (`travel_ticks`, measured 1.0 ticks/tile) — about
-/// one stump-ban window (GONE_BAN_TICKS = 250), so the home rotation has
-/// barely regrown when the hop lands. Past that the walk outlasts the
-/// regrow and willow-at-home wins: degrade instead, logged.
-pub(crate) const SAME_TIER_HOP_TILES: i64 = 200;
+/// Same-tier cluster hop: when every spot of the best tier near the
+/// current bank is a stump or banned, walk to the next live cluster of
+/// the SAME tier instead of degrading, at ANY distance — the job is the
+/// highest tier possible, never the closest. A yew pays 175 xp/log vs
+/// 67.5 for willow (dump `exp` is xp*10): the walk is always worth it.
+/// Degrade only when no live spot of the tier exists anywhere (all
+/// banned/stumped/hunted/across-toll), logged.
+pub(crate) const SAME_TIER_HOP_TILES: i64 = i64::MAX;
 
 /// Shortlist bound for the walking-cost refinement: Manhattan ranks the
 /// filtered pool, only the top-K get a pure plan, the cheapest verified
@@ -39,45 +38,26 @@ pub(crate) const WALK_SHORTLIST: usize = 4;
 /// upset. Unwired (no service) or all-disconnected keeps the Manhattan
 /// order, never drops the pick.
 fn refine_by_walk(bot: &mut Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, (i32, i32))> {
-    if cands.is_empty() {
-        return None;
-    }
     cands.sort();
-    let manhattan = cands[0];
-    if cands.len() > WALK_SHORTLIST {
-        bot.log(&format!("walk-refine: {} spots, planning top-{WALK_SHORTLIST} Manhattan (bound)", cands.len()));
-    }
+    let manhattan = *cands.first()?;
     let level = bot.world.level;
-    let head = cands.len().min(WALK_SHORTLIST);
-    let dests: Vec<lifescape_nav::plan::Tile> = cands[..head]
-        .iter()
-        .map(|(_, pos)| lifescape_nav::plan::Tile { x: pos.0, z: pos.1, level })
-        .collect();
-    let costs = bot.walk_costs(&dests);
-    let mut by_spot: std::collections::HashMap<(i64, (i32, i32)), Option<u32>> = std::collections::HashMap::new();
-    for (cand, cost) in cands[..head].iter().copied().zip(costs) {
-        by_spot.insert(cand, cost);
-    }
-    let ranked = lifescape_nav::walk_rank::rank_walk_shortlist(cands, WALK_SHORTLIST, |cand| {
-        by_spot.get(cand).copied().unwrap_or(None)
-    });
-    let (cost, (_, pos)) = ranked.into_iter().next().expect("non-empty pool ranks");
-    let best = match cost {
+    let (cost, (_, pos)) = crate::skill_walk::refine_walking(bot, cands, WALK_SHORTLIST, "spot", |(_, pos)| lifescape_nav::plan::Tile { x: pos.0, z: pos.1, level }).into_iter().next().expect("non-empty pool ranks");
+    Some(match cost {
         Some(walk) => (i64::from(walk), pos),
         None => manhattan,
-    };
-    if best.1 != manhattan.1 {
-        bot.log(&format!(
-            "walk-refine: Manhattan ({},{})+{} loses to ({},{}) walk {}",
-            manhattan.1.0, manhattan.1.1, manhattan.0, best.1.0, best.1.1, best.0
-        ));
-    }
-    Some(best)
+    })
 }
 
+/// Highest F2P tier whose level requirement is reached: members tiers
+/// (`product_members`, magic) are never picked — travel and spots are
+/// F2P-only, so selecting them just burns every repick on a
+/// guaranteed-empty pool before degrading.
 pub(crate) fn pick_tier(tiers: &[knowledge::trees::TreeTier], level: i64) -> Option<knowledge::trees::TreeTier> {
     let mut best: Option<&knowledge::trees::TreeTier> = None;
     for tier in tiers {
+        if tier.product_members == Some(true) {
+            continue;
+        }
         if tier.level <= level && best.as_ref().is_none_or(|known| tier.level > known.level) {
             best = Some(tier);
         }
@@ -287,7 +267,12 @@ pub(crate) fn pick_tree_spot(
     let hunters: Vec<(i64, i64, i64)> = if bot.allow_wild { Vec::new() } else { hunter_zones(bot) };
     let mut saw_paid_only = false;
     let mut saw_f2p_only = false;
-    let mut affordable: Vec<&knowledge::trees::TreeTier> = tiers.iter().filter(|tier| tier.level <= level).collect();
+    // F2P only, same rule as `pick_tier`: members tiers (magic) never
+    // enter the pool, or every repick burns on a guaranteed-empty tier.
+    let mut affordable: Vec<&knowledge::trees::TreeTier> = tiers
+        .iter()
+        .filter(|tier| tier.level <= level && tier.product_members != Some(true))
+        .collect();
     affordable.sort_by_key(|tier| -tier.level);
     let best = affordable.first().copied();
     let top_level = best.map(|tier| tier.level);
@@ -389,14 +374,9 @@ pub(crate) fn pick_tree_spot(
             wide.sort();
             wide.dedup();
             let mut notes: Vec<String> = Vec::new();
-            let mut far = 0u32;
             let mut banned_notes: Vec<((i32, i32), u64)> = Vec::new();
             for &(spot_x, spot_z) in &wide {
                 let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-                if dist > SAME_TIER_HOP_TILES {
-                    far += 1;
-                    continue;
-                }
                 let why = if Some((spot_x, spot_z)) == except {
                     "noroute".to_string()
                 } else if let Some(until) = banned.until((spot_x, spot_z)) {
@@ -423,7 +403,7 @@ pub(crate) fn pick_tree_spot(
             }
             let degrading = fallback.is_some();
             bot.log(&format!(
-                "no {} reachable under {SAME_TIER_HOP_TILES} tiles{}: {} disqualified [{}], {far} beyond range",
+                "no {} reachable anywhere{}: {} disqualified [{}]",
                 top.product,
                 if degrading { ", degrading a tier" } else { "" },
                 notes.len(),
@@ -544,6 +524,34 @@ mod tests {
         bans
     }
 
+    /// Every yew spawn banned except `keep`: the hop/degrade/starvation
+    /// paths must decide on the whole tier, never on a 200-tile window.
+    /// Returns the bans and the full spawn list (for len assertions).
+    fn ban_all_yews_except(tiers: &[knowledge::trees::TreeTier], keep: &[(i32, i32)]) -> (BanSet, Vec<(i32, i32)>) {
+        let yew = tiers.iter().find(|tier| tier.product == "yew_logs").expect("yew tier in dump");
+        let mut wide = tier_spawns_wide(yew, 0);
+        wide.sort();
+        wide.dedup();
+        let mut bans = BanSet::new();
+        for pos in &wide {
+            if !keep.contains(pos) {
+                bans.ban_until(*pos, u64::MAX);
+            }
+        }
+        (bans, wide)
+    }
+
+    /// F2P only: magic (75, members) never wins, even far above its
+    /// level — the spot pool would be 100% out-of-F2P and every repick
+    /// would burn on a guaranteed-empty tier before degrading.
+    #[test]
+    fn pick_tier_never_selects_members() {
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        assert_eq!(pick_tier(&tiers, 99).expect("tier").product, "yew_logs");
+        assert_eq!(pick_tier(&tiers, 75).expect("tier").product, "yew_logs");
+        assert_eq!(pick_tier(&tiers, 60).expect("tier").product, "yew_logs");
+    }
+
     /// Threat rule mirrors the server: hunters skip players above twice
     /// their level, so combat 4 still fears spiders (2) but combat 5
     /// walks past them; unknown own level counts as threatened.
@@ -557,8 +565,8 @@ mod tests {
 
     /// Toll fence: the only live yews sit across the fence → relocate
     /// to the nearest same-tier spot instead of degrading to willow.
-    /// Every in-range yew banned except (2996,3311), which sits across
-    /// the fence: its note reads "toll", not "banned", so no release.
+    /// Every other yew spawn is banned; (2996,3311) sits across the
+    /// fence: its note reads "toll", not "banned", so no release.
     /// Relocation (not the anti-famine release) resolves the pick.
     #[test]
     fn toll_stranded_relocates_across_fence_to_same_tier() {
@@ -579,27 +587,15 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        // Every in-range yew banned except (2996,3311), across the fence.
-        let mut banned = ban_all(&[
-            (3053, 3271),
-            (3041, 3319),
-            (3017, 3308),
-            (3184, 3226),
-            (3146, 3254),
-            (3151, 3230),
-            (3165, 3219),
-            (2940, 3232),
-            (2933, 3233),
-            (2934, 3225),
-            (2935, 3229),
-        ]);
+        // Every yew spawn banned except (2996,3311), across the fence.
+        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
         assert_eq!(tier.product, "yew_logs", "same tier, not willow, got: {}", tier.product);
         assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
-        assert_eq!(banned.len(), 11, "relocation resolves without releasing bans, got: {}", banned.len());
+        assert_eq!(banned.len(), wide.len() - 1, "relocation resolves without releasing bans, got: {}", banned.len());
     }
 
     /// Live Al-Kharid geometry: bot east of the toll fence, every yew
@@ -624,13 +620,15 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut BanSet::new(), None);
+        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(3249, 3201)]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
         assert_eq!(tier.product, "yew_logs", "same tier, not degraded, got: {}", tier.product);
         assert_eq!((spot_x, spot_z), (3249, 3201), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
         assert!(spot_x < 3268, "relocated west of the fence, got x={spot_x}");
+        assert_eq!(banned.len(), wide.len() - 1, "relocation resolves without releasing bans, got: {}", banned.len());
     }
 
     #[test]
@@ -704,7 +702,7 @@ mod tests {
         assert_eq!((spot_x, spot_z), (2996, 3311), "nearest live yew cluster, got: ({spot_x},{spot_z})");
     }
 
-    /// Starvation: every yew in range banned (a transient storm poisoned
+    /// Starvation: every yew spawn banned (a transient storm poisoned
     /// the clocks) retries the oldest ban instead of degrading to willow.
     /// Staggered clocks prove the oldest goes first, and its entry leaves
     /// the map; a still-dead spot re-bans on the next attempt.
@@ -725,23 +723,25 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
+        // The whole tier banned: the oldest clock ((3053,3271)@1000)
+        // goes first, everything else ticks later so unanimity holds.
+        let yew = tiers.iter().find(|tier| tier.product == "yew_logs").expect("yew tier in dump");
+        let mut wide = tier_spawns_wide(yew, 0);
+        wide.sort();
+        wide.dedup();
+        assert!(wide.contains(&(3053, 3271)), "oldest spot is a yew spawn, wide={wide:?}");
         let mut banned = BanSet::new();
-        for (pos, until) in [
-            ((3053, 3271), 1000u64),
-            ((3041, 3319), 2001),
-            ((3017, 3308), 2002),
-            ((3184, 3226), 2003),
-            ((3146, 3254), 2004),
-            ((3151, 3230), 2005),
-            ((3165, 3219), 2006),
-            ((2996, 3311), 2007),
-            ((2940, 3232), 2008),
-            ((2933, 3233), 2009),
-            ((2934, 3225), 2010),
-            ((2935, 3229), 2011),
-        ] {
-            banned.ban_until(pos, until);
+        banned.ban_until((3053, 3271), 1000);
+        let mut clock = 2000u64;
+        for pos in &wide {
+            if *pos == (3053, 3271) {
+                continue;
+            }
+            clock += 1;
+            banned.ban_until(*pos, clock);
         }
+        let before = banned.len();
+        assert_eq!(before, wide.len(), "whole tier banned, got: {before} of {}", wide.len());
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("starved tier should retry the oldest ban, got None");
@@ -749,11 +749,11 @@ mod tests {
         assert_eq!(tier.product, "yew_logs", "same tier retried, not willow, got: {}", tier.product);
         assert_eq!((spot_x, spot_z), (3053, 3271), "oldest ban retried first, got: ({spot_x},{spot_z})");
         assert!(!banned.contains((3053, 3271)), "released entry leaves the map");
-        assert_eq!(banned.len(), 11, "one release per repick, got: {}", banned.len());
+        assert_eq!(banned.len(), before - 1, "one release per repick, got: {}", banned.len());
     }
 
     /// Degrade only when the tier is genuinely unavailable everywhere:
-    /// every in-range yew banned except (2996,3311), which sits across
+    /// every yew spawn banned except (2996,3311), which sits across
     /// the fence — relocation crosses to it instead of settling for the
     /// willow next door. The toll note still breaks unanimity (no ban
     /// release), the pick just goes over the fence now.
@@ -776,28 +776,16 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        // Every in-range yew banned except (2996,3311), which sits across
+        // Every yew spawn banned except (2996,3311), which sits across
         // the fence: its note reads "toll", not "banned", so no release.
-        let mut banned = ban_all(&[
-            (3053, 3271),
-            (3041, 3319),
-            (3017, 3308),
-            (3184, 3226),
-            (3146, 3254),
-            (3151, 3230),
-            (3165, 3219),
-            (2940, 3232),
-            (2933, 3233),
-            (2934, 3225),
-            (2935, 3229),
-        ]);
+        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
         assert_eq!(tier.product, "yew_logs", "same tier across the fence, not willow, got: {}", tier.product);
         assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
-        assert_eq!(banned.len(), 11, "relocation instead of release, got: {}", banned.len());
+        assert_eq!(banned.len(), wide.len() - 1, "relocation instead of release, got: {}", banned.len());
     }
 
     /// Strike rule: only a refusal from a footprint-operable stand counts
@@ -961,10 +949,10 @@ mod tests {
 
     /// Planner-proven dead spot (`except`): never picked, never
     /// starvation-released, breaks unanimity so the repick degrades to the
-    /// highest CUTTABLE tier instead of hot-looping the dead yew. Near
-    /// Draynor no maple qualifies (dump: maples live ~300 tiles off, past
-    /// hop range), so yew->willow with oak/logs untouched: tiers are walked
-    /// in order, never skipped when available, and the downgrade is logged.
+    /// highest CUTTABLE tier instead of hot-looping the dead yew. No maple
+    /// spawns near the bank (dump), so yew->willow with oak/logs untouched
+    /// when every other yew is banned: tiers are walked in order, never
+    /// skipped when available, and the downgrade is logged.
     #[test]
     fn except_dead_spot_degrades_one_tier() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -982,28 +970,19 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        // Every in-range yew banned except the planner-dead one, which is
-        // excluded instead of released: the repick must degrade to maple.
-        let mut banned = ban_all(&[
-            (3053, 3271),
-            (3041, 3319),
-            (3017, 3308),
-            (3184, 3226),
-            (3146, 3254),
-            (3151, 3230),
-            (3165, 3219),
-            (2940, 3232),
-            (2933, 3233),
-            (2934, 3225),
-            (2935, 3229),
-        ]);
+        // Every yew spawn banned except the planner-dead one, which is
+        // excluded instead of released: the repick must degrade to willow
+        // (no maple spawns near this bank, so willow is next).
+        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
+        let before = banned.len();
+        assert_eq!(before, wide.len() - 1, "all but the dead spot banned, got: {before} of {}", wide.len());
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)));
         let Some((tier, _, _)) = picked else {
             panic!("dead-spot repick should degrade one tier, got None");
         };
         assert_eq!(tier.product, "willow_logs", "highest cuttable tier below yew, got: {}", tier.product);
         assert!(tier.product != "oak_logs" && tier.product != "logs", "never crashes to the bottom, got: {}", tier.product);
-        assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
+        assert_eq!(banned.len(), before, "no release without unanimity, got: {}", banned.len());
     }
 
     /// Walking-cost selection: the Manhattan-nearest oak (3252,3237, +26)

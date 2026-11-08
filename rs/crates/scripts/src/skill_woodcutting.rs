@@ -7,16 +7,15 @@
 use std::collections::{HashMap, HashSet};
 
 use lifescape_gamedata as knowledge;
-use lifescape_sdk::waits::{wait_hitpoints, wait_ticks};
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome,
-    GONE_BAN_TICKS, STALL_TICKS, STRUCTURAL_BAN_TICKS,
+    GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS,
 };
 use crate::skill_gather::{
-    classify_message, death_since, note_gain, on_hurt, stall_expired, BanSet, ToolSpec,
+    classify_message, work_acked, BanSet, ToolSpec, WOODCUT_ACKS,
 };
 use crate::skill_woodcutting_spot::{is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
@@ -275,31 +274,6 @@ fn buy_axe_upgrade(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, Sc
     Ok(None)
 }
 
-type TreeSpot = (knowledge::trees::TreeTier, i32, i32);
-
-/// Death resent: log, bounded respawn wait, loop state reset. The wait is
-/// never billed to the no-log stall budget and the spot is dropped so the
-/// next pick recomputes `had_logs` from the real pack.
-fn respawn_reset(
-    bot: &mut Bot,
-    seen_death_msgs: &mut usize,
-    idle_since: &mut u64,
-    last_hitpoints: &mut u8,
-    spot: &mut Option<TreeSpot>,
-) -> Result<(), ScriptError> {
-    let spent = bot.world.ticks;
-    bot.log("died, respawning");
-    bot.intend("died, respawning");
-    let target = bot.world.ticks + 40;
-    while bot.world.ticks < target && hitpoints(bot) == 0 {
-        bot.pump(5)?;
-    }
-    *idle_since += bot.world.ticks - spent;
-    *last_hitpoints = hitpoints(bot);
-    *spot = None;
-    *seen_death_msgs = bot.world.messages.len();
-    Ok(())
-}
 
 /// Server regrow delay in ticks (1 bot tick = 1 server cycle) per tree
 /// table (`woodcutting_trees.dbrow` respawnrate; `loc_change` counts
@@ -411,6 +385,20 @@ fn wait_for_respawn(
 /// cuts fine from a side) — rotate, never ban. Only refusals from operable
 /// stands report UnreachableSpot (the strike path); stands that cannot even
 /// be reached report Unreachable (transient walk failure, short ban).
+///
+/// Ring-pass verdict after every stand had its click: an operable click
+/// refusal anywhere is the strike path (UnreachableSpot); when no stand
+/// could even be clicked from, the pass is transient (Unreachable).
+/// Pure so tests lock the rotation rule: one walled stand must never
+/// shadow the good ones into a condemn.
+fn ring_pass_verdict(refused_operable: bool) -> WorkOutcome {
+    if refused_operable {
+        WorkOutcome::UnreachableSpot
+    } else {
+        WorkOutcome::Unreachable
+    }
+}
+
 fn work_spot(
     bot: &mut Bot,
     tree_x: i32,
@@ -441,33 +429,7 @@ fn work_spot(
         }
     }
     if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 1 {
-        let mut neighbors: Vec<(i32, i32)> = (-1..=1)
-            .flat_map(|dx| (-1..=1).map(move |dz| (tree_x + dx, tree_z + dz)))
-            .filter(|tile| *tile != (tree_x, tree_z))
-            .collect();
-        neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
-        let mut stepped = false;
-        for (next_x, next_z) in neighbors {
-            match bot.walk_to(next_x, next_z, bot.world.level, 100) {
-                Ok(()) => {
-                    stepped = true;
-                    break;
-                }
-                Err(error)
-                    if matches!(
-                        error,
-                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-                    ) =>
-                {
-                    return Err(error.into())
-                }
-                Err(_) => {}
-            }
-            if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 4 {
-                return Ok((WorkOutcome::Unreachable, 0));
-            }
-        }
-        if !stepped {
+        if !crate::skill_walk::step_adjacent(bot, tree_x, tree_z)? {
             return Ok((WorkOutcome::Unreachable, 0));
         }
     }
@@ -490,6 +452,13 @@ fn work_spot(
         }
     }
     let mut gained = 0u32;
+    // A refused operable stand no longer ends the pass: the click can be
+    // refused by a wall edge between a geometrically adjacent stand and
+    // the trunk (the server also wants the wall edge open), while another
+    // ring stand cuts fine. Returning on the first refusal let the nearest
+    // (walled) stand shadow the good ones, and two strikes condemned a
+    // cuttable tree (Edgeville yews, structural bans).
+    let mut refused_operable = false;
     for ((stand_x, stand_z), operable) in stands {
         if (bot.world.x, bot.world.z) != (stand_x, stand_z) {
             match bot.walk_to(stand_x, stand_z, bot.world.level, 100) {
@@ -509,24 +478,33 @@ fn work_spot(
         gained += got;
         match end {
             WorkOutcome::Gone => return Ok((WorkOutcome::Gone, gained)),
-            WorkOutcome::UnreachableSpot if operable => return Ok((WorkOutcome::UnreachableSpot, gained)),
             WorkOutcome::UnreachableSpot => {
+                refused_operable |= operable;
                 bot.log(&format!(
-                    "click refused from inoperable stand at {:?}, rotating (stand at fault, not the tree)",
+                    "click refused from {}operable stand at {:?}, rotating ring",
+                    if operable { "" } else { "in" },
                     bot.position()
                 ));
             }
             other => return Ok((other, gained)),
         }
     }
-    // No operable stand could even be clicked from (all refused or
-    // unreachable): walk-class failure, short ban, never a strike.
-    Ok((WorkOutcome::Unreachable, gained))
+    // Verdict after the full ring rotation: an operable click refusal
+    // anywhere is the strike path (one strike per pass, as before); when
+    // every stand failed to walk there, the pass is transient, short ban,
+    // never a strike.
+    Ok((ring_pass_verdict(refused_operable), gained))
 }
 
-/// One click round from the current stand: Gone when the tree goes
-/// quiet/stumped, UnreachableSpot on click refusal (caller rotates or
-/// condemns), terminal outcome for anything else. Gained logs this stand.
+/// One click round from the current stand: Gone when the tree is
+/// stumped/cleared or the click was never acked, UnreachableSpot on click
+/// refusal (caller rotates or condemns), terminal outcome for anything
+/// else. One click per stand: the server chains attempts itself, so a
+/// quiet round never re-clicks once the swing was acked (a second click
+/// only fires while unacked, in case the first was swallowed). A swing
+/// ack on a still-present tree means the player IS cutting (dry streak,
+/// own anim never streams) — wait, no round cap; the load-level stall
+/// stays the ultimate backstop. Gained logs this stand.
 fn try_stand(
     bot: &mut Bot,
     tree_x: i32,
@@ -537,6 +515,7 @@ fn try_stand(
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     let mut gained = 0u32;
     let mut silences = 0u32;
+    let mut acked = false;
     let mut need_click = true;
     let mut seen_msgs = bot.world.messages.len();
     let hitpoints_before = hitpoints(bot);
@@ -581,10 +560,17 @@ fn try_stand(
         if silences == 1 && is_stump(bot, tree_x, tree_z) {
             return Ok((WorkOutcome::Gone, gained));
         }
-        if silences >= 2 {
+        acked = acked || work_acked(bot, seen_msgs, &WOODCUT_ACKS);
+        let live = !is_stump(bot, tree_x, tree_z) && live_loc_id(bot, tree_x, tree_z).is_ok();
+        if silences >= 2 && !(acked && live) {
             return Ok((WorkOutcome::Gone, gained));
         }
-        need_click = true;
+        if silences == 2 && acked && live {
+            bot.log(&format!("still cutting at ({tree_x},{tree_z}), waiting out the dry streak"));
+        }
+        // Click once per stand: re-click only while unacked (the first
+        // click may have been swallowed); an acked loop chains itself.
+        need_click = !acked;
     }
 }
 
@@ -610,177 +596,178 @@ fn recover_axe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> Resu
     Ok(pack_total(bot, coins) >= 16 && buy_stock(bot, "bronze_axe", 1)? > 0)
 }
 
-fn chop_load(
-    bot: &mut Bot,
-    tiers: &[knowledge::trees::TreeTier],
-    bank: &mut knowledge::banks::Bank,
+/// Woodcut policy on the shared driver: the pack-full gate ends the
+/// load, a lost axe exits for caller-side recovery (reattach, shop,
+/// bank), tier upgrades and cleared trees drop the spot, stumps wait for
+/// the regrow, refusal strikes condemn, pocket landings escape to the
+/// bank. Bans, regrow memory and strike counts outlive one load.
+struct WoodOps<'a> {
+    tiers: &'a [knowledge::trees::TreeTier],
+    bank: &'a mut knowledge::banks::Bank,
     coins: u16,
-    mut level: i64,
-    banned: &mut BanSet,
-    respawn: &mut HashMap<String, u64>,
-    refusals: &mut HashMap<(i32, i32), u8>,
-) -> Result<(bool, i64), ScriptError> {
-    let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
-    let mut idle_since = bot.world.ticks;
-    let mut unreachable_streak = 0u32;
-    let mut last_hitpoints = hitpoints(bot);
-    let mut flees = 0u32;
-    let mut spot: Option<(knowledge::trees::TreeTier, i32, i32)> = None;
-    let mut had_logs = 0u32;
-    let mut seen_death_msgs = bot.world.messages.len();
-    // Planner-proven dead (spot, from-tile): a NoRoute walk failed here, so
-    // the spot is not re-picked from the same tile (starvation would
-    // hot-loop one doomed plan per repick). Moving clears it (proof stale);
-    // the long ban expiring clears it too (re-test at expiry).
-    let mut travel_dead: Option<((i32, i32), (i32, i32))> = None;
-    loop {
-        check_events(bot)?;
-        if free_slots(bot) <= usize::from(pack_total(bot, coins) > 0) {
-            return Ok((true, level));
-        }
-        if best_axe(bot).is_none() {
-            // Recovery walks (shop, bank) are not chopping: don't bill
-            // them to the no-log stall budget.
-            let spent = bot.world.ticks;
-            if !recover_axe(bot, coins, bank)? {
-                bot.log("axe lost, banking load");
-                return Ok((true, level));
-            }
-            idle_since += bot.world.ticks - spent;
-        }
-        level = learn_level(bot, WC_STAT, level);
-        if let (Some((tier, _, _)), Some(best)) = (&spot, pick_tier(tiers, level)) {
-            if tier.level < best.level {
-                bot.log("level up, switching tier");
-                spot = None;
-            }
-        }
-        let (died, fresh) = death_since(bot, seen_death_msgs);
-        seen_death_msgs = fresh;
-        if died {
-            respawn_reset(bot, &mut seen_death_msgs, &mut idle_since, &mut last_hitpoints, &mut spot)?;
-            // Respawn sits across the map: re-sync the bank (cheap) so the
-            // next spot is picked near here, not near the corpse.
-            *bank = nearest_bank(bot)?;
-            continue;
-        }
-        if hitpoints(bot) < last_hitpoints {
-            bot.log("hurt, fleeing");
-            bot.intend("fleeing a hunter");
-            let fled_spot = spot.as_ref().map(|(_, spot_x, spot_z)| (*spot_x, *spot_z));
-            if on_hurt(banned, fled_spot, &mut flees, bot.world.ticks) {
-                bot.log("too many attacks, aborting load");
-                return Ok((false, level));
-            }
-            wait_hitpoints(bot, hitpoints(bot).saturating_add(1), 200)?;
-            spot = None;
-            last_hitpoints = hitpoints(bot);
-            continue;
-        }
-        last_hitpoints = hitpoints(bot);
-        let now = bot.world.ticks;
-        banned.retain(now);
-        // Planner-proven dead from here (NoRoute at this tile): never
-        // re-pick it until the bot moves or its long ban expires, or the
-        // starvation release hot-loops one doomed walk per repick.
-        let except = travel_dead.and_then(|(dead, from)| {
-            (from == (bot.world.x, bot.world.z) && banned.contains(dead)).then_some(dead)
-        });
-        let stale = match &spot {
-            Some((_, spot_x, spot_z)) => banned.is_banned((*spot_x, *spot_z), now),
-            None => true,
-        };
-        if stale {
-            let mut picked = None;
-            for _ in 0..16 {
-                if let Some(found) = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except) {
-                    picked = Some(found);
-                    break;
-                }
-                bot.log("no tree spot, waiting for respawns");
-                bot.intend("waiting for a safe tree spot");
-                wait_ticks(bot, 15)?;
-            }
-            let Some((tier, spot_x, spot_z)) = picked else {
-                bot.log("no tree spot left");
-                return Ok((false, level));
-            };
-            had_logs = log_ids.iter().map(|id| pack_total(bot, *id)).sum();
-            bot.log(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
-            bot.intend(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
-            spot = Some((tier, spot_x, spot_z));
-        } else if let Some((tier, spot_x, spot_z)) = &spot {
-            if !tree_still_there(bot, *spot_x, *spot_z, &tier.trees) {
-                bot.log(&format!("tree gone at ({spot_x},{spot_z})"));
-                banned.ban_for((*spot_x, *spot_z), bot.world.ticks, GONE_BAN_TICKS);
-                spot = None;
-                continue;
-            }
-        }
-        let Some((tier, spot_x, spot_z)) = spot.clone() else {
-            continue;
-        };
-        let (result, gained) = work_spot(bot, spot_x, spot_z, &log_ids, had_logs, banned, &mut travel_dead)?;
-        // Death can land inside work_spot's own pumps: check its return too,
-        // or the run bills a corpse to the stall budget and never logs it.
-        let (died_mid_work, fresh) = death_since(bot, seen_death_msgs);
-        seen_death_msgs = fresh;
-        if died_mid_work {
-            respawn_reset(bot, &mut seen_death_msgs, &mut idle_since, &mut last_hitpoints, &mut spot)?;
-            *bank = nearest_bank(bot)?;
-            continue;
-        }
-        had_logs += gained;
-        // Strikes only survive short bans and walk failures: any other
-        // outcome re-proves the stand (chopped, stumped, fled, locked).
-        if !matches!(result, WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot) {
-            refusals.remove(&(spot_x, spot_z));
-        }
-        if result != WorkOutcome::Unreachable {
-            unreachable_streak = 0;
-            // Cluster hop: the spot may sit near another bank, so re-sync
-            // on arrival (cheap, no walking) to keep the trip short. The
-            // check is positional, not flag-based: drift without a hop
-            // resolves to the same bank and is a no-op.
-            let fresh = nearest_bank(bot)?;
-            if (fresh.x, fresh.z, fresh.level) != (bank.x, bank.z, bank.level) {
+    level: i64,
+    log_ids: Vec<u16>,
+    respawn: &'a mut HashMap<String, u64>,
+    refusals: &'a mut HashMap<(i32, i32), u8>,
+    streak: u32,
+    travel_dead: Option<((i32, i32), (i32, i32))>,
+}
+
+impl crate::skill_loop::LoopOps for WoodOps<'_> {
+    type Spot = knowledge::trees::TreeTier;
+
+    fn is_full(&self, bot: &Bot) -> bool {
+        free_slots(bot) <= usize::from(pack_total(bot, self.coins) > 0)
+    }
+
+    fn has_tool(&self, bot: &Bot) -> bool {
+        best_axe(bot).is_some()
+    }
+
+    fn gain_of(&self, bot: &Bot, _spot: &Self::Spot) -> u32 {
+        self.log_ids.iter().map(|id| pack_total(bot, *id)).sum()
+    }
+
+    fn pick(&mut self, bot: &mut Bot, state: &mut crate::skill_loop::LoopState) -> Option<(Self::Spot, i32, i32)> {
+        self.level = learn_level(bot, WC_STAT, self.level);
+        // Cluster hop: the spot may sit near another bank, so re-sync on
+        // every pick (cheap, no walking) to keep the trip short. The
+        // driver also clears planner-dead picks through `travel_dead`.
+        if let Ok(fresh) = nearest_bank(bot) {
+            if (fresh.x, fresh.z, fresh.level) != (self.bank.x, self.bank.z, self.bank.level) {
                 bot.log(&format!(
                     "cluster change: bank re-synced to ({},{}) near {:?}",
                     fresh.x,
                     fresh.z,
                     bot.position()
                 ));
-                *bank = fresh;
+                *self.bank = fresh;
             }
         }
-        match result {
+        let except = self.travel_dead.and_then(|(dead, from)| {
+            (from == (bot.world.x, bot.world.z) && state.banned.contains(dead)).then_some(dead)
+        });
+        match pick_tree_spot(bot, self.tiers, &*self.bank, self.level, &mut state.banned, except) {
+            Some((ref tier, spot_x, spot_z)) => {
+                bot.log(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
+                bot.intend(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
+                Some((tier.clone(), spot_x, spot_z))
+            }
+            None => {
+                bot.log("no tree spot, waiting for respawns");
+                bot.intend("waiting for a safe tree spot");
+                None
+            }
+        }
+    }
+
+    fn keep_spot(
+        &mut self,
+        bot: &mut Bot,
+        state: &mut crate::skill_loop::LoopState,
+        spot: &Self::Spot,
+        at: (i32, i32),
+    ) -> bool {
+        self.level = learn_level(bot, WC_STAT, self.level);
+        if let Some(best) = pick_tier(self.tiers, self.level) {
+            if spot.level < best.level {
+                bot.log("level up, switching tier");
+                return false;
+            }
+        }
+        if !tree_still_there(bot, at.0, at.1, &spot.trees) {
+            bot.log(&format!("tree gone at ({},{})", at.0, at.1));
+            state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
+            return false;
+        }
+        true
+    }
+
+    fn work(
+        &mut self,
+        bot: &mut Bot,
+        state: &mut crate::skill_loop::LoopState,
+        _spot: &Self::Spot,
+        at: (i32, i32),
+        had: u32,
+    ) -> Result<(WorkOutcome, u32), ScriptError> {
+        work_spot(bot, at.0, at.1, &self.log_ids, had, &mut state.banned, &mut self.travel_dead)
+    }
+
+    fn on_outcome(
+        &mut self,
+        bot: &mut Bot,
+        cfg: &crate::skill_loop::LoadCfg,
+        state: &mut crate::skill_loop::LoopState,
+        spot: &Self::Spot,
+        at: (i32, i32),
+        outcome: WorkOutcome,
+        gained: u32,
+    ) -> Result<crate::skill_loop::LoadExit, ScriptError> {
+        use crate::skill_loop::LoadExit;
+        let (spot_x, spot_z) = at;
+        // Strikes only survive short bans and walk failures: any other
+        // outcome re-proves the stand (chopped, stumped, fled, locked).
+        if !matches!(outcome, WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot) {
+            self.refusals.remove(&at);
+        }
+        if outcome != WorkOutcome::Unreachable {
+            self.streak = 0;
+            // Cluster hop: the spot may sit near another bank, so re-sync
+            // on arrival (cheap, no walking) to keep the trip short.
+            let fresh = nearest_bank(bot)?;
+            if (fresh.x, fresh.z, fresh.level) != (self.bank.x, self.bank.z, self.bank.level) {
+                bot.log(&format!(
+                    "cluster change: bank re-synced to ({},{}) near {:?}",
+                    fresh.x,
+                    fresh.z,
+                    bot.position()
+                ));
+                *self.bank = fresh;
+            }
+        }
+        match outcome {
             WorkOutcome::Gone => {
                 if is_stump(bot, spot_x, spot_z) {
                     // Depleted under us: waiting for the regrow beats
                     // re-banning blind when the walk costs more.
-                    wait_for_respawn(bot, &tier, spot_x, spot_z, banned, tiers, bank, level, respawn, &mut idle_since, except)?;
+                    let except = self.travel_dead.and_then(|(dead, from)| {
+                        (from == (bot.world.x, bot.world.z) && state.banned.contains(dead)).then_some(dead)
+                    });
+                    wait_for_respawn(
+                        bot,
+                        spot,
+                        spot_x,
+                        spot_z,
+                        &mut state.banned,
+                        self.tiers,
+                        self.bank,
+                        self.level,
+                        self.respawn,
+                        &mut state.idle_since,
+                        except,
+                    )?;
                 } else {
                     bot.log("tree quiet, next one");
-                    banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
+                    state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
                 }
-                spot = None;
+                state.spot = None;
             }
-            WorkOutcome::NoTool => spot = None,
+            WorkOutcome::NoTool => {
+                state.spot = None;
+            }
             WorkOutcome::Unreachable => {
                 // Walk-leg failure (never arrived, leg timeout, step refused
-                // far away): short ban + retry, NEVER structural or long. A
-                // walk that dies en route proves nothing about the stand: a
-                // passing crowd or a missing nav blockage must not condemn
-                // a live tree for half the session.
+                // far away): short ban + retry, NEVER structural or long.
                 bot.log(&format!("unreachable, short-banning ({spot_x},{spot_z}) for {GONE_BAN_TICKS}t (walk fell short)"));
-                banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
-                spot = None;
-                unreachable_streak += 1;
+                state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
+                state.spot = None;
+                self.streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the
                 // walk. Travel back to the bank once, then re-pick from
                 // the new region; the stall bound stays the loud exit.
-                if unreachable_streak >= 8 {
-                    let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
+                if self.streak >= 8 {
+                    let dest = lifescape_sdk::plan::Tile { x: self.bank.x as i32, z: self.bank.z as i32, level: self.bank.level as i32 };
                     match bot.travel_to(dest) {
                         Ok(()) => {}
                         Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
@@ -790,31 +777,23 @@ fn chop_load(
                     }
                     // One escape per streak: a refused escape re-arms by
                     // counting, it never re-fires on the next spot.
-                    // Without this the same failing travel_to runs every
-                    // iteration (up to four full-dijkstra exhaustions
-                    // each) and the loop burns a core until the stall
-                    // bound trips.
-                    unreachable_streak = 0;
+                    self.streak = 0;
                 }
             }
             WorkOutcome::UnreachableSpot => {
                 // Direct server refusal of the chop click itself, from a
                 // footprint-operable stand (work_spot rotates inoperable
                 // stands away before reporting). Structural ONLY on a
-                // repeated operable refusal of a standing tree: a single
-                // refusal (transient storm, gate mid-swing) rides the short
-                // ban and retries before anything is condemned. Geometry,
-                // not Chebyshev: a 3x3 corner stand is "adjacent" but the
-                // server never reaches it, so it must never strike.
+                // repeated operable refusal of a standing tree.
                 let (foot_w, foot_l) = spot_footprint(bot, spot_x, spot_z);
                 let operable = operable_stand(bot.world.x, bot.world.z, spot_x, spot_z, foot_w, foot_l);
                 let stump_here = is_stump(bot, spot_x, spot_z);
                 let ban = if stump_here {
                     // Confirmed stump: count the regrow (measured, else the
                     // tier default), not a flat ban — the tree is back by then.
-                    respawn.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product))
+                    self.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product))
                 } else {
-                    refusal_ban_ticks(operable, false, true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0))
+                    refusal_ban_ticks(operable, false, true, self.refusals.get(&at).copied().unwrap_or(0))
                 };
                 if stump_here {
                     bot.log(&format!("tree stumped at ({spot_x},{spot_z}), back in ~{ban}t"));
@@ -822,47 +801,91 @@ fn chop_load(
                     bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
                     // Condemned: the ban is the memory now, drop the count
                     // so a starvation release re-proves permanence cleanly.
-                    refusals.remove(&(spot_x, spot_z));
-                    unreachable_streak = 0;
+                    self.refusals.remove(&at);
                 } else if operable {
-                    let strikes = refusals.entry((spot_x, spot_z)).or_insert(0);
+                    let strikes = self.refusals.entry(at).or_insert(0);
                     *strikes += 1;
                     bot.log(&format!(
                         "spot refused once at ({spot_x},{spot_z}), short-banning {ban}t (strike {}/{DIRECT_REFUSALS_TO_CONDEMN}), retry before condemning",
                         *strikes
                     ));
-                    unreachable_streak = 0;
                 } else {
                     bot.log(&format!("click refused off-stand at ({spot_x},{spot_z}), walk fell short, short ban {ban}t"));
-                    unreachable_streak = 0;
                 }
-                banned.ban_for((spot_x, spot_z), bot.world.ticks, ban);
-                spot = None;
+                state.banned.ban_for(at, bot.world.ticks, ban);
+                state.spot = None;
             }
             WorkOutcome::LevelLocked => {
-                banned.ban_for((spot_x, spot_z), bot.world.ticks, 500);
-                spot = None;
+                state.banned.ban_for(at, bot.world.ticks, 500);
+                state.spot = None;
             }
             WorkOutcome::Threat => {
                 bot.log("hunter close, re-picking a spot");
-                banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
-                spot = None;
+                state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
+                state.spot = None;
             }
             WorkOutcome::Blocked => {
                 bot.log("unknown dialog blocking chop, aborting load");
-                return Ok((false, level));
+                return Ok(LoadExit::Abort);
             }
             WorkOutcome::Full | WorkOutcome::Moved | WorkOutcome::NoBait => {
-                spot = None;
+                state.spot = None;
             }
         }
-        if gained > 0 {
-            note_gain(&mut idle_since, bot.world.ticks);
+        Ok(crate::skill_loop::stall_or_continue(cfg, state, gained, bot.world.ticks))
+    }
+}
+
+fn chop_load(
+    bot: &mut Bot,
+    tiers: &[knowledge::trees::TreeTier],
+    bank: &mut knowledge::banks::Bank,
+    coins: u16,
+    level: i64,
+    banned: &mut BanSet,
+    respawn: &mut HashMap<String, u64>,
+    refusals: &mut HashMap<(i32, i32), u8>,
+) -> Result<(bool, i64), ScriptError> {
+    let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
+    // Threat bans outlive one load: move the caller's set into the driver
+    // state, run, move back (restored on every exit below, errors too).
+    let mut state = crate::skill_loop::LoopState::resume(bot, std::mem::take(banned));
+    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, respawn, refusals);
+    *banned = std::mem::take(&mut state.banned);
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chop_inner(
+    bot: &mut Bot,
+    tiers: &[knowledge::trees::TreeTier],
+    bank: &mut knowledge::banks::Bank,
+    coins: u16,
+    level: i64,
+    state: &mut crate::skill_loop::LoopState,
+    log_ids: Vec<u16>,
+    respawn: &mut HashMap<String, u64>,
+    refusals: &mut HashMap<(i32, i32), u8>,
+) -> Result<(bool, i64), ScriptError> {
+    let mut ops = WoodOps { tiers, bank, coins, level, log_ids, respawn, refusals, streak: 0, travel_dead: None };
+    loop {
+        if best_axe(bot).is_none() {
+            // Recovery walks (shop, bank) are not chopping: don't bill
+            // them to the no-log stall budget.
+            let spent = bot.world.ticks;
+            if !recover_axe(bot, coins, ops.bank)? {
+                bot.log("axe lost, banking load");
+                return Ok((true, learn_level(bot, WC_STAT, ops.level)));
+            }
+            state.idle_since += bot.world.ticks - spent;
         }
-        if stall_expired(bot.world.ticks, idle_since, STALL_TICKS) {
-            bot.log(&format!("stall: no logs for {STALL_TICKS} ticks"));
-            return Ok((false, level));
+        if crate::skill_loop::run_load(bot, &crate::skill_loop::LoadCfg::mining(), state, &mut ops)? {
+            return Ok((true, learn_level(bot, WC_STAT, ops.level)));
         }
+        if best_axe(bot).is_none() {
+            continue;
+        }
+        return Ok((false, learn_level(bot, WC_STAT, ops.level)));
     }
 }
 
@@ -1387,6 +1410,23 @@ mod tests {
         assert_eq!(respawn_wait_ticks(30, None), Some(30), "nowhere to go waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS, Some(1000)), Some(GONE_BAN_TICKS), "cap itself still waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS + 1, Some(1000)), None, "one over cap leaves");
+    }
+
+    /// Ring-pass verdict: an operable click refusal anywhere is the strike
+    /// path (UnreachableSpot); a pass where no stand could even be clicked
+    /// from is transient (Unreachable). Locks the Edgeville-yew rule: one
+    /// walled stand (west of the trunk, oldwall in between) must never
+    /// shadow the good ones into a structural condemn.
+    #[test]
+    fn ring_pass_verdict_strikes_only_on_operable_refusal() {
+        assert!(
+            matches!(super::ring_pass_verdict(true), WorkOutcome::UnreachableSpot),
+            "operable refusal anywhere strikes"
+        );
+        assert!(
+            matches!(super::ring_pass_verdict(false), WorkOutcome::Unreachable),
+            "pure walk failures stay transient"
+        );
     }
 
 }

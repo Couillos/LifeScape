@@ -18,7 +18,22 @@
       "verified": "2026-11-06"
     }
   ],
-  "one_way_doors": [],
+  "one_way_doors": [
+    {
+      "loc": 134,
+      "at": [3108, 3353, 0],
+      "passable_from": "not-north",
+      "reason": "haunteddoorl: quest_haunted.rs2 open_manor_entrance refuses when player z > door z (The doors won't open), entry south-only; inside routes must use another exit",
+      "verified": "2026-11-08"
+    },
+    {
+      "loc": 135,
+      "at": [3109, 3353, 0],
+      "passable_from": "not-north",
+      "reason": "haunteddoorr: same as haunteddoorl, double door, entry south-only",
+      "verified": "2026-11-08"
+    }
+  ],
   "requirements": [
     {
       "loc": 1805,

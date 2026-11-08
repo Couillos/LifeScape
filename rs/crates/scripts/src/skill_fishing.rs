@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
@@ -11,9 +11,10 @@ use lifescape_sdk::Bot;
 
 use crate::skill_common::{
     bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
-    obj_price, pack_ids, pack_total, sell_for_target, walk_checked, wait_pack_streamed, WorkOutcome, FLEE_BAN_TICKS,
-    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS,
+    obj_price, pack_total, sell_for_target, walk_checked, wait_pack_streamed, WorkOutcome,
 };
+use crate::skill_gather::{work_acked, BanSet, ToolSpec, FISHING_ACKS};
+use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
 
 const FISH_STAT: u8 = 10;
@@ -50,7 +51,8 @@ fn nearest_live(bot: &Bot, category: &str, near_x: i32, near_z: i32) -> Option<(
 fn pick_fish_spot(
     bot: &Bot,
     level: i64,
-    banned: &HashSet<(i32, i32)>,
+    banned: &BanSet,
+    now: u64,
     pinned: &knowledge::banks::Bank,
 ) -> Option<(knowledge::fishing::FishTier, i32, i32, knowledge::banks::Bank)> {
     let mut tiers = knowledge::fishing::all_fish_tiers();
@@ -71,7 +73,7 @@ fn pick_fish_spot(
         }
         let mut best: Option<(i64, (i32, i32))> = None;
         for (spot_level, spot_x, spot_z) in cands {
-            if spot_level != bot.world.level || banned.contains(&(spot_x, spot_z)) {
+            if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
                 continue;
             }
             let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
@@ -110,44 +112,29 @@ fn nearest_bank_at(x: i32, z: i32, level: i32) -> Option<knowledge::banks::Bank>
         .min_by_key(|bank| (bank.x - i64::from(x)).abs() + (bank.z - i64::from(z)).abs())
 }
 
-/// Best tool held, by tier level.
+/// Best tool first, by max tier level: lobster 40, harpoon 35, rod 25,
+/// fly 20, net 1 (the rod serves two tiers, its rank is the higher one).
+/// Matches the old best-by-level pick on every held subset.
+pub const FISH_ORDER: [&str; 5] =
+    ["lobster_pot", "harpoon", "fishing_rod", "fly_fishing_rod", "net"];
+
+/// Shared rank: best held tool wins, level gates pass through `usable`.
+/// One const, reused by every caller (never rebuilt per call).
+const FISH_SPEC: ToolSpec = ToolSpec { order: &FISH_ORDER };
+
+/// Best tool held, best-first.
 fn best_tool(bot: &Bot) -> Option<String> {
-    let held = pack_ids(bot);
-    let mut best: Option<(i64, String)> = None;
-    for tier in knowledge::fishing::all_fish_tiers() {
-        if let Ok(tool) = obj_id(bot, tier.tool) {
-            if held.contains(&tool) && best.as_ref().is_none_or(|(level, _)| tier.level > *level) {
-                best = Some((tier.level, tier.tool.to_string()));
-            }
-        }
-    }
-    best.map(|(_, tool)| tool)
+    FISH_SPEC.best_held(bot)
 }
 
 fn known_tool_ids(bot: &Bot) -> HashSet<u16> {
-    knowledge::fishing::all_fish_tiers().into_iter().filter_map(|tier| obj_id(bot, tier.tool).ok()).collect()
+    FISH_SPEC.known_ids(bot)
 }
 
 fn cheapest_upgrade(bot: &Bot, level: i64) -> (Vec<String>, i64) {
-    let current_level =
-        best_tool(bot).and_then(|tool| knowledge::fishing::all_fish_tiers().into_iter().find(|tier| tier.tool == tool))
-            .map(|tier| tier.level)
-            .unwrap_or(-1);
-    let owned: Vec<knowledge::fishing::FishTier> = knowledge::fishing::all_fish_tiers()
-        .into_iter()
-        .filter(|tier| tier.level > current_level && tier.level <= level)
-        .filter(|tier| crate::skill_common::shop_stock_keeper(bot, tier.tool).is_some())
-        .collect();
-    let mut names: Vec<String> = owned.iter().map(|tier| tier.tool.to_string()).collect();
-    names.sort_by_key(|tool| {
-        -knowledge::fishing::all_fish_tiers()
-            .into_iter()
-            .find(|tier| tier.tool == *tool)
-            .map(|tier| tier.level)
-            .unwrap_or(0)
-    });
-    let cheapest = names.iter().map(|tool| obj_price(tool)).min().unwrap_or(0);
-    (names, cheapest)
+    FISH_SPEC.cheapest_upgrade(bot, |name| {
+        knowledge::fishing::all_fish_tiers().iter().any(|tier| tier.tool == name && tier.level <= level)
+    })
 }
 
 /// One click, then watch the chain: re-clicking restarts it, so never spam.
@@ -170,33 +157,7 @@ fn work_spot(
         }
     }
     if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 2 {
-        let mut neighbors: Vec<(i32, i32)> = (-1..=1)
-            .flat_map(|dx| (-1..=1).map(move |dz| (spot_x + dx, spot_z + dz)))
-            .filter(|tile| *tile != (spot_x, spot_z))
-            .collect();
-        neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
-        let mut stepped = false;
-        for (next_x, next_z) in neighbors {
-            match bot.walk_to(next_x, next_z, bot.world.level, 100) {
-                Ok(()) => {
-                    stepped = true;
-                    break;
-                }
-                Err(error)
-                    if matches!(
-                        error,
-                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-                    ) =>
-                {
-                    return Err(error.into())
-                }
-                Err(_) => {}
-            }
-            if (bot.world.x - spot_x).abs() + (bot.world.z - spot_z).abs() > 4 {
-                return Ok((WorkOutcome::Unreachable, 0));
-            }
-        }
-        if !stepped {
+        if !crate::skill_walk::step_adjacent(bot, spot_x, spot_z)? {
             return Ok((WorkOutcome::Unreachable, 0));
         }
     }
@@ -210,6 +171,8 @@ fn work_spot(
     bot.op_npc(tier.op as u8, slot)?;
     let mut seen_msgs = bot.world.messages.len();
     let mut idle_since = bot.world.ticks;
+    let mut acked = false;
+    let mut patient = false;
     let hitpoints_before = hitpoints(bot);
     loop {
         bot.pump(2)?;
@@ -240,6 +203,10 @@ fn work_spot(
                 return Ok((WorkOutcome::Full, gained));
             }
         }
+        // Cast/attempt acked on a still-live spot: the player IS fishing
+        // (dry streak), not facing a dead spot — same detector as
+        // woodcut/mining (own anim never streams).
+        acked = acked || work_acked(bot, seen_msgs, &FISHING_ACKS);
         seen_msgs = bot.world.messages.len();
         let slot_now = nearest_live(bot, tier.category, spot_x, spot_z);
         let Some((_, live_now_x, live_now_z)) = slot_now else {
@@ -253,8 +220,16 @@ fn work_spot(
             gained = now_have - had_fish;
             idle_since = bot.world.ticks;
         }
-        if bot.world.ticks - idle_since > 60 {
+        // Cast/attempt acked on a still-live spot: the player IS fishing
+        // (dry streak), not facing a dead spot — wait, no time cap; the
+        // load-level stall stays the ultimate backstop. Unacked quiet
+        // still gives up fast: the click itself never landed.
+        if bot.world.ticks - idle_since > 60 && !acked {
             return Ok((WorkOutcome::Gone, gained));
+        }
+        if bot.world.ticks - idle_since > 60 && acked && !patient {
+            patient = true;
+            bot.log("still fishing on a live spot, waiting out the dry streak");
         }
     }
 }
@@ -326,6 +301,152 @@ fn restock_bait(
     Ok(pack_total(bot, bait_id) >= BAIT_MIN)
 }
 
+/// Fishing policy on the shared driver: the pack-full gate ends the
+/// load, gear (tool + bait) is ensured per spot inside `work` (bank and
+/// shop walks bill like the old pick phase), the trek retries in `work`,
+/// bait restocks resume the same spot through `on_no_bait`.
+struct FishOps<'a> {
+    bank: &'a mut knowledge::banks::Bank,
+    coins: u16,
+    side_shop: u16,
+    main_shop: u16,
+    bait_ban: u64,
+    level: i64,
+}
+
+impl crate::skill_loop::LoopOps for FishOps<'_> {
+    type Spot = knowledge::fishing::FishTier;
+
+    fn is_full(&self, bot: &Bot) -> bool {
+        free_slots(bot) <= usize::from(pack_total(bot, self.coins) > 0)
+    }
+
+    /// Always geared at the gate: the tool check runs per spot in `work`
+    /// (a broke pack aborts through `Blocked`, never here).
+    fn has_tool(&self, _bot: &Bot) -> bool {
+        true
+    }
+
+    fn gain_of(&self, bot: &Bot, spot: &Self::Spot) -> u32 {
+        spot.products.iter().filter_map(|product| obj_id(bot, product).ok()).map(|id| pack_total(bot, id)).sum()
+    }
+
+    fn pick(&mut self, bot: &mut Bot, state: &mut crate::skill_loop::LoopState) -> Option<(Self::Spot, i32, i32)> {
+        self.level = learn_level(bot, FISH_STAT, self.level);
+        let now = bot.world.ticks;
+        match pick_fish_spot(bot, self.level, &state.banned, now, &*self.bank) {
+            Some((tier, spot_x, spot_z, use_bank)) => {
+                *self.bank = use_bank;
+                bot.log(&format!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?")));
+                bot.intend(&format!("walking to the fishing spot at ({spot_x},{spot_z})"));
+                Some((tier, spot_x, spot_z))
+            }
+            None => {
+                bot.log("no fish spot, waiting for respawns");
+                bot.intend("waiting for a safe fishing spot");
+                None
+            }
+        }
+    }
+
+    fn keep_spot(
+        &mut self,
+        bot: &mut Bot,
+        _state: &mut crate::skill_loop::LoopState,
+        spot: &Self::Spot,
+        _at: (i32, i32),
+    ) -> bool {
+        self.level = learn_level(bot, FISH_STAT, self.level);
+        if let Some(top) = knowledge::fishing::best_fish_tier(self.level) {
+            if spot.level < top.level {
+                bot.log("level up, switching tier");
+                return false;
+            }
+        }
+        true
+    }
+
+    /// A lost tool condemns the spot like any other refusal (the old loop
+    /// banned 500 here, never a clean drop).
+    fn on_no_tool(&self) -> fn(&mut crate::skill_gather::BanSet, (i32, i32), u64, &crate::skill_loop::LoadCfg) {
+        crate::skill_loop::ban_refusal
+    }
+
+    /// The old loop waited flat after a flee, never heal-gated.
+    fn on_hurt(
+        &mut self,
+        bot: &mut Bot,
+        cfg: &crate::skill_loop::LoadCfg,
+        state: &mut crate::skill_loop::LoopState,
+    ) -> Result<bool, ScriptError> {
+        bot.log("hurt, fleeing");
+        bot.intend("fleeing a hunter");
+        let abort = crate::skill_loop::register_hurt(cfg, state, bot.world.ticks);
+        wait_ticks(bot, 200)?;
+        Ok(abort)
+    }
+
+    /// Bait ran out mid-click: restock walks bill outside the no-fish
+    /// stall budget, exactly like the old `NoBait` arm.
+    fn on_no_bait(
+        &mut self,
+        bot: &mut Bot,
+        state: &mut crate::skill_loop::LoopState,
+        spot: &Self::Spot,
+        _at: (i32, i32),
+    ) -> Result<bool, ScriptError> {
+        let spent = bot.world.ticks;
+        let restocked = restock_bait(bot, spot, self.coins, self.bank)?;
+        state.idle_since += bot.world.ticks - spent;
+        if restocked {
+            bot.log("bait restocked, resuming");
+            return Ok(true);
+        }
+        bot.log("bait out, dropping to net tier");
+        self.bait_ban = bot.world.ticks + 1000;
+        Ok(false)
+    }
+
+    fn work(
+        &mut self,
+        bot: &mut Bot,
+        _state: &mut crate::skill_loop::LoopState,
+        spot: &Self::Spot,
+        at: (i32, i32),
+        had: u32,
+    ) -> Result<(WorkOutcome, u32), ScriptError> {
+        let (spot_x, spot_z) = at;
+        if !ensure_gear(bot, spot, self.side_shop, self.main_shop, self.coins, self.bank, &mut self.bait_ban)? {
+            if pack_total(bot, obj_id(bot, spot.tool).unwrap_or(0)) == 0 {
+                bot.log(&format!("no gear for {}", spot.tool));
+                // Broke without a tool: the load aborts, like the old loop.
+                return Ok((WorkOutcome::Blocked, 0));
+            }
+            return Ok((WorkOutcome::NoBait, 0));
+        }
+        // Trek to the spot: three tries, then the refusal ban. The old
+        // loop repicked between tries; retrying the same spot skips the
+        // repick without changing the ban or the waits.
+        let mut arrived = false;
+        for _ in 0..3 {
+            match walk_checked(bot, spot_x, spot_z, 15000) {
+                Ok(true) => {
+                    arrived = true;
+                    break;
+                }
+                Ok(false) => wait_ticks(bot, 200)?,
+                Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+                Err(_) => return Ok((WorkOutcome::Gone, 0)),
+            }
+        }
+        if !arrived {
+            return Ok((WorkOutcome::Unreachable, 0));
+        }
+        let wanted: Vec<u16> = spot.products.iter().filter_map(|product| obj_id(bot, product).ok()).collect();
+        work_spot(bot, spot, spot_x, spot_z, &wanted, had)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fish_load(
     bot: &mut Bot,
@@ -335,178 +456,14 @@ fn fish_load(
     side_shop: u16,
     main_shop: u16,
 ) -> Result<(bool, i64), ScriptError> {
-    let tiers = knowledge::fishing::all_fish_tiers();
-    let mut product_ids: Vec<u16> = Vec::new();
-    for tier in &tiers {
-        for product in tier.products {
-            if let Ok(id) = obj_id(bot, product) {
-                product_ids.push(id);
-            }
-        }
-    }
-    let mut bait_ids: HashMap<&str, u16> = HashMap::new();
-    for tier in &tiers {
-        if let Some(bait) = tier.bait {
-            if let Ok(id) = obj_id(bot, bait) {
-                bait_ids.insert(bait, id);
-            }
-        }
-    }
-    let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
-    let mut bait_ban_until = 0u64;
-    let mut idle_since = bot.world.ticks;
-    let mut last_hitpoints = hitpoints(bot);
-    let mut flees = 0u32;
-    let mut walk_hurts = 0u32;
-    let mut spot: Option<(knowledge::fishing::FishTier, i32, i32)> = None;
-    loop {
-        check_events(bot)?;
-        if free_slots(bot) <= usize::from(pack_total(bot, coins) > 0) {
-            return Ok((true, level));
-        }
-        let level = learn_level(bot, FISH_STAT, level);
-        let best = knowledge::fishing::best_fish_tier(level);
-        if let (Some(picked), Some(top)) = (&spot, best) {
-            if picked.0.level < top.level {
-                bot.log("level up, switching tier");
-                spot = None;
-            }
-        }
-        if hitpoints(bot) == 0 {
-            bot.log("died, respawning");
-            bot.intend("died, respawning");
-            let target = bot.world.ticks + 40;
-            while bot.world.ticks < target && hitpoints(bot) == 0 {
-                bot.pump(5)?;
-            }
-            last_hitpoints = hitpoints(bot);
-            spot = None;
-            continue;
-        }
-        if hitpoints(bot) < last_hitpoints {
-            flees += 1;
-            bot.log("hurt, fleeing");
-            bot.intend("fleeing a hunter");
-            if let Some((_, spot_x, spot_z)) = &spot {
-                banned.insert((*spot_x, *spot_z), bot.world.ticks + FLEE_BAN_TICKS);
-            }
-            if flees > MAX_FLEES_PER_LOAD {
-                bot.log("too many attacks, aborting load");
-                return Ok((false, level));
-            }
-            wait_ticks(bot, 200)?;
-            spot = None;
-            last_hitpoints = hitpoints(bot);
-            continue;
-        }
-        last_hitpoints = hitpoints(bot);
-        let now = bot.world.ticks;
-        banned.retain(|_, until| *until > now);
-        if spot.is_none() {
-            let usable: Vec<&knowledge::fishing::FishTier> = tiers
-                .iter()
-                .filter(|tier| {
-                    tier.bait.is_none()
-                        || now >= bait_ban_until
-                        || tier.bait.is_some_and(|bait| bait_ids.get(bait).is_some_and(|id| pack_total(bot, *id) > 0))
-                })
-                .collect();
-            let _ = usable;
-            let mut picked = None;
-            for _ in 0..16 {
-                if let Some((tier, spot_x, spot_z, use_bank)) =
-                    pick_fish_spot(bot, level, &banned.keys().copied().collect(), bank)
-                {
-                    picked = Some((tier, spot_x, spot_z, use_bank));
-                    break;
-                }
-                bot.log("no fish spot, waiting for respawns");
-                bot.intend("waiting for a safe fishing spot");
-                wait_ticks(bot, 15)?;
-            }
-            let Some((tier, spot_x, spot_z, use_bank)) = picked else {
-                bot.log("no fish spot left");
-                return Ok((false, level));
-            };
-            *bank = use_bank;
-            if !ensure_gear(bot, &tier, side_shop, main_shop, coins, bank, &mut bait_ban_until)? {
-                if pack_total(bot, obj_id(bot, tier.tool).unwrap_or(0)) == 0 {
-                    bot.log(&format!("no gear for {}", tier.tool));
-                    return Ok((false, level));
-                }
-                spot = None;
-                continue;
-            }
-            bot.log(&format!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?")));
-            bot.intend(&format!("walking to the fishing spot at ({spot_x},{spot_z})"));
-            match walk_checked(bot, spot_x, spot_z, 15000) {
-                Ok(true) => {}
-                Ok(false) => {
-                    wait_ticks(bot, 200)?;
-                    walk_hurts += 1;
-                    if walk_hurts >= 3 {
-                        banned.insert((spot_x, spot_z), bot.world.ticks + 500);
-                        walk_hurts = 0;
-                    }
-                    continue;
-                }
-                Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
-                Err(_) => {
-                    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
-                    continue;
-                }
-            }
-            spot = Some((tier, spot_x, spot_z));
-        }
-        let (tier, spot_x, spot_z) = spot.clone().expect("spot picked");
-        let wanted: Vec<u16> = tier
-            .products
-            .iter()
-            .filter_map(|product| obj_id(bot, product).ok())
-            .collect();
-        let had_fish: u32 = wanted.iter().map(|id| pack_total(bot, *id)).sum();
-        let (result, gained) = work_spot(bot, &tier, spot_x, spot_z, &wanted, had_fish)?;
-        if gained > 0 {
-            idle_since = bot.world.ticks;
-        }
-        match result {
-            WorkOutcome::Full => return Ok((true, level)),
-            WorkOutcome::Moved | WorkOutcome::Gone | WorkOutcome::Threat => {
-                bot.log("spot quiet, next one");
-                banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
-                spot = None;
-            }
-            WorkOutcome::NoTool | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot | WorkOutcome::LevelLocked => {
-                banned.insert((spot_x, spot_z), now + 500);
-                spot = None;
-            }
-            WorkOutcome::NoBait => {
-                // Restock walks (shop) are not fishing: don't bill them
-                // to the no-fish stall budget.
-                let spent = bot.world.ticks;
-                let restocked = restock_bait(bot, &tier, coins, bank)?;
-                idle_since += bot.world.ticks - spent;
-                if restocked {
-                    bot.log("bait restocked, resuming");
-                    continue;
-                }
-                bot.log("bait out, dropping to net tier");
-                bait_ban_until = bot.world.ticks + 1000;
-                spot = None;
-                if free_slots(bot) == 0 {
-                    return Ok((true, level));
-                }
-            }
-            WorkOutcome::Blocked => {
-                bot.log("unknown dialog blocking fish, aborting load");
-                return Ok((false, level));
-            }
-        }
-        if bot.world.ticks - idle_since > STALL_TICKS {
-            bot.log(&format!("stall: no fish for {STALL_TICKS} ticks"));
-            return Ok((false, level));
-        }
-    }
+    let mut ops = FishOps { bank, coins, side_shop, main_shop, bait_ban: 0, level };
+    let ok = crate::skill_loop::run_load(
+        bot,
+        &crate::skill_loop::LoadCfg::mining(),
+        &mut crate::skill_loop::LoopState::fresh(bot),
+        &mut ops,
+    )?;
+    Ok((ok, learn_level(bot, FISH_STAT, ops.level)))
 }
 
 /// Fish banked loads in the open session (0 = forever).
@@ -557,14 +514,50 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let keep: Vec<u16> = known_tool_ids(bot).into_iter().collect();
         bank_coins = bank_trip(bot, &bank, &keep, 0)?;
-        for cand in cands {
-            if buy_stock(bot, &cand, 1)? > 0 {
-                bot.log(&format!("ok upgraded to {cand}"));
-                break;
-            }
-        }
+        // Post-bank upgrade: only what the pack affords, best-first with
+        // downgrade on shop failure (shared aborts: death/conn/interrupt).
+        let _ = buy_best_affordable(bot, &cands)?;
         done += 1;
         bot.log(&format!("ok load {done} banked (fishing={level})"));
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{best_tool, FISH_ORDER, FISH_SPEC};
+    use crate::skill_common::obj_id;
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    /// Static order matches the tier levels (lobster 40 > harpoon 35 >
+    /// rod 25 > fly 20 > net 1), so best-held equals the old best-by-level
+    /// pick on every held subset.
+    #[test]
+    fn fish_order_matches_tier_levels() {
+        let level_of = |tool: &str| {
+            lifescape_gamedata::fishing::all_fish_tiers()
+                .iter()
+                .filter(|tier| tier.tool == tool)
+                .map(|tier| tier.level)
+                .max()
+        };
+        let mut prev = i64::MAX;
+        for tool in FISH_ORDER {
+            let level = level_of(tool).expect("every ordered tool is a tier tool");
+            assert!(level < prev, "{tool} breaks the best-first order");
+            prev = level;
+        }
+        assert_eq!(level_of("fishing_rod"), Some(25), "the rod serves two tiers, its rank is the higher one");
+        assert_eq!(FISH_SPEC.rank("lobster_pot"), Some(0));
+        assert_eq!(FISH_SPEC.rank("no_such_tool"), None, "unknown never ranks");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert_eq!(best_tool(&bot), None, "empty pack holds nothing");
+        let rod = obj_id(&bot, "fishing_rod").expect("fishing_rod in tables");
+        let fly = obj_id(&bot, "fly_fishing_rod").expect("fly_fishing_rod in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(com, [(0u8, (rod, 1u32)), (1, (fly, 1))].into_iter().collect());
+        assert_eq!(best_tool(&bot), Some("fishing_rod".to_string()), "rod 25 beats fly 20");
+    }
 }

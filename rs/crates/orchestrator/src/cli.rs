@@ -353,8 +353,11 @@ fn format_seen(state: &Value) -> String {
             dist(entry),
         ));
     }
-    for entry in state.get("inv").as_arr().cloned().unwrap_or_default() {
-        lines.push(format!("inv  {:<24} x{}", label(&entry, "name"), val_str(entry.get("count")),));
+    let inv = state.get("inv").as_arr().cloned().unwrap_or_default();
+    let carried: i64 = inv.iter().filter_map(|entry| entry.get("count").as_i64()).sum();
+    lines.push(format!("Inventory ({carried})"));
+    for entry in &inv {
+        lines.push(format!("inv  {:<24} x{}", label(entry, "name"), val_str(entry.get("count")),));
     }
     for entry in state.get("worn").as_arr().cloned().unwrap_or_default() {
         lines.push(format!("worn {:<24} x{}", label(&entry, "name"), val_str(entry.get("count")),));
@@ -764,6 +767,41 @@ mod tests {
 
     fn temp_sock(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("lifescape-test-{}-{name}", std::process::id()))
+    }
+
+    /// Spectate header: total carried items in parentheses, then one
+    /// line per stack (`Inventory (28)` + `inv ... x27` + `inv ... x1`).
+    #[test]
+    fn inventory_header_counts_items() {
+        use super::format_seen;
+        use lifescape_json::{object, str_value, Value};
+        let state = object(vec![
+            ("account", str_value("t01")),
+            ("hitpoints", Value::Int(19)),
+            ("position", Value::Arr(vec![Value::Int(0), Value::Int(1), Value::Int(2)])),
+            ("status", str_value("running")),
+            ("intention", str_value("-")),
+            ("zone", str_value("-")),
+            ("zone_dist", str_value("-")),
+            (
+                "inv",
+                Value::Arr(vec![
+                    object(vec![("name", str_value("Yew logs")), ("count", Value::Int(27))]),
+                    object(vec![("name", str_value("Steel axe")), ("count", Value::Int(1))]),
+                ]),
+            ),
+        ]);
+        let seen = format_seen(&state);
+        assert!(seen.lines().any(|line| line == "Inventory (28)"), "header sums stacks, got:\n{seen}");
+        assert_eq!(seen.lines().filter(|line| line.starts_with("inv ")).count(), 2, "one line per stack");
+        let empty = object(vec![
+            ("account", str_value("t01")),
+            ("position", Value::Arr(vec![Value::Int(0), Value::Int(1), Value::Int(2)])),
+        ]);
+        assert!(
+            format_seen(&empty).lines().any(|line| line == "Inventory (0)"),
+            "empty pack still headers",
+        );
     }
 
     /// Single-session guard: a bound socket reads alive, a missing or
