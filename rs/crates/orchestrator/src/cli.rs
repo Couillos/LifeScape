@@ -122,6 +122,40 @@ fn format_status(jobs: &Value) -> String {
     rows.join("\n")
 }
 
+/// One operator-readable line over the pathfinding gauge (lot 4): cache,
+/// queue, refusals (= sync fallbacks client-side), RAM. Full JSON stays
+/// available; this line is the quick health glance.
+fn format_nav_stats(stats: &Value) -> String {
+    let num = |key: &str| stats.get(key).as_i64().map(|n| n.to_string()).unwrap_or_else(|| "-".to_string());
+    let age = match stats.get("l1_oldest_age_ms").as_i64() {
+        Some(ms) => format!("{ms}ms"),
+        None => "empty".to_string(),
+    };
+    let rss_mb = stats
+        .get("rss_bytes")
+        .as_i64()
+        .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
+        .unwrap_or_else(|| "-".to_string());
+    format!(
+        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} rss={} painted={}",
+        stats.get("version").as_str().unwrap_or("-"),
+        num("hits"),
+        num("trunc_hits"),
+        num("joins"),
+        num("misses"),
+        num("l1_len"),
+        num("l1_bytes"),
+        age,
+        num("queue_depth"),
+        num("inflight"),
+        num("refused_cap"),
+        num("refused_full"),
+        num("refused_stale"),
+        rss_mb,
+        num("painted_squares"),
+    )
+}
+
 fn format_ascii(state: &Value, radius: i64) -> Vec<String> {
     let pos = state.get("position").as_arr().cloned().unwrap_or_default();
     let here = (
@@ -585,7 +619,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -703,6 +737,15 @@ pub fn cli(argv: &[String]) -> i32 {
         "reload-nav" => {
             let reply = send(object(vec![("cmd", str_value("reload-nav"))]));
             println!("{}", json::stringify_pretty(&reply));
+            if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
+        "nav-stats" => {
+            let reply = send(object(vec![("cmd", str_value("nav-stats"))]));
+            if reply.get("ok").as_bool() == Some(true) {
+                println!("{}", format_nav_stats(&reply));
+            } else {
+                println!("{}", json::stringify_pretty(&reply));
+            }
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
         _ => {

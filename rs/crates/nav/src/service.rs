@@ -22,7 +22,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -169,7 +169,9 @@ pub const L1_MAX_ENTRY_BYTES: usize = 32 * 1024;
 /// L2 versions kept: the live one plus the draining pre-reload one.
 pub const L2_VERSIONS_CAP: usize = 2;
 
-/// Outcome counters, all atomic: the lot 3 hit-rate verdict reads these.
+/// Outcome counters, all atomic: the lot 3 hit-rate verdict reads these,
+/// the lot 4 fairness verdict reads the refused_* ones (every non-stale
+/// refusal degrades to a local sync plan client-side, logged + counted).
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CacheStats {
     pub hits: u64,
@@ -179,12 +181,16 @@ pub struct CacheStats {
     pub l2_hits: u64,
     pub l2_miss: u64,
     pub evictions: u64,
+    pub refused_cap: u64,
+    pub refused_full: u64,
+    pub refused_stale: u64,
 }
 
 struct LruEntry {
     is_plan: bool,
     body: Value,
     bytes: usize,
+    inserted: std::time::Instant,
 }
 
 struct Lru {
@@ -262,6 +268,7 @@ impl Lru {
         if bytes > L1_MAX_ENTRY_BYTES {
             return false;
         }
+        let now = std::time::Instant::now();
         if self.map.contains_key(&key) {
             if let Some(pos) = self.order.iter().position(|known| known == &key) {
                 self.order.remove(pos);
@@ -272,7 +279,7 @@ impl Lru {
         }
         self.order.push_back(key.clone());
         self.stored_bytes += bytes;
-        self.map.insert(key, LruEntry { is_plan, body, bytes });
+        self.map.insert(key, LruEntry { is_plan, body, bytes, inserted: now });
         while self.map.len() > L1_CAP {
             if let Some(oldest) = self.order.pop_front() {
                 if let Some(old) = self.map.remove(&oldest) {
@@ -285,10 +292,30 @@ impl Lru {
         }
         true
     }
+
+    /// Age of the least-recently-used entry (front of the order): the L1
+    /// max age the lot 4 metrics read. None when the cache is empty.
+    fn oldest_age(&self) -> Option<std::time::Duration> {
+        let now = std::time::Instant::now();
+        self.order
+            .front()
+            .and_then(|key| self.map.get(key))
+            .map(|entry| now.saturating_duration_since(entry.inserted))
+    }
 }
 
-fn options_satisfied(options: &NavOptions) -> Vec<String> {
-    let mut satisfied: Vec<String> = options.satisfied.iter().cloned().collect();
+/// Resident set size of this process in bytes (see `Service::rss_bytes`).
+fn rss_bytes() -> u64 {
+    let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+    let resident_pages: u64 = statm
+        .split_whitespace()
+        .nth(1)
+        .and_then(|field| field.parse().ok())
+        .unwrap_or(0);
+    resident_pages.saturating_mul(4096)
+}
+
+fn options_satisfied(options: &NavOptions) -> Vec<String> {    let mut satisfied: Vec<String> = options.satisfied.iter().cloned().collect();
     satisfied.sort();
     satisfied
 }
@@ -793,12 +820,13 @@ pub struct Service {
     l1: Mutex<Lru>,
     l2: Mutex<(HashMap<String, Arc<SharedEdges>>, Vec<String>)>,
     inflight: Mutex<HashMap<PlanKey, u64>>,
-    tickets: Mutex<HashMap<u64, PlanKey>>,
+    tickets: Mutex<HashMap<u64, (PlanKey, String)>>,
     waiters: Mutex<HashMap<u64, usize>>,
     results: Mutex<HashMap<u64, Slot>>,
     snapshot: Mutex<Arc<Snapshot>>,
     queue_tx: SyncSender<Job>,
     queue_rx: Mutex<Receiver<Job>>,
+    queued: AtomicUsize,
     next_id: AtomicU64,
     hits: AtomicU64,
     trunc_hits: AtomicU64,
@@ -806,6 +834,9 @@ pub struct Service {
     joins: AtomicU64,
     l2_hits: AtomicU64,
     l2_miss: AtomicU64,
+    refused_cap: AtomicU64,
+    refused_full: AtomicU64,
+    refused_stale: AtomicU64,
     sock_path: PathBuf,
 }
 
@@ -837,6 +868,7 @@ impl Service {
             snapshot: Mutex::new(snapshot),
             queue_tx,
             queue_rx: Mutex::new(queue_rx),
+            queued: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
             hits: AtomicU64::new(0),
             trunc_hits: AtomicU64::new(0),
@@ -844,6 +876,9 @@ impl Service {
             joins: AtomicU64::new(0),
             l2_hits: AtomicU64::new(0),
             l2_miss: AtomicU64::new(0),
+            refused_cap: AtomicU64::new(0),
+            refused_full: AtomicU64::new(0),
+            refused_stale: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
         });
         for index in 0..threads.max(1) {
@@ -872,7 +907,13 @@ impl Service {
         &self.sock_path
     }
 
+    /// Current snapshot version (operator gauge + skew logs).
+    pub fn current_version(&self) -> String {
+        self.version()
+    }
+
     /// Lot 3 counters: hit-rate verdict reads these, not the logs.
+    /// Lot 4 adds the refused_* ones: the fairness verdict reads those.
     pub fn stats(&self) -> CacheStats {
         CacheStats {
             hits: self.hits.load(Ordering::Relaxed),
@@ -882,6 +923,9 @@ impl Service {
             l2_hits: self.l2_hits.load(Ordering::Relaxed),
             l2_miss: self.l2_miss.load(Ordering::Relaxed),
             evictions: self.l1.lock().unwrap().evictions,
+            refused_cap: self.refused_cap.load(Ordering::Relaxed),
+            refused_full: self.refused_full.load(Ordering::Relaxed),
+            refused_stale: self.refused_stale.load(Ordering::Relaxed),
         }
     }
 
@@ -905,6 +949,39 @@ impl Service {
 
     pub fn l1_bytes(&self) -> usize {
         self.l1.lock().unwrap().stored_bytes
+    }
+
+    /// Lot 4 operator metrics: queue depth now, in-flight tickets now, L1
+    /// oldest entry age, daemon RSS, painted 64x64 squares. One lock each,
+    /// never held during a Dijkstra (same discipline as the counters).
+    /// Queue depth counts sent-but-undequeued jobs (a cancelled ticket
+    /// still queued counts until the pool drops it: admission already
+    /// released, so the cap never wedges on it).
+    pub fn queue_depth(&self) -> usize {
+        self.queued.load(Ordering::Relaxed)
+    }
+
+    pub fn inflight_total(&self) -> usize {
+        self.admission.lock().unwrap().values().sum()
+    }
+
+    pub fn l1_oldest_age_ms(&self) -> Option<u128> {
+        self.l1
+            .lock()
+            .unwrap()
+            .oldest_age()
+            .map(|age| age.as_millis())
+    }
+
+    /// Daemon RSS in bytes (§5.9 enforcement reads this): /proc/self/statm
+    /// field 2 is resident pages, 4 KiB each. Zero when unreadable (non-
+    /// Linux or racing read): a missing gauge, never a plan verdict.
+    pub fn rss_bytes() -> u64 {
+        rss_bytes()
+    }
+
+    pub fn painted_squares(&self) -> usize {
+        self.snapshot.lock().unwrap().world.painted_squares()
     }
 
     fn serve_one(&self, stream: UnixStream) {
@@ -946,6 +1023,17 @@ impl Service {
                     ("evictions", Value::Int(stats.evictions as i64)),
                     ("l1_len", Value::Int(self.l1_len() as i64)),
                     ("l1_bytes", Value::Int(self.l1_bytes() as i64)),
+                    ("l1_oldest_age_ms", match self.l1_oldest_age_ms() {
+                        Some(age) => Value::Int(age.min(i64::MAX as u128) as i64),
+                        None => Value::Null,
+                    }),
+                    ("queue_depth", Value::Int(self.queue_depth() as i64)),
+                    ("inflight", Value::Int(self.inflight_total() as i64)),
+                    ("refused_cap", Value::Int(stats.refused_cap as i64)),
+                    ("refused_full", Value::Int(stats.refused_full as i64)),
+                    ("refused_stale", Value::Int(stats.refused_stale as i64)),
+                    ("rss_bytes", Value::Int(Self::rss_bytes().min(i64::MAX as u64) as i64)),
+                    ("painted_squares", Value::Int(self.painted_squares() as i64)),
                 ])
             }
             other => object(vec![
@@ -990,6 +1078,7 @@ impl Service {
             }
         };
         if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
             return object(vec![
                 ("ok", Value::Bool(false)),
                 (
@@ -1042,6 +1131,7 @@ impl Service {
             let mut admission = self.admission.lock().unwrap();
             let in_flight = admission.get(&account).copied().unwrap_or(0);
             if in_flight >= ACCOUNT_CAP {
+                self.refused_cap.fetch_add(1, Ordering::Relaxed);
                 return object(vec![
                     ("ok", Value::Bool(false)),
                     ("error", str_value("refused:account-cap")),
@@ -1060,7 +1150,7 @@ impl Service {
             .unwrap()
             .insert(id, Slot::Pending { cancel: Arc::clone(&cancel) });
         self.inflight.lock().unwrap().insert(key.clone(), id);
-        self.tickets.lock().unwrap().insert(id, key.clone());
+        self.tickets.lock().unwrap().insert(id, (key.clone(), account.clone()));
         self.waiters.lock().unwrap().insert(id, 1);
         let job = Job {
             id,
@@ -1071,8 +1161,7 @@ impl Service {
             options,
             cancel,
         };
-        if let Err(error) = self.queue_tx.try_send(job) {
-            // The job back: its key recovers the exact in-flight entry
+        if let Err(error) = self.queue_tx.try_send(job) {            // The job back: its key recovers the exact in-flight entry
             // (the tickets map is already cleared below, so it cannot).
             let job = match error {
                 mpsc::TrySendError::Full(back) | mpsc::TrySendError::Disconnected(back) => back,
@@ -1087,12 +1176,14 @@ impl Service {
             let mut admission = self.admission.lock().unwrap();
             let in_flight = admission.get(&job.account).copied().unwrap_or(1);
             admission.insert(job.account, in_flight.saturating_sub(1));
+            self.refused_full.fetch_add(1, Ordering::Relaxed);
             return object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value("refused:queue-full")),
                 ("version", str_value(&version)),
             ]);
         }
+        self.queued.fetch_add(1, Ordering::Relaxed);
         self.misses.fetch_add(1, Ordering::Relaxed);
         object(vec![
             ("ok", Value::Bool(true)),
@@ -1183,7 +1274,11 @@ impl Service {
             }
         };
         // LOT3 shared tickets: only the last waiter truly cancels; the
-        // others keep polling the same id.
+        // others keep polling the same id. The last cancel also releases
+        // the account admission NOW (lot 4): a cancelled ticket must not
+        // wedge the cap until the pool dequeues and drops it. Double
+        // release is harmless (`release` on a missing key is a no-op) and
+        // the over-admit window is one ticket for milliseconds.
         let last = {
             let mut waiters = self.waiters.lock().unwrap();
             match waiters.get(&id).copied() {
@@ -1201,11 +1296,12 @@ impl Service {
             if let Some(Slot::Pending { cancel }) = self.results.lock().unwrap().remove(&id) {
                 cancel.store(true, Ordering::Relaxed);
             }
-            if let Some(key) = self.tickets.lock().unwrap().remove(&id) {
+            if let Some((key, owner)) = self.tickets.lock().unwrap().remove(&id) {
                 let mut inflight = self.inflight.lock().unwrap();
                 if inflight.get(&key) == Some(&id) {
                     inflight.remove(&key);
                 }
+                self.release(&owner);
             }
         }
         object(vec![("ok", Value::Bool(true))])
@@ -1225,6 +1321,7 @@ impl Service {
             let Ok(job) = job else {
                 break;
             };
+            self.queued.fetch_sub(1, Ordering::Relaxed);
             if !self.results.lock().unwrap().contains_key(&job.id) {
                 self.release(&job.account);
                 continue;

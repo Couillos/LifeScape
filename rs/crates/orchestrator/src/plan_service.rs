@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use lifescape_json::{object, Value};
 use lifescape_nav::service::{self, Service, Snapshot};
 use lifescape_nav::tables::Tables;
 
@@ -81,6 +82,42 @@ pub fn reload() -> Result<String, String> {
 fn registry() -> &'static Mutex<Option<Arc<Service>>> {
     static SERVICE: OnceLock<Mutex<Option<Arc<Service>>>> = OnceLock::new();
     SERVICE.get_or_init(|| Mutex::new(None))
+}
+
+/// Lot 4 operator gauge: counters + queue + RAM in one object, same shape
+/// as the service `stats` op. None when the service is down (workers are
+/// on sync fallback, the gauge is empty rather than wrong).
+pub fn stats_json() -> Option<Value> {
+    let service = registry().lock().unwrap().clone()?;
+    let stats = service.stats();
+    let int = |num: u64| Value::Int(num.min(i64::MAX as u64) as i64);
+    Some(object(vec![
+        ("ok", Value::Bool(true)),
+        ("version", Value::Str(service.current_version())),
+        ("hits", int(stats.hits)),
+        ("trunc_hits", int(stats.trunc_hits)),
+        ("misses", int(stats.misses)),
+        ("joins", int(stats.joins)),
+        ("l2_hits", int(stats.l2_hits)),
+        ("l2_miss", int(stats.l2_miss)),
+        ("evictions", int(stats.evictions)),
+        ("l1_len", int(service.l1_len() as u64)),
+        ("l1_bytes", int(service.l1_bytes() as u64)),
+        (
+            "l1_oldest_age_ms",
+            match service.l1_oldest_age_ms() {
+                Some(age) => int(age.min(i64::MAX as u128) as u64),
+                None => Value::Null,
+            },
+        ),
+        ("queue_depth", int(service.queue_depth() as u64)),
+        ("inflight", int(service.inflight_total() as u64)),
+        ("refused_cap", int(stats.refused_cap)),
+        ("refused_full", int(stats.refused_full)),
+        ("refused_stale", int(stats.refused_stale)),
+        ("rss_bytes", int(Service::rss_bytes())),
+        ("painted_squares", int(service.painted_squares() as u64)),
+    ]))
 }
 
 #[cfg(test)]

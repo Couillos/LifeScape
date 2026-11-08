@@ -403,6 +403,10 @@ impl Bot {
                 }
                 let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
                 let replan_start = std::time::Instant::now();
+                // Lot 4: the replan stays sync-local BY DESIGN, never through
+                // the service. Its key carries the new ban so L1 would miss
+                // anyway; sync consumes zero queue, so a replan-storm faults
+                // only its own thread while other accounts keep the service.
                 let retry = match plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()) {
                     Ok(retry) => retry,
                     Err(no) if no.reason == NoRouteReason::Aborted => {

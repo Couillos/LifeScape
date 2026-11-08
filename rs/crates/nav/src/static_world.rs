@@ -51,6 +51,13 @@ impl StaticWorld {
         }))
     }
 
+    /// 64x64 squares painted so far (lazy paint through `get`): the lot 4
+    /// RAM gauge (§5.9 monde line: 1932 squares bound the pack, this counts
+    /// how far the warmup has gone).
+    pub fn painted_squares(&self) -> usize {
+        self.state.read().expect("static world lock poisoned").pack.loaded_count()
+    }
+
     /// True when the pack ships this 64x64 square.
     pub fn has_square(&self, square_x: i32, square_z: i32) -> bool {
         self.squares.contains(&(square_x, square_z))

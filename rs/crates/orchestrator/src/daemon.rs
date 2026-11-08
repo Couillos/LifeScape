@@ -893,6 +893,17 @@ impl Orchestrator {
                     ]),
                 };
             }
+            "nav-stats" => {
+                // Lot 4 operator gauge: counters + queue + RAM, no log
+                // spam. Down service = explicit error, never stale numbers.
+                return match crate::plan_service::stats_json() {
+                    Some(stats) => stats,
+                    None => object(vec![
+                        ("ok", Value::Bool(false)),
+                        ("error", str_value("pathfinding service not running")),
+                    ]),
+                };
+            }
             _ => {}
         }
         object(vec![
