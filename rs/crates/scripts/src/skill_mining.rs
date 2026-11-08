@@ -512,7 +512,7 @@ fn mine_load(
                 spot = None;
             }
             WorkOutcome::NoTool => spot = None,
-            WorkOutcome::Unreachable | WorkOutcome::LevelLocked => {
+            WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot | WorkOutcome::LevelLocked => {
                 banned.insert((spot_x, spot_z), now + 500);
                 spot = None;
             }

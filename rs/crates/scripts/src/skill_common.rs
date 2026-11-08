@@ -75,6 +75,12 @@ pub enum WorkOutcome {
     Blocked,
     LevelLocked,
     Unreachable,
+    /// Direct spot refusal: the server answered the chop/mine click itself
+    /// with "can't reach that". Walk-leg failures (never arrived, leg
+    /// timeout, step refused far away) stay plain `Unreachable`: only the
+    /// gather loop's classifier may promote this to a long ban, on a
+    /// repeated adjacent refusal — never on transit alone.
+    UnreachableSpot,
 }
 
 /// Resolve an object id through the injected tables. Unknown names fail,

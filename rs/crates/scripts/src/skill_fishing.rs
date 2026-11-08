@@ -476,7 +476,7 @@ fn fish_load(
                 banned.insert((spot_x, spot_z), now + GONE_BAN_TICKS);
                 spot = None;
             }
-            WorkOutcome::NoTool | WorkOutcome::Unreachable | WorkOutcome::LevelLocked => {
+            WorkOutcome::NoTool | WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot | WorkOutcome::LevelLocked => {
                 banned.insert((spot_x, spot_z), now + 500);
                 spot = None;
             }

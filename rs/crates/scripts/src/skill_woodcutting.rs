@@ -15,7 +15,7 @@ use crate::skill_common::{
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
     GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS,
 };
-use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there};
+use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, refusal_ban_ticks, tree_still_there, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
@@ -373,7 +373,7 @@ fn wait_for_respawn(
 ) -> Result<(), ScriptError> {
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
-    let alternative = pick_tree_spot(bot, tiers, bank, level, banned)
+    let alternative = pick_tree_spot(bot, tiers, bank, level, &mut *banned)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
         bot.log(&format!(
@@ -491,7 +491,7 @@ fn work_spot(
             for message in bot.world.messages.get(seen_msgs..).unwrap_or(&[]) {
                 let lowered = message.to_lowercase();
                 if lowered.contains("can't reach that") {
-                    return Ok((WorkOutcome::Unreachable, gained));
+                    return Ok((WorkOutcome::UnreachableSpot, gained));
                 }
                 if lowered.contains("woodcutting level of") {
                     return Ok((WorkOutcome::LevelLocked, gained));
@@ -552,6 +552,7 @@ fn chop_load(
     mut level: i64,
     banned: &mut HashMap<(i32, i32), u64>,
     respawn: &mut HashMap<String, u64>,
+    refusals: &mut HashMap<(i32, i32), u8>,
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut idle_since = bot.world.ticks;
@@ -618,7 +619,7 @@ fn chop_load(
         if stale {
             let mut picked = None;
             for _ in 0..16 {
-                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, banned) {
+                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, &mut *banned) {
                     picked = Some(found);
                     break;
                 }
@@ -656,6 +657,11 @@ fn chop_load(
             continue;
         }
         had_logs += gained;
+        // Strikes only survive short bans and walk failures: any other
+        // outcome re-proves the stand (chopped, stumped, fled, locked).
+        if !matches!(result, WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot) {
+            refusals.remove(&(spot_x, spot_z));
+        }
         if result != WorkOutcome::Unreachable {
             unreachable_streak = 0;
             // Cluster hop: the spot may sit near another bank, so re-sync
@@ -687,50 +693,65 @@ fn chop_load(
             }
             WorkOutcome::NoTool => spot = None,
             WorkOutcome::Unreachable => {
-                // Adjacent refusal, not a walk that fell short: the server
-                // said "can't reach that" with the tree a step away. A
-                // fresh stump depleting between pick and click rides the
-                // short Gone ban (it regrows); a wall/fence/gate between us
-                // and a standing tree sits out long and says so (retrying
-                // in 30k would loop forever). Nav is fine either way: the
-                // streak counts failed walks only.
-                if adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z)
-                    && is_stump(bot, spot_x, spot_z)
-                {
-                    bot.log(&format!("tree stumped at ({spot_x},{spot_z}), next one"));
-                    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
-                    spot = None;
-                } else if adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z) {
-                    bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
-                    banned.insert((spot_x, spot_z), bot.world.ticks + STRUCTURAL_BAN_TICKS);
-                    unreachable_streak = 0;
-                    spot = None;
-                } else {
-                    bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
-                    banned.insert((spot_x, spot_z), bot.world.ticks + UNREACHABLE_BAN_TICKS);
-                    spot = None;
-                    unreachable_streak += 1;
-                    // Pocket landing (yank mid-run): every spot fails at the
-                    // walk. Travel back to the bank once, then re-pick from
-                    // the new region; the stall bound stays the loud exit.
-                    if unreachable_streak >= 8 {
-                        let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
-                        match bot.travel_to(dest) {
-                            Ok(()) => {}
-                            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
-                                return Err(error.into());
-                            }
-                            Err(error) => bot.log(&format!("pocket escape refused: {error}")),
+                // Walk-leg failure (never arrived, leg timeout, step refused
+                // far away): short ban + retry, NEVER structural. A walk
+                // that dies en route proves nothing about the stand.
+                bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
+                banned.insert((spot_x, spot_z), bot.world.ticks + UNREACHABLE_BAN_TICKS);
+                spot = None;
+                unreachable_streak += 1;
+                // Pocket landing (yank mid-run): every spot fails at the
+                // walk. Travel back to the bank once, then re-pick from
+                // the new region; the stall bound stays the loud exit.
+                if unreachable_streak >= 8 {
+                    let dest = lifescape_sdk::plan::Tile { x: bank.x as i32, z: bank.z as i32, level: bank.level as i32 };
+                    match bot.travel_to(dest) {
+                        Ok(()) => {}
+                        Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
+                            return Err(error.into());
                         }
-                        // One escape per streak: a refused escape re-arms by
-                        // counting, it never re-fires on the next spot.
-                        // Without this the same failing travel_to runs every
-                        // iteration (up to four full-dijkstra exhaustions
-                        // each) and the loop burns a core until the stall
-                        // bound trips.
-                        unreachable_streak = 0;
+                        Err(error) => bot.log(&format!("pocket escape refused: {error}")),
                     }
+                    // One escape per streak: a refused escape re-arms by
+                    // counting, it never re-fires on the next spot.
+                    // Without this the same failing travel_to runs every
+                    // iteration (up to four full-dijkstra exhaustions
+                    // each) and the loop burns a core until the stall
+                    // bound trips.
+                    unreachable_streak = 0;
                 }
+            }
+            WorkOutcome::UnreachableSpot => {
+                // Direct server refusal of the chop click itself. Structural
+                // ONLY on a repeated adjacent refusal of a standing tree: a
+                // single refusal (transient storm, gate mid-swing) rides the
+                // short ban and retries before anything is condemned. A
+                // refusal from afar means the walk fell short, not that the
+                // stand is walled: short ban, no strike.
+                let adjacent = adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z);
+                let ban = refusal_ban_ticks(adjacent, is_stump(bot, spot_x, spot_z), true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0));
+                if is_stump(bot, spot_x, spot_z) {
+                    bot.log(&format!("tree stumped at ({spot_x},{spot_z}), next one"));
+                } else if adjacent && ban == STRUCTURAL_BAN_TICKS {
+                    bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
+                    // Condemned: the ban is the memory now, drop the count
+                    // so a starvation release re-proves permanence cleanly.
+                    refusals.remove(&(spot_x, spot_z));
+                    unreachable_streak = 0;
+                } else if adjacent {
+                    let strikes = refusals.entry((spot_x, spot_z)).or_insert(0);
+                    *strikes += 1;
+                    bot.log(&format!(
+                        "spot refused once at ({spot_x},{spot_z}), short-banning (strike {}/{DIRECT_REFUSALS_TO_CONDEMN}), retry before condemning",
+                        *strikes
+                    ));
+                    unreachable_streak = 0;
+                } else {
+                    bot.log(&format!("click refused from afar at ({spot_x},{spot_z}), walk fell short, short ban"));
+                    unreachable_streak = 0;
+                }
+                banned.insert((spot_x, spot_z), bot.world.ticks + ban);
+                spot = None;
             }
             WorkOutcome::LevelLocked => {
                 banned.insert((spot_x, spot_z), bot.world.ticks + 500);
@@ -969,6 +990,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // the whole tier (server rate is per tree table), so this outlives
     // loads like the bans do.
     let mut respawn: HashMap<String, u64> = HashMap::new();
+    // Adjacent direct-refusal strikes per stand: the first refusal rides
+    // the short ban, the repeat condemns (structural). Walk-leg failures
+    // never write here.
+    let mut refusals: HashMap<(i32, i32), u8> = HashMap::new();
     while loads == 0 || done < loads {
         // Death may have moved us across the map: re-sync the bank cheaply
         // (no walking) so spots and treks start from the real position.
@@ -993,7 +1018,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bot.log("still axeless after re-gear, hunting again");
             continue;
         }
-        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn)?;
+        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn, &mut refusals)?;
         level = new_level;
         // A failed load (threats, stumps, stall) retries with bans kept:
         // stumps regrow and hunters wander off.

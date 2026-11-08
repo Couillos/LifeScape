@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
+use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
 use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
@@ -131,7 +132,7 @@ pub(crate) fn pick_tree_spot(
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
-    banned: &HashMap<(i32, i32), u64>,
+    banned: &mut HashMap<(i32, i32), u64>,
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
     let fence = if bot.allow_paid { None } else { toll_line(bot) };
     // Hunter filter unless opted out: spots a threat could reach are
@@ -228,13 +229,15 @@ pub(crate) fn pick_tree_spot(
             wide.dedup();
             let mut notes: Vec<String> = Vec::new();
             let mut far = 0u32;
-            for (spot_x, spot_z) in wide {
+            let mut banned_notes: Vec<((i32, i32), u64)> = Vec::new();
+            for &(spot_x, spot_z) in &wide {
                 let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
                 if dist > SAME_TIER_HOP_TILES {
                     far += 1;
                     continue;
                 }
                 let why = if let Some(until) = banned.get(&(spot_x, spot_z)) {
+                    banned_notes.push(((spot_x, spot_z), *until));
                     format!("banned-{}t", until.saturating_sub(now))
                 } else if !tree_live(bot, spot_x, spot_z, &top.trees) {
                     if is_stump(bot, spot_x, spot_z) {
@@ -263,6 +266,22 @@ pub(crate) fn pick_tree_spot(
                 notes.len(),
                 notes.join(" "),
             ));
+            // Anti-famine: every in-range spot banned (none stumped, gated
+            // or hunted — the tier is not depleted, just blacklisted) means
+            // a transient storm poisoned the clocks. Retry the oldest ban
+            // instead of degrading a tier dumbly; a still-dead spot re-bans
+            // on the next attempt, one release per repick so no hot loop.
+            if let Some(oldest) = starved_oldest(notes.len(), &banned_notes) {
+                banned.remove(&oldest);
+                bot.log(&format!(
+                    "tier starved by bans: {} {} banned in range, releasing oldest ({},{})",
+                    banned_notes.len(),
+                    top.product,
+                    oldest.0,
+                    oldest.1,
+                ));
+                return pick_tree_spot(bot, tiers, bank, level, &mut *banned);
+            }
         }
     }
     if saw_paid_only {
@@ -310,6 +329,37 @@ pub(crate) fn tree_still_there(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: 
 /// the tree (or a fresh stump), never a walk that fell short.
 pub(crate) fn adjacent_to(bot_x: i32, bot_z: i32, spot_x: i32, spot_z: i32) -> bool {
     (bot_x - spot_x).abs().max((bot_z - spot_z).abs()) <= 1
+}
+
+/// Adjacent direct refusals on a standing tree before it is condemned: the
+/// first refusal rides the short ban (a transient storm or a gate mid-swing
+/// refuses once), the repeat proves permanence (wall/fence). A walk-leg
+/// failure never counts as a strike, however close the walk died.
+pub(crate) const DIRECT_REFUSALS_TO_CONDEMN: u8 = 2;
+
+/// Ban for a failed tree stand. `direct` is true only when the server
+/// refused the chop click itself ("can't reach that"); walk-leg failures
+/// (never arrived, leg timeout, step refused far away) pass false and can
+/// never return the structural ban. Structural (240k) needs a repeated
+/// adjacent direct refusal of a standing tree; a stump is depletion (Gone).
+pub(crate) fn refusal_ban_ticks(adjacent: bool, stump: bool, direct: bool, prior_strikes: u8) -> u64 {
+    if stump {
+        return GONE_BAN_TICKS;
+    }
+    if direct && adjacent && prior_strikes + 1 >= DIRECT_REFUSALS_TO_CONDEMN {
+        return STRUCTURAL_BAN_TICKS;
+    }
+    UNREACHABLE_BAN_TICKS
+}
+
+/// Oldest banned spot to retry when a tier starves: Some only when every
+/// in-range spot seen is banned (100% — none stumped, gated or hunted).
+/// Anything else means the tier is genuinely unavailable, not blacklisted.
+pub(crate) fn starved_oldest(total_seen: usize, banned: &[((i32, i32), u64)]) -> Option<(i32, i32)> {
+    if total_seen == 0 || banned.len() != total_seen {
+        return None;
+    }
+    banned.iter().min_by_key(|(_, until)| *until).map(|(pos, _)| *pos)
 }
 
 #[cfg(test)]
@@ -366,13 +416,13 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         bot.allow_paid = false;
-        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &HashMap::new());
+        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new());
         let Some((_, hop_x, _)) = hopped else {
             panic!("hop should find a same-side tree, got None");
         };
         assert!(hop_x < 2920, "hop stays on the bot side of the fence, got x={hop_x}");
         bot.allow_paid = true;
-        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &HashMap::new());
+        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new());
         assert!(some.is_some(), "paid crossing reopens the same spots");
     }
 
@@ -396,7 +446,7 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let banned: HashMap<(i32, i32), u64> = [
+        let mut banned: HashMap<(i32, i32), u64> = [
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -408,7 +458,7 @@ mod tests {
         .into_iter()
         .map(|pos| (pos, u64::MAX))
         .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &banned);
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("hop should find the next yew cluster, got None");
         };
@@ -416,11 +466,12 @@ mod tests {
         assert_eq!((spot_x, spot_z), (2996, 3311), "nearest live yew cluster, got: ({spot_x},{spot_z})");
     }
 
-    /// Hop bound: with every yew inside SAME_TIER_HOP_TILES banned too,
-    /// the pick degrades to willow (logged) instead of marching across
-    /// the map for one log.
+    /// Starvation: every yew in range banned (a transient storm poisoned
+    /// the clocks) retries the oldest ban instead of degrading to willow.
+    /// Staggered clocks prove the oldest goes first, and its entry leaves
+    /// the map; a still-dead spot re-bans on the next attempt.
     #[test]
-    fn hop_bound_refuses_far_march() {
+    fn starved_tier_releases_oldest_ban() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         bot.world.level = 0;
@@ -436,7 +487,57 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let banned: HashMap<(i32, i32), u64> = [
+        let mut banned: HashMap<(i32, i32), u64> = [
+            ((3053, 3271), 1000u64),
+            ((3041, 3319), 2001),
+            ((3017, 3308), 2002),
+            ((3184, 3226), 2003),
+            ((3146, 3254), 2004),
+            ((3151, 3230), 2005),
+            ((3165, 3219), 2006),
+            ((2996, 3311), 2007),
+            ((2940, 3232), 2008),
+            ((2933, 3233), 2009),
+            ((2934, 3225), 2010),
+            ((2935, 3229), 2011),
+        ]
+        .into_iter()
+        .collect();
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned);
+        let Some((tier, spot_x, spot_z)) = picked else {
+            panic!("starved tier should retry the oldest ban, got None");
+        };
+        assert_eq!(tier.product, "yew_logs", "same tier retried, not willow, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (3053, 3271), "oldest ban retried first, got: ({spot_x},{spot_z})");
+        assert!(!banned.contains_key(&(3053, 3271)), "released entry leaves the map");
+        assert_eq!(banned.len(), 11, "one release per repick, got: {}", banned.len());
+    }
+
+    /// Degrade still happens when the tier is genuinely unavailable: one
+    /// in-range yew across a toll fence (not banned) breaks unanimity, so
+    /// no release fires and the pick settles for willow next door.
+    #[test]
+    fn toll_breaks_unanimity_and_degrades() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3053;
+        bot.world.z = 3271;
+        bot.allow_wild = true;
+        bot.allow_paid = false;
+        bot.toll_gates.insert((3000, 3271, 0));
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "draynor".to_string(),
+            members: false,
+        };
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        // Every in-range yew banned except (2996,3311), which sits across
+        // the fence: its note reads "toll", not "banned", so no release.
+        let mut banned: HashMap<(i32, i32), u64> = [
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -444,7 +545,6 @@ mod tests {
             (3146, 3254),
             (3151, 3230),
             (3165, 3219),
-            (2996, 3311),
             (2940, 3232),
             (2933, 3233),
             (2934, 3225),
@@ -453,11 +553,48 @@ mod tests {
         .into_iter()
         .map(|pos| (pos, u64::MAX))
         .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &banned);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned);
         let Some((tier, _, _)) = picked else {
             panic!("degrade should find a willow, got None");
         };
-        assert_eq!(tier.product, "willow_logs", "bound exceeded, degrade, got: {}", tier.product);
+        assert_eq!(tier.product, "willow_logs", "fenced tier degrades, got: {}", tier.product);
+        assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
+    }
+
+    /// Ban rule: transit failures (never arrived, leg timeout, step refused
+    /// far away) ride the short ban even with a full strike history — only
+    /// a repeated ADJACENT direct refusal condemns. A stump is depletion
+    /// (Gone), a refusal from afar is a walk that fell short.
+    #[test]
+    fn direct_refusal_needs_a_repeat_to_condemn() {
+        assert_eq!(refusal_ban_ticks(false, false, false, 5), UNREACHABLE_BAN_TICKS, "far walk never condemns");
+        assert_eq!(refusal_ban_ticks(true, false, false, 5), UNREACHABLE_BAN_TICKS, "walk failure never condemns");
+        assert_eq!(refusal_ban_ticks(true, false, true, 0), UNREACHABLE_BAN_TICKS, "first refusal retries");
+        assert_eq!(refusal_ban_ticks(true, false, true, 1), STRUCTURAL_BAN_TICKS, "repeat condemns");
+        assert_eq!(
+            refusal_ban_ticks(false, false, true, 1),
+            UNREACHABLE_BAN_TICKS,
+            "afar click is a short walk, not a walled stand"
+        );
+        assert_eq!(
+            refusal_ban_ticks(true, true, true, 1),
+            GONE_BAN_TICKS,
+            "stump is depletion even when adjacent"
+        );
+    }
+
+    /// Release rule: only a full ban sweep (100% of spots seen) releases
+    /// the oldest; one stump, gate or hunter means genuinely unavailable.
+    #[test]
+    fn starved_oldest_needs_full_ban_sweep() {
+        assert_eq!(starved_oldest(0, &[]), None, "nothing seen, nothing released");
+        assert_eq!(starved_oldest(2, &[((1, 1), 50)]), None, "mixed stump+ban never releases");
+        assert_eq!(
+            starved_oldest(2, &[((1, 1), 50), ((2, 2), 30)]),
+            Some((2, 2)),
+            "oldest first, got: {:?}",
+            starved_oldest(2, &[((1, 1), 50), ((2, 2), 30)])
+        );
     }
 
     /// F2P filter: travel plans F2P-only, so an out-of-F2P spot is never a
@@ -519,7 +656,7 @@ mod tests {
         plain.world.z = 3384;
         plain.allow_paid = true;
         plain.allow_wild = true;
-        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &banned);
+        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &mut banned);
         let Some((_, spot_x, spot_z)) = picked else {
             panic!("unfiltered pick should land on the only open spot, got None");
         };
@@ -532,7 +669,7 @@ mod tests {
         wired.allow_paid = true;
         wired.allow_wild = true;
         wired.nav_world = Some(world);
-        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &banned);
+        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &mut banned);
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
