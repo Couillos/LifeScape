@@ -24,6 +24,48 @@ const NEAR_BANK_TILES: i64 = 150;
 /// regrow and willow-at-home wins: degrade instead, logged.
 pub(crate) const SAME_TIER_HOP_TILES: i64 = 200;
 
+/// Shortlist bound for the walking-cost refinement: Manhattan ranks the
+/// filtered pool, only the top-K get a pure plan, the cheapest verified
+/// walk wins. K=4: live plans cost ~30-500 ms, so <=4 plans per pick
+/// (amortized over minutes of chopping); a true-nearest pushed past rank
+/// 4 needs a detour the toll filter already excludes. Truncation is
+/// logged; more than K plans never run per selection.
+pub(crate) const WALK_SHORTLIST: usize = 4;
+
+/// Cheapest-to-walk spot among pre-filtered candidates (toll, hunter, F2P,
+/// bans and liveness ran BEFORE, so no plan is wasted on an excluded
+/// spot). Pure plans only (no walk, no send). Unwired (old unit tests) or
+/// all-disconnected keeps the Manhattan order, never drops the pick — the
+/// planner itself is untouched, only the ranking changes. The returned
+/// metric is walk cost when planned, Manhattan otherwise.
+fn refine_by_walk(bot: &Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, (i32, i32))> {
+    if cands.is_empty() {
+        return None;
+    }
+    cands.sort();
+    let manhattan = cands[0];
+    if cands.len() > WALK_SHORTLIST {
+        bot.log(&format!("walk-refine: {} spots, planning top-{WALK_SHORTLIST} Manhattan (bound)", cands.len()));
+    }
+    let mut best = manhattan;
+    let mut walked = false;
+    for &(_, spot) in cands.iter().take(WALK_SHORTLIST) {
+        if let Some(cost) = bot.walk_cost(spot.0, spot.1, bot.world.level) {
+            if !walked || i64::from(cost) < best.0 {
+                best = (i64::from(cost), spot);
+            }
+            walked = true;
+        }
+    }
+    if walked && best.1 != manhattan.1 {
+        bot.log(&format!(
+            "walk-refine: Manhattan ({},{})+{} loses to ({},{}) walk {}",
+            manhattan.1.0, manhattan.1.1, manhattan.0, best.1.0, best.1.1, best.0
+        ));
+    }
+    Some(best)
+}
+
 pub(crate) fn pick_tier(tiers: &[knowledge::trees::TreeTier], level: i64) -> Option<knowledge::trees::TreeTier> {
     let mut best: Option<&knowledge::trees::TreeTier> = None;
     for tier in tiers {
@@ -205,7 +247,7 @@ fn nearest_hop_spot(
     saw_paid_only: &mut bool,
     saw_f2p_only: &mut bool,
 ) -> Option<(i64, (i32, i32))> {
-    let mut hop: Option<(i64, (i32, i32))> = None;
+    let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
     for (spot_x, spot_z) in tier_spawns_wide(tier, i64::from(bot.world.level)) {
         if Some((spot_x, spot_z)) == except {
             continue;
@@ -229,11 +271,11 @@ fn nearest_hop_spot(
             continue;
         }
         let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-        if dist <= SAME_TIER_HOP_TILES && hop.as_ref().is_none_or(|(known, _)| dist < *known) {
-            hop = Some((dist, (spot_x, spot_z)));
+        if dist <= SAME_TIER_HOP_TILES {
+            cands.push((dist, (spot_x, spot_z)));
         }
     }
-    hop
+    refine_by_walk(bot, cands)
 }
 
 pub(crate) fn pick_tree_spot(
@@ -254,11 +296,11 @@ pub(crate) fn pick_tree_spot(
     affordable.sort_by_key(|tier| -tier.level);
     let best = affordable.first().copied();
     let top_level = best.map(|tier| tier.level);
-    // First degraded-tier candidate, held back: the same-tier hop below
-    // preempts it, and only a failed hop falls through to it, logged.
-    let mut fallback: Option<(knowledge::trees::TreeTier, i32, i32)> = None;
+    // First degraded-tier candidates, held back: the same-tier hop below
+    // preempts them, and only a failed hop falls through to them, logged.
+    let mut fallback: Option<(knowledge::trees::TreeTier, Vec<(i64, (i32, i32))>)> = None;
     for tier in affordable {
-        let mut nearest: Option<(i64, (i32, i32))> = None;
+        let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
         for (spot_x, spot_z) in tier_spawns(tier, bank) {
             if Some((spot_x, spot_z)) == except {
                 continue;
@@ -282,17 +324,17 @@ pub(crate) fn pick_tree_spot(
                 continue;
             }
             let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-            if nearest.as_ref().is_none_or(|(known, _)| dist < *known) {
-                nearest = Some((dist, (spot_x, spot_z)));
-            }
+            cands.push((dist, (spot_x, spot_z)));
         }
-        if let Some((_, (spot_x, spot_z))) = nearest {
-            if Some(tier.level) == top_level {
+        if cands.is_empty() {
+            continue;
+        }
+        if Some(tier.level) == top_level {
+            if let Some((_, (spot_x, spot_z))) = refine_by_walk(bot, cands) {
                 return Some((tier.clone(), spot_x, spot_z));
             }
-            if fallback.is_none() {
-                fallback = Some((tier.clone(), spot_x, spot_z));
-            }
+        } else if fallback.is_none() {
+            fallback = Some((tier.clone(), cands));
         }
     }
     // Best tier fully stumped/banned near this bank: hop to the next live
@@ -422,13 +464,14 @@ pub(crate) fn pick_tree_spot(
     // Explicit downgrade: name both tiers so a willow interlude on a yew
     // account reads as a decision with a reason (the disqualified line
     // above), never a silent slide. `fallback` is the highest degraded
-    // tier with a live spot, i.e. one tier below the best when it qualifies.
-    if let (Some(top), Some((ref down, _, _))) = (best, fallback.as_ref()) {
+    // tier with live spots, refined by walking cost like the top tier.
+    let (down, cands) = fallback?;
+    if let Some(top) = best {
         if down.level < top.level {
             bot.log(&format!("degrading {}->{} for this repick (best tier unreachable, reasons above)", top.product, down.product));
         }
     }
-    fallback
+    refine_by_walk(bot, cands).map(|(_, (spot_x, spot_z))| (down, spot_x, spot_z))
 }
 
 /// Live loc id at a tile (live stream first, static template as fallback).
@@ -977,5 +1020,35 @@ mod tests {
         assert_eq!(tier.product, "willow_logs", "highest cuttable tier below yew, got: {}", tier.product);
         assert!(tier.product != "oak_logs" && tier.product != "logs", "never crashes to the bottom, got: {}", tier.product);
         assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
+    }
+
+    /// Walking-cost selection: the Manhattan-nearest oak (3252,3237, +26)
+    /// sits behind houses/doors from (3230,3241) while (3203,3246, +32)
+    /// walks clean — the lure loses. Measured walk: 50 vs 36.
+    #[test]
+    fn walk_cost_beats_manhattan_lure() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
+        let picked = refine_by_walk(&bot, cands).expect("non-empty pool picks");
+        assert_eq!(picked.1, (3203, 3246), "walk-cheap wins over the Manhattan lure, got: {picked:?}");
+    }
+
+    /// No planner wired (old offline tests, golden paths): the pick keeps
+    /// the Manhattan order, never empties — ranking changes, picking never.
+    #[test]
+    fn unwired_keeps_manhattan_order() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
+        let picked = refine_by_walk(&bot, cands).expect("non-empty pool picks");
+        assert_eq!(picked.1, (3252, 3237), "unwired keeps Manhattan order, got: {picked:?}");
     }
 }

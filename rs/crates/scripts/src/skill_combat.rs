@@ -598,6 +598,36 @@ fn is_shop_staff(npc_type: u16) -> bool {
     })
 }
 
+/// Walking-cost order for the acquisition window (pure, no walk, no
+/// send): Manhattan lies across rivers and fences, so the take(3) window
+/// below is reordered by pure plan cost before the door-aware approach
+/// verifies reachability by walking. Never more plans than approaches
+/// (same bound, K=3); unwired or unplannable keeps the Manhattan order.
+fn rank_foes(bot: &Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
+    if window.len() < 2 || bot.nav_world.is_none() {
+        return window;
+    }
+    let first = window[0];
+    let mut costed: Vec<(Option<u32>, (u16, i32, i32))> =
+        window.into_iter().map(|cand| (bot.walk_cost(cand.1, cand.2, bot.world.level), cand)).collect();
+    // Stable: unplannable foes keep their Manhattan rank behind the planned.
+    costed.sort_by(|a, b| match (a.0, b.0) {
+        (Some(first_cost), Some(second_cost)) => first_cost.cmp(&second_cost),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    if costed[0].1.0 != first.0 {
+        if let Some(cost) = costed[0].0 {
+            bot.log(&format!(
+                "walk-refine: nearest foe {} at ({},{}) loses to {} at ({},{}) walk {cost}",
+                first.0, first.1, first.2, costed[0].1.0, costed[0].1.1, costed[0].1.2
+            ));
+        }
+    }
+    costed.into_iter().map(|(_, cand)| cand).collect()
+}
+
 fn attack_nearest(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -621,11 +651,13 @@ fn attack_nearest(
         cands.retain(|(_, x, _)| same_fence_side(line, *x, home));
     }
     cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
-    // Door-aware acquisition, first reachable wins (max 3 foes): stand
-    // orthogonally adjacent via the router, which opens shut doors on the
-    // way (travel Segment::OpenDoor). NoRoute or a blocked ring bans the
-    // tile and tries the next goblin instead of insisting on this one.
-    for (slot, x, z) in cands.into_iter().take(3) {
+    // Door-aware acquisition, first reachable wins (max 3 foes): the window
+    // above is walking-cost ordered (rank_foes), so the first approach is
+    // the nearest by foot, not by air. Stand orthogonally adjacent via the
+    // router, which opens shut doors on the way (travel Segment::OpenDoor).
+    // NoRoute or a blocked ring bans the tile and tries the next goblin
+    // instead of insisting on this one.
+    for (slot, x, z) in rank_foes(bot, cands.into_iter().take(3).collect()) {
         match bot.approach_npc(slot, 100) {
             Ok(()) => {}
             Err(error)
@@ -1138,7 +1170,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_spot, bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
+    use super::{auto_spot, bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1322,5 +1354,35 @@ mod tests {
         assert_eq!(super::same_flank_clusters(3268, 3270, &mixed), vec![(3274, 3213, 4)], "west cluster dropped");
         let east_only = vec![(3274, 3213, 4)];
         assert_eq!(super::same_flank_clusters(3268, 3260, &east_only), east_only, "all-across still hunts");
+    }
+
+    /// Walking-cost order inside the take(3) window: slot 7 at (3252,3237)
+    /// is Manhattan-nearest from (3230,3241) but walks ~50 (houses/doors)
+    /// while slot 9 at (3203,3246) walks ~36 — the lure loses, and no walk
+    /// was spent to learn it (pure plans only).
+    #[test]
+    fn rank_foes_prefers_walk_cheap() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
+        let ranked = rank_foes(&bot, window);
+        assert_eq!(ranked, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "walk-cheap foe first, got: {ranked:?}");
+    }
+
+    /// No planner wired (or nothing plannable): the window keeps its
+    /// Manhattan order, never empties — ranking changes, picking never.
+    #[test]
+    fn rank_foes_unwired_keeps_manhattan() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
+        assert_eq!(rank_foes(&bot, window.clone()), window, "unwired keeps Manhattan order");
     }
 }
