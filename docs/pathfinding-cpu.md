@@ -205,7 +205,8 @@ Cycle de vie, calé sur le daemon existant :
 n'obtient pas de réponse (socket absent, timeout) bascule en fallback
 synchrone local — `plan()` direct sur le thread script (§5.2) + une ligne de
 log (`nav plan sync-fallback`, même format que `nav timing`,
-`travel.rs:214-217`) + compteur dans les métriques globales (§5.3). Le
+`travel.rs:214-217`) + refus comptés §5.3 et fallback compté côté worker
+(pas de global — motif §5.3). Le
 watchdog 45 s (`daemon.rs:27`, `WATCHDOG_STALE_SECS`) reste le filet existant.
 
 ### 5.2 Contrat d'appel : soumission IPC non-bloquante, poll au `pump`, fallback sync
@@ -248,14 +249,15 @@ cancel(ticket)                              // unload/stop → abandon propagé
   l'interrompt au prochain point de yield.
 - Priorité : replan d'exécution (`travel.rs:227-252`) devant plan initial
   **du même compte** (le replan écrase l'attente du compte, jamais le calcul
-  d'autrui — §5.8, règle de fairness).
+  d'autrui — §5.8, règle de fairness). DÉPASSÉ au lot 4 : le replan reste
+  sync-local by design (`travel.rs:406-410`), zéro file — aucune priorité file à implémenter.
 - Fallback synchrone : service injoignable, file pleine, ou thread tombé →
   `plan()` direct sur le thread script + une ligne de log (`nav plan
   sync-fallback`, même format que `nav timing`, `travel.rs:214-217`).
   Une seule tentative service par `submit` : le fallback ne resubmit jamais,
   donc pas de boucle fallback-en-panne — il calcule local, logge, compte.
-  Jamais de panne franche : dégrade, logge, compte (compteur `sync-fallback`
-  global, §5.3), le watchdog (`daemon.rs:143-213`, seuil 45 s
+  Jamais de panne franche : dégrade, logge, compte (refus comptés §5.3 +
+  fallback compté côté worker `travel.rs:126`, pas de global — motif §5.3), le watchdog (`daemon.rs:143-213`, seuil 45 s
   `WATCHDOG_STALE_SECS`, `daemon.rs:27`) reste le filet existant.
 
 ### 5.3 Données partagées UNE fois + cache GLOBAL unique
@@ -352,7 +354,9 @@ de bump au lot 3.
 
 Métriques GLOBALES (une ligne de log par plan, même format que `nav timing`,
 `travel.rs:214-217`) : `hit/miss` L1, taille, âge max, `hits` L2, profondeur
-file, refus, `sync-fallback`, **RSS service + carrés peints** (§5.9).
+file, refus (chaque refus dégrade en `sync-fallback` côté worker, loggé+compté
+par bot `travel.rs:126-127` — pas de compteur global : le service ne voit jamais
+le fallback, motif), **RSS service + carrés peints** (§5.9).
 Bornes mémoire : L1 ≤ 1024 plans (négatifs
 inclus, ~10 Mo max mesurés + ~0,35 Mo d'overhead), L2 ≤ 2 variantes ;
 dépassement L1/L2 = éviction LRU, jamais d'alloc non bornée. Les
@@ -408,7 +412,7 @@ Le thread-par-worker n'est PAS un lot : au plus une ÉTAPE TRANSITOIRE
 | 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:173-175`) ; revert = 1 fonction |
 | 2. Service minimal (sans cache) | monde+tables 1× au daemon, 1-2 threads std, IPC JSON newline (pattern `send_worker`, `daemon.rs:576-597`), `submit/poll/cancel`, fallback sync loggé, annulation sur `stop_requested`/`UNLOAD_TICKS` | p99 overhead IPC ≤ 5 ms mesuré (seuil proposé) sur legs golden (chrono `nav timing`, `travel.rs:214-217`) ; aucun reap à 100 ticks sur legs > 1 s ; fallback loggé+compté ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8 — la clé est posée dès ce lot même sans L1) ; revert = rebrancher `plan_travel` sync |
 | 3. Cache global + version | L1 global 1024 (plans + négatifs, troncation exacte, §5.3) + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; p99 reply ≤ 16 Ko vérifié (max golden mesuré 9,6 Ko) ; test : bump `nav_overrides.json` → 0 plan périmé servi (ni hit cache ni vol en cours, §5.3 rejet+resubmit) ; RAM service ≤ budget dur §5.9 (total ≤ 1 Go, marge incluse — pas « 1 monde + cache » mou) ; revert = version constante + L1 off |
-| 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus, `sync-fallback` | décision chiffrée : garder, régler (threads 1/2/4, L1 1024/2048/4096, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
+| 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus (+ `sync-fallback` loggé/compté côté worker) | décision chiffrée : garder, régler (threads 1/2/4, L1 1024/2048/4096, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
 | 5. (conditionnel) Graphe grossier portails | §2 ligne D, 1 niveau | seulement si le lot 4 montre un hit L1 plafonné par la distance (pas par les options) ; sinon : ne pas faire |
 
 Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
@@ -423,7 +427,7 @@ Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
 | Plan d'un autre bot servi (fuite inter-bots : requires/autorisations d'autrui) | Haute (péage/quête franchi sans droit, replan banni resservi) | **clé par construction** : `allow_paid` + `satisfied` + `excluded_edges` par bot dans la clé L1 (§5.8, preuve §5.3), jamais normalisés ni ignorés ; test d'isolement (§5.5 lot 2) |
 | Thundering herd au cold start (N bots × cache vide) | Moyenne (pic CPU = N Dijkstra d'un coup sur le service) | file globale 16 → `Refuse` → fallback sync étalé (§5.2) : le pic se répartit entre service et workers ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante) ; pré-peinture des carrés hubs au démarrage (§5.4, §5.8) ; préchauffage optionnel (rejouer les top paires §1.4 au boot — proposé, non tranché) |
 | Taille d'un `Plan` sérialisé sur le fil | Faible (**mesuré**, risque clos) | max golden 9,6 Ko, médiane 0,7 Ko (bench `/tmp` nov. 2026, format dossier) ; seuil d'alerte p99 > 16 Ko conservé au lot 4 ; au-delà : compacter (tuiles en delta) ou refuser le cache des monstres — non tranché, mesurer d'abord |
-| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | cap 2/compte + replan prioritaire sur l'attente du compte (§5.2, §5.8) : le fautif seul est refusé/basculé sync, les autres ne voient rien ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
+| File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | cap 2/compte, replan sync-local by design jamais en file (§5.2) : le fautif seul est refusé/basculé sync, les autres ne voient rien ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
 | Divergence sync/async (fallback ≠ service) | Moyenne | même `plan()` underneath des deux côtés, le service n'est qu'un wrapper d'appel (§5 : pas de fork) ; goldens identiques lots 1-2 |
 | Contention verrou monde (2 threads plan, `get` en écriture `static_world.rs:73-75`) | Faible (à mesurer) | ordre total file → résultats → cache → monde, monde feuille (§5.4) ; pré-peinture hubs ; lot 4 tranche (shard/`get` lecture si contention avérée — hors scope) |
 | Snapshot orphelin au reload/shutdown | Faible | requêtes en vol gardent l'ancien `Arc` (double-buffering, §5.3) ; au `shutdown` la file se vide puis le service meurt avec le daemon (§5.1) |
@@ -524,11 +528,14 @@ paires `(from, dest)` vs clé complète sur logs N bots).
 
 **Dimensionnement GLOBAL : 1 cache, 1 file, 1 monde.** RAM service =
 budget dur §5.9 (total nominal ~790 Mo ≤ 1 Go, marge ~230 Mo : base
-daemon 180 + monde 300 + transitoire 2×150 + L1/L2/file ~13) — contre
+daemon 180 provisoire (M3) + monde 300 + transitoire 2×150 + L1/L2/file ~13) — contre
 N×(55-185 Mo + LRU) avant. Invalidation unique : un seul
 reload (`reload-nav`, §5.3), quasi nulle comme en mono-worker. Aucun réglage
 par bot : le lot 4 ajuste (threads 1/2/4, L1 512/1024/2048, file 16±) sur hit
-rate mesuré, pas sur présomption — **sans jamais dépasser le §5.9 : toute
+rate mesuré, pas sur présomption — mesures threads 1/2/4 et hit-vs-distance
+citées en vérification lot 4 NON TRACÉES au 2026-11-08 : décision lot 4
+PROVISOIRE, re-mesure au déploiement (`route --release` + replay logs N bots,
+seuils §5.5 inchangés) avant tout réglage — **sans jamais dépasser le §5.9 : toute
 hausse d'un seuil (threads, L1, file) reboucle le tableau, sinon refusée**.
 
 **Fairness : règle explicite (plus d'isolation process).** File FIFO globale
@@ -536,8 +543,8 @@ bornée à 16 + **cap 2 tickets en vol par compte** (bornes proposées) :
 quand un bot sature son cap (replan-storm : échec → replan,
 `travel.rs:227-252`), seuls SES submits sont refusés → fallback sync local
 loggé (§5.2) — les autres comptes ne voient ni la file ni le CPU plan du
-fautif. Pas de priorité inter-comptes, pas de famine possible : le replan
-d'exécution n'est prioritaire que sur l'attente **du même compte** (§5.2).
+fautif. Pas de priorité inter-comptes, pas de famine possible (DÉPASSÉ au
+lot 4 : replan sync-local by design `travel.rs:406-410`, jamais en file — §5.2).
 Cold start N bots × cache vide : la file absorbe 16, le reste bascule sync —
 le pic s'étale au lieu de saturer (§5.6). Seule contention résiduelle :
 CPU/IO machine (service + N workers), hors sujet de ce doc.
@@ -558,13 +565,13 @@ lignes ci-dessous ; en cas d'écart, ce § fait foi.
 
 | Poste | Borne dure | Mesuré ou estimé | Garde-fou |
 |---|---|---|---|
-| Base daemon (sans monde) | 180 Mo | MESURÉ debug 2026-11-08 : daemon RSS 158 Mo, VmHWM 360 Mo (binaire debug, sans monde) ; release À MESURER (M3) | lecture RSS à chaque submit, loggé avec `nav timing` |
+| Base daemon (sans monde) | 180 Mo PROVISOIRE (bloquant M3) | CONTREDIT par le VmHWM 360 debug 2026-11-08 : daemon RSS 158 Mo, VmHWM 360 Mo (binaire debug, sans monde) ; release À MESURER (M3) avant tout déploiement, total nominal provisoire | lecture RSS à chaque submit (§5.9 enforcement lot 4), loggé avec `nav timing` |
 | Monde + tables chauds (1 snapshot, peinture complète) | 300 Mo | MESURÉ partiel : sessions 55-185 Mo (§1.3) ; 2026-11-08 : admin VmHWM 96 Mo, t01 VmHWM 128 Mo (mondes partiels, peinture paresseuse) ; ESTIMÉ full paint (1932 carrés) ≤ 250 Mo + marge → borne 300 ; À MESURER (M1) | pack fini (1932 carrés) = borne finie ; compteur carrés peints loggé ; pré-peinture hubs (§5.4/§5.8) au démarrage pour sortir la peinture du chemin chaud |
 | Cache L1 (1024 plans + négatifs) | 11 Mo | MESURÉ nov. 2026 : 1024 × 9,6 Ko + ~0,35 Mo overhead → ~10 Mo | cap en len strict + LRU ; entrée > 32 Ko servie une fois, non stockée ; p99 reply > 16 Ko = alerte conservée |
 | L2 (`prepare_edges`, 2 variantes) | 1 Mo | ESTIMÉ (2 × rides ~367 transitions) | 2 variantes max (A/D), jamais 4 |
 | File 16 + table résultats | 1 Mo | ESTIMÉ : 16 × (~4 Ko req + ~10 Ko plan) ≈ 224 Ko → borne 1 Mo | file bornée 16 + cap 2/compte : pleine → `Refuse` immédiat, jamais bloquant (§5.2) ; req > 8 Ko → `Refuse` (borne `satisfied`/`excluded_edges`) |
 | Transitoire par thread plan (`dist`+`prev`+`heap`+scratch `base/open/doors`, §1.1) | 150 Mo/thread × 2 = 300 Mo | ESTIMÉ borne haute à `MAX_VISITS` = 500 k (`plan.rs:57-58`) : `dist` ~17 Mo + `prev` ~56 Mo (valeur `PrevEdge` ~32-48 o, `plan.rs:235-240`) + `heap` ~8 Mo + scratch ~3×17 Mo ≈ 130 Mo → borne 150 ; le poste dominant ; À MESURER (M2) | pool fixe 2 threads, 1 recherche/thread ; kill au `PLAN_BUDGET` 1500 ms + cancel propagé (§5.2) ; jamais de 3ᵉ recherche concurrente |
-| **Total nominal (hors reload)** | **~790 Mo** | 180 + 300 + 11 + 1 + 1 + 300 = 793 → marge **~230 Mo** sous 1 Go | |
+| **Total nominal (hors reload)** | **~790 Mo PROVISOIRE (cf. base M3)** | 180 + 300 + 11 + 1 + 1 + 300 = 793 → marge **~230 Mo** sous 1 Go — provisoire tant que M3 n'a pas tranché la base | |
 | Reload `reload-nav` (2ᵉ snapshot transitoire) | +300 Mo, EXCLUSIF | ESTIMÉ (même borne que le snapshot) | admission gelée pendant le build (tout `submit` → `Refuse` + fallback sync), pool réduit à 1 thread, L1 évincé de moitié avant swap → pic ≈ 180 + 300 + 300 + 150 + 7 ≈ **940 Mo ≤ 1 Go** ; reload refusé si RSS > 600 Mo (réessai au creux) ; un seul reload à la fois ; requêtes en vol gardent l'ancien `Arc` (§5.3) |
 
 Aucun seuil de lot (L1 1024, file 16, cap 2, pool 2 threads) n'est augmenté
@@ -573,17 +580,22 @@ reload est refusée, même avec un hit mesuré supérieur.
 
 Enforcement — ce qui se passe QUAND on approche de la limite (pas « si ») :
 - **80 % (820 Mo)** : log WARN `pathfinding ram 80%` (même format que
-  `nav timing`) + L1 évincé de moitié + compteur `ram-warn`. La peinture
+  `nav timing`) + L1 évincé de moitié + compteur `ram-warn`. IMPLÉMENTÉ lot 4
+  (`ram_gate_for` + `evict_half`, compteurs exposés `nav-stats`). La peinture
   paresseuse continue (bornée par le pack, ligne monde) mais chaque carré
   peint est loggé.
 - **90 % (920 Mo)** : admission gelée — tout `submit` → `Refuse` + fallback
   sync local loggé/compté (§5.2) ; plans > 32 Ko servis mais non cachés ;
-  compteur `ram-shed`.
+  compteur `ram-shed`. IMPLÉMENTÉ lot 4 (`refused:ram-shed`, chemin Refuse
+  existant → fallback sync, compteur exposé `nav-stats`).
 - **95 % (970 Mo)** : abandon des recherches en vol les plus grosses
   (flag cancel du ticket, `dijkstra` `plan.rs:574-578` → `Aborted`) +
   fallback sync ; jamais de kill process, jamais de réponse partielle.
+  NON CÂBLÉ (TODO(shedding) `service.rs`) : le shed à 90 % gèle déjà toute
+  admission, l'abort ne servirait qu'en pic intra-recherche — assumé
+  jusqu'au premier shed observé.
 - **OOM = bug** : tout shed/éviction est loggé + compté (`ram-warn`,
-  `ram-shed`, `sync-fallback`, §5.3) ; le watchdog 45 s (`daemon.rs:27`)
+  `ram-shed` §5.9 + refus §5.3 + `sync-fallback` loggé/compté côté worker) ; le watchdog 45 s (`daemon.rs:27`)
   reste le filet ; pas de panic silencieuse, pas de boucle
   resubmit (une seule tentative service par `submit`, §5.2).
 - La file ne bloque jamais : pleine → `Refuse` immédiat → fallback sync
