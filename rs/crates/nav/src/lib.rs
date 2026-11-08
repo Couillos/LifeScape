@@ -11,5 +11,6 @@ pub mod nav;
 pub mod plan;
 pub mod reach;
 pub mod route;
+pub mod service;
 pub mod static_world;
 pub mod tables;
