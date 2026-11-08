@@ -190,6 +190,51 @@ pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
     }
 }
 
+/// Nearest live same-tier spawn within hop range. Pure scan: no logging,
+/// no bans, no mutation — the caller logs and decides. `fence = None`
+/// skips the toll check (cross-fence relocation when stranded).
+#[allow(clippy::too_many_arguments)]
+fn nearest_hop_spot(
+    bot: &Bot,
+    tier: &knowledge::trees::TreeTier,
+    fence: Option<i32>,
+    banned: &HashMap<(i32, i32), u64>,
+    except: Option<(i32, i32)>,
+    hunters: &[(i64, i64, i64)],
+    saw_paid_only: &mut bool,
+    saw_f2p_only: &mut bool,
+) -> Option<(i64, (i32, i32))> {
+    let mut hop: Option<(i64, (i32, i32))> = None;
+    for (spot_x, spot_z) in tier_spawns_wide(tier, i64::from(bot.world.level)) {
+        if Some((spot_x, spot_z)) == except {
+            continue;
+        }
+        if banned.contains_key(&(spot_x, spot_z))
+            || !tree_live(bot, spot_x, spot_z, &tier.trees)
+        {
+            continue;
+        }
+        if across_toll(bot.world.x, spot_x, fence) {
+            *saw_paid_only = true;
+            continue;
+        }
+        if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
+            *saw_f2p_only = true;
+            continue;
+        }
+        if hunters.iter().any(|(hunter_x, hunter_z, range)| {
+            (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
+        }) {
+            continue;
+        }
+        let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
+        if dist <= SAME_TIER_HOP_TILES && hop.as_ref().is_none_or(|(known, _)| dist < *known) {
+            hop = Some((dist, (spot_x, spot_z)));
+        }
+    }
+    hop
+}
+
 pub(crate) fn pick_tree_spot(
     bot: &Bot,
     tiers: &[knowledge::trees::TreeTier],
@@ -254,32 +299,16 @@ pub(crate) fn pick_tree_spot(
     // rides the short ban (Gone, 250t) so the next repick tries the
     // following cluster, then the tier below — no travel loop.
     if let Some(top) = best {
-        let mut hop: Option<(i64, (i32, i32))> = None;
-        for (spot_x, spot_z) in tier_spawns_wide(top, i64::from(bot.world.level)) {
-            if Some((spot_x, spot_z)) == except {
-                continue;
-            }
-            if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &top.trees) {
-                continue;
-            }
-            if across_toll(bot.world.x, spot_x, fence) {
-                saw_paid_only = true;
-                continue;
-            }
-            if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
-                saw_f2p_only = true;
-                continue;
-            }
-            if hunters.iter().any(|(hx, hz, range)| {
-                (i64::from(spot_x) - hx).abs() + (i64::from(spot_z) - hz).abs() <= *range
-            }) {
-                continue;
-            }
-            let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-            if dist <= SAME_TIER_HOP_TILES && hop.as_ref().is_none_or(|(known, _)| dist < *known) {
-                hop = Some((dist, (spot_x, spot_z)));
-            }
-        }
+        let hop = nearest_hop_spot(
+            bot,
+            top,
+            fence,
+            banned,
+            except,
+            &hunters,
+            &mut saw_paid_only,
+            &mut saw_f2p_only,
+        );
         if let Some((dist, (spot_x, spot_z))) = hop {
             bot.log(&format!(
                 "no {} near bank ({},{}), hopping same tier to ({spot_x},{spot_z}) +{dist} tiles",
@@ -287,7 +316,31 @@ pub(crate) fn pick_tree_spot(
             ));
             return Some((top.clone(), spot_x, spot_z));
         }
-        if hop.is_none() {
+        // Stranded on the wrong side of a toll fence: every in-range spot
+        // is across it, so waiting for respawns is futile — nothing will
+        // cross the fence on its own. Re-pick the best tier ignoring the
+        // toll filter and let travel_to route the free detour around the
+        // fence end (or pay it if allow_paid). The filter re-applies from
+        // the new side, so this relocates once instead of ping-ponging.
+        if fence.is_some() && saw_paid_only {
+            if let Some((dist, (spot_x, spot_z))) = nearest_hop_spot(
+                bot,
+                top,
+                None,
+                banned,
+                except,
+                &hunters,
+                &mut saw_paid_only,
+                &mut saw_f2p_only,
+            ) {
+                bot.log(&format!(
+                    "no {} on this side of the toll fence, relocating across to ({spot_x},{spot_z}) +{dist} tiles",
+                    top.product
+                ));
+                return Some((top.clone(), spot_x, spot_z));
+            }
+        }
+        {
             // One debug line per failed best-tier repick: every in-range
             // spot with its disqualification reason (banned-remaining,
             // stump, gone, toll, hunter). The in-range pool is small (a
@@ -463,9 +516,87 @@ mod tests {
         assert!(hunter_threatens(None, 1), "unknown level stays cautious");
     }
 
-    /// Toll fence: with `allow_paid == false` every spot across the line is
-    /// skipped (log + None, no silent fallback); with `true` the same query
-    /// returns a spot. Draynor bank, bot far west, fence between.
+    /// Toll fence: the only live yews sit across the fence → relocate
+    /// to the nearest same-tier spot instead of degrading to willow.
+    /// Every in-range yew banned except (2996,3311), which sits across
+    /// the fence: its note reads "toll", not "banned", so no release.
+    /// Relocation (not the anti-famine release) resolves the pick.
+    #[test]
+    fn toll_stranded_relocates_across_fence_to_same_tier() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3053;
+        bot.world.z = 3271;
+        bot.allow_wild = true;
+        bot.allow_paid = false;
+        bot.toll_gates.insert((3000, 3271, 0));
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "draynor".to_string(),
+            members: false,
+        };
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        // Every in-range yew banned except (2996,3311), across the fence.
+        let mut banned: HashMap<(i32, i32), u64> = [
+            (3053, 3271),
+            (3041, 3319),
+            (3017, 3308),
+            (3184, 3226),
+            (3146, 3254),
+            (3151, 3230),
+            (3165, 3219),
+            (2940, 3232),
+            (2933, 3233),
+            (2934, 3225),
+            (2935, 3229),
+        ]
+        .into_iter()
+        .map(|pos| (pos, u64::MAX))
+        .collect();
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
+        let Some((tier, spot_x, spot_z)) = picked else {
+            panic!("stranded bot should relocate across the fence, got None");
+        };
+        assert_eq!(tier.product, "yew_logs", "same tier, not willow, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
+        assert_eq!(banned.len(), 11, "relocation resolves without releasing bans, got: {}", banned.len());
+    }
+
+    /// Live Al-Kharid geometry: bot east of the toll fence, every yew
+    /// in range west of it — relocates to (3249,3201) instead of
+    /// waiting out bans or degrading. No east-fence yew exists in range.
+    #[test]
+    fn relocate_across_alkharid_fence_to_yew() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3269;
+        bot.world.z = 3169;
+        bot.allow_wild = true;
+        bot.allow_paid = false;
+        bot.toll_gates.insert((3268, 3169, 0));
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "draynor".to_string(),
+            members: false,
+        };
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut HashMap::new(), None);
+        let Some((tier, spot_x, spot_z)) = picked else {
+            panic!("stranded bot should relocate across the fence, got None");
+        };
+        assert_eq!(tier.product, "yew_logs", "same tier, not degraded, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (3249, 3201), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
+        assert!(spot_x < 3268, "relocated west of the fence, got x={spot_x}");
+    }
+
     #[test]
     fn toll_fence_filters_across_spots() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -585,11 +716,13 @@ mod tests {
         assert_eq!(banned.len(), 11, "one release per repick, got: {}", banned.len());
     }
 
-    /// Degrade still happens when the tier is genuinely unavailable: one
-    /// in-range yew across a toll fence (not banned) breaks unanimity, so
-    /// no release fires and the pick settles for willow next door.
+    /// Degrade only when the tier is genuinely unavailable everywhere:
+    /// every in-range yew banned except (2996,3311), which sits across
+    /// the fence — relocation crosses to it instead of settling for the
+    /// willow next door. The toll note still breaks unanimity (no ban
+    /// release), the pick just goes over the fence now.
     #[test]
-    fn toll_breaks_unanimity_and_degrades() {
+    fn toll_stranded_relocates_instead_of_degrading() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         bot.world.level = 0;
@@ -625,12 +758,13 @@ mod tests {
         .into_iter()
         .map(|pos| (pos, u64::MAX))
         .collect();
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
-        let Some((tier, _, _)) = picked else {
-            panic!("degrade should find a willow, got None");
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
+        let Some((tier, spot_x, spot_z)) = picked else {
+            panic!("stranded bot should relocate across the fence, got None");
         };
-        assert_eq!(tier.product, "willow_logs", "fenced tier degrades, got: {}", tier.product);
-        assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
+        assert_eq!(tier.product, "yew_logs", "same tier across the fence, not willow, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
+        assert_eq!(banned.len(), 11, "relocation instead of release, got: {}", banned.len());
     }
 
     /// Strike rule: only a refusal from a footprint-operable stand counts
