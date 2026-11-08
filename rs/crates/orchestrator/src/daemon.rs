@@ -877,6 +877,22 @@ impl Orchestrator {
                 let _ = UnixStream::connect(paths::socket_path());
                 return object(vec![("ok", Value::Bool(true))]);
             }
+            "reload-nav" => {
+                // Gamedata changed on disk (overrides, transitions,
+                // pack): rebuild the snapshot beside the live one and
+                // swap it. In-flight requests finish on the old Arc;
+                // the bumped version rejects every stale answer.
+                return match crate::plan_service::reload() {
+                    Ok(report) => object(vec![
+                        ("ok", Value::Bool(true)),
+                        ("reloaded", str_value(&report)),
+                    ]),
+                    Err(error) => object(vec![
+                        ("ok", Value::Bool(false)),
+                        ("error", str_value(&error)),
+                    ]),
+                };
+            }
             _ => {}
         }
         object(vec![

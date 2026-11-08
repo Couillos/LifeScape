@@ -585,7 +585,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -697,6 +697,11 @@ pub fn cli(argv: &[String]) -> i32 {
             // needs headroom past the per-command worker timeout.
             let reply = send_command(&object(vec![("cmd", str_value("shutdown"))]), Duration::from_secs(100))
                 .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]));
+            println!("{}", json::stringify_pretty(&reply));
+            if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
+        "reload-nav" => {
+            let reply = send(object(vec![("cmd", str_value("reload-nav"))]));
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }

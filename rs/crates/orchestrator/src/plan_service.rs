@@ -6,7 +6,7 @@
 //! lot 2 goldens forbid). Reload is lot 3 (`reload-nav` + swap).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lifescape_nav::service::{self, Service, Snapshot};
 use lifescape_nav::tables::Tables;
@@ -58,7 +58,29 @@ pub fn load_snapshot() -> Result<Arc<Snapshot>, String> {
 
 /// Spawn the pool + acceptor on the daemon socket.
 pub fn start(snapshot: Arc<Snapshot>) -> Result<Arc<Service>, String> {
-    Service::start(snapshot, &socket_path(), service::PLAN_THREADS)
+    let service = Service::start(snapshot, &socket_path(), service::PLAN_THREADS)?;
+    *registry().lock().unwrap() = Some(service.clone());
+    Ok(service)
+}
+
+/// Operator `reload-nav` (lot 3): rebuild the snapshot beside the live
+/// one, then swap it atomically. In-flight requests keep the old `Arc`;
+/// the version bump makes every old L1 key and old vol unreachable, so
+/// zero stale plans are served after the swap.
+pub fn reload() -> Result<String, String> {
+    let service = registry()
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "pathfinding service not running".to_string())?;
+    let snapshot = load_snapshot()?;
+    let (old, new) = service.reload(snapshot);
+    Ok(format!("{old} -> {new}"))
+}
+
+fn registry() -> &'static Mutex<Option<Arc<Service>>> {
+    static SERVICE: OnceLock<Mutex<Option<Arc<Service>>>> = OnceLock::new();
+    SERVICE.get_or_init(|| Mutex::new(None))
 }
 
 #[cfg(test)]
@@ -98,7 +120,7 @@ mod tests {
         };
         let start = std::time::Instant::now();
         loop {
-            match client.poll(id).expect("poll") {
+            match client.poll(id).expect("poll").0 {
                 lifescape_nav::service::Poll::Ready(plan) => {
                     assert!(!plan.segments.is_empty(), "daemon snapshot plans");
                     break;

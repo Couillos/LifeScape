@@ -1196,6 +1196,42 @@ mod tests {
     }
 
     #[test]
+    fn service_version_skew_resubmits_once() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, encode_plan, test_socket};
+        let (world, tables) = test_nav_context();
+        // Server on "served-v2", worker still on "stale-v1": the submit
+        // refuses stale, the worker adopts the served version and retries
+        // exactly once — the plan lands, no fallback, no loop.
+        let service =
+            Service::start(Snapshot::new(world, tables, "served-v2".to_string()), &test_socket("sdk-skew"), 1).expect("service starts");
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let mut bot = offline_bot(3228, 3214);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("served-v2".to_string());
+        // Warmup on the aligned version (L2 + painted squares): the skew
+        // below must exercise the resubmit path, not a cold compute past
+        // the keepalive window.
+        let _ = bot.plan_travel(dest).expect("warmup plans");
+        assert_eq!(bot.plan_sync_fallbacks, 0, "warmup is remote");
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.plan_data_version = Some("stale-v1".to_string());
+        let (_, _, _, via, _) = bot.plan_travel(dest).expect("skew resubmits, never falls back");
+        assert!(!via.segments.is_empty(), "resubmitted plan lands");
+        assert_eq!(bot.plan_sync_fallbacks, 0, "a resubmit is not a fallback");
+        assert_eq!(bot.plan_data_version.as_deref(), Some("served-v2"), "worker adopts the served version");
+        // Same version now: the next plan is a plain L1 hit, still sync-free.
+        let (_, _, _, again, _) = bot.plan_travel(dest).expect("aligned version plans");
+        assert_eq!(
+            lifescape_json::stringify(&encode_plan(&via)),
+            lifescape_json::stringify(&encode_plan(&again)),
+            "same version, same plan"
+        );
+        assert_eq!(bot.plan_sync_fallbacks, 0, "still no fallback");
+    }
+
+    #[test]
     fn error_kind_covers_every_executor_outcome() {
         assert_eq!(TravelErrorKind::of(&Error::StepRefused("x".to_string())), TravelErrorKind::StepRefused);
         assert_eq!(TravelErrorKind::of(&Error::DoorDidNotOpen("x".to_string())), TravelErrorKind::DoorDidNotOpen);
