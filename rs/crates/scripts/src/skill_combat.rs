@@ -751,14 +751,14 @@ fn fight(
         None => bot.log("toll fence: no gates mapped, cross-fence picks unfiltered"),
     }
     loop {
-        if ticks_limit > 0 && bot.world.ticks - started >= ticks_limit {
+        if ticks_limit > 0 && bot.world.ticks.saturating_sub(started) >= ticks_limit {
             break;
         }
         if kills_limit > 0 && kills >= kills_limit {
             break;
         }
         bot.pump(2)?;
-        if bot.world.ticks - last_event_check >= 25 {
+        if bot.world.ticks.saturating_sub(last_event_check) >= 25 {
             last_event_check = bot.world.ticks;
             check_events(bot)?;
         }
@@ -787,10 +787,10 @@ fn fight(
                 // One foe never holds the bot past the cap, xp trickle or
                 // not: ban, step toward it (door-aware), repick. A target at
                 // 1 hp retried after the ban expiry, nothing is lost.
-                if bot.world.ticks - engaged_at >= KILL_CAP_TICKS {
+                if bot.world.ticks.saturating_sub(engaged_at) >= KILL_CAP_TICKS {
                     let (foe_x, foe_z) =
                         bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
-                    bot.log(&format!("target {slot} alive {}t, moving on", bot.world.ticks - engaged_at));
+                    bot.log(&format!("target {slot} alive {}t, moving on", bot.world.ticks.saturating_sub(engaged_at)));
                     unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
                     let _ = bot.approach_npc(slot, 60);
                     target_npc = None;
@@ -886,7 +886,7 @@ fn fight(
                 } else if (bot.world.x, bot.world.z) != progress_pos {
                     progress_pos = (bot.world.x, bot.world.z);
                     progress_at = bot.world.ticks;
-                } else if bot.world.ticks - progress_at >= FIGHT_STALL_TICKS {
+                } else if bot.world.ticks.saturating_sub(progress_at) >= FIGHT_STALL_TICKS {
                     bot.log(&format!("stall on npc {slot}, repicking"));
                     unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
                     let _ = bot.approach_npc(slot, 60);
@@ -895,7 +895,7 @@ fn fight(
                     progress_at = bot.world.ticks;
                     continue;
                 }
-                if bot.world.ticks - last_attack >= 5 {
+                if bot.world.ticks.saturating_sub(last_attack) >= 5 {
                     bot.op_npc(2, slot)?;
                     last_attack = bot.world.ticks;
                 }
@@ -904,7 +904,7 @@ fn fight(
             kills += 1;
             let loot_from = bot.world.ticks;
             let taken = loot_ground(bot)?;
-            bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks - loot_from));
+            bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks.saturating_sub(loot_from)));
             // Loot can change the best: one re-evaluation when something
             // was picked up, never on empty kills.
             if taken > 0 {
