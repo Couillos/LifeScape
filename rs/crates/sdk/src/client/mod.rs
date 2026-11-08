@@ -108,6 +108,13 @@ pub struct Bot {
     /// Planner tables (transitions, verdicts, door rules), wired by the
     /// session at open alongside `nav_world`.
     pub nav_tables: Option<Arc<lifescape_nav::tables::Tables>>,
+    /// Lot 2 pathfinding service handle (daemon IPC). `None` = sync local
+    /// plan; a dead/refusing service also falls back sync (logged+counted).
+    pub plan_client: Option<lifescape_nav::service::PlanClient>,
+    /// Data version sent with submits (set once at session open).
+    pub plan_data_version: Option<String>,
+    /// Sync fallbacks taken because the service was down/refusing/stale.
+    pub plan_sync_fallbacks: u64,
     /// Last positions with their tick, oldest first, capped
     /// (`TRAIL_CAP`): the failure dossier ships the last 50.
     pub trail: Vec<(u64, i32, i32, i32)>,
@@ -147,6 +154,9 @@ impl Bot {
             transitions: Vec::new(),
             nav_world: None,
             nav_tables: None,
+            plan_client: None,
+            plan_data_version: None,
+            plan_sync_fallbacks: 0,
             trail: Vec::new(),
             on_pump: None,
             pause_gate: None,

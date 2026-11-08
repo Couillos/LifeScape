@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_nav::plan::{self, EdgeId, NavOptions, NoRouteReason, Plan, Segment, Tile};
+use lifescape_nav::plan::{self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, Tile};
+use lifescape_nav::service::{self, Poll as ServicePoll, Submit as ServiceSubmit};
 use lifescape_nav::static_world::StaticWorld;
 use lifescape_nav::tables::Tables;
 
@@ -47,9 +48,21 @@ const COST_BASE: u64 = 347;
 
 /// Per-phase wall-clock of one plan: a trivial leg must cost
 /// milliseconds, so a seconds-long plan names its spinner here.
+#[derive(Debug)]
 struct PlanTimings {
     options_ms: u128,
     plan_ms: u128,
+    service_ms: Option<u128>,
+}
+
+/// One remote plan attempt: ready, a real diagnosis, a transport fallback
+/// (sync local), or an operator stop.
+#[derive(Debug)]
+enum RemoteOutcome {
+    Ready(Plan, u128),
+    NoRoute(NoRoute),
+    Fallback(String),
+    Interrupted(String),
 }
 
 impl Bot {
@@ -82,34 +95,125 @@ impl Bot {
         let options = self.nav_options(&tables);
         let options_ms = options_start.elapsed().as_millis();
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        // LOT2 revert point (1 point): sans service, `plan_sync` direct.
+        // With a service the same `plan()` runs pool-side; sync is only
+        // the transport fallback (down/refused/stale), logged and counted.
         let plan_start = std::time::Instant::now();
-        let plan = plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()).map_err(|no| {
-            if no.reason == NoRouteReason::Aborted {
-                return Error::Interrupted(format!("plan aborted at {:?}", self.position()));
+        let (plan, service_ms) = if self.plan_client.is_some() {
+            match self.plan_remote(&options, from, dest) {
+                RemoteOutcome::Ready(plan, ipc_ms) => (plan, Some(ipc_ms)),
+                RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
+                RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
+                RemoteOutcome::Fallback(reason) => {
+                    let plan = self.plan_sync(&world, &tables, &options, from, dest)?;
+                    let plan_ms = plan_start.elapsed().as_millis();
+                    self.plan_sync_fallbacks += 1;
+                    self.log(&format!("nav plan sync-fallback reason={reason} options={options_ms}ms plan={plan_ms}ms"));
+                    (plan, None)
+                }
             }
-            let mut blocked: Vec<String> =
-                no.blocked_by_requirements.iter().map(|(edge, tags)| format!("{edge:?} missing {tags:?}")).collect();
-            blocked.sort();
-            let observed = format!(
-                "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{}) blocked=[{}] disabled_nearby={}",
-                from.x,
-                from.z,
-                from.level,
-                dest.x,
-                dest.z,
-                dest.level,
-                no.reason.as_str(),
-                no.closest_reachable.x,
-                no.closest_reachable.z,
-                no.closest_reachable.level,
-                blocked.join("; "),
-                no.disabled_transitions_nearby.len(),
-            );
-            let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
-            self.fail(from, dest, &options, None, None, &expected, &Error::Travel(observed))
-        })?;
+        } else {
+            (self.plan_sync(&world, &tables, &options, from, dest)?, None)
+        };
         let plan_ms = plan_start.elapsed().as_millis();
-        Ok((world, tables, options, plan, PlanTimings { options_ms, plan_ms }))
+        Ok((world, tables, options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
+    }
+
+    /// Sync plan: the shared engine underneath both paths.
+    fn plan_sync(
+        &mut self,
+        world: &Arc<StaticWorld>,
+        tables: &Arc<Tables>,
+        options: &NavOptions,
+        from: Tile,
+        dest: Tile,
+    ) -> Result<Plan> {
+        plan::plan_yielding(world, tables, from, dest, options, &mut || self.plan_yield())
+            .map_err(|no| self.fail_no_route(from, dest, options, no))
+    }
+
+    /// Remote plan: submit non-blocking, poll with the keepalive between
+    /// polls (the poll loop replaces the Dijkstra yield: same guard, so a
+    /// remote plan over one second never starves the socket into a
+    /// 100-tick reap, by construction). Never blocks the worker:
+    /// refuse/down/stale/timeout all fall back to a local sync plan.
+    fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
+        let (client, version) = match (self.plan_client.clone(), self.plan_data_version.clone()) {
+            (Some(client), version) => (client, version.unwrap_or_default()),
+            (None, _) => return RemoteOutcome::Fallback("no-service-handle".to_string()),
+        };
+        let attempt_start = std::time::Instant::now();
+        let ticket = match client.submit(from, dest, options, &version) {
+            Ok(ServiceSubmit::Accepted { id, version: served }) => {
+                if !version.is_empty() && !served.is_empty() && served != version {
+                    let _ = client.cancel(id);
+                    return RemoteOutcome::Fallback(format!("version-skew client={version} server={served}"));
+                }
+                id
+            }
+            Ok(ServiceSubmit::Refused { reason, .. }) => return RemoteOutcome::Fallback(reason),
+            Err(error) => return RemoteOutcome::Fallback(error),
+        };
+        let deadline = std::time::Instant::now() + service::SERVICE_WAIT_MAX;
+        // Tight first polls (a fast plan answers inside one round-trip),
+        // then 2 ms pacing: IPC rhythm, not a game wait (keepalive stays
+        // tick-driven).
+        let mut polls = 0u32;
+        loop {
+            match client.poll(ticket) {
+                Ok(ServicePoll::Ready(plan)) => return RemoteOutcome::Ready(plan, attempt_start.elapsed().as_millis()),
+                Ok(ServicePoll::Failed(no)) => {
+                    return if no.reason == NoRouteReason::Aborted {
+                        RemoteOutcome::Fallback("server-aborted".to_string())
+                    } else {
+                        RemoteOutcome::NoRoute(no)
+                    };
+                }
+                Ok(ServicePoll::Unknown) => return RemoteOutcome::Fallback("unknown-ticket".to_string()),
+                Ok(ServicePoll::Pending) => {}
+                Err(error) => return RemoteOutcome::Fallback(error),
+            }
+            if !self.plan_yield() {
+                let _ = client.cancel(ticket);
+                return RemoteOutcome::Interrupted(format!("plan aborted at {:?}", self.position()));
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = client.cancel(ticket);
+                return RemoteOutcome::Fallback("service-timeout".to_string());
+            }
+            polls += 1;
+            if polls >= 10 {
+                std::thread::sleep(service::SERVICE_POLL_INTERVAL);
+            }
+        }
+    }
+
+    /// Shared NoRoute mapping: sync and remote diagnoses become the same
+    /// dossier-carrying error (wrapper, not fork).
+    fn fail_no_route(&mut self, from: Tile, dest: Tile, options: &NavOptions, no: NoRoute) -> Error {
+        if no.reason == NoRouteReason::Aborted {
+            return Error::Interrupted(format!("plan aborted at {:?}", self.position()));
+        }
+        let mut blocked: Vec<String> =
+            no.blocked_by_requirements.iter().map(|(edge, tags)| format!("{edge:?} missing {tags:?}")).collect();
+        blocked.sort();
+        let observed = format!(
+            "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{}) blocked=[{}] disabled_nearby={}",
+            from.x,
+            from.z,
+            from.level,
+            dest.x,
+            dest.z,
+            dest.level,
+            no.reason.as_str(),
+            no.closest_reachable.x,
+            no.closest_reachable.z,
+            no.closest_reachable.level,
+            blocked.join("; "),
+            no.disabled_transitions_nearby.len(),
+        );
+        let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
+        self.fail(from, dest, options, None, None, &expected, &Error::Travel(observed))
     }
 
     /// Yield point for long plans: the plan runs on the only socket
@@ -212,8 +316,11 @@ impl Bot {
         self.ensure_area(self.world.x, self.world.z, 70);
         let ensure_ms = ensure_start.elapsed().as_millis();
         self.log(&format!(
-            "nav timing options={}ms plan={}ms ensure_area={}ms",
-            timings.options_ms, timings.plan_ms, ensure_ms,
+            "nav timing options={}ms plan={}ms ensure_area={}ms{}",
+            timings.options_ms,
+            timings.plan_ms,
+            ensure_ms,
+            timings.service_ms.map(|ms| format!(" service={ms}ms")).unwrap_or_default(),
         ));
         self.publish_plan(&plan, dest);
         let start = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
@@ -958,6 +1065,72 @@ mod tests {
         assert!(value.get("plan").is_null());
         assert!(value.get("failed_segment").is_null());
         assert_eq!(value.get("error").get("kind").as_str(), Some("NoRoute"));
+    }
+
+    #[test]
+    fn service_down_falls_back_sync_and_counts() {
+        use lifescape_nav::service::{PlanClient, test_socket};
+        let mut bot = offline_bot(3228, 3214);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        // No listener on this socket: submit fails, the plan still lands.
+        bot.plan_client = Some(PlanClient::new(&test_socket("absent"), "t01"));
+        let (_, _, _, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("down service falls back sync");
+        assert!(!plan.segments.is_empty(), "fallback plans for real");
+        assert_eq!(bot.plan_sync_fallbacks, 1, "fallback is counted");
+    }
+
+    #[test]
+    fn service_plan_matches_sync_without_fallback() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, encode_plan, test_socket};
+        let (world, tables) = test_nav_context();
+        let service =
+            Service::start(Snapshot::new(world, tables, "test".to_string()), &test_socket("sdk-plan"), 1).expect("service starts");
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let mut bot = offline_bot(3228, 3214);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test".to_string());
+        let (_, _, _, via, timings) = bot.plan_travel(dest).expect("service plans");
+        assert_eq!(bot.plan_sync_fallbacks, 0, "no fallback on a healthy service");
+        assert!(timings.service_ms.is_some(), "service path timed");
+        let mut sync_bot = offline_bot(3228, 3214);
+        sync_bot.last_keepalive = Some(std::time::Instant::now());
+        sync_bot.last_send_tick = sync_bot.world.ticks;
+        let (_, _, _, sync, _) = sync_bot.plan_travel(dest).expect("sync plans");
+        assert_eq!(
+            lifescape_json::stringify(&encode_plan(&via)),
+            lifescape_json::stringify(&encode_plan(&sync)),
+            "service wraps plan(), never forks",
+        );
+    }
+
+    #[test]
+    fn service_poll_honors_operator_stop() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service =
+            Service::start(Snapshot::new(world, tables, "test".to_string()), &test_socket("sdk-stop"), 1).expect("service starts");
+        let mut bot = offline_bot(3222, 3222);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test".to_string());
+        // Long leg (264 tiles): the first poll is still pending, so the
+        // poll loop reaches the operator hook and aborts instead of
+        // going silent (the 100-tick reap guard, by construction).
+        bot.on_pump = Some(Arc::new(|_: &mut Bot| false));
+        let err = match bot.plan_travel(Tile { x: 3250, z: 3420, level: 0 }) {
+            Ok(_) => panic!("stop aborts the remote plan"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::Interrupted(_)), "stop maps to Interrupted, got {err:?}");
+        assert_eq!(bot.plan_sync_fallbacks, 0, "a stop is not a fallback");
+        // The server survives the cancel: the next plan lands.
+        bot.on_pump = None;
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("server healthy after cancel");
     }
 
     #[test]
