@@ -346,8 +346,19 @@ fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Opti
                     break;
                 }
             }
-            Segment::OpenDoor { .. } => {
-                cost += plan::DOOR_COST;
+            Segment::OpenDoor { door, stand, cross_to } => {
+                // One segment per opening, one or two Dijkstra edges:
+                // stepping on then straight off the same door merges two
+                // edges into one segment (assemble), while stopping on the
+                // tile or starting from it rides one. Count per edge, so
+                // the prefix prices exactly what a fresh search charges.
+                let door_tile = Tile {
+                    x: door.x,
+                    z: door.z,
+                    level: door.level,
+                };
+                let edges = u32::from(*stand != door_tile) + u32::from(*cross_to != door_tile);
+                cost += edges * plan::DOOR_COST;
                 remaining -= 1;
                 segments.push(segment.clone());
                 if remaining == 0 {
@@ -1060,19 +1071,22 @@ impl Service {
             options,
             cancel,
         };
-        if self.queue_tx.try_send(job).is_err() {
-            self.results.lock().unwrap().remove(&id);
-            self.tickets.lock().unwrap().remove(&id);
-            self.waiters.lock().unwrap().remove(&id);
+        if let Err(error) = self.queue_tx.try_send(job) {
+            // The job back: its key recovers the exact in-flight entry
+            // (the tickets map is already cleared below, so it cannot).
+            let job = match error {
+                mpsc::TrySendError::Full(back) | mpsc::TrySendError::Disconnected(back) => back,
+            };
+            self.results.lock().unwrap().remove(&job.id);
+            self.tickets.lock().unwrap().remove(&job.id);
+            self.waiters.lock().unwrap().remove(&job.id);
             let mut inflight = self.inflight.lock().unwrap();
-            if let Some(stored) = self.tickets.lock().unwrap().get(&id).cloned() {
-                if inflight.get(&stored) == Some(&id) {
-                    inflight.remove(&stored);
-                }
+            if inflight.get(&job.key) == Some(&job.id) {
+                inflight.remove(&job.key);
             }
             let mut admission = self.admission.lock().unwrap();
-            let in_flight = admission.get(&account).copied().unwrap_or(1);
-            admission.insert(account, in_flight.saturating_sub(1));
+            let in_flight = admission.get(&job.account).copied().unwrap_or(1);
+            admission.insert(job.account, in_flight.saturating_sub(1));
             return object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value("refused:queue-full")),
@@ -2133,6 +2147,44 @@ mod tests {
         }
         let sync = sync.expect("sync prefix converges");
         assert_eq!(served.cost, sync.cost, "truncated prefix is substructure-optimal");
+    }
+
+    /// LOT3 truncation, merged doors: `assemble` folds stepping on then
+    /// straight off the same door (two Dijkstra edges, 2 x DOOR_COST) into
+    /// one segment. The prefix must count per edge, not per segment —
+    /// a merged prefix served 10 under the true 20 (same tiles, tight
+    /// executor timeout, `served != sync`).
+    #[test]
+    fn truncation_counts_merged_door_per_edge() {
+        let (_, tables) = shared_world();
+        let from = Tile { x: 0, z: 0, level: 0 };
+        let stand = Tile { x: 1, z: 0, level: 0 };
+        let door_tile = Tile { x: 2, z: 0, level: 0 };
+        let beyond = Tile { x: 3, z: 0, level: 0 };
+        let door = crate::plan::DoorRef { loc: 7, x: 2, z: 0, level: 0 };
+        // Merged: cross_to past the door tile (two edges).
+        let merged = Plan {
+            segments: vec![
+                Segment::Walk { tiles: vec![stand] },
+                Segment::OpenDoor { door: door.clone(), stand, cross_to: beyond },
+                Segment::Walk { tiles: vec![Tile { x: 4, z: 0, level: 0 }] },
+            ],
+            cost: 1 + 2 * plan::DOOR_COST + 1,
+            adjusted_dest: None,
+        };
+        let prefix = truncate_plan(&tables, from, &merged, beyond).expect("on-path");
+        assert_eq!(prefix.cost, 1 + 2 * plan::DOOR_COST, "merged door counts two edges");
+        // Single: stopping on the door tile (one edge).
+        let single = Plan {
+            segments: vec![
+                Segment::Walk { tiles: vec![stand] },
+                Segment::OpenDoor { door, stand, cross_to: door_tile },
+            ],
+            cost: 1 + plan::DOOR_COST,
+            adjusted_dest: None,
+        };
+        let prefix = truncate_plan(&tables, from, &single, door_tile).expect("on-path");
+        assert_eq!(prefix.cost, 1 + plan::DOOR_COST, "single door counts one edge");
     }
 
     /// LOT3 bump: a reloaded version serves zero stale plans — neither
