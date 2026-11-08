@@ -62,3 +62,9 @@ rempart_1530 | 3224,3223,0 | 3228,3226,0 | - | reachable ; doors<=0 ; walk_tiles
 # L'entree du chateau est impossible dans cette revision (stand
 # orthogonal valide requis, aucun praticable depuis l'exterieur).
 chateau_scell | 3219,3218,0 | 3215,3218,0 | - | unreachable=Disconnected
+# 17. banque Draynor -> chateau de Lumbridge : route directe par le nord
+# (contournement du manoir puis du chateau scelle), jamais par le marais
+# au sud-ouest. Le crochet "par le marais puis retour vers l'est" vu en
+# live venait de l'ancien executeur local, pas du planificateur : cette
+# ligne fige le plan direct (cout + tuile coeur du marais intouchable).
+draynor_lumbridge | 3092,3243,0 | 3222,3218,0 | - | reachable ; walk_tiles<=200 ; avoids=3160,3190
