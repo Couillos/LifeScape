@@ -604,6 +604,47 @@ monde warm sauf mention) :
   + bonus inter-bots (lot 3, seuil ≥ 30 %), contention verrou `get`
   (lot 4) — seuils inchangés, §5.5.
 
+## 6. Goldens vs cache : rôles disjoints, pas de suppression
+
+Mesuré 2026-11-08 (`route` binaire release, monde froid sauf mention) sur
+5 intentions golden représentatives + variantes d'options et retours :
+
+| Paire (aller) | Golden | Variante / retour | Verdict |
+|---|---|---|---|
+| longue_marche 264 walk (coût 264) | `walk_tiles<=400` | retour 264 ; `--paid` 264 (aucune distorsion péage) ; Chebyshev 198 → +66 terrain, identique dans les deux sens | voulu (relief, pas de porte/ride manqué) |
+| etages_echelle walk 4 + 2 rides (44) | `rides>=2`, `levels=0>1>2` | retour 44 par d'autres échelles (1746/1748-desc, directionnelles) : même coût, arêtes adaptées au sens | voulu (pas de ride 0→2 direct au dump) |
+| peage_detour 220 walk (220) | `doors<=0`, `walk_tiles>=200` | `--paid` : porte 2882 + 4 walk (14) ; retour 220 (détour mesuré dans les deux sens, cf. routes.txt:40) | voulu (clôture contournable, documenté) |
+| rempart_1530 19 walk (19) | `doors<=0`, `avoids=3226,3223` | `--paid` 19 ; retour 19 ; Chebyshev 4 → +15 de contour, stable | voulu (mur, pas de porte adjacente à ouvrir) |
+| cave_trappe porte 1568 + ride 1570 (30) | `rides>=1` | coût = 10 + 20 : ride vérifié (pas de +50), walk 0 | optimal trivial |
+
+Tous les rides golden coûtent exactement 20 = `TRANSITION_COST` sans
+`UNVERIFIED_PENALTY` (vérifiés) ; toutes les portes golden coûtent 10 =
+`DOOR_COST`. Le planificateur est un Dijkstra exact (pas d'heuristique) :
+à coûts et arêtes fixés, marche/contour/choix porte-vs-détour sont optimaux
+par construction — les écarts au vol d'oiseau sont du terrain ou des
+contraintes documentées, jamais du gaspillage. **Suboptimalités prouvées :
+aucune.** Les bornes basses (`walk>=`, `rides>=`) et les pins exacts
+(`uses_loc`, `stand=`, `levels=`) sont des fils-pièges voulus : une vraie
+amélioration (raccourci, nouveau ride) les fera casser, et c'est leur rôle.
+
+Le cache (L1/L2 §5.3) ne rend PAS les goldens redondantes :
+- Il ne prouve pas l'optimalité : resservir un hit (ex. les 264 tuiles de
+  longue_marche) ne dit rien de sa qualité — un détour de 300 tuiles serait
+  figé tel quel, plus vite mais toujours détour.
+- Il ne prouve pas la non-régression : un hit court-circuite `plan()`, donc
+  il masque les régressions au lieu de les coincer — ex. `guilde_sans_qp`
+  doit répondre `NeedsRequirement` même si la table des requires change,
+  le cache servirait l'ancien verdict jusqu'au bump de version.
+Les goldens doivent donc tourner moteur nu, cache vide ; le cache ne
+mémoïse que ce qu'elles ont déjà validé.
+
+Caveat mesure : en debug à froid, `route` peut buter sur `PLAN_BUDGET`
+(longue_marche : `Disconnected` à 40960 visites = 40× le pas de 1024 du
+garde-fou `plan.rs:590`, là où le test — qui mutualise le warmup — trouve
+264) ; en release (2 µs/visite) le même plan passe en ~140-270 ms tout
+compris. Chiffres ci-dessus = release ; l'écart debug n'est qu'un artefact
+de lenteur, pas un désaccord monde.
+
 ---
 *Revirement central (2026-11-07, décision produit — §§1-5.8 réécrits ; mesures
 complémentaires 2026-11-08, bench `/tmp` jetable, release, monde warm) :
