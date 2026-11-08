@@ -1071,6 +1071,20 @@ fn run_spot(
     Ok(total)
 }
 
+/// Auto spot: broke beginners (no food carried, none banked) cannot
+/// trade hits, so chickens until the account can afford to bleed.
+/// Stocked accounts keep best_spot() exactly (t02 live: foodless at
+/// melee 2 died to cow chip damage every few kills).
+fn auto_spot(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
+    let level = melee_level(bot);
+    if level <= 2 && food_count(bot) == 0 && !bank_stocks_food(bot) {
+        if let Some(chickens) = knowledge::combat_spots::by_key("chickens") {
+            return chickens;
+        }
+    }
+    knowledge::combat_spots::best_spot(level)
+}
+
 /// Melee farmer: `melee [spot ...] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut spots: Vec<String> = Vec::new();
@@ -1107,7 +1121,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
         let named: Vec<_> = spots.iter().filter_map(|key| knowledge::combat_spots::by_key(key)).collect();
         if named.is_empty() {
-            vec![knowledge::combat_spots::best_spot(melee_level(bot))]
+            vec![auto_spot(bot)]
         } else {
             named
         }
@@ -1124,7 +1138,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
+    use super::{auto_spot, bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1180,6 +1194,17 @@ mod tests {
         let bank_com = (stocked.tables.com_id)("bank_main:inv").expect("bank com in dumps");
         stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
         assert!(bank_stocks_food(&stocked), "banked shrimps restock");
+    }
+
+    /// Broke beginners hunt chickens, stocked ones keep best_spot.
+    #[test]
+    fn auto_spot_shelters_the_foodless() {
+        let broke = stat_bot(2, 2, 2);
+        assert_eq!(auto_spot(&broke).key, "chickens");
+        let mut stocked = stat_bot(2, 2, 2);
+        let bank_com = (stocked.tables.com_id)("bank_main:inv").expect("bank com in dumps");
+        stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
+        assert_eq!(auto_spot(&stocked).key, "cows");
     }
 
     /// Controlled exists exactly where the revision's combat.dbrow puts a
