@@ -331,6 +331,18 @@ impl Bot {
         NavOptions { allow_paid: self.allow_paid, f2p_only: true, satisfied, excluded_edges: HashSet::new() }
     }
 
+    /// Pure walking cost bot -> tile (planner `cost`, doors + rides
+    /// included): the target-selection metric (Manhattan lies across
+    /// rivers and fences). None when unwired or unplannable — callers
+    /// keep the Manhattan order then, never None-pick. No pump, no send.
+    pub fn walk_cost(&self, x: i32, z: i32, level: i32) -> Option<u32> {
+        let world = self.nav_world.as_ref()?;
+        let tables = self.nav_tables.as_ref()?;
+        let options = self.nav_options(tables);
+        let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        plan::plan(world, tables, from, Tile { x, z, level }, &options).ok().map(|plan| plan.cost)
+    }
+
     /// Full plan into the live route: the dashboard trace is the plan.
     fn publish_plan(&mut self, plan: &Plan, dest: Tile) {
         let mut trace = Vec::new();
