@@ -44,10 +44,8 @@ pub fn all_foods() -> Vec<(String, i64)> {
 /// Hitpoints restored by a food, or 0 when it is not edible.
 /// Accepts internal keys ("shrimp") and display names ("Shrimps").
 pub fn heal(name: &str) -> i64 {
-    if let Some((_, heal)) = foods().iter().find(|(entry, _)| entry == name) {
-        return *heal;
-    }
-    key_for(name).map(|key| heal(&key)).unwrap_or(0)
+    let key = key_for(name).unwrap_or_else(|| name.to_string());
+    foods().iter().find(|(entry, _)| *entry == key).map(|(_, heal)| *heal).unwrap_or(0)
 }
 
 /// Highest-healing food among the given names, or None.
@@ -85,5 +83,9 @@ mod tests {
         assert_eq!(heal("Cooked meat"), heal("cooked_meat"));
         assert_eq!(best_food(&["Shrimps", "Bread"]).map(|(name, _)| name), Some("Bread".to_string()));
         assert_eq!(heal("nope"), 0);
+        // Non-food must terminate (regression: mutual recursion with the
+        // display index overflowed the stack and aborted the worker).
+        assert_eq!(heal("Bronze sword"), 0);
+        assert_eq!(heal("Cowhide"), 0);
     }
 }
