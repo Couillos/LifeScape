@@ -137,7 +137,7 @@ fn format_nav_stats(stats: &Value) -> String {
         .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
         .unwrap_or_else(|| "-".to_string());
     format!(
-        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} rss={} painted={}",
+        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
         stats.get("version").as_str().unwrap_or("-"),
         num("hits"),
         num("trunc_hits"),
@@ -151,6 +151,8 @@ fn format_nav_stats(stats: &Value) -> String {
         num("refused_cap"),
         num("refused_full"),
         num("refused_stale"),
+        num("ram_warn"),
+        num("ram_shed"),
         rss_mb,
         num("painted_squares"),
     )

@@ -115,6 +115,8 @@ pub fn stats_json() -> Option<Value> {
         ("refused_cap", int(stats.refused_cap)),
         ("refused_full", int(stats.refused_full)),
         ("refused_stale", int(stats.refused_stale)),
+        ("ram_warn", int(stats.ram_warn)),
+        ("ram_shed", int(stats.ram_shed)),
         ("rss_bytes", int(Service::rss_bytes())),
         ("painted_squares", int(service.painted_squares() as u64)),
     ]))

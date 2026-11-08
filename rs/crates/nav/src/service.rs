@@ -169,6 +169,33 @@ pub const L1_MAX_ENTRY_BYTES: usize = 32 * 1024;
 /// L2 versions kept: the live one plus the draining pre-reload one.
 pub const L2_VERSIONS_CAP: usize = 2;
 
+/// RAM §5.9: 1 Go hard cap, enforcement warn 80 % / shed 90 % / abort 95 %.
+/// Mo entail MiB here (80 % of 1024 = 819.2 ≈ 820, 90 % = 921.6 ≈ 920).
+pub const RAM_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
+pub const RAM_WARN_BYTES: u64 = 820 * 1024 * 1024;
+pub const RAM_SHED_BYTES: u64 = 920 * 1024 * 1024;
+
+/// Admission verdict for one RSS reading: Pass serves, Warn serves after
+/// logging + halving L1, Shed refuses (existing Refuse path, caller falls
+/// back sync). Pure so the unit test injects thresholds with no memory
+/// pressure; production calls it with the constants above.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RamGate {
+    Pass,
+    Warn,
+    Shed,
+}
+
+pub fn ram_gate_for(rss_bytes: u64, warn_at: u64, shed_at: u64) -> RamGate {
+    if rss_bytes >= shed_at {
+        RamGate::Shed
+    } else if rss_bytes >= warn_at {
+        RamGate::Warn
+    } else {
+        RamGate::Pass
+    }
+}
+
 /// Outcome counters, all atomic: the lot 3 hit-rate verdict reads these,
 /// the lot 4 fairness verdict reads the refused_* ones (every non-stale
 /// refusal degrades to a local sync plan client-side, logged + counted).
@@ -184,6 +211,8 @@ pub struct CacheStats {
     pub refused_cap: u64,
     pub refused_full: u64,
     pub refused_stale: u64,
+    pub ram_warn: u64,
+    pub ram_shed: u64,
 }
 
 struct LruEntry {
@@ -301,6 +330,22 @@ impl Lru {
             .front()
             .and_then(|key| self.map.get(key))
             .map(|entry| now.saturating_duration_since(entry.inserted))
+    }
+
+    /// Halve the cache oldest-first (§5.9 warn at 80 %): evictions counted,
+    /// newest half keeps serving. Empty/small caches drop nothing.
+    fn evict_half(&mut self) {
+        let drop = self.map.len() / 2;
+        for _ in 0..drop {
+            if let Some(oldest) = self.order.pop_front() {
+                if let Some(old) = self.map.remove(&oldest) {
+                    self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
+                    self.evictions += 1;
+                }
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -837,6 +882,8 @@ pub struct Service {
     refused_cap: AtomicU64,
     refused_full: AtomicU64,
     refused_stale: AtomicU64,
+    ram_warn: AtomicU64,
+    ram_shed: AtomicU64,
     sock_path: PathBuf,
 }
 
@@ -879,6 +926,8 @@ impl Service {
             refused_cap: AtomicU64::new(0),
             refused_full: AtomicU64::new(0),
             refused_stale: AtomicU64::new(0),
+            ram_warn: AtomicU64::new(0),
+            ram_shed: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
         });
         for index in 0..threads.max(1) {
@@ -926,6 +975,8 @@ impl Service {
             refused_cap: self.refused_cap.load(Ordering::Relaxed),
             refused_full: self.refused_full.load(Ordering::Relaxed),
             refused_stale: self.refused_stale.load(Ordering::Relaxed),
+            ram_warn: self.ram_warn.load(Ordering::Relaxed),
+            ram_shed: self.ram_shed.load(Ordering::Relaxed),
         }
     }
 
@@ -1032,6 +1083,8 @@ impl Service {
                     ("refused_cap", Value::Int(stats.refused_cap as i64)),
                     ("refused_full", Value::Int(stats.refused_full as i64)),
                     ("refused_stale", Value::Int(stats.refused_stale as i64)),
+                    ("ram_warn", Value::Int(stats.ram_warn as i64)),
+                    ("ram_shed", Value::Int(stats.ram_shed as i64)),
                     ("rss_bytes", Value::Int(Self::rss_bytes().min(i64::MAX as u64) as i64)),
                     ("painted_squares", Value::Int(self.painted_squares() as i64)),
                 ])
@@ -1089,6 +1142,34 @@ impl Service {
                 ),
                 ("version", str_value(&version)),
             ]);
+        }
+        // §5.9 enforcement, read per submit (periodic at ~0.3 req/s/bot):
+        // warn logs + halves L1, shed refuses through the existing Refuse
+        // path (the caller falls back sync, logged + counted worker-side).
+        // 95 % abort of in-flight searches is NOT wired: shutdown by cancel
+        // stays operator-driven (TODO(shedding), see §5.9).
+        match ram_gate_for(Self::rss_bytes(), RAM_WARN_BYTES, RAM_SHED_BYTES) {
+            RamGate::Shed => {
+                self.ram_shed.fetch_add(1, Ordering::Relaxed);
+                eprintln!(
+                    "pathfinding ram shed rss={}B: submit refused, sync fallback",
+                    Self::rss_bytes()
+                );
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value("refused:ram-shed")),
+                    ("version", str_value(&version)),
+                ]);
+            }
+            RamGate::Warn => {
+                self.ram_warn.fetch_add(1, Ordering::Relaxed);
+                eprintln!(
+                    "pathfinding ram warn rss={}B: L1 halved",
+                    Self::rss_bytes()
+                );
+                self.l1.lock().unwrap().evict_half();
+            }
+            RamGate::Pass => {}
         }
         // LOT3 L1: the full key (options + current version) first, before
         // any admission accounting: a hit never consumes queue or cap.
@@ -2431,9 +2512,109 @@ mod tests {
         assert!(l1_worst <= 11 * 1024 * 1024, "L1 worst case {l1_worst}B above the 11 Mo line");
     }
 
+    /// §5.9 enforcement trigger (E5): pure gate, injected thresholds, no
+    /// real memory pressure. Constants match the doc lines (820/920 Mo of
+    /// the 1 Go cap). The shed Refuse path itself is the existing one the
+    /// queue-full tests already prove falls back sync client-side.
     #[test]
-    fn version_hash_bumps_on_content_change() {
-        let dir = std::env::temp_dir().join(format!(
+    fn ram_gate_fires_on_injected_thresholds() {
+        assert_eq!(RAM_LIMIT_BYTES, 1024 * 1024 * 1024, "1 Go hard cap");
+        assert_eq!(RAM_WARN_BYTES, 820 * 1024 * 1024, "doc warn line");
+        assert_eq!(RAM_SHED_BYTES, 920 * 1024 * 1024, "doc shed line");
+        assert_eq!(ram_gate_for(0, RAM_WARN_BYTES, RAM_SHED_BYTES), RamGate::Pass);
+        assert_eq!(
+            ram_gate_for(RAM_WARN_BYTES - 1, RAM_WARN_BYTES, RAM_SHED_BYTES),
+            RamGate::Pass
+        );
+        assert_eq!(
+            ram_gate_for(RAM_WARN_BYTES, RAM_WARN_BYTES, RAM_SHED_BYTES),
+            RamGate::Warn
+        );
+        assert_eq!(
+            ram_gate_for(RAM_SHED_BYTES - 1, RAM_WARN_BYTES, RAM_SHED_BYTES),
+            RamGate::Warn
+        );
+        assert_eq!(
+            ram_gate_for(RAM_SHED_BYTES, RAM_WARN_BYTES, RAM_SHED_BYTES),
+            RamGate::Shed
+        );
+        assert_eq!(
+            ram_gate_for(u64::MAX, RAM_WARN_BYTES, RAM_SHED_BYTES),
+            RamGate::Shed
+        );
+    }
+
+    /// L1 halve oldest-first (§5.9 warn): 4 entries in, oldest 2 out,
+    /// newest 2 keep serving.
+    #[test]
+    fn l1_evict_half_keeps_newest() {
+        let mut lru = Lru::new();
+        let options = short_options();
+        let keys: Vec<PlanKey> = (0..4)
+            .map(|x| {
+                PlanKey::of(
+                    Tile { x, z: 0, level: 0 },
+                    Tile { x: x + 10, z: 0, level: 0 },
+                    &options,
+                    "v",
+                )
+            })
+            .collect();
+        for key in &keys {
+            assert!(lru.insert(key.clone(), true, Value::Bool(true)));
+        }
+        assert_eq!(lru.map.len(), 4, "four entries in");
+        lru.evict_half();
+        assert_eq!(lru.map.len(), 2, "oldest half out");
+        assert!(!lru.map.contains_key(&keys[0]), "oldest evicted");
+        assert!(!lru.map.contains_key(&keys[1]), "second oldest evicted");
+        assert!(lru.map.contains_key(&keys[2]), "newest kept");
+        assert!(lru.map.contains_key(&keys[3]), "newest kept");
+    }
+
+    /// Double cancel + cancel-after-completion (E6): every release is
+    /// idempotent, the service keeps serving and the cap never wedges.
+    #[test]
+    fn double_cancel_and_cancel_after_completion_are_harmless() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "lot4-cancel".to_string()),
+            &test_socket("plan-cancel2"),
+            1,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "cancel2");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        // Pending ticket cancelled twice: both answer ok, one release max.
+        let id = match client.submit(from, dest, &short_options(), "lot4-cancel").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        client.cancel(id).expect("first cancel answers");
+        client.cancel(id).expect("second cancel answers");
+        // Completed ticket cancelled twice: terminal slot or not, still ok.
+        let planned = match client.submit(from, dest, &short_options(), "lot4-cancel").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        match await_ready(&client, planned) {
+            Some(Poll::Ready(plan)) => assert!(!plan.segments.is_empty(), "completion lands first"),
+            other => panic!("fast leg must complete, got {other:?}"),
+        }
+        client.cancel(planned).expect("cancel after completion answers");
+        client.cancel(planned).expect("second cancel after completion answers");
+        // The cap never wedges and the service keeps serving afterwards.
+        match client.submit(from, dest, &short_options(), "lot4-cancel").expect("submit") {
+            Submit::Accepted { .. } => {}
+            Submit::Refused { reason, .. } => panic!("cap wedged after double release: {reason}"),
+        }
+        let healthy = submit_ready(&client, from, dest, &short_options(), "lot4-cancel");
+        assert!(!healthy.segments.is_empty(), "healthy after double cancel");
+    }
+
+    #[test]
+    fn version_hash_bumps_on_content_change() {        let dir = std::env::temp_dir().join(format!(
             "lifescape-version-{}-{}",
             std::process::id(),
             NEXT_VERSION.fetch_add(1, Ordering::Relaxed)
