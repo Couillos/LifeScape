@@ -969,6 +969,15 @@ fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)]) -> V
     }
 }
 
+/// Kills still wanted: 0 means unlimited, so a plain subtraction panics
+/// on the second cluster once anything died (t02 live).
+fn remaining_kills(kills_limit: u32, total: u32) -> u32 {
+    if kills_limit == 0 {
+        return 0;
+    }
+    kills_limit.saturating_sub(total)
+}
+
 fn run_spot(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -1026,7 +1035,7 @@ fn run_spot(
                 Ok(true) => {}
             }
             {
-                let (kills, banked) = fight(bot, spot, (center_x, center_z), kills_limit - total, ticks_limit, no_bank)?;
+                let (kills, banked) = fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
                 total += kills;
                 if !banked || (kills_limit > 0 && total >= kills_limit) {
                     return Ok(total);
@@ -1090,7 +1099,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, style_damage_key, weakest_melee};
+    use super::{controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1124,6 +1133,16 @@ mod tests {
         let gapped = stat_bot(6, 5, 5);
         assert_eq!(next_style(&gapped, "attack"), Some("strength"), "5 < 6 trains first");
         assert_eq!(next_style(&gapped, "strength"), None, "weakest held");
+    }
+
+    /// Unlimited (0) stays unlimited past the first cluster; a bound
+    /// never goes negative.
+    #[test]
+    fn remaining_kills_never_underflows() {
+        assert_eq!(remaining_kills(0, 0), 0);
+        assert_eq!(remaining_kills(0, 5), 0, "unlimited hunt survives kills");
+        assert_eq!(remaining_kills(10, 3), 7);
+        assert_eq!(remaining_kills(10, 10), 0);
     }
 
     /// Controlled exists exactly where the revision's combat.dbrow puts a
