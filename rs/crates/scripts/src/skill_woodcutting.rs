@@ -13,7 +13,7 @@ use lifescape_sdk::Bot;
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, death_message_seen, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
-    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS,
+    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS,
 };
 use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, refusal_ban_ticks, tree_still_there, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
@@ -373,6 +373,9 @@ fn wait_for_respawn(
 ) -> Result<(), ScriptError> {
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+    // Ticks advanced during the work: drop expired bans so the walk
+    // alternative is measured against live spots, not stale clocks.
+    banned.retain(|_, until| *until > bot.world.ticks);
     let alternative = pick_tree_spot(bot, tiers, bank, level, &mut *banned)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
@@ -694,10 +697,12 @@ fn chop_load(
             WorkOutcome::NoTool => spot = None,
             WorkOutcome::Unreachable => {
                 // Walk-leg failure (never arrived, leg timeout, step refused
-                // far away): short ban + retry, NEVER structural. A walk
-                // that dies en route proves nothing about the stand.
-                bot.log(&format!("unreachable, blacklisting ({spot_x},{spot_z})"));
-                banned.insert((spot_x, spot_z), bot.world.ticks + UNREACHABLE_BAN_TICKS);
+                // far away): short ban + retry, NEVER structural or long. A
+                // walk that dies en route proves nothing about the stand: a
+                // passing crowd or a missing nav blockage must not condemn
+                // a live tree for half the session.
+                bot.log(&format!("unreachable, short-banning ({spot_x},{spot_z}) for {GONE_BAN_TICKS}t (walk fell short)"));
+                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
                 spot = None;
                 unreachable_streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the
@@ -742,12 +747,12 @@ fn chop_load(
                     let strikes = refusals.entry((spot_x, spot_z)).or_insert(0);
                     *strikes += 1;
                     bot.log(&format!(
-                        "spot refused once at ({spot_x},{spot_z}), short-banning (strike {}/{DIRECT_REFUSALS_TO_CONDEMN}), retry before condemning",
+                        "spot refused once at ({spot_x},{spot_z}), short-banning {ban}t (strike {}/{DIRECT_REFUSALS_TO_CONDEMN}), retry before condemning",
                         *strikes
                     ));
                     unreachable_streak = 0;
                 } else {
-                    bot.log(&format!("click refused from afar at ({spot_x},{spot_z}), walk fell short, short ban"));
+                    bot.log(&format!("click refused from afar at ({spot_x},{spot_z}), walk fell short, short ban {ban}t"));
                     unreachable_streak = 0;
                 }
                 banned.insert((spot_x, spot_z), bot.world.ticks + ban);

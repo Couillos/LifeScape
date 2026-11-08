@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
+use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS};
 use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
@@ -183,9 +183,9 @@ pub(crate) fn pick_tree_spot(
         }
     }
     // Best tier fully stumped/banned near this bank: hop to the next live
-    // cluster of the SAME tier before degrading. An unreachable hop bans
-    // long (UNREACHABLE_BAN_TICKS in the caller) so the next repick tries
-    // the following cluster, then the tier below — no travel loop.
+    // cluster of the SAME tier before degrading. A hop that fails to walk
+    // rides the short ban (Gone, 250t) so the next repick tries the
+    // following cluster, then the tier below — no travel loop.
     if let Some(top) = best {
         let mut hop: Option<(i64, (i32, i32))> = None;
         for (spot_x, spot_z) in tier_spawns_wide(top, i64::from(bot.world.level)) {
@@ -341,7 +341,10 @@ pub(crate) const DIRECT_REFUSALS_TO_CONDEMN: u8 = 2;
 /// refused the chop click itself ("can't reach that"); walk-leg failures
 /// (never arrived, leg timeout, step refused far away) pass false and can
 /// never return the structural ban. Structural (240k) needs a repeated
-/// adjacent direct refusal of a standing tree; a stump is depletion (Gone).
+/// adjacent direct refusal of a standing tree; everything else is
+/// transient (a crowd, a gate mid-swing, a walk that fell short) and rides
+/// the short ban (Gone, 250t) so the spot is re-tested at expiry instead
+/// of sitting out half the session. A stump is depletion (Gone).
 pub(crate) fn refusal_ban_ticks(adjacent: bool, stump: bool, direct: bool, prior_strikes: u8) -> u64 {
     if stump {
         return GONE_BAN_TICKS;
@@ -349,7 +352,7 @@ pub(crate) fn refusal_ban_ticks(adjacent: bool, stump: bool, direct: bool, prior
     if direct && adjacent && prior_strikes + 1 >= DIRECT_REFUSALS_TO_CONDEMN {
         return STRUCTURAL_BAN_TICKS;
     }
-    UNREACHABLE_BAN_TICKS
+    GONE_BAN_TICKS
 }
 
 /// Oldest banned spot to retry when a tier starves: Some only when every
@@ -562,18 +565,19 @@ mod tests {
     }
 
     /// Ban rule: transit failures (never arrived, leg timeout, step refused
-    /// far away) ride the short ban even with a full strike history — only
-    /// a repeated ADJACENT direct refusal condemns. A stump is depletion
-    /// (Gone), a refusal from afar is a walk that fell short.
+    /// far away) ride the short ban (250t, re-tested at expiry) even with
+    /// a full strike history — only a repeated ADJACENT direct refusal
+    /// condemns. A stump is depletion (Gone), a refusal from afar is a
+    /// walk that fell short.
     #[test]
     fn direct_refusal_needs_a_repeat_to_condemn() {
-        assert_eq!(refusal_ban_ticks(false, false, false, 5), UNREACHABLE_BAN_TICKS, "far walk never condemns");
-        assert_eq!(refusal_ban_ticks(true, false, false, 5), UNREACHABLE_BAN_TICKS, "walk failure never condemns");
-        assert_eq!(refusal_ban_ticks(true, false, true, 0), UNREACHABLE_BAN_TICKS, "first refusal retries");
+        assert_eq!(refusal_ban_ticks(false, false, false, 5), GONE_BAN_TICKS, "far walk retries short");
+        assert_eq!(refusal_ban_ticks(true, false, false, 5), GONE_BAN_TICKS, "walk failure retries short");
+        assert_eq!(refusal_ban_ticks(true, false, true, 0), GONE_BAN_TICKS, "first refusal retries short");
         assert_eq!(refusal_ban_ticks(true, false, true, 1), STRUCTURAL_BAN_TICKS, "repeat condemns");
         assert_eq!(
             refusal_ban_ticks(false, false, true, 1),
-            UNREACHABLE_BAN_TICKS,
+            GONE_BAN_TICKS,
             "afar click is a short walk, not a walled stand"
         );
         assert_eq!(
