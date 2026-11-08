@@ -30,6 +30,13 @@ fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> 
     }
 }
 
+/// Ticks since `started`, surviving a server tick reset: area changes and
+/// relogins restart the counter near zero (t02 live: 1439 -> 0 entering
+/// the mine), and plain subtraction panics on the wrap.
+fn elapsed_ticks(now: u64, started: u64) -> u64 {
+    now.saturating_sub(started)
+}
+
 fn has(bot: &Bot, name: &str, count: u32) -> bool {
     obj(name).ok().is_some_and(|id| bot.inventory().get(&id).copied().unwrap_or(0) >= count)
 }
@@ -131,7 +138,7 @@ fn finish_dialog(bot: &mut Bot, answers: &[&str], timeout: u64) -> Result<bool, 
                 if still_since.is_none() {
                     still_since = Some(bot.world.ticks);
                 }
-                if bot.world.ticks - still_since.unwrap_or(0) > 75 {
+                if elapsed_ticks(bot.world.ticks, still_since.unwrap_or(0)) > 75 {
                     return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: dialog not closing at {:?} modal={:?}", bot.position(), bot.world.modal))));
                 }
             } else {
@@ -919,7 +926,7 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
             bot.log(&format!("done {:?}", bot.position()));
             return Ok(0);
         }
-        if bot.world.ticks - started > 20000 {
+        if elapsed_ticks(bot.world.ticks, started) > 20000 {
             return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: 20000 ticks elapsed at {:?}", bot.position()))));
         }
         let Some(stage) = detect_stage(bot) else {
@@ -979,5 +986,18 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
         }
         step(bot, stage)?;
         bot.pump(5)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::elapsed_ticks;
+
+    /// t02 live: server ticks reset 1439 -> 0 on the mine transition and
+    /// the plain subtraction panicked instead of timing out.
+    #[test]
+    fn elapsed_survives_tick_reset() {
+        assert_eq!(elapsed_ticks(100, 50), 50);
+        assert_eq!(elapsed_ticks(5, 1439), 0, "reset: no panic, no false timeout");
     }
 }
