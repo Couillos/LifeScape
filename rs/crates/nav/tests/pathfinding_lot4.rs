@@ -212,6 +212,64 @@ fn storm_replan_loop_starves_nobody() {
     assert_eq!(service.stats().misses, misses_before, "negative served from L1");
 }
 
+/// Queue-full is counted and observable: one exhaustive NoRoute pins the
+/// single pool lane (~1.5 s budget kill), then 9 accounts x 2 submits over-
+/// fill the 16-slot queue. Exactly the last 2 refuse queue-full (never a
+/// block), the gauge shows depth 16, and the service heals after cancels.
+#[test]
+fn queue_full_refuses_and_counts() {
+    let service = start_service(1);
+    let options = short_options();
+    let blocker = PlanClient::new(service.socket_path(), "wall-blocker");
+    let block_from = Tile { x: 3219, z: 3218, level: 0 };
+    let block_dest = Tile { x: 3215, z: 3218, level: 0 };
+    let block_id = match blocker.submit(block_from, block_dest, &options, "lot4").expect("submit") {
+        Submit::Accepted { id, .. } => id,
+        Submit::Refused { reason, .. } => panic!("blocker refused: {reason}"),
+    };
+    // The lane is pinned past the budget kill; the flood below lands in ms.
+    let mut flooded = vec![block_id];
+    let mut refused_full = 0u32;
+    for account in 0..9 {
+        for nth in 0..2 {
+            let client = PlanClient::new(service.socket_path(), &format!("wall-{account}"));
+            let dest = Tile { x: 3200 + account * 10 + nth, z: 3200, level: 0 };
+            match client.submit(block_from, dest, &options, "lot4").expect("submit") {
+                Submit::Accepted { id, .. } => flooded.push(id),
+                Submit::Refused { reason, .. } => {
+                    assert!(reason.contains("queue-full"), "overflow refuses queue-full, got {reason}");
+                    refused_full += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(flooded.len(), 17, "1 computing + 16 queued, never a block");
+    assert_eq!(refused_full, 2, "only the overflow refuses");
+    assert_eq!(service.queue_depth(), 16, "gauge shows the full queue");
+    assert!(service.stats().refused_full >= 2, "queue-full refusals are counted");
+    for id in flooded {
+        let _ = blocker.cancel(id);
+    }
+    // Cancel frees the cap at once but the queue slots free as the pool
+    // drops the dead jobs (sync_channel has no removal): wait the drain out.
+    let start = std::time::Instant::now();
+    while service.queue_depth() > 0 {
+        assert!(start.elapsed() < Duration::from_secs(10), "pool drops cancelled jobs");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Heals: a fast leg lands once the pool drops the cancelled jobs.
+    let healer = PlanClient::new(service.socket_path(), "wall-healer");
+    let (from, dest) = door_leg();
+    let heal_id = match healer.submit(from, dest, &options, "lot4").expect("submit") {
+        Submit::Accepted { id, .. } => id,
+        Submit::Refused { reason, .. } => panic!("healer refused after drain: {reason}"),
+    };
+    match await_terminal(&healer, heal_id) {
+        Poll::Ready(plan) => assert!(!plan.segments.is_empty(), "healthy after queue-full"),
+        other => panic!("must heal, got {other:?}"),
+    }
+}
+
 /// Cancel propagates: filling the cap then cancelling both tickets frees
 /// the account (2 fresh submits accepted) and the dead tickets poll Unknown.
 #[test]
