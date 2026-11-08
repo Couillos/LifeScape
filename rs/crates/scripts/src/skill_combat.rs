@@ -10,7 +10,11 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{bury_bones, check_events, free_slots, hitpoints, obj_id, walk_checked};
+use crate::skill_common::{
+    bury_bones, check_events, free_slots, heal_at_bank, hitpoints, live_bank_booths, nearest_bank, obj_id,
+    walk_checked,
+};
+use crate::skill_gather::{BanSet, same_side};
 use crate::{ScriptError, ScriptResult};
 
 const EAT_FRACTION: f64 = 0.55;
@@ -528,12 +532,16 @@ fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
 
 /// Deposit loot, withdraw the best gear and food for the current levels.
 fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let Some((level, bank_x, bank_z)) = nearest_bank_tile(bot) else {
-        let available = available_gear(bot);
-        let plan = gear_plan(bot, &available);
-        equip_plan(bot, &plan)?;
-        return Ok(false);
+    let bank = match nearest_bank(bot) {
+        Ok(bank) => bank,
+        Err(_) => {
+            let available = available_gear(bot);
+            let plan = gear_plan(bot, &available);
+            equip_plan(bot, &plan)?;
+            return Ok(false);
+        }
     };
+    let (bank_x, bank_z) = (bank.x as i32, bank.z as i32);
     bot.intend(&format!("banking at ({bank_x},{bank_z})"));
     // Dead socket or operator stop, not a missed bank: typed to the
     // session instead of a quiet equip-and-continue.
@@ -553,11 +561,21 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             return Ok(false);
         }
     }
-    let Some((booth_x, booth_z, booth_loc)) = crate::skill_common::live_bank_booth(bot, bank_x, bank_z) else {
-        bot.log(&format!("bank did not open at {:?}", bot.position()));
-        return Ok(false);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+    // The bank tile is safe: heal low HP here before the booth instead
+    // of walking hurt into the next hunt.
+    heal_at_bank(bot)?;
+    // Nearest booth first, every refusal falls through to the next: the
+    // dump's Manhattan pick can name a spawn behind the counter while its
+    // neighbour faces us. Only all-refused is quiet.
+    let mut opened = false;
+    for (booth_x, booth_z, booth_loc) in live_bank_booths(bot, bank_x, bank_z) {
+        if bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+            opened = true;
+            break;
+        }
+        bot.log(&format!("bank booth ({booth_x},{booth_z}) refused from here, trying next"));
+    }
+    if !opened {
         bot.log(&format!("bank did not open at {:?}", bot.position()));
         return Ok(false);
     }
@@ -615,7 +633,6 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
     for (slot, name) in equip_plan(bot, &plan)?.iter() {
         bot.log(&format!("equipped {name} (slot {slot})"));
     }
-    let _ = level;
     Ok(true)
 }
 
@@ -668,15 +685,6 @@ fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec
     ranked.into_iter().map(|(_, x, z, count)| (x, z, count)).collect()
 }
 
-/// Toll-fence side test: the Al-Kharid gate (locs 2882/2883, two halves;
-/// nav/tests/paid_only.rs measures the foot detour at 220 tiles) costs 10
-/// coins a crossing with paid doors on. Melee keeps them off the whole
-/// hunt, so a crossing is always the 220-tile walk, never a payment.
-/// Same side when both tiles sit on the same flank of the gate line.
-fn same_fence_side(line: i32, first: i32, second: i32) -> bool {
-    (first >= line) == (second >= line)
-}
-
 /// Shop and bank staff are never targets: keepers, assistants, Bob and
 /// bankers (some at 1 HP) must survive our hunts. Excluded by op
 /// category — any Trade/Bank right-click — never by name, so a new shop
@@ -693,24 +701,35 @@ fn is_shop_staff(npc_type: u16) -> bool {
     })
 }
 
-/// Walking-cost order for the acquisition window (pure, no walk, no
-/// send): Manhattan lies across rivers and fences, so the take(3) window
-/// below is reordered by pure plan cost before the door-aware approach
-/// verifies reachability by walking. Never more plans than approaches
-/// (same bound, K=3); unwired or unplannable keeps the Manhattan order.
-fn rank_foes(bot: &Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
-    if window.len() < 2 || bot.nav_world.is_none() {
+/// Acquisition window bound: Manhattan ranks the pool, only the top-K get
+/// a pure plan (see `lifescape_nav::walk_rank`), so never more plans than
+/// approaches. K=3: foes die fast, the window re-ranks every pick.
+const FOE_SHORTLIST: usize = 3;
+
+/// Walking-cost order for the acquisition window (remote batch, no
+/// walk, no send): Manhattan lies across rivers and fences, so the
+/// window is reordered by service plan cost before the door-aware
+/// approach verifies reachability by walking. Unwired or unplannable
+/// keeps the Manhattan order; the sort itself lives in
+/// `lifescape_nav::walk_rank`.
+fn rank_foes(bot: &mut Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
+    if window.is_empty() {
         return window;
     }
     let first = window[0];
-    let mut costed: Vec<(Option<u32>, (u16, i32, i32))> =
-        window.into_iter().map(|cand| (bot.walk_cost(cand.1, cand.2, bot.world.level), cand)).collect();
-    // Stable: unplannable foes keep their Manhattan rank behind the planned.
-    costed.sort_by(|a, b| match (a.0, b.0) {
-        (Some(first_cost), Some(second_cost)) => first_cost.cmp(&second_cost),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
+    let level = bot.world.level;
+    let head = window.len().min(FOE_SHORTLIST);
+    let dests: Vec<lifescape_nav::plan::Tile> = window[..head]
+        .iter()
+        .map(|(_, x, z)| lifescape_nav::plan::Tile { x: *x, z: *z, level })
+        .collect();
+    let costs = bot.walk_costs(&dests);
+    let mut by_foe: HashMap<(u16, i32, i32), Option<u32>> = HashMap::new();
+    for (cand, cost) in window[..head].iter().copied().zip(costs) {
+        by_foe.insert(cand, cost);
+    }
+    let costed = lifescape_nav::walk_rank::rank_walk_shortlist(window, FOE_SHORTLIST, |cand| {
+        by_foe.get(cand).copied().unwrap_or(None)
     });
     if costed[0].1.0 != first.0 {
         if let Some(cost) = costed[0].0 {
@@ -726,11 +745,11 @@ fn rank_foes(bot: &Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
 fn attack_nearest(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
-    avoid: &mut HashMap<(i32, i32), u64>,
+    avoid: &mut BanSet,
 ) -> Result<Option<u16>, ScriptError> {
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut cands = bot.npcs_named(&names);
-    cands.retain(|(_, x, z)| avoid.get(&(*x, *z)).is_none_or(|until| *until <= bot.world.ticks));
+    cands.retain(|(_, x, z)| !avoid.is_banned((*x, *z), bot.world.ticks));
     // Shop staff are never foes, by op category (Trade/Bank), not name:
     // a keeper next to the hunt (Bob by the axe shop, the Lumbridge
     // general store pair) is never a valid click.
@@ -743,7 +762,7 @@ fn attack_nearest(
     // pick; the flank follows the bot, not the plan, so no replan loop.
     if let Some(line) = crate::skill_common::toll_gate_x(bot) {
         let home = bot.world.x;
-        cands.retain(|(_, x, _)| same_fence_side(line, *x, home));
+        cands.retain(|(_, x, _)| same_side(line, *x, home));
     }
     cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
     // Door-aware acquisition, first reachable wins (max 3 foes): the window
@@ -752,7 +771,7 @@ fn attack_nearest(
     // router, which opens shut doors on the way (travel Segment::OpenDoor).
     // NoRoute or a blocked ring bans the tile and tries the next goblin
     // instead of insisting on this one.
-    for (slot, x, z) in rank_foes(bot, cands.into_iter().take(3).collect()) {
+    for (slot, x, z) in rank_foes(&mut *bot, cands.into_iter().take(FOE_SHORTLIST).collect()) {
         match bot.approach_npc(slot, 100) {
             Ok(()) => {}
             Err(error)
@@ -769,11 +788,11 @@ fn attack_nearest(
                 // per tile, never a retry campaign.
                 if matches!(error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
                     bot.log(&format!("goblin {slot} at ({x},{z}) behind uncrossable door, excluding: {error}"));
-                    avoid.insert((x, z), DOOR_BAN_TICKS);
+                    avoid.ban_until((x, z), DOOR_BAN_TICKS);
                     continue;
                 }
                 bot.log(&format!("goblin {slot} at ({x},{z}) unreachable: {error}"));
-                avoid.insert((x, z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                avoid.ban_for((x, z), bot.world.ticks, BLOCKED_BAN_TICKS);
                 continue;
             }
         }
@@ -862,7 +881,7 @@ fn fight(
     let mut last_event_check = bot.world.ticks;
     let mut max_hp = hitpoints(bot).max(10);
     let mut seen_msgs = bot.world.messages.len();
-    let mut unreachable: HashMap<(i32, i32), u64> = HashMap::new();
+    let mut unreachable: BanSet = BanSet::new();
     let mut progress_at = bot.world.ticks;
     let mut progress_xp = combat_xp(bot);
     let mut progress_pos = (bot.world.x, bot.world.z);
@@ -930,7 +949,7 @@ fn fight(
                     let (foe_x, foe_z) =
                         bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
                     bot.log(&format!("target {slot} alive {}t, moving on", bot.world.ticks.saturating_sub(engaged_at)));
-                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                     let _ = bot.approach_npc(slot, 60);
                     target_npc = None;
                     attempts = 0;
@@ -951,7 +970,7 @@ fn fight(
                 let (foe_x, foe_z) =
                     bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
                 if blocked {
-                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                     // The step toward a door-blocked foe re-burns the door
                     // (click + watch, refused again): inspect it, and when
                     // the server proves the door uncrossable the tile stays
@@ -959,7 +978,7 @@ fn fight(
                     if let Err(step_error) = bot.approach_npc(slot, 60) {
                         if matches!(step_error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
                             bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) behind uncrossable door, excluding"));
-                            unreachable.insert((foe_x, foe_z), DOOR_BAN_TICKS);
+                            unreachable.ban_until((foe_x, foe_z), DOOR_BAN_TICKS);
                         }
                     }
                     seen_msgs = bot.world.messages.len();
@@ -990,7 +1009,7 @@ fn fight(
                         // tile for the fight and repick at once.
                         if matches!(error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
                             bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) behind uncrossable door, excluding: {error}"));
-                            unreachable.insert((foe_x, foe_z), DOOR_BAN_TICKS);
+                            unreachable.ban_until((foe_x, foe_z), DOOR_BAN_TICKS);
                             target_npc = None;
                             attempts = 0;
                             progress_at = bot.world.ticks;
@@ -1003,7 +1022,7 @@ fn fight(
                                 "blacklist npc {slot} at ({foe_x},{foe_z}): 3 failed approaches from {:?}",
                                 bot.position()
                             ));
-                            unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                            unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                             target_npc = None;
                             attempts = 0;
                             progress_at = bot.world.ticks;
@@ -1027,7 +1046,7 @@ fn fight(
                     progress_at = bot.world.ticks;
                 } else if bot.world.ticks.saturating_sub(progress_at) >= FIGHT_STALL_TICKS {
                     bot.log(&format!("stall on npc {slot}, repicking"));
-                    unreachable.insert((foe_x, foe_z), bot.world.ticks + BLOCKED_BAN_TICKS);
+                    unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                     let _ = bot.approach_npc(slot, 60);
                     target_npc = None;
                     attempts = 0;
@@ -1082,7 +1101,7 @@ fn fight(
             }
             continue;
         }
-        unreachable.retain(|_, until| *until > bot.world.ticks);
+        unreachable.retain(bot.world.ticks);
         target_npc = attack_nearest(bot, spot, &mut unreachable)?;
         if let Some(slot) = target_npc {
             last_attack = bot.world.ticks;
@@ -1107,14 +1126,14 @@ fn fight(
     Ok((kills, false))
 }
 
-/// Clusters on the bot's toll-fence flank (see same_fence_side): the
+/// Clusters on the bot's toll-fence flank (see skill_gather::same_side): the
 /// crossing is never paid in melee, so an eastern cluster from a western
 /// hunt is a ~220-tile detour per visit, never a shortcut. Falls back to
 /// every cluster when none shares the flank (an all-across spot still
 /// hunts instead of idling).
 fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)]) -> Vec<(i32, i32, usize)> {
     let kept: Vec<(i32, i32, usize)> =
-        targets.iter().filter(|(center_x, _, _)| same_fence_side(line, *center_x, home)).copied().collect();
+        targets.iter().filter(|(center_x, _, _)| same_side(line, *center_x, home)).copied().collect();
     if kept.is_empty() {
         targets.to_vec()
     } else {
@@ -1434,10 +1453,11 @@ mod tests {
     /// halves 2882/2883); same flank hunts together, never across.
     #[test]
     fn fence_side_splits_at_the_gate_line() {
-        assert!(super::same_fence_side(3268, 3262, 3255), "west flank together");
-        assert!(super::same_fence_side(3268, 3270, 3300), "east flank together");
-        assert!(!super::same_fence_side(3268, 3262, 3270), "across never targets");
-        assert!(!super::same_fence_side(3268, 3270, 3262), "across either way");
+        use crate::skill_gather::same_side;
+        assert!(same_side(3268, 3262, 3255), "west flank together");
+        assert!(same_side(3268, 3270, 3300), "east flank together");
+        assert!(!same_side(3268, 3262, 3270), "across never targets");
+        assert!(!same_side(3268, 3270, 3262), "across either way");
     }
 
     /// Shop staff are excluded by op category, never by name: the
@@ -1469,7 +1489,7 @@ mod tests {
     /// Walking-cost order inside the take(3) window: slot 7 at (3252,3237)
     /// is Manhattan-nearest from (3230,3241) but walks ~50 (houses/doors)
     /// while slot 9 at (3203,3246) walks ~36 — the lure loses, and no walk
-    /// was spent to learn it (pure plans only).
+    /// was spent to learn it (one remote batch, L1-cached on repeat).
     #[test]
     fn rank_foes_prefers_walk_cheap() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -1478,9 +1498,28 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3230;
         bot.world.z = 3241;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-foes".to_string()),
+            &lifescape_nav::service::test_socket("foes-walk"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "foes"));
+        bot.plan_data_version = Some("test-foes".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
         let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        let ranked = rank_foes(&bot, window);
+        let ranked = rank_foes(&mut bot, window);
         assert_eq!(ranked, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "walk-cheap foe first, got: {ranked:?}");
+        // L1 hit: the same pair costs no new compute.
+        let before = service.stats();
+        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
+        let again = rank_foes(&mut bot, window);
+        assert_eq!(again, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "repeat ranks identically");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "second ranking hits L1, never recomputes");
+        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
     }
 
     /// No planner wired (or nothing plannable): the window keeps its
@@ -1493,7 +1532,35 @@ mod tests {
         bot.world.x = 3230;
         bot.world.z = 3241;
         let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        assert_eq!(rank_foes(&bot, window.clone()), window, "unwired keeps Manhattan order");
+        assert_eq!(rank_foes(&mut bot, window.clone()), window, "unwired keeps Manhattan order");
+    }
+
+    /// Operator stop during ranking: cancel, no block, Manhattan order.
+    #[test]
+    fn rank_foes_stop_returns_manhattan_without_blocking() {
+        use std::sync::Arc;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3230;
+        bot.world.z = 3241;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-foes-stop".to_string()),
+            &lifescape_nav::service::test_socket("foes-stop"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "foes-stop"));
+        bot.plan_data_version = Some("test-foes-stop".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.on_pump = Some(Arc::new(|_: &mut Bot| false));
+        let start = std::time::Instant::now();
+        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
+        assert_eq!(rank_foes(&mut bot, window.clone()), window, "stop keeps Manhattan order");
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "stop cancels, never blocks");
     }
 
     /// Every pressed button resolves to the com_mode index the server

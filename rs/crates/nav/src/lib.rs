@@ -14,3 +14,4 @@ pub mod route;
 pub mod service;
 pub mod static_world;
 pub mod tables;
+pub mod walk_rank;

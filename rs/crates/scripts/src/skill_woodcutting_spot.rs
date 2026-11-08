@@ -4,12 +4,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
+use crate::skill_gather::{across_toll, BanSet};
 use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
@@ -34,11 +33,12 @@ pub(crate) const WALK_SHORTLIST: usize = 4;
 
 /// Cheapest-to-walk spot among pre-filtered candidates (toll, hunter, F2P,
 /// bans and liveness ran BEFORE, so no plan is wasted on an excluded
-/// spot). Pure plans only (no walk, no send). Unwired (old unit tests) or
-/// all-disconnected keeps the Manhattan order, never drops the pick — the
-/// planner itself is untouched, only the ranking changes. The returned
-/// metric is walk cost when planned, Manhattan otherwise.
-fn refine_by_walk(bot: &Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, (i32, i32))> {
+/// spot). One remote batch (no local Dijkstra, no walk, no send). The
+/// ranking lives in `lifescape_nav::walk_rank`; this only bounds the
+/// pool, maps the winner back to a walk-or-Manhattan metric and logs the
+/// upset. Unwired (no service) or all-disconnected keeps the Manhattan
+/// order, never drops the pick.
+fn refine_by_walk(bot: &mut Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, (i32, i32))> {
     if cands.is_empty() {
         return None;
     }
@@ -47,17 +47,26 @@ fn refine_by_walk(bot: &Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, 
     if cands.len() > WALK_SHORTLIST {
         bot.log(&format!("walk-refine: {} spots, planning top-{WALK_SHORTLIST} Manhattan (bound)", cands.len()));
     }
-    let mut best = manhattan;
-    let mut walked = false;
-    for &(_, spot) in cands.iter().take(WALK_SHORTLIST) {
-        if let Some(cost) = bot.walk_cost(spot.0, spot.1, bot.world.level) {
-            if !walked || i64::from(cost) < best.0 {
-                best = (i64::from(cost), spot);
-            }
-            walked = true;
-        }
+    let level = bot.world.level;
+    let head = cands.len().min(WALK_SHORTLIST);
+    let dests: Vec<lifescape_nav::plan::Tile> = cands[..head]
+        .iter()
+        .map(|(_, pos)| lifescape_nav::plan::Tile { x: pos.0, z: pos.1, level })
+        .collect();
+    let costs = bot.walk_costs(&dests);
+    let mut by_spot: std::collections::HashMap<(i64, (i32, i32)), Option<u32>> = std::collections::HashMap::new();
+    for (cand, cost) in cands[..head].iter().copied().zip(costs) {
+        by_spot.insert(cand, cost);
     }
-    if walked && best.1 != manhattan.1 {
+    let ranked = lifescape_nav::walk_rank::rank_walk_shortlist(cands, WALK_SHORTLIST, |cand| {
+        by_spot.get(cand).copied().unwrap_or(None)
+    });
+    let (cost, (_, pos)) = ranked.into_iter().next().expect("non-empty pool ranks");
+    let best = match cost {
+        Some(walk) => (i64::from(walk), pos),
+        None => manhattan,
+    };
+    if best.1 != manhattan.1 {
         bot.log(&format!(
             "walk-refine: Manhattan ({},{})+{} loses to ({},{}) walk {}",
             manhattan.1.0, manhattan.1.1, manhattan.0, best.1.0, best.1.1, best.0
@@ -123,22 +132,6 @@ fn tree_live(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool
             .is_none_or(|entry| entry.name.is_some_and(|name| tier_names.iter().any(|tree| *tree == name.to_lowercase()))),
         None => true,
     }
-}
-
-/// X of the nearest toll fence seen so far. Same nearest-gate rule as
-/// `nearest_bank`: the fence is a vertical line, spots flip sides with it.
-fn toll_line(bot: &Bot) -> Option<i32> {
-    let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.toll_gates
-        .iter()
-        .filter(|(_, _, level)| *level == bot.world.level)
-        .min_by_key(|(gate_x, gate_z, _)| (gate_x - here_x).abs() + (gate_z - here_z).abs())
-        .map(|(gate_x, _, _)| *gate_x)
-}
-
-/// True when the spot sits across the toll fence from the bot.
-fn across_toll(bot_x: i32, spot_x: i32, line: Option<i32>) -> bool {
-    line.is_some_and(|fence| (spot_x >= fence) != (bot_x >= fence))
 }
 
 /// True when a hunter of this level comes for us: the server skips
@@ -238,10 +231,10 @@ pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
 /// skips the toll check (cross-fence relocation when stranded).
 #[allow(clippy::too_many_arguments)]
 fn nearest_hop_spot(
-    bot: &Bot,
+    bot: &mut Bot,
     tier: &knowledge::trees::TreeTier,
     fence: Option<i32>,
-    banned: &HashMap<(i32, i32), u64>,
+    banned: &BanSet,
     except: Option<(i32, i32)>,
     hunters: &[(i64, i64, i64)],
     saw_paid_only: &mut bool,
@@ -252,7 +245,7 @@ fn nearest_hop_spot(
         if Some((spot_x, spot_z)) == except {
             continue;
         }
-        if banned.contains_key(&(spot_x, spot_z))
+        if banned.contains((spot_x, spot_z))
             || !tree_live(bot, spot_x, spot_z, &tier.trees)
         {
             continue;
@@ -279,14 +272,16 @@ fn nearest_hop_spot(
 }
 
 pub(crate) fn pick_tree_spot(
-    bot: &Bot,
+    bot: &mut Bot,
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
-    banned: &mut HashMap<(i32, i32), u64>,
+    banned: &mut BanSet,
     except: Option<(i32, i32)>,
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
-    let fence = if bot.allow_paid { None } else { toll_line(bot) };
+    // Toll-fence aware: banks on the far side are last resort, never the
+    // default — same getter as `nearest_bank`, one line per side.
+    let fence = if bot.allow_paid { None } else { crate::skill_common::toll_gate_x(&mut *bot) };
     // Hunter filter unless opted out: spots a threat could reach are
     // skipped (the hurt-driven flee below still handles wanderers).
     let hunters: Vec<(i64, i64, i64)> = if bot.allow_wild { Vec::new() } else { hunter_zones(bot) };
@@ -305,7 +300,7 @@ pub(crate) fn pick_tree_spot(
             if Some((spot_x, spot_z)) == except {
                 continue;
             }
-            if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &tier.trees) {
+            if banned.contains((spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &tier.trees) {
                 continue;
             }
             if across_toll(bot.world.x, spot_x, fence) {
@@ -330,7 +325,7 @@ pub(crate) fn pick_tree_spot(
             continue;
         }
         if Some(tier.level) == top_level {
-            if let Some((_, (spot_x, spot_z))) = refine_by_walk(bot, cands) {
+            if let Some((_, (spot_x, spot_z))) = refine_by_walk(&mut *bot, cands) {
                 return Some((tier.clone(), spot_x, spot_z));
             }
         } else if fallback.is_none() {
@@ -343,7 +338,7 @@ pub(crate) fn pick_tree_spot(
     // following cluster, then the tier below — no travel loop.
     if let Some(top) = best {
         let hop = nearest_hop_spot(
-            bot,
+            &mut *bot,
             top,
             fence,
             banned,
@@ -367,7 +362,7 @@ pub(crate) fn pick_tree_spot(
         // the new side, so this relocates once instead of ping-ponging.
         if fence.is_some() && saw_paid_only {
             if let Some((dist, (spot_x, spot_z))) = nearest_hop_spot(
-                bot,
+                &mut *bot,
                 top,
                 None,
                 banned,
@@ -404,8 +399,8 @@ pub(crate) fn pick_tree_spot(
                 }
                 let why = if Some((spot_x, spot_z)) == except {
                     "noroute".to_string()
-                } else if let Some(until) = banned.get(&(spot_x, spot_z)) {
-                    banned_notes.push(((spot_x, spot_z), *until));
+                } else if let Some(until) = banned.until((spot_x, spot_z)) {
+                    banned_notes.push(((spot_x, spot_z), until));
                     format!("banned-{}t", until.saturating_sub(now))
                 } else if !tree_live(bot, spot_x, spot_z, &top.trees) {
                     if is_stump(bot, spot_x, spot_z) {
@@ -442,8 +437,7 @@ pub(crate) fn pick_tree_spot(
             // A planner-proven dead spot (`except`, NoRoute from here)
             // breaks unanimity above ("noroute", never released): retrying
             // it from the same tile is provably futile until the bot moves.
-            if let Some(oldest) = starved_oldest(notes.len(), &banned_notes) {
-                banned.remove(&oldest);
+            if let Some(oldest) = banned.release_oldest_if_starved(notes.len(), &banned_notes) {
                 bot.log(&format!(
                     "tier starved by bans: {} {} banned in range, releasing oldest ({},{})",
                     banned_notes.len(),
@@ -451,7 +445,7 @@ pub(crate) fn pick_tree_spot(
                     oldest.0,
                     oldest.1,
                 ));
-                return pick_tree_spot(bot, tiers, bank, level, &mut *banned, except);
+                return pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except);
             }
         }
     }
@@ -471,7 +465,7 @@ pub(crate) fn pick_tree_spot(
             bot.log(&format!("degrading {}->{} for this repick (best tier unreachable, reasons above)", top.product, down.product));
         }
     }
-    refine_by_walk(bot, cands).map(|(_, (spot_x, spot_z))| (down, spot_x, spot_z))
+    refine_by_walk(&mut *bot, cands).map(|(_, (spot_x, spot_z))| (down, spot_x, spot_z))
 }
 
 /// Live loc id at a tile (live stream first, static template as fallback).
@@ -534,22 +528,21 @@ pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior
     GONE_BAN_TICKS
 }
 
-/// Oldest banned spot to retry when a tier starves: Some only when every
-/// in-range spot seen is banned (100% — none stumped, gated or hunted).
-/// Anything else means the tier is genuinely unavailable, not blacklisted.
-pub(crate) fn starved_oldest(total_seen: usize, banned: &[((i32, i32), u64)]) -> Option<(i32, i32)> {
-    if total_seen == 0 || banned.len() != total_seen {
-        return None;
-    }
-    banned.iter().min_by_key(|(_, until)| *until).map(|(pos, _)| *pos)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skill_common::toll_gate_x;
+    use crate::skill_gather::{same_side, starved_oldest};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
-    use std::collections::HashMap;
+
+    fn ban_all(spots: &[(i32, i32)]) -> BanSet {
+        let mut bans = BanSet::new();
+        for pos in spots {
+            bans.ban_until(*pos, u64::MAX);
+        }
+        bans
+    }
 
     /// Threat rule mirrors the server: hunters skip players above twice
     /// their level, so combat 4 still fears spiders (2) but combat 5
@@ -587,7 +580,7 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         // Every in-range yew banned except (2996,3311), across the fence.
-        let mut banned: HashMap<(i32, i32), u64> = [
+        let mut banned = ban_all(&[
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -599,11 +592,8 @@ mod tests {
             (2933, 3233),
             (2934, 3225),
             (2935, 3229),
-        ]
-        .into_iter()
-        .map(|pos| (pos, u64::MAX))
-        .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
+        ]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
@@ -634,7 +624,7 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut HashMap::new(), None);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut BanSet::new(), None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
@@ -651,7 +641,9 @@ mod tests {
         bot.world.x = 2900;
         bot.world.z = 3240;
         bot.toll_gates.insert((2920, 3240, 0));
-        assert_eq!(toll_line(&bot), Some(2920), "nearest fence line");
+        assert_eq!(toll_gate_x(&mut bot), Some(2920), "nearest fence line");
+        assert!(same_side(2920, 2900, 2910), "west flank together");
+        assert!(!same_side(2920, 2900, 3086), "across never targets");
         assert!(across_toll(2900, 3086, Some(2920)), "east spot is across");
         assert!(!across_toll(2900, 2910, Some(2920)), "west spot is same side");
         assert!(!across_toll(2900, 3086, None), "no fence means no filtering");
@@ -665,13 +657,13 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         bot.allow_paid = false;
-        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new(), None);
+        let hopped = pick_tree_spot(&mut bot, &tiers, &bank, 0, &mut BanSet::new(), None);
         let Some((_, hop_x, _)) = hopped else {
             panic!("hop should find a same-side tree, got None");
         };
         assert!(hop_x < 2920, "hop stays on the bot side of the fence, got x={hop_x}");
         bot.allow_paid = true;
-        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new(), None);
+        let some = pick_tree_spot(&mut bot, &tiers, &bank, 0, &mut BanSet::new(), None);
         assert!(some.is_some(), "paid crossing reopens the same spots");
     }
 
@@ -695,7 +687,7 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let mut banned: HashMap<(i32, i32), u64> = [
+        let mut banned = ban_all(&[
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -703,11 +695,8 @@ mod tests {
             (3146, 3254),
             (3151, 3230),
             (3165, 3219),
-        ]
-        .into_iter()
-        .map(|pos| (pos, u64::MAX))
-        .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
+        ]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("hop should find the next yew cluster, got None");
         };
@@ -736,7 +725,8 @@ mod tests {
             members: false,
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let mut banned: HashMap<(i32, i32), u64> = [
+        let mut banned = BanSet::new();
+        for (pos, until) in [
             ((3053, 3271), 1000u64),
             ((3041, 3319), 2001),
             ((3017, 3308), 2002),
@@ -749,16 +739,16 @@ mod tests {
             ((2933, 3233), 2009),
             ((2934, 3225), 2010),
             ((2935, 3229), 2011),
-        ]
-        .into_iter()
-        .collect();
+        ] {
+            banned.ban_until(pos, until);
+        }
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("starved tier should retry the oldest ban, got None");
         };
         assert_eq!(tier.product, "yew_logs", "same tier retried, not willow, got: {}", tier.product);
         assert_eq!((spot_x, spot_z), (3053, 3271), "oldest ban retried first, got: ({spot_x},{spot_z})");
-        assert!(!banned.contains_key(&(3053, 3271)), "released entry leaves the map");
+        assert!(!banned.contains((3053, 3271)), "released entry leaves the map");
         assert_eq!(banned.len(), 11, "one release per repick, got: {}", banned.len());
     }
 
@@ -788,7 +778,7 @@ mod tests {
         let tiers = lifescape_gamedata::trees::all_tiers();
         // Every in-range yew banned except (2996,3311), which sits across
         // the fence: its note reads "toll", not "banned", so no release.
-        let mut banned: HashMap<(i32, i32), u64> = [
+        let mut banned = ban_all(&[
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -800,11 +790,8 @@ mod tests {
             (2933, 3233),
             (2934, 3225),
             (2935, 3229),
-        ]
-        .into_iter()
-        .map(|pos| (pos, u64::MAX))
-        .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
+        ]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
@@ -884,7 +871,7 @@ mod tests {
                 tree_names.insert(tree.clone());
             }
         }
-        let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
+        let mut banned = BanSet::new();
         for entry in lifescape_gamedata::all_locs() {
             let name = entry.name.clone().unwrap_or_default().to_lowercase();
             if !tree_names.contains(&name) {
@@ -894,7 +881,7 @@ mod tests {
                 if spawn.level == 0 && (spawn.x - 2862).abs() + (spawn.z - 3384).abs() <= 200 {
                     let pos = (spawn.x as i32, spawn.z as i32);
                     if pos != (2862, 3385) {
-                        banned.insert(pos, u64::MAX);
+                        banned.ban_until(pos, u64::MAX);
                     }
                 }
             }
@@ -906,7 +893,7 @@ mod tests {
         plain.world.z = 3384;
         plain.allow_paid = true;
         plain.allow_wild = true;
-        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &mut banned, None);
+        let picked = pick_tree_spot(&mut plain, &tiers, &bank, 30, &mut banned, None);
         let Some((_, spot_x, spot_z)) = picked else {
             panic!("unfiltered pick should land on the only open spot, got None");
         };
@@ -919,7 +906,7 @@ mod tests {
         wired.allow_paid = true;
         wired.allow_wild = true;
         wired.nav_world = Some(world);
-        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &mut banned, None);
+        let filtered = pick_tree_spot(&mut wired, &tiers, &bank, 30, &mut banned, None);
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
@@ -997,7 +984,7 @@ mod tests {
         let tiers = lifescape_gamedata::trees::all_tiers();
         // Every in-range yew banned except the planner-dead one, which is
         // excluded instead of released: the repick must degrade to maple.
-        let mut banned: HashMap<(i32, i32), u64> = [
+        let mut banned = ban_all(&[
             (3053, 3271),
             (3041, 3319),
             (3017, 3308),
@@ -1009,11 +996,8 @@ mod tests {
             (2933, 3233),
             (2934, 3225),
             (2935, 3229),
-        ]
-        .into_iter()
-        .map(|pos| (pos, u64::MAX))
-        .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)));
+        ]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)));
         let Some((tier, _, _)) = picked else {
             panic!("dead-spot repick should degrade one tier, got None");
         };
@@ -1024,7 +1008,8 @@ mod tests {
 
     /// Walking-cost selection: the Manhattan-nearest oak (3252,3237, +26)
     /// sits behind houses/doors from (3230,3241) while (3203,3246, +32)
-    /// walks clean — the lure loses. Measured walk: 50 vs 36.
+    /// walks clean — the lure loses. Measured walk: 50 vs 36. One remote
+    /// batch, L1-cached on repeat.
     #[test]
     fn walk_cost_beats_manhattan_lure() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -1033,9 +1018,28 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3230;
         bot.world.z = 3241;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, "test-spot".to_string()),
+            &lifescape_nav::service::test_socket("spot-walk"),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "spot"));
+        bot.plan_data_version = Some("test-spot".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
         let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
-        let picked = refine_by_walk(&bot, cands).expect("non-empty pool picks");
+        let picked = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
         assert_eq!(picked.1, (3203, 3246), "walk-cheap wins over the Manhattan lure, got: {picked:?}");
+        // L1 hit: the same cands cost no new compute.
+        let before = service.stats();
+        let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
+        let again = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
+        assert_eq!(again.1, (3203, 3246), "repeat ranks identically");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "second ranking hits L1, never recomputes");
+        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
     }
 
     /// No planner wired (old offline tests, golden paths): the pick keeps
@@ -1048,7 +1052,7 @@ mod tests {
         bot.world.x = 3230;
         bot.world.z = 3241;
         let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
-        let picked = refine_by_walk(&bot, cands).expect("non-empty pool picks");
+        let picked = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
         assert_eq!(picked.1, (3252, 3237), "unwired keeps Manhattan order, got: {picked:?}");
     }
 }

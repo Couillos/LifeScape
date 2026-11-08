@@ -9,11 +9,9 @@ path = "src/lib.rs"
 
 [dependencies]
 lifescape-json = { path = "../json" }
+lifescape-nav = { path = "../nav" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-gamedata = { path = "../gamedata" }
-
-[dev-dependencies]
-lifescape-nav = { path = "../nav" }
 
 [lints]
 workspace = true

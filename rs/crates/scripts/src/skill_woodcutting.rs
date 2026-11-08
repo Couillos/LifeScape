@@ -11,9 +11,12 @@ use lifescape_sdk::waits::{wait_hitpoints, wait_ticks};
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    bank_trip, bank_trip_resilient, buy_stock, check_events, death_message_seen, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
-    obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
-    GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS,
+    bank_trip, bank_trip_resilient, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
+    obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome,
+    GONE_BAN_TICKS, STALL_TICKS, STRUCTURAL_BAN_TICKS,
+};
+use crate::skill_gather::{
+    classify_message, death_since, note_gain, on_hurt, stall_expired, BanSet, ToolSpec,
 };
 use crate::skill_woodcutting_spot::{is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
@@ -26,28 +29,26 @@ const HANDLE_NAME: &str = "macro_hatchethandle";
 pub const AXE_ORDER: [&str; 7] =
     ["rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe"];
 
+/// Shared rank: the server takes the best carried axe at any level, so
+/// rank alone decides (see `ToolSpec`).
+fn axe_spec() -> ToolSpec {
+    ToolSpec { order: &AXE_ORDER }
+}
+
 /// Rank in AXE_ORDER (0 = best). The server's checker takes the best
 /// carried axe at any woodcutting level (woodcut.rs2
 /// woodcutting_axe_checker: the level-gated shortlist is commented out,
 /// 2004 behaviour), so rank alone decides.
 fn axe_rank(name: &str) -> Option<usize> {
-    AXE_ORDER.iter().position(|axe| *axe == name)
+    axe_spec().rank(name)
 }
 
 fn best_axe(bot: &Bot) -> Option<String> {
-    let held = pack_ids(bot);
-    for name in AXE_ORDER {
-        if let Ok(id) = obj_id(bot, name) {
-            if held.contains(&id) {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
+    axe_spec().best_held(bot)
 }
 
 fn known_axe_ids(bot: &Bot) -> HashSet<u16> {
-    AXE_ORDER.into_iter().filter_map(|name| obj_id(bot, name).ok()).collect()
+    axe_spec().known_ids(bot)
 }
 
 /// Reattach a handle + head carried instead of rebuying.
@@ -239,14 +240,7 @@ fn bootstrap_products(bot: &Bot, coins: u16) -> Vec<u16> {
 }
 
 fn cheapest_upgrade(bot: &Bot) -> (Vec<String>, i64) {
-    let current_rank = best_axe(bot).and_then(|tool| AXE_ORDER.iter().position(|name| *name == tool)).unwrap_or(AXE_ORDER.len());
-    let cands: Vec<String> = AXE_ORDER[..current_rank]
-        .iter()
-        .filter(|name| crate::skill_common::shop_stock_keeper(bot, name).is_some())
-        .map(|name| name.to_string())
-        .collect();
-    let cheapest = cands.iter().map(|name| obj_price(name)).min().unwrap_or(0);
-    (cands, cheapest)
+    axe_spec().cheapest_upgrade(bot, |_| true)
 }
 
 /// One axe buy attempt with bronze fallback: tries the affordable cands
@@ -279,14 +273,6 @@ fn buy_axe_upgrade(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, Sc
         }
     }
     Ok(None)
-}
-
-/// True when death happened since `seen`: hp flatlined or the server
-/// death line arrived. Returns the resynced index (everything observed so
-/// far) so the next call neither replays nor skips a line.
-fn death_since(bot: &Bot, seen: usize) -> (bool, usize) {
-    let died = hitpoints(bot) == 0 || death_message_seen(bot, seen);
-    (died, bot.world.messages.len())
 }
 
 type TreeSpot = (knowledge::trees::TreeTier, i32, i32);
@@ -364,7 +350,7 @@ fn wait_for_respawn(
     tier: &knowledge::trees::TreeTier,
     spot_x: i32,
     spot_z: i32,
-    banned: &mut HashMap<(i32, i32), u64>,
+    banned: &mut BanSet,
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
@@ -375,11 +361,11 @@ fn wait_for_respawn(
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     // Count the regrow, not a flat clock: the stump is back by
     // `expected`, so banning longer just skips a live tree.
-    banned.insert((spot_x, spot_z), bot.world.ticks + expected);
+    banned.ban_for((spot_x, spot_z), bot.world.ticks, expected);
     // Ticks advanced during the work: drop expired bans so the walk
     // alternative is measured against live spots, not stale clocks.
-    banned.retain(|_, until| *until > bot.world.ticks);
-    let alternative = pick_tree_spot(bot, tiers, bank, level, &mut *banned, except)
+    banned.retain(bot.world.ticks);
+    let alternative = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
         bot.log(&format!(
@@ -389,7 +375,7 @@ fn wait_for_respawn(
         return Ok(());
     };
     // Short ban: the repick after the wait may return to this tree.
-    banned.insert((spot_x, spot_z), bot.world.ticks + wait);
+    banned.ban_for((spot_x, spot_z), bot.world.ticks, wait);
     bot.log(&format!(
         "waiting respawn {wait}t at ({spot_x},{spot_z}) (regrow ~{expected}t vs walk {}t)",
         alternative.map(|walk| walk.to_string()).unwrap_or_else(|| "none".to_string())
@@ -401,7 +387,7 @@ fn wait_for_respawn(
         bot.pump(2)?;
         if hitpoints(bot) < hitpoints_before || hitpoints(bot) == 0 {
             bot.log("threat during respawn wait, leaving the stump");
-            banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+            banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
             break;
         }
         if tree_still_there(bot, spot_x, spot_z, &tier.trees) {
@@ -431,7 +417,7 @@ fn work_spot(
     tree_z: i32,
     log_ids: &[u16],
     had_logs: u32,
-    banned: &mut HashMap<(i32, i32), u64>,
+    banned: &mut BanSet,
     travel_dead: &mut Option<((i32, i32), (i32, i32))>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 4 {
@@ -447,7 +433,7 @@ fn work_spot(
                 // tile until the bot moves.
                 let ban = walk_fail_ban(true);
                 bot.log(&format!("no route to ({tree_x},{tree_z}) from {:?}, long-banning {ban}t", bot.position()));
-                banned.insert((tree_x, tree_z), bot.world.ticks + ban);
+                banned.ban_for((tree_x, tree_z), bot.world.ticks, ban);
                 *travel_dead = Some(((tree_x, tree_z), (bot.world.x, bot.world.z)));
                 return Ok((WorkOutcome::Unreachable, 0));
             }
@@ -576,15 +562,8 @@ fn try_stand(
                 }
             }
             for message in bot.world.messages.get(seen_msgs..).unwrap_or(&[]) {
-                let lowered = message.to_lowercase();
-                if lowered.contains("can't reach that") {
-                    return Ok((WorkOutcome::UnreachableSpot, gained));
-                }
-                if lowered.contains("woodcutting level of") {
-                    return Ok((WorkOutcome::LevelLocked, gained));
-                }
-                if lowered.contains("do not have an axe") {
-                    return Ok((WorkOutcome::NoTool, gained));
+                if let Some(outcome) = classify_message(message) {
+                    return Ok((outcome, gained));
                 }
             }
             let now_have: u32 = log_ids.iter().map(|id| pack_total(bot, *id)).sum();
@@ -637,7 +616,7 @@ fn chop_load(
     bank: &mut knowledge::banks::Bank,
     coins: u16,
     mut level: i64,
-    banned: &mut HashMap<(i32, i32), u64>,
+    banned: &mut BanSet,
     respawn: &mut HashMap<String, u64>,
     refusals: &mut HashMap<(i32, i32), u8>,
 ) -> Result<(bool, i64), ScriptError> {
@@ -686,13 +665,10 @@ fn chop_load(
             continue;
         }
         if hitpoints(bot) < last_hitpoints {
-            flees += 1;
             bot.log("hurt, fleeing");
             bot.intend("fleeing a hunter");
-            if let Some((_, spot_x, spot_z)) = &spot {
-                banned.insert((*spot_x, *spot_z), bot.world.ticks + FLEE_BAN_TICKS);
-            }
-            if flees > MAX_FLEES_PER_LOAD {
+            let fled_spot = spot.as_ref().map(|(_, spot_x, spot_z)| (*spot_x, *spot_z));
+            if on_hurt(banned, fled_spot, &mut flees, bot.world.ticks) {
                 bot.log("too many attacks, aborting load");
                 return Ok((false, level));
             }
@@ -703,21 +679,21 @@ fn chop_load(
         }
         last_hitpoints = hitpoints(bot);
         let now = bot.world.ticks;
-        banned.retain(|_, until| *until > now);
+        banned.retain(now);
         // Planner-proven dead from here (NoRoute at this tile): never
         // re-pick it until the bot moves or its long ban expires, or the
         // starvation release hot-loops one doomed walk per repick.
         let except = travel_dead.and_then(|(dead, from)| {
-            (from == (bot.world.x, bot.world.z) && banned.contains_key(&dead)).then_some(dead)
+            (from == (bot.world.x, bot.world.z) && banned.contains(dead)).then_some(dead)
         });
         let stale = match &spot {
-            Some((_, spot_x, spot_z)) => banned.contains_key(&(*spot_x, *spot_z)),
+            Some((_, spot_x, spot_z)) => banned.is_banned((*spot_x, *spot_z), now),
             None => true,
         };
         if stale {
             let mut picked = None;
             for _ in 0..16 {
-                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, &mut *banned, except) {
+                if let Some(found) = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except) {
                     picked = Some(found);
                     break;
                 }
@@ -736,7 +712,7 @@ fn chop_load(
         } else if let Some((tier, spot_x, spot_z)) = &spot {
             if !tree_still_there(bot, *spot_x, *spot_z, &tier.trees) {
                 bot.log(&format!("tree gone at ({spot_x},{spot_z})"));
-                banned.insert((*spot_x, *spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                banned.ban_for((*spot_x, *spot_z), bot.world.ticks, GONE_BAN_TICKS);
                 spot = None;
                 continue;
             }
@@ -785,7 +761,7 @@ fn chop_load(
                     wait_for_respawn(bot, &tier, spot_x, spot_z, banned, tiers, bank, level, respawn, &mut idle_since, except)?;
                 } else {
                     bot.log("tree quiet, next one");
-                    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                    banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
                 }
                 spot = None;
             }
@@ -797,7 +773,7 @@ fn chop_load(
                 // passing crowd or a missing nav blockage must not condemn
                 // a live tree for half the session.
                 bot.log(&format!("unreachable, short-banning ({spot_x},{spot_z}) for {GONE_BAN_TICKS}t (walk fell short)"));
-                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
                 spot = None;
                 unreachable_streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the
@@ -860,16 +836,16 @@ fn chop_load(
                     bot.log(&format!("click refused off-stand at ({spot_x},{spot_z}), walk fell short, short ban {ban}t"));
                     unreachable_streak = 0;
                 }
-                banned.insert((spot_x, spot_z), bot.world.ticks + ban);
+                banned.ban_for((spot_x, spot_z), bot.world.ticks, ban);
                 spot = None;
             }
             WorkOutcome::LevelLocked => {
-                banned.insert((spot_x, spot_z), bot.world.ticks + 500);
+                banned.ban_for((spot_x, spot_z), bot.world.ticks, 500);
                 spot = None;
             }
             WorkOutcome::Threat => {
                 bot.log("hunter close, re-picking a spot");
-                banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+                banned.ban_for((spot_x, spot_z), bot.world.ticks, GONE_BAN_TICKS);
                 spot = None;
             }
             WorkOutcome::Blocked => {
@@ -881,9 +857,9 @@ fn chop_load(
             }
         }
         if gained > 0 {
-            idle_since = bot.world.ticks;
+            note_gain(&mut idle_since, bot.world.ticks);
         }
-        if bot.world.ticks - idle_since > STALL_TICKS {
+        if stall_expired(bot.world.ticks, idle_since, STALL_TICKS) {
             bot.log(&format!("stall: no logs for {STALL_TICKS} ticks"));
             return Ok((false, level));
         }
@@ -901,7 +877,7 @@ fn can_buy_now(have_coins: u32, cheapest: i64, cands: &[String]) -> bool {
 /// doubling up: the server chops with the best carried axe at any level,
 /// so a second axe is dead weight that death would drop anyway.
 fn chop_keep_ids(bot: &Bot) -> Vec<u16> {
-    best_axe(bot).and_then(|name| obj_id(bot, &name).ok()).into_iter().collect()
+    axe_spec().keep_ids(bot)
 }
 
 /// Sell the pack (logs and ground-loot junk alike) at the nearby general
@@ -1095,7 +1071,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut done = 0u32;
     // Threat bans outlive one load: a killer tree stays banned while its
     // neighbours get cut, instead of repicking the same death every load.
-    let mut banned: HashMap<(i32, i32), u64> = HashMap::new();
+    let mut banned: BanSet = BanSet::new();
     // Observed regrow delays per tier product: one exact wait calibrates
     // the whole tier (server rate is per tree table), so this outlives
     // loads like the bans do.
@@ -1198,8 +1174,9 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, death_since, default_respawn_ticks, respawn_wait_ticks};
+    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, default_respawn_ticks, respawn_wait_ticks};
     use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
+    use crate::skill_gather::death_since;
     use lifescape_sdk::Bot;
 
     /// Death since an index: the mid-work message fires on every work

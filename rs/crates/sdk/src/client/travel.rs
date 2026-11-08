@@ -331,16 +331,83 @@ impl Bot {
         NavOptions { allow_paid: self.allow_paid, f2p_only: true, satisfied, excluded_edges: HashSet::new() }
     }
 
-    /// Pure walking cost bot -> tile (planner `cost`, doors + rides
-    /// included): the target-selection metric (Manhattan lies across
-    /// rivers and fences). None when unwired or unplannable — callers
-    /// keep the Manhattan order then, never None-pick. No pump, no send.
-    pub fn walk_cost(&self, x: i32, z: i32, level: i32) -> Option<u32> {
-        let world = self.nav_world.as_ref()?;
-        let tables = self.nav_tables.as_ref()?;
-        let options = self.nav_options(tables);
+    /// Batch walking costs via the pathfinding service, never a local
+    /// Dijkstra: one submit+poll per dest, sequential so at most one
+    /// ticket is in flight (never near ACCOUNT_CAP). L1 exact hits,
+    /// truncation and joins happen server-side on their own. Any miss
+    /// (no service, refused, timeout, stale twice, interrupt,
+    /// unplannable) is None so callers keep the Manhattan order — the
+    /// only local Dijkstra left is the travel_to/approach execution path
+    /// with its own fallback.
+    pub fn walk_costs(&mut self, dests: &[Tile]) -> Vec<Option<u32>> {
+        let Some(tables) = self.nav_tables.clone() else {
+            return vec![None; dests.len()];
+        };
+        let Some(client) = self.plan_client.clone() else {
+            return vec![None; dests.len()];
+        };
+        if dests.is_empty() {
+            return Vec::new();
+        }
+        let options = self.nav_options(&tables);
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-        plan::plan(world, tables, from, Tile { x, z, level }, &options).ok().map(|plan| plan.cost)
+        let mut out = Vec::with_capacity(dests.len());
+        for dest in dests {
+            out.push(self.walk_cost_one(&client, &options, from, *dest));
+        }
+        out
+    }
+
+    /// One remote cost: submit non-blocking, poll with the keepalive
+    /// between polls (same guard as `poll_ticket`), version-skew
+    /// resubmits once, then Manhattan (`None`). Never plans locally.
+    fn walk_cost_one(
+        &mut self,
+        client: &service::PlanClient,
+        options: &NavOptions,
+        from: Tile,
+        dest: Tile,
+    ) -> Option<u32> {
+        let mut resubmits = 0u32;
+        loop {
+            let version = self.plan_data_version.clone().unwrap_or_default();
+            let ticket = match client.submit(from, dest, options, &version) {
+                Ok(ServiceSubmit::Accepted { id, version: served }) => {
+                    if !version.is_empty() && !served.is_empty() && served != version {
+                        self.plan_data_version = Some(served);
+                        if resubmits >= 1 {
+                            return None;
+                        }
+                        resubmits += 1;
+                        continue;
+                    }
+                    id
+                }
+                Ok(ServiceSubmit::Refused { reason, version: served }) => {
+                    if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
+                        self.plan_data_version = Some(served);
+                        resubmits += 1;
+                        continue;
+                    }
+                    return None;
+                }
+                Err(_) => return None,
+            };
+            match self.poll_ticket(client, ticket) {
+                PollTicket::Ticket(RemoteOutcome::Ready(plan, _)) => return Some(plan.cost),
+                PollTicket::Ticket(RemoteOutcome::NoRoute(_)) => return None,
+                PollTicket::Ticket(RemoteOutcome::Fallback(_)) => return None,
+                PollTicket::Ticket(RemoteOutcome::Interrupted(_)) => return None,
+                PollTicket::Stale(served) => {
+                    let _ = client.cancel(ticket);
+                    self.plan_data_version = Some(served);
+                    if resubmits >= 1 {
+                        return None;
+                    }
+                    resubmits += 1;
+                }
+            }
+        }
     }
 
     /// Full plan into the live route: the dashboard trace is the plan.
@@ -1253,6 +1320,63 @@ mod tests {
             "same version, same plan"
         );
         assert_eq!(bot.plan_sync_fallbacks, 0, "still no fallback");
+    }
+
+    #[test]
+    fn walk_costs_batch_hits_service_and_l1() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service =
+            Service::start(Snapshot::new(world, tables, "test-costs".to_string()), &test_socket("sdk-costs"), 1).expect("service starts");
+        let mut bot = offline_bot(3230, 3241);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test-costs".to_string());
+        let dests = [Tile { x: 3252, z: 3237, level: 0 }, Tile { x: 3203, z: 3246, level: 0 }];
+        let costs = bot.walk_costs(&dests);
+        assert_eq!(costs.len(), 2, "one cost per dest");
+        assert!(costs.iter().all(|cost| cost.is_some()), "service costs both, got: {costs:?}");
+        // Walk-cheap (3203,3246) beats the Manhattan lure, same verdict as
+        // the old local Dijkstra, without ever planning thread-side.
+        assert!(costs[1] < costs[0], "walk-cheap wins, got: {costs:?}");
+        let before = service.stats();
+        let again = bot.walk_costs(&dests);
+        assert_eq!(again, costs, "repeat serves identical costs");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "repeat hits L1, never recomputes");
+        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
+    }
+
+    #[test]
+    fn walk_costs_without_service_is_manhattan() {
+        let mut bot = offline_bot(3230, 3241);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        let dests = [Tile { x: 3252, z: 3237, level: 0 }, Tile { x: 3203, z: 3246, level: 0 }];
+        assert_eq!(bot.walk_costs(&dests), vec![None, None], "no service keeps Manhattan order");
+    }
+
+    #[test]
+    fn walk_costs_stop_cancels_without_blocking() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "test-costs-stop".to_string()),
+            &test_socket("sdk-costs-stop"),
+            1,
+        )
+        .expect("service starts");
+        let mut bot = offline_bot(3230, 3241);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test-costs-stop".to_string());
+        bot.on_pump = Some(Arc::new(|_: &mut Bot| false));
+        let start = std::time::Instant::now();
+        let dests = [Tile { x: 3252, z: 3237, level: 0 }, Tile { x: 3203, z: 3246, level: 0 }];
+        assert_eq!(bot.walk_costs(&dests), vec![None, None], "stop keeps Manhattan order");
+        assert!(start.elapsed() < service::SERVICE_WAIT_MAX, "stop cancels, never blocks");
     }
 
     #[test]
