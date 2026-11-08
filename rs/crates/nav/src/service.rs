@@ -155,6 +155,11 @@ fn edge_key(edge: &EdgeId) -> String {
 // Truncation: a dest ON a cached plan serves the prefix with no search
 // (optimal by substructure); anything else recomputes, never extends.
 // L2: one shared edge set per data version (2 slots: current + draining).
+//
+// Revert (1 point): make `Lru::get`/`Lru::truncate` return None and skip
+// the `insert` in `serve_plans` — the service is back to a lot2 wrapper
+// (pool + shared L2) with zero behavior change. Version pinning stays:
+// it is the staleness guard, not the cache.
 
 /// Global plan cache bound: worst case 1024 x 9.6 Ko ~ 10 Mo + ~0.35 Mo
 /// overhead (§5.9: 11 Mo line, never raised without rebouclage).
