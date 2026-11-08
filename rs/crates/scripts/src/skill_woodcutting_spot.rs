@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS};
+use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
 use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
@@ -127,12 +127,76 @@ fn hunter_zones(bot: &Bot) -> Vec<(i64, i64, i64)> {
     zones
 }
 
+/// Live footprint (width, length) of the loc on this tile. The server
+/// reaches shape-10 locs orthogonally to their footprint (`ReachStrategy`
+/// `reachRectangle1`, engine `routefinder/ReachStrategy.ts`), never
+/// diagonally to the anchor tile: yews and oaks are 3x3, most trees 2x2
+/// (`gametypes.json` loc rows). A diagonal-to-anchor stand touches no
+/// footprint edge and the click always refuses — live 6/6: (3150,3229)
+/// fails on (3151,3230) while (3151,3229) cuts, (3183,3225) fails on
+/// (3184,3226) while (3185,3225) cuts, (3164,3220) cuts (3165,3219).
+/// Unknown loc reads as 1x1 (old behaviour, engine arbitrates on click).
+pub(crate) fn spot_footprint(bot: &Bot, spot_x: i32, spot_z: i32) -> (i64, i64) {
+    let footprint = bot.world.loc_at(spot_x, spot_z, bot.world.level).and_then(|(loc, _, angle)| {
+        knowledge::loc_by_id(usize::from(loc)).map(|entry| {
+            if angle % 2 == 1 {
+                (entry.length, entry.width)
+            } else {
+                (entry.width, entry.length)
+            }
+        })
+    });
+    footprint.unwrap_or((1, 1))
+}
+
+/// True when the stand is orthogonally adjacent to the loc footprint, i.e.
+/// the server can reach it: same geometry as `reachRectangle1` minus the
+/// wall-flag checks the engine arbitrates on click. Chebyshev-to-anchor is
+/// NOT the rule (a 3x3 corner stand is "adjacent" but inoperable).
+pub(crate) fn operable_stand(bot_x: i32, bot_z: i32, spot_x: i32, spot_z: i32, width: i64, length: i64) -> bool {
+    let (anchor_x, anchor_z) = (i64::from(spot_x), i64::from(spot_z));
+    let (stand_x, stand_z) = (i64::from(bot_x), i64::from(bot_z));
+    (stand_x == anchor_x - 1 && stand_z >= anchor_z && stand_z < anchor_z + length)
+        || (stand_x == anchor_x + width && stand_z >= anchor_z && stand_z < anchor_z + length)
+        || (stand_z == anchor_z - 1 && stand_x >= anchor_x && stand_x < anchor_x + width)
+        || (stand_z == anchor_z + length && stand_x >= anchor_x && stand_x < anchor_x + width)
+}
+
+/// One stand per footprint side (side middles): the click rotation tries
+/// these before condemning the tree. Sorted nearest-first by the caller.
+pub(crate) fn operable_ring(spot_x: i32, spot_z: i32, width: i64, length: i64) -> Vec<(i32, i32)> {
+    let mut ring = vec![
+        (spot_x - 1, spot_z + (length as i32) / 2),
+        (spot_x + width as i32, spot_z + (length as i32) / 2),
+        (spot_x + (width as i32) / 2, spot_z - 1),
+        (spot_x + (width as i32) / 2, spot_z + length as i32),
+    ];
+    ring.sort();
+    ring.dedup();
+    ring
+}
+
+/// Ban for a failed walk to a stand. Planner-proven `NoRoute`
+/// (`Error::Travel`, disconnected from here) bans 30k: re-planning the
+/// same walk from the same tile is provably futile, so the spot sits out
+/// ~30 min instead of burning a full plan every repick. Every other walk
+/// failure (step refused mid-leg, leg timeout, door mid-swing) rides the
+/// short ban (250t) and is re-tested at expiry.
+pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
+    if planner_proved {
+        UNREACHABLE_BAN_TICKS
+    } else {
+        GONE_BAN_TICKS
+    }
+}
+
 pub(crate) fn pick_tree_spot(
     bot: &Bot,
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
     banned: &mut HashMap<(i32, i32), u64>,
+    except: Option<(i32, i32)>,
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
     let fence = if bot.allow_paid { None } else { toll_line(bot) };
     // Hunter filter unless opted out: spots a threat could reach are
@@ -150,6 +214,9 @@ pub(crate) fn pick_tree_spot(
     for tier in affordable {
         let mut nearest: Option<(i64, (i32, i32))> = None;
         for (spot_x, spot_z) in tier_spawns(tier, bank) {
+            if Some((spot_x, spot_z)) == except {
+                continue;
+            }
             if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &tier.trees) {
                 continue;
             }
@@ -189,6 +256,9 @@ pub(crate) fn pick_tree_spot(
     if let Some(top) = best {
         let mut hop: Option<(i64, (i32, i32))> = None;
         for (spot_x, spot_z) in tier_spawns_wide(top, i64::from(bot.world.level)) {
+            if Some((spot_x, spot_z)) == except {
+                continue;
+            }
             if banned.contains_key(&(spot_x, spot_z)) || !tree_live(bot, spot_x, spot_z, &top.trees) {
                 continue;
             }
@@ -236,7 +306,9 @@ pub(crate) fn pick_tree_spot(
                     far += 1;
                     continue;
                 }
-                let why = if let Some(until) = banned.get(&(spot_x, spot_z)) {
+                let why = if Some((spot_x, spot_z)) == except {
+                    "noroute".to_string()
+                } else if let Some(until) = banned.get(&(spot_x, spot_z)) {
                     banned_notes.push(((spot_x, spot_z), *until));
                     format!("banned-{}t", until.saturating_sub(now))
                 } else if !tree_live(bot, spot_x, spot_z, &top.trees) {
@@ -271,6 +343,9 @@ pub(crate) fn pick_tree_spot(
             // a transient storm poisoned the clocks. Retry the oldest ban
             // instead of degrading a tier dumbly; a still-dead spot re-bans
             // on the next attempt, one release per repick so no hot loop.
+            // A planner-proven dead spot (`except`, NoRoute from here)
+            // breaks unanimity above ("noroute", never released): retrying
+            // it from the same tile is provably futile until the bot moves.
             if let Some(oldest) = starved_oldest(notes.len(), &banned_notes) {
                 banned.remove(&oldest);
                 bot.log(&format!(
@@ -280,7 +355,7 @@ pub(crate) fn pick_tree_spot(
                     oldest.0,
                     oldest.1,
                 ));
-                return pick_tree_spot(bot, tiers, bank, level, &mut *banned);
+                return pick_tree_spot(bot, tiers, bank, level, &mut *banned, except);
             }
         }
     }
@@ -289,6 +364,15 @@ pub(crate) fn pick_tree_spot(
     }
     if saw_f2p_only {
         bot.log("tree spots only outside F2P");
+    }
+    // Explicit downgrade: name both tiers so a willow interlude on a yew
+    // account reads as a decision with a reason (the disqualified line
+    // above), never a silent slide. `fallback` is the highest degraded
+    // tier with a live spot, i.e. one tier below the best when it qualifies.
+    if let (Some(top), Some((ref down, _, _))) = (best, fallback.as_ref()) {
+        if down.level < top.level {
+            bot.log(&format!("degrading {}->{} for this repick (best tier unreachable, reasons above)", top.product, down.product));
+        }
     }
     fallback
 }
@@ -324,32 +408,28 @@ pub(crate) fn tree_still_there(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: 
     }
 }
 
-/// Server reach is Chebyshev: the 8 neighbouring tiles count as adjacent.
-/// A chop refusal from there means a wall/fence/gate stands between us and
-/// the tree (or a fresh stump), never a walk that fell short.
-pub(crate) fn adjacent_to(bot_x: i32, bot_z: i32, spot_x: i32, spot_z: i32) -> bool {
-    (bot_x - spot_x).abs().max((bot_z - spot_z).abs()) <= 1
-}
-
-/// Adjacent direct refusals on a standing tree before it is condemned: the
+/// Operable direct refusals on a standing tree before it is condemned: the
 /// first refusal rides the short ban (a transient storm or a gate mid-swing
 /// refuses once), the repeat proves permanence (wall/fence). A walk-leg
-/// failure never counts as a strike, however close the walk died.
+/// failure never counts as a strike, however close the walk died. Geometry
+/// is footprint-orthogonal (`operable_stand`), never Chebyshev: a refused
+/// diagonal-to-anchor corner is a bad stand, not a walled tree.
 pub(crate) const DIRECT_REFUSALS_TO_CONDEMN: u8 = 2;
 
 /// Ban for a failed tree stand. `direct` is true only when the server
-/// refused the chop click itself ("can't reach that"); walk-leg failures
-/// (never arrived, leg timeout, step refused far away) pass false and can
-/// never return the structural ban. Structural (240k) needs a repeated
-/// adjacent direct refusal of a standing tree; everything else is
-/// transient (a crowd, a gate mid-swing, a walk that fell short) and rides
-/// the short ban (Gone, 250t) so the spot is re-tested at expiry instead
-/// of sitting out half the session. A stump is depletion (Gone).
-pub(crate) fn refusal_ban_ticks(adjacent: bool, stump: bool, direct: bool, prior_strikes: u8) -> u64 {
+/// refused the chop click itself ("can't reach that") from a
+/// footprint-operable stand; walk-leg failures (never arrived, leg timeout,
+/// step refused far away, inoperable stand) pass false and can never return
+/// the structural ban. Structural (240k) needs a repeated operable direct
+/// refusal of a standing tree; everything else is transient (a crowd, a
+/// gate mid-swing, a walk that fell short) and rides the short ban (Gone,
+/// 250t) so the spot is re-tested at expiry instead of sitting out half the
+/// session. A stump is depletion (Gone).
+pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior_strikes: u8) -> u64 {
     if stump {
         return GONE_BAN_TICKS;
     }
-    if direct && adjacent && prior_strikes + 1 >= DIRECT_REFUSALS_TO_CONDEMN {
+    if direct && operable && prior_strikes + 1 >= DIRECT_REFUSALS_TO_CONDEMN {
         return STRUCTURAL_BAN_TICKS;
     }
     GONE_BAN_TICKS
@@ -371,17 +451,6 @@ mod tests {
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
     use std::collections::HashMap;
-
-    /// Refusal rule: orthogonal AND diagonal neighbours are adjacent
-    /// (Chebyshev reach), two tiles off is not.
-    #[test]
-    fn adjacent_to_covers_chebyshev_reach() {
-        assert!(adjacent_to(10, 10, 10, 10), "same tile");
-        assert!(adjacent_to(10, 10, 11, 10), "orthogonal");
-        assert!(adjacent_to(10, 10, 11, 11), "diagonal still adjacent");
-        assert!(!adjacent_to(10, 10, 12, 10), "two tiles off walks short");
-        assert!(!adjacent_to(10, 10, 11, 12), "two tiles off walks short");
-    }
 
     /// Threat rule mirrors the server: hunters skip players above twice
     /// their level, so combat 4 still fears spiders (2) but combat 5
@@ -419,13 +488,13 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         bot.allow_paid = false;
-        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new());
+        let hopped = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new(), None);
         let Some((_, hop_x, _)) = hopped else {
             panic!("hop should find a same-side tree, got None");
         };
         assert!(hop_x < 2920, "hop stays on the bot side of the fence, got x={hop_x}");
         bot.allow_paid = true;
-        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new());
+        let some = pick_tree_spot(&bot, &tiers, &bank, 0, &mut HashMap::new(), None);
         assert!(some.is_some(), "paid crossing reopens the same spots");
     }
 
@@ -461,7 +530,7 @@ mod tests {
         .into_iter()
         .map(|pos| (pos, u64::MAX))
         .collect();
-        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned);
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("hop should find the next yew cluster, got None");
         };
@@ -506,7 +575,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("starved tier should retry the oldest ban, got None");
         };
@@ -556,7 +625,7 @@ mod tests {
         .into_iter()
         .map(|pos| (pos, u64::MAX))
         .collect();
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None);
         let Some((tier, _, _)) = picked else {
             panic!("degrade should find a willow, got None");
         };
@@ -564,11 +633,8 @@ mod tests {
         assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
     }
 
-    /// Ban rule: transit failures (never arrived, leg timeout, step refused
-    /// far away) ride the short ban (250t, re-tested at expiry) even with
-    /// a full strike history — only a repeated ADJACENT direct refusal
-    /// condemns. A stump is depletion (Gone), a refusal from afar is a
-    /// walk that fell short.
+    /// Strike rule: only a refusal from a footprint-operable stand counts
+    /// toward condemning (a corner refusal is a bad stand, retried short).
     #[test]
     fn direct_refusal_needs_a_repeat_to_condemn() {
         assert_eq!(refusal_ban_ticks(false, false, false, 5), GONE_BAN_TICKS, "far walk retries short");
@@ -660,7 +726,7 @@ mod tests {
         plain.world.z = 3384;
         plain.allow_paid = true;
         plain.allow_wild = true;
-        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &mut banned);
+        let picked = pick_tree_spot(&plain, &tiers, &bank, 30, &mut banned, None);
         let Some((_, spot_x, spot_z)) = picked else {
             panic!("unfiltered pick should land on the only open spot, got None");
         };
@@ -673,8 +739,106 @@ mod tests {
         wired.allow_paid = true;
         wired.allow_wild = true;
         wired.nav_world = Some(world);
-        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &mut banned);
+        let filtered = pick_tree_spot(&wired, &tiers, &bank, 30, &mut banned, None);
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
+    }
+
+    /// Operable-stand geometry mirrors the server (`ReachStrategy`
+    /// `reachRectangle1`): orthogonal to the footprint, never diagonal to
+    /// the anchor. Live 6/6 fixtures: a yew is 3x3, so (3151,3229) cuts
+    /// (3151,3230) but the diagonal corner (3150,3229) refuses; (3185,3225)
+    /// cuts (3184,3226) but (3183,3225) refuses; (3164,3220) and
+    /// (3166,3218) both cut (3165,3219) (west side, inside the footprint
+    /// edge range).
+    #[test]
+    fn operable_stand_matches_server_reach() {
+        // Yew 3x3 at (3151,3230): south side works, west corner refuses.
+        assert!(operable_stand(3151, 3229, 3151, 3230, 3, 3), "south side cuts");
+        assert!(!operable_stand(3150, 3229, 3151, 3230, 3, 3), "diagonal corner refuses");
+        // Yew 3x3 at (3184,3226): east-diagonal works, west-diagonal refuses.
+        assert!(operable_stand(3185, 3225, 3184, 3226, 3, 3), "south-east diagonal works");
+        assert!(!operable_stand(3183, 3225, 3184, 3226, 3, 3), "south-west corner refuses");
+        // Yew 3x3 at (3165,3219): west side and south side both cut.
+        assert!(operable_stand(3164, 3220, 3165, 3219, 3, 3), "west side cuts");
+        assert!(operable_stand(3166, 3218, 3165, 3219, 3, 3), "south side cuts");
+        // Willow 2x2: side middles cut, corners refuse, far tiles refuse.
+        assert!(operable_stand(9, 10, 10, 10, 2, 2), "west side cuts");
+        assert!(!operable_stand(9, 9, 10, 10, 2, 2), "corner refuses");
+        assert!(!operable_stand(13, 11, 10, 10, 2, 2), "two tiles off refuses");
+        // 1x1 keeps the old adjacency (all four orthogonals, no diagonals).
+        assert!(operable_stand(5, 4, 5, 5, 1, 1), "south cuts");
+        assert!(!operable_stand(4, 4, 5, 5, 1, 1), "diagonal refuses");
+    }
+
+    /// Ring: one stand per footprint side, deduped (a 3x3 yields 4
+    /// distinct side middles, a 1x1 the four orthogonals).
+    #[test]
+    fn operable_ring_covers_four_sides() {
+        let mut ring = operable_ring(3151, 3230, 3, 3);
+        ring.sort();
+        assert_eq!(ring, vec![(3150, 3231), (3152, 3229), (3152, 3233), (3154, 3231)], "side middles, got: {ring:?}");
+        let mut single = operable_ring(5, 5, 1, 1);
+        single.sort();
+        assert_eq!(single, vec![(4, 5), (5, 4), (5, 6), (6, 5)], "four orthogonals, got: {single:?}");
+    }
+
+    /// Walk-failure bans: planner-proven NoRoute sits out 30k (re-planning
+    /// from the same tile is futile), every transient walk failure rides
+    /// the short ban and is re-tested at expiry.
+    #[test]
+    fn walk_fail_ban_is_proven_or_short() {
+        assert_eq!(walk_fail_ban(true), UNREACHABLE_BAN_TICKS, "planner proof bans long");
+        assert_eq!(walk_fail_ban(false), GONE_BAN_TICKS, "transient walk retries short");
+    }
+
+    /// Planner-proven dead spot (`except`): never picked, never
+    /// starvation-released, breaks unanimity so the repick degrades to the
+    /// highest CUTTABLE tier instead of hot-looping the dead yew. Near
+    /// Draynor no maple qualifies (dump: maples live ~300 tiles off, past
+    /// hop range), so yew->willow with oak/logs untouched: tiers are walked
+    /// in order, never skipped when available, and the downgrade is logged.
+    #[test]
+    fn except_dead_spot_degrades_one_tier() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3053;
+        bot.world.z = 3271;
+        bot.allow_wild = true;
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "draynor".to_string(),
+            members: false,
+        };
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        // Every in-range yew banned except the planner-dead one, which is
+        // excluded instead of released: the repick must degrade to maple.
+        let mut banned: HashMap<(i32, i32), u64> = [
+            (3053, 3271),
+            (3041, 3319),
+            (3017, 3308),
+            (3184, 3226),
+            (3146, 3254),
+            (3151, 3230),
+            (3165, 3219),
+            (2940, 3232),
+            (2933, 3233),
+            (2934, 3225),
+            (2935, 3229),
+        ]
+        .into_iter()
+        .map(|pos| (pos, u64::MAX))
+        .collect();
+        let picked = pick_tree_spot(&bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)));
+        let Some((tier, _, _)) = picked else {
+            panic!("dead-spot repick should degrade one tier, got None");
+        };
+        assert_eq!(tier.product, "willow_logs", "highest cuttable tier below yew, got: {}", tier.product);
+        assert!(tier.product != "oak_logs" && tier.product != "logs", "never crashes to the bottom, got: {}", tier.product);
+        assert_eq!(banned.len(), 11, "no release without unanimity, got: {}", banned.len());
     }
 }

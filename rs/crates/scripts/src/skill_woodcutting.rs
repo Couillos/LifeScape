@@ -15,7 +15,7 @@ use crate::skill_common::{
     obj_price, pack_ids, pack_slot, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome, FLEE_BAN_TICKS,
     GONE_BAN_TICKS, MAX_FLEES_PER_LOAD, STALL_TICKS, STRUCTURAL_BAN_TICKS,
 };
-use crate::skill_woodcutting_spot::{adjacent_to, is_stump, live_loc_id, pick_tier, pick_tree_spot, refusal_ban_ticks, tree_still_there, DIRECT_REFUSALS_TO_CONDEMN};
+use crate::skill_woodcutting_spot::{is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
@@ -370,13 +370,14 @@ fn wait_for_respawn(
     level: i64,
     memory: &mut HashMap<String, u64>,
     idle_since: &mut u64,
+    except: Option<(i32, i32)>,
 ) -> Result<(), ScriptError> {
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
     // Ticks advanced during the work: drop expired bans so the walk
     // alternative is measured against live spots, not stale clocks.
     banned.retain(|_, until| *until > bot.world.ticks);
-    let alternative = pick_tree_spot(bot, tiers, bank, level, &mut *banned)
+    let alternative = pick_tree_spot(bot, tiers, bank, level, &mut *banned, except)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
         bot.log(&format!(
@@ -414,14 +415,22 @@ fn wait_for_respawn(
     Ok(())
 }
 
-/// Click once, then only re-click after a quiet round (the server chains
-/// attempts itself while in range).
+/// Click once per stand, then only re-click after a quiet round (the server
+/// chains attempts itself while in range). Stands rotate on refusal: the
+/// arrival tile first when footprint-operable, else the footprint ring
+/// nearest-first. A click refusal from an inoperable stand proves nothing
+/// about the tree (a 3x3 yew always refuses diagonal-to-anchor corners, yet
+/// cuts fine from a side) — rotate, never ban. Only refusals from operable
+/// stands report UnreachableSpot (the strike path); stands that cannot even
+/// be reached report Unreachable (transient walk failure, short ban).
 fn work_spot(
     bot: &mut Bot,
     tree_x: i32,
     tree_z: i32,
     log_ids: &[u16],
     had_logs: u32,
+    banned: &mut HashMap<(i32, i32), u64>,
+    travel_dead: &mut Option<((i32, i32), (i32, i32))>,
 ) -> Result<(WorkOutcome, u32), ScriptError> {
     if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 4 {
         // Dead socket or operator stop, not an unreachable tree: typed
@@ -430,6 +439,16 @@ fn work_spot(
             Ok(true) => {}
             Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
             Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(ScriptError::Sdk(lifescape_sdk::Error::Travel(_))) => {
+                // Planner proof: disconnected from here. Long ban (re-plan
+                // from the same tile is futile) + never re-pick from this
+                // tile until the bot moves.
+                let ban = walk_fail_ban(true);
+                bot.log(&format!("no route to ({tree_x},{tree_z}) from {:?}, long-banning {ban}t", bot.position()));
+                banned.insert((tree_x, tree_z), bot.world.ticks + ban);
+                *travel_dead = Some(((tree_x, tree_z), (bot.world.x, bot.world.z)));
+                return Ok((WorkOutcome::Unreachable, 0));
+            }
             Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
         }
     }
@@ -465,6 +484,69 @@ fn work_spot(
         }
     }
     let tree_loc = live_loc_id(bot, tree_x, tree_z)?;
+    let (foot_w, foot_l) = spot_footprint(bot, tree_x, tree_z);
+    let mut stands: Vec<((i32, i32), bool)> = Vec::new();
+    if operable_stand(bot.world.x, bot.world.z, tree_x, tree_z, foot_w, foot_l) {
+        stands.push(((bot.world.x, bot.world.z), true));
+    } else {
+        bot.log(&format!(
+            "stand ({},{}) not footprint-operable for ({tree_x},{tree_z}), rotating stands",
+            bot.world.x, bot.world.z
+        ));
+    }
+    let mut ring = operable_ring(tree_x, tree_z, foot_w, foot_l);
+    ring.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    for tile in ring {
+        if !stands.iter().any(|(known, _)| *known == tile) {
+            stands.push((tile, true));
+        }
+    }
+    let mut gained = 0u32;
+    for ((stand_x, stand_z), operable) in stands {
+        if (bot.world.x, bot.world.z) != (stand_x, stand_z) {
+            match bot.walk_to(stand_x, stand_z, bot.world.level, 100) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) => continue,
+            }
+        }
+        let (end, got) = try_stand(bot, tree_x, tree_z, tree_loc, log_ids, had_logs + gained)?;
+        gained += got;
+        match end {
+            WorkOutcome::Gone => return Ok((WorkOutcome::Gone, gained)),
+            WorkOutcome::UnreachableSpot if operable => return Ok((WorkOutcome::UnreachableSpot, gained)),
+            WorkOutcome::UnreachableSpot => {
+                bot.log(&format!(
+                    "click refused from inoperable stand at {:?}, rotating (stand at fault, not the tree)",
+                    bot.position()
+                ));
+            }
+            other => return Ok((other, gained)),
+        }
+    }
+    // No operable stand could even be clicked from (all refused or
+    // unreachable): walk-class failure, short ban, never a strike.
+    Ok((WorkOutcome::Unreachable, gained))
+}
+
+/// One click round from the current stand: Gone when the tree goes
+/// quiet/stumped, UnreachableSpot on click refusal (caller rotates or
+/// condemns), terminal outcome for anything else. Gained logs this stand.
+fn try_stand(
+    bot: &mut Bot,
+    tree_x: i32,
+    tree_z: i32,
+    tree_loc: u16,
+    log_ids: &[u16],
+    had_logs: u32,
+) -> Result<(WorkOutcome, u32), ScriptError> {
     let mut gained = 0u32;
     let mut silences = 0u32;
     let mut need_click = true;
@@ -565,6 +647,11 @@ fn chop_load(
     let mut spot: Option<(knowledge::trees::TreeTier, i32, i32)> = None;
     let mut had_logs = 0u32;
     let mut seen_death_msgs = bot.world.messages.len();
+    // Planner-proven dead (spot, from-tile): a NoRoute walk failed here, so
+    // the spot is not re-picked from the same tile (starvation would
+    // hot-loop one doomed plan per repick). Moving clears it (proof stale);
+    // the long ban expiring clears it too (re-test at expiry).
+    let mut travel_dead: Option<((i32, i32), (i32, i32))> = None;
     loop {
         check_events(bot)?;
         if free_slots(bot) <= usize::from(pack_total(bot, coins) > 0) {
@@ -615,6 +702,12 @@ fn chop_load(
         last_hitpoints = hitpoints(bot);
         let now = bot.world.ticks;
         banned.retain(|_, until| *until > now);
+        // Planner-proven dead from here (NoRoute at this tile): never
+        // re-pick it until the bot moves or its long ban expires, or the
+        // starvation release hot-loops one doomed walk per repick.
+        let except = travel_dead.and_then(|(dead, from)| {
+            (from == (bot.world.x, bot.world.z) && banned.contains_key(&dead)).then_some(dead)
+        });
         let stale = match &spot {
             Some((_, spot_x, spot_z)) => banned.contains_key(&(*spot_x, *spot_z)),
             None => true,
@@ -622,7 +715,7 @@ fn chop_load(
         if stale {
             let mut picked = None;
             for _ in 0..16 {
-                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, &mut *banned) {
+                if let Some(found) = pick_tree_spot(bot, tiers, bank, level, &mut *banned, except) {
                     picked = Some(found);
                     break;
                 }
@@ -649,7 +742,7 @@ fn chop_load(
         let Some((tier, spot_x, spot_z)) = spot.clone() else {
             continue;
         };
-        let (result, gained) = work_spot(bot, spot_x, spot_z, &log_ids, had_logs)?;
+        let (result, gained) = work_spot(bot, spot_x, spot_z, &log_ids, had_logs, banned, &mut travel_dead)?;
         // Death can land inside work_spot's own pumps: check its return too,
         // or the run bills a corpse to the stall budget and never logs it.
         let (died_mid_work, fresh) = death_since(bot, seen_death_msgs);
@@ -687,7 +780,7 @@ fn chop_load(
                 if is_stump(bot, spot_x, spot_z) {
                     // Depleted under us: waiting for the regrow beats
                     // re-banning blind when the walk costs more.
-                    wait_for_respawn(bot, &tier, spot_x, spot_z, banned, tiers, bank, level, respawn, &mut idle_since)?;
+                    wait_for_respawn(bot, &tier, spot_x, spot_z, banned, tiers, bank, level, respawn, &mut idle_since, except)?;
                 } else {
                     bot.log("tree quiet, next one");
                     banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
@@ -727,23 +820,26 @@ fn chop_load(
                 }
             }
             WorkOutcome::UnreachableSpot => {
-                // Direct server refusal of the chop click itself. Structural
-                // ONLY on a repeated adjacent refusal of a standing tree: a
-                // single refusal (transient storm, gate mid-swing) rides the
-                // short ban and retries before anything is condemned. A
-                // refusal from afar means the walk fell short, not that the
-                // stand is walled: short ban, no strike.
-                let adjacent = adjacent_to(bot.world.x, bot.world.z, spot_x, spot_z);
-                let ban = refusal_ban_ticks(adjacent, is_stump(bot, spot_x, spot_z), true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0));
+                // Direct server refusal of the chop click itself, from a
+                // footprint-operable stand (work_spot rotates inoperable
+                // stands away before reporting). Structural ONLY on a
+                // repeated operable refusal of a standing tree: a single
+                // refusal (transient storm, gate mid-swing) rides the short
+                // ban and retries before anything is condemned. Geometry,
+                // not Chebyshev: a 3x3 corner stand is "adjacent" but the
+                // server never reaches it, so it must never strike.
+                let (foot_w, foot_l) = spot_footprint(bot, spot_x, spot_z);
+                let operable = operable_stand(bot.world.x, bot.world.z, spot_x, spot_z, foot_w, foot_l);
+                let ban = refusal_ban_ticks(operable, is_stump(bot, spot_x, spot_z), true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0));
                 if is_stump(bot, spot_x, spot_z) {
                     bot.log(&format!("tree stumped at ({spot_x},{spot_z}), next one"));
-                } else if adjacent && ban == STRUCTURAL_BAN_TICKS {
+                } else if operable && ban == STRUCTURAL_BAN_TICKS {
                     bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
                     // Condemned: the ban is the memory now, drop the count
                     // so a starvation release re-proves permanence cleanly.
                     refusals.remove(&(spot_x, spot_z));
                     unreachable_streak = 0;
-                } else if adjacent {
+                } else if operable {
                     let strikes = refusals.entry((spot_x, spot_z)).or_insert(0);
                     *strikes += 1;
                     bot.log(&format!(
@@ -752,7 +848,7 @@ fn chop_load(
                     ));
                     unreachable_streak = 0;
                 } else {
-                    bot.log(&format!("click refused from afar at ({spot_x},{spot_z}), walk fell short, short ban {ban}t"));
+                    bot.log(&format!("click refused off-stand at ({spot_x},{spot_z}), walk fell short, short ban {ban}t"));
                     unreachable_streak = 0;
                 }
                 banned.insert((spot_x, spot_z), bot.world.ticks + ban);
