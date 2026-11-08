@@ -1036,16 +1036,35 @@ impl Service {
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
+        // Slot BEFORE the queue: the pool must never dequeue a job whose
+        // Pending slot is not yet visible (it would drop a live ticket).
+        // A refused queue removes the slot again — never a dangling id.
+        self.results
+            .lock()
+            .unwrap()
+            .insert(id, Slot::Pending { cancel: Arc::clone(&cancel) });
+        self.inflight.lock().unwrap().insert(key.clone(), id);
+        self.tickets.lock().unwrap().insert(id, key.clone());
+        self.waiters.lock().unwrap().insert(id, 1);
         let job = Job {
             id,
             account: account.clone(),
-            key: key.clone(),
+            key,
             from,
             dest,
             options,
-            cancel: Arc::clone(&cancel),
+            cancel,
         };
         if self.queue_tx.try_send(job).is_err() {
+            self.results.lock().unwrap().remove(&id);
+            self.tickets.lock().unwrap().remove(&id);
+            self.waiters.lock().unwrap().remove(&id);
+            let mut inflight = self.inflight.lock().unwrap();
+            if let Some(stored) = self.tickets.lock().unwrap().get(&id).cloned() {
+                if inflight.get(&stored) == Some(&id) {
+                    inflight.remove(&stored);
+                }
+            }
             let mut admission = self.admission.lock().unwrap();
             let in_flight = admission.get(&account).copied().unwrap_or(1);
             admission.insert(account, in_flight.saturating_sub(1));
@@ -1055,14 +1074,7 @@ impl Service {
                 ("version", str_value(&version)),
             ]);
         }
-        self.inflight.lock().unwrap().insert(key.clone(), id);
-        self.tickets.lock().unwrap().insert(id, key);
-        self.waiters.lock().unwrap().insert(id, 1);
         self.misses.fetch_add(1, Ordering::Relaxed);
-        self.results
-            .lock()
-            .unwrap()
-            .insert(id, Slot::Pending { cancel });
         object(vec![
             ("ok", Value::Bool(true)),
             ("id", Value::Int(id as i64)),
@@ -1213,26 +1225,27 @@ impl Service {
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
             };
-            let live = {
-                let mut results = self.results.lock().unwrap();
-                // A cancelled ticket left no slot: drop its outcome.
-                results.remove(&job.id).is_some()
+            // Encode + L1 first (no results lock held: lock order stays
+            // sequential). A cancelled outcome still caches: same key
+            // means the same plan, and the next submit hits it.
+            let key = PlanKey::of(job.from, job.dest, &job.options, &snapshot.version);
+            let (is_plan, body) = match &outcome {
+                Ok(plan) => (true, encode_plan(plan)),
+                Err(no) => (false, encode_noroute(no)),
             };
-            if live {
-                let key = PlanKey::of(job.from, job.dest, &job.options, &snapshot.version);
-                let (is_plan, body) = match &outcome {
-                    Ok(plan) => (true, encode_plan(plan)),
-                    Err(no) => (false, encode_noroute(no)),
-                };
-                // Negatives cache (the dearest hits); Aborted never does.
-                let cacheable = match &outcome {
-                    Ok(_) => true,
-                    Err(no) => no.reason != NoRouteReason::Aborted,
-                };
-                if cacheable {
-                    self.l1.lock().unwrap().insert(key, is_plan, body.clone());
-                }
-                let mut results = self.results.lock().unwrap();
+            // Negatives cache (the dearest hits); Aborted never does.
+            let cacheable = match &outcome {
+                Ok(_) => true,
+                Err(no) => no.reason != NoRouteReason::Aborted,
+            };
+            if cacheable {
+                self.l1.lock().unwrap().insert(key, is_plan, body.clone());
+            }
+            // One critical section: Pending becomes Ready/Failed with no
+            // poll-visible hole (a poll never sees a missing live ticket).
+            // A missing slot means every waiter cancelled: drop the outcome.
+            let mut results = self.results.lock().unwrap();
+            if matches!(results.get(&job.id), Some(Slot::Pending { .. })) {
                 if is_plan {
                     results.insert(job.id, Slot::Ready { plan: body });
                 } else {
@@ -1252,6 +1265,8 @@ impl Service {
                     }
                 }
             }
+            // A cancelled ticket drops its outcome; a served one leaves
+            // its terminal slot for every waiter to poll.
             {
                 let mut inflight = self.inflight.lock().unwrap();
                 if inflight.get(&job.key) == Some(&job.id) {
