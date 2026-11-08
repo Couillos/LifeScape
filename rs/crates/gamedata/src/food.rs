@@ -1,8 +1,9 @@
 //! Food healing values.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::{Json, table_value};
+use crate::{Json, table, table_value};
 
 fn foods() -> &'static Vec<(String, i64)> {
     static CACHE: OnceLock<Vec<(String, i64)>> = OnceLock::new();
@@ -14,14 +15,39 @@ fn foods() -> &'static Vec<(String, i64)> {
     })
 }
 
+/// Internal food key for a live name: the table keys are internal
+/// ("shrimp") but every live caller passes obj display names ("Shrimps"),
+/// so exact matching heals nothing (t02 live: never ate, never stocked).
+fn key_for(name: &str) -> Option<String> {
+    static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let index = CACHE.get_or_init(|| {
+        let mut map = HashMap::new();
+        for row in table("objs") {
+            let Some(internal) = row.get("name").as_str() else {
+                continue;
+            };
+            map.entry(internal.to_lowercase()).or_insert(internal.to_string());
+            if let Some(display) = row.get("display").as_str() {
+                map.entry(display.to_lowercase()).or_insert(internal.to_string());
+            }
+        }
+        map
+    });
+    index.get(&name.to_lowercase()).cloned()
+}
+
 /// Every food and its hitpoints restored.
 pub fn all_foods() -> Vec<(String, i64)> {
     foods().clone()
 }
 
 /// Hitpoints restored by a food, or 0 when it is not edible.
+/// Accepts internal keys ("shrimp") and display names ("Shrimps").
 pub fn heal(name: &str) -> i64 {
-    foods().iter().find(|(entry, _)| entry == name).map(|(_, heal)| *heal).unwrap_or(0)
+    if let Some((_, heal)) = foods().iter().find(|(entry, _)| entry == name) {
+        return *heal;
+    }
+    key_for(name).map(|key| heal(&key)).unwrap_or(0)
 }
 
 /// Highest-healing food among the given names, or None.
@@ -49,5 +75,15 @@ mod tests {
         assert_eq!(best_food(&["trout", "shark", "lobster"]), Some(("shark".to_string(), 20)));
         assert!(best_food(&["nope"]).is_none());
         assert_eq!(super::all_foods().len(), 139);
+    }
+
+    #[test]
+    fn display_names_heal() {
+        // Live callers pass obj display names, never internal keys.
+        assert!(heal("Shrimps") > 0);
+        assert_eq!(heal("Bread"), heal("bread"));
+        assert_eq!(heal("Cooked meat"), heal("cooked_meat"));
+        assert_eq!(best_food(&["Shrimps", "Bread"]).map(|(name, _)| name), Some("Bread".to_string()));
+        assert_eq!(heal("nope"), 0);
     }
 }

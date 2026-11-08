@@ -412,6 +412,17 @@ fn withdraw_food(bot: &mut Bot) -> Result<u32, ScriptError> {
     Ok(food_count(bot))
 }
 
+/// True when the bank itself holds edible food: a foodless pack is only
+/// worth a bank trip when the bank can restock it. A broke beginner
+/// (t02 live: empty bank) otherwise ping-pongs bank<->field after every
+/// kill and dies crossing the map instead of hunting.
+fn bank_stocks_food(bot: &Bot) -> bool {
+    let banked: Vec<String> =
+        bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
+    let refs: Vec<&str> = banked.iter().map(String::as_str).collect();
+    knowledge::food::best_food(&refs).is_some()
+}
+
 fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
     knowledge::banks::all_banks()
         .into_iter()
@@ -924,7 +935,7 @@ fn fight(
                     melee_stat(bot, "defence")
                 ));
             }
-            if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0) {
+            if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0 && bank_stocks_food(bot)) {
                 return Ok((kills, true));
             }
             continue;
@@ -1017,6 +1028,7 @@ fn run_spot(
         // unpaced loop machine-guns the server into kicking us.
         bot.pump(2)?;
         bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
+        let mut walk_fails = 0u32;
         while kills_limit == 0 || total < kills_limit {
             // Hunt entry: the one full evaluation (pack + bank when near
             // one, pack only with --no-bank). Inside the hunt only a loot
@@ -1031,8 +1043,21 @@ fn run_spot(
             // propagate connection failures, swallow the rest as before.
             match walk_checked(bot, center_x, center_z, 15000) {
                 Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
-                Err(_) | Ok(false) => break,
-                Ok(true) => {}
+                Err(_) | Ok(false) => {
+                    // A sticking door (or a step refused for a tick) must
+                    // not exile the hunt across the map: re-bank and retry
+                    // the same cluster, move on only on the third failure
+                    // in a row (t02 live: Lumbridge pen doors).
+                    walk_fails += 1;
+                    if walk_fails >= 3 {
+                        break;
+                    }
+                    wait_ticks(bot, 25)?;
+                    continue;
+                }
+                Ok(true) => {
+                    walk_fails = 0;
+                }
             }
             {
                 let (kills, banked) = fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
@@ -1099,7 +1124,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
+    use super::{bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, remaining_kills, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1143,6 +1168,18 @@ mod tests {
         assert_eq!(remaining_kills(0, 5), 0, "unlimited hunt survives kills");
         assert_eq!(remaining_kills(10, 3), 7);
         assert_eq!(remaining_kills(10, 10), 0);
+    }
+
+    /// A foodless pack forces a bank trip only when the bank can restock:
+    /// broke beginners stay on the field instead of ping-ponging.
+    #[test]
+    fn bank_trip_needs_bank_food() {
+        let empty = stat_bot(2, 1, 1);
+        assert!(!bank_stocks_food(&empty), "no bank open: no trip for food");
+        let mut stocked = stat_bot(2, 1, 1);
+        let bank_com = (stocked.tables.com_id)("bank_main:inv").expect("bank com in dumps");
+        stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
+        assert!(bank_stocks_food(&stocked), "banked shrimps restock");
     }
 
     /// Controlled exists exactly where the revision's combat.dbrow puts a
