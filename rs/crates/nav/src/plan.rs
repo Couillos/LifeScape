@@ -276,8 +276,19 @@ pub fn plan_yielding(
             reason: NoRouteReason::OutsideF2p,
         });
     }
+    // LOT1 L2: one permissive prepare_edges per plan, shared by A/B/C/D.
+    // Revert: delete this block and `prepare_shared` below, restore the
+    // `prepare_edges(&mut search, …)` call in `dijkstra`.
+    let setup_start = std::time::Instant::now();
+    let shared = match prepare_shared(world, tables, options, yield_) {
+        Some(edges) => edges,
+        None => return Err(aborted(from)),
+    };
+    if std::env::var("PLAN_DEBUG").is_ok() {
+        eprintln!("plan setup {:?} rides={}", setup_start.elapsed(), shared.0.len());
+    }
     // A: requirements lifted (tolls still apply unless paid).
-    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, yield_, deadline) {
+    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
             let mut blocked = Vec::new();
@@ -307,7 +318,7 @@ pub fn plan_yielding(
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
-        match dijkstra(world, tables, from, dest, options, true, true, false, yield_, deadline) {
+        match dijkstra(world, tables, from, dest, options, true, true, false, &shared, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(chain, _, best) => {
                 let mut tolls = Vec::new();
@@ -336,7 +347,7 @@ pub fn plan_yielding(
     if options.f2p_only {
         // C: bounds lifted, requirements enforced. Reaching the dest this
         // way proves the F2P fence is the blocker.
-        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, yield_, deadline) {
+        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, &shared, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(_, _, best) => {
                 return Err(NoRoute {
@@ -350,7 +361,7 @@ pub fn plan_yielding(
         }
     }
     // D: fully filtered search, for the closest reachable tile.
-    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, yield_, deadline) {
+    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(_, _, best) => best,
         Outcome::Closest(best) => best,
@@ -524,10 +535,10 @@ fn dijkstra(
     ignore_requires: bool,
     allow_paid: bool,
     ignore_f2p: bool,
+    shared: &(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>),
     yield_: &mut dyn FnMut() -> bool,
     deadline: std::time::Instant,
 ) -> Outcome {
-    let setup_start = std::time::Instant::now();
     let mut search = Search {
         world,
         tables,
@@ -541,12 +552,7 @@ fn dijkstra(
 
     };
     let dest_walkable = tile_walkable(search.open(dest));
-    let Some((rides, customs)) = prepare_edges(&mut search, yield_) else {
-        return Outcome::Aborted;
-    };
-    if std::env::var("PLAN_DEBUG").is_ok() {
-        eprintln!("plan setup {:?} rides={}", setup_start.elapsed(), rides.len());
-    }
+    let (rides, customs) = shared;
     let mut dist: U64Map<u32> = U64Map::default();
     let mut prev: U64Map<(u64, PrevEdge)> = U64Map::default();
     let mut heap: BinaryHeap<(Reverse<u32>, Reverse<u64>)> = BinaryHeap::new();
@@ -685,18 +691,32 @@ fn dijkstra(
                 PrevEdge::Door(DoorRef { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level }),
             );
         }
-        // Transition and custom rides from this stand.
+        // Transition and custom rides from this stand. The shared L2 is
+        // the permissive superset (requires/tolls/F2P lifted), so a stand
+        // this search could not use, or a dest outside its bounds, is
+        // skipped here: each search sees exactly the edges its own
+        // prepare_edges would have built.
         if let Some(edges) = rides.get(&key) {
-            for edge in edges {
-                if options.excluded_edges.contains(&EdgeId::Ride(tables.transitions[edge.index].name.clone())) {
-                    continue;
+            if search.in_bounds(here) && tile_walkable(search.open(here)) {
+                for edge in edges {
+                    if !search.in_bounds(edge.dest) {
+                        continue;
+                    }
+                    if options.excluded_edges.contains(&EdgeId::Ride(tables.transitions[edge.index].name.clone())) {
+                        continue;
+                    }
+                    let ride = PrevEdge::Ride { index: edge.index, dest: edge.dest, pre_open: edge.pre_open.clone() };
+                    relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, ride);
                 }
-                let ride = PrevEdge::Ride { index: edge.index, dest: edge.dest, pre_open: edge.pre_open.clone() };
-                relax(&mut dist, &mut prev, &mut heap, key, edge.dest.key(), cost + edge.cost, ride);
             }
         }
         if let Some(edges) = customs.get(&key) {
             for edge in edges {
+                if !search.ignore_requires
+                    && !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag))
+                {
+                    continue;
+                }
                 if options.excluded_edges.contains(&EdgeId::Custom(tables.customs[edge.index].name.clone())) {
                     continue;
                 }
@@ -760,6 +780,32 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Til
     }
     chain.reverse();
     chain
+}
+
+/// LOT1 L2: the permissive superset of `prepare_edges` (requires, tolls
+/// and F2P bounds all lifted), computed once per `plan()` and shared by
+/// the A/B/C/D searches. Lifting can only add usable doors (hence open
+/// more stands) and widen bounds, never remove an edge, so each search
+/// recovers exactly its own edge set with the stand/dest/requires filter
+/// in `dijkstra`. Revert: delete this function (see `plan_yielding`).
+fn prepare_shared(
+    world: &StaticWorld,
+    tables: &Tables,
+    options: &NavOptions,
+    yield_: &mut dyn FnMut() -> bool,
+) -> Option<(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>)> {
+    let mut permissive = Search {
+        world,
+        tables,
+        options,
+        ignore_requires: true,
+        allow_paid: true,
+        ignore_f2p: true,
+        base_flags: U64Map::default(),
+        open_flags: U64Map::default(),
+        doors: U64Map::default(),
+    };
+    prepare_edges(&mut permissive, yield_)
 }
 
 /// Stands per ride: walkable tiles around the loc footprint where the op
