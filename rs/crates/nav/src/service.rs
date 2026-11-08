@@ -1,13 +1,15 @@
-//! Central pathfinding service, lot 2: shared world, NO cache.
+//! Central pathfinding service, lot 3: shared world + global caches.
 //!
 //! The daemon loads one [`Snapshot`] (world + tables + version) and serves
 //! plans over a Unix socket (JSON newline, same framing as the daemon
 //! `send_worker` round-trips). Pool threads run the SAME `plan()` as the
-//! sync path: this service is a wrapper, never a fork (goldens identical).
+//! sync path over a SHARED L2 edge set (one per data version); the global
+//! L1 caches complete plans AND negatives under the full [`PlanKey`],
+//! with exact-prefix truncation and in-flight joins on the same key.
 //!
-//! Locking (total order by construction, never two held at once):
-//! admission counts, then results, then the snapshot swap lock; the pool
-//! never holds any lock during a Dijkstra (lookup/insert only).
+//! Locking (sequential by construction, never two held at once):
+//! admission, L1/L2, in-flight, results, then the snapshot swap lock;
+//! the pool never holds any lock during a Dijkstra (lookup/insert only).
 //! No `unsafe`, std only (`mpsc::sync_channel` + threads).
 //!
 //! Bounds (lot 2, proposed): global queue 16, cap 2 in-flight tickets per
@@ -16,7 +18,7 @@
 //! logs it and counts it. A version skew (client vs server snapshot)
 //! refuses stale too; the client falls back sync, never loops.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -28,7 +30,8 @@ use std::time::Duration;
 use lifescape_json::{self as json, object, str_value, Value};
 
 use crate::plan::{
-    self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, Tile, TransitionRef,
+    self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, SharedEdges, Tile,
+    TransitionRef,
 };
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
@@ -107,7 +110,7 @@ impl Snapshot {
 /// Full cache key, set now so the protocol can never normalize an option
 /// away: same key <=> same plan bit for bit (`plan.rs:242`). The lot 2
 /// isolation test pins this (any single field flip changes the key).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PlanKey {
     pub from: Tile,
     pub dest: Tile,
@@ -142,6 +145,244 @@ fn edge_key(edge: &EdgeId) -> String {
         EdgeId::Ride(name) => format!("ride:{name}"),
         EdgeId::Custom(name) => format!("custom:{name}"),
     }
+}
+
+// -- lot 3 cache -------------------------------------------------------------
+//
+// L1: complete plans AND negatives, keyed by the full PlanKey (options +
+// data version, never normalized). A bumped version makes every old key
+// unreachable: no flush, no stale serve, eviction does the rest.
+// Truncation: a dest ON a cached plan serves the prefix with no search
+// (optimal by substructure); anything else recomputes, never extends.
+// L2: one shared edge set per data version (2 slots: current + draining).
+
+/// Global plan cache bound: worst case 1024 x 9.6 Ko ~ 10 Mo + ~0.35 Mo
+/// overhead (§5.9: 11 Mo line, never raised without rebouclage).
+pub const L1_CAP: usize = 1024;
+/// Entries above this are served once, never stored (§5.9; p99 alert 16 Ko).
+pub const L1_MAX_ENTRY_BYTES: usize = 32 * 1024;
+/// L2 versions kept: the live one plus the draining pre-reload one.
+pub const L2_VERSIONS_CAP: usize = 2;
+
+/// Outcome counters, all atomic: the lot 3 hit-rate verdict reads these.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub trunc_hits: u64,
+    pub misses: u64,
+    pub joins: u64,
+    pub l2_hits: u64,
+    pub l2_miss: u64,
+    pub evictions: u64,
+}
+
+struct LruEntry {
+    is_plan: bool,
+    body: Value,
+    bytes: usize,
+}
+
+struct Lru {
+    map: HashMap<PlanKey, LruEntry>,
+    order: VecDeque<PlanKey>,
+    evictions: u64,
+    stored_bytes: usize,
+}
+
+impl Lru {
+    fn new() -> Self {
+        Lru {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            evictions: 0,
+            stored_bytes: 0,
+        }
+    }
+
+    fn get(&mut self, key: &PlanKey) -> Option<(bool, Value)> {
+        let entry = self.map.get(key)?;
+        let out = (entry.is_plan, entry.body.clone());
+        // Refresh: most-recently-used goes back.
+        if let Some(pos) = self.order.iter().position(|known| known == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key.clone());
+        Some(out)
+    }
+
+    /// Same from/options/version with dest on the cached tile path:
+    /// exact prefix, no search (substructure-optimal, §5.3).
+    fn truncate(
+        &mut self,
+        tables: &Tables,
+        from: Tile,
+        dest: Tile,
+        options: &NavOptions,
+        version: &str,
+    ) -> Option<Value> {
+        // Cheap filter first (field compares, no decode); decode only the
+        // few candidates sharing from/options/version.
+        let mut candidates: Vec<(PlanKey, Value)> = Vec::new();
+        for (key, entry) in self.map.iter() {
+            if !entry.is_plan
+                || key.from != from
+                || key.dest == dest
+                || key.version != version
+                || key.allow_paid != options.allow_paid
+                || key.f2p_only != options.f2p_only
+                || key.satisfied != options_satisfied(options)
+                || key.excluded != options_excluded(options)
+            {
+                continue;
+            }
+            candidates.push((key.clone(), entry.body.clone()));
+        }
+        for (key, body) in candidates {
+            let Ok(cached) = decode_plan(&body) else {
+                continue;
+            };
+            let Some(prefix) = truncate_plan(tables, from, &cached, dest) else {
+                continue;
+            };
+            let value = encode_plan(&prefix);
+            // The prefix serves through the same slot shape as a hit.
+            self.get(&key);
+            return Some(value);
+        }
+        None
+    }
+
+    fn insert(&mut self, key: PlanKey, is_plan: bool, body: Value) -> bool {
+        let bytes = json::stringify(&body).len();
+        if bytes > L1_MAX_ENTRY_BYTES {
+            return false;
+        }
+        if self.map.contains_key(&key) {
+            if let Some(pos) = self.order.iter().position(|known| known == &key) {
+                self.order.remove(pos);
+            }
+            if let Some(old) = self.map.get(&key) {
+                self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.stored_bytes += bytes;
+        self.map.insert(key, LruEntry { is_plan, body, bytes });
+        while self.map.len() > L1_CAP {
+            if let Some(oldest) = self.order.pop_front() {
+                if let Some(old) = self.map.remove(&oldest) {
+                    self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
+                    self.evictions += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        true
+    }
+}
+
+fn options_satisfied(options: &NavOptions) -> Vec<String> {
+    let mut satisfied: Vec<String> = options.satisfied.iter().cloned().collect();
+    satisfied.sort();
+    satisfied
+}
+
+fn options_excluded(options: &NavOptions) -> Vec<String> {
+    let mut excluded: Vec<String> = options.excluded_edges.iter().map(edge_key).collect();
+    excluded.sort();
+    excluded
+}
+
+/// Walking-order tile path of a plan, `from` first: walk tiles in order,
+/// door crossings, ride/custom landings. Stands are already the cursor.
+fn plan_path(from: Tile, plan: &Plan) -> Vec<Tile> {
+    let mut path = vec![from];
+    for segment in &plan.segments {
+        match segment {
+            Segment::Walk { tiles } => path.extend(tiles.iter().copied()),
+            Segment::OpenDoor { cross_to, .. } => path.push(*cross_to),
+            Segment::Ride { expect, .. } | Segment::Custom { expect, .. } => path.push(*expect),
+        }
+    }
+    path
+}
+
+/// Exact prefix of `cached` ending on `dest` (first occurrence: the
+/// shortest prefix landing there). Costs are re-derived edge by edge with
+/// the same formula as `assemble`, so the prefix prices exactly what a
+/// fresh search would. `None`: dest is not on the path (recompute).
+fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Option<Plan> {
+    let path = plan_path(from, cached);
+    let pos = path.iter().position(|tile| *tile == dest)?;
+    if pos == 0 {
+        return Some(Plan {
+            segments: Vec::new(),
+            cost: 0,
+            adjusted_dest: None,
+        });
+    }
+    let mut remaining = pos;
+    let mut segments = Vec::new();
+    let mut cost = 0u32;
+    for segment in &cached.segments {
+        match segment {
+            Segment::Walk { tiles } => {
+                if remaining > tiles.len() {
+                    cost += tiles.len() as u32;
+                    remaining -= tiles.len();
+                    segments.push(segment.clone());
+                } else {
+                    cost += remaining as u32;
+                    segments.push(Segment::Walk {
+                        tiles: tiles[..remaining].to_vec(),
+                    });
+                    remaining = 0;
+                    break;
+                }
+            }
+            Segment::OpenDoor { .. } => {
+                cost += plan::DOOR_COST;
+                remaining -= 1;
+                segments.push(segment.clone());
+                if remaining == 0 {
+                    break;
+                }
+            }
+            Segment::Ride { transition, .. } => {
+                cost += plan::TRANSITION_COST
+                    + if tables
+                        .verdict(transition.loc, transition.from)
+                        .is_some_and(crate::tables::Verdict::verified)
+                    {
+                        0
+                    } else {
+                        plan::UNVERIFIED_PENALTY
+                    };
+                remaining -= 1;
+                segments.push(segment.clone());
+                if remaining == 0 {
+                    break;
+                }
+            }
+            Segment::Custom { .. } => {
+                cost += plan::TRANSITION_COST + plan::UNVERIFIED_PENALTY;
+                remaining -= 1;
+                segments.push(segment.clone());
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    if remaining != 0 {
+        return None;
+    }
+    Some(Plan {
+        segments,
+        cost,
+        adjusted_dest: None,
+    })
 }
 
 // -- JSON codec (options serialized integrally, never normalized) -------------
@@ -513,6 +754,7 @@ pub fn decode_noroute(value: &Value) -> Result<NoRoute, String> {
 struct Job {
     id: u64,
     account: String,
+    key: PlanKey,
     from: Tile,
     dest: Tile,
     options: NavOptions,
@@ -526,14 +768,28 @@ enum Slot {
 }
 
 /// Plan server: snapshot shared by the pool, bounded queue, IPC replies.
-/// Field order mirrors the lock discipline (admission, results, snapshot).
+/// LOT3: global L1 (plans + negatives, keyed by the full PlanKey), global
+/// L2 (one edge set per data version), in-flight joins on the full key.
+/// Field order mirrors the lock discipline (admission, cache, in-flight,
+/// results, snapshot); the pool never holds any lock during a Dijkstra.
 pub struct Service {
     admission: Mutex<HashMap<String, usize>>,
+    l1: Mutex<Lru>,
+    l2: Mutex<(HashMap<String, Arc<SharedEdges>>, Vec<String>)>,
+    inflight: Mutex<HashMap<PlanKey, u64>>,
+    tickets: Mutex<HashMap<u64, PlanKey>>,
+    waiters: Mutex<HashMap<u64, usize>>,
     results: Mutex<HashMap<u64, Slot>>,
     snapshot: Mutex<Arc<Snapshot>>,
     queue_tx: SyncSender<Job>,
     queue_rx: Mutex<Receiver<Job>>,
     next_id: AtomicU64,
+    hits: AtomicU64,
+    trunc_hits: AtomicU64,
+    misses: AtomicU64,
+    joins: AtomicU64,
+    l2_hits: AtomicU64,
+    l2_miss: AtomicU64,
     sock_path: PathBuf,
 }
 
@@ -556,11 +812,22 @@ impl Service {
         let (queue_tx, queue_rx) = mpsc::sync_channel(QUEUE_CAP);
         let service = Arc::new(Service {
             admission: Mutex::new(HashMap::new()),
+            l1: Mutex::new(Lru::new()),
+            l2: Mutex::new((HashMap::new(), Vec::new())),
+            inflight: Mutex::new(HashMap::new()),
+            tickets: Mutex::new(HashMap::new()),
+            waiters: Mutex::new(HashMap::new()),
             results: Mutex::new(HashMap::new()),
             snapshot: Mutex::new(snapshot),
             queue_tx,
             queue_rx: Mutex::new(queue_rx),
             next_id: AtomicU64::new(1),
+            hits: AtomicU64::new(0),
+            trunc_hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            joins: AtomicU64::new(0),
+            l2_hits: AtomicU64::new(0),
+            l2_miss: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
         });
         for index in 0..threads.max(1) {
@@ -589,6 +856,41 @@ impl Service {
         &self.sock_path
     }
 
+    /// Lot 3 counters: hit-rate verdict reads these, not the logs.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits.load(Ordering::Relaxed),
+            trunc_hits: self.trunc_hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            joins: self.joins.load(Ordering::Relaxed),
+            l2_hits: self.l2_hits.load(Ordering::Relaxed),
+            l2_miss: self.l2_miss.load(Ordering::Relaxed),
+            evictions: self.l1.lock().unwrap().evictions,
+        }
+    }
+
+    /// Operator reload (`reload-nav`): swap the snapshot atomically. The
+    /// version bump makes every L1 key and in-flight join unreachable
+    /// under the new version (keys carry it); requests in flight keep
+    /// the old `Arc` and their replies carry the old version, so the
+    /// worker rejects + resubmits once instead of serving stale.
+    pub fn reload(&self, snapshot: Arc<Snapshot>) -> (String, String) {
+        let mut guard = self.snapshot.lock().unwrap();
+        let old = guard.version.clone();
+        let new = snapshot.version.clone();
+        *guard = snapshot;
+        (old, new)
+    }
+
+    /// L1 occupancy: entry count and stored bytes (RAM §5.9 evidence).
+    pub fn l1_len(&self) -> usize {
+        self.l1.lock().unwrap().map.len()
+    }
+
+    pub fn l1_bytes(&self) -> usize {
+        self.l1.lock().unwrap().stored_bytes
+    }
+
     fn serve_one(&self, stream: UnixStream) {
         let _ = stream.set_read_timeout(Some(ACCEPT_TIMEOUT));
         let _ = stream.set_write_timeout(Some(ACCEPT_TIMEOUT));
@@ -614,6 +916,22 @@ impl Service {
             "submit" => self.op_submit(request),
             "poll" => self.op_poll(request),
             "cancel" => self.op_cancel(request),
+            "stats" => {
+                let stats = self.stats();
+                object(vec![
+                    ("ok", Value::Bool(true)),
+                    ("version", str_value(&self.version())),
+                    ("hits", Value::Int(stats.hits as i64)),
+                    ("trunc_hits", Value::Int(stats.trunc_hits as i64)),
+                    ("misses", Value::Int(stats.misses as i64)),
+                    ("joins", Value::Int(stats.joins as i64)),
+                    ("l2_hits", Value::Int(stats.l2_hits as i64)),
+                    ("l2_miss", Value::Int(stats.l2_miss as i64)),
+                    ("evictions", Value::Int(stats.evictions as i64)),
+                    ("l1_len", Value::Int(self.l1_len() as i64)),
+                    ("l1_bytes", Value::Int(self.l1_bytes() as i64)),
+                ])
+            }
             other => object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value(&format!("unknown op {other:?}"))),
@@ -667,6 +985,43 @@ impl Service {
                 ("version", str_value(&version)),
             ]);
         }
+        // LOT3 L1: the full key (options + current version) first, before
+        // any admission accounting: a hit never consumes queue or cap.
+        // Bind first: no guard survives into the reply path (lock order
+        // is sequential everywhere, never nested).
+        let key = PlanKey::of(from, dest, &options, &version);
+        let hit = self.l1.lock().unwrap().get(&key);
+        if let Some((is_plan, body)) = hit {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return self.instant_slot(is_plan, body);
+        }
+        // LOT3 truncation: dest on a cached plan serves the prefix.
+        let tables = self.snapshot.lock().unwrap().tables.clone();
+        let prefix = self
+            .l1
+            .lock()
+            .unwrap()
+            .truncate(&tables, from, dest, &options, &version);
+        if let Some(prefix) = prefix {
+            self.trunc_hits.fetch_add(1, Ordering::Relaxed);
+            return self.instant_slot(true, prefix);
+        }
+        // LOT3 vol en cours: same full key already queued/computing ->
+        // join it, never duplicate the Dijkstra. Sequential locks only
+        // (lock order: inflight, results, waiters, never nested).
+        if let Some(id) = self.inflight.lock().unwrap().get(&key).copied() {
+            let pending =
+                matches!(self.results.lock().unwrap().get(&id), Some(Slot::Pending { .. }));
+            if pending {
+                *self.waiters.lock().unwrap().entry(id).or_insert(1) += 1;
+                self.joins.fetch_add(1, Ordering::Relaxed);
+                return object(vec![
+                    ("ok", Value::Bool(true)),
+                    ("id", Value::Int(id as i64)),
+                    ("version", str_value(&version)),
+                ]);
+            }
+        }
         {
             let mut admission = self.admission.lock().unwrap();
             let in_flight = admission.get(&account).copied().unwrap_or(0);
@@ -684,6 +1039,7 @@ impl Service {
         let job = Job {
             id,
             account: account.clone(),
+            key: key.clone(),
             from,
             dest,
             options,
@@ -699,10 +1055,44 @@ impl Service {
                 ("version", str_value(&version)),
             ]);
         }
+        self.inflight.lock().unwrap().insert(key.clone(), id);
+        self.tickets.lock().unwrap().insert(id, key);
+        self.waiters.lock().unwrap().insert(id, 1);
+        self.misses.fetch_add(1, Ordering::Relaxed);
         self.results
             .lock()
             .unwrap()
             .insert(id, Slot::Pending { cancel });
+        object(vec![
+            ("ok", Value::Bool(true)),
+            ("id", Value::Int(id as i64)),
+            ("version", str_value(&version)),
+        ])
+    }
+
+    /// A cache hit answers as a fresh terminal ticket (poll reads it
+    /// once, same shape as a computed plan, no queue involved).
+    fn instant_slot(&self, is_plan: bool, body: Value) -> Value {
+        let version = self.version();
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.waiters.lock().unwrap().insert(id, 1);
+        let mut results = self.results.lock().unwrap();
+        if is_plan {
+            results.insert(id, Slot::Ready { plan: body });
+        } else {
+            results.insert(id, Slot::Failed { error: body });
+        }
+        while results.len() > RESULTS_CAP {
+            let evict = results.iter().find_map(|(id, slot)| {
+                matches!(slot, Slot::Ready { .. } | Slot::Failed { .. }).then_some(*id)
+            });
+            match evict {
+                Some(id) => {
+                    results.remove(&id);
+                }
+                None => break,
+            }
+        }
         object(vec![
             ("ok", Value::Bool(true)),
             ("id", Value::Int(id as i64)),
@@ -721,26 +1111,26 @@ impl Service {
                 ])
             }
         };
-        let mut results = self.results.lock().unwrap();
-        match results.remove(&id) {
-            Some(Slot::Pending { cancel }) => {
-                results.insert(id, Slot::Pending { cancel });
-                object(vec![
-                    ("ok", Value::Bool(true)),
-                    ("status", str_value("pending")),
-                    ("version", str_value(&version)),
-                ])
-            }
+        // LOT3 shared tickets: Ready/Failed answers clone out WITHOUT
+        // consuming the slot (N waiters poll the same id); eviction by
+        // RESULTS_CAP reaps them. Pending stays until computed/cancelled.
+        let results = self.results.lock().unwrap();
+        match results.get(&id) {
+            Some(Slot::Pending { .. }) => object(vec![
+                ("ok", Value::Bool(true)),
+                ("status", str_value("pending")),
+                ("version", str_value(&version)),
+            ]),
             Some(Slot::Ready { plan }) => object(vec![
                 ("ok", Value::Bool(true)),
                 ("status", str_value("ready")),
-                ("plan", plan),
+                ("plan", plan.clone()),
                 ("version", str_value(&version)),
             ]),
             Some(Slot::Failed { error }) => object(vec![
                 ("ok", Value::Bool(true)),
                 ("status", str_value("failed")),
-                ("error", error),
+                ("error", error.clone()),
                 ("version", str_value(&version)),
             ]),
             None => object(vec![
@@ -761,14 +1151,40 @@ impl Service {
                 ])
             }
         };
-        if let Some(Slot::Pending { cancel }) = self.results.lock().unwrap().remove(&id) {
-            cancel.store(true, Ordering::Relaxed);
+        // LOT3 shared tickets: only the last waiter truly cancels; the
+        // others keep polling the same id.
+        let last = {
+            let mut waiters = self.waiters.lock().unwrap();
+            match waiters.get(&id).copied() {
+                Some(count) if count > 1 => {
+                    waiters.insert(id, count - 1);
+                    false
+                }
+                _ => {
+                    waiters.remove(&id);
+                    true
+                }
+            }
+        };
+        if last {
+            if let Some(Slot::Pending { cancel }) = self.results.lock().unwrap().remove(&id) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            if let Some(key) = self.tickets.lock().unwrap().remove(&id) {
+                let mut inflight = self.inflight.lock().unwrap();
+                if inflight.get(&key) == Some(&id) {
+                    inflight.remove(&key);
+                }
+            }
         }
         object(vec![("ok", Value::Bool(true))])
     }
 
     /// Pool worker: one job at a time, snapshot cloned per job, no lock
     /// held during the Dijkstra. A cancelled ticket drops its outcome.
+    /// LOT3: the L2 edge set is cached per data version (compute once,
+    /// serve every search); the outcome lands in L1 under the full key
+    /// (negatives included, Aborted never).
     fn serve_plans(&self) {
         loop {
             let job = {
@@ -783,32 +1199,45 @@ impl Service {
                 continue;
             }
             let snapshot = self.snapshot.lock().unwrap().clone();
+            let shared = self.shared_edges(&snapshot);
             let cancel = Arc::clone(&job.cancel);
-            let outcome = plan::plan_yielding(
-                &snapshot.world,
-                &snapshot.tables,
-                job.from,
-                job.dest,
-                &job.options,
-                &mut || !cancel.load(Ordering::Relaxed),
-            );
-            let mut results = self.results.lock().unwrap();
-            // A cancelled ticket left no slot: drop its outcome.
-            if results.remove(&job.id).is_some() {
-                match outcome {
-                    Ok(plan) => results.insert(
-                        job.id,
-                        Slot::Ready {
-                            plan: encode_plan(&plan),
-                        },
-                    ),
-                    Err(no) => results.insert(
-                        job.id,
-                        Slot::Failed {
-                            error: encode_noroute(&no),
-                        },
-                    ),
+            let outcome = match shared {
+                Some(shared) => plan::plan_yielding_with(
+                    &snapshot.world,
+                    &snapshot.tables,
+                    job.from,
+                    job.dest,
+                    &job.options,
+                    &shared,
+                    &mut || !cancel.load(Ordering::Relaxed),
+                ),
+                None => Err(plan::aborted_no_route(job.from)),
+            };
+            let live = {
+                let mut results = self.results.lock().unwrap();
+                // A cancelled ticket left no slot: drop its outcome.
+                results.remove(&job.id).is_some()
+            };
+            if live {
+                let key = PlanKey::of(job.from, job.dest, &job.options, &snapshot.version);
+                let (is_plan, body) = match &outcome {
+                    Ok(plan) => (true, encode_plan(plan)),
+                    Err(no) => (false, encode_noroute(no)),
                 };
+                // Negatives cache (the dearest hits); Aborted never does.
+                let cacheable = match &outcome {
+                    Ok(_) => true,
+                    Err(no) => no.reason != NoRouteReason::Aborted,
+                };
+                if cacheable {
+                    self.l1.lock().unwrap().insert(key, is_plan, body.clone());
+                }
+                let mut results = self.results.lock().unwrap();
+                if is_plan {
+                    results.insert(job.id, Slot::Ready { plan: body });
+                } else {
+                    results.insert(job.id, Slot::Failed { error: body });
+                }
                 // Bound stored results: evict a consumable outcome (never
                 // a pending); its owner already gave up and fell back sync.
                 while results.len() > RESULTS_CAP {
@@ -823,9 +1252,40 @@ impl Service {
                     }
                 }
             }
-            drop(results);
+            {
+                let mut inflight = self.inflight.lock().unwrap();
+                if inflight.get(&job.key) == Some(&job.id) {
+                    inflight.remove(&job.key);
+                }
+            }
+            self.tickets.lock().unwrap().remove(&job.id);
             self.release(&job.account);
         }
+    }
+
+    /// LOT3 L2: one edge set per data version, shared by every search.
+    /// A reload drains the old version while the new one computes once.
+    fn shared_edges(&self, snapshot: &Arc<Snapshot>) -> Option<Arc<SharedEdges>> {
+        if let Some(shared) = self.l2.lock().unwrap().0.get(&snapshot.version).cloned() {
+            self.l2_hits.fetch_add(1, Ordering::Relaxed);
+            return Some(shared);
+        }
+        self.l2_miss.fetch_add(1, Ordering::Relaxed);
+        // The L2 is the permissive superset (requires/tolls/F2P lifted):
+        // identical for every job, so a default options fits all.
+        let mut always = || true;
+        let edges = plan::prepare_shared(&snapshot.world, &snapshot.tables, &NavOptions::default(), &mut always)?;
+        let shared = Arc::new(edges);
+        let mut l2 = self.l2.lock().unwrap();
+        if !l2.0.contains_key(&snapshot.version) {
+            l2.1.push(snapshot.version.clone());
+            l2.0.insert(snapshot.version.clone(), Arc::clone(&shared));
+            while l2.0.len() > L2_VERSIONS_CAP {
+                let oldest = l2.1.remove(0);
+                l2.0.remove(&oldest);
+            }
+        }
+        Some(shared)
     }
 
     fn release(&self, account: &str) {
@@ -922,7 +1382,10 @@ impl PlanClient {
         })
     }
 
-    pub fn poll(&self, id: u64) -> Result<Poll, String> {
+    /// Poll one round-trip: the outcome plus the serving snapshot
+    /// version (the worker rejects a stale-version answer + resubmits
+    /// once, never serves it).
+    pub fn poll(&self, id: u64) -> Result<(Poll, String), String> {
         let reply = self.round_trip(
             &object(vec![
                 ("op", str_value("poll")),
@@ -930,14 +1393,15 @@ impl PlanClient {
             ]),
             POLL_TIMEOUT,
         )?;
+        let version = reply.get("version").as_str().unwrap_or("").to_string();
         if reply.get("ok").as_bool() != Some(true) {
-            return Ok(Poll::Unknown);
+            return Ok((Poll::Unknown, version));
         }
         match reply.get("status").as_str().unwrap_or("") {
-            "pending" => Ok(Poll::Pending),
-            "ready" => Ok(Poll::Ready(decode_plan(reply.get("plan"))?)),
-            "failed" => Ok(Poll::Failed(decode_noroute(reply.get("error"))?)),
-            _ => Ok(Poll::Unknown),
+            "pending" => Ok((Poll::Pending, version)),
+            "ready" => Ok((Poll::Ready(decode_plan(reply.get("plan"))?), version)),
+            "failed" => Ok((Poll::Failed(decode_noroute(reply.get("error"))?), version)),
+            _ => Ok((Poll::Unknown, version)),
         }
     }
 
@@ -1037,13 +1501,13 @@ mod tests {
         let start = std::time::Instant::now();
         loop {
             match client.poll(id).expect("poll answers") {
-                Poll::Pending => {
+                (Poll::Pending, _) => {
                     if start.elapsed() >= Duration::from_secs(25) {
                         return None;
                     }
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                outcome => return Some(outcome),
+                outcome => return Some(outcome.0),
             }
         }
     }
@@ -1327,7 +1791,7 @@ mod tests {
             Submit::Accepted { .. } => panic!("bogus version must not plan"),
         }
         assert!(
-            matches!(client.poll(999_999).expect("poll"), Poll::Unknown),
+            matches!(client.poll(999_999).expect("poll").0, Poll::Unknown),
             "unknown ticket is unknown"
         );
         client.cancel(999_999).expect("cancel is idempotent");
@@ -1499,6 +1963,303 @@ mod tests {
             "ipc overhead p99 absurdly high: {:.1}ms",
             pick(0.99)
         );
+    }
+
+    /// LOT3 L1: a repeated pair serves from cache (exact hit), and so
+    /// does a repeated failure (negatives are the dearest hits: a
+    /// Disconnected costs up to the 1.5 s budget).
+    #[test]
+    fn l1_caches_plans_and_negatives() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "lot3-l1".to_string()),
+            &test_socket("plan-l1"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "l1");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let first = submit_ready(&client, from, dest, &short_options(), "lot3-l1");
+        assert!(!first.segments.is_empty(), "door leg plans");
+        // Relative deltas only: warmup retries under load stay behind
+        // the baseline, the counted submit is one hit, zero computes.
+        let before = service.stats();
+        let second = submit_ready(&client, from, dest, &short_options(), "lot3-l1");
+        assert_eq!(
+            json::stringify(&encode_plan(&first)),
+            json::stringify(&encode_plan(&second)),
+            "hit serves the same plan bit for bit"
+        );
+        let after_plans = service.stats();
+        assert_eq!(after_plans.misses - before.misses, 0, "hit computes nothing");
+        assert_eq!(after_plans.hits - before.hits, 1, "one exact hit");
+        // Negative: the guild door refuses without qp:32, twice. Direct
+        // submit (not the warming helper: a Failed verdict must count
+        // exactly one compute + one hit).
+        let guild_from = Tile { x: 3191, z: 3366, level: 0 };
+        let guild_dest = Tile { x: 3191, z: 3361, level: 0 };
+        let submit_once = |client: &PlanClient| match client.submit(guild_from, guild_dest, &short_options(), "lot3-l1") {
+            Ok(Submit::Accepted { id, .. }) => id,
+            Ok(Submit::Refused { reason, .. }) => panic!("refused: {reason}"),
+            Err(error) => panic!("submit: {error}"),
+        };
+        for _ in 0..2 {
+            let id = submit_once(&client);
+            match await_ready(&client, id) {
+                Some(Poll::Failed(no)) => assert_eq!(no.reason, NoRouteReason::NeedsRequirement),
+                other => panic!("guild must refuse, got {other:?}"),
+            }
+        }
+        let after = service.stats();
+        assert_eq!(after.misses - after_plans.misses, 1, "negative computed once");
+        assert_eq!(after.hits - after_plans.hits, 1, "negative served from L1");
+        assert!(service.l1_len() >= 2, "plans + negatives share one LRU");
+        println!(
+            "l1: hits={} misses={} len={} bytes={}",
+            after.hits,
+            after.misses,
+            service.l1_len(),
+            service.l1_bytes()
+        );
+    }
+
+    /// LOT3 vol en cours: the same full key twice while the Dijkstra
+    /// runs returns ONE ticket (join), never two searches.
+    #[test]
+    fn inflight_join_shares_one_dijkstra() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "lot3-vol".to_string()),
+            &test_socket("plan-vol"),
+            1,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "vol");
+        // Exhaustive NoRoute: the single pool thread stays busy past the
+        // 1.5 s budget, so the twin submit always lands mid-flight.
+        let from = Tile { x: 3219, z: 3218, level: 0 };
+        let dest = Tile { x: 3215, z: 3218, level: 0 };
+        let id = match client.submit(from, dest, &short_options(), "lot3-vol").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        let twin = match client.submit(from, dest, &short_options(), "lot3-vol").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("twin refused: {reason}"),
+        };
+        assert_eq!(id, twin, "same key in flight joins, never duplicates");
+        let stats = service.stats();
+        assert_eq!(stats.misses, 1, "one compute for two submits");
+        assert_eq!(stats.joins, 1, "one join counted");
+        // Both waiters cancel: the last one truly aborts the ticket.
+        client.cancel(id).expect("cancel");
+        client.cancel(twin).expect("cancel");
+        // The service survives: a fast leg still lands afterwards.
+        let fast = submit_ready(
+            &client,
+            Tile { x: 3228, z: 3214, level: 0 },
+            Tile { x: 3224, z: 3214, level: 0 },
+            &short_options(),
+            "lot3-vol",
+        );
+        assert!(!fast.segments.is_empty(), "healthy after cancel");
+    }
+
+    /// LOT3 truncation: a dest ON a cached plan serves the prefix with no
+    /// search, priced exactly like a fresh plan.
+    #[test]
+    fn truncation_serves_exact_prefix() {
+        let (world, tables) = shared_world();
+        // Pure unit shape first: a walk-only plan prefixes by tile count.
+        let from = Tile { x: 0, z: 0, level: 0 };
+        let tiles: Vec<Tile> = (1..=5).map(|x| Tile { x, z: 0, level: 0 }).collect();
+        let walk = Plan {
+            segments: vec![Segment::Walk { tiles: tiles.clone() }],
+            cost: 5,
+            adjusted_dest: None,
+        };
+        let prefix = truncate_plan(&tables, from, &walk, Tile { x: 3, z: 0, level: 0 }).expect("on-path");
+        assert_eq!(prefix.cost, 3, "walk prefix priced per tile");
+        assert_eq!(plan_path(from, &prefix).last(), Some(&Tile { x: 3, z: 0, level: 0 }));
+        assert!(truncate_plan(&tables, from, &walk, Tile { x: 9, z: 9, level: 0 }).is_none(), "off-path recomputes");
+        // Through the service: full leg, then a mid-path dest.
+        let service = Service::start(
+            Snapshot::new(world.clone(), tables.clone(), "lot3-trunc".to_string()),
+            &test_socket("plan-trunc"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "trunc");
+        let door_from = Tile { x: 3228, z: 3214, level: 0 };
+        let door_dest = Tile { x: 3224, z: 3214, level: 0 };
+        let full = submit_ready(&client, door_from, door_dest, &short_options(), "lot3-trunc");
+        let path = plan_path(door_from, &full);
+        assert!(path.len() > 3, "door leg has a walk worth prefixing");
+        let mid = path[path.len() / 2];
+        let before = service.stats();
+        let served = submit_ready(&client, door_from, mid, &short_options(), "lot3-trunc");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "prefix serves with no search");
+        assert_eq!(after.trunc_hits - before.trunc_hits, 1, "one truncation counted");
+        assert_eq!(plan_path(door_from, &served).last(), Some(&mid), "prefix lands on dest");
+        // Exact price: a fresh sync plan for the same prefix costs the same.
+        let mut sync = None;
+        for _ in 0..5 {
+            if let Ok(found) = plan::plan(&world, &tables, door_from, mid, &short_options()) {
+                sync = Some(found);
+                break;
+            }
+        }
+        let sync = sync.expect("sync prefix converges");
+        assert_eq!(served.cost, sync.cost, "truncated prefix is substructure-optimal");
+    }
+
+    /// LOT3 bump: a reloaded version serves zero stale plans — neither
+    /// L1 hits nor in-flight joins cross the version.
+    #[test]
+    fn reload_bump_invalidates_cache_and_inflight() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world.clone(), tables.clone(), "lot3-old".to_string()),
+            &test_socket("plan-bump"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "bump");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let _ = submit_ready(&client, from, dest, &short_options(), "lot3-old");
+        let _ = submit_ready(&client, from, dest, &short_options(), "lot3-old");
+        let (old, new) = service.reload(Snapshot::new(world, tables, "lot3-new".to_string()));
+        assert_ne!(old, new, "bump changes the version");
+        // Same pair on the new version: a full miss, never a stale hit.
+        // Relative deltas: warmup retries stay behind the baseline.
+        let before = service.stats();
+        let fresh = submit_ready(&client, from, dest, &short_options(), "lot3-new");
+        assert!(!fresh.segments.is_empty(), "new version plans");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 1, "bump forces recompute");
+        assert_eq!(after.hits - before.hits, 0, "zero stale hits across the bump");
+        // Vol en cours across the bump: an old-version submit refuses
+        // stale; a new-version twin joins the new flight, not the old one.
+        let slow_from = Tile { x: 3219, z: 3218, level: 0 };
+        let slow_dest = Tile { x: 3215, z: 3218, level: 0 };
+        let id = match client.submit(slow_from, slow_dest, &short_options(), "lot3-new").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        match client.submit(slow_from, slow_dest, &short_options(), "lot3-old").expect("submit") {
+            Submit::Refused { reason, .. } => assert!(reason.contains("stale"), "old vol refuses, got {reason}"),
+            Submit::Accepted { .. } => panic!("old version must not join the new flight"),
+        }
+        let twin = match client.submit(slow_from, slow_dest, &short_options(), "lot3-new").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("twin refused: {reason}"),
+        };
+        assert_eq!(id, twin, "new vol joins the new flight");
+        client.cancel(id).expect("cancel");
+        client.cancel(twin).expect("cancel");
+    }
+
+    /// LOT3 acceptance: hit rate global >= 30 % on replayed pairs (§1.4:
+    /// same legs come back in a loop). Method: N distinct pairs, 3 rounds
+    /// each; round 1 misses, rounds 2-3 hit. Printed, asserted.
+    #[test]
+    fn hit_rate_benchmark_over_replayed_pairs() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "lot3-bench".to_string()),
+            &test_socket("plan-bench"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "bench");
+        let mut qp = short_options();
+        qp.satisfied.insert("qp:32".to_string());
+        let mut paid = short_options();
+        paid.allow_paid = true;
+        let pairs: Vec<(Tile, Tile, NavOptions)> = vec![
+            (Tile { x: 3228, z: 3214, level: 0 }, Tile { x: 3224, z: 3214, level: 0 }, short_options()),
+            (Tile { x: 3228, z: 3215, level: 0 }, Tile { x: 3229, z: 3212, level: 2 }, short_options()),
+            (Tile { x: 3224, z: 3223, level: 0 }, Tile { x: 3228, z: 3226, level: 0 }, short_options()),
+            (Tile { x: 3265, z: 3227, level: 0 }, Tile { x: 3270, z: 3227, level: 0 }, paid),
+            (Tile { x: 3191, z: 3366, level: 0 }, Tile { x: 3191, z: 3361, level: 0 }, qp),
+            (Tile { x: 3224, z: 3223, level: 0 }, Tile { x: 3228, z: 3226, level: 0 }, short_options()),
+        ];
+        for _ in 0..3 {
+            for (from, dest, options) in &pairs {
+                match submit_terminal(&client, *from, *dest, options, "lot3-bench") {
+                    Poll::Ready(_) | Poll::Failed(_) => {}
+                    Poll::Unknown | Poll::Pending => panic!("poll lost the ticket"),
+                }
+            }
+        }
+        let stats = service.stats();
+        let hits = stats.hits + stats.trunc_hits;
+        let total = hits + stats.misses;
+        let rate = 100.0 * hits as f64 / total as f64;
+        println!(
+            "hit-rate: pairs={} rounds=3 hits={} (exact={} trunc={}) joins={} misses={} rate={rate:.1}% (bar 30%) l2_hits={} l2_miss={} l1_len={} l1_bytes={}",
+            pairs.len(),
+            hits,
+            stats.hits,
+            stats.trunc_hits,
+            stats.joins,
+            stats.misses,
+            stats.l2_hits,
+            stats.l2_miss,
+            service.l1_len(),
+            service.l1_bytes(),
+        );
+        assert!(rate >= 30.0, "hit rate {rate:.1}% below the 30% bar");
+        assert!(stats.l2_hits >= 1, "L2 shared past the first compute");
+    }
+
+    /// LOT3 acceptance: p99 reply <= 16 Ko (§5.3: max golden 9.6 Ko) and
+    /// the L1 RAM line (1024 x max + overhead <= 11 Mo, §5.9).
+    #[test]
+    fn reply_size_and_ram_bound() {
+        let (world, tables) = shared_world();
+        let legs = [
+            (Tile { x: 3228, z: 3214, level: 0 }, Tile { x: 3224, z: 3214, level: 0 }, short_options(), "door"),
+            (Tile { x: 3228, z: 3215, level: 0 }, Tile { x: 3229, z: 3212, level: 2 }, short_options(), "stairs"),
+            (Tile { x: 3265, z: 3227, level: 0 }, Tile { x: 3270, z: 3227, level: 0 }, short_options(), "toll-detour"),
+            (Tile { x: 3025, z: 3512, level: 1 }, Tile { x: 3025, z: 3511, level: 1 }, short_options(), "bk-door"),
+            (Tile { x: 3222, z: 3222, level: 0 }, Tile { x: 3250, z: 3420, level: 0 }, short_options(), "longue-marche"),
+        ];
+        let mut sizes = Vec::new();
+        for (from, dest, options, name) in legs {
+            let mut found = None;
+            for _ in 0..5 {
+                if let Ok(plan) = plan::plan(&world, &tables, from, dest, &options) {
+                    found = Some(plan);
+                    break;
+                }
+            }
+            let Some(plan) = found else {
+                // Debug-cold budget flip (documented §6 artefact): the
+                // release run carries the verdict; debug reports the rest.
+                println!("size: {name} skipped (cold budget flip, release covers it)");
+                assert!(!cfg!(debug_assertions), "{name} must converge in release");
+                continue;
+            };
+            let bytes = json::stringify(&encode_plan(&plan)).len();
+            println!("size: {name} cost={} reply={bytes}B", plan.cost);
+            sizes.push(bytes);
+        }
+        assert!(sizes.len() >= 4, "need at least 4 measured legs, got {}", sizes.len());
+        sizes.sort_unstable();
+        let max = *sizes.last().unwrap();
+        let median = sizes[sizes.len() / 2];
+        let p99 = sizes[((0.99 * sizes.len() as f64) as usize).min(sizes.len() - 1)];
+        let l1_worst = 1024 * max + 350_000;
+        println!(
+            "reply: min={} median={median} max={max} p99={p99} (alert 16 Ko); L1 worst-case 1024x{max}+overhead = {l1_worst}B (line 11 Mo)",
+            sizes[0]
+        );
+        assert!(p99 <= 16 * 1024, "p99 reply {p99}B above the 16 Ko alert");
+        assert!(l1_worst <= 11 * 1024 * 1024, "L1 worst case {l1_worst}B above the 11 Mo line");
     }
 
     #[test]

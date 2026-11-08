@@ -65,6 +65,22 @@ enum RemoteOutcome {
     Interrupted(String),
 }
 
+/// One polled ticket: either terminal, or a stale-version answer the
+/// caller resubmits once on the served version.
+enum PollTicket {
+    Ticket(RemoteOutcome),
+    Stale(String),
+}
+
+/// A terminal reply off a draining snapshot: ours is set and the served
+/// one differs. Empty versions (tests, no daemon) never count as stale.
+fn stale_reply(ours: &Option<String>, served: &str) -> bool {
+    match ours {
+        Some(ours) => !ours.is_empty() && !served.is_empty() && ours != served,
+        None => false,
+    }
+}
+
 impl Bot {
     /// Travel to a tile on any level: plan, publish the full plan as the
     /// live route, execute every segment in order. `NoRoute` becomes
@@ -137,23 +153,59 @@ impl Bot {
     /// remote plan over one second never starves the socket into a
     /// 100-tick reap, by construction). Never blocks the worker:
     /// refuse/down/stale/timeout all fall back to a local sync plan.
+    /// LOT3 stale version: the served version replaces ours and the
+    /// submit retries exactly once (submit-refused or terminal reply off
+    /// a draining snapshot); a second skew falls back sync, never loops.
     fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
-        let (client, version) = match (self.plan_client.clone(), self.plan_data_version.clone()) {
-            (Some(client), version) => (client, version.unwrap_or_default()),
-            (None, _) => return RemoteOutcome::Fallback("no-service-handle".to_string()),
+        let client = match self.plan_client.clone() {
+            Some(client) => client,
+            None => return RemoteOutcome::Fallback("no-service-handle".to_string()),
         };
-        let attempt_start = std::time::Instant::now();
-        let ticket = match client.submit(from, dest, options, &version) {
-            Ok(ServiceSubmit::Accepted { id, version: served }) => {
-                if !version.is_empty() && !served.is_empty() && served != version {
-                    let _ = client.cancel(id);
-                    return RemoteOutcome::Fallback(format!("version-skew client={version} server={served}"));
+        let mut resubmits = 0u32;
+        loop {
+            let version = self.plan_data_version.clone().unwrap_or_default();
+            let ticket = match client.submit(from, dest, options, &version) {
+                Ok(ServiceSubmit::Accepted { id, version: served }) => {
+                    if !version.is_empty() && !served.is_empty() && served != version {
+                        self.plan_data_version = Some(served.clone());
+                        if resubmits >= 1 {
+                            return RemoteOutcome::Fallback(format!(
+                                "version-skew client={version} server={served}"
+                            ));
+                        }
+                        resubmits += 1;
+                        continue;
+                    }
+                    id
                 }
-                id
+                Ok(ServiceSubmit::Refused { reason, version: served }) => {
+                    if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
+                        self.plan_data_version = Some(served);
+                        resubmits += 1;
+                        continue;
+                    }
+                    return RemoteOutcome::Fallback(reason);
+                }
+                Err(error) => return RemoteOutcome::Fallback(error),
+            };
+            match self.poll_ticket(&client, ticket) {
+                PollTicket::Ticket(ticket_outcome) => return ticket_outcome,
+                PollTicket::Stale(served) => {
+                    let _ = client.cancel(ticket);
+                    self.plan_data_version = Some(served.clone());
+                    if resubmits >= 1 {
+                        return RemoteOutcome::Fallback(format!("version-skew mid-flight server={served}"));
+                    }
+                    resubmits += 1;
+                }
             }
-            Ok(ServiceSubmit::Refused { reason, .. }) => return RemoteOutcome::Fallback(reason),
-            Err(error) => return RemoteOutcome::Fallback(error),
-        };
+        }
+    }
+
+    /// Poll one ticket to a terminal outcome; the keepalive still ticks
+    /// between polls and the operator stop still aborts.
+    fn poll_ticket(&mut self, client: &service::PlanClient, ticket: u64) -> PollTicket {
+        let attempt_start = std::time::Instant::now();
         let deadline = std::time::Instant::now() + service::SERVICE_WAIT_MAX;
         // Tight first polls (a fast plan answers inside one round-trip),
         // then 2 ms pacing: IPC rhythm, not a game wait (keepalive stays
@@ -161,25 +213,35 @@ impl Bot {
         let mut polls = 0u32;
         loop {
             match client.poll(ticket) {
-                Ok(ServicePoll::Ready(plan)) => return RemoteOutcome::Ready(plan, attempt_start.elapsed().as_millis()),
-                Ok(ServicePoll::Failed(no)) => {
-                    return if no.reason == NoRouteReason::Aborted {
+                Ok((ServicePoll::Ready(plan), served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        return PollTicket::Stale(served);
+                    }
+                    return PollTicket::Ticket(RemoteOutcome::Ready(plan, attempt_start.elapsed().as_millis()));
+                }
+                Ok((ServicePoll::Failed(no), served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        return PollTicket::Stale(served);
+                    }
+                    return PollTicket::Ticket(if no.reason == NoRouteReason::Aborted {
                         RemoteOutcome::Fallback("server-aborted".to_string())
                     } else {
                         RemoteOutcome::NoRoute(no)
-                    };
+                    });
                 }
-                Ok(ServicePoll::Unknown) => return RemoteOutcome::Fallback("unknown-ticket".to_string()),
-                Ok(ServicePoll::Pending) => {}
-                Err(error) => return RemoteOutcome::Fallback(error),
+                Ok((ServicePoll::Unknown, _)) => {
+                    return PollTicket::Ticket(RemoteOutcome::Fallback("unknown-ticket".to_string()))
+                }
+                Ok((ServicePoll::Pending, _)) => {}
+                Err(error) => return PollTicket::Ticket(RemoteOutcome::Fallback(error)),
             }
             if !self.plan_yield() {
                 let _ = client.cancel(ticket);
-                return RemoteOutcome::Interrupted(format!("plan aborted at {:?}", self.position()));
+                return PollTicket::Ticket(RemoteOutcome::Interrupted(format!("plan aborted at {:?}", self.position())));
             }
             if std::time::Instant::now() >= deadline {
                 let _ = client.cancel(ticket);
-                return RemoteOutcome::Fallback("service-timeout".to_string());
+                return PollTicket::Ticket(RemoteOutcome::Fallback("service-timeout".to_string()));
             }
             polls += 1;
             if polls >= 10 {

@@ -392,6 +392,10 @@ pub(crate) fn plan_yielding_with(
 }
 
 /// No diagnosis: the search never ran to a verdict.
+pub(crate) fn aborted_no_route(from: Tile) -> NoRoute {
+    aborted(from)
+}
+
 fn aborted(from: Tile) -> NoRoute {
     NoRoute {
         closest_reachable: from,
