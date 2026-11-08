@@ -84,7 +84,7 @@ dynamiques (paramètre, pas topologie), 1 agent par requête.
 | **C. Bidirectionnel (déjà envisagé)** | ~2× en espace ouvert, **~1× dans donjons/goulots** (les deux fronts doivent passer les mêmes portes) | 2× structures de visite | Moyenne : règle d'arrêt `topf+topr ≥ µ` subtile avec rides asymétriques | Portes orientées (`side_ok`, `plan.rs:640`) et rides non réversibles : front arrière faux ; cf. vPathfinder « Bottlenecks » |
 | **D. Graphe grossier portails** (transitions + portes = arêtes, Dijkstra local seul) | ~10× sur longues distances (HPA* : jusqu'à 10×, chemins à 1 % de l'optimum — Botea et al. 2004) | Graphe abstrait (~367 rides + portes, ko) | Élevée : extraction, précalcul intra-cluster, lissage | Portes dynamiques = repondération d'arêtes (OK) ; donjons +6400 = le cas favorable (connectivité contrainte) |
 | **E. Flow fields** | Négatif pour 1 agent | Champ = N tuiles (≈ To à l'échelle monde) | Moyenne | **À écarter** : 1 champ par destination (SupCom2, Godot docs) ; rentable à N agents / 1 but (RTS), pas 1 agent / N buts |
-| **F. Service central de plans (RETENU — décision produit, §5)** | CPU : ~50-60 % de Dijkstra évités via cache GLOBAL (hubs partagés, §5.8) ; RAM : N mondes → 1 monde | 1 monde chaud (~200 Mo max, ré-estimé d'après §1.3) + cache global ~1024 plans (quelques Mo, §5.3) | Moyen : threads std + IPC JSON maison (pattern `send_worker` existant, `daemon.rs:576-597`) ; std only, pas de tokio/serde | IPC estimé < 2 ms vs Dijkstra médian ~70 ms (< 3 %, §5.1) ; SPOF → fallback sync loggé (§5.2) ; invalidation unique mais globale (§5.6) |
+| **F. Service central de plans (RETENU — décision produit, §5)** | CPU : ~50-60 % de Dijkstra évités via cache GLOBAL (hubs partagés, §5.8) ; RAM : N mondes → 1 monde | 1 monde chaud (~200 Mo max, ré-estimé d'après §1.3) + cache global ~1024 plans (≤ ~10 Mo mesurés, §5.3) | Moyen : threads std + IPC JSON maison (pattern `send_worker` existant, `daemon.rs:576-597`) ; std only, pas de tokio/serde | IPC estimé < 2 ms vs Dijkstra médian ~70 ms (< 3 %, §5.1) ; SPOF → fallback sync loggé (§5.2) ; invalidation unique mais globale (§5.6) |
 | **G. Précalcul total** | 100 % | **To de RAM** | Faible | **À écarter** : ~1 an de calcul (rapport parent), monde > RAM |
 | **H. A* + heuristique euclidienne** | Variable | 0 | Faible | **À écarter** : offsets de donjons + portails cassent l'admissibilité de Chebyshev (déjà tranché, `plan.rs:3-8`) |
 
@@ -178,8 +178,9 @@ maison (§4 : écarté), pas de tokio/serde (`nav/Cargo.toml:10-11`, `std only`,
 
 Pourquoi l'IPC ne mange pas le gain (chiffres, pas d'affirmation) :
 requête ≈ 200-500 octets JSON (`from`/`dest` 3 entiers + options + sets triés) ;
-réponse = 1 `Plan` : le pire golden fait 264 tuiles (`plan.rs:63-64`) soit
-quelques Ko JSON (ré-estimé) ; aller-retour socket Unix locale pour < 10 Ko :
+réponse = 1 `Plan` : pire golden 264 tuiles = **9,6 Ko JSON mesuré**
+(format dossier `travel_dossier.rs:186-195`, bench jetable `/tmp` nov. 2026 :
+médiane goldens 0,7 Ko, min 0,2 Ko — §5.3) ; aller-retour socket Unix locale pour < 10 Ko :
 < 1 ms (ré-estimé). Face au Dijkstra médian ~70 ms (§2 ligne F, repris) et au
 budget `PLAN_BUDGET` 1500 ms (`plan.rs:71`), l'overhead estimé est < 2 ms soit
 < 3 % du médian — deux ordres de grandeur sous le gain visé (~50 % de Dijkstra
@@ -285,13 +286,46 @@ bumpée rend en plus les anciennes entrées cache illisibles (pas de flush aveug
 Cache : deux briques, comme avant, mais GLOBALES :
 - **L1 — plans complets**, clé = `(from, dest, allow_paid, f2p_only,
   satisfied-trié, excluded_edges-trié, version-données)` (même clé que la
-  recommandation §3 ancien). **LRU global ~1024 plans** (borne proposée :
-  8× l'ancien LRU worker pour absorber N bots sans N×RAM — le lot métriques
-  tranche 512/1024/2048) ; `Plan` petit, `Clone` existant
-  (`plan.rs:160-161`). Cible : convertir les 63,5 % de répétitions (§1.4,
-  borne haute — le taux réel avec clé complète est ≤, §1.4) + les hits
-  inter-bots sur hubs (§5.8) en Dijkstra évités. Pire cas borné : 1024 × p99
-  taille reply (soit ~16 Mo si p99 = 16 Ko) — l'éviction LRU garde ce plafond.
+  recommandation §3 ancien). **LRU global 1024, LRU pur — CHIFFRÉ (mesuré
+  nov. 2026, bench jetable `/tmp`, format dossier
+  `travel_dossier.rs:186-195`)** : petit 0,2 Ko (porte seule), médiane
+  goldens 0,7 Ko, max 9,6 Ko (264 tuiles walk, ~36 o/tuile) ; clé type
+  ~0,2 Ko ; overhead LRU ~350 o/entrée (clé + `HashMap` + `Arc`) soit
+  ~0,35 Mo pour 1024. Pire cas : 1024 × 9,6 Ko ≈ 10 Mo, soit **~1 % du
+  budget 1 Go** (~100 k plans au pire cas, ~1,4 M au médian) — la borne
+  1024 est gardée avec une marge ×100, pas augmentée sans mesure : le hit
+  plafonne par la distribution des paires (63,5 % intra §1.4, queue
+  longue : 5 986 paires distinctes/16 h), pas par la RAM ; le lot 4
+  tranche 1024/2048/4096 sur hit mesuré. **Négatifs inclus dans le même
+  LRU** (même clé, valeur = motif `NoRoute`, ~0,1 Ko) : un `Disconnected`
+  coûte jusqu'au budget 1,5 s (`chateau_scell` = 3,7 s release) — le
+  négatif est le hit le plus rentable du cache. Éviction LRU pure :
+  segmenté (LFU/SLRU/TTL) écarté — données quasi-statiques + bump de
+  version = invalidation exacte, pas de staleness temporelle, complexité
+  non justifiée à ces volumes. Cible : convertir les 63,5 % de répétitions
+  (§1.4, borne haute — le taux réel avec clé complète est ≤, §1.4) + les
+  hits inter-bots sur hubs (§5.8) en Dijkstra évités.
+  Réutilisation exacte sans preuve (coût nul) : **troncation** — si la
+  nouvelle dest est SUR le plan caché, le préfixe est un plus court
+  chemin (sous-structure d'optimalité), servi sans recherche.
+  **Extension (préfixe + suffixe au-delà) ÉCARTÉE** : le suffixe +10
+  tuiles coûte 2,6 ms warm mesuré (rentable face à un replan 80-97 ms),
+  mais la concaténation est valide sans être prouvée optimale — elle
+  casserait `plan.rs:242` (octet pour octet) et la preuve d'isolation
+  ci-dessous ; même rejet pour le destination-keyed join (jonction
+  mid-path, preuve bilatérale). Seule forme exacte d'aide bornée : le
+  coût caché comme majorant d'élagage (branch-and-bound) — non retenu,
+  complexité vs gain non mesuré.
+  **Budget de preuve bornée N = 2000 visites** (tout réusage partiel
+  futur) : temps/visite warm **revalidé** 1,6-4,9 µs (19 v → ~45 µs ;
+  530 v → 0,8 ms ; 926-1201 v → 3,7-5,8 ms en zones portes/rides ;
+  55-59 kv → 123-141 ms ; centre ~2-2,5 µs, le « ~2 µs » est confirmé) ;
+  setup warm incompressible 2,2-3,5 ms (froid 83-183 ms, carrés non
+  peints jusqu'à ~15 ms) — **supprimé par L2 (lot 1, prérequis)** :
+  2000 × 2,5 µs ≈ 5 ms ≈ ordre de l'IPC. Équivalent ≈ 30 tuiles en
+  terrain ouvert (visites ≈ 2r²), jusqu'à ~10× plus en couloir unique
+  (visites ≈ longueur). Règle : jonction prouvée sous 2000 visites →
+  réutilise ; sinon recalcul complet, jamais d'approximation.
 - **L2 — `prepare_edges` partagé** (`plan.rs:773-821`, ~90 ms à froid rejoué
   jusqu'à 4×/plan, §1.1) : calculé 1× par `(version, ignore_requires,
   allow_paid)` — 2 variantes utiles max (A/D, §2 ligne B), pas 4 — et
@@ -315,9 +349,12 @@ de bump au lot 3.
 
 Métriques GLOBALES (une ligne de log par plan, même format que `nav timing`,
 `travel.rs:214-217`) : `hit/miss` L1, taille, âge max, `hits` L2, profondeur
-file, refus, `sync-fallback`. Bornes mémoire : L1 ≤ 1024 plans, L2 ≤ 2
-variantes ; dépassement = éviction LRU, jamais d'alloc non bornée (les
+file, refus, `sync-fallback`. Bornes mémoire : L1 ≤ 1024 plans (négatifs
+inclus, ~10 Mo max mesurés + ~0,35 Mo d'overhead), L2 ≤ 2 variantes ;
+dépassement = éviction LRU, jamais d'alloc non bornée (les
 `HashMap`/`BinaryHeap` par recherche, §1.1, restent transitoires et inchangés).
+Seuil conservé : alerte si p99 reply > 16 Ko (max golden mesuré 9,6 Ko —
+jamais atteint, le lot 4 le vérifie).
 
 ### 5.4 Concurrence `std only` : pool de threads + `mpsc`, verrous minimaux
 
@@ -363,8 +400,8 @@ Le thread-par-worker n'est PAS un lot : au plus une ÉTAPE TRANSITOIRE
 |---|---|---|
 | 1. L2 seul (sync) | `prepare_edges()` 1×/plan, variantes A/D partagées (`plan.rs:773-821`, appel depuis `dijkstra` `plan.rs:530-549`) | `route --release` golden : `plan` p50/p99 en baisse, zéro changement de plan (goldens `tests/golden.rs:173-175`) ; revert = 1 fonction |
 | 2. Service minimal (sans cache) | monde+tables 1× au daemon, 1-2 threads std, IPC JSON newline (pattern `send_worker`, `daemon.rs:576-597`), `submit/poll/cancel`, fallback sync loggé, annulation sur `stop_requested`/`UNLOAD_TICKS` | p99 overhead IPC ≤ 5 ms mesuré (seuil proposé) sur legs golden (chrono `nav timing`, `travel.rs:214-217`) ; aucun reap à 100 ticks sur legs > 1 s ; fallback loggé+compté ; **test d'isolement** : deux jeux d'options ne différant que par `satisfied`/`allow_paid`/`excluded_edges` → 0 hit croisé (unitaire, §5.8 — la clé est posée dès ce lot même sans L1) ; revert = rebrancher `plan_travel` sync |
-| 3. Cache global + version | L1 global 1024 + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; test : bump `nav_overrides.json` → 0 plan périmé servi (ni hit cache ni vol en cours, §5.3 rejet+resubmit) ; RAM service ≤ 1 monde chaud + cache (borne §5.1) ; revert = version constante + L1 off |
-| 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus, `sync-fallback` | décision chiffrée : garder, régler (threads 1/2/4, L1 512/1024/2048, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
+| 3. Cache global + version | L1 global 1024 (plans + négatifs, troncation exacte, §5.3) + L2 global (§5.3), `DataVersion` au chargement daemon, swap `reload-nav`, test de bump | hit rate global ≥ 30 % (seuil repris du §3 ancien), sinon régler avant la suite ; p99 reply ≤ 16 Ko vérifié (max golden mesuré 9,6 Ko) ; test : bump `nav_overrides.json` → 0 plan périmé servi (ni hit cache ni vol en cours, §5.3 rejet+resubmit) ; RAM service ≤ 1 monde chaud + cache (borne §5.1) ; revert = version constante + L1 off |
+| 4. Fairness + métriques + dimensionnement | file globale 16 + cap 2/compte + cancel propagé (§5.2, §5.8), logs `hit/miss`, taille, âge, file, refus, `sync-fallback` | décision chiffrée : garder, régler (threads 1/2/4, L1 1024/2048/4096, file 16±), ou arrêter — pas de lot 5 sans ce verdict ; sous replan-storm simulé (1 compte × N échecs) : 0 famine des autres comptes (refus+fallback du fautif seul) |
 | 5. (conditionnel) Graphe grossier portails | §2 ligne D, 1 niveau | seulement si le lot 4 montre un hit L1 plafonné par la distance (pas par les options) ; sinon : ne pas faire |
 
 Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
@@ -378,7 +415,7 @@ Chaque lot : test d'abord (golden ou unitaire existant en garde-fou),
 | Plan périmé servi (invalidation ratée GLOBALE — pire que par worker : 1 flush raté empoisonne TOUS les bots) | Haute | clé = options complètes + `version-données` (§5.3) ; `excluded_edges` dans la clé (§4) ; **un seul** point de reload (`reload-nav` opérateur + swap atomique, §5.3) au lieu de N ; réponse à version périmée rejetée + resubmit ×1 (vol en cours, §5.3) ; version servie loggée (écart détectable) ; test de bump (§5.5 lot 3) |
 | Plan d'un autre bot servi (fuite inter-bots : requires/autorisations d'autrui) | Haute (péage/quête franchi sans droit, replan banni resservi) | **clé par construction** : `allow_paid` + `satisfied` + `excluded_edges` par bot dans la clé L1 (§5.8, preuve §5.3), jamais normalisés ni ignorés ; test d'isolement (§5.5 lot 2) |
 | Thundering herd au cold start (N bots × cache vide) | Moyenne (pic CPU = N Dijkstra d'un coup sur le service) | file globale 16 → `Refuse` → fallback sync étalé (§5.2) : le pic se répartit entre service et workers ; L2 partagé dès le lot 1 (1 seul `prepare_edges` par variante) ; pré-peinture des carrés hubs au démarrage (§5.4, §5.8) ; préchauffage optionnel (rejouer les top paires §1.4 au boot — proposé, non tranché) |
-| Taille d'un `Plan` sérialisé sur le fil | Faible (estimé) | pire golden 264 tuiles (`plan.rs:63-64`) ≈ quelques Ko JSON (ré-estimé) ; métrique taille reply au lot 4, alerte si p99 > 16 Ko (seuil proposé) ; au-delà : compacter (tuiles en delta) ou refuser le cache des monstres — non tranché, mesurer d'abord |
+| Taille d'un `Plan` sérialisé sur le fil | Faible (**mesuré**, risque clos) | max golden 9,6 Ko, médiane 0,7 Ko (bench `/tmp` nov. 2026, format dossier) ; seuil d'alerte p99 > 16 Ko conservé au lot 4 ; au-delà : compacter (tuiles en delta) ou refuser le cache des monstres — non tranché, mesurer d'abord |
 | File qui explose sous replan-storm (échec → replan × N bots, `travel.rs:227-252`) | Moyenne | cap 2/compte + replan prioritaire sur l'attente du compte (§5.2, §5.8) : le fautif seul est refusé/basculé sync, les autres ne voient rien ; replan reste ≤ 1 par échec (inchangé, `travel.rs:221-237`) |
 | Divergence sync/async (fallback ≠ service) | Moyenne | même `plan()` underneath des deux côtés, le service n'est qu'un wrapper d'appel (§5 : pas de fork) ; goldens identiques lots 1-2 |
 | Contention verrou monde (2 threads plan, `get` en écriture `static_world.rs:73-75`) | Faible (à mesurer) | ordre total file → résultats → cache → monde, monde feuille (§5.4) ; pré-peinture hubs ; lot 4 tranche (shard/`get` lecture si contention avérée — hors scope) |
@@ -421,6 +458,9 @@ Ce qu'on NE fait toujours PAS :
 - **Cache de segments ou de `dist`/`prev`** : assemblage dépendant de
   l'ordre (`plan.rs:912-972`), structures transitoires par recherche
   (§1.1) — L1 plans + L2 arêtes suffisent.
+- **Extension de path en cache et destination-keyed join** : tranché §5.3 —
+  concaténation valide mais optimalité non prouvée (casse `plan.rs:242`) ;
+  seule la troncation (dest sur le plan) est exacte et gratuite.
 - **Nouvelle primitive async maison** (future/executor) : `mpsc` borné +
   poll au `pump` existant (`mod.rs:292-321`) couvrent le besoin côté worker ;
   côté service, threads std + file bornée ; un mini-runtime, c'est du code
@@ -476,8 +516,8 @@ l'intra-worker sur N bots aux hubs communs ; le lot 3 le mesure (comparer
 paires `(from, dest)` vs clé complète sur logs N bots).
 
 **Dimensionnement GLOBAL : 1 cache, 1 file, 1 monde.** RAM service = 1 monde
-chaud (~200 Mo max, ré-estimé d'après §1.3) + L1 ≤ 1024 plans + L2 ≤ 2
-variantes — contre N×(55-185 Mo + LRU) avant. Invalidation unique : un seul
+chaud (~200 Mo max, ré-estimé d'après §1.3) + L1 ≤ 1024 plans (~10 Mo max
+mesurés, §5.3) + L2 ≤ 2 variantes — contre N×(55-185 Mo + LRU) avant. Invalidation unique : un seul
 reload (`reload-nav`, §5.3), quasi nulle comme en mono-worker. Aucun réglage
 par bot : le lot 4 ajuste (threads 1/2/4, L1 512/1024/2048, file 16±) sur hit
 rate mesuré, pas sur présomption.
@@ -500,15 +540,21 @@ globale, même fallback sync. Aucune priorité par type de script, et c'est
 suffisant à ~0,3 req/s/bot (§2).
 
 ---
-*Revirement central (2026-11-07, décision produit — §§1-5.8 réécrits) : aucun
-code modifié, aucune mesure live rejouée, aucun run live — chiffres repris des
-§1-2 ou explicitement ré-estimés (marqués), chemins:ligne vérifiés à
-l'écriture. Ancien modèle enterré au §5.7 (raisons du revirement). Incertitudes
-ouvertes : hit rate réel avec clé complète (≤ 63,5 %, §1.4 borne haute — le
-lot 3 le mesure) ; bonus inter-bots du cache global (+10-20 pts ré-estimés,
-§5.8 — le lot 3 le mesure ; seuil d'arrêt ≥ 30 % global) ; overhead IPC p99
-(estimé < 2 ms — le lot 2 le mesure, seuil ≤ 5 ms) ; taille réelle d'un `Plan`
-sérialisé (quelques Ko ré-estimés — le lot 4 le mesure, alerte p99 > 16 Ko) ;
-contention du verrou `get` en écriture (`static_world.rs:73-75`) à 2 threads
-plan (le lot 4 la mesure). L'ancien thread-par-worker subsiste uniquement
-comme ÉTAPE TRANSITOIRE revertable (§5.5), jamais comme cible.*
+*Revirement central (2026-11-07, décision produit — §§1-5.8 réécrits ; mesures
+complémentaires 2026-11-08, bench `/tmp` jetable, release, monde warm) :
+aucun code modifié, aucune mesure live rejouée, aucun run live — chiffres
+repris des §1-2 ou explicitement marqués (MESURÉ vs ré-estimé),
+chemins:ligne vérifiés à l'écriture. Ancien modèle enterré au §5.7 (raisons
+du revirement). MESURÉ le 2026-11-08 : temps/visite warm 1,6-4,9 µs
+(centre ~2-2,5 µs, le « ~2 µs » est confirmé) ; setup warm 2,2-3,5 ms
+(froid 83-183 ms) ; Plan sérialisé max 9,6 Ko / médiane 0,7 Ko / min
+0,2 Ko ; borne L1 1024 confirmée (~10 Mo max, marge ×100 sous 1 Go) ;
+N preuve bornée = 2000 visites (conditionné L2 lot 1) ; extension écartée,
+troncation exacte retenue (§5.3). Incertitudes ouvertes : hit rate réel
+avec clé complète (≤ 63,5 %, §1.4 borne haute — le lot 3 le mesure) ;
+bonus inter-bots du cache global (+10-20 pts ré-estimés, §5.8 — le lot 3
+le mesure ; seuil d'arrêt ≥ 30 % global) ; overhead IPC p99 (estimé
+< 2 ms — le lot 2 le mesure, seuil ≤ 5 ms) ; contention du verrou `get`
+en écriture (`static_world.rs:73-75`) à 2 threads plan (le lot 4 la
+mesure). L'ancien thread-par-worker subsiste uniquement comme ÉTAPE
+TRANSITOIRE revertable (§5.5), jamais comme cible.*
