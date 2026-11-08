@@ -373,7 +373,9 @@ fn wait_for_respawn(
     except: Option<(i32, i32)>,
 ) -> Result<(), ScriptError> {
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
-    banned.insert((spot_x, spot_z), bot.world.ticks + GONE_BAN_TICKS);
+    // Count the regrow, not a flat clock: the stump is back by
+    // `expected`, so banning longer just skips a live tree.
+    banned.insert((spot_x, spot_z), bot.world.ticks + expected);
     // Ticks advanced during the work: drop expired bans so the walk
     // alternative is measured against live spots, not stale clocks.
     banned.retain(|_, until| *until > bot.world.ticks);
@@ -830,9 +832,16 @@ fn chop_load(
                 // server never reaches it, so it must never strike.
                 let (foot_w, foot_l) = spot_footprint(bot, spot_x, spot_z);
                 let operable = operable_stand(bot.world.x, bot.world.z, spot_x, spot_z, foot_w, foot_l);
-                let ban = refusal_ban_ticks(operable, is_stump(bot, spot_x, spot_z), true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0));
-                if is_stump(bot, spot_x, spot_z) {
-                    bot.log(&format!("tree stumped at ({spot_x},{spot_z}), next one"));
+                let stump_here = is_stump(bot, spot_x, spot_z);
+                let ban = if stump_here {
+                    // Confirmed stump: count the regrow (measured, else the
+                    // tier default), not a flat ban — the tree is back by then.
+                    respawn.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product))
+                } else {
+                    refusal_ban_ticks(operable, false, true, refusals.get(&(spot_x, spot_z)).copied().unwrap_or(0))
+                };
+                if stump_here {
+                    bot.log(&format!("tree stumped at ({spot_x},{spot_z}), back in ~{ban}t"));
                 } else if operable && ban == STRUCTURAL_BAN_TICKS {
                     bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
                     // Condemned: the ban is the memory now, drop the count

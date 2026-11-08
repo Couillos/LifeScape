@@ -25,16 +25,21 @@ pub const MAX_FLEES_PER_LOAD: u32 = 2;
 pub const FLEE_BAN_TICKS: u64 = 500;
 pub const GONE_BAN_TICKS: u64 = 250;
 /// Unreachable stands (static NoRoute, never a transient crowd): the spot
-/// stays banned ~30 min, past the end of most loads, instead of re-burning
-/// a full plan on every pick. Live "can't reach" from a passing blockage
-/// rides along: skipping one tree for a while is cheaper than the plan.
-pub const UNREACHABLE_BAN_TICKS: u64 = 30_000;
+/// stays banned ~2 min at dev tick (60 ms, ~18 min at official 600 ms)
+/// instead of re-burning a full plan on every repick. A planner proof
+/// goes stale fast (doors open, overrides change), so the ban is a
+/// re-probe delay, not a near-session exile. Live "can't reach" from a
+/// passing blockage rides along: skipping one tree for a while is
+/// cheaper than the plan.
+pub const UNREACHABLE_BAN_TICKS: u64 = 1_800;
 /// Adjacent refusal (tile reached, server says "can't reach that", not a
-/// stump): a wall/fence/gate stands between us and the tree. Re-trying in
-/// 30k would loop forever ("essaye des fois"), so the spot sits out ~2h —
-/// long enough to end the run's rotation, short of session-poisoning if the
-/// world changes (a gate that opens).
-pub const STRUCTURAL_BAN_TICKS: u64 = 240_000;
+/// stump): a wall/fence/gate stands between us and the tree. Re-trying
+/// every repick would loop forever ("essaye des fois"), but 240k was a
+/// session exile (~4 h dev, ~40 h official). Now ~7 min dev (~72 min
+/// official): long enough to end the run's rotation, short enough to
+/// re-prove a still or opened spot — and the anti-famine release covers
+/// sweeps.
+pub const STRUCTURAL_BAN_TICKS: u64 = 7_200;
 /// Transit slicing: the bank walk runs in 1500-tick legs for the same
 /// 15000-tick total, checking death and hurt between legs instead of
 /// walking blind into an ambush.

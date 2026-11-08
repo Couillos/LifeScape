@@ -177,9 +177,10 @@ pub(crate) fn operable_ring(spot_x: i32, spot_z: i32, width: i64, length: i64) -
 }
 
 /// Ban for a failed walk to a stand. Planner-proven `NoRoute`
-/// (`Error::Travel`, disconnected from here) bans 30k: re-planning the
-/// same walk from the same tile is provably futile, so the spot sits out
-/// ~30 min instead of burning a full plan every repick. Every other walk
+/// (`Error::Travel`, disconnected from here) bans a short re-probe
+/// delay (UNREACHABLE_BAN_TICKS): re-planning the same walk from the
+/// same tile is provably futile, so the spot sits out instead of
+/// burning a full plan on every repick. Every other walk
 /// failure (step refused mid-leg, leg timeout, door mid-swing) rides the
 /// short ban (250t) and is re-tested at expiry.
 pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
@@ -473,7 +474,9 @@ pub(crate) const DIRECT_REFUSALS_TO_CONDEMN: u8 = 2;
 /// refused the chop click itself ("can't reach that") from a
 /// footprint-operable stand; walk-leg failures (never arrived, leg timeout,
 /// step refused far away, inoperable stand) pass false and can never return
-/// the structural ban. Structural (240k) needs a repeated operable direct
+/// the structural ban (STRUCTURAL_BAN_TICKS: ~7 min at dev tick, ~72 min
+/// official — a proven wall, not a session exile). Structural needs a
+/// repeated operable direct
 /// refusal of a standing tree; everything else is transient (a crowd, a
 /// gate mid-swing, a walk that fell short) and rides the short ban (Gone,
 /// 250t) so the spot is re-tested at expiry instead of sitting out half the
