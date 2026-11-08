@@ -91,6 +91,25 @@ fn daemon_main() -> i32 {
     }
     web::start_web(dispatch, port);
     orch.restore_jobs();
+    // Lot 2 pathfinding service: one snapshot for every worker. Any load
+    // error leaves it down (workers fall back sync, logged+counted); the
+    // daemon itself never depends on it.
+    let _plan_service = match lifescape_orchestrator::plan_service::load_snapshot() {
+        Ok(snapshot) => match lifescape_orchestrator::plan_service::start(snapshot) {
+            Ok(service) => {
+                println!("pathfinding service on {}", lifescape_orchestrator::plan_service::socket_path().display());
+                Some(service)
+            }
+            Err(error) => {
+                eprintln!("pathfinding service unavailable ({error}); workers use sync fallback");
+                None
+            }
+        },
+        Err(error) => {
+            eprintln!("pathfinding service unavailable ({error}); workers use sync fallback");
+            None
+        }
+    };
     lifescape_orchestrator::holdings::start_sampler(orch.clone());
     println!("orchestrator listening on {}", paths::socket_path().display());
     for stream in server.incoming() {
@@ -110,6 +129,7 @@ fn daemon_main() -> i32 {
         }
     }
     let _ = std::fs::remove_file(paths::socket_path());
+    let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());
     0
 }
 

@@ -7,6 +7,7 @@ pub mod mapcache;
 pub mod mapbuild;
 pub mod mapcli;
 pub mod minimap;
+pub mod plan_service;
 pub mod png;
 pub mod web;
 pub mod zones;

@@ -77,7 +77,7 @@ fn append_log(log_path: &std::path::Path, line: &str) {
     }
 }
 
-fn engine_dir() -> String {
+pub(crate) fn engine_dir() -> String {
     if let Ok(dir) = std::env::var("LIFESCAPE_ENGINE_DIR") {
         if !dir.is_empty() {
             return dir;
@@ -743,6 +743,15 @@ pub fn run_session(account: &str) -> i32 {
                 bot.nav_tables = Some(Arc::new(tables));
             }
             Err(error) => shared.log(&format!("planner tables missing ({error}); travel_to refuses")),
+        }
+        // Lot 2 service handle: lazy (connects per submit), so wiring it
+        // never fails the open; a down service falls back sync, logged.
+        {
+            let zip = engine_path.join("data").join("pack").join(".cache").join("maps-server.zip");
+            let f2p = engine_path.join("../content").join("maps").join("free2play.csv");
+            bot.plan_client =
+                Some(lifescape_nav::service::PlanClient::new(&crate::plan_service::socket_path(), account));
+            bot.plan_data_version = Some(crate::plan_service::version_for(&data_dir, &zip, &f2p));
         }
     }
     shared.inner.lock().unwrap().status = "idle".to_string();
