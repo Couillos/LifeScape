@@ -580,9 +580,17 @@ impl Bot {
         // adjusted here: a bad stand is a plan bug, reported loud.
         self.ensure_area(door.x, door.z, 3);
         // Already open: the live loc left the closed id (swapped away or
-        // cleared). Step through at once, no click.
+        // cleared). Step through at once, no click. A refused step means
+        // the reading is stale (missed re-close) or the step was
+        // transient: drop the stale entry and fall through to the click
+        // path below, which re-opens a shut door and otherwise clicks a
+        // no-op before stepping again. One recovery only: a second
+        // refusal fails loud through the normal path.
         if self.door_live_open(door) {
-            return self.step_door_through(door, cross_to, deadline);
+            if self.step_door_through(door, cross_to, deadline).is_ok() {
+                return Ok(());
+            }
+            self.world.locs.remove(&(door.x, door.z, door.level));
         }
         let open_op = self
             .maps
@@ -1252,5 +1260,70 @@ mod tests {
         assert_eq!(TravelErrorKind::of(&Error::Interrupted("x".to_string())), TravelErrorKind::Interrupted);
         assert_eq!(TravelErrorKind::of(&Error::Io("x".to_string())), TravelErrorKind::Io);
         assert_eq!(TravelErrorKind::of(&Error::Travel("x".to_string())), TravelErrorKind::NoRoute);
+    }
+
+    /// Pack with one known door def (palace 1516, Open op): offline
+    /// stand-in so the executor finds its click without the map index.
+    fn stale_door_pack() -> lifescape_nav::collision::MapPack {
+        let mut defs: Vec<Option<lifescape_nav::collision::LocDef>> = vec![None; 1517];
+        defs[1516] = Some(lifescape_nav::collision::LocDef {
+            blockwalk: true,
+            blockrange: true,
+            length: 1,
+            width: 1,
+            active: 1,
+            has_ops: true,
+            open_op: Some(1),
+            toll: false,
+        });
+        lifescape_nav::collision::MapPack::new(
+            std::path::PathBuf::from("no-pack.zip"),
+            std::collections::HashMap::new(),
+            defs,
+        )
+    }
+
+    fn palace_door() -> lifescape_nav::plan::DoorRef {
+        lifescape_nav::plan::DoorRef { loc: 1516, x: 3212, z: 3470, level: 0 }
+    }
+
+    /// Stale-open palace door, refused first step (live t01/t02 loops):
+    /// the stale entry is dropped and the click path runs instead of
+    /// failing at once. Offline the click fails typed Login (dead
+    /// socket aborts the recovery, never a door error): the Login
+    /// proves the click left, the missing entry proves the stale read
+    /// was dropped. Pre-fix this returns DoorDidNotOpen with the stale
+    /// entry intact (the give-up the live loops hit).
+    #[test]
+    fn stale_open_door_recovers_with_click() {
+        let mut bot = offline_bot(3212, 3471);
+        bot.maps = Some(stale_door_pack());
+        bot.world.locs.insert((3212, 3470, 0), None);
+        let door = palace_door();
+        let err = bot
+            .exec_door(&door, Tile { x: 3212, z: 3471, level: 0 }, Tile { x: 3212, z: 3470, level: 0 }, 1000)
+            .unwrap_err();
+        assert!(matches!(err, Error::Login(_)), "recovery clicks (typed conn error offline), got: {err:?}");
+        assert!(bot.world.locs.get(&(3212, 3470, 0)).is_none(), "stale open entry dropped");
+    }
+
+    /// Shut palace door, no live entry: the closed path still clicks
+    /// first (typed Login offline), and nothing is dropped from a live
+    /// map that never claimed the door open.
+    #[test]
+    fn shut_door_still_clicks_first() {
+        let mut bot = offline_bot(3212, 3471);
+        bot.maps = Some(stale_door_pack());
+        bot.world.locs.insert((3212, 3470, 0), Some((1516, 0, 1)));
+        let door = palace_door();
+        let err = bot
+            .exec_door(&door, Tile { x: 3212, z: 3471, level: 0 }, Tile { x: 3212, z: 3470, level: 0 }, 1000)
+            .unwrap_err();
+        assert!(matches!(err, Error::Login(_)), "shut door clicks (typed conn error offline), got: {err:?}");
+        assert_eq!(
+            bot.world.locs.get(&(3212, 3470, 0)),
+            Some(&Some((1516, 0, 1))),
+            "shut reading untouched"
+        );
     }
 }
