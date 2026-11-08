@@ -22,7 +22,7 @@ use crate::tables::{Tables, Transition, Verdict};
 /// raw low bits are just the x coordinate and whole columns would
 /// share one bucket. The mixer spreads every bit over the key.
 #[derive(Default)]
-struct IdHash(u64);
+pub(crate) struct IdHash(u64);
 
 impl Hasher for IdHash {
     fn write(&mut self, bytes: &[u8]) {
@@ -45,7 +45,11 @@ impl Hasher for IdHash {
     }
 }
 
-type U64Map<T> = HashMap<u64, T, BuildHasherDefault<IdHash>>;
+pub(crate) type U64Map<T> = HashMap<u64, T, BuildHasherDefault<IdHash>>;
+
+/// LOT3 L2: the shared edge set, computed once per data version and
+/// reused by every search on every pool thread (see `service`).
+pub(crate) type SharedEdges = (U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>);
 
 /// Door crossing: 10 walk steps worth of swinging and stepping.
 pub const DOOR_COST: u32 = 10;
@@ -217,18 +221,18 @@ pub struct NoRoute {
 }
 
 #[derive(Clone, Debug)]
-struct RideEdge {
-    index: usize,
-    dest: Tile,
-    cost: u32,
-    pre_open: Option<OpenStep>,
+pub(crate) struct RideEdge {
+    pub(crate) index: usize,
+    pub(crate) dest: Tile,
+    pub(crate) cost: u32,
+    pub(crate) pre_open: Option<OpenStep>,
 }
 
 #[derive(Clone, Debug)]
-struct CustomPrepared {
-    index: usize,
-    dest: Tile,
-    cost: u32,
+pub(crate) struct CustomPrepared {
+    pub(crate) index: usize,
+    pub(crate) dest: Tile,
+    pub(crate) cost: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -267,7 +271,6 @@ pub fn plan_yielding(
     options: &NavOptions,
     yield_: &mut dyn FnMut() -> bool,
 ) -> Result<Plan, NoRoute> {
-    let deadline = std::time::Instant::now() + PLAN_BUDGET;
     if options.f2p_only && !world.in_f2p(dest.x, dest.z) {
         return Err(NoRoute {
             closest_reachable: from,
@@ -287,7 +290,21 @@ pub fn plan_yielding(
     if std::env::var("PLAN_DEBUG").is_ok() {
         eprintln!("plan setup {:?} rides={}", setup_start.elapsed(), shared.0.len());
     }
-    // A: requirements lifted (tolls still apply unless paid).
+    plan_yielding_with(world, tables, from, dest, options, &shared, yield_)
+}
+
+/// Same search on a precomputed L2 edge set (LOT3: the pool caches one
+/// per data version instead of rebuilding it per plan).
+pub(crate) fn plan_yielding_with(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    shared: &SharedEdges,
+    yield_: &mut dyn FnMut() -> bool,
+) -> Result<Plan, NoRoute> {
+    let deadline = std::time::Instant::now() + PLAN_BUDGET;
     match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
@@ -535,7 +552,7 @@ fn dijkstra(
     ignore_requires: bool,
     allow_paid: bool,
     ignore_f2p: bool,
-    shared: &(U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>>),
+    shared: &SharedEdges,
     yield_: &mut dyn FnMut() -> bool,
     deadline: std::time::Instant,
 ) -> Outcome {
@@ -788,7 +805,7 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Til
 /// more stands) and widen bounds, never remove an edge, so each search
 /// recovers exactly its own edge set with the stand/dest/requires filter
 /// in `dijkstra`. Revert: delete this function (see `plan_yielding`).
-fn prepare_shared(
+pub(crate) fn prepare_shared(
     world: &StaticWorld,
     tables: &Tables,
     options: &NavOptions,
