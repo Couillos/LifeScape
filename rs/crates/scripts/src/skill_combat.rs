@@ -122,6 +122,9 @@ fn style_buttons(category: &str, skill: &str) -> Option<&'static str> {
         ("weapon_pickaxe", "attack") => Some("combat_pickaxe:pickaxe0"),
         ("weapon_pickaxe", "strength") => Some("combat_pickaxe:pickaxe1"),
         ("weapon_pickaxe", "defence") => Some("combat_pickaxe:pickaxe3"),
+        ("weapon_scythe", "attack") => Some("combat_scythe:scythe0"),
+        ("weapon_scythe", "strength") => Some("combat_scythe:scythe1"),
+        ("weapon_scythe", "defence") => Some("combat_scythe:scythe3"),
         ("weapon_spear", "attack" | "strength") => Some("combat_spear:spear0"),
         ("weapon_spear", "defence") => Some("combat_spear:spear3"),
         ("unarmed", "attack") => Some("combat_unarmed:unarmed0"),
@@ -131,6 +134,77 @@ fn style_buttons(category: &str, skill: &str) -> Option<&'static str> {
     }
 }
 
+/// Server attack-style varp (`gamedata/data/varps.json` id 43,
+/// transmit=true): the ground truth presses verify against. A sent
+/// `if_button` is silently dropped when its component is not visible
+/// (engine `IfButtonHandler.ts`) or the player is delayed (normal queue,
+/// see player_attackstyles.rs2:1-4), so open-loop tracking locked
+/// rotation forever on one dropped press (t02 live: tracker said
+/// defence, server stayed aggressive, str 5->12 while def sat at 4).
+const COM_MODE_VARP: u16 = 43;
+
+/// Live `%com_mode` index, when the server has transmitted it yet.
+fn live_style_index(bot: &Bot) -> Option<i32> {
+    bot.world.varps.get(&COM_MODE_VARP).copied()
+}
+
+/// com_mode index the button for `skill` should produce: the trailing
+/// number of the dotted component (`stab3` -> 3). Single source stays
+/// `style_buttons`/`controlled_button`.
+fn style_button_index(dotted: &str) -> Option<i32> {
+    let tail = dotted.rsplit(':').next()?;
+    let digits: String =
+        tail.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Skill the live `%com_mode` index trains with the wielded category
+/// (damagestyle rows of combat.dbrow in button order): blunt, unarmed,
+/// staff and polearm tables hold 3 rows, the rest 4; stab/axe/2h
+/// sword/pickaxe/scythe index 2 is a second aggressive.
+fn live_skill(category: &str, index: i32) -> Option<&'static str> {
+    match category {
+        "weapon_spear" => match index {
+            0 | 1 | 2 => Some("controlled"),
+            3 => Some("defence"),
+            _ => None,
+        },
+        "weapon_polearm" => match index {
+            0 => Some("controlled"),
+            1 => Some("strength"),
+            2 => Some("defence"),
+            _ => None,
+        },
+        "weapon_slash" | "weapon_spiked" | "weapon_claws" => match index {
+            0 => Some("attack"),
+            1 => Some("strength"),
+            2 => Some("controlled"),
+            3 => Some("defence"),
+            _ => None,
+        },
+        "weapon_blunt" | "unarmed" | "weapon_staff" => match index {
+            0 => Some("attack"),
+            1 => Some("strength"),
+            2 => Some("defence"),
+            _ => None,
+        },
+        _ => match index {
+            0 => Some("attack"),
+            1 | 2 => Some("strength"),
+            3 => Some("defence"),
+            _ => None,
+        },
+    }
+}
+
+/// Skill the server is actually training: its `%com_mode` when known,
+/// else the last style we asked for. Every kill re-derives this, so a
+/// dropped press self-corrects on the next kill instead of pinning the
+/// tracker on a style the server never took.
+fn current_skill<'a>(bot: &Bot, assumed: &'a str) -> &'a str {
+    let category = current_weapon_category(bot);
+    live_style_index(bot).and_then(|index| live_skill(&category, index)).unwrap_or(assumed)
+}
 /// A scimitar's speed beats a 2h sword's raw bonus: one-handed slashers win
 /// ties (strategy, not game data).
 fn weapon_weight(category: &str) -> f64 {
@@ -166,6 +240,8 @@ fn style_damage_key(category: &str, style: &str) -> Option<&'static str> {
         ("weapon_stab", _) => Some("stab"),
         ("weapon_blunt", _) => Some("crush"),
         ("weapon_axe" | "weapon_2h_sword", _) => Some("slash"),
+        ("weapon_scythe", "strength") => Some("stab"),
+        ("weapon_scythe", _) => Some("slash"),
         ("weapon_pickaxe", _) => Some("stab"),
         ("weapon_spear", _) => Some("stab"),
         ("weapon_spiked", "controlled") => Some("stab"),
@@ -355,20 +431,39 @@ fn current_weapon_category(bot: &Bot) -> String {
     }
 }
 
-fn set_style(bot: &mut Bot, skill: &str) -> Result<(), ScriptError> {
+/// Press the button for `skill` and confirm the server took it: true
+/// when live `%com_mode` matches the button's index. A dropped press
+/// (invisible tab, delay queue) is retried twice, then logged loudly so
+/// the next kill retries instead of training the wrong skill in
+/// silence. False when the pair has no button at all (also logged).
+fn set_style(bot: &mut Bot, skill: &str) -> Result<bool, ScriptError> {
     let category = current_weapon_category(bot);
     let dotted = if skill == "controlled" {
         controlled_button(&category)
     } else {
         style_buttons(&category, skill)
     };
-    if let Some(dotted) = dotted {
-        if let Some(com) = (bot.tables.com_id)(dotted) {
-            bot.if_button(com)?;
-            bot.pump(3)?;
+    let Some(dotted) = dotted else {
+        bot.log(&format!("no {skill} button for {category}, holding server style"));
+        return Ok(false);
+    };
+    let Some(com) = (bot.tables.com_id)(dotted) else {
+        bot.log(&format!("{dotted} missing from component table, holding server style"));
+        return Ok(false);
+    };
+    let want = style_button_index(dotted);
+    for _ in 0..3 {
+        bot.if_button(com)?;
+        bot.pump(3)?;
+        if want.is_none() || live_style_index(bot) == want {
+            return Ok(true);
         }
     }
-    Ok(())
+    bot.log(&format!(
+        "style {skill} ({dotted}) not confirmed (live={:?} want={want:?}), next kill retries",
+        live_style_index(bot)
+    ));
+    Ok(false)
 }
 
 /// Eat the first edible thing in the pack.
@@ -780,12 +875,13 @@ fn fight(
     } else {
         weakest_melee(bot).to_string()
     };
-    set_style(bot, &style)?;
+    let confirmed = set_style(bot, &style)?;
     bot.log(&format!(
-        "style {style} (atk={} str={} def={})",
+        "style {style} (atk={} str={} def={}) live={} confirmed={confirmed}",
         melee_stat(bot, "attack"),
         melee_stat(bot, "strength"),
-        melee_stat(bot, "defence")
+        melee_stat(bot, "defence"),
+        current_skill(bot, &style),
     ));
     // One line per hunt: which flank we hold (or that no gate is mapped
     // yet, so the per-pick filter stays off and crossings stay possible).
@@ -957,15 +1053,29 @@ fn fight(
             progress_at = bot.world.ticks;
             attempts = 0;
             target_npc = None;
-            if let Some(want) = next_style(bot, &style) {
-                style = want.to_string();
-                set_style(bot, &style)?;
+            // Trust the server, not the last string sent: a dropped press
+            // shows up here as live != assumed and self-corrects instead
+            // of locking rotation forever.
+            let live = current_skill(bot, &style).to_string();
+            if live != style {
                 bot.log(&format!(
-                    "style -> {style} (atk={} str={} def={})",
+                    "style sync live={live} assumed={style} (atk={} str={} def={})",
                     melee_stat(bot, "attack"),
                     melee_stat(bot, "strength"),
-                    melee_stat(bot, "defence")
+                    melee_stat(bot, "defence"),
                 ));
+                style = live;
+            }
+            if let Some(want) = next_style(bot, &style) {
+                if set_style(bot, want)? {
+                    style = want.to_string();
+                    bot.log(&format!(
+                        "style -> {style} (atk={} str={} def={})",
+                        melee_stat(bot, "attack"),
+                        melee_stat(bot, "strength"),
+                        melee_stat(bot, "defence")
+                    ));
+                }
             }
             if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0 && bank_stocks_food(bot)) {
                 return Ok((kills, true));
@@ -1170,7 +1280,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_spot, bank_stocks_food, controlled_button, gear_score, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_damage_key, weakest_melee};
+    use super::{COM_MODE_VARP, auto_spot, bank_stocks_food, controlled_button, current_skill, gear_score, live_skill, live_style_index, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_button_index, style_buttons, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -1384,5 +1494,83 @@ mod tests {
         bot.world.z = 3241;
         let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
         assert_eq!(rank_foes(&bot, window.clone()), window, "unwired keeps Manhattan order");
+    }
+
+    /// Every pressed button resolves to the com_mode index the server
+    /// takes (dbrow row order x player_attackstyles suffixes): the
+    /// verifier compares against this, never a second table.
+    #[test]
+    fn button_index_matches_pressed_button() {
+        let cases = [
+            ("weapon_slash", "attack", 0),
+            ("weapon_slash", "strength", 1),
+            ("weapon_slash", "defence", 3),
+            ("weapon_stab", "attack", 0),
+            ("weapon_stab", "strength", 1),
+            ("weapon_stab", "defence", 3),
+            ("weapon_blunt", "attack", 0),
+            ("weapon_blunt", "strength", 1),
+            ("weapon_blunt", "defence", 2),
+            ("weapon_axe", "attack", 0),
+            ("weapon_axe", "strength", 1),
+            ("weapon_axe", "defence", 3),
+            ("weapon_2h_sword", "attack", 0),
+            ("weapon_2h_sword", "strength", 1),
+            ("weapon_2h_sword", "defence", 3),
+            ("weapon_pickaxe", "attack", 0),
+            ("weapon_pickaxe", "strength", 1),
+            ("weapon_pickaxe", "defence", 3),
+            ("weapon_scythe", "attack", 0),
+            ("weapon_scythe", "strength", 1),
+            ("weapon_scythe", "defence", 3),
+            ("weapon_spear", "attack", 0),
+            ("weapon_spear", "strength", 0),
+            ("weapon_spear", "defence", 3),
+            ("unarmed", "attack", 0),
+            ("unarmed", "strength", 1),
+            ("unarmed", "defence", 2),
+        ];
+        for (category, skill, want) in cases {
+            let dotted = style_buttons(category, skill).unwrap_or_else(|| panic!("no button for {category}/{skill}"));
+            assert_eq!(style_button_index(dotted), Some(want), "{dotted}");
+        }
+        assert_eq!(style_button_index("combat_hacksword:hack2"), Some(2), "controlled slash");
+        assert_eq!(style_button_index("combat_spear:spear0"), Some(0), "controlled spear");
+        assert_eq!(style_button_index("combat_polearm:polearm0"), Some(0), "controlled polearm");
+        assert_eq!(style_button_index("combat_x:foo"), None, "no trailing number");
+    }
+
+    /// Live index decodes to the trained skill per revision tables:
+    /// stab/axe/2h/pickaxe/scythe 2 is a second aggressive, spear is
+    /// all-controlled but its defensive, blunt/unarmed/staff stop at 2.
+    #[test]
+    fn live_skill_follows_dbrow_tables() {
+        assert_eq!(live_skill("weapon_stab", 2), Some("strength"), "second aggressive");
+        assert_eq!(live_skill("weapon_stab", 3), Some("defence"));
+        assert_eq!(live_skill("weapon_spear", 1), Some("controlled"));
+        assert_eq!(live_skill("weapon_spear", 3), Some("defence"));
+        assert_eq!(live_skill("weapon_polearm", 0), Some("controlled"));
+        assert_eq!(live_skill("weapon_polearm", 2), Some("defence"));
+        assert_eq!(live_skill("weapon_slash", 2), Some("controlled"));
+        assert_eq!(live_skill("weapon_blunt", 2), Some("defence"));
+        assert_eq!(live_skill("unarmed", 2), Some("defence"));
+        assert_eq!(live_skill("unarmed", 0), Some("attack"));
+        assert_eq!(live_skill("weapon_stab", 9), None, "out of table");
+    }
+
+    /// t02 live lock (assumed defence, server aggressive, atk5/str12/def4
+    /// bare-fisted): trusting the live varp re-arms the rotation to the
+    /// real laggard instead of holding a style never taken.
+    #[test]
+    fn live_varp_unsticks_a_dropped_press() {
+        let mut bot = stat_bot(5, 4, 12);
+        bot.world.varps.insert(COM_MODE_VARP, 1);
+        assert_eq!(live_style_index(&bot), Some(1));
+        assert_eq!(current_skill(&bot, "defence"), "strength", "server trains strength, not the assumed defence");
+        assert_eq!(next_style(&bot, current_skill(&bot, "defence")), Some("defence"), "real laggard re-armed");
+        let mut quiet = stat_bot(5, 5, 5);
+        assert_eq!(current_skill(&quiet, "attack"), "attack", "no varp yet: keep assumed");
+        quiet.world.varps.insert(COM_MODE_VARP, 3);
+        assert_eq!(current_skill(&quiet, "attack"), "attack", "index 3 is out of the unarmed table: keep assumed");
     }
 }
