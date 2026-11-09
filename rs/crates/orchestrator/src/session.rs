@@ -24,7 +24,7 @@
 //! requested through that flag and deferred to the next safe point by the
 //! pause gate; a running walk mid-leg finishes its pump, it is never frozen.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -38,6 +38,7 @@ use lifescape_sdk::Bot;
 use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 use crate::session_heartbeat::heartbeat_value;
+use crate::session_report::{report_value, snapshot_holdings, ReportCtx, TaskStart};
 use crate::session_rescue::PendingRescue;
 use crate::zones;
 
@@ -146,6 +147,23 @@ pub(crate) struct Shared {
     pub(crate) heartbeat: Mutex<Option<Snapshot>>,
     pub(crate) queue: Mutex<VecDeque<Arc<QueuedCall>>>,
     pub(crate) stop_requested: AtomicBool,
+    /// Set by the pump hook when the engagement budget ends at a safe
+    /// point (not by the operator): maps Interrupted to budget_exhausted.
+    pub(crate) budget_stop: AtomicBool,
+    /// Run start carrier for the task report (skill scripts only).
+    pub(crate) task_start: Mutex<Option<TaskStart>>,
+    /// Last seen bank contents (bank streams only while open): the end
+    /// snapshot reuses it, so internal trips land in the diff.
+    pub(crate) last_bank: Mutex<HashMap<u16, u32>>,
+    /// Bank contents at first bank-open of the current run: pre-stock
+    /// cancels against it instead of popping as phantom gains.
+    pub(crate) bank_baseline: Mutex<Option<HashMap<u16, u32>>>,
+    /// Market-pause ticks billed to the current engagement (hook sums
+    /// them; the report diffs start/end).
+    pub(crate) market_pause_ticks: Mutex<u64>,
+    /// Posed market delivery: the pause gate (script thread) or the idle
+    /// drain (serve thread) runs it, never the daemon.
+    pub(crate) pending_market: Mutex<Option<crate::session_rescue::PendingMarket>>,
     /// Posed random-event rescue: the pause gate (script thread) or the
     /// idle drain (serve thread) runs it, never the daemon.
     pub(crate) pending_rescue: Mutex<Option<PendingRescue>>,
@@ -256,6 +274,13 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
     }
     let last = shared.inner.lock().unwrap().last_heartbeat_tick;
     let last_wall = shared.inner.lock().unwrap().last_heartbeat_wall;
+    if let Some(live) = crate::session_report::refresh_bank_cache(bot, &mut shared.last_bank.lock().unwrap()) {
+        // First bank-open of a run freezes the pre-stock baseline; every
+        // later open only refreshes the end cache.
+        if shared.task_start.lock().unwrap().is_some() && shared.bank_baseline.lock().unwrap().is_none() {
+            *shared.bank_baseline.lock().unwrap() = Some(live);
+        }
+    }
     if heartbeat_due(last, tick, last_wall, now_secs()) {
         let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
         let state = heartbeat_value(bot, &shared.account, &script, &trail);
@@ -264,7 +289,17 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
         shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
         crate::session_push::push_snapshot(&shared.account, &state);
     }
-    !shared.stop_requested.load(Ordering::SeqCst)
+    if shared.stop_requested.load(Ordering::SeqCst) {
+        return false;
+    }
+    // Engagement end (hook backstop for non-cycle scripts): deferred to
+    // the safe point by `budget_due`, flagged so the run end reports
+    // budget_exhausted instead of stopped.
+    if budget_due(shared, bot) {
+        shared.budget_stop.store(true, Ordering::SeqCst);
+        return false;
+    }
+    true
 }
 
 /// Atomic heartbeat for `run/users/<account>.bot.json`: the same keys the
@@ -302,6 +337,7 @@ fn write_last_breath(shared: &Arc<Shared>) {
 /// socket thread only reads the heartbeat snapshot meanwhile.
 pub(crate) fn spawn_script_thread(shared: &Arc<Shared>, script: &str, args: &[String]) {
     shared.stop_requested.store(false, Ordering::SeqCst);
+    shared.budget_stop.store(false, Ordering::SeqCst);
     std::env::set_var("LIFESCAPE_SCRIPT", script);
     shared.log(&format!("=== session run {} {script} ===", shared.account));
     let worker = Arc::clone(&shared);
@@ -329,7 +365,24 @@ pub(crate) fn script_error_type(error: &lifescape_scripts::ScriptError) -> &'sta
     match error {
         lifescape_scripts::ScriptError::Sdk(_) => "Sdk",
         lifescape_scripts::ScriptError::Usage(_) => "Usage",
+        lifescape_scripts::ScriptError::Blocked { .. } => "Blocked",
     }
+}
+
+/// Engagement budget due at a safe point: work ticks (wall minus market
+/// pauses) past the max, alive with no modal open. The hook aborts the
+/// pump with Interrupted; the run end maps it to budget_exhausted.
+pub(crate) fn budget_due(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
+    let start = shared.task_start.lock().unwrap();
+    let Some(start) = start.as_ref() else {
+        return false;
+    };
+    if start.budget_max == 0 {
+        return false;
+    }
+    let wall = bot.world.ticks.saturating_sub(start.holdings.tick);
+    let work = wall.saturating_sub(bot.pause_ticks.saturating_sub(start.pause_ticks));
+    work >= start.budget_max && lifescape_scripts::kit::survival::at_safe_point(bot)
 }
 
 pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[String]) {
@@ -338,12 +391,14 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
         // Single level: pumps inside this rescue skip the pause gate.
         shared.rescue_gate.store(true, Ordering::SeqCst);
     }
-    let outcome: (String, Option<Value>, Option<Value>) = (|| {
+    let outcome: (String, Option<Value>, Option<Value>, String, Vec<String>) = (|| {
         let mut bot = shared.bot.lock().unwrap();
         match lifescape_scripts::run(script, &mut bot, args) {
             Ok(code) => {
                 if code == 0 {
-                    ("finished".to_string(), Some(Value::Int(i64::from(code))), None)
+                    ("finished".to_string(), Some(Value::Int(i64::from(code))), None, "goal_reached".to_string(), Vec::new())
+                } else if code == lifescape_scripts::kit::cycle::BUDGET_EXIT {
+                    ("finished".to_string(), Some(Value::Int(i64::from(code))), None, "budget_exhausted".to_string(), Vec::new())
                 } else {
                     let (level, pos_x, pos_z) = bot.position();
                     let error = object(vec![
@@ -352,7 +407,7 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                         ("message", str_value(&format!("run returned {code}"))),
                         ("at", Value::Arr(vec![Value::Int(i64::from(level)), Value::Int(i64::from(pos_x)), Value::Int(i64::from(pos_z))])),
                     ]);
-                    ("failed".to_string(), Some(Value::Int(i64::from(code))), Some(error))
+                    ("failed".to_string(), Some(Value::Int(i64::from(code))), Some(error), "failed".to_string(), Vec::new())
                 }
             }
             Err(script_error) => {
@@ -362,12 +417,27 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                     // The trigger would otherwise vanish: relogin only
                     // logs its own outcome, so a flap loop is undiagnosable.
                     worker_out(shared, &format!("{script} reconnect on {script_error}"));
-                    return ("reconnect".to_string(), None, None);
+                    return ("reconnect".to_string(), None, None, String::new(), Vec::new());
                 }
                 if matches!(&script_error, lifescape_scripts::ScriptError::Sdk(SdkError::Interrupted(_))) {
                     // Operator unload/close: back to idle, no rescue event.
+                    // Flagged by the budget hook instead: engagement ended.
                     worker_out(shared, &format!("{script} interrupted at {:?}", bot.position()));
-                    return ("idle".to_string(), None, None);
+                    let stop = if shared.budget_stop.swap(false, Ordering::SeqCst) { "budget_exhausted" } else { "stopped" };
+                    return ("idle".to_string(), None, None, stop.to_string(), Vec::new());
+                }
+                if let lifescape_scripts::ScriptError::Blocked { missing } = &script_error {
+                    let (level, pos_x, pos_z) = bot.position();
+                    let message = script_error.to_string();
+                    let error = object(vec![
+                        ("where", str_value(script)),
+                        ("type", str_value("Blocked")),
+                        ("message", str_value(&message)),
+                        ("at", Value::Arr(vec![Value::Int(i64::from(level)), Value::Int(i64::from(pos_x)), Value::Int(i64::from(pos_z))])),
+                    ]);
+                    shared.log(&format!("blocked {script} missing {missing:?}, brain files a sub-task"));
+                    let phase = if is_rescue { "failed".to_string() } else { "idle".to_string() };
+                    return (phase, None, Some(error), "blocked".to_string(), missing.clone());
                 }
                 let (level, pos_x, pos_z) = bot.position();
                 let tick = bot.world.ticks;
@@ -394,9 +464,9 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                     ("at", Value::Arr(vec![Value::Int(i64::from(level)), Value::Int(i64::from(pos_x)), Value::Int(i64::from(pos_z))])),
                 ]);
                 if is_rescue {
-                    ("failed".to_string(), None, Some(error))
+                    ("failed".to_string(), None, Some(error), "failed".to_string(), Vec::new())
                 } else {
-                    ("idle".to_string(), None, Some(error))
+                    ("idle".to_string(), None, Some(error), "failed".to_string(), Vec::new())
                 }
             }
         }
@@ -447,6 +517,39 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
         write_heartbeat(shared);
         return;
     }
+    // Task report (contract v2): diff the start holdings, push to the
+    // daemon, log one JSON line. Rescues and legacy scripts carry no
+    // start snapshot and report nothing structured.
+    if !is_rescue {
+        if let Some(start) = shared.task_start.lock().unwrap().take() {
+            let bot = shared.bot.lock().unwrap();
+            let end = snapshot_holdings(&bot);
+            // The end cache counts only when the bank opened in-run
+            // (baseline set): a run that never banks sees no bank moves,
+            // so pre-stock stays invisible instead of popping as gains.
+            let baseline = shared.bank_baseline.lock().unwrap().take();
+            let bank_end = if baseline.is_some() { shared.last_bank.lock().unwrap().clone() } else { HashMap::new() };
+            let baseline = baseline.unwrap_or_default();
+            let report = crate::session_report::build_report(
+                &bot,
+                &start.holdings,
+                &baseline,
+                &end,
+                &bank_end,
+                &ReportCtx {
+                    activity: start.script.clone(),
+                    node_id: start.node_id,
+                    stop: outcome.3.clone(),
+                    missing: outcome.4.clone(),
+                },
+            );
+            drop(bot);
+            let value = report_value(&shared.account, &report);
+            crate::session_push::push_task_report(&shared.account, &value);
+            shared.log(&format!("task_report {}", json::stringify(&value)));
+        }
+    }
+    shared.budget_stop.store(false, Ordering::SeqCst);
     // The failure marker logs after the lock drops: stamping takes it.
     let failed_line: Option<String> = {
         let mut inner = shared.inner.lock().unwrap();
@@ -551,6 +654,9 @@ fn idle_pump(shared: &Arc<Shared>) {
     }
     crate::session_cmds::drain_queue(shared);
     if crate::session_rescue::drain_idle(shared) {
+        return;
+    }
+    if crate::session_rescue::drain_idle_market(shared) {
         return;
     }
     if shared.inner.lock().unwrap().script_alive {
@@ -663,6 +769,12 @@ pub fn run_session(account: &str) -> i32 {
         heartbeat: Mutex::new(None),
         queue: Mutex::new(VecDeque::new()),
         stop_requested: AtomicBool::new(false),
+        budget_stop: AtomicBool::new(false),
+        task_start: Mutex::new(None),
+        last_bank: Mutex::new(HashMap::new()),
+        bank_baseline: Mutex::new(None),
+        market_pause_ticks: Mutex::new(0),
+        pending_market: Mutex::new(None),
         pending_rescue: Mutex::new(None),
         rescue_gate: AtomicBool::new(false),
         rescue_done: Mutex::new(None),
@@ -736,7 +848,7 @@ pub fn run_session(account: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{heartbeat_due, mark_resumed, SessionInner};
+    use super::{budget_due, heartbeat_due, mark_resumed, SessionInner, Shared};
 
     fn idle_inner() -> SessionInner {
         SessionInner {
@@ -781,6 +893,63 @@ mod tests {
         assert_eq!(inner.phase, "running");
         assert_eq!(inner.status, "running");
         assert!(inner.script_alive, "run guard sees busy, no double-start");
+    }
+
+    fn budget_shared(budget_max: u64, start_tick: u64) -> Shared {
+        use std::collections::VecDeque;
+        use std::sync::{atomic::AtomicBool, Mutex};
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.ticks = start_tick;
+        let mut start_holdings = crate::session_report::snapshot_holdings(&bot);
+        start_holdings.tick = start_tick;
+        Shared {
+            account: "t01".to_string(),
+            log_path: std::path::PathBuf::from("/tmp/opencode-budget-test.log"),
+            state_path: std::path::PathBuf::from("/tmp/opencode-budget-test.bot.json"),
+            inner: Mutex::new(idle_inner()),
+            bot: Mutex::new(bot),
+            heartbeat: Mutex::new(None),
+            queue: Mutex::new(VecDeque::new()),
+            stop_requested: AtomicBool::new(false),
+            budget_stop: AtomicBool::new(false),
+            task_start: Mutex::new(Some(crate::session_report::TaskStart {
+                script: "woodcut".to_string(),
+                budget_max,
+                node_id: "n9".to_string(),
+                holdings: start_holdings,
+                pause_ticks: 0,
+            })),
+            last_bank: Mutex::new(std::collections::HashMap::new()),
+            bank_baseline: Mutex::new(None),
+            market_pause_ticks: Mutex::new(0),
+            pending_market: Mutex::new(None),
+            pending_rescue: Mutex::new(None),
+            rescue_gate: AtomicBool::new(false),
+            rescue_done: Mutex::new(None),
+        }
+    }
+
+    /// Budget hook: over budget at a safe point aborts (the run end maps
+    /// it to budget_exhausted); under budget or off the safe point keeps
+    /// pumping. No task start means no hook.
+    #[test]
+    fn budget_hook_fires_only_over_budget_at_safe_point() {
+        let shared = budget_shared(6000, 1000);
+        {
+            let mut bot = shared.bot.lock().unwrap();
+            bot.world.ticks = 6999;
+            assert!(!super::budget_due(&shared, &bot), "one tick under keeps pumping");
+            bot.world.ticks = 7000;
+            assert!(super::budget_due(&shared, &bot), "budget at a safe point aborts");
+            bot.world.modal =
+                Some(lifescape_sdk::world::Modal { layer: "chat".to_string(), interface_id: 1 });
+            assert!(!super::budget_due(&shared, &bot), "open modal defers the abort");
+        }
+        *shared.task_start.lock().unwrap() = None;
+        {
+            let bot = shared.bot.lock().unwrap();
+            assert!(!super::budget_due(&shared, &bot), "no task start, no hook");
+        }
     }
 }
 

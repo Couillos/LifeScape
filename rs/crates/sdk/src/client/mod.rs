@@ -92,6 +92,10 @@ pub struct Bot {
     /// Opt-in to paid paths (toll gates). Default false: routing and bank
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
+    /// Opt-in to NPC shop purchases. Default true; a constrained task
+    /// (`TaskSpec.allow_shop`) clears it and the buy paths refuse loud
+    /// instead of spending, so the run reports blocked, never broke.
+    pub allow_shop: bool,
     /// Opt-in to hunter zones (tree spots near aggressive NPCs). Default
     /// false: spots within range of something that would attack us are
     /// skipped.
@@ -121,6 +125,11 @@ pub struct Bot {
     pub on_pump: Option<PumpHook>,
     /// Inline-pause gate, installed by the session worker (default: none).
     pub pause_gate: Option<PauseGate>,
+    /// Pause ticks already billed to market pauses (and only those): the
+    /// engagement budget counts work ticks, so the cycle subtracts this
+    /// counter from the wall-clock tick delta. Advanced by the session
+    /// pause gate around the inline market run, never by scripts.
+    pub pause_ticks: u64,
     /// Zone label for log stamps (`zones::zone_name`), refreshed by the
     /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
     pub zone_label: String,
@@ -148,6 +157,7 @@ impl Bot {
             approach_opened: HashSet::new(),
             approach_depth: 0,
             allow_paid: false,
+            allow_shop: true,
             allow_wild: false,
             maps: None,
             nav_world: None,
@@ -158,6 +168,7 @@ impl Bot {
             trail: Vec::new(),
             on_pump: None,
             pause_gate: None,
+            pause_ticks: 0,
             zone_label: "?".to_string(),
         }
     }
@@ -248,6 +259,12 @@ impl Bot {
             }
         }
         Ok(())
+    }
+
+    /// Record one finished market pause: work-tick accounting for the
+    /// engagement budget. Session gate only.
+    pub fn note_pause(&mut self, ticks: u64) {
+        self.pause_ticks = self.pause_ticks.saturating_add(ticks);
     }
 
     /// Record what the bot is doing right now (dashboard state).

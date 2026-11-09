@@ -22,6 +22,7 @@ pub mod replaynav;
 pub mod session_calls;
 pub mod session_push;
 pub mod session_heartbeat;
+pub mod session_report;
 pub mod session_rescue;
 pub mod staticmap;
 pub mod res_stats;

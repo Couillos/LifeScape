@@ -110,9 +110,30 @@ fn clear_rescue_state(shared: &Shared) {
     shared.rescue_done.lock().unwrap().take();
 }
 
+/// One posed market delivery: the script the gate runs inline at the
+/// next safe point, then the bot walks back to its work. Posed by the
+/// brain (later lots) or the operator; consumed once, like a rescue.
+pub(crate) struct PendingMarket {
+    pub(crate) script: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) posed_at: u64,
+}
+
+/// Pose a market delivery: same single-level gate as the rescue, lower
+/// priority (the rescue branch runs first). Overwrites any earlier pose:
+/// one convocation at a time.
+pub(crate) fn pose_market(shared: &Shared, script: &str, args: &[String], tick: u64) {
+    *shared.pending_market.lock().unwrap() =
+        Some(PendingMarket { script: script.to_string(), args: args.to_vec(), posed_at: tick });
+    shared.log(&format!("market {script} posed, waits for the safe point"));
+    crate::session_push::push_event(&shared.account, "market", script, false, tick, script, args, "", (0, 0, 0));
+}
+
 /// Pause gate: runs at the end of every `pump` on the script thread. A
 /// posed rescue with a free gate runs inline now (same thread, same bot)
-/// and the script loop resumes after this returns. False only when the
+/// and the script loop resumes after this returns. Otherwise a posed
+/// market delivery runs at the next safe point (alive, no modal), with
+/// the engagement clock suspended across it. False only when the
 /// operator stopped the run.
 pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
     let stopped = || shared.stop_requested.load(Ordering::SeqCst);
@@ -121,8 +142,7 @@ pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
     }
     let pending = shared.pending_rescue.lock().unwrap().take();
     let Some(pending) = pending else {
-        shared.rescue_gate.store(false, Ordering::SeqCst);
-        return !stopped();
+        return gate_market(shared, bot, stopped());
     };
     if shared.rescue_done.lock().unwrap().as_ref().is_some_and(|done| done.0 == pending.rescue && done.1 == pending.pos) {
         *shared.pending_rescue.lock().unwrap() = Some(pending);
@@ -168,6 +188,68 @@ pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
                     Value::Arr(vec![Value::Int(i64::from(level)), Value::Int(i64::from(pos_x)), Value::Int(i64::from(pos_z))]),
                 ),
             ]));
+        }
+    }
+    shared.rescue_gate.store(false, Ordering::SeqCst);
+    true
+}
+
+/// Market branch of the pause gate: at the shared safe point only
+/// (alive, no modal), the posed script runs inline and the bot walks
+/// back to its work. The engagement clock is suspended across the whole
+/// pause, return trip included; the ticks land in the task report.
+fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
+    let market = shared.pending_market.lock().unwrap().take();
+    let Some(market) = market else {
+        shared.rescue_gate.store(false, Ordering::SeqCst);
+        return !stopped;
+    };
+    if !lifescape_scripts::kit::survival::at_safe_point(bot) {
+        *shared.pending_market.lock().unwrap() = Some(market);
+        shared.rescue_gate.store(false, Ordering::SeqCst);
+        return !stopped;
+    }
+    let return_to = bot.position();
+    bot.intend(&format!("pausing for market {}", market.script));
+    let pause_start = bot.world.ticks;
+    let outcome = lifescape_scripts::run(&market.script, bot, &market.args);
+    // Best effort walk back to the work tile: a failed return degrades
+    // to resuming wherever the delivery left us, never to a re-run.
+    let (level, pos_x, pos_z) = return_to;
+    if let Err(error) = bot.travel_to(lifescape_sdk::plan::Tile { x: pos_x, z: pos_z, level }) {
+        bot.log(&format!("market return walk failed at {:?}: {error}, resuming here", bot.position()));
+    }
+    let paused = bot.world.ticks.saturating_sub(pause_start);
+    bot.note_pause(paused);
+    {
+        let mut total = shared.market_pause_ticks.lock().unwrap();
+        *total = total.saturating_add(paused);
+    }
+    if shared.stop_requested.load(Ordering::SeqCst) || shared.inner.lock().unwrap().closing {
+        shared.rescue_gate.store(false, Ordering::SeqCst);
+        return false;
+    }
+    match outcome {
+        Ok(_) => {
+            shared.log(&format!("market {} done, script resumes (pause {paused} ticks)", market.script));
+        }
+        Err(error) => {
+            let (end_level, end_x, end_z) = bot.position();
+            let message = error.to_string();
+            let script_args = shared.inner.lock().unwrap().script_args.clone();
+            crate::session_push::push_event(
+                &shared.account,
+                "script_error",
+                &market.script,
+                false,
+                bot.world.ticks,
+                &market.script,
+                &script_args,
+                &message,
+                (end_level, end_x, end_z),
+            );
+            shared.inner.lock().unwrap().last_heartbeat_tick = bot.world.ticks;
+            shared.log(&format!("event script_error {} resolved=false", market.script));
         }
     }
     shared.rescue_gate.store(false, Ordering::SeqCst);
@@ -262,6 +344,40 @@ pub(crate) fn drain_idle(shared: &Arc<Shared>) -> bool {
     true
 }
 
+/// Idle market delivery: same prelude as the idle rescue (the delivery
+/// thread owns the bot like any script). Rescue poses drain first at
+/// the call site; when idle, order needs no gate.
+pub(crate) fn drain_idle_market(shared: &Arc<Shared>) -> bool {
+    if shared.rescue_gate.load(Ordering::SeqCst) {
+        return false;
+    }
+    let pending = shared.pending_market.lock().unwrap().take();
+    let Some(pending) = pending else {
+        return false;
+    };
+    let launch = {
+        let mut inner = shared.inner.lock().unwrap();
+        if inner.script_alive || inner.held || !inner.connected || inner.closing {
+            false
+        } else {
+            inner.phase = "running".to_string();
+            inner.script = Some(pending.script.clone());
+            inner.script_args = pending.args.clone();
+            inner.status = "running".to_string();
+            inner.last_code = None;
+            inner.last_error = None;
+            inner.script_alive = true;
+            true
+        }
+    };
+    if !launch {
+        *shared.pending_market.lock().unwrap() = Some(pending);
+        return false;
+    }
+    crate::session::spawn_script_thread(shared, &pending.script, &pending.args);
+    true
+}
+
 /// Idle detection for the serve thread: never blocks (the script or a
 /// rescue thread may hold the bot), feeds the same `pending_rescue`.
 pub(crate) fn idle_scan(shared: &Shared) {
@@ -281,7 +397,7 @@ mod tests {
     use lifescape_sdk::client::Snapshot;
     use lifescape_sdk::Bot;
     use lifescape_scripts::randomevent::{self, EventKind};
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
 
@@ -321,6 +437,12 @@ mod tests {
             heartbeat: Mutex::new(None),
             queue: Mutex::new(VecDeque::new()),
             stop_requested: AtomicBool::new(false),
+            budget_stop: AtomicBool::new(false),
+            task_start: Mutex::new(None),
+            last_bank: Mutex::new(HashMap::new()),
+            bank_baseline: Mutex::new(None),
+            market_pause_ticks: Mutex::new(0),
+            pending_market: Mutex::new(None),
             pending_rescue: Mutex::new(None),
             rescue_gate: AtomicBool::new(false),
             rescue_done: Mutex::new(None),
@@ -431,5 +553,57 @@ mod tests {
             let key = randomevent::rescue_key(kind);
             assert!(["maze", "mime", "cube", "down", "greet"].contains(&key), "short key {key} runs via run_rescue");
         }
+    }
+
+    /// Market pause, not re-run: a posed delivery runs inline on the same
+    /// thread and the loop resumes where it was, pending consumed once.
+    /// `rescue_cube` with an empty pack clears without touching the net:
+    /// offline-safe, still exercises pose -> inline run -> resume.
+    #[test]
+    fn gate_runs_posed_market_inline_and_resumes() {
+        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let mut bot = idle_bot_at(0, 3220, 3220);
+        lifescape_scripts::attach_live_tables(&mut bot);
+        super::pose_market(&shared, "rescue_cube", &[], 7);
+        let mut iterations = 0;
+        for _ in 0..3 {
+            assert!(super::gate_tick(&shared, &mut bot), "loop resumes after the inline market run");
+            iterations += 1;
+        }
+        assert_eq!(iterations, 3, "same thread continues, no re-run from the start");
+        assert!(shared.pending_market.lock().unwrap().is_none(), "pending consumed once");
+    }
+
+    /// Off the safe point (modal open) the market pose waits: pending
+    /// kept, loop alive. At the safe point it runs and clears.
+    #[test]
+    fn market_pose_defers_off_the_safe_point() {
+        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let mut bot = idle_bot_at(0, 3220, 3220);
+        lifescape_scripts::attach_live_tables(&mut bot);
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "chat".to_string(), interface_id: 1 });
+        super::pose_market(&shared, "rescue_cube", &[], 7);
+        assert!(super::gate_tick(&shared, &mut bot), "loop alive while deferred");
+        assert!(shared.pending_market.lock().unwrap().is_some(), "pose kept off the safe point");
+        bot.world.modal = None;
+        assert!(super::gate_tick(&shared, &mut bot), "loop resumes after the inline run");
+        assert!(shared.pending_market.lock().unwrap().is_none(), "pose consumed at the safe point");
+    }
+
+    /// One level, rescue first: with both posed the rescue runs inline
+    /// before the market pose, which waits its turn.
+    #[test]
+    fn rescue_runs_before_market_on_one_level() {
+        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let mut bot = idle_bot_at(0, 3220, 3220);
+        lifescape_scripts::attach_live_tables(&mut bot);
+        pose(&shared, EventKind::Cube, (0, 3220, 3220), 7);
+        super::pose_market(&shared, "rescue_cube", &[], 7);
+        assert!(super::gate_tick(&shared, &mut bot), "rescue runs first, loop alive");
+        assert!(shared.pending_rescue.lock().unwrap().is_none(), "rescue consumed first");
+        assert!(shared.pending_market.lock().unwrap().is_some(), "market waits its turn");
+        assert!(super::gate_tick(&shared, &mut bot), "market runs next, loop alive");
+        assert!(shared.pending_market.lock().unwrap().is_none(), "market consumed second");
+        assert!(!shared.rescue_gate.load(std::sync::atomic::Ordering::SeqCst), "single level released");
     }
 }

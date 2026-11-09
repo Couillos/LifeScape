@@ -653,6 +653,18 @@ impl Orchestrator {
                 self.write_state(&job);
                 object(vec![("ok", Value::Bool(true))])
             }
+            "task_report" => {
+                let report = frame.get("report").clone();
+                println!(
+                    "job {account}: task_report stop={} activity={} ticks={} (push)",
+                    report.get("stop").as_str().unwrap_or("?"),
+                    report.get("activity").as_str().unwrap_or("?"),
+                    report.get("ticks").as_i64().unwrap_or(-1),
+                );
+                job.inner.lock().unwrap().last_report = Some(report);
+                self.write_state(&job);
+                object(vec![("ok", Value::Bool(true))])
+            }
             other => object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value(&format!("unknown push type {other:?}"))),

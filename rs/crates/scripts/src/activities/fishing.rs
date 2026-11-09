@@ -1,5 +1,5 @@
 //! Fishing activity: best spot for the level, banks full loads,
-//! sells fish to fund tool and bait upgrades. The loads loop only:
+//! sells fish to fund tool and bait upgrades. One load per cycle step:
 //! everything it calls lives in the kit (`kit::fish` driver,
 //! `kit::spots` pool, `kit::tools` rank).
 
@@ -7,6 +7,7 @@
 
 use lifescape_sdk::Bot;
 
+use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::skill_common::{
     bank_trip, buy_stock, check_events, learn_level, nearest_bank, obj_id, obj_price, pack_total,
     sell_for_target, wait_pack_streamed,
@@ -17,7 +18,12 @@ use crate::{ScriptError, ScriptResult};
 /// Fish banked loads in the open session (0 = forever).
 pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("fishing", args)?;
-    let loads = spec.count;
+    if spec.allow_paid {
+        bot.allow_paid = true;
+        bot.log("toll gates allowed for this run");
+    }
+    bot.allow_shop = spec.allow_shop;
+    let task_keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let side_bank = (bot.tables.com_id)("bank_side:inv")
@@ -42,32 +48,30 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
             if pack_total(bot, coins) >= net_price && buy_stock(bot, "net", 1)? > 0 {
                 bot.log("ok bootstrapped net");
             } else {
-                return Err(ScriptError::Usage(format!(
-                    "cannot bootstrap: no tool, {} coins",
-                    pack_total(bot, coins)
-                )));
+                return Err(crate::kit::tools::blocked_tool("net"));
             }
         }
     }
-    let mut done = 0u32;
-    while loads == 0 || done < loads {
-        check_events(bot)?;
-        let (ok, new_level) = crate::kit::fish::fish_load(bot, level, &mut bank, coins, side_shop, main_shop)?;
+    let outcome = run(bot, &spec, |step_bot, state| {
+        check_events(step_bot)?;
+        let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, side_shop, main_shop)?;
         level = new_level;
         if !ok {
-            return Err(ScriptError::Usage(format!("fish failed at {:?}", bot.position())));
+            return Err(ScriptError::Usage(format!("fish failed at {:?}", step_bot.position())));
         }
-        let (cands, cheapest) = crate::kit::tools::cheapest_fish_upgrade(bot, level);
+        let (cands, cheapest) = crate::kit::tools::cheapest_fish_upgrade(step_bot, level);
         if !cands.is_empty() {
-            sell_for_target(bot, &[], coins, cheapest.max(0) as u32 - bank_coins.min(cheapest.max(0) as u32))?;
+            sell_for_target(step_bot, &[], coins, cheapest.max(0) as u32 - bank_coins.min(cheapest.max(0) as u32))?;
         }
-        let keep: Vec<u16> = crate::kit::tools::FISH_SPEC.known_ids(bot).into_iter().collect();
-        bank_coins = bank_trip(bot, &bank, &keep, 0)?;
+        let mut keep: Vec<u16> = crate::kit::tools::FISH_SPEC.known_ids(step_bot).into_iter().collect();
+        keep.extend(task_keep.iter().copied());
+        bank_coins = bank_trip(step_bot, &bank, &keep, 0)?;
         // Post-bank upgrade: only what the pack affords, best-first with
         // downgrade on shop failure (shared aborts: death/conn/interrupt).
-        let _ = buy_best_affordable(bot, &cands)?;
-        done += 1;
-        bot.log(&format!("ok load {done} banked (fishing={level})"));
-    }
-    Ok(0)
+        let _ = buy_best_affordable(step_bot, &cands)?;
+        step_bot.log(&format!("ok load {} banked (fishing={level})", state.units() + 1));
+        Ok(StepControl::UnitDone)
+    });
+    let _ = bank_coins;
+    outcome
 }

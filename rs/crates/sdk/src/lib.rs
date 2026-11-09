@@ -9,6 +9,7 @@ pub mod connection;
 pub mod error;
 pub mod isaac;
 pub mod protocol;
+pub mod provenance;
 pub mod rsa;
 pub mod save;
 pub mod snapshot;

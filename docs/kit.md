@@ -31,3 +31,17 @@ la suite. Reste rangé sans changement de comportement : `pack_*`,
 `run woodcut 3 toll wild` reste valable via parseur commun vers `TaskSpec`.
 Décisions de vie dans `legacy/bootstrap.rs` jusqu'au brain, puis
 supprimées. Chaque étape validée en live par les rendements avant/après.
+
+## Contrat d'exécution
+
+`cycle::run(spec, step)` : un pas = une charge (récolte) ; `poll_stop`
+pour les files (mêlée) : cibles puis budget, fin différée au point sûr.
+`--no-shop` coupe les achats (`bot.allow_shop`, refus au lieu de dépenser)
+et les outils gratuits seuls comptent avant `blocked{missing}` (3 charges
+sans hache, 2 sans pioche). La garde (`keep`) suit les voyages banque des
+récolteurs ; l'équipement garde son jeu propre.
+
+Pause inline générique : `pose_market` à côté du rescue, même porte à un
+seul niveau, rescue prioritaire. Le market attend `at_safe_point`, rejoue
+son script puis retourne marcher au point de départ ; l'horloge
+d'engagement est suspendue (retour compris, `market_pause_ticks`).

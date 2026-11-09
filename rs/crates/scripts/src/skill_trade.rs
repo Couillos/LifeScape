@@ -385,6 +385,10 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     if count == 0 {
         return Ok(0);
     }
+    if !bot.allow_shop {
+        bot.log(&format!("shop buys refused for this task, {obj_name} stays unbought"));
+        return Ok(0);
+    }
     let main_com = (bot.tables.com_id)("shop_template:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
     let Some((keeper, spawn)) = shop_stock_keeper(bot, obj_name) else {

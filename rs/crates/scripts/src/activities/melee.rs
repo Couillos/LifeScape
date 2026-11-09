@@ -1,27 +1,28 @@
 //! Melee activity: best F2P spot for the level, best banked gear,
 //! banked food. The queue loop only: spot picking, death tally and the
 //! kill loop live in `kit::fight`, gear in `kit::gear`, survival in
-//! `kit::survival`.
+//! `kit::survival`. Stop conditions come from `kit::cycle` (count and
+//! budget polls at the top of every queue turn).
 
 #![forbid(unsafe_code)]
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
+use crate::kit::cycle::{exit_code, poll_stop, CycleState};
 use crate::skill_common::check_events;
 use crate::ScriptResult;
 
 /// Melee farmer: `melee [spot ...] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("melee", args)?;
-    let spots = spec.resource;
-    let kills = spec.count;
-    let ticks = spec.ticks;
+    let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
     }
+    bot.allow_shop = spec.allow_shop;
     crate::skill_common::wait_pack_streamed(bot)?;
     let target = bot.world.ticks + 60;
     while bot.world.ticks < target && (!bot.world.stats.contains_key(&0) || !bot.world.stats.contains_key(&3)) {
@@ -47,7 +48,11 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // order. Unpaid and across the toll fence, it re-picks walkable
     // instead of ending the run idle; explicit picks keep the Usage.
     let auto = spots.is_empty();
+    let mut state = CycleState::start(bot);
     while !queue.is_empty() {
+        if let Some(stop) = poll_stop(bot, &state, &spec) {
+            return exit_code(stop);
+        }
         let next = queue.iter().position(|queued| !tally.excludes(queued.key));
         let Some(next) = next else {
             bot.log("all remaining spots excluded after deaths, stopping");
@@ -56,7 +61,10 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let spot = queue.remove(next);
         bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("melee at {}", spot.key));
-        let (total, died, banked) = match crate::kit::fight::run_spot(bot, &spot, kills, ticks, no_bank) {
+        // Remaining kills under the quantity target (0 = unlimited, as
+        // the fight loop reads it); the budget poll above caps ticks.
+        let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
+        let (total, died, banked) = match crate::kit::fight::run_spot(bot, &spot, remaining, spec.budget_max_ticks, no_bank) {
             Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
                 if !tally.excludes(spot.key) {
                     tally.exclude(spot.key);
@@ -72,6 +80,10 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             other => other?,
         };
+        state.add_units(total);
+        if let Some(stop) = poll_stop(bot, &state, &spec) {
+            return exit_code(stop);
+        }
         if total > 0 || banked {
             tally.note_progress();
         }

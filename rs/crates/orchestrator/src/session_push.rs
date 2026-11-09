@@ -52,6 +52,17 @@ pub(crate) fn push_snapshot(account: &str, snapshot: &Value) {
     send_push(&snapshot_frame(account, snapshot));
 }
 
+/// Push a finished task report to the daemon (fire-and-forget, like any
+/// other push frame: a lost report is a missed heartbeat line, the next
+/// run pushes again — and the session log keeps the same JSON).
+pub(crate) fn push_task_report(account: &str, report: &Value) {
+    send_push(&object(vec![
+        ("type", str_value("task_report")),
+        ("account", str_value(account)),
+        ("report", report.clone()),
+    ]));
+}
+
 /// Structured event frame: tick + position ride along, the log keeps only
 /// the human line. `args` is the running script's args (empty for inline
 /// rescues with none). `message` carries the error text for `script_error`,

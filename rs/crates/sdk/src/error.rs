@@ -37,6 +37,10 @@ pub enum Error {
     /// A transition ride landed somewhere unexpected: carries expected
     /// versus observed position.
     RideWrongDestination(String),
+    /// A required tool, input, food or access is missing and cannot be
+    /// conjured on the spot: carries what is missing. The brain turns it
+    /// into a sub-task; scripts never work around it silently.
+    Blocked { missing: Vec<String> },
     /// A choice dialogue opened mid-ride: carries the prompt and options.
     /// The executor never picks; the caller (or prober data) decides.
     NeedsDialogueChoice(String),
@@ -122,6 +126,7 @@ impl std::fmt::Display for Error {
             Error::RideDidNotMove(detail) => write!(formatter, "ride did not move: {detail}"),
             Error::RideWrongDestination(detail) => write!(formatter, "ride wrong destination: {detail}"),
             Error::NeedsDialogueChoice(detail) => write!(formatter, "needs dialogue choice: {detail}"),
+            Error::Blocked { missing } => write!(formatter, "blocked, missing: {}", missing.join(", ")),
             Error::TravelFailure(failure) => write!(
                 formatter,
                 "travel failure {} seg={:?} at {:?} t={} expected={} observed={} dossier={:?}",
@@ -157,4 +162,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// converting it into Unreachable/Timeout and walking on.
 pub fn is_interrupted(error: &Error) -> bool {
     matches!(error, Error::Interrupted(_))
+}
+
+/// True for a missing requirement: the brain turns it into a sub-task
+/// instead of retrying the same action.
+pub fn is_blocked(error: &Error) -> bool {
+    matches!(error, Error::Blocked { .. })
 }

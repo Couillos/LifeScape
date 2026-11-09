@@ -1,5 +1,5 @@
 //! Mining activity: best F2P rock for the level, banks full loads.
-//! The loads loop only: everything it calls lives in the kit
+//! One load per cycle step: everything it calls lives in the kit
 //! (`kit::mine` driver, `kit::spots` pool, `kit::tools` rank).
 
 #![forbid(unsafe_code)]
@@ -7,6 +7,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
+use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::skill_common::{
     bank_trip, buy_stock, check_events, learn_level, nearest_bank, obj_id, obj_price, pack_ids,
     pack_total, sell_for_target,
@@ -17,11 +18,12 @@ use crate::{ScriptError, ScriptResult};
 /// Mine banked loads in the open session (0 = forever).
 pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("mining", args)?;
-    let loads = spec.count;
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
     }
+    bot.allow_shop = spec.allow_shop;
+    let task_keep = resolve_keep(bot, &spec)?;
     crate::skill_common::wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
@@ -53,40 +55,37 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
             if pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
                 bot.log("ok bootstrapped bronze pickaxe");
             } else {
-                return Err(ScriptError::Usage(format!(
-                    "cannot bootstrap: no pickaxe, {} coins",
-                    pack_total(bot, coins)
-                )));
+                return Err(crate::kit::tools::blocked_tool("bronze_pickaxe"));
             }
         }
     }
-    let mut done = 0u32;
     let mut toolless = 0u32;
-    while loads == 0 || done < loads {
-        check_events(bot)?;
-        let (ok, new_level) = crate::kit::mine::mine_load(bot, &tiers, &mut bank, coins, level)?;
+    let outcome = run(bot, &spec, |step_bot, state| {
+        check_events(step_bot)?;
+        let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level)?;
         level = new_level;
         if !ok {
-            return Err(ScriptError::Usage(format!("mine failed at {:?}", bot.position())));
+            return Err(ScriptError::Usage(format!("mine failed at {:?}", step_bot.position())));
         }
-        let (cands, cheapest) = crate::kit::tools::cheapest_pickaxe_upgrade(bot, level);
+        let (cands, cheapest) = crate::kit::tools::cheapest_pickaxe_upgrade(step_bot, level);
         if !cands.is_empty() {
-            sell_for_target(bot, &ore_ids_for(bot, &tiers), coins, cheapest as u32)?;
+            sell_for_target(step_bot, &ore_ids_for(step_bot, &tiers), coins, cheapest as u32)?;
         }
-        let keep: Vec<u16> = crate::kit::tools::PICK_SPEC.known_ids(bot).into_iter().collect();
-        bank_coins = bank_trip(bot, &bank, &keep, cheapest as u32)?;
+        let mut keep: Vec<u16> = crate::kit::tools::PICK_SPEC.known_ids(step_bot).into_iter().collect();
+        keep.extend(task_keep.iter().copied());
+        bank_coins = bank_trip(step_bot, &bank, &keep, cheapest as u32)?;
         // Post-bank upgrade: only what the pack affords, best-first with
         // downgrade on shop failure (shared aborts: death/conn/interrupt).
-        let _ = buy_best_affordable(bot, &cands)?;
-        toolless = if crate::kit::tools::PICK_SPEC.best_held(bot).is_none() { toolless + 1 } else { 0 };
+        let _ = buy_best_affordable(step_bot, &cands)?;
+        toolless = if crate::kit::tools::PICK_SPEC.best_held(step_bot).is_none() { toolless + 1 } else { 0 };
         if toolless >= 2 {
-            return Err(ScriptError::Usage(format!("no pickaxe and cannot rebuy, aborting at {:?}", bot.position())));
+            return Err(crate::kit::tools::blocked_tool("bronze_pickaxe"));
         }
-        done += 1;
-        bot.log(&format!("ok load {done} banked (mining={level})"));
-    }
+        step_bot.log(&format!("ok load {} banked (mining={level})", state.units() + 1));
+        Ok(StepControl::UnitDone)
+    });
     let _ = bank_coins;
-    Ok(0)
+    outcome
 }
 
 fn ore_ids_for(bot: &Bot, tiers: &[knowledge::rocks::RockTier]) -> Vec<u16> {

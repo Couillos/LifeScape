@@ -42,6 +42,10 @@ pub type ScriptResult = Result<i32, ScriptError>;
 pub enum ScriptError {
     Sdk(Error),
     Usage(String),
+    /// A typed requirement the run cannot meet on its own (tool, input,
+    /// food, access): carries what is missing so the brain can file it
+    /// as a sub-task. Raised by the kit, mapped to `stop: blocked`.
+    Blocked { missing: Vec<String> },
 }
 
 impl std::fmt::Display for ScriptError {
@@ -49,6 +53,7 @@ impl std::fmt::Display for ScriptError {
         match self {
             ScriptError::Sdk(err) => write!(formatter, "sdk: {err}"),
             ScriptError::Usage(text) => write!(formatter, "usage: {text}"),
+            ScriptError::Blocked { missing } => write!(formatter, "blocked, missing: {}", missing.join(", ")),
         }
     }
 }
@@ -57,8 +62,17 @@ impl std::error::Error for ScriptError {}
 
 impl From<Error> for ScriptError {
     fn from(err: Error) -> ScriptError {
-        ScriptError::Sdk(err)
+        match err {
+            Error::Blocked { missing } => ScriptError::Blocked { missing },
+            other => ScriptError::Sdk(other),
+        }
     }
+}
+
+/// True for a missing requirement: the session maps it to `stop: blocked`
+/// instead of failing the run.
+pub fn is_blocked(error: &ScriptError) -> bool {
+    matches!(error, ScriptError::Blocked { .. })
 }
 
 /// Real planner context for offline tests: static world plus tables from

@@ -14,6 +14,35 @@ use lifescape_sdk::Bot;
 use crate::skill_common::{bank_trip, buy_stock, live_bank_booth, obj_id, pack_total};
 use crate::ScriptError;
 
+/// Typed missing-tool error: the brain files it as an obtain sub-task.
+/// The name is the cheapest buyable of the family (`bronze_axe`,
+/// `bronze_pickaxe`, `net`), since that is what the task needs funded.
+pub fn blocked_tool(name: &str) -> ScriptError {
+    ScriptError::Blocked { missing: vec![name.to_string()] }
+}
+
+/// Free tool reclaim (no shop, no hunt): pack reattach, then the best
+/// banked tool. True when a tool is held afterwards. Constrained tasks
+/// (`--no-shop`) use only this; anything still missing blocks.
+pub fn reclaim_free(
+    bot: &mut Bot,
+    bank: &lifescape_gamedata::banks::Bank,
+    spec: &ToolSpec,
+    handle_name: &str,
+    head_suffix: &str,
+) -> Result<bool, ScriptError> {
+    if spec.best_held(bot).is_some() {
+        return Ok(true);
+    }
+    if reattach_tool(bot, handle_name, head_suffix, spec)? {
+        bot.log("ok tool reattached from pack, no bootstrap needed");
+    }
+    if spec.best_held(bot).is_none() {
+        let _ = restore_from_bank(bot, bank, spec, handle_name, head_suffix)?;
+    }
+    Ok(spec.best_held(bot).is_some())
+}
+
 /// Withdraw a banked tool (or its handle+head) and reattach it. Cheaper
 /// than rebuying. Reopens the bank: call after a bank trip, or not at
 /// all when the bank is further than a dozen tiles (booth business from
@@ -204,7 +233,7 @@ pub fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &lifescape_gamedata::ban
 
 #[cfg(test)]
 mod tests {
-    use super::{best_banked_by_rank, AXE_SPEC};
+    use super::{best_banked_by_rank, blocked_tool, AXE_SPEC};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -224,6 +253,17 @@ mod tests {
         let slots: HashMap<u8, (u16, u32)> = [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
         assert_eq!(best_banked_by_rank(&slots, &axes, rank), Some((7, steel)), "best banked axe wins");
         assert_eq!(best_banked_by_rank(&HashMap::new(), &axes, rank), None, "empty bank restores nothing");
+    }
+
+    /// Missing-tool error carries the buyable name: the brain funds an
+    /// obtain task from it, the session reports `stop: blocked`.
+    #[test]
+    fn blocked_tool_names_the_buyable() {
+        assert!(matches!(blocked_tool("bronze_axe"), crate::ScriptError::Blocked { .. }));
+        let crate::ScriptError::Blocked { missing } = blocked_tool("bronze_pickaxe") else {
+            panic!("blocked carries missing");
+        };
+        assert_eq!(missing, vec!["bronze_pickaxe".to_string()]);
     }
 }
 

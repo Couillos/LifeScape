@@ -70,7 +70,13 @@ fn cmd_run(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
         inner.trail.clear();
     }
     shared.stop_requested.store(false, Ordering::SeqCst);
+    shared.budget_stop.store(false, Ordering::SeqCst);
     shared.rescue_done.lock().unwrap().take();
+    // Start carrier for the task report (contract scripts only), with a
+    // fresh bank baseline: the first bank-open in-run freezes pre-stock.
+    *shared.bank_baseline.lock().unwrap() = None;
+    *shared.task_start.lock().unwrap() =
+        crate::session_report::task_start_for(&shared.bot.lock().unwrap(), script, &string_args);
     spawn_script_thread(shared, script, &string_args);
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }
@@ -87,6 +93,7 @@ fn cmd_unload(shared: &Arc<Shared>) -> Value {
                 inner.status = "idle".to_string();
             }
             drop(inner);
+            shared.task_start.lock().unwrap().take();
             return object(vec![("ok", Value::Bool(true)), ("session", shared.describe())]);
         }
         inner.status = "busy".to_string();
@@ -258,6 +265,26 @@ pub(crate) fn drain_queue(shared: &Arc<Shared>) {
     call.done.store(true, Ordering::SeqCst);
 }
 
+/// Posed market delivery: runs inline at the next safe point when a
+/// script holds the bot, as its own thread when idle. One convocation at
+/// a time (replaces any earlier pose), rescue keeps priority in the gate.
+fn cmd_pose_market(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
+    let known: Vec<&str> = lifescape_scripts::names();
+    if !known.iter().any(|name| *name == script) {
+        return object(vec![("ok", Value::Bool(false)), ("error", str_value(&format!("unknown script {script:?}")))]);
+    }
+    let string_args: Vec<String> = args
+        .iter()
+        .map(|arg| match arg {
+            Value::Str(text) => text.clone(),
+            other => json::stringify(other),
+        })
+        .collect();
+    let tick = current_ticks(shared);
+    crate::session_rescue::pose_market(shared, script, &string_args, tick);
+    object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
+}
+
 fn cmd_close(shared: &Arc<Shared>) -> Value {
     let _ = cmd_unload(shared);
     shared.log(&format!("=== session close {} ===", shared.account));
@@ -297,6 +324,11 @@ pub(crate) fn dispatch(shared: &Arc<Shared>, request: &Value) -> Value {
         "pause" => cmd_pause(shared),
         "hold" => cmd_hold(shared),
         "resume" => cmd_resume(shared),
+        "pose_market" => cmd_pose_market(
+            shared,
+            request.get("script").as_str().unwrap_or(""),
+            &request.get("args").as_arr().cloned().unwrap_or_default(),
+        ),
         "call" => cmd_call(
             shared,
             request.get("method").as_str().unwrap_or(""),
