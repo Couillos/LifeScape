@@ -1,14 +1,19 @@
 //! Game data tables: typed accessors over the generated JSON dumps.
 //!
 //! Data files live in `gamedata/data/*.json` (arrays indexed by id:
-//! the row index *is* the id). This crate ships a small
-//! std-only JSON reader so the workspace stays dependency-free.
+//! the row index *is* the id). F2P planning filters live in `f2p`,
+//! item provenance in `item_sources`, the XP table in `xp`. This crate
+//! ships a small std-only JSON reader so the workspace stays
+//! dependency-free.
 
 pub mod banks;
 pub mod combat_spots;
+pub mod drops;
 pub mod equipment;
 pub mod fishing;
 pub mod food;
+pub mod f2p;
+pub mod item_sources;
 pub mod quest_requirements;
 pub mod quests;
 pub mod recipes;
@@ -18,6 +23,7 @@ pub mod spawns;
 pub mod spells;
 pub mod trees;
 pub mod varps;
+pub mod xp;
 
 // ---------------------------------------------------------------------------
 // Generated tables (one module per dump, emitted by build.rs into OUT_DIR)
@@ -66,6 +72,9 @@ pub struct Obj {
     pub alch_low: i64,
     pub stackable: bool,
     pub members: Option<bool>,
+    /// Server `oc_tradeable` flag (banknotes inherit their link). Missing
+    /// in older dumps reads as true, the server default.
+    pub tradeable: bool,
     pub respawn_ticks: i64,
 }
 

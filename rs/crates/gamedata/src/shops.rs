@@ -14,6 +14,7 @@ pub(crate) struct StaticShop {
     pub size: i64,
     pub restock: bool,
     pub stocks: &'static [StaticStock],
+    pub members: Option<bool>,
 }
 
 /// One static keeper row (build-time data).
@@ -90,8 +91,9 @@ pub fn all_shops() -> Vec<Shop> {
                     .map(|item| Stock { obj: item.obj.to_string(), count: item.count, rate: item.rate })
                     .collect(),
                 keepers: mine,
-                // No server flag fills this in: it stays empty.
-                members: None,
+                // Server-derived flag from the dump (keeper NPCs): null
+                // means no keeper info (stalls, interface inventories).
+                members: row.members,
             }
         })
         .collect()
@@ -133,6 +135,10 @@ mod tests {
         let zeke = keeper_for_npc("zeke");
         assert_eq!(zeke.len(), 1);
         assert_eq!(zeke[0].shop, "scimitarshop");
+        assert_eq!(scim[0].members, Some(false));
+        let food = by_name("foodshop");
+        assert_eq!(food.len(), 1);
+        assert_eq!(food[0].members, None, "stalls carry no keeper flag");
         assert!(by_name("no such shop").is_empty());
     }
 }

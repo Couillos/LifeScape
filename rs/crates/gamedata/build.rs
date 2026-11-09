@@ -12,6 +12,8 @@
 #[allow(dead_code)]
 mod workspace_json;
 
+#[path = "codegen/drops.rs"]
+mod drops_gen;
 #[path = "codegen/equipment.rs"]
 mod equipment_gen;
 #[path = "codegen/foods.rs"]
@@ -208,7 +210,7 @@ fn render_objs_module(dump_rows: &[workspace_json::Value]) -> String {
             generated.push_str(&format!(
                 "        crate::Obj {{ obj_id: {obj_id}usize, name: None, display: None, desc: None, \
                  ops: &[], inv_ops: &[], price: 0, alch_high: 0, alch_low: 0, stackable: false, \
-                 members: None, respawn_ticks: 100 }},\n"
+                 members: None, tradeable: false, respawn_ticks: 100 }},\n"
             ));
             continue;
         }
@@ -217,7 +219,7 @@ fn render_objs_module(dump_rows: &[workspace_json::Value]) -> String {
         generated.push_str(&format!(
             "        crate::Obj {{ obj_id: {obj_id}usize, name: {}, display: {}, desc: {}, ops: {ops}, \
              inv_ops: {inv_ops}, price: {}, alch_high: {}, alch_low: {}, stackable: {}, members: {}, \
-             respawn_ticks: {} }},\n",
+             tradeable: {}, respawn_ticks: {} }},\n",
             render_opt_str(dump_row.get("name")),
             render_opt_str(dump_row.get("display")),
             render_opt_str(dump_row.get("desc")),
@@ -226,6 +228,7 @@ fn render_objs_module(dump_rows: &[workspace_json::Value]) -> String {
             int_or(dump_row, "alch_low", 0),
             flag_or(dump_row, "stackable", false),
             render_opt_flag(dump_row, "members"),
+            flag_or(dump_row, "tradeable", true),
             int_or(dump_row, "respawn_ticks", 100),
         ));
     }
@@ -401,6 +404,7 @@ fn main() {
         "objs",
         "npcs",
         "locs",
+        "drops",
         "equipment",
         "foods",
         "shops",
@@ -423,6 +427,7 @@ fn main() {
     let parsed_locs = parse_dump(&manifest_dir, "locs");
     emit_generated("locs_generated.rs", &render_locs_module(dump_rows(&parsed_locs, "locs")));
     equipment_gen::generate(&manifest_dir);
+    drops_gen::generate(&manifest_dir);
     foods_gen::generate(&manifest_dir);
     shops_gen::generate(&manifest_dir);
     quests_gen::generate(&manifest_dir);

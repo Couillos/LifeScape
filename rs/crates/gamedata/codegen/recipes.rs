@@ -12,13 +12,14 @@ pub fn generate(manifest_dir: &str) {
     for row in rows {
         generated.push_str(&format!(
             "    super::StaticRecipe {{ kind: \"{}\", level: {}, xp: {}, inputs: {}, outputs: {}, \
-             source: \"{}\", members: {} }},\n",
+             source: \"{}\", burnt: {}, members: {} }},\n",
             crate::escape_for_rust_literal(row.get("kind").as_str().unwrap_or("")),
             row.get("level").as_i64().unwrap_or(0),
             row.get("xp").as_i64().unwrap_or(0),
             crate::render_str_int_map(row, "inputs"),
             crate::render_str_int_map(row, "outputs"),
             crate::escape_for_rust_literal(row.get("extra").get("row").as_str().unwrap_or("")),
+            crate::render_opt_str(row.get("extra").get("burnt")),
             crate::render_opt_flag(row, "members"),
         ));
     }

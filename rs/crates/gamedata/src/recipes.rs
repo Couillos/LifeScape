@@ -9,6 +9,7 @@ pub(crate) struct StaticRecipe {
     pub inputs: &'static [(&'static str, i64)],
     pub outputs: &'static [(&'static str, i64)],
     pub source: &'static str,
+    pub burnt: Option<&'static str>,
     pub members: Option<bool>,
 }
 
@@ -25,6 +26,8 @@ pub struct Recipe {
     pub inputs: Vec<(String, i64)>,
     pub outputs: Vec<(String, i64)>,
     pub source: String,
+    /// Burnt byproduct of this cooking row (`extra.burnt`), if any.
+    pub burnt: Option<String>,
     pub members: Option<bool>,
 }
 
@@ -40,6 +43,7 @@ fn recipe_from_static(row: &StaticRecipe) -> Recipe {
         inputs: pair_list(row.inputs),
         outputs: pair_list(row.outputs),
         source: row.source.to_string(),
+        burnt: row.burnt.map(str::to_string),
         members: row.members,
     }
 }
