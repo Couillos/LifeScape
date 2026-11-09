@@ -10,11 +10,11 @@ use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
+    bank_trip, buy_stock, check_events, free_slots, learn_level, nearest_bank, obj_id,
     obj_price, pack_total, sell_for_target, walk_checked, wait_pack_streamed, WorkOutcome,
 };
 use crate::kit::spots::{drop_occupied, OCCUPIED_RADIUS};
-use crate::skill_gather::{work_acked, BanSet, ToolSpec, FISHING_ACKS};
+use crate::skill_gather::{BanSet, ToolSpec, FISHING_ACKS};
 use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
 
@@ -146,7 +146,74 @@ fn cheapest_upgrade(bot: &Bot, level: i64) -> (Vec<String>, i64) {
     })
 }
 
-/// One click, then watch the chain: re-clicking restarts it, so never spam.
+/// One click, then watch the chain: re-clicking restarts it, so never
+/// spam. A cast acked on a still-live spot is a dry streak, not a dead
+/// spot — wait, no time cap; the load-level stall stays the ultimate
+/// backstop. Quiet without any ack gives up fast: the click itself never
+/// landed. Re-clicks probe reachability every ~30 quiet ticks: only a
+/// click surfaces a refusal.
+struct FishSource<'a> {
+    tier: &'a knowledge::fishing::FishTier,
+    slot: u16,
+    x: i32,
+    z: i32,
+    patient: bool,
+}
+
+impl<'a> crate::kit::harvest::HarvestSource for FishSource<'a> {
+    fn acks(&self) -> &[&str] {
+        &FISHING_ACKS
+    }
+
+    fn click(&mut self, bot: &mut Bot, x: i32, z: i32) -> Result<crate::kit::harvest::HarvestTarget, ScriptError> {
+        bot.log(&format!("click {} at ({x},{z})", self.tier.action));
+        bot.intend(&format!("fishing {}", self.tier.products.first().unwrap_or(&"?")));
+        bot.op_npc(self.tier.op as u8, self.slot)?;
+        Ok(crate::kit::harvest::HarvestTarget::Npc { slot: self.slot })
+    }
+
+    fn slot_gone(&self, bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
+        nearest_live(bot, self.tier.category, self.x, self.z).is_none()
+    }
+
+    fn slot_moved(&self, bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
+        nearest_live(bot, self.tier.category, self.x, self.z).is_some_and(|(_, live_x, live_z)| {
+            (live_x - self.x).abs() + (live_z - self.z).abs() > 6
+        })
+    }
+
+    fn target_live(&self, bot: &mut Bot, target: &crate::kit::harvest::HarvestTarget) -> bool {
+        !self.slot_gone(bot, target)
+    }
+
+    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
+        false
+    }
+
+    /// The old loop's 60 unacked ticks in 12-tick rounds.
+    fn unacked_rounds(&self) -> u32 {
+        5
+    }
+
+    /// The old loop counts 60 ticks from the last fish, not from the
+    /// click: a gain restarts the quiet budget.
+    fn silence_resets_on_gain(&self) -> bool {
+        true
+    }
+
+    /// Reachability probe every ~30 quiet ticks while acked: a
+    /// wall-separated spot only refuses when clicked.
+    fn reprobe(&self, acked: bool, _live: bool, since_probe: u64) -> bool {
+        acked && since_probe >= 30
+    }
+
+    fn note_dry_streak(&mut self, bot: &mut Bot, _x: i32, _z: i32, acked: bool, _live: bool, silences: u32) {
+        if acked && silences >= 5 && !self.patient {
+            self.patient = true;
+            bot.log("still fishing on a live spot, waiting out the dry streak");
+        }
+    }
+}
 fn work_spot(
     bot: &mut Bot,
     tier: &knowledge::fishing::FishTier,
@@ -174,81 +241,8 @@ fn work_spot(
         return Ok((WorkOutcome::Gone, 0));
     };
     let _ = (live_x, live_z);
-    let mut gained = 0u32;
-    bot.log(&format!("click {} at ({spot_x},{spot_z})", tier.action));
-    bot.intend(&format!("fishing {}", tier.products.first().unwrap_or(&"?")));
-    bot.op_npc(tier.op as u8, slot)?;
-    let mut seen_msgs = bot.world.messages.len();
-    let mut idle_since = bot.world.ticks;
-    let mut acked = false;
-    let mut patient = false;
-    let mut last_probe = bot.world.ticks;
-    let hitpoints_before = hitpoints(bot);
-    loop {
-        bot.pump(2)?;
-        if hitpoints(bot) < hitpoints_before {
-            return Ok((WorkOutcome::Threat, gained));
-        }
-        if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-            bot.pump(10)?;
-            if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                return Ok((WorkOutcome::Blocked, gained));
-            }
-        }
-        for message in bot.world.messages.get(seen_msgs..).unwrap_or(&[]) {
-            let lowered = message.to_lowercase();
-            if lowered.contains("can't reach that") {
-                return Ok((WorkOutcome::Unreachable, gained));
-            }
-            if lowered.contains("need at least") && lowered.contains("fishing") {
-                return Ok((WorkOutcome::LevelLocked, gained));
-            }
-            if lowered.contains("need a ") && (lowered.contains("to catch") || lowered.contains("to bait") || lowered.contains("to lure")) {
-                return Ok((WorkOutcome::NoTool, gained));
-            }
-            if lowered.contains("don't have any") && lowered.contains("left") {
-                return Ok((WorkOutcome::NoBait, gained));
-            }
-            if lowered.contains("can't carry any more") {
-                return Ok((WorkOutcome::Full, gained));
-            }
-        }
-        // Cast/attempt acked on a still-live spot: the player IS fishing
-        // (dry streak), not facing a dead spot — same detector as
-        // woodcut/mining (own anim never streams).
-        acked = acked || work_acked(bot, seen_msgs, &FISHING_ACKS);
-        seen_msgs = bot.world.messages.len();
-        let slot_now = nearest_live(bot, tier.category, spot_x, spot_z);
-        let Some((_, live_now_x, live_now_z)) = slot_now else {
-            return Ok((WorkOutcome::Gone, gained));
-        };
-        if (live_now_x - spot_x).abs() + (live_now_z - spot_z).abs() > 6 {
-            return Ok((WorkOutcome::Moved, gained));
-        }
-        let now_have: u32 = product_ids.iter().map(|id| pack_total(bot, *id)).sum();
-        if now_have > had_fish + gained {
-            gained = now_have - had_fish;
-            idle_since = bot.world.ticks;
-        }
-        // Cast/attempt acked on a still-live spot: the player IS fishing
-        // (dry streak), not facing a dead spot — wait, no time cap; the
-        // load-level stall stays the ultimate backstop. Re-click as a
-        // reachability probe every ~30 quiet ticks: only a click surfaces
-        // a refusal. Unacked quiet still gives up fast: the click itself
-        // never landed.
-        if bot.world.ticks - idle_since > 60 && !acked {
-            return Ok((WorkOutcome::Gone, gained));
-        }
-        if acked && bot.world.ticks - last_probe >= 30 {
-            bot.op_npc(tier.op as u8, slot)?;
-            last_probe = bot.world.ticks;
-            seen_msgs = bot.world.messages.len();
-        }
-        if bot.world.ticks - idle_since > 60 && acked && !patient {
-            patient = true;
-            bot.log("still fishing on a live spot, waiting out the dry streak");
-        }
-    }
+    let mut source = FishSource { tier, slot, x: spot_x, z: spot_z, patient: false };
+    crate::kit::harvest::watch_stand(bot, &mut source, spot_x, spot_z, product_ids, had_fish)
 }
 
 fn ensure_gear(

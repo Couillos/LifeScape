@@ -3,4 +3,5 @@
 
 #![forbid(unsafe_code)]
 
+pub mod harvest;
 pub mod spots;

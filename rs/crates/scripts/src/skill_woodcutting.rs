@@ -10,18 +10,18 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    bank_trip, bank_trip_resilient, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
+    bank_trip, bank_trip_resilient, buy_stock, check_events, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome,
     GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS,
 };
+use crate::kit::harvest::{watch_stand, HarvestSource, HarvestTarget};
 use crate::skill_gather::{
-    best_banked_by_rank, classify_message, reattach_tool, work_acked, BanSet, ToolSpec, WOODCUT_ACKS,
+    best_banked_by_rank, reattach_tool, BanSet, ToolSpec, WOODCUT_ACKS,
 };
 use crate::skill_woodcutting_spot::{default_respawn_ticks, dud_stump_ban, is_stump, learn_respawn, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
-const ROUND_IDLE_TICKS: u64 = 12;
 const HANDLE_NAME: &str = "macro_hatchethandle";
 
 /// Best axe first.
@@ -375,6 +375,7 @@ fn work_spot(
     // (walled) stand shadow the good ones, and two strikes condemned a
     // cuttable tree (Edgeville yews, structural bans).
     let mut refused_operable = false;
+    let mut source = TreeSource { loc: tree_loc, x: tree_x, z: tree_z };
     for ((stand_x, stand_z), operable) in stands {
         if (bot.world.x, bot.world.z) != (stand_x, stand_z) {
             match bot.walk_to(stand_x, stand_z, bot.world.level, 100) {
@@ -390,7 +391,7 @@ fn work_spot(
                 Err(_) => continue,
             }
         }
-        let (end, got) = try_stand(bot, tree_x, tree_z, tree_loc, log_ids, had_logs + gained)?;
+        let (end, got) = watch_stand(bot, &mut source, tree_x, tree_z, log_ids, had_logs + gained)?;
         gained += got;
         match end {
             WorkOutcome::Gone => return Ok((WorkOutcome::Gone, gained)),
@@ -421,84 +422,57 @@ fn probe_after_silence(acked: bool, live: bool) -> bool {
     !(acked && live)
 }
 
-/// One click round from the current stand: Gone when the tree is
-/// stumped/cleared or the click was never acked, UnreachableSpot on click
-/// refusal (caller rotates or condemns), terminal outcome for anything
-/// else. One click opens the stand; quiet rounds without an ack re-click
-/// as reachability probes (a wall-separated tree only refuses when
-/// clicked — silence alone can't tell it from a dry streak). A swing ack
-/// on a still-present tree means the player IS cutting — keep waiting;
-/// the load-level stall stays the ultimate backstop. Gained logs this
-/// stand.
-fn try_stand(
-    bot: &mut Bot,
-    tree_x: i32,
-    tree_z: i32,
-    tree_loc: u16,
-    log_ids: &[u16],
-    had_logs: u32,
-) -> Result<(WorkOutcome, u32), ScriptError> {
-    let mut gained = 0u32;
-    let mut silences = 0u32;
-    let mut acked = false;
-    let mut need_click = true;
-    let mut seen_msgs = bot.world.messages.len();
-    let hitpoints_before = hitpoints(bot);
-    loop {
-        if need_click {
-            bot.log(&format!("click tree at ({tree_x},{tree_z})"));
-            bot.intend(&format!("chopping a tree at ({tree_x},{tree_z})"));
-            bot.op_loc(1, tree_x, tree_z, tree_loc)?;
-            seen_msgs = bot.world.messages.len();
-            need_click = false;
-        }
-        let target = bot.world.ticks + ROUND_IDLE_TICKS;
-        let mut quiet = true;
-        while bot.world.ticks < target {
-            bot.pump(2)?;
-            if hitpoints(bot) < hitpoints_before {
-                return Ok((WorkOutcome::Threat, gained));
-            }
-            if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                bot.pump(10)?;
-                if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                    return Ok((WorkOutcome::Blocked, gained));
-                }
-            }
-            for message in bot.world.messages.get(seen_msgs..).unwrap_or(&[]) {
-                if let Some(outcome) = classify_message(message) {
-                    return Ok((outcome, gained));
-                }
-            }
-            let now_have: u32 = log_ids.iter().map(|id| pack_total(bot, *id)).sum();
-            if now_have > had_logs + gained {
-                gained = now_have - had_logs;
-                quiet = false;
-                break;
-            }
-        }
-        if !quiet {
-            continue;
-        }
-        check_events(bot)?;
-        silences += 1;
-        if silences == 1 && is_stump(bot, tree_x, tree_z) {
-            return Ok((WorkOutcome::Gone, gained));
-        }
-        acked = acked || work_acked(bot, seen_msgs, &WOODCUT_ACKS);
-        let live = !is_stump(bot, tree_x, tree_z) && live_loc_id(bot, tree_x, tree_z).is_ok();
-        if silences >= 2 && !(acked && live) {
-            return Ok((WorkOutcome::Gone, gained));
-        }
+/// Tree click-and-watch on the shared harvest core: the loc is resolved
+/// once per spot (stream first, template fallback), the ring stands rotate
+/// around it, the watch loop is `kit::harvest`.
+struct TreeSource {
+    loc: u16,
+    x: i32,
+    z: i32,
+}
+
+impl HarvestSource for TreeSource {
+    fn acks(&self) -> &[&str] {
+        &WOODCUT_ACKS
+    }
+
+    fn click(&mut self, bot: &mut Bot, x: i32, z: i32) -> Result<HarvestTarget, ScriptError> {
+        bot.log(&format!("click tree at ({x},{z})"));
+        bot.intend(&format!("chopping a tree at ({x},{z})"));
+        bot.op_loc(1, x, z, self.loc)?;
+        Ok(HarvestTarget::Loc { loc: self.loc })
+    }
+
+    fn slot_gone(&self, _bot: &mut Bot, _target: &HarvestTarget) -> bool {
+        false
+    }
+
+    fn slot_moved(&self, _bot: &mut Bot, _target: &HarvestTarget) -> bool {
+        false
+    }
+
+    fn target_live(&self, bot: &mut Bot, _target: &HarvestTarget) -> bool {
+        !is_stump(bot, self.x, self.z) && live_loc_id(bot, self.x, self.z).is_ok()
+    }
+
+    /// Stump on the first quiet round: the tree is depleted, Gone at once
+    /// instead of waiting out a second round on a stump.
+    fn depleted_now(&self, bot: &mut Bot, _x: i32, _z: i32, silences: u32) -> bool {
+        silences == 1 && is_stump(bot, self.x, self.z)
+    }
+
+    fn reprobe(&self, acked: bool, live: bool, _since_probe: u64) -> bool {
+        probe_after_silence(acked, live)
+    }
+
+    fn poll_events(&self) -> bool {
+        true
+    }
+
+    fn note_dry_streak(&mut self, bot: &mut Bot, x: i32, z: i32, acked: bool, live: bool, silences: u32) {
         if silences == 2 && acked && live {
-            bot.log(&format!("still cutting at ({tree_x},{tree_z}), waiting out the dry streak"));
+            bot.log(&format!("still cutting at ({x},{z}), waiting out the dry streak"));
         }
-        // Re-click probe only while no swing was acked on this live tree:
-        // a wall-separated tree only refuses when clicked (refusal →
-        // UnreachableSpot above). An acked swing on a live tree means the
-        // player IS cutting — re-clicking would restart the swing
-        // server-side, so wait it out. Gaining rounds never re-click.
-        need_click = probe_after_silence(acked, live);
     }
 }
 

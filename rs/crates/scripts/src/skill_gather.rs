@@ -117,18 +117,22 @@ pub fn across_toll(bot_x: i32, spot_x: i32, line: Option<i32>) -> bool {
 }
 
 /// Server refusal lines shared by the three gather clicks: direct refusals
-/// ("can't reach that"), level gates, missing tools, missing bait, and the
-/// full-pack line ("too full to hold any more": woodcut/mining server
-/// wording; fishing has its own "can't carry any more"). `None`
-/// when the line is chatter or progress (gain, depletion and combat
-/// engagement stay caller-side; combat keeps its own under-attack parser).
+/// ("can't reach that"), level gates, missing tools, missing bait, the
+/// full-pack lines ("too full to hold any more", "can't carry any more"),
+/// and rock depletion ("no ore/minerals currently available" reads Gone:
+/// the pick repicks instead of waiting on an empty rock). `None`
+/// when the line is chatter or progress (gain and combat engagement stay
+/// caller-side; combat keeps its own under-attack parser).
 pub fn classify_message(line: &str) -> Option<WorkOutcome> {
     let lowered = line.to_lowercase();
     if lowered.contains("can't reach that") {
         return Some(WorkOutcome::UnreachableSpot);
     }
-    if lowered.contains("too full to hold any more") {
+    if lowered.contains("too full to hold any more") || lowered.contains("can't carry any more") {
         return Some(WorkOutcome::Full);
+    }
+    if lowered.contains("no ore currently available") || lowered.contains("no minerals currently available") {
+        return Some(WorkOutcome::Gone);
     }
     if lowered.contains("level of") || (lowered.contains("need at least") && lowered.contains("fishing")) {
         return Some(WorkOutcome::LevelLocked);
@@ -371,8 +375,8 @@ mod tests {
         assert_eq!(bans.release_oldest_if_starved(2, &[((1, 1), 50)]), None, "no unanimity, no release");
     }
 
-    /// Message classes: direct refusals, level gates, missing tools/bait
-    /// map; loot chatter and depletion lines stay `None` (caller-side).
+    /// Message classes: direct refusals, level gates, missing tools/bait,
+    /// full packs and rock depletion map; loot chatter stays `None`.
     #[test]
     fn classify_covers_the_gather_refusals() {
         assert_eq!(classify_message("I can't reach that!"), Some(WorkOutcome::UnreachableSpot));
@@ -385,8 +389,10 @@ mod tests {
         assert_eq!(classify_message("You don't have any bait left."), Some(WorkOutcome::NoBait));
         assert_eq!(classify_message("Your inventory is too full to hold any more logs."), Some(WorkOutcome::Full));
         assert_eq!(classify_message("Your inventory is too full to hold any more iron ore."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("You can't carry any more fish."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("There is no ore currently available."), Some(WorkOutcome::Gone));
+        assert_eq!(classify_message("There are no minerals currently available."), Some(WorkOutcome::Gone));
         assert_eq!(classify_message("You get some oak logs."), None, "progress stays caller-side");
-        assert_eq!(classify_message("There is no ore currently available."), None, "depletion stays caller-side");
     }
 
     /// Fence side: the gate line splits flanks; `None` means no filtering.

@@ -10,17 +10,16 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
-    bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
+    bank_trip, buy_stock, check_events, free_slots, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_total, sell_for_target, walk_checked, WorkOutcome, GONE_BAN_TICKS,
 };
 use crate::kit::spots::{drop_occupied, OCCUPIED_RADIUS};
-use crate::skill_gather::{best_banked_by_rank, reattach_tool, work_acked, BanSet, ToolSpec, MINING_ACKS};
+use crate::skill_gather::{best_banked_by_rank, reattach_tool, BanSet, ToolSpec, MINING_ACKS};
 use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
 
 const MINING_STAT: u8 = 14;
 const NEAR_BANK_TILES: i64 = 150;
-const ROUND_IDLE_TICKS: u64 = 12;
 const HANDLE_NAME: &str = "macro_pickaxehandle";
 
 /// Best pickaxe first.
@@ -167,7 +166,56 @@ fn cheapest_upgrade(bot: &Bot, level: i64) -> (Vec<String>, i64) {
 }
 
 /// Click once, then only re-click after a quiet round (the server chains
-/// attempts itself while in range).
+/// attempts itself while in range). Rock liveness is the loc id match:
+/// depletion streams a loc change, so an acked swing on a still-matching
+/// rock is a dry streak — keep waiting. Quiet rounds re-click as
+/// reachability probes: only a click surfaces a refusal.
+struct RockSource {
+    loc: u16,
+    x: i32,
+    z: i32,
+}
+
+impl crate::kit::harvest::HarvestSource for RockSource {
+    fn acks(&self) -> &[&str] {
+        &MINING_ACKS
+    }
+
+    fn click(&mut self, bot: &mut Bot, x: i32, z: i32) -> Result<crate::kit::harvest::HarvestTarget, ScriptError> {
+        bot.log(&format!("click rock at ({x},{z})"));
+        bot.intend(&format!("mining a rock at ({x},{z})"));
+        bot.op_loc(1, x, z, self.loc)?;
+        Ok(crate::kit::harvest::HarvestTarget::Loc { loc: self.loc })
+    }
+
+    fn slot_gone(&self, _bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
+        false
+    }
+
+    fn slot_moved(&self, _bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
+        false
+    }
+
+    fn target_live(&self, bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
+        live_loc_id(bot, self.x, self.z).is_ok_and(|id| id == self.loc)
+    }
+
+    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
+        false
+    }
+
+    /// Quiet rounds re-click as reachability probes: a wall-separated
+    /// rock only refuses when clicked.
+    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool {
+        true
+    }
+
+    fn note_dry_streak(&mut self, bot: &mut Bot, x: i32, z: i32, acked: bool, live: bool, silences: u32) {
+        if silences == 2 && acked && live {
+            bot.log(&format!("still mining at ({x},{z}), waiting out the dry streak"));
+        }
+    }
+}
 fn work_spot(
     bot: &mut Bot,
     rock_x: i32,
@@ -191,76 +239,8 @@ fn work_spot(
         }
     }
     let rock_loc = live_loc_id(bot, rock_x, rock_z)?;
-    let mut gained = 0u32;
-    let mut silences = 0u32;
-    let mut acked = false;
-    let mut need_click = true;
-    let mut seen_msgs = bot.world.messages.len();
-    let hitpoints_before = hitpoints(bot);
-    loop {
-        if need_click {
-            bot.log(&format!("click rock at ({rock_x},{rock_z})"));
-            bot.intend(&format!("mining a rock at ({rock_x},{rock_z})"));
-            bot.op_loc(1, rock_x, rock_z, rock_loc)?;
-            seen_msgs = bot.world.messages.len();
-            need_click = false;
-        }
-        let target = bot.world.ticks + ROUND_IDLE_TICKS;
-        let mut quiet = true;
-        while bot.world.ticks < target {
-            bot.pump(2)?;
-            if hitpoints(bot) < hitpoints_before {
-                return Ok((WorkOutcome::Threat, gained));
-            }
-            if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                bot.pump(10)?;
-                if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                    return Ok((WorkOutcome::Blocked, gained));
-                }
-            }
-            for message in bot.world.messages.get(seen_msgs..).unwrap_or(&[]) {
-                let lowered = message.to_lowercase();
-                if lowered.contains("can't reach that") {
-                    return Ok((WorkOutcome::Unreachable, gained));
-                }
-                if lowered.contains("mining level of") {
-                    return Ok((WorkOutcome::LevelLocked, gained));
-                }
-                if lowered.contains("do not have a pickaxe") {
-                    return Ok((WorkOutcome::NoTool, gained));
-                }
-                if lowered.contains("too full to hold any more") {
-                    return Ok((WorkOutcome::Full, gained));
-                }
-                if lowered.contains("no ore currently available") || lowered.contains("no minerals currently available") {
-                    return Ok((WorkOutcome::Gone, gained));
-                }
-            }
-            let now_have: u32 = ore_ids.iter().map(|id| pack_total(bot, *id)).sum();
-            if now_have > had_ore + gained {
-                gained = now_have - had_ore;
-                quiet = false;
-                break;
-            }
-        }
-        if !quiet {
-            continue;
-        }
-        silences += 1;
-        // Swing acked and the rock stage unchanged (depletion is a
-        // streamed loc_change): the player IS mining — keep waiting.
-        // Quiet rounds still re-click as reachability probes: only a
-        // click surfaces a refusal.
-        acked = acked || work_acked(bot, seen_msgs, &MINING_ACKS);
-        let live = live_loc_id(bot, rock_x, rock_z).is_ok_and(|id| id == rock_loc);
-        if silences >= 2 && !(acked && live) {
-            return Ok((WorkOutcome::Gone, gained));
-        }
-        if silences == 2 && acked && live {
-            bot.log(&format!("still mining at ({rock_x},{rock_z}), waiting out the dry streak"));
-        }
-        need_click = true;
-    }
+    let mut source = RockSource { loc: rock_loc, x: rock_x, z: rock_z };
+    crate::kit::harvest::watch_stand(bot, &mut source, rock_x, rock_z, ore_ids, had_ore)
 }
 
 /// Withdraw a banked pickaxe (or its handle+head) and reattach it.
