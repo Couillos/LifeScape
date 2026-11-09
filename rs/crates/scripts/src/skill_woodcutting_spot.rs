@@ -628,6 +628,41 @@ pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior
     GONE_BAN_TICKS
 }
 
+/// Sit-out after a gainless stump outcome (the pick expected a tree,
+/// the server shows a stump). First sighting rides the regrow ETA (a
+/// race or a stale template costs one walk); repeats back off
+/// geometrically so a never-regrowing stump stops shadowing the pool:
+/// the bans outlast a full rotation, the pool empties and the loop
+/// degrades a tier instead of touring stumps forever. Capped at the
+/// long sit-out; the starvation release still re-proves the oldest.
+pub(crate) fn dud_ban_ticks(expected: u64, fails: u8) -> u64 {
+    if fails <= 1 {
+        return expected;
+    }
+    (expected << fails.saturating_sub(1).min(5)).min(STRUCTURAL_BAN_TICKS)
+}
+
+/// Book a stump outcome at `at`: gains prove the tree live (reset to
+/// the ETA), a gainless stump counts a failed prediction. Returns the
+/// sit-out ban for this outcome.
+pub(crate) fn dud_stump_ban(duds: &mut HashMap<(i32, i32), u8>, at: (i32, i32), gained: u32, expected: u64) -> u64 {
+    if gained > 0 {
+        duds.remove(&at);
+        return expected;
+    }
+    let fails = duds.get(&at).copied().unwrap_or(0).saturating_add(1);
+    duds.insert(at, fails);
+    dud_ban_ticks(expected, fails)
+}
+
+/// Fold one observed regrow wait into the tier ETA. Observations are
+/// REMAINING times (arrival mid-regrow reads short), so the ETA only
+/// ratchets up toward the true delay: overwriting with the latest
+/// observation collapsed yew 185t to 10t and every stump read due.
+pub(crate) fn learn_respawn(known: Option<u64>, observed: u64) -> u64 {
+    known.map(|wait| wait.max(observed)).unwrap_or(observed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,6 +991,34 @@ mod tests {
             GONE_BAN_TICKS,
             "stump is depletion even when adjacent"
         );
+    }
+
+    /// Dud rule: a gainless stump outcome rides the regrow ETA once (a
+    /// race or a stale template costs one walk), then backs off
+    /// geometrically so a never-regrowing stump stops shadowing the
+    /// pool; any gains at the spot prove it live and reset to the ETA.
+    /// Live t01/t04: every yew pick returned a stump, bans == ETA, the
+    /// pool never emptied so the loop never degraded a tier.
+    #[test]
+    fn dud_stump_ban_grace_then_backoff() {
+        let mut duds = HashMap::new();
+        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 200, "first gainless stump rides the ETA");
+        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 400, "repeat backs off");
+        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 800, "still down backs off again");
+        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 5, 200), 200, "gains prove live, ETA again");
+        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 200, "grace again after reset");
+        assert_eq!(dud_ban_ticks(400, 9), STRUCTURAL_BAN_TICKS, "capped at the long sit-out");
+    }
+
+    /// Learning rule: observations are REMAINING times (arrival
+    /// mid-regrow reads short), so the tier ETA only ratchets up toward
+    /// the true delay. Overwriting collapsed yew 185t to 10t live and
+    /// every stump read due days early.
+    #[test]
+    fn respawn_learning_ratchets_up_never_down() {
+        assert_eq!(learn_respawn(None, 185), 185, "first observation sets the ETA");
+        assert_eq!(learn_respawn(Some(185), 10), 185, "short remaining never collapses the ETA");
+        assert_eq!(learn_respawn(Some(10), 185), 185, "longer observation recovers upward");
     }
 
     /// Release rule: only a full ban sweep (100% of spots seen) releases
