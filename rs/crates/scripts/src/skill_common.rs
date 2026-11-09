@@ -216,9 +216,16 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
 /// transitions itself, instead of a script-side ladder scan.
 pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError> {
     let (here_x, here_z) = (bot.world.x, bot.world.z);
-    let gate_x = bot
-        .toll_fence(here_x, here_z, bot.world.level, 150)?
-        .map(|(gate_x, _, _)| gate_x);
+    // Same discipline as `toll_gate_x`: a down service leaves the pick
+    // unfenced (logged) instead of aborting the run; the walk itself
+    // still fails loud with `nav-down`.
+    let gate_x = match bot.toll_fence(here_x, here_z, bot.world.level, 150) {
+        Ok(gate) => gate.map(|(gate_x, _, _)| gate_x),
+        Err(error) => {
+            bot.log(&format!("toll fence unavailable ({error}), picking unfenced"));
+            None
+        }
+    };
     let mut best: Option<(i64, knowledge::banks::Bank)> = None;
     let mut fallback: Option<(i64, knowledge::banks::Bank)> = None;
     for bank in knowledge::banks::all_banks() {
@@ -963,6 +970,20 @@ mod tests {
         bot.world.z = 3200;
         let far = nearest_bank(&mut bot).expect("a bank resolves");
         assert!(!far.members && far.level == 0, "free surface bank, got: {far:?}");
+    }
+
+    /// No service handle (old daemon, unknown op): the bank pick stays
+    /// unfenced (logged) instead of aborting the run — the walk itself
+    /// still fails loud with `nav-down`. Same discipline as `toll_gate_x`.
+    #[test]
+    fn nearest_bank_picks_unfenced_without_service() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3091;
+        bot.world.z = 3242;
+        let got = nearest_bank(&mut bot).expect("unfenced pick resolves");
+        assert_eq!((got.x, got.z, got.level), (3091, 3242, 0), "draynor wins unfenced, got: {got:?}");
     }
 
     #[test]
