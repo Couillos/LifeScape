@@ -419,7 +419,7 @@ pub fn fight(
             }
             kills += 1;
             let loot_from = bot.world.ticks;
-            let taken = crate::skill_combat::loot_ground(bot)?;
+            let taken = crate::kit::loot::loot_ground(bot)?;
             bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks.saturating_sub(loot_from)));
             // Loot can change the best: one re-evaluation when something
             // was picked up, never on empty kills.

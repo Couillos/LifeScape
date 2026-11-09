@@ -4,25 +4,26 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{
     bank_trip, bank_trip_resilient, buy_stock, check_events, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
-    obj_price, pack_ids, pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome,
+    pack_total, sell_for_target, travel_ticks, walk_checked, WorkOutcome,
     GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS,
 };
 use crate::kit::harvest::{watch_stand, HarvestSource, HarvestTarget};
 use crate::skill_gather::{
-    best_banked_by_rank, reattach_tool, BanSet, ToolSpec, WOODCUT_ACKS,
+    reattach_tool, BanSet, ToolSpec, WOODCUT_ACKS,
 };
-use crate::skill_woodcutting_spot::{default_respawn_ticks, dud_stump_ban, is_stump, learn_respawn, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
+use crate::kit::observe::Observe;
+use crate::skill_woodcutting_spot::{default_respawn_ticks, is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
-const HANDLE_NAME: &str = "macro_hatchethandle";
+pub(crate) const HANDLE_NAME: &str = "macro_hatchethandle";
 
 /// Best axe first.
 pub const AXE_ORDER: [&str; 7] =
@@ -32,7 +33,7 @@ pub const AXE_ORDER: [&str; 7] =
 /// rank alone decides (see `ToolSpec`). The level-gated shortlist is
 /// commented out server-side (woodcut.rs2 woodcutting_axe_checker, 2004
 /// behaviour).
-const AXE_SPEC: ToolSpec = ToolSpec { order: &AXE_ORDER };
+pub(crate) const AXE_SPEC: ToolSpec = ToolSpec { order: &AXE_ORDER };
 
 /// Adapter for the `fn`-pointer rank API (`best_banked_by_rank` takes a
 /// plain function, never a closure over the spec).
@@ -40,164 +41,9 @@ fn axe_rank(name: &str) -> Option<usize> {
     AXE_SPEC.rank(name)
 }
 
-/// Withdraw a banked axe (or its handle+head) and reattach it.
-/// Cheaper than rebuying. Reopens the bank: call after a bank trip.
-/// Booth business from across the map fails fast instead of fanning
-/// 169 instant walks at a booth we cannot touch.
-fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<bool, ScriptError> {
-    if AXE_SPEC.best_held(bot).is_some() {
-        return Ok(true);
-    }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
-        bot.log(&format!("axe restore: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
-        return Ok(false);
-    }
-    let Ok(handle) = obj_id(bot, HANDLE_NAME) else {
-        return Ok(false);
-    };
-    let heads: Vec<u16> = knowledge::all_objs()
-        .into_iter()
-        .filter(|entry| entry.name.as_deref().unwrap_or("").ends_with("_hatchethead"))
-        .filter_map(|entry| entry.name.clone())
-        .filter_map(|name| obj_id(bot, &name).ok())
-        .collect();
-    if heads.is_empty() {
-        return Ok(false);
-    }
-    let Some((booth_x, booth_z, booth_loc)) = crate::skill_common::live_bank_booth(bot, bank.x as i32, bank.z as i32) else {
-        return Ok(false);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-        return Ok(false);
-    }
-    let Some(main_com) = (bot.tables.com_id)("bank_main:inv") else {
-        bot.close_modal()?;
-        return Ok(false);
-    };
-    let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
-    let axes = AXE_SPEC.known_ids(bot);
-    // One axe in the pack: withdraw the best banked axe, never a second.
-    if let Some((slot, held)) = best_banked_by_rank(&slots, &axes, axe_rank) {
-        bot.inv_button(1, held, slot, main_com)?;
-        bot.pump(10)?;
-        bot.close_modal()?;
-        bot.pump(5)?;
-        if AXE_SPEC.best_held(bot).is_some() {
-            bot.log("ok withdrew banked axe");
-            return Ok(true);
-        }
-        return Ok(false);
-    }
-    let handle_slot = slots.iter().find(|(_, (held, _))| *held == handle).map(|(slot, _)| *slot);
-    let head_slot = slots.iter().find(|(_, (held, _))| heads.contains(held)).map(|(slot, _)| *slot);
-    let (Some(handle_slot), Some(head_slot)) = (handle_slot, head_slot) else {
-        bot.close_modal()?;
-        bot.pump(5)?;
-        return Ok(false);
-    };
-    let head = slots[&head_slot].0;
-    bot.inv_button(1, handle, handle_slot, main_com)?;
-    bot.pump(5)?;
-    bot.inv_button(1, head, head_slot, main_com)?;
-    bot.pump(10)?;
-    bot.close_modal()?;
-    bot.pump(5)?;
-    if reattach_tool(bot, HANDLE_NAME, "_hatchethead", &AXE_SPEC)? {
-        bot.log("ok restored axe from banked pieces");
-        return Ok(true);
-    }
-    Ok(false)
-}
 
-/// Broke and axeless: kill goblins east of Lumbridge for coin drops
-/// until the pack funds the axe. Bounded rounds, each a few kills; the hunt
-/// loot stays in the pack for the shared buy below, but anything older
-/// (banked logs from a failed sale, shop junk) is stashed first so combat
-/// never rides with a dead stock. No gain stops early. True when the pack
-/// now affords the axe.
-/// Budget: goblin coin drops average ~1.6/kill (goblin.rs2 drop table, 27
-/// coin rolls per 128), so 30 kills expect ~47 coins and P(<16) is ~2%.
-/// True when the pack holds anything but axes and coins: shop stock or
-/// loot from another job that must not ride into combat (death drops it,
-/// and it clogs the slots the fight needs).
-fn combat_pack_dirty(bot: &Bot, coins: u16) -> bool {
-    let axes = AXE_SPEC.known_ids(bot);
-    pack_ids(bot).iter().any(|id| *id != coins && !axes.contains(id))
-}
 
-fn hunt_goblins(bot: &mut Bot, coins: u16) -> Result<bool, ScriptError> {
-    // Combat pack is combat loot only: logs or shop junk riding along die
-    // with the bot (or clog the pack), and a failed sale above is exactly
-    // how they get there. Stash everything but axes and coins first, so a
-    // missed sale banks its stock instead of marching it into the hunt.
-    if combat_pack_dirty(bot, coins) {
-        let mut keep = AXE_SPEC.known_ids(bot);
-        keep.insert(coins);
-        let bank = nearest_bank(bot)?;
-        bank_trip(bot, &bank, &keep.into_iter().collect::<Vec<_>>(), 0)?;
-    }
-    for _ in 0..5 {
-        if pack_total(bot, coins) >= 16 {
-            return Ok(true);
-        }
-        let before = pack_total(bot, coins);
-        crate::skill_combat::run_melee(
-            bot,
-            &["goblins".to_string(), "--kills".to_string(), "6".to_string(), "--no-bank".to_string()],
-        )?;
-        if pack_total(bot, coins) <= before {
-            break;
-        }
-    }
-    Ok(pack_total(bot, coins) >= 16)
-}
 
-/// Pack ids the bootstrap may sell for the axe: everything carried that
-/// is neither an axe, coins, the unbankable genie lamp, nor the random-
-/// event cube. Ground loot (daggers, spare logs) funds the axe instead
-/// of forcing a bank trip just to dump it; event items are never sale
-/// stock (selling the cube would strand its rescue).
-fn bootstrap_products(bot: &Bot, coins: u16) -> Vec<u16> {
-    let axes = AXE_SPEC.known_ids(bot);
-    let lamp = (bot.tables.find_obj_by_name)("macro_genilamp");
-    let cube = (bot.tables.find_obj_by_name)("macro_cube");
-    pack_ids(bot)
-        .into_iter()
-        .filter(|id| *id != coins && !axes.contains(id) && Some(*id) != lamp && Some(*id) != cube)
-        .collect()
-}
-
-/// One axe buy attempt with bronze fallback: tries the affordable cands
-/// best-first, one attempt each, downgrading on any shop failure (empty
-/// live stock, short coins). Conn/death/interrupt still abort; anything
-/// else logs and tries the next cheaper axe. Returns the bought name or
-/// None when nothing affordable succeeded. Never loops: one pass, no retry.
-fn buy_axe_upgrade(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, ScriptError> {
-    let have = pack_total(bot, obj_id(bot, "coins")?);
-    for cand in cands {
-        let price = obj_price(cand);
-        if price <= 0 || have < price as u32 {
-            bot.log(&format!("skip {cand}: costs {price}, have {have}"));
-            continue;
-        }
-        match buy_stock(bot, cand, 1) {
-            Ok(bought) if bought > 0 => {
-                bot.log(&format!("ok upgraded to {cand}"));
-                return Ok(Some(cand.clone()));
-            }
-            Ok(_) => {
-                bot.log(&format!("{cand} trade failed at {:?}, trying cheaper", bot.position()));
-            }
-            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-            Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
-            Err(error) if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) => return Err(error),
-            Err(error) => {
-                bot.log(&format!("{cand} buy failed ({error}), trying cheaper"));
-            }
-        }
-    }
-    Ok(None)
-}
 
 /// Pure wait-vs-walk call: Some(wait) when standing still wins, None when
 /// leaving wins. Wait wins only when strictly cheaper than the walk to the
@@ -233,13 +79,12 @@ fn wait_for_respawn(
     tiers: &[knowledge::trees::TreeTier],
     bank: &knowledge::banks::Bank,
     level: i64,
-    memory: &mut HashMap<String, u64>,
+    observe: &mut Observe,
     idle_since: &mut u64,
     except: Option<(i32, i32)>,
-    stumped: &mut HashMap<(i32, i32), u64>,
     leave_ban: u64,
 ) -> Result<(), ScriptError> {
-    let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
+    let expected = observe.respawn.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     // Sitting out a failed prediction (leave_ban, backed off by dud
     // count) is longer than the ETA; sitting out our own fresh stump is
     // exactly the ETA, so a genuinely regrown tree is never skipped.
@@ -247,7 +92,7 @@ fn wait_for_respawn(
     // Ticks advanced during the work: drop expired bans so the walk
     // alternative is measured against live spots, not stale clocks.
     banned.retain(bot.world.ticks);
-    let alternative = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except, stumped, memory)
+    let alternative = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except, observe)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
         bot.log(&format!(
@@ -281,7 +126,7 @@ fn wait_for_respawn(
     if elapsed > 0 && tree_still_there(bot, spot_x, spot_z, &tier.trees) {
         // Remaining time, not the full delay (arrival reads mid-regrow),
         // so the ETA only ratchets up toward the true server rate.
-        memory.insert(tier.product.clone(), learn_respawn(memory.get(&tier.product).copied(), elapsed));
+        observe.learn_respawn(&tier.product, elapsed);
         bot.log(&format!("regrew at ({spot_x},{spot_z}) after {elapsed}t"));
     }
     Ok(())
@@ -509,10 +354,7 @@ struct WoodOps<'a> {
     coins: u16,
     level: i64,
     log_ids: Vec<u16>,
-    respawn: &'a mut HashMap<String, u64>,
-    refusals: &'a mut HashMap<(i32, i32), u8>,
-    dudded: &'a mut HashMap<(i32, i32), u8>,
-    stumped: &'a mut HashMap<(i32, i32), u64>,
+    observe: &'a mut Observe,
     streak: u32,
     travel_dead: Option<((i32, i32), (i32, i32))>,
 }
@@ -551,7 +393,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         let except = self.travel_dead.and_then(|(dead, from)| {
             (from == (bot.world.x, bot.world.z) && state.banned.contains(dead)).then_some(dead)
         });
-        match pick_tree_spot(bot, self.tiers, &*self.bank, self.level, &mut state.banned, except, &mut self.stumped, self.respawn) {
+        match pick_tree_spot(bot, self.tiers, &*self.bank, self.level, &mut state.banned, except, self.observe) {
             Some((ref tier, spot_x, spot_z)) => {
                 bot.log(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
                 bot.intend(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
@@ -584,7 +426,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
             if is_stump(bot, at.0, at.1) {
                 // Timestamp the sighting: the pick predicts this regrow
                 // instead of trusting the stale stream state forever.
-                self.stumped.insert(at, bot.world.ticks);
+                self.observe.note_stump(at, bot.world.ticks);
             }
             state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
             return false;
@@ -618,7 +460,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         // Strikes only survive short bans and walk failures: any other
         // outcome re-proves the stand (chopped, stumped, fled, locked).
         if !matches!(outcome, WorkOutcome::Unreachable | WorkOutcome::UnreachableSpot) {
-            self.refusals.remove(&at);
+            self.observe.refusals.remove(&at);
         }
         if outcome != WorkOutcome::Unreachable {
             self.streak = 0;
@@ -644,9 +486,9 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                     // means the prediction failed (still a stump on
                     // arrival): back the sit-out off so repeats empty the
                     // pool and the loop degrades instead of touring stumps.
-                    self.stumped.insert(at, bot.world.ticks);
-                    let expected = self.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product));
-                    let leave_ban = dud_stump_ban(self.dudded, at, gained, expected);
+                    self.observe.note_stump(at, bot.world.ticks);
+                    let expected = self.observe.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product));
+                    let leave_ban = self.observe.dud_ban(at, gained, expected);
                     // Waiting for the regrow beats re-banning blind when
                     // the walk costs more.
                     let except = self.travel_dead.and_then(|(dead, from)| {
@@ -661,10 +503,9 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                         self.tiers,
                         self.bank,
                         self.level,
-                        self.respawn,
+                        self.observe,
                         &mut state.idle_since,
                         except,
-                        &mut self.stumped,
                         leave_ban,
                     )?;
                 } else {
@@ -713,11 +554,11 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                     // off like the Gone path so repeats empty the pool.
                     // Gains prove we cut it ourselves: plain regrow ETA.
                     // Timestamp it too: the pick predicts this regrow.
-                    self.stumped.insert(at, bot.world.ticks);
-                    let expected = self.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product));
-                    dud_stump_ban(self.dudded, at, gained, expected)
+                    self.observe.note_stump(at, bot.world.ticks);
+                    let expected = self.observe.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product));
+                    self.observe.dud_ban(at, gained, expected)
                 } else {
-                    refusal_ban_ticks(operable, false, true, self.refusals.get(&at).copied().unwrap_or(0))
+                    refusal_ban_ticks(operable, false, true, self.observe.refusals.get(&at).copied().unwrap_or(0))
                 };
                 if stump_here {
                     bot.log(&format!("tree stumped at ({spot_x},{spot_z}), back in ~{ban}t"));
@@ -725,9 +566,9 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                     bot.log(&format!("structurally unreachable, long-banning ({spot_x},{spot_z})"));
                     // Condemned: the ban is the memory now, drop the count
                     // so a starvation release re-proves permanence cleanly.
-                    self.refusals.remove(&at);
+                    self.observe.refusals.remove(&at);
                 } else if operable {
-                    let strikes = self.refusals.entry(at).or_insert(0);
+                    let strikes = self.observe.refusals.entry(at).or_insert(0);
                     *strikes += 1;
                     bot.log(&format!(
                         "spot refused once at ({spot_x},{spot_z}), short-banning {ban}t (strike {}/{DIRECT_REFUSALS_TO_CONDEMN}), retry before condemning",
@@ -767,16 +608,13 @@ fn chop_load(
     coins: u16,
     level: i64,
     banned: &mut BanSet,
-    respawn: &mut HashMap<String, u64>,
-    refusals: &mut HashMap<(i32, i32), u8>,
-    dudded: &mut HashMap<(i32, i32), u8>,
-    stumped: &mut HashMap<(i32, i32), u64>,
+    observe: &mut Observe,
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     // Threat bans outlive one load: move the caller's set into the driver
     // state, run, move back (restored on every exit below, errors too).
     let mut state = crate::skill_loop::LoopState::resume(bot, std::mem::take(banned));
-    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, respawn, refusals, dudded, stumped);
+    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, observe);
     *banned = std::mem::take(&mut state.banned);
     out
 }
@@ -790,12 +628,9 @@ fn chop_inner(
     level: i64,
     state: &mut crate::skill_loop::LoopState,
     log_ids: Vec<u16>,
-    respawn: &mut HashMap<String, u64>,
-    refusals: &mut HashMap<(i32, i32), u8>,
-    dudded: &mut HashMap<(i32, i32), u8>,
-    stumped: &mut HashMap<(i32, i32), u64>,
+    observe: &mut Observe,
 ) -> Result<(bool, i64), ScriptError> {
-    let mut ops = WoodOps { tiers, bank, coins, level, log_ids, respawn, refusals, dudded, stumped, streak: 0, travel_dead: None };
+    let mut ops = WoodOps { tiers, bank, coins, level, log_ids, observe, streak: 0, travel_dead: None };
     loop {
         if AXE_SPEC.best_held(bot).is_none() {
             // Recovery walks (shop, bank) are not chopping: don't bill
@@ -817,179 +652,8 @@ fn chop_inner(
     }
 }
 
-/// True when the pack alone can pay the upgrade right now: buy
-/// immediately, never hoard coins through the chop.
-fn can_buy_now(have_coins: u32, cheapest: i64, cands: &[String]) -> bool {
-    !cands.is_empty() && cheapest > 0 && have_coins >= cheapest as u32
-}
 
-/// Sell the pack (logs and ground-loot junk alike) at the nearby general
-/// store and buy the bronze axe when funded. True when the axe is now
-/// held. The hunt loot only exists AFTER the hunt, so the caller runs this
-/// both before and after: selling late beats losing it to the bank trek
-/// (junk stranded, unsold) or to death (dropped).
-fn sell_pack_and_buy(bot: &mut Bot, bank: &mut knowledge::banks::Bank, coins: u16, label: &str) -> Result<bool, ScriptError> {
-    let funded = bootstrap_products(bot, coins);
-    let have = pack_total(bot, coins);
-    if !funded.is_empty() && have < 16 {
-        let names: Vec<String> =
-            funded.iter().map(|id| (bot.tables.obj_name)(*id).unwrap_or_else(|| format!("obj{id}"))).collect();
-        bot.log(&format!("{label}: selling {names:?} for {have} coins at {:?}", bot.position()));
-        match sell_for_target(bot, &funded, coins, 16 - have) {
-            Ok(_) => {}
-            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-            Err(err) => bot.log(&format!("{label} sale failed: {err}, trying the bank")),
-        }
-    }
-    if pack_total(bot, coins) >= 16 {
-        match buy_stock(bot, "bronze_axe", 1) {
-            Ok(bought) if bought > 0 => {
-                bot.log(&format!("ok bootstrapped bronze axe from {label}"));
-                *bank = nearest_bank(bot)?;
-                return Ok(true);
-            }
-            Ok(_) => {}
-            Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-            Err(err) => bot.log(&format!("{label} axe buy failed: {err}, trying the bank")),
-        }
-    }
-    Ok(AXE_SPEC.best_held(bot).is_some())
-}
 
-/// Axe bootstrap, reusable after every death: reattach from the pack,
-/// sell the pack and buy from the keeper, else bank-trip, restore a
-/// banked axe, else withdraw and sell banked logs to fund one. Returns
-/// the banked coin total for upgrade budgeting. Loud when broke: an axe
-/// cannot be conjured from nothing.
-fn ensure_axe(
-    bot: &mut Bot,
-    bank: &mut knowledge::banks::Bank,
-    coins: u16,
-    log_ids: &HashSet<u16>,
-) -> Result<Option<u32>, ScriptError> {
-    let mut bank_coins: Option<u32> = None;
-    if AXE_SPEC.best_held(bot).is_none() || pack_ids(bot).iter().any(|id| !AXE_SPEC.known_ids(bot).contains(id) && !log_ids.contains(id) && *id != coins) {
-        if reattach_tool(bot, HANDLE_NAME, "_hatchethead", &AXE_SPEC)? {
-            bot.log("ok reattached axe from pack, no bootstrap needed");
-        }
-        let keep: Vec<u16> = log_ids.iter().copied().collect();
-        // An axe is bought with wood, not with a bank trip: sell the pack
-        // (logs and ground-loot junk alike) at the nearby general store
-        // and buy from the axe keeper first. Every trek below only runs
-        // when the pack cannot fund the axe on its own.
-        // Sale hiccups are never fatal here: the hunt below is exactly
-        // what funds the axe, so log and keep going.
-        if AXE_SPEC.best_held(bot).is_none() {
-            let bought = match sell_pack_and_buy(bot, &mut *bank, coins, "pack sale") {
-                Ok(bought) => bought,
-                Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
-                Err(error)
-                    if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) =>
-                {
-                    return Err(error)
-                }
-                Err(error) => {
-                    bot.log(&format!("pack sale failed: {error}, hunting to fund the axe"));
-                    false
-                }
-            };
-            // Broke with nothing worth selling: earn the axe on goblins
-            // east of Lumbridge first, then sell THAT loot too before
-            // falling to the bank below.
-            if !bought && pack_total(bot, coins) < 16 {
-                match hunt_goblins(bot, coins) {
-                    Ok(true) => {}
-                    Ok(false) => bot.log("goblin hunt came up short, trying the bank"),
-                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                    Err(err) => bot.log(&format!("goblin hunt failed: {err}, trying the bank")),
-                }
-                let _ = match sell_pack_and_buy(bot, &mut *bank, coins, "hunt loot") {
-                    Ok(bought) => bought,
-                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                    Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
-                    Err(error)
-                        if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) =>
-                    {
-                        return Err(error)
-                    }
-                    Err(error) => {
-                        bot.log(&format!("hunt loot sale failed: {error}, trying the bank"));
-                        false
-                    }
-                };
-            }
-        }
-        if AXE_SPEC.best_held(bot).is_none() {
-            bank_coins = Some(bank_trip(bot, bank, &keep, 0)?);
-            if restore_from_bank(bot, bank)? {
-                bot.log("ok axe restored from bank");
-            }
-        }
-        if AXE_SPEC.best_held(bot).is_none() {
-            // Toll crossing costs 10 coins each way: budget it only when
-            // the bank sits across the fence, then pay the guard.
-            let need_cross = crate::skill_common::toll_gate_x(bot)
-                .is_some_and(|line| (bank.x >= line as i64) != (bot.world.x >= line));
-            let target = 16u32 + if need_cross { 10 } else { 0 };
-            bank_coins = Some(bank_trip(bot, bank, &keep, u32::MAX / 2)?);
-            let have = pack_total(bot, coins);
-            if have < target {
-                // No wood in the pack: pull the banked logs back out and
-                // sell those (an axe is bought with wood, not with nothing).
-                let log_list: Vec<u16> = log_ids.iter().copied().collect();
-                let carried: u32 = log_list.iter().map(|id| pack_total(bot, *id)).sum();
-                if carried == 0 {
-                    let pulled = crate::skill_common::bank_withdraw_items(bot, bank, &log_list, 10)?;
-                    if pulled > 0 {
-                        bot.log(&format!("withdrew {pulled} logs from the bank to fund the axe"));
-                    }
-                }
-                sell_for_target(bot, &log_list, coins, target - pack_total(bot, coins))?;
-            }
-            if need_cross && !crate::skill_common::cross_toll_gate(bot)? {
-                return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
-            }
-            // Bronze-first bootstrap: one attempt, then fall through broke.
-            // Being broke is never fatal: the main loop sees no axe and
-            // hunts again. Only death/conn/interrupt abort. Callers fall
-            // back to the hunt, never to a buy loop.
-            if pack_total(bot, coins) >= 16 {
-                match buy_stock(bot, "bronze_axe", 1) {
-                    Ok(bought) if bought > 0 => {
-                        bot.log("ok bootstrapped bronze axe");
-                        *bank = nearest_bank(bot)?;
-                    }
-                    Ok(_) => {
-                        bot.log(&format!(
-                            "cannot bootstrap yet: no axe, {} coins (bronze trade failed at {:?}), hunting again",
-                            pack_total(bot, coins),
-                            bot.position()
-                        ));
-                    }
-                    Err(error) if crate::skill_common::is_death_abort(&error) => return Err(error),
-                    Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
-                    Err(error) if matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_))) => {
-                        return Err(error)
-                    }
-                    Err(error) => {
-                        bot.log(&format!(
-                            "cannot bootstrap yet: no axe, {} coins (bronze out of stock at {:?}: {error}), hunting again",
-                            pack_total(bot, coins),
-                            bot.position()
-                        ));
-                    }
-                }
-            } else {
-                bot.log(&format!(
-                    "cannot bootstrap yet: no axe, {} coins, hunting again",
-                    pack_total(bot, coins)
-                ));
-            }
-        }
-    }
-    Ok(bank_coins)
-}
 
 /// Cut banked loads in the open session (0 = forever).
 pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
@@ -1015,23 +679,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // Threat bans outlive one load: a killer tree stays banned while its
     // neighbours get cut, instead of repicking the same death every load.
     let mut banned: BanSet = BanSet::new();
-    // Observed regrow delays per tier product: one exact wait calibrates
-    // the whole tier (server rate is per tree table), so this outlives
-    // loads like the bans do.
-    let mut respawn: HashMap<String, u64> = HashMap::new();
-    // Confirmed stump sightings (spot -> tick): the picker predicts the
-    // regrow from these instead of trusting stale stream state — a tree
-    // the bot wasn't around to see regrow still reads as a stump.
-    // Arrival re-streams and proves it, so this outlives loads too.
-    let mut stumped: HashMap<(i32, i32), u64> = HashMap::new();
-    // Adjacent direct-refusal strikes per stand: the first refusal rides
-    // the short ban, the repeat condemns (structural). Walk-leg failures
-    // never write here.
-    let mut refusals: HashMap<(i32, i32), u8> = HashMap::new();
-    // Consecutive gainless stump visits per spot: the first rides the
-    // regrow ETA, repeats back off so dead stumps stop shadowing live
-    // tiers. Gains at the spot clear it (proven live).
-    let mut dudded: HashMap<(i32, i32), u8> = HashMap::new();
+    // Observation memory for the run (regrow ETAs, stump sightings,
+    // refusal strikes, gainless visits): owned by the bot, never shared,
+    // never persisted — it dies with the run.
+    let mut observe = Observe::fresh();
     while loads == 0 || done < loads {
         // Death may have moved us across the map: re-sync the bank cheaply
         // (no walking) so spots and treks start from the real position.
@@ -1043,7 +694,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // iteration (combat xp always progresses). Only conn/interrupt
         // and structural failures (toll, unreachable bank) fail loud.
         // Anything else fails loud as before.
-        match ensure_axe(bot, &mut bank, coins, &log_ids) {
+        match crate::legacy::bootstrap::ensure_axe(bot, &mut bank, coins, &log_ids) {
             Ok(Some(coins_)) => bank_coins = coins_,
             Ok(None) => {}
             Err(error) if crate::skill_common::is_death_abort(&error) => {
@@ -1056,7 +707,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bot.log("still axeless after re-gear, hunting again");
             continue;
         }
-        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn, &mut refusals, &mut dudded, &mut stumped)?;
+        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut observe)?;
         level = new_level;
         // A failed load (threats, stumps, stall) retries with bans kept:
         // stumps regrow and hunters wander off.
@@ -1073,8 +724,8 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 coins,
                 (cheapest as u32).saturating_sub(bank_coins + have),
             )?;
-            if can_buy_now(pack_total(bot, coins), cheapest, &cands) {
-                match buy_axe_upgrade(bot, &cands)? {
+            if crate::legacy::bootstrap::can_buy_now(pack_total(bot, coins), cheapest, &cands) {
+                match crate::legacy::bootstrap::buy_axe_upgrade(bot, &cands)? {
                     Some(_) => {}
                     None => {
                         bot.log(&format!(
@@ -1104,7 +755,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // The shop trip can leave two axes in the pack (old + upgrade):
         // stash then, so the spot sees one axe and no coins.
         if pack_total(bot, coins) > 0 {
-            let _ = buy_axe_upgrade(bot, &cands)?;
+            let _ = crate::legacy::bootstrap::buy_axe_upgrade(bot, &cands)?;
         }
         let axes_held: u32 = AXE_SPEC.known_ids(bot).iter().map(|id| pack_total(bot, *id)).sum();
         if pack_total(bot, coins) > 0 || axes_held > 1 {
@@ -1126,7 +777,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_products, can_buy_now, combat_pack_dirty, respawn_wait_ticks, AXE_SPEC};
+    use super::{respawn_wait_ticks, AXE_SPEC};
     use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
     use crate::skill_gather::death_since;
     use lifescape_sdk::Bot;
@@ -1173,64 +824,9 @@ mod tests {
         assert_eq!(fresh, 1, "chatter still resyncs the index");
     }
 
-    /// Combat pack rule: logs or shop junk force a stash, axes and coins
-    /// ride along. A missed sale must bank its stock, never march it into
-    /// the hunt.
-    #[test]
-    fn combat_pack_dirty_iff_noncombat_carried() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
-        let logs = crate::skill_common::obj_id(&bot, "logs").expect("logs in tables");
-        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
-        assert!(!combat_pack_dirty(&bot, coins), "empty pack hunts as-is");
-        bot.world.inv.insert(com, [(0u8, (coins, 3u32))].into_iter().collect());
-        assert!(!combat_pack_dirty(&bot, coins), "coins ride along");
-        bot.world.inv.insert(com, [(0u8, (coins, 3u32)), (1, (logs, 6))].into_iter().collect());
-        assert!(combat_pack_dirty(&bot, coins), "banked logs must stash before the hunt");
-    }
-
-    /// Bootstrap sale set: ground loot and logs fund the axe, axes/coins
-    /// and the unbankable lamp never sell.
-    #[test]
-    fn bootstrap_products_sells_loot_never_axe_or_lamp() {        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
-        let axe = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
-        let dagger = crate::skill_common::obj_id(&bot, "bronze_dagger").expect("bronze_dagger in tables");
-        let logs = crate::skill_common::obj_id(&bot, "logs").expect("logs in tables");
-        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
-        bot.world.inv.insert(
-            com,
-            [(0u8, (coins, 3u32)), (1, (axe, 1)), (2, (dagger, 1)), (3, (logs, 2))]
-                .into_iter()
-                .collect(),
-        );
-        let funded = bootstrap_products(&bot, coins);
-        assert!(funded.contains(&dagger), "ground loot funds the axe");
-        assert!(funded.contains(&logs), "logs fund the axe");
-        assert!(!funded.contains(&coins), "coins never sell");
-        assert!(!funded.contains(&axe), "axes never sell");
-        if let Some(lamp) = (bot.tables.find_obj_by_name)("macro_genilamp") {
-            assert!(!funded.contains(&lamp), "lamp never sells");
-        }
-        if let Some(cube) = (bot.tables.find_obj_by_name)("macro_cube") {
-            assert!(!funded.contains(&cube), "event cube never sells");
-        }
-    }
 
 
-    /// Affordable upgrade: buy right away. Short, no candidates, or no
-    /// price: coins stay reserved for the bank, never spent mid-chop.
-    #[test]
-    fn upgrade_bought_immediately_when_affordable() {
-        let cands = vec!["iron_axe".to_string()];
-        assert!(can_buy_now(613, 500, &cands), "613 coins pay 500 now");
-        assert!(can_buy_now(500, 500, &cands), "exact price pays now");
-        assert!(!can_buy_now(109, 500, &cands), "109 coins stay reserved for the bank");
-        assert!(!can_buy_now(999, 500, &[]), "no candidates, nothing to buy");
-        assert!(!can_buy_now(999, 0, &cands), "no price, nothing to buy");
-    }
+
 
     /// Bootstrap fallback order: with 16 coins only bronze is affordable
     /// (bronze 16, iron 56, steel 200 from the dump). The upgrade loop must

@@ -320,12 +320,12 @@ fn use_handle_on_head(bot: &mut Bot, handle: u16, head: u16, spec: &ToolSpec) ->
 
 /// Best-ranked banked tool slot (the pack holds one tool: an upgrade banks
 /// the old one, a restore withdraws the best, never a second). Pure: rank
-/// decides through a `fn` pointer (no closure, no `&Bot` capture); names
-/// come from the dump (`obj_by_id` debug names, not display labels).
+/// decides; names come from the dump (`obj_by_id` debug names, not display
+/// labels).
 pub fn best_banked_by_rank(
     slots: &HashMap<u8, (u16, u32)>,
     known: &HashSet<u16>,
-    rank: fn(&str) -> Option<usize>,
+    rank: impl Fn(&str) -> Option<usize>,
 ) -> Option<(u8, u16)> {
     slots
         .iter()

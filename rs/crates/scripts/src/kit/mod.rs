@@ -6,6 +6,9 @@
 pub mod fight;
 pub mod gear;
 pub mod harvest;
+pub mod loot;
+pub mod observe;
 pub mod spots;
 pub mod style;
 pub mod survival;
+pub mod tools;

@@ -4,12 +4,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
+use crate::kit::observe::Observe;
 use crate::kit::spots::{drop_occupied, f2p_inside, hunter_covers, hunter_zones, refine_by_walk, OCCUPIED_RADIUS};
 use crate::skill_gather::{across_toll, BanSet};
 use crate::ScriptError;
@@ -33,30 +32,6 @@ pub(crate) fn default_respawn_ticks(product: &str) -> u64 {
         "magic_logs" => 400,
         _ => 160,
     }
-}
-
-/// A remembered stump whose regrow ETA passed counts as live: the bot
-/// wasn't there to see it regrow, so the stream still shows the stump.
-/// `stumped` maps spot -> tick the stump was confirmed; `respawn` holds
-/// observed per-product delays (server rate is per tree table). Unknown
-/// spots (never seen stump) are NOT predicted — first sight stamps the
-/// clock via `or_insert`, so at most one extra regrow window passes
-/// before the first probe. Arrival re-streams and proves it (live chop
-/// or fresh re-ban), so a wrong prediction costs one walk, never a loop.
-pub(crate) fn regrown_due(
-    bot: &Bot,
-    pos: (i32, i32),
-    product: &str,
-    stumped: &mut HashMap<(i32, i32), u64>,
-    respawn: &HashMap<String, u64>,
-) -> bool {
-    if !is_stump(bot, pos.0, pos.1) {
-        stumped.remove(&pos);
-        return true;
-    }
-    let at = *stumped.entry(pos).or_insert(bot.world.ticks);
-    let wait = respawn.get(product).copied().unwrap_or_else(|| default_respawn_ticks(product));
-    bot.world.ticks.saturating_sub(at) >= wait
 }
 
 /// Highest F2P tier whose level requirement is reached: members tiers
@@ -202,8 +177,7 @@ fn nearest_hop_spot(
     hunters: &[(i64, i64, i64)],
     saw_paid_only: &mut bool,
     saw_f2p_only: &mut bool,
-    stumped: &mut HashMap<(i32, i32), u64>,
-    respawn: &HashMap<String, u64>,
+    observe: &mut Observe,
 ) -> Option<(i64, (i32, i32))> {
     // Local filters first (no service), then ONE f2p batch for the
     // survivors — never one IPC per spot in a tight loop.
@@ -218,8 +192,9 @@ fn nearest_hop_spot(
         // Stale stump whose regrow ETA passed reads as live: the bot
         // wasn't there to see it regrow. Arrival re-streams and proves
         // it (live chop or fresh re-ban + re-stamp).
+        let wait = observe.respawn.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
         if !tree_live(bot, spot_x, spot_z, &tier.trees)
-            && !regrown_due(bot, (spot_x, spot_z), &tier.product, stumped, respawn)
+            && !observe.regrown_due(bot.world.ticks, (spot_x, spot_z), wait, is_stump(bot, spot_x, spot_z))
         {
             continue;
         }
@@ -253,8 +228,7 @@ pub(crate) fn pick_tree_spot(
     level: i64,
     banned: &mut BanSet,
     except: Option<(i32, i32)>,
-    stumped: &mut HashMap<(i32, i32), u64>,
-    respawn: &HashMap<String, u64>,
+    observe: &mut Observe,
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
     // Toll-fence aware: banks on the far side are last resort, never the
     // default — same getter as `nearest_bank`, one line per side.
@@ -287,8 +261,9 @@ pub(crate) fn pick_tree_spot(
             if banned.contains((spot_x, spot_z)) {
                 continue;
             }
+            let wait = observe.respawn.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
             if !tree_live(bot, spot_x, spot_z, &tier.trees)
-                && !regrown_due(bot, (spot_x, spot_z), &tier.product, stumped, respawn)
+                && !observe.regrown_due(bot.world.ticks, (spot_x, spot_z), wait, is_stump(bot, spot_x, spot_z))
             {
                 continue;
             }
@@ -341,8 +316,7 @@ pub(crate) fn pick_tree_spot(
             &hunters,
             &mut saw_paid_only,
             &mut saw_f2p_only,
-            stumped,
-            respawn,
+            observe,
         );
         if let Some((dist, (spot_x, spot_z))) = hop {
             bot.log(&format!(
@@ -367,8 +341,7 @@ pub(crate) fn pick_tree_spot(
                 &hunters,
                 &mut saw_paid_only,
                 &mut saw_f2p_only,
-                stumped,
-                respawn,
+                observe,
             ) {
                 bot.log(&format!(
                     "no {} on this side of the toll fence, relocating across to ({spot_x},{spot_z}) +{dist} tiles",
@@ -404,8 +377,8 @@ pub(crate) fn pick_tree_spot(
                         // owns stamping): due stumps read as live to the
                         // picker, so only the toll/f2p/hunter stages below
                         // can still exclude them.
-                        let wait = respawn.get(&top.product).copied().unwrap_or_else(|| default_respawn_ticks(&top.product));
-                        let elapsed = stumped.get(&(spot_x, spot_z)).map(|at| now.saturating_sub(*at));
+                        let wait = observe.respawn.get(&top.product).copied().unwrap_or_else(|| default_respawn_ticks(&top.product));
+                        let elapsed = observe.stumped.get(&(spot_x, spot_z)).map(|at| now.saturating_sub(*at));
                         match elapsed {
                             Some(past) if past >= wait => "stump-due".to_string(),
                             Some(past) => format!("stump~{}t", wait.saturating_sub(past)),
@@ -454,7 +427,7 @@ pub(crate) fn pick_tree_spot(
                     oldest.0,
                     oldest.1,
                 ));
-                return pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except, stumped, respawn);
+                return pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except, observe);
             }
         }
     }
@@ -553,44 +526,10 @@ pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior
     GONE_BAN_TICKS
 }
 
-/// Sit-out after a gainless stump outcome (the pick expected a tree,
-/// the server shows a stump). First sighting rides the regrow ETA (a
-/// race or a stale template costs one walk); repeats back off
-/// geometrically so a never-regrowing stump stops shadowing the pool:
-/// the bans outlast a full rotation, the pool empties and the loop
-/// degrades a tier instead of touring stumps forever. Capped at the
-/// long sit-out; the starvation release still re-proves the oldest.
-pub(crate) fn dud_ban_ticks(expected: u64, fails: u8) -> u64 {
-    if fails <= 1 {
-        return expected;
-    }
-    (expected << fails.saturating_sub(1).min(5)).min(STRUCTURAL_BAN_TICKS)
-}
-
-/// Book a stump outcome at `at`: gains prove the tree live (reset to
-/// the ETA), a gainless stump counts a failed prediction. Returns the
-/// sit-out ban for this outcome.
-pub(crate) fn dud_stump_ban(duds: &mut HashMap<(i32, i32), u8>, at: (i32, i32), gained: u32, expected: u64) -> u64 {
-    if gained > 0 {
-        duds.remove(&at);
-        return expected;
-    }
-    let fails = duds.get(&at).copied().unwrap_or(0).saturating_add(1);
-    duds.insert(at, fails);
-    dud_ban_ticks(expected, fails)
-}
-
-/// Fold one observed regrow wait into the tier ETA. Observations are
-/// REMAINING times (arrival mid-regrow reads short), so the ETA only
-/// ratchets up toward the true delay: overwriting with the latest
-/// observation collapsed yew 185t to 10t and every stump read due.
-pub(crate) fn learn_respawn(known: Option<u64>, observed: u64) -> u64 {
-    known.map(|wait| wait.max(observed)).unwrap_or(observed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::observe::Observe;
     use crate::kit::spots::refine_by_walk;
     use crate::skill_common::toll_gate_x;
     use crate::skill_gather::{same_side, starved_oldest};
@@ -695,9 +634,10 @@ mod tests {
         let bank = draynor_bank();
         let spot = (3053, 3271);
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
-        let mut stumped: HashMap<(i32, i32), u64> = [(spot, 0)].into_iter().collect();
+        let mut observe = Observe::fresh();
+        observe.stumped.insert(spot, 0);
         let (mut bot, _service) = stump_bot_at(spot, 200, "spot-due-stump");
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut observe);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("due stump should read live, got None");
         };
@@ -712,9 +652,10 @@ mod tests {
         let spot = (3053, 3271);
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
         // Stumped "now": the 200-tick yew regrow hasn't elapsed.
-        let mut stumped: HashMap<(i32, i32), u64> = [(spot, 1000)].into_iter().collect();
+        let mut observe = Observe::fresh();
+        observe.stumped.insert(spot, 1000);
         let (mut bot, _service) = stump_bot_at(spot, 1000, "spot-fresh-stump");
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut observe);
         let Some((tier, _, _)) = picked else {
             panic!("fresh stump should degrade, got None");
         };
@@ -727,16 +668,16 @@ mod tests {
         let bank = draynor_bank();
         let spot = (3053, 3271);
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
-        let mut stumped: HashMap<(i32, i32), u64> = HashMap::new();
+        let mut observe = Observe::fresh();
         // First sight stamps the clock: still down, degrades.
         let (mut bot, _service) = stump_bot_at(spot, 10000, "spot-first-sight");
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut observe);
         let product = picked.map(|(tier, _, _)| tier.product);
         assert!(product.as_deref() == Some("willow_logs"), "first sight degrades, got: {product:?}");
-        assert_eq!(stumped.get(&spot), Some(&10000), "first sight stamps the clock");
+        assert_eq!(observe.stumped.get(&spot), Some(&10000), "first sight stamps the clock");
         // A regrow window later the same stump reads live again.
         bot.world.ticks = 10250;
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut observe);
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("due stump should read live, got None");
         };
@@ -802,7 +743,7 @@ mod tests {
         let tiers = lifescape_gamedata::trees::all_tiers();
         // Every yew spawn banned except (3249,3201), across the fence.
         let (mut banned, wide) = ban_all_yews_except(&tiers, &[(3249, 3201)]);
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut Observe::fresh());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
@@ -823,7 +764,7 @@ mod tests {
         let bank = draynor_bank();
         let tiers = lifescape_gamedata::trees::all_tiers();
         let (mut banned, _) = ban_all_yews_except(&tiers, &[(3270, 3470), (3249, 3201)]);
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut Observe::fresh());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("same-side yew should win, got None");
         };
@@ -842,7 +783,7 @@ mod tests {
         let bank = draynor_bank();
         let tiers = lifescape_gamedata::trees::all_tiers();
         let (mut banned, _) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut Observe::fresh());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("hop should find the next yew cluster, got None");
         };
@@ -888,7 +829,7 @@ mod tests {
         }
         let before = banned.len();
         assert_eq!(before, wide.len(), "whole tier banned, got: {before} of {}", wide.len());
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut Observe::fresh());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("starved tier should retry the oldest ban, got None");
         };
@@ -916,34 +857,6 @@ mod tests {
             GONE_BAN_TICKS,
             "stump is depletion even when adjacent"
         );
-    }
-
-    /// Dud rule: a gainless stump outcome rides the regrow ETA once (a
-    /// race or a stale template costs one walk), then backs off
-    /// geometrically so a never-regrowing stump stops shadowing the
-    /// pool; any gains at the spot prove it live and reset to the ETA.
-    /// Live t01/t04: every yew pick returned a stump, bans == ETA, the
-    /// pool never emptied so the loop never degraded a tier.
-    #[test]
-    fn dud_stump_ban_grace_then_backoff() {
-        let mut duds = HashMap::new();
-        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 200, "first gainless stump rides the ETA");
-        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 400, "repeat backs off");
-        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 800, "still down backs off again");
-        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 5, 200), 200, "gains prove live, ETA again");
-        assert_eq!(dud_stump_ban(&mut duds, (1, 1), 0, 200), 200, "grace again after reset");
-        assert_eq!(dud_ban_ticks(400, 9), STRUCTURAL_BAN_TICKS, "capped at the long sit-out");
-    }
-
-    /// Learning rule: observations are REMAINING times (arrival
-    /// mid-regrow reads short), so the tier ETA only ratchets up toward
-    /// the true delay. Overwriting collapsed yew 185t to 10t live and
-    /// every stump read due days early.
-    #[test]
-    fn respawn_learning_ratchets_up_never_down() {
-        assert_eq!(learn_respawn(None, 185), 185, "first observation sets the ETA");
-        assert_eq!(learn_respawn(Some(185), 10), 185, "short remaining never collapses the ETA");
-        assert_eq!(learn_respawn(Some(10), 185), 185, "longer observation recovers upward");
     }
 
     /// Release rule: only a full ban sweep (100% of spots seen) releases
@@ -1007,7 +920,7 @@ mod tests {
                 }
             }
         }
-        let filtered = pick_tree_spot(&mut bot, &tiers, &bank, 30, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let filtered = pick_tree_spot(&mut bot, &tiers, &bank, 30, &mut banned, None, &mut Observe::fresh());
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
@@ -1087,7 +1000,7 @@ mod tests {
         let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
         let before = banned.len();
         assert_eq!(before, wide.len() - 1, "all but the dead spot banned, got: {before} of {}", wide.len());
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)), &mut HashMap::new(), &HashMap::new());
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, Some((2996, 3311)), &mut Observe::fresh());
         let Some((tier, _, _)) = picked else {
             panic!("dead-spot repick should degrade one tier, got None");
         };

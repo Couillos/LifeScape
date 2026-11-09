@@ -14,7 +14,7 @@ use crate::skill_common::{
     obj_price, pack_ids, pack_total, sell_for_target, walk_checked, WorkOutcome, GONE_BAN_TICKS,
 };
 use crate::kit::spots::{drop_occupied, OCCUPIED_RADIUS};
-use crate::skill_gather::{best_banked_by_rank, reattach_tool, BanSet, ToolSpec, MINING_ACKS};
+use crate::skill_gather::{reattach_tool, BanSet, ToolSpec, MINING_ACKS};
 use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
 
@@ -140,11 +140,6 @@ fn rock_still_there(bot: &mut Bot, spot_x: i32, spot_z: i32, tier: &knowledge::r
 /// every caller (never rebuilt per call).
 const PICK_SPEC: ToolSpec = ToolSpec { order: &PICK_ORDER };
 
-/// Rank in PICK_ORDER (0 = best).
-fn pick_rank(name: &str) -> Option<usize> {
-    PICK_SPEC.rank(name)
-}
-
 fn best_pickaxe(bot: &Bot) -> Option<String> {
     PICK_SPEC.best_held(bot)
 }
@@ -243,69 +238,6 @@ fn work_spot(
     crate::kit::harvest::watch_stand(bot, &mut source, rock_x, rock_z, ore_ids, had_ore)
 }
 
-/// Withdraw a banked pickaxe (or its handle+head) and reattach it.
-/// Cheaper than rebuying. Reopens the bank: call after a bank trip.
-fn restore_from_bank(bot: &mut Bot, bank: &knowledge::banks::Bank) -> Result<bool, ScriptError> {
-    if best_pickaxe(bot).is_some() {
-        return Ok(true);
-    }
-    let Ok(handle) = obj_id(bot, HANDLE_NAME) else {
-        return Ok(false);
-    };
-    let heads: Vec<u16> = knowledge::all_objs()
-        .into_iter()
-        .filter(|entry| entry.name.as_deref().unwrap_or("").ends_with("_pickaxehead"))
-        .filter_map(|entry| entry.name.clone())
-        .filter_map(|name| obj_id(bot, &name).ok())
-        .collect();
-    if heads.is_empty() {
-        return Ok(false);
-    }
-    let Some((booth_x, booth_z, booth_loc)) = crate::skill_common::live_bank_booth(bot, bank.x as i32, bank.z as i32) else {
-        return Ok(false);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-        return Ok(false);
-    }
-    let Some(main_com) = (bot.tables.com_id)("bank_main:inv") else {
-        bot.close_modal()?;
-        return Ok(false);
-    };
-    let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
-    let picks = known_pick_ids(bot);
-    // One pickaxe in the pack: withdraw the best banked one, never a
-    // second (shared rank, same as the axe loop).
-    if let Some((slot, held)) = best_banked_by_rank(&slots, &picks, pick_rank) {
-        bot.inv_button(1, held, slot, main_com)?;
-        bot.pump(10)?;
-        bot.close_modal()?;
-        bot.pump(5)?;
-        if best_pickaxe(bot).is_some() {
-            bot.log("ok withdrew banked pickaxe");
-            return Ok(true);
-        }
-        return Ok(false);
-    }
-    let handle_slot = slots.iter().find(|(_, (held, _))| *held == handle).map(|(slot, _)| *slot);
-    let head_slot = slots.iter().find(|(_, (held, _))| heads.contains(held)).map(|(slot, _)| *slot);
-    let (Some(handle_slot), Some(head_slot)) = (handle_slot, head_slot) else {
-        bot.close_modal()?;
-        bot.pump(5)?;
-        return Ok(false);
-    };
-    let head = slots[&head_slot].0;
-    bot.inv_button(1, handle, handle_slot, main_com)?;
-    bot.pump(5)?;
-    bot.inv_button(1, head, head_slot, main_com)?;
-    bot.pump(10)?;
-    bot.close_modal()?;
-    bot.pump(5)?;
-    if reattach(bot)? {
-        bot.log("ok restored pickaxe from banked pieces");
-        return Ok(true);
-    }
-    Ok(false)
-}
 
 fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> Result<bool, ScriptError> {
     if best_pickaxe(bot).is_some() {
@@ -327,7 +259,7 @@ fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> 
         let _ = bank;
         return Ok(false);
     }
-    if best_pickaxe(bot).is_none() && restore_from_bank(bot, &home)? {
+    if best_pickaxe(bot).is_none() && crate::kit::tools::restore_from_bank(bot, &home, &PICK_SPEC, HANDLE_NAME, "_pickaxehead")? {
         bot.log("ok replacement pickaxe restored from bank");
         return Ok(true);
     }
@@ -467,7 +399,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let keep: Vec<u16> = known_pick_ids(bot).into_iter().collect();
         bank_coins = bank_trip(bot, &bank, &keep, 0)?;
-        if best_pickaxe(bot).is_none() && restore_from_bank(bot, &bank)? {
+        if best_pickaxe(bot).is_none() && crate::kit::tools::restore_from_bank(bot, &bank, &PICK_SPEC, HANDLE_NAME, "_pickaxehead")? {
             bot.log("ok pickaxe restored from bank");
         }
         if best_pickaxe(bot).is_none() {

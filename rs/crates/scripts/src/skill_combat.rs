@@ -12,66 +12,11 @@ use crate::kit::gear::{available_gear, equip_plan, gear_plan, melee_level, prepa
 use crate::kit::style::{fight_weapon_style, style_damage_key};
 use crate::kit::survival::{bank_stocks_food, danger_error, food_count, DeathTally};
 use crate::skill_common::{
-    bury_bones, check_events, free_slots, walk_checked,
+    check_events, walk_checked,
 };
 use crate::skill_gather::same_side;
 use crate::{ScriptError, ScriptResult};
 
-const LOOT_RADIUS: i32 = 6;
-/// Worst-case take: the drop lands on the death tick (goblin.rs2 obj_add
-/// right after npc_death), walk <= 6 tiles + click. 600 burned 12 s on every
-/// vanished/unreachable item; failures now log so the bound stays honest.
-const TAKE_TICKS: u64 = 100;
-
-
-
-
-
-
-
-
-
-
-
-pub(crate) fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
-    let mut taken = 0u32;
-    let mut items: Vec<((i32, i32, i32), u16)> = bot
-        .world
-        .ground_items(bot.world.x, bot.world.z, bot.world.level, LOOT_RADIUS, None)
-        .into_iter()
-        .map(|((tile, oid), _)| (tile, oid))
-        .collect();
-    items.sort_by_key(|(tile, _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
-    // Coins first: the goblin bootstrap exists to fund the axe, junk never
-    // starves the coin pickup when the pack is nearly full.
-    let coins = (bot.tables.find_obj_by_name)("coins");
-    items.sort_by_key(|(_, oid)| if Some(*oid) == coins { 0 } else { 1 });
-    for (_, oid) in items {
-        if free_slots(bot) == 0 {
-            break;
-        }
-        let name = (bot.tables.obj_name)(oid).unwrap_or_default();
-        if name.is_empty() || name.to_lowercase().contains("bones") {
-            continue;
-        }
-        // Dead socket, not a missed pickup: typed instead of skipping.
-        match bot.take(Some(oid), None, TAKE_TICKS) {
-            Ok(true) => taken += 1,
-            Ok(false) => bot.log(&format!("loot {name} gave nothing at {:?}", bot.position())),
-            Err(error)
-                if matches!(
-                    error,
-                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-                ) =>
-            {
-                return Err(error.into())
-            }
-            Err(error) => bot.log(&format!("loot {name} failed at {:?}: {error}", bot.position())),
-        }
-    }
-    bury_bones(bot)?;
-    Ok(taken)
-}
 
 
 
