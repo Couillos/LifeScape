@@ -973,6 +973,10 @@ impl Orchestrator {
                 // connections, each with its per-second average.
                 return crate::res_stats::snapshot_json();
             }
+            "market" => {
+                // Market socket API over HTTP: {cmd:"market", op, ...}.
+                return crate::market_service::handle(request);
+            }
             _ => {}
         }
         object(vec![

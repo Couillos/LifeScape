@@ -17,6 +17,8 @@ lifescape-gamedata = { path = "../gamedata" }
 lifescape-nav = { path = "../nav" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-scripts = { path = "../scripts" }
+lifescape-market = { path = "../market" }
+lifescape-store = { path = "../store" }
 
 [lints]
 workspace = true

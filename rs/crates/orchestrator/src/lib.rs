@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 pub mod paths;
+pub mod market_service;
+pub mod market_seed;
+#[cfg(test)]
+#[path = "market_service_tests.rs"]
+mod market_service_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;

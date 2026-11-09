@@ -372,6 +372,7 @@ fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
     let mut log_mark: Option<(u128, u64)> = None;
     let mut last_logs: Vec<String> = Vec::new();
     let mut last_state: Option<Value> = None;
+    let mut last_market: i64 = 0;
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -380,6 +381,23 @@ fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
         if now - last_send >= WS_INTERVAL {
             let (mut payload, full) = state_payload(dispatch, &account, last_state.as_ref());
             last_state = full.or(last_state);
+            // Market live tail on the same 1 Hz frame: the last prints
+            // per item let the market graph stretch its candle live.
+            let tick = dispatch(object(vec![
+                ("cmd", str_value("market")),
+                ("op", str_value("tick")),
+                ("since", Value::Int(last_market)),
+            ]));
+            for trade in tick.get("trades").as_arr().map(|items| items.to_vec()).unwrap_or_default() {
+                if let Some(at) = trade.get("t").as_i64() {
+                    if at > last_market {
+                        last_market = at;
+                    }
+                }
+            }
+            if let Value::Obj(map) = &mut payload {
+                map.insert("market".to_string(), tick);
+            }
             if !account.is_empty() {
                 let (_merged, _partial, log_path) = paths::user_paths(&account);
                 let mark = std::fs::metadata(&log_path).ok().and_then(|meta| {
@@ -605,6 +623,48 @@ fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Response {
             shaped.insert("ok".to_string(), reply.get("ok").clone());
             shaped.insert("state".to_string(), annotate_mapscene(state));
             return Ok(ok_json(Value::Obj(shaped)));
+        }
+        if parts == ["market"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "text/html; charset=utf-8",
+                cache: "no-store",
+                body: asset("market.html").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["market.js"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "application/javascript",
+                cache: "no-store",
+                body: asset("market.js").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts.len() >= 3 && parts[..2] == ["api", "market"] {
+            // Market JSON API: the op is the third segment, the rest of
+            // the query string becomes the request fields.
+            let op = parts[2].to_string();
+            let params = parse_query(query);
+            let num = |key: &str| params.get(key).and_then(|raw| raw.parse::<i64>().ok());
+            let mut fields: Vec<(String, Value)> = vec![("cmd".to_string(), str_value("market")), ("op".to_string(), str_value(&op))];
+            for key in ["item", "depth", "from", "to", "limit", "since"] {
+                if let Some(value) = num(key) {
+                    fields.push((key.to_string(), Value::Int(value)));
+                }
+            }
+            for key in ["q", "res", "account", "side"] {
+                if let Some(value) = params.get(key) {
+                    // Search names carry spaces (`Air rune`): decode the
+                    // two escapes browsers send, nothing more.
+                    let decoded = value.replace('+', " ").replace("%20", " ");
+                    fields.push((key.to_string(), str_value(&decoded)));
+                }
+            }
+            let mut map = std::collections::BTreeMap::new();
+            for (key, value) in fields {
+                map.insert(key, value);
+            }
+            return Ok(ok_json(dispatch(Value::Obj(map))));
         }
         if parts == ["api", "items", "history"] {
             let reply = dispatch(object(vec![("cmd", str_value("items"))]));

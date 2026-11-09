@@ -111,6 +111,19 @@ fn daemon_main() -> i32 {
         }
     };
     lifescape_orchestrator::holdings::start_sampler(orch.clone());
+    // Market: catalogue from the dumps, store opened here alone, demo
+    // history seeded when empty, socket beside the session sockets.
+    match lifescape_orchestrator::market_service::start() {
+        Ok(service) => {
+            let probe = lifescape_json::object(vec![("op", lifescape_json::str_value("stats"))]);
+            println!(
+                "market on {} ({} items)",
+                lifescape_orchestrator::market_service::socket_path().display(),
+                service.handle(&probe).get("items").as_i64().unwrap_or(-1)
+            )
+        }
+        Err(error) => eprintln!("market service unavailable ({error}); market page shows the error"),
+    };
     // E2 persistent pushes: one stream per worker, one reader thread
     // daemon-side (`push.sock`). The CLI socket below keeps its 1
     // req/1 reply shape on a bounded pool (no thread per message).
@@ -134,6 +147,7 @@ fn daemon_main() -> i32 {
     }
     let _ = std::fs::remove_file(paths::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());
+    let _ = std::fs::remove_file(lifescape_orchestrator::market_service::socket_path());
     0
 }
 

@@ -83,6 +83,10 @@ name = "lifescape-json"
 version = "0.1.0"
 
 [[package]]
+name = "lifescape-market"
+version = "0.1.0"
+
+[[package]]
 name = "lifescape-nav"
 version = "0.1.0"
 dependencies = [
@@ -95,9 +99,11 @@ version = "0.1.0"
 dependencies = [
  "lifescape-gamedata",
  "lifescape-json",
+ "lifescape-market",
  "lifescape-nav",
  "lifescape-scripts",
  "lifescape-sdk",
+ "lifescape-store",
 ]
 
 [[package]]
