@@ -20,6 +20,7 @@ pub mod harvest;
 pub mod loot;
 pub mod mine;
 pub mod observe;
+pub mod produce;
 pub mod spots;
 pub mod style;
 pub mod survival;

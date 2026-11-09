@@ -197,7 +197,9 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
             }
             other if other.starts_with("--") => return Err(usage()),
             other => {
-                if activity == "melee" {
+                if activity == "melee"
+                    || (activity == "cook" && spec.resource.is_empty() && other.parse::<u32>().is_err())
+                {
                     spec.resource.push(other.to_string());
                 } else if spec.targets.count.is_none() {
                     spec.targets.count = Some(other.parse().map_err(|_| usage())?);
@@ -392,6 +394,22 @@ mod tests {
         assert!(melee.no_bank, "no-bank kept");
         assert!(parse_cli("woodcut", &["x".to_string()]).is_err(), "junk count fails loud");
         assert!(parse_cli("melee", &["--kills".to_string()]).is_err(), "dangling flag fails loud");
+    }
+
+    /// Cook positionals: an optional resource name, then an optional
+    /// count. A bare number stays a count (default raw); a name fills the
+    /// resource the brain would otherwise fix.
+    #[test]
+    fn cook_positionals_fill_resource_then_count() {
+        let both = parse_cli("cook", &["raw_shrimp".to_string(), "2".to_string()]).expect("cook parses");
+        assert_eq!(both.resource, vec!["raw_shrimp".to_string()]);
+        assert_eq!(both.targets.count, Some(2));
+        let bare = parse_cli("cook", &["3".to_string()]).expect("bare count parses");
+        assert!(bare.resource.is_empty(), "bare count keeps the default raw");
+        assert_eq!(bare.targets.count, Some(3));
+        let named = parse_cli("cook", &["raw_shrimp".to_string()]).expect("bare resource parses");
+        assert_eq!(named.resource, vec!["raw_shrimp".to_string()]);
+        assert_eq!(named.targets.count, None);
     }
 
     /// Task flags: XP/level/quest targets, tick budget, keep-list, node,

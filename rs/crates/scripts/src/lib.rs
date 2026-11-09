@@ -175,7 +175,7 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "fishing", "mining", "woodcut", "melee", "tutorial",
+        "cook", "fishing", "mining", "woodcut", "melee", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -201,6 +201,7 @@ fn runner(name: &str) -> Option<Runner> {
         "walkto" => Some(|bot, args| Walkto.run(bot, args)),
         "debug_walk" => Some(|bot, args| DebugWalk.run(bot, args)),
         "fishing" => Some(|bot, args| activities::fishing::run_fishing(bot, args)),
+        "cook" => Some(|bot, args| activities::cook::run_cook(bot, args)),
         "mining" => Some(|bot, args| activities::mining::run_mining(bot, args)),
         "woodcut" => Some(|bot, args| activities::woodcut::run_woodcut(bot, args)),
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
@@ -261,7 +262,7 @@ mod tests {
     fn registry_covers_legacy_scripts() {
         // all supervised entry points, checked against names().
         for name in [
-            "fishing", "mining", "woodcut", "melee", "tutorial",
+            "cook", "fishing", "mining", "woodcut", "melee", "tutorial",
             "quest_cooks_assistant", "quest_dragon_slayer", "rescue_maze",
             "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
             "check_transitions", "check_doors", "check_routes", "goto",
@@ -271,7 +272,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 44);
+        assert_eq!(names().len(), 45);
     }
 
     #[test]

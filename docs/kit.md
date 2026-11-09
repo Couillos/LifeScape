@@ -45,3 +45,43 @@ Pause inline générique : `pose_market` à côté du rescue, même porte à un
 seul niveau, rescue prioritaire. Le market attend `at_safe_point`, rejoue
 son script puis retourne marcher au point de départ ; l'horloge
 d'engagement est suspendue (retour compris, `market_pause_ticks`).
+
+## Produce (transformation A sur B)
+
+`kit/produce.rs`, premier client `activities/cook.rs` (cuire des
+crevettes sur une cuisinière). Déclaration : site (locs en ordre de
+préférence, ou PNJ) + adaptateur d'interface + intrant. Un pas
+`cycle::run` = une charge (remplir de cru, tout cuire, banquer).
+
+Adaptateurs (un par famille d'interface, jamais par activité) :
+
+- `Direct` : aucun modal (cuisine : un clic = un produit). Attente de la
+  consommation de l'intrant, re-clic par unité.
+- `Choice { pick }` : dialogue chat1-chat4, choisit l'option contenant
+  `pick`, pagine le texte courant sinon.
+- `Count` : `P_COUNTDIALOG` → `RESUME_P_COUNTDIALOG` avec le reste à
+  produire (0 = tout le porté) ; le serveur enchaîne, la brique draine
+  sans re-cliquer.
+- `Grid { button }` : ouvre l'interface (`smithing`,
+  `crafting_jewelry`, `leather_crafting`, `tanner`), presse le bouton
+  (nom com complet, ex. `smelting:com_19`), répond au compteur éventuel.
+  La table produit → bouton reste côté appelant.
+
+Particularités cuisine : cuisinières d'abord (brûlent moins), puis
+cheminées, puis feux ; brûlés suivis comme produits (`Recipe.burnt`) ;
+pas d'intrant manquant = `blocked{missing: [cru]}` ; poste introuvable
+ou charge sans consommation = erreur forte, jamais de no-op silencieux.
+Feux : le foyer de Lumbridge sert de repli (brûle plus, même boucle).
+
+CLI : `run cook [cru] [charge]` (`cook` seul = crevettes, charge 0 =
+infini). `cook 3` reste une charge comme les récolteurs.
+
+A priori cuisine (remplacé dès 3 mesures) : 400 plats et 12000 XP par
+6000 ticks (charge de 28 crevettes à 30 XP : banque, trajet, cuisson,
+retour). Mesures R6 : voir rendements ci-dessous.
+
+## Rendements live (référence, remesurés à chaque lot)
+
+| Id | Tournée | XP / 6000 ticks | Objets / 6000 ticks |
+|---|---|---|---|
+| R6 | crevettes, cuisinière | — | — |

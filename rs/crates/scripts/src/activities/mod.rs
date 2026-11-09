@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cook;
 pub mod fishing;
 pub mod melee;
 pub mod mining;
