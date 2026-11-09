@@ -102,8 +102,18 @@ fn pick_rock_spot(
 }
 
 /// Live loc id at a tile (live stream first, static template as fallback).
-fn live_loc_id(bot: &Bot, rock_x: i32, rock_z: i32) -> Result<u16, ScriptError> {
+/// The worker paints nothing: the fallback is one `tiles_flags` batch to
+/// the nav service, which reads its snapshot. Live still wins (a depleted
+/// rock streams its change), so `rock_still_there` keeps deciding below.
+/// A down service stays loud (`nav-down` via `ScriptError::Sdk`); only a
+/// tile the service has no template for keeps the `Usage` error.
+fn live_loc_id(bot: &mut Bot, rock_x: i32, rock_z: i32) -> Result<u16, ScriptError> {
     if let Some((loc, _, _)) = bot.world.loc_at(rock_x, rock_z, bot.world.level) {
+        return Ok(loc);
+    }
+    let level = bot.world.level;
+    let rows = bot.tiles_flags(&[(rock_x, rock_z, level)]).map_err(ScriptError::Sdk)?;
+    if let Some((loc, _, _)) = rows.into_iter().next().and_then(|row| row.loc) {
         return Ok(loc);
     }
     Err(ScriptError::Usage(format!("no loc at {rock_x},{rock_z} from {:?}", bot.position())))
@@ -111,7 +121,7 @@ fn live_loc_id(bot: &Bot, rock_x: i32, rock_z: i32) -> Result<u16, ScriptError> 
 
 /// True unless the server confirmed a depleted rock here (unknown = assume
 /// standing, never assume depletion).
-fn rock_still_there(bot: &Bot, spot_x: i32, spot_z: i32, tier: &knowledge::rocks::RockTier) -> bool {
+fn rock_still_there(bot: &mut Bot, spot_x: i32, spot_z: i32, tier: &knowledge::rocks::RockTier) -> bool {
     let Ok(loc) = live_loc_id(bot, spot_x, spot_z) else {
         return true;
     };
@@ -530,4 +540,105 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 fn ore_ids_for(bot: &Bot, tiers: &[knowledge::rocks::RockTier]) -> Vec<u16> {
     tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tables_live::attach_live_tables;
+
+    /// Mapless worker against a real nav service (repo dumps): no painted
+    /// world, only the plan handle — the same shape as a live worker.
+    fn served_mining_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+        let data = root.join("LifeScape/gamedata/data");
+        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+        world.set_f2p(zones);
+        let tables = std::sync::Arc::new(lifescape_nav::tables::Tables::load(&data).expect("tables"));
+        let version = format!("test-mine-{socket_tag}");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, version.clone()),
+            &lifescape_nav::service::test_socket(socket_tag),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), socket_tag));
+        bot.plan_data_version = Some(version);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        (bot, service)
+    }
+
+    /// First dump rock spawn the service has a template for, with its loc:
+    /// the fallback target, found in one batch.
+    fn templated_rock_spawn(bot: &mut Bot) -> (i32, i32, u16) {
+        let mut spawns: Vec<(i32, i32)> = Vec::new();
+        for tier in usable_tiers() {
+            for entry in knowledge::all_locs() {
+                let name = entry.name.clone().unwrap_or_default().to_lowercase();
+                if tier.rocks.iter().any(|rock| *rock == name) {
+                    for spawn in entry.spawns {
+                        if spawn.level == 0 {
+                            spawns.push((spawn.x as i32, spawn.z as i32));
+                        }
+                    }
+                }
+            }
+        }
+        spawns.sort();
+        spawns.dedup();
+        let tiles: Vec<(i32, i32, i32)> = spawns.iter().take(64).map(|(x, z)| (*x, *z, 0)).collect();
+        let rows = bot.tiles_flags(&tiles).expect("flags answer");
+        spawns
+            .into_iter()
+            .take(64)
+            .zip(rows)
+            .find_map(|((x, z), row)| row.loc.map(|(loc, _, _)| (x, z, loc)))
+            .expect("a templated rock spawn")
+    }
+
+    /// Unstreamed rock tile: the service template answers the loc instead
+    /// of ending the run with `Usage` (same hole as the woodcut twin).
+    /// Live still wins once streamed.
+    #[test]
+    fn live_loc_id_falls_back_to_the_service_template() {
+        let (mut bot, _service) = served_mining_bot("mine-loc-fallback");
+        let (rock_x, rock_z, template) = templated_rock_spawn(&mut bot);
+        bot.world.locs.remove(&(rock_x, rock_z, 0));
+        assert!(bot.world.loc_at(rock_x, rock_z, 0).is_none(), "nothing streamed yet");
+        assert_eq!(live_loc_id(&mut bot, rock_x, rock_z).expect("static template answers"), template);
+        // Live wins once streamed.
+        bot.world.locs.insert((rock_x, rock_z, 0), Some((template.wrapping_add(1), 0, 0)));
+        assert_eq!(
+            live_loc_id(&mut bot, rock_x, rock_z).expect("live answers"),
+            template.wrapping_add(1),
+            "live beats the template"
+        );
+    }
+
+    /// A tile the service has no template for keeps the `Usage` error
+    /// (a spot with genuinely no rock), never a guessed id.
+    #[test]
+    fn live_loc_id_without_template_stays_usage() {
+        let (mut bot, _service) = served_mining_bot("mine-loc-empty");
+        // One batch over open grass: the first tile without a template
+        // proves the error path.
+        let cands: Vec<(i32, i32, i32)> = (0..32).map(|index| (3000 + index, 3300, 0)).collect();
+        let rows = bot.tiles_flags(&cands).expect("flags answer");
+        let empty = cands
+            .iter()
+            .zip(rows)
+            .find(|(_, row)| row.loc.is_none())
+            .map(|(tile, _)| *tile)
+            .expect("open grass somewhere");
+        let err = live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is Usage");
+        assert!(matches!(err, ScriptError::Usage(_)), "Usage, got: {err:?}");
+    }
 }

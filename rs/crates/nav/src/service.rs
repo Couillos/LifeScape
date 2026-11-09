@@ -212,6 +212,7 @@ pub struct CacheStats {
     pub refused_cap: u64,
     pub refused_full: u64,
     pub refused_stale: u64,
+    pub unknown: u64,
     pub ram_warn: u64,
     pub ram_shed: u64,
 }
@@ -864,8 +865,8 @@ struct Job {
 
 enum Slot {
     Pending { cancel: Arc<AtomicBool> },
-    Ready { plan: Value },
-    Failed { error: Value },
+    Ready { plan: Value, polled: bool },
+    Failed { error: Value, polled: bool },
 }
 
 /// Plan server: snapshot shared by the pool, bounded queue, IPC replies.
@@ -895,6 +896,7 @@ pub struct Service {
     refused_cap: AtomicU64,
     refused_full: AtomicU64,
     refused_stale: AtomicU64,
+    unknown_polls: AtomicU64,
     ram_warn: AtomicU64,
     ram_shed: AtomicU64,
     door_defs_served: AtomicU64,
@@ -950,6 +952,7 @@ impl Service {
             refused_cap: AtomicU64::new(0),
             refused_full: AtomicU64::new(0),
             refused_stale: AtomicU64::new(0),
+            unknown_polls: AtomicU64::new(0),
             ram_warn: AtomicU64::new(0),
             ram_shed: AtomicU64::new(0),
             door_defs_served: AtomicU64::new(0),
@@ -1010,6 +1013,7 @@ impl Service {
             refused_cap: self.refused_cap.load(Ordering::Relaxed),
             refused_full: self.refused_full.load(Ordering::Relaxed),
             refused_stale: self.refused_stale.load(Ordering::Relaxed),
+            unknown: self.unknown_polls.load(Ordering::Relaxed),
             ram_warn: self.ram_warn.load(Ordering::Relaxed),
             ram_shed: self.ram_shed.load(Ordering::Relaxed),
         }
@@ -1160,6 +1164,7 @@ impl Service {
                     ("refused_cap", Value::Int(stats.refused_cap as i64)),
                     ("refused_full", Value::Int(stats.refused_full as i64)),
                     ("refused_stale", Value::Int(stats.refused_stale as i64)),
+                    ("unknown", Value::Int(stats.unknown as i64)),
                     ("door_defs", Value::Int(self.door_defs_served.load(Ordering::Relaxed) as i64)),
                     ("tiles_flags", Value::Int(self.tiles_flags_served.load(Ordering::Relaxed) as i64)),
                     ("static_locs_near", Value::Int(self.static_locs_served.load(Ordering::Relaxed) as i64)),
@@ -1363,25 +1368,49 @@ impl Service {
 
     /// A cache hit answers as a fresh terminal ticket (poll reads it
     /// once, same shape as a computed plan, no queue involved).
+    /// Reap one consumable terminal when `results` overflows: a polled
+    /// (already consumed) terminal first, oldest id first so the choice
+    /// is FIFO-deterministic; an unpolled one only when no polled
+    /// terminal exists (the bound holds, never a pending). The waiter
+    /// orphan goes down with its slot: without this, every evicted id
+    /// leaked one `waiters` entry forever (`unknown-ticket` storm
+    /// artefact). One lock at a time, never nested.
+    /// Returns false when nothing is consumable (pendings only): the
+    /// caller breaks instead of spinning.
+    fn evict_one(&self) -> bool {
+        let victim = self
+            .results
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, slot)| matches!(slot, Slot::Ready { .. } | Slot::Failed { .. }))
+            .min_by_key(|(id, slot)| {
+                let consumed = matches!(slot, Slot::Ready { polled: true, .. } | Slot::Failed { polled: true, .. });
+                (!consumed, **id)
+            })
+            .map(|(id, _)| *id);
+        if let Some(id) = victim {
+            self.results.lock().unwrap().remove(&id);
+            self.waiters.lock().unwrap().remove(&id);
+            true
+        } else {
+            false
+        }
+    }
     fn instant_slot(&self, is_plan: bool, body: Value) -> Value {
         let version = self.version();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.waiters.lock().unwrap().insert(id, 1);
         let mut results = self.results.lock().unwrap();
         if is_plan {
-            results.insert(id, Slot::Ready { plan: body });
+            results.insert(id, Slot::Ready { plan: body, polled: false });
         } else {
-            results.insert(id, Slot::Failed { error: body });
+            results.insert(id, Slot::Failed { error: body, polled: false });
         }
-        while results.len() > RESULTS_CAP {
-            let evict = results.iter().find_map(|(id, slot)| {
-                matches!(slot, Slot::Ready { .. } | Slot::Failed { .. }).then_some(*id)
-            });
-            match evict {
-                Some(id) => {
-                    results.remove(&id);
-                }
-                None => break,
+        drop(results);
+        while self.results.lock().unwrap().len() > RESULTS_CAP {
+            if !self.evict_one() {
+                break;
             }
         }
         object(vec![
@@ -1404,31 +1433,44 @@ impl Service {
         };
         // LOT3 shared tickets: Ready/Failed answers clone out WITHOUT
         // consuming the slot (N waiters poll the same id); eviction by
-        // RESULTS_CAP reaps them. Pending stays until computed/cancelled.
-        let results = self.results.lock().unwrap();
-        match results.get(&id) {
+        // RESULTS_CAP reaps them, polled ones first. Pending stays until
+        // computed/cancelled. A first poll marks the terminal consumed so
+        // the eviction prefers it over a never-polled one.
+        let mut results = self.results.lock().unwrap();
+        match results.get_mut(&id) {
             Some(Slot::Pending { .. }) => object(vec![
                 ("ok", Value::Bool(true)),
                 ("status", str_value("pending")),
                 ("version", str_value(&version)),
             ]),
-            Some(Slot::Ready { plan }) => object(vec![
-                ("ok", Value::Bool(true)),
-                ("status", str_value("ready")),
-                ("plan", plan.clone()),
-                ("version", str_value(&version)),
-            ]),
-            Some(Slot::Failed { error }) => object(vec![
-                ("ok", Value::Bool(true)),
-                ("status", str_value("failed")),
-                ("error", error.clone()),
-                ("version", str_value(&version)),
-            ]),
-            None => object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value("unknown-ticket")),
-                ("version", str_value(&version)),
-            ]),
+            Some(Slot::Ready { plan, polled }) => {
+                *polled = true;
+                let plan = plan.clone();
+                object(vec![
+                    ("ok", Value::Bool(true)),
+                    ("status", str_value("ready")),
+                    ("plan", plan),
+                    ("version", str_value(&version)),
+                ])
+            }
+            Some(Slot::Failed { error, polled }) => {
+                *polled = true;
+                let error = error.clone();
+                object(vec![
+                    ("ok", Value::Bool(true)),
+                    ("status", str_value("failed")),
+                    ("error", error),
+                    ("version", str_value(&version)),
+                ])
+            }
+            None => {
+                self.unknown_polls.fetch_add(1, Ordering::Relaxed);
+                object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value("unknown-ticket")),
+                    ("version", str_value(&version)),
+                ])
+            }
         }
     }
 
@@ -1842,7 +1884,18 @@ impl Service {
             };
             self.queued.fetch_sub(1, Ordering::Relaxed);
             if !self.results.lock().unwrap().contains_key(&job.id) {
-                self.release(&job.account);
+                // Cancelled while queued: the canceller already dropped
+                // the maps and released admission. Release only when we
+                // still own them, never twice for one ticket (a double
+                // release stole a live ticket's cap unit and let the
+                // effective concurrency drift above ACCOUNT_CAP).
+                if self.tickets.lock().unwrap().remove(&job.id).is_some() {
+                    let mut inflight = self.inflight.lock().unwrap();
+                    if inflight.get(&job.key) == Some(&job.id) {
+                        inflight.remove(&job.key);
+                    }
+                    self.release(&job.account);
+                }
                 continue;
             }
             let snapshot = self.snapshot.lock().unwrap().clone();
@@ -1882,34 +1935,33 @@ impl Service {
             let mut results = self.results.lock().unwrap();
             if matches!(results.get(&job.id), Some(Slot::Pending { .. })) {
                 if is_plan {
-                    results.insert(job.id, Slot::Ready { plan: body });
+                    results.insert(job.id, Slot::Ready { plan: body, polled: false });
                 } else {
-                    results.insert(job.id, Slot::Failed { error: body });
+                    results.insert(job.id, Slot::Failed { error: body, polled: false });
                 }
                 // Bound stored results: evict a consumable outcome (never
                 // a pending); its owner already gave up and fell back sync.
-                while results.len() > RESULTS_CAP {
-                    let evict = results.iter().find_map(|(id, slot)| {
-                        matches!(slot, Slot::Ready { .. } | Slot::Failed { .. }).then_some(*id)
-                    });
-                    match evict {
-                        Some(id) => {
-                            results.remove(&id);
-                        }
-                        None => break,
+                drop(results);
+                while self.results.lock().unwrap().len() > RESULTS_CAP {
+                    if !self.evict_one() {
+                        break;
                     }
                 }
             }
             // A cancelled ticket drops its outcome; a served one leaves
-            // its terminal slot for every waiter to poll.
+            // its terminal slot for every waiter to poll. Admission is
+            // released exactly once per ticket: a cancel already released
+            // it and dropped the maps, so only the owner still holding
+            // the ticket entry releases here.
             {
                 let mut inflight = self.inflight.lock().unwrap();
                 if inflight.get(&job.key) == Some(&job.id) {
                     inflight.remove(&job.key);
                 }
             }
-            self.tickets.lock().unwrap().remove(&job.id);
-            self.release(&job.account);
+            if self.tickets.lock().unwrap().remove(&job.id).is_some() {
+                self.release(&job.account);
+            }
         }
     }
 
@@ -3330,5 +3382,138 @@ mod tests {
         assert_eq!(after.2 - before.2, 1, "transitions_list counted");
         assert_eq!(after.3 - before.3, 2, "both probe batches counted");
         assert_eq!(after.4 - before.4, 1, "doors_near counted");
+    }
+
+    /// Cancel-then-drop must release admission exactly once: a cancelled
+    /// queued job is dropped by the pool without touching the cap, so a
+    /// live ticket of the same account stays counted until it completes.
+    /// (Storm artefact: every cancel-then-drop stole one cap unit, the
+    /// effective per-account concurrency drifted above ACCOUNT_CAP and
+    /// fed the RESULTS_CAP churn behind `unknown-ticket`.)
+    #[test]
+    fn cancelled_queued_job_does_not_steal_admission() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "drop-adm".to_string()),
+            &test_socket("plan-drop-adm"),
+            1,
+        )
+        .expect("service starts");
+        // Long leg (same as the operator-stop test): seconds of Dijkstra,
+        // so ticket B is still in flight while A is already dropped.
+        let from = Tile { x: 3222, z: 3222, level: 0 };
+        let dest = Tile { x: 3250, z: 3420, level: 0 };
+        let account = "drop-adm";
+        let cancelled = match client_submit(&service, account, from, dest) {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        let client = PlanClient::new(service.socket_path(), account);
+        client.cancel(cancelled).expect("cancel answers");
+        let live = match client.submit(from, dest, &short_options(), "drop-adm").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("cap wedged by the cancel: {reason}"),
+        };
+        // While B is still in flight, the account holds exactly one unit:
+        // A released once (cancel), never again (pool drop). Loop: the
+        // drop lands milliseconds after the cancel, B runs for seconds.
+        let start = std::time::Instant::now();
+        loop {
+            match client.poll(live).expect("poll answers") {
+                (Poll::Pending, _) => {
+                    let held = service.admission.lock().unwrap().get(account).copied();
+                    assert_eq!(held, Some(1), "live ticket counted exactly once, got {held:?}");
+                }
+                (Poll::Ready(_), _) | (Poll::Failed(_), _) | (Poll::Unknown, _) => break,
+            }
+            assert!(start.elapsed() < Duration::from_secs(60), "long leg must terminate");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // B done: the cap is empty again, never negative, never stuck.
+        assert_eq!(service.admission.lock().unwrap().get(account).copied(), None, "cap empty after completion");
+    }
+
+    /// Shared helper: submit on a fresh-service account (submit path
+    /// without a client handle, for tests driving the maps directly).
+    fn client_submit(service: &Service, account: &str, from: Tile, dest: Tile) -> Submit {
+        let client = PlanClient::new(service.socket_path(), account);
+        match client.submit(from, dest, &short_options(), "drop-adm").expect("submit") {
+            Submit::Accepted { id, .. } => Submit::Accepted { id, version: "drop-adm".to_string() },
+            Submit::Refused { reason, version } => Submit::Refused { reason, version },
+        }
+    }
+
+    /// Eviction policy: polled (consumed) terminals first, oldest id
+    /// first, an unpolled one only as a last resort, a pending never.
+    /// Every reaped slot takes its waiter orphan down with it (the
+    /// storm leaked one `waiters` entry per evicted id, unbounded).
+    #[test]
+    fn eviction_reaps_consumed_first_and_never_pendings() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "evict-pol".to_string()),
+            &test_socket("plan-evict-pol"),
+            1,
+        )
+        .expect("service starts");
+        let terminal = |polled: bool| Slot::Ready { plan: object(vec![("k", str_value("v"))]), polled };
+        {
+            let mut results = service.results.lock().unwrap();
+            let mut waiters = service.waiters.lock().unwrap();
+            results.insert(7, terminal(true));
+            results.insert(8, terminal(true));
+            results.insert(9, terminal(false));
+            results.insert(10, Slot::Pending { cancel: Arc::new(AtomicBool::new(false)) });
+            for id in [7u64, 8, 9, 10] {
+                waiters.insert(id, 1);
+            }
+        }
+        assert!(service.evict_one(), "a consumable terminal exists");
+        assert!(!service.results.lock().unwrap().contains_key(&7), "oldest consumed reaped first");
+        assert!(service.results.lock().unwrap().contains_key(&8), "newer consumed waits its turn");
+        assert!(service.results.lock().unwrap().contains_key(&9), "unconsumed survives while consumed exist");
+        assert!(!service.waiters.lock().unwrap().contains_key(&7), "waiter orphan reaped with its slot");
+        assert!(service.evict_one(), "one consumed left");
+        assert!(!service.results.lock().unwrap().contains_key(&8), "second consumed gone");
+        assert!(service.results.lock().unwrap().contains_key(&9), "unconsumed still survives");
+        assert!(service.evict_one(), "last resort reaps the unconsumed");
+        assert!(!service.results.lock().unwrap().contains_key(&9), "unconsumed falls last");
+        assert!(!service.waiters.lock().unwrap().contains_key(&9), "orphan cleaned");
+        assert!(!service.evict_one(), "pendings only: nothing to reap");
+        let results = service.results.lock().unwrap();
+        assert!(matches!(results.get(&10), Some(Slot::Pending { .. })), "pending never evicted");
+        assert!(service.waiters.lock().unwrap().contains_key(&10), "pending waiter untouched");
+    }
+
+    /// Storm scenario at the protocol level: the slot disappears (here
+    /// a last-waiter cancel, standing in for an eviction or a daemon
+    /// restart) and the next poll is `unknown-ticket`, counted. A
+    /// cancel on the missing id stays ok and leaves no waiter orphan:
+    /// this is what the client now sends on every Unknown.
+    #[test]
+    fn cancelled_ticket_polls_unknown_and_cancel_cleans_orphan() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "cancel-unk".to_string()),
+            &test_socket("plan-cancel-unk"),
+            1,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "cancel-unk");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let id = match client.submit(from, dest, &short_options(), "cancel-unk").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        client.cancel(id).expect("cancel answers");
+        match client.poll(id).expect("poll answers") {
+            (Poll::Unknown, _) => {}
+            other => panic!("cancelled slot polls Unknown, got {other:?}"),
+        }
+        assert_eq!(service.stats().unknown, 1, "one unknown poll counted");
+        client.cancel(id).expect("cancel on a missing id stays ok");
+        assert!(!service.waiters.lock().unwrap().contains_key(&id), "no waiter orphan left");
+        assert_eq!(service.stats().unknown, 1, "the cleanup cancel polls nothing");
     }
 }

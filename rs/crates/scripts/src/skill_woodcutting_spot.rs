@@ -187,8 +187,8 @@ fn hunter_zones(bot: &Bot) -> Vec<(i64, i64, i64)> {
 /// fails on (3151,3230) while (3151,3229) cuts, (3183,3225) fails on
 /// (3184,3226) while (3185,3225) cuts, (3164,3220) cuts (3165,3219).
 /// Unknown loc reads as 1x1 (old behaviour, engine arbitrates on click).
-pub(crate) fn spot_footprint(bot: &Bot, spot_x: i32, spot_z: i32) -> (i64, i64) {
-    let footprint = bot.world.loc_at(spot_x, spot_z, bot.world.level).and_then(|(loc, _, angle)| {
+pub(crate) fn spot_footprint(bot: &mut Bot, spot_x: i32, spot_z: i32) -> (i64, i64) {
+    let footprint = resolve_loc(bot, spot_x, spot_z).ok().and_then(|(loc, angle)| {
         knowledge::loc_by_id(usize::from(loc)).map(|entry| {
             if angle % 2 == 1 {
                 (entry.length, entry.width)
@@ -554,11 +554,26 @@ pub(crate) fn pick_tree_spot(
 }
 
 /// Live loc id at a tile (live stream first, static template as fallback).
-pub(crate) fn live_loc_id(bot: &Bot, tree_x: i32, tree_z: i32) -> Result<u16, ScriptError> {
-    if let Some((loc, _, _)) = bot.world.loc_at(tree_x, tree_z, bot.world.level) {
-        return Ok(loc);
+/// The worker paints nothing: the fallback is one `tiles_flags` batch to
+/// the nav service, which reads its snapshot. Live still wins (a stump
+/// streams live), so `is_stump`/`tree_still_there` keep deciding below.
+/// A down service stays loud (`nav-down` via `ScriptError::Sdk`); only a
+/// tile the service has no template for keeps the `Usage` error.
+fn resolve_loc(bot: &mut Bot, tile_x: i32, tile_z: i32) -> Result<(u16, u8), ScriptError> {
+    if let Some((loc, _, angle)) = bot.world.loc_at(tile_x, tile_z, bot.world.level) {
+        return Ok((loc, angle));
     }
-    Err(ScriptError::Usage(format!("no loc at {tree_x},{tree_z} from {:?}", bot.position())))
+    let level = bot.world.level;
+    let rows = bot.tiles_flags(&[(tile_x, tile_z, level)]).map_err(ScriptError::Sdk)?;
+    if let Some((loc, _, angle)) = rows.into_iter().next().and_then(|row| row.loc) {
+        return Ok((loc, angle));
+    }
+    Err(ScriptError::Usage(format!("no loc at {tile_x},{tile_z} from {:?}", bot.position())))
+}
+
+/// Live loc id at a tile (live stream first, static template as fallback).
+pub(crate) fn live_loc_id(bot: &mut Bot, tree_x: i32, tree_z: i32) -> Result<u16, ScriptError> {
+    resolve_loc(bot, tree_x, tree_z).map(|(loc, _)| loc)
 }
 
 /// True only when the server confirms a stump here. Unknown means keep
@@ -571,7 +586,7 @@ pub(crate) fn is_stump(bot: &Bot, tree_x: i32, tree_z: i32) -> bool {
     }
 }
 
-pub(crate) fn tree_still_there(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool {
+pub(crate) fn tree_still_there(bot: &mut Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool {
     if bot.world.loc_removed(spot_x, spot_z, bot.world.level) {
         return false;
     }
@@ -1141,5 +1156,43 @@ mod tests {
         let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
         let picked = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
         assert_eq!(picked.1, (3252, 3237), "unwired keeps Manhattan order, got: {picked:?}");
+    }
+
+    /// Unstreamed tree tile: the service template answers the loc instead
+    /// of ending the run with `Usage` (live t01: `no loc at (3053,3271)`).
+    /// Live still wins once streamed; a tile with no template stays `Usage`.
+    #[test]
+    fn live_loc_id_falls_back_to_the_service_template() {
+        let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-loc-fallback");
+        assert!(bot.world.loc_at(3053, 3271, 0).is_none(), "nothing streamed yet");
+        let loc = live_loc_id(&mut bot, 3053, 3271).expect("static template answers");
+        let name =
+            knowledge::loc_by_id(usize::from(loc)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
+        assert!(name.contains("yew"), "template names the yew, got: {name}");
+        // Live wins once streamed: a stump id reports the stump, not the tree.
+        bot.world.locs.insert((3053, 3271, 0), Some((1341, 0, 0)));
+        assert_eq!(live_loc_id(&mut bot, 3053, 3271).expect("live answers"), 1341, "live beats the template");
+        // Footprint follows the fallback too: yews are 3x3, never 1x1.
+        bot.world.locs.remove(&(3053, 3271, 0));
+        assert_eq!(spot_footprint(&mut bot, 3053, 3271), (3, 3), "fallback footprint");
+    }
+
+    /// A tile the service has no template for keeps the `Usage` error
+    /// (a spot with genuinely no tree), never a guessed id.
+    #[test]
+    fn live_loc_id_without_template_stays_usage() {
+        let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-loc-empty");
+        // One batch over open grass: the first tile without a template
+        // proves the error path.
+        let cands: Vec<(i32, i32, i32)> = (0..32).map(|index| (3000 + index, 3300, 0)).collect();
+        let rows = bot.tiles_flags(&cands).expect("flags answer");
+        let empty = cands
+            .iter()
+            .zip(rows)
+            .find(|(_, row)| row.loc.is_none())
+            .map(|(tile, _)| *tile)
+            .expect("open grass somewhere");
+        let err = live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is Usage");
+        assert!(matches!(err, ScriptError::Usage(_)), "Usage, got: {err:?}");
     }
 }

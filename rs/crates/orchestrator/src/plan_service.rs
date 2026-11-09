@@ -119,6 +119,7 @@ pub fn stats_json() -> Option<Value> {
         ("refused_cap", int(stats.refused_cap)),
         ("refused_full", int(stats.refused_full)),
         ("refused_stale", int(stats.refused_stale)),
+        ("unknown", int(stats.unknown)),
         ("door_defs", int(door_defs)),
         ("tiles_flags", int(tiles_flags)),
         ("static_locs_near", int(static_locs_near)),

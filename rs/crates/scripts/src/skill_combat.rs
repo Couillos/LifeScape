@@ -1158,13 +1158,15 @@ fn fight(
 
 /// Clusters on the bot's toll-fence flank (see skill_gather::same_side): the
 /// crossing is never paid in melee, so an eastern cluster from a western
-/// hunt is a ~220-tile detour per visit, never a shortcut. Falls back to
-/// every cluster when none shares the flank (an all-across spot still
-/// hunts instead of idling).
-fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)]) -> Vec<(i32, i32, usize)> {
+/// hunt is a ~220-tile detour per visit, never a shortcut. When every
+/// cluster is across and the run did not opt into `toll`, the list stays
+/// empty and the caller fails named instead of burning NoRoute dossiers.
+/// Falls back to every cluster only when paid (an all-across spot still
+/// hunts instead of idling once the gate is crossable).
+fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)], allow_paid: bool) -> Vec<(i32, i32, usize)> {
     let kept: Vec<(i32, i32, usize)> =
         targets.iter().filter(|(center_x, _, _)| same_side(line, *center_x, home)).copied().collect();
-    if kept.is_empty() {
+    if kept.is_empty() && allow_paid {
         targets.to_vec()
     } else {
         kept
@@ -1207,9 +1209,19 @@ fn run_spot(
     // oscillation inside the fight; this stops it between clusters.
     let mut targets = targets;
     if let Some(line) = crate::skill_common::toll_gate_x(bot) {
-        let kept = same_flank_clusters(line, bot.world.x, &targets);
+        let kept = same_flank_clusters(line, bot.world.x, &targets, bot.allow_paid);
         if kept.len() != targets.len() {
             bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
+        }
+        // Unpaid and nothing on this flank: the router refuses the paid
+        // gate, so every cluster would burn a NoRoute dossier and end
+        // "ok killed 0" (t02 live). Fail named instead.
+        if kept.is_empty() {
+            return Err(ScriptError::Usage(format!(
+                "spot {} is across the toll fence (line {line}) from {:?}: re-run with `toll` once the bot carries coins",
+                spot.key,
+                bot.position()
+            )));
         }
         targets = kept;
     }
@@ -1519,15 +1531,19 @@ mod tests {
         assert!(!super::is_shop_staff(1), "man fights");
     }
 
-    /// Cluster flank filter: mixed flanks keep the bot's side only, an
-    /// all-across list falls back to everything (still hunts).
+    /// Cluster flank filter: mixed flanks keep the bot's side only; an
+    /// all-across list falls back to everything only when paid, and
+    /// stays empty when unpaid so the caller fails named (t02 live:
+    /// unpaid al_kharid_warriors from the west burned NoRoute dossiers
+    /// and ended "ok killed 0").
     #[test]
     fn clusters_stay_on_the_hunting_flank() {
         let mixed = vec![(3252, 3243, 16), (3274, 3213, 4)];
-        assert_eq!(super::same_flank_clusters(3268, 3260, &mixed), vec![(3252, 3243, 16)], "east cluster dropped");
-        assert_eq!(super::same_flank_clusters(3268, 3270, &mixed), vec![(3274, 3213, 4)], "west cluster dropped");
+        assert_eq!(super::same_flank_clusters(3268, 3260, &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
+        assert_eq!(super::same_flank_clusters(3268, 3270, &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
         let east_only = vec![(3274, 3213, 4)];
-        assert_eq!(super::same_flank_clusters(3268, 3260, &east_only), east_only, "all-across still hunts");
+        assert_eq!(super::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
+        assert!(super::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
     }
 
     /// Walking-cost order inside the take(3) window: slot 7 at (3252,3237)

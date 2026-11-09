@@ -64,6 +64,91 @@ pub struct Modal {
 pub type Tile = (i32, i32, i32);
 pub type LocValue = (u16, u8, u8);
 
+/// Cap on retained `MESSAGE_GAME` lines (and paired ticks): past it the oldest
+/// half of BOTH logs is dropped, like `trail` (cap 4000, drain 2000). Sized
+/// from t01: 67 517 msg-lines at ~27 chars avg (~1,8 Mo text, ~5 Mo RAM with
+/// `String`+tick overhead), woodcut flow ~1 msg every few seconds: 8192 is
+/// hours of history (<1 Mo) against cursor windows of 20 (dossier) to 25
+/// (heartbeat), script loops re-reading every few pumps.
+pub const MESSAGE_CAP: usize = 8192;
+
+/// Game-message (or tick) history with saturating cursors: after a drain, a
+/// `seen` cursor taken before it reads empty (as when nothing arrived), never panics.
+#[derive(Debug, Clone)]
+pub struct MessageHistory<LoggedEntry> {
+    entries: Vec<LoggedEntry>,
+}
+
+impl<LoggedEntry> Default for MessageHistory<LoggedEntry> {
+    fn default() -> MessageHistory<LoggedEntry> {
+        MessageHistory { entries: Vec::new() }
+    }
+}
+
+impl<LoggedEntry> MessageHistory<LoggedEntry> {
+    pub fn push(&mut self, entry: LoggedEntry) {
+        self.entries.push(entry);
+    }
+
+    pub(crate) fn drop_oldest(&mut self, drop_count: usize) {
+        let bounded = drop_count.min(self.entries.len());
+        self.entries.drain(..bounded);
+    }
+}
+
+impl<LoggedEntry> std::ops::Deref for MessageHistory<LoggedEntry> {
+    type Target = [LoggedEntry];
+
+    fn deref(&self) -> &[LoggedEntry] {
+        &self.entries
+    }
+}
+
+impl<LoggedEntry> std::ops::Index<usize> for MessageHistory<LoggedEntry> {
+    type Output = LoggedEntry;
+
+    fn index(&self, position: usize) -> &LoggedEntry {
+        &self.entries[position]
+    }
+}
+
+impl<LoggedEntry> std::ops::Index<std::ops::RangeFrom<usize>> for MessageHistory<LoggedEntry> {
+    type Output = [LoggedEntry];
+
+    fn index(&self, range: std::ops::RangeFrom<usize>) -> &[LoggedEntry] {
+        let start = range.start.min(self.entries.len());
+        &self.entries[start..]
+    }
+}
+
+impl<LoggedEntry> std::ops::Index<std::ops::Range<usize>> for MessageHistory<LoggedEntry> {
+    type Output = [LoggedEntry];
+
+    fn index(&self, range: std::ops::Range<usize>) -> &[LoggedEntry] {
+        let kept = self.entries.len();
+        let start = range.start.min(kept);
+        let end = range.end.clamp(start, kept);
+        &self.entries[start..end]
+    }
+}
+
+impl<LoggedEntry> std::ops::Index<std::ops::RangeFull> for MessageHistory<LoggedEntry> {
+    type Output = [LoggedEntry];
+
+    fn index(&self, _whole: std::ops::RangeFull) -> &[LoggedEntry] {
+        &self.entries
+    }
+}
+
+impl<LoggedEntry> std::ops::Index<std::ops::RangeTo<usize>> for MessageHistory<LoggedEntry> {
+    type Output = [LoggedEntry];
+
+    fn index(&self, range: std::ops::RangeTo<usize>) -> &[LoggedEntry] {
+        let end = range.end.min(self.entries.len());
+        &self.entries[..end]
+    }
+}
+
 /// Live world state fed by server frames.
 #[derive(Debug, Clone, Default)]
 pub struct World {
@@ -98,8 +183,8 @@ pub struct World {
     pub side_flash: Option<u8>,
     pub count_dialog: bool,
     pub player_ops: HashMap<u8, (u8, String)>,
-    pub messages: Vec<String>,
-    pub message_ticks: Vec<u64>,
+    pub messages: MessageHistory<String>,
+    pub message_ticks: MessageHistory<u64>,
     pub chat: Vec<ChatLine>,
     pub private: Vec<ChatLine>,
     pub logged_out: bool,
@@ -133,6 +218,18 @@ impl World {
 
     pub fn busy(&self) -> bool {
         self.modal.is_some()
+    }
+
+    /// Record one `MESSAGE_GAME` line with its tick, dropping the oldest
+    /// half of BOTH logs past `MESSAGE_CAP` so they stay paired by index.
+    fn push_message(&mut self, text: String) {
+        self.messages.push(text);
+        self.message_ticks.push(self.ticks);
+        if self.messages.len() > MESSAGE_CAP {
+            let drop_count = self.messages.len() / 2;
+            self.messages.drop_oldest(drop_count);
+            self.message_ticks.drop_oldest(drop_count);
+        }
     }
 
     /// Ground items near a tile: live removals shadow the static template.
@@ -185,10 +282,7 @@ impl World {
                 self.stats.insert(index, (level, exp));
             }
             "UPDATE_RUNENERGY" => self.energy = zone.u8()?,
-            "MESSAGE_GAME" => {
-                self.messages.push(zone.jstr(10)?);
-                self.message_ticks.push(self.ticks);
-            }
+            "MESSAGE_GAME" => self.push_message(zone.jstr(10)?),
             "HINT_ARROW" => self.hint_arrow(body)?,
             "TUT_FLASH" => self.side_flash = Some(zone.u8()?),
             "MESSAGE_PRIVATE" => {
@@ -824,5 +918,43 @@ mod tests {
         // A real overlay still opens normally afterwards.
         world.feed("IF_OPENOVERLAY", &[0, 193]).unwrap();
         assert!(world.modal.is_some(), "real overlays still open");
+    }
+
+    #[test]
+    fn message_burst_stays_capped_and_paired() {
+        use super::MESSAGE_CAP;
+        let mut world = World::new();
+        for index in 0..20_000u64 {
+            world.ticks = index;
+            world.push_message(format!("line {index}"));
+        }
+        let kept = world.messages.len();
+        assert!(kept <= MESSAGE_CAP, "burst capped, got {kept}");
+        assert!(kept > MESSAGE_CAP / 2, "drain keeps the newest half, got {kept}");
+        assert_eq!(world.message_ticks.len(), kept, "ticks stay paired");
+        for (offset, tick) in world.message_ticks.iter().enumerate() {
+            let line_number = 20_000 - kept as u64 + offset as u64;
+            assert_eq!(*tick, line_number, "tick paired at {offset}");
+            assert_eq!(world.messages[offset], format!("line {line_number}"));
+        }
+    }
+
+    #[test]
+    fn stale_cursor_reads_empty_after_drain() {
+        let mut world = World::new();
+        for index in 0..8_000u64 {
+            world.ticks = index;
+            world.push_message(format!("line {index}"));
+        }
+        let seen = world.messages.len();
+        for index in 8_000..10_000u64 {
+            world.ticks = index;
+            world.push_message(format!("line {index}"));
+        }
+        assert!(world.messages.len() < seen, "drain shrank the log");
+        assert!(world.messages[seen..].is_empty(), "direct index reads empty");
+        assert!(world.message_ticks[seen..].is_empty(), "paired ticks read empty");
+        assert!(world.messages.get(seen..).unwrap_or(&[]).is_empty());
+        assert!(!world.messages.is_empty(), "newest lines survive");
     }
 }

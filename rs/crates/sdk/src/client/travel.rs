@@ -205,6 +205,12 @@ impl Bot {
                     });
                 }
                 Ok((ServicePoll::Unknown, _)) => {
+                    // The slot is gone (evicted terminal, last-waiter
+                    // cancel, or a restarted daemon): release the waiter
+                    // orphan server-side, then fail loud. Cancel of a
+                    // missing id is a no-op by construction, same as the
+                    // timeout path below.
+                    let _ = client.cancel(ticket);
                     return PollTicket::Ticket(RemoteOutcome::NavDown("unknown-ticket".to_string()))
                 }
                 Ok((ServicePoll::Pending, _)) => {}
@@ -1268,6 +1274,40 @@ mod tests {
             matches!(&err, Error::Travel(detail) if detail.contains("nav-down")),
             "down service is nav-down, got {err:?}",
         );
+    }
+
+    #[test]
+    fn unknown_ticket_cancels_and_fails_loud() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, Submit as ServiceSubmit, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "test-unk".to_string()),
+            &test_socket("sdk-unk"),
+            1,
+        )
+        .expect("service starts");
+        let mut bot = offline_bot(3228, 3214);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        let client = PlanClient::new(service.socket_path(), "t01");
+        // A live ticket whose slot disappears server-side (evicted
+        // terminal, last-waiter cancel, or a restarted daemon, like the
+        // storm hit): the poll loop fails loud with the typed reason,
+        // never hangs, never resubmits, never plans local.
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let (world, tables) = test_nav_context();
+        let options = bot.nav_options(&tables);
+        let id = match client.submit(from, dest, &options, "test-unk").expect("submit") {
+            ServiceSubmit::Accepted { id, .. } => id,
+            ServiceSubmit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        client.cancel(id).expect("slot disappears");
+        match bot.poll_ticket(&client, id) {
+            PollTicket::Ticket(RemoteOutcome::NavDown(reason)) if reason.contains("unknown-ticket") => {}
+            PollTicket::Ticket(_) => panic!("vanished slot stays unknown-ticket, not another verdict"),
+            PollTicket::Stale(_) => panic!("no version skew in this scenario"),
+        }
     }
 
     #[test]

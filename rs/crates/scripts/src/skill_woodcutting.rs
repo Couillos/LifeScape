@@ -396,6 +396,12 @@ fn work_spot(
             Ok(true) => {}
             Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
             Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(ScriptError::Sdk(lifescape_sdk::Error::Travel(detail))) if detail.contains("nav-down") => {
+                // Transitory service outage (unknown-ticket under load,
+                // L1 full): not a spot verdict — fail loud with the typed
+                // error, no ban, no travel_dead; the session stays alive.
+                return Err(ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)));
+            }
             Err(ScriptError::Sdk(lifescape_sdk::Error::Travel(_))) => {
                 // Planner proof: disconnected from here. Long ban (re-plan
                 // from the same tile is futile) + never re-pick from this
@@ -1413,6 +1419,27 @@ mod tests {
             matches!(super::ring_pass_verdict(false), WorkOutcome::Unreachable),
             "pure walk failures stay transient"
         );
+    }
+
+    /// Service outage is not a spot verdict: `nav-down` from the walk
+    /// passes through typed (loud run failure, live session) with no ban
+    /// and no `travel_dead`. Mapless bot, no service handle — the first
+    /// plan step fails `nav-down` before any socket exists.
+    #[test]
+    fn nav_down_walk_fails_loud_without_ban() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3092;
+        bot.world.z = 3230;
+        let (tree_x, tree_z) = (3092, 3246);
+        let mut banned = crate::skill_gather::BanSet::new();
+        let mut travel_dead: Option<((i32, i32), (i32, i32))> = None;
+        let error = super::work_spot(&mut bot, tree_x, tree_z, &[], 0, &mut banned, &mut travel_dead)
+            .expect_err("nav-down fails loud, never a quiet Unreachable");
+        assert!(error.to_string().contains("nav-down"), "typed nav-down, got: {error}");
+        assert!(!banned.contains((tree_x, tree_z)), "outage bans nothing");
+        assert!(travel_dead.is_none(), "outage poisons no pick");
     }
 
 }
