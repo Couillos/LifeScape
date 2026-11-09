@@ -483,14 +483,24 @@ fn work_spot(
     Ok((ring_pass_verdict(refused_operable), gained))
 }
 
+/// Re-click decision after a quiet round: never when a swing was acked
+/// on a still-live tree (the player is cutting — a re-click restarts the
+/// swing server-side); otherwise probe reachability (a wall-separated
+/// tree only refuses when clicked). Pure so the cadence rule is locked
+/// by tests without a live connection (`op_loc`/`pump` need a login).
+fn probe_after_silence(acked: bool, live: bool) -> bool {
+    !(acked && live)
+}
+
 /// One click round from the current stand: Gone when the tree is
 /// stumped/cleared or the click was never acked, UnreachableSpot on click
 /// refusal (caller rotates or condemns), terminal outcome for anything
-/// else. One click opens the stand; quiet rounds re-click as
-/// reachability probes (a wall-separated tree only refuses when clicked —
-/// silence alone can't tell it from a dry streak). A swing ack on a
-/// still-present tree means the player IS cutting — keep waiting; the
-/// load-level stall stays the ultimate backstop. Gained logs this stand.
+/// else. One click opens the stand; quiet rounds without an ack re-click
+/// as reachability probes (a wall-separated tree only refuses when
+/// clicked — silence alone can't tell it from a dry streak). A swing ack
+/// on a still-present tree means the player IS cutting — keep waiting;
+/// the load-level stall stays the ultimate backstop. Gained logs this
+/// stand.
 fn try_stand(
     bot: &mut Bot,
     tree_x: i32,
@@ -554,10 +564,12 @@ fn try_stand(
         if silences == 2 && acked && live {
             bot.log(&format!("still cutting at ({tree_x},{tree_z}), waiting out the dry streak"));
         }
-        // Re-click every quiet round: a wall-separated tree only refuses
-        // when clicked, so the click is the reachability probe (refusal →
-        // UnreachableSpot above). Gaining rounds never re-click.
-        need_click = true;
+        // Re-click probe only while no swing was acked on this live tree:
+        // a wall-separated tree only refuses when clicked (refusal →
+        // UnreachableSpot above). An acked swing on a live tree means the
+        // player IS cutting — re-clicking would restart the swing
+        // server-side, so wait it out. Gaining rounds never re-click.
+        need_click = probe_after_silence(acked, live);
     }
 }
 
@@ -1402,6 +1414,32 @@ mod tests {
         assert_eq!(respawn_wait_ticks(30, None), Some(30), "nowhere to go waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS, Some(1000)), Some(GONE_BAN_TICKS), "cap itself still waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS + 1, Some(1000)), None, "one over cap leaves");
+    }
+
+    /// Cadence lock: silent rounds with an acked swing on a live tree
+    /// never re-click (one `op_loc` per stand — the player is cutting, a
+    /// re-click would restart the swing server-side); silent rounds
+    /// without an ack keep the re-click probe (a lost click or a wall
+    /// only shows on refusal). A dead/stumped tree still probes: the Gone
+    /// verdict (`silences >= 2 && !(acked && live)`) owns that path.
+    #[test]
+    fn silence_probe_never_reclicks_an_acked_live_tree() {
+        assert!(
+            !super::probe_after_silence(true, true),
+            "acked swing on a live tree waits, exactly one op_loc per stand"
+        );
+        assert!(
+            super::probe_after_silence(false, true),
+            "no ack on a live tree re-clicks the reachability probe"
+        );
+        assert!(
+            super::probe_after_silence(true, false),
+            "acked swing on a gone tree re-clicks: Gone owns the verdict"
+        );
+        assert!(
+            super::probe_after_silence(false, false),
+            "no ack on a gone tree re-clicks the probe before Gone fires"
+        );
     }
 
     /// Ring-pass verdict: an operable click refusal anywhere is the strike

@@ -860,6 +860,9 @@ fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
     Ok(())
 }
 
+/// Deaths make the fight return instead of resuming the killer spot: the
+/// caller re-picks excluding it (one death) or fails typed (two in a row).
+/// Returns (kills, bank trip wanted, death seen).
 fn fight(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -867,7 +870,7 @@ fn fight(
     kills_limit: u32,
     ticks_limit: u64,
     no_bank: bool,
-) -> Result<(u32, bool), ScriptError> {
+) -> Result<(u32, bool, bool), ScriptError> {
     let mut kills = 0u32;
     let started = bot.world.ticks;
     let mut target_npc: Option<u16> = None;
@@ -925,14 +928,14 @@ fn fight(
             while bot.world.ticks < target && hitpoints(bot) == 0 {
                 bot.pump(5)?;
             }
-            max_hp = hitpoints(bot).max(10);
-            target_npc = None;
-            attempts = 0;
-            progress_at = bot.world.ticks;
             // Death drops the pack: re-wear from what survived, pack only,
-            // never a buy loop.
+            // never a buy loop. Then stop: the caller re-picks excluding
+            // this spot (or fails typed on the second death in a row) —
+            // walking straight back here is the death loop (t02 live:
+            // warriors -> Lumbridge -> warriors on foot, forever).
             rewear(bot, "death")?;
-            continue;
+            bot.log(&format!("died at {} respawned at {:?}", spot.key, bot.position()));
+            return Ok((kills, false, true));
         }
         max_hp = max_hp.max(hp);
         if f64::from(hp) <= f64::from(max_hp) * EAT_FRACTION {
@@ -1121,7 +1124,7 @@ fn fight(
                 }
             }
             if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0 && bank_stocks_food(bot)) {
-                return Ok((kills, true));
+                return Ok((kills, true, false));
             }
             continue;
         }
@@ -1153,7 +1156,7 @@ fn fight(
             wait_ticks(bot, 5)?;
         }
     }
-    Ok((kills, false))
+    Ok((kills, false, false))
 }
 
 /// Clusters on the bot's toll-fence flank (see skill_gather::same_side): the
@@ -1188,7 +1191,7 @@ fn run_spot(
     kills_limit: u32,
     ticks_limit: u64,
     no_bank: bool,
-) -> Result<u32, ScriptError> {
+) -> Result<(u32, bool, bool), ScriptError> {
     if spot.entrance.is_some() {
         // shortcut: trapdoors/ladders to underground areas are not traversed
         // (single-level router); surface spots only.
@@ -1201,7 +1204,7 @@ fn run_spot(
     let targets = ranked_clusters(bot, spot);
     if targets.is_empty() {
         bot.log(&format!("no spawn for {}", spot.key));
-        return Ok(0);
+        return Ok((0, false, false));
     }
     // One flank per hunt: cluster centers across the toll fence would
     // each cost the ~220-tile foot detour (paid doors stay off all
@@ -1226,6 +1229,7 @@ fn run_spot(
         targets = kept;
     }
     let mut total = 0u32;
+    let mut banked_trip = false;
     for (center_x, center_z, count) in targets {
         // Pace retries: instant walk failures consume no ticks, so an
         // unpaced loop machine-guns the server into kicking us.
@@ -1235,9 +1239,12 @@ fn run_spot(
         while kills_limit == 0 || total < kills_limit {
             // Hunt entry: the one full evaluation (pack + bank when near
             // one, pack only with --no-bank). Inside the hunt only a loot
-            // that was picked up or a death re-evaluates (see fight()).
+            // that was picked up re-evaluates; a death ends the fight and
+            // returns to the run for the re-pick (see fight()).
             if !no_bank {
-                prepare_at_bank(bot)?;
+                if prepare_at_bank(bot)? {
+                    banked_trip = true;
+                }
             } else {
                 let available = available_gear(bot);
                 equip_plan(bot, &gear_plan(bot, &available))?;
@@ -1263,15 +1270,19 @@ fn run_spot(
                 }
             }
             {
-                let (kills, banked) = fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
+                let (kills, bank_wanted, died) =
+                    fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
                 total += kills;
-                if !banked || (kills_limit > 0 && total >= kills_limit) {
-                    return Ok(total);
+                if died {
+                    return Ok((total, true, banked_trip));
+                }
+                if !bank_wanted || (kills_limit > 0 && total >= kills_limit) {
+                    return Ok((total, false, banked_trip));
                 }
             }
         }
     }
-    Ok(total)
+    Ok((total, false, banked_trip))
 }
 
 /// Auto spot: broke beginners (no food carried, none banked) cannot
@@ -1286,6 +1297,80 @@ fn auto_spot(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
         }
     }
     knowledge::combat_spots::best_spot(level)
+}
+
+/// Run-local death tally: consecutive deaths (a kill or a bank trip is
+/// progress and resets the streak) plus the killer spots excluded from
+/// every later re-pick. Local to one `run_melee`, never global, never
+/// persisted: a spot that killed once stays out for the run.
+struct DeathTally {
+    deaths: u32,
+    excluded: Vec<&'static str>,
+}
+
+impl DeathTally {
+    fn fresh() -> DeathTally {
+        DeathTally { deaths: 0, excluded: Vec::new() }
+    }
+
+    fn excludes(&self, spot_key: &str) -> bool {
+        self.excluded.iter().any(|key| *key == spot_key)
+    }
+
+    fn fatal(&self) -> bool {
+        self.deaths >= 2
+    }
+
+    /// A kill or a bank trip is progress: the next death starts a new
+    /// streak. Exclusions stay: a spot that killed once stays out.
+    fn note_progress(&mut self) {
+        self.deaths = 0;
+    }
+
+    fn note_death(&mut self, spot_key: &'static str) {
+        self.deaths += 1;
+        if !self.excludes(spot_key) {
+            self.excluded.push(spot_key);
+        }
+    }
+}
+
+/// Second consecutive death with no kill or bank trip between: loud and
+/// typed instead of walking back a third time.
+fn danger_error(spot_key: &str, deaths: u32) -> ScriptError {
+    ScriptError::Sdk(lifescape_sdk::Error::Unreachable(format!(
+        "spot {spot_key} too dangerous after {deaths} deaths, re-gear or pick easier foes"
+    )))
+}
+
+/// Fallback after a death at `killer`: nearest surface spot that fits the
+/// current melee level and is no harder than the killer (existing
+/// `min_level` data only, no new threshold), killers excluded. Gear is
+/// unchanged since the death (re-wear from survivors only), so an
+/// easier-or-equal level range stays within gear reach. Nearest cluster to
+/// the respawn position wins so the walk back stays short. None when
+/// nothing reasonable is on foot: the caller banks instead.
+fn fallback_spot(
+    bot: &Bot,
+    killer: &knowledge::combat_spots::CombatSpot,
+    excluded: &[&str],
+) -> Option<knowledge::combat_spots::CombatSpot> {
+    let level = melee_level(bot);
+    let here = (bot.world.x, bot.world.z);
+    knowledge::combat_spots::all_spots()
+        .into_iter()
+        .filter(|spot| spot.entrance.is_none())
+        .filter(|spot| !excluded.iter().any(|key| *key == spot.key))
+        .filter(|spot| spot.min_level <= level && spot.min_level <= killer.min_level)
+        .filter_map(|spot| {
+            ranked_clusters(bot, &spot)
+                .into_iter()
+                .map(|(spot_x, spot_z, _)| (spot_x - here.0).abs() + (spot_z - here.1).abs())
+                .min()
+                .map(|dist| (dist, spot))
+        })
+        .min_by_key(|(dist, _)| *dist)
+        .map(|(_, spot)| spot)
 }
 
 /// Melee farmer: `melee [spot ...] [--kills N] [--ticks N] [--no-bank]`.
@@ -1334,19 +1419,59 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     };
     bot.log(&format!("melee={} spots={}", melee_level(bot), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));
-    for spot in picked {
+    // Deaths re-pick, never identically: the killer spot is excluded for
+    // the run (one death hunts the fallback or the next picked spot, two
+    // consecutive deaths fail typed). Kills and bank trips reset the
+    // streak: only back-to-back deaths with no progress between are fatal.
+    let mut queue = picked;
+    let mut tally = DeathTally::fresh();
+    while !queue.is_empty() {
+        let next = queue.iter().position(|queued| !tally.excludes(queued.key));
+        let Some(next) = next else {
+            bot.log("all remaining spots excluded after deaths, stopping");
+            break;
+        };
+        let spot = queue.remove(next);
         bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("melee at {}", spot.key));
-        let total = run_spot(bot, &spot, kills, ticks, no_bank)?;
+        let (total, died, banked) = run_spot(bot, &spot, kills, ticks, no_bank)?;
+        if total > 0 || banked {
+            tally.note_progress();
+        }
         bot.log(&format!("ok {} killed {total}", spot.key));
+        if !died {
+            continue;
+        }
+        tally.note_death(spot.key);
+        if tally.fatal() {
+            return Err(danger_error(spot.key, tally.deaths));
+        }
+        if queue.iter().any(|queued| !tally.excludes(queued.key)) {
+            bot.log(&format!("{} killed us, re-picking without it", spot.key));
+            continue;
+        }
+        match fallback_spot(bot, &spot, &tally.excluded) {
+            Some(fallback) => {
+                bot.log(&format!("{} killed us, falling back to {}", spot.key, fallback.key));
+                queue.insert(0, fallback);
+            }
+            None => {
+                if !no_bank {
+                    prepare_at_bank(bot)?;
+                }
+                bot.log(&format!("{} killed us, nothing safer on foot: banked and stopping", spot.key));
+                break;
+            }
+        }
     }
     Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{COM_MODE_VARP, auto_spot, bank_stocks_food, controlled_button, current_skill, gear_score, live_skill, live_style_index, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_button_index, style_buttons, style_damage_key, weakest_melee};
+    use super::{COM_MODE_VARP, DeathTally, auto_spot, bank_stocks_food, controlled_button, current_skill, danger_error, fallback_spot, gear_score, live_skill, live_style_index, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_button_index, style_buttons, style_damage_key, weakest_melee};
     use crate::tables_live::attach_live_tables;
+    use lifescape_gamedata as knowledge;
     use lifescape_sdk::Bot;
 
     fn stat_bot(attack: u8, defence: u8, strength: u8) -> Bot {
@@ -1665,6 +1790,74 @@ mod tests {
         assert_eq!(style_button_index("combat_spear:spear0"), Some(0), "controlled spear");
         assert_eq!(style_button_index("combat_polearm:polearm0"), Some(0), "controlled polearm");
         assert_eq!(style_button_index("combat_x:foo"), None, "no trailing number");
+    }
+
+    /// One death excludes the killer from every later re-pick: the
+    /// fallback is never the spot that just killed (t02 live: warriors
+    /// -> Lumbridge -> warriors on foot, forever).
+    #[test]
+    fn death_excludes_the_killer_spot() {
+        let bot = stat_bot(9, 9, 9);
+        let killer = knowledge::combat_spots::by_key("cows").expect("cows");
+        let mut tally = DeathTally::fresh();
+        tally.note_death(killer.key);
+        assert!(tally.excludes("cows"));
+        let fallback =
+            fallback_spot(&bot, &killer, &tally.excluded).expect("a same-tier repli exists");
+        assert_ne!(fallback.key, "cows", "never re-pick the killer identically");
+        assert!(fallback.entrance.is_none(), "surface only, the router never rides down");
+        assert!(
+            fallback.min_level <= killer.min_level,
+            "no harder than what just killed, got: {}",
+            fallback.key
+        );
+    }
+
+    /// Nothing safer on foot (every surface spot excluded or above the
+    /// melee level): no fallback, the caller banks instead of re-picking.
+    #[test]
+    fn no_fallback_when_nothing_reasonable() {
+        let bot = stat_bot(2, 2, 2);
+        let killer = knowledge::combat_spots::by_key("chickens").expect("chickens");
+        let all: Vec<&str> =
+            knowledge::combat_spots::all_spots().iter().map(|spot| spot.key).collect();
+        assert!(
+            fallback_spot(&bot, &killer, &all).is_none(),
+            "everything excluded: bank, never re-pick"
+        );
+    }
+
+    /// Two deaths in a row (no kill, no bank trip between) fail typed
+    /// Unreachable instead of walking back a third time.
+    #[test]
+    fn two_deaths_fail_typed_unreachable() {
+        let mut tally = DeathTally::fresh();
+        tally.note_death("al_kharid_warriors");
+        assert!(!tally.fatal(), "one death re-picks, never fails");
+        tally.note_death("cows");
+        assert!(tally.fatal(), "two consecutive deaths are fatal");
+        let error = danger_error("cows", tally.deaths);
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Unreachable(_))),
+            "typed Unreachable, got: {error}"
+        );
+        assert!(error.to_string().contains("too dangerous after 2 deaths"), "explicit, got: {error}");
+        assert!(error.to_string().contains("re-gear"), "points at the fix, got: {error}");
+    }
+
+    /// A kill or a bank trip between deaths starts a new streak (deaths
+    /// with progress between are not consecutive); the killer stays out
+    /// for the run.
+    #[test]
+    fn progress_resets_the_death_streak() {
+        let mut tally = DeathTally::fresh();
+        tally.note_death("cows");
+        tally.note_progress();
+        assert_eq!(tally.deaths, 0, "kill/bank resets the streak");
+        assert!(!tally.fatal());
+        assert!(tally.excludes("cows"), "the killer stays out for the run");
+        tally.note_death("goblins");
+        assert!(!tally.fatal(), "progress between deaths: new streak, not fatal");
     }
 
     /// Live index decodes to the trained skill per revision tables:
