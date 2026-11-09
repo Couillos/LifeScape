@@ -10,6 +10,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
+use crate::kit::spots::{drop_occupied, f2p_inside, hunter_covers, hunter_zones, refine_by_walk, OCCUPIED_RADIUS};
 use crate::skill_gather::{across_toll, BanSet};
 use crate::ScriptError;
 
@@ -56,32 +57,6 @@ pub(crate) fn regrown_due(
     let at = *stumped.entry(pos).or_insert(bot.world.ticks);
     let wait = respawn.get(product).copied().unwrap_or_else(|| default_respawn_ticks(product));
     bot.world.ticks.saturating_sub(at) >= wait
-}
-
-/// Shortlist bound for the walking-cost refinement: Manhattan ranks the
-/// filtered pool, only the top-K get a pure plan, the cheapest verified
-/// walk wins. K=4: live plans cost ~30-500 ms, so <=4 plans per pick
-/// (amortized over minutes of chopping); a true-nearest pushed past rank
-/// 4 needs a detour the toll filter already excludes. Truncation is
-/// logged; more than K plans never run per selection.
-pub(crate) const WALK_SHORTLIST: usize = 4;
-
-/// Cheapest-to-walk spot among pre-filtered candidates (toll, hunter, F2P,
-/// bans and liveness ran BEFORE, so no plan is wasted on an excluded
-/// spot). One remote batch (no local Dijkstra, no walk, no send). The
-/// ranking lives in `lifescape_nav::walk_rank`; this only bounds the
-/// pool, maps the winner back to a walk-or-Manhattan metric and logs the
-/// upset. Unwired (no service) or all-disconnected keeps the Manhattan
-/// order, never drops the pick.
-fn refine_by_walk(bot: &mut Bot, mut cands: Vec<(i64, (i32, i32))>) -> Option<(i64, (i32, i32))> {
-    cands.sort();
-    let manhattan = *cands.first()?;
-    let level = bot.world.level;
-    let (cost, (_, pos)) = crate::skill_walk::refine_walking(bot, cands, WALK_SHORTLIST, "spot", |(_, pos)| lifescape_nav::plan::Tile { x: pos.0, z: pos.1, level }).into_iter().next().expect("non-empty pool ranks");
-    Some(match cost {
-        Some(walk) => (i64::from(walk), pos),
-        None => manhattan,
-    })
 }
 
 /// Highest F2P tier whose level requirement is reached: members tiers
@@ -150,34 +125,6 @@ fn tree_live(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool
     }
 }
 
-/// True when a hunter of this level comes for us: the server skips
-/// players above twice its level, so anything at or under that line is
-/// a threat (unknown own level counts as threatened).
-fn hunter_threatens(our_combat: Option<u8>, vislevel: i64) -> bool {
-    our_combat.is_none_or(|ours| i64::from(ours) <= vislevel * 2)
-}
-
-/// Static hunter spawns on this level that would attack us: (x, z, aggro
-/// range + wander margin). NPCs wander off their spawn, so the raw
-/// huntrange alone under-covers; the hurt-driven flee still handles what
-/// wanders in.
-fn hunter_zones(bot: &Bot) -> Vec<(i64, i64, i64)> {
-    const WANDER: i64 = 2;
-    let ours = bot.combat_level();
-    let mut zones = Vec::new();
-    for entry in knowledge::all_npcs() {
-        if !entry.hunts_players || !hunter_threatens(ours, entry.vislevel) {
-            continue;
-        }
-        for spawn in entry.spawns {
-            if spawn.level == i64::from(bot.world.level) {
-                zones.push((spawn.x, spawn.z, entry.huntrange + WANDER));
-            }
-        }
-    }
-    zones
-}
-
 /// Live footprint (width, length) of the loc on this tile. The server
 /// reaches shape-10 locs orthogonally to their footprint (`ReachStrategy`
 /// `reachRectangle1`, engine `routefinder/ReachStrategy.ts`), never
@@ -242,25 +189,6 @@ pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
     }
 }
 
-/// One F2P verdict per candidate spot, in order, in a single service
-/// batch. `None` when the service is down (logged): callers drop every
-/// candidate instead of guessing — the pick returns `None` and the loop
-/// waits, while any real walk still fails loud with `nav-down`.
-fn f2p_inside(bot: &mut Bot, spots: &[(i32, i32)]) -> Option<Vec<bool>> {
-    if spots.is_empty() {
-        return Some(Vec::new());
-    }
-    let level = bot.world.level;
-    let tiles: Vec<(i32, i32, i32)> = spots.iter().map(|(spot_x, spot_z)| (*spot_x, *spot_z, level)).collect();
-    match bot.in_f2p_batch(&tiles) {
-        Ok(verdicts) => Some(verdicts),
-        Err(error) => {
-            bot.log(&format!("f2p batch unavailable ({error}), dropping {} spots", spots.len()));
-            None
-        }
-    }
-}
-
 /// Nearest live same-tier spawn within hop range. Pure scan: no logging,
 /// no bans, no mutation — the caller logs and decides. `fence = None`
 /// skips the toll check (cross-fence relocation when stranded).
@@ -299,9 +227,7 @@ fn nearest_hop_spot(
             *saw_paid_only = true;
             continue;
         }
-        if hunters.iter().any(|(hunter_x, hunter_z, range)| {
-            (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
-        }) {
+        if hunter_covers(&hunters, spot_x, spot_z) {
             continue;
         }
         spots.push((spot_x, spot_z));
@@ -316,6 +242,7 @@ fn nearest_hop_spot(
         let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
         cands.push((dist, (spot_x, spot_z)));
     }
+    let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
     refine_by_walk(bot, cands)
 }
 
@@ -369,9 +296,7 @@ pub(crate) fn pick_tree_spot(
                 saw_paid_only = true;
                 continue;
             }
-            if hunters.iter().any(|(hx, hz, range)| {
-                (i64::from(spot_x) - hx).abs() + (i64::from(spot_z) - hz).abs() <= *range
-            }) {
+            if hunter_covers(&hunters, spot_x, spot_z) {
                 continue;
             }
             spots.push((spot_x, spot_z));
@@ -394,6 +319,7 @@ pub(crate) fn pick_tree_spot(
             continue;
         }
         if Some(tier.level) == top_level {
+            let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
             if let Some((_, (spot_x, spot_z))) = refine_by_walk(&mut *bot, cands) {
                 return Some((tier.clone(), spot_x, spot_z));
             }
@@ -497,9 +423,7 @@ pub(crate) fn pick_tree_spot(
                     // shut (no verified spot to retry) and the note tells
                     // the outage apart from a genuinely filtered pool.
                     "nav-down".to_string()
-                } else if hunters.iter().any(|(hunter_x, hunter_z, range)| {
-                    (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
-                }) {
+                } else if hunter_covers(&hunters, spot_x, spot_z) {
                     "hunter".to_string()
                 } else {
                     "hop-missed".to_string()
@@ -550,6 +474,7 @@ pub(crate) fn pick_tree_spot(
             bot.log(&format!("degrading {}->{} for this repick (best tier unreachable, reasons above)", top.product, down.product));
         }
     }
+    let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
     refine_by_walk(&mut *bot, cands).map(|(_, (spot_x, spot_z))| (down, spot_x, spot_z))
 }
 
@@ -666,6 +591,7 @@ pub(crate) fn learn_respawn(known: Option<u64>, observed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::spots::{f2p_inside, refine_by_walk};
     use crate::skill_common::toll_gate_x;
     use crate::skill_gather::{same_side, starved_oldest};
     use crate::tables_live::attach_live_tables;
@@ -834,15 +760,14 @@ mod tests {
         assert_eq!(default_respawn_ticks("something_new"), 160, "unknown falls back to the normal mean");
     }
 
-    /// Threat rule mirrors the server: hunters skip players above twice
-    /// their level, so combat 4 still fears spiders (2) but combat 5
-    /// walks past them; unknown own level counts as threatened.
+    /// Threat rule mirrors the server: covered by the kit brick's own
+    /// test (`kit::spots`), kept here as the call-site witness that the
+    /// tree picker filters through it.
     #[test]
-    fn hunter_threat_follows_server_rule() {
-        assert!(hunter_threatens(Some(4), 2), "spider hunts combat 4");
-        assert!(!hunter_threatens(Some(5), 2), "combat 5 too strong for spiders");
-        assert!(hunter_threatens(Some(4), 26), "jailguard hunts everyone here");
-        assert!(hunter_threatens(None, 1), "unknown level stays cautious");
+    fn hunter_filter_covers_threatened_tiles() {
+        assert!(hunter_covers(&[(0, 0, 5)], 3, 2), "inside the zone");
+        assert!(!hunter_covers(&[(0, 0, 5)], 4, 2), "outside the zone");
+        assert!(!hunter_covers(&[], 0, 0), "no hunters, nothing covered");
     }
 
     /// Toll fence reporting: the Al-Kharid gate line comes from the

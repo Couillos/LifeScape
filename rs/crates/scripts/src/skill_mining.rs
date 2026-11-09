@@ -13,6 +13,7 @@ use crate::skill_common::{
     bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_ids, pack_total, sell_for_target, walk_checked, WorkOutcome, GONE_BAN_TICKS,
 };
+use crate::kit::spots::{drop_occupied, OCCUPIED_RADIUS};
 use crate::skill_gather::{best_banked_by_rank, reattach_tool, work_acked, BanSet, ToolSpec, MINING_ACKS};
 use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
@@ -70,7 +71,7 @@ fn tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank)
 }
 
 fn pick_rock_spot(
-    bot: &Bot,
+    bot: &mut Bot,
     tiers: &[knowledge::rocks::RockTier],
     bank: &knowledge::banks::Bank,
     level: i64,
@@ -81,7 +82,7 @@ fn pick_rock_spot(
         tiers.iter().filter(|tier| tier.level <= level).collect();
     affordable.sort_by_key(|tier| (-tier.level, -tier_price(tier)));
     for tier in affordable {
-        let mut best: Option<(i64, (i32, i32))> = None;
+        let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
         for (spot_x, spot_z) in tier_spawns(tier, bank) {
             if banned.is_banned((spot_x, spot_z), now) {
                 continue;
@@ -90,11 +91,12 @@ fn pick_rock_spot(
             // hunts_players flag), so spots skip the static safety filter;
             // hurt-driven flee still relocates mid-load.
             let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-            if best.as_ref().is_none_or(|(known, _)| dist < *known) {
-                best = Some((dist, (spot_x, spot_z)));
-            }
+            cands.push((dist, (spot_x, spot_z)));
         }
-        if let Some((_, (spot_x, spot_z))) = best {
+        // Occupation perçue: dodge rocks another visible player works
+        // while free ones exist; a full house keeps the pool.
+        let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
+        if let Some((_, (spot_x, spot_z))) = cands.into_iter().min_by_key(|(dist, _)| *dist) {
             return Some((tier.clone(), spot_x, spot_z));
         }
     }

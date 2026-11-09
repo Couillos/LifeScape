@@ -13,6 +13,7 @@ use crate::skill_common::{
     bank_trip, buy_stock, check_events, dismiss_modal, free_slots, hitpoints, learn_level, nearest_bank, obj_id,
     obj_price, pack_total, sell_for_target, walk_checked, wait_pack_streamed, WorkOutcome,
 };
+use crate::kit::spots::{drop_occupied, OCCUPIED_RADIUS};
 use crate::skill_gather::{work_acked, BanSet, ToolSpec, FISHING_ACKS};
 use crate::skill_trade::buy_best_affordable;
 use crate::{ScriptError, ScriptResult};
@@ -49,7 +50,7 @@ fn nearest_live(bot: &Bot, category: &str, near_x: i32, near_z: i32) -> Option<(
 
 /// Best affordable tier with a live or static spot near a pinned bank.
 fn pick_fish_spot(
-    bot: &Bot,
+    bot: &mut Bot,
     level: i64,
     banned: &BanSet,
     now: u64,
@@ -72,8 +73,16 @@ fn pick_fish_spot(
             }
         }
         let mut best: Option<(i64, (i32, i32))> = None;
+        // Occupation perçue: dodge spots another visible player works
+        // while free ones exist; a full house keeps the pool.
+        let pool: Vec<(i64, (i32, i32))> =
+            cands.iter().map(|&(_, spot_x, spot_z)| (0i64, (spot_x, spot_z))).collect();
+        let kept = drop_occupied(bot, pool, OCCUPIED_RADIUS);
         for (spot_level, spot_x, spot_z) in cands {
             if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
+                continue;
+            }
+            if !kept.iter().any(|&(_, pos)| pos == (spot_x, spot_z)) {
                 continue;
             }
             let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
