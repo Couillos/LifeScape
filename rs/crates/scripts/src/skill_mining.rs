@@ -236,9 +236,9 @@ fn work_spot(
         }
         silences += 1;
         // Swing acked and the rock stage unchanged (depletion is a
-        // streamed loc_change, no re-click needed to see it): the player
-        // IS mining — wait, no round cap. One click per rock: re-click
-        // only while unacked, in case the first was swallowed.
+        // streamed loc_change): the player IS mining — keep waiting.
+        // Quiet rounds still re-click as reachability probes: only a
+        // click surfaces a refusal.
         acked = acked || work_acked(bot, seen_msgs, &MINING_ACKS);
         let live = live_loc_id(bot, rock_x, rock_z).is_ok_and(|id| id == rock_loc);
         if silences >= 2 && !(acked && live) {
@@ -247,7 +247,7 @@ fn work_spot(
         if silences == 2 && acked && live {
             bot.log(&format!("still mining at ({rock_x},{rock_z}), waiting out the dry streak"));
         }
-        need_click = !acked;
+        need_click = true;
     }
 }
 

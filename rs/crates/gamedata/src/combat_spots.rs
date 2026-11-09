@@ -26,18 +26,21 @@ const SPOTS: [CombatSpot; 9] = [
     // it anyway.
     CombatSpot { key: "goblins", npc_names: &["goblin"], min_level: 1, max_level: 12, entrance: None },
     CombatSpot { key: "cows", npc_names: &["cow"], min_level: 1, max_level: 12, entrance: None },
-    CombatSpot {
-        key: "al_kharid_warriors",
-        npc_names: &["al_kharid_warrior"],
-        min_level: 8,
-        max_level: 20,
-        entrance: None,
-    },
+    // Weakest first: men (vislevel 2) sort before al_kharid_warriors
+    // (vislevel 9) so best_spot() progression never shadows the
+    // stronger camp (t02 live: melee 15 stuck on men).
     CombatSpot {
         key: "men",
         npc_names: &["man", "man2", "man3", "woman", "woman2", "woman3"],
         min_level: 8,
         max_level: 25,
+        entrance: None,
+    },
+    CombatSpot {
+        key: "al_kharid_warriors",
+        npc_names: &["al_kharid_warrior"],
+        min_level: 8,
+        max_level: 20,
         entrance: None,
     },
     CombatSpot { key: "guards", npc_names: &["guard1", "guard2"], min_level: 20, max_level: 40, entrance: None },
@@ -94,6 +97,13 @@ mod tests {
         // best_spot(1) == chickens, best_spot(25) == dark_wizards.
         assert_eq!(best_spot(0).key, "chickens");
         assert_eq!(best_spot(1).key, "cows");
+        // t02 live: melee 15 hunted men (vislevel 2) instead of the
+        // level-9 al-kharid warriors. Weakest first, so men sorts
+        // before al_kharid_warriors and never shadows it.
+        assert_eq!(best_spot(7).key, "cows");
+        assert_eq!(best_spot(8).key, "al_kharid_warriors");
+        assert_eq!(best_spot(15).key, "al_kharid_warriors");
+        assert_eq!(best_spot(19).key, "al_kharid_warriors");
         assert_eq!(best_spot(25).key, "dark_wizards");
         assert_eq!(by_key("cows").expect("cows").npc_names, &["cow"]);
         assert_eq!(by_key("goblins").expect("goblins").npc_names, &["goblin"]);

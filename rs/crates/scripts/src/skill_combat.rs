@@ -1037,14 +1037,16 @@ fn fight(
                     progress_at = bot.world.ticks;
                     continue;
                 }
-                // One click per target: the engaged loop chains itself.
-                // Re-click only while nothing proves the fight started
-                // (a swallowed click recovers in <= 5 ticks). Evidence:
-                // xp flowing, hp taken, or the target animating — its
-                // attack anim streams, ours never does. No positive
-                // "you're fighting" message exists server-side (all
-                // combat lines are refusals), so this is the whole
-                // signal; FIGHT_STALL/KILL_CAP stay the backstops.
+                // One click opens the fight; re-click only while no evidence
+                // proves it started (a swallowed click recovers in <= 5
+                // ticks). No positive "you're fighting" message exists
+                // server-side (all combat lines are refusals), so evidence
+                // is xp flowing, hp taken, or the target animating — its
+                // attack anim streams, ours never does. A held fight
+                // still probes reachability every 25 ticks: a
+                // wall-separated target only refuses when clicked, and
+                // that refusal is the fast exit (UnreachableSpot path).
+                // FIGHT_STALL/KILL_CAP stay the backstops.
                 if !fighting && bot.world.ticks.saturating_sub(last_attack) >= 5 {
                     if fight_engaged(
                         combat_xp(bot),
@@ -1060,6 +1062,9 @@ fn fight(
                         bot.op_npc(2, slot)?;
                         last_attack = bot.world.ticks;
                     }
+                } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= 25 {
+                    bot.op_npc(2, slot)?;
+                    last_attack = bot.world.ticks;
                 }
                 prev_hp = hitpoints(bot);
                 continue;
@@ -1263,6 +1268,10 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut kills = 0u32;
     let mut ticks = 0u64;
     let mut no_bank = false;
+    if args.iter().any(|arg| arg == "toll") {
+        bot.allow_paid = true;
+        bot.log("toll gates allowed for this run");
+    }
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {

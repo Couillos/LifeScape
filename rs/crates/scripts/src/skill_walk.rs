@@ -152,6 +152,40 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             Ok(()) => {}
             Err(err) => {
                 bot.log(&format!("walk blocked: {err}"));
+                // Blind 40-tile clamp can land inside a wall pocket the
+                // full route walks around (t02: (2988,3328) sealed by
+                // Falador castlewall): retry a halved clamp first — it
+                // threads the same corridor in plannable legs — then the
+                // final dest once. Conn aborts and final-leg blocks keep
+                // the old rescue path.
+                if !final_leg
+                    && matches!(
+                        &err,
+                        Error::TravelFailure(failure)
+                            if failure.kind == lifescape_sdk::error::TravelErrorKind::NoRoute
+                    )
+                {
+                    let half_x = bot.world.x + (dest_x - bot.world.x).clamp(-20, 20);
+                    let half_z = bot.world.z + (dest_z - bot.world.z).clamp(-20, 20);
+                    if (half_x, half_z) != (bot.world.x, bot.world.z) {
+                        match bot.walk_to(half_x, half_z, bot.world.level, rest) {
+                            Ok(()) => continue,
+                            Err(_) => {}
+                        }
+                    }
+                    match bot.walk_to(dest_x, dest_z, bot.world.level, rest) {
+                        Ok(()) => {}
+                        Err(final_err) => {
+                            bot.log(&format!("walk blocked: {final_err}"));
+                            if rescued {
+                                return Err(final_err.into());
+                            }
+                            rescued = true;
+                            rescue_then_retry(bot, final_err)?;
+                        }
+                    }
+                    continue;
+                }
                 if rescued {
                     return Err(err.into());
                 }
@@ -281,6 +315,24 @@ mod tests {
         let outcome = walk_checked(&mut bot, 3100, 3100, 500);
         let error = outcome.expect_err("blocked walk fails loudly");
         assert!(crate::skill_common::is_conn_abort(&error), "typed conn error, got: {error}");
+    }
+
+    /// Blind 40-tile clamp can land inside a wall pocket the full route
+    /// walks around (t02 live: (2948,3368)->(3292,3171) clamps first to
+    /// (2988,3328), sealed by Falador castlewall; 3x NoRoute, killed 0):
+    /// walk_checked falls back to the final dest once, so planning
+    /// succeeds and only the dead socket fails the walk offline.
+    #[test]
+    fn walk_checked_walled_subleg_falls_back_to_final_dest() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 2948;
+        bot.world.z = 3368;
+        let outcome = walk_checked(&mut bot, 2998, 3328, 500);
+        let error = outcome.expect_err("dead socket fails the walk");
+        assert!(crate::skill_common::is_conn_abort(&error), "past planning to execution, got: {error}");
     }
 
     /// Blocked décor (Draynor bank booth) with the bot on the adjusted

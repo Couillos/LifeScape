@@ -173,6 +173,7 @@ fn work_spot(
     let mut idle_since = bot.world.ticks;
     let mut acked = false;
     let mut patient = false;
+    let mut last_probe = bot.world.ticks;
     let hitpoints_before = hitpoints(bot);
     loop {
         bot.pump(2)?;
@@ -222,10 +223,17 @@ fn work_spot(
         }
         // Cast/attempt acked on a still-live spot: the player IS fishing
         // (dry streak), not facing a dead spot — wait, no time cap; the
-        // load-level stall stays the ultimate backstop. Unacked quiet
-        // still gives up fast: the click itself never landed.
+        // load-level stall stays the ultimate backstop. Re-click as a
+        // reachability probe every ~30 quiet ticks: only a click surfaces
+        // a refusal. Unacked quiet still gives up fast: the click itself
+        // never landed.
         if bot.world.ticks - idle_since > 60 && !acked {
             return Ok((WorkOutcome::Gone, gained));
+        }
+        if acked && bot.world.ticks - last_probe >= 30 {
+            bot.op_npc(tier.op as u8, slot)?;
+            last_probe = bot.world.ticks;
+            seen_msgs = bot.world.messages.len();
         }
         if bot.world.ticks - idle_since > 60 && acked && !patient {
             patient = true;

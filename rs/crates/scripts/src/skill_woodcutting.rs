@@ -17,7 +17,7 @@ use crate::skill_common::{
 use crate::skill_gather::{
     classify_message, work_acked, BanSet, ToolSpec, WOODCUT_ACKS,
 };
-use crate::skill_woodcutting_spot::{is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
+use crate::skill_woodcutting_spot::{default_respawn_ticks, is_stump, live_loc_id, operable_ring, operable_stand, pick_tier, pick_tree_spot, refusal_ban_ticks, spot_footprint, tree_still_there, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::{ScriptError, ScriptResult};
 
 const WC_STAT: u8 = 8;
@@ -274,26 +274,6 @@ fn buy_axe_upgrade(bot: &mut Bot, cands: &[String]) -> Result<Option<String>, Sc
     Ok(None)
 }
 
-
-/// Server regrow delay in ticks (1 bot tick = 1 server cycle) per tree
-/// table (`woodcutting_trees.dbrow` respawnrate; `loc_change` counts
-/// server cycles): oak/willow 30, maple 120, yew 200, magic 400. Rate-0
-/// tables (normal/burnt/achey logs) regrow at 120+random(80), midpoint
-/// 160. Memory is per tier, not per loc: the rate is defined per tree
-/// table, identical for every spot of the tier at fixed playercount
-/// (`scale_by_playercount` ~= 1.0 solo), so one exact wait calibrates
-/// the whole tier — per-loc memory would need an observation per tree
-/// for the same number. Observed waits replace the default.
-fn default_respawn_ticks(product: &str) -> u64 {
-    match product {
-        "oak_logs" | "willow_logs" => 30,
-        "maple_logs" => 120,
-        "yew_logs" => 200,
-        "magic_logs" => 400,
-        _ => 160,
-    }
-}
-
 /// Pure wait-vs-walk call: Some(wait) when standing still wins, None when
 /// leaving wins. Wait wins only when strictly cheaper than the walk to the
 /// best alternative (`travel_ticks`, Manhattan lower bound — biased toward
@@ -331,6 +311,7 @@ fn wait_for_respawn(
     memory: &mut HashMap<String, u64>,
     idle_since: &mut u64,
     except: Option<(i32, i32)>,
+    stumped: &mut HashMap<(i32, i32), u64>,
 ) -> Result<(), ScriptError> {
     let expected = memory.get(&tier.product).copied().unwrap_or_else(|| default_respawn_ticks(&tier.product));
     // Count the regrow, not a flat clock: the stump is back by
@@ -339,7 +320,7 @@ fn wait_for_respawn(
     // Ticks advanced during the work: drop expired bans so the walk
     // alternative is measured against live spots, not stale clocks.
     banned.retain(bot.world.ticks);
-    let alternative = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except)
+    let alternative = pick_tree_spot(&mut *bot, tiers, bank, level, &mut *banned, except, stumped, memory)
         .map(|(_, found_x, found_z)| travel_ticks((found_x - bot.world.x).abs() as u64 + (found_z - bot.world.z).abs() as u64));
     let Some(wait) = respawn_wait_ticks(expected, alternative) else {
         bot.log(&format!(
@@ -499,12 +480,11 @@ fn work_spot(
 /// One click round from the current stand: Gone when the tree is
 /// stumped/cleared or the click was never acked, UnreachableSpot on click
 /// refusal (caller rotates or condemns), terminal outcome for anything
-/// else. One click per stand: the server chains attempts itself, so a
-/// quiet round never re-clicks once the swing was acked (a second click
-/// only fires while unacked, in case the first was swallowed). A swing
-/// ack on a still-present tree means the player IS cutting (dry streak,
-/// own anim never streams) — wait, no round cap; the load-level stall
-/// stays the ultimate backstop. Gained logs this stand.
+/// else. One click opens the stand; quiet rounds re-click as
+/// reachability probes (a wall-separated tree only refuses when clicked —
+/// silence alone can't tell it from a dry streak). A swing ack on a
+/// still-present tree means the player IS cutting — keep waiting; the
+/// load-level stall stays the ultimate backstop. Gained logs this stand.
 fn try_stand(
     bot: &mut Bot,
     tree_x: i32,
@@ -568,9 +548,10 @@ fn try_stand(
         if silences == 2 && acked && live {
             bot.log(&format!("still cutting at ({tree_x},{tree_z}), waiting out the dry streak"));
         }
-        // Click once per stand: re-click only while unacked (the first
-        // click may have been swallowed); an acked loop chains itself.
-        need_click = !acked;
+        // Re-click every quiet round: a wall-separated tree only refuses
+        // when clicked, so the click is the reachability probe (refusal →
+        // UnreachableSpot above). Gaining rounds never re-click.
+        need_click = true;
     }
 }
 
@@ -609,6 +590,7 @@ struct WoodOps<'a> {
     log_ids: Vec<u16>,
     respawn: &'a mut HashMap<String, u64>,
     refusals: &'a mut HashMap<(i32, i32), u8>,
+    stumped: &'a mut HashMap<(i32, i32), u64>,
     streak: u32,
     travel_dead: Option<((i32, i32), (i32, i32))>,
 }
@@ -647,7 +629,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         let except = self.travel_dead.and_then(|(dead, from)| {
             (from == (bot.world.x, bot.world.z) && state.banned.contains(dead)).then_some(dead)
         });
-        match pick_tree_spot(bot, self.tiers, &*self.bank, self.level, &mut state.banned, except) {
+        match pick_tree_spot(bot, self.tiers, &*self.bank, self.level, &mut state.banned, except, &mut self.stumped, self.respawn) {
             Some((ref tier, spot_x, spot_z)) => {
                 bot.log(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
                 bot.intend(&format!("chopping {} at ({spot_x},{spot_z})", tier.product));
@@ -677,6 +659,11 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         }
         if !tree_still_there(bot, at.0, at.1, &spot.trees) {
             bot.log(&format!("tree gone at ({},{})", at.0, at.1));
+            if is_stump(bot, at.0, at.1) {
+                // Timestamp the sighting: the pick predicts this regrow
+                // instead of trusting the stale stream state forever.
+                self.stumped.insert(at, bot.world.ticks);
+            }
             state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
             return false;
         }
@@ -729,8 +716,12 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         match outcome {
             WorkOutcome::Gone => {
                 if is_stump(bot, spot_x, spot_z) {
-                    // Depleted under us: waiting for the regrow beats
-                    // re-banning blind when the walk costs more.
+                    // Depleted under us: timestamp the sighting so the
+                    // pick predicts this regrow instead of trusting the
+                    // stale stream state after the ban expires.
+                    self.stumped.insert(at, bot.world.ticks);
+                    // Waiting for the regrow beats re-banning blind when
+                    // the walk costs more.
                     let except = self.travel_dead.and_then(|(dead, from)| {
                         (from == (bot.world.x, bot.world.z) && state.banned.contains(dead)).then_some(dead)
                     });
@@ -746,6 +737,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                         self.respawn,
                         &mut state.idle_since,
                         except,
+                        &mut self.stumped,
                     )?;
                 } else {
                     bot.log("tree quiet, next one");
@@ -791,6 +783,8 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                 let ban = if stump_here {
                     // Confirmed stump: count the regrow (measured, else the
                     // tier default), not a flat ban — the tree is back by then.
+                    // Timestamp it too: the pick predicts this regrow.
+                    self.stumped.insert(at, bot.world.ticks);
                     self.respawn.get(&spot.product).copied().unwrap_or_else(|| default_respawn_ticks(&spot.product))
                 } else {
                     refusal_ban_ticks(operable, false, true, self.refusals.get(&at).copied().unwrap_or(0))
@@ -845,12 +839,13 @@ fn chop_load(
     banned: &mut BanSet,
     respawn: &mut HashMap<String, u64>,
     refusals: &mut HashMap<(i32, i32), u8>,
+    stumped: &mut HashMap<(i32, i32), u64>,
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     // Threat bans outlive one load: move the caller's set into the driver
     // state, run, move back (restored on every exit below, errors too).
     let mut state = crate::skill_loop::LoopState::resume(bot, std::mem::take(banned));
-    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, respawn, refusals);
+    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, respawn, refusals, stumped);
     *banned = std::mem::take(&mut state.banned);
     out
 }
@@ -866,8 +861,9 @@ fn chop_inner(
     log_ids: Vec<u16>,
     respawn: &mut HashMap<String, u64>,
     refusals: &mut HashMap<(i32, i32), u8>,
+    stumped: &mut HashMap<(i32, i32), u64>,
 ) -> Result<(bool, i64), ScriptError> {
-    let mut ops = WoodOps { tiers, bank, coins, level, log_ids, respawn, refusals, streak: 0, travel_dead: None };
+    let mut ops = WoodOps { tiers, bank, coins, level, log_ids, respawn, refusals, stumped, streak: 0, travel_dead: None };
     loop {
         if best_axe(bot).is_none() {
             // Recovery walks (shop, bank) are not chopping: don't bill
@@ -1099,6 +1095,11 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // the whole tier (server rate is per tree table), so this outlives
     // loads like the bans do.
     let mut respawn: HashMap<String, u64> = HashMap::new();
+    // Confirmed stump sightings (spot -> tick): the picker predicts the
+    // regrow from these instead of trusting stale stream state — a tree
+    // the bot wasn't around to see regrow still reads as a stump.
+    // Arrival re-streams and proves it, so this outlives loads too.
+    let mut stumped: HashMap<(i32, i32), u64> = HashMap::new();
     // Adjacent direct-refusal strikes per stand: the first refusal rides
     // the short ban, the repeat condemns (structural). Walk-leg failures
     // never write here.
@@ -1127,7 +1128,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bot.log("still axeless after re-gear, hunting again");
             continue;
         }
-        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn, &mut refusals)?;
+        let (ok, new_level) = chop_load(bot, &tiers, &mut bank, coins, level, &mut banned, &mut respawn, &mut refusals, &mut stumped)?;
         level = new_level;
         // A failed load (threats, stumps, stall) retries with bans kept:
         // stumps regrow and hunters wander off.
@@ -1197,7 +1198,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, default_respawn_ticks, respawn_wait_ticks};
+    use super::{bootstrap_products, can_buy_now, chop_keep_ids, combat_pack_dirty, respawn_wait_ticks};
     use crate::skill_common::{death_message_seen, WorkOutcome};    use crate::tables_live::attach_live_tables;
     use crate::skill_gather::death_since;
     use lifescape_sdk::Bot;
@@ -1378,21 +1379,6 @@ mod tests {
         let mut spot: Option<(i32, i32)> = Some((3086, 3243));
         spot = None;
         assert!(spot.is_none(), "spot reset after death");
-    }
-
-    /// Defaults mirror the server tree table (`woodcutting_trees.dbrow`
-    /// respawnrate): oak/willow 30, maple 120, yew 200, magic 400, and
-    /// 160 for normal logs (120+random(80), midpoint). Unknown products
-    /// fall back to the normal-tree mean, never a round guess.
-    #[test]
-    fn respawn_defaults_match_server_table() {
-        assert_eq!(default_respawn_ticks("oak_logs"), 30, "oak regrows in 30");
-        assert_eq!(default_respawn_ticks("willow_logs"), 30, "willow regrows in 30");
-        assert_eq!(default_respawn_ticks("maple_logs"), 120, "maple regrows in 120");
-        assert_eq!(default_respawn_ticks("yew_logs"), 200, "yew regrows in 200");
-        assert_eq!(default_respawn_ticks("magic_logs"), 400, "magic regrows in 400");
-        assert_eq!(default_respawn_ticks("logs"), 160, "normal trees average 160");
-        assert_eq!(default_respawn_ticks("something_new"), 160, "unknown falls back to the normal mean");
     }
 
     /// Wait-vs-walk on chiffré cases (GONE_BAN_TICKS = 250 cap): oak 30
