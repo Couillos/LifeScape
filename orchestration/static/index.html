@@ -8,15 +8,17 @@
   :root { color-scheme: dark; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
   a { color: #04A800; }
+  .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
+  .navlink:hover { background: #262626; }
   h1 { font-size: 18px; margin: 0; }
   h2 { font-size: 13px; margin: 10px 0 4px; color: #ff0; font-weight: 700; }
   #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
-  #bar .meta { color: #888; font-size: 12px; }
   #bar button { line-height: 18px; }
   button { font: inherit; color: #eee; background: #1b1b1b; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; cursor: pointer; }
   button:hover { background: #262626; }
   button:disabled { opacity: 0.45; cursor: default; }
   #controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #0a0a0a; border: 1px solid #333; padding: 6px 8px; margin-bottom: 10px; }
+  #controls > div { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   #controls input, #controls select { font: inherit; color: #eee; background: #000; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; }
   #controls select { max-width: 200px; }
   #controls #args { width: 170px; }
@@ -42,11 +44,14 @@
   .pill.running { background: #46c46f; color: #000; } .pill.crashed { background: #e05a5a; color: #000; }
   .pill.paused { background: #d9a441; color: #000; } .pill.stopped { background: #6b7280; color: #000; }
   .pill.empty { background: none; border: 1px solid #555; color: #888; }
-  #detail { flex: 2 1 420px; min-width: 300px; }
+  #left { flex: 1 1 260px; min-width: 250px; max-width: 560px; }
+  #center { flex: 2 1 420px; min-width: 300px; max-width: 560px; }
+  #mid { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
   #title { color: #888; margin-bottom: 6px; }
   #zonename { color: #ff0; margin-left: 8px; }
-  canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; }
-  #side { flex: 1 1 280px; min-width: 260px; max-width: 420px; }
+  canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; box-sizing: border-box; }
+  #layout .panel { max-width: 560px; box-sizing: border-box; }
+  #side { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
   .panel { background: #0a0a0a; border: 1px solid #333; padding: 6px; margin-top: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; }
   .panel pre { white-space: pre-wrap; margin: 0; font-family: monospace; }
   .logpanel { background: none; border: 0; padding: 0; max-height: none; overflow: visible; }
@@ -54,7 +59,7 @@
   .muted { color: #888; }
   @media (max-width: 900px) {
     #layout { flex-direction: column; }
-    #detail, #side { max-width: none; width: 100%; flex: 1 1 auto; }
+    #left, #center, #mid, #side { max-width: none; width: 100%; flex: 1 1 auto; }
   }
 </style>
 </head>
@@ -64,21 +69,22 @@
     <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide sessions">☰ Sessions</button>
     <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
-    <a href="/items" style="color:#04A800;text-decoration:none">Item holdings</a>
+    <a class="navlink" href="/items">Item holdings</a>
   </div>
-  <span class="meta" id="stamp"></span>
 </div>
 <div id="controls">
-  <select id="account" title="Session account (defaults to the followed bot)"></select>
-  <button id="btn-open" title="Create a session: log the player in">open</button>
-  <button id="btn-close" title="Cut the session: log out and drop the connection">close</button>
+  <div id="open-block">
+    <select id="account" title="Session account for open"></select>
+    <button id="btn-open" title="Create a session: log the player in">open</button>
+  </div>
   <span class="sep">|</span>
-  <select id="script" title="Script to launch"></select>
-  <input id="args" placeholder="args…" title="Script args, space-separated (JSON when it parses)">
-  <button id="btn-run" title="Launch the script in the session">run</button>
-  <button id="btn-stop" title="Stop the script, keep the session connected">stop</button>
-  <button id="btn-pause" title="Freeze the script, keep the connection">pause</button>
-  <button id="btn-resume" title="Unfreeze the script">resume</button>
+  <div id="script-block">
+    <select id="script" title="Script to launch"></select>
+    <input id="args" placeholder="args…" title="Script args, space-separated (JSON when it parses)">
+    <button id="btn-run" title="Launch the script in the session">run</button>
+    <button id="btn-stop" title="Stop the script, keep the session connected">stop</button>
+    <button id="btn-pause-toggle" title="Freeze the script, keep the connection">pause</button>
+  </div>
   <span id="ctlmsg"></span>
 </div>
 <div id="layout">
@@ -89,24 +95,28 @@
     </div>
     <ul id="players"><li class="muted">loading…</li></ul>
   </div>
-  <div id="detail">
-    <div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="zonename"></span></div>
-    <canvas id="map" width="560" height="560"></canvas>
+  <div id="left">
     <div class="panel"><pre id="infotext"></pre></div>
+    <h2>Log</h2>
+    <div class="panel logpanel"><pre id="log"></pre></div>
   </div>
-  <div id="side">
+  <div id="center">
+    <div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="scriptname" class="pill empty" style="display:none"></span><span id="zonename"></span> <button id="btn-close" title="Cut the session: log out and drop the connection">close</button></div>
+    <canvas id="map" width="560" height="560"></canvas>
+  </div>
+  <div id="mid">
     <h2>Dialogue / window</h2>
     <div class="panel"><pre id="dialog"></pre></div>
     <h2>Messages</h2>
     <div class="panel"><pre id="chat"></pre></div>
+    <h2>Scenery &amp; ground items</h2>
+    <div class="panel"><pre id="scenery"></pre></div>
+  </div>
+  <div id="side">
     <h2 id="invtitle">Inventory</h2>
     <div class="panel"><pre id="inv"></pre></div>
     <h2>Skills</h2>
     <div class="panel"><pre id="skills"></pre></div>
-    <h2>Scenery &amp; ground items</h2>
-    <div class="panel"><pre id="scenery"></pre></div>
-    <h2>Log</h2>
-    <div class="panel logpanel"><pre id="log"></pre></div>
   </div>
 </div>
 <script src="/spectator.js"></script>

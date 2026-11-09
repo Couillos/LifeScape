@@ -1425,6 +1425,10 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // streak: only back-to-back deaths with no progress between are fatal.
     let mut queue = picked;
     let mut tally = DeathTally::fresh();
+    // Auto mode (no explicit spot): the pick is a suggestion, never an
+    // order. Unpaid and across the toll fence, it re-picks walkable
+    // instead of ending the run idle; explicit picks keep the Usage.
+    let auto = spots.is_empty();
     while !queue.is_empty() {
         let next = queue.iter().position(|queued| !tally.excludes(queued.key));
         let Some(next) = next else {
@@ -1434,7 +1438,22 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let spot = queue.remove(next);
         bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("melee at {}", spot.key));
-        let (total, died, banked) = run_spot(bot, &spot, kills, ticks, no_bank)?;
+        let (total, died, banked) = match run_spot(bot, &spot, kills, ticks, no_bank) {
+            Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
+                if !tally.excludes(spot.key) {
+                    tally.excluded.push(spot.key);
+                }
+                match fallback_spot(bot, &spot, &tally.excluded) {
+                    Some(fallback) => {
+                        bot.log(&format!("{} across the toll fence, falling back to {}", spot.key, fallback.key));
+                        queue.insert(0, fallback);
+                        continue;
+                    }
+                    None => return Err(crate::ScriptError::Usage(detail)),
+                }
+            }
+            other => other?,
+        };
         if total > 0 || banked {
             tally.note_progress();
         }
@@ -1669,6 +1688,28 @@ mod tests {
         let east_only = vec![(3274, 3213, 4)];
         assert_eq!(super::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
         assert!(super::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
+    }
+
+    /// Auto re-pick from the west never idles on an across-toll pick: the
+    /// fallback is a surface spot at or below the killer tier with a
+    /// same-flank cluster to hunt (t02 live: auto warriors from Lumbridge
+    /// ended the run with Usage instead of hunting).
+    #[test]
+    fn auto_toll_fallback_hunts_the_home_flank() {
+        let mut bot = stat_bot(17, 17, 17);
+        bot.world.x = 3219;
+        bot.world.z = 3219;
+        bot.world.level = 0;
+        let killer = knowledge::combat_spots::by_key("al_kharid_warriors").expect("warriors");
+        let excluded = vec![killer.key];
+        let fallback = fallback_spot(&bot, &killer, &excluded).expect("a walkable repli exists");
+        assert_ne!(fallback.key, killer.key, "never re-pick the across spot");
+        assert!(fallback.entrance.is_none(), "surface only, the router never rides down");
+        assert!(fallback.min_level <= killer.min_level, "no harder than the across pick, got: {}", fallback.key);
+        let targets = super::ranked_clusters(&bot, &fallback);
+        assert!(!targets.is_empty(), "fallback has same-level spawns");
+        let kept = super::same_flank_clusters(3268, bot.world.x, &targets, false);
+        assert!(!kept.is_empty(), "{} has no west-flank cluster to hunt", fallback.key);
     }
 
     /// Walking-cost order inside the take(3) window: slot 7 at (3252,3237)

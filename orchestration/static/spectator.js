@@ -87,11 +87,36 @@ function scriptState(job) {
 }
 function renderPill() {
   const pill = document.getElementById("scriptpill");
+  const name = document.getElementById("scriptname");
   if (!pill) return;
-  if (!last) { pill.style.display = "none"; return; }
+  if (!last) {
+    pill.style.display = "none";
+    if (name) name.style.display = "none";
+    syncPauseBtn();
+    return;
+  }
   pill.style.display = "";
-  pill.textContent = scriptState(last);
+  setText(pill, scriptState(last));
   pill.className = "pill " + scriptState(last);
+  // Script name pill next to the status pill.
+  if (name) {
+    if (last.script) {
+      name.style.display = "";
+      setText(name, last.script);
+    } else {
+      name.style.display = "none";
+    }
+  }
+  syncPauseBtn();
+}
+
+// Single pause/resume toggle: label follows the followed session state.
+function syncPauseBtn() {
+  const btn = document.getElementById("btn-pause-toggle");
+  if (!btn) return;
+  const paused = !!(last && last.paused);
+  btn.textContent = paused ? "resume" : "pause";
+  btn.title = paused ? "Unfreeze the script" : "Freeze the script, keep the connection";
 }
 
 function toggleList(force) {
@@ -118,8 +143,8 @@ function renderList(jobs) {
 }
 
 function setTitle(text, zone) {
-  document.getElementById("titletext").textContent = text;
-  document.getElementById("zonename").textContent = zone || "";
+  setText(document.getElementById("titletext"), text);
+  setText(document.getElementById("zonename"), zone || "");
 }
 
 async function select(account) {
@@ -127,6 +152,13 @@ async function select(account) {
   autoSelected = true;
   last = null;
   logLines = [];
+  logShown = 0;
+  // New bot, new base: drop the previous bot's line nodes and caches so
+  // the next frames rebuild from scratch (same as a full server resend).
+  for (const id of ["infotext", "log", "dialog", "chat", "inv", "skills", "scenery"]) {
+    const pre = document.getElementById(id);
+    if (pre) { pre.textContent = ""; pre._lines = undefined; }
+  }
   paint(); // drop the previous bot at once; the next state paints the new one
   setTitle("Following: " + account.replace(/_/g, " "), "");
   const picker = document.getElementById("account");
@@ -150,14 +182,7 @@ function follow(account) {
 let socket = null;
 let socketRetry = 500;
 
-function setLink(text, good) {
-  const stamp = document.getElementById("stamp");
-  stamp.textContent = text;
-  stamp.style.color = good ? "#46c46f" : "#d9a441";
-}
-
 function scheduleReconnect() {
-  setLink("reconnecting…", false);
   setTimeout(connectSocket, socketRetry);
   socketRetry = Math.min(socketRetry * 2, 5000);
 }
@@ -173,7 +198,6 @@ function connectSocket() {
   }
   socket.onopen = () => {
     socketRetry = 500;
-    setLink("live " + new Date().toLocaleTimeString(), true);
     follow(selected);
   };
   socket.onmessage = (event) => {
@@ -187,10 +211,10 @@ function connectSocket() {
         select(first.account);
       }
     }
-    if (data.logs) { logLines = data.logs; renderLog(); }
+    if (data.logs) { logLines = data.logs; renderLogFull(); }
     if (data.log_append && data.log_append.length) {
       logLines = logLines.concat(data.log_append).slice(-500);
-      renderLog();
+      appendLog(data.log_append);
     }
     if (data.state && data.state.account) {
       const incoming = data.state;
@@ -207,9 +231,9 @@ function connectSocket() {
       }
       const merged = last ? Object.assign({}, last, incoming) : incoming;
       last = merged;
-      // Session gap, not a dead pipe: the socket stays live (stamp below
-      // keeps ticking) while the worker relogs. Say so with the stale
-      // age instead of showing a frozen frame as if it were live.
+      // Session gap, not a dead pipe: the socket stays open while the
+      // worker relogs. Say so with the stale age instead of showing a
+      // frozen frame as if it were live.
       const gap = last.status === "reconnecting" || last.status === "disconnected";
       const stale = last.updated ? Math.max(0, Date.now() / 1000 - last.updated) : 0;
       setTitle(
@@ -225,30 +249,81 @@ function connectSocket() {
       last = null;
       renderPill();
     }
-    setLink("live " + new Date().toLocaleTimeString(), true);
   };
   socket.onerror = () => { if (socket) socket.close(); };
   socket.onclose = () => { socket = null; scheduleReconnect(); };
 }
 
 let logLines = [];
-function renderLog() {
-  setLog(logLines);
+let logShown = 0; // line nodes currently in #log
+// Scroll + selection discipline for the blocks around the canvas. The
+// server pushes a state diff at 1 Hz and log tails as they grow;
+// rewriting textContent on every frame would yank scrolled-up readers
+// and destroy any text selection. So:
+// - stickyWrite: only auto-scroll a block that was already at the
+//   bottom (< 24 px); a block the user scrolled up is never touched.
+// - syncStatePre: one text node per line, mutated in place; unchanged
+//   lines keep their DOM nodes, so a selection inside them survives.
+// - setText: assign textContent only when the string actually changed.
+function scrollerFor(pre) {
+  return pre.id === "log" ? pre : pre.parentElement;
+}
+function stickyWrite(pre, write) {
+  const box = scrollerFor(pre);
+  const follow = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+  write();
+  if (follow) box.scrollTop = box.scrollHeight;
+}
+function setText(node, text) {
+  if (node && node.textContent !== text) node.textContent = text;
+}
+function syncStatePre(pre, lines, emptyText) {
+  const wanted = lines.length ? lines : [emptyText];
+  let nodes = pre._lines;
+  if (!nodes) { pre.textContent = ""; nodes = pre._lines = []; }
+  stickyWrite(pre, () => {
+    while (nodes.length < wanted.length) {
+      if (nodes.length > 0) pre.appendChild(document.createTextNode("\n"));
+      nodes.push(pre.appendChild(document.createTextNode("")));
+    }
+    while (nodes.length > wanted.length) {
+      pre.removeChild(nodes.pop());
+      if (pre.lastChild) pre.removeChild(pre.lastChild);
+    }
+    for (let line = 0; line < wanted.length; line++) {
+      if (nodes[line].nodeValue !== wanted[line]) nodes[line].nodeValue = wanted[line];
+    }
+  });
 }
 
-function setLog(lines) {
+function renderLogFull() {
   const pre = document.getElementById("log");
-  // Follow new lines when the user is already at the bottom (or at the very
-  // first render); otherwise keep the same distance from the bottom so new
-  // lines never yank the view upwards.
-  const before = pre.scrollHeight - pre.scrollTop - pre.clientHeight;
-  const follow = before < 24;
-  pre.textContent = lines.join("\n") || "(no log)";
-  if (follow) {
-    pre.scrollTop = pre.scrollHeight;
-  } else {
-    pre.scrollTop = Math.max(0, pre.scrollHeight - pre.clientHeight - before);
-  }
+  stickyWrite(pre, () => {
+    pre.textContent = logLines.join("\n") || "(no log)";
+    logShown = logLines.length;
+  });
+}
+// Append-only: the server already sends just the tail (log_append,
+// web.rs log_delta), so new line nodes go after the old ones without
+// touching them — a selection above survives, and the 500-line cap
+// drops whole head lines.
+function appendLog(lines) {
+  if (!lines.length) return;
+  const pre = document.getElementById("log");
+  stickyWrite(pre, () => {
+    if (logShown === 0) pre.textContent = "";
+    for (const line of lines) {
+      if (logShown > 0) pre.appendChild(document.createTextNode("\n"));
+      pre.appendChild(document.createTextNode(line));
+      logShown++;
+    }
+    let drop = logShown - 500;
+    while (drop-- > 0) {
+      if (pre.firstChild) pre.removeChild(pre.firstChild);
+      if (pre.firstChild) pre.removeChild(pre.firstChild);
+      logShown--;
+    }
+  });
 }
 
 function draw() {
@@ -471,18 +546,22 @@ function updatePanels() {
     const action = last.route_action;
     lines.push(`action: ${action.name || 'object #' + action.id} at ${action.x},${action.z}`);
   }
-  document.getElementById('infotext').textContent = lines.join('\n');
+  syncStatePre(document.getElementById('infotext'), lines, '(no state)');
 
-  document.getElementById('dialog').textContent = last.modal_name ? `window: ${last.modal_name}` : '(no window open)';
-  document.getElementById('chat').textContent = (last.chat || []).join('\n') || '(no messages)';
+  setText(document.getElementById('dialog'), last.modal_name ? `window: ${last.modal_name}` : '(no window open)');
+  syncStatePre(document.getElementById('chat'), last.chat || [], '(no messages)');
 
   const fmt = (items, empty) => (items && items.length)
-    ? items.map(i => (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object')).join('\n')
-    : empty;
+    ? items.map(i => (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object'))
+    : [empty];
   const carried = (last.inv || []).reduce((n, i) => n + (i.count || 0), 0);
-  document.getElementById('invtitle').textContent = `Inventory (${carried})`;
-  document.getElementById('inv').textContent = 'Backpack:\n' + fmt(last.inv, '(empty)') + '\n\nWorn:\n' + fmt(last.worn, '(nothing)');
-  document.getElementById('skills').textContent = (last.skills || []).map(s => `${SKILLS[s.id] || ('stat' + s.id)} ${s.level} (${s.xp}xp)`).join('\n') || '(no skills)';
+  setText(document.getElementById('invtitle'), `Inventory (${carried})`);
+  syncStatePre(document.getElementById('inv'),
+    ['Backpack:'].concat(fmt(last.inv, '(empty)'), ['', 'Worn:'], fmt(last.worn, '(nothing)')),
+    '(empty)');
+  syncStatePre(document.getElementById('skills'),
+    (last.skills || []).map(s => `${SKILLS[s.id] || ('stat' + s.id)} ${s.level} (${s.xp}xp)`),
+    '(no skills)');
 
   const locCounts = {};
   let sceneryCount = 0;
@@ -494,9 +573,10 @@ function updatePanels() {
   }
   const locLines = Object.entries(locCounts).map(([name, count]) => (count > 1 ? count + 'x ' : '') + name);
   const objLines = (last.objs || []).map(o => (o.name || ('object #' + o.id)) + ' @ ' + o.x + ',' + o.z);
-  document.getElementById('scenery').textContent =
-    `Scenery (${sceneryCount}):\n` + (locLines.slice(0, 60).join('\n') || '(none)') +
-    `\n\nGround items (${(last.objs || []).length}):\n` + (objLines.join('\n') || '(none)');
+  syncStatePre(document.getElementById('scenery'),
+    [`Scenery (${sceneryCount}):`].concat(locLines.slice(0, 60).length ? locLines.slice(0, 60) : ['(none)'],
+      [''], [`Ground items (${(last.objs || []).length}):`], objLines.length ? objLines : ['(none)']),
+    '(none)');
 }
 
 connectSocket();
@@ -508,13 +588,9 @@ document.getElementById("rtbtn").onclick = () => {
   syncRtBtn();
 };
 syncRtBtn();
-// Session controls: open/run/stop/pause/resume/close on the typed account,
-// defaulting to the followed bot. Scripts come from /api/scripts.
-function ctlAccount() {
-  const input = document.getElementById("account");
-  const typed = (input && input.value || "").trim();
-  return typed || selected || "";
-}
+// Session controls act on the followed session (selected from the drawer):
+// open uses the account dropdown, run/stop/pause/close use the selection.
+// Scripts come from /api/scripts.
 function ctlMsg(text, good) {
   const el = document.getElementById("ctlmsg");
   if (el) { el.textContent = text || ""; el.style.color = good ? "#46c46f" : "#d9a441"; }
@@ -568,17 +644,20 @@ async function loadAccounts() {
   });
 });
 document.getElementById("drawer-close").onclick = () => toggleList(true);
-document.getElementById("btn-open").onclick = () => { const a = ctlAccount(); if (!a) return ctlMsg("pick a bot first", false); ctlCall("opening", "open", "/api/open", {account: a}); };
+document.getElementById("btn-open").onclick = () => { const typed = (document.getElementById("account").value || "").trim(); if (!typed) return ctlMsg("pick a bot first", false); ctlCall("opening", "open", "/api/open", {account: typed}); };
 document.getElementById("btn-close").onclick = () => { if (!selected) return ctlMsg("follow a session first", false); ctlCall("closing", "closed", "/api/close", {account: selected}); };
 document.getElementById("btn-run").onclick = () => {
-  const a = ctlAccount(); if (!a) return ctlMsg("pick a bot first", false);
+  if (!selected) return ctlMsg("follow a session first", false);
   const script = document.getElementById("script").value;
   if (!script) return ctlMsg("pick a script", false);
-  ctlCall("starting " + script, "started", "/api/run", {account: a, script: script, args: parseArgs(document.getElementById("args").value)});
+  ctlCall("starting " + script, "started", "/api/run", {account: selected, script: script, args: parseArgs(document.getElementById("args").value)});
 };
 document.getElementById("btn-stop").onclick = () => { if (!selected) return ctlMsg("follow a session first", false); ctlCall("stopping", "stopped", "/api/unload", {account: selected}); };
-document.getElementById("btn-pause").onclick = () => { if (!selected) return ctlMsg("follow a session first", false); ctlCall("pausing", "", "/api/pause", {account: selected}); };
-document.getElementById("btn-resume").onclick = () => { if (!selected) return ctlMsg("follow a session first", false); ctlCall("resuming", "", "/api/resume", {account: selected}); };
+document.getElementById("btn-pause-toggle").onclick = () => {
+  if (!selected) return ctlMsg("follow a session first", false);
+  if (last && last.paused) ctlCall("resuming", "", "/api/resume", {account: selected});
+  else ctlCall("pausing", "", "/api/pause", {account: selected});
+};
 loadScripts();
 loadAccounts();
 window.spectator = { select: select, toggle: toggleList };
