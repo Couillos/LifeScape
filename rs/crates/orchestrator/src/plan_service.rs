@@ -1,9 +1,9 @@
-//! Daemon-side hosting of the lot 2 pathfinding service: ONE snapshot
-//! (world + tables + version) loaded at daemon start, served over
+//! Daemon-side hosting of the pathfinding service: ONE snapshot (world +
+//! tables + version) loaded at daemon start, served over
 //! `run/pathfinding.sock`. Load is all-or-nothing: any missing piece
-//! leaves the service down and every worker falls back to its local sync
-//! plan (a half-world server would diverge from the sync path, which the
-//! lot 2 goldens forbid). Reload is lot 3 (`reload-nav` + swap).
+//! leaves the service down and every worker plan fails `nav-down`, never
+//! a local plan (a half-world server would diverge from the plan the
+//! goldens pin). Reload is `reload-nav` + swap.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -33,7 +33,8 @@ pub fn version_for(data_dir: &Path, zip: &Path, f2p: &Path) -> String {
 
 /// Load the daemon snapshot exactly like a session worker does (same
 /// loaders, same strictness minus the logs): index + lazy squares, f2p
-/// zones, tables. Any error = no service (workers stay sync).
+/// zones, tables. Any error = no service: every worker plan fails
+/// `nav-down`, never a local plan.
 pub fn load_snapshot() -> Result<Arc<Snapshot>, String> {
     let data_dir = paths::root().join("gamedata").join("data");
     let engine = PathBuf::from(crate::session::engine_dir());
@@ -84,13 +85,16 @@ fn registry() -> &'static Mutex<Option<Arc<Service>>> {
     SERVICE.get_or_init(|| Mutex::new(None))
 }
 
-/// Lot 4 operator gauge: counters + queue + RAM in one object, same shape
-/// as the service `stats` op. None when the service is down (workers are
-/// on sync fallback, the gauge is empty rather than wrong).
+/// Operator gauge: counters + queue + RAM in one object, same shape
+/// as the service `stats` op, plus one entry per batch op served. None
+/// when the service is down: the gauge is empty rather than stale.
 pub fn stats_json() -> Option<Value> {
     let service = registry().lock().unwrap().clone()?;
     let stats = service.stats();
     let int = |num: u64| Value::Int(num.min(i64::MAX as u64) as i64);
+    let (door_defs, tiles_flags) = service.query_stats();
+    let (static_locs_near, in_f2p, toll_fence, wants) = service.query_stats_scripts();
+    let (diff, debug, transitions_list, probe_targets, doors_near) = service.query_stats_diag();
     Some(object(vec![
         ("ok", Value::Bool(true)),
         ("version", Value::Str(service.current_version())),
@@ -115,6 +119,17 @@ pub fn stats_json() -> Option<Value> {
         ("refused_cap", int(stats.refused_cap)),
         ("refused_full", int(stats.refused_full)),
         ("refused_stale", int(stats.refused_stale)),
+        ("door_defs", int(door_defs)),
+        ("tiles_flags", int(tiles_flags)),
+        ("static_locs_near", int(static_locs_near)),
+        ("in_f2p", int(in_f2p)),
+        ("toll_fence", int(toll_fence)),
+        ("wants", int(wants)),
+        ("diff", int(diff)),
+        ("debug", int(debug)),
+        ("transitions_list", int(transitions_list)),
+        ("probe_targets", int(probe_targets)),
+        ("doors_near", int(doors_near)),
         ("ram_warn", int(stats.ram_warn)),
         ("ram_shed", int(stats.ram_shed)),
         ("rss_bytes", int(Service::rss_bytes())),

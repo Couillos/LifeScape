@@ -1,7 +1,20 @@
 //! Craft recipes (smith, smelt, cook, leather, gem, fletch, brew).
 //! Levels and XP are raw server values.
 
-use crate::{Json, num, opt_flag, opt_str, str_int_map, table};
+/// One static recipe row (build-time data, mirrored into [`Recipe`] per call).
+pub(crate) struct StaticRecipe {
+    pub kind: &'static str,
+    pub level: i64,
+    pub xp: i64,
+    pub inputs: &'static [(&'static str, i64)],
+    pub outputs: &'static [(&'static str, i64)],
+    pub source: &'static str,
+    pub members: Option<bool>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/recipes_generated.rs"));
+}
 
 /// One recipe row.
 #[derive(Debug, Clone)]
@@ -15,25 +28,28 @@ pub struct Recipe {
     pub members: Option<bool>,
 }
 
-fn recipe_from_row(row: &Json) -> Recipe {
-    let source = opt_str(row.get("extra"), "row").unwrap_or_default();
+fn pair_list(pairs: &[(&'static str, i64)]) -> Vec<(String, i64)> {
+    pairs.iter().map(|(name, value)| ((*name).to_string(), *value)).collect()
+}
+
+fn recipe_from_static(row: &StaticRecipe) -> Recipe {
     Recipe {
-        kind: opt_str(row, "kind").unwrap_or_default(),
-        level: num(row, "level", 0),
-        xp: num(row, "xp", 0),
-        inputs: str_int_map(row, "inputs"),
-        outputs: str_int_map(row, "outputs"),
-        source,
-        members: opt_flag(row, "members"),
+        kind: row.kind.to_string(),
+        level: row.level,
+        xp: row.xp,
+        inputs: pair_list(row.inputs),
+        outputs: pair_list(row.outputs),
+        source: row.source.to_string(),
+        members: row.members,
     }
 }
 
 /// Every recipe, optionally filtered by kind.
 pub fn all_recipes(kind: Option<&str>) -> Vec<Recipe> {
-    table("recipes")
+    generated::ALL
         .iter()
-        .filter(|row| kind.is_none_or(|wanted| row.get("kind").as_str() == Some(wanted)))
-        .map(recipe_from_row)
+        .filter(|row| kind.is_none_or(|wanted| row.kind == wanted))
+        .map(recipe_from_static)
         .collect()
 }
 

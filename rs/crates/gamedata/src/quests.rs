@@ -1,6 +1,21 @@
 //! Quests scraped from quest scripts.
 
-use crate::{num, opt_flag, opt_str, str_list, table};
+/// One static quest row (build-time data, mirrored into [`Quest`] per call).
+pub(crate) struct StaticQuest {
+    pub name: &'static str,
+    pub files: i64,
+    pub varps: &'static [&'static str],
+    pub skill_reqs: &'static [(&'static str, &'static str, i64)],
+    pub item_checks: &'static [(&'static str, &'static str)],
+    pub qp_gates: &'static [(&'static str, i64)],
+    pub xp_rewards: &'static [(&'static str, i64)],
+    pub complete_raw: &'static [&'static str],
+    pub members: Option<bool>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/quests_generated.rs"));
+}
 
 /// One `stat_base` gate inside a quest script.
 #[derive(Debug, Clone)]
@@ -38,57 +53,35 @@ pub struct Quest {
     pub complete_raw: Vec<String>,
 }
 
-fn quest_from_row(row: &crate::Json) -> Quest {
-    let skills = match row.get("skill_reqs") {
-        crate::Json::Arr(items) => items
-            .iter()
-            .map(|item| SkillReq {
-                skill: opt_str(item, "skill").unwrap_or_default(),
-                op: opt_str(item, "op").unwrap_or_default(),
-                level: num(item, "level", 0),
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let checks = match row.get("item_checks") {
-        crate::Json::Arr(items) => items
-            .iter()
-            .map(|item| ItemCheck {
-                container: opt_str(item, "container").unwrap_or_default(),
-                obj: opt_str(item, "obj").unwrap_or_default(),
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let gates = match row.get("qp_gates") {
-        crate::Json::Arr(items) => {
-            items.iter().map(|item| (opt_str(item, "op").unwrap_or_default(), num(item, "value", 0))).collect()
-        }
-        _ => Vec::new(),
-    };
-    let rewards = match row.get("xp_rewards") {
-        crate::Json::Arr(items) => items
-            .iter()
-            .map(|item| XpReward { skill: opt_str(item, "skill").unwrap_or_default(), xp: num(item, "xp", 0) })
-            .collect(),
-        _ => Vec::new(),
-    };
+fn quest_from_static(row: &StaticQuest) -> Quest {
     Quest {
-        name: opt_str(row, "quest").unwrap_or_default(),
-        members: opt_flag(row, "members"),
-        files: num(row, "files", 0),
-        varps: str_list(row, "varps"),
-        skill_reqs: skills,
-        item_checks: checks,
-        qp_gates: gates,
-        xp_rewards: rewards,
-        complete_raw: str_list(row, "complete_raw"),
+        name: row.name.to_string(),
+        members: row.members,
+        files: row.files,
+        varps: row.varps.iter().map(|entry| (*entry).to_string()).collect(),
+        skill_reqs: row
+            .skill_reqs
+            .iter()
+            .map(|(skill, op, level)| SkillReq { skill: (*skill).to_string(), op: (*op).to_string(), level: *level })
+            .collect(),
+        item_checks: row
+            .item_checks
+            .iter()
+            .map(|(container, obj)| ItemCheck { container: (*container).to_string(), obj: (*obj).to_string() })
+            .collect(),
+        qp_gates: row.qp_gates.iter().map(|(op, value)| ((*op).to_string(), *value)).collect(),
+        xp_rewards: row
+            .xp_rewards
+            .iter()
+            .map(|(skill, xp)| XpReward { skill: (*skill).to_string(), xp: *xp })
+            .collect(),
+        complete_raw: row.complete_raw.iter().map(|entry| (*entry).to_string()).collect(),
     }
 }
 
 /// Every quest row.
 pub fn all_quests() -> Vec<Quest> {
-    table("quests").iter().map(quest_from_row).collect()
+    generated::ALL.iter().map(quest_from_static).collect()
 }
 
 /// Quests with this exact (case-insensitive) debugname.

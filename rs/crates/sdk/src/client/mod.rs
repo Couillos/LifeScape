@@ -7,6 +7,7 @@ pub mod actions;
 pub mod approach;
 pub mod doors;
 pub mod movement;
+pub mod nav_remote;
 pub mod snapshot_view;
 pub mod travel;
 pub mod travel_dossier;
@@ -16,7 +17,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::collision::{CollisionMap, MapPack};
-use crate::client::movement::TransitionRow;
 use crate::connection::{Connection, Frame};
 use crate::error::{Error, Result};
 use crate::tables::{NOTABLES, Tables};
@@ -99,22 +99,21 @@ pub struct Bot {
     /// Pack index for lazy map loading. `None` means no live painting:
     /// collision stays as streamed and `ensure_area` is a no-op.
     pub maps: Option<MapPack>,
-    /// Known stair/ladder/trapdoor rides, loaded from the transition dump.
-    /// Empty without it: climbs fall back to the nearest ladder loc.
-    pub transitions: Vec<TransitionRow>,
     /// Static collision for the planner, wired by the session at open.
     /// `travel_to` refuses loud without it: no plan, no walk.
     pub nav_world: Option<Arc<lifescape_nav::static_world::StaticWorld>>,
     /// Planner tables (transitions, verdicts, door rules), wired by the
     /// session at open alongside `nav_world`.
     pub nav_tables: Option<Arc<lifescape_nav::tables::Tables>>,
-    /// Lot 2 pathfinding service handle (daemon IPC). `None` = sync local
-    /// plan; a dead/refusing service also falls back sync (logged+counted).
+    /// Pathfinding service handle (daemon IPC). `None` or a dead/refusing
+    /// service means every plan fails loud with `nav-down`: never a local
+    /// plan, the failure stays visible in the logs.
     pub plan_client: Option<lifescape_nav::service::PlanClient>,
     /// Data version sent with submits (set once at session open).
     pub plan_data_version: Option<String>,
-    /// Sync fallbacks taken because the service was down/refusing/stale.
-    pub plan_sync_fallbacks: u64,
+    /// Served `wants` tags pinned by version: options build without
+    /// tables and without a second round-trip while the version holds.
+    pub(crate) wants_cache: Option<(String, Vec<String>)>,
     /// Last positions with their tick, oldest first, capped
     /// (`TRAIL_CAP`): the failure dossier ships the last 50.
     pub trail: Vec<(u64, i32, i32, i32)>,
@@ -151,12 +150,11 @@ impl Bot {
             allow_paid: false,
             allow_wild: false,
             maps: None,
-            transitions: Vec::new(),
             nav_world: None,
             nav_tables: None,
             plan_client: None,
             plan_data_version: None,
-            plan_sync_fallbacks: 0,
+            wants_cache: None,
             trail: Vec::new(),
             on_pump: None,
             pause_gate: None,
@@ -204,8 +202,9 @@ impl Bot {
             self.conn.connect(&self.host, self.port)?;
             match self.conn.login(&self.username, &password, &self.pack_dir, &self.key_path, 274) {
                 Ok(_) => {
-                    // Fresh live state, but keep the loaded static map:
-                    // sessions reload it once at open, not per login.
+                    // Fresh live state. The worker holds no static map (the
+                    // service owns it); kept locs only matter to offline
+                    // and direct tools that paint locally.
                     let static_locs = std::mem::take(&mut self.world.static_locs);
                     self.world = World::new();
                     self.world.static_locs = static_locs;

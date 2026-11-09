@@ -91,9 +91,9 @@ fn daemon_main() -> i32 {
     }
     web::start_web(dispatch, port);
     orch.restore_jobs();
-    // Lot 2 pathfinding service: one snapshot for every worker. Any load
-    // error leaves it down (workers fall back sync, logged+counted); the
-    // daemon itself never depends on it.
+    // Pathfinding service: one snapshot for every worker. Any load
+    // error leaves it down (every plan then fails `nav-down`, never a
+    // local plan); the daemon itself never depends on it.
     let _plan_service = match lifescape_orchestrator::plan_service::load_snapshot() {
         Ok(snapshot) => match lifescape_orchestrator::plan_service::start(snapshot) {
             Ok(service) => {
@@ -101,12 +101,12 @@ fn daemon_main() -> i32 {
                 Some(service)
             }
             Err(error) => {
-                eprintln!("pathfinding service unavailable ({error}); workers use sync fallback");
+                eprintln!("pathfinding service unavailable ({error}); workers fail nav-down");
                 None
             }
         },
         Err(error) => {
-            eprintln!("pathfinding service unavailable ({error}); workers use sync fallback");
+            eprintln!("pathfinding service unavailable ({error}); workers fail nav-down");
             None
         }
     };

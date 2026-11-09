@@ -57,7 +57,7 @@ fn tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank)
     for entry in knowledge::all_locs() {
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
         if tier.rocks.iter().any(|rock| *rock == name) {
-            for spawn in &entry.spawns {
+            for spawn in entry.spawns {
                 if spawn.level == bank.level
                     && (spawn.x - bank.x).abs() + (spawn.z - bank.z).abs() <= NEAR_BANK_TILES
                 {

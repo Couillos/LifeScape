@@ -283,9 +283,10 @@ mod tests {
         assert!(!error.contains("nothing reachable"), "walk error replaced by the rescue outcome, got: {error}");
     }
 
-    /// First walk failure with no event is a dead socket offline (never
-    /// logged in): the typed connection error propagates untouched so the
-    /// session reconnects — no rescue, no retry, no silent fallback.
+    /// First walk failure with no service: no `plan_client` means the
+    /// plan step fails `nav-down` before any socket exists — never a
+    /// local plan. The typed travel error propagates untouched so the
+    /// caller retries through its own loop — no rescue, no silent guess.
     #[test]
     fn walk_checked_fails_loud_without_event() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -295,15 +296,16 @@ mod tests {
         bot.world.x = 3220;
         bot.world.z = 3220;
         let outcome = walk_checked(&mut bot, 3100, 3100, 500);
-        let error = outcome.expect_err("blocked walk fails loudly");
-        assert!(format!("{error}").contains("not logged in"), "conn error propagates untouched, got: {error}");
-        assert!(crate::skill_common::is_conn_abort(&error), "typed for the reconnect arm");
+        let error = outcome.expect_err("no service fails loudly");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down without sync plan, got: {error}"
+        );
     }
 
-    /// Logging does not change the return: every `walk_to` failure is now
-    /// logged as "walk blocked: ..." (first and retry, router text kept)
-    /// before the rescue/return. Offline the failure is the dead socket,
-    /// still typed for the reconnect arm.
+    /// Logging does not change the return: every `walk_to` failure is
+    /// logged as "walk blocked: ..." before the rescue/return. Without
+    /// a service the failure is the typed `nav-down` travel error.
     #[test]
     fn walk_checked_logs_blockage_without_changing_return() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -314,14 +316,18 @@ mod tests {
         bot.world.z = 3220;
         let outcome = walk_checked(&mut bot, 3100, 3100, 500);
         let error = outcome.expect_err("blocked walk fails loudly");
-        assert!(crate::skill_common::is_conn_abort(&error), "typed conn error, got: {error}");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(Error::Travel(detail)) if detail.contains("nav-down")),
+            "typed nav-down, got: {error}"
+        );
     }
 
     /// Blind 40-tile clamp can land inside a wall pocket the full route
     /// walks around (t02 live: (2948,3368)->(3292,3171) clamps first to
-    /// (2988,3328), sealed by Falador castlewall; 3x NoRoute, killed 0):
-    /// walk_checked falls back to the final dest once, so planning
-    /// succeeds and only the dead socket fails the walk offline.
+    /// (2988,3328), sealed by Falador castlewall): with a service
+    /// walk_checked falls back to the final dest once. Without one the
+    /// first plan step is already `nav-down` (not a plannable NoRoute),
+    /// so no fallback runs and the typed error propagates untouched.
     #[test]
     fn walk_checked_walled_subleg_falls_back_to_final_dest() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -331,25 +337,30 @@ mod tests {
         bot.world.x = 2948;
         bot.world.z = 3368;
         let outcome = walk_checked(&mut bot, 2998, 3328, 500);
-        let error = outcome.expect_err("dead socket fails the walk");
-        assert!(crate::skill_common::is_conn_abort(&error), "past planning to execution, got: {error}");
+        let error = outcome.expect_err("no service fails the walk");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down before any fallback, got: {error}"
+        );
     }
 
-    /// Blocked décor (Draynor bank booth) with the bot on the adjusted
-    /// tile: `walk_checked` ends on the zero-segment plan with Ok(true) —
-    /// no send, no tick, the caller clicks from here.
+    /// Blocked décor (Draynor bank booth): with a service `walk_checked`
+    /// ends on the zero-segment plan with Ok(true). Without one the
+    /// plan step itself is `nav-down`, so the walk fails loud instead
+    /// of settling — no send, no tick, no silent click spot.
     #[test]
-    fn walk_checked_blocked_decor_returns_true_fast() {
+    fn walk_checked_blocked_decor_fails_nav_down_without_service() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         crate::wire_nav(&mut bot);
         bot.world.level = 0;
         bot.world.x = 3092;
         bot.world.z = 3243;
-        let before = bot.world.ticks;
-        assert!(walk_checked(&mut bot, 3091, 3242, 600).expect("booth tile settles adjacent"));
-        assert_eq!((bot.world.x, bot.world.z), (3092, 3243));
-        assert_eq!(bot.world.ticks, before, "zero-segment plan sends nothing");
+        let error = walk_checked(&mut bot, 3091, 3242, 600).expect_err("no service, no adjacent settle");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down, not a silent settle, got: {error}"
+        );
     }
 
     /// Unwired Manhattan: no service means no costs, order untouched.
@@ -430,9 +441,12 @@ mod tests {
         assert!(after.misses - before.misses <= 2, "never more plans than the shortlist, got: {:?}", after);
     }
 
-    /// Dead socket, not a missed step: conn abort propagates typed.
+    /// No service: every ring `walk_to` fails `nav-down`, which is not a
+    /// conn abort — `step_adjacent` swallows it per tile by contract and
+    /// reports no step landed. The direct `walk_to` below proves the root
+    /// cause is `nav-down` and nothing else (never a local plan).
     #[test]
-    fn step_adjacent_offline_propagates_conn() {
+    fn step_adjacent_offline_yields_no_step() {
         use super::step_adjacent;
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
@@ -440,7 +454,11 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3220;
         bot.world.z = 3220;
-        let error = step_adjacent(&mut bot, 3225, 3225).expect_err("dead socket fails typed");
-        assert!(crate::skill_common::is_conn_abort(&error), "typed conn error, got: {error}");
+        assert!(!step_adjacent(&mut bot, 3225, 3225).expect("nav-down per tile degrades to no-step"), "no step without a service");
+        let error = bot.walk_to(3224, 3224, bot.world.level, 100).expect_err("direct walk is nav-down");
+        assert!(
+            matches!(&error, Error::Travel(detail) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
     }
 }

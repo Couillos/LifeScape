@@ -1,6 +1,20 @@
 //! Static spawns: NPC positions and ground-item pops with cooldowns.
 
-use crate::{Json, flag, num, obj_by_id, table};
+use crate::obj_by_id;
+
+/// One static ground-item spawn row (build-time data).
+pub(crate) struct StaticObjSpawn {
+    pub level: i64,
+    pub x: i64,
+    pub z: i64,
+    pub obj: i64,
+    pub count: i64,
+    pub members: Option<bool>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/spawns_obj_generated.rs"));
+}
 
 /// One static NPC spawn. `members` comes from the dump row.
 #[derive(Debug, Clone)]
@@ -27,29 +41,12 @@ pub struct ObjSpawn {
 /// Every NPC spawn, optionally filtered to one NPC id.
 pub fn all_npc_spawns(npc_id: Option<usize>) -> Vec<NpcSpawn> {
     let mut out = Vec::new();
-    for (row_id, row) in table("npcs").iter().enumerate() {
-        if row.is_null() {
-            continue;
-        }
+    for (row_id, entry) in crate::npcs::ALL.iter().enumerate() {
         if npc_id.is_some_and(|wanted| wanted != row_id) {
             continue;
         }
-        if let Json::Arr(spots) = row.get("spawns") {
-            for spot in spots {
-                if let (Some(x), Some(z), Some(level)) = (
-                    spot.get("x").as_i64(),
-                    spot.get("z").as_i64(),
-                    spot.get("level").as_i64(),
-                ) {
-                    out.push(NpcSpawn {
-                        x,
-                        z,
-                        level,
-                        npc_id: row_id,
-                        members: flag(spot, "members", false),
-                    });
-                }
-            }
+        for spot in entry.spawns {
+            out.push(NpcSpawn { x: spot.x, z: spot.z, level: spot.level, npc_id: row_id, members: spot.members });
         }
     }
     out
@@ -58,8 +55,8 @@ pub fn all_npc_spawns(npc_id: Option<usize>) -> Vec<NpcSpawn> {
 /// Every ground-item spawn, optionally filtered to one object id.
 pub fn all_obj_spawns(obj_id: Option<usize>) -> Vec<ObjSpawn> {
     let mut out = Vec::new();
-    for row in table("spawns_obj") {
-        let id = num(row, "obj", -1);
+    for row in generated::ALL {
+        let id = row.obj;
         if id < 0 {
             continue;
         }
@@ -67,19 +64,15 @@ pub fn all_obj_spawns(obj_id: Option<usize>) -> Vec<ObjSpawn> {
             continue;
         }
         let entry = obj_by_id(id as usize);
-        let ticks = entry.as_ref().map(|found| found.respawn_ticks).unwrap_or(100);
+        let ticks = entry.map(|found| found.respawn_ticks).unwrap_or(100);
         // Dump flag wins; otherwise fall back to the object flag.
-        let members = row
-            .get("members")
-            .as_bool()
-            .or_else(|| entry.as_ref().and_then(|found| found.members))
-            .unwrap_or(false);
+        let members = row.members.or_else(|| entry.and_then(|found| found.members)).unwrap_or(false);
         out.push(ObjSpawn {
-            x: num(row, "x", 0),
-            z: num(row, "z", 0),
-            level: num(row, "level", 0),
+            x: row.x,
+            z: row.z,
+            level: row.level,
             obj_id: id as usize,
-            count: num(row, "count", 1),
+            count: row.count,
             respawn_ticks: ticks,
             members,
         });

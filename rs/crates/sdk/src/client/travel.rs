@@ -7,12 +7,14 @@
 //! caller. Anything else (interrupt, io, timeout, choice dialogue) is
 //! returned at once, never retried.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+#[cfg(test)]
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_nav::plan::{self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, Tile};
+use lifescape_nav::plan::{EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, Tile};
 use lifescape_nav::service::{self, Poll as ServicePoll, Submit as ServiceSubmit};
+#[cfg(test)]
 use lifescape_nav::static_world::StaticWorld;
 use lifescape_nav::tables::Tables;
 
@@ -49,19 +51,19 @@ const COST_BASE: u64 = 347;
 /// Per-phase wall-clock of one plan: a trivial leg must cost
 /// milliseconds, so a seconds-long plan names its spinner here.
 #[derive(Debug)]
-struct PlanTimings {
+pub(crate) struct PlanTimings {
     options_ms: u128,
     plan_ms: u128,
     service_ms: Option<u128>,
 }
 
-/// One remote plan attempt: ready, a real diagnosis, a transport fallback
-/// (sync local), or an operator stop.
+/// One remote plan attempt: ready, a real diagnosis, a service failure
+/// (`nav-down`), or an operator stop.
 #[derive(Debug)]
 enum RemoteOutcome {
     Ready(Plan, u128),
     NoRoute(NoRoute),
-    Fallback(String),
+    NavDown(String),
     Interrupted(String),
 }
 
@@ -74,7 +76,7 @@ enum PollTicket {
 
 /// A terminal reply off a draining snapshot: ours is set and the served
 /// one differs. Empty versions (tests, no daemon) never count as stale.
-fn stale_reply(ours: &Option<String>, served: &str) -> bool {
+pub(crate) fn stale_reply(ours: &Option<String>, served: &str) -> bool {
     match ours {
         Some(ours) => !ours.is_empty() && !served.is_empty() && ours != served,
         None => false,
@@ -86,9 +88,9 @@ impl Bot {
     /// live route, execute every segment in order. `NoRoute` becomes
     /// `Error::Travel` with the planner diagnosis.
     pub fn travel_to(&mut self, dest: Tile) -> Result<()> {
-        let (world, tables, options, plan, timings) = self.plan_travel(dest)?;
+        let (options, plan, timings) = self.plan_travel(dest)?;
         let timeout = plan.cost as u64 * COST_PER_TICK + COST_BASE;
-        self.run_with_replan(dest, world, tables, options, plan, timings, timeout)
+        self.run_with_replan(dest, options, plan, timings, timeout)
     }
 
     /// Same-level-or-not walk with a caller tick budget. Thin envelope
@@ -96,70 +98,43 @@ impl Bot {
     pub fn walk_to(&mut self, x: i32, z: i32, level: i32, timeout: u64) -> Result<()> {
         self.act(format!("walk_to ({x},{z},{level}) timeout={timeout}"));
         let dest = Tile { x, z, level };
-        let (world, tables, options, plan, timings) = self.plan_travel(dest)?;
-        self.run_with_replan(dest, world, tables, options, plan, timings, timeout)
+        let (options, plan, timings) = self.plan_travel(dest)?;
+        self.run_with_replan(dest, options, plan, timings, timeout)
     }
 
-    fn plan_travel(&mut self, dest: Tile) -> Result<(Arc<StaticWorld>, Arc<Tables>, NavOptions, Plan, PlanTimings)> {
-        let world = self.nav_world.clone().ok_or_else(|| {
-            Error::State("travel_to without static world (the session wires it at open)".to_string())
-        })?;
-        let tables = self.nav_tables.clone().ok_or_else(|| {
-            Error::State("travel_to without planner tables (the session wires them at open)".to_string())
-        })?;
+    /// Plan through the service only: no local world, no local tables, no
+    /// local search. Options come from the served `wants` tags pinned by
+    /// version; without them the failure is `nav-down`, never an empty
+    /// guess. Every service failure (down, refused, stale after 1
+    /// resubmit, timeout, interrupt) is `nav-down` — never a local plan.
+    pub(crate) fn plan_travel(&mut self, dest: Tile) -> Result<(NavOptions, Plan, PlanTimings)> {
         let options_start = std::time::Instant::now();
-        let options = self.nav_options(&tables);
+        let options = self.nav_options_remote()?;
         let options_ms = options_start.elapsed().as_millis();
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-        // LOT2 revert point (1 point): sans service, `plan_sync` direct.
-        // With a service the same `plan()` runs pool-side; sync is only
-        // the transport fallback (down/refused/stale), logged and counted.
         let plan_start = std::time::Instant::now();
-        let (plan, service_ms) = if self.plan_client.is_some() {
-            match self.plan_remote(&options, from, dest) {
-                RemoteOutcome::Ready(plan, ipc_ms) => (plan, Some(ipc_ms)),
-                RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
-                RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
-                RemoteOutcome::Fallback(reason) => {
-                    let plan = self.plan_sync(&world, &tables, &options, from, dest)?;
-                    let plan_ms = plan_start.elapsed().as_millis();
-                    self.plan_sync_fallbacks += 1;
-                    self.log(&format!("nav plan sync-fallback reason={reason} options={options_ms}ms plan={plan_ms}ms"));
-                    (plan, None)
-                }
-            }
-        } else {
-            (self.plan_sync(&world, &tables, &options, from, dest)?, None)
+        let (plan, service_ms) = match self.plan_remote(&options, from, dest) {
+            RemoteOutcome::Ready(plan, ipc_ms) => (plan, Some(ipc_ms)),
+            RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
+            RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
+            RemoteOutcome::NavDown(reason) => return Err(Error::Travel(format!("nav-down: {reason}"))),
         };
         let plan_ms = plan_start.elapsed().as_millis();
-        Ok((world, tables, options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
-    }
-
-    /// Sync plan: the shared engine underneath both paths.
-    fn plan_sync(
-        &mut self,
-        world: &Arc<StaticWorld>,
-        tables: &Arc<Tables>,
-        options: &NavOptions,
-        from: Tile,
-        dest: Tile,
-    ) -> Result<Plan> {
-        plan::plan_yielding(world, tables, from, dest, options, &mut || self.plan_yield())
-            .map_err(|no| self.fail_no_route(from, dest, options, no))
+        Ok((options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
     }
 
     /// Remote plan: submit non-blocking, poll with the keepalive between
     /// polls (the poll loop replaces the Dijkstra yield: same guard, so a
     /// remote plan over one second never starves the socket into a
-    /// 100-tick reap, by construction). Never blocks the worker:
-    /// refuse/down/stale/timeout all fall back to a local sync plan.
-    /// LOT3 stale version: the served version replaces ours and the
-    /// submit retries exactly once (submit-refused or terminal reply off
-    /// a draining snapshot); a second skew falls back sync, never loops.
+    /// 100-tick reap, by construction). Refuse/down/stale twice/timeout
+    /// all become `nav-down`, never a local plan. Stale version: the
+    /// served version replaces ours and the submit retries exactly once
+    /// (submit-refused or terminal reply off a draining snapshot); a
+    /// second skew is `nav-down`, never a loop.
     fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
         let client = match self.plan_client.clone() {
             Some(client) => client,
-            None => return RemoteOutcome::Fallback("no-service-handle".to_string()),
+            None => return RemoteOutcome::NavDown("no-service-handle".to_string()),
         };
         let mut resubmits = 0u32;
         loop {
@@ -169,7 +144,7 @@ impl Bot {
                     if !version.is_empty() && !served.is_empty() && served != version {
                         self.plan_data_version = Some(served.clone());
                         if resubmits >= 1 {
-                            return RemoteOutcome::Fallback(format!(
+                            return RemoteOutcome::NavDown(format!(
                                 "version-skew client={version} server={served}"
                             ));
                         }
@@ -184,9 +159,9 @@ impl Bot {
                         resubmits += 1;
                         continue;
                     }
-                    return RemoteOutcome::Fallback(reason);
+                    return RemoteOutcome::NavDown(reason);
                 }
-                Err(error) => return RemoteOutcome::Fallback(error),
+                Err(error) => return RemoteOutcome::NavDown(error),
             };
             match self.poll_ticket(&client, ticket) {
                 PollTicket::Ticket(ticket_outcome) => return ticket_outcome,
@@ -194,7 +169,7 @@ impl Bot {
                     let _ = client.cancel(ticket);
                     self.plan_data_version = Some(served.clone());
                     if resubmits >= 1 {
-                        return RemoteOutcome::Fallback(format!("version-skew mid-flight server={served}"));
+                        return RemoteOutcome::NavDown(format!("version-skew mid-flight server={served}"));
                     }
                     resubmits += 1;
                 }
@@ -224,16 +199,16 @@ impl Bot {
                         return PollTicket::Stale(served);
                     }
                     return PollTicket::Ticket(if no.reason == NoRouteReason::Aborted {
-                        RemoteOutcome::Fallback("server-aborted".to_string())
+                        RemoteOutcome::NavDown("server-aborted".to_string())
                     } else {
                         RemoteOutcome::NoRoute(no)
                     });
                 }
                 Ok((ServicePoll::Unknown, _)) => {
-                    return PollTicket::Ticket(RemoteOutcome::Fallback("unknown-ticket".to_string()))
+                    return PollTicket::Ticket(RemoteOutcome::NavDown("unknown-ticket".to_string()))
                 }
                 Ok((ServicePoll::Pending, _)) => {}
-                Err(error) => return PollTicket::Ticket(RemoteOutcome::Fallback(error)),
+                Err(error) => return PollTicket::Ticket(RemoteOutcome::NavDown(error)),
             }
             if !self.plan_yield() {
                 let _ = client.cancel(ticket);
@@ -241,7 +216,7 @@ impl Bot {
             }
             if std::time::Instant::now() >= deadline {
                 let _ = client.cancel(ticket);
-                return PollTicket::Ticket(RemoteOutcome::Fallback("service-timeout".to_string()));
+                return PollTicket::Ticket(RemoteOutcome::NavDown("service-timeout".to_string()));
             }
             polls += 1;
             if polls >= 10 {
@@ -302,7 +277,8 @@ impl Bot {
     /// Options from live state: toll wallet, carried items, quest points.
     /// Tags the data never requires (`quest:<name>`...) stay unsatisfied,
     /// so the planner reports them instead of walking into a refusal.
-    pub(crate) fn nav_options(&self, tables: &Tables) -> NavOptions {        let carried = crate::client::aggregate(&self.world.inv);
+    pub(crate) fn nav_options(&self, tables: &Tables) -> NavOptions {
+        let carried = crate::client::aggregate(&self.world.inv);
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
         let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
         let mut wants: HashSet<&str> = HashSet::new();
@@ -312,6 +288,50 @@ impl Bot {
         for edge in &tables.customs {
             wants.extend(edge.requires.iter().map(String::as_str));
         }
+        NavOptions {
+            allow_paid: self.allow_paid,
+            f2p_only: true,
+            satisfied: Self::satisfy_tags(wants, &carried, coins, quest_points),
+            excluded_edges: HashSet::new(),
+        }
+    }
+
+    /// Options from the served `wants` tags, pinned by version: the
+    /// worker builds them from its live state with no local tables. The
+    /// cache holds while `plan_data_version` holds; a skew refetch is one
+    /// round-trip. No service (or a refused/skewed one) is `nav-down`,
+    /// never an empty satisfied set: the plan must fail loud instead of
+    /// reporting legs the wallet already covers.
+    pub(crate) fn nav_options_remote(&mut self) -> Result<NavOptions> {
+        let pinned = self.plan_data_version.clone().unwrap_or_default();
+        let tags = match &self.wants_cache {
+            Some((cached_version, tags)) if *cached_version == pinned => tags.clone(),
+            _ => {
+                let tags = self.wants()?;
+                let served = self.plan_data_version.clone().unwrap_or_default();
+                self.wants_cache = Some((served, tags.clone()));
+                tags
+            }
+        };
+        let carried = crate::client::aggregate(&self.world.inv);
+        let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
+        let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
+        Ok(NavOptions {
+            allow_paid: self.allow_paid,
+            f2p_only: true,
+            satisfied: Self::satisfy_tags(tags.iter().map(String::as_str), &carried, coins, quest_points),
+            excluded_edges: HashSet::new(),
+        })
+    }
+
+    /// Tags the live state covers: coins, quest points, carried items.
+    /// Anything else stays unsatisfied so the planner reports it.
+    fn satisfy_tags<'tag>(
+        wants: impl IntoIterator<Item = &'tag str>,
+        carried: &HashMap<u16, u32>,
+        coins: u32,
+        quest_points: i32,
+    ) -> HashSet<String> {
         let mut satisfied = HashSet::new();
         for tag in wants {
             if let Some(need) = tag.strip_prefix("coins:") {
@@ -328,28 +348,27 @@ impl Bot {
                 }
             }
         }
-        NavOptions { allow_paid: self.allow_paid, f2p_only: true, satisfied, excluded_edges: HashSet::new() }
+        satisfied
     }
 
     /// Batch walking costs via the pathfinding service, never a local
-    /// Dijkstra: one submit+poll per dest, sequential so at most one
-    /// ticket is in flight (never near ACCOUNT_CAP). L1 exact hits,
-    /// truncation and joins happen server-side on their own. Any miss
-    /// (no service, refused, timeout, stale twice, interrupt,
-    /// unplannable) is None so callers keep the Manhattan order — the
-    /// only local Dijkstra left is the travel_to/approach execution path
-    /// with its own fallback.
+    /// Dijkstra: one submit+poll per dest, sequential so at most one ticket
+    /// is in flight (never near ACCOUNT_CAP). Options come from the served
+    /// `wants` tags like a plan; without them (or the handle) every dest
+    /// is None so callers keep the Manhattan order. L1 exact hits,
+    /// truncation and joins happen server-side on their own. Any miss (no
+    /// service, refused, timeout, stale twice, stop, unplannable) is None.
     pub fn walk_costs(&mut self, dests: &[Tile]) -> Vec<Option<u32>> {
-        let Some(tables) = self.nav_tables.clone() else {
-            return vec![None; dests.len()];
-        };
-        let Some(client) = self.plan_client.clone() else {
-            return vec![None; dests.len()];
-        };
         if dests.is_empty() {
             return Vec::new();
         }
-        let options = self.nav_options(&tables);
+        let Some(client) = self.plan_client.clone() else {
+            return vec![None; dests.len()];
+        };
+        let options = match self.nav_options_remote() {
+            Ok(options) => options,
+            Err(_) => return vec![None; dests.len()],
+        };
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         let mut out = Vec::with_capacity(dests.len());
         for dest in dests {
@@ -396,7 +415,7 @@ impl Bot {
             match self.poll_ticket(client, ticket) {
                 PollTicket::Ticket(RemoteOutcome::Ready(plan, _)) => return Some(plan.cost),
                 PollTicket::Ticket(RemoteOutcome::NoRoute(_)) => return None,
-                PollTicket::Ticket(RemoteOutcome::Fallback(_)) => return None,
+                PollTicket::Ticket(RemoteOutcome::NavDown(_)) => return None,
                 PollTicket::Ticket(RemoteOutcome::Interrupted(_)) => return None,
                 PollTicket::Stale(served) => {
                     let _ = client.cancel(ticket);
@@ -442,31 +461,22 @@ impl Bot {
     fn run_with_replan(
         &mut self,
         dest: Tile,
-        world: Arc<StaticWorld>,
-        tables: Arc<Tables>,
         mut options: NavOptions,
         plan: Plan,
         timings: PlanTimings,
         timeout: u64,
     ) -> Result<()> {
         let deadline = self.world.ticks + timeout;
-        // Live state around the start: painted collision, door registry
-        // and static locs, so suspect lines and door syncs see the world
-        // instead of empty maps.
-        let ensure_start = std::time::Instant::now();
-        self.ensure_area(self.world.x, self.world.z, 70);
-        let ensure_ms = ensure_start.elapsed().as_millis();
         self.log(&format!(
-            "nav timing options={}ms plan={}ms ensure_area={}ms{}",
+            "nav timing options={}ms plan={}ms{}",
             timings.options_ms,
             timings.plan_ms,
-            ensure_ms,
             timings.service_ms.map(|ms| format!(" service={ms}ms")).unwrap_or_default(),
         ));
         self.publish_plan(&plan, dest);
         let start = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
         let segments = plan.segments.len().max(1);
-        match self.run_plan(&plan, &tables, segments, deadline) {
+        match self.run_plan(&plan, segments, deadline) {
             Ok(()) => {
                 self.route.clear();
                 self.route_target = None;
@@ -482,18 +492,21 @@ impl Bot {
                 }
                 let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
                 let replan_start = std::time::Instant::now();
-                // Lot 4: the replan stays sync-local BY DESIGN, never through
-                // the service. Its key carries the new ban so L1 would miss
-                // anyway; sync consumes zero queue, so a replan-storm faults
-                // only its own thread while other accounts keep the service.
-                let retry = match plan::plan_yielding(&world, &tables, from, dest, &options, &mut || self.plan_yield()) {
-                    Ok(retry) => retry,
-                    Err(no) if no.reason == NoRouteReason::Aborted => {
+                // The replan goes through the service with the same ban,
+                // never a local search: a second service failure is
+                // `nav-down`, the original failure keeps its dossier.
+                let retry = match self.plan_remote(&options, from, dest) {
+                    RemoteOutcome::Ready(retry, _) => retry,
+                    RemoteOutcome::NoRoute(no) if no.reason == NoRouteReason::Aborted => {
                         return Err(Error::Interrupted(format!("replan aborted at {:?}", self.position())));
                     }
-                    Err(no) => {
+                    RemoteOutcome::NoRoute(no) => {
                         self.log(&format!("nav replan: {} (original failure stands)", no.reason.as_str()));
                         return Err(first);
+                    }
+                    RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
+                    RemoteOutcome::NavDown(reason) => {
+                        return Err(Error::Travel(format!("nav-down: {reason}")));
                     }
                 };
                 self.log(&format!(
@@ -504,7 +517,7 @@ impl Bot {
                 ));
                 self.publish_plan(&retry, dest);
                 let segments = retry.segments.len().max(1);
-                match self.run_plan(&retry, &tables, segments, deadline) {
+                match self.run_plan(&retry, segments, deadline) {
                     Ok(()) => {
                         self.route.clear();
                         self.route_target = None;
@@ -524,16 +537,19 @@ impl Bot {
     }
 
     /// One pass over a plan. Ok when every postcondition holds; the
-    /// failing segment index rides along for the replan ban.
-    fn run_plan(&mut self, plan: &Plan, tables: &Tables, total: usize, deadline: u64) -> std::result::Result<(), (usize, Error)> {
+    /// failing segment index rides along for the replan ban. The door
+    /// registry is seeded from the plan on entry and cleared on exit:
+    /// ephemeral per execution, never painted, never kept.
+    fn run_plan(&mut self, plan: &Plan, total: usize, deadline: u64) -> std::result::Result<(), (usize, Error)> {
+        self.seed_plan_doors(plan);
         for (index, seg) in plan.segments.iter().enumerate() {
             let started = self.world.ticks;
             let summary = seg_summary(seg);
             let outcome = match seg {
                 Segment::Walk { tiles } => self.exec_walk(tiles, deadline),
-                Segment::OpenDoor { door, stand, cross_to } => self.exec_door(door, *stand, *cross_to, deadline),
-                Segment::Ride { transition, stand, pre_open, expect } => {
-                    self.exec_ride(transition, *stand, pre_open.clone(), *expect, tables, deadline)
+                Segment::OpenDoor { door, stand, cross_to, .. } => self.exec_door(door, *stand, *cross_to, deadline),
+                Segment::Ride { transition, stand, pre_open, expect, .. } => {
+                    self.exec_ride(transition, *stand, pre_open.clone(), *expect, deadline)
                 }
                 Segment::Custom { edge, .. } => {
                     Err(Error::Travel(format!("custom edge {} has no live executor", edge.name)))
@@ -555,10 +571,12 @@ impl Bot {
                         summary,
                         self.world.ticks.saturating_sub(started),
                     ));
+                    self.clear_plan_doors();
                     return Err((index, err));
                 }
             }
         }
+        self.clear_plan_doors();
         Ok(())
     }
 
@@ -616,17 +634,28 @@ impl Bot {
     }
 
     /// StepRefused for a walk stall: the suspect tile plus the last game
-    /// message, so the log names the wall or the re-closed door.
+    /// message, so the log names the wall or the re-closed door. Static
+    /// flags come from one service batch; when the batch itself is down
+    /// and nothing live explains the stall, the failure is `nav-down`.
     fn refused(&mut self, pending: &[(i32, i32)], cause: &Error) -> Error {
         let start = (self.world.x, self.world.z, self.world.level);
-        let suspect = self
-            .suspect_tile(pending, start)
-            .unwrap_or_else(|| {
-                let live = pending.first().map(|(x, z)| self.world.loc_at(*x, *z, start.2));
-                let flags = pending.first().map(|(x, z)| self.collision.get(*x, *z, start.2)).unwrap_or(0);
-                Self::refused_line(pending, start, live.flatten(), flags)
-            });
-        Error::StepRefused(format!("{}; walk: {cause}; last game: {}", suspect, last_message(self)))
+        if let Some(suspect) = self.suspect_tile(pending, start) {
+            return Error::StepRefused(format!("{}; walk: {cause}; last game: {}", suspect, last_message(self)));
+        }
+        let live = pending.first().map(|(x, z)| self.world.loc_at(*x, *z, start.2));
+        let tile = pending.first().map(|(x, z)| (*x, *z, start.2));
+        let flags = match tile {
+            None => None,
+            Some(tile) => match self.tiles_flags(std::slice::from_ref(&tile)) {
+                Ok(rows) => rows.into_iter().next().map(|row| row.flags),
+                Err(error) => return Error::Travel(format!("nav-down: {error}")),
+            },
+        };
+        Error::StepRefused(format!(
+            "{}; walk: {cause}; last game: {}",
+            Self::refused_line(pending, start, live.flatten(), flags),
+            last_message(self),
+        ))
     }
 
     /// Door segment, the single §6.2 model: read the live loc, step
@@ -653,11 +682,6 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
         }
-        // Live state around the door: painted square, so the open check
-        // below reads the world instead of empty maps. The stand itself
-        // is plan-guaranteed (orthogonal, engine reach-valid), never
-        // adjusted here: a bad stand is a plan bug, reported loud.
-        self.ensure_area(door.x, door.z, 3);
         // Already open: the live loc left the closed id (swapped away or
         // cleared). Step through at once, no click. A refused step means
         // the reading is stale (missed re-close) or the step was
@@ -671,23 +695,21 @@ impl Bot {
             }
             self.world.locs.remove(&(door.x, door.z, door.level));
         }
-        let open_op = self
-            .maps
-            .as_ref()
-            .and_then(|pack| pack.loc_def(door.loc as usize))
-            .and_then(|def| def.open_op)
-            .ok_or_else(|| {
-                Error::DoorDidNotOpen(format!(
-                    "door loc {} at ({},{},{}) has no open op at {:?}; last game: {}",
-                    door.loc, door.x, door.z, door.level, self.position(), last_message(self),
-                ))
-            })?;
+        let open_op = door.open_op.ok_or_else(|| {
+            Error::DoorDidNotOpen(format!(
+                "door loc {} at ({},{},{}) has no open op at {:?}; last game: {}",
+                door.loc, door.x, door.z, door.level, self.position(), last_message(self),
+            ))
+        })?;
         // One click only: the swing shows in the live loc within a few
         // ticks. A second click would toggle a swapped door shut again,
         // so never re-click for the walk-through model; the teleport
         // model moves us instead, which the watch below sees first.
         self.op_loc(open_op, door.x, door.z, door.loc)?;
-        if self.take_toll_option()? {
+        // The plan names toll gates: only then is a pay dialog expected.
+        // A dialog on a free door is unexpected — never auto-pay it, the
+        // swing watch below (then the blind step) decides instead.
+        if door.toll && self.take_toll_option()? {
             return self.finish_door(door, cross_to, deadline);
         }
         let watched = self.world.ticks + DOOR_SWING_WAIT;
@@ -862,7 +884,6 @@ impl Bot {
         stand: Tile,
         pre_open: Option<lifescape_nav::plan::OpenStep>,
         expect: Tile,
-        tables: &Tables,
         deadline: u64,
     ) -> Result<()> {
         if (self.world.x, self.world.z, self.world.level) != (stand.x, stand.z, stand.level) {
@@ -922,7 +943,9 @@ impl Bot {
             self.pump(1)?;
             let options = self.chat_options();
             if !options.is_empty() {
-                let known = tables.verdict(ride.loc, ride.from).is_some_and(|seen| seen == lifescape_nav::tables::Verdict::NeedsChoice);
+                // The plan carries the prober verdict: a known choice names
+                // the no-recorded-pick suffix, an unknown one stays bare.
+                let known = ride.needs_choice;
                 let prompt = options.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join(" / ");
                 return Err(Error::NeedsDialogueChoice(format!(
                     "ride {} opened a choice at {:?}: {prompt}{}; last game: {}",
@@ -1136,28 +1159,37 @@ mod tests {
     }
 
     #[test]
-    fn aborted_plan_is_interrupted() {
+    fn no_service_handle_is_nav_down() {
         let mut bot = offline_bot(3222, 3222);
-        // No socket: the first yield's keepalive fails, aborting the search.
-        // Interrupted here (not Travel/Disconnected) proves the yield fired
-        // mid-search: without it this dest runs 238k visits to Disconnected.
-        let err = match bot.plan_travel(Tile { x: 3100, z: 3100, level: 0 }) {
-            Ok(_) => panic!("a refused yield must abort, not plan"),
+        // No handle at all: the plan fails loud, never local.
+        let err = match bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }) {
+            Ok(_) => panic!("no handle must not plan"),
             Err(err) => err,
         };
-        assert!(matches!(err, Error::Interrupted(_)), "abort maps to Interrupted, got {err:?}");
+        assert!(
+            matches!(&err, Error::Travel(detail) if detail.contains("nav-down")),
+            "missing handle is nav-down, got {err:?}",
+        );
     }
 
     #[test]
-    fn short_plan_stays_offline() {
-        let mut bot = offline_bot(3228, 3214);
-        // No socket: pretend a keepalive just went out, so the setup
-        // yield finds nothing due and the pure plan runs offline.
+    fn plan_needs_no_local_world_or_tables() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(Snapshot::new(world, tables, "test".to_string()), &test_socket("sdk-bare"), 1)
+            .expect("service starts");
+        // Bare bot: no local world, no local tables, only the handle.
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.x = 3228;
+        bot.world.z = 3214;
+        bot.world.level = 0;
+        // Keepalive primed as just-sent: the poll loop never yields mid-plan.
         bot.last_keepalive = Some(std::time::Instant::now());
         bot.last_send_tick = bot.world.ticks;
-        // Pure planning, no yield point reached: no socket, no keepalive, Ok.
-        let (_, _, _, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("short plan stays offline");
-        assert!(!plan.segments.is_empty(), "the door route has segments");
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test".to_string());
+        let (_, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("bare bot plans remote");
+        assert!(!plan.segments.is_empty(), "the door route lands with no local map");
     }
 
     #[test]
@@ -1221,20 +1253,25 @@ mod tests {
     }
 
     #[test]
-    fn service_down_falls_back_sync_and_counts() {
+    fn service_down_is_nav_down() {
         use lifescape_nav::service::{PlanClient, test_socket};
         let mut bot = offline_bot(3228, 3214);
         bot.last_keepalive = Some(std::time::Instant::now());
         bot.last_send_tick = bot.world.ticks;
-        // No listener on this socket: submit fails, the plan still lands.
+        // No listener on this socket: the plan fails loud, never local.
         bot.plan_client = Some(PlanClient::new(&test_socket("absent"), "t01"));
-        let (_, _, _, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("down service falls back sync");
-        assert!(!plan.segments.is_empty(), "fallback plans for real");
-        assert_eq!(bot.plan_sync_fallbacks, 1, "fallback is counted");
+        let err = match bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }) {
+            Ok(_) => panic!("a down service must not plan"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, Error::Travel(detail) if detail.contains("nav-down")),
+            "down service is nav-down, got {err:?}",
+        );
     }
 
     #[test]
-    fn service_plan_matches_sync_without_fallback() {
+    fn service_plan_matches_engine() {
         use lifescape_nav::service::{PlanClient, Service, Snapshot, encode_plan, test_socket};
         let (world, tables) = test_nav_context();
         let service =
@@ -1245,13 +1282,14 @@ mod tests {
         bot.last_send_tick = bot.world.ticks;
         bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
         bot.plan_data_version = Some("test".to_string());
-        let (_, _, _, via, timings) = bot.plan_travel(dest).expect("service plans");
-        assert_eq!(bot.plan_sync_fallbacks, 0, "no fallback on a healthy service");
+        let (_, via, timings) = bot.plan_travel(dest).expect("service plans");
         assert!(timings.service_ms.is_some(), "service path timed");
-        let mut sync_bot = offline_bot(3228, 3214);
-        sync_bot.last_keepalive = Some(std::time::Instant::now());
-        sync_bot.last_send_tick = sync_bot.world.ticks;
-        let (_, _, _, sync, _) = sync_bot.plan_travel(dest).expect("sync plans");
+        // Engine reference, same world/tables/options: the service wraps
+        // plan(), never forks it.
+        let (world, tables) = test_nav_context();
+        let options = bot.nav_options(&tables);
+        let sync = lifescape_nav::plan::plan(&world, &tables, Tile { x: 3228, z: 3214, level: 0 }, dest, &options)
+            .expect("engine plans");
         assert_eq!(
             lifescape_json::stringify(&encode_plan(&via)),
             lifescape_json::stringify(&encode_plan(&sync)),
@@ -1279,7 +1317,6 @@ mod tests {
             Err(err) => err,
         };
         assert!(matches!(err, Error::Interrupted(_)), "stop maps to Interrupted, got {err:?}");
-        assert_eq!(bot.plan_sync_fallbacks, 0, "a stop is not a fallback");
         // The server survives the cancel: the next plan lands.
         bot.on_pump = None;
         bot.last_keepalive = Some(std::time::Instant::now());
@@ -1305,21 +1342,18 @@ mod tests {
         // below must exercise the resubmit path, not a cold compute past
         // the keepalive window.
         let _ = bot.plan_travel(dest).expect("warmup plans");
-        assert_eq!(bot.plan_sync_fallbacks, 0, "warmup is remote");
         bot.last_keepalive = Some(std::time::Instant::now());
         bot.plan_data_version = Some("stale-v1".to_string());
-        let (_, _, _, via, _) = bot.plan_travel(dest).expect("skew resubmits, never falls back");
+        let (_, via, _) = bot.plan_travel(dest).expect("skew resubmits, never fails");
         assert!(!via.segments.is_empty(), "resubmitted plan lands");
-        assert_eq!(bot.plan_sync_fallbacks, 0, "a resubmit is not a fallback");
         assert_eq!(bot.plan_data_version.as_deref(), Some("served-v2"), "worker adopts the served version");
-        // Same version now: the next plan is a plain L1 hit, still sync-free.
-        let (_, _, _, again, _) = bot.plan_travel(dest).expect("aligned version plans");
+        // Same version now: the next plan is a plain L1 hit, still remote.
+        let (_, again, _) = bot.plan_travel(dest).expect("aligned version plans");
         assert_eq!(
             lifescape_json::stringify(&encode_plan(&via)),
             lifescape_json::stringify(&encode_plan(&again)),
             "same version, same plan"
         );
-        assert_eq!(bot.plan_sync_fallbacks, 0, "still no fallback");
     }
 
     #[test]
@@ -1398,29 +1432,10 @@ mod tests {
         assert_eq!(TravelErrorKind::of(&Error::Travel("x".to_string())), TravelErrorKind::NoRoute);
     }
 
-    /// Pack with one known door def (palace 1516, Open op): offline
-    /// stand-in so the executor finds its click without the map index.
-    fn stale_door_pack() -> lifescape_nav::collision::MapPack {
-        let mut defs: Vec<Option<lifescape_nav::collision::LocDef>> = vec![None; 1517];
-        defs[1516] = Some(lifescape_nav::collision::LocDef {
-            blockwalk: true,
-            blockrange: true,
-            length: 1,
-            width: 1,
-            active: 1,
-            has_ops: true,
-            open_op: Some(1),
-            toll: false,
-        });
-        lifescape_nav::collision::MapPack::new(
-            std::path::PathBuf::from("no-pack.zip"),
-            std::collections::HashMap::new(),
-            defs,
-        )
-    }
-
+    /// Palace door (loc 1516, Open op): the plan carries the click, so the
+    /// executor needs no pack — open_op rides on the segment.
     fn palace_door() -> lifescape_nav::plan::DoorRef {
-        lifescape_nav::plan::DoorRef { loc: 1516, x: 3212, z: 3470, level: 0 }
+        lifescape_nav::plan::DoorRef { loc: 1516, x: 3212, z: 3470, level: 0, open_op: Some(1), toll: false }
     }
 
     /// Stale-open palace door, refused first step (live t01/t02 loops):
@@ -1433,7 +1448,6 @@ mod tests {
     #[test]
     fn stale_open_door_recovers_with_click() {
         let mut bot = offline_bot(3212, 3471);
-        bot.maps = Some(stale_door_pack());
         bot.world.locs.insert((3212, 3470, 0), None);
         let door = palace_door();
         let err = bot
@@ -1449,7 +1463,6 @@ mod tests {
     #[test]
     fn shut_door_still_clicks_first() {
         let mut bot = offline_bot(3212, 3471);
-        bot.maps = Some(stale_door_pack());
         bot.world.locs.insert((3212, 3470, 0), Some((1516, 0, 1)));
         let door = palace_door();
         let err = bot

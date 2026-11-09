@@ -127,7 +127,7 @@ fn item_name(obj_id: i64) -> String {
         if let Some(obj) = lifescape_gamedata::obj_by_id(obj_id as usize) {
             if let Some(display) = obj.display {
                 if !display.is_empty() {
-                    return display;
+                    return display.to_string();
                 }
             }
             if let Some(name) = obj.name {

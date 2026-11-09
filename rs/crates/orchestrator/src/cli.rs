@@ -123,8 +123,9 @@ fn format_status(jobs: &Value) -> String {
 }
 
 /// One operator-readable line over the pathfinding gauge (lot 4): cache,
-/// queue, refusals (= sync fallbacks client-side), RAM. Full JSON stays
-/// available; this line is the quick health glance.
+/// queue, refusals (= typed `nav-down` client-side, never a local plan),
+/// batch reads, RAM. Full JSON stays available; this line is the quick
+/// health glance. A `-` marks a counter missing from `stats_json`.
 fn format_nav_stats(stats: &Value) -> String {
     let num = |key: &str| stats.get(key).as_i64().map(|n| n.to_string()).unwrap_or_else(|| "-".to_string());
     let age = match stats.get("l1_oldest_age_ms").as_i64() {
@@ -137,7 +138,7 @@ fn format_nav_stats(stats: &Value) -> String {
         .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
         .unwrap_or_else(|| "-".to_string());
     format!(
-        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
+        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
         stats.get("version").as_str().unwrap_or("-"),
         num("hits"),
         num("trunc_hits"),
@@ -151,6 +152,17 @@ fn format_nav_stats(stats: &Value) -> String {
         num("refused_cap"),
         num("refused_full"),
         num("refused_stale"),
+        num("door_defs"),
+        num("tiles_flags"),
+        num("static_locs_near"),
+        num("in_f2p"),
+        num("toll_fence"),
+        num("wants"),
+        num("diff"),
+        num("debug"),
+        num("transitions_list"),
+        num("probe_targets"),
+        num("doors_near"),
         num("ram_warn"),
         num("ram_shed"),
         rss_mb,
@@ -562,11 +574,14 @@ fn worker_socket_alive(sock_path: &std::path::Path) -> bool {
 }
 
 /// Direct run without daemon nor session worker: login, run one script,
-/// logout. Same Bot setup as a session (live tables, map index,
-/// transitions) so routing behaves the same; nothing is published
-/// (no heartbeat, no logs, no spectate). For fast live tests only.
-/// Refuses when a session worker is alive on the account: two live
-/// logins fight over the name ("already logged in" storms).
+/// logout. Same Bot setup as a session for the local part (live tables,
+/// map index) plus the daemon plan handle when the pathfinding service
+/// answers: without it every `travel_to` is `nav-down` and the run
+/// refuses to start rather than silently diverging on straight legs.
+/// Nothing is published (no heartbeat, no logs, no spectate). For fast
+/// live tests only. Refuses when a session worker is alive on the
+/// account: two live logins fight over the name ("already logged in"
+/// storms).
 fn run_direct(args: &[String]) -> i32 {
     if args.len() < 2 {
         eprintln!("usage: orchestrator direct <account> <script> [args...]");
@@ -576,6 +591,13 @@ fn run_direct(args: &[String]) -> i32 {
     if session_worker_alive(account) {
         eprintln!("direct: session worker alive on {account}; unload it first");
         return 2;
+    }
+    if UnixStream::connect(crate::plan_service::socket_path()).is_err() {
+        eprintln!(
+            "direct: pathfinding service down (no {}); start the daemon first — travel needs it, no local plan",
+            crate::plan_service::socket_path().display()
+        );
+        return 1;
     }
     let script = &args[1];
     let script_args = args[2..].to_vec();
@@ -599,9 +621,14 @@ fn run_direct(args: &[String]) -> i32 {
         Ok(pack) => bot.maps = Some(pack),
         Err(error) => eprintln!("direct: static locs missing ({error}); straight legs only"),
     }
-    match crate::staticmap::load_transitions() {
-        Ok(rows) => bot.transitions = rows,
-        Err(error) => eprintln!("direct: transitions missing ({error}); nearest ladder only"),
+    {
+        let data_dir = crate::paths::root().join("gamedata").join("data");
+        let engine_path = std::path::Path::new(&engine);
+        let zip = engine_path.join("data").join("pack").join(".cache").join("maps-server.zip");
+        let f2p = engine_path.join("../content").join("maps").join("free2play.csv");
+        bot.plan_client =
+            Some(lifescape_nav::service::PlanClient::new(&crate::plan_service::socket_path(), account));
+        bot.plan_data_version = Some(crate::plan_service::version_for(&data_dir, &zip, &f2p));
     }
     if let Err(error) = bot.login(account, None) {
         eprintln!("direct: login {account} failed: {error}");

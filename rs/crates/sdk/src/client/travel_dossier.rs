@@ -7,6 +7,7 @@
 //! calls `dossier_json` and `write_dossier_file` from `Bot::fail`.
 
 use lifescape_json::{self as json, Value};
+use lifescape_nav::service_queries::{self, DiffCell};
 use lifescape_nav::plan::{EdgeId, NavOptions, Plan, Segment, Tile};
 
 use crate::client::Bot;
@@ -20,11 +21,12 @@ const MESSAGE_TAKE: usize = 20;
 
 impl Bot {
     /// Live locs within the dossier window: dynamic state shadowing the
-    /// static template (removed tiles ride along as `removed: true`).
+    /// served template (removed tiles ride along as `removed: true`). The
+    /// window reads the live stream only, never painted static locs.
     pub(crate) fn live_locs(&self) -> Vec<Value> {
         let (here_x, here_z) = (self.world.x, self.world.z);
         let mut tiles: Vec<(i32, i32, i32)> = Vec::new();
-        for tile in self.world.locs.keys().chain(self.world.static_locs.keys()) {
+        for tile in self.world.locs.keys() {
             let (x, z, level) = *tile;
             if (x - here_x).abs() <= DIFF_RADIUS && (z - here_z).abs() <= DIFF_RADIUS && !tiles.contains(&(x, z, level)) {
                 tiles.push((x, z, level));
@@ -54,34 +56,59 @@ impl Bot {
             .collect()
     }
 
-    /// Tiles where the live map disagrees with the static one. Live tiles
-    /// never painted carry no information (unknown, not different) and are
-    /// skipped, so an unstreamed stretch never fakes a B verdict.
+    /// Tiles where the live map disagrees with the served snapshot. The
+    /// worker ships its live window (same tiles as `live_locs`, known
+    /// state only) and the service compares against its template: opened
+    /// doors, moved dynamics and missing data surface, an unstreamed
+    /// stretch never fakes a B verdict. No handle or no answer reads
+    /// empty (logged): never a local guess, the dossier still classifies
+    /// A/C and the next plan replays the skew.
     pub(crate) fn static_live_diff(&self) -> Vec<Value> {
-        let Some(world) = self.nav_world.as_ref() else {
-            return Vec::new();
-        };
         let (here_x, here_z, here_level) = (self.world.x, self.world.z, self.world.level);
-        let mut out = Vec::new();
-        for dx in -DIFF_RADIUS..=DIFF_RADIUS {
-            for dz in -DIFF_RADIUS..=DIFF_RADIUS {
-                let (x, z) = (here_x + dx, here_z + dz);
-                if !self.collision.has(x, z, here_level) {
-                    continue;
-                }
-                let (painted, live) = (world.get(x, z, here_level), self.collision.get(x, z, here_level));
-                if painted != live {
-                    out.push(json::object(vec![
-                        ("x", Value::Int(i64::from(x))),
-                        ("z", Value::Int(i64::from(z))),
-                        ("level", Value::Int(i64::from(here_level))),
-                        ("static", Value::Int(i64::from(painted))),
-                        ("live", Value::Int(i64::from(live))),
-                    ]));
-                }
+        let mut tiles: Vec<(i32, i32, i32)> = Vec::new();
+        for tile in self.world.locs.keys() {
+            let (x, z, level) = *tile;
+            if level == here_level
+                && (x - here_x).abs() <= DIFF_RADIUS
+                && (z - here_z).abs() <= DIFF_RADIUS
+                && !tiles.contains(&(x, z, level))
+            {
+                tiles.push((x, z, level));
             }
         }
-        out
+        tiles.sort();
+        let cells: Vec<DiffCell> = tiles
+            .into_iter()
+            .filter_map(|(x, z, level)| match self.world.loc_at(x, z, level) {
+                Some((id, shape, angle)) => Some(DiffCell { x, z, level, loc: Some((id, shape, angle)), removed: false }),
+                None if self.world.loc_removed(x, z, level) => Some(DiffCell { x, z, level, loc: None, removed: true }),
+                None => None,
+            })
+            .collect();
+        if cells.is_empty() {
+            return Vec::new();
+        }
+        let Some(reply) = self.direct_best_effort("diff", vec![("cells", service_queries::encode_diff_cells(&cells))]) else {
+            return Vec::new();
+        };
+        service_queries::decode_diff_reply(&reply).unwrap_or_default().into_iter().map(|entry| {
+            let loc_value = |loc: Option<(u16, u8, u8)>| {
+                loc.map_or(Value::Null, |(id, shape, angle)| {
+                    json::object(vec![
+                        ("loc", Value::Int(i64::from(id))),
+                        ("shape", Value::Int(i64::from(shape))),
+                        ("angle", Value::Int(i64::from(angle))),
+                    ])
+                })
+            };
+            json::object(vec![
+                ("x", Value::Int(i64::from(entry.x))),
+                ("z", Value::Int(i64::from(entry.z))),
+                ("level", Value::Int(i64::from(entry.level))),
+                ("static", loc_value(entry.static_loc)),
+                ("live", loc_value(entry.live_loc)),
+            ])
+        }).collect()
     }
 
     /// Last game messages with their tick, oldest first.

@@ -209,20 +209,16 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
 /// Nearest free (non-members, same level) bank booth by Manhattan distance.
 /// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
-/// Needs the toll gate's fence line, read off the loaded toll doors.
+/// Needs the toll gate's fence line, served by the nav service.
 ///
 /// Pocket exits (basements, upper floors) are the planner's job now:
 /// `bank_trip` walks there via `travel_to`, which rides mapped
 /// transitions itself, instead of a script-side ladder scan.
 pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError> {
     let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.ensure_area(here_x, here_z, 150);
     let gate_x = bot
-        .toll_gates
-        .iter()
-        .filter(|(_, _, level)| *level == bot.world.level)
-        .min_by_key(|(x, z, _)| (x - here_x).abs() + (z - here_z).abs())
-        .map(|(x, _, _)| *x);
+        .toll_fence(here_x, here_z, bot.world.level, 150)?
+        .map(|(gate_x, _, _)| gate_x);
     let mut best: Option<(i64, knowledge::banks::Bank)> = None;
     let mut fallback: Option<(i64, knowledge::banks::Bank)> = None;
     for bank in knowledge::banks::all_banks() {
@@ -245,21 +241,29 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
         .ok_or_else(|| ScriptError::Usage(format!("no reachable bank from {:?}", bot.position())))
 }
 
-/// X of the nearest toll-gate door, if a fence has been mapped yet.
+/// X of the nearest toll fence, served by the nav service. `None` when no
+/// fence stands nearby — or when the service is down (logged): callers
+/// proceed unfenced and the next plan fails loud with `nav-down`, never a
+/// local guess. The `Option` shape is frozen by callers that cannot carry a
+/// `Result` (`skill_woodcutting.rs`, `skill_mining.rs` bootstrap budgets).
 pub fn toll_gate_x(bot: &mut Bot) -> Option<i32> {
     let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.ensure_area(here_x, here_z, 150);
-    bot.toll_gates
-        .iter()
-        .filter(|(_, _, level)| *level == bot.world.level)
-        .min_by_key(|(x, z, _)| (x - here_x).abs() + (z - here_z).abs())
-        .map(|(x, _, _)| *x)
+    match bot.toll_fence(here_x, here_z, bot.world.level, 150) {
+        Ok(gate) => gate.map(|(gate_x, _, _)| gate_x),
+        Err(error) => {
+            bot.log(&format!("toll fence unavailable ({error}), proceeding unfenced"));
+            None
+        }
+    }
 }
 
 /// Cross the toll fence through the guard's dialog (10 coins). The side
 /// flip proves it: works eastward and westward, unlike a fixed check.
 pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let Some(line) = toll_gate_x(bot) else {
+    let Some(line) = bot
+        .toll_fence(bot.world.x, bot.world.z, bot.world.level, 150)?
+        .map(|(gate_x, _, _)| gate_x)
+    else {
         bot.log(&format!("no toll gate found near {:?}", bot.position()));
         return Ok(false);
     };
@@ -267,13 +271,7 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
     bot.intend(&format!("paying the toll gate at x={line}"));
     let target = bot.world.ticks + 1500;
     while bot.world.ticks < target && (bot.world.x >= line) == start_side {
-        let gate = match bot
-            .toll_gates
-            .iter()
-            .filter(|(_, _, level)| *level == bot.world.level)
-            .min_by_key(|(x, z, _)| (x - bot.world.x).abs() + (z - bot.world.z).abs())
-            .copied()
-        {
+        let gate = match bot.toll_fence(bot.world.x, bot.world.z, bot.world.level, 150)? {
             Some(gate) => gate,
             None => return Ok(false),
         };
@@ -283,12 +281,12 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
             return Ok(true);
         }
         let gate_id = gate_id(bot, gate)?;
-        let Some(op) = bot
-            .maps
-            .as_ref()
-            .and_then(|pack| pack.loc_def(gate_id as usize))
-            .and_then(|def| def.open_op)
-        else {
+        let open_op = bot
+            .door_defs(std::slice::from_ref(&gate_id))?
+            .into_iter()
+            .next()
+            .and_then(|def| def.open_op);
+        let Some(op) = open_op else {
             return Ok(false);
         };
         bot.op_loc(op, gate.0, gate.1, gate_id)?;
@@ -319,40 +317,36 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
     Ok((bot.world.x >= line) != start_side)
 }
 
-fn gate_id(bot: &Bot, gate: (i32, i32, i32)) -> Result<u16, ScriptError> {
-    bot.world
-        .loc_at(gate.0, gate.1, gate.2)
-        .map(|(id, _, _)| id)
-        .or_else(|| bot.world.static_locs.get(&gate).map(|entry| entry.0))
+fn gate_id(bot: &mut Bot, gate: (i32, i32, i32)) -> Result<u16, ScriptError> {
+    if let Some((id, _, _)) = bot.world.loc_at(gate.0, gate.1, gate.2) {
+        return Ok(id);
+    }
+    bot.static_locs_near(gate.0, gate.1, gate.2, 1)?
+        .into_iter()
+        .find(|entry| (entry.x, entry.z, entry.level) == gate)
+        .map(|entry| entry.loc)
         .ok_or_else(|| ScriptError::Usage(format!("toll gate gone at {gate:?}")))
 }
 
 /// Live bankbooth loc nearest to the booth spawn (loc id comes from the
-/// live stream, never assumed from the dump).
-pub fn live_bank_booth(bot: &Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32, u16)> {
+/// live stream, never assumed from the dump). Static booths come from one
+/// `static_locs_near` batch; without the service only the live stream
+/// counts (logged), never a painted guess.
+pub fn live_bank_booth(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Option<(i32, i32, u16)> {
     live_bank_booths(bot, bank_x, bank_z).into_iter().next()
 }
 
-/// Bankbooth loc ids, resolved once from the dump. `live_bank_booths`
-/// used to call `loc_name` (String alloc + lowercase per entry) for every
-/// live and static loc on every bank trip: past ~100k painted entries that
-/// silent scan outlasted the server's 100-tick silence reap (~6 s, no pump
-/// inside) and the session FIN-looped at the booth. The id set keeps the
-/// same predicate with zero per-entry allocs.
-static BANKBOOTH_IDS: std::sync::OnceLock<HashSet<u16>> = std::sync::OnceLock::new();
-
-fn bankbooth_ids() -> &'static HashSet<u16> {
-    BANKBOOTH_IDS.get_or_init(|| {
-        knowledge::all_locs()
-            .into_iter()
-            .filter(|entry| {
-                entry.name.as_deref().is_some_and(|name| {
-                    let label = name.to_lowercase();
-                    label.contains("bankbooth") || label.contains("bank booth")
-                })
-            })
-            .map(|entry| entry.loc_id as u16)
-            .collect()
+/// True when a loc id is a bankbooth (open, closed or tutorial): the dump
+/// name carries `bankbooth`, read straight from the static row — no id set,
+/// no scan. `live_bank_booths` used to call `loc_name` (String alloc +
+/// lowercase per entry) for every live and static loc on every bank trip:
+/// past ~100k painted entries that silent scan outlasted the server's
+/// 100-tick silence reap (~6 s, no pump inside) and the session FIN-looped
+/// at the booth. The direct row read keeps the same predicate.
+fn is_bankbooth(loc_id: u16) -> bool {
+    knowledge::loc_by_id(usize::from(loc_id)).and_then(|entry| entry.name).is_some_and(|name| {
+        let label = name.to_lowercase();
+        label.contains("bankbooth") || label.contains("bank booth")
     })
 }
 
@@ -360,16 +354,19 @@ fn bankbooth_ids() -> &'static HashSet<u16> {
 /// Manhattan pick flips between spawns of one bank (Draynor 3242/3245)
 /// and the nearest spawn can sit behind the counter: the trip tries each
 /// booth in turn instead of grinding the nearest from its blind side.
-pub fn live_bank_booths(bot: &Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u16)> {
+/// Static booths arrive in one service batch (`static_locs_near`, radius
+/// 64: booths cluster at the bank); a down service leaves the live
+/// stream only, logged, never a painted guess.
+pub fn live_bank_booths(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u16)> {
     let mut booths: Vec<(i64, (i32, i32, u16))> = Vec::new();
     let mut near: Option<(i64, u16)> = None;
-    let booth_ids = bankbooth_ids();
-    let mut consider = |x: i32, z: i32, level: i32, loc: u16| {
-        if level != bot.world.level {
+    let level = bot.world.level;
+    let mut consider = |x: i32, z: i32, loc_level: i32, loc: u16| {
+        if loc_level != level {
             return;
         }
         let dist = i64::from((x - bank_x).abs() + (z - bank_z).abs());
-        if !booth_ids.contains(&loc) {
+        if !is_bankbooth(loc) {
             if near.as_ref().is_none_or(|(known, _)| dist < *known) {
                 near = Some((dist, loc));
             }
@@ -377,19 +374,28 @@ pub fn live_bank_booths(bot: &Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i32, u
         }
         booths.push((dist, (x, z, loc)));
     };
-    for ((x, z, level), slot) in &bot.world.locs {
+    for ((x, z, loc_level), slot) in &bot.world.locs {
         if let Some((loc, _, _)) = slot {
-            consider(*x, *z, *level, *loc);
+            consider(*x, *z, *loc_level, *loc);
         }
     }
-    for ((x, z, level), (loc, _, _)) in &bot.world.static_locs {
-        consider(*x, *z, *level, *loc);
+    let mut remote_count = 0;
+    match bot.static_locs_near(bank_x, bank_z, level, 64) {
+        Ok(rows) => {
+            remote_count = rows.len();
+            for row in rows {
+                consider(row.x, row.z, row.level, row.loc);
+            }
+        }
+        Err(error) => {
+            bot.log(&format!("bank search: static locs unavailable ({error}), live only"));
+        }
     }
     booths.sort();
     booths.dedup();
     if booths.is_empty() {
         let near = near.map(|(dist, loc)| (dist, (bot.tables.loc_name)(loc).unwrap_or_default(), loc));
-        bot.log(&format!("bank search: live={} static={} near={:?}", bot.world.locs.len(), bot.world.static_locs.len(), near));
+        bot.log(&format!("bank search: live={} remote={remote_count} near={near:?}", bot.world.locs.len()));
     }
     booths.into_iter().map(|(_, booth)| booth).collect()
 }
@@ -604,7 +610,6 @@ pub fn bank_trip(
     let mut reached = false;
     let mut seen_death_msgs = bot.world.messages.len();
     let mut hurts = 0u32;
-    bot.ensure_area(bank_x, bank_z, 32);
     let slices = TRANSIT_TOTAL_TICKS.div_ceil(TRANSIT_SLICE_TICKS);
     'transit: for _ in 0..TRANSIT_ATTEMPTS {
         for _ in 0..slices {
@@ -811,11 +816,40 @@ pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bank_trip, bank_trip_resilient, bankbooth_ids, death_message_seen, dismiss_modal, is_conn_abort, is_walk_abort,
+        bank_trip, bank_trip_resilient, death_message_seen, dismiss_modal, is_bankbooth, is_conn_abort, is_walk_abort,
         live_bank_booth, live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared,
     };
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    /// Mapless worker against a real nav service (repo dumps): the bot
+    /// carries no `nav_world`/`nav_tables`, only the plan handle. Each
+    /// test binds the service so the socket outlives the bot.
+    fn served_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+        let data = root.join("LifeScape/gamedata/data");
+        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+        world.set_f2p(zones);
+        let tables = std::sync::Arc::new(lifescape_nav::tables::Tables::load(&data).expect("tables"));
+        let version = format!("test-bank-{socket_tag}");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, version.clone()),
+            &lifescape_nav::service::test_socket(socket_tag),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), socket_tag));
+        bot.plan_data_version = Some(version);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        (bot, service)
+    }
 
     /// Overlay-layer modals never block: the wilderness overlay (live 193)
     /// reads as dismissed with no server round-trip, so the gather loops
@@ -842,17 +876,34 @@ mod tests {
         assert!(super::TICKS_PER_TILE_RUNNING < super::TICKS_PER_TILE, "run is faster than walk");
     }
 
+    /// Booths resolve from the live stream first, static template second
+    /// via one service batch: the painted `static_locs` map is never
+    /// read. The remote half only adds booths, so a live booth at the
+    /// spawn stays nearest whatever the dumps hold nearby.
     #[test]
-    fn booth_found_in_static_locs() {
+    fn booth_found_in_live_stream() {
+        let (mut bot, _service) = served_bot("bank-booth-live");
+        bot.world.level = 0;
+        bot.world.locs.insert((3015, 3354, 0), Some((2213, 0, 0)));
+        let found = live_bank_booth(&mut bot, 3015, 3354).expect("Falador booth resolves");
+        assert_eq!(found, (3015, 3354, 2213));
+        bot.world.locs.insert((3200, 3200, 0), Some((2213, 0, 0)));
+        let near = live_bank_booth(&mut bot, 3015, 3354).expect("nearest of two booths");
+        assert_eq!(near, (3015, 3354, 2213));
+    }
+
+    /// No service, no scenery: only the live stream counts, never a
+    /// painted guess. The down batch is logged, the live booth still
+    /// resolves.
+    #[test]
+    fn booth_live_only_without_service() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        assert!(live_bank_booth(&bot, 3015, 3354).is_none(), "no booth without scenery");
-        bot.world.static_locs.insert((3015, 3354, 0), (2213, 0, 0));
-        let found = live_bank_booth(&bot, 3015, 3354).expect("Falador booth resolves");
+        bot.world.level = 0;
+        assert!(live_bank_booth(&mut bot, 3015, 3354).is_none(), "no booth without scenery");
+        bot.world.locs.insert((3015, 3354, 0), Some((2213, 0, 0)));
+        let found = live_bank_booth(&mut bot, 3015, 3354).expect("live booth resolves");
         assert_eq!(found, (3015, 3354, 2213));
-        bot.world.static_locs.insert((3200, 3200, 0), (2213, 0, 0));
-        let near = live_bank_booth(&bot, 3015, 3354).expect("nearest of two booths");
-        assert_eq!(near, (3015, 3354, 2213));
     }
 
     /// Draynor has three booth spawns on one wall: all three come back
@@ -860,40 +911,43 @@ mod tests {
     /// pick instead of grinding it (the trip #2 hole).
     #[test]
     fn booths_list_every_spawn_nearest_first() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
+        let (mut bot, _service) = served_bot("bank-booths-near");
         bot.world.level = 0;
         for booth_z in [3242, 3243, 3245] {
-            bot.world.static_locs.insert((3091, booth_z, 0), (2213, 0, 0));
+            bot.world.locs.insert((3091, booth_z, 0), Some((2213, 0, 0)));
         }
-        let booths = live_bank_booths(&bot, 3091, 3245);
-        assert_eq!(booths, vec![(3091, 3245, 2213), (3091, 3243, 2213), (3091, 3242, 2213)], "nearest first, got: {booths:?}");
-        assert_eq!(live_bank_booth(&bot, 3091, 3245), Some((3091, 3245, 2213)), "wrapper stays the nearest");
+        let booths = live_bank_booths(&mut bot, 3091, 3245);
+        assert_eq!(booths[0], (3091, 3245, 2213), "spawn booth first, got: {booths:?}");
+        for spawn in [(3091, 3245, 2213), (3091, 3243, 2213), (3091, 3242, 2213)] {
+            assert!(booths.contains(&spawn), "spawn listed, got: {booths:?}");
+        }
+        assert_eq!(live_bank_booth(&mut bot, 3091, 3245), Some((3091, 3245, 2213)), "wrapper stays the nearest");
     }
 
     /// The id-set fast path matches the old per-entry name predicate:
     /// booth 2213 resolves, and a nearer non-booth never does (no name
     /// lookup per entry, so long sessions stop outlasting the reap).
+    /// Unserved, so only the live stream counts: deterministic.
     #[test]
     fn booth_scan_ignores_non_booth_without_name_lookups() {
-        assert!(bankbooth_ids().contains(&2213), "booth id resolves");
-        let plain = (0u16..).find(|id| !bankbooth_ids().contains(id)).expect("a non-booth id exists");
+        assert!(is_bankbooth(2213), "booth id resolves");
+        let plain = (0u16..).find(|id| !is_bankbooth(*id)).expect("a non-booth id exists");
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         bot.world.level = 0;
-        bot.world.static_locs.insert((3000, 3000, 0), (plain, 0, 0));
-        bot.world.static_locs.insert((3010, 3000, 0), (2213, 0, 0));
-        let booths = live_bank_booths(&bot, 3000, 3000);
+        bot.world.locs.insert((3000, 3000, 0), Some((plain, 0, 0)));
+        bot.world.locs.insert((3010, 3000, 0), Some((2213, 0, 0)));
+        let booths = live_bank_booths(&mut bot, 3000, 3000);
         assert_eq!(booths, vec![(3010, 3000, 2213)], "only the booth resolves, got: {booths:?}");
     }
 
     /// Picking is pure: standing on a booth spawn returns that booth,
     /// and the bot never moves (pocket exits ride inside `travel_to` now,
-    /// not in a script-side ladder scan).
+    /// not in a script-side ladder scan). The fence line comes from the
+    /// service; the underfoot bank can never sit across it.
     #[test]
     fn nearest_bank_picks_closest_without_moving() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
+        let (mut bot, _service) = served_bot("bank-near");
         let want = lifescape_gamedata::banks::all_banks()
             .into_iter()
             .find(|bank| !bank.members && bank.level == 0)
@@ -911,7 +965,6 @@ mod tests {
         assert!(!far.members && far.level == 0, "free surface bank, got: {far:?}");
     }
 
-    /// Shared death helper: case-insensitive, index-tracked.
     #[test]
     fn death_message_seen_matches_case_insensitive() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -1069,25 +1122,32 @@ mod tests {
 
     /// Resilient rediscovers once then fails hard when nothing was deposited.
     #[test]
-    fn resilient_retries_then_fails_loud() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
+    /// Resilient rediscovers once, then fails loud: the first trip finds
+    /// no booth at the booth-free tile (served batch confirms), the
+    /// rediscovered real bank is a dead-socket walk away, so the typed
+    /// walk abort surfaces instead of masking as "bank unreachable".
+    /// (3226,3223) is booth-free in the dumps (probed), keeping the
+    /// first failure on the booth lookup.
+    #[test]
+    fn resilient_rediscovers_then_fails_loud() {
+        let (mut bot, _service) = served_bot("bank-resilient");
         bot.world.level = 0;
-        bot.world.x = 3268;
-        bot.world.z = 3169;
+        bot.world.x = 3226;
+        bot.world.z = 3223;
         let coins = super::obj_id(&bot, "coins").expect("coins in dumps");
         let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
         bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
         let mut bank = lifescape_gamedata::banks::Bank {
-            x: 3268,
-            z: 3169,
+            x: 3226,
+            z: 3223,
             level: 0,
             loc_id: 2213,
             name: "bankbooth".to_string(),
             members: false,
         };
         let err = bank_trip_resilient(&mut bot, &mut bank, &[], 0, &[coins]).expect_err("load never deposited");
-        assert!(err.to_string().contains("bank unreachable"), "loud cause, got: {err}");
+        assert!(super::is_walk_abort(&err), "dead socket surfaces typed, got: {err}");
+        assert!((bank.x, bank.z) != (3226, 3223), "rediscovery ran before failing loud, got ({},{})", bank.x, bank.z);
         assert_eq!(super::pack_total(&bot, coins), 5, "load still in the pack");
     }
 

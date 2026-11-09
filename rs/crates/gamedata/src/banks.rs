@@ -18,16 +18,16 @@ pub struct Bank {
 pub fn all_banks() -> Vec<Bank> {
     let mut found = Vec::new();
     for entry in all_locs() {
-        if entry.name.as_deref().unwrap_or("").to_lowercase() != "bankbooth" {
+        if entry.name.unwrap_or("").to_lowercase() != "bankbooth" {
             continue;
         }
-        for spot in &entry.spawns {
+        for spot in entry.spawns {
             found.push(Bank {
                 x: spot.x,
                 z: spot.z,
                 level: spot.level,
                 loc_id: entry.loc_id,
-                name: entry.name.clone().unwrap_or_default(),
+                name: entry.name.unwrap_or("").to_string(),
                 members: spot.members.unwrap_or(false),
             });
         }

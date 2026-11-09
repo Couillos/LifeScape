@@ -178,25 +178,27 @@ pub fn rub_genie_lamp(bot: &mut Bot) -> Result<bool, ScriptError> {
 
 /// Climb back to the surface after a fail-teleport: ride the mapped
 /// down-exits nearest-first via `travel_to` (same guards as before: 30
-/// tiles, closest 5, 12 rounds). A dead socket or operator stop aborts
-/// typed; a refused ride logs its typed cause and tries the next exit,
-/// and no mapped exit nearby ends the rescue round (Ok(false)) instead
-/// of guessing a ladder. A choice dialogue on an exit surfaces as
-/// `Error::Travel(NeedsDialogueChoice)` in the log line, never silent.
+/// tiles, closest 5, 12 rounds). One bulk `transitions_list` fetch per
+/// call; a dead socket or operator stop aborts typed, a refused ride
+/// logs its typed cause and tries the next exit, and no mapped exit
+/// nearby ends the rescue round (Ok(false)) instead of guessing a
+/// ladder. A down service fails `nav-down` loud. A choice dialogue on
+/// an exit surfaces as `Error::Travel(NeedsDialogueChoice)` in the log
+/// line, never silent.
 pub fn climb_out(bot: &mut Bot) -> Result<bool, ScriptError> {
+    // Without the service the exits are unknown: typed `nav-down`, never
+    // a guessed ladder.
+    let rows = bot.transitions_list()?;
     for _ in 0..12 {
         if bot.world.level == 0 {
             bot.log(&format!("ok on ground at {:?}", bot.position()));
             return Ok(true);
         }
-        let tables = bot.nav_tables.clone().ok_or_else(|| {
-            ScriptError::Usage(format!("climb_out without planner tables at {:?}", bot.position()))
-        })?;
-        // Known down-exits nearest-first (exact table rows, like before).
+        // Known down-exits nearest-first (served rows, like before).
         // Bounded to the local area and to the closest few: planning one
         // ride per row is cheap, walking to every row in the world is not.
         let mut downs: Vec<(i32, _)> = Vec::new();
-        for row in &tables.transitions {
+        for row in &rows {
             if row.disabled || row.from.level != bot.world.level || row.to.level >= row.from.level {
                 continue;
             }

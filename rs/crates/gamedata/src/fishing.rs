@@ -1,7 +1,7 @@
 //! Fishing table: spot categories, level reqs, tools, bait, products, XP
 //! (F2P rows only; XP is raw tenths).
 
-use crate::table;
+use crate::npcs;
 
 /// One fish tier: category matches the tail of the spot NPC debugnames.
 #[derive(Debug, Clone, Copy)]
@@ -117,10 +117,10 @@ pub fn best_fish_tier(fishing_level: i64) -> Option<FishTier> {
 /// NPC ids whose debugname ends with `_<category>`.
 pub fn spot_npc_ids(category: &str) -> Vec<usize> {
     let tail = format!("_{category}");
-    table("npcs")
+    npcs::ALL
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.get("name").as_str().is_some_and(|name| name.ends_with(tail.as_str())))
+        .filter(|(_, entry)| entry.name.is_some_and(|name| name.ends_with(tail.as_str())))
         .map(|(npc_id, _)| npc_id)
         .collect()
 }

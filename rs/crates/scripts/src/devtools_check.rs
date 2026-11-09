@@ -7,41 +7,45 @@
 
 use lifescape_gamedata::{all_locs, banks::all_banks};
 use std::collections::HashMap;
+use lifescape_sdk::client::nav_remote::TransitionView;
 use lifescape_sdk::{Bot, Error};
 
-use crate::devtools::{await_landing, cheat_teleport, escape_json, live_loc_tiles, open_op, parse_filter, require_admin, save_report, sides_of};
+use crate::devtools::{await_landing, cheat_teleport, escape_json, open_op, parse_filter, require_admin, save_report, sides_of};
 use crate::{ScriptError, ScriptResult};
 
 // -- check_doors ----------------------------------------------------------------
-// One live instance per distinct door loc: teleport beside it, click the
-// Open op, walk to the far side and check the arrival.
+// One live instance per distinct door loc: the template doors near the
+// bot, the click the Open op, walk to the far side, check the arrival.
 //
-// shortcut: the wall-door scan (pack reader) and the router are not
-// ported, so candidates come from the streamed live locs and the far
-// side is the opposite orthogonal neighbour, not a routed tile.
+// shortcut: stands come from the service door list (no pack reader),
+// the far side is the opposite orthogonal neighbour, not a routed tile.
 
-fn live_doors(bot: &Bot, only: Option<&str>) -> Vec<(i32, i32, i32, u16, String)> {
+/// Engine levels: the transition dump spans 0-3 only, so the door sweep
+/// covers exactly these. If the engine ever gains a level, read the span
+/// from the served snapshot instead of bumping this.
+const LEVEL_COUNT: i32 = 4;
+
+fn live_doors(bot: &mut Bot, only: Option<&str>) -> Result<Vec<(i32, i32, i32, u16, String)>, ScriptError> {
     let mut seen: HashMap<u16, (i32, i32, i32, u16, String)> = HashMap::new();
-    for ((x, z, level), value) in live_loc_tiles(bot) {
-        let (loc_id, _, _) = value;
-        if open_op(loc_id).is_none() {
-            continue;
-        }
-        let name = (bot.tables.loc_name)(loc_id).unwrap_or_default();
-        let lower = name.to_lowercase();
-        if ["trapdoor", "ladder", "stair", "portal", "manhole"].iter().any(|key| lower.contains(key)) {
-            continue;
-        }
-        if let Some(want) = only {
-            if loc_id.to_string() != want {
+    for level in 0..LEVEL_COUNT {
+        for entry in bot.doors_near(bot.world.x, bot.world.z, level, 150)? {
+            let loc_id = entry.loc;
+            let name = (bot.tables.loc_name)(loc_id).unwrap_or_default();
+            let lower = name.to_lowercase();
+            if ["trapdoor", "ladder", "stair", "portal", "manhole"].iter().any(|key| lower.contains(key)) {
                 continue;
             }
+            if let Some(want) = only {
+                if loc_id.to_string() != want {
+                    continue;
+                }
+            }
+            seen.entry(loc_id).or_insert((entry.x, entry.z, entry.level, loc_id, name));
         }
-        seen.entry(loc_id).or_insert((x, z, level, loc_id, name));
     }
     let mut doors: Vec<_> = seen.into_values().collect();
     doors.sort();
-    doors
+    Ok(doors)
 }
 
 fn open_live_door(bot: &mut Bot, x: i32, z: i32, level: i32, loc_id: u16) -> Result<bool, ScriptError> {
@@ -70,8 +74,7 @@ pub(crate) fn dev_check_doors(bot: &mut Bot, args: &[String]) -> ScriptResult {
     require_admin(bot)?;
     let filter = parse_filter(args)?;
     bot.intend("live-testing doors");
-    bot.ensure_all();
-    let mut doors = live_doors(bot, filter.only.as_deref());
+    let mut doors = live_doors(bot, filter.only.as_deref())?;
     doors = doors.into_iter().skip(filter.skip).take(if filter.limit > 0 { filter.limit } else { usize::MAX }).collect();
     let mut outcomes: Vec<(String, String)> = Vec::new();
     for (index, (x, z, level, loc_id, name)) in doors.iter().enumerate() {
@@ -122,90 +125,16 @@ fn test_door(bot: &mut Bot, x: i32, z: i32, level: i32, loc_id: u16) -> Result<S
 
 // -- check_transitions ----------------------------------------------------------
 // Table-driven live test: teleport beside each transition, click the
-// climb op (pre-opening trapdoors), check the landing tile.
+// climb op (pre-opening trapdoors), check the landing tile. Rows come
+// from the service bulk list (versioned), never a local file read.
 //
 // shortcut: no resume file, no walkability ranking of sides:
 // sides are tried closest-first and the walk proves them.
 
-#[derive(Debug, Clone)]
-struct TransitionRow {
-    name: String,
-    kind: String,
-    from: [i64; 3],
-    to: [i64; 3],
-    loc: u16,
-    climb_loc: u16,
-    climb_op: u8,
-    open_to: Option<u16>,
-    delta: Option<[i64; 3]>,
-    footprint: Vec<[i64; 2]>,
-    disabled: bool,
-}
-
-fn int_triplet(value: &lifescape_json::Value) -> Option<[i64; 3]> {
-    let items = value.as_arr()?;
-    if items.len() != 3 {
-        return None;
-    }
-    Some([items[0].as_i64()?, items[1].as_i64()?, items[2].as_i64()?])
-}
-
-fn load_transitions() -> Result<Vec<TransitionRow>, ScriptError> {
-    let mut text = None;
-    for path in ["gamedata/data/transitions.json"] {
-        if let Ok(body) = std::fs::read_to_string(path) {
-            text = Some(body);
-            break;
-        }
-    }
-    let text = text.ok_or_else(|| {
-        ScriptError::Usage("transitions.json not found (run orchestrator dump-transitions gamedata/data/transitions.json first)".to_string())
-    })?;
-    let parsed = lifescape_json::parse(&text).map_err(|err| ScriptError::Usage(format!("bad transitions.json: {err}")))?;
-    let rows = parsed.as_arr().ok_or_else(|| ScriptError::Usage("transitions.json is not an array".to_string()))?;
-    let mut out = Vec::new();
-    for row in rows {
-        let triplet = |key: &str| int_triplet(row.get(key));
-        let (Some(from), Some(to)) = (triplet("from"), triplet("to")) else { continue };
-        let int = |key: &str| row.get(key).as_i64().unwrap_or(0);
-        let footprint = match row.get("footprint") {
-            lifescape_json::Value::Arr(tiles) => tiles
-                .iter()
-                .filter_map(|tile| {
-                    let pair = tile.as_arr()?;
-                    if pair.len() != 2 {
-                        return None;
-                    }
-                    Some([pair[0].as_i64()?, pair[1].as_i64()?])
-                })
-                .collect(),
-            _ => vec![[from[1], from[2]]],
-        };
-        out.push(TransitionRow {
-            name: row
-                .get("name")
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{}-{}-{}", from[0], from[1], from[2])),
-            kind: row.get("kind").as_str().unwrap_or("other").to_string(),
-            from,
-            to,
-            loc: int("loc") as u16,
-            climb_loc: int("climb_loc") as u16,
-            climb_op: int("climb_op").max(1) as u8,
-            open_to: row.get("open_to").as_i64().map(|id| id as u16),
-            delta: triplet("delta"),
-            footprint,
-            disabled: !row.get("disabled").is_null(),
-        });
-    }
-    Ok(out)
-}
-
-
-fn test_transition(bot: &mut Bot, row: &TransitionRow) -> Result<String, ScriptError> {
-    let (level, x, z) = (row.from[0] as i32, row.from[1] as i32, row.from[2] as i32);
-    let sides = sides_of(&row.footprint.iter().map(|tile| [tile[0], tile[1]]).collect::<Vec<_>>(), bot.world.x, bot.world.z);
+fn test_transition(bot: &mut Bot, row: &TransitionView) -> Result<String, ScriptError> {
+    let (level, x, z) = (row.from.level, row.from.x, row.from.z);
+    let footprint: Vec<[i64; 2]> = row.footprint.iter().map(|(tile_x, tile_z)| [*tile_x as i64, *tile_z as i64]).collect();
+    let sides = sides_of(&footprint, bot.world.x, bot.world.z);
     if sides.is_empty() {
         return Ok("no walkable side".to_string());
     }
@@ -218,8 +147,8 @@ fn test_transition(bot: &mut Bot, row: &TransitionRow) -> Result<String, ScriptE
             continue;
         }
         let expected = match row.delta {
-            Some([dlevel, dx, dz]) => (level + dlevel as i32, side_x + dx as i32, side_z + dz as i32),
-            None => (row.to[0] as i32, row.to[1] as i32, row.to[2] as i32),
+            Some((dlevel, dx, dz)) => (level + dlevel, side_x + dx, side_z + dz),
+            None => (row.to.level, row.to.x, row.to.z),
         };
         if let Some(opened) = row.open_to {
             if bot.world.loc_at(x, z, level).map(|loc| loc.0) != Some(opened) {
@@ -245,13 +174,10 @@ pub(crate) fn dev_check_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
     require_admin(bot)?;
     let filter = parse_filter(args)?;
     bot.intend("live-testing transitions");
-    let mut rows = load_transitions()?;
+    let mut rows = bot.transitions_list()?;
     rows.retain(|row| !row.disabled);
     if let Some(only) = &filter.only {
         rows.retain(|row| row.name.contains(only));
-    }
-    if let Some(kind) = &filter.kind {
-        rows.retain(|row| row.kind == *kind);
     }
     rows = rows.into_iter().skip(filter.skip).take(if filter.limit > 0 { filter.limit } else { usize::MAX }).collect();
     bot.log(&format!("testing {} transitions", rows.len()));
@@ -265,7 +191,7 @@ pub(crate) fn dev_check_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         if outcome != "ok" {
             let _ = cheat_teleport(bot, 0, 3222, 3218, 500);
         }
-        outcomes.push((format!("{},{},{}>{},{},{}@{}.{}", row.from[0], row.from[1], row.from[2], row.to[0], row.to[1], row.to[2], row.climb_loc, row.climb_op), outcome));
+        outcomes.push((format!("{},{},{}>{},{},{}@{}.{}", row.from.level, row.from.x, row.from.z, row.to.level, row.to.x, row.to.z, row.climb_loc, row.climb_op), outcome));
     }
     let bad = outcomes.iter().filter(|(_, outcome)| outcome != "ok").count();
     bot.log(&format!("tested={} ok={} failed={}", outcomes.len(), outcomes.len() - bad, bad));
@@ -303,7 +229,7 @@ fn loc_spawns_near(want: &str, near_x: i64, near_z: i64, level: i64, radius: i64
         if entry.name.as_deref().unwrap_or("").to_lowercase() != want {
             continue;
         }
-        for spot in &entry.spawns {
+        for spot in entry.spawns {
             if spot.level == level && (spot.x - near_x).abs() + (spot.z - near_z).abs() <= radius {
                 found.push((spot.x as i32, spot.z as i32));
             }
@@ -373,25 +299,23 @@ fn build_route_legs() -> Vec<RouteLeg> {
     legs
 }
 
-fn find_toll_gate(bot: &Bot) -> Option<(i32, i32, i32)> {
-    for ((x, z, level), (loc_id, _, _)) in &bot.world.static_locs {
-        if *level != 0 {
-            continue;
-        }
-        if (bot.tables.loc_name)(*loc_id).unwrap_or_default().to_lowercase().contains("toll") {
-            return Some((0, *x, *z));
+fn find_toll_gate(bot: &mut Bot) -> Result<Option<(i32, i32, i32)>, ScriptError> {
+    for (_, start, dest) in BACKBONE {
+        let (mid_x, mid_z) = ((start.1 + dest.1) / 2, (start.2 + dest.2) / 2);
+        let radius = ((start.1 - dest.1).abs() + (start.2 - dest.2).abs()) / 2 + 60;
+        if let Some((gate_x, gate_z, gate_level)) = bot.toll_fence(mid_x, mid_z, 0, radius)? {
+            return Ok(Some((gate_level, gate_x, gate_z)));
         }
     }
-    None
+    Ok(None)
 }
 
 pub(crate) fn dev_check_routes(bot: &mut Bot, args: &[String]) -> ScriptResult {
     require_admin(bot)?;
     let filter = parse_filter(args)?;
     bot.intend("live-testing routes");
-    bot.ensure_all();
     let mut legs = build_route_legs();
-    if let Some(gate) = find_toll_gate(bot) {
+    if let Some(gate) = find_toll_gate(bot)? {
         let (level, gx, gz) = gate;
         legs.push(RouteLeg {
             name: "toll-gate".to_string(),
@@ -473,7 +397,6 @@ fn test_leg(bot: &mut Bot, leg: &RouteLeg) -> Result<String, ScriptError> {
 
 pub(crate) fn dev_dump_bank_stands(bot: &mut Bot, _args: &[String]) -> ScriptResult {
     bot.intend("dumping bank booth clusters");
-    bot.ensure_all();
     let mut banks: Vec<_> = all_banks().into_iter().filter(|bank| !bank.members && bank.level == 0).collect();
     banks.sort_by_key(|bank| (bank.x, bank.z));
     let mut clusters: Vec<Vec<(i64, i64)>> = Vec::new();

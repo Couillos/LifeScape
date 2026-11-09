@@ -1,7 +1,13 @@
 //! Maze walllow doors: entry sides, stand order, swing clicks and the
 //! maze-aware stepping that goes with them. A script event's doors, not
-//! generic SDK doors: the generic router never plans through the maze
-//! (see `nav_overrides.json`), only this solver walks here.
+//! generic SDK doors: the generic router never plans through the maze,
+//! so only this solver walks here.
+//!
+//! Mapless: no painted collision, no painted door registry, no local
+//! router. Each leg fetches its tiles in one `tiles_flags` batch (one
+//! round trip per leg, never one per step), off-plan doors resolve
+//! through `door_defs`, and the step the server accepts is the only
+//! verification. A down service fails loud, never a silent stall.
 //!
 //! Moved from `sdk/src/client/doors.rs` (phase 8.2): same logic, free
 //! functions over `&mut Bot` instead of methods (an external crate cannot
@@ -9,8 +15,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::{HashMap, HashSet};
+
+use lifescape_nav::service_queries::TileFlags;
+use lifescape_sdk::collision::CollisionMap;
 use lifescape_sdk::error::{Error, Result};
-use lifescape_sdk::route::Router;
 use lifescape_sdk::Bot;
 
 /// Entry side of a maze walllow door loc (content `all.loc`, category
@@ -135,12 +144,108 @@ pub fn maze_door_diag(
     )
 }
 
+/// Diamond window tiles around a center tile, for one batch read.
+pub fn window_tiles(center_x: i32, center_z: i32, level: i32, radius: i32) -> Vec<(i32, i32, i32)> {
+    let radius = radius.max(0);
+    let mut tiles = Vec::new();
+    for scan_x in center_x - radius..=center_x + radius {
+        let rest = radius - (scan_x - center_x).abs();
+        for scan_z in center_z - rest..=center_z + rest {
+            tiles.push((scan_x, scan_z, level));
+        }
+    }
+    tiles
+}
+
+/// Scratch map plus door index off one batch reply: flags drive the
+/// shared-edge step test, a recorded door (else a maze static loc) names
+/// the door per tile. Ground decor never lands here: `loc` only counts
+/// for maze walllow ids. Pure: the worker map stays empty, the scratch
+/// dies with the leg.
+pub fn scratch_from_rows(rows: &[TileFlags]) -> (CollisionMap, HashMap<(i32, i32, i32), (u16, u8, u8)>) {
+    let mut scratch = CollisionMap::new();
+    let mut doors = HashMap::new();
+    for row in rows {
+        scratch.set(row.tile.x, row.tile.z, row.tile.level, row.flags);
+        let tile = (row.tile.x, row.tile.z, row.tile.level);
+        if let Some(triple) = row.door {
+            doors.insert(tile, triple);
+        } else if let Some(triple) = row.loc {
+            if is_maze_door(triple.0) {
+                doors.insert(tile, triple);
+            }
+        }
+    }
+    (scratch, doors)
+}
+
+/// Shortest cardinal path on a scratch map. Unknown tiles read shut, so
+/// the search stays inside the batched window. Capped: the approach only
+/// walks a few tiles per stand.
+fn bfs_steps(scratch: &CollisionMap, level: i32, from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+    use std::collections::VecDeque;
+    if from == to {
+        return Some(Vec::new());
+    }
+    let mut parent: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    let mut seen: HashSet<(i32, i32)> = HashSet::from([from]);
+    let mut queue = VecDeque::from([from]);
+    let mut expanded = 0usize;
+    while let Some(current) = queue.pop_front() {
+        expanded += 1;
+        if expanded > 600 {
+            return None;
+        }
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            if !lifescape_sdk::collision::step_open(scratch, current.0, current.1, level, dx, dz) {
+                continue;
+            }
+            let next = (current.0 + dx, current.1 + dz);
+            if seen.contains(&next) {
+                continue;
+            }
+            seen.insert(next);
+            parent.insert(next, current);
+            if next == to {
+                let mut path = vec![next];
+                let mut at = current;
+                while at != from {
+                    path.push(at);
+                    at = parent[&at];
+                }
+                path.reverse();
+                return Some(path);
+            }
+            queue.push_back(next);
+        }
+    }
+    None
+}
+
+/// One refusal line, same shape as the walk legs: the wanted tile, the
+/// start, the live loc there and the batch flags (`unknown` when the row
+/// missed). Pure so tests lock the wording.
+fn maze_refused_line(wanted: (i32, i32), start: (i32, i32, i32), live: Option<(u16, u8, u8)>, flags: Option<u32>) -> String {
+    let live_text = match live {
+        Some((loc_id, shape, angle)) => format!("loc {loc_id} shape={shape} angle={angle}"),
+        None => "none".to_string(),
+    };
+    let flags_text = match flags {
+        Some(flags) => format!("{flags:#x}"),
+        None => "unknown".to_string(),
+    };
+    format!(
+        "step refused: wanted [{wanted:?}] from ({},{},{}) live={live_text} flags={flags_text}",
+        start.0, start.1, start.2
+    )
+}
+
 /// Stand on a cardinal tile of a maze door, on its entry side: the
 /// server refuses wall clicks from diagonals ("can't reach that")
 /// and one-way doors from the wrong side, and a click from the wrong
 /// side only bounces back onto the door. True once standing on one.
-/// Walks explicit BFS steps (capped): walk legs never open random doors,
-/// they only step next door.
+/// One batch window around the bot feeds a scratch BFS per stand; every
+/// step is server truth, a refused stand tries the next one.
 fn approach_maze_door(
     bot: &mut Bot,
     door_x: i32,
@@ -148,93 +253,71 @@ fn approach_maze_door(
     door_level: i32,
     loc_id: u16,
     angle: u8,
-    _timeout: u64,
-) -> bool {
+) -> Result<bool> {
     let entry = maze_entry_side(loc_id).unwrap_or(0);
     // Live angle steers when the walllow still stands; a mid-swing
-    // inviswall or an unstreamed tile keeps the static paint.
+    // inviswall or an unstreamed tile keeps the batch angle.
     let live_here = bot.world.loc_at(door_x, door_z, door_level);
     let (eff_angle, angle_source) = maze_effective_angle(live_here, loc_id, angle);
     // Preferred group first, off-axis fallback after: an axis stand
     // that never moves (or an op the server refuses) still leaves the
     // E/O neighbours to try in the same call. Bounded walk legs only.
     let ordered = maze_approach_order(entry, eff_angle, door_x, door_z, bot.world.x, bot.world.z);
-    {
-        let live_text = match live_here {
-            Some((live_id, live_shape, live_angle)) => {
-                format!("loc {live_id} shape={live_shape} angle={live_angle}")
-            }
+    bot.log(&format!(
+        "maze approach door ({door_x},{door_z}) live={} from {:?} entry={entry} angle={eff_angle}({angle_source}) order={ordered:?}",
+        match live_here {
+            Some((live_id, live_shape, live_angle)) => format!("loc {live_id} shape={live_shape} angle={live_angle}"),
             None => "none".to_string(),
-        };
-        bot.log(&format!(
-            "maze approach door ({door_x},{door_z}) live={live_text} from {:?} entry={entry} angle={eff_angle}({angle_source}) order={ordered:?}",
-            bot.position()
-        ));
-    }
-    bot.ensure_area(bot.world.x, bot.world.z, 70);
-    let planning = match &bot.maps {
-        Some(pack) => pack.planning_view(&bot.collision, &bot.doors, &bot.toll_gates, bot.allow_paid),
-        None => bot.collision.clone(),
-    };
+        },
+        bot.position(),
+    ));
+    // The only static read: one window batch. Down service fails loud,
+    // never a blind walk.
+    let rows = bot.tiles_flags(&window_tiles(bot.world.x, bot.world.z, door_level, 10)).map_err(|error| {
+        bot.log(&format!("maze approach door ({door_x},{door_z}) static batch down: {error}"));
+        error
+    })?;
+    let (scratch, _) = scratch_from_rows(&rows);
     for (stand_x, stand_z) in ordered {
         if bot.world.level == door_level && (bot.world.x, bot.world.z) == (stand_x, stand_z) {
-            return true;
+            return Ok(true);
         }
-        let mut router = Router::new();
-        let waypoints = router.find_path_to_tile(&planning, door_level, bot.world.x, bot.world.z, stand_x, stand_z);
-        if waypoints.is_empty() {
-            eprintln!("{} maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): no planned path", bot.tag());
+        if bot.world.level != door_level {
+            break;
+        }
+        let Some(path) = bfs_steps(&scratch, door_level, (bot.world.x, bot.world.z), (stand_x, stand_z)) else {
             continue;
-        }
-        let steps = lifescape_sdk::nav::expand_waypoints(&waypoints, bot.world.x, bot.world.z);
-        if steps.len() > 12 {
-            eprintln!("{} maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): path too long", bot.tag());
-            continue;
-        }
-        let _ = walk_maze_steps(bot, &steps, 60);
-        eprintln!("{} maze approach door ({door_x},{door_z}) stand ({stand_x},{stand_z}): walked to {:?}", bot.tag(), bot.position());
-        if bot.world.level == door_level && (bot.world.x, bot.world.z) == (stand_x, stand_z) {
-            return true;
-        }
-    }
-    // Exact stands can read shut in live collision while a plain
-    // neighbour is one step away: the server walks the last step
-    // itself on click (p_walk in macro_event_maze.rs2), so any
-    // cardinal tile clicks. Prefer the entry side for one-way doors.
-    let mut neighbours = vec![
-        (door_x + 1, door_z),
-        (door_x - 1, door_z),
-        (door_x, door_z + 1),
-        (door_x, door_z - 1),
-    ];
-    neighbours.sort_by_key(|(stand_x, stand_z)| {
-        let side = match eff_angle {
-            0 | 2 => *stand_x == door_x,
-            _ => *stand_z == door_z,
         };
-        let wanted = entry == 0 || (entry == 1 && side) || (entry == 2 && !side);
-        ((!wanted) as u8, (stand_x - bot.world.x).abs() + (stand_z - bot.world.z).abs())
-    });
-    for (stand_x, stand_z) in neighbours {
-        if bot.world.level == door_level && (bot.world.x, bot.world.z) == (stand_x, stand_z) {
-            return true;
+        if path.len() > 12 {
+            continue;
         }
-        if bot.world.level == door_level
-            && (bot.world.x - stand_x).abs() + (bot.world.z - stand_z).abs() == 1
-            && lifescape_sdk::collision::step_open(&bot.collision, bot.world.x, bot.world.z, bot.world.level, stand_x - bot.world.x, stand_z - bot.world.z)
-            && bot.step_to(stand_x, stand_z, 8).unwrap_or(false)
-        {
-            return true;
+        let mut arrived = true;
+        for (step_x, step_z) in path {
+            match bot.step_to(step_x, step_z, 8) {
+                Ok(true) => {}
+                Ok(false) => {
+                    arrived = false;
+                    break;
+                }
+                Err(error) if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) => {
+                    return Err(error);
+                }
+                Err(_) => {
+                    arrived = false;
+                    break;
+                }
+            }
+        }
+        if arrived && bot.world.level == door_level && (bot.world.x, bot.world.z) == (stand_x, stand_z) {
+            return Ok(true);
         }
     }
     // Already cardinally adjacent (or on the door): click from here.
-    if bot.world.level == door_level && (bot.world.x - door_x).abs() + (bot.world.z - door_z).abs() <= 1 {
-        return true;
-    }
-    false
+    Ok(bot.world.level == door_level && (bot.world.x - door_x).abs() + (bot.world.z - door_z).abs() <= 1)
 }
 
-/// Nearest known maze walllow door within `radius` tiles, if any.
+/// Nearest known maze walllow door within `radius` tiles, if any. Reads
+/// the ephemeral run registry, never painted state.
 pub fn nearest_maze_door(bot: &Bot, radius: i32) -> Option<(i32, i32, i32)> {
     let mut best: Option<(i32, (i32, i32, i32))> = None;
     for (tile, (loc_id, _, _)) in bot.doors.iter() {
@@ -256,23 +339,45 @@ pub fn nearest_maze_door(bot: &Bot, radius: i32) -> Option<(i32, i32, i32)> {
 /// (parked or through: either way replan from the new tile); only a
 /// door that leaves us exactly in place reads shut and blacklists.
 pub fn open_maze_door(bot: &mut Bot, door_x: i32, door_z: i32, door_level: i32) -> Result<bool> {
-    let Some((loc_id, shape, angle)) = bot.doors.remove(&(door_x, door_z, door_level)) else {
-        return Err(Error::Unreachable(format!("no known door at ({door_x},{door_z},{door_level})")));
+    // Door identity: live first (a mid-swing inviswall differs from the
+    // record), else one batch tile. Unknown or non-maze reads fail loud,
+    // never a blind click.
+    let (loc_id, shape, angle) = match bot.world.loc_at(door_x, door_z, door_level) {
+        Some(triple) if is_maze_door(triple.0) => triple,
+        _ => {
+            let rows = bot.tiles_flags(&[(door_x, door_z, door_level)]).map_err(|error| {
+                bot.log(&format!("maze door ({door_x},{door_z}) identity batch down: {error}"));
+                error
+            })?;
+            match rows.into_iter().next().and_then(|row| row.door.or(row.loc)).filter(|triple| is_maze_door(triple.0)) {
+                Some(triple) => triple,
+                None => return Err(Error::Unreachable(format!("no known maze door at ({door_x},{door_z},{door_level})"))),
+            }
+        }
     };
-    if maze_entry_side(loc_id).is_none() {
-        bot.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
-        return Err(Error::Unreachable(format!("loc {loc_id} at ({door_x},{door_z}) is not a maze door")));
-    }
-    let Some(op) = bot.maps.as_ref().and_then(|pack| pack.loc_def(loc_id as usize)).and_then(|def| def.open_op) else {
-        bot.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
+    // The click comes from the service def, never a guess: no open action
+    // reads shut and loud, a down service propagates its typed error.
+    let open_op = bot
+        .door_defs(std::slice::from_ref(&loc_id))
+        .map_err(|error| {
+            bot.log(&format!("maze door loc {loc_id} at ({door_x},{door_z}) defs down: {error}"));
+            error
+        })?
+        .into_iter()
+        .next()
+        .and_then(|def| def.open_op);
+    let Some(op) = open_op else {
+        bot.log(&format!("maze door loc {loc_id} at ({door_x},{door_z}) has no open action, leaving it shut"));
         return Ok(false);
     };
-    if !approach_maze_door(bot, door_x, door_z, door_level, loc_id, angle, 800) {
-        println!("{} maze door {loc_id} at ({door_x},{door_z}) unreachable from {:?}", bot.tag(), bot.position());
-        bot.doors.insert((door_x, door_z, door_level), (loc_id, shape, angle));
+    if !approach_maze_door(bot, door_x, door_z, door_level, loc_id, angle)? {
+        bot.log(&format!(
+            "maze door {loc_id} at ({door_x},{door_z}) unreachable from {:?}, leaving it shut",
+            bot.position()
+        ));
         return Ok(false);
     }
-    println!("{} opening maze door loc {loc_id} at ({door_x},{door_z},{door_level})", bot.tag());
+    bot.log(&format!("opening maze door loc {loc_id} at ({door_x},{door_z},{door_level})"));
     bot.intend(&format!("opening the maze door at ({door_x},{door_z})"));
     let start = (bot.world.x, bot.world.z);
     // Through-destination of the swing (door_open for straight walls).
@@ -337,7 +442,7 @@ pub fn open_maze_door(bot: &mut Bot, door_x: i32, door_z: i32, door_level: i32) 
         // blacklisting a working door.
         return Ok(true);
     }
-    println!("{} maze door loc {loc_id} at ({door_x},{door_z}) did not open, leaving it shut", bot.tag());
+    bot.log(&format!("maze door loc {loc_id} at ({door_x},{door_z}) did not open, leaving it shut"));
     if bot.world.modal.as_ref().is_some_and(|modal| modal.layer != "overlay") {
         let _ = bot.close_modal();
         let _ = bot.pump(2);
@@ -346,15 +451,34 @@ pub fn open_maze_door(bot: &mut Bot, door_x: i32, door_z: i32, door_level: i32) 
 }
 
 /// Walk explicit steps one tile at a time inside the maze, swinging shut
-/// maze doors that block the way. No router, no fan: diagonal steps split
-/// into cardinals (open edge first), a shut edge swings a maze door when
-/// there is one (ordinary shut doors go through the generic opener), and
+/// doors that block the way. One `tiles_flags` batch covers the whole
+/// leg (start plus every step, deduped): a single round trip per leg,
+/// never one per step. Shut edges swing a maze door when the batch names
+/// one there (ordinary shut doors go through the generic opener), and
 /// anything else stops at once so the caller replans instead of
-/// detouring blindly. True when every step is done (a teleport mid-route
-/// stops early for the same reason).
+/// detouring blindly. Every step is server truth; a down service fails
+/// loud before the first step. True when every step is done (a teleport
+/// mid-route stops early for the same reason).
 pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Result<bool> {
+    if steps.is_empty() {
+        return Ok(true);
+    }
     let deadline = bot.world.ticks + timeout.max(1);
-    bot.sync_live_doors();
+    let level = bot.world.level;
+    let mut tiles = vec![(bot.world.x, bot.world.z, level)];
+    tiles.extend(steps.iter().map(|(step_x, step_z)| (*step_x, *step_z, level)));
+    tiles.sort();
+    tiles.dedup();
+    let rows = bot.tiles_flags(&tiles).map_err(|error| {
+        bot.log(&format!("maze walk batch down at {:?}: {error}", bot.position()));
+        error
+    })?;
+    let (scratch, doors) = scratch_from_rows(&rows);
+    let flag_of = |tile: (i32, i32)| {
+        rows.iter()
+            .find(|row| (row.tile.x, row.tile.z) == tile && row.tile.level == level)
+            .map(|row| row.flags)
+    };
     let mut index = 0;
     while index < steps.len() {
         if bot.world.ticks > deadline {
@@ -369,12 +493,17 @@ pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Res
             index += 1;
             continue;
         }
+        if bot.world.level != level {
+            // Teleport mid-route (a door swing lands elsewhere): stop so
+            // the caller replans from the new tile.
+            return Ok(false);
+        }
         let (dx, dz) = (step_x - bot.world.x, step_z - bot.world.z);
         // Cardinal legs for this step, open edge first.
         let mut legs: Vec<(i32, i32)> = Vec::new();
         if dx != 0 && dz != 0 {
-            let x_open = lifescape_sdk::collision::step_open(&bot.collision, bot.world.x, bot.world.z, bot.world.level, dx.signum(), 0);
-            let z_open = lifescape_sdk::collision::step_open(&bot.collision, bot.world.x, bot.world.z, bot.world.level, 0, dz.signum());
+            let x_open = lifescape_sdk::collision::step_open(&scratch, bot.world.x, bot.world.z, level, dx.signum(), 0);
+            let z_open = lifescape_sdk::collision::step_open(&scratch, bot.world.x, bot.world.z, level, 0, dz.signum());
             if x_open {
                 legs.push((dx.signum(), 0));
                 legs.push((0, dz.signum()));
@@ -389,20 +518,28 @@ pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Res
             continue;
         }
         if legs.is_empty() {
-            // Corner shut on both edges: swing a maze door there if
-            // there is one, then replan from wherever that leaves us.
+            // Corner shut on both edges: swing a maze door there if the
+            // batch names one, then replan from wherever that leaves us.
             for (tile_x, tile_z) in [(bot.world.x + dx.signum(), bot.world.z), (bot.world.x, bot.world.z + dz.signum())] {
-                if let Some((loc_id, _, _)) = bot.doors.get(&(tile_x, tile_z, bot.world.level)).copied() {
+                if let Some((loc_id, _, _)) = doors.get(&(tile_x, tile_z, level)).copied() {
                     if is_maze_door(loc_id) {
-                        if let Err(error) = open_maze_door(bot, tile_x, tile_z, bot.world.level) {
-                            if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) {
+                        match open_maze_door(bot, tile_x, tile_z, level) {
+                            Ok(_) => {}
+                            Err(error) if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) => {
                                 return Err(error);
                             }
+                            Err(error) => {
+                                bot.log(&format!("maze walk corner door at ({tile_x},{tile_z}) failed loud: {error}"));
+                            }
                         }
-                        break;
                     }
+                    break;
                 }
             }
+            bot.log(&format!(
+                "maze walk corner shut at {:?} wanted ({step_x},{step_z}), replanning",
+                bot.position()
+            ));
             return Ok(false);
         }
         let mut advanced = false;
@@ -410,24 +547,59 @@ pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Res
             if (bot.world.x, bot.world.z) == (step_x, step_z) {
                 break;
             }
+            if bot.world.level != level {
+                return Ok(false);
+            }
             let (next_x, next_z) = (bot.world.x + move_x, bot.world.z + move_z);
-            eprintln!("{} maze walk leg ({},{})->({},{}) flags={:#x}", bot.tag(), bot.world.x, bot.world.z, next_x, next_z, bot.collision.get(next_x, next_z, bot.world.level));
-            if !lifescape_sdk::collision::step_open(&bot.collision, bot.world.x, bot.world.z, bot.world.level, move_x, move_z) {
-                eprintln!("{} maze walk leg blocked, door?", bot.tag());
-                if let Some((loc_id, _, _)) = bot.doors.get(&(next_x, next_z, bot.world.level)).copied() {
-                    if is_maze_door(loc_id) {
-                        if let Err(error) = open_maze_door(bot, next_x, next_z, bot.world.level) {
-                            if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) {
+            // A recorded door the live stream still shows closed clicks
+            // first even when the static edge reads open: flags never
+            // carry live door states, the batch only names the door.
+            let door_record = doors.get(&(next_x, next_z, level)).copied();
+            let live_shut = match (door_record, bot.world.loc_at(next_x, next_z, level)) {
+                (Some((loc_id, _, _)), Some((live_id, _, _))) => live_id == loc_id,
+                _ => false,
+            };
+            if !lifescape_sdk::collision::step_open(&scratch, bot.world.x, bot.world.z, level, move_x, move_z) || live_shut {
+                match door_record {
+                    Some((loc_id, _, _)) if is_maze_door(loc_id) => {
+                        match open_maze_door(bot, next_x, next_z, level) {
+                            Ok(_) => {}
+                            Err(error) if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) => {
                                 return Err(error);
+                            }
+                            Err(error) => {
+                                bot.log(&format!("maze walk door at ({next_x},{next_z}) failed loud: {error}"));
                             }
                         }
                         break;
                     }
-                    if !bot.open_shut_door(next_x, next_z, bot.world.level, loc_id) {
+                    Some((loc_id, _, _)) => {
+                        match bot.open_shut_door(next_x, next_z, level, loc_id) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                bot.log(&format!(
+                                    "maze walk door loc {loc_id} at ({next_x},{next_z}) stays shut from {:?}, replanning",
+                                    bot.position()
+                                ));
+                                break;
+                            }
+                            Err(error)
+                                if lifescape_sdk::error::is_interrupted(&error)
+                                    || matches!(error, Error::Io(_) | Error::Login(_)) =>
+                            {
+                                return Err(error)
+                            }
+                            Err(error) => {
+                                bot.log(&format!("maze walk door loc {loc_id} at ({next_x},{next_z}) failed loud: {error}"));
+                                break;
+                            }
+                        }
+                    }
+                    None => {
+                        let live = bot.world.loc_at(next_x, next_z, level);
+                        bot.log(&maze_refused_line((next_x, next_z), (bot.world.x, bot.world.z, level), live, flag_of((next_x, next_z))));
                         break;
                     }
-                } else {
-                    break;
                 }
             }
             match bot.step_to(next_x, next_z, 8) {
@@ -435,7 +607,8 @@ pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Res
                     advanced = true;
                 }
                 Ok(false) => {
-                    eprintln!("{} maze walk leg refused", bot.tag());
+                    let live = bot.world.loc_at(next_x, next_z, level);
+                    bot.log(&maze_refused_line((next_x, next_z), (bot.world.x, bot.world.z, level), live, flag_of((next_x, next_z))));
                     break;
                 }
                 Err(error) if lifescape_sdk::error::is_interrupted(&error) || matches!(error, Error::Io(_) | Error::Login(_)) => return Err(error),
@@ -454,15 +627,29 @@ pub fn walk_maze_steps(bot: &mut Bot, steps: &[(i32, i32)], timeout: u64) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lifescape_sdk::collision::{self, MapPack};
 
-    /// Pack index with no squares: offline stand-in so hand-painted
-    /// collision survives untouched.
-    fn empty_pack() -> MapPack {
-        MapPack::new(std::path::PathBuf::from("no-pack.zip"), std::collections::HashMap::new(), Vec::new())
+    /// Served bot: real dumps wired for the snapshot, one plan socket.
+    /// Game sends still fail typed (dead game socket), service reads pass.
+    fn served_bot(account: &str, socket: &std::path::Path, version: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::wire_nav(&mut bot);
+        bot.world.level = 0;
+        let world = bot.nav_world.clone().expect("wired");
+        let tables = bot.nav_tables.clone().expect("wired");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, version.to_string()),
+            socket,
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), account));
+        bot.plan_data_version = Some(version.to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        (bot, service)
     }
 
-    /// Stand choice follows the live angle, not the static paint: a door
+    /// Stand choice follows the live angle, not the batch one: a door
     /// registered angle 0 but streaming angle 1 wants E/W stands first.
     #[test]
     fn maze_stands_follow_live_angle_not_static() {
@@ -527,34 +714,128 @@ mod tests {
         assert!(missing.contains("axis=false"), "off-axis stand flags, got: {missing}");
     }
 
-    /// Maze door without an open action: the record survives the early
-    /// exit, locked for every opener path.
+    /// Window tiles: diamond around the center, center included once, all
+    /// on the level. One batch, no per-tile round trip.
     #[test]
-    fn maze_door_without_open_op_keeps_registry() {
+    fn window_tiles_covers_diamond_once() {
+        let tiles = window_tiles(100, 200, 0, 2);
+        assert_eq!(tiles.len(), 13, "diamond radius 2 covers 13 tiles, got: {tiles:?}");
+        assert!(tiles.contains(&(100, 200, 0)), "center included");
+        assert!(tiles.iter().all(|(_, _, level)| *level == 0), "single level");
+        let mut sorted = tiles.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), tiles.len(), "no duplicate tile");
+    }
+
+    /// Scratch off batch rows: flags land readable, recorded doors index
+    /// (maze or ordinary), a maze static loc indexes too, ground decor
+    /// never does.
+    #[test]
+    fn scratch_from_rows_names_recorded_doors_only() {
+        use lifescape_nav::plan::Tile;
+        let rows = vec![
+            TileFlags { tile: Tile { x: 1, z: 1, level: 0 }, flags: 0x240100, door: Some((1530, 0, 2)), toll: false, loc: Some((1530, 0, 2)) },
+            TileFlags { tile: Tile { x: 2, z: 1, level: 0 }, flags: 0, door: None, toll: false, loc: Some((3628, 0, 2)) },
+            TileFlags { tile: Tile { x: 3, z: 1, level: 0 }, flags: 0, door: None, toll: false, loc: Some((695, 22, 0)) },
+        ];
+        let (scratch, doors) = scratch_from_rows(&rows);
+        assert_eq!(scratch.get(1, 1, 0), 0x240100, "flags drive the step test");
+        assert_eq!(doors.len(), 2, "recorded door plus maze static loc, got: {doors:?}");
+        assert_eq!(doors.get(&(1, 1, 0)), Some(&(1530, 0, 2)), "ordinary recorded door indexes");
+        assert_eq!(doors.get(&(2, 1, 0)), Some(&(3628, 0, 2)), "maze static loc indexes");
+        assert!(!doors.contains_key(&(3, 1, 0)), "ground decor is no door");
+    }
+
+    /// No service, no steps: the leg batch is the first read, so the
+    /// failure is a typed `nav-down` before anything pumps — never a
+    /// silent stall on painted state.
+    #[test]
+    fn walk_without_service_is_nav_down_before_any_step() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        bot.maps = Some(empty_pack());
         bot.world.level = 0;
-        bot.world.x = 0;
-        bot.world.z = 0;
-        bot.doors.insert((10, 0, 0), (3628, 0, 2));
-        assert!(!open_maze_door(&mut bot, 10, 0, 0).expect("no socket touched"), "no open action fails loud");
-        assert_eq!(bot.doors.get(&(10, 0, 0)), Some(&(3628, 0, 2)), "record kept");
+        let err = walk_maze_steps(&mut bot, &[(0, 1)], 60).expect_err("dead service aborts typed");
+        assert!(matches!(&err, Error::Travel(detail) if detail.contains("nav-down")), "typed travel error, got: {err}");
+        assert_eq!((bot.world.x, bot.world.z), (0, 0), "never moved");
         assert_eq!(bot.world.ticks, 0, "failure pumps nothing");
     }
 
-    /// Blocked maze legs stop at once: the solver replans from the new
-    /// tile instead of detouring blindly. Offline the send never leaves,
-    /// which reads as a typed login abort (never a silent Ok(false)).
+    /// Shut ordinary door on the leg: the batch names it, the generic
+    /// opener runs it (dead game socket: the click never leaves), and the
+    /// leg stops loud with no blind step. Exactly one flags batch per leg.
     #[test]
-    fn maze_steps_stop_on_shut_edge_without_door() {
+    fn shut_ordinary_door_stops_loud_without_blind_step() {
+        let (mut bot, service) = served_bot("maze-shut", &lifescape_nav::service::test_socket("maze-shut"), "maze-shut");
+        bot.world.x = 3226;
+        bot.world.z = 3222;
+        bot.world.locs.insert((3226, 3223, 0), Some((1530, 0, 2)));
+        let (_, before) = service.query_stats();
+        let outcome = walk_maze_steps(&mut bot, &[(3226, 3223)], 60).expect("shut door stops, never aborts");
+        let (_, after) = service.query_stats();
+        assert!(!outcome, "shut door stops the leg for a replan");
+        assert_eq!((bot.world.x, bot.world.z), (3226, 3222), "no blind step onto the shut tile");
+        assert_eq!(bot.world.ticks, 0, "refusal pumps nothing");
+        assert_eq!(after - before, 1, "one flags batch per leg, never one per step");
+    }
+
+    /// Maze door click without a game connection: defs and approach run
+    /// (service is up, the bot already stands), the dead game socket
+    /// refuses the click, and the door reads shut and loud — never a
+    /// local success. The record is kept for the re-close.
+    #[test]
+    fn maze_door_click_without_game_conn_stays_shut_loud() {
+        let (mut bot, _service) = served_bot("maze-click", &lifescape_nav::service::test_socket("maze-click"), "maze-click");
+        // On the first-choice axis stand: no approach steps, the dead
+        // game socket refuses the click itself.
+        bot.world.x = 10;
+        bot.world.z = 1;
+        bot.world.locs.insert((10, 0, 0), Some((3628, 0, 2)));
+        let defs = bot.door_defs(&[3628]).expect("defs answer");
+        assert!(defs[0].open_op.is_some(), "the maze door carries its click");
+        assert!(!open_maze_door(&mut bot, 10, 0, 0).expect("dead game socket reads shut, never aborts"), "no conn means no swing");
+        assert_eq!(bot.world.ticks, 0, "refusal pumps nothing");
+        assert_eq!(bot.doors.get(&(10, 0, 0)), Some(&(3628, 0, 2)), "record kept for the re-close");
+    }
+
+    /// Unstreamed tile, no service: identity needs its batch tile, so the
+    /// failure is `nav-down` — loud, typed, before any click.
+    #[test]
+    fn maze_door_identity_without_service_is_nav_down() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        bot.maps = Some(empty_pack());
         bot.world.level = 0;
-        bot.world.x = 0;
+        let err = open_maze_door(&mut bot, 10, 0, 0).expect_err("dead service aborts typed");
+        assert!(matches!(&err, Error::Travel(detail) if detail.contains("nav-down")), "typed travel error, got: {err}");
+        assert_eq!(bot.world.ticks, 0, "failure pumps nothing");
+    }
+
+    /// Tile holding no maze door: rejected without any click — the static
+    /// batch is the authority (live may show a mid-swing inviswall), and
+    /// its silence reads `Unreachable`, never a blind click. Game socket
+    /// untouched (the click never leaves), no pump.
+    #[test]
+    fn non_maze_tile_rejected_without_click() {
+        let (mut bot, _service) = served_bot("maze-non", &lifescape_nav::service::test_socket("maze-non"), "maze-non");
+        bot.world.x = 9;
         bot.world.z = 0;
-        collision::change_loc_collision(&mut bot.collision, 0, 2, true, 1, 1, 1, 0, 1, 0, true);
-        let err = walk_maze_steps(&mut bot, &[(0, 1)], 60).expect_err("dead socket aborts typed");
-        assert!(matches!(err, Error::Login(_)), "typed conn error, got: {err}");
-        assert_eq!((bot.world.x, bot.world.z), (0, 0), "never moved");
+        bot.world.locs.insert((10, 0, 0), Some((1530, 0, 2)));
+        let err = open_maze_door(&mut bot, 10, 0, 0).expect_err("non-maze tile never clicks");
+        assert!(matches!(&err, Error::Unreachable(_)), "typed unreachable, got: {err}");
+        assert_eq!(bot.world.ticks, 0, "rejection pumps nothing");
+        assert!(bot.doors.get(&(10, 0, 0)).is_none(), "unguessed door records nothing");
+    }
+
+    /// Static flags never carry live door states: the shut ordinary door
+    /// tile (3226,3223) reads edge-open north/south off its batch flags,
+    /// so the stepper must consult the live loc before trusting the
+    /// scratch. Locks the `live_shut` branch against "simplification".
+    #[test]
+    fn static_flags_miss_live_door_state() {
+        let mut scratch = CollisionMap::new();
+        scratch.set(3226, 3222, 0, 0x1008);
+        scratch.set(3226, 3223, 0, 0x1008);
+        assert!(
+            lifescape_sdk::collision::step_open(&scratch, 3226, 3222, 0, 0, 1),
+            "batch flags alone read the shut door open"
+        );
     }
 }

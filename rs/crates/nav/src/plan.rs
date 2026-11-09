@@ -112,13 +112,17 @@ fn unkey(key: u64) -> Tile {
     }
 }
 
-/// Which closed door a step swings through.
+/// Which closed door a step swings through. `open_op`/`toll` ride along
+/// for the executor (no pack read worker-side): `None` on old plans
+/// means the door stays shut, never clicked blind.
 #[derive(Clone, Debug)]
 pub struct DoorRef {
     pub loc: u16,
     pub x: i32,
     pub z: i32,
     pub level: i32,
+    pub open_op: Option<u8>,
+    pub toll: bool,
 }
 
 /// Which transition row a ride takes.
@@ -134,6 +138,9 @@ pub struct TransitionRef {
     /// and the table `from` is not always that one. The executor clicks
     /// the footprint tile nearest its stand.
     pub footprint: Vec<(i32, i32)>,
+    /// Prober verdict carried for the executor message (`NeedsChoice`
+    /// names the no-recorded-pick suffix). Absent on old plans: false.
+    pub needs_choice: bool,
 }
 
 /// Which hand-added edge a step takes.
@@ -410,11 +417,11 @@ fn disabled_nearby(tables: &Tables, dest: Tile) -> Vec<TransitionRef> {
         .transitions
         .iter()
         .filter(|row| row.disabled && (row.from.x - dest.x).abs() + (row.from.z - dest.z).abs() <= 40)
-        .map(transition_ref)
+        .map(|row| transition_ref(row, tables))
         .collect()
 }
 
-fn transition_ref(row: &Transition) -> TransitionRef {
+fn transition_ref(row: &Transition, tables: &Tables) -> TransitionRef {
     TransitionRef {
         name: row.name.clone(),
         loc: row.loc,
@@ -423,6 +430,9 @@ fn transition_ref(row: &Transition) -> TransitionRef {
         from: row.from,
         to: row.to,
         footprint: row.footprint.clone(),
+        needs_choice: tables
+            .verdict(row.loc, row.from)
+            .is_some_and(|seen| seen == Verdict::NeedsChoice),
     }
 }
 
@@ -709,7 +719,14 @@ fn dijkstra(
                 key,
                 next_key,
                 cost + DOOR_COST,
-                PrevEdge::Door(DoorRef { loc: id, x: door_tile.x, z: door_tile.z, level: door_tile.level }),
+                PrevEdge::Door(DoorRef {
+                    loc: id,
+                    x: door_tile.x,
+                    z: door_tile.z,
+                    level: door_tile.level,
+                    open_op: search.world.loc_def(id as usize).and_then(|def| def.open_op),
+                    toll: search.world.is_toll(door_tile.x, door_tile.z, door_tile.level),
+                }),
             );
         }
         // Transition and custom rides from this stand. The shared L2 is
@@ -790,7 +807,7 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Til
         };
         let edge = match edge {
             PrevEdge::Walk => PrevEdge::Walk,
-            PrevEdge::Door(door) => PrevEdge::Door(DoorRef { loc: door.loc, x: door.x, z: door.z, level: door.level }),
+            PrevEdge::Door(door) => PrevEdge::Door(door.clone()),
             PrevEdge::Ride { index, dest, pre_open } => {
                 PrevEdge::Ride { index: *index, dest: *dest, pre_open: pre_open.clone() }
             }
@@ -1012,7 +1029,7 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
                     stand: cursor,
                     expect: dest,
                     pre_open,
-                    transition: transition_ref(row),
+                    transition: transition_ref(row, tables),
                 });
                 cursor = dest;
             }

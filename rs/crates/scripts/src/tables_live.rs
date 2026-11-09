@@ -10,15 +10,15 @@ fn npc_size(npc_type: u16) -> u8 {
 }
 
 fn npc_name(npc_type: u16) -> Option<String> {
-    lifescape_gamedata::npc_by_id(usize::from(npc_type)).and_then(|entry| entry.name)
+    lifescape_gamedata::npc_by_id(usize::from(npc_type)).and_then(|entry| entry.name).map(str::to_string)
 }
 
 fn loc_name(loc_id: u16) -> Option<String> {
-    lifescape_gamedata::loc_by_id(usize::from(loc_id)).and_then(|entry| entry.name)
+    lifescape_gamedata::loc_by_id(usize::from(loc_id)).and_then(|entry| entry.name).map(str::to_string)
 }
 
 fn obj_name(obj_id: u16) -> Option<String> {
-    lifescape_gamedata::obj_display_name(usize::from(obj_id))
+    lifescape_gamedata::obj_display_name(usize::from(obj_id)).map(str::to_string)
 }
 
 fn obj_take_op(obj_id: u16) -> Option<u8> {

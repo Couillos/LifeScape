@@ -107,7 +107,7 @@ fn tier_spawns(tier: &knowledge::trees::TreeTier, bank: &knowledge::banks::Bank)
     for entry in knowledge::all_locs() {
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
         if tier.trees.iter().any(|tree| *tree == name) {
-            for spawn in &entry.spawns {
+            for spawn in entry.spawns {
                 if spawn.level == bank.level
                     && (spawn.x - bank.x).abs() + (spawn.z - bank.z).abs() <= NEAR_BANK_TILES
                 {
@@ -126,7 +126,7 @@ fn tier_spawns_wide(tier: &knowledge::trees::TreeTier, level: i64) -> Vec<(i32, 
     for entry in knowledge::all_locs() {
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
         if tier.trees.iter().any(|tree| *tree == name) {
-            for spawn in &entry.spawns {
+            for spawn in entry.spawns {
                 if spawn.level == level {
                     found.push((spawn.x as i32, spawn.z as i32));
                 }
@@ -169,7 +169,7 @@ fn hunter_zones(bot: &Bot) -> Vec<(i64, i64, i64)> {
         if !entry.hunts_players || !hunter_threatens(ours, entry.vislevel) {
             continue;
         }
-        for spawn in &entry.spawns {
+        for spawn in entry.spawns {
             if spawn.level == i64::from(bot.world.level) {
                 zones.push((spawn.x, spawn.z, entry.huntrange + WANDER));
             }
@@ -242,6 +242,25 @@ pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
     }
 }
 
+/// One F2P verdict per candidate spot, in order, in a single service
+/// batch. `None` when the service is down (logged): callers drop every
+/// candidate instead of guessing — the pick returns `None` and the loop
+/// waits, while any real walk still fails loud with `nav-down`.
+fn f2p_inside(bot: &mut Bot, spots: &[(i32, i32)]) -> Option<Vec<bool>> {
+    if spots.is_empty() {
+        return Some(Vec::new());
+    }
+    let level = bot.world.level;
+    let tiles: Vec<(i32, i32, i32)> = spots.iter().map(|(spot_x, spot_z)| (*spot_x, *spot_z, level)).collect();
+    match bot.in_f2p_batch(&tiles) {
+        Ok(verdicts) => Some(verdicts),
+        Err(error) => {
+            bot.log(&format!("f2p batch unavailable ({error}), dropping {} spots", spots.len()));
+            None
+        }
+    }
+}
+
 /// Nearest live same-tier spawn within hop range. Pure scan: no logging,
 /// no bans, no mutation — the caller logs and decides. `fence = None`
 /// skips the toll check (cross-fence relocation when stranded).
@@ -258,7 +277,9 @@ fn nearest_hop_spot(
     stumped: &mut HashMap<(i32, i32), u64>,
     respawn: &HashMap<String, u64>,
 ) -> Option<(i64, (i32, i32))> {
-    let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+    // Local filters first (no service), then ONE f2p batch for the
+    // survivors — never one IPC per spot in a tight loop.
+    let mut spots: Vec<(i32, i32)> = Vec::new();
     for (spot_x, spot_z) in tier_spawns_wide(tier, i64::from(bot.world.level)) {
         if Some((spot_x, spot_z)) == except {
             continue;
@@ -278,13 +299,18 @@ fn nearest_hop_spot(
             *saw_paid_only = true;
             continue;
         }
-        if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
-            *saw_f2p_only = true;
-            continue;
-        }
         if hunters.iter().any(|(hunter_x, hunter_z, range)| {
             (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
         }) {
+            continue;
+        }
+        spots.push((spot_x, spot_z));
+    }
+    let inside = f2p_inside(bot, &spots)?;
+    let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+    for ((spot_x, spot_z), live) in spots.into_iter().zip(inside) {
+        if !live {
+            *saw_f2p_only = true;
             continue;
         }
         let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
@@ -324,7 +350,9 @@ pub(crate) fn pick_tree_spot(
     // preempts them, and only a failed hop falls through to them, logged.
     let mut fallback: Option<(knowledge::trees::TreeTier, Vec<(i64, (i32, i32))>)> = None;
     for tier in affordable {
-        let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+        // Local filters first (no service), then ONE f2p batch for the
+        // survivors — never one IPC per spot in a tight loop.
+        let mut spots: Vec<(i32, i32)> = Vec::new();
         for (spot_x, spot_z) in tier_spawns(tier, bank) {
             if Some((spot_x, spot_z)) == except {
                 continue;
@@ -341,15 +369,22 @@ pub(crate) fn pick_tree_spot(
                 saw_paid_only = true;
                 continue;
             }
-            // Travel always plans F2P-only: an out-of-F2P spot is a
-            // guaranteed NoRoute dossier (live t01-4572), never a pick.
-            if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
-                saw_f2p_only = true;
-                continue;
-            }
             if hunters.iter().any(|(hx, hz, range)| {
                 (i64::from(spot_x) - hx).abs() + (i64::from(spot_z) - hz).abs() <= *range
             }) {
+                continue;
+            }
+            spots.push((spot_x, spot_z));
+        }
+        // Travel always plans F2P-only: an out-of-F2P spot is a
+        // guaranteed NoRoute dossier (live t01-4572), never a pick.
+        let Some(inside) = f2p_inside(bot, &spots) else {
+            continue;
+        };
+        let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+        for ((spot_x, spot_z), live) in spots.into_iter().zip(inside) {
+            if !live {
+                saw_f2p_only = true;
                 continue;
             }
             let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
@@ -426,9 +461,11 @@ pub(crate) fn pick_tree_spot(
             let mut wide = tier_spawns_wide(top, i64::from(bot.world.level));
             wide.sort();
             wide.dedup();
+            // One batch for the note tags below, like the pick filters.
+            let wide_inside = f2p_inside(bot, &wide);
             let mut notes: Vec<String> = Vec::new();
             let mut banned_notes: Vec<((i32, i32), u64)> = Vec::new();
-            for &(spot_x, spot_z) in &wide {
+            for (index, &(spot_x, spot_z)) in wide.iter().enumerate() {
                 let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
                 let why = if Some((spot_x, spot_z)) == except {
                     "noroute".to_string()
@@ -453,8 +490,13 @@ pub(crate) fn pick_tree_spot(
                     }
                 } else if across_toll(bot.world.x, spot_x, fence) {
                     "toll".to_string()
-                } else if bot.nav_world.as_ref().is_some_and(|world| !world.in_f2p(spot_x, spot_z)) {
+                } else if wide_inside.as_ref().is_some_and(|verdicts| !verdicts[index]) {
                     "f2p".to_string()
+                } else if wide_inside.is_none() {
+                    // Down batch: name it, so the famine release stays
+                    // shut (no verified spot to retry) and the note tells
+                    // the outage apart from a genuinely filtered pool.
+                    "nav-down".to_string()
                 } else if hunters.iter().any(|(hunter_x, hunter_z, range)| {
                     (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
                 }) {
@@ -579,14 +621,6 @@ mod tests {
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
-    fn ban_all(spots: &[(i32, i32)]) -> BanSet {
-        let mut bans = BanSet::new();
-        for pos in spots {
-            bans.ban_until(*pos, u64::MAX);
-        }
-        bans
-    }
-
     /// Every yew spawn banned except `keep`: the hop/degrade/starvation
     /// paths must decide on the whole tier, never on a 200-tile window.
     /// Returns the bans and the full spawn list (for len assertions).
@@ -615,20 +649,57 @@ mod tests {
         assert_eq!(pick_tier(&tiers, 60).expect("tier").product, "yew_logs");
     }
 
-    /// Stump clock: a remembered stump whose regrow ETA passed reads as
-    /// live — the bot wasn't there to see it regrow. Arrival re-streams
-    /// and proves it (or re-bans with a fresh clock).
-    fn stump_bot_at(spot: (i32, i32), now: u64) -> Bot {
+    /// Mapless worker against a real nav service (repo dumps): the bot
+    /// carries no `nav_world`, only the plan handle. Each test binds the
+    /// service so the socket outlives the bot. Hunter filter off unless
+    /// the test says otherwise; the fence stays live unless the test
+    /// opts into paid crossings.
+    fn served_spot_bot(
+        spot_x: i32,
+        spot_z: i32,
+        socket_tag: &str,
+    ) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.world.ticks = now;
+        bot.world.x = spot_x;
+        bot.world.z = spot_z;
         bot.allow_wild = true;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+        let data = root.join("LifeScape/gamedata/data");
+        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+        world.set_f2p(zones);
+        let tables = std::sync::Arc::new(lifescape_nav::tables::Tables::load(&data).expect("tables"));
+        let version = format!("test-spot-{socket_tag}");
+        let service = lifescape_nav::service::Service::start(
+            lifescape_nav::service::Snapshot::new(world, tables, version.clone()),
+            &lifescape_nav::service::test_socket(socket_tag),
+            1,
+        )
+        .expect("service starts");
+        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), socket_tag));
+        bot.plan_data_version = Some(version);
+        bot.last_keepalive = Some(std::time::Instant::now());
+        (bot, service)
+    }
+
+    /// Stump clock: a remembered stump whose regrow ETA passed reads as
+    /// live — the bot wasn't there to see it regrow. Arrival re-streams
+    /// and proves it (or re-bans with a fresh clock). Paid crossings on:
+    /// these tests prove the stump clock, not the fence, so the real
+    /// fence (if any) stays out of the way like the old empty paint.
+    fn stump_bot_at(spot: (i32, i32), now: u64, socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        let (mut bot, service) = served_spot_bot(3053, 3271, socket_tag);
+        bot.world.ticks = now;
+        bot.allow_paid = true;
         // Static yew stump on the tile: the stream still shows it.
         bot.world.locs.insert((spot.0, spot.1, 0), Some((1341, 0, 0)));
-        bot
+        (bot, service)
     }
 
     fn draynor_bank() -> lifescape_gamedata::banks::Bank {
@@ -649,7 +720,7 @@ mod tests {
         let spot = (3053, 3271);
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
         let mut stumped: HashMap<(i32, i32), u64> = [(spot, 0)].into_iter().collect();
-        let mut bot = stump_bot_at(spot, 200);
+        let (mut bot, _service) = stump_bot_at(spot, 200, "spot-due-stump");
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("due stump should read live, got None");
@@ -666,7 +737,7 @@ mod tests {
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
         // Stumped "now": the 200-tick yew regrow hasn't elapsed.
         let mut stumped: HashMap<(i32, i32), u64> = [(spot, 1000)].into_iter().collect();
-        let mut bot = stump_bot_at(spot, 1000);
+        let (mut bot, _service) = stump_bot_at(spot, 1000, "spot-fresh-stump");
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
         let Some((tier, _, _)) = picked else {
             panic!("fresh stump should degrade, got None");
@@ -682,7 +753,7 @@ mod tests {
         let (mut banned, _) = ban_all_yews_except(&tiers, &[spot]);
         let mut stumped: HashMap<(i32, i32), u64> = HashMap::new();
         // First sight stamps the clock: still down, degrades.
-        let mut bot = stump_bot_at(spot, 10000);
+        let (mut bot, _service) = stump_bot_at(spot, 10000, "spot-first-sight");
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut stumped, &HashMap::new());
         let product = picked.map(|(tier, _, _)| tier.product);
         assert!(product.as_deref() == Some("willow_logs"), "first sight degrades, got: {product:?}");
@@ -724,137 +795,78 @@ mod tests {
         assert!(hunter_threatens(None, 1), "unknown level stays cautious");
     }
 
-    /// Toll fence: the only live yews sit across the fence → relocate
-    /// to the nearest same-tier spot instead of degrading to willow.
-    /// Every other yew spawn is banned; (2996,3311) sits across the
-    /// fence: its note reads "toll", not "banned", so no release.
-    /// Relocation (not the anti-famine release) resolves the pick.
+    /// Toll fence reporting: the Al-Kharid gate line comes from the
+    /// service, not painted state — x=3268 near the corridor, nothing
+    /// near Draynor. Pure side math stays covered in `skill_gather`.
     #[test]
-    fn toll_stranded_relocates_across_fence_to_same_tier() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.allow_wild = true;
+    fn toll_fence_reports_the_gate_line() {
+        let (mut bot, _service) = served_spot_bot(3275, 3227, "spot-fence-line");
         bot.allow_paid = false;
-        bot.toll_gates.insert((3000, 3271, 0));
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "draynor".to_string(),
-            members: false,
-        };
-        let tiers = lifescape_gamedata::trees::all_tiers();
-        // Every yew spawn banned except (2996,3311), across the fence.
-        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
-        let Some((tier, spot_x, spot_z)) = picked else {
-            panic!("stranded bot should relocate across the fence, got None");
-        };
-        assert_eq!(tier.product, "yew_logs", "same tier, not willow, got: {}", tier.product);
-        assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
-        assert_eq!(banned.len(), wide.len() - 1, "relocation resolves without releasing bans, got: {}", banned.len());
+        assert_eq!(toll_gate_x(&mut bot), Some(3268), "gate line from the service");
+        assert!(same_side(3268, 3275, 3300), "east flank together");
+        assert!(!same_side(3268, 3275, 3249), "across never targets");
+        assert!(across_toll(3275, 3249, Some(3268)), "west spot is across");
+        assert!(!across_toll(3275, 3300, Some(3268)), "east spot is same side");
+        assert!(!across_toll(3275, 3249, None), "no fence means no filtering");
+        // No fence near Draynor: the getter stays quiet there.
+        let (mut draynor, _service) = served_spot_bot(3091, 3242, "spot-fence-far");
+        draynor.allow_paid = false;
+        assert_eq!(toll_gate_x(&mut draynor), None, "no fence near Draynor");
     }
 
-    /// Live Al-Kharid geometry: bot east of the toll fence, every yew
-    /// in range west of it — relocates to (3249,3201) instead of
-    /// waiting out bans or degrading. No east-fence yew exists in range.
+    /// Toll fence: the only live yew sits across the real Al-Kharid
+    /// fence → relocate to the same tier instead of degrading to willow.
+    /// Every other yew spawn is banned; (3249,3201) sits west of the
+    /// line: relocation (not the anti-famine release) resolves the pick.
     #[test]
-    fn relocate_across_alkharid_fence_to_yew() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3269;
-        bot.world.z = 3169;
-        bot.allow_wild = true;
+    fn toll_stranded_relocates_across_fence_to_same_tier() {
+        let (mut bot, _service) = served_spot_bot(3275, 3227, "spot-relocate");
         bot.allow_paid = false;
-        bot.toll_gates.insert((3268, 3169, 0));
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "draynor".to_string(),
-            members: false,
-        };
+        assert_eq!(toll_gate_x(&mut bot), Some(3268), "east of the real fence");
+        let bank = draynor_bank();
         let tiers = lifescape_gamedata::trees::all_tiers();
+        // Every yew spawn banned except (3249,3201), across the fence.
         let (mut banned, wide) = ban_all_yews_except(&tiers, &[(3249, 3201)]);
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("stranded bot should relocate across the fence, got None");
         };
-        assert_eq!(tier.product, "yew_logs", "same tier, not degraded, got: {}", tier.product);
-        assert_eq!((spot_x, spot_z), (3249, 3201), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
+        assert_eq!(tier.product, "yew_logs", "same tier, not willow, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (3249, 3201), "cross-fence yew, got: ({spot_x},{spot_z})");
         assert!(spot_x < 3268, "relocated west of the fence, got x={spot_x}");
         assert_eq!(banned.len(), wide.len() - 1, "relocation resolves without releasing bans, got: {}", banned.len());
     }
 
+    /// Same-side filter: the nearer yew across the real fence loses to
+    /// the farther same-side one — the pick never crosses while unpaid.
+    /// (3270,3470) east-far beats (3249,3201) west-near from (3275,3227).
     #[test]
-    fn toll_fence_filters_across_spots() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 2900;
-        bot.world.z = 3240;
-        bot.toll_gates.insert((2920, 3240, 0));
-        assert_eq!(toll_gate_x(&mut bot), Some(2920), "nearest fence line");
-        assert!(same_side(2920, 2900, 2910), "west flank together");
-        assert!(!same_side(2920, 2900, 3086), "across never targets");
-        assert!(across_toll(2900, 3086, Some(2920)), "east spot is across");
-        assert!(!across_toll(2900, 2910, Some(2920)), "west spot is same side");
-        assert!(!across_toll(2900, 3086, None), "no fence means no filtering");
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "draynor".to_string(),
-            members: false,
-        };
-        let tiers = lifescape_gamedata::trees::all_tiers();
+    fn toll_filter_prefers_same_side_over_nearer_across() {
+        let (mut bot, _service) = served_spot_bot(3275, 3227, "spot-sameside");
         bot.allow_paid = false;
-        let hopped = pick_tree_spot(&mut bot, &tiers, &bank, 0, &mut BanSet::new(), None, &mut HashMap::new(), &HashMap::new());
-        let Some((_, hop_x, _)) = hopped else {
-            panic!("hop should find a same-side tree, got None");
+        assert_eq!(toll_gate_x(&mut bot), Some(3268), "east of the real fence");
+        let bank = draynor_bank();
+        let tiers = lifescape_gamedata::trees::all_tiers();
+        let (mut banned, _) = ban_all_yews_except(&tiers, &[(3270, 3470), (3249, 3201)]);
+        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let Some((tier, spot_x, spot_z)) = picked else {
+            panic!("same-side yew should win, got None");
         };
-        assert!(hop_x < 2920, "hop stays on the bot side of the fence, got x={hop_x}");
-        bot.allow_paid = true;
-        let some = pick_tree_spot(&mut bot, &tiers, &bank, 0, &mut BanSet::new(), None, &mut HashMap::new(), &HashMap::new());
-        assert!(some.is_some(), "paid crossing reopens the same spots");
+        assert_eq!(tier.product, "yew_logs", "same tier, not degraded, got: {}", tier.product);
+        assert_eq!((spot_x, spot_z), (3270, 3470), "far same-side beats near across, got: ({spot_x},{spot_z})");
     }
 
-    /// Same-tier hop: every yew near the Draynor bank is a stump/ban, so
-    /// the pick walks to the next live yew cluster ((2996,3311), 97 tiles
-    /// off) instead of settling for the live willow next door.
+    /// Same-tier hop: every other yew is banned, so the pick walks to
+    /// the next live yew cluster ((2996,3311), 97 tiles off) instead of
+    /// settling for the live willow next door.
     #[test]
     fn hop_same_tier_before_degrading() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.allow_wild = true;
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "draynor".to_string(),
-            members: false,
-        };
+        let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-hop");
+        // Paid crossings on: this test proves the hop, not the fence.
+        bot.allow_paid = true;
+        let bank = draynor_bank();
         let tiers = lifescape_gamedata::trees::all_tiers();
-        let mut banned = ban_all(&[
-            (3053, 3271),
-            (3041, 3319),
-            (3017, 3308),
-            (3184, 3226),
-            (3146, 3254),
-            (3151, 3230),
-            (3165, 3219),
-        ]);
+        let (mut banned, _) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
         let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
         let Some((tier, spot_x, spot_z)) = picked else {
             panic!("hop should find the next yew cluster, got None");
@@ -869,12 +881,10 @@ mod tests {
     /// the map; a still-dead spot re-bans on the next attempt.
     #[test]
     fn starved_tier_releases_oldest_ban() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.allow_wild = true;
+        let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-starved");
+        // Paid crossings on: this test proves the famine release, not
+        // the fence.
+        bot.allow_paid = true;
         let bank = lifescape_gamedata::banks::Bank {
             x: 3091,
             z: 3242,
@@ -913,42 +923,6 @@ mod tests {
         assert_eq!(banned.len(), before - 1, "one release per repick, got: {}", banned.len());
     }
 
-    /// Degrade only when the tier is genuinely unavailable everywhere:
-    /// every yew spawn banned except (2996,3311), which sits across
-    /// the fence — relocation crosses to it instead of settling for the
-    /// willow next door. The toll note still breaks unanimity (no ban
-    /// release), the pick just goes over the fence now.
-    #[test]
-    fn toll_stranded_relocates_instead_of_degrading() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.allow_wild = true;
-        bot.allow_paid = false;
-        bot.toll_gates.insert((3000, 3271, 0));
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "draynor".to_string(),
-            members: false,
-        };
-        let tiers = lifescape_gamedata::trees::all_tiers();
-        // Every yew spawn banned except (2996,3311), which sits across
-        // the fence: its note reads "toll", not "banned", so no release.
-        let (mut banned, wide) = ban_all_yews_except(&tiers, &[(2996, 3311)]);
-        let picked = pick_tree_spot(&mut bot, &tiers, &bank, 63, &mut banned, None, &mut HashMap::new(), &HashMap::new());
-        let Some((tier, spot_x, spot_z)) = picked else {
-            panic!("stranded bot should relocate across the fence, got None");
-        };
-        assert_eq!(tier.product, "yew_logs", "same tier across the fence, not willow, got: {}", tier.product);
-        assert_eq!((spot_x, spot_z), (2996, 3311), "nearest cross-fence yew, got: ({spot_x},{spot_z})");
-        assert_eq!(banned.len(), wide.len() - 1, "relocation instead of release, got: {}", banned.len());
-    }
-
     /// Strike rule: only a refusal from a footprint-operable stand counts
     /// toward condemning (a corner refusal is a bad stand, retried short).
     #[test]
@@ -985,22 +959,17 @@ mod tests {
 
     /// F2P filter: travel plans F2P-only, so an out-of-F2P spot is never a
     /// pick (live t01-4572: NoRoute OutsideF2p to a willow at (2906,3385)).
-    /// The same query without a wired world keeps returning the spot: no
-    /// world means no bounds, never silent filtering.
+    /// Verdicts come from one service batch per pool; a down service
+    /// drops the pool instead of guessing (the wait loop retries).
     #[test]
     fn f2p_filter_skips_outside_spots() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
-        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-        let data = root.join("LifeScape/gamedata/data");
-        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
-        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
-        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
-        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
-        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
-        world.set_f2p(zones);
-        assert!(!world.in_f2p(2862, 3385), "dossier spot is outside F2P");
-        assert!(!world.in_f2p(2906, 3385), "dossier leg dest is outside F2P");
-        assert!(world.in_f2p(3091, 3242), "Draynor bank booth is inside F2P");
+        let (mut bot, _service) = served_spot_bot(2862, 3384, "spot-f2p");
+        bot.allow_paid = true;
+        // The service verdicts match the old direct reads: the dossier
+        // tiles sit outside F2P, the Draynor bank booth inside.
+        assert_eq!(bot.in_f2p_batch(&[(2862, 3385, 0)]).expect("f2p answers"), vec![false], "dossier spot is outside F2P");
+        assert_eq!(bot.in_f2p_batch(&[(2906, 3385, 0)]).expect("f2p answers"), vec![false], "dossier leg dest is outside F2P");
+        assert_eq!(bot.in_f2p_batch(&[(3091, 3242, 0)]).expect("f2p answers"), vec![true], "Draynor bank booth is inside F2P");
         let bank = lifescape_gamedata::banks::Bank {
             x: 2860,
             z: 3380,
@@ -1011,8 +980,8 @@ mod tests {
         };
         let tiers = lifescape_gamedata::trees::all_tiers();
         // Every tree spawn in both pools (near-bank 150 and same-tier
-        // hop 200 around the bot) banned except the out-of-F2P one, so
-        // the unfiltered pick must land on it and the filtered pick must not.
+        // hop) banned except the out-of-F2P one: the pick must refuse
+        // it instead of walking into a guaranteed NoRoute dossier.
         // Tier-agnostic: the dossier tile's tier is whatever it is.
         let mut tree_names = std::collections::HashSet::new();
         for tier in &tiers {
@@ -1026,7 +995,7 @@ mod tests {
             if !tree_names.contains(&name) {
                 continue;
             }
-            for spawn in &entry.spawns {
+            for spawn in entry.spawns {
                 if spawn.level == 0 && (spawn.x - 2862).abs() + (spawn.z - 3384).abs() <= 200 {
                     let pos = (spawn.x as i32, spawn.z as i32);
                     if pos != (2862, 3385) {
@@ -1035,27 +1004,7 @@ mod tests {
                 }
             }
         }
-        let mut plain = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut plain);
-        plain.world.level = 0;
-        plain.world.x = 2862;
-        plain.world.z = 3384;
-        plain.allow_paid = true;
-        plain.allow_wild = true;
-        let picked = pick_tree_spot(&mut plain, &tiers, &bank, 30, &mut banned, None, &mut HashMap::new(), &HashMap::new());
-        let Some((_, spot_x, spot_z)) = picked else {
-            panic!("unfiltered pick should land on the only open spot, got None");
-        };
-        assert_eq!((spot_x, spot_z), (2862, 3385), "unfiltered pick lands on it, got: ({spot_x},{spot_z})");
-        let mut wired = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut wired);
-        wired.world.level = 0;
-        wired.world.x = 2862;
-        wired.world.z = 3384;
-        wired.allow_paid = true;
-        wired.allow_wild = true;
-        wired.nav_world = Some(world);
-        let filtered = pick_tree_spot(&mut wired, &tiers, &bank, 30, &mut banned, None, &mut HashMap::new(), &HashMap::new());
+        let filtered = pick_tree_spot(&mut bot, &tiers, &bank, 30, &mut banned, None, &mut HashMap::new(), &HashMap::new());
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
@@ -1116,12 +1065,10 @@ mod tests {
     /// skipped when available, and the downgrade is logged.
     #[test]
     fn except_dead_spot_degrades_one_tier() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3053;
-        bot.world.z = 3271;
-        bot.allow_wild = true;
+        let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-except");
+        // Paid crossings on: this test proves the dead-spot degrade, not
+        // the fence.
+        bot.allow_paid = true;
         let bank = lifescape_gamedata::banks::Bank {
             x: 3091,
             z: 3242,

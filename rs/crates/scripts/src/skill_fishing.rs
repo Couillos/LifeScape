@@ -61,7 +61,7 @@ fn pick_fish_spot(
         let mut cands: Vec<(i32, i32, i32)> = Vec::new();
         for npc_id in knowledge::fishing::spot_npc_ids(tier.category) {
             if let Some(entry) = knowledge::npc_by_id(npc_id) {
-                for spawn in &entry.spawns {
+                for spawn in entry.spawns {
                     cands.push((spawn.level as i32, spawn.x as i32, spawn.z as i32));
                 }
             }

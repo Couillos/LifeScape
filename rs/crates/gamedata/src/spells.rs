@@ -1,6 +1,20 @@
 //! Combat spells: level, runes, XP, max hit, interface component.
 
-use crate::{flag, num, opt_num, opt_str, str_int_map, table};
+/// One static combat spell (build-time data, mirrored into [`Spell`] per call).
+pub(crate) struct StaticSpell {
+    pub spell: &'static str,
+    pub name: Option<&'static str>,
+    pub com: Option<&'static str>,
+    pub members: bool,
+    pub level: i64,
+    pub runes: &'static [(&'static str, i64)],
+    pub xp: i64,
+    pub maxhit: Option<i64>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/spells_generated.rs"));
+}
 
 /// One combat spell.
 #[derive(Debug, Clone)]
@@ -15,21 +29,22 @@ pub struct Spell {
     pub maxhit: Option<i64>,
 }
 
+fn spell_from_static(row: &StaticSpell) -> Spell {
+    Spell {
+        spell: row.spell.to_string(),
+        name: row.name.map(str::to_string),
+        com: row.com.map(str::to_string),
+        members: row.members,
+        level: row.level,
+        runes: row.runes.iter().map(|(name, count)| ((*name).to_string(), *count)).collect(),
+        xp: row.xp,
+        maxhit: row.maxhit,
+    }
+}
+
 /// Every combat spell.
 pub fn all_spells() -> Vec<Spell> {
-    table("spells")
-        .iter()
-        .map(|row| Spell {
-            spell: opt_str(row, "spell").unwrap_or_default(),
-            name: opt_str(row, "name"),
-            com: opt_str(row, "com"),
-            members: flag(row, "members", false),
-            level: num(row, "level", 0),
-            runes: str_int_map(row, "runes"),
-            xp: num(row, "xp", 0),
-            maxhit: opt_num(row, "maxhit"),
-        })
-        .collect()
+    generated::ALL.iter().map(spell_from_static).collect()
 }
 
 /// Spells with this debugname (case-insensitive, leading `^` stripped).

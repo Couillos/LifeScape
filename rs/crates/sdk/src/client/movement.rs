@@ -5,6 +5,8 @@
 //! This module only sends steps and reports what stopped them, never
 //! plans, detours or retries.
 
+use lifescape_nav::plan::Tile;
+
 use crate::buffer::Writer;
 use crate::client::Bot;
 use crate::error::{Error, Result};
@@ -65,7 +67,10 @@ impl Bot {
             } else {
                 let (step_x, step_z) = leg[0];
                 let live = self.world.loc_at(step_x, step_z, self.world.level);
-                let flags = self.collision.get(step_x, step_z, self.world.level);
+                let flags = self
+                    .tile_flags_best_effort(&[(step_x, step_z, self.world.level)])
+                    .and_then(|rows| rows.into_iter().next())
+                    .map(|row| row.flags);
                 self.log(&Self::refused_line(leg, (start_x, start_z, start_level), live, flags));
             }
         }
@@ -75,28 +80,38 @@ impl Bot {
     /// One refusal line, pure so tests lock it: the first step tile carries
     /// the prime suspect (no progress means step one never succeeded), the
     /// live loc names a re-closed door and the flags a blocking wall.
-    pub(crate) fn refused_line(leg: &[(i32, i32)], start: (i32, i32, i32), live: Option<(u16, u8, u8)>, flags: u32) -> String {
+    /// `None` flags mean the static batch was down: the line keeps its
+    /// live half instead of inventing a wall.
+    pub(crate) fn refused_line(
+        leg: &[(i32, i32)],
+        start: (i32, i32, i32),
+        live: Option<(u16, u8, u8)>,
+        flags: Option<u32>,
+    ) -> String {
         let live_text = match live {
             Some((loc_id, shape, angle)) => format!("loc {loc_id} shape={shape} angle={angle}"),
             None => "none".to_string(),
         };
+        let flags_text = match flags {
+            Some(flags) => format!("{flags:#x}"),
+            None => "unknown".to_string(),
+        };
         format!(
-            "step refused: wanted {leg:?} from ({},{},{}) live={live_text} flags={flags:#x}",
+            "step refused: wanted {leg:?} from ({},{},{}) live={live_text} flags={flags_text}",
             start.0, start.1, start.2
         )
     }
 
-    /// First refusal wins: the scan walks the leg in order and names the
-    /// first live loc, known door or shut step. Entities never block
-    /// walking server-side (`canMove` ignores `NPC_OCC`/`PLAYER_OCC`),
-    /// so occupants are deliberately not reported. Pure diagnosis, no
-    /// movement.
-    pub(crate) fn suspect_tile(&self, leg: &[(i32, i32)], start: (i32, i32, i32)) -> Option<String> {
+    /// First refusal wins: the live scan names the first live loc or known
+    /// door in leg order (entities never count — the server walks through
+    /// NPCs and players), then one service batch covers the static
+    /// shut-step check on a scratch map (never the worker map, which stays
+    /// empty). `None` means clean or service down: the caller degrades to
+    /// its live-only line. Pure diagnosis, no movement.
+    pub(crate) fn suspect_tile(&mut self, leg: &[(i32, i32)], start: (i32, i32, i32)) -> Option<String> {
         let level = start.2;
-        let mut prev = (start.0, start.1);
         for (index, tile) in leg.iter().enumerate() {
             let (tile_x, tile_z) = *tile;
-            let (dx, dz) = (tile_x - prev.0, tile_z - prev.1);
             // Live ground decor (shape 22: soil, grass, rugs) never blocks
             // feet; reporting it cried wolf on every courtyard stall.
             if let Some((loc, shape, angle)) = self.world.loc_at(tile_x, tile_z, level) {
@@ -107,11 +122,24 @@ impl Bot {
             if self.doors.contains_key(&(tile_x, tile_z, level)) {
                 return Some(format!("step {index} known door at ({tile_x},{tile_z})"));
             }
+        }
+        let tiles: Vec<(i32, i32, i32)> = std::iter::once((start.0, start.1, level))
+            .chain(leg.iter().map(|(tile_x, tile_z)| (*tile_x, *tile_z, level)))
+            .collect();
+        let rows = self.tile_flags_best_effort(&tiles)?;
+        let mut scratch = crate::collision::CollisionMap::new();
+        for row in &rows {
+            scratch.set(row.tile.x, row.tile.z, row.tile.level, row.flags);
+        }
+        let mut prev = (start.0, start.1);
+        for (index, tile) in leg.iter().enumerate() {
+            let (tile_x, tile_z) = *tile;
+            let (dx, dz) = (tile_x - prev.0, tile_z - prev.1);
             if (dx == 0 || dz == 0)
-                && !crate::collision::step_open(&self.collision, prev.0, prev.1, level, dx, dz)
+                && !crate::collision::step_open(&scratch, prev.0, prev.1, level, dx, dz)
             {
-                let here = self.collision.get(prev.0, prev.1, level);
-                let there = self.collision.get(tile_x, tile_z, level);
+                let here = scratch.get(prev.0, prev.1, level);
+                let there = scratch.get(tile_x, tile_z, level);
                 return Some(format!("step {index} shut ({},{})->({tile_x},{tile_z}) flags={here:#x}/{there:#x}", prev.0, prev.1));
             }
             prev = (tile_x, tile_z);
@@ -172,9 +200,12 @@ impl Bot {
         }
     }
 
-    /// Diagnose one walk without walking it. Reads the static world,
-    /// the live delta around the target, and the planner verdict for
-    /// the same inputs travel_to would use — the plan is the diagnosis.
+    /// Diagnose one walk without walking it: the static half (flags,
+    /// template locs, plan or NoRoute for the same inputs `travel_to`
+    /// uses) comes from the service in one round trip, the live delta
+    /// around the target stays local. Options come from the service too
+    /// (same versioned `wants` as `travel_to`); without them the report
+    /// keeps its live half with the typed `nav-down`.
     pub fn debug_walk(&mut self, x: i32, z: i32, level: i32) -> DebugReport {
         let mut lines = vec![
             format!("from {:?} to ({x},{z},{level})", self.position()),
@@ -187,53 +218,32 @@ impl Bot {
         if level != self.world.level {
             lines.push(format!("different level (here {}): travel plans across levels", self.world.level));
         }
-        let (here_x, here_z) = (self.world.x, self.world.z);
-        self.ensure_area(here_x, here_z, 70);
-        self.ensure_area(x, z, 10);
-        let (here_flags, dest_flags, static_world) = match &self.nav_world {
-            Some(world) => (world.get(here_x, here_z, level), world.get(x, z, level), "yes"),
-            None => (self.collision.get(here_x, here_z, level), self.collision.get(x, z, level), "no"),
-        };
-        lines.push(format!("flags here={here_flags:#x} dest={dest_flags:#x} static={static_world}"));
-        let mut statics: Vec<(i32, i32, u16, String, u8, u8, String)> = Vec::new();
-        for ((lx, lz, ll), (id, shape, angle)) in &self.world.static_locs {
-            if *ll == level && (lx - x).abs() <= 2 && (lz - z).abs() <= 2 {
-                let name = (self.tables.loc_name)(*id).unwrap_or_else(|| format!("#{id}"));
-                let extra = self
-                    .nav_world
-                    .as_ref()
-                    .and_then(|world| world.loc_def(*id as usize))
-                    .map(|def| def.open_op.map(|op| format!("open{op}")).unwrap_or_else(|| "fixed".to_string()))
-                    .unwrap_or_else(|| "unknown-def".to_string());
-                statics.push((*lx, *lz, *id, name, *shape, *angle, extra));
-            }
-        }
-        statics.sort();
-        lines.push(format!("static locs within 2 of target: {}", statics.len()));
-        for (lx, lz, id, name, shape, angle, extra) in statics.iter().take(12) {
-            lines.push(format!("  loc {name} id={id} at ({lx},{lz}) shape={shape} angle={angle} [{extra}]"));
-        }
-        let mut locs: Vec<(i32, i32, u16, String, u8, u8)> = Vec::new();
-        for ((lx, lz, ll), value) in &self.world.locs {
-            if *ll == level && (lx - x).abs() <= 2 && (lz - z).abs() <= 2 {
-                if let Some((id, shape, angle)) = value {
-                    let name = (self.tables.loc_name)(*id)
-                        .unwrap_or_else(|| format!("#{id}"));
-                    locs.push((*lx, *lz, *id, name, *shape, *angle));
+        let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        let dest = Tile { x, z, level };
+        // Same options `travel_to` plans with: the served `wants` tags
+        // pinned by version (shared versioned cache). Without them the
+        // static half reports `nav-down` and only the live half follows.
+        match self.nav_options_remote() {
+            Ok(options) => match self.debug_snapshot(from, dest, &options) {
+                Ok(answer) => {
+                lines.push(format!("flags here={:#x} dest={:#x} static=yes", answer.flags_here, answer.flags_dest));
+                let mut statics: Vec<(i32, i32, u16, String, u8, u8, String)> = Vec::new();
+                for entry in &answer.locs {
+                    let name = (self.tables.loc_name)(entry.loc).unwrap_or_else(|| format!("#{}", entry.loc));
+                    let extra = answer
+                        .defs
+                        .iter()
+                        .find(|def| def.loc == entry.loc)
+                        .map(|def| def.open_op.map(|op| format!("open{op}")).unwrap_or_else(|| "fixed".to_string()))
+                        .unwrap_or_else(|| "unknown-def".to_string());
+                    statics.push((entry.x, entry.z, entry.loc, name, entry.shape, entry.angle, extra));
                 }
-            }
-        }
-        locs.sort();
-        lines.push(format!("live locs within 2 of target: {}", locs.len()));
-        for (lx, lz, id, name, shape, angle) in locs.iter().take(12) {
-            lines.push(format!("  loc {name} id={id} at ({lx},{lz}) shape={shape} angle={angle}"));
-        }
-        match (&self.nav_world, &self.nav_tables) {
-            (Some(world), Some(tables)) => {
-                let from = lifescape_nav::plan::Tile { x: here_x, z: here_z, level: self.world.level };
-                let dest = lifescape_nav::plan::Tile { x, z, level };
-                let options = self.nav_options(tables);
-                match lifescape_nav::plan::plan(world, tables, from, dest, &options) {
+                statics.sort();
+                lines.push(format!("static locs within 2 of target: {}", statics.len()));
+                for (lx, lz, id, name, shape, angle, extra) in statics.iter().take(12) {
+                    lines.push(format!("  loc {name} id={id} at ({lx},{lz}) shape={shape} angle={angle} [{extra}]"));
+                }
+                match answer.outcome {
                     Ok(plan) => {
                         lines.push(format!("reachable in {} segments cost {}", plan.segments.len(), plan.cost));
                         for seg in plan.segments.iter().take(12) {
@@ -257,9 +267,27 @@ impl Bot {
                     )),
                 }
             }
-            _ => lines.push("no static world (travel refuses without it)".to_string()),
+                Err(err) => lines.push(format!("static map unavailable: {err}")),
+            },
+            Err(err) => lines.push(format!("static map unavailable: {err}")),
+        }
+        let mut locs: Vec<(i32, i32, u16, String, u8, u8)> = Vec::new();
+        for ((lx, lz, ll), value) in &self.world.locs {
+            if *ll == level && (lx - x).abs() <= 2 && (lz - z).abs() <= 2 {
+                if let Some((id, shape, angle)) = value {
+                    let name = (self.tables.loc_name)(*id)
+                        .unwrap_or_else(|| format!("#{id}"));
+                    locs.push((*lx, *lz, *id, name, *shape, *angle));
+                }
+            }
+        }
+        locs.sort();
+        lines.push(format!("live locs within 2 of target: {}", locs.len()));
+        for (lx, lz, id, name, shape, angle) in locs.iter().take(12) {
+            lines.push(format!("  loc {name} id={id} at ({lx},{lz}) shape={shape} angle={angle}"));
         }
         let mut doors: Vec<(i32, (i32, i32, i32))> = Vec::new();
+        let (here_x, here_z) = (self.world.x, self.world.z);
         for tile in self.doors.keys() {
             if tile.2 != self.world.level {
                 continue;
@@ -298,36 +326,109 @@ impl Bot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::{self};
+    use crate::client::travel::test_nav_context;
+    use crate::collision;
+    use lifescape_nav::plan::Tile;
+    use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
 
     /// Refusal line format, locked offline: full chunk debug, start tile,
-    /// live loc on the first step (or none), collision flags of that tile.
+    /// live loc on the first step (or none), batch flags of that tile —
+    /// `unknown` when the batch was down, never an invented wall.
     #[test]
     fn refused_line_format_locked() {
-        let shut = Bot::refused_line(&[(3226, 3223), (3225, 3223)], (3226, 3222, 0), Some((1530, 0, 2)), collision::WALK_BLOCKED);
+        let shut = Bot::refused_line(&[(3226, 3223), (3225, 3223)], (3226, 3222, 0), Some((1530, 0, 2)), Some(collision::WALK_BLOCKED));
         assert_eq!(
             shut,
             "step refused: wanted [(3226, 3223), (3225, 3223)] from (3226,3222,0) live=loc 1530 shape=0 angle=2 flags=0x240100"
         );
-        let open = Bot::refused_line(&[(1, 0)], (0, 0, 0), None, collision::OPEN);
+        let open = Bot::refused_line(&[(1, 0)], (0, 0, 0), None, Some(collision::OPEN));
         assert_eq!(open, "step refused: wanted [(1, 0)] from (0,0,0) live=none flags=0x0");
+        let down = Bot::refused_line(&[(1, 0)], (0, 0, 0), None, None);
+        assert_eq!(down, "step refused: wanted [(1, 0)] from (0,0,0) live=none flags=unknown");
     }
 
-    /// Suspect scan, pure: a live loc on step 1 (not leg[0]) names step 1,
-    /// a clean leg finds nothing, and entities never count (the server
+    /// Suspect scan: the live pass names a live loc on step 1 (not leg[0])
+    /// with no service involved, and the walk tiles of a real plan read
+    /// clean through one service batch. Entities never count (the server
     /// walks through NPCs and players).
     #[test]
     fn suspect_tile_names_true_blocker_not_leg_zero() {
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "suspect".to_string()),
+            &test_socket("sdk-suspect"),
+            1,
+        )
+        .expect("service starts");
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "suspect"));
+        bot.plan_data_version = Some("suspect".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        // Live half, no service needed: step 1 carries the blocker.
         bot.world.level = 0;
         bot.world.x = 0;
         bot.world.z = 0;
-        for tile in [(0, 0), (1, 0), (2, 0), (1, 1), (0, 1)] {
-            bot.collision.set(tile.0, tile.1, 0, collision::OPEN);
-        }
-        assert!(bot.suspect_tile(&[(1, 0), (2, 0)], (0, 0, 0)).is_none(), "clean leg");
         bot.world.locs.insert((2, 0, 0), Some((99, 10, 0)));
         let found = bot.suspect_tile(&[(1, 0), (2, 0)], (0, 0, 0)).expect("live loc found");
         assert!(found.contains("step 1") && found.contains("live loc 99"), "got: {found}");
+        bot.world.locs.remove(&(2, 0, 0));
+        // Static half: tiles a real plan walks read clean, one batch.
+        bot.world.x = 3228;
+        bot.world.z = 3214;
+        let (_, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("door leg plans");
+        let leg: Vec<(i32, i32)> = plan
+            .segments
+            .iter()
+            .find_map(|segment| match segment {
+                lifescape_nav::plan::Segment::Walk { tiles } if !tiles.is_empty() => {
+                    Some(tiles.iter().map(|tile| (tile.x, tile.z)).collect())
+                }
+                _ => None,
+            })
+            .expect("door leg starts with a walk");
+        assert!(bot.suspect_tile(&leg, (3228, 3214, 0)).is_none(), "planned walk reads clean");
+    }
+
+    /// `debug_walk` plans through the service like `travel_to`: same
+    /// versioned `wants`, same static half (flags + plan in one trip),
+    /// with the live tail after it.
+    #[test]
+    fn debug_walk_served_matches_remote_plan() {
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "sdk-walk".to_string()),
+            &test_socket("sdk-walk"),
+            1,
+        )
+        .expect("service starts");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.x = 3228;
+        bot.world.z = 3214;
+        bot.world.level = 0;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "walk"));
+        bot.plan_data_version = Some("sdk-walk".to_string());
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        let report = bot.debug_walk(3224, 3214, 0);
+        let text = report.lines.join("\n");
+        assert!(text.contains("reachable in"), "door leg diagnoses reachable, got:\n{text}");
+        assert!(text.contains("static=yes"), "static half answered, got:\n{text}");
+        assert!(text.contains("live locs within 2"), "live tail follows, got:\n{text}");
+    }
+
+    /// `debug_walk` without a service keeps only its live half, with the
+    /// same typed `nav-down` as `plan_travel` — never a local plan.
+    #[test]
+    fn debug_walk_down_is_nav_down_not_a_world_refusal() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.x = 3228;
+        bot.world.z = 3214;
+        bot.world.level = 0;
+        let report = bot.debug_walk(3224, 3214, 0);
+        let text = report.lines.join("\n");
+        assert!(text.contains("nav-down"), "typed failure, got:\n{text}");
+        assert!(text.contains("live locs within 2"), "live half still reported, got:\n{text}");
+        assert!(!text.contains("static=yes"), "no static half without the service, got:\n{text}");
     }
 }

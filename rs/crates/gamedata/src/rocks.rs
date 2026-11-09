@@ -1,7 +1,19 @@
 //! Mining table: rock loc names, level reqs, ore products, XP
 //! (XP is raw tenths).
 
-use crate::{num, opt_flag, opt_str, str_list, table};
+/// One static mining tier (build-time data, mirrored into [`RockTier`] per call).
+pub(crate) struct StaticRockTier {
+    pub rocks: &'static [&'static str],
+    pub level: i64,
+    pub product: &'static str,
+    pub exp: i64,
+    pub ore_name: &'static str,
+    pub product_members: Option<bool>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/rocks_generated.rs"));
+}
 
 /// One mining tier.
 #[derive(Debug, Clone)]
@@ -14,20 +26,20 @@ pub struct RockTier {
     pub product_members: Option<bool>,
 }
 
+fn tier_from_static(row: &StaticRockTier) -> RockTier {
+    RockTier {
+        rocks: row.rocks.iter().map(|entry| (*entry).to_string()).collect(),
+        level: row.level,
+        product: row.product.to_string(),
+        exp: row.exp,
+        ore_name: row.ore_name.to_string(),
+        product_members: row.product_members,
+    }
+}
+
 /// Every rock tier.
 pub fn all_rock_tiers() -> Vec<RockTier> {
-    table("rocks")
-        .iter()
-        .filter(|row| !row.is_null())
-        .map(|row| RockTier {
-            rocks: str_list(row, "rocks"),
-            level: num(row, "level", 0),
-            product: opt_str(row, "product").unwrap_or_default(),
-            exp: num(row, "exp", 0),
-            ore_name: opt_str(row, "ore_name").unwrap_or_default(),
-            product_members: opt_flag(row, "product_members"),
-        })
-        .collect()
+    generated::ALL.iter().map(tier_from_static).collect()
 }
 
 /// Highest tier whose level requirement is reached, or None.

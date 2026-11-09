@@ -196,6 +196,7 @@ pub fn map_cli(args: &[String]) -> i32 {
             for ((lx, lz, level), (id, shape, angle)) in rows.into_iter().take(40) {
                 let name = lifescape_gamedata::loc_by_id(*id as usize)
                     .and_then(|entry| entry.name)
+                    .map(str::to_string)
                     .unwrap_or_else(|| format!("#{id}"));
                 println!("{name} id={id} at ({lx},{lz},{level}) shape={shape} angle={angle}");
             }

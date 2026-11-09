@@ -57,8 +57,9 @@ pub fn worn_count(bot: &Bot, obj: u16) -> u32 {
 }
 
 /// Nearest loc whose debugname contains one of `names`, on this level and
-/// within `radius` tiles. Pumps briefly first: freshly streamed areas take
-/// a few ticks to arrive.
+/// within `radius` tiles. Static locs come from one service batch around
+/// the bot; the pump loop only waits for the live stream. A down service
+/// fails loud with `nav-down`, never a local guess.
 pub fn find_loc(bot: &mut Bot, names: &[&str], radius: i32) -> Result<(i32, i32, i32, u16), ScriptError> {
     let from = (bot.world.x, bot.world.z);
     find_loc_from(bot, names, radius, from)
@@ -70,26 +71,38 @@ pub fn find_loc(bot: &mut Bot, names: &[&str], radius: i32) -> Result<(i32, i32,
 pub fn find_loc_from(bot: &mut Bot, names: &[&str], radius: i32, from: (i32, i32)) -> Result<(i32, i32, i32, u16), ScriptError> {
     let wants: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
     let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.ensure_area(here_x, here_z, radius);
+    let level = bot.world.level;
+    // One static batch up front (static data never moves under the pump
+    // loop); the loop below only waits for the live stream. A down
+    // service fails loud here with `nav-down`, never a local guess.
+    let static_rows = bot.static_locs_near(here_x, here_z, level, radius)?;
+    let matches =
+        |x: i32, z: i32, tile_level: i32, loc: u16, best: &mut Option<(i32, i32, i32, i32, u16)>| {
+            if tile_level != level {
+                return;
+            }
+            let dist = (x - from.0).abs() + (z - from.1).abs();
+            if dist > radius {
+                return;
+            }
+            let label =
+                gamedata::loc_by_id(loc as usize).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
+            if !wants.iter().any(|want| label.contains(want)) {
+                return;
+            }
+            if best.is_none_or(|known| dist < known.0) {
+                *best = Some((dist, x, z, tile_level, loc));
+            }
+        };
     let target = bot.world.ticks + 20;
     loop {
         let mut best: Option<(i32, i32, i32, i32, u16)> = None;
-        for (tile, loc) in bot.world.static_locs.iter().map(|(tile, loc)| (*tile, Some(*loc))).chain(bot.world.locs.iter().map(|(tile, loc)| (*tile, *loc))) {
+        for row in &static_rows {
+            matches(row.x, row.z, row.level, row.loc, &mut best);
+        }
+        for (tile, loc) in &bot.world.locs {
             let Some((loc_id, _, _)) = loc else { continue };
-            if tile.2 != bot.world.level {
-                continue;
-            }
-            let dist = (tile.0 - from.0).abs() + (tile.1 - from.1).abs();
-            if dist > radius {
-                continue;
-            }
-            let label = gamedata::loc_by_id(loc_id as usize).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
-            if !wants.iter().any(|want| label.contains(want)) {
-                continue;
-            }
-            if best.is_none_or(|known| dist < known.0) {
-                best = Some((dist, tile.0, tile.1, tile.2, loc_id));
-            }
+            matches(tile.0, tile.1, tile.2, *loc_id, &mut best);
         }
         if let Some((_, x, z, level, loc)) = best {
             return Ok((x, z, level, loc));

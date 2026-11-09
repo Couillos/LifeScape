@@ -1,7 +1,18 @@
 //! Woodcutting table: tree loc names, level reqs, log products, XP
 //! (XP is raw tenths).
 
-use crate::{num, opt_flag, opt_str, str_list, table};
+/// One static woodcutting tier (build-time data, mirrored into [`TreeTier`] per call).
+pub(crate) struct StaticTreeTier {
+    pub trees: &'static [&'static str],
+    pub level: i64,
+    pub product: &'static str,
+    pub exp: i64,
+    pub product_members: Option<bool>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/trees_generated.rs"));
+}
 
 /// One woodcutting tier. `product_members` is the product obj flag:
 /// tree locs themselves carry no server members flag.
@@ -14,19 +25,19 @@ pub struct TreeTier {
     pub product_members: Option<bool>,
 }
 
+fn tier_from_static(row: &StaticTreeTier) -> TreeTier {
+    TreeTier {
+        trees: row.trees.iter().map(|entry| (*entry).to_string()).collect(),
+        level: row.level,
+        product: row.product.to_string(),
+        exp: row.exp,
+        product_members: row.product_members,
+    }
+}
+
 /// Every tree tier.
 pub fn all_tiers() -> Vec<TreeTier> {
-    table("trees")
-        .iter()
-        .filter(|row| !row.is_null())
-        .map(|row| TreeTier {
-            trees: str_list(row, "trees"),
-            level: num(row, "level", 0),
-            product: opt_str(row, "product").unwrap_or_default(),
-            exp: num(row, "exp", 0),
-            product_members: opt_flag(row, "product_members"),
-        })
-        .collect()
+    generated::ALL.iter().map(tier_from_static).collect()
 }
 
 /// Highest F2P tier whose level requirement is reached, or None.

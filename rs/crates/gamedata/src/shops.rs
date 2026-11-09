@@ -1,6 +1,34 @@
 //! Shops: stock, restock rates, and keeper NPCs.
 
-use crate::{Json, num, opt_num, opt_str, table_value};
+/// One static stock row (build-time data).
+pub(crate) struct StaticStock {
+    pub obj: &'static str,
+    pub count: i64,
+    pub rate: i64,
+}
+
+/// One static shop row (build-time data, keepers joined per call).
+pub(crate) struct StaticShop {
+    pub name: &'static str,
+    pub scope: Option<&'static str>,
+    pub size: i64,
+    pub restock: bool,
+    pub stocks: &'static [StaticStock],
+}
+
+/// One static keeper row (build-time data).
+pub(crate) struct StaticKeeper {
+    pub npc: &'static str,
+    pub npc_id: i64,
+    pub shop: &'static str,
+    pub sell: Option<i64>,
+    pub buy: Option<i64>,
+    pub title: Option<&'static str>,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/shops_generated.rs"));
+}
 
 /// One stocked item.
 #[derive(Debug, Clone)]
@@ -33,82 +61,34 @@ pub struct Shop {
     pub members: Option<bool>,
 }
 
-fn keeper_from_row(row: &Json) -> Keeper {
+fn keeper_from_static(row: &StaticKeeper) -> Keeper {
     Keeper {
-        npc: opt_str(row, "npc").unwrap_or_default(),
-        npc_id: num(row, "npc_id", -1),
-        shop: opt_str(row, "shop").unwrap_or_default(),
-        sell_multiplier: opt_num(row, "sell_multiplier"),
-        buy_multiplier: opt_num(row, "buy_multiplier"),
-        title: opt_str(row, "title"),
-    }
-}
-
-fn int_or_string(row: &Json, key: &str) -> i64 {
-    match row.get(key) {
-        Json::Int(value) => *value,
-        Json::Float(value) => *value as i64,
-        Json::Str(text) => text.parse::<i64>().unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn shop_rows() -> (Vec<Json>, Vec<Json>) {
-    match table_value("shops") {
-        Some(Json::Obj(fields)) => {
-            let shops = fields
-                .iter()
-                .find(|(name, _)| name.as_str() == "shops")
-                .and_then(|(_, value)| match value {
-                    Json::Arr(rows) => Some(rows.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let keepers = fields
-                .iter()
-                .find(|(name, _)| name.as_str() == "keepers")
-                .and_then(|(_, value)| match value {
-                    Json::Arr(rows) => Some(rows.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            (shops, keepers)
-        }
-        _ => (Vec::new(), Vec::new()),
+        npc: row.npc.to_string(),
+        npc_id: row.npc_id,
+        shop: row.shop.to_string(),
+        sell_multiplier: row.sell,
+        buy_multiplier: row.buy,
+        title: row.title.map(str::to_string),
     }
 }
 
 /// Every shop, each with its keepers attached.
 pub fn all_shops() -> Vec<Shop> {
-    let (shops, keepers) = shop_rows();
-    shops
+    generated::SHOPS
         .iter()
         .map(|row| {
-            let name = opt_str(row, "name").unwrap_or_default();
-            let stocks = match row.get("stocks") {
-                Json::Arr(items) => items
-                    .iter()
-                    .map(|item| Stock {
-                        obj: opt_str(item, "obj").unwrap_or_default(),
-                        count: num(item, "count", 1),
-                        rate: num(item, "rate", 0),
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let mine: Vec<Keeper> = keepers
-                .iter()
-                .filter(|keeper| keeper.get("shop").as_str() == Some(name.as_str()))
-                .map(keeper_from_row)
-                .collect();
+            let mine: Vec<Keeper> =
+                generated::KEEPERS.iter().filter(|keeper| keeper.shop == row.name).map(keeper_from_static).collect();
             Shop {
-                name,
-                scope: opt_str(row, "scope"),
-                size: int_or_string(row, "size"),
-                restock: row.get("restock").as_str().is_some_and(|text| {
-                    matches!(text.to_lowercase().as_str(), "yes" | "true" | "1")
-                }),
-                stocks,
+                name: row.name.to_string(),
+                scope: row.scope.map(str::to_string),
+                size: row.size,
+                restock: row.restock,
+                stocks: row
+                    .stocks
+                    .iter()
+                    .map(|item| Stock { obj: item.obj.to_string(), count: item.count, rate: item.rate })
+                    .collect(),
                 keepers: mine,
                 // No server flag fills this in: it stays empty.
                 members: None,
@@ -126,11 +106,10 @@ pub fn by_name(name: &str) -> Vec<Shop> {
 /// Raw keeper rows for one NPC debugname (case-insensitive).
 pub fn keeper_for_npc(npc_name: &str) -> Vec<Keeper> {
     let wanted = npc_name.to_lowercase();
-    let (_, keepers) = shop_rows();
-    keepers
+    generated::KEEPERS
         .iter()
-        .filter(|keeper| keeper.get("npc").as_str().is_some_and(|npc| npc.to_lowercase() == wanted))
-        .map(keeper_from_row)
+        .filter(|keeper| keeper.npc.to_lowercase() == wanted)
+        .map(keeper_from_static)
         .collect()
 }
 

@@ -691,68 +691,20 @@ pub fn run_session(account: &str) -> i32 {
             }
         }
     }
-    // Static maps load after login: Bot::login resets the world, so any
-    // earlier load would be wiped.
-    // Map index only (fast): squares paint on demand as the bot moves.
-    // Loaded before login so the ready snapshot already covers spawn.
-    match crate::staticmap::build_pack(&engine) {
-        Ok(pack) => {
-            let squares = pack.square_count();
-            shared.bot.lock().unwrap().maps = Some(pack);
-            shared.log(&format!("map index ready: {squares} squares"));
-        }
-        Err(error) => shared.log(&format!("static locs missing ({error}); live locs and straight legs only")),
-    }
-    match crate::staticmap::load_transitions() {
-        Ok(rows) => {
-            let count = rows.len();
-            shared.bot.lock().unwrap().transitions = rows;
-            shared.log(&format!("transitions loaded: {count}"));
-        }
-        Err(error) => shared.log(&format!("transitions missing ({error}); ladders by nearest loc only")),
-    }
-    // Planner world and tables for travel_to: static collision plus the
-    // transition dump, verdicts and door rules. Missing pieces fail loud
-    // at travel time, never silently.
+    // Workers carry no map: navigation is 100 % service-side. The daemon
+    // holds the single snapshot; the worker only wires the plan handle
+    // and pins the snapshot version. A down or stale service fails loud
+    // at travel time (`nav-down`), never with a local plan.
     {
         let mut bot = shared.bot.lock().unwrap();
         let data_dir = crate::paths::root().join("gamedata").join("data");
         let engine_path = std::path::Path::new(&engine);
         let zip = engine_path.join("data").join("pack").join(".cache").join("maps-server.zip");
-        match crate::staticmap::load_loctypes(&data_dir.join("gametypes.json")) {
-            Ok(defs) => match lifescape_nav::static_world::StaticWorld::open(&zip, defs) {
-                Ok(world) => {
-                    let content = engine_path.join("../content");
-                    match lifescape_nav::f2p::load_zones(&content.join("maps").join("free2play.csv")) {
-                        Ok(zones) => world.set_f2p(zones),
-                        Err(error) => shared.log(&format!("f2p bounds missing ({error}); travel plans everywhere")),
-                    }
-                    bot.nav_world = Some(world);
-                    shared.log("static world ready for travel_to");
-                }
-                Err(error) => shared.log(&format!("static world missing ({error}); travel_to refuses")),
-            },
-            Err(error) => shared.log(&format!("loctypes missing ({error}); travel_to refuses")),
-        }
-        match lifescape_nav::tables::Tables::load(&data_dir) {
-            Ok(tables) => {
-                shared.log(&format!("planner tables ready: {} transitions", tables.transitions.len()));
-                if let Some(world) = bot.nav_world.as_ref() {
-                    world.set_sky_floors(tables.sky_floors.clone());
-                }
-                bot.nav_tables = Some(Arc::new(tables));
-            }
-            Err(error) => shared.log(&format!("planner tables missing ({error}); travel_to refuses")),
-        }
-        // Lot 2 service handle: lazy (connects per submit), so wiring it
-        // never fails the open; a down service falls back sync, logged.
-        {
-            let zip = engine_path.join("data").join("pack").join(".cache").join("maps-server.zip");
-            let f2p = engine_path.join("../content").join("maps").join("free2play.csv");
-            bot.plan_client =
-                Some(lifescape_nav::service::PlanClient::new(&crate::plan_service::socket_path(), account));
-            bot.plan_data_version = Some(crate::plan_service::version_for(&data_dir, &zip, &f2p));
-        }
+        let f2p = engine_path.join("../content").join("maps").join("free2play.csv");
+        bot.plan_client =
+            Some(lifescape_nav::service::PlanClient::new(&crate::plan_service::socket_path(), account));
+        bot.plan_data_version = Some(crate::plan_service::version_for(&data_dir, &zip, &f2p));
+        shared.log("plan service wired, no local map");
     }
     shared.inner.lock().unwrap().status = "idle".to_string();
     write_heartbeat(&shared);

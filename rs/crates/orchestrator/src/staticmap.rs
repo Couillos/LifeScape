@@ -29,51 +29,6 @@ pub(crate) fn load_loctypes(gametypes_path: &Path) -> Result<Vec<Option<LocDef>>
     loctypes::parse_loctypes(&text, &overrides_text)
 }
 
-/// Transition rows for stair/ladder rides (`gamedata/data/transitions.json`).
-/// Parsed once per session; the file is small and static.
-pub fn load_transitions() -> Result<Vec<lifescape_sdk::TransitionRow>, String> {
-    let path = paths::root().join("gamedata").join("data").join("transitions.json");
-    let text = std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
-    let rows = parsed.as_arr().ok_or_else(|| format!("{} is not an array", path.display()))?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let triple = |key: &str| -> Option<(i32, i32, i32)> {
-            let items = row.get(key).as_arr()?;
-            if items.len() != 3 {
-                return None;
-            }
-            Some((items[0].as_i64()? as i32, items[1].as_i64()? as i32, items[2].as_i64()? as i32))
-        };
-        let (Some(from_tile), Some(to_tile)) = (triple("from"), triple("to")) else {
-            continue;
-        };
-        let footprint: Vec<(i32, i32)> = row
-            .get("footprint")
-            .as_arr()
-            .map(|tiles| {
-                tiles
-                    .iter()
-                    .filter_map(|tile| {
-                        let pair = tile.as_arr()?;
-                        Some((pair.first()?.as_i64()? as i32, pair.get(1)?.as_i64()? as i32))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        out.push(lifescape_sdk::TransitionRow {
-            name: row.get("name").as_str().unwrap_or("").to_string(),
-            from_tile,
-            to_tile,
-            loc: row.get("climb_loc").as_i64().unwrap_or(0) as u16,
-            op: row.get("climb_op").as_i64().unwrap_or(1) as u8,
-            footprint,
-            disabled: row.get("disabled").as_bool().unwrap_or(false),
-        });
-    }
-    Ok(out)
-}
-
 /// Build the pack index (zip spans plus loc defs) without painting any
 /// square: fast enough to run on every session open. Squares paint on
 /// demand through `Bot::ensure_area`.

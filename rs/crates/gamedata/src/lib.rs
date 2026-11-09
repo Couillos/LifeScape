@@ -4,9 +4,6 @@
 //! the row index *is* the id). This crate ships a small
 //! std-only JSON reader so the workspace stays dependency-free.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 pub mod banks;
 pub mod combat_spots;
 pub mod equipment;
@@ -21,6 +18,15 @@ pub mod spawns;
 pub mod spells;
 pub mod trees;
 pub mod varps;
+
+// ---------------------------------------------------------------------------
+// Generated tables (one module per dump, emitted by build.rs into OUT_DIR)
+// ---------------------------------------------------------------------------
+
+include!(concat!(env!("OUT_DIR"), "/comps_generated.rs"));
+include!(concat!(env!("OUT_DIR"), "/objs_generated.rs"));
+include!(concat!(env!("OUT_DIR"), "/npcs_generated.rs"));
+include!(concat!(env!("OUT_DIR"), "/locs_generated.rs"));
 
 // ---------------------------------------------------------------------------
 // Mini JSON reader (std-only)
@@ -43,154 +49,18 @@ impl std::error::Error for JsonError {}
 
 
 // ---------------------------------------------------------------------------
-// Shared row helpers (std-only, no allocation beyond the result)
-// ---------------------------------------------------------------------------
-
-/// Optional string field, owned.
-pub(crate) fn opt_str(row: &Json, key: &str) -> Option<String> {
-    row.get(key).as_str().map(str::to_string)
-}
-
-/// Integer field with a default when missing.
-pub(crate) fn num(row: &Json, key: &str, default: i64) -> i64 {
-    row.get(key).as_i64().unwrap_or(default)
-}
-
-/// Nullable integer field.
-pub(crate) fn opt_num(row: &Json, key: &str) -> Option<i64> {
-    row.get(key).as_i64()
-}
-
-/// Boolean field with a default when missing.
-pub(crate) fn flag(row: &Json, key: &str, default: bool) -> bool {
-    row.get(key).as_bool().unwrap_or(default)
-}
-
-/// Nullable boolean field (single `members` flag, never invented).
-pub(crate) fn opt_flag(row: &Json, key: &str) -> Option<bool> {
-    row.get(key).as_bool()
-}
-
-/// List-of-strings field, skipping nulls.
-pub(crate) fn str_list(row: &Json, key: &str) -> Vec<String> {
-    match row.get(key) {
-        Json::Arr(items) => items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// String->int map field (runes, bonuses, requirements, inputs...).
-pub(crate) fn str_int_map(row: &Json, key: &str) -> Vec<(String, i64)> {
-    match row.get(key) {
-        Json::Obj(fields) => fields
-            .iter()
-            .filter_map(|(name, value)| value.as_i64().map(|number| (name.clone(), number)))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Table loading
-// ---------------------------------------------------------------------------
-
-fn data_dir() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("LIFESCAPE_GAMEDATA") {
-        return std::path::PathBuf::from(dir);
-    }
-    // Walk up from the binary and from the working directory: the first
-    // gamedata/data holding objs.json wins (workspace, crate or install).
-    let mut starts = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        starts.push(exe);
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        starts.push(cwd);
-    }
-    for start in starts {
-        let mut dir = start.as_path();
-        for _ in 0..10 {
-            let candidate = dir.join("gamedata").join("data");
-            if candidate.join("objs.json").exists() {
-                return candidate;
-            }
-            match dir.parent() {
-                Some(parent) => dir = parent,
-                None => break,
-            }
-        }
-    }
-    // Last resort: the historical relative layout.
-    std::path::PathBuf::from("gamedata/data")
-}
-
-fn load_value(name: &str) -> Result<Json, JsonError> {
-    let path = data_dir().join(format!("{name}.json"));
-    let text = std::fs::read_to_string(&path).map_err(|err| JsonError(format!("cannot read {}: {err}", path.display())))?;
-    lifescape_json::parse(&text).map_err(|err| JsonError(format!("cannot parse {}: {err}", path.display())))
-}
-
-/// Every dump table, parsed once and shared. Arrays and objects alike:
-/// use `table` for id-indexed arrays, match on the value for dicts.
-pub fn table_value(name: &str) -> Option<&'static Json> {
-    static CACHE: OnceLock<HashMap<String, Json>> = OnceLock::new();
-    const KNOWN: &[&str] = &[
-        "objs", "npcs", "locs", "comps", "varps", "shops", "equipment", "foods", "recipes", "rocks", "spells",
-        "trees", "quests", "spawns_obj",
-    ];
-    CACHE
-        .get_or_init(|| {
-            let mut maps = HashMap::new();
-            for known in KNOWN {
-                if let Ok(value) = load_value(known) {
-                    maps.insert((*known).to_string(), value);
-                }
-            }
-            maps
-        })
-        .get(name)
-}
-
-/// Load (and cache) one array table by name. Rows are indexed by id;
-/// unknown tables and non-arrays yield an empty slice.
-pub fn table(name: &str) -> &'static [Json] {
-    match table_value(name) {
-        Some(Json::Arr(rows)) => rows,
-        _ => &[],
-    }
-}
-
-fn row_name(row: &Json) -> Option<String> {
-    row.get("name").as_str().map(str::to_string)
-}
-
-fn row_ops(row: &Json, key: &str) -> Vec<Option<String>> {
-    match row.get(key) {
-        Json::Arr(items) => items
-            .iter()
-            .map(|item| match item {
-                Json::Null => None,
-                Json::Str(text) => Some(text.clone()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Typed rows: objs / npcs / locs
+// Typed rows: objs / npcs / locs (build-time statics, zero retained heap)
 // ---------------------------------------------------------------------------
 
 /// Game object (id plus optional debug name).
 #[derive(Debug, Clone)]
 pub struct Obj {
     pub obj_id: usize,
-    pub name: Option<String>,
-    pub display: Option<String>,
-    pub desc: Option<String>,
-    pub ops: Vec<Option<String>>,
-    pub inv_ops: Vec<Option<String>>,
+    pub name: Option<&'static str>,
+    pub display: Option<&'static str>,
+    pub desc: Option<&'static str>,
+    pub ops: &'static [Option<&'static str>],
+    pub inv_ops: &'static [Option<&'static str>],
     pub price: i64,
     pub alch_high: i64,
     pub alch_low: i64,
@@ -199,88 +69,48 @@ pub struct Obj {
     pub respawn_ticks: i64,
 }
 
-fn obj_from_row(obj_id: usize, row: &Json) -> Obj {
-    if row.is_null() {
-        return Obj {
-            obj_id,
-            name: None,
-            display: None,
-            desc: None,
-            ops: Vec::new(),
-            inv_ops: Vec::new(),
-            price: 0,
-            alch_high: 0,
-            alch_low: 0,
-            stackable: false,
-            members: None,
-            respawn_ticks: 100,
-        };
-    }
-    Obj {
-        obj_id,
-        name: row_name(row),
-        display: row.get("display").as_str().map(str::to_string).or_else(|| row_name(row)),
-        desc: row.get("desc").as_str().map(str::to_string),
-        ops: row_ops(row, "ops"),
-        inv_ops: row_ops(row, "iops"),
-        price: row.get("price").as_i64().unwrap_or(0),
-        alch_high: row.get("alch_high").as_i64().unwrap_or(0),
-        alch_low: row.get("alch_low").as_i64().unwrap_or(0),
-        stackable: row.get("stackable").as_bool().unwrap_or(false),
-        members: row.get("members").as_bool(),
-        respawn_ticks: row.get("respawn_ticks").as_i64().unwrap_or(100),
-    }
+/// All objects, indexed by id (build-time static, no allocation).
+pub fn all_objs() -> &'static [Obj] {
+    objs::ALL
 }
 
-/// All objects, indexed by id.
-pub fn all_objs() -> Vec<Obj> {
-    table("objs").iter().enumerate().map(|(id, row)| obj_from_row(id, row)).collect()
-}
-
-/// Lowercased debug-name → ids, built once. By-name lookups stay O(1):
-/// gear planning resolves hundreds of names per spot, and rebuilding
-/// the whole obj table per lookup starves the session silent past the
-/// server's 100-tick reap (~11 s observed on the woodcut goblin hunt).
-static OBJ_BY_NAME: OnceLock<HashMap<String, Vec<usize>>> = OnceLock::new();
-
-fn obj_name_index() -> &'static HashMap<String, Vec<usize>> {
-    OBJ_BY_NAME.get_or_init(|| {
-        let mut index: HashMap<String, Vec<usize>> = HashMap::new();
-        for (id, row) in table("objs").iter().enumerate() {
-            if let Json::Str(name) = row.get("name") {
-                index.entry(name.to_lowercase()).or_default().push(id);
-            }
-        }
-        index
-    })
+/// Lowercase exact-name ids in one sorted index: `partition_point` brackets
+/// every same-name row, so all matches come back in dump order exactly like
+/// the old linear scan (no duplicates in today's dumps).
+fn ids_by_exact_name(index: &[(&str, usize)], name: &str) -> Vec<usize> {
+    let wanted = name.to_lowercase();
+    let start = index.partition_point(|entry| entry.0 < wanted.as_str());
+    let mut end = start;
+    while end < index.len() && index[end].0 == wanted.as_str() {
+        end += 1;
+    }
+    index[start..end].iter().map(|entry| entry.1).collect()
 }
 
 /// Object by id, or None when out of range.
-pub fn obj_by_id(obj_id: usize) -> Option<Obj> {
-    table("objs").get(obj_id).map(|row| obj_from_row(obj_id, row))
+pub fn obj_by_id(obj_id: usize) -> Option<&'static Obj> {
+    objs::ALL.get(obj_id)
 }
 
 /// Display name as the game shows it ("Air rune"), not the debug name.
-pub fn obj_display_name(obj_id: usize) -> Option<String> {
+pub fn obj_display_name(obj_id: usize) -> Option<&'static str> {
     obj_by_id(obj_id).and_then(|entry| entry.display.or(entry.name))
 }
 
 /// Exact (case-insensitive) name match.
-pub fn objs_by_name(name: &str) -> Vec<Obj> {
-    let wanted = name.to_lowercase();
-    obj_name_index().get(&wanted).map(|ids| ids.iter().filter_map(|id| obj_by_id(*id)).collect()).unwrap_or_default()
+pub fn objs_by_name(name: &str) -> Vec<&'static Obj> {
+    ids_by_exact_name(objs::BY_NAME, name)
+        .into_iter()
+        .filter_map(|id| objs::ALL.get(id))
+        .collect()
 }
 
 /// Substring (case-insensitive) name search.
-pub fn objs_search(fragment: &str) -> Vec<Obj> {
+pub fn objs_search(fragment: &str) -> Vec<&'static Obj> {
     let wanted = fragment.to_lowercase();
-    table("objs")
+    objs::ALL
         .iter()
-        .enumerate()
-        .filter_map(|(id, row)| match row.get("name") {
-            Json::Str(name) if name.to_lowercase().contains(&wanted) => obj_by_id(id),
-            _ => None,
-        })
+        .filter(|entry| entry.name.is_some_and(|name| name.to_lowercase().contains(wanted.as_str())))
         .collect()
 }
 
@@ -290,71 +120,47 @@ pub struct NpcSpawn {
     pub x: i64,
     pub z: i64,
     pub level: i64,
+    pub members: bool,
 }
 
 /// Non-player character (debug name, combat stats, spawn table).
 #[derive(Debug, Clone)]
 pub struct Npc {
     pub npc_id: usize,
-    pub name: Option<String>,
+    pub name: Option<&'static str>,
     pub size: i64,
-    pub ops: Vec<Option<String>>,
+    pub ops: &'static [Option<&'static str>],
     pub members: Option<bool>,
     pub hunts_players: bool,
     pub huntrange: i64,
     pub vislevel: i64,
-    pub spawns: Vec<NpcSpawn>,
+    pub spawns: &'static [NpcSpawn],
 }
 
-fn npc_from_row(npc_id: usize, row: &Json) -> Npc {
-    if row.is_null() {
-        return Npc { npc_id, name: None, size: 1, ops: Vec::new(), members: None, hunts_players: false, huntrange: 0, vislevel: 0, spawns: Vec::new() };
-    }
-    let mut spawns = Vec::new();
-    if let Json::Arr(items) = row.get("spawns") {
-        for item in items {
-            if let (Some(x), Some(z), Some(level)) =
-                (item.get("x").as_i64(), item.get("z").as_i64(), item.get("level").as_i64())
-            {
-                spawns.push(NpcSpawn { x, z, level });
-            }
-        }
-    }
-    Npc {
-        npc_id,
-        name: row_name(row),
-        size: row.get("size").as_i64().unwrap_or(1),
-        ops: row_ops(row, "ops"),
-        members: row.get("members").as_bool(),
-        hunts_players: row.get("hunts_players").as_bool().unwrap_or(false),
-        huntrange: row.get("huntrange").as_i64().unwrap_or(0),
-        vislevel: row.get("vislevel").as_i64().unwrap_or(0),
-        spawns,
-    }
-}
-
-/// All NPCs, indexed by id.
-pub fn all_npcs() -> Vec<Npc> {
-    table("npcs").iter().enumerate().map(|(id, row)| npc_from_row(id, row)).collect()
+/// All NPCs, indexed by id (build-time static, no allocation).
+pub fn all_npcs() -> &'static [Npc] {
+    npcs::ALL
 }
 
 /// NPC by id, or None when out of range.
-pub fn npc_by_id(npc_id: usize) -> Option<Npc> {
-    table("npcs").get(npc_id).map(|row| npc_from_row(npc_id, row))
+pub fn npc_by_id(npc_id: usize) -> Option<&'static Npc> {
+    npcs::ALL.get(npc_id)
 }
 
 /// Exact (case-insensitive) name match.
-pub fn npcs_by_name(name: &str) -> Vec<Npc> {
-    let wanted = name.to_lowercase();
-    all_npcs().into_iter().filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase() == wanted).collect()
+pub fn npcs_by_name(name: &str) -> Vec<&'static Npc> {
+    ids_by_exact_name(npcs::BY_NAME, name)
+        .into_iter()
+        .filter_map(|id| npcs::ALL.get(id))
+        .collect()
 }
 
 /// Substring (case-insensitive) name search.
-pub fn npcs_search(fragment: &str) -> Vec<Npc> {
+pub fn npcs_search(fragment: &str) -> Vec<&'static Npc> {
     let wanted = fragment.to_lowercase();
-    all_npcs()
-        .into_iter()
-        .filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase().contains(&wanted))
+    npcs::ALL
+        .iter()
+        .filter(|entry| entry.name.is_some_and(|name| name.to_lowercase().contains(wanted.as_str())))
         .collect()
 }
 
@@ -362,14 +168,14 @@ pub fn npcs_search(fragment: &str) -> Vec<Npc> {
 #[derive(Debug, Clone)]
 pub struct Loc {
     pub loc_id: usize,
-    pub name: Option<String>,
+    pub name: Option<&'static str>,
     pub width: i64,
     pub length: i64,
     pub blockwalk: bool,
     pub blockrange: bool,
     pub active: i64,
-    pub ops: Vec<Option<String>>,
-    pub spawns: Vec<LocSpawn>,
+    pub ops: &'static [Option<&'static str>],
+    pub spawns: &'static [LocSpawn],
 }
 
 /// One static scenery spawn (tile, replacement and respawn timer).
@@ -383,68 +189,31 @@ pub struct LocSpawn {
     pub members: Option<bool>,
 }
 
-fn loc_from_row(loc_id: usize, row: &Json) -> Loc {
-    if row.is_null() {
-        return Loc {
-            loc_id,
-            name: None,
-            width: 1,
-            length: 1,
-            blockwalk: false,
-            blockrange: false,
-            active: 0,
-            ops: Vec::new(),
-            spawns: Vec::new(),
-        };
-    }
-    let mut spawns = Vec::new();
-    if let Json::Arr(items) = row.get("spawns") {
-        for item in items {
-            if let (Some(x), Some(z), Some(level)) =
-                (item.get("x").as_i64(), item.get("z").as_i64(), item.get("level").as_i64())
-            {
-                spawns.push(LocSpawn { x, z, level, members: item.get("members").as_bool() });
-            }
-        }
-    }
-    Loc {
-        loc_id,
-        name: row_name(row),
-        width: row.get("width").as_i64().unwrap_or(1),
-        length: row.get("length").as_i64().unwrap_or(1),
-        blockwalk: row.get("blockwalk").as_bool().unwrap_or(false),
-        blockrange: row.get("blockrange").as_bool().unwrap_or(false),
-        active: row.get("active").as_i64().unwrap_or(0),
-        ops: row_ops(row, "ops"),
-        spawns,
-    }
-}
-
-/// All scenery, indexed by id.
-pub fn all_locs() -> Vec<Loc> {
-    table("locs").iter().enumerate().map(|(id, row)| loc_from_row(id, row)).collect()
+/// All scenery, indexed by id (build-time static, no allocation).
+pub fn all_locs() -> &'static [Loc] {
+    locs::ALL
 }
 
 /// Scenery by id, or None when out of range.
-pub fn loc_by_id(loc_id: usize) -> Option<Loc> {
-    table("locs").get(loc_id).map(|row| loc_from_row(loc_id, row))
+pub fn loc_by_id(loc_id: usize) -> Option<&'static Loc> {
+    locs::ALL.get(loc_id)
 }
 
 /// Exact (case-insensitive) name match.
-pub fn locs_by_name(name: &str) -> Vec<Loc> {
-    let wanted = name.to_lowercase();
-    all_locs().into_iter().filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase() == wanted).collect()
+pub fn locs_by_name(name: &str) -> Vec<&'static Loc> {
+    ids_by_exact_name(locs::BY_NAME, name)
+        .into_iter()
+        .filter_map(|id| locs::ALL.get(id))
+        .collect()
 }
 
 /// Component id by dotted name (`magic:wind_strike`), like `comps.com_id`.
 pub fn com_id(name: &str) -> Option<u16> {
     let wanted = name.to_lowercase();
-    for row in table("comps") {
-        if row.get("name").as_str().is_some_and(|label| label.to_lowercase() == wanted) {
-            return row.get("id").as_i64().map(|id| id as u16);
-        }
-    }
-    None
+    comps::BY_NAME
+        .binary_search_by(|entry| entry.0.cmp(wanted.as_str()))
+        .ok()
+        .map(|position| comps::BY_NAME[position].1)
 }
 
 #[cfg(test)]
@@ -468,15 +237,17 @@ mod tests {
         }
     }
 
-    /// The by-name obj index answers exactly like the old full scan
+    /// The by-name obj lookup answers exactly like the old full scan
     /// (coins is the canonical probe) and stays fast when gear planning
     /// resolves hundreds of names per spot: the whole equipment table
     /// must resolve well inside one server tick budget.
     #[test]
-    fn obj_name_index_matches_and_stays_fast() {
+    fn obj_by_name_matches_and_stays_fast() {
         let coins = super::objs_by_name("coins");
         assert_eq!(coins.len(), 1, "one coins row, got {}", coins.len());
         assert_eq!(coins[0].obj_id, 995);
+        assert_eq!(super::objs_by_name("COINS")[0].obj_id, 995, "case-insensitive");
+        assert!(super::objs_by_name("no_such_obj_xyz").is_empty(), "unknown stays empty");
         let equips = super::equipment::all_wearables();
         assert!(!equips.is_empty(), "wearables load");
         let start = std::time::Instant::now();
@@ -488,5 +259,75 @@ mod tests {
         }
         assert!(hits > 0, "some wearables resolve");
         assert!(start.elapsed() < std::time::Duration::from_secs(2), "678 lookups under 2 s, took {:?}", start.elapsed());
+    }
+
+    /// The build embeds the dump: known names resolve to their dump ids,
+    /// matching stays case-insensitive and unknown names stay `None`.
+    #[test]
+    fn com_id_reads_the_build_time_table() {
+        assert_eq!(super::com_id("inventory:inv"), Some(3214));
+        assert_eq!(super::com_id("music:competition"), Some(10983));
+        assert_eq!(super::com_id("INVENTORY:INV"), Some(3214));
+        assert_eq!(super::com_id("no_such_comp:xx"), None);
+    }
+
+    /// The generated statics hold every dump row at its dump id, with the
+    /// same fields the old runtime rows carried (spot-checked against the
+    /// dump values asserted by each table module's own tests).
+    #[test]
+    fn generated_tables_match_the_dumps() {
+        assert_eq!(super::all_objs().len(), 3894);
+        assert_eq!(super::all_npcs().len(), 1359);
+        assert_eq!(super::all_locs().len(), 4671);
+
+        let coins = super::obj_by_id(995).expect("coins in dumps");
+        assert_eq!(coins.name, Some("coins"));
+        assert_eq!(coins.display, Some("Coins"));
+        assert_eq!(coins.price, 1);
+        assert_eq!(coins.ops.len(), 5);
+        let hans = super::npc_by_id(0).expect("hans in dumps");
+        assert_eq!(hans.name, Some("hans"));
+        assert_eq!(hans.spawns.len(), 1);
+        assert_eq!((hans.spawns[0].x, hans.spawns[0].z, hans.spawns[0].level), (3207, 3233, 0));
+        let booth = super::loc_by_id(2213).expect("bank booth in dumps");
+        assert_eq!(booth.name, Some("bankbooth"));
+        assert!(!booth.spawns.is_empty(), "booth has spawns");
+
+        let npc_spawns: usize = super::all_npcs().iter().map(|entry| entry.spawns.len()).sum();
+        assert_eq!(npc_spawns, 7322, "npc spawn count, got {npc_spawns}");
+        let loc_spawns: usize = super::all_locs().iter().map(|entry| entry.spawns.len()).sum();
+        assert_eq!(loc_spawns, 15030, "loc spawn count, got {loc_spawns}");
+    }
+
+    /// Name indexes stay sorted, resolve to their own row, and keep the
+    /// dump order the old linear scans returned.
+    #[test]
+    fn name_indexes_cover_every_row() {
+        for (index, rows, label) in [
+            (super::objs::BY_NAME, super::all_objs().len(), "objs"),
+            (super::npcs::BY_NAME, super::all_npcs().len(), "npcs"),
+            (super::locs::BY_NAME, super::all_locs().len(), "locs"),
+        ] {
+            assert!(index.windows(2).all(|pair| pair[0].0 <= pair[1].0), "{label} index sorted");
+            for (name, id) in index {
+                assert!(*id < rows, "{label} index id {id} in range");
+                assert!(!name.is_empty(), "{label} index name non-empty");
+            }
+        }
+        // Multi-row order matches the scan: substring hits come back in id order.
+        let banks: Vec<usize> = super::all_locs()
+            .iter()
+            .filter(|entry| entry.name.is_some_and(|name| name.contains("bank")))
+            .map(|entry| entry.loc_id)
+            .collect();
+        let mut ordered = banks.clone();
+        ordered.sort_unstable();
+        assert_eq!(banks, ordered, "substring hits in id order");
+        let booths = super::locs_by_name("BANKBOOTH");
+        assert_eq!(booths.len(), 1, "one bankbooth row, got {}", booths.len());
+        assert_eq!(booths[0].loc_id, 2213);
+        assert!(super::npc_by_id(1359).is_none(), "npc out of range stays None");
+        assert!(super::loc_by_id(4671).is_none(), "loc out of range stays None");
+        assert!(super::obj_by_id(3894).is_none(), "obj out of range stays None");
     }
 }

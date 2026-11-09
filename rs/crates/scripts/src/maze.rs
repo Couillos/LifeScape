@@ -8,6 +8,12 @@
 //! with the generic router therefore ping-pongs, so this module searches
 //! the true state space instead: walk steps on open floor plus directed
 //! door edges (stand -> teleport destination).
+//!
+//! Mapless: no painted collision, no painted door registry. Each plan
+//! fetches one `tiles_flags` window (one round trip per plan), each walk
+//! leg fetches its tiles in one batch, doors resolve through `door_defs`,
+//! and the step the server accepts is the verification. A down service
+//! fails loud, never a silent stall.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -18,6 +24,15 @@ use super::quest_common as kit;
 use super::randomevent;
 use super::maze_doors;
 use crate::{ScriptError, ScriptResult};
+
+/// Maze bounds (content map m45_71): the planning window clamps to this
+/// square so one batch per plan covers door-to-door hops.
+const MAZE_X0: i32 = 2880;
+const MAZE_X1: i32 = 2944;
+const MAZE_Z0: i32 = 4544;
+const MAZE_Z1: i32 = 4608;
+/// Planning window radius around the bot: one batch per plan, door-to-door.
+const PLAN_RADIUS: i32 = 40;
 
 /// check_axis (door_procs.rs2): W/E doors read the same-X tiles, N/S
 /// doors the same-Z ones.
@@ -39,27 +54,23 @@ fn door_dest(angle: u8, door_x: i32, door_z: i32) -> (i32, i32) {
     }
 }
 
-/// Walk step allowed: same shared edge test as the SDK walker (both
-/// wall sides plus walkable tiles), so planned steps execute as-is.
-fn maze_step_open(collision: &lifescape_sdk::collision::CollisionMap, x: i32, z: i32, dx: i32, dz: i32, level: i32) -> bool {
-    lifescape_sdk::collision::step_open(collision, x, z, level, dx, dz)
-}
-
 /// True when Touch can land: cardinal-adjacent to the statue footprint
 /// with no wall on the shared edge, or standing inside it. Diagonal
-/// corners refuse ("can't reach that").
-fn statue_touchable(bot: &Bot, statue_x: i32, statue_z: i32, width: i32, length: i32) -> bool {
+/// corners refuse ("can't reach that"). Edge flags come from one batch
+/// read (bot tile plus click tile); a down service fails loud, never a
+/// guess from painted state.
+fn statue_touchable(bot: &mut Bot, statue_x: i32, statue_z: i32, width: i32, length: i32) -> Result<bool, ScriptError> {
     let (bot_x, bot_z) = (bot.world.x, bot.world.z);
     let (far_x, far_z) = (statue_x + width - 1, statue_z + length - 1);
     let near = bot_x >= statue_x - 1 && bot_x <= far_x + 1 && bot_z >= statue_z && bot_z <= far_z + 1
         || bot_x >= statue_x && bot_x <= far_x && bot_z >= statue_z - 1 && bot_z <= far_z + 1;
     if !near {
-        return false;
+        return Ok(false);
     }
     let card_or_inside =
         (bot_x >= statue_x && bot_x <= far_x) || (bot_z >= statue_z && bot_z <= far_z);
     if !card_or_inside {
-        return false;
+        return Ok(false);
     }
     // Click tile facing the bot (getLoc matches origin tiles only, so the
     // click always goes to the origin; the edge must be open towards it).
@@ -68,19 +79,29 @@ fn statue_touchable(bot: &Bot, statue_x: i32, statue_z: i32, width: i32, length:
     let click_z = bot_z.clamp(statue_z, far_z);
     let (step_x, step_z) = (click_x - bot_x, click_z - bot_z);
     if step_x == 0 && step_z == 0 {
-        return true;
+        return Ok(true);
     }
     let level = bot.world.level;
-    let here = bot.collision.get(bot_x, bot_z, level);
-    let there = bot.collision.get(click_x, click_z, level);
+    let rows = bot
+        .tiles_flags(&[(bot_x, bot_z, level), (click_x, click_z, level)])
+        .map_err(ScriptError::Sdk)?;
+    let flag_of = |x: i32, z: i32| {
+        rows.iter()
+            .find(|row| row.tile.x == x && row.tile.z == z && row.tile.level == level)
+            .map(|row| row.flags)
+            // A row that missed the batch reads shut: no touch, replan.
+            .unwrap_or(lifescape_sdk::collision::NULL)
+    };
+    let here = flag_of(bot_x, bot_z);
+    let there = flag_of(click_x, click_z);
     use lifescape_sdk::collision::{WALL_EAST, WALL_NORTH, WALL_SOUTH, WALL_WEST};
-    match (step_x, step_z) {
+    Ok(match (step_x, step_z) {
         (0, 1) => here & WALL_NORTH == 0 && there & WALL_SOUTH == 0,
         (0, -1) => here & WALL_SOUTH == 0 && there & WALL_NORTH == 0,
         (1, 0) => here & WALL_EAST == 0 && there & WALL_WEST == 0,
         (-1, 0) => here & WALL_WEST == 0 && there & WALL_EAST == 0,
         _ => false,
-    }
+    })
 }
 
 /// Click the statue origin (getLoc matches origin tiles only) and wait
@@ -106,7 +127,8 @@ enum MazeAction {
 /// Shortest action list from the bot to touching the statue: BFS over
 /// tiles, where walk edges cost 1 and door swings (stand -> teleport
 /// destination, entry side permitting) cost 2 clicks. Doors in `tried`
-/// already refused us and read shut for planning.
+/// already refused us and read shut for planning. One batch window feeds
+/// the whole search; a down service fails loud.
 fn plan(
     bot: &mut Bot,
     statue_x: i32,
@@ -114,13 +136,24 @@ fn plan(
     statue_w: i32,
     statue_l: i32,
     tried: &HashSet<(i32, i32, i32)>,
-) -> Option<Vec<MazeAction>> {
+) -> Result<Option<Vec<MazeAction>>, lifescape_sdk::error::Error> {
     let level = bot.world.level;
     let (statue_far_x, statue_far_z) = (statue_x + statue_w - 1, statue_z + statue_l - 1);
-    // Collect maze doors on this level with their entry sides, except
+    // One batch window around the bot, clamped to the maze square: the
+    // only static read of this plan.
+    let mut window = maze_doors::window_tiles(bot.world.x, bot.world.z, level, PLAN_RADIUS);
+    window.retain(|(x, z, _)| *x >= MAZE_X0 && *x < MAZE_X1 && *z >= MAZE_Z0 && *z < MAZE_Z1);
+    window.sort();
+    window.dedup();
+    let rows = bot.tiles_flags(&window).map_err(|error| {
+        bot.log(&format!("maze plan batch down at {:?}: {error}", bot.position()));
+        error
+    })?;
+    let (scratch, door_index) = maze_doors::scratch_from_rows(&rows);
+    // Collect maze doors in the window with their entry sides, except
     // ones that already refused us (they read shut until relogin).
     let mut doors: Vec<(i32, i32, u16, u8, u8)> = Vec::new();
-    for ((tile_x, tile_z, tile_level), (loc_id, shape, angle)) in bot.doors.iter() {
+    for ((tile_x, tile_z, tile_level), (loc_id, shape, angle)) in door_index.iter() {
         if *tile_level != level {
             continue;
         }
@@ -147,13 +180,13 @@ fn plan(
     bot.log(&format!("maze plan: start={:?} doors={} statue=({},{})", start, doors.len(), statue_x, statue_z));
     let mut goal: Option<(i32, i32)> = None;
     let mut expanded = 0usize;
-    // Bounds: the maze square plus a margin (BFS stays inside anyway).
-    let in_bounds = |(x, z): (i32, i32)| x >= 2880 && x < 2944 && z >= 4544 && z < 4608;
+    // Bounds: the maze square (the window already clamps to it).
+    let in_bounds = |(x, z): (i32, i32)| x >= MAZE_X0 && x < MAZE_X1 && z >= MAZE_Z0 && z < MAZE_Z1;
     // Walkable mirrors the SDK router: a tile holds unless every
     // direction is blocked. LOC alone does not hold (doors sit on wall
     // tiles), but scenery footprints (statue, chests) are never walked.
-    let walkable = |bot_ref: &Bot, tile: (i32, i32)| {
-        let flags = bot_ref.collision.get(tile.0, tile.1, level);
+    let walkable = |tile: (i32, i32)| {
+        let flags = scratch.get(tile.0, tile.1, level);
         let in_statue = tile.0 >= statue_x
             && tile.0 <= statue_far_x
             && tile.1 >= statue_z
@@ -180,23 +213,23 @@ fn plan(
             let open = match (click_x - cx, click_z - cz) {
                 (0, 0) => true,
                 (0, 1) => {
-                    let here = bot.collision.get(cx, cz, level);
-                    let there = bot.collision.get(click_x, click_z, level);
+                    let here = scratch.get(cx, cz, level);
+                    let there = scratch.get(click_x, click_z, level);
                     here & WALL_NORTH == 0 && there & WALL_SOUTH == 0
                 }
                 (0, -1) => {
-                    let here = bot.collision.get(cx, cz, level);
-                    let there = bot.collision.get(click_x, click_z, level);
+                    let here = scratch.get(cx, cz, level);
+                    let there = scratch.get(click_x, click_z, level);
                     here & WALL_SOUTH == 0 && there & WALL_NORTH == 0
                 }
                 (1, 0) => {
-                    let here = bot.collision.get(cx, cz, level);
-                    let there = bot.collision.get(click_x, click_z, level);
+                    let here = scratch.get(cx, cz, level);
+                    let there = scratch.get(click_x, click_z, level);
                     here & WALL_EAST == 0 && there & WALL_WEST == 0
                 }
                 (-1, 0) => {
-                    let here = bot.collision.get(cx, cz, level);
-                    let there = bot.collision.get(click_x, click_z, level);
+                    let here = scratch.get(cx, cz, level);
+                    let there = scratch.get(click_x, click_z, level);
                     here & WALL_WEST == 0 && there & WALL_EAST == 0
                 }
                 _ => false,
@@ -211,10 +244,10 @@ fn plan(
         // Walk edges.
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let next = (current.0 + dx, current.1 + dz);
-            if !in_bounds(next) || seen.contains(&next) || !walkable(bot, next) {
+            if !in_bounds(next) || seen.contains(&next) || !walkable(next) {
                 continue;
             }
-            if !maze_step_open(&bot.collision, current.0, current.1, dx, dz, level) {
+            if !lifescape_sdk::collision::step_open(&scratch, current.0, current.1, dx, dz, level) {
                 continue;
             }
             seen.insert(next);
@@ -279,14 +312,16 @@ fn plan(
             }
         }
         bot.log(&format!("maze plan: NO PATH expanded={} seen={} x=[{},{}] z=[{},{}] doorstands={} from {:?}", expanded, seen.len(), x0, x1, z0, z1, stands, start));
+        return Ok(None);
     }
-    let goal = goal?;
+    let goal = goal.expect("logged above");
     // Reconstruct tile path with edge kinds, then compress walk runs.
     let mut tiles: Vec<(i32, i32)> = vec![goal];
     let mut edges: Vec<Edge> = Vec::new();
     while tiles.last().copied() != Some(start) {
         let tile = *tiles.last().unwrap();
-        let (prev, edge) = parent.get(&tile).copied()?;
+        let (prev, edge) = parent.get(&tile).copied()
+            .ok_or_else(|| lifescape_sdk::error::Error::State(format!("maze plan lost parent of {tile:?}")))?;
         tiles.push(prev);
         edges.push(edge);
     }
@@ -310,7 +345,7 @@ fn plan(
     }
     flush(&mut run, &mut actions);
     actions.push(MazeAction::Touch);
-    Some(actions)
+    Ok(Some(actions))
 }
 
 /// Solve the maze: follow BFS door-to-door plans, touching as soon as
@@ -319,8 +354,8 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
     if !randomevent::in_maze(bot) {
         return Ok(true);
     }
-    bot.ensure_area(bot.world.x, bot.world.z, 70);
-    bot.ensure_area(2911, 4575, 10);
+    // No painted area: statue and doors resolve through the service
+    // batches below (`find_loc` via the shared kit, tiles/defs per leg).
     let Ok((statue_x, statue_z, _statue_level, statue_loc)) = kit::find_loc(bot, &["macro_maze_complete"], 150) else {
         bot.log("maze centre missing from the map table");
         return Ok(false);
@@ -338,15 +373,22 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
             bot.close_modal()?;
             bot.pump(3)?;
         }
-        if statue_touchable(bot, statue_x, statue_z, statue_w, statue_l) {
+        if statue_touchable(bot, statue_x, statue_z, statue_w, statue_l)? {
             if touch_statue(bot, statue_x, statue_z, statue_loc)? {
                 return Ok(true);
             }
         }
         let before = (bot.world.x, bot.world.z);
-        let Some(actions) = plan(bot, statue_x, statue_z, statue_w, statue_l, &tried) else {
-            bot.log(&format!("maze: no planned path to the centre from {:?}", bot.position()));
-            return Ok(false);
+        let actions = match plan(bot, statue_x, statue_z, statue_w, statue_l, &tried) {
+            Ok(Some(actions)) => actions,
+            Ok(None) => {
+                bot.log(&format!("maze: no planned path to the centre from {:?}", bot.position()));
+                return Ok(false);
+            }
+            Err(error) => {
+                bot.log(&format!("maze: plan batch down at {:?}: {error}", bot.position()));
+                return Err(ScriptError::Sdk(error));
+            }
         };
         for action in actions {
             if !randomevent::in_maze(bot) {
@@ -361,33 +403,25 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
                         Err(error) if lifescape_sdk::error::is_interrupted(&error) => {
                             return Err(ScriptError::Sdk(error));
                         }
-                        Err(_) => {}
+                        Err(error) => {
+                            bot.log(&format!("maze: walk failed loud at {:?}: {error}", bot.position()));
+                        }
                     }
                 }
                 MazeAction::OpenDoor(door_x, door_z, door_level) => {
-                    // Live diagnostic before the click: exact loc, bot
-                    // position, chosen side and why (entry, live-or-static
-                    // angle, axis). Same wording as the SDK per-click line.
-                    let (diag_loc, _diag_shape, diag_angle) =
-                        bot.doors.get(&(door_x, door_z, door_level)).copied().unwrap_or((3628, 0, 0));
-                    let diag_live = bot.world.loc_at(door_x, door_z, door_level);
-                    let diag_entry = maze_doors::maze_entry_side(diag_loc).unwrap_or(0);
-                    let (diag_angle_eff, diag_source) =
-                        maze_doors::maze_effective_angle(diag_live, diag_loc, diag_angle);
-                    bot.log(&maze_doors::maze_door_diag(
-                        door_x, door_z, door_level, diag_live,
-                        bot.world.x, bot.world.z, bot.world.level,
-                        diag_entry, diag_angle_eff, diag_source, bot.world.x, bot.world.z,
-                    ));
+                    // The click logs its own diagnostic (exact live loc,
+                    // position, side and why); failures land here loud.
                     match maze_doors::open_maze_door(bot, door_x, door_z, door_level) {
                         Ok(true) => {}
                         Ok(false) => {
+                            bot.log(&format!("maze: door at ({door_x},{door_z},{door_level}) refused, blacklisting"));
                             tried.insert((door_x, door_z, door_level));
                         }
                         Err(error) if lifescape_sdk::error::is_interrupted(&error) => {
                             return Err(ScriptError::Sdk(error));
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            bot.log(&format!("maze: door at ({door_x},{door_z},{door_level}) failed loud: {error}"));
                             tried.insert((door_x, door_z, door_level));
                         }
                     }
@@ -399,7 +433,7 @@ pub fn solve(bot: &mut Bot) -> Result<bool, ScriptError> {
                     }
                 }
             }
-            if statue_touchable(bot, statue_x, statue_z, statue_w, statue_l) {
+            if statue_touchable(bot, statue_x, statue_z, statue_w, statue_l)? {
                 break;
             }
         }

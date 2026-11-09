@@ -13,10 +13,8 @@
 //! rows. The planner reads that file back (§5.2: verified rides lose
 //! the +50 penalty, failed ones are excluded).
 
-use std::collections::HashSet;
-
 use lifescape_json::{self as json, Value};
-use lifescape_sdk::plan::{NavOptions, Tile};
+use lifescape_sdk::plan::Tile;
 use lifescape_sdk::{Bot, Error};
 
 use crate::devtools::{cheat_teleport, open_op, require_admin, save_report};
@@ -46,36 +44,13 @@ struct Entry {
     date: String,
 }
 
-/// Filter view of a transition row: name, locs and table tiles only.
+/// Filter view of a transition: name, locs and table tiles only.
 struct RowView<'a> {
     name: &'a str,
     loc: u16,
     climb_loc: u16,
     from: Tile,
     to: Tile,
-}
-
-/// Substring match on the name, exact match on either loc id, or
-/// substring on the table coordinates (covers zone numbers like 9858).
-fn row_matches(view: RowView, filter: Option<&str>) -> bool {
-    let Some(raw) = filter else {
-        return true;
-    };
-    let needle = raw.trim().to_lowercase();
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.parse::<u16>().is_ok_and(|num| num == view.loc || num == view.climb_loc) {
-        return true;
-    }
-    if view.name.to_lowercase().contains(&needle) {
-        return true;
-    }
-    format!(
-        "{} {} {} {} {} {}",
-        view.from.level, view.from.x, view.from.z, view.to.level, view.to.x, view.to.z,
-    )
-    .contains(&needle)
 }
 
 /// Transport and operator stops abort the run; anything else is one
@@ -302,55 +277,41 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         return Err(ScriptError::Usage("probe_transitions [filtre]".to_string()));
     }
     let filter = args.first().map(String::as_str);
-    let tables = bot.nav_tables.clone().ok_or_else(|| {
-        ScriptError::Sdk(Error::State(
-            "probe_transitions needs planner tables (the session wires them at open)".to_string(),
-        ))
-    })?;
-    let Some(world) = bot.nav_world.clone() else {
-        return Err(ScriptError::Sdk(Error::State(
-            "probe_transitions needs the static world (the session wires it at open)".to_string(),
-        )));
-    };
-    // Geometric stands: paid doors open, no requirement tags held. The
-    // planner may use a subset; one verdict covers the whole row.
-    let options = NavOptions {
-        allow_paid: true,
-        f2p_only: true,
-        satisfied: HashSet::new(),
-        excluded_edges: HashSet::new(),
-    };
+    // Stands and expects come from the service bulk op (same prober
+    // options: paid doors open, no tags held); the planner rides the
+    // same first stand, so one verdict still covers the whole row.
     struct Target {
-        index: usize,
+        name: String,
+        loc: u16,
+        climb_loc: u16,
+        from: Tile,
+        to: Tile,
         stand: Tile,
         expect: Tile,
+        open_to: Option<u16>,
+        climb_op: u8,
+        footprint: Vec<(i32, i32)>,
     }
     let mut targets: Vec<Target> = Vec::new();
     let mut skipped = 0u32;
-    for (index, row) in tables.transitions.iter().enumerate() {
-        if row.disabled {
-            continue;
-        }
-        if !row_matches(
-            RowView { name: &row.name, loc: row.loc, climb_loc: row.climb_loc, from: row.from, to: row.to },
-            filter,
-        ) {
-            continue;
-        }
-        let Some(stand) = lifescape_sdk::plan::ride_stands(&world, &tables, &options, row).into_iter().next() else {
-            bot.log(&format!("skip {}: no reach-valid stand", row.name));
+    for found in bot.probe_targets(filter)? {
+        let (Some(stand), Some(expect)) = (found.stand, found.expect) else {
+            bot.log(&format!("skip {}: no reach-valid stand", found.view.name));
             skipped += 1;
             continue;
         };
-        let expect = match row.delta {
-            Some((delta_level, delta_x, delta_z)) => Tile {
-                x: stand.x + delta_x,
-                z: stand.z + delta_z,
-                level: stand.level + delta_level,
-            },
-            None => row.to,
-        };
-        targets.push(Target { index, stand, expect });
+        targets.push(Target {
+            name: found.view.name,
+            loc: found.view.loc,
+            climb_loc: found.view.climb_loc,
+            from: found.view.from,
+            to: found.view.to,
+            stand,
+            expect,
+            open_to: found.view.open_to,
+            climb_op: found.view.climb_op,
+            footprint: found.view.footprint,
+        });
     }
     bot.intend("probing transitions");
     bot.log(&format!(
@@ -362,15 +323,14 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
     let mut entries: Vec<Entry> = Vec::new();
     let mut remove: Vec<(u16, i32, i32, i32)> = Vec::new();
     for (position, target) in targets.iter().enumerate() {
-        let row = &tables.transitions[target.index];
         bot.log(&format!(
             "{:4}/{} {} loc={} climb={} op={} stand=({},{},{}) expect=({},{},{})",
             position + 1,
             targets.len(),
-            row.name,
-            row.loc,
-            row.climb_loc,
-            row.climb_op,
+            target.name,
+            target.loc,
+            target.climb_loc,
+            target.climb_op,
             target.stand.x,
             target.stand.z,
             target.stand.level,
@@ -378,16 +338,16 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             target.expect.z,
             target.expect.level,
         ));
-        let view = RowView { name: &row.name, loc: row.loc, climb_loc: row.climb_loc, from: row.from, to: row.to };
+        let view = RowView { name: &target.name, loc: target.loc, climb_loc: target.climb_loc, from: target.from, to: target.to };
         match probe_row(
             bot,
             view,
             target.stand,
             target.expect,
-            row.open_to,
-            row.climb_op,
-            row.climb_loc,
-            &row.footprint,
+            target.open_to,
+            target.climb_op,
+            target.climb_loc,
+            &target.footprint,
             &date,
         ) {
             Ok(entry) => {
@@ -408,7 +368,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
                     return Err(err);
                 }
                 bot.log(&format!("  -> skip: {err}"));
-                remove.push((row.loc, row.from.level, row.from.x, row.from.z));
+                remove.push((target.loc, target.from.level, target.from.x, target.from.z));
                 skipped += 1;
             }
         }
@@ -455,25 +415,8 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_date_of, died_since, merge_verified, row_matches, Entry, RowView};
+    use super::{civil_date_of, died_since, merge_verified, Entry};
     use lifescape_sdk::plan::Tile;
-
-    fn view() -> RowView<'static> {
-        RowView { name: "trapdoor_352", loc: 1568, climb_loc: 1570, from: Tile { x: 3097, z: 3468, level: 0 }, to: Tile { x: 3097, z: 9868, level: 0 } }
-    }
-
-    #[test]
-    fn filter_matches_name_loc_and_zone() {
-        assert!(row_matches(view(), None));
-        assert!(row_matches(view(), Some("trapdoor")));
-        assert!(row_matches(view(), Some("TRAPDOOR_352")));
-        assert!(row_matches(view(), Some("1568")));
-        assert!(row_matches(view(), Some("1570")));
-        assert!(row_matches(view(), Some("9868")));
-        assert!(row_matches(view(), Some("3097")));
-        assert!(!row_matches(view(), Some("ladder")));
-        assert!(!row_matches(view(), Some("9999")));
-    }
 
     #[test]
     fn civil_epoch_is_1970_01_01() {

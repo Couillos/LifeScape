@@ -533,6 +533,13 @@ fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
 /// Deposit loot, withdraw the best gear and food for the current levels.
 fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
     let bank = match nearest_bank(bot) {
+        // No service means no fence line and no walk: typed `nav-down`
+        // stays loud instead of degrading into an equip-and-continue.
+        Err(error)
+            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
+        {
+            return Err(error)
+        }
         Ok(bank) => bank,
         Err(_) => {
             let available = available_gear(bot);
@@ -552,6 +559,13 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             let plan = gear_plan(bot, &available);
             equip_plan(bot, &plan)?;
             return Ok(false);
+        }
+        // No service means no walk at all: typed `nav-down` stays loud
+        // instead of degrading into an equip-and-continue.
+        Err(error)
+            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
+        {
+            return Err(error)
         }
         Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
         Err(_) => {
@@ -640,11 +654,11 @@ fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
 fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec<(i32, i32, usize)> {
     let mut spawns: Vec<(i64, i64)> = Vec::new();
     for entry in knowledge::all_npcs() {
-        let name = entry.name.clone().unwrap_or_default();
-        if !spot.npc_names.contains(&name.as_str()) || entry.members == Some(true) {
+        let name = entry.name.unwrap_or_default();
+        if !spot.npc_names.contains(&name) || entry.members == Some(true) {
             continue;
         }
-        for spawn in &entry.spawns {
+        for spawn in entry.spawns {
             // shortcut: same-level spawns only; the fighter never rides
             // down to a dungeon camp. Revisit if one is wanted.
             if spawn.level != i64::from(bot.world.level) {
@@ -1401,10 +1415,12 @@ mod tests {
         assert_eq!(controlled_button("weapon_blunt"), None);
     }
 
-    /// No socket: the bank walk fails typed (reconnect) instead of a quiet
-    /// equip-and-continue that strands the fighter ungeared mid-field.
+    /// No service: the bank walk fails `nav-down`, which `prepare_at_bank`
+    /// propagates typed by contract (no walk, no equip-and-continue).
+    /// The direct `walk_to` below proves the root cause is `nav-down`
+    /// and nothing else (never a local plan).
     #[test]
-    fn prepare_offline_aborts_typed() {
+    fn prepare_offline_falls_back_to_equip() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         crate::wire_nav(&mut bot);
@@ -1412,8 +1428,16 @@ mod tests {
         bot.world.x = 3220;
         bot.world.z = 3220;
         bot.world.stats.insert(3, (10, 0));
-        let error = prepare_at_bank(&mut bot).expect_err("dead socket aborts typed");
-        assert!(crate::skill_common::is_walk_abort(&error), "typed for the reconnect arm, got: {error}");
+        let error = prepare_at_bank(&mut bot).expect_err("no service, nav-down is loud");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
+        let error = bot.walk_to(3200, 3200, bot.world.level, 100).expect_err("direct walk is nav-down");
+        assert!(
+            matches!(&error, lifescape_sdk::Error::Travel(detail) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
     }
 
     fn slash_weapon(slash: i64, stab: i64) -> lifescape_gamedata::equipment::Wearable {

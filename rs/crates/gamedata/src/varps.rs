@@ -1,6 +1,16 @@
 //! Player variables (varps): id, name and persistence.
 
-use crate::{Json, flag, num, opt_str, table};
+/// One static player variable (build-time data, mirrored into [`Varp`] per call).
+pub(crate) struct StaticVarp {
+    pub varp_id: i64,
+    pub name: &'static str,
+    pub scope: i64,
+    pub transmit: bool,
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/varps_generated.rs"));
+}
 
 /// One player variable.
 #[derive(Debug, Clone)]
@@ -11,20 +21,13 @@ pub struct Varp {
     pub transmit: bool,
 }
 
+fn varp_from_static(row: &StaticVarp) -> Varp {
+    Varp { varp_id: row.varp_id, name: row.name.to_string(), scope: row.scope, transmit: row.transmit }
+}
+
 /// Every varp, ordered by id.
 pub fn all_varps() -> Vec<Varp> {
-    table("varps")
-        .iter()
-        .filter_map(|row| match row {
-            Json::Obj(_) => Some(Varp {
-                varp_id: num(row, "id", -1),
-                name: opt_str(row, "name").unwrap_or_default(),
-                scope: num(row, "scope", 0),
-                transmit: flag(row, "transmit", false),
-            }),
-            _ => None,
-        })
-        .collect()
+    generated::ALL.iter().map(varp_from_static).collect()
 }
 
 /// Varp by name (case-insensitive), or None.

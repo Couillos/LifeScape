@@ -1,6 +1,22 @@
 //! Wearable stats and level requirements.
 
-use crate::{Json, num, opt_str, str_int_map, table_value};
+/// One static wearable row (build-time data, mirrored into [`Wearable`] per call).
+pub(crate) struct StaticWearable {
+    pub name: &'static str,
+    pub wearpos: i64,
+    pub wearpos2: i64,
+    pub wearpos3: i64,
+    pub category: Option<&'static str>,
+    pub attack: &'static [(&'static str, i64)],
+    pub defence: &'static [(&'static str, i64)],
+    pub strength: i64,
+    pub prayer: i64,
+    pub requirements: &'static [(&'static str, i64)],
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/equipment_generated.rs"));
+}
 
 /// Server wearpos slots: 0 head, 2 amulet, 3 right hand, 4 body,
 /// 5 left hand, 7 legs, 9 hands, 10 feet, 12 ring.
@@ -34,37 +50,36 @@ pub fn stat_index(stat: &str) -> Option<usize> {
     STATS.iter().find(|(name, _)| *name == stat).map(|(_, index)| *index)
 }
 
-fn wearable_from_row(name: &str, row: &Json) -> Wearable {
+fn pair_list(pairs: &[(&'static str, i64)]) -> Vec<(String, i64)> {
+    pairs.iter().map(|(name, value)| ((*name).to_string(), *value)).collect()
+}
+
+fn wearable_from_static(row: &StaticWearable) -> Wearable {
     Wearable {
-        name: name.to_string(),
-        wearpos: num(row, "wearpos", -1),
-        wearpos2: num(row, "wearpos2", -1),
-        wearpos3: num(row, "wearpos3", -1),
-        category: opt_str(row, "category"),
-        attack: str_int_map(row, "attack"),
-        defence: str_int_map(row, "defence"),
-        strength: num(row, "strength", 0),
-        prayer: num(row, "prayer", 0),
-        requirements: str_int_map(row, "requirements"),
+        name: row.name.to_string(),
+        wearpos: row.wearpos,
+        wearpos2: row.wearpos2,
+        wearpos3: row.wearpos3,
+        category: row.category.map(str::to_string),
+        attack: pair_list(row.attack),
+        defence: pair_list(row.defence),
+        strength: row.strength,
+        prayer: row.prayer,
+        requirements: pair_list(row.requirements),
     }
 }
 
-/// Every wearable, keyed by debugname in the dump.
+/// Every wearable, debugname order (the dump object already iterates sorted).
 pub fn all_wearables() -> Vec<Wearable> {
-    match table_value("equipment") {
-        Some(Json::Obj(fields)) => fields.iter().map(|(name, row)| wearable_from_row(name, row)).collect(),
-        _ => Vec::new(),
-    }
+    generated::ALL.iter().map(wearable_from_static).collect()
 }
 
-/// Wearable by debugname, or None.
+/// Wearable by exact debugname (case-sensitive, like the dump keys), or None.
 pub fn by_name(name: &str) -> Option<Wearable> {
-    match table_value("equipment") {
-        Some(Json::Obj(fields)) => {
-            fields.iter().find(|(entry, _)| *entry == name).map(|(entry, row)| wearable_from_row(entry, row))
-        }
-        _ => None,
-    }
+    generated::ALL
+        .binary_search_by(|row| row.name.cmp(name))
+        .ok()
+        .map(|position| wearable_from_static(&generated::ALL[position]))
 }
 
 /// True when every level-gated requirement is met

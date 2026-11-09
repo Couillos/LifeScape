@@ -13,26 +13,36 @@ use crate::{ScriptError, ScriptResult};
 // floor changes click the nearest ladder/stair loc and wait for the level
 // to flip instead of routing through the portal they answer.
 fn go_level(bot: &mut Bot, level: i32) -> Result<(), ScriptError> {
-    let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.ensure_area(here_x, here_z, 40);
     for _ in 0..6 {
         if bot.world.level == level {
             return Ok(());
         }
         let names: &[&str] = if bot.world.level > level { &["laddertop", "spiralstairstop", "stairstop"] } else { &["ladder", "spiralstairs", "stairs"] };
+        let wants: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
+        // One static batch up front (static ladders never move under the
+        // pump loop); the loop below only waits for the live stream.
+        let static_rows = bot.static_locs_near(bot.world.x, bot.world.z, bot.world.level, 150)?;
         let mut cands: Vec<(i32, i32, i32, u16)> = Vec::new();
         let target = bot.world.ticks + 20;
         while bot.world.ticks < target && cands.is_empty() {
             bot.pump(2)?;
-            for (tile, loc) in bot.world.static_locs.iter().map(|(tile, loc)| (*tile, Some(*loc))).chain(bot.world.locs.iter().map(|(tile, loc)| (*tile, *loc))) {
-                let Some((loc_id, _, _)) = loc else { continue };
-                if tile.2 != bot.world.level {
-                    continue;
+            cands.clear();
+            let level = bot.world.level;
+            let mut consider = |x: i32, z: i32, tile_level: i32, loc_id: u16| {
+                if tile_level != level {
+                    return;
                 }
                 let label = lifescape_gamedata::loc_by_id(loc_id as usize).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
-                if names.iter().any(|want| label.contains(want)) {
-                    cands.push((tile.0, tile.1, tile.2, loc_id));
+                if wants.iter().any(|want| label.contains(want)) {
+                    cands.push((x, z, tile_level, loc_id));
                 }
+            };
+            for row in &static_rows {
+                consider(row.x, row.z, row.level, row.loc);
+            }
+            for (tile, loc) in &bot.world.locs {
+                let Some((loc_id, _, _)) = loc else { continue };
+                consider(tile.0, tile.1, tile.2, *loc_id);
             }
         }
         cands.sort_by_key(|cand| (cand.0 - bot.world.x).abs() + (cand.1 - bot.world.z).abs());

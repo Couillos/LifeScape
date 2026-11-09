@@ -3,8 +3,6 @@
 //! table, completion varps against the varp table; unknown names fail
 //! loudly, never silently.
 
-use std::sync::OnceLock;
-
 use crate::{objs_by_name, varps::id_by_name as varp_id_by_name};
 
 /// One skill gate.
@@ -57,7 +55,7 @@ fn item(name: &str, count: i64, worn_only: bool) -> ItemRequirement {
     ItemRequirement {
         item: name.to_string(),
         obj_id: entry.obj_id,
-        name: entry.name.unwrap_or_else(|| name.to_string()),
+        name: entry.name.map(str::to_string).unwrap_or_else(|| name.to_string()),
         count,
         worn_only,
     }
@@ -324,19 +322,15 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
     ]
 }
 
-fn f2p_quests() -> &'static Vec<QuestRequirements> {
-    static CACHE: OnceLock<Vec<QuestRequirements>> = OnceLock::new();
-    CACHE.get_or_init(build_f2p_quests)
-}
-
-/// Every F2P quest with typed requirements.
+/// Every F2P quest with typed requirements. Built per call (18 rows):
+/// nothing is retained between calls.
 pub fn all_f2p_quests() -> Vec<QuestRequirements> {
-    f2p_quests().clone()
+    build_f2p_quests()
 }
 
 /// F2P quest by key, or None when the key is unknown.
 pub fn by_key(key: &str) -> Option<QuestRequirements> {
-    f2p_quests().iter().find(|quest| quest.key == key).cloned()
+    build_f2p_quests().into_iter().find(|quest| quest.key == key)
 }
 
 #[cfg(test)]

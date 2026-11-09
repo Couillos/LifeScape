@@ -1,51 +1,30 @@
 //! Food healing values.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
-use crate::{Json, table, table_value};
-
-fn foods() -> &'static Vec<(String, i64)> {
-    static CACHE: OnceLock<Vec<(String, i64)>> = OnceLock::new();
-    CACHE.get_or_init(|| match table_value("foods") {
-        Some(Json::Obj(fields)) => {
-            fields.iter().filter_map(|(name, value)| value.as_i64().map(|heal| (name.clone(), heal))).collect()
-        }
-        _ => Vec::new(),
-    })
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/foods_generated.rs"));
 }
 
 /// Internal food key for a live name: the table keys are internal
-/// ("shrimp") but every live caller passes obj display names ("Shrimps"),
-/// so exact matching heals nothing (t02 live: never ate, never stocked).
-fn key_for(name: &str) -> Option<String> {
-    static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
-    let index = CACHE.get_or_init(|| {
-        let mut map = HashMap::new();
-        for row in table("objs") {
-            let Some(internal) = row.get("name").as_str() else {
-                continue;
-            };
-            map.entry(internal.to_lowercase()).or_insert(internal.to_string());
-            if let Some(display) = row.get("display").as_str() {
-                map.entry(display.to_lowercase()).or_insert(internal.to_string());
-            }
-        }
-        map
-    });
-    index.get(&name.to_lowercase()).cloned()
+/// ("shrimp") but every live caller passes obj display names ("Shrimps").
+/// The build-time index maps both spellings, first dump row winning.
+fn key_for(name: &str) -> Option<&'static str> {
+    let wanted = name.to_lowercase();
+    generated::ALIASES
+        .binary_search_by(|entry| entry.0.cmp(wanted.as_str()))
+        .ok()
+        .map(|position| generated::ALIASES[position].1)
 }
 
 /// Every food and its hitpoints restored.
 pub fn all_foods() -> Vec<(String, i64)> {
-    foods().clone()
+    generated::ALL.iter().map(|(name, heal)| ((*name).to_string(), *heal)).collect()
 }
 
 /// Hitpoints restored by a food, or 0 when it is not edible.
 /// Accepts internal keys ("shrimp") and display names ("Shrimps").
 pub fn heal(name: &str) -> i64 {
-    let key = key_for(name).unwrap_or_else(|| name.to_string());
-    foods().iter().find(|(entry, _)| *entry == key).map(|(_, heal)| *heal).unwrap_or(0)
+    let key = key_for(name).unwrap_or(name);
+    generated::ALL.binary_search_by(|entry| entry.0.cmp(key)).ok().map(|position| generated::ALL[position].1).unwrap_or(0)
 }
 
 /// Highest-healing food among the given names, or None.

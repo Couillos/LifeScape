@@ -14,9 +14,9 @@
 //!
 //! Bounds (lot 2, proposed): global queue 16, cap 2 in-flight tickets per
 //! account, 2 plan threads, 256 stored results. Full/busy/stale submit ->
-//! `Refused`, never a block: the caller falls back to a local sync plan,
+//! `Refused`, never a block: the caller surfaces typed `nav-down`,
 //! logs it and counts it. A version skew (client vs server snapshot)
-//! refuses stale too; the client falls back sync, never loops.
+//! refuses stale too; the client resubmits once, never loops.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
@@ -33,6 +33,7 @@ use crate::plan::{
     self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, SharedEdges, Tile,
     TransitionRef,
 };
+use crate::service_queries;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
@@ -51,7 +52,7 @@ pub const SUBMIT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Poll pacing: IPC rhythm, not a game wait (the keepalive stays tick-driven).
 pub const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(2);
-/// Client-side guard (mirrors the 30 s `UNLOAD` wall guard): cancel, sync fallback.
+/// Client-side guard (mirrors the 30 s `UNLOAD` wall guard): cancel, then `nav-down`.
 pub const SERVICE_WAIT_MAX: Duration = Duration::from_secs(30);
 /// Acceptor read bound per connection (tiny newline frames).
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -198,7 +199,7 @@ pub fn ram_gate_for(rss_bytes: u64, warn_at: u64, shed_at: u64) -> RamGate {
 
 /// Outcome counters, all atomic: the lot 3 hit-rate verdict reads these,
 /// the lot 4 fairness verdict reads the refused_* ones (every non-stale
-/// refusal degrades to a local sync plan client-side, logged + counted).
+/// refusal surfaces as typed `nav-down` client-side, logged + counted).
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CacheStats {
     pub hits: u64,
@@ -592,6 +593,7 @@ fn ride_value(ride: &TransitionRef) -> Value {
                     .collect(),
             ),
         ),
+        ("needs_choice", Value::Bool(ride.needs_choice)),
     ])
 }
 
@@ -612,6 +614,8 @@ fn parse_ride(value: &Value) -> Result<TransitionRef, String> {
         from: parse_tile(value.get("from"))?,
         to: parse_tile(value.get("to"))?,
         footprint,
+        // Old plans predate the field: no recorded pick suffix by default.
+        needs_choice: value.get("needs_choice").as_bool().unwrap_or(false),
     })
 }
 
@@ -637,6 +641,12 @@ fn segment_value(segment: &Segment) -> Value {
                     ("x", Value::Int(i64::from(door.x))),
                     ("z", Value::Int(i64::from(door.z))),
                     ("level", Value::Int(i64::from(door.level))),
+                    // Absent op encodes null (never 0: 1-based op index).
+                    (
+                        "open_op",
+                        door.open_op.map_or(Value::Null, |op| Value::Int(i64::from(op))),
+                    ),
+                    ("toll", Value::Bool(door.toll)),
                 ]),
             ),
             ("stand", tile_value(*stand)),
@@ -698,6 +708,9 @@ fn parse_segment(value: &Value) -> Result<Segment, String> {
                     .get("level")
                     .as_i64()
                     .ok_or("door.level")? as i32,
+                // Old plans predate the fields: shut door, never auto-paid.
+                open_op: value.get("door").get("open_op").as_i64().map(|op| op as u8),
+                toll: value.get("door").get("toll").as_bool().unwrap_or(false),
             },
             stand: parse_tile(value.get("stand"))?,
             cross_to: parse_tile(value.get("cross_to"))?,
@@ -884,6 +897,17 @@ pub struct Service {
     refused_stale: AtomicU64,
     ram_warn: AtomicU64,
     ram_shed: AtomicU64,
+    door_defs_served: AtomicU64,
+    tiles_flags_served: AtomicU64,
+    static_locs_served: AtomicU64,
+    f2p_served: AtomicU64,
+    toll_fence_served: AtomicU64,
+    wants_served: AtomicU64,
+    diff_served: AtomicU64,
+    debug_served: AtomicU64,
+    transitions_list_served: AtomicU64,
+    probe_targets_served: AtomicU64,
+    doors_near_served: AtomicU64,
     sock_path: PathBuf,
 }
 
@@ -928,6 +952,17 @@ impl Service {
             refused_stale: AtomicU64::new(0),
             ram_warn: AtomicU64::new(0),
             ram_shed: AtomicU64::new(0),
+            door_defs_served: AtomicU64::new(0),
+            tiles_flags_served: AtomicU64::new(0),
+            static_locs_served: AtomicU64::new(0),
+            f2p_served: AtomicU64::new(0),
+            toll_fence_served: AtomicU64::new(0),
+            wants_served: AtomicU64::new(0),
+            diff_served: AtomicU64::new(0),
+            debug_served: AtomicU64::new(0),
+            transitions_list_served: AtomicU64::new(0),
+            probe_targets_served: AtomicU64::new(0),
+            doors_near_served: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
         });
         for index in 0..threads.max(1) {
@@ -978,6 +1013,37 @@ impl Service {
             ram_warn: self.ram_warn.load(Ordering::Relaxed),
             ram_shed: self.ram_shed.load(Ordering::Relaxed),
         }
+    }
+
+    /// Direct-read counters (no admission, no queue): batches served per op.
+    /// Read beside `stats()`, never inside it: the orchestrator parses
+    /// that struct field by field, additive JSON only.
+    pub fn query_stats(&self) -> (u64, u64) {
+        (
+            self.door_defs_served.load(Ordering::Relaxed),
+            self.tiles_flags_served.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Script-read counters: one batch served per op, same discipline.
+    pub fn query_stats_scripts(&self) -> (u64, u64, u64, u64) {
+        (
+            self.static_locs_served.load(Ordering::Relaxed),
+            self.f2p_served.load(Ordering::Relaxed),
+            self.toll_fence_served.load(Ordering::Relaxed),
+            self.wants_served.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Diag/bulk counters: one batch served per op, same discipline.
+    pub fn query_stats_diag(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.diff_served.load(Ordering::Relaxed),
+            self.debug_served.load(Ordering::Relaxed),
+            self.transitions_list_served.load(Ordering::Relaxed),
+            self.probe_targets_served.load(Ordering::Relaxed),
+            self.doors_near_served.load(Ordering::Relaxed),
+        )
     }
 
     /// Operator reload (`reload-nav`): swap the snapshot atomically. The
@@ -1060,6 +1126,17 @@ impl Service {
             "submit" => self.op_submit(request),
             "poll" => self.op_poll(request),
             "cancel" => self.op_cancel(request),
+            "door_defs" => self.op_door_defs(request),
+            "tiles_flags" => self.op_tiles_flags(request),
+            "static_locs_near" => self.op_static_locs_near(request),
+            "in_f2p" => self.op_in_f2p(request),
+            "toll_fence" => self.op_toll_fence(request),
+            "wants" => self.op_wants(request),
+            "diff" => self.op_diff(request),
+            "debug" => self.op_debug(request),
+            "transitions_list" => self.op_transitions_list(request),
+            "probe_targets" => self.op_probe_targets(request),
+            "doors_near" => self.op_doors_near(request),
             "stats" => {
                 let stats = self.stats();
                 object(vec![
@@ -1083,6 +1160,17 @@ impl Service {
                     ("refused_cap", Value::Int(stats.refused_cap as i64)),
                     ("refused_full", Value::Int(stats.refused_full as i64)),
                     ("refused_stale", Value::Int(stats.refused_stale as i64)),
+                    ("door_defs", Value::Int(self.door_defs_served.load(Ordering::Relaxed) as i64)),
+                    ("tiles_flags", Value::Int(self.tiles_flags_served.load(Ordering::Relaxed) as i64)),
+                    ("static_locs_near", Value::Int(self.static_locs_served.load(Ordering::Relaxed) as i64)),
+                    ("in_f2p", Value::Int(self.f2p_served.load(Ordering::Relaxed) as i64)),
+                    ("toll_fence", Value::Int(self.toll_fence_served.load(Ordering::Relaxed) as i64)),
+                    ("wants", Value::Int(self.wants_served.load(Ordering::Relaxed) as i64)),
+                    ("diff", Value::Int(self.diff_served.load(Ordering::Relaxed) as i64)),
+                    ("debug", Value::Int(self.debug_served.load(Ordering::Relaxed) as i64)),
+                    ("transitions_list", Value::Int(self.transitions_list_served.load(Ordering::Relaxed) as i64)),
+                    ("probe_targets", Value::Int(self.probe_targets_served.load(Ordering::Relaxed) as i64)),
+                    ("doors_near", Value::Int(self.doors_near_served.load(Ordering::Relaxed) as i64)),
                     ("ram_warn", Value::Int(stats.ram_warn as i64)),
                     ("ram_shed", Value::Int(stats.ram_shed as i64)),
                     ("rss_bytes", Value::Int(Self::rss_bytes().min(i64::MAX as u64) as i64)),
@@ -1145,14 +1233,14 @@ impl Service {
         }
         // §5.9 enforcement, read per submit (periodic at ~0.3 req/s/bot):
         // warn logs + halves L1, shed refuses through the existing Refuse
-        // path (the caller falls back sync, logged + counted worker-side).
+        // path (the caller surfaces `nav-down`, logged + counted worker-side).
         // 95 % abort of in-flight searches is NOT wired: shutdown by cancel
         // stays operator-driven (TODO(shedding), see §5.9).
         match ram_gate_for(Self::rss_bytes(), RAM_WARN_BYTES, RAM_SHED_BYTES) {
             RamGate::Shed => {
                 self.ram_shed.fetch_add(1, Ordering::Relaxed);
                 eprintln!(
-                    "pathfinding ram shed rss={}B: submit refused, sync fallback",
+                    "pathfinding ram shed rss={}B: submit refused, nav-down",
                     Self::rss_bytes()
                 );
                 return object(vec![
@@ -1386,6 +1474,356 @@ impl Service {
             }
         }
         object(vec![("ok", Value::Bool(true))])
+    }
+
+    /// Direct read, no ticket: defs for a batch of loc ids off the shared
+    /// snapshot. Version skew refuses stale like a submit; the worker
+    /// adopts the served version and retries once, never plans local.
+    fn op_door_defs(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let locs = match service_queries::parse_door_defs_request(request) {
+            Ok(locs) => locs,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let defs = service_queries::door_defs(&snapshot, &locs);
+        self.door_defs_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_door_defs_reply(&defs, &version)
+    }
+
+    /// Direct read, no ticket: static flags for a batch of tiles off the
+    /// shared snapshot (diagnosis, stepping). Same version discipline.
+    fn op_tiles_flags(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let tiles = match service_queries::parse_tiles_flags_request(request) {
+            Ok(tiles) => tiles,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let rows = service_queries::tiles_flags(&snapshot, &tiles);
+        self.tiles_flags_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_tiles_flags_reply(&rows, &version)
+    }
+
+    /// Direct read, no ticket: static locs near a center tile, nearest
+    /// first. Same version discipline as the other direct reads.
+    fn op_static_locs_near(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let center = match service_queries::parse_static_locs_near_request(request) {
+            Ok(center) => center,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let locs = service_queries::static_locs_near(&snapshot, center.0, center.1, center.2, center.3);
+        self.static_locs_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_static_locs_near_reply(&locs, &version)
+    }
+
+    /// Direct read, no ticket: one F2P verdict per tile, in request
+    /// order. Same version discipline.
+    fn op_in_f2p(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let tiles = match service_queries::parse_tiles_flags_request(request) {
+            Ok(tiles) => tiles,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let inside = service_queries::in_f2p_batch(&snapshot, &tiles);
+        self.f2p_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_in_f2p_reply(&inside, &version)
+    }
+
+    /// Direct read, no ticket: nearest toll-gate tile on this level
+    /// within the radius, or null. Same version discipline.
+    fn op_toll_fence(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let center = match service_queries::parse_toll_fence_request(request) {
+            Ok(center) => center,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let gate = service_queries::toll_fence(&snapshot, center.0, center.1, center.2, center.3);
+        self.toll_fence_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_toll_fence_reply(gate, &version)
+    }
+
+    /// Direct read, no ticket: every tag a plan may require, sorted and
+    /// distinct. The worker satisfies them from live state; the reply
+    /// version keys its cache. Same stale discipline.
+    fn op_wants(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let tags = service_queries::wants(&snapshot);
+        self.wants_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_wants_reply(&tags, &version)
+    }
+
+    /// Direct read, no ticket: static/live mismatches for a dossier
+    /// window. Same version discipline as the other direct reads.
+    fn op_diff(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let cells = match service_queries::parse_diff_request(request) {
+            Ok(cells) => cells,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let entries = service_queries::diff_cells(&snapshot, &cells);
+        self.diff_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_diff_reply(&entries, &version)
+    }
+
+    /// Direct read, no ticket: flags here/dest, template locs near dest
+    /// and the plan (or NoRoute) for the same inputs `travel_to` uses.
+    /// The Dijkstra runs inline on the acceptor (admin-only, one caller):
+    /// a slow exhaustive NoRoute still lands inside the poll guard.
+    fn op_debug(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let (from, dest, options) = match service_queries::parse_debug_request(request) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let (flags_here, flags_dest, locs, defs) = service_queries::debug_static(&snapshot, &from, &dest);
+        let outcome = plan::plan(&snapshot.world, &snapshot.tables, from, dest, &options);
+        self.debug_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_debug_reply(flags_here, flags_dest, &locs, &defs, &outcome, &version)
+    }
+
+    /// Direct read, no ticket: every transition row, in table order.
+    /// Same version discipline as the other direct reads.
+    fn op_transitions_list(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let rows = service_queries::transitions_list(&snapshot);
+        self.transitions_list_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_transitions_list_reply(&rows, &version)
+    }
+
+    /// Direct read, no ticket: stands and expects for the filtered rows,
+    /// prober options. Same version discipline.
+    fn op_probe_targets(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let filter = request.get("filter").as_str().map(str::to_string);
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let targets = service_queries::probe_targets(&snapshot, filter.as_deref());
+        self.probe_targets_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_probe_targets_reply(&targets, &version)
+    }
+
+    /// Direct read, no ticket: template doors within the radius, nearest
+    /// first. Same version discipline.
+    fn op_doors_near(&self, request: &Value) -> Value {
+        let version = self.version();
+        let client_version = request.get("version").as_str().unwrap_or("");
+        if !client_version.is_empty() && !version.is_empty() && client_version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={client_version} server={version}"
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let center = match service_queries::parse_center_radius(request) {
+            Ok(center) => center,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        let doors = service_queries::doors_near(&snapshot, center.0, center.1, center.2, center.3);
+        self.doors_near_served.fetch_add(1, Ordering::Relaxed);
+        service_queries::encode_static_locs_near_reply(&doors, &version)
     }
 
     /// Pool worker: one job at a time, snapshot cloned per job, no lock
@@ -1627,6 +2065,13 @@ impl PlanClient {
         )?;
         Ok(())
     }
+
+    /// Direct read: one round-trip, no ticket, no queue (door defs, tile
+    /// flags). Same framing and timeout as a poll; the caller pins the
+    /// version and resubmits once on skew, like a plan.
+    pub fn request(&self, request: &Value) -> Result<Value, String> {
+        self.round_trip(request, POLL_TIMEOUT)
+    }
 }
 
 /// Unique socket path for tests (parallel-safe).
@@ -1810,6 +2255,90 @@ mod tests {
         let options = decode_options(&encode_options(&short_options())).expect("options decode");
         assert_eq!(options.allow_paid, short_options().allow_paid);
         assert_eq!(options.f2p_only, short_options().f2p_only);
+    }
+
+    /// Mixed versions: a body without the new fields decodes with safe
+    /// defaults (shut door, never auto-paid, no recorded pick).
+    #[test]
+    fn codec_tolerates_missing_door_and_ride_fields() {
+        let stand = Tile { x: 1, z: 0, level: 0 };
+        let door_old = object(vec![
+            ("kind", str_value("door")),
+            (
+                "door",
+                object(vec![
+                    ("loc", Value::Int(7)),
+                    ("x", Value::Int(2)),
+                    ("z", Value::Int(0)),
+                    ("level", Value::Int(0)),
+                ]),
+            ),
+            ("stand", tile_value(stand)),
+            ("cross_to", tile_value(Tile { x: 3, z: 0, level: 0 })),
+        ]);
+        let ride_old = object(vec![
+            ("kind", str_value("ride")),
+            (
+                "ride",
+                ride_value(&crate::plan::TransitionRef {
+                    name: "stairs".to_string(),
+                    loc: 1,
+                    climb_loc: 2,
+                    op: 1,
+                    from: Tile { x: 5, z: 5, level: 0 },
+                    to: Tile { x: 5, z: 5, level: 1 },
+                    footprint: vec![(5, 5)],
+                    needs_choice: true,
+                }),
+            ),
+            ("stand", tile_value(stand)),
+            ("expect", tile_value(Tile { x: 5, z: 5, level: 1 })),
+        ]);
+        // Strip the new fields: the L1 shape the old daemon served.
+        let mut ride_fields = ride_old.get("ride").as_obj().cloned().unwrap_or_default();
+        ride_fields.remove("needs_choice");
+        let ride_old = object(vec![
+            ("kind", str_value("ride")),
+            ("ride", Value::Obj(ride_fields)),
+            ("stand", tile_value(stand)),
+            ("expect", tile_value(Tile { x: 5, z: 5, level: 1 })),
+        ]);
+        let plan = decode_plan(&object(vec![
+            ("cost", Value::Int(30)),
+            ("segments", Value::Arr(vec![door_old, ride_old])),
+        ]))
+        .expect("old body decodes");
+        match &plan.segments[0] {
+            Segment::OpenDoor { door, .. } => {
+                assert_eq!(door.open_op, None, "absent op never clicks blind");
+                assert!(!door.toll, "absent toll never auto-pays");
+            }
+            other => panic!("want a door segment, got {other:?}"),
+        }
+        match &plan.segments[1] {
+            Segment::Ride { transition, .. } => {
+                assert!(!transition.needs_choice, "absent verdict names no pick");
+            }
+            other => panic!("want a ride segment, got {other:?}"),
+        }
+        // New bodies round-trip exactly, fields included.
+        let (world, tables) = shared_world();
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let full = plan::plan(&world, &tables, from, dest, &short_options()).expect("door leg plans");
+        let again = decode_plan(&encode_plan(&full)).expect("new body decodes");
+        assert_eq!(
+            json::stringify(&encode_plan(&again)),
+            json::stringify(&encode_plan(&full)),
+            "new codec is exact"
+        );
+        assert!(
+            full.segments.iter().any(|segment| matches!(
+                segment,
+                Segment::OpenDoor { door, .. } if door.open_op.is_some()
+            )),
+            "the door leg carries its open op"
+        );
     }
 
     #[test]
@@ -2339,7 +2868,7 @@ mod tests {
         let stand = Tile { x: 1, z: 0, level: 0 };
         let door_tile = Tile { x: 2, z: 0, level: 0 };
         let beyond = Tile { x: 3, z: 0, level: 0 };
-        let door = crate::plan::DoorRef { loc: 7, x: 2, z: 0, level: 0 };
+        let door = crate::plan::DoorRef { loc: 7, x: 2, z: 0, level: 0, open_op: Some(1), toll: false };
         // Merged: cross_to past the door tile (two edges).
         let merged = Plan {
             segments: vec![
@@ -2634,4 +3163,172 @@ mod tests {
     }
 
     static NEXT_VERSION: AtomicU64 = AtomicU64::new(0);
+
+    fn lot5_service() -> (Arc<Service>, PlanClient) {
+        let (world, tables) = shared_world();
+        let service = Service::start(Snapshot::new(world, tables, "lot5".to_string()), &test_socket("plan-lot5"), 1)
+            .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "lot5");
+        (service, client)
+    }
+
+    fn lot5_debug(client: &PlanClient, from: Tile, dest: Tile) -> Value {
+        client
+            .request(&object(vec![
+                ("op", str_value("debug")),
+                ("version", str_value("lot5")),
+                (
+                    "from",
+                    object(vec![
+                        ("x", Value::Int(i64::from(from.x))),
+                        ("z", Value::Int(i64::from(from.z))),
+                        ("level", Value::Int(i64::from(from.level))),
+                    ]),
+                ),
+                (
+                    "dest",
+                    object(vec![
+                        ("x", Value::Int(i64::from(dest.x))),
+                        ("z", Value::Int(i64::from(dest.z))),
+                        ("level", Value::Int(i64::from(dest.level))),
+                    ]),
+                ),
+                ("options", encode_options(&short_options())),
+            ]))
+            .expect("debug answers")
+    }
+
+    /// L5 diag: `debug` plans the door leg inline, `diff` compares a
+    /// worker window against the snapshot; both count server-side.
+    #[test]
+    fn diag_ops_diff_and_debug_serve_dossier_inputs() {
+        let (service, client) = lot5_service();
+        let before = service.query_stats_diag();
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let reply = lot5_debug(&client, from, dest);
+        assert_eq!(reply.get("ok").as_bool(), Some(true), "debug answers, got {reply:?}");
+        let answer = crate::service_queries::decode_debug_reply(&reply).expect("debug decodes");
+        assert!(!answer.locs.is_empty(), "template locs near dest");
+        assert!(answer.defs.iter().any(|def| def.open_op.is_some()), "a door def names its click");
+        let plan = match answer.outcome {
+            Ok(plan) => plan,
+            Err(no) => panic!("door leg plans, got {}", no.reason.as_str()),
+        };
+        assert!(plan.segments.iter().any(|segment| matches!(segment, Segment::OpenDoor { .. })), "leg swings a door");
+        // Diff: an exact cell agrees (no entry), a wrong id mismatches.
+        let entry = &answer.locs[0];
+        let cells = vec![
+            crate::service_queries::DiffCell { x: entry.x, z: entry.z, level: entry.level, loc: Some((entry.loc, entry.shape, entry.angle)), removed: false },
+            crate::service_queries::DiffCell { x: entry.x, z: entry.z, level: entry.level, loc: Some((entry.loc.wrapping_add(1), entry.shape, entry.angle)), removed: false },
+        ];
+        let reply = client
+            .request(&object(vec![
+                ("op", str_value("diff")),
+                ("version", str_value("lot5")),
+                ("cells", crate::service_queries::encode_diff_cells(&cells)),
+            ]))
+            .expect("diff answers");
+        let diff = crate::service_queries::decode_diff_reply(&reply).expect("diff decodes");
+        assert_eq!(diff.len(), 1, "only the wrong cell mismatches, got {diff:?}");
+        assert_eq!(diff[0].static_loc, Some((entry.loc, entry.shape, entry.angle)), "static names the template");
+        let after = service.query_stats_diag();
+        assert_eq!(after.0 - before.0, 1, "diff counted");
+        assert_eq!(after.1 - before.1, 1, "debug counted");
+    }
+
+    /// L5 diag: an unplannable dest answers NoRoute, never a plan.
+    #[test]
+    fn diag_ops_debug_reports_noroute() {
+        let (_, client) = lot5_service();
+        let reply = lot5_debug(&client, Tile { x: 3191, z: 3366, level: 0 }, Tile { x: 3191, z: 3361, level: 0 });
+        let answer = crate::service_queries::decode_debug_reply(&reply).expect("debug decodes");
+        match answer.outcome {
+            Ok(_) => panic!("guild door must not plan without qp"),
+            Err(no) => assert_eq!(no.reason, crate::plan::NoRouteReason::NeedsRequirement, "names the missing tags"),
+        }
+    }
+
+    /// L5 discipline: stale refuses with the served version, bad payloads
+    /// refuse typed, never a guess.
+    #[test]
+    fn diag_ops_stale_and_bad_payload() {
+        let (_, client) = lot5_service();
+        let reply = client
+            .request(&object(vec![("op", str_value("diff")), ("version", str_value("bogus")), ("cells", Value::Arr(vec![]))]))
+            .expect("stale answers");
+        assert_eq!(reply.get("ok").as_bool(), Some(false), "stale refuses");
+        assert_eq!(reply.get("version").as_str(), Some("lot5"), "served version rides along");
+        for (op, body) in [
+            ("diff", vec![("cells", Value::Int(1))]),
+            ("debug", vec![]),
+            ("doors_near", vec![("x", Value::Int(0))]),
+        ] {
+            let mut fields = vec![("op", str_value(op)), ("version", str_value("lot5"))];
+            fields.extend(body);
+            let reply = client.request(&object(fields)).expect("transport answers");
+            assert_eq!(reply.get("ok").as_bool(), Some(false), "{op} refuses, got {reply:?}");
+        }
+    }
+
+    /// L5 bulk: lists match the tables, stands match the planner, doors
+    /// stay in radius and nearest-first.
+    #[test]
+    fn bulk_ops_lists_match_tables_and_prober() {
+        let (service, client) = lot5_service();
+        let (world, tables) = shared_world();
+        let before = service.query_stats_diag();
+        let reply = client
+            .request(&object(vec![("op", str_value("transitions_list")), ("version", str_value("lot5"))]))
+            .expect("list answers");
+        let rows = crate::service_queries::decode_transitions_list_reply(&reply).expect("list decodes");
+        assert_eq!(rows.len(), tables.transitions.len(), "every row ships");
+        assert_eq!(rows[0].name, tables.transitions[0].name, "table order kept");
+        let reply = client
+            .request(&object(vec![("op", str_value("probe_targets")), ("version", str_value("lot5")), ("filter", Value::Null)]))
+            .expect("targets answer");
+        let targets = crate::service_queries::decode_probe_targets_reply(&reply).expect("targets decode");
+        assert!(!targets.is_empty(), "unfiltered probes");
+        let probed: Vec<_> = tables.transitions.iter().filter(|row| !row.disabled).collect();
+        assert_eq!(targets.len(), probed.len(), "disabled excluded, rest kept");
+        let options = NavOptions { allow_paid: true, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new() };
+        for target in targets.iter().take(25) {
+            let row = tables.transitions.iter().find(|row| row.name == target.view.name).expect("row exists");
+            let direct = crate::plan::ride_stands(&world, &tables, &options, row).into_iter().next();
+            assert_eq!(target.stand, direct, "{} stands like the planner", row.name);
+            assert!(target.expect.is_some() == target.stand.is_some(), "stand and expect agree");
+        }
+        let reply = client
+            .request(&object(vec![
+                ("op", str_value("probe_targets")),
+                ("version", str_value("lot5")),
+                ("filter", str_value("zzz-no-such-row")),
+            ]))
+            .expect("filtered answers");
+        assert!(crate::service_queries::decode_probe_targets_reply(&reply).expect("decodes").is_empty(), "no match, no rows");
+        let (door_x, door_z, door_level): (i32, i32, i32) = (3226, 3223, 0);
+        let door_loc = 1530u16;
+        let reply = client
+            .request(&object(vec![
+                ("op", str_value("doors_near")),
+                ("version", str_value("lot5")),
+                ("x", Value::Int(i64::from(door_x))),
+                ("z", Value::Int(i64::from(door_z))),
+                ("level", Value::Int(i64::from(door_level))),
+                ("radius", Value::Int(20)),
+            ]))
+            .expect("doors answer");
+        let doors = crate::service_queries::decode_static_locs_near_reply(&reply).expect("doors decode");
+        assert!(doors.iter().any(|entry| entry.loc == door_loc), "the door tile names its door");
+        assert!(doors.windows(2).all(|pair| {
+            let first = (pair[0].x - door_x).abs() + (pair[0].z - door_z).abs();
+            let second = (pair[1].x - door_x).abs() + (pair[1].z - door_z).abs();
+            first <= second
+        }), "nearest first");
+        assert!(doors.iter().all(|entry| (entry.x - door_x).abs() + (entry.z - door_z).abs() <= 20 && entry.level == door_level), "radius and level hold");
+        let after = service.query_stats_diag();
+        assert_eq!(after.2 - before.2, 1, "transitions_list counted");
+        assert_eq!(after.3 - before.3, 2, "both probe batches counted");
+        assert_eq!(after.4 - before.4, 1, "doors_near counted");
+    }
 }

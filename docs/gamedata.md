@@ -7,7 +7,7 @@ sol avec cooldowns. Accès typé depuis Rust (`lifescape-gamedata`,
 `fishing`, `food`, `quests`, `quest_requirements`, `recipes`, `rocks`, `shops`,
 `spawns`, `spells`, `trees`, `varps`) ; l'index du tableau *est* l'id.
 
-Données : `gamedata/data/*.json` (`bank_stands`, `comps`, `equipment`, `foods`,
+Données : `gamedata/data/*.json` (`comps`, `equipment`, `foods`,
 `gametypes`, `locs`, `npcs`, `objs`, `quests`, `rocks`, `shops`, `spawns_obj`,
 `spells`, `transitions`, `trees`, `varps`). Générées par dump, jamais éditées.
 Régénérer (rev 274) :

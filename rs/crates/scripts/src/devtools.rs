@@ -9,7 +9,7 @@
 //! Tools that need the pack reader, the engine content tree or a second
 //! connection cannot run in-session and report `impossible` instead.
 
-use lifescape_gamedata::{all_locs, loc_by_id, objs_by_name};
+use lifescape_gamedata::{loc_by_id, objs_by_name};
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::{Bot, Error};
 
@@ -174,13 +174,12 @@ pub(crate) fn escape_json(text: &str) -> String {
     out
 }
 
-/// `--only X --kind Y --limit N --skip M`. Anything else is refused
+/// `--only X --limit N --skip M`. Anything else is refused
 /// instead of silently ignored (`--trace` needs the private connection
 /// trace, `--run`/`--fresh` have no Rust-SDK equivalent yet).
 #[derive(Debug, Default)]
 pub(crate) struct Filter {
     pub(crate) only: Option<String>,
-    pub(crate) kind: Option<String>,
     pub(crate) limit: usize,
     pub(crate) skip: usize,
 }
@@ -194,10 +193,6 @@ pub(crate) fn parse_filter(args: &[String]) -> Result<Filter, ScriptError> {
                 index += 1;
                 filter.only = args.get(index).cloned();
             }
-            "--kind" => {
-                index += 1;
-                filter.kind = args.get(index).cloned();
-            }
             "--limit" => {
                 index += 1;
                 filter.limit = args.get(index).and_then(|text| text.parse().ok()).unwrap_or(0);
@@ -206,7 +201,7 @@ pub(crate) fn parse_filter(args: &[String]) -> Result<Filter, ScriptError> {
                 index += 1;
                 filter.skip = args.get(index).and_then(|text| text.parse().ok()).unwrap_or(0);
             }
-            other => return Err(ScriptError::Usage(format!("unsupported devtool flag {other:?} (want --only/--kind/--limit/--skip)"))),
+            other => return Err(ScriptError::Usage(format!("unsupported devtool flag {other:?} (want --only/--limit/--skip)"))),
         }
         index += 1;
     }
@@ -239,19 +234,6 @@ fn dev_walktour(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 // -- bank_deposit ------------------------------------------------------------
 
-pub(crate) fn live_loc_tiles(bot: &Bot) -> Vec<((i32, i32, i32), (u16, u8, u8))> {
-    let mut out = Vec::new();
-    for (key, value) in &bot.world.static_locs {
-        out.push((*key, *value));
-    }
-    for (key, slot) in &bot.world.locs {
-        if let Some(value) = slot {
-            out.push((*key, *value));
-        }
-    }
-    out
-}
-
 fn dev_bank_deposit(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep = Vec::new();
     for name in args {
@@ -261,20 +243,11 @@ fn dev_bank_deposit(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     }
     bot.intend("depositing backpack");
-    let (here_x, here_z) = (bot.world.x, bot.world.z);
-    bot.ensure_area(here_x, here_z, 150);
-    let booth_ids: Vec<u16> = all_locs()
-        .iter()
-        .filter(|entry| entry.name.as_deref().unwrap_or("").to_lowercase() == "bankbooth")
-        .map(|entry| entry.loc_id as u16)
-        .collect();
+    let (here_x, here_z, here_level) = (bot.world.x, bot.world.z, bot.world.level);
     let mut booths: Vec<(i32, i32, u16)> = Vec::new();
-    for ((x, z, level), value) in live_loc_tiles(bot) {
-        if level != bot.world.level {
-            continue;
-        }
-        if booth_ids.contains(&value.0) {
-            booths.push((x, z, value.0));
+    for entry in bot.static_locs_near(here_x, here_z, here_level, 150)? {
+        if (bot.tables.loc_name)(entry.loc).as_deref() == Some("bankbooth") {
+            booths.push((entry.x, entry.z, entry.loc));
         }
     }
     booths.sort_by_key(|booth| (booth.0 - bot.world.x).abs() + (booth.1 - bot.world.z).abs());

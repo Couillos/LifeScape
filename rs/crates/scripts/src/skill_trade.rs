@@ -24,7 +24,7 @@ pub fn general_store(bot: &Bot) -> Option<(String, (i32, i32, i32))> {
         }
         for keeper in &shop.keepers {
             for entry in knowledge::npcs_by_name(&keeper.npc) {
-                for spawn in &entry.spawns {
+                for spawn in entry.spawns {
                     if spawn.level != i64::from(bot.world.level) {
                         continue;
                     }
@@ -54,7 +54,7 @@ pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32
         }
         for keeper in &shop.keepers {
             for entry in knowledge::npcs_by_name(&keeper.npc) {
-                for spawn in &entry.spawns {
+                for spawn in entry.spawns {
                     if spawn.level != i64::from(bot.world.level) {
                         continue;
                     }
@@ -136,7 +136,7 @@ fn shop_mates(bot: &Bot, keeper: &str) -> Vec<(String, (i32, i32, i32))> {
             continue;
         }
         for entry in knowledge::npcs_by_name(&row.npc) {
-            for spawn in &entry.spawns {
+            for spawn in entry.spawns {
                 if spawn.level != i64::from(bot.world.level) {
                     continue;
                 }
@@ -186,6 +186,13 @@ fn trade_with(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32), main_com: u16
             Ok(false) => {
                 bot.log(&format!("trade with {keeper} failed: hurt walking to spawn at {:?}", bot.position()));
                 return Ok(false);
+            }
+            // No service means no walk at all: typed `nav-down` stays
+            // loud instead of degrading into an unreachable keeper.
+            Err(err)
+                if matches!(&err, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
+            {
+                return Err(err)
             }
             Err(err) if is_death_abort(&err) => {
                 return Err(err);
@@ -244,8 +251,12 @@ fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) 
                 break;
             }
             // Dead socket, not a bad angle: reconnect instead of pacing
-            // the other sides of a booth we cannot touch.
+            // the other sides of a booth we cannot touch. A down service
+            // is typed `nav-down`: loud, never paced as a bad angle.
             if let Err(err) = bot.walk_to(tile_x, tile_z, bot.world.level, 750) {
+                if matches!(&err, lifescape_sdk::Error::Travel(detail) if detail.contains("nav-down")) {
+                    return Err(err.into());
+                }
                 if matches!(err, lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)) {
                     return Err(err.into());
                 }
@@ -498,10 +509,10 @@ mod tests {
         assert_eq!(require_trade_gain(3, "coins", &bot).expect("nonzero passes"), 3);
     }
 
-    /// Keeper out of reach in an empty world: offline the spawn walk fails
-    /// at the dead socket, which aborts typed (reconnect) instead of
-    /// degrading to Ok(false). A live unreachable keeper (refusals with a
-    /// live socket) still returns Ok(false), never a guess.
+    /// Keeper out of reach in an empty world: without a service the
+    /// spawn walk fails `nav-down`, which `trade_with` propagates typed
+    /// by contract (no walk, no limp-along). The direct `walk_to` below
+    /// proves the root cause is `nav-down` and nothing else.
     #[test]
     fn unreachable_spawn_returns_false() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
@@ -511,9 +522,16 @@ mod tests {
         bot.world.x = 3220;
         bot.world.z = 3220;
         assert!(bot.world.npcs.is_empty(), "empty world, keeper absent");
-        let outcome = trade_to_keeper(&mut bot, "no_such_keeper", (0, 3200, 3227));
-        let error = outcome.expect_err("dead socket aborts typed");
-        assert!(crate::skill_common::is_conn_abort(&error), "typed for the reconnect arm, got: {error}");
+        let error = trade_to_keeper(&mut bot, "no_such_keeper", (0, 3200, 3227)).expect_err("no service, nav-down is loud");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
+        let error = bot.walk_to(3200, 3227, bot.world.level, 100).expect_err("direct walk is nav-down");
+        assert!(
+            matches!(&error, lifescape_sdk::Error::Travel(detail) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
     }
 
     /// Live keeper known: the live tile wins, the static spawn (which can
@@ -534,10 +552,12 @@ mod tests {
         assert_ne!((found.1, found.2), (3232, 3203), "static spawn ignored when live is there");
     }
 
-    /// Live keeper with no socket: the first booth-side walk fails typed
-    /// (reconnect) instead of pacing all sides and returning Ok(false).
+    /// Live keeper with no service: the booth-side walk fails `nav-down`,
+    /// which the trade rounds propagate typed by contract (no walk, no
+    /// pacing to the next angle). The direct `walk_to` below proves the
+    /// root cause is `nav-down` and nothing else (never a local plan).
     #[test]
-    fn live_keeper_offline_aborts_typed() {
+    fn live_keeper_offline_returns_false() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         crate::wire_nav(&mut bot);
@@ -548,9 +568,16 @@ mod tests {
             7,
             NpcInfo { npc_type: bob_type(), x: 3096, z: 3241, level: 0, name: None, anim: None },
         );
-        let outcome = trade_to_keeper(&mut bot, "bob", (0, 3232, 3203));
-        let error = outcome.expect_err("dead socket aborts typed");
-        assert!(crate::skill_common::is_conn_abort(&error), "typed for the reconnect arm, got: {error}");
+        let error = trade_to_keeper(&mut bot, "bob", (0, 3232, 3203)).expect_err("no service, nav-down is loud");
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
+        let error = bot.walk_to(3096, 3241, bot.world.level, 100).expect_err("direct walk is nav-down");
+        assert!(
+            matches!(&error, lifescape_sdk::Error::Travel(detail) if detail.contains("nav-down")),
+            "nav-down and nothing else, got: {error}"
+        );
     }
 
     /// Keeper absent: no live tile, and the fallback line names the keeper
