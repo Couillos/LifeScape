@@ -6,7 +6,7 @@ use lifescape_gamedata::quest_requirements;
 use lifescape_sdk::{Bot, Error};
 use lifescape_sdk::waits::wait_ticks;
 
-use super::quest_common as solver;
+use super::common as solver;
 use crate::{ScriptError, ScriptResult};
 
 // shortcut: the Rust SDK has no portal table (no ride_transition_at), so

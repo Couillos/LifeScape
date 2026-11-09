@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use lifescape_sdk::Bot;
 use lifescape_sdk::collision::LOC;
 
-use super::quest_common as kit;
+use crate::quests::common as kit;
 use super::randomevent;
 use super::maze_doors;
 use crate::{ScriptError, ScriptResult};

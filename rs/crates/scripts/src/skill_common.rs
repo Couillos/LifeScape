@@ -252,7 +252,7 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
 /// fence stands nearby — or when the service is down (logged): callers
 /// proceed unfenced and the next plan fails loud with `nav-down`, never a
 /// local guess. The `Option` shape is frozen by callers that cannot carry a
-/// `Result` (`skill_woodcutting.rs`, `skill_mining.rs` bootstrap budgets).
+/// `Result` (`activities/woodcut.rs`, `activities/mining.rs` bootstrap budgets).
 pub fn toll_gate_x(bot: &mut Bot) -> Option<i32> {
     let (here_x, here_z) = (bot.world.x, bot.world.z);
     match bot.toll_fence(here_x, here_z, bot.world.level, 150) {
@@ -305,11 +305,11 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
             bot.approach(gate.0, gate.1, gate.2, 1, 300)?;
             continue;
         }
-        crate::quest_common::drain_dialog(bot, 60)?;
+        crate::quests::common::drain_dialog(bot, 60)?;
         if bot.world.modal.is_some() {
             let _ = bot.chat_choose("Yes, ok.");
             bot.pump(10)?;
-            crate::quest_common::drain_dialog(bot, 30)?;
+            crate::quests::common::drain_dialog(bot, 30)?;
         }
         let moved = bot.world.ticks + 30;
         while bot.world.ticks < moved && (bot.world.x >= line) == start_side {

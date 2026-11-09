@@ -5,7 +5,7 @@
 use lifescape_gamedata::quest_requirements;
 use lifescape_sdk::Bot;
 
-use super::quest_common as solver;
+use super::common as solver;
 use crate::{ScriptError, ScriptResult};
 
 fn solve_cook(bot: &mut Bot) -> Result<(), ScriptError> {

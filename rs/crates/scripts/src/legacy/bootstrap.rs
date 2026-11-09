@@ -16,7 +16,7 @@ use crate::skill_common::{
     bank_trip, buy_stock, nearest_bank, obj_id, obj_price, pack_ids, pack_total, sell_for_target,
 };
 use crate::skill_gather::reattach_tool;
-use crate::skill_woodcutting::{AXE_SPEC, HANDLE_NAME};
+use crate::kit::tools::{AXE_HANDLE, AXE_HEAD_SUFFIX, AXE_SPEC};
 use crate::ScriptError;
 
 /// Broke and axeless: kill goblins east of Lumbridge for coin drops
@@ -51,7 +51,7 @@ pub(crate) fn hunt_goblins(bot: &mut Bot, coins: u16) -> Result<bool, ScriptErro
             return Ok(true);
         }
         let before = pack_total(bot, coins);
-        crate::skill_combat::run_melee(
+        crate::activities::melee::run_melee(
             bot,
             &["goblins".to_string(), "--kills".to_string(), "6".to_string(), "--no-bank".to_string()],
         )?;
@@ -161,7 +161,7 @@ pub(crate) fn ensure_axe(
 ) -> Result<Option<u32>, ScriptError> {
     let mut bank_coins: Option<u32> = None;
     if AXE_SPEC.best_held(bot).is_none() || pack_ids(bot).iter().any(|id| !AXE_SPEC.known_ids(bot).contains(id) && !log_ids.contains(id) && *id != coins) {
-        if reattach_tool(bot, HANDLE_NAME, "_hatchethead", &AXE_SPEC)? {
+        if reattach_tool(bot, AXE_HANDLE, AXE_HEAD_SUFFIX, &AXE_SPEC)? {
             bot.log("ok reattached axe from pack, no bootstrap needed");
         }
         let keep: Vec<u16> = log_ids.iter().copied().collect();
@@ -214,7 +214,7 @@ pub(crate) fn ensure_axe(
         }
         if AXE_SPEC.best_held(bot).is_none() {
             bank_coins = Some(bank_trip(bot, bank, &keep, 0)?);
-            if crate::kit::tools::restore_from_bank(bot, bank, &AXE_SPEC, HANDLE_NAME, "_hatchethead")? {
+            if crate::kit::tools::restore_from_bank(bot, bank, &AXE_SPEC, AXE_HANDLE, AXE_HEAD_SUFFIX)? {
                 bot.log("ok axe restored from bank");
             }
         }

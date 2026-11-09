@@ -1,13 +1,13 @@
-//! Woodcutter spot picking: tiers, spawns, liveness, toll fence and
-//! hunter filters. Pure selection (no walking): the gather loop walks to
-//! whatever this returns. Split from `skill_woodcutting` (file-size rule).
+//! Tree pool: tiers, spawns, liveness, toll fence and hunter
+//! filters, regrow prediction. Pure selection (no walking): the tree
+//! driver walks to whatever this returns. Split from the old woodcut
+//! script (file-size rule); the generic filters live in `kit::spots`.
 
 #![forbid(unsafe_code)]
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
 use crate::kit::observe::Observe;
 use crate::kit::spots::{drop_occupied, f2p_inside, hunter_covers, hunter_zones, refine_by_walk, OCCUPIED_RADIUS};
 use crate::skill_gather::{across_toll, BanSet};
@@ -100,69 +100,7 @@ fn tree_live(bot: &Bot, spot_x: i32, spot_z: i32, tier_names: &[String]) -> bool
     }
 }
 
-/// Live footprint (width, length) of the loc on this tile. The server
-/// reaches shape-10 locs orthogonally to their footprint (`ReachStrategy`
-/// `reachRectangle1`, engine `routefinder/ReachStrategy.ts`), never
-/// diagonally to the anchor tile: yews and oaks are 3x3, most trees 2x2
-/// (`gametypes.json` loc rows). A diagonal-to-anchor stand touches no
-/// footprint edge and the click always refuses — live 6/6: (3150,3229)
-/// fails on (3151,3230) while (3151,3229) cuts, (3183,3225) fails on
-/// (3184,3226) while (3185,3225) cuts, (3164,3220) cuts (3165,3219).
-/// Unknown loc reads as 1x1 (old behaviour, engine arbitrates on click).
-pub(crate) fn spot_footprint(bot: &mut Bot, spot_x: i32, spot_z: i32) -> (i64, i64) {
-    let footprint = resolve_loc(bot, spot_x, spot_z).ok().and_then(|(loc, angle)| {
-        knowledge::loc_by_id(usize::from(loc)).map(|entry| {
-            if angle % 2 == 1 {
-                (entry.length, entry.width)
-            } else {
-                (entry.width, entry.length)
-            }
-        })
-    });
-    footprint.unwrap_or((1, 1))
-}
 
-/// True when the stand is orthogonally adjacent to the loc footprint, i.e.
-/// the server can reach it: same geometry as `reachRectangle1` minus the
-/// wall-flag checks the engine arbitrates on click. Chebyshev-to-anchor is
-/// NOT the rule (a 3x3 corner stand is "adjacent" but inoperable).
-pub(crate) fn operable_stand(bot_x: i32, bot_z: i32, spot_x: i32, spot_z: i32, width: i64, length: i64) -> bool {
-    let (anchor_x, anchor_z) = (i64::from(spot_x), i64::from(spot_z));
-    let (stand_x, stand_z) = (i64::from(bot_x), i64::from(bot_z));
-    (stand_x == anchor_x - 1 && stand_z >= anchor_z && stand_z < anchor_z + length)
-        || (stand_x == anchor_x + width && stand_z >= anchor_z && stand_z < anchor_z + length)
-        || (stand_z == anchor_z - 1 && stand_x >= anchor_x && stand_x < anchor_x + width)
-        || (stand_z == anchor_z + length && stand_x >= anchor_x && stand_x < anchor_x + width)
-}
-
-/// One stand per footprint side (side middles): the click rotation tries
-/// these before condemning the tree. Sorted nearest-first by the caller.
-pub(crate) fn operable_ring(spot_x: i32, spot_z: i32, width: i64, length: i64) -> Vec<(i32, i32)> {
-    let mut ring = vec![
-        (spot_x - 1, spot_z + (length as i32) / 2),
-        (spot_x + width as i32, spot_z + (length as i32) / 2),
-        (spot_x + (width as i32) / 2, spot_z - 1),
-        (spot_x + (width as i32) / 2, spot_z + length as i32),
-    ];
-    ring.sort();
-    ring.dedup();
-    ring
-}
-
-/// Ban for a failed walk to a stand. Planner-proven `NoRoute`
-/// (`Error::Travel`, disconnected from here) bans a short re-probe
-/// delay (UNREACHABLE_BAN_TICKS): re-planning the same walk from the
-/// same tile is provably futile, so the spot sits out instead of
-/// burning a full plan on every repick. Every other walk
-/// failure (step refused mid-leg, leg timeout, door mid-swing) rides the
-/// short ban (250t) and is re-tested at expiry.
-pub(crate) fn walk_fail_ban(planner_proved: bool) -> u64 {
-    if planner_proved {
-        UNREACHABLE_BAN_TICKS
-    } else {
-        GONE_BAN_TICKS
-    }
-}
 
 /// Nearest live same-tier spawn within hop range. Pure scan: no logging,
 /// no bans, no mutation — the caller logs and decides. `fence = None`
@@ -457,8 +395,7 @@ pub(crate) fn pick_tree_spot(
 /// streams live), so `is_stump`/`tree_still_there` keep deciding below.
 /// A down service stays loud (`nav-down` via `ScriptError::Sdk`); only a
 /// tile the service has no template for keeps the `Usage` error.
-fn resolve_loc(bot: &mut Bot, tile_x: i32, tile_z: i32) -> Result<(u16, u8), ScriptError> {
-    if let Some((loc, _, angle)) = bot.world.loc_at(tile_x, tile_z, bot.world.level) {
+pub(crate) fn resolve_loc(bot: &mut Bot, tile_x: i32, tile_z: i32) -> Result<(u16, u8), ScriptError> {    if let Some((loc, _, angle)) = bot.world.loc_at(tile_x, tile_z, bot.world.level) {
         return Ok((loc, angle));
     }
     let level = bot.world.level;
@@ -497,34 +434,9 @@ pub(crate) fn tree_still_there(bot: &mut Bot, spot_x: i32, spot_z: i32, tier_nam
     }
 }
 
-/// Operable direct refusals on a standing tree before it is condemned: the
-/// first refusal rides the short ban (a transient storm or a gate mid-swing
-/// refuses once), the repeat proves permanence (wall/fence). A walk-leg
-/// failure never counts as a strike, however close the walk died. Geometry
-/// is footprint-orthogonal (`operable_stand`), never Chebyshev: a refused
-/// diagonal-to-anchor corner is a bad stand, not a walled tree.
-pub(crate) const DIRECT_REFUSALS_TO_CONDEMN: u8 = 2;
 
-/// Ban for a failed tree stand. `direct` is true only when the server
-/// refused the chop click itself ("can't reach that") from a
-/// footprint-operable stand; walk-leg failures (never arrived, leg timeout,
-/// step refused far away, inoperable stand) pass false and can never return
-/// the structural ban (STRUCTURAL_BAN_TICKS: ~7 min at dev tick, ~72 min
-/// official — a proven wall, not a session exile). Structural needs a
-/// repeated operable direct
-/// refusal of a standing tree; everything else is transient (a crowd, a
-/// gate mid-swing, a walk that fell short) and rides the short ban (Gone,
-/// 250t) so the spot is re-tested at expiry instead of sitting out half the
-/// session. A stump is depletion (Gone).
-pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior_strikes: u8) -> u64 {
-    if stump {
-        return GONE_BAN_TICKS;
-    }
-    if direct && operable && prior_strikes + 1 >= DIRECT_REFUSALS_TO_CONDEMN {
-        return STRUCTURAL_BAN_TICKS;
-    }
-    GONE_BAN_TICKS
-}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -532,7 +444,7 @@ mod tests {
     use crate::kit::observe::Observe;
     use crate::kit::spots::refine_by_walk;
     use crate::skill_common::toll_gate_x;
-    use crate::skill_gather::{same_side, starved_oldest};
+    use crate::skill_gather::{same_side, starved_oldest, BanSet};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -842,22 +754,6 @@ mod tests {
     /// Strike rule: only a refusal from a footprint-operable stand counts
     /// toward condemning (a corner refusal is a bad stand, retried short).
     #[test]
-    fn direct_refusal_needs_a_repeat_to_condemn() {
-        assert_eq!(refusal_ban_ticks(false, false, false, 5), GONE_BAN_TICKS, "far walk retries short");
-        assert_eq!(refusal_ban_ticks(true, false, false, 5), GONE_BAN_TICKS, "walk failure retries short");
-        assert_eq!(refusal_ban_ticks(true, false, true, 0), GONE_BAN_TICKS, "first refusal retries short");
-        assert_eq!(refusal_ban_ticks(true, false, true, 1), STRUCTURAL_BAN_TICKS, "repeat condemns");
-        assert_eq!(
-            refusal_ban_ticks(false, false, true, 1),
-            GONE_BAN_TICKS,
-            "afar click is a short walk, not a walled stand"
-        );
-        assert_eq!(
-            refusal_ban_ticks(true, true, true, 1),
-            GONE_BAN_TICKS,
-            "stump is depletion even when adjacent"
-        );
-    }
 
     /// Release rule: only a full ban sweep (100% of spots seen) releases
     /// the oldest; one stump, gate or hunter means genuinely unavailable.
@@ -933,45 +829,15 @@ mod tests {
     /// (3166,3218) both cut (3165,3219) (west side, inside the footprint
     /// edge range).
     #[test]
-    fn operable_stand_matches_server_reach() {
-        // Yew 3x3 at (3151,3230): south side works, west corner refuses.
-        assert!(operable_stand(3151, 3229, 3151, 3230, 3, 3), "south side cuts");
-        assert!(!operable_stand(3150, 3229, 3151, 3230, 3, 3), "diagonal corner refuses");
-        // Yew 3x3 at (3184,3226): east-diagonal works, west-diagonal refuses.
-        assert!(operable_stand(3185, 3225, 3184, 3226, 3, 3), "south-east diagonal works");
-        assert!(!operable_stand(3183, 3225, 3184, 3226, 3, 3), "south-west corner refuses");
-        // Yew 3x3 at (3165,3219): west side and south side both cut.
-        assert!(operable_stand(3164, 3220, 3165, 3219, 3, 3), "west side cuts");
-        assert!(operable_stand(3166, 3218, 3165, 3219, 3, 3), "south side cuts");
-        // Willow 2x2: side middles cut, corners refuse, far tiles refuse.
-        assert!(operable_stand(9, 10, 10, 10, 2, 2), "west side cuts");
-        assert!(!operable_stand(9, 9, 10, 10, 2, 2), "corner refuses");
-        assert!(!operable_stand(13, 11, 10, 10, 2, 2), "two tiles off refuses");
-        // 1x1 keeps the old adjacency (all four orthogonals, no diagonals).
-        assert!(operable_stand(5, 4, 5, 5, 1, 1), "south cuts");
-        assert!(!operable_stand(4, 4, 5, 5, 1, 1), "diagonal refuses");
-    }
 
     /// Ring: one stand per footprint side, deduped (a 3x3 yields 4
     /// distinct side middles, a 1x1 the four orthogonals).
     #[test]
-    fn operable_ring_covers_four_sides() {
-        let mut ring = operable_ring(3151, 3230, 3, 3);
-        ring.sort();
-        assert_eq!(ring, vec![(3150, 3231), (3152, 3229), (3152, 3233), (3154, 3231)], "side middles, got: {ring:?}");
-        let mut single = operable_ring(5, 5, 1, 1);
-        single.sort();
-        assert_eq!(single, vec![(4, 5), (5, 4), (5, 6), (6, 5)], "four orthogonals, got: {single:?}");
-    }
 
     /// Walk-failure bans: planner-proven NoRoute sits out 30k (re-planning
     /// from the same tile is futile), every transient walk failure rides
     /// the short ban and is re-tested at expiry.
     #[test]
-    fn walk_fail_ban_is_proven_or_short() {
-        assert_eq!(walk_fail_ban(true), UNREACHABLE_BAN_TICKS, "planner proof bans long");
-        assert_eq!(walk_fail_ban(false), GONE_BAN_TICKS, "transient walk retries short");
-    }
 
     /// Planner-proven dead spot (`except`): never picked, never
     /// starvation-released, breaks unanimity so the repick degrades to the
@@ -1075,7 +941,7 @@ mod tests {
         assert_eq!(live_loc_id(&mut bot, 3053, 3271).expect("live answers"), 1341, "live beats the template");
         // Footprint follows the fallback too: yews are 3x3, never 1x1.
         bot.world.locs.remove(&(3053, 3271, 0));
-        assert_eq!(spot_footprint(&mut bot, 3053, 3271), (3, 3), "fallback footprint");
+        assert_eq!(crate::kit::harvest::spot_footprint(&mut bot, 3053, 3271), (3, 3), "fallback footprint");
     }
 
     /// A tile the service has no template for keeps the `Usage` error

@@ -5,7 +5,7 @@
 
 use lifescape_sdk::Bot;
 
-use super::quest_common as kit;
+use crate::quests::common as kit;
 use super::randomevent::{self};
 use crate::{ScriptError, ScriptResult};
 

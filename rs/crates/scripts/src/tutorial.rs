@@ -7,7 +7,7 @@
 
 use lifescape_sdk::{Bot, Error};
 
-use super::quest_common as kit;
+use crate::quests::common as kit;
 use crate::{ScriptError, ScriptResult};
 
 const COM_DESIGN_ACCEPT: u16 = 3651;

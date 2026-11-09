@@ -3,6 +3,7 @@
 //! Every script the orchestrator can launch. Every entry runs for
 //! real through the SDK; unknown names report errors, never silent stubs.
 
+pub mod activities;
 pub mod devtools;
 pub mod devtools_check;
 pub mod devtools_probe;
@@ -10,22 +11,15 @@ pub mod kit;
 pub mod legacy;
 pub mod maze;
 pub mod maze_doors;
+pub mod quests;
+pub mod randomevent;
+pub mod randomevent_full;
+pub mod rescues;
 pub mod skill_common;
 pub mod skill_gather;
 pub mod skill_loop;
 pub mod skill_trade;
 pub mod skill_walk;
-pub mod skill_fishing;
-pub mod skill_combat;
-pub mod skill_mining;
-pub mod skill_woodcutting;
-pub mod skill_woodcutting_spot;
-pub mod quest_common;
-pub mod quests_a;
-pub mod quests_b;
-pub mod randomevent;
-pub mod randomevent_full;
-pub mod rescues;
 pub mod tables_live;
 pub mod tutorial;
 
@@ -192,29 +186,29 @@ fn runner(name: &str) -> Option<Runner> {
         "goto" => Some(|bot, args| Goto.run(bot, args)),
         "walkto" => Some(|bot, args| Walkto.run(bot, args)),
         "debug_walk" => Some(|bot, args| DebugWalk.run(bot, args)),
-        "fishing" => Some(|bot, args| skill_fishing::run_fishing(bot, args)),
-        "mining" => Some(|bot, args| skill_mining::run_mining(bot, args)),
-        "woodcut" => Some(|bot, args| skill_woodcutting::run_woodcut(bot, args)),
-        "melee" => Some(|bot, args| skill_combat::run_melee(bot, args)),
+        "fishing" => Some(|bot, args| activities::fishing::run_fishing(bot, args)),
+        "mining" => Some(|bot, args| activities::mining::run_mining(bot, args)),
+        "woodcut" => Some(|bot, args| activities::woodcut::run_woodcut(bot, args)),
+        "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
-        "quest_black_knights_fortress" => Some(|bot, args| quests_b::run_quest("blackknight", bot, args)),
-        "quest_cooks_assistant" => Some(|bot, args| quests_a::run_quest("cook", bot, args)),
-        "quest_demon_slayer" => Some(|bot, args| quests_b::run_quest("demon", bot, args)),
-        "quest_dorics_quest" => Some(|bot, args| quests_a::run_quest("doric", bot, args)),
-        "quest_dragon_slayer" => Some(|bot, args| quests_b::run_quest("dragon", bot, args)),
-        "quest_ernest_the_chicken" => Some(|bot, args| quests_a::run_quest("haunted", bot, args)),
-        "quest_goblin_diplomacy" => Some(|bot, args| quests_a::run_quest("gobdip", bot, args)),
-        "quest_imp_catcher" => Some(|bot, args| quests_a::run_quest("imp", bot, args)),
-        "quest_knights_sword" => Some(|bot, args| quests_b::run_quest("squire", bot, args)),
-        "quest_pirates_treasure" => Some(|bot, args| quests_b::run_quest("hunt", bot, args)),
-        "quest_prince_ali_rescue" => Some(|bot, args| quests_b::run_quest("prince", bot, args)),
-        "quest_restless_ghost" => Some(|bot, args| quests_b::run_quest("priest", bot, args)),
-        "quest_romeo_and_juliet" => Some(|bot, args| quests_a::run_quest("romeojuliet", bot, args)),
-        "quest_rune_mysteries" => Some(|bot, args| quests_a::run_quest("runemysteries", bot, args)),
-        "quest_sheep_shearer" => Some(|bot, args| quests_a::run_quest("sheep", bot, args)),
-        "quest_shield_of_arrav" => Some(|bot, args| quests_b::run_quest("blackarmgang", bot, args)),
-        "quest_vampire_slayer" => Some(|bot, args| quests_b::run_quest("vampire", bot, args)),
-        "quest_witchs_potion" => Some(|bot, args| quests_a::run_quest("hetty", bot, args)),
+        "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
+        "quest_cooks_assistant" => Some(|bot, args| quests::a::run_quest("cook", bot, args)),
+        "quest_demon_slayer" => Some(|bot, args| quests::b::run_quest("demon", bot, args)),
+        "quest_dorics_quest" => Some(|bot, args| quests::a::run_quest("doric", bot, args)),
+        "quest_dragon_slayer" => Some(|bot, args| quests::b::run_quest("dragon", bot, args)),
+        "quest_ernest_the_chicken" => Some(|bot, args| quests::a::run_quest("haunted", bot, args)),
+        "quest_goblin_diplomacy" => Some(|bot, args| quests::a::run_quest("gobdip", bot, args)),
+        "quest_imp_catcher" => Some(|bot, args| quests::a::run_quest("imp", bot, args)),
+        "quest_knights_sword" => Some(|bot, args| quests::b::run_quest("squire", bot, args)),
+        "quest_pirates_treasure" => Some(|bot, args| quests::b::run_quest("hunt", bot, args)),
+        "quest_prince_ali_rescue" => Some(|bot, args| quests::b::run_quest("prince", bot, args)),
+        "quest_restless_ghost" => Some(|bot, args| quests::b::run_quest("priest", bot, args)),
+        "quest_romeo_and_juliet" => Some(|bot, args| quests::a::run_quest("romeojuliet", bot, args)),
+        "quest_rune_mysteries" => Some(|bot, args| quests::a::run_quest("runemysteries", bot, args)),
+        "quest_sheep_shearer" => Some(|bot, args| quests::a::run_quest("sheep", bot, args)),
+        "quest_shield_of_arrav" => Some(|bot, args| quests::b::run_quest("blackarmgang", bot, args)),
+        "quest_vampire_slayer" => Some(|bot, args| quests::b::run_quest("vampire", bot, args)),
+        "quest_witchs_potion" => Some(|bot, args| quests::a::run_quest("hetty", bot, args)),
         "rescue_maze" => Some(|bot, args| rescues::run_rescue("maze", bot, args)),
         "rescue_mime" => Some(|bot, args| rescues::run_rescue("mime", bot, args)),
         "rescue_cube" => Some(|bot, args| rescues::run_rescue("cube", bot, args)),
@@ -272,5 +266,59 @@ mod tests {
             assert!(super::runner(name).is_some(), "registry name {name} has no runner");
         }
         assert!(super::runner("nope").is_none(), "unknown names must not dispatch");
+    }
+
+    /// Size plafonds (std only, no new dependency): activities stay
+    /// declarations (< 200 code lines, tests excluded), kit bricks stay
+    /// focused (< 500). Quests and legacy move verbatim and keep only the
+    /// file rule (< 1000 total lines). Code = non-blank, non-comment
+    /// lines outside `#[cfg(test)]`.
+    #[test]
+    fn plafonds_hold_for_activities_bricks_and_files() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut over = Vec::new();
+        for dir in ["kit", "activities", "quests", "legacy"] {
+            let entries = std::fs::read_dir(root.join(dir)).expect("scripts subdir lists");
+            let mut names: Vec<String> = Vec::new();
+            for entry in entries {
+                let name = entry.expect("dir entry").file_name().to_string_lossy().into_owned();
+                if name.ends_with(".rs") {
+                    names.push(name);
+                }
+            }
+            names.sort();
+            for name in names {
+                if name == "mod.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(root.join(dir).join(&name)).expect("brick reads");
+                let total = text.lines().count();
+                let mut code = 0usize;
+                let mut in_test = false;
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if trimmed == "#[cfg(test)]" {
+                        in_test = true;
+                    }
+                    if !in_test && !trimmed.is_empty() && !trimmed.starts_with("//") {
+                        code += 1;
+                    }
+                }
+                // Code budget: activities (< 200) and kit bricks (< 500)
+                // only; quests and legacy moved verbatim.
+                let limit = match dir {
+                    "activities" => 200,
+                    "kit" => 500,
+                    _ => usize::MAX,
+                };
+                if code >= limit {
+                    over.push(format!("{dir}/{name}: {code} code lines (limit {limit})"));
+                }
+                if total >= 1000 {
+                    over.push(format!("{dir}/{name}: {total} total lines (limit 1000)"));
+                }
+            }
+        }
+        assert!(over.is_empty(), "plafond dépassé:\n{}", over.join("\n"));
     }
 }

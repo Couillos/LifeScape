@@ -10,21 +10,13 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
-use crate::kit::gear::{current_weapon_category, rewear};
-use crate::kit::style::{combat_xp, controlled_button, current_skill, melee_stat, next_style, set_style, weakest_melee};
+use crate::kit::gear::{current_weapon_category, equip_plan, gear_plan, melee_level, prepare_at_bank, rewear};
+use crate::kit::style::{combat_xp, controlled_button, current_skill, fight_weapon_style, melee_stat, next_style, set_style, style_damage_key, weakest_melee};
 use crate::kit::survival::{bank_stocks_food, eat, food_count, should_eat, EAT_FRACTION};
-use crate::skill_common::{check_events, free_slots, hitpoints};
+use crate::kit::spots::{attack_nearest, BLOCKED_BAN_TICKS, DOOR_BAN_TICKS};
+use crate::skill_common::{check_events, free_slots, hitpoints, walk_checked};
 use crate::skill_gather::{fight_engaged, same_side, BanSet};
 use crate::ScriptError;
-
-/// World ticks a "can't reach" goblin tile stays banned before retry.
-const BLOCKED_BAN_TICKS: u64 = 200;
-
-/// Ban for a foe behind a door the server proved uncrossable (door opens,
-/// the step through is refused): the tile stays out for the whole fight.
-/// A spot that fails in a loop is worse than a spot skipped: each new
-/// indoor goblin burns one approach, never a campaign.
-const DOOR_BAN_TICKS: u64 = u64::MAX;
 
 /// No combat xp and no steps for this long while the foe lives: not
 /// fighting (fence, stale slot, single-way block). ~35 s at the measured
@@ -37,159 +29,6 @@ const FIGHT_STALL_TICKS: u64 = 200;
 /// is by definition a bad use of time on an axe rush.
 const KILL_CAP_TICKS: u64 = 900;
 
-fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
-    knowledge::banks::all_banks()
-        .into_iter()
-        .filter(|bank| !bank.members && bank.level == i64::from(bot.world.level))
-        .min_by_key(|bank| (bank.x - i64::from(bot.world.x)).abs() + (bank.z - i64::from(bot.world.z)).abs())
-        .map(|bank| (bank.level as i32, bank.x as i32, bank.z as i32))
-}
-
-/// NPC spawn clusters for a spot (same-level spawns only).
-pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec<(i32, i32, usize)> {
-    let mut spawns: Vec<(i64, i64)> = Vec::new();
-    for entry in knowledge::all_npcs() {
-        let name = entry.name.unwrap_or_default();
-        if !spot.npc_names.contains(&name) || entry.members == Some(true) {
-            continue;
-        }
-        for spawn in entry.spawns {
-            // shortcut: same-level spawns only; the fighter never rides
-            // down to a dungeon camp. Revisit if one is wanted.
-            if spawn.level != i64::from(bot.world.level) {
-                continue;
-            }
-            spawns.push((spawn.x, spawn.z));
-        }
-    }
-    let mut groups: Vec<Vec<(i64, i64)>> = Vec::new();
-    for spawn in spawns {
-        let mut placed = false;
-        for group in groups.iter_mut() {
-            let center_x: i64 = group.iter().map(|item| item.0).sum::<i64>() / group.len() as i64;
-            let center_z: i64 = group.iter().map(|item| item.1).sum::<i64>() / group.len() as i64;
-            if (spawn.0 - center_x).abs().max((spawn.1 - center_z).abs()) <= 15 {
-                group.push(spawn);
-                placed = true;
-                break;
-            }
-        }
-        if !placed {
-            groups.push(vec![spawn]);
-        }
-    }
-    let mut ranked: Vec<(f64, i32, i32, usize)> = groups
-        .into_iter()
-        .filter(|group| !group.is_empty())
-        .map(|group| {
-            let center_x = (group.iter().map(|item| item.0).sum::<i64>() / group.len() as i64) as i32;
-            let center_z = (group.iter().map(|item| item.1).sum::<i64>() / group.len() as i64) as i32;
-            let dist = nearest_bank_tile(bot).map(|(_, bank_x, bank_z)| {
-                (bank_x - center_x).abs() + (bank_z - center_z).abs()
-            }).unwrap_or(10000) as f64;
-            (group.len() as f64 - dist / 40.0, center_x, center_z, group.len())
-        })
-        .collect();
-    ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    ranked.into_iter().map(|(_, x, z, count)| (x, z, count)).collect()
-}
-
-/// Shop and bank staff are never targets: keepers, assistants, Bob and
-/// bankers (some at 1 HP) must survive our hunts. Excluded by op
-/// category — any Trade/Bank right-click — never by name, so a new shop
-/// inherits the guard. Valid foes carry Attack instead (goblin npc 100:
-/// [None, Attack, None, ...]).
-/// Source (read-only): gamedata npcs.json ops, e.g. generalshopkeeper1
-/// (npc 520) and generalassistant1 (521) carry Trade at op index 2.
-fn is_shop_staff(npc_type: u16) -> bool {
-    knowledge::npc_by_id(usize::from(npc_type)).is_some_and(|entry| {
-        entry.ops.iter().flatten().any(|op| {
-            let lowered = op.to_lowercase();
-            lowered.contains("trade") || lowered.contains("bank")
-        })
-    })
-}
-
-/// Acquisition window bound: Manhattan ranks the pool, only the top-K get
-/// a pure plan (see `lifescape_nav::walk_rank`), so never more plans than
-/// approaches. K=3: foes die fast, the window re-ranks every pick.
-const FOE_SHORTLIST: usize = 3;
-
-/// Walking-cost order for the acquisition window (remote batch, no
-/// walk, no send): Manhattan lies across rivers and fences, so the
-/// window is reordered by service plan cost before the door-aware
-/// approach verifies reachability by walking. Unwired or unplannable
-/// keeps the Manhattan order; the sort itself lives in
-/// `lifescape_nav::walk_rank`.
-fn rank_foes(bot: &mut Bot, window: Vec<(u16, i32, i32)>) -> Vec<(u16, i32, i32)> {
-    let level = bot.world.level;
-    crate::skill_walk::refine_walking(bot, window, FOE_SHORTLIST, "foe", |(_, x, z)| {
-        lifescape_nav::plan::Tile { x: *x, z: *z, level }
-    })
-    .into_iter()
-    .map(|(_, cand)| cand)
-    .collect()
-}
-
-fn attack_nearest(
-    bot: &mut Bot,
-    spot: &knowledge::combat_spots::CombatSpot,
-    avoid: &mut BanSet,
-) -> Result<Option<u16>, ScriptError> {
-    let names: Vec<&str> = spot.npc_names.to_vec();
-    let mut cands = bot.npcs_named(&names);
-    cands.retain(|(_, x, z)| !avoid.is_banned((*x, *z), bot.world.ticks));
-    // Shop staff are never foes, by op category (Trade/Bank), not name:
-    // a keeper next to the hunt (Bob by the axe shop, the Lumbridge
-    // general store pair) is never a valid click.
-    cands.retain(|(slot, _, _)| {
-        bot.world.npcs.get(slot).is_none_or(|npc| !is_shop_staff(npc.npc_type))
-    });
-    // Never target across the toll fence: goblins spawn on both flanks,
-    // so the nearest flips sides every kill and each crossing walks the
-    // ~200-tile foot detour (paid doors stay off all hunt). One side per
-    // pick; the flank follows the bot, not the plan, so no replan loop.
-    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
-        let home = bot.world.x;
-        cands.retain(|(_, x, _)| same_side(line, *x, home));
-    }
-    cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
-    // Door-aware acquisition, first reachable wins (max 3 foes): the window
-    // above is walking-cost ordered (rank_foes), so the first approach is
-    // the nearest by foot, not by air. Stand orthogonally adjacent via the
-    // router, which opens shut doors on the way (travel Segment::OpenDoor).
-    // NoRoute or a blocked ring bans the tile and tries the next goblin
-    // instead of insisting on this one.
-    for (slot, x, z) in rank_foes(&mut *bot, cands.into_iter().take(FOE_SHORTLIST).collect()) {
-        match bot.approach_npc(slot, 100) {
-            Ok(()) => {}
-            Err(error)
-                if matches!(
-                    error,
-                    lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
-                ) =>
-            {
-                return Err(error.into())
-            }
-            Err(error) => {
-                // Uncrossable door (verified open, step refused): the house
-                // is out for this fight, not the foe. One approach burned
-                // per tile, never a retry campaign.
-                if matches!(error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
-                    bot.log(&format!("goblin {slot} at ({x},{z}) behind uncrossable door, excluding: {error}"));
-                    avoid.ban_until((x, z), DOOR_BAN_TICKS);
-                    continue;
-                }
-                bot.log(&format!("goblin {slot} at ({x},{z}) unreachable: {error}"));
-                avoid.ban_for((x, z), bot.world.ticks, BLOCKED_BAN_TICKS);
-                continue;
-            }
-        }
-        bot.op_npc(2, slot)?;
-        return Ok(Some(slot));
-    }
-    Ok(None)
-}
 
 /// Deaths make the fight return instead of resuming the killer spot: the
 /// caller re-picks excluding it (one death) or fails typed (two in a row).
@@ -490,101 +329,338 @@ pub fn fight(
     Ok((kills, false, false))
 }
 
+
+
+
+/// Clusters on the bot's toll-fence flank (see skill_gather::same_side): the
+/// crossing is never paid in melee, so an eastern cluster from a western
+/// hunt is a ~220-tile detour per visit, never a shortcut. When every
+/// cluster is across and the run did not opt into `toll`, the list stays
+/// empty and the caller fails named instead of burning NoRoute dossiers.
+/// Falls back to every cluster only when paid (an all-across spot still
+/// hunts instead of idling once the gate is crossable).
+fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)], allow_paid: bool) -> Vec<(i32, i32, usize)> {
+    let kept: Vec<(i32, i32, usize)> =
+        targets.iter().filter(|(center_x, _, _)| same_side(line, *center_x, home)).copied().collect();
+    if kept.is_empty() && allow_paid {
+        targets.to_vec()
+    } else {
+        kept
+    }
+}
+
+/// Kills still wanted: 0 means unlimited, so a plain subtraction panics
+/// on the second cluster once anything died (t02 live).
+fn remaining_kills(kills_limit: u32, total: u32) -> u32 {
+    if kills_limit == 0 {
+        return 0;
+    }
+    kills_limit.saturating_sub(total)
+}
+
+pub fn run_spot(
+    bot: &mut Bot,
+    spot: &knowledge::combat_spots::CombatSpot,
+    kills_limit: u32,
+    ticks_limit: u64,
+    no_bank: bool,
+) -> Result<(u32, bool, bool), ScriptError> {
+    if spot.entrance.is_some() {
+        // shortcut: trapdoors/ladders to underground areas are not traversed
+        // (single-level router); surface spots only.
+        return Err(ScriptError::Usage(format!(
+            "spot {} is underground, not traversable from {:?}",
+            spot.key,
+            bot.position()
+        )));
+    }
+    let targets = crate::kit::spots::ranked_clusters(bot, spot);
+    if targets.is_empty() {
+        bot.log(&format!("no spawn for {}", spot.key));
+        return Ok((0, false, false));
+    }
+    // One flank per hunt: cluster centers across the toll fence would
+    // each cost the ~220-tile foot detour (paid doors stay off all
+    // hunt). The per-pick filter in attack_nearest stops the same
+    // oscillation inside the fight; this stops it between clusters.
+    let mut targets = targets;
+    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
+        let kept = same_flank_clusters(line, bot.world.x, &targets, bot.allow_paid);
+        if kept.len() != targets.len() {
+            bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
+        }
+        // Unpaid and nothing on this flank: the router refuses the paid
+        // gate, so every cluster would burn a NoRoute dossier and end
+        // "ok killed 0" (t02 live). Fail named instead.
+        if kept.is_empty() {
+            return Err(ScriptError::Usage(format!(
+                "spot {} is across the toll fence (line {line}) from {:?}: re-run with `toll` once the bot carries coins",
+                spot.key,
+                bot.position()
+            )));
+        }
+        targets = kept;
+    }
+    let mut total = 0u32;
+    let mut banked_trip = false;
+    for (center_x, center_z, count) in targets {
+        // Pace retries: instant walk failures consume no ticks, so an
+        // unpaced loop machine-guns the server into kicking us.
+        bot.pump(2)?;
+        bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
+        let mut walk_fails = 0u32;
+        while kills_limit == 0 || total < kills_limit {
+            // Hunt entry: the one full evaluation (pack + bank when near
+            // one, pack only with --no-bank). Inside the hunt only a loot
+            // that was picked up re-evaluates; a death ends the fight and
+            // returns to the run for the re-pick (see fight()).
+            if !no_bank {
+                if prepare_at_bank(bot)? {
+                    banked_trip = true;
+                }
+            } else {
+                let available = crate::kit::gear::available_gear(bot);
+                equip_plan(bot, &gear_plan(bot, &available, fight_weapon_style, style_damage_key))?;
+            }
+            // A dead socket must reconnect, not limp to the next cluster:
+            // propagate connection failures, swallow the rest as before.
+            match walk_checked(bot, center_x, center_z, 15000) {
+                Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                Err(_) | Ok(false) => {
+                    // A sticking door (or a step refused for a tick) must
+                    // not exile the hunt across the map: re-bank and retry
+                    // the same cluster, move on only on the third failure
+                    // in a row (t02 live: Lumbridge pen doors).
+                    walk_fails += 1;
+                    if walk_fails >= 3 {
+                        break;
+                    }
+                    wait_ticks(bot, 25)?;
+                    continue;
+                }
+                Ok(true) => {
+                    walk_fails = 0;
+                }
+            }
+            {
+                let (kills, bank_wanted, died) =
+                    crate::kit::fight::fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
+                total += kills;
+                if died {
+                    return Ok((total, true, banked_trip));
+                }
+                if !bank_wanted || (kills_limit > 0 && total >= kills_limit) {
+                    return Ok((total, false, banked_trip));
+                }
+            }
+        }
+    }
+    Ok((total, false, banked_trip))
+}
+
+/// Auto spot: broke beginners (no food carried, none banked) cannot
+/// trade hits, so chickens until the account can afford to bleed.
+/// Stocked accounts keep best_spot() exactly (t02 live: foodless at
+/// melee 2 died to cow chip damage every few kills).
+pub fn auto_spot(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
+    let level = melee_level(bot);
+    if level <= 2 && food_count(bot) == 0 && !bank_stocks_food(bot) {
+        if let Some(chickens) = knowledge::combat_spots::by_key("chickens") {
+            return chickens;
+        }
+    }
+    knowledge::combat_spots::best_spot(level)
+}
+
+
+/// Fallback after a death at `killer`: nearest surface spot that fits the
+/// current melee level and is no harder than the killer (existing
+/// `min_level` data only, no new threshold), killers excluded. Gear is
+/// unchanged since the death (re-wear from survivors only), so an
+/// easier-or-equal level range stays within gear reach. Nearest cluster to
+/// the respawn position wins so the walk back stays short. None when
+/// nothing reasonable is on foot: the caller banks instead.
+pub fn fallback_spot(
+    bot: &Bot,
+    killer: &knowledge::combat_spots::CombatSpot,
+    excluded: &[&str],
+) -> Option<knowledge::combat_spots::CombatSpot> {
+    let level = melee_level(bot);
+    let here = (bot.world.x, bot.world.z);
+    knowledge::combat_spots::all_spots()
+        .into_iter()
+        .filter(|spot| spot.entrance.is_none())
+        .filter(|spot| !excluded.iter().any(|key| *key == spot.key))
+        .filter(|spot| spot.min_level <= level && spot.min_level <= killer.min_level)
+        .filter_map(|spot| {
+            crate::kit::spots::ranked_clusters(bot, &spot)
+                .into_iter()
+                .map(|(spot_x, spot_z, _)| (spot_x - here.0).abs() + (spot_z - here.1).abs())
+                .min()
+                .map(|dist| (dist, spot))
+        })
+        .min_by_key(|(dist, _)| *dist)
+        .map(|(_, spot)| spot)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_shop_staff, rank_foes};
+    use super::{auto_spot, fallback_spot, remaining_kills};
+    use crate::kit::survival::{danger_error, DeathTally};
     use crate::tables_live::attach_live_tables;
+    use lifescape_gamedata as knowledge;
     use lifescape_sdk::Bot;
 
-    /// Shop staff are excluded by op category, never by name: the
-    /// Lumbridge general store pair (520/521), Bob (519) and bankers
-    /// carry Trade/Bank; every valid foe (goblin 100, chicken 41, man 1)
-    /// carries Attack instead.
-    #[test]
-    fn shop_staff_never_targeted_by_category() {
-        assert!(is_shop_staff(520), "Lumbridge keeper");
-        assert!(is_shop_staff(521), "Lumbridge assistant");
-        assert!(is_shop_staff(519), "Bob the axe seller");
-        assert!(is_shop_staff(494), "banker");
-        assert!(!is_shop_staff(100), "goblin fights");
-        assert!(!is_shop_staff(41), "chicken fights");
-        assert!(!is_shop_staff(1), "man fights");
-    }
-
-    /// Walking-cost order inside the take(3) window: slot 7 at (3252,3237)
-    /// is Manhattan-nearest from (3230,3241) but walks ~50 (houses/doors)
-    /// while slot 9 at (3203,3246) walks ~36 — the lure loses, and no walk
-    /// was spent to learn it (one remote batch, L1-cached on repeat).
-    #[test]
-    fn rank_foes_prefers_walk_cheap() {
+    fn stat_bot(attack: u8, defence: u8, strength: u8) -> Bot {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        crate::wire_nav(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3230;
-        bot.world.z = 3241;
-        let world = bot.nav_world.clone().expect("wired");
-        let tables = bot.nav_tables.clone().expect("wired");
-        let service = lifescape_nav::service::Service::start(
-            lifescape_nav::service::Snapshot::new(world, tables, "test-foes".to_string()),
-            &lifescape_nav::service::test_socket("foes-walk"),
-            1,
-        )
-        .expect("service starts");
-        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "foes"));
-        bot.plan_data_version = Some("test-foes".to_string());
-        bot.last_keepalive = Some(std::time::Instant::now());
-        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        let ranked = rank_foes(&mut bot, window);
-        assert_eq!(ranked, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "walk-cheap foe first, got: {ranked:?}");
-        // L1 hit: the same pair costs no new compute.
-        let before = service.stats();
-        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        let again = rank_foes(&mut bot, window);
-        assert_eq!(again, vec![(9u16, 3203, 3246), (7u16, 3252, 3237)], "repeat ranks identically");
-        let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "second ranking hits L1, never recomputes");
-        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
+        bot.world.stats.insert(0, (attack, 0));
+        bot.world.stats.insert(1, (defence, 0));
+        bot.world.stats.insert(2, (strength, 0));
+        bot
     }
 
-    /// No planner wired (or nothing plannable): the window keeps its
-    /// Manhattan order, never empties — ranking changes, picking never.
+
+
+    /// Unlimited (0) stays unlimited past the first cluster; a bound
+    /// never goes negative.
     #[test]
-    fn rank_foes_unwired_keeps_manhattan() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3230;
-        bot.world.z = 3241;
-        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        assert_eq!(rank_foes(&mut bot, window.clone()), window, "unwired keeps Manhattan order");
+    fn remaining_kills_never_underflows() {
+        assert_eq!(remaining_kills(0, 0), 0);
+        assert_eq!(remaining_kills(0, 5), 0, "unlimited hunt survives kills");
+        assert_eq!(remaining_kills(10, 3), 7);
+        assert_eq!(remaining_kills(10, 10), 0);
     }
 
-    /// Operator stop during ranking: cancel, no block, Manhattan order.
+
+    /// Broke beginners hunt chickens, stocked ones keep best_spot.
     #[test]
-    fn rank_foes_stop_returns_manhattan_without_blocking() {
-        use std::sync::Arc;
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        crate::wire_nav(&mut bot);
+    fn auto_spot_shelters_the_foodless() {
+        let broke = stat_bot(2, 2, 2);
+        assert_eq!(auto_spot(&broke).key, "chickens");
+        let mut stocked = stat_bot(2, 2, 2);
+        let bank_com = (stocked.tables.com_id)("bank_main:inv").expect("bank com in dumps");
+        stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
+        assert_eq!(auto_spot(&stocked).key, "cows");
+    }
+
+
+
+
+
+
+
+    /// Toll-fence side test: the gate line splits flanks (Al-Kharid gate
+    /// halves 2882/2883); same flank hunts together, never across.
+    #[test]
+
+
+    /// Cluster flank filter: mixed flanks keep the bot's side only; an
+    /// all-across list falls back to everything only when paid, and
+    /// stays empty when unpaid so the caller fails named (t02 live:
+    /// unpaid al_kharid_warriors from the west burned NoRoute dossiers
+    /// and ended "ok killed 0").
+    #[test]
+    fn clusters_stay_on_the_hunting_flank() {
+        let mixed = vec![(3252, 3243, 16), (3274, 3213, 4)];
+        assert_eq!(super::same_flank_clusters(3268, 3260, &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
+        assert_eq!(super::same_flank_clusters(3268, 3270, &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
+        let east_only = vec![(3274, 3213, 4)];
+        assert_eq!(super::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
+        assert!(super::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
+    }
+
+    /// Auto re-pick from the west never idles on an across-toll pick: the
+    /// fallback is a surface spot at or below the killer tier with a
+    /// same-flank cluster to hunt (t02 live: auto warriors from Lumbridge
+    /// ended the run with Usage instead of hunting).
+    #[test]
+    fn auto_toll_fallback_hunts_the_home_flank() {
+        let mut bot = stat_bot(17, 17, 17);
+        bot.world.x = 3219;
+        bot.world.z = 3219;
         bot.world.level = 0;
-        bot.world.x = 3230;
-        bot.world.z = 3241;
-        let world = bot.nav_world.clone().expect("wired");
-        let tables = bot.nav_tables.clone().expect("wired");
-        let service = lifescape_nav::service::Service::start(
-            lifescape_nav::service::Snapshot::new(world, tables, "test-foes-stop".to_string()),
-            &lifescape_nav::service::test_socket("foes-stop"),
-            1,
-        )
-        .expect("service starts");
-        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), "foes-stop"));
-        bot.plan_data_version = Some("test-foes-stop".to_string());
-        bot.last_keepalive = Some(std::time::Instant::now());
-        bot.on_pump = Some(Arc::new(|_: &mut Bot| false));
-        let start = std::time::Instant::now();
-        let window = vec![(7u16, 3252, 3237), (9u16, 3203, 3246)];
-        assert_eq!(rank_foes(&mut bot, window.clone()), window, "stop keeps Manhattan order");
-        assert!(start.elapsed() < std::time::Duration::from_secs(30), "stop cancels, never blocks");
+        let killer = knowledge::combat_spots::by_key("al_kharid_warriors").expect("warriors");
+        let excluded = vec![killer.key];
+        let fallback = fallback_spot(&bot, &killer, &excluded).expect("a walkable repli exists");
+        assert_ne!(fallback.key, killer.key, "never re-pick the across spot");
+        assert!(fallback.entrance.is_none(), "surface only, the router never rides down");
+        assert!(fallback.min_level <= killer.min_level, "no harder than the across pick, got: {}", fallback.key);
+        let targets = crate::kit::spots::ranked_clusters(&bot, &fallback);
+        assert!(!targets.is_empty(), "fallback has same-level spawns");
+        let kept = super::same_flank_clusters(3268, bot.world.x, &targets, false);
+        assert!(!kept.is_empty(), "{} has no west-flank cluster to hunt", fallback.key);
+    }
+
+
+
+
+
+    /// One death excludes the killer from every later re-pick: the
+    /// fallback is never the spot that just killed (t02 live: warriors
+    /// -> Lumbridge -> warriors on foot, forever).
+    #[test]
+    fn death_excludes_the_killer_spot() {
+        let bot = stat_bot(9, 9, 9);
+        let killer = knowledge::combat_spots::by_key("cows").expect("cows");
+        let mut tally = DeathTally::fresh();
+        tally.note_death(killer.key);
+        assert!(tally.excludes("cows"));
+        let fallback =
+            fallback_spot(&bot, &killer, tally.excluded()).expect("a same-tier repli exists");
+        assert_ne!(fallback.key, "cows", "never re-pick the killer identically");
+        assert!(fallback.entrance.is_none(), "surface only, the router never rides down");
+        assert!(
+            fallback.min_level <= killer.min_level,
+            "no harder than what just killed, got: {}",
+            fallback.key
+        );
+    }
+
+    /// Nothing safer on foot (every surface spot excluded or above the
+    /// melee level): no fallback, the caller banks instead of re-picking.
+    #[test]
+    fn no_fallback_when_nothing_reasonable() {
+        let bot = stat_bot(2, 2, 2);
+        let killer = knowledge::combat_spots::by_key("chickens").expect("chickens");
+        let all: Vec<&str> =
+            knowledge::combat_spots::all_spots().iter().map(|spot| spot.key).collect();
+        assert!(
+            fallback_spot(&bot, &killer, &all).is_none(),
+            "everything excluded: bank, never re-pick"
+        );
+    }
+
+    /// Two deaths in a row (no kill, no bank trip between) fail typed
+    /// Unreachable instead of walking back a third time.
+    #[test]
+    fn two_deaths_fail_typed_unreachable() {
+        let mut tally = DeathTally::fresh();
+        tally.note_death("al_kharid_warriors");
+        assert!(!tally.fatal(), "one death re-picks, never fails");
+        tally.note_death("cows");
+        assert!(tally.fatal(), "two consecutive deaths are fatal");
+        let error = danger_error("cows", tally.deaths());
+        assert!(
+            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Unreachable(_))),
+            "typed Unreachable, got: {error}"
+        );
+        assert!(error.to_string().contains("too dangerous after 2 deaths"), "explicit, got: {error}");
+        assert!(error.to_string().contains("re-gear"), "points at the fix, got: {error}");
+    }
+
+    /// A kill or a bank trip between deaths starts a new streak (deaths
+    /// with progress between are not consecutive); the killer stays out
+    /// for the run.
+    #[test]
+    fn progress_resets_the_death_streak() {
+        let mut tally = DeathTally::fresh();
+        tally.note_death("cows");
+        tally.note_progress();
+        assert_eq!(tally.deaths(), 0, "kill/bank resets the streak");
+        assert!(!tally.fatal());
+        assert!(tally.excludes("cows"), "the killer stays out for the run");
+        tally.note_death("goblins");
+        assert!(!tally.fatal(), "progress between deaths: new streak, not fatal");
     }
 }

@@ -1,0 +1,73 @@
+//! Fishing activity: best spot for the level, banks full loads,
+//! sells fish to fund tool and bait upgrades. The loads loop only:
+//! everything it calls lives in the kit (`kit::fish` driver,
+//! `kit::spots` pool, `kit::tools` rank).
+
+#![forbid(unsafe_code)]
+
+use lifescape_sdk::Bot;
+
+use crate::skill_common::{
+    bank_trip, buy_stock, check_events, learn_level, nearest_bank, obj_id, obj_price, pack_total,
+    sell_for_target, wait_pack_streamed,
+};
+use crate::skill_trade::buy_best_affordable;
+use crate::{ScriptError, ScriptResult};
+
+/// Fish banked loads in the open session (0 = forever).
+pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
+    let spec = crate::kit::cycle::parse_cli("fishing", args)?;
+    let loads = spec.count;
+    wait_pack_streamed(bot)?;
+    check_events(bot)?;
+    let side_bank = (bot.tables.com_id)("bank_side:inv")
+        .ok_or_else(|| ScriptError::Usage("bank_side:inv missing from component table".to_string()))?;
+    let main_bank = (bot.tables.com_id)("bank_main:inv")
+        .ok_or_else(|| ScriptError::Usage("bank_main:inv missing from component table".to_string()))?;
+    let side_shop = (bot.tables.com_id)("shop_template_side:inv")
+        .ok_or_else(|| ScriptError::Usage("shop_template_side:inv missing from component table".to_string()))?;
+    let main_shop = (bot.tables.com_id)("shop_template:inv")
+        .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
+    let _ = (side_bank, main_bank);
+    let coins = obj_id(bot, "coins")?;
+    let mut level = learn_level(bot, crate::kit::fish::FISH_STAT, 1);
+    let mut bank = nearest_bank(bot)?;
+    bot.log(&format!("bank at ({},{})", bank.x, bank.z));
+    let mut bank_coins = 0u32;
+    if crate::kit::tools::FISH_SPEC.best_held(bot).is_none() {
+        let keep = vec![coins];
+        bank_coins = bank_trip(bot, &bank, &keep, 0)?;
+        if crate::kit::tools::FISH_SPEC.best_held(bot).is_none() {
+            let net_price = obj_price("net") as u32;
+            if pack_total(bot, coins) >= net_price && buy_stock(bot, "net", 1)? > 0 {
+                bot.log("ok bootstrapped net");
+            } else {
+                return Err(ScriptError::Usage(format!(
+                    "cannot bootstrap: no tool, {} coins",
+                    pack_total(bot, coins)
+                )));
+            }
+        }
+    }
+    let mut done = 0u32;
+    while loads == 0 || done < loads {
+        check_events(bot)?;
+        let (ok, new_level) = crate::kit::fish::fish_load(bot, level, &mut bank, coins, side_shop, main_shop)?;
+        level = new_level;
+        if !ok {
+            return Err(ScriptError::Usage(format!("fish failed at {:?}", bot.position())));
+        }
+        let (cands, cheapest) = crate::kit::tools::cheapest_fish_upgrade(bot, level);
+        if !cands.is_empty() {
+            sell_for_target(bot, &[], coins, cheapest.max(0) as u32 - bank_coins.min(cheapest.max(0) as u32))?;
+        }
+        let keep: Vec<u16> = crate::kit::tools::FISH_SPEC.known_ids(bot).into_iter().collect();
+        bank_coins = bank_trip(bot, &bank, &keep, 0)?;
+        // Post-bank upgrade: only what the pack affords, best-first with
+        // downgrade on shop failure (shared aborts: death/conn/interrupt).
+        let _ = buy_best_affordable(bot, &cands)?;
+        done += 1;
+        bot.log(&format!("ok load {done} banked (fishing={level})"));
+    }
+    Ok(0)
+}

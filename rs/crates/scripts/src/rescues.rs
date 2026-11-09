@@ -9,7 +9,7 @@
 use lifescape_sdk::{Bot, Error};
 use lifescape_sdk::waits::wait_ticks;
 
-use super::quest_common as kit;
+use crate::quests::common as kit;
 use super::randomevent;
 use super::randomevent_full::climb_out;
 use crate::{ScriptError, ScriptResult};
