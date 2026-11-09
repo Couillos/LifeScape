@@ -489,15 +489,18 @@ pub(crate) fn described_jobs(orch: &crate::daemon::Orchestrator) -> Vec<Value> {
 /// the live describes like the endpoint, so running bots count their
 /// pushed snapshots instead of their stale save files.
 pub fn start_sampler(orch: Arc<crate::daemon::Orchestrator>) {
-    std::thread::spawn(move || {
-        while orch.running.load(std::sync::atomic::Ordering::SeqCst) {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            if !orch.running.load(std::sync::atomic::Ordering::SeqCst) {
-                break;
+    std::thread::Builder::new()
+        .name("holdings-sampler".to_string())
+        .spawn(move || {
+            while orch.running.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                if !orch.running.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                maybe_sample(&described_jobs(&orch));
             }
-            maybe_sample(&described_jobs(&orch));
-        }
-    });
+        })
+        .expect("holdings sampler spawns");
 }
 
 #[cfg(test)]

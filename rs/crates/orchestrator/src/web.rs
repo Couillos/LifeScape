@@ -824,17 +824,23 @@ pub fn start_web(dispatch: Dispatch, port: u16) {
         }
     };
     println!("webapp listening on http://0.0.0.0:{port}/");
-    std::thread::spawn(move || {
-        for stream in server.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let dispatch = dispatch.clone();
-                    std::thread::spawn(move || serve_conn(stream, &dispatch));
+    std::thread::Builder::new()
+        .name("web-accept".to_string())
+        .spawn(move || {
+            for stream in server.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let dispatch = dispatch.clone();
+                        std::thread::Builder::new()
+                            .name("web-conn".to_string())
+                            .spawn(move || serve_conn(stream, &dispatch))
+                            .expect("web connection thread spawns");
+                    }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-    });
+        })
+        .expect("web acceptor spawns");
 }
 
 #[cfg(test)]

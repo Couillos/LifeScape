@@ -1147,7 +1147,7 @@ fn dossier_text(error: &Error) -> String {
 mod tests {
     use super::*;
     use crate::client::travel_dossier::dossier_json;
-    use crate::waits::TICK_MS;
+    use crate::waits::tick_ms;
 
     fn empty_plan() -> Plan {
         Plan { segments: Vec::new(), cost: 0, adjusted_dest: None }
@@ -1223,7 +1223,7 @@ mod tests {
         );
         assert_eq!(value.get("account").as_str(), Some("t01"));
         assert_eq!(value.get("tick").as_i64(), Some(42));
-        assert_eq!(value.get("tick_ms").as_i64(), Some(TICK_MS as i64));
+        assert_eq!(value.get("tick_ms").as_i64(), Some(tick_ms() as i64));
         assert_eq!(value.get("from").get("x").as_i64(), Some(1));
         assert_eq!(value.get("dest").get("z").as_i64(), Some(4));
         assert_eq!(value.get("failed_segment").as_i64(), Some(0));

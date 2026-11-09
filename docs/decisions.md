@@ -24,3 +24,40 @@
 - 2026-11-09 — Gamedata en statiques compilées (`gamedata/build.rs` → modules générés dans `OUT_DIR`, `&'static`, index triés + `binary_search`, `rerun-if-changed` par dump, pages `.rodata` partagées entre workers) au lieu d'un service gamedata. Rejeté : IPC gamedata (RAM résidente + latence + mode panne pour des dumps stables en prod).
 - 2026-11-09 — `direct` branche `plan_client` (+ version) comme une session quand le service répond, sinon refuse le run au démarrage. Rejeté : run direct sans handle (rendait `nav-down` à chaque pas, divergent de la session).
 - 2026-11-09 — Persistance SQLite confinée (D3) : nouveau crate `lifescape-store`, seul autorisé à dépendre d'une bibliothèque externe (`rusqlite =0.41.1`, fonctionnalité `bundled`, compilé avec le projet, aucun système requis hors `cc`) ; API typée sans fuite SQL, `#![forbid(unsafe_code)]` conservé, WAL, migrations versionnées, un seul ouvreur (le daemon). Rejeté : JSON par compte (pas de requêtes) et SQLite dans chaque crate (dépendance dispersée).
+- 2026-11-09 — Base de temps D1 : engagements et budgets en ticks, graphes et historiques en horloge. Rejeté : tout en ticks (graphes incomparables entre dev et prod) et tout en horloge (comportement différent à 60 ms vs 600 ms).
+- 2026-11-09 — Invendus au plancher D2 : haute alchimie si rentable (niveau 55/21, runes au prix market), sinon vente au magasin qui paie le plus, sinon jet (D10) pour le non échangeable invendable. Rejeté : détruire sans ordre et garder indéfiniment (banque 60 cases).
+- 2026-11-09 — Périmètre F2P uniquement D4 : comptes, objets (`members = false` et `tradeable = true`), recettes, sorts, 18 quêtes du registre, 15 skills, géographie `in_f2p`. Rejeté : contenu membres (monde F2P confirmé, `map_members = false`).
+- 2026-11-09 — Market prioritaire D5 : pause inline générique (généralisation du rescue), compteur d'engagement suspendu pendant la pause, retour à la position de départ, rescue d'abord. Rejeté : arrêt + relance (état à reconstruire) et décompte des pauses dans l'engagement.
+- 2026-11-09 — Tous les échanges place de Varrock D6, autour de la fontaine (3213, 3429, niveau 0), anneau de cases adjacentes calculé via `tiles_flags`. Rejeté : échanges sur place (pas de liquidité visible, trajets non mesurables).
+- 2026-11-09 — Tick D7 : 60 ms en dev, 600 ms en prod, réglé par `NODE_TICK_RATE` (défaut 600). Rejeté : taux unique (dev trop lent ou prod faussée).
+- 2026-11-09 — Aucun plafond de pauses market D8. Rejeté : plafond (bot souvent apparié pénalisé sans raison système).
+- 2026-11-09 — Équipement gardé D9 : meilleur objet F2P uniquement pour les styles entraînés par le but. Rejeté : panoplies de tous les styles (banque 60 cases).
+- 2026-11-09 — Objets non échangeables et invendables devenus inutiles D10 : jetés. Rejeté : conservation (fuite de cases).
+- 2026-11-09 — Aucune taxe ni frein à l'inflation D11 : masse monétaire seulement mesurée et affichée. Rejeté : taxe (équilibrage prématuré, hors socle).
+- 2026-11-09 — Tout passe par le market D12 : aucun échange hors carnet ; objet sans repli D2 reste au carnet jusqu'à 1 pièce. Rejeté : dons et prêts entre bots (échanges invisibles, non mesurables).
+- 2026-11-09 — Wilderness ouverte à tous D13, sans préparation ni détour banque ; pertes gérées par replanning. Rejeté : profil risque et équipement d'expédition (complexité sans gain F2P).
+- 2026-11-09 — Graphe de prix en canvas maison D14, dans la lignée de `items.js`. Rejeté : bibliothèque externe (std only).
+- 2026-11-09 — Choix market/farm D15 : trait `market_affinity` tiré à la création, fixe, qui pondère les coûts. Rejeté : choix pur coût (tous les bots identiques) et trait changeant (comportement illisible).
+- 2026-11-09 — Rendements D16 : tout compte (produits, drops, spawns au sol, ramassés), provenance étiquetée non excluante ; seuls `shop_bought`/`traded` exclus. Rejeté : exclusion des drops (rendements faux en combat).
+- 2026-11-09 — Banque pleine d'invendus D17 : jeter des piles entières, moins chère en valeur totale d'abord, ordre annulé. Rejeté : jeter partiel (ne libère aucune case).
+- 2026-11-09 — Bots marchands D18 dans le socle : archétype du but « devenir riche », méthode `market:flip`, poste fixe place de Varrock. Rejeté : market sans marchands (liquidité nulle entre bots aux buts dispersés).
+- 2026-11-09 — Tendances publiées D19 calculées sur les seules données publiques du market (carnet, exécutions), bonus de rentabilité lissé. Rejeté : signaux sur engagements des autres bots (mémoire partagée déguisée, contraire à D22).
+- 2026-11-09 — Kit de comportements D20 : onze briques partagées, six archétypes, activités < 200 lignes, briques < 500. Rejeté : scripts monolithiques (woodcut 1846 lignes de code, décisions de vie dispersées).
+- 2026-11-09 — Batterie de tâches D21 : le brain fixe objectif et ressource exacte ; un script ne choisit ni ressource ni palier, il trouve seulement où l'exploiter. Rejeté : choix de palier côté script (replanning impossible).
+- 2026-11-09 — Réalisme D22 : aucune mémoire partagée entre bots ; un bot ne sait que ce qu'il voit, vit et ce qui est public (prix, rendements publiés). Rejeté : pénalité de foule et offres en route (connaissance cachée).
+- 2026-11-09 — Fabrication et cuisine D23 dans le socle, premier client de la brique `produce`. Rejeté : socle sans fabrication (extensibilité non démontrée).
+- 2026-11-09 — Décisions de vie de woodcut D24 isolées dans `legacy/bootstrap.rs` jusqu'au brain, puis supprimées. Rejeté : suppression immédiate (parité live perdue) et conservation (dette).
+- 2026-11-09 — Arguments CLI conservés D25 via parseur commun vers `TaskSpec`. Rejeté : nouveau CLI incompatible (tests live et habitudes cassés).
+- 2026-11-09 — Contrainte dure D26 : plusieurs centaines de bots dans 20 Go ; enveloppe RAM/CPU par composant, mesure PSS, admission de sessions, chantiers E1-E15. Rejeté : croissance sans enveloppe (effondrement silencieux).
+- 2026-11-09 — Cible D27 : 300 bots 24 h/24 sur 8 cœurs / 20 Go / SSD avec serveur, base et dashboard ; grands runs au tick de prod. Rejeté : machine dédiée par composant (hors moyens).
+- 2026-11-09 — Aucun plafond de présence à la fontaine D28. Rejeté : quotas de place (file artificielle, rendez-vous manqués).
+- 2026-11-09 — Observabilité intégrale D29 : minimap, spectate et outils de debug conservés, optimisables jamais appauvris. Rejeté : suppression d'outils pour gagner du CPU (indispensables au développement).
+- 2026-11-09 — Heartbeat espacé D30 en deux flux (léger fréquent, complet en diffs espacé). Rejeté : statu quo 1 snapshot/s/bot (~33 Ko/s/bot extrapolés à 300).
+- 2026-11-09 — Plusieurs bots par process D31 acceptés dès gain CPU mesuré ≥ 20 %, groupes de 10 à 25. Rejeté : adoption aveugle (RAM déjà à 8-9 Mo/bot, le gain ne peut venir que du CPU).
+- 2026-11-09 — Logs complets D32 : optimisations sans perte seules (buffer, déduplication, rotation). Rejeté : troncature (information perdue pour le diagnostic).
+- 2026-11-09 — Pas de sessions humaines D33 : les bots jouent en continu. Rejeté : plages humaines (complexité sans besoin).
+- 2026-11-09 — Logs D34 : 100 Mo par bot en rotation (~30 Go à 300) ; ≥ 60 Go libres exigés avant endurance (29 Go libres mesurés : faire de la place). Rejeté : logs non bornés (SSD rempli).
+- 2026-11-09 — RAM n'est plus la contrainte D35 : 8-9 Mo PSS/bot mesurés, plafond 20 Mo/bot ; E7 se tranche sur le CPU de prod. Rejeté : multi-process pour la RAM (gain négligeable).
+- 2026-11-09 — CPU du daemon contrainte n° 1 D36 : ≤ 0,33 % d'un cœur par bot au tick de prod ; E2, E3, E4, E8, E13, E14 obligatoires avant L5. Rejeté : market et brain avant sobriété (charge ajoutée sur le poste saturé).
+- 2026-11-09 — `TICK_MS = 20` remplacé D37 par `waits::tick_ms()` (`NODE_TICK_RATE`, 600 par défaut) ; règle 5 d'AGENTS.md corrigée. Rejeté : constante 20 (dossiers d'échec annotés d'une fausse durée).
+- 2026-11-09 — Tests live limités à 20 bots D38 ; tenue à 300 par coûts par bot × 300 + banc E15 à 300 faux workers. Rejeté : live à 300 (risque serveur et SSD, hors moyens).

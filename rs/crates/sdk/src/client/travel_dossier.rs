@@ -12,7 +12,7 @@ use lifescape_nav::plan::{EdgeId, NavOptions, Plan, Segment, Tile};
 
 use crate::client::Bot;
 use crate::error::TravelErrorKind;
-use crate::waits::TICK_MS;
+use crate::waits::tick_ms;
 
 /// Dossier field budgets (§6.4): trail marks, live window, messages.
 pub(crate) const TRAIL_TAKE: usize = 50;
@@ -264,7 +264,7 @@ pub(crate) fn dossier_json(
     let mut fields = vec![
         ("account", Value::Str(account.to_string())),
         ("tick", Value::Int(tick as i64)),
-        ("tick_ms", Value::Int(TICK_MS as i64)),
+        ("tick_ms", Value::Int(tick_ms() as i64)),
         ("from", tile_value(from)),
         ("dest", tile_value(dest)),
         ("options", options_value(options)),

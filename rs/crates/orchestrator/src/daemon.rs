@@ -599,6 +599,7 @@ impl Orchestrator {
     pub(crate) fn write_state(&self, job: &Arc<Job>) {
         let (merged_path, _partial, _log) = paths::user_paths(&job.account);
         let _ = paths::write_json(&merged_path, &job.describe());
+        crate::res_stats::record_file();
     }
 
     /// Worker push frames (`session_push`): snapshots refresh the memory
@@ -606,6 +607,7 @@ impl Orchestrator {
     /// merged state at once. Fire-and-forget from the worker side: a lost
     /// frame is a missed heartbeat, the next pump pushes again.
     pub fn ingest_push(&self, frame: &Value) -> Value {
+        crate::res_stats::record_push(json::stringify(frame).len() as u64);
         let account = frame.get("account").as_str().unwrap_or("").to_string();
         if account.is_empty() {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
@@ -903,6 +905,11 @@ impl Orchestrator {
                         ("error", str_value("pathfinding service not running")),
                     ]),
                 };
+            }
+            "res-stats" => {
+                // Attribution gauge: pushes, bytes, plans, polls, files,
+                // connections, each with its per-second average.
+                return crate::res_stats::snapshot_json();
             }
             _ => {}
         }

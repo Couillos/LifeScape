@@ -14,6 +14,7 @@ use lifescape_orchestrator::cli::cli;
 use lifescape_orchestrator::daemon::Orchestrator;
 
 fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
+    lifescape_orchestrator::res_stats::record_connection();
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let mut line = String::new();
     if BufReader::new(&stream).read_line(&mut line).is_err() {
@@ -119,7 +120,10 @@ fn daemon_main() -> i32 {
         match stream {
             Ok(stream) => {
                 let inner = orch.clone();
-                std::thread::spawn(move || serve_client(&inner, stream));
+                std::thread::Builder::new()
+                    .name("daemon-conn".to_string())
+                    .spawn(move || serve_client(&inner, stream))
+                    .expect("daemon connection thread spawns");
             }
             Err(_) => {
                 if !orch.running.load(Ordering::SeqCst) {

@@ -18,10 +18,11 @@
 //! safe-point); while a script holds the bot they return `busy` (500-tick
 //! bound on each wait).
 //!
-//! shortcut: no cooperative stop flag in the SDK, so unload cannot freeze
-//! a running walk mid-leg; it waits for the script thread up to
-//! UNLOAD_TICKS then reports the orphan and lets it finish. Revisit when
-//! the SDK grows a stop hook.
+//! Cooperative stop: `stop_requested` → the `on_pump` hook returns false → the
+//! SDK raises `Error::Interrupted`, propagated by the pump loops via
+//! `is_interrupted`. Budget ends (engagement ticks, unload/close) are
+//! requested through that flag and deferred to the next safe point by the
+//! pause gate; a running walk mid-leg finishes its pump, it is never frozen.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -303,10 +304,14 @@ pub(crate) fn spawn_script_thread(shared: &Arc<Shared>, script: &str, args: &[St
     shared.stop_requested.store(false, Ordering::SeqCst);
     std::env::set_var("LIFESCAPE_SCRIPT", script);
     shared.log(&format!("=== session run {} {script} ===", shared.account));
-    let worker = Arc::clone(shared);
+    let worker = Arc::clone(&shared);
     let script_name = script.to_string();
     let script_args = args.to_vec();
-    std::thread::spawn(move || run_script_thread(&worker, &script_name, &script_args));
+    let thread_name = format!("script-{}", shared.account);
+    std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || run_script_thread(&worker, &script_name, &script_args))
+        .expect("script thread spawns");
 }
 
 /// Restore the running books for a script resumed after reconnect: the
@@ -584,7 +589,11 @@ fn serve(shared: &Arc<Shared>, listener: UnixListener) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let worker = Arc::clone(shared);
-                std::thread::spawn(move || serve_client(worker, stream));
+                let thread_name = format!("session-conn-{}", worker.account);
+                std::thread::Builder::new()
+                    .name(thread_name)
+                    .spawn(move || serve_client(worker, stream))
+                    .expect("session connection thread spawns");
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => worker_out(shared, &format!("accept failed: {error}")),
@@ -713,7 +722,11 @@ pub fn run_session(account: &str) -> i32 {
         // Event observer for the whole session life, idle and running:
         // poses `pending_rescue` for the pause gate / idle drain.
         let watcher = Arc::clone(&shared);
-        std::thread::spawn(move || crate::session_rescue::observe_events(&watcher));
+        let thread_name = format!("session-observe-{}", shared.account);
+        std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || crate::session_rescue::observe_events(&watcher))
+            .expect("session observer thread spawns");
     }
     serve(&shared, listener);
     write_last_breath(&shared);

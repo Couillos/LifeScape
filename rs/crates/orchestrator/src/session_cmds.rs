@@ -269,10 +269,14 @@ fn cmd_close(shared: &Arc<Shared>) -> Value {
     shared.bot.lock().unwrap().close();
     let session = shared.describe();
     let worker = Arc::clone(shared);
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
-        worker.inner.lock().unwrap().closing = true;
-    });
+    let thread_name = format!("session-close-{}", worker.account);
+    std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            worker.inner.lock().unwrap().closing = true;
+        })
+        .expect("session close thread spawns");
     object(vec![("ok", Value::Bool(true)), ("session", session)])
 }
 

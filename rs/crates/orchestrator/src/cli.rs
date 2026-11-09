@@ -122,6 +122,31 @@ fn format_status(jobs: &Value) -> String {
     rows.join("\n")
 }
 
+/// One operator-readable line over the resource gauge: cumulative counts
+/// with per-second averages since daemon start. A `-` marks a counter
+/// missing from the reply.
+fn format_res_stats(stats: &Value) -> String {
+    let int = |key: &str| stats.get(key).as_i64().map(|n| n.to_string()).unwrap_or_else(|| "-".to_string());
+    let rate = |key: &str| stats.get(key).as_f64().map(|n| format!("{n:.2}")).unwrap_or_else(|| "-".to_string());
+    let uptime = stats.get("uptime_secs").as_f64().map(|s| format!("{s:.0}s")).unwrap_or_else(|| "-".to_string());
+    format!(
+        "res-stats up={} conn={} ({} /s) pushes={} ({} /s, {} B at {} B/s) plans={} ({} /s) polls={} ({} /s) files={} ({} /s)",
+        uptime,
+        int("connections"),
+        rate("connections_per_s"),
+        int("pushes"),
+        rate("pushes_per_s"),
+        int("push_bytes"),
+        rate("push_bytes_per_s"),
+        int("plan_submits"),
+        rate("plan_submits_per_s"),
+        int("plan_polls"),
+        rate("plan_polls_per_s"),
+        int("files_written"),
+        rate("files_per_s"),
+    )
+}
+
 /// One operator-readable line over the pathfinding gauge (lot 4): cache,
 /// queue, refusals (= typed `nav-down` client-side, never a local plan),
 /// batch reads, RAM. Full JSON stays available; this line is the quick
@@ -652,7 +677,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -776,6 +801,15 @@ pub fn cli(argv: &[String]) -> i32 {
             let reply = send(object(vec![("cmd", str_value("nav-stats"))]));
             if reply.get("ok").as_bool() == Some(true) {
                 println!("{}", format_nav_stats(&reply));
+            } else {
+                println!("{}", json::stringify_pretty(&reply));
+            }
+            if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
+        "res-stats" => {
+            let reply = send(object(vec![("cmd", str_value("res-stats"))]));
+            if reply.get("ok").as_bool() == Some(true) {
+                println!("{}", format_res_stats(&reply));
             } else {
                 println!("{}", json::stringify_pretty(&reply));
             }

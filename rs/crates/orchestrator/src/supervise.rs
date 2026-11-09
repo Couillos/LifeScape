@@ -28,14 +28,18 @@ impl Orchestrator {
     /// One thread per account: accounts are watched in parallel.
     pub(crate) fn start_supervisor(self: &Arc<Self>, job: Arc<Job>) {
         let orch = self.clone();
-        std::thread::spawn(move || {
-            let mut watchdog = Watchdog::new();
-            while orch.running.load(Ordering::SeqCst) && job.inner.lock().unwrap().supervise {
-                orch.supervise_once(&job);
-                orch.watchdog_tick(&job, &mut watchdog);
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        });
+        let thread_name = format!("supervise-{}", job.account);
+        std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let mut watchdog = Watchdog::new();
+                while orch.running.load(Ordering::SeqCst) && job.inner.lock().unwrap().supervise {
+                    orch.supervise_once(&job);
+                    orch.watchdog_tick(&job, &mut watchdog);
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            })
+            .expect("supervisor thread spawns");
     }
 
     fn supervise_once(&self, job: &Arc<Job>) {

@@ -215,6 +215,8 @@ pub struct CacheStats {
     pub unknown: u64,
     pub ram_warn: u64,
     pub ram_shed: u64,
+    pub submits: u64,
+    pub polls: u64,
 }
 
 struct LruEntry {
@@ -910,6 +912,8 @@ pub struct Service {
     transitions_list_served: AtomicU64,
     probe_targets_served: AtomicU64,
     doors_near_served: AtomicU64,
+    submits_served: AtomicU64,
+    polls_served: AtomicU64,
     sock_path: PathBuf,
 }
 
@@ -966,6 +970,8 @@ impl Service {
             transitions_list_served: AtomicU64::new(0),
             probe_targets_served: AtomicU64::new(0),
             doors_near_served: AtomicU64::new(0),
+            submits_served: AtomicU64::new(0),
+            polls_served: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
         });
         for index in 0..threads.max(1) {
@@ -1016,6 +1022,8 @@ impl Service {
             unknown: self.unknown_polls.load(Ordering::Relaxed),
             ram_warn: self.ram_warn.load(Ordering::Relaxed),
             ram_shed: self.ram_shed.load(Ordering::Relaxed),
+            submits: self.submits_served.load(Ordering::Relaxed),
+            polls: self.polls_served.load(Ordering::Relaxed),
         }
     }
 
@@ -1165,6 +1173,8 @@ impl Service {
                     ("refused_full", Value::Int(stats.refused_full as i64)),
                     ("refused_stale", Value::Int(stats.refused_stale as i64)),
                     ("unknown", Value::Int(stats.unknown as i64)),
+                    ("submits", Value::Int(stats.submits as i64)),
+                    ("polls", Value::Int(stats.polls as i64)),
                     ("door_defs", Value::Int(self.door_defs_served.load(Ordering::Relaxed) as i64)),
                     ("tiles_flags", Value::Int(self.tiles_flags_served.load(Ordering::Relaxed) as i64)),
                     ("static_locs_near", Value::Int(self.static_locs_served.load(Ordering::Relaxed) as i64)),
@@ -1194,6 +1204,7 @@ impl Service {
     }
 
     fn op_submit(&self, request: &Value) -> Value {
+        self.submits_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
         let parsed = (|| -> Result<(String, Tile, Tile, NavOptions, String), String> {
             let account = request
@@ -1421,6 +1432,7 @@ impl Service {
     }
 
     fn op_poll(&self, request: &Value) -> Value {
+        self.polls_served.fetch_add(1, Ordering::Relaxed);
         let version = self.version();
         let id = match request.get("id").as_i64() {
             Some(id) => id as u64,
