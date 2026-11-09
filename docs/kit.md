@@ -84,4 +84,10 @@ retour). Mesures R6 : voir rendements ci-dessous.
 
 | Id | Tournée | XP / 6000 ticks | Objets / 6000 ticks |
 |---|---|---|---|
-| R6 | crevettes, cuisinière | — | — |
+| R6 | crevettes, cuisinière (charge 28 crus, 290 ticks, niveau 1→5) | ~8690 (420 mesurés) | ~579 (28 plats : 14 shrimps + 14 burnt) |
+
+Mesure R6 (2026-11-09, `admin`, stock initial par cheat `give raw_shrimp 28`
+— pas de farm, réserve sur la provenance) : `run admin cook raw_shrimp 1`,
+ticks 6194→6484 (290), cooking XP 0→420 (niveau 1→5, 14×30 XP, 14 brûlés sur
+28 à niveau 1), 28 crus consommés, 28 plats banqués, sortie 0. A priori
+(400 plats / 12000 XP) gardé jusqu'à 3 mesures (n=1).
