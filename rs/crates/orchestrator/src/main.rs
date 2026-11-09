@@ -5,7 +5,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use lifescape_json::{self as json, Value, object, str_value};
@@ -112,25 +111,26 @@ fn daemon_main() -> i32 {
         }
     };
     lifescape_orchestrator::holdings::start_sampler(orch.clone());
+    // E2 persistent pushes: one stream per worker, one reader thread
+    // daemon-side (`push.sock`). The CLI socket below keeps its 1
+    // req/1 reply shape on a bounded pool (no thread per message).
+    {
+        let inner = orch.clone();
+        let dispatch: Arc<dyn Fn(Value) + Send + Sync> =
+            Arc::new(move |frame: Value| {
+                let _ = inner.ingest_push(&frame);
+            });
+        if let Err(error) = lifescape_orchestrator::push_hub::start_push_hub(dispatch) {
+            eprintln!("push hub unavailable ({error}); workers fall back to one-shot pushes");
+        }
+    }
     println!("orchestrator listening on {}", paths::socket_path().display());
-    for stream in server.incoming() {
-        if !orch.running.load(Ordering::SeqCst) {
-            break;
-        }
-        match stream {
-            Ok(stream) => {
-                let inner = orch.clone();
-                std::thread::Builder::new()
-                    .name("daemon-conn".to_string())
-                    .spawn(move || serve_client(&inner, stream))
-                    .expect("daemon connection thread spawns");
-            }
-            Err(_) => {
-                if !orch.running.load(Ordering::SeqCst) {
-                    break;
-                }
-            }
-        }
+    {
+        let serve: Arc<dyn Fn(UnixStream) + Send + Sync> = {
+            let inner = orch.clone();
+            Arc::new(move |stream: UnixStream| serve_client(&inner, stream))
+        };
+        lifescape_orchestrator::daemon_pool::serve_pooled(server, serve);
     }
     let _ = std::fs::remove_file(paths::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());

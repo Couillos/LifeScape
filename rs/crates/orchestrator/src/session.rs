@@ -48,8 +48,10 @@ const HEARTBEAT_TICKS: u64 = 10;
 /// without freezing the worker, so one snapshot per second still flows
 /// with the true (frozen) tick instead of a dead frame.
 const HEARTBEAT_WALL_SECS: f64 = 1.0;
-/// Idle pump cadence, in milliseconds.
+/// Idle pump cadence when active (E5); at rest the serve loop sleeps
+/// IDLE_REST_MS instead: 1 wakeup/s, not 10.
 const IDLE_POLL_MS: u64 = 100;
+const IDLE_REST_MS: u64 = 1000;
 
 pub(crate) fn now_secs() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
@@ -74,9 +76,9 @@ pub(crate) fn worker_out(shared: &Shared, line: &str) {
 }
 
 fn append_log(log_path: &std::path::Path, line: &str) {
-    if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(handle, "{line}");
-    }
+    // E11 buffered sink (dédup + rotation 100 Mo): no open/write/close
+    // per line anymore; heartbeats and close flush.
+    crate::session_log::append_log(log_path, line);
 }
 
 pub(crate) fn engine_dir() -> String {
@@ -128,6 +130,12 @@ pub(crate) struct SessionInner {
     /// Wall time of the last pushed heartbeat: the tick gate alone
     /// starves the pipe while a long plan freezes ticks.
     pub(crate) last_heartbeat_wall: f64,
+    /// Last FULL snapshot pushed (E4 two-flow): tick, wall, and the
+    /// script/status it carried. Light frames update the pair above.
+    pub(crate) last_full_tick: u64,
+    pub(crate) last_full_wall: f64,
+    pub(crate) last_full_script: String,
+    pub(crate) last_full_status: String,
     pub(crate) last_msg_logged: usize,
     /// Zone of the last heartbeat, for stamps when the bot is borrowed.
     /// "?" when unknown: explicit, never a silent fallback.
@@ -234,7 +242,7 @@ impl Shared {
 /// a long plan freezes ticks without freezing the worker, and the old
 /// tick-only gate left spectate showing a dead frame as live. Same tick,
 /// fresh `updated`: honest, never faked progress.
-fn heartbeat_due(last_tick: u64, tick: u64, last_wall: f64, now: f64) -> bool {
+pub(crate) fn heartbeat_due(last_tick: u64, tick: u64, last_wall: f64, now: f64) -> bool {
     tick.saturating_sub(last_tick) >= HEARTBEAT_TICKS || now - last_wall >= HEARTBEAT_WALL_SECS
 }
 
@@ -243,8 +251,7 @@ fn heartbeat_due(last_tick: u64, tick: u64, last_wall: f64, now: f64) -> bool {
 /// bot's pump hook so spectate/route/calls stay live during runs.
 /// Returns false once the operator stops the run (unload/close): the pump
 /// aborts and the script unwinds instead of finishing its action.
-fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
-    let tick = bot.world.ticks;
+fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {    let tick = bot.world.ticks;
     let zone = if bot.zone_label.is_empty() { "?".to_string() } else { bot.zone_label.clone() };
     // Game lines print after the lock drops: stamping takes the same lock.
     let (pending, trail): (Vec<(String, u64)>, Vec<(i32, i32, u64)>) = {
@@ -282,12 +289,7 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
         }
     }
     if heartbeat_due(last, tick, last_wall, now_secs()) {
-        let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
-        let state = heartbeat_value(bot, &shared.account, &script, &trail);
-        *shared.heartbeat.lock().unwrap() = Some(bot.snapshot());
-        shared.inner.lock().unwrap().last_heartbeat_tick = tick;
-        shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
-        crate::session_push::push_snapshot(&shared.account, &state);
+        crate::heartbeat_flows::pump_heartbeat(shared, bot, &trail);
     }
     if shared.stop_requested.load(Ordering::SeqCst) {
         return false;
@@ -304,6 +306,9 @@ fn publish_tick(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
 
 /// Atomic heartbeat for `run/users/<account>.bot.json`: the same keys the
 /// the heartbeat writer publishes, so `Job::describe` keeps working.
+/// Full flow (E4): explicit state changes flush here; the periodic idle
+/// path prefers the light flow. Always flushes the E11 log buffer: at
+/// most one heartbeat of lines is ever memory-only.
 pub(crate) fn write_heartbeat(shared: &Arc<Shared>) {
     let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
     let Ok(bot) = shared.bot.try_lock() else { return };
@@ -313,15 +318,28 @@ pub(crate) fn write_heartbeat(shared: &Arc<Shared>) {
     let tick = bot.world.ticks;
     let zone = if bot.zone_label.is_empty() { "?".to_string() } else { bot.zone_label.clone() };
     drop(bot);
+    let status_now = shared.inner.lock().unwrap().status.clone();
     shared.inner.lock().unwrap().last_heartbeat_tick = tick;
     shared.inner.lock().unwrap().last_heartbeat_wall = now_secs();
     shared.inner.lock().unwrap().last_zone = zone;
+    shared.inner.lock().unwrap().last_full_tick = tick;
+    shared.inner.lock().unwrap().last_full_wall = now_secs();
+    shared.inner.lock().unwrap().last_full_script = script;
+    shared.inner.lock().unwrap().last_full_status = status_now;
     crate::session_push::push_snapshot(&shared.account, &state);
+    crate::session_log::flush_log(&shared.log_path);
+}
+
+/// Light idle heartbeat (E4): position and status only, no snapshot
+/// rebuild, merged daemon-side. Full frames stay on `write_heartbeat`.
+pub(crate) fn write_light(shared: &Arc<Shared>) {
+    crate::heartbeat_flows::write_light(shared);
 }
 
 /// Last breath: the only disk write left. The daemon already serves the
 /// pushed snapshots from memory; this file is for daemon-restart adoption.
 fn write_last_breath(shared: &Arc<Shared>) {
+    crate::session_log::flush_log(&shared.log_path);
     let Ok(bot) = shared.bot.try_lock() else { return };
     let script = shared.inner.lock().unwrap().script.clone().unwrap_or_default();
     let trail = shared.inner.lock().unwrap().trail.clone();
@@ -663,8 +681,14 @@ fn idle_pump(shared: &Arc<Shared>) {
         return;
     }
     let tick = shared.bot.lock().unwrap().world.ticks;
-    if tick.saturating_sub(shared.inner.lock().unwrap().last_heartbeat_tick) >= HEARTBEAT_TICKS {
-        write_heartbeat(shared);
+    let (last, last_wall) = {
+        let inner = shared.inner.lock().unwrap();
+        (inner.last_heartbeat_tick, inner.last_heartbeat_wall)
+    };
+    if heartbeat_due(last, tick, last_wall, now_secs()) {
+        // E4: periodic idle flow is light; full frames ride explicit
+        // state changes (`write_heartbeat`) or the full cadence.
+        crate::heartbeat_flows::idle_heartbeat_flow(shared, tick);
     }
     idle_watch(shared);
 }
@@ -705,7 +729,17 @@ fn serve(shared: &Arc<Shared>, listener: UnixListener) {
             Err(error) => worker_out(shared, &format!("accept failed: {error}")),
         }
         idle_pump(shared);
-        std::thread::sleep(Duration::from_millis(IDLE_POLL_MS));
+        // E5 event-driven rest: at rest (no script, no queued call, no
+        // posed rescue/market) the serve loop wakes 1/s, not 10/s. With
+        // the 1 s observer below, an idle worker wakes <= 2/s.
+        let resting = {
+            let inner = shared.inner.lock().unwrap();
+            !inner.script_alive
+                && shared.queue.lock().unwrap().is_empty()
+                && shared.pending_rescue.lock().unwrap().is_none()
+                && shared.pending_market.lock().unwrap().is_none()
+        };
+        std::thread::sleep(Duration::from_millis(if resting { IDLE_REST_MS } else { IDLE_POLL_MS }));
     }
 }
 
@@ -761,6 +795,10 @@ pub fn run_session(account: &str) -> i32 {
             script_alive: false,
             last_heartbeat_tick: 0,
             last_heartbeat_wall: 0.0,
+            last_full_tick: 0,
+            last_full_wall: 0.0,
+            last_full_script: String::new(),
+            last_full_status: String::new(),
             last_msg_logged: 0,
             last_zone: "?".to_string(),
             trail: Vec::new(),
@@ -866,6 +904,10 @@ mod tests {
             script_alive: false,
             last_heartbeat_tick: 0,
             last_heartbeat_wall: 0.0,
+            last_full_tick: 0,
+            last_full_wall: 0.0,
+            last_full_script: String::new(),
+            last_full_status: String::new(),
             last_msg_logged: 0,
             last_zone: "?".to_string(),
             trail: Vec::new(),

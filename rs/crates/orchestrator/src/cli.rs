@@ -130,7 +130,7 @@ fn format_res_stats(stats: &Value) -> String {
     let rate = |key: &str| stats.get(key).as_f64().map(|n| format!("{n:.2}")).unwrap_or_else(|| "-".to_string());
     let uptime = stats.get("uptime_secs").as_f64().map(|s| format!("{s:.0}s")).unwrap_or_else(|| "-".to_string());
     format!(
-        "res-stats up={} conn={} ({} /s) pushes={} ({} /s, {} B at {} B/s) plans={} ({} /s) polls={} ({} /s) files={} ({} /s)",
+        "res-stats up={} conn={} ({} /s) pushes={} ({} /s, {} B at {} B/s) lights={} ({} /s) plans={} ({} /s) polls={} ({} /s) files={} ({} /s) reconnects={} refused={} disk={}Go low={}",
         uptime,
         int("connections"),
         rate("connections_per_s"),
@@ -138,12 +138,18 @@ fn format_res_stats(stats: &Value) -> String {
         rate("pushes_per_s"),
         int("push_bytes"),
         rate("push_bytes_per_s"),
+        int("lights"),
+        rate("lights_per_s"),
         int("plan_submits"),
         rate("plan_submits_per_s"),
         int("plan_polls"),
         rate("plan_polls_per_s"),
         int("files_written"),
         rate("files_per_s"),
+        int("push_reconnects"),
+        int("admission_refused"),
+        int("disk_free_go"),
+        stats.get("disk_low").as_bool().map(|low| low.to_string()).unwrap_or_else(|| "-".to_string()),
     )
 }
 
@@ -677,7 +683,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -814,6 +820,21 @@ pub fn cli(argv: &[String]) -> i32 {
                 println!("{}", json::stringify_pretty(&reply));
             }
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
+        "bench-l2r" => {
+            let workers = argv.get(2).and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(300);
+            let secs = argv.get(3).and_then(|raw| raw.parse::<u64>().ok()).unwrap_or(15);
+            let config = crate::bench_offline::BenchConfig { workers, secs, legs: 12, pace_ms: 700 };
+            match crate::bench_offline::run_bench(&config) {
+                Ok(report) => {
+                    println!("{}", report.summary());
+                    0
+                }
+                Err(error) => {
+                    eprintln!("bench-l2r: {error}");
+                    1
+                }
+            }
         }
         _ => {
             eprintln!("unknown command '{command}'");

@@ -21,6 +21,12 @@ struct Counters {
     pushes: AtomicU64,
     push_bytes: AtomicU64,
     files_written: AtomicU64,
+    /// Pushed light frames + hub reconnects + admission refusals (E13).
+    lights: AtomicU64,
+    reconnects: AtomicU64,
+    admission_refused: AtomicU64,
+    /// Last recorded free disk in Go (gauge, set on each `open`).
+    disk_free_gb: AtomicU64,
 }
 
 fn counters() -> &'static Counters {
@@ -31,6 +37,10 @@ fn counters() -> &'static Counters {
         pushes: AtomicU64::new(0),
         push_bytes: AtomicU64::new(0),
         files_written: AtomicU64::new(0),
+        lights: AtomicU64::new(0),
+        reconnects: AtomicU64::new(0),
+        admission_refused: AtomicU64::new(0),
+        disk_free_gb: AtomicU64::new(0),
     })
 }
 
@@ -51,6 +61,27 @@ pub fn record_file() {
     counters().files_written.fetch_add(1, Ordering::Relaxed);
 }
 
+/// One light heartbeat merged daemon-side (E4 two-flow gauge).
+pub fn record_light() {
+    counters().lights.fetch_add(1, Ordering::Relaxed);
+}
+
+/// One hub reconnect (worker redial after a daemon restart).
+pub fn record_push_reconnect() {
+    counters().reconnects.fetch_add(1, Ordering::Relaxed);
+}
+
+/// One refused `open` (envelope or pace, never silent degradation).
+pub fn record_admission_refused() {
+    counters().admission_refused.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Free-disk gauge in Go (set on each `open`; D34 warning input).
+/// Never a refusal: the arbitration binds endurance runs, not openings.
+pub fn record_disk(free_bytes: u64) {
+    counters().disk_free_gb.store(free_bytes / 1_073_741_824, Ordering::Relaxed);
+}
+
 fn per_second(total: u64, uptime_secs: f64) -> f64 {
     if uptime_secs > 0.0 { total as f64 / uptime_secs } else { 0.0 }
 }
@@ -65,6 +96,10 @@ pub fn snapshot_json() -> Value {
     let pushes = counts.pushes.load(Ordering::Relaxed);
     let push_bytes = counts.push_bytes.load(Ordering::Relaxed);
     let files = counts.files_written.load(Ordering::Relaxed);
+    let lights = counts.lights.load(Ordering::Relaxed);
+    let reconnects = counts.reconnects.load(Ordering::Relaxed);
+    let refused = counts.admission_refused.load(Ordering::Relaxed);
+    let disk_gb = counts.disk_free_gb.load(Ordering::Relaxed);
     let plan = crate::plan_service::stats_json();
     let plan_num = |key: &str| plan.as_ref().and_then(|stats| stats.get(key).as_i64()).unwrap_or(0);
     object(vec![
@@ -82,6 +117,12 @@ pub fn snapshot_json() -> Value {
         ("plan_polls_per_s", Value::Float(per_second(plan_num("polls") as u64, uptime_secs))),
         ("files_written", Value::Int(files as i64)),
         ("files_per_s", Value::Float(per_second(files, uptime_secs))),
+        ("lights", Value::Int(lights as i64)),
+        ("lights_per_s", Value::Float(per_second(lights, uptime_secs))),
+        ("push_reconnects", Value::Int(reconnects as i64)),
+        ("admission_refused", Value::Int(refused as i64)),
+        ("disk_free_go", Value::Int(disk_gb as i64)),
+        ("disk_low", Value::Bool(disk_gb > 0 && disk_gb < 60)),
     ])
 }
 
@@ -113,6 +154,12 @@ mod tests {
             "plan_polls_per_s",
             "files_written",
             "files_per_s",
+            "lights",
+            "lights_per_s",
+            "push_reconnects",
+            "admission_refused",
+            "disk_free_go",
+            "disk_low",
         ] {
             assert!(!snapshot.get(key).is_null(), "res-stats needs {key}");
         }

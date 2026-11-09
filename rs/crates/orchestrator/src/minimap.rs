@@ -808,4 +808,17 @@ mod tests {
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 36);
         assert_eq!(png[25], 2); // truecolor
     }
+
+    /// E12 bound: past FRAME_CAP distinct windows the cache evicts one
+    /// slot per overflow and never grows with the spectators.
+    #[test]
+    fn frame_cache_stays_bounded() {
+        let maps = Minimap::new(crate::minimap::pack_dir());
+        for index in 0..(super::FRAME_CAP + 6) {
+            let frame = maps.png(0, 3000 + index as i32 * 11, 3000, 5);
+            assert!(!frame.is_empty());
+        }
+        let len = maps.frames.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len();
+        assert!(len <= super::FRAME_CAP, "cache bounded at {len}");
+    }
 }

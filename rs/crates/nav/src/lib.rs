@@ -12,6 +12,7 @@ pub mod plan;
 pub mod reach;
 pub mod route;
 pub mod service;
+pub mod service_plan;
 pub mod service_queries;
 pub mod static_world;
 pub mod tables;

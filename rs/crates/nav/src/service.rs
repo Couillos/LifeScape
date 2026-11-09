@@ -38,14 +38,20 @@ use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
 /// Global queue bound: submit past this is `Refused`, never queued.
-pub const QUEUE_CAP: usize = 16;
+/// T11 recalibration for 300 bots (E15 validates): 64 absorbs one
+/// synchronized convocation wave without `nav-down`.
+pub const QUEUE_CAP: usize = 64;
 /// In-flight tickets (queued + computing) per account.
 pub const ACCOUNT_CAP: usize = 2;
 /// Plan threads sharing the snapshot (`~14 plans/s` on one thread at the
 /// ~70 ms median; the second absorbs 1.5 s exhaustive NoRoutes).
-pub const PLAN_THREADS: usize = 2;
+/// T11 recalibration: 4 compute threads + the 16 `plan` waiters, so one
+/// synchronized wave of 300 bots finds workers instead of `queue-full`.
+pub const PLAN_THREADS: usize = 4;
 /// Stored results bound: evicts consumable outcomes, never pendings.
-pub const RESULTS_CAP: usize = 256;
+/// T11: 512 holds the `plan`-op terminal burst of one wave (every waiter
+/// poll marks its slot consumed, so eviction reaps them FIFO).
+pub const RESULTS_CAP: usize = 512;
 /// Submit is admission only (no plan runs inside): fast by construction.
 pub const SUBMIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// One poll round-trip bound (map lookup, no compute inside).
@@ -479,8 +485,7 @@ fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Opti
 
 // -- JSON codec (options serialized integrally, never normalized) -------------
 
-fn tile_value(tile: Tile) -> Value {
-    object(vec![
+pub(crate) fn tile_value(tile: Tile) -> Value {    object(vec![
         ("x", Value::Int(i64::from(tile.x))),
         ("z", Value::Int(i64::from(tile.z))),
         ("level", Value::Int(i64::from(tile.level))),
@@ -915,6 +920,9 @@ pub struct Service {
     submits_served: AtomicU64,
     polls_served: AtomicU64,
     sock_path: PathBuf,
+    /// E3 waiter pool for the `plan` op (single-round-trip plans): bound
+    /// filled at `start`, read by `plan_handoff`.
+    wait_tx: Mutex<Option<mpsc::SyncSender<crate::service_plan::WaitJob>>>,
 }
 
 impl Service {
@@ -973,6 +981,7 @@ impl Service {
             submits_served: AtomicU64::new(0),
             polls_served: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
+            wait_tx: Mutex::new(None),
         });
         for index in 0..threads.max(1) {
             let worker = Arc::clone(&service);
@@ -993,6 +1002,9 @@ impl Service {
                 }
             })
             .expect("plan acceptor spawns");
+        // E3 waiter pool (single-round-trip `plan` ops): bounded threads
+        // + queue, filled here so `plan_handoff` never blocks the acceptor.
+        *service.wait_tx.lock().unwrap() = Some(crate::service_plan::start_wait_pool(service.clone(), threads));
         Ok(service)
     }
 
@@ -1114,13 +1126,21 @@ impl Service {
     }
 
     fn serve_one(&self, stream: UnixStream) {
-        let _ = stream.set_read_timeout(Some(ACCEPT_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(ACCEPT_TIMEOUT));
+        let _ = stream.set_read_timeout(Some(ACCEPT_TIMEOUT));        let _ = stream.set_write_timeout(Some(ACCEPT_TIMEOUT));
         let mut line = String::new();
         let request = BufReader::new(&stream)
             .read_line(&mut line)
             .map_err(|error| error.to_string())
             .and_then(|_| json::parse(&line).map_err(|error| error.to_string()));
+        // E3 fast lane: `plan` waits server-side on the bounded waiter
+        // pool and answers terminal on the same connection — the 2 ms
+        // poll loop never happens. The stream moves to the pool.
+        if let Ok(ref request) = request {
+            if request.get("op").as_str() == Some("plan") {
+                self.plan_handoff(stream, request);
+                return;
+            }
+        }
         let reply = match request {
             Ok(request) => self.dispatch(&request),
             Err(error) => object(vec![
@@ -1131,6 +1151,103 @@ impl Service {
         let mut buf = json::stringify(&reply);
         buf.push('\n');
         let _ = (&stream).write_all(buf.as_bytes());
+    }
+
+    /// E3 handoff: the `plan` stream moves to the bounded waiter pool.
+    /// A full waiter queue refuses loudly on the stream itself (the
+    /// client falls back to submit/poll); the acceptor never blocks.
+    fn plan_handoff(&self, stream: UnixStream, request: &Value) {
+        let sender = self.wait_tx.lock().unwrap().clone();
+        let Some(sender) = sender else {
+            let reply = object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value("refused:wait-down")),
+                ("version", str_value(&self.version())),
+            ]);
+            let mut buf = json::stringify(&reply);
+            buf.push('\n');
+            let _ = (&stream).write_all(buf.as_bytes());
+            return;
+        };
+        let job = crate::service_plan::WaitJob { stream, request: request.clone() };
+        if let Err(error) = sender.try_send(job) {
+            // Full or disconnected: answer on the returned stream, the
+            // client falls back to submit/poll. Never drop a stream
+            // silently (the client would hang to its timeout).
+            let mut job = match error {
+                mpsc::TrySendError::Full(job) => job,
+                mpsc::TrySendError::Disconnected(job) => job,
+            };
+            let reply = object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value("refused:wait-full")),
+                ("version", str_value(&self.version())),
+            ]);
+            let mut buf = json::stringify(&reply);
+            buf.push('\n');
+            let _ = (&mut job.stream).write_all(buf.as_bytes());
+        }
+    }
+
+    /// Waiter-pool submit: the terminal ticket id, or the refusal frame
+    /// the client falls back on.
+    pub(crate) fn op_submit_public(&self, request: &Value) -> Result<u64, Value> {
+        let reply = self.op_submit(request);
+        if reply.get("ok").as_bool() == Some(true) {
+            match reply.get("id").as_i64() {
+                Some(id) => Ok(id as u64),
+                None => Err(reply),
+            }
+        } else {
+            Err(reply)
+        }
+    }
+
+    /// Waiter-pool poll: terminal frames or still pending. Unknown
+    /// tickets surface as terminal refusals (the waiter answers and
+    /// exits, never spins).
+    pub(crate) fn op_poll_public(&self, id: u64) -> crate::service_plan::WaitPoll {
+        use crate::service_plan::WaitPoll;
+        let reply = self.op_poll(&object(vec![("id", Value::Int(id as i64))]));
+        if reply.get("ok").as_bool() != Some(true) {
+            return WaitPoll::Terminal(reply);
+        }
+        let version = reply.get("version").clone();
+        match reply.get("status").as_str().unwrap_or("") {
+            "ready" => WaitPoll::Terminal(object(vec![
+                ("ok", Value::Bool(true)),
+                ("outcome", str_value("ready")),
+                ("plan", reply.get("plan").clone()),
+                ("version", version),
+            ])),
+            "failed" => WaitPoll::Terminal(object(vec![
+                ("ok", Value::Bool(true)),
+                ("outcome", str_value("failed")),
+                ("error", reply.get("error").clone()),
+                ("version", version),
+            ])),
+            _ => WaitPoll::Pending,
+        }
+    }
+
+    /// Waiter-pool waiter release at terminal: drops only the waiter
+    /// count (pool completion already cleaned tickets/inflight/admission;
+    /// the Ready/Failed slot stays consumable for joins).
+    pub(crate) fn op_release_waiter(&self, id: u64) {
+        let mut waiters = self.waiters.lock().unwrap();
+        match waiters.get(&id).copied() {
+            Some(count) if count > 1 => {
+                waiters.insert(id, count - 1);
+            }
+            _ => {
+                waiters.remove(&id);
+            }
+        }
+    }
+
+    /// Served snapshot version for waiter replies.
+    pub(crate) fn version_public(&self) -> String {
+        self.version()
     }
 
     fn dispatch(&self, request: &Value) -> Value {
@@ -2045,7 +2162,11 @@ impl PlanClient {
         }
     }
 
-    fn round_trip(&self, request: &Value, timeout: Duration) -> Result<Value, String> {
+    pub(crate) fn account_name(&self) -> &str {
+        &self.account
+    }
+
+    pub(crate) fn round_trip(&self, request: &Value, timeout: Duration) -> Result<Value, String> {
         let stream = UnixStream::connect(&self.sock)
             .map_err(|_| format!("pathfinding unreachable on {}", self.sock.display()))?;
         stream

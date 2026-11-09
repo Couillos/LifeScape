@@ -213,9 +213,10 @@ fn storm_replan_loop_starves_nobody() {
 }
 
 /// Queue-full is counted and observable: one exhaustive NoRoute pins the
-/// single pool lane (~1.5 s budget kill), then 9 accounts x 2 submits over-
-/// fill the 16-slot queue. Exactly the last 2 refuse queue-full (never a
-/// block), the gauge shows depth 16, and the service heals after cancels.
+/// single pool lane (~1.5 s budget kill), then 33 accounts x 2 submits
+/// overfill the 64-slot queue (T11 recalibration for 300 bots). Exactly
+/// the last 2 refuse queue-full (never a block), the gauge shows depth
+/// 64, and the service heals after cancels.
 #[test]
 fn queue_full_refuses_and_counts() {
     let service = start_service(1);
@@ -230,7 +231,7 @@ fn queue_full_refuses_and_counts() {
     // The lane is pinned past the budget kill; the flood below lands in ms.
     let mut flooded = vec![block_id];
     let mut refused_full = 0u32;
-    for account in 0..9 {
+    for account in 0..33 {
         for nth in 0..2 {
             let client = PlanClient::new(service.socket_path(), &format!("wall-{account}"));
             let dest = Tile { x: 3200 + account * 10 + nth, z: 3200, level: 0 };
@@ -243,9 +244,9 @@ fn queue_full_refuses_and_counts() {
             }
         }
     }
-    assert_eq!(flooded.len(), 17, "1 computing + 16 queued, never a block");
+    assert_eq!(flooded.len(), 65, "1 computing + 64 queued, never a block");
     assert_eq!(refused_full, 2, "only the overflow refuses");
-    assert_eq!(service.queue_depth(), 16, "gauge shows the full queue");
+    assert_eq!(service.queue_depth(), 64, "gauge shows the full queue");
     assert!(service.stats().refused_full >= 2, "queue-full refusals are counted");
     for id in flooded {
         let _ = blocker.cancel(id);

@@ -307,6 +307,38 @@ impl Orchestrator {
         if account.is_empty() {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
         }
+        // E1 admission + E10 pace: refuse loudly past the envelope or
+        // inside the open interval, never degrade the running bots.
+        if let Some(wait) = crate::admission::open_rate_due() {
+            crate::res_stats::record_admission_refused();
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value(&format!("admission:open-rate wait {wait:.1}s"))),
+            ]);
+        }
+        {
+            let snapshot = crate::res_stats::snapshot_json();
+            let rate = |key: &str| snapshot.get(key).as_f64().unwrap_or(0.0);
+            let load = crate::admission::DaemonLoad {
+                online_bots: self.jobs.lock().unwrap().len(),
+                pushes_per_s: rate("pushes_per_s"),
+                push_bytes_per_s: rate("push_bytes_per_s"),
+                files_per_s: rate("files_per_s"),
+                plan_submits_per_s: rate("plan_submits_per_s"),
+                plan_polls_per_s: rate("plan_polls_per_s"),
+            };
+            if let crate::admission::Admission::Refuse { reason } = crate::admission::admission_check(&load) {
+                crate::res_stats::record_admission_refused();
+                return object(vec![("ok", Value::Bool(false)), ("error", str_value(&reason))]);
+            }
+            // D34 warning only (arbitration): log + res-stats flag, the
+            // open goes through. Hard refusals stay envelope-only.
+            let free = crate::admission::free_disk_bytes(&crate::paths::run_dir());
+            crate::res_stats::record_disk(free);
+            if let Some(warning) = crate::admission::disk_warning(free) {
+                println!("open {account}: {warning}");
+            }
+        }
         {
             let jobs = self.jobs.lock().unwrap();
             if jobs.contains_key(account) && self.proc_alive(account) {
@@ -626,6 +658,17 @@ impl Orchestrator {
                 job.inner.lock().unwrap().live = Some(frame.get("snapshot").clone());
                 object(vec![("ok", Value::Bool(true))])
             }
+            "snapshot_light" => {
+                // E4 two-flow: merge the light keys into the last full
+                // state (or hold the light alone before the first full).
+                crate::res_stats::record_light();
+                let mut inner = job.inner.lock().unwrap();
+                match inner.live.as_mut() {
+                    Some(cached) => crate::heartbeat_flows::merge_light(cached, frame),
+                    None => inner.live = Some(frame.clone()),
+                }
+                object(vec![("ok", Value::Bool(true))])
+            }
             "event" => {
                 let kind = frame.get("kind").as_str().unwrap_or("").to_string();
                 let name = frame.get("event").as_str().unwrap_or("unknown").to_string();
@@ -661,7 +704,14 @@ impl Orchestrator {
                     report.get("activity").as_str().unwrap_or("?"),
                     report.get("ticks").as_i64().unwrap_or(-1),
                 );
-                job.inner.lock().unwrap().last_report = Some(report);
+                // E8: stage grouped for the future store import, flag the
+                // single supervisor (brain trigger) immediately.
+                if let Err(error) = crate::store_queue::stage_report(&report) {
+                    println!("job {account}: staging failed: {error}");
+                }
+                let mut inner = job.inner.lock().unwrap();
+                inner.last_report = Some(report);
+                inner.report_pending = true;
                 self.write_state(&job);
                 object(vec![("ok", Value::Bool(true))])
             }

@@ -2,13 +2,81 @@
 //! Supervision: one thread per account, event telemetry, live state.
 //! Methods on daemon::Orchestrator; session control stays in daemon.rs.
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::daemon::{Orchestrator, Watchdog, WORKER_TIMEOUT};
 use crate::jobs::{Job, now_secs};
 use lifescape_json::{Value, object, str_value};
+
+/// E8 single supervisor: one thread for ALL accounts (was: one thread
+/// per account = 300 threads at target). `start_supervisor` only
+/// registers; the `supervise-all` thread polls the registry every 500 ms
+/// (same cadence, N times less threads) and the watchdog states live in
+/// the thread, keyed by account.
+fn registry() -> &'static Mutex<Vec<(Arc<Orchestrator>, Arc<Job>)>> {
+    static REGISTRY: OnceLock<Mutex<Vec<(Arc<Orchestrator>, Arc<Job>)>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn ensure_supervisor_thread() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("supervise-all".to_string())
+            .spawn(supervise_all)
+            .expect("supervisor thread spawns");
+    });
+}
+
+/// Registration only: the single thread does the polling. Re-registering
+/// an account replaces the stale entry (re-open after a dead worker).
+impl Orchestrator {
+    pub(crate) fn start_supervisor(self: &Arc<Self>, job: Arc<Job>) {
+        {
+            let mut guard = registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.retain(|(_, known)| known.account != job.account);
+            guard.push((self.clone(), job));
+        }
+        ensure_supervisor_thread();
+    }
+}
+
+/// The one supervision loop: poll every account, prune parked/closed
+/// jobs, drain report flags (brain trigger hook) immediately.
+fn supervise_all() {
+    let mut watchdogs: HashMap<String, Watchdog> = HashMap::new();
+    let mut written: HashMap<String, (f64, String)> = HashMap::new();
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let pairs: Vec<(Arc<Orchestrator>, Arc<Job>)> = {
+            let mut guard = registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.retain(|(orch, job)| {
+                orch.running.load(Ordering::SeqCst) && job.inner.lock().unwrap().supervise
+            });
+            guard.clone()
+        };
+        if pairs.is_empty() {
+            watchdogs.clear();
+            written.clear();
+            continue;
+        }
+        for (orch, job) in &pairs {
+            orch.supervise_once(job, &mut written);
+            let watchdog = watchdogs.entry(job.account.clone()).or_insert_with(Watchdog::new);
+            orch.watchdog_tick(job, watchdog);
+            // E8 brain trigger: a pushed task report wakes handling on
+            // the next pass instead of waiting for a poll. The brain
+            // itself lands in a later lot; the flag guarantees no report
+            // waits longer than one 500 ms pass.
+            if std::mem::replace(&mut job.inner.lock().unwrap().report_pending, false) {
+                let _ = &written;
+            }
+        }
+    }
+}
 
 // Random-event geography, decoded from the streamed random events.
 const MAZE_X: (i64, i64) = (2880, 2944);
@@ -25,24 +93,9 @@ const FAIL_TELEPORTS: &[(i64, i64, i64)] = &[
 ];
 
 impl Orchestrator {
-    /// One thread per account: accounts are watched in parallel.
-    pub(crate) fn start_supervisor(self: &Arc<Self>, job: Arc<Job>) {
-        let orch = self.clone();
-        let thread_name = format!("supervise-{}", job.account);
-        std::thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                let mut watchdog = Watchdog::new();
-                while orch.running.load(Ordering::SeqCst) && job.inner.lock().unwrap().supervise {
-                    orch.supervise_once(&job);
-                    orch.watchdog_tick(&job, &mut watchdog);
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-            })
-            .expect("supervisor thread spawns");
-    }
-
-    fn supervise_once(&self, job: &Arc<Job>) {
+    /// E8 single supervisor entry: registered above, polled by the one
+    /// `supervise-all` thread. Telemetry still arrives as worker pushes.
+    fn supervise_once(&self, job: &Arc<Job>, written: &mut HashMap<String, (f64, String)>) {
         if self.procs.lock().unwrap().contains_key(&job.account) && !self.proc_alive(&job.account) {
             self.handle_worker_death(job);
             return;
@@ -69,16 +122,19 @@ impl Orchestrator {
         // anything.
         self.clear_event_if_gone(job);
         self.auto_idle_finished(job);
-        let write = {
-            let mut inner = job.inner.lock().unwrap();
-            if now_secs() - inner.state_written_at >= 2.0 {
-                inner.state_written_at = now_secs();
-                true
-            } else {
-                false
-            }
+        // E4+E8: merged state writes ride the slow cadence (30 s) or a
+        // visible change (phase/status/script), not every 2 s per bot.
+        // At 300 bots that is ~10 files/s worst case, ~0 idle.
+        let (key, due) = {
+            let inner = job.inner.lock().unwrap();
+            let key = format!("{}|{}|{:?}", inner.phase, inner.status, inner.script);
+            let seen = written.get(&job.account);
+            let changed = seen.map(|(_, old)| old != &key).unwrap_or(true);
+            let elapsed = seen.map(|(at, _)| now_secs() - at).unwrap_or(f64::MAX);
+            (key, changed || elapsed >= 30.0)
         };
-        if write {
+        if due {
+            written.insert(job.account.clone(), (now_secs(), key));
             self.write_state(job);
         }
     }

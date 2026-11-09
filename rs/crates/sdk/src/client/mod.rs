@@ -5,6 +5,7 @@
 
 pub mod actions;
 pub mod approach;
+pub mod cost_cache;
 pub mod doors;
 pub mod movement;
 pub mod nav_remote;
@@ -118,6 +119,8 @@ pub struct Bot {
     /// Served `wants` tags pinned by version: options build without
     /// tables and without a second round-trip while the version holds.
     pub(crate) wants_cache: Option<(String, Vec<String>)>,
+    /// E14 walk-cost counters (remote calls vs in-batch duplicates).
+    pub(crate) cost_stats: cost_cache::CostStats,
     /// Last positions with their tick, oldest first, capped
     /// (`TRAIL_CAP`): the failure dossier ships the last 50.
     pub trail: Vec<(u64, i32, i32, i32)>,
@@ -165,6 +168,7 @@ impl Bot {
             plan_client: None,
             plan_data_version: None,
             wants_cache: None,
+            cost_stats: cost_cache::CostStats::default(),
             trail: Vec::new(),
             on_pump: None,
             pause_gate: None,

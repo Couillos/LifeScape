@@ -74,6 +74,13 @@ enum PollTicket {
     Stale(String),
 }
 
+/// E3 fast-path routing: terminal outcome, or the legacy submit/poll
+/// path (old daemon without the `plan` op).
+enum PlanOnceTerminal {
+    Done(RemoteOutcome),
+    Legacy,
+}
+
 /// A terminal reply off a draining snapshot: ours is set and the served
 /// one differs. Empty versions (tests, no daemon) never count as stale.
 pub(crate) fn stale_reply(ours: &Option<String>, served: &str) -> bool {
@@ -123,19 +130,132 @@ impl Bot {
         Ok((options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
     }
 
-    /// Remote plan: submit non-blocking, poll with the keepalive between
-    /// polls (the poll loop replaces the Dijkstra yield: same guard, so a
-    /// remote plan over one second never starves the socket into a
-    /// 100-tick reap, by construction). Refuse/down/stale twice/timeout
-    /// all become `nav-down`, never a local plan. Stale version: the
-    /// served version replaces ours and the submit retries exactly once
-    /// (submit-refused or terminal reply off a draining snapshot); a
-    /// second skew is `nav-down`, never a loop.
+    /// Remote plan, E3 fast path first: one `plan` op with a server-side
+    /// wait (no 2 ms polling, one connection per plan). Old daemons that
+    /// do not know the op fall back to submit/poll; every other refusal
+    /// (down, refused, stale twice, timeout, interrupt) is `nav-down`,
+    /// never a local plan. Stale version: the served version replaces
+    /// ours and the `plan` retries exactly once; a second skew is
+    /// `nav-down`, never a loop.
     fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
         let client = match self.plan_client.clone() {
             Some(client) => client,
             None => return RemoteOutcome::NavDown("no-service-handle".to_string()),
         };
+        match self.plan_once_terminal(&client, options, from, dest) {
+            PlanOnceTerminal::Done(outcome) => outcome,
+            PlanOnceTerminal::Legacy => self.plan_remote_legacy(&client, options, from, dest),
+        }
+    }
+
+    /// E3 single round-trip: `plan` with one stale-version resubmit.
+    /// `Legacy` only when the daemon predates the op (unknown op);
+    /// transport and refusals are terminal `NavDown`, like before.
+    /// Long computes wait server-side in 500 ms slices: between slices
+    /// the keepalive still ticks (no 100-tick reap) and the operator stop
+    /// still aborts (no blind 8 s wait). Median plans cost 1 connection.
+    fn plan_once_terminal(
+        &mut self,
+        client: &service::PlanClient,
+        options: &NavOptions,
+        from: Tile,
+        dest: Tile,
+    ) -> PlanOnceTerminal {
+        use lifescape_nav::service_plan::{PlanOnceError, PLAN_SLICE_WAIT_MS};
+        let started = std::time::Instant::now();
+        let deadline = started + service::SERVICE_WAIT_MAX;
+        // A stop already posed (unload/close) aborts before any socket
+        // traffic: ranking and costing helpers keep their no-block
+        // contract, the run maps this to `Interrupted` like before.
+        if !self.plan_yield() {
+            return PlanOnceTerminal::Done(RemoteOutcome::Interrupted(format!(
+                "plan aborted at {:?}",
+                self.position()
+            )));
+        }
+        let mut resubmits = 0u32;
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return PlanOnceTerminal::Done(RemoteOutcome::NavDown("service-timeout".to_string()));
+            }
+            let version = self.plan_data_version.clone().unwrap_or_default();
+            match client.plan_once(from, dest, options, &version, PLAN_SLICE_WAIT_MS) {
+                Ok((ServicePoll::Ready(plan), served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        self.plan_data_version = Some(served.clone());
+                        if resubmits >= 1 {
+                            return PlanOnceTerminal::Done(RemoteOutcome::NavDown(format!(
+                                "version-skew server={served}"
+                            )));
+                        }
+                        resubmits += 1;
+                        continue;
+                    }
+                    let ipc_ms = started.elapsed().as_millis();
+                    return PlanOnceTerminal::Done(RemoteOutcome::Ready(plan, ipc_ms));
+                }
+                Ok((ServicePoll::Failed(no), served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        self.plan_data_version = Some(served.clone());
+                        if resubmits >= 1 {
+                            return PlanOnceTerminal::Done(RemoteOutcome::NavDown(format!(
+                                "version-skew server={served}"
+                            )));
+                        }
+                        resubmits += 1;
+                        continue;
+                    }
+                    return PlanOnceTerminal::Done(if no.reason == NoRouteReason::Aborted {
+                        RemoteOutcome::NavDown("server-aborted".to_string())
+                    } else {
+                        RemoteOutcome::NoRoute(no)
+                    });
+                }
+                Ok((ServicePoll::Pending, _)) | Ok((ServicePoll::Unknown, _)) => {
+                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(
+                        "plan-op-nonterminal".to_string(),
+                    ));
+                }
+                Err(PlanOnceError::Refused { reason, served }) => {
+                    if reason == "plan-timeout" {
+                        // Slice elapsed, plan still computing: keepalive +
+                        // stop check, then wait another slice (the legacy
+                        // poll loop's guard, 250x fewer connections).
+                        if !self.plan_yield() {
+                            return PlanOnceTerminal::Done(RemoteOutcome::Interrupted(format!(
+                                "plan aborted at {:?}",
+                                self.position()
+                            )));
+                        }
+                        continue;
+                    }
+                    if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
+                        self.plan_data_version = Some(served);
+                        resubmits += 1;
+                        continue;
+                    }
+                    if reason.contains("unknown op") {
+                        return PlanOnceTerminal::Legacy;
+                    }
+                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(reason));
+                }
+                Err(PlanOnceError::Transport(error)) => {
+                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(error));
+                }
+            }
+        }
+    }
+
+    /// Legacy submit/poll path, kept for old daemons only (unknown `plan`
+    /// op). Same discipline as before: refuse/down/stale twice/timeout
+    /// all become `nav-down`, never a local plan.
+    fn plan_remote_legacy(
+        &mut self,
+        client: &service::PlanClient,
+        options: &NavOptions,
+        from: Tile,
+        dest: Tile,
+    ) -> RemoteOutcome {
         let mut resubmits = 0u32;
         loop {
             let version = self.plan_data_version.clone().unwrap_or_default();
@@ -358,8 +478,10 @@ impl Bot {
     }
 
     /// Batch walking costs via the pathfinding service, never a local
-    /// Dijkstra: one submit+poll per dest, sequential so at most one ticket
-    /// is in flight (never near ACCOUNT_CAP). Options come from the served
+    /// Dijkstra: one `plan` op (E3) per UNIQUE dest, sequential so at most
+    /// one ticket is in flight (never near ACCOUNT_CAP). Identical dests
+    /// in one batch share one remote cost (E14 grouping); repeats across
+    /// calls still hit the service L1. Options come from the served
     /// `wants` tags like a plan; without them (or the handle) every dest
     /// is None so callers keep the Manhattan order. L1 exact hits,
     /// truncation and joins happen server-side on their own. Any miss (no
@@ -376,17 +498,48 @@ impl Bot {
             Err(_) => return vec![None; dests.len()],
         };
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-        let mut out = Vec::with_capacity(dests.len());
+        // E14: one remote cost per unique tile in the batch.
+        let mut unique: Vec<Tile> = Vec::with_capacity(dests.len());
+        let mut slot_of: Vec<usize> = Vec::with_capacity(dests.len());
         for dest in dests {
-            out.push(self.walk_cost_one(&client, &options, from, *dest));
+            match unique.iter().position(|known| *known == *dest) {
+                Some(slot) => {
+                    slot_of.push(slot);
+                    self.cost_stats.dedup_hits += 1;
+                }
+                None => {
+                    slot_of.push(unique.len());
+                    unique.push(*dest);
+                }
+            }
         }
-        out
+        let mut costs = vec![None; unique.len()];
+        for (slot, dest) in unique.iter().enumerate() {
+            self.cost_stats.remote_calls += 1;
+            costs[slot] = self.walk_cost_one(&client, &options, from, *dest);
+        }
+        slot_of.iter().map(|slot| costs[*slot]).collect()
     }
 
-    /// One remote cost: submit non-blocking, poll with the keepalive
-    /// between polls (same guard as `poll_ticket`), version-skew
-    /// resubmits once, then Manhattan (`None`). Never plans locally.
+    /// One remote cost: E3 `plan` op first (one round-trip, server-side
+    /// wait, version-skew resubmits once), legacy submit/poll only
+    /// against an old daemon. Never plans locally: any miss is None.
     fn walk_cost_one(
+        &mut self,
+        client: &service::PlanClient,
+        options: &NavOptions,
+        from: Tile,
+        dest: Tile,
+    ) -> Option<u32> {
+        match self.plan_once_terminal(client, options, from, dest) {
+            PlanOnceTerminal::Done(RemoteOutcome::Ready(plan, _)) => Some(plan.cost),
+            PlanOnceTerminal::Done(_) => None,
+            PlanOnceTerminal::Legacy => self.walk_cost_legacy(client, options, from, dest),
+        }
+    }
+
+    /// Legacy per-cost submit/poll, kept for old daemons only.
+    fn walk_cost_legacy(
         &mut self,
         client: &service::PlanClient,
         options: &NavOptions,

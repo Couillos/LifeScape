@@ -55,8 +55,11 @@ pub struct JobInner {
     pub last_code: Option<Value>,
     pub supervise: bool,
     /// Last pushed snapshot (worker push frames): the front reads this,
-    /// the disk is only the adoption fallback when no push arrived yet.
+    /// the disk is only the adoption fallback before the first push arrived.
     pub live: Option<Value>,
+    /// A task report arrived since the last supervision pass: the single
+    /// supervisor drains it immediately (brain trigger hook, E8).
+    pub report_pending: bool,
     pub state_written_at: f64,
 }
 
@@ -85,6 +88,7 @@ impl Job {
                 last_code: None,
                 supervise: true,
                 live: None,
+                report_pending: false,
                 state_written_at: 0.0,
             }),
         }

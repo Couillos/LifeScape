@@ -273,10 +273,11 @@ pub(crate) fn finish_rescue(shared: &Shared, script: &str) {
 /// so running scripts are read from the heartbeat snapshot: enough for
 /// geography and the carried cube, which is exactly the telemetry a
 /// stuck script needs. Never the full `check()`: that walks and pumps,
-/// which would recurse from inside a pump hook.
+/// which would recurse from inside a pump hook. E5: 1 s cadence — with
+/// the resting serve loop, an idle worker wakes <= 2/s.
 pub(crate) fn observe_events(shared: &Arc<Shared>) {
     loop {
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(1000));
         if shared.inner.lock().unwrap().closing {
             return;
         }
@@ -429,6 +430,10 @@ mod tests {
                 script_alive: false,
                 last_heartbeat_tick: 0,
                 last_heartbeat_wall: 0.0,
+                last_full_tick: 0,
+                last_full_wall: 0.0,
+                last_full_script: String::new(),
+                last_full_status: String::new(),
                 last_msg_logged: 0,
                 last_zone: "?".to_string(),
                 trail: Vec::new(),

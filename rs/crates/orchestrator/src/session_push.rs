@@ -7,34 +7,13 @@
 //! fire-and-forget with a short bound: a lost frame is no worse than a
 //! missed heartbeat, the next pump pushes the full state again.
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::time::Duration;
-
-use lifescape_json::{self as json, Value, object, str_value};
-use crate::paths;
-
-/// One push never holds the pump longer than this.
-const PUSH_TIMEOUT: Duration = Duration::from_secs(2);
+use lifescape_json::{Value, object, str_value};
 
 fn send_push(frame: &Value) {
-    let Ok(stream) = UnixStream::connect(paths::socket_path()) else {
-        return;
-    };
-    if stream.set_read_timeout(Some(PUSH_TIMEOUT)).is_err() {
-        return;
-    }
-    if stream.set_write_timeout(Some(PUSH_TIMEOUT)).is_err() {
-        return;
-    }
-    let mut buf = json::stringify(frame);
-    buf.push('\n');
-    if (&stream).write_all(buf.as_bytes()).is_err() {
-        return;
-    }
-    // The reply is protocol hygiene only; nobody waits on it.
-    let mut line = String::new();
-    let _ = BufReader::new(&stream).read_line(&mut line);
+    // E2 persistent hub first (one stream per worker life); legacy
+    // one-shot only when no hub answers (rolling upgrades).
+    let account = frame.get("account").as_str().unwrap_or("").to_string();
+    crate::push_conn::send_frame(&account, frame);
 }
 
 /// Full live state frame. The caller throttles (~10 ticks): the daemon
@@ -50,6 +29,12 @@ pub(crate) fn snapshot_frame(account: &str, snapshot: &Value) -> Value {
 /// Push the full live state to the daemon (fire-and-forget).
 pub(crate) fn push_snapshot(account: &str, snapshot: &Value) {
     send_push(&snapshot_frame(account, snapshot));
+}
+
+/// Push a light heartbeat to the daemon (E4 two-flow: position and
+/// status only, merged into the last full state daemon-side).
+pub(crate) fn push_light(light: &Value) {
+    send_push(light);
 }
 
 /// Push a finished task report to the daemon (fire-and-forget, like any
