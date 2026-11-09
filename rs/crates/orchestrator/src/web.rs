@@ -4,7 +4,7 @@
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items/history
 //! /api/scripts /api/accounts /api/logs/<account> +
-//! POST /api/open|run|unload|pause|resume|close + /ws pushing every 0.2 s.
+//! POST /api/open|run|unload|pause|resume|close + /ws pushing every 1 s.
 //! Static files are re-read from orchestration/static/ on every request.
 //!
 //! The spectator map is precomputed once at daemon startup (mapbuild: one
@@ -24,15 +24,18 @@ use crate::minimap::Minimap;
 use crate::paths;
 
 pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-pub const WS_INTERVAL: f64 = 0.2;
+pub const WS_INTERVAL: f64 = 1.0;
 
 pub type Dispatch = Arc<dyn Fn(Value) -> Value + Send + Sync>;
 
-const LOC_FIELDS: &[&str] = &[
-    "x", "z", "id", "shape", "angle", "act", "active", "block", "width", "length", "mapscene",
-    "mapsceneX", "mapsceneY", "cosmetic",
-];
+/// Loc columns on the wire. The screen only reads `name` (via `loc_names`),
+/// `cosmetic` (scenery panel) and `id` (the names key): x/z/shape/angle and
+/// the mapscene origin ride no pixel, the map is the static PNG.
+const LOC_FIELDS: &[&str] = &["id", "cosmetic"];
 
+/// Job columns on the wire: exactly what the spectator list renders
+/// (name/level/position/window/state line). Phase/zone/ticks/errors ride the
+/// followed state, not the list.
 const JOB_LIST_FIELDS: &[&str] = &[
     "account",
     "account_name",
@@ -42,14 +45,8 @@ const JOB_LIST_FIELDS: &[&str] = &[
     "intention",
     "status",
     "paused",
-    "phase",
     "script",
     "hitpoints",
-    "zone",
-    "ticks",
-    "last_error",
-    "last_event",
-    "updated",
 ];
 
 /// Pack-backed ground and sprite renderer, shared by every connection.
@@ -82,39 +79,18 @@ fn annotate_mapscene(mut state: Value) -> Value {
     state
 }
 
-fn fnv1a(text: &str) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in text.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-/// Cheap signature of the fields that only change when the bot moves.
-fn heavy_signature(state: &Value) -> Value {
-    let locs = state.get("locs").as_arr().map(|items| items.to_vec()).unwrap_or_default();
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for loc in &locs {
-        let row = format!(
-            "{:?}{:?}{:?}{:?}{:?}",
-            loc.get("x"),
-            loc.get("z"),
-            loc.get("id"),
-            loc.get("shape"),
-            loc.get("angle")
-        );
-        hash ^= fnv1a(&row);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    Value::Arr(vec![
-        state.get("position").clone(),
-        state.get("zone").clone(),
-        Value::Int(locs.len() as i64),
-        Value::Int(hash as i64),
-    ])
-}
-
+/// Full-weight fields the spectator screen never reads (no `last.<name>`
+/// in `spectator.js`): dropped from the 1 Hz push only. `/api/state` and the
+/// CLI keep the full state.
+const WS_DROP: &[&str] = &[
+    "trail",
+    "bank",
+    "messages",
+    "message_ticks",
+    "texts",
+    "flora",
+    "models",
+];
 /// Encode locs as arrays plus one id -> name table (same wire shape).
 fn compact_locs(state: &mut Value) {
     let locs = match state.as_obj().and_then(|map| map.get("locs")) {
@@ -150,7 +126,16 @@ fn compact_locs(state: &mut Value) {
     }
 }
 
-pub fn state_payload(dispatch: &Dispatch, account: &str, previous: Option<&Value>) -> Value {
+/// Full state plus its per-connection diff: `previous` is the last full
+/// state this connection got (`None` on connect or account switch). Same
+/// shape as `/api/state` minus `WS_DROP`, locs compacted; unchanged keys
+/// are omitted and the client merges (`Object.assign`) over its copy.
+/// Returns the wire payload and the full state to remember for next time.
+pub fn state_payload(
+    dispatch: &Dispatch,
+    account: &str,
+    previous: Option<&Value>,
+) -> (Value, Option<Value>) {
     let jobs = dispatch(object(vec![("cmd", str_value("status"))]));
     let mut listed = Vec::new();
     for job in jobs.get("jobs").as_arr().map(|items| items.to_vec()).unwrap_or_default() {
@@ -160,8 +145,8 @@ pub fn state_payload(dispatch: &Dispatch, account: &str, previous: Option<&Value
         }
         listed.push(Value::Obj(slim));
     }
-    let mut payload =
-        object(vec![("jobs", Value::Arr(listed)), ("signature", Value::Null)]);
+    let mut payload = object(vec![("jobs", Value::Arr(listed))]);
+    let mut remembered = None;
     if !account.is_empty() {
         let mut state = dispatch(object(vec![
             ("cmd", str_value("live")),
@@ -172,22 +157,42 @@ pub fn state_payload(dispatch: &Dispatch, account: &str, previous: Option<&Value
         if state.as_obj().is_none() {
             state = object(vec![]);
         }
-        state = annotate_mapscene(state);
-        let signature = heavy_signature(&state);
-        if previous == Some(&signature) {
-            if let Value::Obj(map) = &mut state {
-                map.remove("locs");
-                map.insert("partial".to_string(), Value::Bool(true));
+        if let Value::Obj(map) = &mut state {
+            for dead in WS_DROP {
+                map.remove(*dead);
             }
-        } else {
-            compact_locs(&mut state);
         }
+        compact_locs(&mut state);
+        remembered = Some(state.clone());
+        let frame = match previous {
+            Some(prev) => {
+                let mut changed = std::collections::BTreeMap::new();
+                if let Value::Obj(map) = &state {
+                    for (key, value) in map {
+                        if *prev.get(key) != *value {
+                            changed.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                let mut frame = Value::Obj(changed);
+                if let Value::Obj(map) = &mut frame {
+                    // `account` marks a live frame (its absence reads as
+                    // offline), and compact rows need their table to decode.
+                    map.insert("account".to_string(), state.get("account").clone());
+                    if map.contains_key("locs") {
+                        map.insert("loc_names".to_string(), state.get("loc_names").clone());
+                        map.insert("loc_fields".to_string(), state.get("loc_fields").clone());
+                    }
+                }
+                frame
+            }
+            None => state,
+        };
         if let Value::Obj(map) = &mut payload {
-            map.insert("state".to_string(), state);
-            map.insert("signature".to_string(), signature);
+            map.insert("state".to_string(), frame);
         }
     }
-    payload
+    (payload, remembered)
 }
 
 // -- websocket framing (RFC 6455 server frames) ----------------------------
@@ -332,23 +337,49 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
+/// Incremental log tail for the WS: the 120-line window slides as the file
+/// grows, so the new tail is never a prefix of the old one. Find how many
+/// leading lines were already sent (overlap) and send only the new tail as
+/// `log_append` (possibly empty, the client no-ops). Full `logs` resend
+/// only when nothing overlaps (rotated file) or on first contact. The
+/// client appends to its copy.
+fn log_delta(previous: &[String], fresh: &[String]) -> (String, Value) {
+    let max = fresh.len().min(previous.len());
+    let mut overlap = 0;
+    for len in (1..=max).rev() {
+        if fresh[..len] == previous[previous.len() - len..] {
+            overlap = len;
+            break;
+        }
+    }
+    if overlap == 0 && !previous.is_empty() && !fresh.is_empty() {
+        return (
+            "logs".to_string(),
+            Value::Arr(fresh.iter().map(|line| str_value(line)).collect()),
+        );
+    }
+    (
+        "log_append".to_string(),
+        Value::Arr(fresh[overlap..].iter().map(|line| str_value(line)).collect()),
+    )
+}
+
 /// Push jobs + the followed account's state until the client leaves.
 fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
     let mut account = String::new();
     let mut last_send = 0.0f64;
     let mut log_mark: Option<(u128, u64)> = None;
-    let mut signature: Option<Value> = None;
+    let mut last_logs: Vec<String> = Vec::new();
+    let mut last_state: Option<Value> = None;
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|span| span.as_secs_f64())
             .unwrap_or(0.0);
         if now - last_send >= WS_INTERVAL {
-            let mut payload = state_payload(dispatch, &account, signature.as_ref());
-            if let Value::Obj(map) = &mut payload {
-                signature = map.remove("signature");
-            }
+            let (mut payload, full) = state_payload(dispatch, &account, last_state.as_ref());
+            last_state = full.or(last_state);
             if !account.is_empty() {
                 let (_merged, _partial, log_path) = paths::user_paths(&account);
                 let mark = std::fs::metadata(&log_path).ok().and_then(|meta| {
@@ -367,10 +398,21 @@ fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
                     .get("lines")
                     .clone();
                     if !lines.is_null() {
+                        let fresh: Vec<String> = lines
+                            .as_arr()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|line| line.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         if let Value::Obj(map) = &mut payload {
-                            map.insert("logs".to_string(), lines);
+                            let (key, value) = log_delta(&last_logs, &fresh);
+                            map.insert(key, value);
                         }
                         log_mark = mark;
+                        last_logs = fresh;
                     }
                 }
             }
@@ -400,7 +442,14 @@ fn ws_session(mut sock: TcpStream, dispatch: &Dispatch) {
                 } else if opcode == 0x1 {
                     let text = String::from_utf8_lossy(&data);
                     if let Ok(request) = json::parse(&text) {
-                        account = request.get("account").as_str().unwrap_or("").to_string();
+                        let next = request.get("account").as_str().unwrap_or("").to_string();
+                        // New base: the client drops its copy (`last = null`)
+                        // and expects a full state, not a diff of another bot.
+                        if next != account {
+                            account = next;
+                            last_state = None;
+                            last_logs = Vec::new();
+                        }
                     }
                 }
             }
@@ -815,6 +864,93 @@ mod tests {
         assert_eq!(map_asset(&["map-0123456789abcdef", "c44-l0.jpg"]), None);
         assert_eq!(map_asset(&["map-0123456789ABCDEF", "c44-l0.png"]), Some(("map-0123456789ABCDEF".to_string(), "c44-l0.png".to_string())));
         assert_eq!(map_asset(&["map-0123456789abcde", "c44-l0.png"]), None);
+    }
+
+    #[test]
+    fn ws_payload_keeps_displayed_drops_dead_weight() {
+        fn live_dispatch(ticks: i64, loc_id: i64) -> Dispatch {
+            Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
+            "status" => object(vec![("jobs", Value::Arr(Vec::new()))]),
+            _ => object(vec![("state", object(vec![
+                ("account", str_value("bob")),
+                ("position", Value::Arr(vec![Value::Int(0), Value::Int(1), Value::Int(2)])),
+                ("zone", str_value("Lumbridge")),
+                ("ticks", Value::Int(ticks)),
+                ("inv", Value::Arr(Vec::new())),
+                ("skills", Value::Arr(Vec::new())),
+                ("locs", Value::Arr(vec![object(vec![
+                    ("id", Value::Int(loc_id)),
+                    ("name", str_value("Bank booth")),
+                    ("cosmetic", Value::Bool(false)),
+                ])])),
+                ("trail", Value::Arr(vec![Value::Int(1)])),
+                ("bank", Value::Arr(vec![Value::Int(2)])),
+                ("messages", Value::Arr(vec![Value::Int(3)])),
+                ("message_ticks", Value::Arr(vec![Value::Int(4)])),
+                ("texts", Value::Obj(Default::default())),
+                ("flora", Value::Arr(Vec::new())),
+                ("models", Value::Obj(Default::default())),
+            ]))])})
+        }
+        let (payload, full) = state_payload(&live_dispatch(7, 3), "bob", None);
+        let state = payload.get("state");
+        for dead in ["trail", "bank", "messages", "message_ticks", "texts", "flora", "models"] {
+            assert!(state.get(dead).is_null(), "{dead} rides the WS but the screen never reads it");
+        }
+        assert!(!state.get("inv").is_null());
+        assert!(!state.get("skills").is_null());
+        // locs stay compact: [id, cosmetic] rows + the names table.
+        let locs = state.get("locs").as_arr().unwrap();
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].as_arr().unwrap().len(), 2);
+        assert_eq!(
+            state.get("loc_names").get("3").as_str(),
+            Some("Bank booth")
+        );
+        // Same snapshot again: only the `account` marker rides, the client
+        // keeps its copy.
+        let full = full.expect("full state to remember");
+        let (repeat, _) = state_payload(&live_dispatch(7, 3), "bob", Some(&full));
+        let frame = repeat.get("state");
+        assert_eq!(frame.as_obj().map(|map| map.len()), Some(1));
+        assert_eq!(frame.get("account").as_str(), Some("bob"));
+        // One tick moved: only that key rides, plus `account` (a frame
+        // without it reads as offline on the client).
+        let (delta, _) = state_payload(&live_dispatch(8, 3), "bob", Some(&full));
+        let frame = delta.get("state");
+        assert_eq!(frame.as_obj().map(|map| map.len()), Some(2));
+        assert_eq!(frame.get("ticks").as_i64(), Some(8));
+        assert_eq!(frame.get("account").as_str(), Some("bob"));
+        // Locs moved: the rows ride with their decode table.
+        let (moved, _) = state_payload(&live_dispatch(8, 4), "bob", Some(&full));
+        let frame = moved.get("state");
+        assert!(!frame.get("locs").as_arr().unwrap().is_empty());
+        assert_eq!(frame.get("loc_names").get("4").as_str(), Some("Bank booth"));
+        assert!(!frame.get("loc_fields").as_arr().unwrap().is_empty());
+    }
+
+    #[test]
+    fn log_tail_goes_incremental() {
+        let old = vec!["a".to_string(), "b".to_string()];
+        let (key, value) = log_delta(&old, &["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(key, "log_append");
+        assert_eq!(value.as_arr().unwrap().len(), 1);
+        let (key, value) = log_delta(&old, &old.clone());
+        assert_eq!(key, "log_append");
+        assert!(value.as_arr().unwrap().is_empty());
+        // Truncated or rotated file: full resend, the client replaces.
+        let (key, value) = log_delta(&old, &["x".to_string()]);
+        assert_eq!(key, "logs");
+        assert_eq!(value.as_arr().unwrap().len(), 1);
+        // Sliding window: only the new tail rides.
+        let (key, value) = log_delta(
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+            &["b".to_string(), "c".to_string(), "d".to_string()],
+        );
+        assert_eq!(key, "log_append");
+        let tail = value.as_arr().unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].as_str(), Some("d"));
     }
 
     #[test]

@@ -39,7 +39,7 @@ const R = 16;         // drawn radius, in tiles
 // The map is precomputed server-side (one PNG per painted cluster per
 // level, 4 px per tile, same passes as the client minimap) and served
 // immutable. The client only crops the 33-tile window around the player
-// (position already arrives over the WS at 5 Hz): zero image requests.
+// (position already arrives over the WS at 1 Hz): zero image requests.
 // Frames are atomic: draw() only paints when the crop is fully covered,
 // otherwise it keeps the previous complete frame.
 let mapState = 'loading'; // loading | ready | missing
@@ -126,6 +126,7 @@ async function select(account) {
   selected = account;
   autoSelected = true;
   last = null;
+  logLines = [];
   paint(); // drop the previous bot at once; the next state paints the new one
   setTitle("Following: " + account.replace(/_/g, " "), "");
   const picker = document.getElementById("account");
@@ -186,7 +187,11 @@ function connectSocket() {
         select(first.account);
       }
     }
-    if (data.logs) setLog(data.logs);
+    if (data.logs) { logLines = data.logs; renderLog(); }
+    if (data.log_append && data.log_append.length) {
+      logLines = logLines.concat(data.log_append).slice(-500);
+      renderLog();
+    }
     if (data.state && data.state.account) {
       const incoming = data.state;
       if (Array.isArray(incoming.locs) && incoming.loc_fields) {
@@ -200,7 +205,7 @@ function connectSocket() {
           return loc;
         });
       }
-      const merged = incoming.partial && last ? Object.assign({}, last, incoming) : incoming;
+      const merged = last ? Object.assign({}, last, incoming) : incoming;
       last = merged;
       // Session gap, not a dead pipe: the socket stays live (stamp below
       // keeps ticking) while the worker relogs. Say so with the stale
@@ -224,6 +229,11 @@ function connectSocket() {
   };
   socket.onerror = () => { if (socket) socket.close(); };
   socket.onclose = () => { socket = null; scheduleReconnect(); };
+}
+
+let logLines = [];
+function renderLog() {
+  setLog(logLines);
 }
 
 function setLog(lines) {
@@ -543,7 +553,7 @@ async function loadAccounts() {
     if (current && [...picker.options].some(o => o.value === current)) picker.value = current;
   } catch (e) { /* read-only fallback */ }
 }
-// One listener on the stable <ul>: the rows are re-rendered 5x/s, so a
+// One listener on the stable <ul>: the rows are re-rendered 1x/s, so a
 // click often spans two different row nodes (press on one, release on
 // its replacement) and never fires on the link. Selecting on mousedown
 // registers before any re-render can swap the node; click stays as a
