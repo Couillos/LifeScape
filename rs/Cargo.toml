@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sdk", "crates/gamedata", "crates/orchestrator", "crates/scripts", "crates/json", "crates/nav"]
+members = ["crates/sdk", "crates/gamedata", "crates/orchestrator", "crates/scripts", "crates/json", "crates/nav", "crates/store"]
 resolver = "2"
 
 [workspace.lints.rust]

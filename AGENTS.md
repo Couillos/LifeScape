@@ -35,11 +35,11 @@ cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata 
 
 ## 4. Règles dures
 
-1. Std only : aucun `[dependencies]`, JSON/HTTP/WS maison, pas de tokio/serde.
+1. Std only : aucun `[dependencies]`, JSON/HTTP/WS maison, pas de tokio/serde. Exception D3 : `lifescape-store` seul dépend de `rusqlite` (`bundled`), voir `docs/decisions.md`.
 2. Pas d'`unsafe` : `#![forbid(unsafe_code)]` sur chaque crate, pas de code généré.
 3. Noms explicites : jamais de variable, fonction ou module en 1-2 caractères.
 4. Moins de 1000 lignes par fichier : découper par rôle avant la limite, API stable.
-5. Attentes en ticks (`bot.world.ticks`, `waits::wait_ticks`, `TICK_MS = 20`), jamais en secondes ni `thread::sleep` d'attente jeu.
+5. Attentes en ticks (`bot.world.ticks`, `waits::wait_ticks`, `waits::tick_ms()` : 60 ms en dev, 600 ms en prod via `NODE_TICK_RATE`), jamais en secondes ni `thread::sleep` d'attente jeu.
 6. Erreurs typées et contextualisées (`sdk::error::Error`), remontées via `Result` ; jamais d'`unwrap` sur un chemin réseau/jeu.
 7. Aucun fallback non demandé : en échec, erreur typée puis question à l'utilisateur.
 8. Scripts minces et stateless : logique skill uniquement, réutilisable → SDK, données → gamedata, aucun état persisté.
