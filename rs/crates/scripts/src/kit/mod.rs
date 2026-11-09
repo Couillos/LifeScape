@@ -3,5 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gear;
 pub mod harvest;
 pub mod spots;
+pub mod survival;

@@ -4,21 +4,18 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
+use crate::kit::gear::{available_gear, current_weapon_category, equip_plan, gear_plan, melee_level, prepare_at_bank, rewear};
+use crate::kit::survival::{bank_stocks_food, danger_error, eat, food_count, should_eat, DeathTally, EAT_FRACTION};
 use crate::skill_common::{
-    bury_bones, check_events, free_slots, heal_at_bank, hitpoints, live_bank_booths, nearest_bank, obj_id,
-    walk_checked,
+    bury_bones, check_events, free_slots, hitpoints, walk_checked,
 };
 use crate::skill_gather::{fight_engaged, BanSet, same_side};
 use crate::{ScriptError, ScriptResult};
 
-const EAT_FRACTION: f64 = 0.55;
-const FOOD_TARGET: usize = 10;
 const LOOT_RADIUS: i32 = 6;
 /// World ticks a "can't reach" goblin tile stays banned before retry.
 const BLOCKED_BAN_TICKS: u64 = 200;
@@ -40,10 +37,6 @@ const FIGHT_STALL_TICKS: u64 = 200;
 /// 1.5x headroom. The 12-minute goblin 810 grind (xp flowing, nothing dying)
 /// is by definition a bad use of time on an axe rush.
 const KILL_CAP_TICKS: u64 = 900;
-const ARMOUR_SLOTS: [i64; 9] = [0, 1, 2, 4, 5, 7, 9, 10, 12];
-/// Server wearpos slots: 3 is the weapon, 5 the shield.
-const WEAPON_SLOT: i64 = 3;
-const WORN_COM_NAME: &str = "wornitems:wear";
 
 /// Controlled style button per weapon category, when this revision offers
 /// one: slash/spiked/claws index 2, spear 0-2, polearm 0. Controlled trains
@@ -94,6 +87,7 @@ fn next_style(bot: &Bot, current: &str) -> Option<&'static str> {
 
 /// Weakest of attack/strength/defence right now.
 fn weakest_melee(bot: &Bot) -> &'static str {
+
     let (attack, strength, defence) =
         (melee_stat(bot, "attack"), melee_stat(bot, "strength"), melee_stat(bot, "defence"));
     if attack <= strength && attack <= defence {
@@ -103,6 +97,13 @@ fn weakest_melee(bot: &Bot) -> &'static str {
     } else {
         "defence"
     }
+}
+
+/// The style `fight` presses for this category: controlled when the
+/// revision offers it, else the weakest skill right now. Shared with the
+/// gear planner so the scored bonus is the trained bonus.
+pub(crate) fn fight_weapon_style(bot: &Bot, category: &str) -> &'static str {
+    if controlled_button(category).is_some() { "controlled" } else { weakest_melee(bot) }
 }
 
 /// Combat style buttons per weapon category (player_attackstyles data).
@@ -211,7 +212,7 @@ fn current_skill<'a>(bot: &Bot, assumed: &'a str) -> &'a str {
 }
 /// A scimitar's speed beats a 2h sword's raw bonus: one-handed slashers win
 /// ties (strategy, not game data).
-fn weapon_weight(category: &str) -> f64 {
+pub(crate) fn weapon_weight(category: &str) -> f64 {
     match category {
         "weapon_slash" => 1.0,
         "weapon_stab" => 0.9,
@@ -237,7 +238,7 @@ fn weapon_weight(category: &str) -> f64 {
 /// crush/crush/stab/crush, claws_table like slash, polearm_table
 /// con/agg/def on stab/slash/stab, unarmed/staff all crush) crossed with
 /// content/.../player/player_attackstyles.rs2 (button suffix -> style).
-fn style_damage_key(category: &str, style: &str) -> Option<&'static str> {
+pub(crate) fn style_damage_key(category: &str, style: &str) -> Option<&'static str> {
     match (category, style) {
         ("weapon_slash" | "weapon_claws", "controlled") => Some("stab"),
         ("weapon_slash" | "weapon_claws", _) => Some("slash"),
@@ -257,183 +258,6 @@ fn style_damage_key(category: &str, style: &str) -> Option<&'static str> {
     }
 }
 
-/// Replacement cost of a wearable (shop price from the objs dump, 0 when
-/// the dump carries none, unknown names last): the tie-break when two
-/// items score equal is the cheaper one to lose on a death far from a
-/// bank. No gender gate exists in this revision (equipment.json
-/// requirements only ever name attack/defence/strength).
-fn loss_cost(name: &str) -> i64 {
-    knowledge::objs_by_name(name).first().map(|entry| entry.price).unwrap_or(i64::MAX)
-}
-
-/// Gear score, slot by slot. Weapon: the style's own attack bonus plus
-/// twice the strength bonus (expected DPS at the current style), scaled
-/// by the category speed proxy. Armour: summed defence plus twice
-/// strength plus prayer (survival). Level gates come from
-/// equipment.json requirements via requirements_met (wield gates in
-/// content/scripts/levelrequire/scripts/tier1|5|10|20|30|40.rs2:
-/// iron attack 1, steel 5, black 10, mithril 20, adamant 30, rune 40 —
-/// bronze ungated outside the tutorial); ties keep the cheaper kit.
-fn gear_score(bot: &Bot, entry: &knowledge::equipment::Wearable, slot: i64) -> f64 {
-    if slot == WEAPON_SLOT {
-        let category = entry.category.as_deref().unwrap_or("");
-        // Controlled trains everything when the category offers it,
-        // otherwise the weakest skill right now: the same button fight()
-        // will press, so the bonus scored is the bonus trained with.
-        let style = if controlled_button(category).is_some() { "controlled" } else { weakest_melee(bot) };
-        let attack = match style_damage_key(category, style) {
-            Some(key) => entry.attack.iter().find(|(name, _)| name == key).map(|(_, bonus)| *bonus).unwrap_or(0),
-            None => entry.attack.iter().map(|(_, bonus)| *bonus).max().unwrap_or(0),
-        } as f64;
-        return (attack + 2.0 * entry.strength as f64) * weapon_weight(category);
-    }
-    entry.defence.iter().map(|(_, bonus)| *bonus).sum::<i64>() as f64 + 2.0 * entry.strength as f64
-        + entry.prayer as f64
-}
-
-fn levels_by_name(bot: &Bot) -> Vec<(String, i64)> {
-    knowledge::equipment::STATS
-        .iter()
-        .map(|(name, index)| {
-            let level = bot.world.stats.get(&(*index as u8)).map(|(level, _)| i64::from(*level)).unwrap_or(1);
-            (name.to_string(), level)
-        })
-        .collect()
-}
-
-fn melee_level(bot: &Bot) -> i64 {
-    let at = |index: u8| bot.world.stats.get(&index).map(|(level, _)| i64::from(*level)).unwrap_or(1);
-    (at(0) + at(2) + at(1)) / 3
-}
-
-/// Display names of worn + banked + carried gear, with their obj ids.
-fn available_gear(bot: &Bot) -> HashMap<u16, String> {
-    let mut found = HashMap::new();
-    for id in bot.inventory().keys() {
-        if let Some(name) = (bot.tables.obj_name)(*id) {
-            found.insert(*id, name);
-        }
-    }
-    if let Some(worn_com) = (bot.tables.com_id)(WORN_COM_NAME) {
-        if let Some(slots) = bot.world.inv.get(&worn_com) {
-            for (_, (held, _)) in slots {
-                if let Some(name) = (bot.tables.obj_name)(*held) {
-                    found.insert(*held, name);
-                }
-            }
-        }
-    }
-    for (id, _) in bot.bank_items() {
-        if let Some(name) = (bot.tables.obj_name)(id) {
-            found.insert(id, name);
-        }
-    }
-    found
-}
-
-/// Best wearable per slot among the available obj ids.
-fn gear_plan(bot: &Bot, available: &HashMap<u16, String>) -> HashMap<i64, Vec<knowledge::equipment::Wearable>> {
-    let levels = levels_by_name(bot);
-    let refs: Vec<(&str, i64)> = levels.iter().map(|(name, level)| (name.as_str(), *level)).collect();
-    let ids: std::collections::HashSet<u16> = available.keys().copied().collect();
-    let mut plan: HashMap<i64, Vec<knowledge::equipment::Wearable>> = HashMap::new();
-    for entry in knowledge::equipment::all_wearables() {
-        let Ok(obj) = obj_id(bot, &entry.name) else {
-            continue;
-        };
-        if !ids.contains(&obj) || !knowledge::equipment::requirements_met(&entry, &refs) {
-            continue;
-        }
-        for slot in [WEAPON_SLOT].into_iter().chain(ARMOUR_SLOTS) {
-            if knowledge::equipment::covers_slot(&entry, slot) {
-                plan.entry(slot).or_default().push(entry.clone());
-            }
-        }
-    }
-    for (slot, cands) in plan.iter_mut() {
-        // Best score wins, ties keep the cheaper kit (death far from a
-        // bank drops the pack: risk without a bonus is just cost).
-        cands.sort_by(|a, b| {
-            gear_score(bot, b, *slot)
-                .partial_cmp(&gear_score(bot, a, *slot))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| loss_cost(&a.name).cmp(&loss_cost(&b.name)))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        if *slot == WEAPON_SLOT {
-            // Prefer a one-handed weapon so the shield slot stays useful.
-            cands.sort_by_key(|entry| knowledge::equipment::covers_slot(entry, 5));
-        }
-    }
-    plan
-}
-
-fn worn_obj(bot: &Bot, slot: i64) -> Option<u16> {
-    let worn_com = (bot.tables.com_id)(WORN_COM_NAME)?;
-    bot.world.inv.get(&worn_com)?.get(&(slot as u8)).map(|(held, _)| *held)
-}
-
-/// Wear an entry from the pack. True when it ends up worn.
-fn equip(bot: &mut Bot, entry: &knowledge::equipment::Wearable) -> Result<bool, ScriptError> {
-    let obj = obj_id(bot, &entry.name)?;
-    if worn_obj(bot, entry.wearpos) == Some(obj) {
-        return Ok(true);
-    }
-    let Some(pack_com) = bot.backpack().0 else {
-        return Ok(false);
-    };
-    let slot = bot.backpack().1.into_iter().find(|(_, (held, _))| *held == obj).map(|(slot, _)| slot);
-    let Some(slot) = slot else {
-        return Ok(false);
-    };
-    let seen = bot.world.messages.len();
-    bot.op_held(2, obj, slot, pack_com)?;
-    let target = bot.world.ticks + 25;
-    while bot.world.ticks < target {
-        bot.pump(2)?;
-        if worn_obj(bot, entry.wearpos) == Some(obj) {
-            return Ok(true);
-        }
-        if bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|line| {
-            let lowered = line.to_lowercase();
-            lowered.contains("not a high enough level") || lowered.contains("free space")
-        }) {
-            return Ok(false);
-        }
-    }
-    Ok(false)
-}
-
-fn equip_plan(bot: &mut Bot, plan: &HashMap<i64, Vec<knowledge::equipment::Wearable>>) -> Result<HashMap<i64, String>, ScriptError> {
-    let mut equipped: HashMap<i64, String> = HashMap::new();
-    for slot in [WEAPON_SLOT].into_iter().chain(ARMOUR_SLOTS) {
-        if slot == 5 && equipped.contains_key(&WEAPON_SLOT) {
-            let weapon = equipped.get(&WEAPON_SLOT).cloned().unwrap_or_default();
-            if knowledge::equipment::by_name(&weapon).is_some_and(|entry| knowledge::equipment::covers_slot(&entry, 5)) {
-                continue;
-            }
-        }
-        let cands = plan.get(&slot).cloned().unwrap_or_default();
-        for entry in cands {
-            if equip(bot, &entry)? {
-                equipped.insert(slot, entry.name.clone());
-                break;
-            }
-        }
-    }
-    Ok(equipped)
-}
-
-fn current_weapon_category(bot: &Bot) -> String {
-    match worn_obj(bot, WEAPON_SLOT) {
-        Some(obj) => knowledge::equipment::all_wearables()
-            .into_iter()
-            .find(|entry| obj_id(bot, &entry.name).is_ok_and(|id| id == obj))
-            .and_then(|entry| entry.category)
-            .unwrap_or_else(|| "unarmed".to_string()),
-        None => "unarmed".to_string(),
-    }
-}
 
 /// Press the button for `skill` and confirm the server took it: true
 /// when live `%com_mode` matches the button's index. A dropped press
@@ -470,57 +294,6 @@ fn set_style(bot: &mut Bot, skill: &str) -> Result<bool, ScriptError> {
     Ok(false)
 }
 
-/// Eat the first edible thing in the pack.
-fn eat(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let found = bot.backpack().1.into_iter().find(|(_, (held, _))| {
-        (bot.tables.obj_name)(*held).is_some_and(|name| knowledge::food::heal(&name) > 0)
-    });
-    let Some((slot, (held, _))) = found else {
-        return Ok(false);
-    };
-    let Some(pack_com) = bot.backpack().0 else {
-        return Ok(false);
-    };
-    bot.op_held(1, held, slot, pack_com)?;
-    bot.pump(3)?;
-    Ok(true)
-}
-
-fn food_count(bot: &Bot) -> u32 {
-    bot.backpack()
-        .1
-        .into_iter()
-        .filter(|(_, (held, _))| (bot.tables.obj_name)(*held).is_some_and(|name| knowledge::food::heal(&name) > 0))
-        .map(|(_, (_, count))| count)
-        .sum()
-}
-
-/// Withdraw the best banked food up to the target. Returns food carried.
-fn withdraw_food(bot: &mut Bot) -> Result<u32, ScriptError> {
-    let banked: Vec<String> =
-        bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
-    let refs: Vec<&str> = banked.iter().map(String::as_str).collect();
-    let Some((chosen, _)) = knowledge::food::best_food(&refs) else {
-        return Ok(food_count(bot));
-    };
-    let food_id = obj_id(bot, &chosen)?;
-    let need = (FOOD_TARGET as u32).saturating_sub(food_count(bot));
-    if need > 0 {
-        let _ = bot.bank_withdraw(food_id, need, 50);
-    }
-    Ok(food_count(bot))
-}
-
-/// True when the bank itself holds edible food: a foodless pack is only
-/// worth a bank trip when the bank can restock it. A broke beginner
-/// (t02 live: empty bank) otherwise ping-pongs bank<->field after every
-/// kill and dies crossing the map instead of hunting.
-fn bank_stocks_food(bot: &Bot) -> bool {
-    let banked: Vec<String> =
-        bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
-    let refs: Vec<&str> = banked.iter().map(String::as_str).collect();
-    knowledge::food::best_food(&refs).is_some()
-}
 
 fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
     knowledge::banks::all_banks()
@@ -530,125 +303,6 @@ fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
         .map(|bank| (bank.level as i32, bank.x as i32, bank.z as i32))
 }
 
-/// Deposit loot, withdraw the best gear and food for the current levels.
-fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
-    let bank = match nearest_bank(bot) {
-        // No service means no fence line and no walk: typed `nav-down`
-        // stays loud instead of degrading into an equip-and-continue.
-        Err(error)
-            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
-        {
-            return Err(error)
-        }
-        Ok(bank) => bank,
-        Err(_) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-    };
-    let (bank_x, bank_z) = (bank.x as i32, bank.z as i32);
-    bot.intend(&format!("banking at ({bank_x},{bank_z})"));
-    // Dead socket or operator stop, not a missed bank: typed to the
-    // session instead of a quiet equip-and-continue.
-    match walk_checked(bot, bank_x, bank_z, 15000) {
-        Ok(true) => {}
-        Ok(false) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-        // No service means no walk at all: typed `nav-down` stays loud
-        // instead of degrading into an equip-and-continue.
-        Err(error)
-            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
-        {
-            return Err(error)
-        }
-        Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
-        Err(_) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-    }
-    // The bank tile is safe: heal low HP here before the booth instead
-    // of walking hurt into the next hunt.
-    heal_at_bank(bot)?;
-    // Nearest booth first, every refusal falls through to the next: the
-    // dump's Manhattan pick can name a spawn behind the counter while its
-    // neighbour faces us. Only all-refused is quiet.
-    let mut opened = false;
-    for (booth_x, booth_z, booth_loc) in live_bank_booths(bot, bank_x, bank_z) {
-        if bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-            opened = true;
-            break;
-        }
-        bot.log(&format!("bank booth ({booth_x},{booth_z}) refused from here, trying next"));
-    }
-    if !opened {
-        bot.log(&format!("bank did not open at {:?}", bot.position()));
-        return Ok(false);
-    }
-    let bank_main = (bot.tables.com_id)("bank_main:inv")
-        .ok_or_else(|| ScriptError::Usage("bank_main:inv missing from component table".to_string()))?;
-    let target = bot.world.ticks + 50;
-    while bot.world.ticks < target && !bot.world.inv.contains_key(&bank_main) {
-        bot.pump(5)?;
-    }
-    if !bot.world.inv.contains_key(&bank_main) {
-        bot.close_modal()?;
-        return Ok(false);
-    }
-    let side_bank = (bot.tables.com_id)("bank_side:inv")
-        .ok_or_else(|| ScriptError::Usage("bank_side:inv missing from component table".to_string()))?;
-    let carried: Vec<(u16, u32)> = bot.inventory().into_iter().collect();
-    let available = available_gear(bot);
-    let mut keep: Vec<u16> = carried
-        .iter()
-        .filter(|(held, _)| {
-            available.contains_key(held)
-                && knowledge::equipment::all_wearables().iter().any(|entry| obj_id(bot, &entry.name).is_ok_and(|id| id == *held))
-        })
-        .map(|(held, _)| *held)
-        .collect();
-    let banked: Vec<String> = bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
-    let bank_refs: Vec<&str> = banked.iter().map(String::as_str).collect();
-    if knowledge::food::best_food(&bank_refs).is_none() {
-        keep.extend(carried.iter().filter(|(held, _)| {
-            (bot.tables.obj_name)(*held).is_some_and(|name| knowledge::food::heal(&name) > 0)
-        }).map(|(held, _)| *held));
-    }
-    keep.sort();
-    keep.dedup();
-    bot.bank_deposit_all(side_bank, &keep, 25)?;
-    let available = available_gear(bot);
-    let plan = gear_plan(bot, &available);
-    for slot in [3, 0, 4, 7, 5, 2, 9, 10, 12, 1] {
-        for entry in plan.get(&slot).cloned().unwrap_or_default().into_iter().take(2) {
-            let Ok(obj) = obj_id(bot, &entry.name) else {
-                continue;
-            };
-            if bot.inventory().contains_key(&obj) || free_slots(bot) <= FOOD_TARGET {
-                continue;
-            }
-            let _ = bot.bank_withdraw(obj, 1, 25);
-        }
-        if free_slots(bot) <= FOOD_TARGET {
-            break;
-        }
-    }
-    withdraw_food(bot)?;
-    bot.close_modal()?;
-    bot.pump(5)?;
-    for (slot, name) in equip_plan(bot, &plan)?.iter() {
-        bot.log(&format!("equipped {name} (slot {slot})"));
-    }
-    Ok(true)
-}
 
 /// NPC spawn clusters for a spot (same-level spawns only).
 fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec<(i32, i32, usize)> {
@@ -836,29 +490,6 @@ fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
     Ok(taken)
 }
 
-/// Re-wear the best kit from what is actually carried (pack + worn):
-/// after a death the pack dropped, after a loot the best changed. One
-/// evaluation per event, never per kill or per tick; no bank trip and
-/// never a buy — the bank only enters at prepare_at_bank on the way in.
-/// Logs the slots that changed, quiet when nothing does.
-fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
-    let before: HashMap<i64, u16> = ARMOUR_SLOTS
-        .into_iter()
-        .chain([WEAPON_SLOT])
-        .filter_map(|slot| worn_obj(bot, slot).map(|obj| (slot, obj)))
-        .collect();
-    let available = available_gear(bot);
-    let plan = gear_plan(bot, &available);
-    equip_plan(bot, &plan)?;
-    for slot in ARMOUR_SLOTS.into_iter().chain([WEAPON_SLOT]) {
-        if worn_obj(bot, slot) != before.get(&slot).copied() {
-            let name =
-                worn_obj(bot, slot).and_then(|obj| (bot.tables.obj_name)(obj)).unwrap_or_default();
-            bot.log(&format!("{why}: now wearing {name} (slot {slot})"));
-        }
-    }
-    Ok(())
-}
 
 /// Deaths make the fight return instead of resuming the killer spot: the
 /// caller re-picks excluding it (one death) or fails typed (two in a row).
@@ -938,7 +569,7 @@ fn fight(
             return Ok((kills, false, true));
         }
         max_hp = max_hp.max(hp);
-        if f64::from(hp) <= f64::from(max_hp) * EAT_FRACTION {
+        if should_eat(hp, max_hp, EAT_FRACTION) {
             eat(bot)?;
         }
         if let Some(slot) = target_npc {
@@ -1247,7 +878,7 @@ fn run_spot(
                 }
             } else {
                 let available = available_gear(bot);
-                equip_plan(bot, &gear_plan(bot, &available))?;
+                equip_plan(bot, &gear_plan(bot, &available, fight_weapon_style, style_damage_key))?;
             }
             // A dead socket must reconnect, not limp to the next cluster:
             // propagate connection failures, swallow the rest as before.
@@ -1299,49 +930,6 @@ fn auto_spot(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
     knowledge::combat_spots::best_spot(level)
 }
 
-/// Run-local death tally: consecutive deaths (a kill or a bank trip is
-/// progress and resets the streak) plus the killer spots excluded from
-/// every later re-pick. Local to one `run_melee`, never global, never
-/// persisted: a spot that killed once stays out for the run.
-struct DeathTally {
-    deaths: u32,
-    excluded: Vec<&'static str>,
-}
-
-impl DeathTally {
-    fn fresh() -> DeathTally {
-        DeathTally { deaths: 0, excluded: Vec::new() }
-    }
-
-    fn excludes(&self, spot_key: &str) -> bool {
-        self.excluded.iter().any(|key| *key == spot_key)
-    }
-
-    fn fatal(&self) -> bool {
-        self.deaths >= 2
-    }
-
-    /// A kill or a bank trip is progress: the next death starts a new
-    /// streak. Exclusions stay: a spot that killed once stays out.
-    fn note_progress(&mut self) {
-        self.deaths = 0;
-    }
-
-    fn note_death(&mut self, spot_key: &'static str) {
-        self.deaths += 1;
-        if !self.excludes(spot_key) {
-            self.excluded.push(spot_key);
-        }
-    }
-}
-
-/// Second consecutive death with no kill or bank trip between: loud and
-/// typed instead of walking back a third time.
-fn danger_error(spot_key: &str, deaths: u32) -> ScriptError {
-    ScriptError::Sdk(lifescape_sdk::Error::Unreachable(format!(
-        "spot {spot_key} too dangerous after {deaths} deaths, re-gear or pick easier foes"
-    )))
-}
 
 /// Fallback after a death at `killer`: nearest surface spot that fits the
 /// current melee level and is no harder than the killer (existing
@@ -1441,9 +1029,9 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (total, died, banked) = match run_spot(bot, &spot, kills, ticks, no_bank) {
             Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
                 if !tally.excludes(spot.key) {
-                    tally.excluded.push(spot.key);
+                    tally.exclude(spot.key);
                 }
-                match fallback_spot(bot, &spot, &tally.excluded) {
+                match fallback_spot(bot, &spot, tally.excluded()) {
                     Some(fallback) => {
                         bot.log(&format!("{} across the toll fence, falling back to {}", spot.key, fallback.key));
                         queue.insert(0, fallback);
@@ -1463,13 +1051,13 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         tally.note_death(spot.key);
         if tally.fatal() {
-            return Err(danger_error(spot.key, tally.deaths));
+            return Err(danger_error(spot.key, tally.deaths()));
         }
         if queue.iter().any(|queued| !tally.excludes(queued.key)) {
             bot.log(&format!("{} killed us, re-picking without it", spot.key));
             continue;
         }
-        match fallback_spot(bot, &spot, &tally.excluded) {
+        match fallback_spot(bot, &spot, tally.excluded()) {
             Some(fallback) => {
                 bot.log(&format!("{} killed us, falling back to {}", spot.key, fallback.key));
                 queue.insert(0, fallback);
@@ -1488,7 +1076,8 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{COM_MODE_VARP, DeathTally, auto_spot, bank_stocks_food, controlled_button, current_skill, danger_error, fallback_spot, gear_score, live_skill, live_style_index, loss_cost, melee_stat, next_style, prepare_at_bank, rank_foes, remaining_kills, style_button_index, style_buttons, style_damage_key, weakest_melee};
+    use super::{COM_MODE_VARP, auto_spot, controlled_button, current_skill, fallback_spot, live_skill, live_style_index, melee_stat, next_style, rank_foes, remaining_kills, style_button_index, style_buttons, style_damage_key, weakest_melee};
+    use crate::kit::survival::{DeathTally, danger_error};
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
     use lifescape_sdk::Bot;
@@ -1535,17 +1124,6 @@ mod tests {
         assert_eq!(remaining_kills(10, 10), 0);
     }
 
-    /// A foodless pack forces a bank trip only when the bank can restock:
-    /// broke beginners stay on the field instead of ping-ponging.
-    #[test]
-    fn bank_trip_needs_bank_food() {
-        let empty = stat_bot(2, 1, 1);
-        assert!(!bank_stocks_food(&empty), "no bank open: no trip for food");
-        let mut stocked = stat_bot(2, 1, 1);
-        let bank_com = (stocked.tables.com_id)("bank_main:inv").expect("bank com in dumps");
-        stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
-        assert!(bank_stocks_food(&stocked), "banked shrimps restock");
-    }
 
     /// Broke beginners hunt chickens, stocked ones keep best_spot.
     #[test]
@@ -1571,61 +1149,8 @@ mod tests {
         assert_eq!(controlled_button("weapon_blunt"), None);
     }
 
-    /// No service: the bank walk fails `nav-down`, which `prepare_at_bank`
-    /// propagates typed by contract (no walk, no equip-and-continue).
-    /// The direct `walk_to` below proves the root cause is `nav-down`
-    /// and nothing else (never a local plan).
-    #[test]
-    fn prepare_offline_falls_back_to_equip() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        crate::wire_nav(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3220;
-        bot.world.z = 3220;
-        bot.world.stats.insert(3, (10, 0));
-        let error = prepare_at_bank(&mut bot).expect_err("no service, nav-down is loud");
-        assert!(
-            matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")),
-            "nav-down and nothing else, got: {error}"
-        );
-        let error = bot.walk_to(3200, 3200, bot.world.level, 100).expect_err("direct walk is nav-down");
-        assert!(
-            matches!(&error, lifescape_sdk::Error::Travel(detail) if detail.contains("nav-down")),
-            "nav-down and nothing else, got: {error}"
-        );
-    }
 
-    fn slash_weapon(slash: i64, stab: i64) -> lifescape_gamedata::equipment::Wearable {
-        lifescape_gamedata::equipment::Wearable {
-            name: "test_slash".to_string(),
-            wearpos: 3,
-            wearpos2: -1,
-            wearpos3: -1,
-            category: Some("weapon_slash".to_string()),
-            attack: vec![("stab".to_string(), stab), ("slash".to_string(), slash)],
-            defence: Vec::new(),
-            strength: 0,
-            prayer: 0,
-            requirements: Vec::new(),
-        }
-    }
 
-    /// Style bonus, not max bonus: a slash weapon on controlled trains
-    /// stab (dbrow slash_table button 2), so the stab-heavy blade wins
-    /// even when its slash is worse.
-    #[test]
-    fn weapon_score_uses_the_trained_bonus() {
-        let bot = stat_bot(5, 5, 5);
-        let slashy = slash_weapon(8, 0);
-        let stabby = slash_weapon(0, 8);
-        assert_eq!(style_damage_key("weapon_slash", "controlled"), Some("stab"));
-        assert_eq!(style_damage_key("weapon_slash", "attack"), Some("slash"));
-        assert!(
-            gear_score(&bot, &stabby, super::WEAPON_SLOT) > gear_score(&bot, &slashy, super::WEAPON_SLOT),
-            "controlled trains stab: the stab blade must win"
-        );
-    }
 
     /// Style map covers the buttons the bot presses (dbrow damagetypes x
     /// player_attackstyles suffixes); unknown categories fall back to max.
@@ -1641,13 +1166,6 @@ mod tests {
         assert_eq!(style_damage_key("weapon_bow", "attack"), None, "ranged: max fallback");
     }
 
-    /// Equal scores keep the cheaper kit: bronze before steel (dump shop
-    /// prices 26 vs 325), unknown names last.
-    #[test]
-    fn ties_keep_the_cheap_kit() {
-        assert!(loss_cost("bronze_sword") < loss_cost("steel_sword"), "bronze cheaper to lose");
-        assert_eq!(loss_cost("no_such_item_xyz"), i64::MAX, "unknown prices never win ties");
-    }
 
     /// Toll-fence side test: the gate line splits flanks (Al-Kharid gate
     /// halves 2882/2883); same flank hunts together, never across.
@@ -1844,7 +1362,7 @@ mod tests {
         tally.note_death(killer.key);
         assert!(tally.excludes("cows"));
         let fallback =
-            fallback_spot(&bot, &killer, &tally.excluded).expect("a same-tier repli exists");
+            fallback_spot(&bot, &killer, tally.excluded()).expect("a same-tier repli exists");
         assert_ne!(fallback.key, "cows", "never re-pick the killer identically");
         assert!(fallback.entrance.is_none(), "surface only, the router never rides down");
         assert!(
@@ -1877,7 +1395,7 @@ mod tests {
         assert!(!tally.fatal(), "one death re-picks, never fails");
         tally.note_death("cows");
         assert!(tally.fatal(), "two consecutive deaths are fatal");
-        let error = danger_error("cows", tally.deaths);
+        let error = danger_error("cows", tally.deaths());
         assert!(
             matches!(&error, crate::ScriptError::Sdk(lifescape_sdk::Error::Unreachable(_))),
             "typed Unreachable, got: {error}"
@@ -1894,7 +1412,7 @@ mod tests {
         let mut tally = DeathTally::fresh();
         tally.note_death("cows");
         tally.note_progress();
-        assert_eq!(tally.deaths, 0, "kill/bank resets the streak");
+        assert_eq!(tally.deaths(), 0, "kill/bank resets the streak");
         assert!(!tally.fatal());
         assert!(tally.excludes("cows"), "the killer stays out for the run");
         tally.note_death("goblins");

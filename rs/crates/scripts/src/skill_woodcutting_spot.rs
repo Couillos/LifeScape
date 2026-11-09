@@ -591,7 +591,7 @@ pub(crate) fn learn_respawn(known: Option<u64>, observed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::spots::{f2p_inside, refine_by_walk};
+    use crate::kit::spots::refine_by_walk;
     use crate::skill_common::toll_gate_x;
     use crate::skill_gather::{same_side, starved_oldest};
     use crate::tables_live::attach_live_tables;
