@@ -135,7 +135,7 @@ fn gear_score(
             Some(key) => entry.attack.iter().find(|(name, _)| *name == key).map(|(_, bonus)| *bonus).unwrap_or(0),
             None => entry.attack.iter().map(|(_, bonus)| *bonus).max().unwrap_or(0),
         } as f64;
-        return (attack + 2.0 * entry.strength as f64) * crate::skill_combat::weapon_weight(category);
+        return (attack + 2.0 * entry.strength as f64) * crate::kit::style::weapon_weight(category);
     }
     entry.defence.iter().map(|(_, bonus)| *bonus).sum::<i64>() as f64 + 2.0 * entry.strength as f64
         + entry.prayer as f64
@@ -221,7 +221,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
         Ok(bank) => bank,
         Err(_) => {
             let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::skill_combat::fight_weapon_style, crate::skill_combat::style_damage_key);
+            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
             equip_plan(bot, &plan)?;
             return Ok(false);
         }
@@ -234,7 +234,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
         Ok(true) => {}
         Ok(false) => {
             let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::skill_combat::fight_weapon_style, crate::skill_combat::style_damage_key);
+            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
             equip_plan(bot, &plan)?;
             return Ok(false);
         }
@@ -248,7 +248,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
         Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
         Err(_) => {
             let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::skill_combat::fight_weapon_style, crate::skill_combat::style_damage_key);
+            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
             equip_plan(bot, &plan)?;
             return Ok(false);
         }
@@ -304,7 +304,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
     keep.dedup();
     bot.bank_deposit_all(side_bank, &keep, 25)?;
     let available = available_gear(bot);
-    let plan = gear_plan(bot, &available, crate::skill_combat::fight_weapon_style, crate::skill_combat::style_damage_key);
+    let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
     for slot in [3, 0, 4, 7, 5, 2, 9, 10, 12, 1] {
         for entry in plan.get(&slot).cloned().unwrap_or_default().into_iter().take(2) {
             let Ok(obj) = obj_id(bot, &entry.name) else {
@@ -340,7 +340,7 @@ pub fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
         .filter_map(|slot| worn_obj(bot, slot).map(|obj| (slot, obj)))
         .collect();
     let available = available_gear(bot);
-    let plan = gear_plan(bot, &available, crate::skill_combat::fight_weapon_style, crate::skill_combat::style_damage_key);
+    let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
     equip_plan(bot, &plan)?;
     for slot in ARMOUR_SLOTS.into_iter().chain([WEAPON_SLOT]) {
         if worn_obj(bot, slot) != before.get(&slot).copied() {
@@ -355,7 +355,7 @@ pub fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{loss_cost, prepare_at_bank, WEAPON_SLOT};
-    use crate::skill_combat::{fight_weapon_style, style_damage_key};
+    use crate::kit::style::{fight_weapon_style, style_damage_key};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
