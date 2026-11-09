@@ -34,6 +34,7 @@ pub mod res_stats;
 pub mod admission;
 pub mod push_hub;
 pub mod push_conn;
+pub mod rates_service;
 pub mod heartbeat_flows;
 pub mod session_log;
 pub mod store_queue;

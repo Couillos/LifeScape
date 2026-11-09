@@ -640,6 +640,25 @@ fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Response {
                 body: asset("market.js").map_err(|error| error.to_string())?,
             });
         }
+        if parts == ["rates"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "text/html; charset=utf-8",
+                cache: "no-store",
+                body: asset("rates.html").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["rates.js"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "application/javascript",
+                cache: "no-store",
+                body: asset("rates.js").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["api", "rates", "table"] {
+            return Ok(ok_json(crate::rates_service::rates_api(&**dispatch)));
+        }
         if parts.len() >= 3 && parts[..2] == ["api", "market"] {
             // Market JSON API: the op is the third segment, the rest of
             // the query string becomes the request fields.

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rates - LifeScape</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  td, th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
+  th { color: #888; font-weight: normal; }
+  td.left, th.left { text-align: left; }
+  .muted { color: #888; }
+  .prior { color: #e0a030; }
+  #search { padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<h1>Rates <span class="muted">(<a href="/">back to bots</a>) · per 6000 ticks, bands of 5 levels</span></h1>
+<div>
+  <input id="search" placeholder="Filter method or item…" autocomplete="off" oninput="onSearch()">
+  <span id="summary" class="muted"></span>
+</div>
+<h2>Yields <span class="muted">(farm flows only; <span class="prior">prior</span> = cold-start estimate, replaced at 3 reports)</span></h2>
+<table id="yields"></table>
+<h2>XP per 6000 ticks</h2>
+<table id="xp"></table>
+<h2>Profit per 6000 ticks <span class="muted">(revenue − inputs − pause friction + trend bonus)</span></h2>
+<table id="profit"></table>
+<h2>Engaged bots <span class="muted">(operator eyes only)</span></h2>
+<table id="engaged"></table>
+<script src="/rates.js"></script>
+</body>
+</html>

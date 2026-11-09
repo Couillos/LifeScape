@@ -72,6 +72,15 @@ fn supervise_all() {
             // itself lands in a later lot; the flag guarantees no report
             // waits longer than one 500 ms pass.
             if std::mem::replace(&mut job.inner.lock().unwrap().report_pending, false) {
+                // Rendements: one TaskReport in, raw store rows plus the
+                // persisted snapshot buckets out. Loud on failure, never
+                // a silent drop (the staging log keeps the raw report).
+                let report = job.inner.lock().unwrap().last_report.clone();
+                if let Some(report) = report {
+                    if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
+                        println!("job {}: rates ingest failed: {error}", job.account);
+                    }
+                }
                 let _ = &written;
             }
         }

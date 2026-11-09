@@ -61,13 +61,39 @@ sans eux (+33 %).
 
 ## Rendements
 
-Une ligne par objet et par fin de tâche `{méthode, objet, provenance,
-quantité, ticks, contexte}` ; tout compte (produits, loot, spawns au sol,
-ramassés), provenance étiquetée. Agrégation par 6000 ticks, tranches de 5
-niveaux, n + moyenne + écart-type + moyenne mobile ; mêmes mesures pour
-l'XP. Rentabilité = Σ rendement × prix − intrants − friction market
-(`market_pause_ticks` mesurés) + bonus de tendance. Démarrage à froid :
-priors marqués, remplacés dès n ≥ 3.
+Chaque fin de tâche produit une ligne par objet dans `task_reports` /
+`task_yields` : `{script, méthode, objet, provenance, quantité, ticks,
+contexte}`, où le contexte est le niveau du skill principal (bande de
+5 niveaux), le tout horodaté en ticks. Seuls les flux de farm comptent
+dans un rendement : produits de skill, drops, spawns fixes au sol et
+objets ramassés, provenance étiquetée (`produced`, `loot`,
+`ground_spawn`, `picked`). Les flux de boutique et d'échange
+(`shop_bought`, `traded`) sont stockés bruts mais exclus des taux ; les
+`consumed` (appâts, nourriture) nourrissent le coût des intrants.
+
+Ingestion : la session pousse le rapport, le superviseur du daemon le
+verse dans le store (`jobs::ingest_report_into`) puis dans l'agrégat
+persisté (`rates_service`, `run/rates-snapshot.json`, rechargé au
+redémarrage : aucune mesure ne se perd avec le process). Les lignes
+brutes restent requêtables pour recouper plus tard.
+
+Agrégation : rendement normalisé par 6000 ticks, par triplet (méthode,
+objet, tranche de 5 niveaux), avec n, moyenne, écart-type (population)
+et moyenne mobile exponentielle (alpha 0,3, ordre d'arrivée). Mêmes
+mesures pour l'XP par 6000 ticks, qui dimensionne les durées de montée
+de niveau. Sous 3 rapports, la page sert l'estimation de démarrage à
+froid (tables de skills du jeu et pratiques de l'époque, marquée
+`prior`) ; à 3 rapports et plus, la mesure remplace l'estimation.
+
+Rentabilité d'une activité et d'une tranche : Σ rendement × prix de
+vente estimé (VWAP 24 h du market quand le carnet a des exécutions,
+sinon prix magasin, cas marqué `price_prior`) − intrants consommés −
+friction des pauses market (pauses mesurées par rapport, valorisées au
+taux de l'activité : une pause ne rapporte rien) + bonus de tendance
+(score public × chiffre × 0,1). Page `rates` : tableaux méthode × objet
+× tranche, rentabilité courante, nombre de bots engagés par script
+(information pour l'opérateur humain uniquement, jamais lue par les
+bots).
 
 ## Tendances et marchands
 

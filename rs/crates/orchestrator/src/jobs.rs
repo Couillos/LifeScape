@@ -342,6 +342,95 @@ pub fn resolve_state(mut state: Value) -> Value {
     state
 }
 
+// -- rates ingest (lot rendements) -----------------------------------------
+
+/// Store file the daemon alone opens (the same file the market service
+/// holds): one short-lived connection per report, WAL-safe.
+fn rates_db_path() -> std::path::PathBuf {
+    crate::paths::run_dir().join("lifescape.db")
+}
+
+/// Parses one pushed TaskReport and appends its raw rows to the store:
+/// one `task_reports` row plus one `task_yields` line per item flow and
+/// per XP gain. Every provenance is stored raw (shop and trade lines
+/// included); the rates snapshot excludes them at aggregation time.
+/// Returns the parsed report for the snapshot caller.
+pub fn ingest_report_into(
+    store: &lifescape_store::Store,
+    report: &Value,
+) -> Result<crate::rates_service::ParsedReport, String> {
+    let parsed = crate::rates_service::parse_report(report)?;
+    let report_id = store
+        .record_task_report(&lifescape_store::NewTaskReport {
+            account: parsed.account.clone(),
+            node_id: parsed.node_id.clone(),
+            method: parsed.method.clone(),
+            script: parsed.script.clone(),
+            ticks: parsed.wall_ticks,
+            stop: parsed.stop.clone(),
+            context_level: parsed.level,
+            clock: now_secs() as i64,
+        })
+        .map_err(|error| format!("rates store report: {error}"))?;
+    let mut lines = 0;
+    for flow in &parsed.items {
+        store
+            .record_task_yield(&lifescape_store::NewTaskYield {
+                report_id,
+                item_name: flow.name.clone(),
+                provenance: flow.provenance.clone(),
+                quantity: flow.quantity,
+                skill: String::new(),
+                xp: 0,
+            })
+            .map_err(|error| format!("rates store yield: {error}"))?;
+        lines += 1;
+    }
+    for gain in &parsed.xp {
+        store
+            .record_task_yield(&lifescape_store::NewTaskYield {
+                report_id,
+                item_name: String::new(),
+                provenance: "produced".to_string(),
+                quantity: 0,
+                skill: gain.skill.clone(),
+                xp: gain.amount,
+            })
+            .map_err(|error| format!("rates store xp: {error}"))?;
+        lines += 1;
+    }
+    println!(
+        "rates: stored report {report_id} {} {} ({} lines)",
+        parsed.account, parsed.method, lines
+    );
+    Ok(parsed)
+}
+
+/// File-backed ingest for the supervisor thread: opens the daemon store
+/// (retrying through SQLite lock contention with the market service),
+/// stores the raw rows, then folds the report into the persisted rates
+/// snapshot. Loud error, never a silent drop.
+pub fn ingest_report_persisted(report: &Value) -> Result<(), String> {
+    let mut last_error = "rates store: no attempt".to_string();
+    for _attempt in 0..20 {
+        match lifescape_store::Store::open(&rates_db_path()) {
+            Ok(store) => {
+                let parsed = ingest_report_into(&store, report)?;
+                crate::rates_service::record_snapshot(&parsed)?;
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = error.to_string();
+                if !(last_error.contains("locked") || last_error.contains("busy")) {
+                    return Err(format!("rates store open: {last_error}"));
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err(format!("rates store open, retries exhausted: {last_error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +456,82 @@ mod tests {
         ] {
             assert!(state.as_obj().unwrap().contains_key(key), "missing {key}");
         }
+    }
+
+    fn fishing_report() -> Value {
+        object(vec![
+            ("account", str_value("t01")),
+            ("activity", str_value("fishing")),
+            ("node_id", str_value("n9")),
+            ("stop", str_value("budget_exhausted")),
+            ("ticks", Value::Int(6000)),
+            ("market_pause_ticks", Value::Int(0)),
+            (
+                "xp",
+                Value::Arr(vec![object(vec![
+                    ("stat", Value::Int(10)),
+                    ("skill", str_value("fishing")),
+                    ("xp", Value::Int(4000)),
+                ])]),
+            ),
+            (
+                "items",
+                Value::Arr(vec![
+                    object(vec![
+                        ("name", str_value("Raw shrimps")),
+                        ("provenance", str_value("produced")),
+                        ("qty", Value::Int(300)),
+                    ]),
+                    object(vec![
+                        ("name", str_value("Fishing bait")),
+                        ("provenance", str_value("shop_bought")),
+                        ("qty", Value::Int(100)),
+                    ]),
+                    object(vec![
+                        ("name", str_value("Coins")),
+                        ("provenance", str_value("traded")),
+                        ("qty", Value::Int(500)),
+                    ]),
+                ]),
+            ),
+            (
+                "levels_before",
+                Value::Arr(vec![object(vec![("stat", Value::Int(10)), ("level", Value::Int(8))])]),
+            ),
+            ("levels_after", Value::Arr(vec![])),
+        ])
+    }
+
+    /// Ingest stores every line raw (farm, shop and trade alike) with
+    /// the wall ticks and the context level; aggregation filters later.
+    #[test]
+    fn ingest_stores_all_lines_raw() {
+        let store = lifescape_store::Store::open_in_memory().expect("memory store");
+        let parsed = super::ingest_report_into(&store, &fishing_report()).expect("ingests");
+        assert_eq!((parsed.method.as_str(), parsed.level, parsed.band), ("fishing", 8, 6));
+        let aggregates = store.aggregate_yields().expect("aggregates");
+        let shrimp = aggregates
+            .iter()
+            .find(|line| line.item_name == "Raw shrimps")
+            .expect("shrimp aggregate");
+        assert_eq!((shrimp.total_quantity, shrimp.report_count), (300, 1));
+        // Shop and trade lines are stored too: raw rows are kept, the
+        // snapshot (not the store) excludes them from rates.
+        assert!(aggregates.iter().any(|line| line.provenance == "shop_bought"), "shop line kept");
+        assert!(aggregates.iter().any(|line| line.provenance == "traded"), "trade line kept");
+        assert_eq!(aggregates.iter().map(|line| line.report_count).sum::<i64>(), 4, "one report, four lines");
+    }
+
+    /// Empty account or method fails loud, never stores a phantom row.
+    #[test]
+    fn ingest_rejects_empty_identity() {
+        let store = lifescape_store::Store::open_in_memory().expect("memory store");
+        assert!(super::ingest_report_into(&store, &object(vec![])).is_err(), "empty report fails");
+        let mut no_account = fishing_report();
+        if let Value::Obj(map) = &mut no_account {
+            map.insert("account".to_string(), str_value(""));
+        }
+        assert!(super::ingest_report_into(&store, &no_account).is_err(), "empty account fails");
+        assert!(store.aggregate_yields().expect("aggregates").is_empty(), "nothing stored");
     }
 }
