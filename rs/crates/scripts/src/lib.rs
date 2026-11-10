@@ -172,9 +172,9 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "cook", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
+        "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
         "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
-        "milk", "telegrab_wine", "market", "tutorial",
+        "milk", "telegrab_wine", "runecraft", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -201,6 +201,8 @@ fn runner(name: &str) -> Option<Runner> {
         "debug_walk" => Some(|bot, args| DebugWalk.run(bot, args)),
         "fishing" => Some(|bot, args| activities::fishing::run_fishing(bot, args)),
         "cook" => Some(|bot, args| activities::cook::run_cook(bot, args)),
+        "bake_bread" => Some(|bot, args| activities::bake_bread::run_bake_bread(bot, args)),
+        "cook_meals" => Some(|bot, args| activities::cook_meals::run_cook_meals(bot, args)),
         "mining" => Some(|bot, args| activities::mining::run_mining(bot, args)),
         "woodcut" => Some(|bot, args| activities::woodcut::run_woodcut(bot, args)),
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
@@ -217,6 +219,7 @@ fn runner(name: &str) -> Option<Runner> {
         "shear" => Some(|bot, args| activities::shear::run_shear(bot, args)),
         "milk" => Some(|bot, args| activities::milk::run_milk(bot, args)),
         "telegrab_wine" => Some(|bot, args| activities::telegrab_wine::run_telegrab_wine(bot, args)),
+        "runecraft" => Some(|bot, args| activities::runecraft::run_runecraft(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -285,7 +288,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 59);
+        assert_eq!(names().len(), 62);
     }
 
     #[test]

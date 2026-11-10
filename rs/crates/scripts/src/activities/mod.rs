@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod alchemy;
+pub mod bake_bread;
 pub mod bury_loot;
 pub mod cook;
+pub mod cook_meals;
 pub mod cut_gems;
 pub mod enchant_teleport;
 pub mod firemaking;
@@ -23,6 +25,7 @@ pub mod market_shop;
 pub mod melee;
 pub mod mining;
 pub mod ranged_style;
+pub mod runecraft;
 pub mod shear;
 pub mod stringing;
 pub mod superheat;
