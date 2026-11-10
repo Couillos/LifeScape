@@ -41,8 +41,20 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut bank_coins = 0u32;
     if crate::kit::tools::FISH_SPEC.best_held(bot).is_none() {
-        let keep = vec![coins];
+        // Keep the tool family in the pack through the bootstrap trip:
+        // `bank_trip` only deposits, it never withdraws, so a
+        // coins-only keep banks the very net we are looking for and the
+        // run below fails `blocked` on a tool sitting in the bank (seen
+        // live, L11). Then pull back a net banked by another skill's
+        // trip before buying or blocking (mining bootstrap pattern).
+        let mut keep = vec![coins];
+        keep.extend(crate::kit::tools::FISH_SPEC.known_ids(bot));
         bank_coins = bank_trip(bot, &bank, &keep, 0)?;
+        if crate::kit::tools::FISH_SPEC.best_held(bot).is_none()
+            && crate::kit::tools::restore_banked_tool(bot, &bank, &crate::kit::tools::FISH_SPEC)?
+        {
+            bot.log("ok net restored from bank");
+        }
         if crate::kit::tools::FISH_SPEC.best_held(bot).is_none() {
             let net_price = obj_price("net") as u32;
             if pack_total(bot, coins) >= net_price && buy_stock(bot, "net", 1)? > 0 {
