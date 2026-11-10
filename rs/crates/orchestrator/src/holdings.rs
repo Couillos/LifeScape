@@ -14,7 +14,7 @@
 //! through a minimal read-only SQLite walk (rowid tables, integer
 //! records, no overflow pages: the only shapes the sampler ever wrote).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -44,6 +44,33 @@ fn sqlite_path(items: &Path) -> PathBuf {
 
 // -- live holdings -----------------------------------------------------------
 
+/// A life file belongs to an Ironman when its profile says so. Pure for
+/// the test; the aggregate below reads the files.
+pub fn life_is_iron(text: &str) -> bool {
+    json::parse(text).map(|value| value.get("profile").get("ironman").as_bool() == Some(true)).unwrap_or(false)
+}
+
+/// Iron accounts (lowercased) from their life files. Their yields still
+/// count in rates, but their coins and stock leave the public economy
+/// aggregates (D9 economy pages, masse monétaire).
+fn iron_accounts() -> HashSet<String> {
+    let mut iron = HashSet::new();
+    let Ok(entries) = std::fs::read_dir(crate::brain::lives_dir()) else { return iron };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if life_is_iron(&text) {
+            if let Some(account) = path.file_stem().and_then(|stem| stem.to_str()) {
+                iron.insert(account.to_lowercase());
+            }
+        }
+    }
+    iron
+}
+
 /// Aggregate one snapshot's inv/worn/bank arrays (`{id, count}` rows).
 fn add_snapshot(totals: &mut BTreeMap<i64, i64>, snapshot: &Value) {
     for key in ["inv", "worn", "bank"] {
@@ -71,10 +98,11 @@ fn snapshot_bank_empty(snapshot: &Value) -> bool {
 /// the rest fall through to their save file like any idle account.
 pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i64> {
     let now = jobs::now_secs();
+    let iron = iron_accounts();
     let mut live: HashMap<String, Value> = HashMap::new();
     for state in described {
         let account = state.get("account").as_str().unwrap_or("").to_lowercase();
-        if account.is_empty() || EXCLUDED_ACCOUNTS.contains(&account.as_str()) {
+        if account.is_empty() || EXCLUDED_ACCOUNTS.contains(&account.as_str()) || iron.contains(&account) {
             continue;
         }
         let fresh = state.get("updated").as_f64().is_some_and(|at| now - at < LIVE_FRESH_SECONDS);
@@ -95,7 +123,7 @@ pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i6
     names.sort();
     for name in names {
         let account = name[..name.len() - 4].to_lowercase();
-        if EXCLUDED_ACCOUNTS.contains(&account.as_str()) {
+        if EXCLUDED_ACCOUNTS.contains(&account.as_str()) || iron.contains(&account) {
             continue;
         }
         let path = format!("{save_dir}/{name}");
@@ -717,8 +745,15 @@ mod tests {
     }
 
     #[test]
-    fn per_slot_stacks_add_up() {
-        let dir = temp_dir("slots");
+    fn iron_life_flags_parse() {
+        assert!(life_is_iron(r#"{"profile":{"ironman":true}}"#), "iron flag reads");
+        assert!(!life_is_iron(r#"{"profile":{"ironman":false}}"#), "normal play counts");
+        assert!(!life_is_iron(r#"{"profile":{}}"#), "missing flag counts");
+        assert!(!life_is_iron("not json"), "garbage counts");
+    }
+
+    #[test]
+    fn per_slot_stacks_add_up() {        let dir = temp_dir("slots");
         let now = jobs::now_secs();
         // Three oak-log slots of one log each, like the live t01 snapshot.
         let live = vec![described("t01", now, vec![(1521, 1), (1521, 1), (1521, 1)], vec![])];

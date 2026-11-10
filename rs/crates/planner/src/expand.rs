@@ -385,6 +385,14 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
             node.alternatives.sort_by_key(|alt| alt.est_ticks);
             node.method = node.alternatives.first().map(|alt| alt.method.clone());
         }
+        NodeKind::SpaceCleanup => {
+            node.alternatives = vec![Alternative {
+                method: "space:cleanup".to_string(),
+                est_ticks: 6000,
+                est_coins: 0,
+            }];
+            node.method = Some("space:cleanup".to_string());
+        }
         _ => {
             if node.method.is_none() {
                 node.method = node.alternatives.first().map(|alt| alt.method.clone());
@@ -401,7 +409,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
 #[cfg(test)]
 mod tests {
     use super::{expand_goal, reach_method, resolve_ready, tranches, ReadyCtx};
-    use crate::model::{Archetype, GoalKind, NodeKind, Profile};
+    use crate::model::{Archetype, GoalKind, Node, NodeKind, Profile};
 
     fn profile() -> Profile {
         Profile::new(false, 0.72, 0.4, 7, Archetype::Producer)
@@ -470,6 +478,13 @@ mod tests {
         // Feathers drop from chickens: the farm leg stays.
         let feather = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 100 }, &profile());
         assert!(feather[0].alternatives.iter().any(|alt| alt.method == "farm:feather"), "feathers farm");
+    }
+
+    #[test]
+    fn space_cleanup_locks_its_method() {
+        let mut node = Node::new("n5", NodeKind::SpaceCleanup, Vec::new(), 0);
+        resolve_ready(&mut node, &ReadyCtx::blind(0.5));
+        assert_eq!(node.method.as_deref(), Some("space:cleanup"), "cleanup resolves directly");
     }
 
     #[test]

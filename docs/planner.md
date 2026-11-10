@@ -102,3 +102,34 @@ sous-tâche, marchand, bonus de tendance — voir le rapport de lot.
   sous-tâche goblins (D21 par drop) → abandon après 3 échecs (péage sans
   pièces). La montée pêche 40 + cuisine 30 + minage 30 + 1 quête reste à
   jouer en endurance (même boucle, objectifs plus longs).
+
+## L8 : espace (protégé, D2, D12, D17)
+
+`planner/src/space.rs` (pur) : `needs_cleanup` (banque ≥ 55 types sur 60),
+`triage_bank` (pièces, nourriture jusqu'à 100 unités, puis keep-list),
+`fallback_for` + `reserve_floor` (formule D2 : alchimie − runes > rachat
+magasin, sinon magasin, sinon jet D10), `d17_order` (piles entières,
+valeur totale croissante, ordres annulés). Le cerveau insère le nœud
+`space_cleanup` (même passe, prêt aussitôt), verrouille
+`space:cleanup` → `market cleanup --keep… [--iron]`, budget une fenêtre
+de 6000 ticks. L'activité worker (`activities/market_cleanup.rs`, sous le
+plafond 200) : marché pour le surplus échangeable (plancher de réserve
+aussitôt, descente par pas différée — `my_orders` sans âge), magasin
+général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
+la passe suivante, D12). Jambes alchimie décidées mais non exécutées
+(pas de script de magie sur le socle : repli magasin, log).
+
+## L9 : profils et Iron
+
+Tirage à la création (`draw_profile`, graine persistée, reproductible) :
+`market_affinity` (pondère market vs farm, D15), `price_patience`,
+marge initiale `0.05 + patience × 0.15`, archétype `get_rich`
+producteur/marchand (10 % marchand, jamais Iron). Planner sans aucune
+méthode `market:*` pour Iron (création + résolution, garde
+`launch_allowed` au cerveau contre les vieux verrous). Le cerveau refuse
+tout lancement market pour Iron et passe `--iron` (D2 direct, aucun appel
+market). Les Iron n'ont jamais d'ordres : le carnet, les deals et les
+agrégats holdings les excluent structurellement ; leurs rendements
+comptent (même snapshot rates). Plafond 20 Iron (`iron_allowed`,
+contrôlé à la création). Wilderness ouverte à tous (D13) : aucune
+préparation, mort → replanning.

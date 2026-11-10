@@ -7,6 +7,7 @@
 pub mod cook;
 pub mod fishing;
 pub mod market;
+pub mod market_cleanup;
 pub mod market_flip;
 pub mod market_deliver;
 pub mod market_shop;

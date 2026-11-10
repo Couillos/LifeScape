@@ -178,3 +178,56 @@ pub fn buyer_want(offered: &std::collections::HashMap<u16, u32>, base: u16, trad
     }
     None
 }
+
+/// Cleanup sell leg: one order at the reserve floor. A refusal logs and
+/// passes: the next janitor pass re-lists.
+pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, price: i64) -> Result<(), ScriptError> {
+    let reply = market_call(
+        "place",
+        vec![
+            ("account", str_value(&bot.username)),
+            ("side", str_value("sell")),
+            ("item", Value::Int(i64::from(item))),
+            ("qty", Value::Int(qty)),
+            ("price", Value::Int(price)),
+        ],
+    )?;
+    if reply.get("ok").as_bool() != Some(true) {
+        bot.log(&format!("cleanup sell refused: {}", reply.get("error").as_str().unwrap_or("?")));
+    } else {
+        bot.log(&format!("cleanup sell {} x{qty} @ {price}", reply.get("order").as_i64().unwrap_or(-1)));
+    }
+    Ok(())
+}
+
+/// Cancel every open order of one item (D17: the drop follows the cancel).
+pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
+    let reply = market_call("my_orders", vec![("account", str_value(&bot.username))])?;
+    for entry in reply.get("orders").as_arr().cloned().unwrap_or_default() {
+        if entry.get("status").as_str() != Some("open") || entry.get("item").as_i64() != Some(i64::from(item)) {
+            continue;
+        }
+        let order = entry.get("order").as_i64().unwrap_or(-1);
+        let done =
+            market_call("cancel", vec![("account", str_value(&bot.username)), ("order", Value::Int(order))])?;
+        if done.get("ok").as_bool() != Some(true) {
+            bot.log(&format!("cleanup cancel {order} refused: {}", done.get("error").as_str().unwrap_or("?")));
+        }
+    }
+    Ok(())
+}
+
+/// Items with at least one open sell order of this account.
+pub fn open_sell_items(bot: &mut Bot) -> std::collections::HashSet<u16> {
+    let mut listed = std::collections::HashSet::new();
+    let Ok(reply) = market_call("my_orders", vec![("account", str_value(&bot.username))]) else { return listed };
+    for entry in reply.get("orders").as_arr().cloned().unwrap_or_default() {
+        if entry.get("status").as_str() != Some("open") || entry.get("side").as_str() != Some("sell") {
+            continue;
+        }
+        if let Some(item) = entry.get("item").as_i64() {
+            listed.insert(item as u16);
+        }
+    }
+    listed
+}

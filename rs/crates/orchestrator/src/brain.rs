@@ -27,6 +27,11 @@ use crate::jobs::Job;
 pub const MERCHANT_SHARE_PCT: u64 = 10;
 /// Iron cap (D8): at most 20 Iron accounts, enforced at creation.
 pub const MAX_IRON: usize = 20;
+
+/// Iron slots left at creation: `existing` counts current Iron lives.
+pub fn iron_allowed(existing: usize) -> bool {
+    existing < MAX_IRON
+}
 /// Fixed round-trip estimate to Varrock for cost comparisons.
 // shortcut: fixed 800-tick round trip; replaced by measured convene
 // ETAs once the brain reads them (L8).
@@ -166,7 +171,7 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
     if let Some(life) = load_life(account) {
         return Ok(life);
     }
-    if iron && iron_count() >= MAX_IRON {
+    if iron && !iron_allowed(iron_count()) {
         return Err(format!("iron cap reached ({MAX_IRON}): no new Ironman"));
     }
     let goal = parse_goal(goal_text)?;
@@ -318,6 +323,59 @@ fn holdings_count(job: &Job, item_debug: &str) -> i64 {
         }
     }
     total
+}
+
+/// Distinct banked types with a positive count (the space-pressure gauge,
+/// L8: cleanup at 55 of 60 F2P slots). Name or id keys the type, so both
+/// live snapshot shapes count.
+fn bank_types(job: &Job) -> usize {
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let mut types = std::collections::HashSet::new();
+    for entry in live.get("bank").as_arr().cloned().unwrap_or_default() {
+        match &entry {
+            Value::Obj(_) => {
+                if entry.get("count").as_i64().unwrap_or(1) <= 0 {
+                    continue;
+                }
+                if let Some(name) = entry.get("name").as_str() {
+                    types.insert(name.to_lowercase());
+                } else if let Some(id) = entry.get("id").as_i64() {
+                    types.insert(format!("id{id}"));
+                }
+            }
+            Value::Str(name) => {
+                types.insert(name.to_lowercase());
+            }
+            _ => {}
+        }
+    }
+    types.len()
+}
+
+/// Keep-list for a cleanup order: unfinished graph obtain items plus the
+/// item checks of unfinished quests, deduplicated and sorted. Coins, food
+/// and best tools are added worker-side (planner triage, kit specs).
+pub fn cleanup_keep(life: &Life) -> Vec<String> {
+    let mut keep = Vec::new();
+    for node in &life.nodes {
+        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
+            continue;
+        }
+        match &node.kind {
+            NodeKind::ObtainItems { item, .. } => keep.push(item.clone()),
+            NodeKind::CompleteQuest { quest } => {
+                if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
+                    for check in &required.items {
+                        keep.push(check.item.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    keep.sort();
+    keep.dedup();
+    keep
 }
 
 fn reach_level(report: &Value, skill: &str) -> Option<u8> {
@@ -535,6 +593,32 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             dirty = true;
         }
     }
+    // Space pressure (L8): a bank past the type limit inserts its janitor
+    // node, ready at once so the scan below can launch it this pass.
+    {
+        let open = life.nodes.iter().any(|node| {
+            matches!(node.kind, NodeKind::SpaceCleanup)
+                && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+        });
+        let done_cleanups = life
+            .nodes
+            .iter()
+            .filter(|node| matches!(node.kind, NodeKind::SpaceCleanup) && node.status == NodeStatus::Done)
+            .count();
+        if lifescape_planner::cleanup_needed(open, done_cleanups, bank_types(job)) {
+            let mut counter = life.nodes.len();
+            for node in &life.nodes {
+                if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
+                    counter = counter.max(number);
+                }
+            }
+            let mut node = Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0);
+            node.status = NodeStatus::Ready;
+            println!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, node.id);
+            life.nodes.push(node);
+            dirty = true;
+        }
+    }
     // A market node placed but unfilled waits instead of reordering: the
     // holdings check below closes it once the deal settles.
     let mut await_fill = false;
@@ -614,9 +698,22 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let _ = save_life(&life);
         return;
     }
+    // Iron never trades (D15): a stale market lock from an old file resets
+    // instead of launching; the planner never locks one on fresh resolves.
+    if !lifescape_planner::launch_allowed(&method, life.profile.ironman) {
+        println!("brain {}: refusing {method} for Ironman", job.account);
+        let node_id = life.nodes[position].id.clone();
+        life.nodes[position].status = NodeStatus::Ready;
+        life.nodes[position].method = None;
+        if life.active.as_deref() == Some(node_id.as_str()) {
+            life.active = None;
+        }
+        let _ = save_life(&life);
+        return;
+    }
     // Engagement: money draws [6000, 18000] at the activity start;
     // reach boxes at one window and retries; farm obtains work one
-    // window then recheck holdings.
+    // window then recheck holdings; cleanup works one window per pass.
     let budget: Option<(u64, u64)> = match &life.nodes[position].kind {
         NodeKind::MakeMoney => {
             let chosen = draw_engagement_ticks(life.seed, life.history.len() as u64);
@@ -631,12 +728,26 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
         NodeKind::ReachLevel { .. } => Some((0, 18000)),
         NodeKind::ObtainItems { .. } if method.starts_with("farm:") => Some((6000, 6000)),
+        NodeKind::SpaceCleanup => Some((0, 6000)),
         _ => None,
     };
     let node_snapshot = life.nodes[position].clone();
     let Some((script, args)) = map_method(&method, &node_snapshot, budget) else {
         return;
     };
+    let mut args = args;
+    // Cleanup carries its keep-list (graph obtains, quest checks) and the
+    // Iron flag (D2 direct, no carnet) to the worker; coins, food and best
+    // tools resolve worker-side.
+    if method == "space:cleanup" {
+        for kept in cleanup_keep(&life) {
+            args.push("--keep".to_string());
+            args.push(kept);
+        }
+        if life.profile.ironman {
+            args.push("--iron".to_string());
+        }
+    }
     if !crate::registry::script_known(&script) {
         return;
     }
@@ -753,8 +864,8 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, draw_profile, generate_pseudo, parse_goal};
-    use lifescape_planner::GoalKind;
+    use super::{choose_money, cleanup_keep, draw_profile, generate_pseudo, iron_allowed, parse_goal, MAX_IRON};
+    use lifescape_planner::{GoalKind, Life, Node, NodeKind};
 
     #[test]
     fn goals_parse() {
@@ -806,5 +917,51 @@ mod tests {
             ("gather:woodcut/yew_logs".to_string(), 480.0, 1000.0, 0.8),
         ];
         assert_eq!(choose_money(&flip, 0.1).as_deref(), Some("gather:woodcut/yew_logs"), "trend flips the money call");
+    }
+
+    #[test]
+    fn profile_draw_replays_from_the_seed() {
+        let first = draw_profile(918273645, false);
+        let second = draw_profile(918273645, false);
+        assert_eq!(first, second, "same seed replays the whole profile");
+        assert!((0.0..=1.0).contains(&first.market_affinity), "affinity in [0,1]");
+        assert!((0.0..=1.0).contains(&first.price_patience), "patience in [0,1]");
+        assert!((first.margin - (0.05 + first.price_patience * 0.15)).abs() < 1e-12, "margin derives from patience");
+        assert_eq!(first.seed, 918273645, "seed persists for the replay");
+        assert_ne!(draw_profile(1, false).market_affinity, draw_profile(2, false).market_affinity, "seeds vary");
+    }
+
+    #[test]
+    fn iron_cap_holds_at_twenty() {
+        assert_eq!(MAX_IRON, 20, "D8 cap pinned");
+        assert!(iron_allowed(19), "19 Iron leave one slot");
+        assert!(!iron_allowed(20), "20 Iron close creation");
+        assert!(!iron_allowed(99), "over cap stays closed");
+    }
+
+    #[test]
+    fn cleanup_keep_covers_graph_and_quests() {
+        let profile = draw_profile(7, false);
+        let mut nodes = lifescape_planner::expand_goal(
+            &GoalKind::Obtain { item: "feather".to_string(), count: 100 },
+            &profile,
+        );
+        nodes.push(Node::new("n9", NodeKind::CompleteQuest { quest: "cook".to_string() }, Vec::new(), 1));
+        let life = Life {
+            schema: lifescape_planner::model::LIFE_SCHEMA,
+            account: "t99".to_string(),
+            created_at: 0,
+            seed: 7,
+            profile,
+            goal: GoalKind::Obtain { item: "feather".to_string(), count: 100 },
+            nodes,
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+        };
+        let keep = cleanup_keep(&life);
+        assert!(keep.contains(&"feather".to_string()), "graph obtain survives, got {keep:?}");
+        assert!(keep.contains(&"bucket_milk".to_string()), "quest check survives, got {keep:?}");
+        assert!(keep.windows(2).all(|pair| pair[0] <= pair[1]), "sorted for stable orders");
     }
 }

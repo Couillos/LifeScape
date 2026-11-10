@@ -65,8 +65,10 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else if method == "shop:buy" {
         let (item, count) = obtain_pair(node)?;
         ("market".to_string(), vec!["shopbuy".to_string(), item, count])
-    } else if method == "market:flip" || method == "space:cleanup" {
+    } else if method == "market:flip" {
         ("market".to_string(), vec!["flip".to_string()])
+    } else if method == "space:cleanup" {
+        ("market".to_string(), vec!["cleanup".to_string()])
     } else if let Some(recipe) = method.strip_prefix("craft:") {
         ("cook".to_string(), vec![recipe.to_string()])
     } else if let Some(quest) = method.strip_prefix("quest:") {
@@ -185,6 +187,10 @@ mod tests {
         assert_eq!(script, "woodcut");
         let (script, _) = map_method("market:flip", &obtain(), budget).expect("flip maps");
         assert_eq!(script, "market");
+        let cleanup = Node::new("n5", NodeKind::SpaceCleanup, Vec::new(), 0);
+        let (script, args) = map_method("space:cleanup", &cleanup, None).expect("cleanup maps");
+        assert_eq!(script, "market");
+        assert!(args.contains(&"cleanup".to_string()), "cleanup subcommand rides along, got {args:?}");
         let (script, args) = map_method("shop:buy", &obtain(), None).expect("shop maps");
         assert_eq!(script, "market");
         assert!(args.contains(&"shopbuy".to_string()), "shopbuy subcommand rides along");

@@ -16,9 +16,10 @@ pub fn run_market(bot: &mut Bot, args: &[String]) -> ScriptResult {
         Some("sell") => place_side(bot, args, false),
         Some("buy") => place_side(bot, args, true),
         Some("flip") => super::market_flip::run_flip(bot, args),
+        Some("cleanup") => super::market_cleanup::run_cleanup(bot, args),
         Some("shopbuy") => super::market_shop::run_shopbuy(bot, args),
         Some("deliver") => super::market_deliver::run_deliver(bot, args),
-        _ => Err(ScriptError::Usage("market <sell|buy|flip|shopbuy|deliver> ...".to_string())),
+        _ => Err(ScriptError::Usage("market <sell|buy|flip|shopbuy|deliver|cleanup> ...".to_string())),
     }
 }
 
