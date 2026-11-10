@@ -397,11 +397,22 @@ impl Bot {
             }
         }
         let had: u32 = self.inventory().values().sum();
+        let seen = self.world.messages.len();
         self.op_obj(op, x, z, oid)?;
         while self.world.ticks < deadline {
             self.pump(3)?;
             if self.inventory().values().sum::<u32>() > had {
                 return Ok(true);
+            }
+            // The engine answers an unpathable click with "I can't reach
+            // that!" (Player.ts) and never picks up: fail typed instead
+            // of burning the timeout (a ground item on a blocked tile,
+            // e.g. under a table, refuses every sweep otherwise).
+            if Self::bank_click_refused(&self.world.messages, seen) {
+                return Err(Error::Unreachable(format!(
+                    "obj {oid} at {x},{z} refused from {:?} (blocked tile?)",
+                    self.position()
+                )));
             }
         }
         Ok(false)

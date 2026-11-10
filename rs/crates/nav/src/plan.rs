@@ -68,11 +68,15 @@ const MAX_VISITS: usize = 500_000;
 /// below (worst golden reachable: 264 tiles in ~1.1 s debug, live legs
 /// plan in ~0.2 s); past the budget each pending search stops at its
 /// current best, the same Disconnected answer exhaustion would give.
-/// Edge setup (`prepare_edges`) is finite — one pass over the transition
-/// table, it always terminates — so it carries no deadline, only a yield:
-/// a slow setup still proves the session alive instead of starving the
-/// socket into a server reap, and still honors the operator stop.
-const PLAN_BUDGET: Duration = Duration::from_millis(1500);
+/// Calibrated against the longest legit trek (south Varrock crossing,
+/// ~86k visits / ~1.7 s of search loop in debug plus ~0.7 s of edge
+/// setup): 3000 ms leaves headroom in debug and stays snappy in
+/// release. Edge setup (`prepare_edges`) is finite — one pass over the
+/// transition table, it always terminates — so it carries no deadline,
+/// only a yield: a slow setup still proves the session alive instead of
+/// starving the socket into a server reap, and still honors the
+/// operator stop.
+const PLAN_BUDGET: Duration = Duration::from_millis(3000);
 
 /// One map tile on one level.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -967,6 +971,20 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
             shape,
             0,
         ) {
+            // A ride landing inside a wall never executes (the server
+            // climbs onto a walkable tile): drop the stand here so the
+            // prober's first stand — the one verdict the whole row
+            // carries — is always a live-climbable one. The old first
+            // stand of stairs_316 (west of the stair) landed on a
+            // walled L1 tile and its mono-stand no_move verdict shut a
+            // working stair.
+            let dest = match row.delta {
+                Some((dl, dx, dz)) => Tile { x: x + dx, z: z + dz, level: row.from.level + dl },
+                None => row.to,
+            };
+            if !tile_walkable(search.open(dest)) {
+                continue;
+            }
             out.push(stand);
         }
     }

@@ -793,24 +793,6 @@
   },
   {
     "arrived": [
-      0,
-      2970,
-      3370
-    ],
-    "choice": "",
-    "date": "2026-11-06",
-    "from": [
-      0,
-      2971,
-      3370
-    ],
-    "loc": 1722,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
-  },
-  {
-    "arrived": [
       1,
       3021,
       3344

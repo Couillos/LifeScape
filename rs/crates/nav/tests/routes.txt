@@ -68,3 +68,13 @@ chateau_scell | 3219,3218,0 | 3215,3218,0 | - | unreachable=Disconnected
 # live venait de l'ancien executeur local, pas du planificateur : cette
 # ligne fige le plan direct (cout + tuile coeur du marais intouchable).
 draynor_lumbridge | 3092,3243,0 | 3222,3218,0 | - | reachable ; walk_tiles<=200 ; avoids=3160,3190
+# 18. hache de Rimmington (escalier 1722, delta +4) : le premier stand
+# (2970,3370) atterrit sur une tuile L1 murée et le serveur le refuse en
+# live (verdict no_move mono-stand) ; les stands nord marchent (L1
+# prouvée praticable, cout L1 ~4). Fige le ride après le filtre stands.
+hache_rimmington | 2971,3375,0 | 2970,3376,1 | f2p | reachable ; rides>=1 ; uses_loc=1722
+# 19. longue traversée sud Varrock (R8) : Dijkstra pur, ~86k visites,
+# ~1.7 s en debug — au-delà du budget 1.5 s d'avant (Disconnected
+# closest=(3182,3399) alors que les deux segments passent). Fige le
+# budget relevé.
+traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
