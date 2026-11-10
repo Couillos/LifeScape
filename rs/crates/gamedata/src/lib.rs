@@ -1,10 +1,10 @@
 //! Game data tables: typed accessors over the generated JSON dumps.
 //!
 //! Data files live in `gamedata/data/*.json` (arrays indexed by id:
-//! the row index *is* the id). F2P planning filters live in `f2p`,
-//! item provenance in `item_sources`, the XP table in `xp`. This crate
-//! ships a small std-only JSON reader so the workspace stays
-//! dependency-free.
+//! the row index *is* the id). F2P planning filters live in `f2p`
+//! (zones in `free_zones`), item provenance in `item_sources`, the XP
+//! table in `xp`. This crate ships a small std-only JSON reader so the
+//! workspace stays dependency-free.
 
 pub mod banks;
 pub mod combat_spots;
@@ -13,6 +13,7 @@ pub mod equipment;
 pub mod fishing;
 pub mod food;
 pub mod f2p;
+pub mod free_zones;
 pub mod item_sources;
 pub mod quest_requirements;
 pub mod quests;

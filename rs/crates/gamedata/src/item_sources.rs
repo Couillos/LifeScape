@@ -137,15 +137,21 @@ mod tests {
 
     #[test]
     fn known_sources() {
-        // Lobster buys at the fish restaurant; feathers drop from chickens;
-        // yew logs cut at 60; runite ore mines at 85; steel bars smelt.
-        let lobster = sources_for_name("lobster");
-        assert!(has_shop(&lobster, "fishrestaurant"), "lobster shops: {lobster:?}");
+        // Lobster is caged at 40 with a lobster pot; feathers drop from
+        // chickens and sell at the Port Sarim fishing shop (Gerrant
+        // stands in an F2P zone); yew logs cut at 60; runite ore mines
+        // at 85; steel bars smelt.
+        let lobster = sources_for_name("raw_lobster");
+        assert!(
+            lobster.iter().any(|entry| matches!(entry, ItemSource::Fish { level: 40, .. })),
+            "lobster fish: {lobster:?}"
+        );
         let feather = sources_for_name("feather");
         assert!(
             feather.iter().any(|entry| matches!(entry, ItemSource::Drop { npc, .. } if npc == "chicken")),
             "feather drops: {feather:?}"
         );
+        assert!(has_shop(&feather, "fishingshop"), "feather shops: {feather:?}");
         let yew = sources_for_name("yew_logs");
         assert!(
             yew.iter().any(|entry| matches!(entry, ItemSource::Woodcut { level: 60 })),
@@ -176,11 +182,14 @@ mod tests {
     fn coverage_report() {
         // L1 bar: every F2P tradeable object resolved above is sourced;
         // the rest is the documented orphan set (quest/event/trail,
-        // dialogue-made, prep and byproduct items).
+        // dialogue-made, prep and byproduct items, plus the 35 honest
+        // orphans unmasked by the zone check: members-shop goods, kegs
+        // and ales, staffs, vials, dyes and kebabs previously sourced
+        // from members zones or unverifiable stalls).
         let (total, sourced, missing) = coverage();
         assert_eq!(total, 1128, "f2p tradeable total, got {total}");
         eprintln!("sourced {sourced}/{total}; orphans ({}): {}", missing.len(), missing.join(", "));
         assert_eq!(missing, orphans(), "orphans deterministic");
-        assert!(missing.len() <= 180, "orphan count grows: {}", missing.len());
+        assert!(missing.len() <= 215, "orphan count grows: {}", missing.len());
     }
 }

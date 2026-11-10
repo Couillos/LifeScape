@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -110,6 +110,26 @@ CREATE TABLE IF NOT EXISTS trends(
 );
 ";
 
+/// Migration 2 (PRD 2, D48): item holdings move from the 30-minute JSON
+/// sampler to SQLite. Hourly points (one per item and hour) are kept 8
+/// days, daily points (last measure of each day) 400 days.
+const MIGRATION_V2: &str = "
+CREATE TABLE IF NOT EXISTS holdings_hourly(
+    item_id INTEGER NOT NULL,
+    taken_at INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY(item_id, taken_at)
+);
+CREATE TABLE IF NOT EXISTS holdings_daily(
+    item_id INTEGER NOT NULL,
+    day_start INTEGER NOT NULL,
+    taken_at INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY(item_id, day_start)
+);
+CREATE INDEX IF NOT EXISTS idx_holdings_hourly_time ON holdings_hourly(taken_at);
+";
+
 /// Reads the `user_version` pragma of an open connection.
 pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> {
     let found: i64 = connection
@@ -135,6 +155,14 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
             .execute_batch("PRAGMA user_version = 1")
             .map_err(|source| Error::Sql(source.to_string()))?;
     }
+    if found < 2 {
+        connection
+            .execute_batch(MIGRATION_V2)
+            .map_err(|source| Error::Sql(source.to_string()))?;
+        connection
+            .execute_batch("PRAGMA user_version = 2")
+            .map_err(|source| Error::Sql(source.to_string()))?;
+    }
     Ok(())
 }
 
@@ -153,15 +181,42 @@ mod schema_tests {
             let table_count: i64 = store.connection.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
                  ('items','orders','deals','executions','candles','task_reports',\
-                 'task_yields','accounts_econ','trends')",
+                 'task_yields','accounts_econ','trends','holdings_hourly','holdings_daily')",
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(table_count, 9);
+            assert_eq!(table_count, 11);
         }
         // Reopen keeps the version: migrations are idempotent.
         let reopened = Store::open(&path)?;
         assert_eq!(reopened.schema_version()?, SCHEMA_VERSION);
+        Ok(())
+    }
+
+    /// A v1 file migrates to v2 without losing its market rows.
+    #[test]
+    fn v1_file_gains_holdings_tables() -> Result<(), Error> {
+        use rusqlite::Connection;
+        let path = temp_database_path("migrate-v1");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(super::MIGRATION_V1)?;
+            connection.execute_batch("PRAGMA user_version = 1")?;
+            connection.execute(
+                "INSERT INTO items(item_id, name, shop_price, alch_value) VALUES (995, 'Coins', 0, 0)",
+                [],
+            )?;
+        }
+        let store = Store::open(&path)?;
+        assert_eq!(store.schema_version()?, SCHEMA_VERSION);
+        assert_eq!(
+            store.get_item(995)?.map(|item| item.name),
+            Some("Coins".to_string()),
+            "v1 rows survive the v2 migration"
+        );
+        store.record_holdings(1_762_675_200, &[(995, 7)])?;
+        assert_eq!(store.hourly_points(Some(995))?, vec![(1_762_675_200, 7)]);
         Ok(())
     }
 

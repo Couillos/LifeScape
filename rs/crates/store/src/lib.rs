@@ -17,6 +17,7 @@
 pub mod candles;
 pub mod deals;
 pub mod economy;
+pub mod holdings;
 pub mod items;
 pub mod orders;
 pub mod reports;

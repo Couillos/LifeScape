@@ -1,18 +1,13 @@
 #![forbid(unsafe_code)]
-//! Item holdings: live totals plus 30-minute history for /api/items/history.
-//!
-//! The dashboard page (`orchestration/static/items.js`) needs
-//! `{intervalMinutes, samples, total, liveTotal, items}` where each item
-//! carries `{id, name, count, series}`. The Rust port shipped a stub that
-//! always returned empty lists, so the page showed nothing.
+//! Item holdings: live totals plus hourly history for /api/items/history.
 //!
 //! Live totals come from the supervised snapshots (in-memory describes,
 //! pushed by the workers many times a second) plus the engine save files
 //! for every other account, exactly like the old Python `holdings.py`.
-//! History lives in `run/items/holdings.json` (one point per 30 minutes,
-//! 48 kept); the frozen Python-era `holdings.sqlite` is migrated once
-//! through a minimal read-only SQLite walk (rowid tables, integer
-//! records, no overflow pages: the only shapes the sampler ever wrote).
+//! History lives in the store (`holdings_hourly`, 8 days, one point per
+//! item and hour; `holdings_daily`, 400 days, last measure of each day).
+//! The frozen Python-era `holdings.json` (30-minute points, 48 kept) and
+//! its `holdings.sqlite` ancestor are imported once, then set aside.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -22,8 +17,7 @@ use lifescape_json::{self as json, Value, object, str_value};
 
 use crate::jobs;
 
-pub const INTERVAL_SECONDS: i64 = 30 * 60;
-pub const MAX_POINTS: usize = 48;
+pub const INTERVAL_SECONDS: i64 = 60 * 60;
 pub const COINS: i64 = 995;
 const LIVE_FRESH_SECONDS: f64 = 600.0;
 const TOP_ITEMS: usize = 500;
@@ -38,8 +32,19 @@ fn history_path(items: &Path) -> PathBuf {
     items.join("holdings.json")
 }
 
+fn imported_path(items: &Path) -> PathBuf {
+    items.join("holdings.json.imported")
+}
+
 fn sqlite_path(items: &Path) -> PathBuf {
     items.join("holdings.sqlite")
+}
+
+fn store_path(items: &Path) -> PathBuf {
+    items
+        .parent()
+        .map(|run| run.join("lifescape.db"))
+        .unwrap_or_else(|| crate::paths::run_dir().join("lifescape.db"))
 }
 
 // -- live holdings -----------------------------------------------------------
@@ -150,7 +155,7 @@ pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i6
     totals
 }
 
-fn item_name(obj_id: i64) -> String {
+pub(crate) fn item_name(obj_id: i64) -> String {
     if obj_id >= 0 {
         if let Some(obj) = lifescape_gamedata::obj_by_id(obj_id as usize) {
             if let Some(display) = obj.display {
@@ -194,31 +199,12 @@ fn history_from_value(data: &Value) -> Result<History, String> {
         samples.push((taken_at, items));
     }
     samples.sort_by_key(|(taken_at, _)| *taken_at);
-    if samples.len() > MAX_POINTS {
-        samples.drain(..samples.len() - MAX_POINTS);
-    }
     Ok(History { samples })
 }
 
-fn history_to_value(history: &History) -> Value {
-    Value::Arr(
-        history
-            .samples
-            .iter()
-            .map(|(taken_at, items)| {
-                let mut fields = BTreeMap::new();
-                for (obj_id, count) in items {
-                    fields.insert(obj_id.to_string(), Value::Int(*count));
-                }
-                object(vec![("time", Value::Int(*taken_at)), ("items", Value::Obj(fields))])
-            })
-            .collect(),
-    )
-}
-
-/// Read the JSON history, migrating the frozen Python-era SQLite once.
-/// A broken store reads empty (logged): the live holdings below are
-/// always served, history just shows fewer points.
+/// Read the frozen JSON history, with the frozen Python-era SQLite as
+/// fallback. A broken store reads empty (logged): the live holdings
+/// below are always served, history just shows fewer points.
 fn read_history(items: &Path) -> History {
     let path = history_path(items);
     if path.exists() {
@@ -229,22 +215,58 @@ fn read_history(items: &Path) -> History {
             },
             Err(error) => eprintln!("holdings: ignoring {path:?}: {error}"),
         }
-        // A corrupt store migrates again below instead of losing history.
     }
     let sqlite = sqlite_path(items);
     if sqlite.exists() {
         match read_sqlite_history(&sqlite) {
-            Ok(history) => {
-                let data = object(vec![("samples", history_to_value(&history))]);
-                if let Err(error) = crate::paths::write_json(&path, &data) {
-                    eprintln!("holdings: sqlite migration kept in memory: {error}");
-                }
-                return history;
-            }
+            Ok(history) => return history,
             Err(error) => eprintln!("holdings: ignoring {sqlite:?}: {error}"),
         }
     }
     History { samples: Vec::new() }
+}
+
+/// One-shot import of the frozen JSON history into the store: every
+/// sample in time order, so hourly keeps the last write of its hour and
+/// daily the last measure of its day. Runs only into an empty store;
+/// the JSON file is then set aside (never deleted, never read again).
+pub(crate) fn ensure_imported(items: &Path) {
+    let history = history_path(items);
+    if !history.exists() || imported_path(items).exists() {
+        return;
+    }
+    let db_path = store_path(items);
+    let store = match lifescape_store::Store::open(&db_path) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("holdings: import skipped, store unreachable: {error}");
+            return;
+        }
+    };
+    match store.holdings_latest() {
+        Ok(None) => {}
+        Ok(Some(_)) => return,
+        Err(error) => {
+            eprintln!("holdings: import skipped, latest unreadable: {error}");
+            return;
+        }
+    }
+    let samples = read_history(items).samples;
+    let imported = samples.len();
+    let mut failures = 0;
+    for (taken_at, point) in samples {
+        let pairs: Vec<(i64, i64)> = point.into_iter().collect();
+        if let Err(error) = store.record_holdings(taken_at, &pairs) {
+            failures += 1;
+            eprintln!("holdings: import drops point at {taken_at}: {error}");
+        }
+    }
+    if failures == 0 {
+        println!("holdings: imported {imported} JSON samples into {}", db_path.display());
+    }
+    if let Err(error) = std::fs::rename(&history, imported_path(items)) {
+        eprintln!("holdings: import kept, JSON not set aside: {error}");
+    }
 }
 
 // -- minimal read-only SQLite walk --------------------------------------------
@@ -427,23 +449,13 @@ fn read_sqlite_history(path: &Path) -> Result<History, String> {
 
 // -- snapshot + sampling --------------------------------------------------------
 
-fn snapshot_in(described: &[Value], items: &Path, save_dir: &str) -> Value {
-    let history = read_history(items);
+fn snapshot_in(described: &[Value], _items: &Path, save_dir: &str) -> Value {
     let live = current_holdings(described, save_dir);
     let live_total: i64 = live.values().sum();
-    let points: Vec<BTreeMap<i64, i64>> = history.samples.iter().map(|(_, point)| point.clone()).collect();
     let mut ids: Vec<i64> = live.keys().copied().collect();
     ids.push(COINS);
-    for point in &points {
-        ids.extend(point.keys().copied());
-    }
     ids.sort();
     ids.dedup();
-    let mut series: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
-    for obj_id in &ids {
-        series.insert(*obj_id, points.iter().map(|point| point.get(obj_id).copied().unwrap_or(0)).collect());
-    }
-    let total: Vec<i64> = points.iter().map(|point| point.values().sum()).collect();
     let mut ranked = ids;
     ranked.sort_by(|left, right| {
         live.get(left).copied().unwrap_or(0).cmp(&live.get(right).copied().unwrap_or(0)).reverse().then(left.cmp(right))
@@ -456,41 +468,44 @@ fn snapshot_in(described: &[Value], items: &Path, save_dir: &str) -> Value {
                 ("id", Value::Int(*obj_id)),
                 ("name", str_value(&item_name(*obj_id))),
                 ("count", Value::Int(live.get(obj_id).copied().unwrap_or(0))),
-                ("series", Value::Arr(series.get(obj_id).cloned().unwrap_or_default().into_iter().map(Value::Int).collect())),
             ])
         })
         .collect();
-    object(vec![
-        ("intervalMinutes", Value::Int(INTERVAL_SECONDS / 60)),
-        ("samples", Value::Arr(history.samples.iter().map(|(taken_at, _)| Value::Int(*taken_at)).collect())),
-        ("total", Value::Arr(total.into_iter().map(Value::Int).collect())),
-        ("liveTotal", Value::Int(live_total)),
-        ("items", Value::Arr(items_list)),
-    ])
+    object(vec![("liveTotal", Value::Int(live_total)), ("items", Value::Arr(items_list))])
 }
 
-/// The dashboard payload: live totals plus aligned history series.
+/// The dashboard payload: live totals plus the ranked item list.
+/// History rides the store now (`holdings_hourly`/`holdings_daily`),
+/// served per item by the items history endpoint.
 pub fn snapshot(described: &[Value]) -> Value {
     snapshot_in(described, &items_dir(), &lifescape_sdk::save::default_save_dir())
 }
 
 fn maybe_sample_in(described: &[Value], items: &Path, save_dir: &str, now: i64) -> bool {
+    ensure_imported(items);
     let holdings = current_holdings(described, save_dir);
-    if holdings.is_empty() {
+    let pairs: Vec<(i64, i64)> = holdings.into_iter().filter(|(_, count)| *count > 0).collect();
+    if pairs.is_empty() {
         return false;
     }
-    let mut history = read_history(items);
-    if history.samples.last().is_some_and(|(taken_at, _)| now - taken_at < INTERVAL_SECONDS) {
-        return false;
+    let store = match lifescape_store::Store::open(&store_path(items)) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("holdings: sample dropped, store unreachable: {error}");
+            return false;
+        }
+    };
+    match store.holdings_latest() {
+        Ok(Some(latest)) if now - latest < INTERVAL_SECONDS => return false,
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("holdings: sample dropped, latest unreadable: {error}");
+            return false;
+        }
     }
-    history.samples.push((now, holdings));
-    if history.samples.len() > MAX_POINTS {
-        history.samples.drain(..history.samples.len() - MAX_POINTS);
-    }
-    let data = object(vec![("samples", history_to_value(&history))]);
-    match crate::paths::write_json(&history_path(items), &data) {
+    match store.record_holdings(now, &pairs) {
         Ok(()) => {
-            println!("holdings: {} item kinds across all accounts", history.samples.last().map(|(_, point)| point.len()).unwrap_or(0));
+            println!("holdings: {} item kinds across all accounts", pairs.len());
             true
         }
         Err(error) => {
@@ -500,7 +515,7 @@ fn maybe_sample_in(described: &[Value], items: &Path, save_dir: &str, now: i64) 
     }
 }
 
-/// Append one point when the last is older than 30 minutes. True when
+/// Append one point when the last is older than one hour. True when
 /// a point was written.
 pub fn maybe_sample(described: &[Value]) -> bool {
     maybe_sample_in(described, &items_dir(), &lifescape_sdk::save::default_save_dir(), jobs::now_secs() as i64)
@@ -513,7 +528,7 @@ pub(crate) fn described_jobs(orch: &crate::daemon::Orchestrator) -> Vec<Value> {
     live.iter().map(|job| job.describe()).collect()
 }
 
-/// Background 30-minute sampler, started once by the daemon. It reads
+/// Background hourly sampler, started once by the daemon. It reads
 /// the live describes like the endpoint, so running bots count their
 /// pushed snapshots instead of their stale save files.
 pub fn start_sampler(orch: Arc<crate::daemon::Orchestrator>) {
@@ -762,53 +777,73 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_shape_ranks_names_and_aligns_series() {
+    fn snapshot_lists_live_counts_without_history() {
         let dir = temp_dir("snapshot");
         let items = dir.join("items");
         std::fs::create_dir_all(&items).unwrap();
-        std::fs::write(
-            history_path(&items),
-            r#"{"samples": [{"time": 1000, "items": {"995": 7, "1521": 2}}, {"time": 2000, "items": {"995": 5}}]}"#,
-        )
-        .unwrap();
         let now = jobs::now_secs();
         let live = vec![described("t01", now, vec![(1521, 3)], vec![])];
         let save_arg = dir.join("saves").to_string_lossy().to_string();
         let data = snapshot_in(&live, &items, &save_arg);
-        assert_eq!(data.get("intervalMinutes").as_i64(), Some(30));
         assert_eq!(data.get("liveTotal").as_i64(), Some(3));
-        let samples: Vec<i64> = data.get("samples").as_arr().unwrap().iter().map(|value| value.as_i64().unwrap()).collect();
-        assert_eq!(samples, vec![1000, 2000]);
-        let total: Vec<i64> = data.get("total").as_arr().unwrap().iter().map(|value| value.as_i64().unwrap()).collect();
-        assert_eq!(total, vec![9, 5]);
         let rows = data.get("items").as_arr().unwrap();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 2, "live item plus the coins row");
         assert_eq!(rows[0].get("id").as_i64(), Some(1521), "live count ranks first");
         assert_eq!(rows[0].get("count").as_i64(), Some(3));
         assert_eq!(rows[0].get("name").as_str(), Some("Oak logs"));
-        let series: Vec<i64> = rows[0].get("series").as_arr().unwrap().iter().map(|value| value.as_i64().unwrap()).collect();
-        assert_eq!(series, vec![2, 0]);
+        assert!(rows[0].get("series").is_null(), "series ride the store now, not the snapshot");
+        assert!(data.get("samples").is_null() && data.get("total").is_null());
         assert_eq!(rows[1].get("id").as_i64(), Some(995));
         assert_eq!(rows[1].get("name").as_str(), Some("Coins"));
     }
 
     #[test]
-    fn sample_writes_then_respects_interval_and_cap() {
+    fn sample_writes_hourly_then_respects_interval() {
         let dir = temp_dir("sampling");
         let items = dir.join("items");
         std::fs::create_dir_all(&items).unwrap();
         let saves = dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
         let save_arg = saves.to_string_lossy().to_string();
-        let now = jobs::now_secs() as i64;
+        let now = 1_762_675_200;
         assert!(!maybe_sample_in(&[], &items, &save_arg, now), "no holdings means no point");
-        assert!(!history_path(&items).exists());
+        assert!(!store_path(&items).exists(), "no store file without holdings");
         let live = vec![described("t01", jobs::now_secs(), vec![(995, 7)], vec![])];
         assert!(maybe_sample_in(&live, &items, &save_arg, now));
-        assert!(!maybe_sample_in(&live, &items, &save_arg, now), "same minute: no second point");
-        assert!(maybe_sample_in(&live, &items, &save_arg, now + INTERVAL_SECONDS), "30 min later: new point");
-        let data = json::parse(&std::fs::read_to_string(history_path(&items)).unwrap()).unwrap();
-        assert_eq!(data.get("samples").as_arr().unwrap().len(), 2);
+        assert!(!maybe_sample_in(&live, &items, &save_arg, now), "same hour: no second point");
+        assert!(!maybe_sample_in(&live, &items, &save_arg, now + INTERVAL_SECONDS - 1), "59 min later: still no point");
+        assert!(maybe_sample_in(&live, &items, &save_arg, now + INTERVAL_SECONDS), "one hour later: new point");
+        let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
+        assert_eq!(store.hourly_points(Some(995)).unwrap().len(), 2);
+        assert_eq!(store.daily_points(Some(995)).unwrap().len(), 1, "same day: last measure wins");
+    }
+
+    #[test]
+    fn frozen_json_imports_once_then_steps_aside() {
+        let dir = temp_dir("import");
+        let items = dir.join("items");
+        std::fs::create_dir_all(&items).unwrap();
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let save_arg = saves.to_string_lossy().to_string();
+        // Two 30-minute samples inside one hour, one the next day.
+        std::fs::write(
+            history_path(&items),
+            r#"{"samples": [{"time": 1000, "items": {"995": 7, "1521": 2}}, {"time": 1900, "items": {"995": 5}}, {"time": 90000, "items": {"995": 9}}]}"#,
+        )
+        .unwrap();
+        let live = vec![described("t01", jobs::now_secs(), vec![(995, 1)], vec![])];
+        assert!(maybe_sample_in(&live, &items, &save_arg, 1_762_675_200), "import plus fresh sample");
+        assert!(!history_path(&items).exists(), "JSON set aside after import");
+        assert!(imported_path(&items).exists());
+        let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
+        // 1000 and 1900 share an hour: last write wins; 90000 lands alone.
+        assert_eq!(store.hourly_points(Some(995)).unwrap(), vec![(0, 5), (86400, 9), (1_762_675_200, 1)]);
+        assert_eq!(store.daily_points(Some(995)).unwrap(), vec![(0, 5), (86400, 9), ((1_762_675_200 / 86400) * 86400, 1)]);
+        assert_eq!(store.hourly_points(Some(1521)).unwrap(), vec![(0, 2)]);
+        // Second run sees the store filled: no reimport, no rename failure.
+        assert!(!maybe_sample_in(&live, &items, &save_arg, 1_762_675_200), "same hour: quiet");
+        assert!(imported_path(&items).exists());
     }
 
     /// The frozen sampler-era database parses: 48 points, positive counts.

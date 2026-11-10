@@ -1,14 +1,18 @@
 //! Free-to-play index filters for planning: every table narrowed to what
 //! a non-member bot can use. Rules: objects and recipes need
 //! `members == Some(false)` (the dump leaves recipes null only for herblore,
-//! so plain `false` also excludes every brew/fletch row); shops and drops
-//! exclude only known-members rows (stalls carry no keeper flag); quests
-//! have no server flag, so the 18 scripted quests below are the whitelist.
+//! so plain `false` also excludes every brew/fletch row); positions follow
+//! the F2P map zones (`free_zones`, from `maps/free2play.csv`) and never
+//! the dump spawn flags, which mark members-area spawns as F2P; shops
+//! follow their keepers (a shop is F2P when a keeper NPC stands in an
+//! F2P zone, plus the explicit `_free` world variants); quests have no
+//! server flag, so the 18 scripted quests below are the whitelist.
 
 use crate::drops::{self, Drop};
+use crate::free_zones::is_free;
 use crate::quests::Quest;
 use crate::recipes::Recipe;
-use crate::shops::Shop;
+use crate::shops::{Keeper, Shop};
 use crate::spells::Spell;
 use crate::spawns::{NpcSpawn, ObjSpawn};
 use crate::{npc_by_id, obj_by_id, Obj};
@@ -65,10 +69,23 @@ pub fn f2p_recipes() -> Vec<Recipe> {
         .collect()
 }
 
-/// Shops that are not known members-only (stalls carry no keeper flag and
-/// stay listed; interface inventories are filtered at the source level).
+/// True when this keeper NPC stands somewhere a non-member can walk
+/// (unknown or spawn-less keeper NPCs never count).
+fn keeper_has_free_spawn(keeper: &Keeper) -> bool {
+    if keeper.npc_id < 0 {
+        return false;
+    }
+    npc_by_id(keeper.npc_id as usize)
+        .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
+}
+
+/// Shops a non-member can use: a keeper NPC with an F2P-zone spawn, or
+/// an explicit `_free` world variant (which carries no keeper row).
 pub fn f2p_shops() -> Vec<Shop> {
-    crate::shops::all_shops().into_iter().filter(|entry| entry.members != Some(true)).collect()
+    crate::shops::all_shops()
+        .into_iter()
+        .filter(|entry| entry.name.ends_with("_free") || entry.keepers.iter().any(keeper_has_free_spawn))
+        .collect()
 }
 
 /// Combat spells a non-member can cast.
@@ -76,17 +93,28 @@ pub fn f2p_spells() -> Vec<Spell> {
     crate::spells::all_spells().into_iter().filter(|entry| !entry.members).collect()
 }
 
-/// Ground-item spawns outside members areas, optionally for one object.
+/// Ground-item spawns standing in an F2P zone, optionally for one object.
+/// The dump `members` flag is ignored: it follows the object type, not
+/// the spawn position.
 pub fn f2p_obj_spawns(obj_id: Option<usize>) -> Vec<ObjSpawn> {
-    crate::spawns::all_obj_spawns(obj_id).into_iter().filter(|entry| !entry.members).collect()
+    crate::spawns::all_obj_spawns(obj_id).into_iter().filter(|entry| is_free(entry.x, entry.z)).collect()
 }
 
-/// NPC spawns outside members areas, optionally for one NPC.
+/// NPC spawns standing in an F2P zone, optionally for one NPC. The dump
+/// `members` flag is ignored: it follows the NPC type, not the spawn
+/// position.
 pub fn f2p_npc_spawns(npc_id: Option<usize>) -> Vec<NpcSpawn> {
-    crate::spawns::all_npc_spawns(npc_id).into_iter().filter(|entry| !entry.members).collect()
+    crate::spawns::all_npc_spawns(npc_id).into_iter().filter(|entry| is_free(entry.x, entry.z)).collect()
 }
 
-/// Static drops from free-to-play NPCs of free-to-play tradeable objects.
+/// True when this NPC stands somewhere a non-member can walk.
+fn npc_has_free_spawn(npc_id: usize) -> bool {
+    npc_by_id(npc_id).is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
+}
+
+/// Static drops of free-to-play tradeable objects from NPCs that stand
+/// in an F2P zone (wildcard `npc_id < 0` rows carry no position and
+/// stay listed, like before).
 pub fn f2p_drops() -> Vec<Drop> {
     drops::all_drops()
         .into_iter()
@@ -95,16 +123,15 @@ pub fn f2p_drops() -> Vec<Drop> {
                 || obj_by_id(entry.obj_id as usize)
                     .is_some_and(|obj| obj.members == Some(false) && obj.tradeable)
         })
-        .filter(|entry| {
-            entry.npc_id < 0
-                || npc_by_id(entry.npc_id as usize).is_some_and(|npc| npc.members == Some(false))
-        })
+        .filter(|entry| entry.npc_id < 0 || (entry.npc_id >= 0 && npc_has_free_spawn(entry.npc_id as usize)))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{f2p_drops, f2p_objs, f2p_quests, f2p_recipes, f2p_shops, f2p_spells, F2P_QUESTS};
+    use super::{f2p_drops, f2p_npc_spawns, f2p_obj_spawns, f2p_objs, f2p_quests, f2p_recipes, f2p_shops, f2p_spells, F2P_QUESTS};
+    use crate::free_zones::is_free;
+    use crate::spawns::{all_npc_spawns, all_obj_spawns};
 
     #[test]
     fn f2p_whitelist_resolves() {
@@ -140,12 +167,132 @@ mod tests {
             recipes.iter().all(|entry| entry.kind != "brew" && entry.kind != "fletch"),
             "no brew/fletch rows"
         );
-        // Shops keep F2P rows and stalls; spells keep the standard book.
-        assert!(f2p_shops().iter().any(|entry| entry.name == "scimitarshop"));
-        assert!(f2p_shops().iter().all(|entry| entry.members != Some(true)));
+        // Spells keep the standard book; chicken drops survive the F2P cut.
         let wind = f2p_spells().into_iter().find(|entry| entry.spell == "wind_strike").expect("wind strike");
         assert!(!wind.members);
-        // Chicken drops survive the F2P cut.
         assert!(f2p_drops().iter().any(|entry| entry.npc == "chicken" && entry.obj == "feather"));
+    }
+
+    #[test]
+    fn obj_spawns_come_from_free_zones() {
+        // The dump flags 799 spawns F2P; only the 452 standing in an
+        // F2P zone survive (verified counts from the catalogue).
+        assert_eq!(all_obj_spawns(None).len(), 1151);
+        let free = f2p_obj_spawns(None);
+        assert_eq!(free.len(), 452, "f2p ground spawns, got {}", free.len());
+        assert!(free.iter().all(|entry| is_free(entry.x, entry.z)), "no f2p spawn outside the zones");
+        let count = |name: &str| {
+            let id =
+                crate::objs_by_name(name).into_iter().next().unwrap_or_else(|| panic!("{name} in dumps")).obj_id;
+            f2p_obj_spawns(Some(id)).len()
+        };
+        assert_eq!(count("bronze_pickaxe"), 5, "bronze pick spawns");
+        assert_eq!(count("bronze_axe"), 1, "bronze axe spawns");
+        assert_eq!(count("iron_pickaxe"), 0, "no iron pick spawn");
+        assert_eq!(count("fishing_rod"), 0, "no fishing rod spawn");
+        assert_eq!(count("coins"), 39, "coin piles");
+        assert_eq!(count("cake_tin"), 2, "cake mould spawns only");
+    }
+
+    #[test]
+    fn npc_spawns_come_from_free_zones() {
+        // The dump flags 7088 spawns F2P; only the 1779 standing in an
+        // F2P zone survive.
+        assert_eq!(all_npc_spawns(None).len(), 7322);
+        let free = f2p_npc_spawns(None);
+        assert_eq!(free.len(), 1779, "f2p npc spawns, got {}", free.len());
+        assert!(free.iter().all(|entry| is_free(entry.x, entry.z)), "no f2p npc outside the zones");
+        let hans = crate::npcs_by_name("hans").into_iter().next().expect("hans in dumps");
+        assert!(!f2p_npc_spawns(Some(hans.npc_id)).is_empty(), "lumbridge hans stays");
+        let druids = crate::npcs_by_name("chaos_druid").into_iter().next().expect("chaos druid in dumps");
+        assert!(f2p_npc_spawns(Some(druids.npc_id)).is_empty(), "no f2p chaos druid");
+    }
+
+    #[test]
+    fn shops_follow_their_keepers() {
+        // Keepered shops need a keeper standing in an F2P zone; the two
+        // `_free` rows are the explicit F2P-world variants.
+        let free = f2p_shops();
+        assert_eq!(free.len(), 45, "f2p shops, got {}", free.len());
+        let names: Vec<&str> = free.iter().map(|entry| entry.name.as_str()).collect();
+        for name in ["scimitarshop", "axeshop", "pickaxeshop", "fishingshop", "craftingshop_free", "craftingshop2_free"] {
+            assert!(names.contains(&name), "shop {name} stays f2p");
+        }
+        for name in ["khazardshop", "fishingguild", "regicide_general_shop", "memberstaffshop", "foodshop"] {
+            assert!(!names.contains(&name), "shop {name} leaves f2p");
+        }
+        for shop in &free {
+            if shop.name.ends_with("_free") {
+                continue;
+            }
+            assert!(
+                shop.keepers.iter().any(|keeper| {
+                    keeper.npc_id >= 0
+                        && crate::npc_by_id(keeper.npc_id as usize)
+                            .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
+                }),
+                "shop {} has a free keeper",
+                shop.name
+            );
+        }
+        for shop in crate::shops::all_shops() {
+            if names.contains(&shop.name.as_str()) || shop.keepers.is_empty() {
+                continue;
+            }
+            assert!(
+                !shop.keepers.iter().any(|keeper| {
+                    keeper.npc_id >= 0
+                        && crate::npc_by_id(keeper.npc_id as usize)
+                            .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
+                }),
+                "shop {} excluded for a reason",
+                shop.name
+            );
+        }
+    }
+
+    #[test]
+    fn drops_need_a_free_npc() {
+        // Chaos druids never stand in an F2P zone, so their drops leave
+        // the F2P set even though the NPC type flag says F2P.
+        assert!(!f2p_drops().iter().any(|entry| entry.npc == "chaos_druid"), "no chaos druid drops");
+        for drop in f2p_drops() {
+            if drop.npc_id < 0 {
+                continue;
+            }
+            assert!(
+                crate::npc_by_id(drop.npc_id as usize)
+                    .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z))),
+                "drop npc {} stands free",
+                drop.npc
+            );
+        }
+    }
+
+    #[test]
+    fn no_f2p_source_outside_the_zones() {
+        // M10a acceptance: no F2P source (ground spawn, NPC spawn, shop
+        // keeper, bank booth) stands outside `free2play.csv`.
+        assert!(f2p_obj_spawns(None).iter().all(|entry| is_free(entry.x, entry.z)));
+        assert!(f2p_npc_spawns(None).iter().all(|entry| is_free(entry.x, entry.z)));
+        for shop in f2p_shops() {
+            for keeper in &shop.keepers {
+                if keeper.npc_id < 0 {
+                    continue;
+                }
+                let npc = crate::npc_by_id(keeper.npc_id as usize)
+                    .unwrap_or_else(|| panic!("keeper {} resolves", keeper.npc));
+                assert!(
+                    npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)),
+                    "keeper {} stands free",
+                    keeper.npc
+                );
+            }
+        }
+        for bank in crate::banks::all_banks() {
+            if !bank.members {
+                assert!(is_free(bank.x, bank.z), "bank ({}, {}) stands free", bank.x, bank.z);
+            }
+        }
     }
 }
