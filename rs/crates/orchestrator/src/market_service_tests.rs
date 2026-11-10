@@ -3,6 +3,7 @@
 //! Temp database file per test, never `run/`.
 
 use lifescape_json::{object, str_value, Value};
+use lifescape_store::{NewExecution, YieldCandleResolution};
 use crate::market_seed::CatalogueItem;
 use crate::market_service::MarketService;
 
@@ -586,5 +587,78 @@ fn list_merges_same_name_forms_and_sorts_by_volume() {
     assert_eq!(rows[0].get("price").as_i64(), Some(11));
     assert_eq!(rows[0].get("change24h").as_i64(), Some(200));
     assert_eq!(rows[1].get("name").as_str(), Some("Coal"));
+    cleanup(&path);
+}
+
+fn print_at(service: &MarketService, clock: i64, price: i64, qty: i64) {
+    service
+        .lock_store()
+        .record_execution(&NewExecution {
+            item_id: 314,
+            quantity: qty,
+            price,
+            clock,
+            server_tick: clock,
+        })
+        .expect("prints");
+}
+
+/// History candles carry the execution count of their window (`n`,
+/// tooltip §6.2): three fills in one hour read `n = 3`, one in the
+/// next reads `n = 1`, beside the OHLCV the store rebuilt.
+#[test]
+fn history_candles_carry_execution_counts() {
+    let (service, path) = service("candle-n");
+    let hour = 48_000 * 3600;
+    print_at(&service, hour + 60, 4, 2);
+    print_at(&service, hour + 120, 6, 3);
+    print_at(&service, hour + 300, 5, 4);
+    print_at(&service, hour + 3600 + 10, 7, 10);
+    service.rebuild_candles(314, YieldCandleResolution::Hour1).expect("rebuilds");
+    let history = service.handle(&request(vec![
+        ("op", str_value("history")),
+        ("item", Value::Int(314)),
+        ("res", str_value("1h")),
+        ("from", Value::Int(hour - 3600)),
+        ("to", Value::Int(hour + 3 * 3600)),
+    ]));
+    assert_eq!(history.get("ok").as_bool(), Some(true));
+    assert_eq!(history.get("res").as_str(), Some("1h"));
+    let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
+    assert_eq!(candles.len(), 2);
+    assert_eq!(candles[0].get("t").as_i64(), Some(hour));
+    assert_eq!(candles[0].get("o").as_i64(), Some(4));
+    assert_eq!(candles[0].get("h").as_i64(), Some(6));
+    assert_eq!(candles[0].get("l").as_i64(), Some(4));
+    assert_eq!(candles[0].get("c").as_i64(), Some(5));
+    assert_eq!(candles[0].get("v").as_i64(), Some(9));
+    assert_eq!(candles[0].get("n").as_i64(), Some(3), "three fills in the window");
+    assert_eq!(candles[1].get("t").as_i64(), Some(hour + 3600));
+    assert_eq!(candles[1].get("v").as_i64(), Some(10));
+    assert_eq!(candles[1].get("n").as_i64(), Some(1), "single fill in the window");
+    cleanup(&path);
+}
+
+/// History stays sparse: windows without executions return no candle,
+/// so the front draws the fixed-slot gap (never a fake flat line).
+#[test]
+fn history_stays_sparse_for_empty_windows() {
+    let (service, path) = service("candle-sparse");
+    let hour = 48_000 * 3600;
+    print_at(&service, hour + 60, 4, 2);
+    print_at(&service, hour + 2 * 3600 + 60, 9, 5);
+    service.rebuild_candles(314, YieldCandleResolution::Hour1).expect("rebuilds");
+    let history = service.handle(&request(vec![
+        ("op", str_value("history")),
+        ("item", Value::Int(314)),
+        ("res", str_value("1h")),
+        ("from", Value::Int(hour - 3600)),
+        ("to", Value::Int(hour + 4 * 3600)),
+    ]));
+    let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
+    assert_eq!(candles.len(), 2, "the empty middle hour is the front's gap");
+    assert_eq!(candles[0].get("t").as_i64(), Some(hour));
+    assert_eq!(candles[1].get("t").as_i64(), Some(hour + 2 * 3600));
+    assert_eq!(candles[1].get("n").as_i64(), Some(1));
     cleanup(&path);
 }

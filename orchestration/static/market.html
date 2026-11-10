@@ -44,7 +44,7 @@
     <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market" aria-current="page">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a></nav>
   </div>
 </div>
-<h1>Market <span class="muted">· live prices over volume bars</span></h1>
+<h1>Market <span class="muted">· candles over volume bars</span></h1>
 <div id="layout">
   <div id="list">
     <h2>Items</h2>
@@ -60,8 +60,8 @@
   <div id="detail">
     <h2 id="title">Pick an item</h2>
     <div id="views">
-      <button id="v-day" class="cur" onclick="setView('day')">6 months / day</button>
-      <button id="v-hour" onclick="setView('hour')">24 h / hour</button>
+      <button id="v-hour" class="cur" onclick="setView('hour')">24 h / hour</button>
+      <button id="v-day" onclick="setView('day')">6 months / day</button>
       <span id="refline" class="muted"></span>
     </div>
     <canvas id="chart" width="720" height="340"></canvas>
@@ -71,6 +71,7 @@
     </div>
   </div>
 </div>
+<script src="/chart.js"></script>
 <script src="/market.js"></script>
 </body>
 </html>

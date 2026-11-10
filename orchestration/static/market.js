@@ -1,11 +1,13 @@
-// Market front: item list, price-over-volume canvas graph, book and last
-// trades. Canvas maison, no library. Two views: 6 months of daily
-// candles, or 24 h of hourly candles. The newest candle stretches live
-// with every WS tick (the `market` field of the 1 Hz frame).
+// Market front: item list, OHLC candles over volume bars, book and last
+// trades. Canvas maison via the shared LifeChart module (chart.js).
+// Two views: 24 h of hourly candles (default, D42), or 6 months of daily
+// candles. Fixed time slots (24 or 183): empty slots show a gap, never a
+// fake flat line. The newest candle stretches live with every WS tick
+// (the `market` field of the 1 Hz frame).
 const PAGE_SIZE = 25;
 let items = [];
 let selected = null;
-let view = 'day';
+let view = 'hour';
 let candles = [];
 let trades = [];
 let pageIndex = 0;
@@ -28,8 +30,11 @@ async function loadList() {
 
 async function loadDetail() {
   if (selected === null) return;
-  const res = view === 'day' ? '1d' : '1h';
-  const span = view === 'day' ? 183 * 86400 : 86400;
+  const hourly = view === 'hour';
+  const res = hourly ? '1h' : '1d';
+  const width = hourly ? 3600 : 86400;
+  const count = hourly ? 24 : 183;
+  const span = count * width;
   const to = Math.floor(Date.now() / 1000);
   const from = to - span;
   try {
@@ -123,94 +128,65 @@ function renderTrades() {
   document.getElementById('trades').innerHTML = rows.join('');
 }
 
+// Fixed slots for the current view: 24 hourly or 183 daily windows,
+// aligned on multiples of the width since epoch (same buckets as the
+// store candles). Sparse history maps on; empty slots stay null.
+function currentSlots() {
+  const hourly = view === 'hour';
+  const width = hourly ? 3600 : 86400;
+  const count = hourly ? 24 : 183;
+  const to = Math.floor(Date.now() / 1000);
+  const from = Math.floor((to - count * width) / width) * width;
+  return { slots: LifeChart.slotStarts(from, width, count), width };
+}
+
 function draw() {
   const canvas = document.getElementById('chart');
-  const ctx = canvas.getContext('2d');
-  const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(320, canvas.clientWidth);
-  const height = Math.round(width * 340 / 720);
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(height * ratio);
-  canvas.style.height = height + 'px';
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.fillStyle = '#111';
-  ctx.fillRect(0, 0, width, height);
-
   const item = items.find(entry => entry.item === selected);
   document.getElementById('title').textContent = item ? item.name : 'Pick an item';
   document.getElementById('refline').textContent = item ? ' ref ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · vol ' + item.volume24h : '';
-  if (!candles.length) {
-    ctx.fillStyle = '#888';
-    ctx.font = '14px monospace';
-    ctx.fillText('No history yet for this item.', 20, height / 2);
-    return;
-  }
 
-  // Live tail: fold the newest WS prints into a copy of the last candle.
-  const live = candles.map(row => ({ ...row }));
-  const fresh = trades.filter(trade => live.length && trade.t >= live[live.length - 1].t);
-  if (fresh.length) {
-    const tail = live[live.length - 1];
-    for (const trade of fresh) {
-      tail.h = Math.max(tail.h, trade.p);
-      tail.l = Math.min(tail.l, trade.p);
-      tail.c = trade.p;
-      tail.v += trade.q;
+  const { slots, width } = currentSlots();
+  const byTime = new Map();
+  for (const row of candles) byTime.set(row.t, { ...row });
+
+  // Live tail: fold the newest WS prints into a copy of the candles.
+  // Oldest first so the close ends on the freshest print; a print past
+  // the last stored candle opens the live slot with its own OHLC.
+  const fresh = trades
+    .filter(trade => slots.length && trade.t >= slots[slots.length - 1] - width && trade.t < slots[slots.length - 1] + width)
+    .slice()
+    .sort((a, b) => a.t - b.t);
+  for (const trade of fresh) {
+    const start = Math.floor(trade.t / width) * width;
+    let tail = byTime.get(start);
+    if (!tail) {
+      tail = { t: start, o: trade.p, h: trade.p, l: trade.p, c: trade.p, v: 0, n: 0 };
+      byTime.set(start, tail);
     }
+    tail.h = Math.max(tail.h, trade.p);
+    tail.l = Math.min(tail.l, trade.p);
+    tail.c = trade.p;
+    tail.v += trade.q;
+    tail.n = (tail.n || 0) + 1;
   }
 
-  let lo = Infinity, hi = -Infinity, volMax = 0;
-  for (const row of live) { lo = Math.min(lo, row.l); hi = Math.max(hi, row.h); volMax = Math.max(volMax, row.v); }
-  if (lo === hi) { lo -= 1; hi += 1; }
-  if (volMax <= 0) volMax = 1;
-  const pad = 44;
-  const chartW = width - pad * 2, chartH = height - pad * 2;
-  const yOf = price => pad + chartH - ((price - lo) / (hi - lo)) * chartH;
-  const slot = chartW / live.length;
-  const barW = Math.max(1, Math.min(10, slot * 0.55));
-
-  // Volume bars first (right scale), price line over them (left scale).
-  for (let i = 0; i < live.length; i++) {
-    const barH = (live[i].v / volMax) * chartH * 0.45;
-    ctx.fillStyle = '#2c4a2c';
-    ctx.fillRect(pad + slot * i + (slot - barW) / 2, pad + chartH - barH, barW, barH);
-  }
-
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1;
-  ctx.font = '10px monospace';
-  for (let step = 0; step <= 4; step++) {
-    const y = pad + (chartH * step) / 4;
-    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(width - pad, y); ctx.stroke();
-    ctx.fillStyle = '#888';
-    ctx.fillText(String(Math.round(hi - ((hi - lo) * step) / 4)), 4, y + 3);
-  }
-
-  ctx.strokeStyle = '#4caf50';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  live.forEach((row, i) => {
-    const x = pad + slot * i + slot / 2, y = yOf(row.c);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  const rows = LifeChart.fillSlots(slots, [...byTime.values()]);
+  LifeChart.draw(canvas, {
+    slots,
+    width,
+    kind: 'candles',
+    rows,
+    live: true,
+    leftTitle: 'Prix (pièces)',
+    rightTitle: 'Volume (quantité échangée)',
+    legend: [
+      { swatch: 'up', color: '#4caf50', label: 'Chandelle : ouverture → clôture, mèche : plus bas / plus haut — échelle de gauche, en pièces' },
+      { swatch: 'bar', color: '#4caf50', label: 'Bâton : quantité échangée sur la période — échelle de droite' },
+    ],
+    emptyText: 'No history yet for this item.',
+    tooltipFor: (slot, row) => LifeChart.candleTooltip(slot, width, row),
   });
-  ctx.stroke();
-  ctx.lineWidth = 1;
-
-  const lastX = pad + slot * (live.length - 1) + slot / 2;
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(lastX, yOf(live[live.length - 1].c), 4, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#888';
-  const step = Math.max(1, Math.ceil(live.length / 8));
-  for (let i = 0; i < live.length; i += step) {
-    const date = new Date(live[i].t * 1000);
-    const label = view === 'day'
-      ? String(date.getDate()).padStart(2, '0') + '/' + String(date.getMonth() + 1).padStart(2, '0')
-      : String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    ctx.fillText(label, pad + slot * i, height - pad + 14);
-  }
 }
 
 // Live prints ride the dashboard WS: same socket, `market` field of the

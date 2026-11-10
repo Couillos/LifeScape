@@ -448,9 +448,16 @@ impl MarketService {
         let store = self.lock_store();
         let candles = store.candles_for(item, resolution, from, to).unwrap_or_default();
         let executions = store.executions_for_item(item, from, to).unwrap_or_default();
+        // Execution count per candle window (tooltip §6.2, `n`): the
+        // candles table carries OHLCV only, so count the window's fills.
+        let width = resolution.width_seconds();
         let candle_values: Vec<Value> = candles
             .iter()
             .map(|candle| {
+                let count = executions
+                    .iter()
+                    .filter(|exec| exec.clock >= candle.window_start && exec.clock < candle.window_start + width)
+                    .count() as i64;
                 object(vec![
                     ("t", Value::Int(candle.window_start)),
                     ("o", Value::Int(candle.open_price)),
@@ -458,6 +465,7 @@ impl MarketService {
                     ("l", Value::Int(candle.low_price)),
                     ("c", Value::Int(candle.close_price)),
                     ("v", Value::Int(candle.volume)),
+                    ("n", Value::Int(count)),
                 ])
             })
             .collect();
