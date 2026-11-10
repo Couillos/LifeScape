@@ -169,10 +169,11 @@ fn format_nav_stats(stats: &Value) -> String {
         .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
         .unwrap_or_else(|| "-".to_string());
     format!(
-        "nav-stats v={} hits={} trunc={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
+        "nav-stats v={} hits={} trunc={} suffix={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} walk_costs={} detour(sum/max/plans)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
         stats.get("version").as_str().unwrap_or("-"),
         num("hits"),
         num("trunc_hits"),
+        num("suffix_hits"),
         num("joins"),
         num("misses"),
         num("l1_len"),
@@ -184,6 +185,10 @@ fn format_nav_stats(stats: &Value) -> String {
         num("refused_full"),
         num("refused_stale"),
         num("unknown"),
+        num("walk_costs"),
+        num("detour_sum"),
+        num("detour_max"),
+        num("detour_plans"),
         num("door_defs"),
         num("tiles_flags"),
         num("static_locs_near"),
@@ -937,6 +942,26 @@ mod tests {
             format_seen(&empty).lines().any(|line| line == "Inventory (0)"),
             "empty pack still headers",
         );
+    }
+
+    /// N8 relay: suffix serves, multi-target batches and detour counters
+    /// reach the operator line (missing keys read `-`, never panic).
+    #[test]
+    fn nav_stats_line_carries_n8() {
+        use super::format_nav_stats;
+        use lifescape_json::{object, str_value, Value};
+        let stats = object(vec![
+            ("version", str_value("1")),
+            ("suffix_hits", Value::Int(7)),
+            ("walk_costs", Value::Int(3)),
+            ("detour_sum", Value::Int(40)),
+            ("detour_max", Value::Int(12)),
+            ("detour_plans", Value::Int(5)),
+        ]);
+        let line = format_nav_stats(&stats);
+        assert!(line.contains("suffix=7"), "suffix relayed, got:\n{line}");
+        assert!(line.contains("walk_costs=3"), "batches relayed, got:\n{line}");
+        assert!(line.contains("detour(sum/max/plans)=40/12/5"), "detour relayed, got:\n{line}");
     }
 
     /// Single-session guard: a bound socket reads alive, a missing or
