@@ -38,7 +38,18 @@ fn find_obj_by_name(needle: &str) -> Option<u16> {
     if let Some(entry) = lifescape_gamedata::objs_by_name(needle).into_iter().next() {
         return Some(entry.obj_id as u16);
     }
-    lifescape_gamedata::objs_search(needle).into_iter().next().map(|entry| entry.obj_id as u16)
+    if let Some(entry) = lifescape_gamedata::objs_search(needle).into_iter().next() {
+        return Some(entry.obj_id as u16);
+    }
+    // Live callers pass display names ("Shrimps"), never internal keys
+    // ("shrimp"): exact display fallback, first dump row winning (the
+    // cooked shrimp sorts before its certificate). Fixes the banked-food
+    // gate (Usage unknown obj "Shrimps") for every caller at once.
+    let wanted = needle.to_lowercase();
+    lifescape_gamedata::all_objs()
+        .iter()
+        .find(|entry| entry.display.is_some_and(|display| display.to_lowercase() == wanted))
+        .map(|entry| entry.obj_id as u16)
 }
 
 fn com_id(dotted: &str) -> Option<u16> {
@@ -70,5 +81,13 @@ mod tests {
     fn live_resolves_bank_com_and_coins() {
         assert!((LIVETABLES.com_id)("bank_main:inv").is_some());
         assert_eq!((LIVETABLES.find_obj_by_name)("coins"), Some(995));
+    }
+
+    /// Live callers pass display names ("Shrimps"), never internal keys:
+    /// the banked-food gate failed with Usage unknown obj "Shrimps".
+    #[test]
+    fn live_resolves_display_names() {
+        assert_eq!((LIVETABLES.find_obj_by_name)("Shrimps"), Some(315), "cooked shrimps by display");
+        assert_eq!((LIVETABLES.find_obj_by_name)("shrimp"), Some(315), "internal key still first");
     }
 }

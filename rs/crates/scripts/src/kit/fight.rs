@@ -43,6 +43,29 @@ pub fn fight_engaged(
 /// ~5.6 ticks/s; a real engagement lands xp within seconds of contact.
 const FIGHT_STALL_TICKS: u64 = 200;
 
+/// Cold-click budget: consecutive attack clicks thrown from an adjacent
+/// tile that produced no engagement evidence (no xp, no hp taken, target
+/// anim unchanged) before the target is declared unstartable (ban +
+/// repick, same as the stall path). Our own chasing steps reset the
+/// stall window, so silent clicks alone never escalated: t02 live,
+/// woman3 slot 785 ate ~40 silent clicks over ~250t, then rode KILL_CAP
+/// to 970t alive with 0 kills. 40 clicks ≈ one stall window at the 5t
+/// re-click throttle.
+const MAX_COLD_CLICKS: u32 = 40;
+
+/// True once the cold-click budget is spent: ban and repick.
+fn cold_clicks_spent(cold: u32) -> bool {
+    cold >= MAX_COLD_CLICKS
+}
+
+/// True when the bot stands on a tile the server accepts NPC clicks
+/// from: orthogonal adjacency, never a diagonal (see `approach_npc`).
+/// Clicks thrown from further out are silently converted to walks, so
+/// throwing them only burns the cold-click budget for nothing.
+fn click_adjacent(bot_x: i32, bot_z: i32, npc_x: i32, npc_z: i32) -> bool {
+    (npc_x - bot_x).abs() + (npc_z - bot_z).abs() == 1
+}
+
 /// One foe never holds the bot longer than this, xp trickle or not: a normal
 /// goblin kill costs <= ~600 ticks all-in (t01 live: kills 1-6), so 900 is
 /// 1.5x headroom. The 12-minute goblin 810 grind (xp flowing, nothing dying)
@@ -78,6 +101,7 @@ pub fn fight(
     let mut progress_pos = (bot.world.x, bot.world.z);
     let mut engaged_at = bot.world.ticks;
     let mut attempts = 0u32;
+    let mut cold_clicks = 0u32;
     // Controlled (all three at once) when the wielded category offers it,
     // else the weakest skill right now: unarmed has no controlled entry.
     let mut style: String = if controlled_button(&current_weapon_category(bot)).is_some() {
@@ -265,9 +289,25 @@ pub fn fight(
                     ) {
                         fighting = true;
                         bot.log(&format!("engaged npc {slot}, holding clicks"));
-                    } else {
+                    } else if bot.world.npcs.get(&slot).is_some_and(|foe| {
+                        click_adjacent(bot.world.x, bot.world.z, foe.x, foe.z)
+                    }) {
+                        // Adjacent throws only: clicks from further out are
+                        // silently converted to walks and prove nothing, so
+                        // they must not burn the cold-click budget (the
+                        // approach above is still closing).
                         bot.op_npc(2, slot)?;
                         last_attack = bot.world.ticks;
+                        cold_clicks += 1;
+                        if cold_clicks_spent(cold_clicks) {
+                            let (foe_x, foe_z) = bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
+                            bot.log(&format!("{cold_clicks} silent clicks on npc {slot}, repicking"));
+                            unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
+                            let _ = bot.approach_npc(slot, 60);
+                            target_npc = None;
+                            attempts = 0;
+                            progress_at = bot.world.ticks;
+                        }
                     }
                 } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= 25 {
                     bot.op_npc(2, slot)?;
@@ -330,6 +370,7 @@ pub fn fight(
             last_attack = bot.world.ticks;
             engaged_at = bot.world.ticks;
             attempts = 0;
+            cold_clicks = 0;
             let _ = slot;
         } else if (bot.world.x - target.0).abs() + (bot.world.z - target.1).abs() > 8 {
             // Dead socket, not an empty field: typed instead of pacing.
@@ -730,5 +771,24 @@ mod engaged_tests {
         assert!(fight_engaged(100, 100, 15, 18, None, None), "damage taken is engagement");
         assert!(fight_engaged(100, 100, 18, 18, Some(7), None), "target animating is engagement");
         assert!(!fight_engaged(100, 100, 19, 18, None, None), "regen/heal is not engagement");
+    }
+
+    /// Cold-click budget: 39 silent clicks hold, the 40th repicks.
+    #[test]
+    fn cold_click_budget_spent_at_forty() {
+        assert!(!super::cold_clicks_spent(0), "fresh target holds");
+        assert!(!super::cold_clicks_spent(39), "39 silent clicks hold");
+        assert!(super::cold_clicks_spent(40), "40 silent clicks repick");
+    }
+
+    /// Clicks only land from orthogonal adjacency: diagonals and range
+    /// never start combat (the server silently walks instead).
+    #[test]
+    fn clicks_gate_on_orthogonal_adjacency() {
+        assert!(super::click_adjacent(0, 0, 1, 0), "side adjacent clicks");
+        assert!(super::click_adjacent(0, 0, 0, 1), "side adjacent clicks");
+        assert!(!super::click_adjacent(0, 0, 1, 1), "diagonal never clicks");
+        assert!(!super::click_adjacent(0, 0, 2, 0), "range never clicks");
+        assert!(!super::click_adjacent(0, 0, 0, 0), "same tile never clicks");
     }
 }
