@@ -91,12 +91,15 @@ pub fn max_online_bots(load: &DaemonLoad) -> usize {
         0.0
     };
     let by_cpu = if per_bot > 0.0 {
-        // One traffic unit costs the daemon a fixed slice: scale the
-        // observed rate to the 1-core budget by rule of three against the
-        // L0 baseline (10 %/bot at ~2 pushes+polls/s/bot in dev).
-        let baseline_per_bot = 2.0_f64;
-        let baseline_bots = DAEMON_BUDGET_CORES / 0.10;
-        ((baseline_bots * baseline_per_bot / per_bot.max(0.01)) as usize).max(1)
+        // One traffic unit (push/plan/poll) costs the daemon a fixed
+        // slice: scale the observed rate to the 1-core budget by rule of
+        // three. L11 prod-tick measurement (idle bots): ~2.7 % of a core
+        // at ~9 traffic/s, i.e. ~330 traffic/s per core, rounded down to
+        // 300. Re-tune with ACTIVE-bot traffic (plans + reports change
+        // the mix); until then this gate is idle-calibrated and the
+        // absolute ceiling still caps at 300.
+        let budget_traffic_per_s = 300.0_f64;
+        ((budget_traffic_per_s / per_bot.max(0.01)) as usize).max(1)
     } else {
         ABSOLUTE_MAX_BOTS
     };
