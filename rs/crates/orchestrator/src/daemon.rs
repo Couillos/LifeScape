@@ -7,7 +7,8 @@
 //! It never speaks the game protocol.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
+pub(crate) use crate::daemon_conn::{is_pktlog_line, live_binary, tail_lines};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::sync::atomic::AtomicBool;
@@ -21,36 +22,7 @@ use crate::registry;
 
 pub const WORKER_TIMEOUT: u64 = 40;
 
-/// Frozen-session watchdog: heartbeats older than this (wall clock) mean
-/// the worker pumps nothing anymore (wedged thread, dead socket never
-/// noticed) no matter what the game ticks say.
-const WATCHDOG_STALE_SECS: f64 = 45.0;
-/// Poison window: this many watchdog restarts inside it parks the job
-/// for the operator instead of respawning forever.
-const WATCHDOG_WINDOW_SECS: f64 = 300.0;
-const WATCHDOG_MAX_RESTARTS: usize = 3;
-
-/// Frozen-session watchdog state, kept in the supervisor thread (no
-/// struct churn): last heartbeat wall time, recent restart times.
-pub(crate) struct Watchdog {
-    last_hb: Option<f64>,
-    restarts: Vec<f64>,
-}
-
-impl Watchdog {
-    pub(crate) fn new() -> Self {
-        Watchdog { last_hb: None, restarts: Vec::new() }
-    }
-}
-
-/// Pure staleness decision: heartbeat older than the bound (wall clock),
-/// never-seen heartbeat never counts (login edge).
-pub(crate) fn watchdog_due(last_hb: Option<f64>, now: f64) -> bool {
-    match last_hb {
-        Some(at) => now - at >= WATCHDOG_STALE_SECS,
-        None => false,
-    }
-}
+pub(crate) use crate::daemon_watch::Watchdog;
 
 const STOP_GRACE: f64 = 8.0;
 const OPEN_TIMEOUT: f64 = 150.0;
@@ -110,32 +82,6 @@ pub struct Orchestrator {
     pub running: AtomicBool,
 }
 
-/// Bounded unix connect: the blocking `connect` runs on a helper
-/// thread and the caller waits at most `timeout`. A wedged listener
-/// (backlog full, nobody accepting) can no longer park the caller
-/// forever; the helper thread is reaped when the worker dies (the
-/// caller kills it on timeout, which unblocks the connect).
-fn connect_worker(
-    sock_path: &std::path::Path,
-    timeout: Duration,
-) -> Result<UnixStream, String> {
-    let path = sock_path.to_path_buf();
-    let (sender, receiver) = std::sync::mpsc::channel::<Result<UnixStream, String>>();
-    if std::thread::Builder::new()
-        .name("worker-connect".to_string())
-        .spawn(move || {
-            let _ = sender.send(
-                UnixStream::connect(&path).map_err(|error| format!("session unreachable: {error}")),
-            );
-        })
-        .is_err()
-    {
-        return Err("connect spawn failed".to_string());
-    }
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|_| "connect timed out (wedged session)".to_string())?
-}
 
 impl Orchestrator {
     pub fn new() -> Self {
@@ -154,94 +100,12 @@ impl Orchestrator {
         }
     }
 
-    fn kill_process(&self, account: &str) {
+    pub(crate) fn kill_process(&self, account: &str) {
         if let Some(mut proc) = self.procs.lock().unwrap().remove(account) {
             proc.terminate_gracefully();
         }
     }
 
-    /// Frozen-session watchdog, called from the supervisor thread: when
-    /// heartbeats stop arriving although the session should be live, the
-    /// worker pumps nothing anymore (wedged thread, dead socket never
-    /// noticed) and no in-worker timeout can fire. Kill the worker,
-    /// respawn it, and resume the running script if any (stateless
-    /// scripts restart cleanly from anywhere). Poison-capped: repeated
-    /// wedges park the job loudly instead of respawning forever.
-    pub(crate) fn watchdog_tick(&self, job: &Arc<Job>, state: &mut Watchdog) {
-        let (phase, script, args, status, paused, held, updated) = {
-            let Ok(inner) = job.inner.try_lock() else {
-                return;
-            };
-            let updated = inner.live.as_ref().and_then(|frame| frame.get("updated").as_f64());
-            (
-                inner.phase.clone(),
-                inner.script.clone(),
-                inner.script_args.clone(),
-                inner.status.clone(),
-                inner.paused,
-                inner.held,
-                updated,
-            )
-        };
-        if paused || held {
-            return;
-        }
-        if matches!(status.as_str(), "reconnecting" | "disconnected" | "starting" | "busy") {
-            return;
-        }
-        let Some(at) = updated else {
-            return;
-        };
-        let now = crate::jobs::now_secs();
-        if at > state.last_hb.unwrap_or(0.0) {
-            state.last_hb = Some(at);
-            return;
-        }
-        if !watchdog_due(state.last_hb, now) {
-            return;
-        }
-        state.restarts.retain(|seen| now - seen < WATCHDOG_WINDOW_SECS);
-        if state.restarts.len() >= WATCHDOG_MAX_RESTARTS {
-            if let Ok(mut inner) = job.inner.try_lock() {
-                inner.last_error = Some(object(vec![
-                    ("where", str_value("watchdog")),
-                    ("type", str_value("watchdog")),
-                    ("message", str_value("session wedged repeatedly, parked for operator")),
-                    ("at", Value::Arr(vec![])),
-                ]));
-            }
-            return;
-        }
-        state.restarts.push(now);
-        println!("watchdog {}: no heartbeat for {:.0}s, restarting worker", job.account, now - at);
-        self.kill_process(&job.account);
-        std::thread::sleep(Duration::from_millis(1500));
-        if let Err(error) = self.spawn(job, false) {
-            println!("watchdog {}: respawn failed: {error}", job.account);
-            return;
-        }
-        let deadline = crate::jobs::now_secs() + 15.0;
-        let mut ready = false;
-        while crate::jobs::now_secs() < deadline {
-            match self.send_worker(&job.account, &object(vec![("cmd", str_value("status"))]), Duration::from_secs(3)) {
-                Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
-                    ready = true;
-                    break;
-                }
-                _ => std::thread::sleep(Duration::from_millis(500)),
-            }
-        }
-        if !ready {
-            println!("watchdog {}: respawned worker never answered", job.account);
-            return;
-        }
-        if phase == "running" {
-            if let Some(name) = script {
-                println!("watchdog {}: resuming {name} after restart", job.account);
-                self.run_job(&job.account, &name, &args);
-            }
-        }
-    }
 
     /// Worker binary for `session` spawn: `current_exe()` keeps pointing
     /// at the replaced file after `cargo build` ("/proc/self/exe" reads
@@ -259,7 +123,7 @@ impl Orchestrator {
     }
 
     /// Start the session worker and wait for its login (or typed error).
-    fn spawn(&self, job: &Arc<Job>, no_login: bool) -> Result<(), String> {
+    pub(crate) fn spawn(&self, job: &Arc<Job>, no_login: bool) -> Result<(), String> {
         let (sock_path, ready_path) = paths::session_paths(&job.account);
         for stale in [&sock_path, &ready_path] {
             let _ = std::fs::remove_file(stale);
@@ -638,40 +502,6 @@ impl Orchestrator {
     }
 
 
-    /// One JSON round-trip to the session worker. The connect itself
-    /// is bounded (helper thread + timeout, reaped on worker death):
-    /// a socket nobody accepts never parks the supervisor, the brain,
-    /// or a CLI command. A timed-out connect kills the worker on the
-    /// spot — it cannot serve anyone — and clean recovery follows.
-    pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
-        let (sock_path, _ready) = paths::session_paths(account);
-        let stream = match connect_worker(&sock_path, timeout) {
-            Ok(stream) => stream,
-            Err(_) => {
-                println!("daemon: connect to {account} wedged, killing the worker");
-                self.kill_process(account);
-                let _ = std::fs::remove_file(&sock_path);
-                return Err(format!("session unreachable for {account}"));
-            }
-        };
-        stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-        stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-        let mut buf = json::stringify(request);
-        buf.push('\n');
-        (&stream).write_all(buf.as_bytes()).map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
-                format!("worker for {account} did not answer in time (busy script or wedged session)")
-            } else {
-                error.to_string()
-            }
-        })?;
-        if line.trim().is_empty() {
-            return Ok(object(vec![]));
-        }
-        json::parse(&line).map_err(|e| e.to_string())
-    }
 
     pub(crate) fn write_state(&self, job: &Arc<Job>) {
         let (merged_path, _partial, _log) = paths::user_paths(&job.account);
@@ -1051,94 +881,3 @@ fn known_accounts() -> Vec<String> {
     accounts
 }
 
-/// Live worker binary behind a `current_exe()` path: after `cargo build`
-/// replaces the file, "/proc/self/exe" reads "... (deleted)", so strip
-/// that marker. `None` means the path is really gone (no guessing).
-fn live_binary(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    let rendered = exe.to_string_lossy();
-    let live = rendered.strip_suffix(" (deleted)").unwrap_or(&rendered);
-    let candidate = std::path::PathBuf::from(live);
-    candidate.is_file().then(|| candidate)
-}
-
-/// Packet-trace line from `connection.rs` pktlog (`C>S ...` / `S>C ...`,
-/// stderr, off unless the file flag or env enables it). Spectate and
-/// `logs` drop these; the session log file keeps them for debug.
-pub(crate) fn is_pktlog_line(line: &str) -> bool {
-    line.starts_with("C>S ") || line.starts_with("S>C ")
-}
-
-/// Last lines of a (possibly huge) log without reading it whole.
-fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
-    const WINDOW: u64 = 131072;
-    use std::io::{Read, Seek};
-    let mut handle = match std::fs::File::open(path) {
-        Ok(handle) => handle,
-        Err(_) => return Vec::new(),
-    };
-    let size = handle.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
-    let offset = size.saturating_sub(std::cmp::max(WINDOW, lines as u64 * 2048));
-    if handle.seek(std::io::SeekFrom::Start(offset)).is_err() {
-        return Vec::new();
-    }
-    let mut data = Vec::new();
-    if handle.read_to_end(&mut data).is_err() {
-        return Vec::new();
-    }
-    let mut found: Vec<String> = String::from_utf8_lossy(&data).split('\n').map(str::to_string).collect();
-    if offset > 0 && !found.is_empty() {
-        found.remove(0);
-    }
-    if lines == 0 {
-        return Vec::new();
-    }
-    // A trailing newline leaves a final empty element: drop it.
-    if found.last().is_some_and(|line| line.is_empty()) {
-        found.pop();
-    }
-    if found.len() > lines {
-        found[found.len() - lines..].to_vec()
-    } else {
-        found
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{is_pktlog_line, live_binary, watchdog_due};
-
-    #[test]
-    fn watchdog_fires_only_on_stale_heartbeat() {
-        assert!(!watchdog_due(None, 1000.0), "never seen is login edge, not death");
-        assert!(!watchdog_due(Some(990.0), 1000.0), "10s fresh is healthy");
-        assert!(watchdog_due(Some(900.0), 1000.0), "100s stale is wedged");
-    }
-
-    /// Deleted-inode re-resolution: a rebuilt binary keeps spawning, a
-    /// truly missing one reads missing (the caller errors loudly).
-    #[test]
-    fn live_binary_strips_deleted_marker() {
-        let dir = std::env::temp_dir().join(format!("lifescape-spawn-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let real = dir.join("orchestrator");
-        std::fs::write(&real, b"fake").unwrap();
-        assert_eq!(live_binary(&real), Some(real.clone()));
-        let deleted = std::path::PathBuf::from(format!("{} (deleted)", real.display()));
-        assert_eq!(live_binary(&deleted), Some(real.clone()));
-        assert_eq!(live_binary(&dir.join("absent")), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn spectate_drops_pktlog_keeps_game() {
-        assert!(is_pktlog_line("C>S OPNPC2 id=233 len=2 head=0316 w=1.0 pid=1"));
-        assert!(is_pktlog_line("S>C NPC_INFO op=197 len=12 head=1b29 w=1.0 pid=1"));
-        assert!(is_pktlog_line("C>S NO_TIMEOUT id=0 len=0 head= w=1.0 pid=1"));
-        assert!(!is_pktlog_line("act [t=4264 Lumbridge] op_npc2 goblin slot=790"));
-        assert!(!is_pktlog_line("msg [t=3818 Lumbridge] I can't reach that!"));
-        assert!(!is_pktlog_line("=== session run t01 woodcut ==="));
-        assert!(!is_pktlog_line(""));
-        // A line merely mentioning the marker mid-text is game content.
-        assert!(!is_pktlog_line("say C>S hello"));
-    }
-}

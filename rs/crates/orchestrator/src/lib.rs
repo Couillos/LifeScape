@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod paths;
 pub mod brain;
+pub mod brain_plan;
 pub mod market_convene;
 pub mod market_eta;
 pub mod market_service;
@@ -18,9 +19,14 @@ pub mod minimap;
 pub mod plan_service;
 pub mod png;
 pub mod web;
+pub mod web_ws;
+pub mod web_lives;
+pub mod web_market;
 pub mod zones;
 pub mod cli;
 pub mod daemon;
+pub mod daemon_watch;
+pub mod daemon_conn;
 pub mod supervise;
 pub mod session;
 pub mod session_cmds;
