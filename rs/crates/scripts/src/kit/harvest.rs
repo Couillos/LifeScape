@@ -12,8 +12,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::trees::resolve_loc;
-use crate::skill_common::{check_events, dismiss_modal, hitpoints, WorkOutcome};
-use crate::skill_gather::{classify_message, work_acked};
+use crate::kit::survival::{check_events, hitpoints};
 use crate::ScriptError;
 
 /// One quiet round: the server chains attempts itself while in range, so
@@ -127,7 +126,7 @@ pub fn watch_stand<Source: HarvestSource>(
                 }
             }
             let now_have: u32 =
-                product_ids.iter().map(|id| crate::skill_common::pack_total(bot, *id)).sum();
+                product_ids.iter().map(|id| crate::kit::pack::pack_total(bot, *id)).sum();
             if now_have > had + gained {
                 gained = now_have - had;
                 quiet = false;
@@ -210,9 +209,111 @@ pub(crate) fn operable_ring(spot_x: i32, spot_z: i32, width: i64, length: i64) -
     ring
 }
 
+
+/// Spot work result, shared by the three gathering scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkOutcome {
+    Full,
+    Gone,
+    Moved,
+    NoTool,
+    NoBait,
+    Threat,
+    Blocked,
+    LevelLocked,
+    Unreachable,
+    /// Direct spot refusal: the server answered the chop/mine click itself
+    /// with "can't reach that". Walk-leg failures (never arrived, leg
+    /// timeout, step refused far away) stay plain `Unreachable`: only the
+    /// gather loop's classifier may promote this to a long ban, on a
+    /// repeated adjacent refusal — never on transit alone.
+    UnreachableSpot,
+}
+
+/// Server refusal lines shared by the three gather clicks: direct refusals
+/// ("can't reach that"), level gates, missing tools, missing bait, the
+/// full-pack lines ("too full to hold any more", "can't carry any more"),
+/// and rock depletion ("no ore/minerals currently available" reads Gone:
+/// the pick repicks instead of waiting on an empty rock). `None`
+/// when the line is chatter or progress (gain and combat engagement stay
+/// caller-side; combat keeps its own under-attack parser).
+pub fn classify_message(line: &str) -> Option<WorkOutcome> {
+    let lowered = line.to_lowercase();
+    if lowered.contains("can't reach that") {
+        return Some(WorkOutcome::UnreachableSpot);
+    }
+    if lowered.contains("too full to hold any more") || lowered.contains("can't carry any more") {
+        return Some(WorkOutcome::Full);
+    }
+    if lowered.contains("no ore currently available") || lowered.contains("no minerals currently available") {
+        return Some(WorkOutcome::Gone);
+    }
+    if lowered.contains("level of") || (lowered.contains("need at least") && lowered.contains("fishing")) {
+        return Some(WorkOutcome::LevelLocked);
+    }
+    if lowered.contains("do not have an axe") || lowered.contains("do not have a pickaxe") {
+        return Some(WorkOutcome::NoTool);
+    }
+    if lowered.contains("need a ")
+        && (lowered.contains("to catch") || lowered.contains("to bait") || lowered.contains("to lure"))
+    {
+        return Some(WorkOutcome::NoTool);
+    }
+    if lowered.contains("don't have any") && lowered.contains("left") {
+        return Some(WorkOutcome::NoBait);
+    }
+    None
+}
+
+/// True when a work-start ack arrived since `seen` (the message count
+/// right after the click). Case-insensitive substring, like the
+/// refusal vocabulary in `classify_message`.
+pub fn work_acked(bot: &Bot, seen: usize, acks: &[&str]) -> bool {
+    bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|line| {
+        let lowered = line.to_lowercase();
+        acks.iter().any(|ack| lowered.contains(ack))
+    })
+}
+
+/// Dismiss a level-up / dialog modal with Continue. True when no modal
+/// remains; congratulation dialogs are the only ones auto-dismissed.
+pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
+    if bot.world.modal.is_none() {
+        return Ok(true);
+    }
+    // Overlay-layer modals (wilderness overlay 193) are informational: the
+    // server keeps answering world clicks while one is open (live: op_loc
+    // answered "I can't reach that!" with the overlay up), so there is
+    // nothing to dismiss and the gather loops must not read it as Blocked.
+    if bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "overlay") {
+        return Ok(true);
+    }
+    let congrats = bot.chat_texts().iter().any(|(_, text)| text.to_lowercase().contains("congratulations"));
+    if !congrats {
+        return Ok(false);
+    }
+    for _ in 0..4 {
+        bot.chat_continue()?;
+        bot.pump(5)?;
+        if bot.world.modal.is_none() {
+            bot.log("ok dialog dismissed");
+            return Ok(true);
+        }
+    }
+    let target = bot.world.ticks + 25;
+    while bot.world.ticks < target && bot.world.modal.is_some() {
+        bot.pump(5)?;
+    }
+    Ok(bot.world.modal.is_none())
+
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{operable_ring, operable_stand};
+    use super::{classify_message, dismiss_modal, operable_ring, operable_stand, work_acked, WorkOutcome};
+    use crate::kit::{fish::FISHING_ACKS, mine::MINING_ACKS, woodcut::WOODCUT_ACKS};
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
 
     /// Operable-stand geometry mirrors the server (`ReachStrategy`
     /// `reachRectangle1`): orthogonal to the footprint, never diagonal to
@@ -251,4 +352,59 @@ mod tests {
         let mut single = operable_ring(5, 5, 1, 1);
         single.sort();
         assert_eq!(single, vec![(4, 5), (5, 4), (5, 6), (6, 5)], "four orthogonals, got: {single:?}");
-    }}
+    }
+
+    /// Message classes: direct refusals, level gates, missing tools/bait,
+    /// full packs and rock depletion map; loot chatter stays `None`.
+    #[test]
+    fn classify_covers_the_gather_refusals() {
+        assert_eq!(classify_message("I can't reach that!"), Some(WorkOutcome::UnreachableSpot));
+        assert_eq!(classify_message("You need a Woodcutting level of 60."), Some(WorkOutcome::LevelLocked));
+        assert_eq!(classify_message("You need a Mining level of 15."), Some(WorkOutcome::LevelLocked));
+        assert_eq!(classify_message("You need at least level 5 Fishing."), Some(WorkOutcome::LevelLocked));
+        assert_eq!(classify_message("You do not have an axe to cut this."), Some(WorkOutcome::NoTool));
+        assert_eq!(classify_message("You do not have a pickaxe to mine this."), Some(WorkOutcome::NoTool));
+        assert_eq!(classify_message("You need a rod to catch these."), Some(WorkOutcome::NoTool));
+        assert_eq!(classify_message("You don't have any bait left."), Some(WorkOutcome::NoBait));
+        assert_eq!(classify_message("Your inventory is too full to hold any more logs."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("Your inventory is too full to hold any more iron ore."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("You can't carry any more fish."), Some(WorkOutcome::Full));
+        assert_eq!(classify_message("There is no ore currently available."), Some(WorkOutcome::Gone));
+        assert_eq!(classify_message("There are no minerals currently available."), Some(WorkOutcome::Gone));
+        assert_eq!(classify_message("You get some oak logs."), None, "progress stays caller-side");
+    }
+
+
+    /// Work-start ack: per-skill vocab, case-insensitive, only lines
+    /// after the click count (seen-indexed, never replays old swings).
+    #[test]
+    fn work_acked_detects_swing_since_click() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.messages.push("You swing your axe at the tree.".to_string());
+        let seen = bot.world.messages.len();
+        bot.world.messages.push("You get some yew logs.".to_string());
+        assert!(!work_acked(&bot, seen, &WOODCUT_ACKS), "loot is not a start ack");
+        assert!(!work_acked(&bot, seen, &MINING_ACKS), "axe swing is not a pick swing");
+        bot.world.messages.push("YOU SWING YOUR PICK AT THE ROCK.".to_string());
+        assert!(work_acked(&bot, seen, &MINING_ACKS), "case-insensitive pick ack");
+        assert!(!work_acked(&bot, 0, &FISHING_ACKS), "no cast, no ack");
+        bot.world.messages.push("You attempt to catch a fish.".to_string());
+        assert!(work_acked(&bot, seen, &FISHING_ACKS), "attempt counts as fishing ack");
+    }
+
+
+    /// Overlay-layer modals never block: the wilderness overlay (live 193)
+    /// reads as dismissed with no server round-trip, so the gather loops
+    /// reach the real message ("can't reach that") instead of Blocked.
+    #[test]
+    fn overlay_modal_reads_as_dismissed() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "overlay".to_string(), interface_id: 193 });
+        assert!(dismiss_modal(&mut bot).expect("overlay never errors"), "overlay is non-blocking");
+        assert!(bot.world.modal.is_some(), "overlay stays open, only the verdict changes");
+        bot.world.modal = None;
+        assert!(dismiss_modal(&mut bot).expect("no modal passes"), "no modal passes");
+    }
+}

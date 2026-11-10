@@ -14,9 +14,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::obj_price;
-use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
-use crate::skill_gather::{same_side, BanSet};
+use crate::kit::{bans::{GONE_BAN_TICKS, UNREACHABLE_BAN_TICKS, same_side, BanSet}, observe::STRUCTURAL_BAN_TICKS, pack::obj_price};
 use crate::ScriptError;
 
 /// Bank trek bounds and live-spot radius for the rock/fish pools.
@@ -278,7 +276,7 @@ pub fn attack_nearest(
     // so the nearest flips sides every kill and each crossing walks the
     // ~200-tile foot detour (paid doors stay off all hunt). One side per
     // pick; the flank follows the bot, not the plan, so no replan loop.
-    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
+    if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
         let home = bot.world.x;
         cands.retain(|(_, x, _)| same_side(line, *x, home));
     }
@@ -494,7 +492,7 @@ fn pick_near_fish_spot(
         if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
             continue;
         }
-        if crate::skill_gather::across_toll(bot.world.x, spot_x, fence) {
+        if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
             continue;
         }
         let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
@@ -552,7 +550,7 @@ fn pick_hop_fish_spot(
         if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
             continue;
         }
-        if crate::skill_gather::across_toll(bot.world.x, spot_x, fence) {
+        if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
             continue;
         }
         let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
@@ -598,7 +596,7 @@ pub(crate) fn pick_fish_spot(
 ) -> Option<(knowledge::fishing::FishTier, i32, i32, knowledge::banks::Bank)> {
     // Toll-fence aware: banks on the far side are last resort, never the
     // default — same discipline as `nearest_bank` and the tree picker.
-    let fence = if bot.allow_paid { None } else { crate::skill_common::toll_gate_x(&mut *bot) };
+    let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(&mut *bot) };
     let mut tiers = knowledge::fishing::all_fish_tiers();
     tiers.sort_by_key(|tier| -tier.level);
     for tier in tiers.into_iter().filter(|tier| tier.level <= level) {
@@ -677,7 +675,7 @@ pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior
 #[cfg(test)]
 mod tests {
     use super::{drop_occupied, hunter_threatens, is_shop_staff, rank_foes, refusal_ban_ticks, rock_live_loc_id, visible_workers, walk_fail_ban, OCCUPIED_RADIUS};
-    use crate::skill_common::{GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS, UNREACHABLE_BAN_TICKS};
+    use crate::kit::{bans::{GONE_BAN_TICKS, UNREACHABLE_BAN_TICKS}, observe::STRUCTURAL_BAN_TICKS};
     use crate::tables_live::attach_live_tables;
     use crate::ScriptError;
     use lifescape_gamedata as knowledge;
@@ -826,7 +824,7 @@ mod tests {
     #[test]
     fn varrock_bank_hops_to_water() {
         let (mut bot, _service) = served_spot_bot("fish-hop-varrock", 3185, 3436);
-        let banned = crate::skill_gather::BanSet::new();
+        let banned = crate::kit::bans::BanSet::new();
         let pinned = super::nearest_bank_at(3185, 3436, 0).expect("a Varrock bank");
         let found = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned);
         let (tier, spot_x, spot_z, bank) = found.expect("hop to water from a Varrock bank");
@@ -856,7 +854,7 @@ mod tests {
             7u16,
             lifescape_sdk::world::PlayerInfo { x: 3085, z: 3230, level: 0, jump: false, name: None },
         );
-        let banned = crate::skill_gather::BanSet::new();
+        let banned = crate::kit::bans::BanSet::new();
         let pinned = super::nearest_bank_at(3092, 3242, 0).expect("a Draynor bank");
         let found = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned);
         let (_, spot_x, spot_z, _) = found.expect("crowded home water still picks");

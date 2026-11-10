@@ -7,7 +7,7 @@ use lifescape_json::{str_value, Value};
 use lifescape_sdk::Bot;
 
 use crate::market_client::market_call;
-use crate::skill_common::obj_id;
+use crate::kit::pack::obj_id;
 use crate::{ScriptError, ScriptResult};
 
 use super::market::tradeable_id;
@@ -88,7 +88,7 @@ pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if held < qty {
         let banked = bot.bank_items().get(&id).copied().unwrap_or(0) as i64;
         if banked > 0 {
-            let bank = crate::skill_common::nearest_bank(bot)?;
+            let bank = crate::kit::bank::nearest_bank(bot)?;
             if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
                 let _ = bot.bank_withdraw(id, (qty - held).min(banked) as u32, 300);
                 let _ = bot.close_modal();

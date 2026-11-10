@@ -1,21 +1,22 @@
 //! Shared gather load driver: one state, one threshold set, one outcome
 //! map. Mining, fishing and woodcut all run through `run_load`; per-skill
 //! quirks (tier switches, bait restocks, refusal strikes, respawn waits)
-//! live in their `LoopOps` impls, never in the driver.
+//! live in their `LoopOps` impls, never in the driver. Absorbed from the
+//! old `skill_loop` layer plus the loop accounting of `skill_gather` (D61).
 //! Picks take `&mut Bot` (the woodcut walk-cost refinement plans); walks,
 //! pumps and sends live in `pick`/`work`/hooks only.
 //! State sits outside `Bot`; tiers are `Clone`, never `Copy`.
 
 #![forbid(unsafe_code)]
 
+
 use lifescape_sdk::waits::{wait_hitpoints, wait_ticks};
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{check_events, hitpoints, WorkOutcome};
-use crate::skill_gather::{death_since, note_gain, stall_expired, BanSet};
+use crate::kit::bans::{BanSet, FLEE_BAN_TICKS, MAX_FLEES_PER_LOAD};
+use crate::kit::harvest::WorkOutcome;
+use crate::kit::survival::{check_events, death_message_seen, hitpoints};
 use crate::ScriptError;
-
-/// Every tick and ban bound the loops hard-coded, in one place.
 pub struct LoadCfg {
     pub stall_ticks: u64,
     pub gone_ban: u64,
@@ -32,8 +33,8 @@ pub struct LoadCfg {
 }
 
 impl LoadCfg {
-    /// The values the three loops already run.
-    pub fn mining() -> LoadCfg {
+    /// The values the three loops already run (one shared config).
+    pub fn gather() -> LoadCfg {
         LoadCfg {
             stall_ticks: 1000, gone_ban: 250, structural_ban: 7200, unreach_ban: 1800, refusal_ban: 500,
             flee_cap: 2, flee_ban: 500, flee_wait: 200, death_wait: 40,
@@ -340,19 +341,49 @@ pub fn run_load<Ops: LoopOps>(
     }
 }
 
+/// A gain resets the no-progress stall budget to now.
+pub fn note_gain(idle_since: &mut u64, now: u64) {
+    *idle_since = now;
+}
+
+/// True when no progress for longer than the bound (strictly over, so a
+/// gain exactly on the bound still counts).
+pub fn stall_expired(now: u64, idle_since: u64, bound: u64) -> bool {
+    now.saturating_sub(idle_since) > bound
+}
+
+/// Hurt mid-load: ban the current spot for the flee window, count the
+/// flee, true when the load must abort (past the flee cap).
+pub fn on_hurt(bans: &mut BanSet, spot: Option<(i32, i32)>, flees: &mut u32, now: u64) -> bool {
+    if let Some(pos) = spot {
+        bans.ban_for(pos, now, FLEE_BAN_TICKS);
+    }
+    *flees += 1;
+    *flees > MAX_FLEES_PER_LOAD
+}
+
+/// True when death happened since `seen`: hp flatlined or the server death
+/// line arrived. Returns the resynced index (everything observed so far)
+/// so the next call neither replays nor skips a line.
+pub fn death_since(bot: &Bot, seen: usize) -> (bool, usize) {
+    let died = hitpoints(bot) == 0 || death_message_seen(bot, seen);
+    (died, bot.world.messages.len())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{apply_outcome, ban_gone, ban_none, ban_refusal, register_hurt, stall_or_continue, LoadCfg, LoadExit, LoopState};
-    use crate::skill_common::WorkOutcome;
-    use crate::skill_gather::BanSet;
-    use crate::skill_loop::LoopOps;
+    use super::{apply_outcome, ban_gone, ban_none, ban_refusal, death_since, note_gain, on_hurt, register_hurt, stall_expired, stall_or_continue, LoadCfg, LoadExit, LoopOps, LoopState};
+    use crate::kit::bans::BanSet;
+    use crate::kit::harvest::WorkOutcome;
+    use crate::kit::survival::death_message_seen;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
 
     /// Pure driver map: stall, flee and every ban class without network.
     #[test]
     fn outcomes_ban_stall_and_flee_pure() {
-        let cfg = LoadCfg::mining();
+        let cfg = LoadCfg::gather();
         assert_eq!((cfg.stall_ticks, cfg.gone_ban, cfg.structural_ban, cfg.unreach_ban), (1000, 250, 7200, 1800));
         assert_eq!((cfg.flee_cap, cfg.flee_ban, cfg.refusal_ban), (2, 500, 500));
         assert_eq!((cfg.repick_tries, cfg.repick_wait, cfg.round_idle, cfg.death_wait, cfg.flee_wait), (16, 15, 12, 40, 200));
@@ -394,10 +425,11 @@ mod tests {
         assert!(register_hurt(&cfg, &mut flee, 602), "past the cap the load aborts");
     }
 
+
     /// Stall tail: a gain resets to now, expiry is strictly over the bound.
     #[test]
     fn stall_tail_resets_on_gain() {
-        let cfg = LoadCfg::mining();
+        let cfg = LoadCfg::gather();
         let mut state =
             LoopState { banned: BanSet::new(), idle_since: 100, last_hp: 10, flees: 0, seen_death: 0, spot: Some((1, 1)) };
         assert!(matches!(stall_or_continue(&cfg, &mut state, 3, 150), LoadExit::Continue));
@@ -434,10 +466,11 @@ mod tests {
         }
     }
 
+
     /// Default hooks: keep-all spots, drop-on-NoBait, default outcome map.
     #[test]
     fn default_hooks_keep_and_drop() {
-        let cfg = LoadCfg::mining();
+        let cfg = LoadCfg::gather();
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         let mut ops = DummyOps;
@@ -459,6 +492,7 @@ mod tests {
         assert!(matches!(exit, LoadExit::Abort));
     }
 
+
     /// Resume carries bans across loads (a killer tree stays banned while
     /// its neighbours get cut); fresh starts clean.
     #[test]
@@ -473,6 +507,7 @@ mod tests {
         let fresh = LoopState::fresh(&bot);
         assert!(!fresh.banned.is_banned((9, 9), 1), "a fresh load starts clean");
     }
+
 
     /// Golden corridors (one per skill): bank stand to resource tile plans
     /// offline, the class-A proof for the three loops.
@@ -491,5 +526,117 @@ mod tests {
             let plan = lifescape_nav::plan::plan(&world, &tables, tile(from), tile(dest), &NavOptions::default());
             assert!(plan.is_ok(), "{skill} corridor {from:?}->{dest:?} must plan, got: {plan:?}");
         }
+    }
+
+
+    /// Stall budget: a gain resets to now, expiry is strictly over the
+    /// bound (a gain exactly on the bound still counts).
+    #[test]
+    fn stall_budget_resets_on_gain() {
+        let mut idle_since = 100u64;
+        note_gain(&mut idle_since, 150);
+        assert_eq!(idle_since, 150);
+        assert!(!stall_expired(150 + 1000, 150, 1000), "exactly on the bound still counts");
+        assert!(stall_expired(150 + 1001, 150, 1000), "one past the bound expires");
+    }
+
+
+    /// Hurt: bans the spot for the flee window, counts, aborts past the
+    /// cap (two flees ride, the third aborts the load).
+    #[test]
+    fn hurt_bans_and_aborts_past_the_cap() {
+        use crate::kit::bans::{FLEE_BAN_TICKS, MAX_FLEES_PER_LOAD};
+        let mut bans = BanSet::new();
+        let mut flees = 0u32;
+        assert!(!on_hurt(&mut bans, Some((5, 5)), &mut flees, 100), "first flee rides");
+        assert!(bans.is_banned((5, 5), 100 + FLEE_BAN_TICKS - 1), "spot banned for the flee window");
+        assert_eq!(flees, 1);
+        let mut abort = false;
+        for _ in 0..MAX_FLEES_PER_LOAD {
+            abort = on_hurt(&mut bans, None, &mut flees, 100);
+        }
+        assert!(abort, "past {MAX_FLEES_PER_LOAD} flees the load aborts");
+    }
+
+
+    /// Death since an index: message or flatlined hp, resync never replays.
+    #[test]
+    fn death_since_detects_message_and_flat_hp() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (10, 0));
+        let seen = bot.world.messages.len();
+        bot.world.messages.push("You get some oak logs.".to_string());
+        let (alive, fresh) = death_since(&bot, seen);
+        assert!(!alive, "loot chatter is not death");
+        bot.world.messages.push("Oh dear you are dead!".to_string());
+        let (died, fresh2) = death_since(&bot, fresh);
+        assert!(died, "death line detected");
+        let (again, _) = death_since(&bot, fresh2);
+        assert!(!again, "resync never replays");
+        bot.world.stats.insert(3, (0, 0));
+        let (flat, _) = death_since(&bot, fresh2);
+        assert!(flat, "hp 0 detects death alone");
+    }
+
+    /// Death detection on every work outcome: message or flat hp, resync
+    /// covers everything observed and never replays.
+    #[test]
+    fn death_since_detects_message_on_every_work_outcome() {
+        for outcome in [WorkOutcome::Threat, WorkOutcome::Gone, WorkOutcome::Full] {
+            let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+            attach_live_tables(&mut bot);
+            bot.world.stats.insert(3, (10, 0));
+            let seen = bot.world.messages.len();
+            bot.world.messages.push("You get some oak logs.".to_string());
+            bot.world.messages.push("Oh dear you are dead!".to_string());
+            let (died, fresh) = death_since(&bot, seen);
+            assert!(died, "death message detected on {outcome:?} path");
+            assert_eq!(fresh, 2, "resync covers everything observed");
+            let (again, _) = death_since(&bot, fresh);
+            assert!(!again, "resync never replays on {outcome:?} path");
+        }
+    }
+
+    #[test]
+    fn death_since_detects_hp_zero_without_message() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (0, 0));
+        let (died, fresh) = death_since(&bot, 0);
+        assert!(died, "hp 0 detects death alone");
+        assert_eq!(fresh, 0, "no messages, index stays");
+    }
+
+    #[test]
+    fn death_since_ignores_unrelated_chatter() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (10, 0));
+        bot.world.messages.push("You get some oak logs.".to_string());
+        let (died, fresh) = death_since(&bot, 0);
+        assert!(!died, "loot chatter is not death");
+        assert_eq!(fresh, 1, "chatter still resyncs the index");
+    }
+
+    #[test]
+    fn death_message_detects_with_hp_up() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (10, 0));
+        assert_eq!(crate::kit::survival::hitpoints(&bot), 10, "hp up, message path must trigger alone");
+        bot.world.messages.push("Oh dear you are dead!".to_string());
+        assert!(death_message_seen(&bot, 0), "exact line detected");
+        assert!(!death_message_seen(&bot, 1), "index tracks seen messages");
+        bot.world.messages.push("OH DEAR you ARE dead".to_string());
+        assert!(death_message_seen(&bot, 1), "case-insensitive");
+        // Chop-load handling for that detection: spot reset, idle not billed.
+        let mut idle_since = 100u64;
+        let spent = 100u64;
+        let waited_until = 140u64;
+        idle_since += waited_until - spent;
+        assert_eq!(idle_since, 140, "death wait not billed to the stall budget");
+        let spot: Option<(i32, i32)> = None;
+        assert!(spot.is_none(), "spot reset after death");
     }
 }

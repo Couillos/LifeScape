@@ -7,7 +7,8 @@ use lifescape_json::{str_value, Value};
 use lifescape_sdk::Bot;
 
 use crate::market_client::{buyer_want, deal_report, ensure_goods, market_call, my_deals, seller_form, trade_id};
-use crate::skill_common::{nearest_bank, obj_id};
+use crate::kit::bank::nearest_bank;
+use crate::kit::pack::obj_id;
 use crate::{ScriptError, ScriptResult};
 
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when

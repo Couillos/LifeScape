@@ -8,9 +8,9 @@
 
 #![forbid(unsafe_code)]
 
-use lifescape_sdk::Bot;
+use lifescape_sdk::{Bot, Error};
 
-use crate::skill_common::{bury_bones, free_slots};
+use crate::kit::pack::{free_slots, obj_label, pack_slots};
 use crate::ScriptError;
 
 /// Worst-case take: the drop lands on the death tick (goblin.rs2 obj_add
@@ -23,7 +23,7 @@ pub const LOOT_RADIUS: i32 = 6;
 /// Reference value of a drop name (shop price today, market reference
 /// at L5). Unknown names are worthless, never priceless.
 pub fn drop_value(name: &str) -> i64 {
-    crate::skill_common::obj_price(name)
+    crate::kit::pack::obj_price(name)
 }
 
 /// Take ground drops nearest-first, coins first, bones never. Returns
@@ -65,6 +65,24 @@ pub fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
     }
     bury_bones(bot)?;
     Ok(taken)
+}
+
+
+/// Bury every bone in the pack (frees slots, trains prayer).
+pub fn bury_bones(bot: &mut Bot) -> Result<(), ScriptError> {
+    loop {
+        let found = pack_slots(bot).into_iter().find(|(_, (held, _))| {
+            obj_label(bot, *held).to_lowercase().contains("bones")
+        });
+        let Some((slot, (held, _))) = found else {
+            return Ok(());
+        };
+        let Some(pack_com) = bot.backpack().0 else {
+            return Err(Error::Unreachable("backpack not streamed".to_string()).into());
+        };
+        bot.op_held(1, held, slot, pack_com)?;
+        bot.pump(2)?;
+    }
 }
 
 #[cfg(test)]

@@ -11,16 +11,21 @@ use lifescape_sdk::Bot;
 
 use crate::kit::spots::{nearest_live, pick_fish_spot};
 use crate::kit::tools::FISH_SPEC;
-use crate::skill_common::{
-    bank_trip, buy_stock, free_slots, learn_level, obj_id, obj_price,
-    pack_total, sell_for_target, walk_checked, WorkOutcome,
-};
-use crate::skill_gather::FISHING_ACKS;
+use crate::kit::bank::bank_trip;
+use crate::kit::pack::{free_slots, obj_id, obj_price, pack_total};
+use crate::kit::shop::{buy_stock, sell_for_target};
+use crate::kit::harvest::WorkOutcome;
+use crate::kit::survival::learn_level;
+use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 pub const FISH_STAT: u8 = 10;
 const BAIT_MIN: u32 = 20;
 const BAIT_WANT: u32 = 200;
+
+/// Server start-of-work acks: the action loop runs on the server's side.
+/// Fishing-only vocabulary (point 1: skill-specific stays with the skill).
+pub const FISHING_ACKS: [&str; 2] = ["cast out your line", "attempt to catch"];
 
 /// One click, then watch the chain: re-clicking restarts it, so never
 /// spam. A cast acked on a still-live spot is a dry streak, not a dead
@@ -104,7 +109,7 @@ fn work_spot(
         match walk_checked(bot, spot_x, spot_z, 6000) {
             Ok(true) => {}
             Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
-            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
             Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
         }
     }
@@ -206,7 +211,7 @@ struct FishOps<'a> {
     level: i64,
 }
 
-impl crate::skill_loop::LoopOps for FishOps<'_> {
+impl crate::kit::load::LoopOps for FishOps<'_> {
     type Spot = knowledge::fishing::FishTier;
 
     fn is_full(&self, bot: &Bot) -> bool {
@@ -223,7 +228,7 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
         spot.products.iter().filter_map(|product| obj_id(bot, product).ok()).map(|id| pack_total(bot, id)).sum()
     }
 
-    fn pick(&mut self, bot: &mut Bot, state: &mut crate::skill_loop::LoopState) -> Option<(Self::Spot, i32, i32)> {
+    fn pick(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Option<(Self::Spot, i32, i32)> {
         self.level = learn_level(bot, FISH_STAT, self.level);
         let now = bot.world.ticks;
         match pick_fish_spot(bot, self.level, &state.banned, now, &*self.bank) {
@@ -244,7 +249,7 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
     fn keep_spot(
         &mut self,
         bot: &mut Bot,
-        _state: &mut crate::skill_loop::LoopState,
+        _state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         _at: (i32, i32),
     ) -> bool {
@@ -260,20 +265,20 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
 
     /// A lost tool condemns the spot like any other refusal (the old loop
     /// banned 500 here, never a clean drop).
-    fn on_no_tool(&self) -> fn(&mut crate::skill_gather::BanSet, (i32, i32), u64, &crate::skill_loop::LoadCfg) {
-        crate::skill_loop::ban_refusal
+    fn on_no_tool(&self) -> fn(&mut crate::kit::bans::BanSet, (i32, i32), u64, &crate::kit::load::LoadCfg) {
+        crate::kit::load::ban_refusal
     }
 
     /// The old loop waited flat after a flee, never heal-gated.
     fn on_hurt(
         &mut self,
         bot: &mut Bot,
-        cfg: &crate::skill_loop::LoadCfg,
-        state: &mut crate::skill_loop::LoopState,
+        cfg: &crate::kit::load::LoadCfg,
+        state: &mut crate::kit::load::LoopState,
     ) -> Result<bool, ScriptError> {
         bot.log("hurt, fleeing");
         bot.intend("fleeing a hunter");
-        let abort = crate::skill_loop::register_hurt(cfg, state, bot.world.ticks);
+        let abort = crate::kit::load::register_hurt(cfg, state, bot.world.ticks);
         wait_ticks(bot, 200)?;
         Ok(abort)
     }
@@ -283,7 +288,7 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
     fn on_no_bait(
         &mut self,
         bot: &mut Bot,
-        state: &mut crate::skill_loop::LoopState,
+        state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         _at: (i32, i32),
     ) -> Result<bool, ScriptError> {
@@ -302,7 +307,7 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
     fn work(
         &mut self,
         bot: &mut Bot,
-        _state: &mut crate::skill_loop::LoopState,
+        _state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
         had: u32,
@@ -327,7 +332,7 @@ impl crate::skill_loop::LoopOps for FishOps<'_> {
                     break;
                 }
                 Ok(false) => wait_ticks(bot, 200)?,
-                Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+                Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
                 Err(_) => return Ok((WorkOutcome::Gone, 0)),
             }
         }
@@ -350,10 +355,10 @@ pub fn fish_load(
     main_shop: u16,
 ) -> Result<(bool, i64), ScriptError> {
     let mut ops = FishOps { bank, coins, side_shop, main_shop, bait_ban: 0, level };
-    let ok = crate::skill_loop::run_load(
+    let ok = crate::kit::load::run_load(
         bot,
-        &crate::skill_loop::LoadCfg::mining(),
-        &mut crate::skill_loop::LoopState::fresh(bot),
+        &crate::kit::load::LoadCfg::gather(),
+        &mut crate::kit::load::LoopState::fresh(bot),
         &mut ops,
     )?;
     Ok((ok, learn_level(bot, FISH_STAT, ops.level)))

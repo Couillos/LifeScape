@@ -10,13 +10,18 @@ use lifescape_sdk::Bot;
 
 use crate::kit::spots::{pick_rock_spot, pick_rock_tier, rock_live_loc_id, rock_still_there};
 use crate::kit::tools::{recover_pickaxe, PICK_SPEC};
-use crate::skill_common::{
-    free_slots, learn_level, obj_id, pack_total, walk_checked, WorkOutcome, GONE_BAN_TICKS,
-};
-use crate::skill_gather::MINING_ACKS;
+use crate::kit::pack::{free_slots, obj_id, pack_total};
+use crate::kit::harvest::WorkOutcome;
+use crate::kit::bans::GONE_BAN_TICKS;
+use crate::kit::survival::learn_level;
+use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 pub const MINING_STAT: u8 = 14;
+
+/// Server start-of-work ack: the action loop runs on the server's side.
+/// Mining-only vocabulary (point 1: skill-specific stays with the skill).
+pub const MINING_ACKS: [&str; 1] = ["swing your pick"];
 
 /// Click once, then only re-click after a quiet round (the server chains
 /// attempts itself while in range). Rock liveness is the loc id match:
@@ -83,7 +88,7 @@ fn work_spot(
         match walk_checked(bot, rock_x, rock_z, 6000) {
             Ok(true) => {}
             Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
-            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
             Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
         }
     }
@@ -108,7 +113,7 @@ struct MineOps<'a> {
     level: i64,
 }
 
-impl crate::skill_loop::LoopOps for MineOps<'_> {
+impl crate::kit::load::LoopOps for MineOps<'_> {
     type Spot = knowledge::rocks::RockTier;
 
     fn is_full(&self, bot: &Bot) -> bool {
@@ -123,7 +128,7 @@ impl crate::skill_loop::LoopOps for MineOps<'_> {
         self.ore_ids.iter().map(|id| pack_total(bot, *id)).sum()
     }
 
-    fn pick(&mut self, bot: &mut Bot, state: &mut crate::skill_loop::LoopState) -> Option<(Self::Spot, i32, i32)> {
+    fn pick(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Option<(Self::Spot, i32, i32)> {
         self.level = learn_level(bot, MINING_STAT, self.level);
         let now = bot.world.ticks;
         let found = pick_rock_spot(bot, self.tiers, self.bank, self.level, &state.banned, now);
@@ -143,7 +148,7 @@ impl crate::skill_loop::LoopOps for MineOps<'_> {
     fn keep_spot(
         &mut self,
         bot: &mut Bot,
-        state: &mut crate::skill_loop::LoopState,
+        state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
     ) -> bool {
@@ -165,7 +170,7 @@ impl crate::skill_loop::LoopOps for MineOps<'_> {
     fn work(
         &mut self,
         bot: &mut Bot,
-        _state: &mut crate::skill_loop::LoopState,
+        _state: &mut crate::kit::load::LoopState,
         _spot: &Self::Spot,
         at: (i32, i32),
         had: u32,
@@ -182,7 +187,7 @@ pub fn mine_load(
     level: i64,
 ) -> Result<(bool, i64), ScriptError> {
     let ore_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
-    let mut state = crate::skill_loop::LoopState::fresh(bot);
+    let mut state = crate::kit::load::LoopState::fresh(bot);
     loop {
         if PICK_SPEC.best_held(bot).is_none() {
             // Recovery walks (shop, bank) are not mining: don't bill
@@ -195,7 +200,7 @@ pub fn mine_load(
             state.idle_since += bot.world.ticks - spent;
         }
         let mut ops = MineOps { tiers, bank, coins, ore_ids: ore_ids.clone(), level };
-        if crate::skill_loop::run_load(bot, &crate::skill_loop::LoadCfg::mining(), &mut state, &mut ops)? {
+        if crate::kit::load::run_load(bot, &crate::kit::load::LoadCfg::gather(), &mut state, &mut ops)? {
             return Ok((true, learn_level(bot, MINING_STAT, ops.level)));
         }
         if PICK_SPEC.best_held(bot).is_none() {

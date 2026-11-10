@@ -1,21 +1,23 @@
 //! Shop trade for the skill scripts: keeper lookup, loud trade clicks,
-//! selling produce and buying stock. Split from `skill_common` (file-size
-//! rule); `skill_common` re-exports it so callers do not change.
-//!
+//! selling produce and buying stock. Absorbed from the old `skill_trade`
+//! layer (D61): the kit owns it now.
 //! Every wait is tick-bounded (`bot.world.ticks`); nothing sleeps. Trade
 //! failures log their reason; post-trade sale/purchase failures are loud
 //! errors, never silent `Ok(0)`.
 
 #![forbid(unsafe_code)]
 
+
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{is_conn_abort, is_death_abort, obj_id, obj_price, pack_slot, pack_total, TREK_LIMIT};
+use crate::kit::pack::{obj_id, obj_price, pack_slot, pack_total};
+use crate::kit::survival::{is_conn_abort, is_death_abort};
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
-/// Nearest general-store keeper spawn on this level within trek range.
+/// Nearest-shop trek range: keeper spawns past this never count.
+const TREK_LIMIT: i64 = 400;
 pub fn general_store(bot: &Bot) -> Option<(String, (i32, i32, i32))> {
     let mut best: Option<(i64, (String, (i32, i32, i32)))> = None;
     for shop in knowledge::shops::all_shops() {
@@ -198,7 +200,7 @@ fn trade_with(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32), main_com: u16
                 return Err(err);
             }
             // A dead socket must reconnect, not limp to the next slice.
-            Err(err) if crate::skill_common::is_conn_abort(&err) => return Err(err),
+            Err(err) if crate::kit::survival::is_conn_abort(&err) => return Err(err),
             Err(err) => {
                 if (bot.world.x, bot.world.z) == before {
                     bot.log(&format!("trade with {keeper} failed: walk to spawn ({},{}) failed: {err}", spawn.1, spawn.2));

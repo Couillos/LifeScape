@@ -11,8 +11,11 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::survival::death_resume;
-use crate::skill_common::{check_events, death_message_seen, dismiss_modal, hitpoints, obj_label, pack_total, walk_checked, WorkOutcome};
-use crate::skill_gather::classify_message;
+use crate::kit::harvest::{dismiss_modal, WorkOutcome};
+use crate::kit::pack::{obj_label, pack_total};
+use crate::kit::survival::{check_events, death_message_seen, hitpoints};
+use crate::skill_walk::walk_checked;
+use crate::kit::harvest::classify_message;
 use crate::ScriptError;
 
 /// Where the transformation happens: station locs (range, furnace,
@@ -377,7 +380,7 @@ fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Re
         match walk_checked(bot, stand_x, stand_z, STAND_WALK_TICKS) {
             Ok(true) => {}
             Ok(false) => continue,
-            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
             Err(_) => continue,
         }
         let site = ClickedSite::Loc { x, z, loc };

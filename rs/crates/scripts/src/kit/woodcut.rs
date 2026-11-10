@@ -8,22 +8,42 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::harvest::{watch_stand, HarvestSource, HarvestTarget};
-use crate::kit::observe::Observe;
+use crate::kit::harvest::{watch_stand, HarvestSource, HarvestTarget, WorkOutcome};
+use crate::kit::observe::{Observe, STRUCTURAL_BAN_TICKS};
 use crate::kit::tools::{recover_axe, AXE_SPEC};
 use crate::kit::harvest::{operable_ring, operable_stand, spot_footprint};
 use crate::kit::spots::{refusal_ban_ticks, walk_fail_ban, DIRECT_REFUSALS_TO_CONDEMN};
 use crate::kit::trees::{
     default_respawn_ticks, is_stump, live_loc_id, pick_tier, pick_tree_spot, tree_still_there,
 };
-use crate::skill_common::{
-    free_slots, hitpoints, learn_level, nearest_bank, obj_id,
-    pack_total, travel_ticks, walk_checked, WorkOutcome, GONE_BAN_TICKS, STRUCTURAL_BAN_TICKS,
-};
-use crate::skill_gather::{BanSet, WOODCUT_ACKS};
+use crate::kit::bank::nearest_bank;
+use crate::kit::bans::{BanSet, GONE_BAN_TICKS};
+use crate::kit::pack::{free_slots, obj_id, pack_total};
+use crate::kit::survival::{hitpoints, learn_level};
+use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 pub const WC_STAT: u8 = 8;
+
+/// Server start-of-work ack: the action loop runs on the server's side.
+/// Woodcut-only vocabulary (point 1: skill-specific stays with the skill).
+pub const WOODCUT_ACKS: [&str; 1] = ["swing your axe"];
+
+/// Measured live travel speed, one place (admin walkto, Lumbridge-Draynor,
+/// 2026-11-07): 24 tiles in 14 ticks at full energy (0.58, run, client
+/// energy 100->93 proving the drain), 189 flat tiles in ~190 drained
+/// (~1.0, walk). Only the woodcut wait-vs-walk budgets on it.
+pub const TICKS_PER_TILE: f64 = 1.0;
+/// Full-energy run rate, same sessions: ~0.5 ticks/tile before send
+/// overhead (~2 ticks per walk_to leg). Informational: budgets never
+/// assume it.
+pub const TICKS_PER_TILE_RUNNING: f64 = 0.5;
+
+/// Travel budget in ticks for `tiles` Manhattan tiles at the guaranteed
+/// walk rate (ceil, so a 1-tile step never budgets zero).
+pub fn travel_ticks(tiles: u64) -> u64 {
+    (tiles as f64 * TICKS_PER_TILE).ceil() as u64
+}
 
 
 
@@ -153,7 +173,7 @@ fn work_spot(
         match walk_checked(bot, tree_x, tree_z, 6000) {
             Ok(true) => {}
             Ok(false) => return Ok((WorkOutcome::Unreachable, 0)),
-            Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+            Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
             Err(ScriptError::Sdk(lifescape_sdk::Error::Travel(detail))) if detail.contains("nav-down") => {
                 // Transitory service outage (unknown-ticket under load,
                 // L1 full): not a spot verdict — fail loud with the typed
@@ -322,7 +342,7 @@ struct WoodOps<'a> {
     travel_dead: Option<((i32, i32), (i32, i32))>,
 }
 
-impl crate::skill_loop::LoopOps for WoodOps<'_> {
+impl crate::kit::load::LoopOps for WoodOps<'_> {
     type Spot = knowledge::trees::TreeTier;
 
     fn is_full(&self, bot: &Bot) -> bool {
@@ -337,7 +357,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
         self.log_ids.iter().map(|id| pack_total(bot, *id)).sum()
     }
 
-    fn pick(&mut self, bot: &mut Bot, state: &mut crate::skill_loop::LoopState) -> Option<(Self::Spot, i32, i32)> {
+    fn pick(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Option<(Self::Spot, i32, i32)> {
         self.level = learn_level(bot, WC_STAT, self.level);
         // Cluster hop: the spot may sit near another bank, so re-sync on
         // every pick (cheap, no walking) to keep the trip short. The
@@ -373,7 +393,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
     fn keep_spot(
         &mut self,
         bot: &mut Bot,
-        state: &mut crate::skill_loop::LoopState,
+        state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
     ) -> bool {
@@ -400,7 +420,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
     fn work(
         &mut self,
         bot: &mut Bot,
-        state: &mut crate::skill_loop::LoopState,
+        state: &mut crate::kit::load::LoopState,
         _spot: &Self::Spot,
         at: (i32, i32),
         had: u32,
@@ -411,14 +431,14 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
     fn on_outcome(
         &mut self,
         bot: &mut Bot,
-        cfg: &crate::skill_loop::LoadCfg,
-        state: &mut crate::skill_loop::LoopState,
+        cfg: &crate::kit::load::LoadCfg,
+        state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
         outcome: WorkOutcome,
         gained: u32,
-    ) -> Result<crate::skill_loop::LoadExit, ScriptError> {
-        use crate::skill_loop::LoadExit;
+    ) -> Result<crate::kit::load::LoadExit, ScriptError> {
+        use crate::kit::load::LoadExit;
         let (spot_x, spot_z) = at;
         // Strikes only survive short bans and walk failures: any other
         // outcome re-proves the stand (chopped, stumped, fled, locked).
@@ -560,7 +580,7 @@ impl crate::skill_loop::LoopOps for WoodOps<'_> {
                 state.spot = None;
             }
         }
-        Ok(crate::skill_loop::stall_or_continue(cfg, state, gained, bot.world.ticks))
+        Ok(crate::kit::load::stall_or_continue(cfg, state, gained, bot.world.ticks))
     }
 }
 
@@ -576,7 +596,7 @@ pub fn chop_load(
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     // Threat bans outlive one load: move the caller's set into the driver
     // state, run, move back (restored on every exit below, errors too).
-    let mut state = crate::skill_loop::LoopState::resume(bot, std::mem::take(banned));
+    let mut state = crate::kit::load::LoopState::resume(bot, std::mem::take(banned));
     let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, observe);
     *banned = std::mem::take(&mut state.banned);
     out
@@ -589,7 +609,7 @@ fn chop_inner(
     bank: &mut knowledge::banks::Bank,
     coins: u16,
     level: i64,
-    state: &mut crate::skill_loop::LoopState,
+    state: &mut crate::kit::load::LoopState,
     log_ids: Vec<u16>,
     observe: &mut Observe,
 ) -> Result<(bool, i64), ScriptError> {
@@ -605,7 +625,7 @@ fn chop_inner(
             }
             state.idle_since += bot.world.ticks - spent;
         }
-        if crate::skill_loop::run_load(bot, &crate::skill_loop::LoadCfg::mining(), state, &mut ops)? {
+        if crate::kit::load::run_load(bot, &crate::kit::load::LoadCfg::gather(), state, &mut ops)? {
             return Ok((true, learn_level(bot, WC_STAT, ops.level)));
         }
         if AXE_SPEC.best_held(bot).is_none() {
@@ -618,72 +638,23 @@ fn chop_inner(
 #[cfg(test)]
 mod tests {
     use super::respawn_wait_ticks;
-    use crate::skill_common::{death_message_seen, WorkOutcome};
-    use crate::skill_gather::death_since;
+    use crate::kit::harvest::WorkOutcome;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
+    /// Travel budget: walk rate (1.0), ceil, never zero — the measured
+    /// live rates live in TICKS_PER_TILE, nowhere else.
     #[test]
-    fn death_since_detects_message_on_every_work_outcome() {
-        for outcome in [WorkOutcome::Threat, WorkOutcome::Gone, WorkOutcome::Full] {
-            let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-            attach_live_tables(&mut bot);
-            bot.world.stats.insert(3, (10, 0));
-            let seen = bot.world.messages.len();
-            bot.world.messages.push("You get some oak logs.".to_string());
-            bot.world.messages.push("Oh dear you are dead!".to_string());
-            let (died, fresh) = death_since(&bot, seen);
-            assert!(died, "death message detected on {outcome:?} path");
-            assert_eq!(fresh, 2, "resync covers everything observed");
-            let (again, _) = death_since(&bot, fresh);
-            assert!(!again, "resync never replays on {outcome:?} path");
-        }
-    }
-
-    #[test]
-    fn death_since_detects_hp_zero_without_message() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.stats.insert(3, (0, 0));
-        let (died, fresh) = death_since(&bot, 0);
-        assert!(died, "hp 0 detects death alone");
-        assert_eq!(fresh, 0, "no messages, index stays");
-    }
-
-    #[test]
-    fn death_since_ignores_unrelated_chatter() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.stats.insert(3, (10, 0));
-        bot.world.messages.push("You get some oak logs.".to_string());
-        let (died, fresh) = death_since(&bot, 0);
-        assert!(!died, "loot chatter is not death");
-        assert_eq!(fresh, 1, "chatter still resyncs the index");
-    }
-
-    #[test]
-    fn death_message_detects_with_hp_up() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.stats.insert(3, (10, 0));
-        assert_eq!(crate::skill_common::hitpoints(&bot), 10, "hp up, message path must trigger alone");
-        bot.world.messages.push("Oh dear you are dead!".to_string());
-        assert!(death_message_seen(&bot, 0), "exact line detected");
-        assert!(!death_message_seen(&bot, 1), "index tracks seen messages");
-        bot.world.messages.push("OH DEAR you ARE dead".to_string());
-        assert!(death_message_seen(&bot, 1), "case-insensitive");
-        // Chop-load handling for that detection: spot reset, idle not billed.
-        let mut idle_since = 100u64;
-        let spent = 100u64;
-        let waited_until = 140u64;
-        idle_since += waited_until - spent;
-        assert_eq!(idle_since, 140, "death wait not billed to the stall budget");
-        let spot: Option<(i32, i32)> = None;
-        assert!(spot.is_none(), "spot reset after death");
+    fn travel_ticks_uses_walk_rate() {
+        assert_eq!(super::travel_ticks(0), 0, "no tiles, no budget");
+        assert_eq!(super::travel_ticks(1), 1, "a 1-tile step never budgets zero");
+        assert_eq!(super::travel_ticks(24), 24, "24 flat tiles, got: {}", super::travel_ticks(24));
+        assert_eq!(super::travel_ticks(189), 189, "189 flat tiles, got: {}", super::travel_ticks(189));
+        assert!(super::TICKS_PER_TILE_RUNNING < super::TICKS_PER_TILE, "run is faster than walk");
     }
     #[test]
     fn respawn_wait_wins_only_when_strictly_cheaper() {
-        use crate::skill_common::GONE_BAN_TICKS;
+        use crate::kit::bans::GONE_BAN_TICKS;
         assert_eq!(respawn_wait_ticks(30, Some(200)), Some(30), "oak 30 < walk 200 waits");
         assert_eq!(respawn_wait_ticks(200, Some(50)), None, "yew 200 > walk 50 leaves");
         assert_eq!(respawn_wait_ticks(400, Some(500)), None, "magic 400 over cap leaves");
@@ -731,7 +702,7 @@ mod tests {
         bot.world.x = 3092;
         bot.world.z = 3230;
         let (tree_x, tree_z) = (3092, 3246);
-        let mut banned = crate::skill_gather::BanSet::new();
+        let mut banned = crate::kit::bans::BanSet::new();
         let mut travel_dead: Option<((i32, i32), (i32, i32))> = None;
         let error = super::work_spot(&mut bot, tree_x, tree_z, &[], 0, &mut banned, &mut travel_dead)
             .expect_err("nav-down fails loud, never a quiet Unreachable");

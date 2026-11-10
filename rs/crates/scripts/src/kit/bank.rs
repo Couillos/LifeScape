@@ -1,45 +1,18 @@
-//! Shared core for the four trade-skill scripts: pack helpers, tick-based
-//! walking, banking, shop trade, modal handling and random-event checks.
-//!
-//! Every wait is tick-bounded (`bot.world.ticks`); nothing sleeps. Errors
-//! are typed (`ScriptError::Sdk`, never swallowed); unknown ids or missing
-//! interfaces fail loudly instead of falling back silently.
+//! Bank: bank trips, booth discovery, toll fence, transit heals. One
+//! resilient trip per call, verified deposits, loud failures. Every wait
+//! is tick-bounded; a dead socket aborts typed. Absorbed from the old
+//! `skill_common` layer (D61).
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
 
 use lifescape_gamedata as knowledge;
-use lifescape_sdk::waits::{wait_backpack, wait_hitpoints, wait_ticks};
-use lifescape_sdk::{Bot, Error};
+use lifescape_sdk::waits::wait_hitpoints;
+use lifescape_sdk::Bot;
 
-use crate::{ScriptError, ScriptResult};
-
-pub use crate::skill_walk::{rescue_then_retry, walk_checked};
-pub use crate::skill_trade::{buy_stock, general_store, npc_op, sell_batches, sell_for_target, shop_stock_keeper, trade_to_keeper};
-
-pub const BACKPACK_SIZE: usize = 28;
-pub const TREK_LIMIT: i64 = 400;
-pub const STALL_TICKS: u64 = 1000;
-pub const MAX_FLEES_PER_LOAD: u32 = 2;
-pub const FLEE_BAN_TICKS: u64 = 500;
-pub const GONE_BAN_TICKS: u64 = 250;
-/// Unreachable stands (static NoRoute, never a transient crowd): the spot
-/// stays banned ~2 min at dev tick (60 ms, ~18 min at official 600 ms)
-/// instead of re-burning a full plan on every repick. A planner proof
-/// goes stale fast (doors open, overrides change), so the ban is a
-/// re-probe delay, not a near-session exile. Live "can't reach" from a
-/// passing blockage rides along: skipping one tree for a while is
-/// cheaper than the plan.
-pub const UNREACHABLE_BAN_TICKS: u64 = 1_800;
-/// Adjacent refusal (tile reached, server says "can't reach that", not a
-/// stump): a wall/fence/gate stands between us and the tree. Re-trying
-/// every repick would loop forever ("essaye des fois"), but 240k was a
-/// session exile (~4 h dev, ~40 h official). Now ~7 min dev (~72 min
-/// official): long enough to end the run's rotation, short enough to
-/// re-prove a still or opened spot — and the anti-famine release covers
-/// sweeps.
-pub const STRUCTURAL_BAN_TICKS: u64 = 7_200;
+use crate::kit::pack::{obj_id, pack_slots, pack_total};
+use crate::kit::survival::{death_message_seen, hitpoints};
+use crate::ScriptError;
 /// Transit slicing: the bank walk runs in 1500-tick legs for the same
 /// 15000-tick total, checking death and hurt between legs instead of
 /// walking blind into an ambush.
@@ -49,162 +22,6 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 /// Past 3 hurts the trip aborts loudly instead of walking into death.
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
-
-/// Measured live travel speed, one place (admin walkto, Lumbridge-Draynor,
-/// 2026-11-07): 24 tiles in 14 ticks at full energy (0.58, run, client
-/// energy 100->93 proving the drain), 189 flat tiles in ~190 drained
-/// (~1.0, walk). Run bursts need full energy on both sides and collapse
-/// after one leg; walking is the guaranteed rate, so every trip budget
-/// uses it — a run only lands earlier.
-pub const TICKS_PER_TILE: f64 = 1.0;
-/// Full-energy run rate, same sessions: ~0.5 ticks/tile before send
-/// overhead (~2 ticks per walk_to leg). Informational: budgets never
-/// assume it.
-pub const TICKS_PER_TILE_RUNNING: f64 = 0.5;
-
-/// Travel budget in ticks for `tiles` Manhattan tiles at the guaranteed
-/// walk rate (ceil, so a 1-tile step never budgets zero).
-pub fn travel_ticks(tiles: u64) -> u64 {
-    (tiles as f64 * TICKS_PER_TILE).ceil() as u64
-}
-
-/// Spot work result, shared by the three gathering scripts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkOutcome {
-    Full,
-    Gone,
-    Moved,
-    NoTool,
-    NoBait,
-    Threat,
-    Blocked,
-    LevelLocked,
-    Unreachable,
-    /// Direct spot refusal: the server answered the chop/mine click itself
-    /// with "can't reach that". Walk-leg failures (never arrived, leg
-    /// timeout, step refused far away) stay plain `Unreachable`: only the
-    /// gather loop's classifier may promote this to a long ban, on a
-    /// repeated adjacent refusal — never on transit alone.
-    UnreachableSpot,
-}
-
-/// Resolve an object id through the injected tables. Unknown names fail,
-// never guess.
-pub fn obj_id(bot: &Bot, name: &str) -> Result<u16, ScriptError> {
-    (bot.tables.find_obj_by_name)(name)
-        .ok_or_else(|| ScriptError::Usage(format!("unknown obj {name:?} at {:?}", bot.position())))
-}
-
-/// Shop price from the dump (0 when the dump carries none).
-pub fn obj_price(name: &str) -> i64 {
-    knowledge::objs_by_name(name).first().map(|entry| entry.price).unwrap_or(0)
-}
-
-/// Display name for logs, empty when the tables do not know the id.
-pub fn obj_label(bot: &Bot, obj: u16) -> String {
-    (bot.tables.obj_name)(obj).unwrap_or_default()
-}
-
-/// (slot, (obj, count)) for every backpack slot.
-pub fn pack_slots(bot: &Bot) -> Vec<(u8, (u16, u32))> {
-    bot.backpack().1
-}
-
-/// Total carried count of one object id.
-pub fn pack_total(bot: &Bot, obj: u16) -> u32 {
-    pack_slots(bot).iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).sum()
-}
-
-/// First backpack slot holding the object, or a loud error.
-pub fn pack_slot(bot: &Bot, obj: u16) -> Result<u8, ScriptError> {
-    pack_slots(bot)
-        .iter()
-        .find(|(_, (held, _))| *held == obj)
-        .map(|(slot, _)| *slot)
-        .ok_or_else(|| Error::Unreachable(format!("no obj {obj} in pack at {:?}", bot.position())).into())
-}
-
-/// Free backpack slots (28-cap, corpses of full loads).
-pub fn free_slots(bot: &Bot) -> usize {
-    BACKPACK_SIZE.saturating_sub(pack_slots(bot).len())
-}
-
-/// Distinct object ids currently carried.
-pub fn pack_ids(bot: &Bot) -> HashSet<u16> {
-    pack_slots(bot).iter().map(|(_, (held, _))| *held).collect()
-}
-
-/// Live level of a stat, or the last known value before it streamed.
-pub fn learn_level(bot: &Bot, stat: u8, known: i64) -> i64 {
-    bot.world.stats.get(&stat).map(|(level, _)| i64::from(*level)).unwrap_or(known)
-}
-
-/// Current hitpoints (10 before the stats stream).
-pub fn hitpoints(bot: &Bot) -> u8 {
-    bot.world.stats.get(&3).map(|(level, _)| *level).unwrap_or(10)
-}
-
-/// True when the server announced death since `seen`: "Oh dear you are
-/// dead!" arrives even when the hitpoints stream lags behind.
-pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
-    bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("oh dear you are dead"))
-}
-
-/// Combat level (3 before the stats stream).
-pub fn combat_level(bot: &Bot) -> i64 {
-    i64::from(bot.combat_level().unwrap_or(3))
-}
-
-/// Random-event gate: greets hosts on sight, rubs the lamp, solves what
-/// resolves inline; an unresolved event aborts loudly so the caller stops
-/// before the next step. The worker pause gate runs the mapped rescue
-/// inline and the loop retries after the next pump.
-pub fn check_events(bot: &mut Bot) -> ScriptResult {
-    if !crate::randomevent_full::check(bot)? {
-        return Err(ScriptError::Usage(format!("random event unresolved at {:?}", bot.position())));
-    }
-    Ok(0)
-}
-
-/// Wait until the backpack streams after login (tick-bounded).
-pub fn wait_pack_streamed(bot: &mut Bot) -> Result<(), ScriptError> {
-    if !wait_backpack(bot, 150)? {
-        return Err(ScriptError::Usage(format!("backpack never streamed at {:?}", bot.position())));
-    }
-    Ok(())
-}
-
-/// Dismiss a level-up / dialog modal with Continue. True when no modal
-/// remains; congratulation dialogs are the only ones auto-dismissed.
-pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
-    if bot.world.modal.is_none() {
-        return Ok(true);
-    }
-    // Overlay-layer modals (wilderness overlay 193) are informational: the
-    // server keeps answering world clicks while one is open (live: op_loc
-    // answered "I can't reach that!" with the overlay up), so there is
-    // nothing to dismiss and the gather loops must not read it as Blocked.
-    if bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "overlay") {
-        return Ok(true);
-    }
-    let congrats = bot.chat_texts().iter().any(|(_, text)| text.to_lowercase().contains("congratulations"));
-    if !congrats {
-        return Ok(false);
-    }
-    for _ in 0..4 {
-        bot.chat_continue()?;
-        bot.pump(5)?;
-        if bot.world.modal.is_none() {
-            bot.log("ok dialog dismissed");
-            return Ok(true);
-        }
-    }
-    let target = bot.world.ticks + 25;
-    while bot.world.ticks < target && bot.world.modal.is_some() {
-        bot.pump(5)?;
-    }
-    Ok(bot.world.modal.is_none())
-}
 
 /// Nearest free (non-members, same level) bank booth by Manhattan distance.
 /// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
@@ -553,31 +370,6 @@ fn death_resume(
     )))
 }
 
-/// True for connection failures (socket, login): these must propagate
-/// all the way to the session's reconnect instead of degrading into a
-/// limp-along (a dead socket freezes ticks, so every tick-bounded wait
-/// below would spin forever). Hurt, stalls and blockages stay local.
-pub fn is_conn_abort(error: &ScriptError) -> bool {
-    matches!(
-        error,
-        ScriptError::Sdk(lifescape_sdk::Error::Io(_)) | ScriptError::Sdk(lifescape_sdk::Error::Login(_))
-    )
-}
-
-/// True for errors a walk must never downgrade into Ok(false)/Unreachable:
-/// dead socket (the session reconnects) or operator stop (the run unwinds).
-/// Callers match this before degrading anything else to a limp-along.
-pub fn is_walk_abort(error: &ScriptError) -> bool {
-    is_conn_abort(error) || matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_)))
-}
-/// True for the loud death-abort errors raised instead of limping on:
-/// `bank_trip` ("died en route") and `walk_checked` ("died walking")
-/// both mean the load was lost to a respawn. Callers match on this to
-/// re-gear and continue the job rather than failing it.
-pub fn is_death_abort(error: &ScriptError) -> bool {
-    error.to_string().contains("died ")
-}
-
 /// Walk to a bank, open the booth, deposit everything but `keep`, withdraw
 /// `withdraw_coins`. Returns the banked coin total for upgrade budgeting.
 ///
@@ -738,23 +530,6 @@ pub fn bank_trip(
     Ok(bank_coins)
 }
 
-/// Bury every bone in the pack (frees slots, trains prayer).
-pub fn bury_bones(bot: &mut Bot) -> Result<(), ScriptError> {
-    loop {
-        let found = pack_slots(bot).into_iter().find(|(_, (held, _))| {
-            obj_label(bot, *held).to_lowercase().contains("bones")
-        });
-        let Some((slot, (held, _))) = found else {
-            return Ok(());
-        };
-        let Some(pack_com) = bot.backpack().0 else {
-            return Err(Error::Unreachable("backpack not streamed".to_string()).into());
-        };
-        bot.op_held(1, held, slot, pack_com)?;
-        bot.pump(2)?;
-    }
-}
-
 /// Pump until hitpoints reach `target` (heal wait after a flee).
 pub fn wait_healed(bot: &mut Bot, timeout: u64) -> Result<(), ScriptError> {
     wait_hitpoints(bot, hitpoints(bot).saturating_add(1), timeout)?;
@@ -800,31 +575,9 @@ pub fn heal_at_bank(bot: &mut Bot) -> Result<(), ScriptError> {
     Ok(())
 }
 
-/// Settle-wait until the carried total reaches `minimum` (server inventory
-/// updates arrive ticks after the click).
-pub fn wait_pack_count(bot: &mut Bot, obj: u16, minimum: u32, timeout: u64) -> Result<bool, ScriptError> {
-    let target = bot.world.ticks + timeout;
-    while bot.world.ticks < target {
-        bot.pump(5)?;
-        if pack_total(bot, obj) >= minimum {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Wait until the backpack holds one more free-slot tick cycle of calm.
-pub fn settle(bot: &mut Bot, ticks: u64) -> Result<(), ScriptError> {
-    wait_ticks(bot, ticks)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        bank_trip, bank_trip_resilient, death_message_seen, dismiss_modal, is_bankbooth, is_conn_abort, is_walk_abort,
-        live_bank_booth, live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared,
-    };
+    use super::{bank_trip, bank_trip_resilient, is_bankbooth, live_bank_booth, live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -857,29 +610,178 @@ mod tests {
         (bot, service)
     }
 
-    /// Overlay-layer modals never block: the wilderness overlay (live 193)
-    /// reads as dismissed with no server round-trip, so the gather loops
-    /// reach the real message ("can't reach that") instead of Blocked.
+
+    /// Death in transit: a fake death line during the trip logs and the
+    /// trip stays valid (Ok, no booth here so no network), continuing
+    /// from the respawn position instead of erroring.
     #[test]
-    fn overlay_modal_reads_as_dismissed() {
+    fn bank_trip_survives_death_message() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "overlay".to_string(), interface_id: 193 });
-        assert!(dismiss_modal(&mut bot).expect("overlay never errors"), "overlay is non-blocking");
-        assert!(bot.world.modal.is_some(), "overlay stays open, only the verdict changes");
-        bot.world.modal = None;
-        assert!(dismiss_modal(&mut bot).expect("no modal passes"), "no modal passes");
+        bot.world.level = 0;
+        bot.world.x = 3000;
+        bot.world.z = 3000;
+        bot.world.messages.push("Oh dear you are dead!".to_string());
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3000,
+            z: 3000,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        let outcome = bank_trip(&mut bot, &bank, &[], 0);
+        assert!(outcome.is_ok(), "death in transit stays valid, got: {outcome:?}");
     }
 
-    /// Travel budget: walk rate (1.0), ceil, never zero — the measured
-    /// live rates live in TICKS_PER_TILE, nowhere else.
+    /// True no-op never walks: far from the bank with an empty pack and no
+    /// withdrawal, the trip is Ok(0) with no network (any walk attempt
+    /// fails loudly offline, so Ok proves nothing was attempted).
     #[test]
-    fn travel_ticks_uses_walk_rate() {
-        assert_eq!(super::travel_ticks(0), 0, "no tiles, no budget");
-        assert_eq!(super::travel_ticks(1), 1, "a 1-tile step never budgets zero");
-        assert_eq!(super::travel_ticks(24), 24, "24 flat tiles, got: {}", super::travel_ticks(24));
-        assert_eq!(super::travel_ticks(189), 189, "189 flat tiles, got: {}", super::travel_ticks(189));
-        assert!(super::TICKS_PER_TILE_RUNNING < super::TICKS_PER_TILE, "run is faster than walk");
+    fn bank_trip_noop_never_walks() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3226;
+        bot.world.z = 3223;
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        assert_eq!(bank_trip(&mut bot, &bank, &[], 0).expect("no-op is Ok(0)"), 0);
+        assert_eq!((bot.world.x, bot.world.z), (3226, 3223), "never moved");
+    }
+
+    /// Death far from the bank aborts loud (load lost) instead of
+    /// re-trekking the gauntlet from respawn for scraps; next to the bank
+    /// with work left it resumes; an empty pack costs nothing. The helper
+    /// is pure (no network), unlike the trip around it.
+    #[test]
+    fn bank_trip_death_far_aborts_load_lost() {
+        use super::death_resume;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3222;
+        bot.world.z = 3218;
+        let logs = crate::kit::pack::obj_id(&bot, "logs").expect("logs in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(com, [(0u8, (logs, 5u32))].into_iter().collect());
+        let err = death_resume(&bot, 3091, 3242, 0, &[], 0).expect_err("far death aborts");
+        assert!(err.to_string().contains("load lost"), "loud cause, got: {err}");
+        bot.world.x = 3091;
+        bot.world.z = 3242;
+        death_resume(&bot, 3091, 3242, 0, &[], 0).expect("near death with work resumes");
+        bot.world.inv.remove(&com);
+        bot.world.x = 3222;
+        bot.world.z = 3218;
+        death_resume(&bot, 3091, 3242, 0, &[], 0).expect("empty pack costs nothing");
+    }
+
+    /// Fourth transit injury aborts loudly instead of walking into death
+    /// (the abort fires before any heal pump, so no server is needed).
+    #[test]
+    fn fourth_transit_hurt_aborts_loud() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        let mut hurts = 3u32;
+        let err = register_transit_hurt(&mut bot, &mut hurts, 10).expect_err("4th hurt aborts");
+        assert!(err.to_string().contains("too hurt en route, aborting trip"), "loud abort, got: {err}");
+        assert_eq!(hurts, 4, "injury counted before aborting");
+    }
+
+    /// Uncleared deposit is a loud error naming the cause; a cleared one
+    /// passes silently.
+    #[test]
+    fn uncleared_deposit_fails_loud() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        require_deposit_cleared(&bot, true).expect("cleared passes");
+        let err = require_deposit_cleared(&bot, false).expect_err("leftovers are loud");
+        assert!(err.to_string().contains("deposit did not clear"), "loud cause, got: {err}");
+    }
+
+    /// Unreached booth with a deposit pending fails loudly, never Ok(0):
+    /// the live hole (could not reach + ok load banked on an empty bank).
+    #[test]
+    fn unreachable_with_deposit_fails_loud() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3000;
+        bot.world.z = 3000;
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3000,
+            z: 3000,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        let err = bank_trip(&mut bot, &bank, &[], 0).expect_err("pending deposit without booth");
+        assert!(err.to_string().contains("bank unreachable"), "loud cause, got: {err}");
+        assert_eq!(crate::kit::pack::pack_total(&bot, coins), 5, "nothing deposited");
+    }
+
+    /// True no-op (pack already keep-only, nothing to withdraw) stays Ok(0)
+    /// without a booth and without network.
+    #[test]
+    fn noop_without_booth_stays_ok() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3000;
+        bot.world.z = 3000;
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3000,
+            z: 3000,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        assert_eq!(bank_trip(&mut bot, &bank, &[], 0).expect("empty pack is a no-op"), 0);
+        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        assert_eq!(bank_trip(&mut bot, &bank, &[coins], 0).expect("pack == keep is a no-op"), 0);
+    }
+
+    /// Resilient rediscovers once, then fails loud: the first trip finds
+    /// no booth at the booth-free tile (served batch confirms), the
+    /// rediscovered real bank is a dead-socket walk away, so the typed
+    /// walk abort surfaces instead of masking as "bank unreachable".
+    /// (3226,3223) is booth-free in the dumps (probed), keeping the
+    /// first failure on the booth lookup.
+    #[test]
+    fn resilient_rediscovers_then_fails_loud() {
+        let (mut bot, _service) = served_bot("bank-resilient");
+        bot.world.level = 0;
+        bot.world.x = 3226;
+        bot.world.z = 3223;
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        let mut bank = lifescape_gamedata::banks::Bank {
+            x: 3226,
+            z: 3223,
+            level: 0,
+            loc_id: 2213,
+            name: "bankbooth".to_string(),
+            members: false,
+        };
+        let err = bank_trip_resilient(&mut bot, &mut bank, &[], 0, &[coins]).expect_err("load never deposited");
+        assert!(crate::kit::survival::is_walk_abort(&err), "dead socket surfaces typed, got: {err}");
+        assert!((bank.x, bank.z) != (3226, 3223), "rediscovery ran before failing loud, got ({},{})", bank.x, bank.z);
+        assert_eq!(crate::kit::pack::pack_total(&bot, coins), 5, "load still in the pack");
     }
 
     /// Booths resolve from the live stream first, static template second
@@ -983,230 +885,5 @@ mod tests {
         bot.world.z = 3242;
         let got = nearest_bank(&mut bot).expect("unfenced pick resolves");
         assert_eq!((got.x, got.z, got.level), (3091, 3242, 0), "draynor wins unfenced, got: {got:?}");
-    }
-
-    #[test]
-    fn death_message_seen_matches_case_insensitive() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.messages.push("Oh dear you are dead!".to_string());
-        assert!(death_message_seen(&bot, 0), "exact line detected");
-        assert!(!death_message_seen(&bot, 1), "index tracks seen messages");
-        bot.world.messages.push("OH DEAR you ARE dead".to_string());
-        assert!(death_message_seen(&bot, 1), "case-insensitive");
-    }
-
-    /// Death in transit: a fake death line during the trip logs and the
-    /// trip stays valid (Ok, no booth here so no network), continuing
-    /// from the respawn position instead of erroring.
-    #[test]
-    fn bank_trip_survives_death_message() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3000;
-        bot.world.z = 3000;
-        bot.world.messages.push("Oh dear you are dead!".to_string());
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3000,
-            z: 3000,
-            level: 0,
-            loc_id: 0,
-            name: "test".to_string(),
-            members: false,
-        };
-        let outcome = bank_trip(&mut bot, &bank, &[], 0);
-        assert!(outcome.is_ok(), "death in transit stays valid, got: {outcome:?}");
-    }
-
-    /// True no-op never walks: far from the bank with an empty pack and no
-    /// withdrawal, the trip is Ok(0) with no network (any walk attempt
-    /// fails loudly offline, so Ok proves nothing was attempted).
-    #[test]
-    fn bank_trip_noop_never_walks() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3226;
-        bot.world.z = 3223;
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "test".to_string(),
-            members: false,
-        };
-        assert_eq!(bank_trip(&mut bot, &bank, &[], 0).expect("no-op is Ok(0)"), 0);
-        assert_eq!((bot.world.x, bot.world.z), (3226, 3223), "never moved");
-    }
-
-    /// Death far from the bank aborts loud (load lost) instead of
-    /// re-trekking the gauntlet from respawn for scraps; next to the bank
-    /// with work left it resumes; an empty pack costs nothing. The helper
-    /// is pure (no network), unlike the trip around it.
-    #[test]
-    fn bank_trip_death_far_aborts_load_lost() {
-        use super::death_resume;
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3222;
-        bot.world.z = 3218;
-        let logs = super::obj_id(&bot, "logs").expect("logs in tables");
-        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
-        bot.world.inv.insert(com, [(0u8, (logs, 5u32))].into_iter().collect());
-        let err = death_resume(&bot, 3091, 3242, 0, &[], 0).expect_err("far death aborts");
-        assert!(err.to_string().contains("load lost"), "loud cause, got: {err}");
-        bot.world.x = 3091;
-        bot.world.z = 3242;
-        death_resume(&bot, 3091, 3242, 0, &[], 0).expect("near death with work resumes");
-        bot.world.inv.remove(&com);
-        bot.world.x = 3222;
-        bot.world.z = 3218;
-        death_resume(&bot, 3091, 3242, 0, &[], 0).expect("empty pack costs nothing");
-    }
-
-    /// Fourth transit injury aborts loudly instead of walking into death
-    /// (the abort fires before any heal pump, so no server is needed).
-    #[test]
-    fn fourth_transit_hurt_aborts_loud() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        let mut hurts = 3u32;
-        let err = register_transit_hurt(&mut bot, &mut hurts, 10).expect_err("4th hurt aborts");
-        assert!(err.to_string().contains("too hurt en route, aborting trip"), "loud abort, got: {err}");
-        assert_eq!(hurts, 4, "injury counted before aborting");
-    }
-
-    /// Uncleared deposit is a loud error naming the cause; a cleared one
-    /// passes silently.
-    #[test]
-    fn uncleared_deposit_fails_loud() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        require_deposit_cleared(&bot, true).expect("cleared passes");
-        let err = require_deposit_cleared(&bot, false).expect_err("leftovers are loud");
-        assert!(err.to_string().contains("deposit did not clear"), "loud cause, got: {err}");
-    }
-
-    /// Unreached booth with a deposit pending fails loudly, never Ok(0):
-    /// the live hole (could not reach + ok load banked on an empty bank).
-    #[test]
-    fn unreachable_with_deposit_fails_loud() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3000;
-        bot.world.z = 3000;
-        let coins = super::obj_id(&bot, "coins").expect("coins in dumps");
-        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3000,
-            z: 3000,
-            level: 0,
-            loc_id: 0,
-            name: "test".to_string(),
-            members: false,
-        };
-        let err = bank_trip(&mut bot, &bank, &[], 0).expect_err("pending deposit without booth");
-        assert!(err.to_string().contains("bank unreachable"), "loud cause, got: {err}");
-        assert_eq!(super::pack_total(&bot, coins), 5, "nothing deposited");
-    }
-
-    /// True no-op (pack already keep-only, nothing to withdraw) stays Ok(0)
-    /// without a booth and without network.
-    #[test]
-    fn noop_without_booth_stays_ok() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3000;
-        bot.world.z = 3000;
-        let coins = super::obj_id(&bot, "coins").expect("coins in dumps");
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3000,
-            z: 3000,
-            level: 0,
-            loc_id: 0,
-            name: "test".to_string(),
-            members: false,
-        };
-        assert_eq!(bank_trip(&mut bot, &bank, &[], 0).expect("empty pack is a no-op"), 0);
-        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
-        assert_eq!(bank_trip(&mut bot, &bank, &[coins], 0).expect("pack == keep is a no-op"), 0);
-    }
-
-    /// Resilient rediscovers once, then fails loud: the first trip finds
-    /// no booth at the booth-free tile (served batch confirms), the
-    /// rediscovered real bank is a dead-socket walk away, so the typed
-    /// walk abort surfaces instead of masking as "bank unreachable".
-    /// (3226,3223) is booth-free in the dumps (probed), keeping the
-    /// first failure on the booth lookup.
-    #[test]
-    fn resilient_rediscovers_then_fails_loud() {
-        let (mut bot, _service) = served_bot("bank-resilient");
-        bot.world.level = 0;
-        bot.world.x = 3226;
-        bot.world.z = 3223;
-        let coins = super::obj_id(&bot, "coins").expect("coins in dumps");
-        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
-        let mut bank = lifescape_gamedata::banks::Bank {
-            x: 3226,
-            z: 3223,
-            level: 0,
-            loc_id: 2213,
-            name: "bankbooth".to_string(),
-            members: false,
-        };
-        let err = bank_trip_resilient(&mut bot, &mut bank, &[], 0, &[coins]).expect_err("load never deposited");
-        assert!(super::is_walk_abort(&err), "dead socket surfaces typed, got: {err}");
-        assert!((bank.x, bank.z) != (3226, 3223), "rediscovery ran before failing loud, got ({},{})", bank.x, bank.z);
-        assert_eq!(super::pack_total(&bot, coins), 5, "load still in the pack");
-    }
-
-    /// Walk-abort typing: dead socket and operator stop never degrade,
-    /// stalls and blockages still do.
-    #[test]
-    fn walk_abort_covers_conn_and_stop_only() {
-        use crate::ScriptError;
-        use lifescape_sdk::Error;
-        assert!(is_walk_abort(&ScriptError::Sdk(Error::Io("x".to_string()))), "socket");
-        assert!(is_walk_abort(&ScriptError::Sdk(Error::Login("x".to_string()))), "login");
-        assert!(is_walk_abort(&ScriptError::Sdk(Error::Interrupted("x".to_string()))), "stop");
-        assert!(!is_walk_abort(&ScriptError::Sdk(Error::Unreachable("x".to_string()))), "blockage stays local");
-        assert!(!is_walk_abort(&ScriptError::Sdk(Error::Timeout("x".to_string()))), "stall stays local");
-        assert!(!is_walk_abort(&ScriptError::Usage("x".to_string())), "usage stays local");
-        assert!(is_conn_abort(&ScriptError::Sdk(Error::Io("x".to_string()))), "conn subset");
-        assert!(!is_conn_abort(&ScriptError::Sdk(Error::Interrupted("x".to_string()))), "stop is not conn");
-    }
-
-    /// Far bank with a deposit pending and no socket: the transit approach
-    /// fails typed (reconnect), never "bank unreachable".
-    #[test]
-    fn bank_trip_far_offline_aborts_typed() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        bot.world.x = 3226;
-        bot.world.z = 3223;
-        let coins = super::obj_id(&bot, "coins").expect("coins in dumps");
-        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
-        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
-        let bank = lifescape_gamedata::banks::Bank {
-            x: 3091,
-            z: 3242,
-            level: 0,
-            loc_id: 0,
-            name: "test".to_string(),
-            members: false,
-        };
-        let err = bank_trip(&mut bot, &bank, &[], 0).expect_err("dead socket aborts");
-        assert!(is_walk_abort(&err), "typed for the reconnect arm, got: {err}");
-        assert!(!err.to_string().contains("bank unreachable"), "no masking, got: {err}");
     }
 }

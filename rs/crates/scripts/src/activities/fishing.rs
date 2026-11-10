@@ -8,11 +8,10 @@
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
-use crate::skill_common::{
-    bank_trip, buy_stock, check_events, learn_level, nearest_bank, obj_id, obj_price, pack_total,
-    sell_for_target, wait_pack_streamed,
-};
-use crate::skill_trade::buy_best_affordable;
+use crate::kit::bank::{bank_trip, nearest_bank};
+use crate::kit::pack::{obj_id, obj_price, pack_total};
+use crate::kit::shop::{buy_best_affordable, buy_stock, sell_for_target};
+use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
 /// Fish banked loads in the open session (0 = forever).

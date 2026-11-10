@@ -8,11 +8,10 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
-use crate::skill_common::{
-    bank_trip, buy_stock, check_events, learn_level, nearest_bank, obj_id, obj_price, pack_ids,
-    pack_total, sell_for_target,
-};
-use crate::skill_trade::buy_best_affordable;
+use crate::kit::bank::{bank_trip, nearest_bank};
+use crate::kit::pack::{obj_id, obj_price, pack_ids, pack_total};
+use crate::kit::shop::{buy_best_affordable, buy_stock, sell_for_target};
+use crate::kit::survival::{check_events, learn_level};
 use crate::{ScriptError, ScriptResult};
 
 /// Mine banked loads in the open session (0 = forever).
@@ -24,7 +23,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
-    crate::skill_common::wait_pack_streamed(bot)?;
+    crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
     let tiers = crate::kit::spots::usable_rock_tiers();
@@ -43,13 +42,13 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         if crate::kit::tools::PICK_SPEC.best_held(bot).is_none() {
             let bronze_price = obj_price("bronze_pickaxe") as u32;
-            let need_cross = crate::skill_common::toll_gate_x(bot)
+            let need_cross = crate::kit::bank::toll_gate_x(bot)
             .is_some_and(|line| (bank.x as i32 >= line) != (bot.world.x >= line));
             let target = bronze_price + if need_cross { 10 } else { 0 };
             if pack_total(bot, coins) < target {
                 bank_coins = bank_trip(bot, &bank, &keep, u32::MAX / 2)?;
             }
-            if need_cross && pack_total(bot, coins) >= target && !crate::skill_common::cross_toll_gate(bot)? {
+            if need_cross && pack_total(bot, coins) >= target && !crate::kit::bank::cross_toll_gate(bot)? {
                 return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
             }
             if pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0 {

@@ -7,7 +7,7 @@
 
 use lifescape_sdk::Bot;
 
-use crate::skill_common::obj_id;
+use crate::kit::pack::obj_id;
 use crate::{ScriptError, ScriptResult};
 
 /// `market shopbuy <item> <qty> [--budget-max N] [--node ID]`: buy from
@@ -58,7 +58,7 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if held < need {
         let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
         if banked > 0 {
-            let bank = crate::skill_common::nearest_bank(bot)?;
+            let bank = crate::kit::bank::nearest_bank(bot)?;
             if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
                 let _ = bot.bank_withdraw(coins, (need - held).min(banked), 300);
                 let _ = bot.close_modal();
@@ -68,7 +68,7 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     }
     bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
-    let bought = crate::skill_trade::buy_stock(bot, &item, qty)?;
+    let bought = crate::kit::shop::buy_stock(bot, &item, qty)?;
     let held = obj_id(bot, &item).map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
     bot.log(&format!("shopbuy {item} x{qty}: bought {bought}, holding {held}"));
     Ok(if held >= qty { 0 } else { 1 })

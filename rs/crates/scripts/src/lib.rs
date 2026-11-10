@@ -16,10 +16,6 @@ pub mod quests;
 pub mod randomevent;
 pub mod randomevent_full;
 pub mod rescues;
-pub mod skill_common;
-pub mod skill_gather;
-pub mod skill_loop;
-pub mod skill_trade;
 pub mod skill_walk;
 pub mod tables_live;
 pub mod tutorial;
@@ -285,11 +281,11 @@ mod tests {
         assert!(super::runner("nope").is_none(), "unknown names must not dispatch");
     }
 
-    /// Size plafonds (std only, no new dependency): activities stay
-    /// declarations (< 200 code lines, tests excluded), kit bricks stay
-    /// focused (< 500). Quests and legacy move verbatim and keep only the
-    /// file rule (< 1000 total lines). Code = non-blank, non-comment
-    /// lines outside `#[cfg(test)]`.
+    /// Size plafonds (std only, no new dependency): D60 caps per
+    /// activity file (< 250 harvest, < 120 cook, < 150 melee, < 200
+    /// other activities, tests excluded), kit bricks < 500. Quests and
+    /// legacy move verbatim and keep only the file rule (< 1000 total).
+    /// Code = non-blank, non-comment lines outside `#[cfg(test)]`.
     #[test]
     fn plafonds_hold_for_activities_bricks_and_files() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -321,10 +317,18 @@ mod tests {
                         code += 1;
                     }
                 }
-                // Code budget: activities (< 200) and kit bricks (< 500)
-                // only; quests and legacy moved verbatim.
+                // D60 activity caps (tests excluded): harvest (fishing,
+                // mining, woodcut) < 250, cook < 120, melee < 150; other
+                // activities keep the old declaration cap (< 200). Kit
+                // bricks stay focused (< 500); quests and legacy moved
+                // verbatim.
                 let limit = match dir {
-                    "activities" => 200,
+                    "activities" => match name.as_str() {
+                        "fishing.rs" | "mining.rs" | "woodcut.rs" => 250,
+                        "cook.rs" => 120,
+                        "melee.rs" => 150,
+                        _ => 200,
+                    },
                     "kit" => 500,
                     _ => usize::MAX,
                 };

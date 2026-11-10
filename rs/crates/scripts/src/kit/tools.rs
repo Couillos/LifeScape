@@ -6,12 +6,16 @@
 
 #![forbid(unsafe_code)]
 
-pub use crate::skill_gather::{best_banked_by_rank, reattach_tool, BanSet, ToolSpec};
+pub use crate::kit::bans::BanSet;
+
+use std::collections::{HashMap, HashSet};
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{bank_trip, buy_stock, live_bank_booth, obj_id, pack_total};
+use crate::kit::bank::{bank_trip, live_bank_booth};
+use crate::kit::pack::{obj_id, obj_price, pack_ids, pack_slot, pack_total};
+use crate::kit::shop::buy_stock;
 use crate::ScriptError;
 
 /// Typed missing-tool error: the brain files it as an obtain sub-task.
@@ -261,12 +265,12 @@ pub fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &lifescape_gamedata::ban
     if reattach_tool(bot, PICK_HANDLE, PICK_HEAD_SUFFIX, &PICK_SPEC)? {
         return Ok(true);
     }
-    let bronze_price = crate::skill_common::obj_price("bronze_pickaxe") as u32;
-    if pack_total(bot, coins) >= bronze_price && crate::skill_common::buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
+    let bronze_price = crate::kit::pack::obj_price("bronze_pickaxe") as u32;
+    if pack_total(bot, coins) >= bronze_price && crate::kit::shop::buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
         bot.log("ok replacement pickaxe bought");
         return Ok(true);
     }
-    let Some(home) = crate::skill_common::nearest_bank(bot).ok() else {
+    let Some(home) = crate::kit::bank::nearest_bank(bot).ok() else {
         return Ok(false);
     };
     let keep = vec![coins];
@@ -282,7 +286,124 @@ pub fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &lifescape_gamedata::ban
         bot.log("ok replacement pickaxe restored");
         return Ok(true);
     }
-    Ok(pack_total(bot, coins) >= bronze_price && crate::skill_common::buy_stock(bot, "bronze_pickaxe", 1)? > 0)
+    Ok(pack_total(bot, coins) >= bronze_price && crate::kit::shop::buy_stock(bot, "bronze_pickaxe", 1)? > 0)
+}
+
+
+/// Best-first tool order (`AXE_ORDER`, `PICK_ORDER`, fishing tools by max
+/// tier level): rank decides, shop stock gates, level gates pass through
+/// `usable`. State reads only, never a walk or a buy.
+pub struct ToolSpec {
+    pub order: &'static [&'static str],
+}
+
+impl ToolSpec {
+    /// Rank in `order` (0 = best). Unknown tools never rank.
+    pub fn rank(&self, name: &str) -> Option<usize> {
+        self.order.iter().position(|tool| *tool == name)
+    }
+
+    /// Best held tool, best-first.
+    pub fn best_held(&self, bot: &Bot) -> Option<String> {
+        let held = pack_ids(bot);
+        self.order
+            .iter()
+            .find(|name| obj_id(bot, name).is_ok_and(|id| held.contains(&id)))
+            .map(|name| name.to_string())
+    }
+
+    /// Every order id the tables know (for dirty-pack and sale filters:
+    /// a banked tool type still counts as a tool, never as junk).
+    pub fn known_ids(&self, bot: &Bot) -> HashSet<u16> {
+        self.order.iter().filter_map(|name| obj_id(bot, name).ok()).collect()
+    }
+
+    /// Pack ids that survive the bank trip: the single best tool only (the
+    /// server works with the best carried tool, so a second is dead weight
+    /// that death would drop anyway).
+    pub fn keep_ids(&self, bot: &Bot) -> Vec<u16> {
+        self.best_held(bot).and_then(|name| obj_id(bot, &name).ok()).into_iter().collect()
+    }
+
+    /// Affordable upgrade cands, best-first, with the cheapest price:
+    /// better-ranked than held, level-usable by the caller, actually in
+    /// shop stock. One pass, never a loop.
+    pub fn cheapest_upgrade(&self, bot: &Bot, usable: impl Fn(&str) -> bool) -> (Vec<String>, i64) {
+        let current = self.best_held(bot).and_then(|name| self.rank(&name)).unwrap_or(self.order.len());
+        let cands: Vec<String> = self.order[..current]
+            .iter()
+            .filter(|name| usable(name) && crate::kit::shop::shop_stock_keeper(bot, name).is_some())
+            .map(|name| name.to_string())
+            .collect();
+        let cheapest = cands.iter().map(|name| obj_price(name)).min().unwrap_or(0);
+        (cands, cheapest)
+    }
+}
+
+/// Reattach a carried handle + head instead of rebuying (axe and pickaxe
+/// loops share it). Pack ops only, no bank modal: resolve the handle, try
+/// each carried head with `head_suffix`, verify through `spec` (a plain
+/// ref, never a closure over `&Bot`, so no double-borrow). Ok(false) when
+/// the handle or every head is missing: nothing sent.
+pub fn reattach_tool(bot: &mut Bot, handle_name: &str, head_suffix: &str, spec: &ToolSpec) -> Result<bool, ScriptError> {
+    let Ok(handle) = obj_id(bot, handle_name) else {
+        return Ok(false);
+    };
+    if pack_total(bot, handle) == 0 {
+        return Ok(false);
+    }
+    let heads: Vec<u16> = knowledge::all_objs()
+        .into_iter()
+        .filter(|entry| entry.name.as_deref().unwrap_or("").ends_with(head_suffix))
+        .filter_map(|entry| entry.name.clone())
+        .filter_map(|name| obj_id(bot, &name).ok())
+        .collect();
+    for head in heads {
+        if pack_total(bot, head) == 0 {
+            continue;
+        }
+        if use_handle_on_head(bot, handle, head, spec)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn use_handle_on_head(bot: &mut Bot, handle: u16, head: u16, spec: &ToolSpec) -> Result<bool, ScriptError> {
+    let Some(pack_com) = bot.backpack().0 else {
+        return Ok(false);
+    };
+    let (Ok(handle_slot), Ok(head_slot)) = (pack_slot(bot, handle), pack_slot(bot, head)) else {
+        return Ok(false);
+    };
+    bot.op_held_u(handle, handle_slot, pack_com, head, head_slot, pack_com)?;
+    let target = bot.world.ticks + 50;
+    while bot.world.ticks < target {
+        bot.pump(5)?;
+        if spec.best_held(bot).is_some() {
+            bot.log("ok tool reattached");
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Best-ranked banked tool slot (the pack holds one tool: an upgrade banks
+/// the old one, a restore withdraws the best, never a second). Pure: rank
+/// decides; names come from the dump (`obj_by_id` debug names, not display
+/// labels).
+pub fn best_banked_by_rank(
+    slots: &HashMap<u8, (u16, u32)>,
+    known: &HashSet<u16>,
+    rank: impl Fn(&str) -> Option<usize>,
+) -> Option<(u8, u16)> {
+    slots
+        .iter()
+        .filter(|(_, (held, _))| known.contains(held))
+        .min_by_key(|(_, (held, _))| {
+            knowledge::obj_by_id(usize::from(*held)).and_then(|entry| entry.name).and_then(|name| rank(&name)).unwrap_or(usize::MAX)
+        })
+        .map(|(slot, (held, _))| (*slot, *held))
 }
 
 #[cfg(test)]
@@ -301,8 +422,8 @@ mod tests {
         assert_eq!(rank("no_such_axe"), None, "unknown axes never rank");
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        let bronze = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
-        let steel = crate::skill_common::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
+        let bronze = crate::kit::pack::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let steel = crate::kit::pack::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
         let axes = AXE_SPEC.known_ids(&bot);
         let slots: HashMap<u8, (u16, u32)> = [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
         assert_eq!(best_banked_by_rank(&slots, &axes, rank), Some((7, steel)), "best banked axe wins");
@@ -329,7 +450,7 @@ mod keep_tests {
 
     #[test]
     fn fallback_order_skips_unaffordable_with_16() {
-        use crate::skill_common::obj_price;
+        use crate::kit::pack::obj_price;
         let bronze = obj_price("bronze_axe");
         let iron = obj_price("iron_axe");
         let steel = obj_price("steel_axe");
@@ -347,9 +468,9 @@ mod keep_tests {
     fn chop_keep_never_holds_coins() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        let coins = crate::skill_common::obj_id(&bot, "coins").expect("coins in tables");
-        let bronze = crate::skill_common::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
-        let steel = crate::skill_common::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in tables");
+        let bronze = crate::kit::pack::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let steel = crate::kit::pack::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
         let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
         bot.world.inv.insert(com, [(0u8, (bronze, 1u32)), (1, (steel, 1))].into_iter().collect());
         let keep = AXE_SPEC.keep_ids(&bot);
@@ -362,7 +483,7 @@ mod keep_tests {
 #[cfg(test)]
 mod fish_order_tests {
     use super::{FISH_ORDER, FISH_SPEC};
-    use crate::skill_common::obj_id;
+    use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -392,5 +513,86 @@ mod fish_order_tests {
         let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
         bot.world.inv.insert(com, [(0u8, (rod, 1u32)), (1, (fly, 1))].into_iter().collect());
         assert_eq!(FISH_SPEC.best_held(&bot), Some("fishing_rod".to_string()), "rod 25 beats fly 20");
+    }
+}
+
+#[cfg(test)]
+mod gather_tests {
+    use super::{best_banked_by_rank, reattach_tool, ToolSpec};
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+
+    /// Tool rank: best held wins, keep holds one tool only, unknown tools
+    /// never rank. State reads only, no shop walk needed for the rank.
+    #[test]
+    fn tool_rank_picks_best_held() {
+        const ORDER: [&str; 3] = ["steel_axe", "iron_axe", "bronze_axe"];
+        const SPEC: ToolSpec = ToolSpec { order: &ORDER };
+        assert_eq!(SPEC.rank("steel_axe"), Some(0));
+        assert_eq!(SPEC.rank("no_such_tool"), None, "unknown never ranks");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert_eq!(SPEC.best_held(&bot), None, "empty pack holds nothing");
+        let bronze = crate::kit::pack::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let steel = crate::kit::pack::obj_id(&bot, "steel_axe").expect("steel_axe in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(com, [(0u8, (bronze, 1u32)), (1, (steel, 1))].into_iter().collect());
+        assert_eq!(SPEC.best_held(&bot), Some("steel_axe".to_string()), "best held wins");
+        assert_eq!(SPEC.keep_ids(&bot), vec![steel], "one tool in the pack: the best");
+        assert!(!SPEC.keep_ids(&bot).contains(&bronze), "inferior banks, never doubles");
+        assert!(SPEC.known_ids(&bot).contains(&bronze), "known covers the banked types too");
+    }
+
+
+    /// Upgrade shortlist: only better-ranked, shop-gated by the caller
+    /// predicate (`usable`); the cheapest price is the min of the cands.
+    #[test]
+    fn upgrade_lists_only_usable_better_tools() {
+        const ORDER: [&str; 3] = ["steel_axe", "iron_axe", "bronze_axe"];
+        const SPEC: ToolSpec = ToolSpec { order: &ORDER };
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let bronze = crate::kit::pack::obj_id(&bot, "bronze_axe").expect("bronze_axe in tables");
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(com, [(0u8, (bronze, 1u32))].into_iter().collect());
+        let (none, cheapest) = SPEC.cheapest_upgrade(&bot, |_| false);
+        assert!(none.is_empty() && cheapest == 0, "nothing usable, nothing listed");
+        let (cands, _) = SPEC.cheapest_upgrade(&bot, |_| true);
+        assert!(!cands.contains(&"bronze_axe".to_string()), "held rank never lists itself");
+        assert!(cands.iter().all(|name| SPEC.rank(name) < SPEC.rank("bronze_axe")), "only better ranks, got: {cands:?}");
+    }
+
+
+    /// Reattach without a handle never sends: unknown handle and empty
+    /// pack both return Ok(false) before any `op_held_u` (an offline send
+    /// would fail, so Ok(false) proves nothing was attempted).
+    #[test]
+    fn reattach_without_handle_never_sends() {
+        const ORDER: [&str; 2] = ["steel_pickaxe", "bronze_pickaxe"];
+        const SPEC: ToolSpec = ToolSpec { order: &ORDER };
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert!(!reattach_tool(&mut bot, "no_such_handle", "_pickaxehead", &SPEC).expect("unknown handle never sends"));
+        assert!(!reattach_tool(&mut bot, "macro_pickaxehandle", "_pickaxehead", &SPEC).expect("empty pack never sends"));
+    }
+
+
+    /// Bank restore withdraws the best-ranked tool, never a second or a
+    /// worse one (rank fn decides, dump debug names, unknown never ranks).
+    #[test]
+    fn banked_best_rank_prefers_steel() {
+        fn rank(name: &str) -> Option<usize> {
+            ["steel_pickaxe", "bronze_pickaxe"].iter().position(|tool| *tool == name)
+        }
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let bronze = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("bronze_pickaxe in tables");
+        let steel = crate::kit::pack::obj_id(&bot, "steel_pickaxe").expect("steel_pickaxe in tables");
+        let known: std::collections::HashSet<u16> = [bronze, steel].into_iter().collect();
+        let slots: std::collections::HashMap<u8, (u16, u32)> =
+            [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
+        assert_eq!(best_banked_by_rank(&slots, &known, rank), Some((7, steel)), "best banked tool wins");
+        assert_eq!(best_banked_by_rank(&std::collections::HashMap::new(), &known, rank), None, "empty bank restores nothing");
     }
 }

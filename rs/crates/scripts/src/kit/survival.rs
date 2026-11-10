@@ -6,10 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+use lifescape_sdk::waits::wait_backpack;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::hitpoints;
-use crate::ScriptError;
+use crate::{ScriptError, ScriptResult};
 
 /// Eat when hp falls to this fraction of the tracked max (fight loop
 /// owns the max; beginners without food bank before hunting instead).
@@ -60,7 +60,7 @@ pub fn withdraw_food(bot: &mut Bot) -> Result<u32, ScriptError> {
     let Some((chosen, _)) = lifescape_gamedata::food::best_food(&refs) else {
         return Ok(food_count(bot));
     };
-    let food_id = crate::skill_common::obj_id(bot, &chosen)?;
+    let food_id = crate::kit::pack::obj_id(bot, &chosen)?;
     let need = (FOOD_TARGET as u32).saturating_sub(food_count(bot));
     if need > 0 {
         let _ = bot.bank_withdraw(food_id, need, 50);
@@ -143,7 +143,7 @@ pub fn danger_error(spot_key: &str, deaths: u32) -> ScriptError {
 /// Death resume: bounded wait for the respawn, then resync the loop
 /// watches (hp flatlined, message index consumed). Never billed to a
 /// stall budget by the caller. This is the `death_resume` the pause and
-/// engagement code (L2) reuses; `skill_loop` wraps it for the driver.
+/// engagement code (L2) reuses; `kit::load` wraps it for the driver.
 pub fn death_resume(bot: &mut Bot, wait_ticks: u64, last_hp: &mut u8, seen: &mut usize) -> Result<(), ScriptError> {
     bot.log("died, respawning");
     bot.intend("died, respawning");
@@ -164,9 +164,70 @@ pub fn at_safe_point(bot: &Bot) -> bool {
     hitpoints(bot) > 0 && bot.world.modal.is_none()
 }
 
+
+/// Live level of a stat, or the last known value before it streamed.
+pub fn learn_level(bot: &Bot, stat: u8, known: i64) -> i64 {
+    bot.world.stats.get(&stat).map(|(level, _)| i64::from(*level)).unwrap_or(known)
+}
+
+/// Current hitpoints (10 before the stats stream).
+pub fn hitpoints(bot: &Bot) -> u8 {
+    bot.world.stats.get(&3).map(|(level, _)| *level).unwrap_or(10)
+}
+
+/// True when the server announced death since `seen`: "Oh dear you are
+/// dead!" arrives even when the hitpoints stream lags behind.
+pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
+    bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("oh dear you are dead"))
+}
+
+/// Random-event gate: greets hosts on sight, rubs the lamp, solves what
+/// resolves inline; an unresolved event aborts loudly so the caller stops
+/// before the next step. The worker pause gate runs the mapped rescue
+/// inline and the loop retries after the next pump.
+pub fn check_events(bot: &mut Bot) -> ScriptResult {
+    if !crate::randomevent_full::check(bot)? {
+        return Err(ScriptError::Usage(format!("random event unresolved at {:?}", bot.position())));
+    }
+    Ok(0)
+}
+
+/// Wait until the backpack streams after login (tick-bounded).
+pub fn wait_pack_streamed(bot: &mut Bot) -> Result<(), ScriptError> {
+    if !wait_backpack(bot, 150)? {
+        return Err(ScriptError::Usage(format!("backpack never streamed at {:?}", bot.position())));
+    }
+    Ok(())
+}
+
+/// True for connection failures (socket, login): these must propagate
+/// all the way to the session's reconnect instead of degrading into a
+/// limp-along (a dead socket freezes ticks, so every tick-bounded wait
+/// below would spin forever). Hurt, stalls and blockages stay local.
+pub fn is_conn_abort(error: &ScriptError) -> bool {
+    matches!(
+        error,
+        ScriptError::Sdk(lifescape_sdk::Error::Io(_)) | ScriptError::Sdk(lifescape_sdk::Error::Login(_))
+    )
+}
+
+/// True for errors a walk must never downgrade into Ok(false)/Unreachable:
+/// dead socket (the session reconnects) or operator stop (the run unwinds).
+/// Callers match this before degrading anything else to a limp-along.
+pub fn is_walk_abort(error: &ScriptError) -> bool {
+    is_conn_abort(error) || matches!(error, ScriptError::Sdk(lifescape_sdk::Error::Interrupted(_)))
+}
+/// True for the loud death-abort errors raised instead of limping on:
+/// `bank_trip` ("died en route") and `walk_checked` ("died walking")
+/// both mean the load was lost to a respawn. Callers match on this to
+/// re-gear and continue the job rather than failing it.
+pub fn is_death_abort(error: &ScriptError) -> bool {
+    error.to_string().contains("died ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{at_safe_point, should_eat, DeathTally, EAT_FRACTION, FOOD_TARGET};
+    use super::{at_safe_point, death_message_seen, should_eat, DeathTally, EAT_FRACTION, FOOD_TARGET};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -223,4 +284,16 @@ mod tests {
         stocked.world.inv.insert(bank_com, [(0u8, (315u16, 3u32))].into_iter().collect());
         assert!(bank_stocks_food(&stocked), "banked shrimps restock");
     }
+
+    #[test]
+    fn death_message_seen_matches_case_insensitive() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.messages.push("Oh dear you are dead!".to_string());
+        assert!(death_message_seen(&bot, 0), "exact line detected");
+        assert!(!death_message_seen(&bot, 1), "index tracks seen messages");
+        bot.world.messages.push("OH DEAR you ARE dead".to_string());
+        assert!(death_message_seen(&bot, 1), "case-insensitive");
+    }
+
 }

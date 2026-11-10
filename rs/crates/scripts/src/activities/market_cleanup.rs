@@ -13,9 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use lifescape_sdk::Bot;
 
-use crate::kit::tools::cleanup_keep_names;
+use crate::kit::{bank::nearest_bank, pack::{free_slots, obj_id, pack_total}, tools::cleanup_keep_names};
 use crate::market_client::{cancel_for, open_sell_items, place_sell};
-use crate::skill_common::{free_slots, nearest_bank, obj_id, pack_total};
 use crate::{ScriptError, ScriptResult};
 
 struct CleanupArgs {
@@ -186,7 +185,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     loop {
         let carried = packed(bot, &rest);
         if !carried.is_empty() {
-            match crate::skill_trade::sell_for_target(bot, &carried, coins, u32::MAX - pack_total(bot, coins)) {
+            match crate::kit::shop::sell_for_target(bot, &carried, coins, u32::MAX - pack_total(bot, coins)) {
                 Ok(gained) => bot.log(&format!("cleanup shop sold for {gained}")),
                 Err(error) => bot.log(&format!("cleanup shop pass skipped ({error}), dropping leftovers")),
             }

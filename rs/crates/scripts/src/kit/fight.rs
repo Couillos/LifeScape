@@ -14,9 +14,29 @@ use crate::kit::gear::{current_weapon_category, equip_plan, gear_plan, melee_lev
 use crate::kit::style::{combat_xp, controlled_button, current_skill, fight_weapon_style, melee_stat, next_style, set_style, style_damage_key, weakest_melee};
 use crate::kit::survival::{bank_stocks_food, eat, food_count, should_eat, EAT_FRACTION};
 use crate::kit::spots::{attack_nearest, BLOCKED_BAN_TICKS, DOOR_BAN_TICKS};
-use crate::skill_common::{check_events, free_slots, hitpoints, walk_checked};
-use crate::skill_gather::{fight_engaged, same_side, BanSet};
+use crate::kit::pack::free_slots;
+use crate::kit::survival::{check_events, hitpoints};
+use crate::skill_walk::walk_checked;
+use crate::kit::bans::{same_side, BanSet};
 use crate::ScriptError;
+
+/// True when the fight started since the click: xp flowing, hp taken,
+/// or the target animating (its attack anim streams — ours never does,
+/// and no positive "you're fighting" message exists server-side, all
+/// combat lines are refusals). Pure so the loop stays thin; the caller
+/// owns the snapshots and the re-click throttle. Ready for smithing-
+/// style loops too: any started-loop-vs-dead-click verdict.
+pub fn fight_engaged(
+    xp_now: i64,
+    xp_at_click: i64,
+    hp_now: u8,
+    hp_before: u8,
+    anim_now: Option<u16>,
+    anim_at_click: Option<u16>,
+) -> bool {
+    xp_now != xp_at_click || hp_now < hp_before || anim_now != anim_at_click
+}
+
 
 /// No combat xp and no steps for this long while the foe lives: not
 /// fighting (fence, stale slot, single-way block). ~35 s at the measured
@@ -75,7 +95,7 @@ pub fn fight(
     ));
     // One line per hunt: which flank we hold (or that no gate is mapped
     // yet, so the per-pick filter stays off and crossings stay possible).
-    match crate::skill_common::toll_gate_x(bot) {
+    match crate::kit::bank::toll_gate_x(bot) {
         Some(line) => bot.log(&format!("toll fence line {line}, hunting the {} flank", if bot.world.x >= line { "east" } else { "west" })),
         None => bot.log("toll fence: no gates mapped, cross-fence picks unfiltered"),
     }
@@ -332,7 +352,7 @@ pub fn fight(
 
 
 
-/// Clusters on the bot's toll-fence flank (see skill_gather::same_side): the
+/// Clusters on the bot's toll-fence flank (see kit::bans::same_side): the
 /// crossing is never paid in melee, so an eastern cluster from a western
 /// hunt is a ~220-tile detour per visit, never a shortcut. When every
 /// cluster is across and the run did not opt into `toll`, the list stays
@@ -393,7 +413,7 @@ pub fn run_spot(
     // hunt). The per-pick filter in attack_nearest stops the same
     // oscillation inside the fight; this stops it between clusters.
     let mut targets = targets;
-    if let Some(line) = crate::skill_common::toll_gate_x(bot) {
+    if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
         let kept = same_flank_clusters(line, bot.world.x, &targets, bot.allow_paid);
         if kept.len() != targets.len() {
             bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
@@ -448,7 +468,7 @@ pub fn run_spot(
             // A dead socket must reconnect, not limp to the next cluster:
             // propagate connection failures, swallow the rest as before.
             match walk_checked(bot, center_x, center_z, 15000) {
-                Err(error) if crate::skill_common::is_conn_abort(&error) => return Err(error),
+                Err(error) if crate::kit::survival::is_conn_abort(&error) => return Err(error),
                 Err(_) | Ok(false) => {
                     // A sticking door (or a step refused for a tick) must
                     // not exile the hunt across the map: re-bank and retry
@@ -691,5 +711,24 @@ mod tests {
         assert!(tally.excludes("cows"), "the killer stays out for the run");
         tally.note_death("goblins");
         assert!(!tally.fatal(), "progress between deaths: new streak, not fatal");
+    }
+}
+
+#[cfg(test)]
+mod engaged_tests {
+    use super::fight_engaged;
+
+
+    /// Engagement evidence: each channel alone proves the fight (xp
+    /// only flows on our hits, hp only drops on damage taken, target
+    /// anim only changes when it acts); all quiet means the click
+    /// never landed.
+    #[test]
+    fn fight_engaged_reads_any_channel() {
+        assert!(!fight_engaged(100, 100, 18, 18, None, None), "silence is not engagement");
+        assert!(fight_engaged(120, 100, 18, 18, None, None), "xp flow is engagement");
+        assert!(fight_engaged(100, 100, 15, 18, None, None), "damage taken is engagement");
+        assert!(fight_engaged(100, 100, 18, 18, Some(7), None), "target animating is engagement");
+        assert!(!fight_engaged(100, 100, 19, 18, None, None), "regen/heal is not engagement");
     }
 }

@@ -13,7 +13,9 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
-use crate::skill_common::{bank_trip_resilient, check_events, learn_level, nearest_bank, obj_id};
+use crate::kit::bank::{bank_trip_resilient, nearest_bank};
+use crate::kit::pack::obj_id;
+use crate::kit::survival::{check_events, learn_level};
 use crate::ScriptResult;
 
 /// Consecutive axeless loads before the run reports blocked: the brain
@@ -33,7 +35,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
-    crate::skill_common::wait_pack_streamed(bot)?;
+    crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
     let tiers = knowledge::trees::all_tiers();
@@ -48,7 +50,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     // Threat bans outlive one load: a killer tree stays banned while its
     // neighbours get cut, instead of repicking the same death every load.
-    let mut banned = crate::skill_gather::BanSet::new();
+    let mut banned = crate::kit::bans::BanSet::new();
     // Observation memory for the run (regrow ETAs, stump sightings,
     // refusal strikes, gainless visits): owned by the bot, never shared,
     // never persisted — it dies with the run.
@@ -89,7 +91,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // loud as before.
         match bank_trip_resilient(step_bot, &mut bank, &keep, 0, &log_ids.iter().copied().collect::<Vec<_>>()) {
             Ok(_) => {}
-            Err(error) if crate::skill_common::is_death_abort(&error) => {
+            Err(error) if crate::kit::survival::is_death_abort(&error) => {
                 step_bot.log("died on the bank trip, re-gearing to continue");
                 return Ok(StepControl::Continue);
             }

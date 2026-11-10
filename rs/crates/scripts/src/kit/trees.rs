@@ -10,7 +10,7 @@ use lifescape_sdk::Bot;
 
 use crate::kit::observe::Observe;
 use crate::kit::spots::{drop_occupied, f2p_inside, hunter_covers, hunter_zones, refine_by_walk, OCCUPIED_RADIUS};
-use crate::skill_gather::{across_toll, BanSet};
+use crate::kit::bans::{across_toll, BanSet};
 use crate::ScriptError;
 
 const NEAR_BANK_TILES: i64 = 150;
@@ -170,7 +170,7 @@ pub(crate) fn pick_tree_spot(
 ) -> Option<(knowledge::trees::TreeTier, i32, i32)> {
     // Toll-fence aware: banks on the far side are last resort, never the
     // default — same getter as `nearest_bank`, one line per side.
-    let fence = if bot.allow_paid { None } else { crate::skill_common::toll_gate_x(&mut *bot) };
+    let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(&mut *bot) };
     // Hunter filter unless opted out: spots a threat could reach are
     // skipped (the hurt-driven flee below still handles wanderers).
     let hunters: Vec<(i64, i64, i64)> = if bot.allow_wild { Vec::new() } else { hunter_zones(bot) };
@@ -443,8 +443,8 @@ mod tests {
     use super::*;
     use crate::kit::observe::Observe;
     use crate::kit::spots::refine_by_walk;
-    use crate::skill_common::toll_gate_x;
-    use crate::skill_gather::{same_side, starved_oldest, BanSet};
+    use crate::kit::bank::toll_gate_x;
+    use crate::kit::bans::{same_side, starved_oldest, BanSet};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -625,7 +625,7 @@ mod tests {
 
     /// Toll fence reporting: the Al-Kharid gate line comes from the
     /// service, not painted state — x=3268 near the corridor, nothing
-    /// near Draynor. Pure side math stays covered in `skill_gather`.
+    /// near Draynor. Pure side math stays covered in `kit::bans`.
     #[test]
     fn toll_fence_reports_the_gate_line() {
         let (mut bot, _service) = served_spot_bot(3275, 3227, "spot-fence-line");

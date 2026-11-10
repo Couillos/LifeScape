@@ -227,7 +227,7 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn resolve_keep(bot: &Bot, spec: &TaskSpec) -> Result<Vec<u16>, ScriptError> {
     let mut ids = Vec::new();
     for name in &spec.keep {
-        let id = crate::skill_common::obj_id(bot, name)?;
+        let id = crate::kit::pack::obj_id(bot, name)?;
         if !ids.contains(&id) {
             ids.push(id);
         }

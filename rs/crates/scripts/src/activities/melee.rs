@@ -10,7 +10,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{exit_code, poll_stop, CycleState};
-use crate::skill_common::check_events;
+use crate::kit::survival::check_events;
 use crate::ScriptResult;
 
 /// Melee farmer: `melee [spot ...] [--kills N] [--ticks N] [--no-bank]`.
@@ -23,7 +23,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
-    crate::skill_common::wait_pack_streamed(bot)?;
+    crate::kit::survival::wait_pack_streamed(bot)?;
     let target = bot.world.ticks + 60;
     while bot.world.ticks < target && (!bot.world.stats.contains_key(&0) || !bot.world.stats.contains_key(&3)) {
         bot.pump(5)?;

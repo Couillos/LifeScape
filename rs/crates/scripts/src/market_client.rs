@@ -11,7 +11,7 @@ use lifescape_json::{object, str_value, Value};
 
 use lifescape_sdk::Bot;
 
-use crate::skill_common::nearest_bank;
+use crate::kit::bank::nearest_bank;
 use crate::ScriptError;
 
 /// One open deal row for this account (counterparty, terms).

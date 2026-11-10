@@ -10,10 +10,9 @@ use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::produce::{self, Produce, ProduceJob, ProduceSite, ProduceUi};
-use crate::skill_common::{
-    bank_trip, bank_withdraw_items, check_events, is_death_abort, learn_level, nearest_bank, obj_id,
-    pack_total, wait_pack_streamed,
-};
+use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
+use crate::kit::pack::{obj_id, pack_total};
+use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
 pub const COOK_STAT: u8 = 7;
@@ -106,7 +105,7 @@ pub fn run_cook(bot: &mut Bot, args: &[String]) -> ScriptResult {
 /// none or the booth is far: the caller reports `blocked`, never an
 /// empty walk).
 fn fill_raw(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, raw: u16) -> Result<(), ScriptError> {
-    let free = crate::skill_common::free_slots(bot) as u32;
+    let free = crate::kit::pack::free_slots(bot) as u32;
     if free == 0 {
         return Ok(());
     }

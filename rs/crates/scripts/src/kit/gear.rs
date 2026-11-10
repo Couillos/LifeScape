@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::skill_common::{free_slots, heal_at_bank, live_bank_booths, nearest_bank, obj_id, walk_checked};
+use crate::kit::bank::{heal_at_bank, live_bank_booths, nearest_bank};
+use crate::kit::pack::{free_slots, obj_id};
+use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 pub const ARMOUR_SLOTS: [i64; 9] = [0, 1, 2, 4, 5, 7, 9, 10, 12];
@@ -245,7 +247,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
         {
             return Err(error)
         }
-        Err(error) if crate::skill_common::is_walk_abort(&error) => return Err(error),
+        Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
         Err(_) => {
             let available = available_gear(bot);
             let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
