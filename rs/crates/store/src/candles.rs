@@ -139,6 +139,21 @@ impl Store {
         Ok(fills)
     }
 
+    /// Every item id with at least one recorded execution, oldest
+    /// source of truth for the "traded items only" list filter (24h
+    /// volume hides goods whose last fill settled more than a day ago).
+    pub fn items_with_executions(&self) -> Result<Vec<i64>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT DISTINCT item_id FROM executions ORDER BY item_id")?;
+        let mapped = statement.query_map(rusqlite::params![], |row| row.get(0))?;
+        let mut traded = Vec::new();
+        for mapped_row in mapped {
+            traded.push(mapped_row?);
+        }
+        Ok(traded)
+    }
+
     /// Stored candles for one item and resolution in a window range.
     pub fn candles_for(
         &self,

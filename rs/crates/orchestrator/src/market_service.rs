@@ -363,6 +363,7 @@ impl MarketService {
             "cancel" => self.op_cancel(request),
             "my_orders" => self.op_my_orders(request),
             "my_deals" => self.op_my_deals(request),
+            "recent" => self.op_recent(request),
             "deal_arrived" => self.op_deal_arrived(request),
             "deal_report" => self.op_deal_report(request),
             "pending" => self.op_pending(request),
@@ -514,6 +515,7 @@ impl MarketService {
     fn op_list(&self, request: &Value) -> Value {
         let query = request.get("q").as_str().unwrap_or("").to_lowercase();
         let limit = request.get("limit").as_i64().unwrap_or(200).clamp(1, 2000) as usize;
+        let traded_only = request.get("traded_only").as_i64().unwrap_or(0) == 1;
         let clock = Self::now_clock();
         // One row per displayed name: base objects and their banknotes
         // (`cert_*` rows share the display) trade as a single named good —
@@ -529,6 +531,10 @@ impl MarketService {
             groups.entry(row.name.clone()).or_default().push((row.id, row.shop_price));
         }
         drop(engine);
+        // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
+        let traded: std::collections::HashSet<i64> = if traded_only {
+            self.lock_store().items_with_executions().unwrap_or_default().into_iter().collect()
+        } else { std::collections::HashSet::new() };
         // One row per named good: 24h volume summed over every form,
         // reference and change from the merged fills, canonical id = the
         // form carrying the volume (base on ties). Sorted by descending
@@ -536,6 +542,9 @@ impl MarketService {
         let store = self.lock_store();
         let mut items = Vec::new();
         for (name, members) in &groups {
+            if traded_only && !members.iter().any(|member| traded.contains(&member.0)) {
+                continue;
+            }
             let mut volume = 0i64;
             let mut fills: Vec<lifescape_market::PricedFill> = Vec::new();
             let mut volumes: Vec<(i64, i64)> = Vec::new();

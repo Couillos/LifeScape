@@ -662,3 +662,44 @@ fn history_stays_sparse_for_empty_windows() {
     assert_eq!(candles[1].get("n").as_i64(), Some(1));
     cleanup(&path);
 }
+
+#[test]
+fn recent_lists_newest_deal_first_with_pseudos() {
+    let (service, path) = service("recent");
+    funded(&service, "seller-a");
+    funded(&service, "buyer");
+    let deal = match_one(&service, "seller-a", "buyer", 10, 4);
+    let reply = service.handle(&request(vec![("op", str_value("recent")), ("limit", Value::Int(20))]));
+    assert_eq!(reply.get("ok").as_bool(), Some(true));
+    let rows = reply.get("deals").as_arr().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("deal").as_i64(), Some(deal));
+    assert_eq!(rows[0].get("buyer").as_str(), Some("buyer"));
+    assert_eq!(rows[0].get("seller").as_str(), Some("seller-a"));
+    assert_eq!(rows[0].get("item").as_i64(), Some(314));
+    assert_eq!(rows[0].get("qty").as_i64(), Some(10));
+    assert_eq!(rows[0].get("price").as_i64(), Some(4));
+    // Narrowing to an untraded item hides the deal, like `trades`.
+    let narrowed = service.handle(&request(vec![
+        ("op", str_value("recent")),
+        ("item", Value::Int(995)),
+        ("limit", Value::Int(20)),
+    ]));
+    assert_eq!(narrowed.get("deals").as_arr().map(|rows| rows.len()), Some(0));
+    cleanup(&path);
+}
+
+#[test]
+fn list_traded_only_hides_untraded_goods() {
+    let (service, path) = service("traded-only");
+    funded(&service, "seller-a");
+    funded(&service, "buyer");
+    let empty = service.handle(&request(vec![("op", str_value("list")), ("traded_only", Value::Int(1))]));
+    assert_eq!(empty.get("items").as_arr().map(|rows| rows.len()), Some(0));
+    match_one(&service, "seller-a", "buyer", 10, 4);
+    let reply = service.handle(&request(vec![("op", str_value("list")), ("traded_only", Value::Int(1))]));
+    let rows = reply.get("items").as_arr().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
+    cleanup(&path);
+}

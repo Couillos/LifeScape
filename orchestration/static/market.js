@@ -13,6 +13,8 @@ let trades = [];
 let pageIndex = 0;
 let query = "";
 let liveClock = 0;
+let recent = [];
+let recentHavePseudos = false;
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -21,7 +23,9 @@ async function getJson(url) {
 
 async function loadList() {
   try {
-    const payload = await getJson('/api/market/list?limit=2000');
+    const payload = await getJson('/api/market/list?limit=2000&traded_only=1');
+    // `traded_only=1` keeps goods with >= 1 recorded execution; no
+    // client-side volume proxy (a good can trade outside the last 24h).
     if (payload.ok) items = payload.items;
   } catch (e) { /* daemon down: keep the last list */ }
   if (selected === null && items.length) selected = items[0].item;
@@ -76,7 +80,7 @@ function renderList() {
       '" onclick="pick(' + item.item + ')">' + item.name +
       ' <span class="qty">(' + item.price + ' · <span class="' + cls + '">' + changeText(item.change24h) + '</span> · ' + item.volume24h + ')</span></li>');
   }
-  document.getElementById('items').innerHTML = rows.join('') || '<li class="muted">no match</li>';
+  document.getElementById('items').innerHTML = rows.join('') || '<li class="muted">' + (query ? 'no match' : 'no traded item yet') + '</li>';
   document.getElementById('pageinfo').textContent = 'page ' + (pageIndex + 1) + '/' + pages + ' · ' + matches.length + ' item(s)';
 }
 
@@ -106,15 +110,31 @@ function setView(next) {
   loadDetail();
 }
 
-function renderBook(book) {
-  const rows = ['<tr><th>bid</th><th>ask</th></tr>'];
-  const depth = Math.max(book.buys.length, book.sells.length);
-  for (let i = 0; i < depth; i++) {
-    const bid = book.buys[i] ? book.buys[i][0] + ' × ' + book.buys[i][1] : '';
-    const ask = book.sells[i] ? book.sells[i][0] + ' × ' + book.sells[i][1] : '';
-    rows.push('<tr><td>' + bid + '</td><td>' + ask + '</td></tr>');
+function aggregateLevels(levels, descending) {
+  const totals = new Map();
+  for (const level of levels || []) {
+    totals.set(level[0], (totals.get(level[0]) || 0) + level[1]);
   }
-  document.getElementById('book').innerHTML = rows.join('');
+  const rows = [...totals.entries()];
+  rows.sort((left, right) => descending ? right[0] - left[0] : left[0] - right[0]);
+  let cumul = 0;
+  return rows.map(([price, qty]) => ({ price, qty, cumul: cumul += qty }));
+}
+
+function depthTable(title, rows) {
+  const out = ['<tr><th colspan="3">' + title + '</th></tr><tr><th>price</th><th>qty</th><th>cumul</th></tr>'];
+  for (const row of rows) {
+    out.push('<tr><td>' + row.price + '</td><td>' + row.qty + '</td><td>' + row.cumul + '</td></tr>');
+  }
+  return out.join('');
+}
+
+function renderBook(book) {
+  const bids = aggregateLevels(book.buys, true);
+  const asks = aggregateLevels(book.sells, false);
+  let html = depthTable('bids', bids) + depthTable('asks', asks);
+  if (!bids.length && !asks.length) html += '<tr><td colspan="3" class="muted">empty book</td></tr>';
+  document.getElementById('book').innerHTML = html;
 }
 
 function renderTrades() {
@@ -126,6 +146,44 @@ function renderTrades() {
     rows.push('<tr><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('trades').innerHTML = rows.join('');
+}
+
+function renderRecent() {
+  const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>time</th></tr>'];
+  for (const trade of recent.slice(0, 15)) {
+    const date = new Date(trade.t * 1000);
+    const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+    rows.push('<tr><td>' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + label + '</td></tr>');
+  }
+  document.getElementById('recent').innerHTML = rows.join('');
+}
+
+function itemName(id) {
+  const item = items.find(entry => entry.item === id);
+  return item ? item.name : ('#' + id);
+}
+
+async function loadRecent() {
+  // Preferred feed: backend `recent` op (deals with buyer/seller).
+  // Falls back to the anonymous prints of `trades` (no item = all)
+  // when the op is unknown or the daemon predates it.
+  try {
+    const payload = await getJson('/api/market/recent?limit=20');
+    if (payload.ok && Array.isArray(payload.deals)) {
+      recentHavePseudos = true;
+      recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller }));
+      renderRecent();
+      return;
+    }
+  } catch (e) { /* fall through to the anonymous feed */ }
+  try {
+    const payload = await getJson('/api/market/trades?limit=20');
+    if (payload.ok) {
+      recentHavePseudos = false;
+      recent = payload.trades.slice().reverse().map(trade => ({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—' }));
+      renderRecent();
+    }
+  } catch (e) { /* keep the last frame */ }
 }
 
 // Fixed slots for the current view: 24 hourly or 183 daily windows,
@@ -205,6 +263,11 @@ function watchLive() {
     if (!fresh || !fresh.length) return;
     let moved = false;
     for (const trade of fresh) {
+      if (!recentHavePseudos && (!recent.length || trade.t > recent[0].t)) {
+        recent.unshift({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—' });
+        recent = recent.slice(0, 30);
+        renderRecent();
+      }
       if (trade.item !== selected) continue;
       if (trade.t > liveClock) liveClock = trade.t;
       if (!trades.length || trade.t > trades[0].t || (trade.t === trades[0].t && trade.p !== trades[0].p)) {
@@ -227,7 +290,8 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { if (candles.length) draw(); }, 150);
 });
 
-loadList().then(loadDetail);
+loadList().then(() => { loadDetail(); loadRecent(); });
 setInterval(loadList, 60000);
 setInterval(loadDetail, 30000);
+setInterval(loadRecent, 10000);
 watchLive();

@@ -338,6 +338,32 @@ impl MarketService {
         object(vec![("ok", Value::Bool(true)), ("deals", Value::Arr(values))])
     }
 
+    /// Latest transactions, newest first, with buyer/seller pseudos.
+    /// Shape matches what `market.js loadRecent` reads; `item` narrows.
+    pub(crate) fn op_recent(&self, request: &Value) -> Value {
+        let wanted = request.get("item").as_i64().unwrap_or(-1);
+        let limit = request.get("limit").as_i64().unwrap_or(20).clamp(1, 100);
+        let store = self.lock_store();
+        let mut rows = store.recent_deals(limit).unwrap_or_default();
+        if wanted >= 0 {
+            rows.retain(|row| row.item_id == wanted);
+        }
+        let values: Vec<Value> = rows.iter().map(|row| {
+            object(vec![
+                ("deal", Value::Int(row.deal_id)),
+                ("buyer", str_value(&row.buyer)),
+                ("seller", str_value(&row.seller)),
+                ("item", Value::Int(row.item_id)),
+                ("qty", Value::Int(row.quantity)),
+                ("price", Value::Int(row.price)),
+                ("t", Value::Int(row.created_clock)),
+                ("status", str_value(row.status.as_str())),
+            ])
+        })
+            .collect();
+        object(vec![("ok", Value::Bool(true)), ("deals", Value::Arr(values))])
+    }
+
     pub(crate) fn op_deal_arrived(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("");
         let deal_id = request.get("deal").as_i64().unwrap_or(-1);

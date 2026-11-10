@@ -15,7 +15,7 @@ pub enum DealStatus {
 }
 
 impl DealStatus {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             DealStatus::Matched => "matched",
             DealStatus::Convened => "convened",
@@ -180,6 +180,24 @@ impl Store {
             open_deals.push(map_deal(row)?);
         }
         Ok(open_deals)
+    }
+
+    /// Latest deals first (newest `created_clock`, `deal_id` tiebreak),
+    /// every status: the market page feed shows buyer and seller pseudos.
+    /// Limit clamps to one page (1..=100); callers pass the `limit` query.
+    pub fn recent_deals(&self, limit: i64) -> Result<Vec<Deal>, Error> {
+        let capped = limit.clamp(1, 100);
+        let query = format!(
+            "SELECT {DEAL_COLUMNS} FROM deals \
+             ORDER BY created_clock DESC, deal_id DESC LIMIT ?1"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let mut found_rows = statement.query(rusqlite::params![capped])?;
+        let mut latest = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            latest.push(map_deal(row)?);
+        }
+        Ok(latest)
     }
 
     /// Fails every non-final deal left by a dead daemon (both parties

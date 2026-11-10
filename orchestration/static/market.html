@@ -49,7 +49,7 @@
   <div id="list">
     <h2>Items</h2>
     <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
-    <div class="muted">price · 24h change · 24h volume — most traded first</div>
+    <div class="muted">traded items only · price · 24h change · 24h volume — most traded first</div>
     <ul id="items"></ul>
     <div id="pager">
       <button onclick="page(-1)">‹</button>
@@ -68,6 +68,7 @@
     <div id="tables">
       <div><h2>Book</h2><table id="book"></table></div>
       <div><h2>Last trades</h2><table id="trades"></table></div>
+      <div><h2>Latest transactions</h2><table id="recent"></table><div class="muted">all items, live · buyer/seller from the backend feed</div></div>
     </div>
   </div>
 </div>
