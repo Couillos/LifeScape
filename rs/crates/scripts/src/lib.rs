@@ -172,7 +172,7 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "cook", "fishing", "mining", "woodcut", "melee", "market", "tutorial",
+        "cook", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -202,6 +202,8 @@ fn runner(name: &str) -> Option<Runner> {
         "mining" => Some(|bot, args| activities::mining::run_mining(bot, args)),
         "woodcut" => Some(|bot, args| activities::woodcut::run_woodcut(bot, args)),
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
+        "ranged" => Some(|bot, args| activities::ranged_style::run_ranged(bot, args)),
+        "magic" => Some(|bot, args| activities::magic_style::run_magic(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -270,7 +272,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 46);
+        assert_eq!(names().len(), 48);
     }
 
     #[test]
