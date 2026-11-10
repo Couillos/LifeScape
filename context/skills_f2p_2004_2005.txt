@@ -60,8 +60,8 @@ Higher levels:
   team cape. Only the scimmy for training.
 - Lesser demons (82, Karamja volcano: Port Sarim boat 30 gp, west to the
   volcano): good alchable drops (rune meds). Bring alch runes (natures;
-  fires drop there). Lobsters fished on site, or noted supplies +
-  general-store "bank" trick.
+  fires drop there). Lobsters fished on site, or banked food (274: no
+  notes, no Stiles) + general-store "bank" trick.
 - Moss giants (level 42, Wilderness): big bones, solid mid-level XP.
   Bank at Edgeville.
 - Ice warriors/giants: listed for higher levels.
@@ -172,11 +172,11 @@ RUNECRAFT
 - Rune Mysteries quest to start; Aubury in Varrock teleports you to the
   essence mine.
 - Altars: air (south Varrock, start here) -> mind -> water -> earth ->
-  fire -> body (20). Air/earth stay the F2P staple in 2004. Tiaras and
-  talismans grant altar entry.
-- Method: mine essence, walk to the altar, craft, bank, repeat. Air
-  tiara for direct entry. Runner-assisted crafting via face-to-face
-  trade is era-plausible (trade existed, no market needed).
+  fire -> body (20). Air/earth stay the F2P staple in 2004. 274: no
+  tiaras exist, talismans only for altar entry.
+- Method: mine essence, walk to the altar, craft, bank, repeat.
+  Runner-assisted crafting via face-to-face trade is era-plausible
+  (trade existed, no market needed).
 
 F2P QUESTS WITH SKILL XP (2004, start here before grinding)
 ------------------------------------------------------------

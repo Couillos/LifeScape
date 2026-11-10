@@ -1,6 +1,6 @@
 //! Build-time table codegen: `comps`, `objs`, `npcs` and `locs`, plus every
 //! remaining dump (`equipment`, `foods`, `shops`, `quests`, `recipes`,
-//! `rocks`, `spells`, `trees`, `varps`, `spawns_obj`).
+//! `rocks`, `spells`, `stations`, `trees`, `varps`, `spawns_obj`).
 //!
 //! Parses the dumps with the workspace JSON reader and emits one generated
 //! module per table (`*_generated.rs` in `OUT_DIR`) holding the typed row
@@ -30,6 +30,8 @@ mod shops_gen;
 mod spawns_obj_gen;
 #[path = "codegen/spells.rs"]
 mod spells_gen;
+#[path = "codegen/stations.rs"]
+mod stations_gen;
 #[path = "codegen/trees.rs"]
 mod trees_gen;
 #[path = "codegen/varps.rs"]
@@ -412,6 +414,7 @@ fn main() {
         "recipes",
         "rocks",
         "spells",
+        "stations",
         "trees",
         "varps",
         "spawns_obj",
@@ -434,6 +437,7 @@ fn main() {
     recipes_gen::generate(&manifest_dir);
     rocks_gen::generate(&manifest_dir);
     spells_gen::generate(&manifest_dir);
+    stations_gen::generate(&manifest_dir);
     trees_gen::generate(&manifest_dir);
     varps_gen::generate(&manifest_dir);
     spawns_obj_gen::generate(&manifest_dir);

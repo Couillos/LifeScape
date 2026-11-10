@@ -40,10 +40,17 @@ gone or block scraping. This file compiles:
 ---------
 - Faster respawn in crowded worlds (wines, rocks): guides recommend
   worlds 1-7.
-- Fish: only Stiles (south of the Karamja volcano, Musa Point) swaps
-  tuna/lobster/swordfish for bank notes. Everything else is banked on
-  foot: Karamja ship -> Port Sarim -> Falador/Varrock bank. Count the
-  walk into the profit.
+- Fish (274 correction: Stiles is absent from revision 274, no fish
+  notes exist): all Karamja fish is banked on foot, tuna/lobster/
+  swordfish included. Loop: Karamja ship -> Port Sarim -> Falador/
+  Varrock bank. Count the walk into the profit. (Old guides cite
+  Stiles south of the volcano swapping fish for notes; that NPC
+  postdates 274.)
+- Billets (274 correction: no generalized bank notes, only `cert_`
+  withdrawals at the bank for the base item): no noted essence, no
+  noted supplies. Essence runners trade raw essence face-to-face
+  (era-plausible, no market needed); volcano trips carry lobsters
+  fished on site or banked food.
 - Telegrab magic: without it, the chaos mages attack you.
 - Edgeville Dungeon door (hill giants): brass key required.
 - F2P runite: a single spot, level 46 Wilderness north of the Lava
@@ -104,16 +111,18 @@ METHODS BY LEVEL
   demand from runecrafters.
 
 5. RUNECRAFTING
-- Classic air: altar south of Varrock, air tiara, minimum weight.
+- Classic air: altar south of Varrock, air talisman (no tiaras in
+  274, entry via ruins with talisman), minimum weight.
   Earnings scale with level (multiple runes per essence at high
   levels).
-- World 16 runners: people open your noted essence for a tip. High
-  volume and fast XP, increasingly worthwhile at high Runecrafting.
+- World 16 runners (274: face-to-face trade of raw essence for a tip,
+  no notes): high volume and fast XP, increasingly worthwhile at high
+  Runecrafting.
 - Air/earth stay the F2P staple in 2004.
 
 6. FISHING
-- Lobsters/swordfish at Karamja (Musa Point). Note exchange at Stiles
-  (tuna/lobster/swordfish only).
+- Lobsters/swordfish at Karamja (Musa Point). 274: no Stiles, no
+  notes — bank on foot via the Port Sarim boat.
 - Era trick: buy cheap off fishers training their level, resell higher.
 - The queen F2P method with yews: "lobsters and yews back in 05".
 - Tuna for Cooking/levelling, not for sale.
