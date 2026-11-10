@@ -49,6 +49,11 @@ impl Orchestrator {
 fn supervise_all() {
     let mut watchdogs: HashMap<String, Watchdog> = HashMap::new();
     let mut written: HashMap<String, (f64, String)> = HashMap::new();
+    // Consecutive report-drain contentions per account: the lock holder
+    // is still unidentified (verrou fantome, L7), so at least the wedged
+    // account names itself loudly instead of stalling silently. Resets
+    // on the first clean drain.
+    let mut contended: HashMap<String, u32> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_millis(500));
         let pairs: Vec<(Arc<Orchestrator>, Arc<Job>)> = {
@@ -90,10 +95,19 @@ fn supervise_all() {
                 Ok(mut inner) => {
                     let pending = std::mem::replace(&mut inner.report_pending, false);
                     let report = if pending { inner.last_report.clone() } else { None };
+                    contended.remove(&job.account);
                     (pending, report)
                 }
                 Err(_) => {
-                    println!("brain {}: inner busy, pass deferred", job.account);
+                    let hits = contended.get(&job.account).cloned().unwrap_or(0) + 1;
+                    contended.insert(job.account.clone(), hits);
+                    if hits == 10 || hits % 60 == 0 {
+                        println!(
+                            "brain {}: inner contended x{hits} (~{}s), job telemetry stalled; holder unknown, worker restart parks it if the watchdog fires",
+                            job.account,
+                            hits / 2
+                        );
+                    }
                     (false, None)
                 }
             };

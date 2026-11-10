@@ -181,6 +181,22 @@ impl Store {
         }
         Ok(open_deals)
     }
+
+    /// Fails every non-final deal left by a dead daemon (both parties
+    /// disconnected with it, no handover can resume). Returns the count.
+    /// The market service calls this on boot so `my_deals` never shows
+    /// phantom handovers after a restart.
+    pub fn fail_stale_deals(&self, reason: &str, clock: i64) -> Result<usize, Error> {
+        if reason.is_empty() {
+            return Err(Error::Invalid("failed deal needs a reason".to_string()));
+        }
+        let touched = self.connection.execute(
+            "UPDATE deals SET status = 'failed', fail_reason = ?1, updated_clock = ?2 \
+             WHERE status NOT IN ('settled','failed')",
+            rusqlite::params![reason, clock],
+        )?;
+        Ok(touched)
+    }
 }
 
 #[cfg(test)]

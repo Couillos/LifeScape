@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{check_coverage, check_price, reference_price, Order};
+use crate::jobs::Job;
 use crate::market_seed::{catalogue, CatalogueItem};
 use lifescape_market::{Book, Deal, Side};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
@@ -69,6 +70,25 @@ impl Ledger {
 
     pub(crate) fn credit_stock(&mut self, account: &str, item: i64, qty: i64) {
         *self.stock.entry((account.to_string(), item)).or_insert(0) += qty;
+    }
+
+    /// Funding mirror of the last pushed holdings (daemon sync, see
+    /// `market_convene`): SET semantics, not credit. Live bots spend
+    /// outside the market (shops, deaths), so only the fresh snapshot
+    /// is truthful; match-time settlement still moves the ledger between
+    /// syncs. Known limit, documented in decisions: two quick buys can
+    /// over-commit against the same coins until the handover updates the
+    /// snapshot; the physical trade double-checks real items, so this
+    /// degrades into failed deals with a reliability penalty, never
+    /// into lost items.
+    pub(crate) fn sync_account(&mut self, account: &str, coins: i64, stock: &[(i64, i64)]) {
+        self.coins.insert(account.to_string(), coins.max(0));
+        self.stock.retain(|(owner, _item), _qty| owner != account);
+        for (item, qty) in stock {
+            if *qty > 0 {
+                self.stock.insert((account.to_string(), *item), *qty);
+            }
+        }
     }
 }
 
@@ -174,7 +194,123 @@ impl MarketService {
                 })
                 .map_err(|error| error.to_string())?;
         }
-        Ok(MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)) })
+        let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)) };
+        service.reload_books();
+        Ok(service)
+    }
+
+    /// Rebuilds the in-memory books from the persisted carnet after a
+    /// restart: resting (`open`, plus partially filled `matched` rows
+    /// stranded without their deals) orders rest again under their store
+    /// ids, ranked by creation clock so price-time priority replays the
+    /// pre-shutdown queue. Stranded non-final deals fail loudly (both
+    /// parties disconnected with the daemon). Without this a restart
+    /// orphans every order: visible in `my_orders`, invisible to
+    /// matching, and the market silently dies (seen live, L11).
+    pub(crate) fn reload_books(&self) {
+        let clock = Self::now_clock();
+        let stale_deals = self.lock_store().fail_stale_deals("daemon restart", clock).unwrap_or(0);
+        if stale_deals > 0 {
+            println!("market reload: failed {stale_deals} stale in-flight deals (daemon restart)");
+        }
+        let rows = match self.lock_store().resting_orders() {
+            Ok(rows) => rows,
+            Err(error) => {
+                println!("market reload: no book rebuild, store read failed: {error}");
+                return;
+            }
+        };
+        if rows.is_empty() {
+            return;
+        }
+        let mut reopened = 0usize;
+        {
+            let mut engine = self.lock_engine();
+            for (seq, row) in rows.iter().enumerate() {
+                let side = match row.side {
+                    lifescape_store::OrderSide::Buy => Side::Buy,
+                    lifescape_store::OrderSide::Sell => Side::Sell,
+                };
+                let book = engine.books.entry(row.item_id).or_insert_with(Book::new);
+                book.relist(Order {
+                    id: row.order_id as u64,
+                    account: row.account.clone(),
+                    item: row.item_id,
+                    side,
+                    quantity: row.quantity,
+                    remaining: row.remaining.max(0),
+                    price: row.price,
+                    seq: seq as u64,
+                });
+                engine.order_item.insert(row.order_id as u64, row.item_id);
+            }
+        }
+        // Stranded `matched` rows rejoin as plain resting orders: their
+        // deals died with the daemon and no handover can resume them.
+        let store = self.lock_store();
+        for row in &rows {
+            if row.status == lifescape_store::OrderStatus::Matched
+                && store
+                    .set_order_status(row.order_id, lifescape_store::OrderStatus::Open, row.remaining.max(0), clock)
+                    .is_ok()
+            {
+                reopened += 1;
+            }
+        }
+        println!(
+            "market reload: {} resting orders back in {} books ({reopened} stranded matched reopened)",
+            rows.len(),
+            self.lock_engine().books.len()
+        );
+    }
+
+    /// Funds the ledger from the last pushed holdings (L11): the
+    /// coverage check in `op_place` runs against the ledger, but nothing
+    /// ever credited live bots, so every live order failed coverage. Each
+    /// convene round mirrors inv+bank+worn item counts (numeric ids from
+    /// the snapshot) into the ledger; match-time settlement still moves
+    /// it between rounds. Stale (>30 s) or missing snapshots skip: no
+    /// funding without a live witness. SET semantics over-commit window
+    /// documented on `sync_account`.
+    pub(crate) fn sync_ledger_from_jobs(&self, jobs: &[std::sync::Arc<Job>]) {
+        let coins_id = lifescape_gamedata::objs_by_name("Coins")
+            .into_iter()
+            .next()
+            .map(|entry| entry.obj_id as i64)
+            .unwrap_or(995);
+        let now = crate::jobs::now_secs();
+        for job in jobs {
+            let live = match job.inner.try_lock().map(|inner| inner.live.clone()) {
+                Ok(Some(live)) => live,
+                _ => continue,
+            };
+            if !live.get("updated").as_f64().is_some_and(|at| now - at < 30.0) {
+                continue;
+            }
+            let mut coins = 0i64;
+            let mut stock: HashMap<i64, i64> = HashMap::new();
+            for key in ["inv", "bank", "worn"] {
+                for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+                    let (id, count) = match &entry {
+                        Value::Obj(_) => (
+                            entry.get("id").as_i64().unwrap_or(-1),
+                            entry.get("count").as_i64().unwrap_or(1).max(0),
+                        ),
+                        _ => continue,
+                    };
+                    if id < 0 {
+                        continue;
+                    }
+                    if id == coins_id {
+                        coins += count;
+                    } else {
+                        *stock.entry(id).or_insert(0) += count;
+                    }
+                }
+            }
+            let stock: Vec<(i64, i64)> = stock.into_iter().collect();
+            self.lock_engine().ledger.sync_account(&job.account, coins, &stock);
+        }
     }
 
     pub(crate) fn lock_store(&self) -> std::sync::MutexGuard<'_, Store> {

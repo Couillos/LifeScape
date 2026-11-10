@@ -882,6 +882,10 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                 };
                 let tick_ms = meter.observe(wall, truth);
                 let nav_up = crate::plan_service::stats_json().is_some();
+                // Never hold the jobs map while locking a job (same
+                // discipline as `market_live_positions`).
+                let jobs: Vec<Arc<Job>> = orch.jobs.lock().unwrap().values().cloned().collect();
+                service.sync_ledger_from_jobs(&jobs);
                 for pose in convene_round(&service, nav_up, &parties, &mut eta, tick_ms) {
                     eprintln!("market-convene: pose {} {:?}", pose.account, pose.args);
                     unposed.push(pose);

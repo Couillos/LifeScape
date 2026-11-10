@@ -500,3 +500,51 @@ fn fifty_deals_settle_without_loss() {
     cleanup(&path);
 }
 
+/// A daemon restart reloads the carnet: resting orders rest again under
+/// their store ids, and the next crossing order matches them. Regression
+/// test for the live L11 finding (engine empty, ~500 orphaned seed
+/// orders, quotes without depth after a restart).
+#[test]
+fn restart_reloads_resting_orders_into_books() {
+    let (service, path) = service("reload");
+    funded(&service, "seller");
+    funded(&service, "buyer");
+    let sell = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("seller")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(10)),
+        ("price", Value::Int(5)),
+    ]));
+    assert_eq!(sell.get("ok").as_bool(), Some(true));
+    let buy = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("buyer")),
+        ("side", str_value("buy")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(10)),
+        ("price", Value::Int(4)),
+    ]));
+    assert_eq!(buy.get("ok").as_bool(), Some(true), "resting bid, no cross");
+    drop(service);
+    // Same database file, new engine: the restart path.
+    let reopened = MarketService::open(&path, catalogue()).expect("reopens");
+    let book = reopened.handle(&request(vec![("op", str_value("book")), ("item", Value::Int(314))]));
+    assert_eq!(book.get("ok").as_bool(), Some(true));
+    assert_eq!(book.get("sells").as_arr().map(|rows| rows.len()), Some(1), "reloaded ask visible");
+    assert_eq!(book.get("buys").as_arr().map(|rows| rows.len()), Some(1), "reloaded bid visible");
+    funded(&reopened, "taker");
+    let cross = reopened.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("taker")),
+        ("side", str_value("buy")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(10)),
+        ("price", Value::Int(6)),
+    ]));
+    assert_eq!(cross.get("ok").as_bool(), Some(true));
+    assert_eq!(cross.get("fills").as_arr().map(|fills| fills.len()), Some(1), "cross matches the reloaded ask");
+    cleanup(&path);
+}
+

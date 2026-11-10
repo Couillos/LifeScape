@@ -358,6 +358,15 @@ fn remaining_kills(kills_limit: u32, total: u32) -> u32 {
     kills_limit.saturating_sub(total)
 }
 
+/// Portion of a run budget still unspent (ticks left, saturated).
+/// Pure so the budget arithmetic stays testable without a game.
+pub fn budget_left(ticks_limit: u64, started: u64, now: u64) -> u64 {
+    if ticks_limit == 0 {
+        return 0;
+    }
+    ticks_limit.saturating_sub(now.saturating_sub(started))
+}
+
 pub fn run_spot(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -403,13 +412,27 @@ pub fn run_spot(
     }
     let mut total = 0u32;
     let mut banked_trip = false;
+    // Run-level deadline: `fight` below budgets each call from its own
+    // start, so passing it the full limit every cluster multiplies the
+    // overshoot by the cluster count (~2.5x seen live, L7 debt). The
+    // remainder shrinks as the run spends ticks anywhere (bank trips,
+    // walks, fights alike).
+    let run_started = bot.world.ticks;
     for (center_x, center_z, count) in targets {
         // Pace retries: instant walk failures consume no ticks, so an
         // unpaced loop machine-guns the server into kicking us.
         bot.pump(2)?;
+        if ticks_limit > 0 && bot.world.ticks.saturating_sub(run_started) >= ticks_limit {
+            bot.log(&format!("run budget {ticks_limit}t spent across clusters, stopping"));
+            break;
+        }
         bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
         let mut walk_fails = 0u32;
         while kills_limit == 0 || total < kills_limit {
+            if ticks_limit > 0 && bot.world.ticks.saturating_sub(run_started) >= ticks_limit {
+                bot.log(&format!("run budget {ticks_limit}t spent inside the hunt, stopping"));
+                break;
+            }
             // Hunt entry: the one full evaluation (pack + bank when near
             // one, pack only with --no-bank). Inside the hunt only a loot
             // that was picked up re-evaluates; a death ends the fight and
@@ -444,7 +467,7 @@ pub fn run_spot(
             }
             {
                 let (kills, bank_wanted, died) =
-                    crate::kit::fight::fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), ticks_limit, no_bank)?;
+                    crate::kit::fight::fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), budget_left(ticks_limit, run_started, bot.world.ticks), no_bank)?;
                 total += kills;
                 if died {
                     return Ok((total, true, banked_trip));
@@ -530,6 +553,17 @@ mod tests {
         assert_eq!(remaining_kills(0, 5), 0, "unlimited hunt survives kills");
         assert_eq!(remaining_kills(10, 3), 7);
         assert_eq!(remaining_kills(10, 10), 0);
+    }
+
+    /// The run budget is cumulative, not per cluster: each fight call
+    /// receives only what the run has not spent yet.
+    #[test]
+    fn budget_left_shrinks_with_spent_ticks() {
+        assert_eq!(super::budget_left(0, 100, 99999), 0, "unlimited stays unlimited");
+        assert_eq!(super::budget_left(6000, 100, 100), 6000, "nothing spent yet");
+        assert_eq!(super::budget_left(6000, 100, 3100), 3000, "half the run left");
+        assert_eq!(super::budget_left(6000, 100, 6100), 0, "spent budget saturates, never wraps");
+        assert_eq!(super::budget_left(6000, 5000, 100), 6000, "clock skew never grants extra");
     }
 
 

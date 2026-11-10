@@ -241,6 +241,25 @@ impl Store {
         }
         Ok(account_book)
     }
+
+    /// Every resting order of the whole carnet (open, plus partially
+    /// filled rows stranded by a daemon restart), oldest first. The
+    /// market service rebuilds its in-memory books from these on boot:
+    /// without this a restart orphans every resting order (visible in
+    /// `my_orders`, invisible to matching).
+    pub fn resting_orders(&self) -> Result<Vec<Order>, Error> {
+        let query = format!(
+            "SELECT {ORDER_COLUMNS} FROM orders \
+             WHERE status IN ('open','matched') AND dormant = 0 ORDER BY created_clock"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let mut found_rows = statement.query(rusqlite::params![])?;
+        let mut resting = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            resting.push(map_order(row)?);
+        }
+        Ok(resting)
+    }
 }
 
 #[cfg(test)]
