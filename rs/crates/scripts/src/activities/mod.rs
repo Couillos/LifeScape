@@ -4,9 +4,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod alchemy;
 pub mod bury_loot;
 pub mod cook;
+pub mod cut_gems;
+pub mod enchant_teleport;
+pub mod firemaking;
 pub mod fishing;
+pub mod leatherwork;
 pub mod magic_style;
 pub mod market;
 pub mod market_cleanup;
@@ -16,4 +21,6 @@ pub mod market_shop;
 pub mod melee;
 pub mod mining;
 pub mod ranged_style;
+pub mod stringing;
+pub mod superheat;
 pub mod woodcut;

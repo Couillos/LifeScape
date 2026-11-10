@@ -172,7 +172,8 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "cook", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "market", "tutorial",
+        "cook", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
+        "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -204,6 +205,13 @@ fn runner(name: &str) -> Option<Runner> {
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
         "ranged" => Some(|bot, args| activities::ranged_style::run_ranged(bot, args)),
         "magic" => Some(|bot, args| activities::magic_style::run_magic(bot, args)),
+        "firemaking" => Some(|bot, args| activities::firemaking::run_firemaking(bot, args)),
+        "cut_gems" => Some(|bot, args| activities::cut_gems::run_cut_gems(bot, args)),
+        "leatherwork" => Some(|bot, args| activities::leatherwork::run_leatherwork(bot, args)),
+        "stringing" => Some(|bot, args| activities::stringing::run_stringing(bot, args)),
+        "alchemy" => Some(|bot, args| activities::alchemy::run_alchemy(bot, args)),
+        "superheat" => Some(|bot, args| activities::superheat::run_superheat(bot, args)),
+        "enchant_teleport" => Some(|bot, args| activities::enchant_teleport::run_enchant_teleport(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -272,7 +280,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 48);
+        assert_eq!(names().len(), 55);
     }
 
     #[test]
