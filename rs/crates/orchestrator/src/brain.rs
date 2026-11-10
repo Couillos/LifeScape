@@ -300,6 +300,21 @@ fn fail_count(life: &Life, node: &str) -> usize {
     life.history.iter().filter(|entry| entry.node == node && entry.outcome == "failed").count()
 }
 
+/// Typed launch failure (P3.6): the locked method names no executable
+/// (unmapped prefix) or its script is not registered yet (P3 waves
+/// land in parallel). Failed, never silent: the front counts it, the
+/// 3-strike rule bounds it, and a landed script replans it via a fresh
+/// life, not a ghost retry.
+fn fail_no_script(life: &mut Life, position: usize, method: &str) {
+    let id = life.nodes[position].id.clone();
+    println!("brain {}: no script for {method}, failing {}", life.account, id);
+    life.nodes[position].status = NodeStatus::Failed { error: format!("no-script:{method}") };
+    if life.active.as_deref() == Some(id.as_str()) {
+        life.active = None;
+    }
+    push_history(life, &id, "failed");
+}
+
 fn done_ids(life: &Life) -> Vec<String> {
     life.nodes.iter().filter(|node| node.status == NodeStatus::Done).map(|node| node.id.clone()).collect()
 }
@@ -621,6 +636,11 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     let node_snapshot = life.nodes[position].clone();
     let Some((script, args)) = map_method(&method, &node_snapshot, budget) else {
+        // No executable for this method: typed failure, never a silent
+        // spin — the dashboard shows it and the 3-strike rule can
+        // abandon it (replan on new scripts, never ghost-retry).
+        fail_no_script(&mut life, position, &method);
+        let _ = save_life(&life);
         return;
     };
     let mut args = args;
@@ -652,6 +672,10 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
     }
     if !crate::registry::script_known(&script) {
+        // The method is wired but its P3 script has not landed yet:
+        // same typed failure, the script name rides in the error.
+        fail_no_script(&mut life, position, &format!("{method} -> {script}"));
+        let _ = save_life(&life);
         return;
     }
     let values: Vec<Value> = args.iter().map(|arg| lifescape_json::str_value(arg)).collect();
@@ -869,8 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn space_pressure_inserts_even_on_terminal_graphs() {
-        let mut life = terminal_life();
+    fn space_pressure_inserts_even_on_terminal_graphs() {        let mut life = terminal_life();
         assert!(maybe_insert_cleanup(&mut life, 55), "full bank on a done graph still inserts");
         assert!(matches!(life.nodes.last().map(|node| (&node.kind, &node.status)),
             Some((NodeKind::SpaceCleanup, lifescape_planner::NodeStatus::Ready))), "janitor ready at once");
@@ -887,5 +910,63 @@ mod tests {
             stalled.nodes.push(abandoned);
         }
         assert!(!maybe_insert_cleanup(&mut stalled, 60), "two abandoned in a row stop the loop");
+    }
+
+    /// P3.6 integration: every family method the planner emits names a
+    /// script the registry dispatches. P3.1-P3.5 all landed (72
+    /// scripts), so the pending set is empty: an unmapped script fails
+    /// this test, a missing one fails typed at launch.
+    #[test]
+    fn mapped_scripts_are_registered() {
+        let obtain = Node::new("n9", NodeKind::ObtainItems { item: "feather".to_string(), count: 2000 }, Vec::new(), 2000);
+        let reach = Node::new("n1", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 30 }, Vec::new(), 30);
+        for method in [
+            "gather:fishing/raw_trout", "gather:woodcut/willow_logs", "gather:mining/coal",
+            "gather:sheep/wool", "gather:wheat/grain",
+            "cook/raw_shrimp", "cook:trout", "bake:bread",
+            "smelt:steel_bar", "smith:steel_platebody",
+            "tan:cow_hide", "craft:leather_gloves",
+            "fire:willow_logs", "spin:ball_of_wool", "pottery:pot", "jewelry:gold_ring",
+            "string:unstrung_gold_amulet", "alch:gold_ring", "superheat:iron_bar",
+            "enchant:strung_sapphire_amulet",
+            "runecraft:airrune", "pick:grain", "mill:pot_flour", "fill:jug_water",
+            "essence:blankrune",
+            "fight:melee/cows", "fight:ranged/cows", "fight:magic/cows",
+            "farm:feather", "market:buy", "shop:buy", "market:flip", "space:cleanup",
+            "quest:cook", "access:varrock",
+        ] {
+            let node = if method.starts_with("gather:") || method.starts_with("smelt:") || method.starts_with("cook/") {
+                &reach
+            } else {
+                &obtain
+            };
+            let (script, _) = lifescape_planner::map_method(method, node, None)
+                .unwrap_or_else(|| panic!("{method} maps"));
+            assert!(crate::registry::script_known(&script), "{method} -> {script}: not registered");
+        }
+    }
+
+    /// P3.6: a method without script fails typed (no-script), never
+    /// silent — the front counts it and the 3-strike rule can abandon.
+    #[test]
+    fn no_script_fails_typed_never_silent() {
+        let mut life = terminal_life();
+        life.nodes[0].status = lifescape_planner::NodeStatus::Ready;
+        life.active = Some("n1".to_string());
+        super::fail_no_script(&mut life, 0, "smelt:iron_bar");
+        assert!(matches!(
+            life.nodes[0].status,
+            lifescape_planner::NodeStatus::Failed { .. }
+        ), "failed, got {:?}", life.nodes[0].status);
+        assert!(life.active.is_none(), "no stranded lock");
+        assert_eq!(
+            life.history.iter().filter(|entry| entry.outcome == "failed").count(),
+            1,
+            "one typed failure in history"
+        );
+        assert!(matches!(
+            &life.nodes[0].status,
+            lifescape_planner::NodeStatus::Failed { error } if error == "no-script:smelt:iron_bar"
+        ), "the missing method rides in the error");
     }
 }

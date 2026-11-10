@@ -67,8 +67,8 @@ const HIDE_LEATHER_STEPS: &[ChainStep] = &[
 const GOLD_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:mining/gold_ore", skill: "mining", level: 40, ticks_each: 12.0, xp_each: 6.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "gold_ore", makes_qty: 1.0 },
     ChainStep { method: "smelt:gold_bar", skill: "smithing", level: 40, ticks_each: 4.0, xp_each: 22.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ore", takes_qty: 1.0, makes: "gold_bar", makes_qty: 1.0 },
-    ChainStep { method: "craft:gold_ring", skill: "crafting", level: 5, ticks_each: 4.0, xp_each: 15.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_bar", takes_qty: 1.0, makes: "gold_ring", makes_qty: 1.0 },
-    ChainStep { method: "alch:high", skill: "magic", level: 55, ticks_each: 3.0, xp_each: 65.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ring", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
+    ChainStep { method: "jewelry:gold_ring", skill: "crafting", level: 5, ticks_each: 4.0, xp_each: 15.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_bar", takes_qty: 1.0, makes: "gold_ring", makes_qty: 1.0 },
+    ChainStep { method: "alch:gold_ring", skill: "magic", level: 55, ticks_each: 3.0, xp_each: 65.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "gold_ring", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
 ];
 const ESSENCE_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:mining/blankrune", skill: "mining", level: 1, ticks_each: 6.0, xp_each: 2.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "blankrune", makes_qty: 1.0 },
@@ -77,11 +77,11 @@ const ESSENCE_STEPS: &[ChainStep] = &[
 const WOOL_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:sheep/wool", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 2.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "wool", makes_qty: 1.0 },
     ChainStep { method: "spin:ball_of_wool", skill: "crafting", level: 1, ticks_each: 3.0, xp_each: 2.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "wool", takes_qty: 1.0, makes: "ball_of_wool", makes_qty: 1.0 },
-    ChainStep { method: "string:amulet_of_magic", skill: "crafting", level: 1, ticks_each: 2.0, xp_each: 4.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "ball_of_wool", takes_qty: 1.0, makes: "amulet_of_magic", makes_qty: 1.0 },
+    ChainStep { method: "string:unstrung_gold_amulet", skill: "crafting", level: 1, ticks_each: 2.0, xp_each: 4.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "ball_of_wool", takes_qty: 1.0, makes: "strung_gold_amulet", makes_qty: 1.0 },
 ];
 const CLAY_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:mining/clay", skill: "mining", level: 1, ticks_each: 8.0, xp_each: 2.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "clay", makes_qty: 1.0 },
-    ChainStep { method: "craft:pot", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 6.3, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "clay", takes_qty: 1.0, makes: "pot", makes_qty: 1.0 },
+    ChainStep { method: "pottery:pot", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 6.3, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "clay", takes_qty: 1.0, makes: "pot", makes_qty: 1.0 },
 ];
 const BREAD_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:wheat/grain", skill: "cooking", level: 1, ticks_each: 4.0, xp_each: 1.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "", takes_qty: 0.0, makes: "grain", makes_qty: 1.0 },
@@ -95,6 +95,25 @@ const SUPERHEAT_STEPS: &[ChainStep] = &[
 const RUNITE_WILD_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:mining/runite_ore", skill: "mining", level: 85, ticks_each: 30.0, xp_each: 12.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: true, takes: "", takes_qty: 0.0, makes: "runite_ore", makes_qty: 1.0 },
 ];
+const ENCHANT_STEPS: &[ChainStep] = &[
+    // Wiring amulets to enchant spells (P2.1 review): the strung input
+    // resolves spell, level, runes and product in the script; the XP is
+    // the spell dump (enchant_lvl1 175 raw / 10, asserted below).
+    ChainStep { method: "enchant:strung_sapphire_amulet", skill: "magic", level: 7, ticks_each: 3.0, xp_each: 17.5, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "strung_sapphire_amulet", takes_qty: 1.0, makes: "amulet_of_magic", makes_qty: 1.0 },
+];
+const BURY_STEPS: &[ChainStep] = &[
+    // §7 combat → burial: the bones bury in the combat loop (no
+    // standalone bury script: `bury_loot::bury_now` is an in-loop
+    // helper), so the chain step is the fight itself, scored in prayer.
+    ChainStep { method: "fight:melee/cows", skill: "prayer", level: 1, ticks_each: 20.0, xp_each: 4.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "bones", makes_qty: 1.0 },
+];
+const LESSER_STEPS: &[ChainStep] = &[
+    // §7 lesser demons → rune → high alchemy. The helm is a drop, not a
+    // guarantee: makes_qty 1.0 is an upper-bound prior (measured
+    // yields replace priors from n ≥ 3, D22 rates, never the dump rate).
+    ChainStep { method: "fight:melee/lesser_demons", skill: "attack", level: 82, ticks_each: 20.0, xp_each: 12.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "rune_med_helm", makes_qty: 1.0 },
+    ChainStep { method: "alch:rune_med_helm", skill: "magic", level: 55, ticks_each: 3.0, xp_each: 65.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "rune_med_helm", takes_qty: 1.0, makes: "coins", makes_qty: 1.0 },
+];
 
 /// Every D58 family on the partial catalogue (§7, minus member-gated rows).
 pub static CHAINS: &[Chain] = &[
@@ -105,11 +124,14 @@ pub static CHAINS: &[Chain] = &[
     Chain { id: "hide_leather", steps: HIDE_LEATHER_STEPS, product: "leather_gloves", unlocks: "" },
     Chain { id: "gold", steps: GOLD_STEPS, product: "coins", unlocks: "" },
     Chain { id: "essence", steps: ESSENCE_STEPS, product: "airrune", unlocks: "runecraft" },
-    Chain { id: "wool", steps: WOOL_STEPS, product: "amulet_of_magic", unlocks: "" },
+    Chain { id: "wool", steps: WOOL_STEPS, product: "strung_gold_amulet", unlocks: "" },
     Chain { id: "clay", steps: CLAY_STEPS, product: "pot", unlocks: "" },
     Chain { id: "bread", steps: BREAD_STEPS, product: "bread", unlocks: "" },
     Chain { id: "superheat", steps: SUPERHEAT_STEPS, product: "iron_bar", unlocks: "" },
     Chain { id: "runite_wild", steps: RUNITE_WILD_STEPS, product: "runite_ore", unlocks: "" },
+    Chain { id: "enchant", steps: ENCHANT_STEPS, product: "amulet_of_magic", unlocks: "" },
+    Chain { id: "bury", steps: BURY_STEPS, product: "bones", unlocks: "" },
+    Chain { id: "lesser_alch", steps: LESSER_STEPS, product: "coins", unlocks: "" },
 ];
 
 pub fn chain_by_id(id: &str) -> Option<&'static Chain> {
@@ -254,25 +276,25 @@ fn xorshift(mut word: u64) -> u64 {
     word
 }
 
-/// Era gate (D64): P1 chains first; a P2 chain runs when it unlocks
-/// (quest, area, spell) or when the goal names its product.
+/// Era gate (D64, strict): P1 chains always run; a P2 chain runs when
+/// it unlocks (quest, area, spell — the D64 exception) or when the goal
+/// names its real product. Any other P2 chain is EXCLUDED, never
+/// deferred: the brain spends no ticks off-goal off-era.
 pub fn usable_chains<'c>(chains: &[&'c Chain], goal_product: &str, unlocked: &[&str]) -> Vec<&'c Chain> {
-    let mut p1: Vec<&Chain> = Vec::new();
-    let mut p2: Vec<&Chain> = Vec::new();
+    let mut early: Vec<&Chain> = Vec::new();
+    let mut goaled: Vec<&Chain> = Vec::new();
     for chain in chains {
         let epoch = if chain.steps.iter().any(|step| step.epoch == Epoch::P2) { Epoch::P2 } else { Epoch::P1 };
         if epoch == Epoch::P1 {
-            p1.push(*chain);
+            early.push(*chain);
         } else if !chain.unlocks.is_empty() && unlocked.contains(&chain.unlocks) {
-            p1.push(*chain);
+            early.push(*chain);
         } else if chain.product == goal_product {
-            p2.push(*chain);
-        } else {
-            p2.push(*chain);
+            goaled.push(*chain);
         }
     }
-    p1.extend(p2);
-    p1
+    early.extend(goaled);
+    early
 }
 
 /// One D59 shortcut: quest XP or the unlock that shortens the goal.
@@ -421,7 +443,7 @@ pub fn synergies(chain_id: &str) -> &'static [&'static str] {
 mod tests {
     use super::{
         best_for_money, best_for_xp, boot_covers, boot_plan, chain_by_id, cheapest_source, eval_chain, quest_shortcut,
-        quests_for_goal, synergies, usable_chains, xp_per_tick, Chain, ChainPrices, Source, SourceCtx, CHAINS,
+        quests_for_goal, synergies, usable_chains, xp_per_tick, Chain, ChainPrices, ChainStep, Source, SourceCtx, CHAINS,
     };
     use crate::catalog::Epoch;
 
@@ -434,7 +456,7 @@ mod tests {
             "leather_gloves" => 6.0,
             "coins" => 1.0,
             "airrune" => 4.0,
-            "amulet_of_magic" => 900.0,
+            "strung_gold_amulet" => 350.0,
             "pot" => 1.0,
             "bread" => 12.0,
             "iron_bar" => 28.0,
@@ -535,21 +557,45 @@ mod tests {
     }
 
     #[test]
-    fn epoch_prefers_p1_unless_unlock_or_goal() {
+    fn era_gate_is_strict_p1_unless_unlock_or_goal() {
         let refs: Vec<&Chain> = CHAINS.iter().collect();
+        // No unlock, unrelated goal: every plain P2 chain is excluded,
+        // never deferred.
         let ordered = usable_chains(&refs, "trout", &[]);
-        let first_plain_p2 = ordered.iter().position(|chain| {
-            chain.steps.iter().any(|step| step.epoch == Epoch::P2) && chain.unlocks.is_empty()
-        }).expect("a plain P2 chain runs");
-        assert!(ordered[..first_plain_p2].iter().all(|chain| {
-            !chain.steps.iter().any(|step| step.epoch == Epoch::P2) || !chain.unlocks.is_empty()
-        }), "P1 first, got {:?}", ordered.iter().map(|chain| chain.id).collect::<Vec<_>>());
-        // A P2 chain that unlocks runs with the P1 set once unlocked.
-        let unlocked = usable_chains(&refs, "trout", &["runecraft"]);
-        assert!(unlocked.iter().take(8).any(|chain| chain.id == "essence"), "unlocked essence runs early");
-        // A P2 product the goal names is still reachable.
+        assert!(ordered.iter().all(|chain| {
+            chain.steps.iter().all(|step| step.epoch == Epoch::P1) || !chain.unlocks.is_empty()
+        }), "P1 or unlocking only, got {:?}", ordered.iter().map(|chain| chain.id).collect::<Vec<_>>());
+        assert!(!ordered.iter().any(|chain| chain.id == "clay"), "plain P2 clay excluded off-goal");
+        assert!(!ordered.iter().any(|chain| chain.id == "enchant"), "plain P2 enchant excluded off-goal");
+        // A P2 product the goal names is still reachable, after the P1 set.
         let goaled = usable_chains(&refs, "pot", &[]);
         assert!(goaled.iter().any(|chain| chain.id == "clay"), "goal product stays reachable");
+        let first_plain_p2 = goaled.iter().position(|chain| chain.id == "clay").expect("clay runs on-goal");
+        assert!(goaled[..first_plain_p2].iter().all(|chain| {
+            chain.steps.iter().all(|step| step.epoch == Epoch::P1) || !chain.unlocks.is_empty()
+        }), "P1 first, goal-named P2 after");
+        // Essence unlocks (Aubury via Rune Mysteries) but mines at P1
+        // tiers, so it runs with the P1 set either way.
+        let unlocked = usable_chains(&refs, "trout", &["runecraft"]);
+        assert!(unlocked.iter().take(8).any(|chain| chain.id == "essence"), "essence runs early");
+    }
+
+    #[test]
+    fn p1_wins_xp_ties() {
+        // D64 tiebreak, order-independent: same xp/tick, P1 beats P2.
+        static TIE_P1: &[ChainStep] = &[ChainStep { method: "cook:trout", skill: "cooking", level: 15, ticks_each: 3.0, xp_each: 70.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "raw_trout", takes_qty: 1.0, makes: "trout", makes_qty: 1.0 }];
+        static TIE_P2: &[ChainStep] = &[ChainStep { method: "bake:bread", skill: "cooking", level: 1, ticks_each: 3.0, xp_each: 70.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "bread_dough", takes_qty: 1.0, makes: "bread", makes_qty: 1.0 }];
+        let p1 = Chain { id: "tie_p1", steps: TIE_P1, product: "trout", unlocks: "" };
+        let p2 = Chain { id: "tie_p2", steps: TIE_P2, product: "bread", unlocks: "" };
+        let (market, shop) = prices();
+        let ctx = ChainPrices { market: &market, shop: &shop, trip_ticks: 800 };
+        let levels = |_: &str| 99u8;
+        for order in [vec![&p1, &p2], vec![&p2, &p1]] {
+            let evals: Vec<super::ChainEval> = order.iter().map(|chain| eval_chain(chain, 1.0, &ctx)).collect();
+            assert!((evals[0].ticks as f64 - evals[1].ticks as f64).abs() < 1e-9, "tied rates, got {evals:?}");
+            let picked = best_for_xp(&order, &evals, "cooking", &levels).expect("a chain wins");
+            assert_eq!(picked.id, "tie_p1", "P1 wins ties whichever order, got {}", picked.id);
+        }
     }
 
     #[test]
@@ -559,7 +605,7 @@ mod tests {
         let wild = chain_by_id("runite_wild").expect("wilderness chain");
         let eval = eval_chain(wild, 1.0, &ctx);
         assert!(eval.wilderness, "flagged");
-        assert!(eval.ticks >= 800 * 2 + super::WILDERNESS_TAX_TICKS, "risk priced, got {}", eval.ticks);
+        assert_eq!(eval.ticks, 800 * 2 + 30 + super::WILDERNESS_TAX_TICKS, "trips + one runite rock + risk, got {}", eval.ticks);
     }
 
     #[test]
@@ -630,5 +676,144 @@ mod tests {
             assert!(lifescape_gamedata::quest_requirements::by_key(quest).is_some(), "{quest} is a real quest");
         }
         assert_eq!(lifescape_gamedata::quest_requirements::by_key("squire").expect("squire").skills[0].skill, "mining");
+    }
+
+    /// P3.6: every chain step names an executable (map_method is Some).
+    /// A step without a script fails typed at launch, never silently —
+    /// so this test pins that the whole catalogue is wired today.
+    #[test]
+    fn every_chain_step_maps_to_a_script() {
+        let node = crate::model::Node::new(
+            "n9",
+            crate::model::NodeKind::ObtainItems { item: "feather".to_string(), count: 2000 },
+            Vec::new(),
+            2000,
+        );
+        for chain in CHAINS {
+            for step in chain.steps {
+                assert!(
+                    crate::mapping::map_method(step.method, &node, None).is_some(),
+                    "chain {} step {} names no script",
+                    chain.id,
+                    step.method
+                );
+                // Locked steps name a real level, never 0.
+                assert!(step.level >= 1, "chain {} step {} needs its level", chain.id, step.method);
+            }
+        }
+    }
+
+    /// P3.6 §8: past the last tier, levelling continues by volume — so
+    /// every chain must hold at volume (finite ticks, value and XP that
+    /// grow with quantity, no cliff past the top method).
+    #[test]
+    fn chains_hold_at_volume_past_the_last_tier() {
+        let (market, shop) = prices();
+        let ctx = ChainPrices { market: &market, shop: &shop, trip_ticks: 800 };
+        for chain in CHAINS {
+            let small = eval_chain(chain, 10.0, &ctx);
+            let bulk = eval_chain(chain, 1000.0, &ctx);
+            assert!(bulk.ticks > small.ticks, "chain {} grows with quantity", chain.id);
+            assert!(bulk.final_value > small.final_value, "chain {} value grows", chain.id);
+            assert!(bulk.xp.iter().any(|(_, amount)| *amount > 0.0), "chain {} teaches at volume", chain.id);
+            assert!(small.final_value > 0.0, "chain {} product has a price", chain.id);
+        }
+    }
+
+    /// P3.6 §8 + M10b: every F2P skill trains 1→99 — a catalogue method
+    /// for each 10-level tranche, and a brain reach method that maps.
+    /// XP are dump raw tenths (methods.rs); the planner divides by 10.
+    #[test]
+    fn every_skill_trains_1_to_99_by_tranches() {
+        let skills = [
+            "woodcutting", "mining", "fishing", "cooking", "firemaking", "crafting", "smithing",
+            "runecraft", "prayer", "magic", "ranged", "attack", "strength", "defence", "hitpoints",
+        ];
+        assert_eq!(skills.len(), 15, "all 15 F2P skills");
+        let node = crate::model::Node::new(
+            "n9",
+            crate::model::NodeKind::ObtainItems { item: "feather".to_string(), count: 2000 },
+            Vec::new(),
+            2000,
+        );
+        for skill in skills {
+            for level in [1i64, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99] {
+                assert!(
+                    lifescape_gamedata::methods::best_method(skill, level).is_some(),
+                    "{skill} has no catalogue method at {level}"
+                );
+            }
+            // The brain fixes one resource per tranche to 99 (D21); each
+            // tier names a mapped family method.
+            let mut tiers = crate::expand::tranches(skill, 1, 99);
+            assert_eq!(tiers.last().copied(), Some(99), "{skill} tranches reach 99, got {tiers:?}");
+            tiers.retain(|tier| *tier < 99);
+            for tier in tiers {
+                let method = crate::expand::reach_method(skill, tier);
+                assert!(
+                    crate::mapping::map_method(&method, &node, None).is_some(),
+                    "{skill}@{tier} {method} names no script"
+                );
+            }
+        }
+    }
+
+    /// P3.6 priors-vs-dump: chain priors carry real XP (server raw / 10,
+    /// single source: `recipes`, `extra_recipes`, `methods`, `spells`
+    /// dumps). Sampled per family; published rates replace them at n ≥ 3.
+    #[test]
+    fn chain_priors_match_dump_tenths() {
+        let smelt_xp = |bar: &str| {
+            lifescape_gamedata::recipes::making(bar, Some("smelt"))
+                .into_iter()
+                .map(|recipe| recipe.xp as f64 / 10.0)
+                .next()
+                .expect("smelt row")
+        };
+        assert!((smelt_xp("iron_bar") - 12.5).abs() < 1e-9, "iron smelt prior, dump {}", smelt_xp("iron_bar"));
+        assert!((smelt_xp("steel_bar") - 17.5).abs() < 1e-9, "steel smelt prior");
+        assert!((smelt_xp("gold_bar") - 22.5).abs() < 1e-9, "gold smelt prior");
+        let enchant_xp = lifescape_gamedata::spells::by_name("enchant_lvl1")
+            .into_iter()
+            .map(|spell| spell.xp as f64 / 10.0)
+            .next()
+            .expect("enchant row");
+        assert!((enchant_xp - 17.5).abs() < 1e-9, "enchant_lvl1 prior, dump {enchant_xp}");
+        let alch_xp = lifescape_gamedata::spells::by_name("highlvl_alchemy")
+            .into_iter()
+            .map(|spell| spell.xp as f64 / 10.0)
+            .next()
+            .expect("alch row");
+        assert!((alch_xp - 65.0).abs() < 1e-9, "high alch prior, dump {alch_xp}");
+        let string_xp = lifescape_gamedata::extra_recipes::by_kind("string")
+            .into_iter()
+            .find(|entry| entry.source == "string_gold_amulet")
+            .expect("string row")
+            .xp as f64
+            / 10.0;
+        assert!((string_xp - 4.0).abs() < 1e-9, "stringing prior, dump {string_xp}");
+        // Wool now strings the real dump amulet, which the enchant
+        // ladder resolves (`enchant_for` wiring amulets → spells).
+        let wool = chain_by_id("wool").expect("wool chain");
+        assert_eq!(wool.product, "strung_gold_amulet", "real dump names, got {}", wool.product);
+        assert_eq!(wool.steps[2].method, "string:unstrung_gold_amulet");
+    }
+
+    /// P2.1 review, statued: the 5th furnace tile (3081, 9496) is the
+    /// Tutorial Island furnace (tutorial-only, smithing instructor),
+    /// not a mainland 5th site. The catalogue's 4 (§5.7) stand: Al-Kharid,
+    /// Falador, Lumbridge and Wilderness.
+    #[test]
+    fn four_mainland_furnace_sites_plus_tutorial() {
+        let near = |x: i64, z: i64| {
+            lifescape_gamedata::stations::all_stations()
+                .into_iter()
+                .any(|entry| entry.kind == "furnace" && (entry.x - x).abs() <= 2 && (entry.z - z).abs() <= 2)
+        };
+        assert!(near(3272, 3185), "Al-Kharid furnace");
+        assert!(near(2975, 3368), "Falador furnace");
+        assert!(near(3225, 3256), "Lumbridge furnace");
+        assert!(near(3143, 3735), "Wilderness furnace");
+        assert!(near(3081, 9496), "tutorial furnace tile stays in the dump, excluded from the 4");
     }
 }

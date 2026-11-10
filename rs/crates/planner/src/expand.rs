@@ -77,14 +77,24 @@ fn next_id(counter: &mut usize) -> String {
 }
 
 /// D21 level tranches per skill: the brain fixes one resource per
-/// tranche, the script never changes tier mid-task.
+/// tranche, the script never changes tier mid-task. P1 tiers prefer the
+/// classic method (§8); one tier per 10 levels where the dump offers no
+/// finer step.
 pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
     let cuts: &[u8] = match skill {
         "fishing" => &[5, 10, 20, 25, 35, 40],
         "woodcutting" => &[15, 30, 45, 60, 75],
         "mining" => &[10, 15, 20, 30, 40, 55],
         "cooking" => &[10, 20, 30, 45],
+        "firemaking" => &[15, 30, 60],
+        "crafting" => &[5, 7, 8, 16, 20, 27, 34, 43, 70],
+        "smithing" => &[15, 20, 30, 40, 50, 70, 85],
+        "runecraft" => &[2, 5, 9, 14, 20],
         "attack" | "strength" | "defence" | "hitpoints" => &[10, 20, 30, 40],
+        "magic" | "ranged" => &[10, 20, 30, 40],
+        // Prayer buries where it fights (no standalone bury script):
+        // one tranche, burial in the combat loop.
+        "prayer" => &[],
         _ => &[10, 20, 30],
     };
     let mut out: Vec<u8> = cuts.iter().copied().filter(|cut| *cut > from && *cut < to).collect();
@@ -150,7 +160,80 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
-        "attack" | "strength" | "defence" | "hitpoints" => {
+        "firemaking" => {
+            if level >= 60 {
+                "yew_logs"
+            } else if level >= 30 {
+                "willow_logs"
+            } else if level >= 15 {
+                "oak_logs"
+            } else {
+                "logs"
+            }
+            .to_string()
+        }
+        "smithing" => {
+            if level >= 85 {
+                "rune_bar"
+            } else if level >= 70 {
+                "adamantite_bar"
+            } else if level >= 50 {
+                "mithril_bar"
+            } else if level >= 40 {
+                "gold_bar"
+            } else if level >= 30 {
+                "steel_bar"
+            } else if level >= 20 {
+                "silver_bar"
+            } else if level >= 15 {
+                "iron_bar"
+            } else {
+                "bronze_bar"
+            }
+            .to_string()
+        }
+        "crafting" => {
+            if level >= 70 {
+                "diamond_amulet"
+            } else if level >= 43 {
+                "diamond_ring"
+            } else if level >= 34 {
+                "ruby_ring"
+            } else if level >= 27 {
+                "emerald_ring"
+            } else if level >= 20 {
+                "sapphire_ring"
+            } else if level >= 16 {
+                "holy_symbol"
+            } else if level >= 8 {
+                "gold_amulet"
+            } else if level >= 7 {
+                "pie_dish"
+            } else if level >= 5 {
+                "gold_ring"
+            } else {
+                "ball_of_wool"
+            }
+            .to_string()
+        }
+        "runecraft" => {
+            if level >= 20 {
+                "bodyrune"
+            } else if level >= 14 {
+                "firerune"
+            } else if level >= 9 {
+                "earthrune"
+            } else if level >= 5 {
+                "waterrune"
+            } else if level >= 2 {
+                "mindrune"
+            } else {
+                "airrune"
+            }
+            .to_string()
+        }
+        "prayer" => "bones".to_string(),
+        "attack" | "strength" | "defence" | "hitpoints" | "ranged" | "magic" => {
             if level >= 20 {
                 "cow_lumbridge"
             } else {
@@ -169,6 +252,28 @@ pub fn reach_method(skill: &str, level: u8) -> String {
         "woodcutting" => format!("gather:woodcut/{}", tranche_resource(skill, level)),
         "mining" => format!("gather:mining/{}", tranche_resource(skill, level)),
         "cooking" => format!("cook/{}", tranche_resource(skill, level)),
+        "firemaking" => format!("fire:{}", tranche_resource(skill, level)),
+        // Smelting trains smithing 1→99 (bronze 1, quest squire 1→29);
+        // plates run through the money chains, never the reach tiers.
+        "smithing" => format!("smelt:{}", tranche_resource(skill, level)),
+        // One P1-first family per tier (D64): wheel, gold, pie dish,
+        // gold amulet, silver symbol, then the gem ladder.
+        "crafting" => {
+            let resource = tranche_resource(skill, level);
+            if resource == "ball_of_wool" {
+                format!("spin:{resource}")
+            } else if resource == "pie_dish" || resource == "pot" || resource == "bowl" {
+                format!("pottery:{resource}")
+            } else {
+                format!("jewelry:{resource}")
+            }
+        }
+        "runecraft" => format!("runecraft:{}", tranche_resource(skill, level)),
+        // No standalone bury script (in-loop helper only): prayer fights
+        // where the bones drop and buries each kill.
+        "prayer" => "fight:melee/cows".to_string(),
+        "ranged" => format!("fight:ranged/{}", tranche_resource(skill, level)),
+        "magic" => format!("fight:magic/{}", tranche_resource(skill, level)),
         "attack" | "strength" | "defence" | "hitpoints" => {
             format!("fight:melee/{}", tranche_resource(skill, level))
         }
@@ -456,6 +561,29 @@ mod tests {
         assert_eq!(reach_method("woodcutting", 30), "gather:woodcut/willow_logs");
         assert_eq!(reach_method("mining", 30), "gather:mining/coal");
         assert_eq!(tranches("fishing", 1, 40), vec![5, 10, 20, 25, 35, 40]);
+    }
+
+    /// P3.6: every skill owns its reach tiers and family methods (D21,
+    /// catalogue §8). Tiers never move without a catalogue reason.
+    #[test]
+    fn every_skill_owns_its_reach_tiers() {
+        assert_eq!(tranches("firemaking", 1, 99), vec![15, 30, 60, 99]);
+        assert_eq!(tranches("smithing", 1, 99), vec![15, 20, 30, 40, 50, 70, 85, 99]);
+        assert_eq!(tranches("crafting", 1, 99), vec![5, 7, 8, 16, 20, 27, 34, 43, 70, 99]);
+        assert_eq!(tranches("runecraft", 1, 99), vec![2, 5, 9, 14, 20, 99]);
+        assert_eq!(tranches("prayer", 1, 99), vec![99], "one tranche, burial in-loop");
+        assert_eq!(tranches("magic", 1, 99), vec![10, 20, 30, 40, 99]);
+        assert_eq!(reach_method("firemaking", 30), "fire:willow_logs");
+        assert_eq!(reach_method("smithing", 30), "smelt:steel_bar");
+        assert_eq!(reach_method("smithing", 1), "smelt:bronze_bar");
+        assert_eq!(reach_method("crafting", 1), "spin:ball_of_wool");
+        assert_eq!(reach_method("crafting", 7), "pottery:pie_dish");
+        assert_eq!(reach_method("crafting", 8), "jewelry:gold_amulet");
+        assert_eq!(reach_method("crafting", 70), "jewelry:diamond_amulet");
+        assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");
+        assert_eq!(reach_method("prayer", 99), "fight:melee/cows");
+        assert_eq!(reach_method("ranged", 20), "fight:ranged/cow_lumbridge");
+        assert_eq!(reach_method("magic", 20), "fight:magic/cow_lumbridge");
     }
 
     #[test]

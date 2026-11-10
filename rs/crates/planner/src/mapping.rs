@@ -52,8 +52,73 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
             head.push(level.to_string());
         }
         ("mining".to_string(), head)
-    } else if let Some(resource) = method.strip_prefix("cook/") {
-        ("cook".to_string(), vec![resource.to_string()])
+    } else if let Some(raw) = method.strip_prefix("cook/") {
+        ("cook".to_string(), vec![raw.to_string()])
+    } else if let Some(product) = method.strip_prefix("cook:") {
+        // Chain-side `cook:` names the product (trout); the script eats
+        // the raw input, resolved from the dump, never guessed.
+        ("cook".to_string(), vec![cook_raw(product)])
+    } else if let Some(product) = method.strip_prefix("bake:") {
+        // Plain bread bakes in its own script; composed meals run in
+        // the P3.3 meals script (meal name rides first there too).
+        if product == "bread" {
+            ("bake_bread".to_string(), Vec::new())
+        } else {
+            ("cook_meals".to_string(), vec![product.to_string()])
+        }
+    } else if let Some(bar) = method.strip_prefix("smelt:") {
+        ("smelt".to_string(), vec![bar.to_string()])
+    } else if let Some(product) = method.strip_prefix("smith:") {
+        ("smith".to_string(), vec![product.to_string()])
+    } else if let Some(hide) = method.strip_prefix("tan:") {
+        // Tanning is leather's precondition: the leatherwork script
+        // owns the tanner grid (dette P2.4: grid unverified, fails
+        // typed until P3.4 maps it).
+        ("leatherwork".to_string(), vec![hide.to_string()])
+    } else if let Some(log) = method.strip_prefix("fire:") {
+        ("firemaking".to_string(), vec![log.to_string()])
+    } else if let Some(product) = method.strip_prefix("spin:") {
+        // The wheel script eats the INPUT (wool only, flax members):
+        // resolve it from the dump, like `cook:` resolves raw.
+        ("spin".to_string(), vec![spin_input(&product)])
+    } else if let Some(_product) = method.strip_prefix("pottery:") {
+        // Pot only (P3.4): clay and water ride the same load, no
+        // positional — the suffix documents the chain product.
+        ("pottery".to_string(), Vec::new())
+    } else if let Some(product) = method.strip_prefix("jewelry:") {
+        ("smelt_jewelry".to_string(), vec![product.to_string()])
+    } else if let Some(rune) = method.strip_prefix("runecraft:") {
+        ("runecraft".to_string(), vec![rune.to_string()])
+    } else if let Some(kind) = method.strip_prefix("pick:") {
+        ("picking".to_string(), vec![kind.to_string()])
+    } else if let Some(_product) = method.strip_prefix("mill:") {
+        // Grain + empty pot ride every load: no positional.
+        ("mill_grain".to_string(), Vec::new())
+    } else if let Some(container) = method.strip_prefix("fill:") {
+        ("fill_water".to_string(), vec![container.to_string()])
+    } else if let Some(_kind) = method.strip_prefix("essence:") {
+        // Aubury runs carry essence through the mine: no positional.
+        ("essence_run".to_string(), Vec::new())
+    } else if let Some(input) = method.strip_prefix("string:") {
+        ("stringing".to_string(), vec![input.to_string()])
+    } else if let Some(item) = method.strip_prefix("alch:") {
+        // The script takes the ITEM (`alchemy <item>` picks low/high
+        // by level itself): `alch:gold_ring`, never `alch:high`.
+        ("alchemy".to_string(), vec![item.to_string()])
+    } else if let Some(ore) = method.strip_prefix("superheat:") {
+        ("superheat".to_string(), vec![ore.to_string()])
+    } else if let Some(amulet) = method.strip_prefix("enchant:") {
+        // The script resolves spell, level, runes and product from a
+        // strung amulet (`enchant_for`): `enchant:strung_sapphire_amulet`.
+        ("enchant_teleport".to_string(), vec![amulet.to_string()])
+    } else if let Some(spot) = method.strip_prefix("fight:ranged/") {
+        ("ranged".to_string(), vec![spot.to_string()])
+    } else if let Some(spot) = method.strip_prefix("fight:magic/") {
+        ("magic".to_string(), vec![spot.to_string()])
+    } else if method.starts_with("gather:sheep/") {
+        ("shear".to_string(), Vec::new())
+    } else if let Some(resource) = method.strip_prefix("gather:wheat/") {
+        ("picking".to_string(), vec![resource.to_string()])
     } else if let Some(spot) = method.strip_prefix("fight:melee/") {
         ("melee".to_string(), vec![spot.to_string()])
     } else if let Some(resource) = method.strip_prefix("farm:") {
@@ -70,7 +135,14 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else if method == "space:cleanup" {
         ("market".to_string(), vec!["cleanup".to_string()])
     } else if let Some(recipe) = method.strip_prefix("craft:") {
-        ("cook".to_string(), vec![recipe.to_string()])
+        // Leather sews in the leatherwork script; everything else
+        // bakes on a range (P3.3 owns composed dishes past plain fish).
+        // Native `jewelry:`/`pottery:` methods bypass this fallback.
+        if is_leather_recipe(recipe) {
+            ("leatherwork".to_string(), vec![recipe.to_string()])
+        } else {
+            ("cook".to_string(), vec![recipe.to_string()])
+        }
     } else if let Some(quest) = method.strip_prefix("quest:") {
         (quest_script(quest).to_string(), Vec::new())
     } else if let Some(area) = method.strip_prefix("access:") {
@@ -87,6 +159,37 @@ fn obtain_pair(node: &Node) -> Option<(String, String)> {
         NodeKind::ObtainItems { item, count } => Some((item.clone(), count.to_string())),
         _ => None,
     }
+}
+
+/// Raw input the cook script eats for a cooked `product` (dump `cook`
+/// rows, e.g. trout → raw_trout). Falls back to the product itself so
+/// an unknown name fails loud in the script, never here.
+fn cook_raw(product: &str) -> String {
+    lifescape_gamedata::recipes::making(product, Some("cook"))
+        .into_iter()
+        .flat_map(|recipe| recipe.inputs.into_iter().map(|(name, _)| name))
+        .next()
+        .unwrap_or_else(|| product.to_string())
+}
+
+/// True when the dump sews `product` from leather (the `craft:` router).
+fn is_leather_recipe(product: &str) -> bool {
+    !lifescape_gamedata::recipes::making(product, Some("leather")).is_empty()
+}
+
+/// Wheel input spinning into `product` (dump `spin` rows, e.g. the
+/// ball of wool spins from wool). Falls back to the product itself so
+/// an unknown name fails loud in the script, never here.
+fn spin_input(product: &str) -> String {
+    lifescape_gamedata::extra_recipes::by_kind("spin")
+        .into_iter()
+        .flat_map(|recipe| {
+            let makes = recipe.outputs.iter().any(|(name, _)| name.eq_ignore_ascii_case(product));
+            let input = recipe.inputs.first().map(|(name, _)| name.clone());
+            if makes { input } else { None }
+        })
+        .next()
+        .unwrap_or_else(|| product.to_string())
 }
 
 /// Farm routing: fish and logs/ore go to their gatherer; drops go to
@@ -176,8 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn methods_map_to_scripts_with_node_and_budget() {
-        let budget = Some((6000, 12000));
+    fn methods_map_to_scripts_with_node_and_budget() {        let budget = Some((6000, 12000));
         let (script, args) = map_method("market:buy", &obtain(), budget).expect("market maps");
         assert_eq!(script, "market");
         assert!(args.contains(&"buy".to_string()) && args.contains(&"feather".to_string()));
@@ -198,5 +300,52 @@ mod tests {
         assert_eq!(script, "quest_cooks_assistant");
         assert!(map_method("equip:melee", &obtain(), None).is_none(), "equip is not a script order");
         assert!(map_method("nope:x", &obtain(), None).is_none(), "unknown methods fail loud");
+    }
+
+    /// P3.6: every P3 family names its script; the positional resource
+    /// rides first (every script's convention), node and budget after.
+    /// P3.1-P3.5 scripts land in parallel: a name missing from the
+    /// registry fails typed at launch (`script_known`), never here.
+    #[test]
+    fn p3_families_branch_to_their_scripts() {
+        for (method, script, resource) in [
+            ("smelt:iron_bar", "smelt", "iron_bar"),
+            ("smith:steel_platebody", "smith", "steel_platebody"),
+            ("cook:trout", "cook", "raw_trout"),
+            ("cook/raw_shrimp", "cook", "raw_shrimp"),
+            ("bake:bread", "bake_bread", ""),
+            ("tan:cow_hide", "leatherwork", "cow_hide"),
+            ("fire:willow_logs", "firemaking", "willow_logs"),
+            ("spin:ball_of_wool", "spin", "wool"),
+            ("pottery:pot", "pottery", ""),
+            ("jewelry:gold_ring", "smelt_jewelry", "gold_ring"),
+            ("runecraft:airrune", "runecraft", "airrune"),
+            ("pick:grain", "picking", "grain"),
+            ("mill:pot_flour", "mill_grain", ""),
+            ("fill:jug_water", "fill_water", "jug_water"),
+            ("essence:blankrune", "essence_run", ""),
+            ("string:unstrung_gold_amulet", "stringing", "unstrung_gold_amulet"),
+            ("alch:gold_ring", "alchemy", "gold_ring"),
+            ("superheat:iron_bar", "superheat", "iron_bar"),
+            ("enchant:strung_sapphire_amulet", "enchant_teleport", "strung_sapphire_amulet"),
+            ("fight:ranged/cows", "ranged", "cows"),
+            ("fight:magic/cows", "magic", "cows"),
+            ("gather:sheep/wool", "shear", ""),
+            ("gather:wheat/grain", "picking", "grain"),
+            ("craft:leather_gloves", "leatherwork", "leather_gloves"),
+            ("craft:bread", "cook", "bread"),
+        ] {
+            let (mapped, args) = map_method(method, &obtain(), None).unwrap_or_else(|| panic!("{method} maps"));
+            assert_eq!(mapped, script, "{method} names {script}");
+            if resource.is_empty() {
+                assert_eq!(args, vec!["--node".to_string(), "n9".to_string()], "{method} takes no resource, got {args:?}");
+            } else {
+                assert_eq!(args.first().map(String::as_str), Some(resource), "{method} carries {resource} first, got {args:?}");
+            }
+            assert!(args.contains(&"n9".to_string()), "{method} carries the node, got {args:?}");
+        }
+        // `cook:` names the product but the script eats the raw input.
+        let (_, args) = map_method("cook:trout", &obtain(), None).expect("cook maps");
+        assert_eq!(args.first().map(String::as_str), Some("raw_trout"), "product resolves to raw, got {args:?}");
     }
 }
