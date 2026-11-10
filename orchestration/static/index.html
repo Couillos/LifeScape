@@ -25,7 +25,7 @@
   #controls select { max-width: 200px; }
   #controls #args { width: 170px; }
   #controls #args { width: 170px; }
-  #controls .sep { color: #555; }
+  #controls .vsep { width: 0; border-left: 1px solid #555; align-self: stretch; }
   #ctlmsg { color: #d9a441; min-height: 1em; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
   /* Sessions list: always visible on the left on PC, drawer on mobile only. */
@@ -85,10 +85,11 @@
 <div id="controls">
   <div id="open-block">
     <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
+    <span class="vsep" aria-hidden="true"></span>
     <select id="account" title="Session account for open"></select>
     <button id="btn-open" title="Create a session: log the player in">open</button>
   </div>
-  <span class="sep">|</span>
+  <span class="vsep" aria-hidden="true"></span>
   <div id="script-block">
     <select id="script" title="Script to launch"></select>
     <input id="args" placeholder="args…" title="Script args, space-separated (JSON when it parses)">
