@@ -27,7 +27,14 @@ pub mod mining;
 pub mod ranged_style;
 pub mod runecraft;
 pub mod shear;
+pub mod smelt;
+pub mod smith;
 pub mod stringing;
 pub mod superheat;
 pub mod telegrab_wine;
 pub mod woodcut;
+// TEMP-P34-VERIFY: removed before hand-off.
+pub mod dye;
+pub mod pottery;
+pub mod smelt_jewelry;
+pub mod spin;

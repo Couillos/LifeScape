@@ -174,7 +174,7 @@ pub fn names() -> Vec<&'static str> {
     vec![
         "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
         "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
-        "milk", "telegrab_wine", "runecraft", "market", "tutorial",
+        "milk", "telegrab_wine", "runecraft", "smelt", "smith", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -185,6 +185,8 @@ pub fn names() -> Vec<&'static str> {
         "check_transitions", "check_doors", "check_routes", "goto", "walkto", "walktour",
         "bank_deposit", "drop", "debug_walk", "trade_swap", "quest_reset", "reset_quests",
         "give", "hello", "probe_transitions",
+        // TEMP-P34-VERIFY: removed before hand-off.
+        "spin", "pottery", "smelt_jewelry", "dye",
     ]
 }
 
@@ -218,8 +220,15 @@ fn runner(name: &str) -> Option<Runner> {
         "ground_pickup" => Some(|bot, args| activities::ground_pickup::run_ground_pickup(bot, args)),
         "shear" => Some(|bot, args| activities::shear::run_shear(bot, args)),
         "milk" => Some(|bot, args| activities::milk::run_milk(bot, args)),
+        // TEMP-P34-VERIFY: removed before hand-off.
+        "spin" => Some(|bot, args| activities::spin::run_spin(bot, args)),
+        "pottery" => Some(|bot, args| activities::pottery::run_pottery(bot, args)),
+        "smelt_jewelry" => Some(|bot, args| activities::smelt_jewelry::run_smelt_jewelry(bot, args)),
+        "dye" => Some(|bot, args| activities::dye::run_dye(bot, args)),
         "telegrab_wine" => Some(|bot, args| activities::telegrab_wine::run_telegrab_wine(bot, args)),
         "runecraft" => Some(|bot, args| activities::runecraft::run_runecraft(bot, args)),
+        "smelt" => Some(|bot, args| activities::smelt::run_smelt(bot, args)),
+        "smith" => Some(|bot, args| activities::smith::run_smith(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -288,7 +297,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 62);
+        assert_eq!(names().len(), 64);
     }
 
     #[test]
