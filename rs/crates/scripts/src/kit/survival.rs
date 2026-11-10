@@ -227,7 +227,7 @@ pub fn is_death_abort(error: &ScriptError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{at_safe_point, death_message_seen, should_eat, DeathTally, EAT_FRACTION, FOOD_TARGET};
+    use super::{at_safe_point, death_message_seen, is_conn_abort, is_walk_abort, should_eat, DeathTally, EAT_FRACTION, FOOD_TARGET};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 
@@ -294,6 +294,22 @@ mod tests {
         assert!(!death_message_seen(&bot, 1), "index tracks seen messages");
         bot.world.messages.push("OH DEAR you ARE dead".to_string());
         assert!(death_message_seen(&bot, 1), "case-insensitive");
+    }
+
+    /// Walk-abort typing: dead socket and operator stop never degrade,
+    /// stalls and blockages still do.
+    #[test]
+    fn walk_abort_covers_conn_and_stop_only() {
+        use crate::ScriptError;
+        use lifescape_sdk::Error;
+        assert!(is_walk_abort(&ScriptError::Sdk(Error::Io("x".to_string()))), "socket");
+        assert!(is_walk_abort(&ScriptError::Sdk(Error::Login("x".to_string()))), "login");
+        assert!(is_walk_abort(&ScriptError::Sdk(Error::Interrupted("x".to_string()))), "stop");
+        assert!(!is_walk_abort(&ScriptError::Sdk(Error::Unreachable("x".to_string()))), "blockage stays local");
+        assert!(!is_walk_abort(&ScriptError::Sdk(Error::Timeout("x".to_string()))), "stall stays local");
+        assert!(!is_walk_abort(&ScriptError::Usage("x".to_string())), "usage stays local");
+        assert!(is_conn_abort(&ScriptError::Sdk(Error::Io("x".to_string()))), "conn subset");
+        assert!(!is_conn_abort(&ScriptError::Sdk(Error::Interrupted("x".to_string()))), "stop is not conn");
     }
 
 }

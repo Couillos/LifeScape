@@ -731,6 +731,31 @@ mod tests {
         assert_eq!(crate::kit::pack::pack_total(&bot, coins), 5, "nothing deposited");
     }
 
+    /// Far bank with a deposit pending and no socket: the transit approach
+    /// fails typed (reconnect), never "bank unreachable".
+    #[test]
+    fn bank_trip_far_offline_aborts_typed() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3226;
+        bot.world.z = 3223;
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in dumps");
+        let pack_com = (bot.tables.com_id)("inventory:inv").expect("pack com");
+        bot.world.inv.insert(pack_com, [(0u8, (coins, 5u32))].into_iter().collect());
+        let bank = lifescape_gamedata::banks::Bank {
+            x: 3091,
+            z: 3242,
+            level: 0,
+            loc_id: 0,
+            name: "test".to_string(),
+            members: false,
+        };
+        let err = bank_trip(&mut bot, &bank, &[], 0).expect_err("dead socket aborts");
+        assert!(crate::kit::survival::is_walk_abort(&err), "typed for the reconnect arm, got: {err}");
+        assert!(!err.to_string().contains("bank unreachable"), "no masking, got: {err}");
+    }
+
     /// True no-op (pack already keep-only, nothing to withdraw) stays Ok(0)
     /// without a booth and without network.
     #[test]
