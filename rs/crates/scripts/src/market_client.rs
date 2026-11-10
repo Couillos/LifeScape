@@ -179,9 +179,10 @@ pub fn buyer_want(offered: &std::collections::HashMap<u16, u32>, base: u16, trad
     None
 }
 
-/// Cleanup sell leg: one order at the reserve floor. A refusal logs and
-/// passes: the next janitor pass re-lists.
-pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, price: i64) -> Result<(), ScriptError> {
+/// Cleanup sell leg: one order at the reserve floor. Returns whether the
+/// carnet took it. A refusal logs and passes: the next janitor pass
+/// re-lists.
+pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, price: i64) -> Result<bool, ScriptError> {
     let reply = market_call(
         "place",
         vec![
@@ -194,10 +195,10 @@ pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, price: i64) -> Result<(), 
     )?;
     if reply.get("ok").as_bool() != Some(true) {
         bot.log(&format!("cleanup sell refused: {}", reply.get("error").as_str().unwrap_or("?")));
-    } else {
-        bot.log(&format!("cleanup sell {} x{qty} @ {price}", reply.get("order").as_i64().unwrap_or(-1)));
+        return Ok(false);
     }
-    Ok(())
+    bot.log(&format!("cleanup sell {} x{qty} @ {price}", reply.get("order").as_i64().unwrap_or(-1)));
+    Ok(true)
 }
 
 /// Cancel every open order of one item (D17: the drop follows the cancel).

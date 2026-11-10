@@ -134,11 +134,27 @@ pub fn launch_allowed(method: &str, ironman: bool) -> bool {
     !ironman || iron_may_use(method)
 }
 
+/// Stall guard: the last two finished janitors both abandoned means the
+/// pressure never drains (persistent failure), so inserts stop. A `done`
+/// anywhere in the tail breaks the streak: healthy cleanups never stall.
+pub fn cleanup_stalled(nodes: &[crate::model::Node]) -> bool {
+    let mut finished = nodes
+        .iter()
+        .filter(|node| {
+            matches!(node.kind, crate::model::NodeKind::SpaceCleanup)
+                && matches!(node.status, crate::model::NodeStatus::Done | crate::model::NodeStatus::Abandoned)
+        })
+        .rev();
+    matches!(
+        (finished.next().map(|node| &node.status), finished.next().map(|node| &node.status)),
+        (Some(crate::model::NodeStatus::Abandoned), Some(crate::model::NodeStatus::Abandoned))
+    )
+}
+
 /// Insert a fresh cleanup node only while the bank is past the limit,
-/// nothing is already open, and previous cleanups did not stall out
-/// (three `done` nodes with a still-full bank means protected-only).
-pub fn cleanup_needed(open_exists: bool, done_cleanups: usize, bank_types: usize) -> bool {
-    needs_cleanup(bank_types) && !open_exists && done_cleanups < 3
+/// nothing is already open, and the janitor is not stalled.
+pub fn cleanup_needed(open_exists: bool, stalled: bool, bank_types: usize) -> bool {
+    needs_cleanup(bank_types) && !open_exists && !stalled
 }
 
 #[cfg(test)]
@@ -147,6 +163,7 @@ mod tests {
         cleanup_needed, d17_order, fallback_for, iron_may_use, launch_allowed, market_leg, needs_cleanup,
         reserve_floor, triage_bank, Fallback, ItemEcon, BANK_TYPE_LIMIT, FOOD_KEEP_MIN,
     };
+    use crate::model::{Node, NodeKind, NodeStatus};
 
     fn stacks() -> Vec<(String, i64)> {
         vec![
@@ -259,9 +276,32 @@ mod tests {
 
     #[test]
     fn cleanup_reinserts_until_stall() {
-        assert!(cleanup_needed(false, 0, 55), "full bank without a node inserts");
-        assert!(!cleanup_needed(true, 0, 59), "an open node blocks doubles");
-        assert!(!cleanup_needed(false, 3, 60), "three stalled cleanups stop the loop");
-        assert!(!cleanup_needed(false, 0, 54), "room left, no node");
+        assert!(cleanup_needed(false, false, 55), "full bank without a node inserts");
+        assert!(!cleanup_needed(true, false, 59), "an open node blocks doubles");
+        assert!(!cleanup_needed(false, true, 60), "a stalled janitor stops the loop");
+        assert!(!cleanup_needed(false, false, 54), "room left, no node");
+    }
+
+    fn cleanup_node(status: NodeStatus) -> Node {
+        let mut node = Node::new("n9", NodeKind::SpaceCleanup, Vec::new(), 0);
+        node.status = status;
+        node
+    }
+
+    #[test]
+    fn stall_needs_two_abandoned_in_a_row() {
+        use super::cleanup_stalled;
+        assert!(!cleanup_stalled(&[]), "no janitor never stalls");
+        assert!(!cleanup_stalled(&[cleanup_node(NodeStatus::Abandoned)]), "one failure retries");
+        assert!(!cleanup_stalled(&[cleanup_node(NodeStatus::Done)]), "success never stalls");
+        assert!(cleanup_stalled(&[cleanup_node(NodeStatus::Abandoned), cleanup_node(NodeStatus::Abandoned)]), "two in a row stall");
+        assert!(
+            !cleanup_stalled(&[cleanup_node(NodeStatus::Abandoned), cleanup_node(NodeStatus::Done)]),
+            "a done breaks the streak"
+        );
+        assert!(
+            !cleanup_stalled(&[cleanup_node(NodeStatus::Done), cleanup_node(NodeStatus::Abandoned)]),
+            "one trailing failure retries"
+        );
     }
 }

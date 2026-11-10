@@ -378,6 +378,32 @@ pub fn cleanup_keep(life: &Life) -> Vec<String> {
     keep
 }
 
+/// Space-pressure insert (L8) for one life: terminal graphs included, a
+/// full bank needs its janitor even when everything else is done.
+/// Returns true when a node was inserted.
+pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
+    let open = life.nodes.iter().any(|node| {
+        matches!(node.kind, NodeKind::SpaceCleanup)
+            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+    });
+    // Done breaks a failure streak; two abandoned janitors in a row mean
+    // the pressure never drains, so inserts stop instead of looping.
+    let stalled = lifescape_planner::cleanup_stalled(&life.nodes);
+    if !lifescape_planner::cleanup_needed(open, stalled, bank_type_count) {
+        return false;
+    }
+    let mut counter = life.nodes.len();
+    for node in &life.nodes {
+        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
+            counter = counter.max(number);
+        }
+    }
+    let mut node = Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0);
+    node.status = NodeStatus::Ready;
+    life.nodes.push(node);
+    true
+}
+
 fn reach_level(report: &Value, skill: &str) -> Option<u8> {
     let stat = lifescape_sdk::provenance::skill_id(&skill.to_lowercase())? as i64;
     report
@@ -564,11 +590,18 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     }
     let Some(mut life) = load_life(&job.account) else { return };
+    let mut dirty = false;
+    // Space pressure (L8) precedes the terminal check: a full bank needs
+    // its janitor even when the graph is done.
+    if maybe_insert_cleanup(&mut life, bank_types(job)) {
+        let inserted = life.nodes.last().map(|node| node.id.clone()).unwrap_or_default();
+        println!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
+        dirty = true;
+    }
     if life.nodes.iter().all(|node| node.status == NodeStatus::Done || node.status == NodeStatus::Abandoned) {
         return;
     }
     let done = done_ids(&life);
-    let mut dirty = false;
     let abandoned: Vec<String> = life
         .nodes
         .iter()
@@ -593,38 +626,11 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             dirty = true;
         }
     }
-    // Space pressure (L8): a bank past the type limit inserts its janitor
-    // node, ready at once so the scan below can launch it this pass.
-    {
-        let open = life.nodes.iter().any(|node| {
-            matches!(node.kind, NodeKind::SpaceCleanup)
-                && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
-        });
-        let done_cleanups = life
-            .nodes
-            .iter()
-            .filter(|node| matches!(node.kind, NodeKind::SpaceCleanup) && node.status == NodeStatus::Done)
-            .count();
-        if lifescape_planner::cleanup_needed(open, done_cleanups, bank_types(job)) {
-            let mut counter = life.nodes.len();
-            for node in &life.nodes {
-                if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
-                    counter = counter.max(number);
-                }
-            }
-            let mut node = Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0);
-            node.status = NodeStatus::Ready;
-            println!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, node.id);
-            life.nodes.push(node);
-            dirty = true;
-        }
-    }
     // A market node placed but unfilled waits instead of reordering: the
     // holdings check below closes it once the deal settles.
     let mut await_fill = false;
     if let Some(active_id) = life.active.clone() {
-        if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {
-            let done = match life.nodes[position].kind.clone() {
+        if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {            let done = match life.nodes[position].kind.clone() {
                 NodeKind::ObtainItems { item, count } if life.nodes[position].status == NodeStatus::Active => {
                     let held = holdings_count(job, &item);
                     life.nodes[position].progress_current = held;
@@ -633,6 +639,7 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                         life.active = None;
                         let id = life.nodes[position].id.clone();
                         push_history(&mut life, &id, "goal_reached");
+                        dirty = true;
                         true
                     } else {
                         await_fill = true;
@@ -864,7 +871,7 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, cleanup_keep, draw_profile, generate_pseudo, iron_allowed, parse_goal, MAX_IRON};
+    use super::{choose_money, cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, parse_goal, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
 
     #[test]
@@ -963,5 +970,44 @@ mod tests {
         assert!(keep.contains(&"feather".to_string()), "graph obtain survives, got {keep:?}");
         assert!(keep.contains(&"bucket_milk".to_string()), "quest check survives, got {keep:?}");
         assert!(keep.windows(2).all(|pair| pair[0] <= pair[1]), "sorted for stable orders");
+    }
+
+    fn terminal_life() -> Life {
+        let profile = draw_profile(7, false);
+        let mut done = Node::new("n1", NodeKind::MakeMoney, Vec::new(), 0);
+        done.status = lifescape_planner::NodeStatus::Done;
+        Life {
+            schema: lifescape_planner::model::LIFE_SCHEMA,
+            account: "t99".to_string(),
+            created_at: 0,
+            seed: 7,
+            profile,
+            goal: GoalKind::MakeMoney,
+            nodes: vec![done],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn space_pressure_inserts_even_on_terminal_graphs() {
+        let mut life = terminal_life();
+        assert!(maybe_insert_cleanup(&mut life, 55), "full bank on a done graph still inserts");
+        assert!(matches!(life.nodes.last().map(|node| (&node.kind, &node.status)),
+            Some((NodeKind::SpaceCleanup, lifescape_planner::NodeStatus::Ready))), "janitor ready at once");
+        let mut roomy = terminal_life();
+        assert!(!maybe_insert_cleanup(&mut roomy, 54), "room left inserts nothing");
+        assert_eq!(roomy.nodes.len(), 1, "life untouched");
+        let mut second = terminal_life();
+        second.nodes.push(Node::new("n2", NodeKind::SpaceCleanup, Vec::new(), 0));
+        assert!(!maybe_insert_cleanup(&mut second, 59), "an open node blocks doubles");
+        let mut stalled = terminal_life();
+        for id in ["n2", "n3"] {
+            let mut abandoned = Node::new(id, NodeKind::SpaceCleanup, Vec::new(), 0);
+            abandoned.status = lifescape_planner::NodeStatus::Abandoned;
+            stalled.nodes.push(abandoned);
+        }
+        assert!(!maybe_insert_cleanup(&mut stalled, 60), "two abandoned in a row stop the loop");
     }
 }

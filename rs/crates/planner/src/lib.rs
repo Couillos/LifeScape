@@ -22,6 +22,6 @@ pub use model::{
 };
 pub use replan::{ReplanCause, draw_engagement_ticks, needs_replan, replan_node};
 pub use space::{
-    Fallback, ItemEcon, cleanup_needed, d17_order, fallback_for, iron_may_use, launch_allowed,
+    Fallback, ItemEcon, cleanup_needed, cleanup_stalled, d17_order, fallback_for, iron_may_use, launch_allowed,
     market_leg, needs_cleanup, reserve_floor, triage_bank, BANK_TYPE_LIMIT, FOOD_KEEP_MIN,
 };

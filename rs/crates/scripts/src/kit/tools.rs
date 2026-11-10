@@ -142,6 +142,29 @@ pub fn recover_axe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> 
     Ok(pack_total(bot, coins) >= 16 && buy_stock(bot, "bronze_axe", 1)? > 0)
 }
 
+/// Best banked tool per kit spec, plus tinderbox: the protected tool set
+/// for the bank janitor (worker-side half of the planner triage).
+pub fn cleanup_keep_names(bot: &Bot, banked: &std::collections::HashSet<u16>) -> Vec<String> {
+    let mut keep = Vec::new();
+    for spec in [&AXE_SPEC, &PICK_SPEC, &FISH_SPEC] {
+        let mut best: Option<(usize, &str)> = None;
+        for name in spec.order {
+            let rank = spec.rank(name).unwrap_or(usize::MAX);
+            let held = obj_id(bot, name).is_ok_and(|id| banked.contains(&id));
+            if held && best.is_none_or(|(top, _)| rank < top) {
+                best = Some((rank, name));
+            }
+        }
+        if let Some((_, name)) = best {
+            keep.push(name.to_string());
+        }
+    }
+    if obj_id(bot, "tinderbox").is_ok_and(|id| banked.contains(&id)) {
+        keep.push("tinderbox".to_string());
+    }
+    keep
+}
+
 // -- tool specs (best-first orders; the server works with the best carried
 // tool, so rank alone decides which one to keep, restore or upgrade) --
 

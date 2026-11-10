@@ -155,7 +155,7 @@ pub fn task_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskSt
 /// market CLI.
 fn market_start_for(bot: &Bot, args: &[String]) -> Option<TaskStart> {
     match args.first().map(String::as_str) {
-        Some("flip") | Some("buy") | Some("sell") | Some("shopbuy") => {}
+        Some("flip") | Some("buy") | Some("sell") | Some("shopbuy") | Some("cleanup") => {}
         _ => return None,
     }
     let mut budget_max = 0u64;
@@ -520,7 +520,7 @@ mod tests {
         assert!(activity_products(&bot, "melee").is_empty());
     }
 
-    /// Start carrier: the four contract scripts parse their CLI into a
+    /// Start carrier: the contract scripts parse their CLI into a
     /// budget and a node; anything else runs the minimal legacy path.
     #[test]
     fn task_start_parses_budget_and_node() {
@@ -549,6 +549,13 @@ mod tests {
         )
         .expect("flip carries a start");
         assert_eq!((flip.budget_max, flip.node_id.as_str()), (9000, "n3"));
+        let cleanup = task_start_for(
+            &bot,
+            "market",
+            &["cleanup".to_string(), "--node".to_string(), "n2".to_string(), "--budget-min".to_string(), "0".to_string(), "--budget-max".to_string(), "6000".to_string()],
+        )
+        .expect("cleanup carries a start");
+        assert_eq!((cleanup.budget_max, cleanup.node_id.as_str()), (6000, "n2"), "janitor reports to its node");
         assert!(task_start_for(&bot, "market", &["deliver".to_string(), "1".to_string(), "2".to_string(), "3=1,1".to_string()]).is_none(), "deliver legs stay minimal");
     }
 

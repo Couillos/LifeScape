@@ -112,7 +112,11 @@ magasin, sinon magasin, sinon jet D10), `d17_order` (piles entières,
 valeur totale croissante, ordres annulés). Le cerveau insère le nœud
 `space_cleanup` (même passe, prêt aussitôt), verrouille
 `space:cleanup` → `market cleanup --keep… [--iron]`, budget une fenêtre
-de 6000 ticks. L'activité worker (`activities/market_cleanup.rs`, sous le
+de 6000 ticks. Le déclencheur précède le test de graphe terminal (une
+banque pleine se nettoie même graphe fini) ; l'arrêt sur deux abandons
+consécutifs borne les pannes persistantes sans bloquer les nettoyages
+sains. Le repli `await_fill` persiste son `done` (sinon l'obtention
+ferme ne se termine jamais). L'activité worker (`activities/market_cleanup.rs`, sous le
 plafond 200) : marché pour le surplus échangeable (plancher de réserve
 aussitôt, descente par pas différée — `my_orders` sans âge), magasin
 général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
