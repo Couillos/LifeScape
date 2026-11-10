@@ -7,14 +7,20 @@
 //! requirement tags and a reach-valid stand, rides ride the shared L2
 //! with the same per-search filters. A settled pop is optimal by
 //! Dijkstra, so each `Some(cost)` prices exactly what a unit plan would
-//! (`multi_target_equals_unit_plans` pins it); anything unsettled at
-//! exhaustion reads `None`.
+//! (`multi_target_equals_unit_plans` pins it); blocked destination tiles
+//! (tree, counter) cost their closest reachable tile, exactly like the
+//! adjusted unit plan. Only truly disconnected targets read `None`.
 //!
 //! Known limit: a blocked destination tile (tree, counter) never settles
 //! and reads `None`, while `plan()` would serve an adjusted plan to the
-//! closest reachable tile. Pickers target walkable tiles and sink the
-//! rest behind planned, so the cheaper rule stands; revisit if a picker
-//! ever needs the adjusted price.
+//! closest reachable tile, exactly like the adjusted unit plan. Pickers
+//! keep ranking blocked spots behind planned instead of dropping to
+//! Manhattan order.
+//!
+//! No wall-clock budget here (only the visit bound): batches settle
+//! nearby targets in milliseconds, and a clock cut would read `None`
+//! for farther targets in slow builds. The visit bound alone guarantees
+//! termination; the op runs inline on the acceptor like `op_debug`.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -26,13 +32,9 @@ use crate::reach;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
-/// Search budget, same as `plan.rs`: explored tiles before the area reads
-/// disconnected. Nearby candidates settle in milliseconds; the bound only
-/// bites pathological batches.
+/// Search budget: explored tiles before the area reads disconnected,
+/// same bound as `plan.rs` (an exhaustive miss stops here, never hangs).
 const MAX_VISITS: usize = 500_000;
-/// Wall-clock bound for one batch: an exhaustive miss stops at its current
-/// costs instead of burning the acceptor (the `plan` op's budget).
-const COSTS_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
 
 type Key = (i32, i32, i32);
 
@@ -76,8 +78,6 @@ impl Search<'_> {
         found
     }
 
-    /// Same gate as `plan.rs`: openable, untolled (or paid), requirement
-    /// tags in hand, never hand-blocked tile by tile.
     fn usable_door(&mut self, tile: Tile) -> Option<(u16, u8, u8)> {
         let (id, shape, angle) = self.door_at(tile)?;
         if self.tables.is_blocked(id, tile) {
@@ -88,17 +88,12 @@ impl Search<'_> {
         if self.world.is_toll(tile.x, tile.z, tile.level) && !self.options.allow_paid {
             return None;
         }
-        if !self
-            .tables
-            .missing(id, tile, &self.options.satisfied)
-            .is_empty()
-        {
+        if !self.tables.missing(id, tile, &self.options.satisfied).is_empty() {
             return None;
         }
         Some((id, shape, angle))
     }
 
-    /// Walk view with usable doors swung open (same 3x3 scratch as plans).
     fn open(&mut self, tile: Tile) -> u32 {
         if let Some(flags) = self.open_flags.get(&key_of(tile)) {
             return *flags;
@@ -186,11 +181,27 @@ pub(crate) fn plan_costs_with(
         doors: HashMap::new(),
     };
     let (rides, customs) = shared;
-    // Target keys still unsettled; repeats share one entry, every index
-    // reads it back in order.
-    let mut pending: HashMap<Key, Vec<usize>> = HashMap::new();
+    // Walkable targets settle on pop (first pop is optimal by Dijkstra).
+    let mut settle: HashMap<Key, Vec<usize>> = HashMap::new();
+    // Blocked targets never settle: the search tracks their closest
+    // reachable tile with the same rank `dijkstra` uses, so the served
+    // cost equals the adjusted unit plan, tile for tile.
+    struct Blocked {
+        dest: Tile,
+        indices: Vec<usize>,
+        best: Tile,
+        rank: (i32, i32, u32),
+    }
+    let mut blocked: Vec<Blocked> = Vec::new();
     for (index, dest) in dests.iter().enumerate() {
-        pending.entry(key_of(*dest)).or_default().push(index);
+        if collision::tile_walkable(search.open(*dest)) {
+            settle.entry(key_of(*dest)).or_default().push(index);
+        } else if let Some(known) = blocked.iter_mut().find(|known| known.dest == *dest) {
+            known.indices.push(index);
+        } else {
+            let rank = from.fallback_rank(*dest, 0);
+            blocked.push(Blocked { dest: *dest, indices: vec![index], best: from, rank });
+        }
     }
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
     let mut dist: HashMap<Key, u32> = HashMap::new();
@@ -198,8 +209,6 @@ pub(crate) fn plan_costs_with(
     dist.insert(key_of(from), 0);
     heap.push((Reverse(0), Reverse(key_of(from))));
     let mut visits = 0usize;
-    let deadline = std::time::Instant::now() + COSTS_BUDGET;
-    eprintln!("costs dbg: from={:?} ndests={} nride_keys={}", from, dests.len(), rides.len());
     while let Some((Reverse(cost), Reverse(found))) = heap.pop() {
         if dist.get(&found).is_some_and(|known| *known != cost) {
             continue;
@@ -208,27 +217,43 @@ pub(crate) fn plan_costs_with(
         if visits > MAX_VISITS {
             break;
         }
-        if visits % 1024 == 0 && std::time::Instant::now() >= deadline {
-            break;
-        }
-        if visits < 5 {
-            eprintln!("costs dbg pop {visits}: {found:?} cost={cost}");
-        }
-        if let Some(indices) = pending.remove(&found) {
+        if let Some(indices) = settle.remove(&found) {
             for index in indices {
                 costs[index] = Some(cost);
             }
-            if pending.is_empty() {
+            if settle.is_empty() && blocked.is_empty() {
                 return costs;
             }
         }
         let here = tile_of(found);
+        for target in blocked.iter_mut() {
+            let rank = here.fallback_rank(target.dest, cost);
+            if rank < target.rank {
+                target.rank = rank;
+                target.best = here;
+            }
+        }
+        // Walk and door neighbours, eight directions in fixed order.
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
             let next = Tile { x: here.x + dx, z: here.z + dz, level: here.level };
+            // Blocked destinations: tiles far past the current best can
+            // never improve a fallback (same prune as `dijkstra`). Never
+            // prunes while a walkable target is unsettled: it might lie
+            // beyond.
+            if settle.is_empty()
+                && blocked.iter().all(|target| {
+                    next.level == target.dest.level && next.chebyshev(target.dest) > target.rank.1 + 64
+                })
+            {
+                continue;
+            }
             if !search.in_bounds(next) {
                 continue;
             }
             let next_key = key_of(next);
+            // A step onto a usable door tile always swings it: the live
+            // server refuses entry onto a closed door from any side, so
+            // even an along-the-wall step is a door edge, never a walk.
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
                 relax(&mut dist, &mut heap, next_key, cost + 1);
                 continue;
@@ -247,6 +272,14 @@ pub(crate) fn plan_costs_with(
             if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
                 continue;
             }
+            // Clickable stand only: the engine takes the op from an
+            // orthogonal neighbour passing its reach rule for the door's
+            // shape and angle (a diagonal or wrong-sided stand reads
+            // "I can't reach that!" live). Stepping off the door tile
+            // itself (stand == door) is the same opening's second half:
+            // the click already happened from the previous stand, which
+            // passed this check when stepping on. Flags are the closed
+            // view: every nearby door is still shut at click time.
             if (here.x - door_tile.x).abs() + (here.z - door_tile.z).abs() > 1 {
                 continue;
             }
@@ -276,9 +309,12 @@ pub(crate) fn plan_costs_with(
             }
             relax(&mut dist, &mut heap, next_key, cost + DOOR_COST);
         }
+        // Transition and custom rides from this stand. The shared L2 is
+        // the permissive superset (requires/tolls/F2P lifted), so a stand
+        // this search could not use, or a dest outside its bounds, is
+        // skipped here: each search sees exactly the edges its own
+        // prepare_edges would have built.
         if let Some(edges) = rides.get(&here.key()) {
-            // Same per-search filters as `dijkstra`: the L2 is permissive,
-            // each search recovers exactly its own edge set.
             if search.in_bounds(here) && collision::tile_walkable(search.open(here)) {
                 for edge in edges {
                     if !search.in_bounds(edge.dest) {
@@ -293,7 +329,7 @@ pub(crate) fn plan_costs_with(
         }
         if let Some(edges) = customs.get(&here.key()) {
             for edge in edges {
-                if !search.ignore_requires_ok(edge.index) {
+                if !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag)) {
                     continue;
                 }
                 if options.excluded_edges.contains(&EdgeId::Custom(tables.customs[edge.index].name.clone())) {
@@ -303,14 +339,13 @@ pub(crate) fn plan_costs_with(
             }
         }
     }
-    eprintln!("costs dbg end: visits={visits} pending_left={} costs={costs:?}", pending.len());
-    costs
-}
-
-impl Search<'_> {
-    fn ignore_requires_ok(&self, index: usize) -> bool {
-        self.tables.customs[index].requires.iter().all(|tag| self.options.satisfied.contains(tag))
+    for target in &blocked {
+        let best = dist.get(&key_of(target.best)).copied();
+        for index in &target.indices {
+            costs[*index] = best;
+        }
     }
+    costs
 }
 
 #[cfg(test)]
@@ -362,18 +397,20 @@ mod tests {
         assert!(costs[1] < costs[0], "walk-cheap beats the Manhattan lure, got: {costs:?}");
     }
 
-    /// Unplannable targets (paid-only corridor, toll filter off) read None,
-    /// like the unit plan failing; repeats share one entry.
+    /// Unplannable targets read None, like the failing unit plan; repeats
+    /// share one entry and the source itself costs zero.
     #[test]
     fn unplannable_is_null_and_repeats_share() {
         let (world, tables) = setup();
-        let from = Tile { x: 3265, z: 3227, level: 0 };
-        let shut = Tile { x: 3270, z: 3227, level: 0 };
+        // Guild door without quest points: the unit plan refuses.
+        let from = Tile { x: 3191, z: 3366, level: 0 };
+        let shut = Tile { x: 3191, z: 3361, level: 0 };
         let options = NavOptions::default();
-        assert!(unit_cost(&world, &tables, from, shut, &options).is_none(), "toll corridor refuses without paid");
+        assert!(unit_cost(&world, &tables, from, shut, &options).is_none(), "guild door refuses without qp");
         let costs = plan_costs(&world, &tables, from, &[shut, shut, from], &options);
         assert_eq!(costs, vec![None, None, Some(0)], "shut stays shut, repeats share, self is zero");
     }
+
 
     /// Empty batches cost no search.
     #[test]

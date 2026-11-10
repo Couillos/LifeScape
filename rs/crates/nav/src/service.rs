@@ -22,7 +22,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -36,6 +36,7 @@ use crate::plan::{
 use crate::service_queries;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
+use crate::{costs, walk_costs};
 
 /// Global queue bound: submit past this is `Refused`, never queued.
 /// T11 recalibration for 300 bots (E15 validates): 64 absorbs one
@@ -154,6 +155,39 @@ fn edge_key(edge: &EdgeId) -> String {
     }
 }
 
+/// Batch cost cache key (N1): identical (from, dests, options, version)
+/// batches repeat every ranking cycle (spot/foe pickers re-rank the same
+/// window), so the second identical batch serves with no search. Small
+/// and bounded (cleared when full — a cache, never truth); a version
+/// bump makes old keys unreachable, like L1. Cache hits count in `hits`:
+/// served from cache with no compute, plans and batches alike.
+const COSTS_CACHE_CAP: usize = 256;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct CostsKey {
+    from: Tile,
+    dests: Vec<Tile>,
+    allow_paid: bool,
+    f2p_only: bool,
+    satisfied: Vec<String>,
+    excluded: Vec<String>,
+    version: String,
+}
+
+impl CostsKey {
+    fn of(from: Tile, dests: &[Tile], options: &NavOptions, version: &str) -> Self {
+        CostsKey {
+            from,
+            dests: dests.to_vec(),
+            allow_paid: options.allow_paid,
+            f2p_only: options.f2p_only,
+            satisfied: options_satisfied(options),
+            excluded: options_excluded(options),
+            version: version.to_string(),
+        }
+    }
+}
+
 // -- lot 3 cache -------------------------------------------------------------
 //
 // L1: complete plans AND negatives, keyed by the full PlanKey (options +
@@ -210,6 +244,9 @@ pub fn ram_gate_for(rss_bytes: u64, warn_at: u64, shed_at: u64) -> RamGate {
 pub struct CacheStats {
     pub hits: u64,
     pub trunc_hits: u64,
+    /// Suffix serves (N2): the requester stood mid-plan, the tail served
+    /// with no search, priced by substructure like a prefix.
+    pub suffix_hits: u64,
     pub misses: u64,
     pub joins: u64,
     pub l2_hits: u64,
@@ -223,6 +260,14 @@ pub struct CacheStats {
     pub ram_shed: u64,
     pub submits: u64,
     pub polls: u64,
+    /// Multi-target cost batches served (N1), one search each.
+    pub walk_costs: u64,
+    /// Detour sums (N8): plan cost minus the Chebyshev straight-line
+    /// bound, accumulated over computed plans. `detour_sum / detour_plans`
+    /// is the mean extra walking per plan; `detour_max` the worst.
+    pub detour_sum: u64,
+    pub detour_max: u32,
+    pub detour_plans: u64,
 }
 
 struct LruEntry {
@@ -296,6 +341,49 @@ impl Lru {
             };
             let value = encode_plan(&prefix);
             // The prefix serves through the same slot shape as a hit.
+            self.get(&key);
+            return Some(value);
+        }
+        None
+    }
+
+    /// Same dest/options/version with `from` ON a cached plan path:
+    /// the tail from there, priced by substructure (cached cost minus
+    /// the dropped prefix, edge by edge). Serves replans after a flight
+    /// and mid-route joins with no search. Adjusted plans never serve:
+    /// their last tile is not the destination.
+    fn suffix(
+        &mut self,
+        tables: &Tables,
+        from: Tile,
+        dest: Tile,
+        options: &NavOptions,
+        version: &str,
+    ) -> Option<Value> {
+        let mut candidates: Vec<(PlanKey, Value)> = Vec::new();
+        for (key, entry) in self.map.iter() {
+            if !entry.is_plan
+                || key.dest != dest
+                || key.from == from
+                || key.version != version
+                || key.allow_paid != options.allow_paid
+                || key.f2p_only != options.f2p_only
+                || key.satisfied != options_satisfied(options)
+                || key.excluded != options_excluded(options)
+            {
+                continue;
+            }
+            candidates.push((key.clone(), entry.body.clone()));
+        }
+        for (key, body) in candidates {
+            let Ok(cached) = decode_plan(&body) else {
+                continue;
+            };
+            let Some(tail) = split_suffix(tables, key.from, &cached, from) else {
+                continue;
+            };
+            let value = encode_plan(&tail);
+            // The suffix serves through the same slot shape as a hit.
             self.get(&key);
             return Some(value);
         }
@@ -479,6 +567,83 @@ fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Opti
     Some(Plan {
         segments,
         cost,
+        adjusted_dest: None,
+    })
+}
+
+/// Tail of `cached` from `from` (which must lie strictly inside its tile
+/// path), priced by substructure: cached cost minus the dropped prefix,
+/// the prefix priced edge by edge with the same formula as `assemble`.
+/// `None`: `from` is not on the path, or the plan is adjusted (its last
+/// tile is not the destination, so no tail ends there).
+fn split_suffix(tables: &Tables, cached_from: Tile, cached: &Plan, from: Tile) -> Option<Plan> {
+    if cached.adjusted_dest.is_some() {
+        return None;
+    }
+    let path = plan_path(cached_from, cached);
+    let pos = path.iter().position(|tile| *tile == from)?;
+    if pos == 0 {
+        return None;
+    }
+    let mut remaining = pos;
+    let mut prefix_cost = 0u32;
+    let mut suffix = Vec::new();
+    for segment in &cached.segments {
+        if remaining == 0 {
+            suffix.push(segment.clone());
+            continue;
+        }
+        match segment {
+            Segment::Walk { tiles } => {
+                if remaining >= tiles.len() {
+                    prefix_cost += tiles.len() as u32;
+                    remaining -= tiles.len();
+                } else {
+                    // Split inside this walk: drop `remaining`, keep the rest.
+                    prefix_cost += remaining as u32;
+                    let keep = tiles[remaining..].to_vec();
+                    if !keep.is_empty() {
+                        suffix.push(Segment::Walk { tiles: keep });
+                    }
+                    remaining = 0;
+                }
+            }
+            Segment::OpenDoor { door, stand, cross_to } => {
+                // One path tile per opening; one or two Dijkstra edges
+                // (same count as `truncate_plan`).
+                let door_tile = Tile {
+                    x: door.x,
+                    z: door.z,
+                    level: door.level,
+                };
+                let edges = u32::from(*stand != door_tile) + u32::from(*cross_to != door_tile);
+                prefix_cost += edges * plan::DOOR_COST;
+                remaining -= 1;
+            }
+            Segment::Ride { transition, .. } => {
+                prefix_cost += plan::TRANSITION_COST
+                    + if tables
+                        .verdict(transition.loc, transition.from)
+                        .is_some_and(crate::tables::Verdict::verified)
+                    {
+                        0
+                    } else {
+                        plan::UNVERIFIED_PENALTY
+                    };
+                remaining -= 1;
+            }
+            Segment::Custom { .. } => {
+                prefix_cost += plan::TRANSITION_COST + plan::UNVERIFIED_PENALTY;
+                remaining -= 1;
+            }
+        }
+    }
+    if remaining != 0 {
+        return None;
+    }
+    Some(Plan {
+        cost: cached.cost.saturating_sub(prefix_cost),
+        segments: suffix,
         adjusted_dest: None,
     })
 }
@@ -884,6 +1049,7 @@ enum Slot {
 pub struct Service {
     admission: Mutex<HashMap<String, usize>>,
     l1: Mutex<Lru>,
+    costs_cache: Mutex<HashMap<CostsKey, Vec<Option<u32>>>>,
     l2: Mutex<(HashMap<String, Arc<SharedEdges>>, Vec<String>)>,
     inflight: Mutex<HashMap<PlanKey, u64>>,
     tickets: Mutex<HashMap<u64, (PlanKey, String)>>,
@@ -896,6 +1062,7 @@ pub struct Service {
     next_id: AtomicU64,
     hits: AtomicU64,
     trunc_hits: AtomicU64,
+    suffix_hits: AtomicU64,
     misses: AtomicU64,
     joins: AtomicU64,
     l2_hits: AtomicU64,
@@ -919,6 +1086,10 @@ pub struct Service {
     doors_near_served: AtomicU64,
     submits_served: AtomicU64,
     polls_served: AtomicU64,
+    walk_costs_served: AtomicU64,
+    detour_sum: AtomicU64,
+    detour_max: AtomicU32,
+    detour_plans: AtomicU64,
     sock_path: PathBuf,
     /// E3 waiter pool for the `plan` op (single-round-trip plans): bound
     /// filled at `start`, read by `plan_handoff`.
@@ -945,6 +1116,7 @@ impl Service {
         let service = Arc::new(Service {
             admission: Mutex::new(HashMap::new()),
             l1: Mutex::new(Lru::new()),
+            costs_cache: Mutex::new(HashMap::new()),
             l2: Mutex::new((HashMap::new(), Vec::new())),
             inflight: Mutex::new(HashMap::new()),
             tickets: Mutex::new(HashMap::new()),
@@ -957,6 +1129,7 @@ impl Service {
             next_id: AtomicU64::new(1),
             hits: AtomicU64::new(0),
             trunc_hits: AtomicU64::new(0),
+            suffix_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             joins: AtomicU64::new(0),
             l2_hits: AtomicU64::new(0),
@@ -980,6 +1153,10 @@ impl Service {
             doors_near_served: AtomicU64::new(0),
             submits_served: AtomicU64::new(0),
             polls_served: AtomicU64::new(0),
+            walk_costs_served: AtomicU64::new(0),
+            detour_sum: AtomicU64::new(0),
+            detour_max: AtomicU32::new(0),
+            detour_plans: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
             wait_tx: Mutex::new(None),
         });
@@ -1028,6 +1205,7 @@ impl Service {
         CacheStats {
             hits: self.hits.load(Ordering::Relaxed),
             trunc_hits: self.trunc_hits.load(Ordering::Relaxed),
+            suffix_hits: self.suffix_hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             joins: self.joins.load(Ordering::Relaxed),
             l2_hits: self.l2_hits.load(Ordering::Relaxed),
@@ -1041,6 +1219,10 @@ impl Service {
             ram_shed: self.ram_shed.load(Ordering::Relaxed),
             submits: self.submits_served.load(Ordering::Relaxed),
             polls: self.polls_served.load(Ordering::Relaxed),
+            walk_costs: self.walk_costs_served.load(Ordering::Relaxed),
+            detour_sum: self.detour_sum.load(Ordering::Relaxed),
+            detour_max: self.detour_max.load(Ordering::Relaxed),
+            detour_plans: self.detour_plans.load(Ordering::Relaxed),
         }
     }
 
@@ -1260,6 +1442,7 @@ impl Service {
             "submit" => self.op_submit(request),
             "poll" => self.op_poll(request),
             "cancel" => self.op_cancel(request),
+            "walk_costs" => self.op_walk_costs(request),
             "door_defs" => self.op_door_defs(request),
             "tiles_flags" => self.op_tiles_flags(request),
             "static_locs_near" => self.op_static_locs_near(request),
@@ -1278,6 +1461,7 @@ impl Service {
                     ("version", str_value(&self.version())),
                     ("hits", Value::Int(stats.hits as i64)),
                     ("trunc_hits", Value::Int(stats.trunc_hits as i64)),
+                    ("suffix_hits", Value::Int(stats.suffix_hits as i64)),
                     ("misses", Value::Int(stats.misses as i64)),
                     ("joins", Value::Int(stats.joins as i64)),
                     ("l2_hits", Value::Int(stats.l2_hits as i64)),
@@ -1297,6 +1481,10 @@ impl Service {
                     ("unknown", Value::Int(stats.unknown as i64)),
                     ("submits", Value::Int(stats.submits as i64)),
                     ("polls", Value::Int(stats.polls as i64)),
+                    ("walk_costs", Value::Int(stats.walk_costs as i64)),
+                    ("detour_sum", Value::Int(stats.detour_sum as i64)),
+                    ("detour_max", Value::Int(i64::from(stats.detour_max))),
+                    ("detour_plans", Value::Int(stats.detour_plans as i64)),
                     ("door_defs", Value::Int(self.door_defs_served.load(Ordering::Relaxed) as i64)),
                     ("tiles_flags", Value::Int(self.tiles_flags_served.load(Ordering::Relaxed) as i64)),
                     ("static_locs_near", Value::Int(self.static_locs_served.load(Ordering::Relaxed) as i64)),
@@ -1417,6 +1605,17 @@ impl Service {
         if let Some(prefix) = prefix {
             self.trunc_hits.fetch_add(1, Ordering::Relaxed);
             return self.instant_slot(true, prefix);
+        }
+        // N2 suffix: from on a cached plan serves the tail (replans
+        // after a flight, mid-route joins) with no search either.
+        let suffix = self
+            .l1
+            .lock()
+            .unwrap()
+            .suffix(&tables, from, dest, &options, &version);
+        if let Some(suffix) = suffix {
+            self.suffix_hits.fetch_add(1, Ordering::Relaxed);
+            return self.instant_slot(true, suffix);
         }
         // LOT3 vol en cours: same full key already queued/computing ->
         // join it, never duplicate the Dijkstra. Sequential locks only
@@ -1650,6 +1849,75 @@ impl Service {
             }
         }
         object(vec![("ok", Value::Bool(true))])
+    }
+
+    /// Multi-target costs (N1): one Dijkstra from the requester, stopped
+    /// when every target is reached. Direct read, no ticket, no queue:
+    /// batches are small and nearby (spot pickers), so one bounded search
+    /// on the acceptor answers faster than a ticket round-trip. Same
+    /// version discipline as the other direct reads: the worker adopts
+    /// the served version and retries once, never plans local.
+    fn op_walk_costs(&self, request: &Value) -> Value {
+        self.walk_costs_served.fetch_add(1, Ordering::Relaxed);
+        let version = self.version();
+        let parsed = match walk_costs::decode_request(request) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&error)),
+                    ("version", str_value(&version)),
+                ])
+            }
+        };
+        if !parsed.version.is_empty() && !version.is_empty() && parsed.version != version {
+            self.refused_stale.fetch_add(1, Ordering::Relaxed);
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                (
+                    "error",
+                    str_value(&format!(
+                        "refused:stale-version client={} server={version}",
+                        parsed.version
+                    )),
+                ),
+                ("version", str_value(&version)),
+            ]);
+        }
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        // Batch cache first: identical ranking windows repeat every cycle.
+        let key = CostsKey::of(parsed.from, &parsed.dests, &parsed.options, &version);
+        if let Some(found) = self.costs_cache.lock().unwrap().get(&key).cloned() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return walk_costs::encode_response(&walk_costs::WalkCostsResp { costs: found, version });
+        }
+        let Some(shared) = self.shared_edges(&snapshot) else {
+            // The L2 builds infallibly here (no yield gate): all-None
+            // keeps the caller on Manhattan order instead of inventing
+            // costs.
+            return walk_costs::encode_response(&walk_costs::WalkCostsResp {
+                costs: vec![None; parsed.dests.len()],
+                version,
+            });
+        };
+        let found = costs::plan_costs_with(
+            &snapshot.world,
+            &snapshot.tables,
+            parsed.from,
+            &parsed.dests,
+            &parsed.options,
+            &shared,
+        );
+        // Bounded batch cache (cleared when full, never truth): the next
+        // identical ranking window serves with no search.
+        {
+            let mut cache = self.costs_cache.lock().unwrap();
+            if cache.len() >= COSTS_CACHE_CAP {
+                cache.clear();
+            }
+            cache.insert(key, found.clone());
+        }
+        walk_costs::encode_response(&walk_costs::WalkCostsResp { costs: found, version })
     }
 
     /// Direct read, no ticket: defs for a batch of loc ids off the shared
@@ -2047,6 +2315,17 @@ impl Service {
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
             };
+            // N8 detour: plan cost minus the Chebyshev straight-line
+            // bound, accumulated over computed plans (the nav-stats gauge
+            // reads the sum, the max and the count).
+            if let Ok(plan) = &outcome {
+                let straight =
+                    (job.from.x - job.dest.x).abs().max((job.from.z - job.dest.z).abs()) as u32;
+                let detour = plan.cost.saturating_sub(straight);
+                self.detour_sum.fetch_add(u64::from(detour), Ordering::Relaxed);
+                self.detour_plans.fetch_add(1, Ordering::Relaxed);
+                self.detour_max.fetch_max(detour, Ordering::Relaxed);
+            }
             // Encode + L1 first (no results lock held: lock order stays
             // sequential). A cancelled outcome still caches: same key
             // means the same plan, and the next submit hits it.
@@ -2254,6 +2533,35 @@ impl PlanClient {
             POLL_TIMEOUT,
         )?;
         Ok(())
+    }
+
+    /// Multi-target costs (N1): one `walk_costs` round-trip serves the
+    /// whole batch, order-preserving, `None` per unplannable target.
+    /// `Ok` carries the serving version; `Err` carries the refusal
+    /// reason plus the serving version, so the worker adopts it and
+    /// retries once like a plan. Transport errors carry no version.
+    pub fn walk_costs(
+        &self,
+        from: Tile,
+        dests: &[Tile],
+        options: &NavOptions,
+        version: &str,
+    ) -> Result<(Vec<Option<u32>>, String), (String, String)> {
+        let reply = self
+            .round_trip(
+                &walk_costs::encode_request(&walk_costs::WalkCostsReq {
+                    from,
+                    dests: dests.to_vec(),
+                    options: options.clone(),
+                    version: version.to_string(),
+                }),
+                SUBMIT_TIMEOUT,
+            )
+            .map_err(|transport| (transport, String::new()))?;
+        let served = reply.get("version").as_str().unwrap_or("").to_string();
+        walk_costs::decode_response(&reply)
+            .map(|resp| (resp.costs, served.clone()))
+            .map_err(|refused| (refused, served))
     }
 
     /// Direct read: one round-trip, no ticket, no queue (door defs, tile
@@ -3082,6 +3390,134 @@ mod tests {
         };
         let prefix = truncate_plan(&tables, from, &single, door_tile).expect("on-path");
         assert_eq!(prefix.cost, 1 + plan::DOOR_COST, "single door counts one edge");
+    }
+
+    /// N1: one `walk_costs` op serves the whole batch in one search —
+    /// order-preserving, one entry per target, `None` where unplannable.
+    /// No plan ticket is consumed (misses do not move), the batch counter
+    /// does. Stale versions refuse loud like every other direct read.
+    #[test]
+    fn walk_costs_op_serves_batch_in_one_search() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "costs-op".to_string()),
+            &test_socket("plan-costs-op"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "costs");
+        let from = Tile { x: 3230, z: 3241, level: 0 };
+        let near = Tile { x: 3203, z: 3246, level: 0 };
+        let far = Tile { x: 3228, z: 3214, level: 0 };
+        let before = service.stats();
+        let (found, served) = client
+            .walk_costs(from, &[far, near, near], &short_options(), "costs-op")
+            .expect("batch serves");
+        assert_eq!(served, "costs-op");
+        assert_eq!(found.len(), 3, "one cost per target, repeats included");
+        assert_eq!(found[1], found[2], "repeats share one entry");
+        assert!(found.iter().all(|cost| cost.is_some()), "all three walk, got: {found:?}");
+        assert!(found[1] < found[0], "walk-cheap beats the Manhattan lure, got: {found:?}");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "no plan ticket consumed");
+        assert_eq!(after.walk_costs - before.walk_costs, 1, "one batch counted");
+        // Repeat batch: cached, no search, counted as a cache hit.
+        let (again, _) = client
+            .walk_costs(from, &[far, near, near], &short_options(), "costs-op")
+            .expect("repeat serves");
+        assert_eq!(again, found, "repeat serves identical costs");
+        let cached = service.stats();
+        assert_eq!(cached.walk_costs - before.walk_costs, 2, "each batch is one op");
+        assert!(cached.hits > after.hits, "repeat batch serves from cache");
+        // Same prices as the unit plans, without any ticket.
+        let (world, tables) = shared_world();
+        for (dest, cost) in [far, near].iter().zip([found[0], found[1]].iter()) {
+            let mut sync = None;
+            for _ in 0..5 {
+                if let Ok(plan) = plan::plan(&world, &tables, from, *dest, &short_options()) {
+                    sync = Some(plan.cost);
+                    break;
+                }
+            }
+            assert_eq!(*cost, sync, "batch prices the unit plan for ({},{})", dest.x, dest.z);
+        }
+        // Stale version refuses loud, never serves.
+        let refused = client.walk_costs(from, &[near], &short_options(), "stale-v1");
+        assert!(refused.is_err(), "stale version refuses, got: {refused:?}");
+    }
+
+    /// N2 suffix: standing mid-plan serves the tail with no search,
+    /// priced exactly like a fresh plan from there.
+    #[test]
+    fn suffix_serves_tail_without_search() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world.clone(), tables.clone(), "lot3-suffix".to_string()),
+            &test_socket("plan-suffix"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "suffix");
+        // Unit shape first: a walk-only plan suffixes by tile count.
+        let from = Tile { x: 0, z: 0, level: 0 };
+        let tiles: Vec<Tile> = (1..=5).map(|x| Tile { x, z: 0, level: 0 }).collect();
+        let walk = Plan {
+            segments: vec![Segment::Walk { tiles: tiles.clone() }],
+            cost: 5,
+            adjusted_dest: None,
+        };
+        let tail = split_suffix(&tables, from, &walk, Tile { x: 2, z: 0, level: 0 }).expect("mid-path");
+        assert_eq!(tail.cost, 3, "dropped prefix priced per tile");
+        assert_eq!(plan_path(Tile { x: 2, z: 0, level: 0 }, &tail).last(), Some(&Tile { x: 5, z: 0, level: 0 }));
+        assert!(split_suffix(&tables, from, &walk, from).is_none(), "start is a prefix, not a suffix");
+        assert!(split_suffix(&tables, from, &walk, Tile { x: 9, z: 9, level: 0 }).is_none(), "off-path recomputes");
+        // Through the service: full leg, then a mid-path start.
+        let door_from = Tile { x: 3228, z: 3214, level: 0 };
+        let door_dest = Tile { x: 3224, z: 3214, level: 0 };
+        let full = submit_ready(&client, door_from, door_dest, &short_options(), "lot3-suffix");
+        let path = plan_path(door_from, &full);
+        assert!(path.len() > 3, "door leg has a walk worth suffixing");
+        let mid = path[path.len() / 2];
+        let before = service.stats();
+        let served = submit_ready(&client, mid, door_dest, &short_options(), "lot3-suffix");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "suffix serves with no search");
+        assert_eq!(after.suffix_hits - before.suffix_hits, 1, "one suffix counted");
+        assert_eq!(plan_path(mid, &served).last(), Some(&door_dest), "suffix lands on dest");
+        // Exact price: a fresh sync plan for the same tail costs the same.
+        let mut sync = None;
+        for _ in 0..5 {
+            if let Ok(found) = plan::plan(&world, &tables, mid, door_dest, &short_options()) {
+                sync = Some(found);
+                break;
+            }
+        }
+        let sync = sync.expect("sync suffix converges");
+        assert_eq!(served.cost, sync.cost, "truncated tail is substructure-optimal");
+    }
+
+    /// N8 detour: every computed plan accumulates cost minus the
+    /// straight-line bound (sum, max, count) for the nav-stats gauge.
+    #[test]
+    fn detour_metric_tracks_computed_plans() {
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "detour".to_string()),
+            &test_socket("plan-detour"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "detour");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let before = service.stats();
+        let planned = submit_ready(&client, from, dest, &short_options(), "detour");
+        let after = service.stats();
+        let straight = (from.x - dest.x).abs().max((from.z - dest.z).abs()) as u32;
+        let want = planned.cost.saturating_sub(straight);
+        assert_eq!(after.detour_plans - before.detour_plans, 1, "one computed plan counted");
+        assert_eq!(after.detour_sum - before.detour_sum, u64::from(want), "sum prices this plan's detour");
+        assert!(after.detour_max >= want, "max covers this plan's detour");
     }
 
     /// LOT3 bump: a reloaded version serves zero stale plans — neither

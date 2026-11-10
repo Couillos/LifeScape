@@ -83,14 +83,14 @@ pub struct Tile {
 }
 
 impl Tile {
-    fn key(self) -> u64 {
+    pub(crate) fn key(self) -> u64 {
         let level = (self.level as u64) & 0xFF;
         let z = ((self.z + 8192) as u64) & 0x1F_FFFF;
         let x = ((self.x + 8192) as u64) & 0x1F_FFFF;
         (level << 42) | (z << 21) | x
     }
 
-    fn chebyshev(self, other: Tile) -> i32 {
+    pub(crate) fn chebyshev(self, other: Tile) -> i32 {
         (self.x - other.x).abs().max((self.z - other.z).abs())
     }
 
@@ -99,7 +99,7 @@ impl Tile {
     /// always beats the tile straight above a booth or counter.
     /// Exact-destination search is untouched (dijkstra still settles by
     /// cost); only the fallback/adjust choice changes.
-    fn fallback_rank(self, other: Tile, cost: u32) -> (i32, i32, u32) {
+    pub(crate) fn fallback_rank(self, other: Tile, cost: u32) -> (i32, i32, u32) {
         ((self.level - other.level).abs(), self.chebyshev(other), cost)
     }
 }

@@ -1,4 +1,4 @@
-//! travel_to: plan once with lifescape-nav, execute segment by segment.
+//! travel_to: one plan per trip, executed segment by segment.
 //!
 //! The plan is pure (same world, same options, same plan); this executor
 //! only walks it and checks one postcondition per segment. A replanable
@@ -6,20 +6,34 @@
 //! once with the faulty edge banned; the second failure goes to the
 //! caller. Anything else (interrupt, io, timeout, choice dialogue) is
 //! returned at once, never retried.
+//!
+//! Between-legs control (D65): one trip installs a `BetweenLegsHook`
+//! (`install_between_legs`, always removed after) which the executor runs
+//! between two sent legs — random event, injury and flight, death. The
+//! hook observes only; the executor decides: `Continue` walks the next
+//! leg, `Fled` replans from the new position with no edge banned, anything
+//! else aborts the trip with a typed error (never a silent NoRoute).
+//!
+//! Plans go through the single-round-trip `plan` op (E3, server-side
+//! wait, no 2 ms polling); walking costs go through one `walk_costs` op
+//! per batch (N1, one search, order-preserving). No legacy submit/poll
+//! path: every service failure is `nav-down`, never a local plan.
 
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
 use lifescape_nav::plan::{EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, Tile};
-use lifescape_nav::service::{self, Poll as ServicePoll, Submit as ServiceSubmit};
+use lifescape_nav::service::{self, Poll as ServicePoll};
 #[cfg(test)]
 use lifescape_nav::static_world::StaticWorld;
 #[cfg(test)]
 use lifescape_nav::tables::Tables;
 
 use super::travel_dossier::{TRAIL_TAKE, dossier_json, trail_mark, write_dossier_file};
+use super::travel_hook::{BetweenLegsHook, LegInfo, LegVerdict};
 use crate::client::Bot;
 use crate::client::movement::STEP_CAP;
 use crate::error::{Error, Result, TravelError, TravelErrorKind};
@@ -68,20 +82,6 @@ enum RemoteOutcome {
     Interrupted(String),
 }
 
-/// One polled ticket: either terminal, or a stale-version answer the
-/// caller resubmits once on the served version.
-enum PollTicket {
-    Ticket(RemoteOutcome),
-    Stale(String),
-}
-
-/// E3 fast-path routing: terminal outcome, or the legacy submit/poll
-/// path (old daemon without the `plan` op).
-enum PlanOnceTerminal {
-    Done(RemoteOutcome),
-    Legacy,
-}
-
 /// A terminal reply off a draining snapshot: ours is set and the served
 /// one differs. Empty versions (tests, no daemon) never count as stale.
 pub(crate) fn stale_reply(ours: &Option<String>, served: &str) -> bool {
@@ -89,6 +89,49 @@ pub(crate) fn stale_reply(ours: &Option<String>, served: &str) -> bool {
         Some(ours) => !ours.is_empty() && !served.is_empty() && ours != served,
         None => false,
     }
+}
+
+/// Fled marker: the between-legs hook reports flight, the trip replans
+/// from the new position with no edge banned (unlike a segment failure,
+/// which bans the faulty edge). Prefix-matched, never shown to callers
+/// beyond the dossier line.
+pub(crate) const FLED_MARK: &str = "fled-between-legs";
+
+/// Between-legs hook registry (D65): one trip installs its control, the
+/// executor reads it between two sent legs, the trip removes it after.
+/// Keyed by bot identity (never dereferenced): `Bot` keeps its frozen
+/// shape, and one worker drives one bot at a time, so identity keys never
+/// collide across sessions. The lock is only held for the lookup, never
+/// across the hook call.
+static LEG_HOOKS: OnceLock<Mutex<HashMap<usize, BetweenLegsHook>>> = OnceLock::new();
+
+fn legs_registry() -> &'static Mutex<HashMap<usize, BetweenLegsHook>> {
+    LEG_HOOKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn legs_key(bot: &Bot) -> usize {
+    bot as *const Bot as usize
+}
+
+/// Install the between-legs control for one trip: the executor calls it
+/// between two sent legs until `remove_between_legs`. Walk scripts wrap
+/// the trip with `with_between_legs` so no control leaks.
+pub fn install_between_legs(bot: &mut Bot, hook: BetweenLegsHook) {
+    legs_registry().lock().unwrap().insert(legs_key(bot), hook);
+}
+
+/// Remove the trip control (called after the trip on every path).
+pub fn remove_between_legs(bot: &Bot) {
+    legs_registry().lock().unwrap().remove(&legs_key(bot));
+}
+
+/// Run one trip with the between-legs control installed, removed
+/// afterwards on every path.
+pub fn with_between_legs<T>(bot: &mut Bot, hook: BetweenLegsHook, trip: impl FnOnce(&mut Bot) -> T) -> T {
+    install_between_legs(bot, hook);
+    let out = trip(bot);
+    remove_between_legs(bot);
+    out
 }
 
 impl Bot {
@@ -131,27 +174,21 @@ impl Bot {
         Ok((options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
     }
 
-    /// Remote plan, E3 fast path first: one `plan` op with a server-side
-    /// wait (no 2 ms polling, one connection per plan). Old daemons that
-    /// do not know the op fall back to submit/poll; every other refusal
-    /// (down, refused, stale twice, timeout, interrupt) is `nav-down`,
-    /// never a local plan. Stale version: the served version replaces
-    /// ours and the `plan` retries exactly once; a second skew is
-    /// `nav-down`, never a loop.
+    /// Remote plan through one `plan` op with a server-side wait (one
+    /// connection per plan, no 2 ms polling). Every refusal (down,
+    /// refused, stale twice, timeout, interrupt, unknown op) is
+    /// `nav-down`, never a local plan. Stale version: the served version
+    /// replaces ours and the `plan` retries exactly once; a second skew
+    /// is `nav-down`, never a loop.
     fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
         let client = match self.plan_client.clone() {
             Some(client) => client,
             None => return RemoteOutcome::NavDown("no-service-handle".to_string()),
         };
-        match self.plan_once_terminal(&client, options, from, dest) {
-            PlanOnceTerminal::Done(outcome) => outcome,
-            PlanOnceTerminal::Legacy => self.plan_remote_legacy(&client, options, from, dest),
-        }
+        self.plan_once_terminal(&client, options, from, dest)
     }
 
     /// E3 single round-trip: `plan` with one stale-version resubmit.
-    /// `Legacy` only when the daemon predates the op (unknown op);
-    /// transport and refusals are terminal `NavDown`, like before.
     /// Long computes wait server-side in 500 ms slices: between slices
     /// the keepalive still ticks (no 100-tick reap) and the operator stop
     /// still aborts (no blind 8 s wait). Median plans cost 1 connection.
@@ -161,7 +198,7 @@ impl Bot {
         options: &NavOptions,
         from: Tile,
         dest: Tile,
-    ) -> PlanOnceTerminal {
+    ) -> RemoteOutcome {
         use lifescape_nav::service_plan::{PlanOnceError, PLAN_SLICE_WAIT_MS};
         let started = std::time::Instant::now();
         let deadline = started + service::SERVICE_WAIT_MAX;
@@ -169,15 +206,15 @@ impl Bot {
         // traffic: ranking and costing helpers keep their no-block
         // contract, the run maps this to `Interrupted` like before.
         if !self.plan_yield() {
-            return PlanOnceTerminal::Done(RemoteOutcome::Interrupted(format!(
+            return RemoteOutcome::Interrupted(format!(
                 "plan aborted at {:?}",
                 self.position()
-            )));
+            ));
         }
         let mut resubmits = 0u32;
         loop {
             if std::time::Instant::now() >= deadline {
-                return PlanOnceTerminal::Done(RemoteOutcome::NavDown("service-timeout".to_string()));
+                return RemoteOutcome::NavDown("service-timeout".to_string());
             }
             let version = self.plan_data_version.clone().unwrap_or_default();
             match client.plan_once(from, dest, options, &version, PLAN_SLICE_WAIT_MS) {
@@ -185,169 +222,66 @@ impl Bot {
                     if stale_reply(&self.plan_data_version, &served) {
                         self.plan_data_version = Some(served.clone());
                         if resubmits >= 1 {
-                            return PlanOnceTerminal::Done(RemoteOutcome::NavDown(format!(
-                                "version-skew server={served}"
-                            )));
-                        }
-                        resubmits += 1;
-                        continue;
-                    }
-                    let ipc_ms = started.elapsed().as_millis();
-                    return PlanOnceTerminal::Done(RemoteOutcome::Ready(plan, ipc_ms));
-                }
-                Ok((ServicePoll::Failed(no), served)) => {
-                    if stale_reply(&self.plan_data_version, &served) {
-                        self.plan_data_version = Some(served.clone());
-                        if resubmits >= 1 {
-                            return PlanOnceTerminal::Done(RemoteOutcome::NavDown(format!(
-                                "version-skew server={served}"
-                            )));
-                        }
-                        resubmits += 1;
-                        continue;
-                    }
-                    return PlanOnceTerminal::Done(if no.reason == NoRouteReason::Aborted {
-                        RemoteOutcome::NavDown("server-aborted".to_string())
-                    } else {
-                        RemoteOutcome::NoRoute(no)
-                    });
-                }
-                Ok((ServicePoll::Pending, _)) | Ok((ServicePoll::Unknown, _)) => {
-                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(
-                        "plan-op-nonterminal".to_string(),
-                    ));
-                }
-                Err(PlanOnceError::Refused { reason, served }) => {
-                    if reason == "plan-timeout" {
-                        // Slice elapsed, plan still computing: keepalive +
-                        // stop check, then wait another slice (the legacy
-                        // poll loop's guard, 250x fewer connections).
-                        if !self.plan_yield() {
-                            return PlanOnceTerminal::Done(RemoteOutcome::Interrupted(format!(
-                                "plan aborted at {:?}",
-                                self.position()
-                            )));
-                        }
-                        continue;
-                    }
-                    if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
-                        self.plan_data_version = Some(served);
-                        resubmits += 1;
-                        continue;
-                    }
-                    if reason.contains("unknown op") {
-                        return PlanOnceTerminal::Legacy;
-                    }
-                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(reason));
-                }
-                Err(PlanOnceError::Transport(error)) => {
-                    return PlanOnceTerminal::Done(RemoteOutcome::NavDown(error));
-                }
-            }
-        }
-    }
-
-    /// Legacy submit/poll path, kept for old daemons only (unknown `plan`
-    /// op). Same discipline as before: refuse/down/stale twice/timeout
-    /// all become `nav-down`, never a local plan.
-    fn plan_remote_legacy(
-        &mut self,
-        client: &service::PlanClient,
-        options: &NavOptions,
-        from: Tile,
-        dest: Tile,
-    ) -> RemoteOutcome {
-        let mut resubmits = 0u32;
-        loop {
-            let version = self.plan_data_version.clone().unwrap_or_default();
-            let ticket = match client.submit(from, dest, options, &version) {
-                Ok(ServiceSubmit::Accepted { id, version: served }) => {
-                    if !version.is_empty() && !served.is_empty() && served != version {
-                        self.plan_data_version = Some(served.clone());
-                        if resubmits >= 1 {
                             return RemoteOutcome::NavDown(format!(
-                                "version-skew client={version} server={served}"
+                                "version-skew server={served}"
                             ));
                         }
                         resubmits += 1;
                         continue;
                     }
-                    id
+                    let ipc_ms = started.elapsed().as_millis();
+                    return RemoteOutcome::Ready(plan, ipc_ms);
                 }
-                Ok(ServiceSubmit::Refused { reason, version: served }) => {
+                Ok((ServicePoll::Failed(no), served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        self.plan_data_version = Some(served.clone());
+                        if resubmits >= 1 {
+                            return RemoteOutcome::NavDown(format!(
+                                "version-skew server={served}"
+                            ));
+                        }
+                        resubmits += 1;
+                        continue;
+                    }
+                    return if no.reason == NoRouteReason::Aborted {
+                        RemoteOutcome::NavDown("server-aborted".to_string())
+                    } else {
+                        RemoteOutcome::NoRoute(no)
+                    };
+                }
+                Ok((ServicePoll::Pending, _)) | Ok((ServicePoll::Unknown, _)) => {
+                    return RemoteOutcome::NavDown(
+                        "plan-op-nonterminal".to_string(),
+                    );
+                }
+                Err(PlanOnceError::Refused { reason, served }) => {
+                    if reason == "plan-timeout" {
+                        // Slice elapsed, plan still computing: keepalive +
+                        // stop check, then wait another slice (250x fewer
+                        // connections than the old 2 ms poll loop).
+                        if !self.plan_yield() {
+                            return RemoteOutcome::Interrupted(format!(
+                                "plan aborted at {:?}",
+                                self.position()
+                            ));
+                        }
+                        continue;
+                    }
                     if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
                         self.plan_data_version = Some(served);
                         resubmits += 1;
                         continue;
                     }
+                    // No legacy submit/poll path (N9): an old daemon
+                    // without the op fails loud as `nav-down`.
+                    if reason.contains("unknown op") {
+                        return RemoteOutcome::NavDown(reason);
+                    }
                     return RemoteOutcome::NavDown(reason);
                 }
-                Err(error) => return RemoteOutcome::NavDown(error),
-            };
-            match self.poll_ticket(&client, ticket) {
-                PollTicket::Ticket(ticket_outcome) => return ticket_outcome,
-                PollTicket::Stale(served) => {
-                    let _ = client.cancel(ticket);
-                    self.plan_data_version = Some(served.clone());
-                    if resubmits >= 1 {
-                        return RemoteOutcome::NavDown(format!("version-skew mid-flight server={served}"));
-                    }
-                    resubmits += 1;
+                Err(PlanOnceError::Transport(error)) => {
+                    return RemoteOutcome::NavDown(error);
                 }
-            }
-        }
-    }
-
-    /// Poll one ticket to a terminal outcome; the keepalive still ticks
-    /// between polls and the operator stop still aborts.
-    fn poll_ticket(&mut self, client: &service::PlanClient, ticket: u64) -> PollTicket {
-        let attempt_start = std::time::Instant::now();
-        let deadline = std::time::Instant::now() + service::SERVICE_WAIT_MAX;
-        // Tight first polls (a fast plan answers inside one round-trip),
-        // then 2 ms pacing: IPC rhythm, not a game wait (keepalive stays
-        // tick-driven).
-        let mut polls = 0u32;
-        loop {
-            match client.poll(ticket) {
-                Ok((ServicePoll::Ready(plan), served)) => {
-                    if stale_reply(&self.plan_data_version, &served) {
-                        return PollTicket::Stale(served);
-                    }
-                    return PollTicket::Ticket(RemoteOutcome::Ready(plan, attempt_start.elapsed().as_millis()));
-                }
-                Ok((ServicePoll::Failed(no), served)) => {
-                    if stale_reply(&self.plan_data_version, &served) {
-                        return PollTicket::Stale(served);
-                    }
-                    return PollTicket::Ticket(if no.reason == NoRouteReason::Aborted {
-                        RemoteOutcome::NavDown("server-aborted".to_string())
-                    } else {
-                        RemoteOutcome::NoRoute(no)
-                    });
-                }
-                Ok((ServicePoll::Unknown, _)) => {
-                    // The slot is gone (evicted terminal, last-waiter
-                    // cancel, or a restarted daemon): release the waiter
-                    // orphan server-side, then fail loud. Cancel of a
-                    // missing id is a no-op by construction, same as the
-                    // timeout path below.
-                    let _ = client.cancel(ticket);
-                    return PollTicket::Ticket(RemoteOutcome::NavDown("unknown-ticket".to_string()))
-                }
-                Ok((ServicePoll::Pending, _)) => {}
-                Err(error) => return PollTicket::Ticket(RemoteOutcome::NavDown(error)),
-            }
-            if !self.plan_yield() {
-                let _ = client.cancel(ticket);
-                return PollTicket::Ticket(RemoteOutcome::Interrupted(format!("plan aborted at {:?}", self.position())));
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = client.cancel(ticket);
-                return PollTicket::Ticket(RemoteOutcome::NavDown("service-timeout".to_string()));
-            }
-            polls += 1;
-            if polls >= 10 {
-                std::thread::sleep(service::SERVICE_POLL_INTERVAL);
             }
         }
     }
@@ -380,7 +314,40 @@ impl Bot {
         self.fail(from, dest, options, None, None, &expected, &Error::Travel(observed))
     }
 
-    /// Yield point for long plans: the plan runs on the only socket
+    /// Run the installed between-legs control, if any. `Continue` walks the
+    /// next leg; `Fled` replans from the new position (marker error, never a
+    /// segment failure, never an edge ban); `RandomEvent`/`Dead` abort the
+    /// trip with a typed error the caller maps (rescue, flee, re-gear) —
+    /// never a silent NoRoute, never a replan.
+    fn check_legs(&mut self, info: LegInfo) -> Result<()> {
+    let hook = legs_registry().lock().unwrap().get(&legs_key(self)).cloned();
+    let Some(hook) = hook else {
+        return Ok(());
+    };
+    match hook(self, &info) {
+        LegVerdict::Continue => Ok(()),
+        LegVerdict::Fled => Err(Error::StepRefused(format!(
+            "{FLED_MARK} at {:?} after leg {}/{}",
+            self.position(),
+            info.seg_index + 1,
+            info.seg_total,
+        ))),
+        LegVerdict::RandomEvent => Err(Error::Unreachable(format!(
+            "random event between legs at {:?} after leg {}/{}",
+            self.position(),
+            info.seg_index + 1,
+            info.seg_total,
+        ))),
+        LegVerdict::Dead => Err(Error::Unreachable(format!(
+            "dead between legs at {:?} after leg {}/{}",
+            self.position(),
+            info.seg_index + 1,
+            info.seg_total,
+        ))),
+    }
+}
+
+/// Yield point for long plans: the plan runs on the only socket
     /// reader, so each yield emits the keepalive the server needs (it
     /// reaps after ~6 s of silence: 100 ticks at 60 ms). The session stop
     /// hook aborts the same way. False stops every pending search; the
@@ -479,15 +446,14 @@ impl Bot {
         satisfied
     }
 
-    /// Batch walking costs via the pathfinding service, never a local
-    /// Dijkstra: one `plan` op (E3) per UNIQUE dest, sequential so at most
-    /// one ticket is in flight (never near ACCOUNT_CAP). Identical dests
-    /// in one batch share one remote cost (E14 grouping); repeats across
-    /// calls still hit the service L1. Options come from the served
-    /// `wants` tags like a plan; without them (or the handle) every dest
-    /// is None so callers keep the Manhattan order. L1 exact hits,
-    /// truncation and joins happen server-side on their own. Any miss (no
-    /// service, refused, timeout, stale twice, stop, unplannable) is None.
+    /// Batch walking costs in ONE `walk_costs` round-trip (N1): the
+    /// service runs a single Dijkstra from here, stopped when every target
+    /// is reached. Order-preserving (`costs[i]` answers `dests[i]`), `None`
+    /// per unplannable target. Identical dests share one entry (E14
+    /// grouping); options come from the served `wants` tags like a plan.
+    /// Any miss (no service, refused, stale twice, stop, timeout,
+    /// transport) is `None` for every dest, so callers keep the Manhattan
+    /// order. Never plans locally.
     pub fn walk_costs(&mut self, dests: &[Tile]) -> Vec<Option<u32>> {
         if dests.is_empty() {
             return Vec::new();
@@ -499,8 +465,13 @@ impl Bot {
             Ok(options) => options,
             Err(_) => return vec![None; dests.len()],
         };
+        // A stop already posed aborts before any socket traffic: costing
+        // helpers keep their no-block contract, like plans.
+        if !self.plan_yield() {
+            return vec![None; dests.len()];
+        }
         let from = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
-        // E14: one remote cost per unique tile in the batch.
+        // E14: one remote entry per unique tile in the batch.
         let mut unique: Vec<Tile> = Vec::with_capacity(dests.len());
         let mut slot_of: Vec<usize> = Vec::with_capacity(dests.len());
         for dest in dests {
@@ -515,76 +486,46 @@ impl Bot {
                 }
             }
         }
-        let mut costs = vec![None; unique.len()];
-        for (slot, dest) in unique.iter().enumerate() {
-            self.cost_stats.remote_calls += 1;
-            costs[slot] = self.walk_cost_one(&client, &options, from, *dest);
-        }
+        let costs = self
+            .walk_costs_remote(&client, &options, from, &unique)
+            .unwrap_or_else(|| vec![None; unique.len()]);
+        self.cost_stats.remote_calls += 1;
         slot_of.iter().map(|slot| costs[*slot]).collect()
     }
 
-    /// One remote cost: E3 `plan` op first (one round-trip, server-side
-    /// wait, version-skew resubmits once), legacy submit/poll only
-    /// against an old daemon. Never plans locally: any miss is None.
-    fn walk_cost_one(
+    /// One `walk_costs` round-trip with one stale-version resubmit: the
+    /// served version replaces ours and the batch retries exactly once; a
+    /// second skew is `None`, never a loop. `None`: down, refused, timeout
+    /// or stop — never a local Dijkstra.
+    fn walk_costs_remote(
         &mut self,
         client: &service::PlanClient,
         options: &NavOptions,
         from: Tile,
-        dest: Tile,
-    ) -> Option<u32> {
-        match self.plan_once_terminal(client, options, from, dest) {
-            PlanOnceTerminal::Done(RemoteOutcome::Ready(plan, _)) => Some(plan.cost),
-            PlanOnceTerminal::Done(_) => None,
-            PlanOnceTerminal::Legacy => self.walk_cost_legacy(client, options, from, dest),
-        }
-    }
-
-    /// Legacy per-cost submit/poll, kept for old daemons only.
-    fn walk_cost_legacy(
-        &mut self,
-        client: &service::PlanClient,
-        options: &NavOptions,
-        from: Tile,
-        dest: Tile,
-    ) -> Option<u32> {
+        dests: &[Tile],
+    ) -> Option<Vec<Option<u32>>> {
         let mut resubmits = 0u32;
         loop {
             let version = self.plan_data_version.clone().unwrap_or_default();
-            let ticket = match client.submit(from, dest, options, &version) {
-                Ok(ServiceSubmit::Accepted { id, version: served }) => {
-                    if !version.is_empty() && !served.is_empty() && served != version {
-                        self.plan_data_version = Some(served);
+            match client.walk_costs(from, dests, options, &version) {
+                Ok((costs, served)) => {
+                    if stale_reply(&self.plan_data_version, &served) {
+                        self.plan_data_version = Some(served.clone());
                         if resubmits >= 1 {
                             return None;
                         }
                         resubmits += 1;
                         continue;
                     }
-                    id
+                    return Some(costs);
                 }
-                Ok(ServiceSubmit::Refused { reason, version: served }) => {
+                Err((reason, served)) => {
                     if reason.starts_with("refused:stale-version") && resubmits < 1 && !served.is_empty() {
                         self.plan_data_version = Some(served);
                         resubmits += 1;
                         continue;
                     }
                     return None;
-                }
-                Err(_) => return None,
-            };
-            match self.poll_ticket(client, ticket) {
-                PollTicket::Ticket(RemoteOutcome::Ready(plan, _)) => return Some(plan.cost),
-                PollTicket::Ticket(RemoteOutcome::NoRoute(_)) => return None,
-                PollTicket::Ticket(RemoteOutcome::NavDown(_)) => return None,
-                PollTicket::Ticket(RemoteOutcome::Interrupted(_)) => return None,
-                PollTicket::Stale(served) => {
-                    let _ = client.cancel(ticket);
-                    self.plan_data_version = Some(served);
-                    if resubmits >= 1 {
-                        return None;
-                    }
-                    resubmits += 1;
                 }
             }
         }
@@ -616,9 +557,11 @@ impl Bot {
         ));
     }
 
-    /// Run every segment in order, at most one replan on a replanable
-    /// failure. Returns the second failure (or the replan diagnosis) to
-    /// the caller; never retries anything else.
+    /// Run every segment in order, at most one replan: a replanable
+    /// segment failure replans with the faulty edge banned, a hook `Fled`
+    /// between legs replans from the new position with no ban. Returns
+    /// the second failure (or the replan diagnosis) to the caller; never
+    /// retries anything else.
     fn run_with_replan(
         &mut self,
         dest: Tile,
@@ -644,7 +587,14 @@ impl Bot {
                 Ok(())
             }
             Err((failed, err)) if is_replanable(&err) => {
-                let edge = ban_for(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))], self);
+                // Fled (hook marker): the bot moved, nothing failed — replan
+                // from the new position with no edge banned.
+                let fled = matches!(&err, Error::StepRefused(detail) if detail.starts_with(FLED_MARK));
+                let edge = if fled {
+                    None
+                } else {
+                    ban_for(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))], self)
+                };
                 let expected = seg_summary(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))]);
                 let first = self.fail(start, dest, &options, Some(&plan), Some(failed), &expected, &err);
                 self.log(&format!("nav fail seg {}/{segments} at {:?}: {err} (dossier: {})", failed + 1, self.position(), dossier_text(&first)));
@@ -736,6 +686,22 @@ impl Bot {
                     return Err((index, err));
                 }
             }
+            // Between-legs control (D65): event, injury and death ride the
+            // hook between two sent legs, never the destination. The next
+            // index rides along (a `Fled` replans the remainder).
+            if index + 1 < plan.segments.len() {
+                let kind = match seg {
+                    Segment::Walk { .. } => "walk",
+                    Segment::OpenDoor { .. } => "door",
+                    Segment::Ride { .. } => "ride",
+                    Segment::Custom { .. } => "custom",
+                };
+                if let Err(err) = self.check_legs(LegInfo { seg_index: index, seg_total: plan.segments.len(), kind }) {
+                    self.log(&format!("nav legs {kind} {}/{} -> {err}", index + 1, plan.segments.len()));
+                    self.clear_plan_doors();
+                    return Err((index + 1, err));
+                }
+            }
         }
         self.clear_plan_doors();
         Ok(())
@@ -749,12 +715,15 @@ impl Bot {
         }
         let run = self.want_run();
         let mut pending: Vec<(i32, i32)> = tiles.iter().map(|tile| (tile.x, tile.z)).collect();
+        let legs_total = pending.len().div_ceil(STEP_CAP);
+        let mut leg_no = 0usize;
         while !pending.is_empty() {
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("walk timed out at {:?}", self.position())));
             }
             let end = pending.len().min(STEP_CAP);
             let leg: Vec<(i32, i32)> = pending[..end].to_vec();
+            leg_no += 1;
             if let Err(err) = self.send_and_await(&leg, run, deadline, false) {
                 if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
                     return Err(err);
@@ -778,6 +747,11 @@ impl Bot {
                         last_message(self),
                     )));
                 }
+            }
+            // Between-legs control inside long walks too: the next send
+            // waits for the hook verdict.
+            if !pending.is_empty() {
+                self.check_legs(LegInfo { seg_index: leg_no - 1, seg_total: legs_total, kind: "walk" })?;
             }
         }
         let last = tiles[tiles.len() - 1];
@@ -1432,40 +1406,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_ticket_cancels_and_fails_loud() {
-        use lifescape_nav::service::{PlanClient, Service, Snapshot, Submit as ServiceSubmit, test_socket};
-        let (world, tables) = test_nav_context();
-        let service = Service::start(
-            Snapshot::new(world, tables, "test-unk".to_string()),
-            &test_socket("sdk-unk"),
-            1,
-        )
-        .expect("service starts");
-        let mut bot = offline_bot(3228, 3214);
-        bot.last_keepalive = Some(std::time::Instant::now());
-        bot.last_send_tick = bot.world.ticks;
-        let client = PlanClient::new(service.socket_path(), "t01");
-        // A live ticket whose slot disappears server-side (evicted
-        // terminal, last-waiter cancel, or a restarted daemon, like the
-        // storm hit): the poll loop fails loud with the typed reason,
-        // never hangs, never resubmits, never plans local.
-        let from = Tile { x: 3228, z: 3214, level: 0 };
-        let dest = Tile { x: 3224, z: 3214, level: 0 };
-        let (_, tables) = test_nav_context();
-        let options = bot.nav_options(&tables);
-        let id = match client.submit(from, dest, &options, "test-unk").expect("submit") {
-            ServiceSubmit::Accepted { id, .. } => id,
-            ServiceSubmit::Refused { reason, .. } => panic!("refused: {reason}"),
-        };
-        client.cancel(id).expect("slot disappears");
-        match bot.poll_ticket(&client, id) {
-            PollTicket::Ticket(RemoteOutcome::NavDown(reason)) if reason.contains("unknown-ticket") => {}
-            PollTicket::Ticket(_) => panic!("vanished slot stays unknown-ticket, not another verdict"),
-            PollTicket::Stale(_) => panic!("no version skew in this scenario"),
-        }
-    }
-
-    #[test]
     fn service_plan_matches_engine() {
         use lifescape_nav::service::{PlanClient, Service, Snapshot, encode_plan, test_socket};
         let (world, tables) = test_nav_context();
@@ -1493,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn service_poll_honors_operator_stop() {
+    fn service_plan_honors_operator_stop() {
         use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
         let (world, tables) = test_nav_context();
         let service =
@@ -1503,9 +1443,8 @@ mod tests {
         bot.last_send_tick = bot.world.ticks;
         bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
         bot.plan_data_version = Some("test".to_string());
-        // Long leg (264 tiles): the first poll is still pending, so the
-        // poll loop reaches the operator hook and aborts instead of
-        // going silent (the 100-tick reap guard, by construction).
+        // A stop already posed aborts before any socket traffic (the
+        // 100-tick reap guard, by construction).
         bot.on_pump = Some(Arc::new(|_: &mut Bot| false));
         let err = match bot.plan_travel(Tile { x: 3250, z: 3420, level: 0 }) {
             Ok(_) => panic!("stop aborts the remote plan"),
@@ -1552,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn walk_costs_batch_hits_service_and_l1() {
+    fn walk_costs_batch_serves_one_search() {
         use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
         let (world, tables) = test_nav_context();
         let service =
@@ -1562,19 +1501,27 @@ mod tests {
         bot.last_send_tick = bot.world.ticks;
         bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
         bot.plan_data_version = Some("test-costs".to_string());
-        let dests = [Tile { x: 3252, z: 3237, level: 0 }, Tile { x: 3203, z: 3246, level: 0 }];
-        let costs = bot.walk_costs(&dests);
-        assert_eq!(costs.len(), 2, "one cost per dest");
-        assert!(costs.iter().all(|cost| cost.is_some()), "service costs both, got: {costs:?}");
-        // Walk-cheap (3203,3246) beats the Manhattan lure, same verdict as
-        // the old local Dijkstra, without ever planning thread-side.
-        assert!(costs[1] < costs[0], "walk-cheap wins, got: {costs:?}");
+        // One duplicate in the batch: a single op serves all three.
+        let dests = [
+            Tile { x: 3252, z: 3237, level: 0 },
+            Tile { x: 3203, z: 3246, level: 0 },
+            Tile { x: 3203, z: 3246, level: 0 },
+        ];
         let before = service.stats();
+        let costs = bot.walk_costs(&dests);
+        assert_eq!(costs.len(), 3, "one cost per dest, repeats included");
+        assert_eq!(costs[1], costs[2], "repeats share one entry");
+        assert!(costs.iter().all(|cost| cost.is_some()), "service costs all, got: {costs:?}");
+        // Walk-cheap (3203,3246) beats the Manhattan lure, same verdict as
+        // the unit plans, without ever planning thread-side.
+        assert!(costs[1] < costs[0], "walk-cheap wins, got: {costs:?}");
+        assert_eq!(bot.cost_stats(), (1, 1), "one remote call, one in-batch duplicate");
+        let after = service.stats();
+        assert_eq!(after.misses - before.misses, 0, "no plan ticket consumed");
+        assert_eq!(after.walk_costs - before.walk_costs, 1, "one batch counted");
         let again = bot.walk_costs(&dests);
         assert_eq!(again, costs, "repeat serves identical costs");
-        let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "repeat hits L1, never recomputes");
-        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
+        assert_eq!(service.stats().walk_costs - before.walk_costs, 2, "each batch is one op");
     }
 
     #[test]
@@ -1606,6 +1553,39 @@ mod tests {
         let dests = [Tile { x: 3252, z: 3237, level: 0 }, Tile { x: 3203, z: 3246, level: 0 }];
         assert_eq!(bot.walk_costs(&dests), vec![None, None], "stop keeps Manhattan order");
         assert!(start.elapsed() < service::SERVICE_WAIT_MAX, "stop cancels, never blocks");
+    }
+
+    #[test]
+    fn legs_hook_registry_roundtrips() {
+        let mut bot = offline_bot(3222, 3222);
+        let info = LegInfo { seg_index: 0, seg_total: 2, kind: "walk" };
+        // No hook installed: the check passes through.
+        assert!(bot.check_legs(info).is_ok());
+        install_between_legs(&mut bot, Arc::new(|_, _| LegVerdict::Continue));
+        assert!(bot.check_legs(info).is_ok());
+        remove_between_legs(&bot);
+        assert!(bot.check_legs(info).is_ok(), "removed controls never leak into the next trip");
+    }
+
+    #[test]
+    fn legs_hook_verdicts_map_to_typed_errors() {
+        use crate::client::travel_hook::is_no_route;
+        let mut bot = offline_bot(3222, 3222);
+        let info = LegInfo { seg_index: 1, seg_total: 3, kind: "door" };
+        install_between_legs(&mut bot, Arc::new(|_, _| LegVerdict::Fled));
+        match bot.check_legs(info) {
+            Err(Error::StepRefused(detail)) => assert!(detail.starts_with(FLED_MARK), "fled carries its marker, got: {detail}"),
+            other => panic!("fled replans, never aborts, got: {other:?}"),
+        }
+        install_between_legs(&mut bot, Arc::new(|_, _| LegVerdict::RandomEvent));
+        match bot.check_legs(info) {
+            Err(Error::Unreachable(detail)) => assert!(!is_no_route(&Error::Unreachable(detail.clone())), "hook aborts are typed, never NoRoute"),
+            other => panic!("event aborts the trip, got: {other:?}"),
+        }
+        install_between_legs(&mut bot, Arc::new(|_, _| LegVerdict::Dead));
+        assert!(matches!(bot.check_legs(info), Err(Error::Unreachable(_))), "death aborts the trip");
+        remove_between_legs(&bot);
+        assert!(bot.check_legs(info).is_ok());
     }
 
     #[test]

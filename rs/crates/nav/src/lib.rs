@@ -5,6 +5,7 @@
 pub mod bfs;
 pub mod buffer;
 pub mod collision;
+pub mod costs;
 pub mod f2p;
 pub mod loctypes;
 pub mod nav;

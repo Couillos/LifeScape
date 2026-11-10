@@ -1,15 +1,19 @@
-//! Checked walking for skill scripts: 40-tile legs with event checks,
-//! cooperative rescue on blockage. Split from `skill_common` (file-size
-//! rule); `skill_common` re-exports both so callers do not change.
+//! Checked walking for skill scripts: one plan per trip, controls
+//! between legs. Split from `skill_common` (file-size rule);
+//! `skill_common` re-exports both so callers do not change.
 //!
 //! Every wait is tick-bounded (`bot.world.ticks`); nothing sleeps. Errors
 //! are typed, never swallowed.
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
+use lifescape_sdk::client::travel::{install_between_legs, remove_between_legs};
+use lifescape_sdk::client::travel_hook::{BetweenLegsHook, LegInfo, LegVerdict};
 use lifescape_sdk::{Bot, Error};
 
-use crate::skill_common::{check_events, hitpoints};
+use crate::kit::survival::{check_events, hitpoints};
 use crate::ScriptError;
 
 /// Remote walking-cost refinement, shared by the foe/spot pickers (network
@@ -110,17 +114,30 @@ pub fn rescue_then_retry(bot: &mut Bot, error: Error) -> Result<bool, ScriptErro
     Ok(true)
 }
 
-/// Chunked `walk_to` in 40-tile legs with event checks: a hurt walk aborts
-/// (Ok(false)) so the caller can flee, a first `Unreachable` runs the
-/// cooperative rescue and retries the leg, a second one errors loudly.
+/// One trip to the target (D65): a single `walk_to` (one plan, executed
+/// leg by leg) with the between-legs control installed. Random events,
+/// injury and death ride the hook between two sent legs — the executor
+/// aborts the trip on the verdict, this function maps it: death is a typed
+/// abort (the job re-gears), a limp with no event pending ends the walk
+/// with Ok(false) so the caller flees, a first `Unreachable` runs the
+/// cooperative rescue and retries the trip, a second one errors loudly.
 /// A final-leg Ok on a blocked décor tile (the router settles on the
 /// adjacent tile) ends the walk with Ok(true): the caller clicks from there.
 pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Result<bool, ScriptError> {
     let deadline = bot.world.ticks + timeout;
-    let mut hitpoints_before = hitpoints(bot);
-    let mut last_greet = bot.world.ticks;
+    if (bot.world.x, bot.world.z) == (dest_x, dest_z) {
+        return Ok(true);
+    }
+    // Already dead (respawn pending): no point walking a corpse.
+    if hitpoints(bot) == 0 {
+        return Err(ScriptError::Usage(format!(
+            "died walking to {dest_x},{dest_z} at {:?}",
+            bot.position()
+        )));
+    }
+    check_events(bot)?;
     let mut rescued = false;
-    while (bot.world.x, bot.world.z) != (dest_x, dest_z) {
+    loop {
         if bot.world.ticks > deadline {
             return Err(Error::Timeout(format!(
                 "walk to {dest_x},{dest_z} timed out at {:?} ({timeout} ticks)",
@@ -128,93 +145,74 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             ))
             .into());
         }
-        if bot.world.ticks - last_greet > 50 {
-            last_greet = bot.world.ticks;
-            check_events(bot)?;
+        if (bot.world.x, bot.world.z) == (dest_x, dest_z) {
+            return Ok(true);
         }
-        // Already dead (respawn pending): no point walking a corpse.
         if hitpoints(bot) == 0 {
             return Err(ScriptError::Usage(format!(
                 "died walking to {dest_x},{dest_z} at {:?}",
                 bot.position()
             )));
         }
-        let step_x = bot.world.x + (dest_x - bot.world.x).clamp(-40, 40);
-        let step_z = bot.world.z + (dest_z - bot.world.z).clamp(-40, 40);
         let rest = deadline.saturating_sub(bot.world.ticks).max(500).min(6000);
-        let final_leg = (step_x, step_z) == (dest_x, dest_z);
-        match bot.walk_to(step_x, step_z, bot.world.level, rest) {
+        // The verdict enum is frozen (P0.2): hurt has no verdict of its
+        // own, so it aborts as `RandomEvent` and this function tells the
+        // limp from the event through live state (hp vs event present).
+        let hitpoints_before = hitpoints(bot);
+        let hook: BetweenLegsHook = Arc::new(move |hook_bot: &mut Bot, _: &LegInfo| {
+            if hitpoints(hook_bot) == 0 {
+                return LegVerdict::Dead;
+            }
+            if crate::randomevent::event_at(hook_bot).is_some() {
+                return LegVerdict::RandomEvent;
+            }
+            if hitpoints(hook_bot) < hitpoints_before {
+                return LegVerdict::RandomEvent;
+            }
+            LegVerdict::Continue
+        });
+        install_between_legs(bot, hook);
+        let outcome = bot.walk_to(dest_x, dest_z, bot.world.level, rest);
+        remove_between_legs(bot);
+        match outcome {
             // Blocked décor (tree, rock, booth) never converges on its exact
-            // tile: the router stops on the BFS-nearest reachable tile and
+            // tile: the router settles on the BFS-nearest reachable tile and
             // reports Ok. That adjacent arrival is the click spot, not a
-            // reason to re-walk until the budget burns out.
-            Ok(()) if final_leg => return Ok(true),
-            Ok(()) => {}
+            // reason to walk again until the budget burns out.
+            Ok(()) => return Ok(true),
             Err(err) => {
                 bot.log(&format!("walk blocked: {err}"));
-                // Blind 40-tile clamp can land inside a wall pocket the
-                // full route walks around (t02: (2988,3328) sealed by
-                // Falador castlewall): retry a halved clamp first — it
-                // threads the same corridor in plannable legs — then the
-                // final dest once. Conn aborts and final-leg blocks keep
-                // the old rescue path.
-                if !final_leg
-                    && matches!(
-                        &err,
-                        Error::TravelFailure(failure)
-                            if failure.kind == lifescape_sdk::error::TravelErrorKind::NoRoute
-                    )
-                {
-                    let half_x = bot.world.x + (dest_x - bot.world.x).clamp(-20, 20);
-                    let half_z = bot.world.z + (dest_z - bot.world.z).clamp(-20, 20);
-                    if (half_x, half_z) != (bot.world.x, bot.world.z) {
-                        match bot.walk_to(half_x, half_z, bot.world.level, rest) {
-                            Ok(()) => continue,
-                            Err(_) => {}
-                        }
-                    }
-                    match bot.walk_to(dest_x, dest_z, bot.world.level, rest) {
-                        Ok(()) => {}
-                        Err(final_err) => {
-                            bot.log(&format!("walk blocked: {final_err}"));
-                            if rescued {
-                                return Err(final_err.into());
-                            }
-                            rescued = true;
-                            rescue_then_retry(bot, final_err)?;
-                        }
-                    }
-                    continue;
+                // Death is not a flesh wound: surface it typed so callers
+                // re-gear and continue the job instead of mistaking a
+                // corpse for a limp.
+                if hitpoints(bot) == 0 {
+                    return Err(ScriptError::Usage(format!(
+                        "died walking to {dest_x},{dest_z} at {:?}",
+                        bot.position()
+                    )));
+                }
+                // A limp with no event pending: the caller flees, never a
+                // rescue (the hook aborted the trip on the limp itself).
+                if hitpoints(bot) < hitpoints_before && crate::randomevent::event_at(bot).is_none() {
+                    bot.log("hurt walking, fleeing");
+                    return Ok(false);
                 }
                 if rescued {
                     return Err(err.into());
                 }
                 rescued = true;
+                // The rescue ran (or the error replaces the walk failure):
+                // the loop retries the trip from here.
                 rescue_then_retry(bot, err)?;
             }
         }
-        let now_hitpoints = hitpoints(bot);
-        // Death is not a flesh wound: surface it typed so callers re-gear
-        // and continue the job instead of mistaking a corpse for a limp.
-        if now_hitpoints == 0 {
-            return Err(ScriptError::Usage(format!(
-                "died walking to {dest_x},{dest_z} at {:?}",
-                bot.position()
-            )));
-        }
-        if now_hitpoints < hitpoints_before {
-            bot.log("hurt walking, fleeing");
-            return Ok(false);
-        }
-        hitpoints_before = now_hitpoints;
     }
-    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{rescue_then_retry, walk_checked};
-    use crate::skill_common::obj_id;
+    use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::{Bot, Error};
 
@@ -244,7 +242,7 @@ mod tests {
         bot.world.z = 3220;
         bot.world.stats.insert(3, (0, 0));
         let err = walk_checked(&mut bot, 3100, 3100, 500).expect_err("corpse does not walk");
-        assert!(crate::skill_common::is_death_abort(&err), "typed death abort, got: {err}");
+        assert!(crate::kit::survival::is_death_abort(&err), "typed death abort, got: {err}");
     }
 
     #[test]
@@ -322,14 +320,12 @@ mod tests {
         );
     }
 
-    /// Blind 40-tile clamp can land inside a wall pocket the full route
-    /// walks around (t02 live: (2948,3368)->(3292,3171) clamps first to
-    /// (2988,3328), sealed by Falador castlewall): with a service
-    /// walk_checked falls back to the final dest once. Without one the
-    /// first plan step is already `nav-down` (not a plannable NoRoute),
-    /// so no fallback runs and the typed error propagates untouched.
+    /// One trip, one plan: a far destination plans once from the current
+    /// position (no 40-tile clamp, no 20-tile fallback). Without a service
+    /// the single plan step is already `nav-down`, so the walk fails loud
+    /// before any send — the typed error propagates untouched.
     #[test]
-    fn walk_checked_walled_subleg_falls_back_to_final_dest() {
+    fn walk_checked_single_trip_fails_nav_down_without_service() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         crate::wire_nav(&mut bot);
@@ -361,6 +357,17 @@ mod tests {
             matches!(&error, crate::ScriptError::Sdk(Error::Travel(detail)) if detail.contains("nav-down")),
             "nav-down, not a silent settle, got: {error}"
         );
+    }
+
+    /// Already there: no plan, no send, no service needed.
+    #[test]
+    fn walk_checked_same_tile_is_noop() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3220;
+        bot.world.z = 3220;
+        assert!(walk_checked(&mut bot, 3220, 3220, 500).expect("no trip for no distance"));
     }
 
     /// Unwired Manhattan: no service means no costs, order untouched.
