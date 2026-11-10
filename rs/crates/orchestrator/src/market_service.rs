@@ -507,53 +507,75 @@ impl MarketService {
         let query = request.get("q").as_str().unwrap_or("").to_lowercase();
         let limit = request.get("limit").as_i64().unwrap_or(200).clamp(1, 2000) as usize;
         let clock = Self::now_clock();
+        // One row per displayed name: base objects and their banknotes
+        // (`cert_*` rows share the display) trade as a single named good —
+        // physical delivery already settles both forms as notes. Members
+        // keep catalogue order, so a volume tie falls back to the base.
         let engine = self.lock_engine();
-        let mut rows = Vec::new();
+        let mut groups: std::collections::BTreeMap<String, Vec<(i64, i64)>> =
+            std::collections::BTreeMap::new();
         for row in &engine.catalogue {
             if !query.is_empty() && !row.name.to_lowercase().contains(&query) {
                 continue;
             }
-            rows.push((row.id, row.name.clone(), row.shop_price));
-            if rows.len() >= limit {
-                break;
-            }
+            groups.entry(row.name.clone()).or_default().push((row.id, row.shop_price));
         }
         drop(engine);
-        // One row per item: reference, 24h change and volume. Empty books
-        // fall back to the shop price so the list never shows holes.
+        // One row per named good: 24h volume summed over every form,
+        // reference and change from the merged fills, canonical id = the
+        // form carrying the volume (base on ties). Sorted by descending
+        // volume so the traded goods surface first.
         let store = self.lock_store();
         let mut items = Vec::new();
-        for (id, name, shop) in rows {
-            let day = store.executions_for_item(id, clock - 86400, clock + 1).unwrap_or_default();
-            let volume: i64 = day.iter().map(|exec| exec.quantity).sum();
-            let reference = reference_price(
-                &day
-                    .iter()
-                    .map(|exec| lifescape_market::PricedFill {
-                        quantity: exec.quantity,
-                        price: exec.price,
-                        clock: exec.clock,
-                    })
-                    .collect::<Vec<_>>(),
-                None,
-                None,
-                shop,
-            );
-            let change = match (day.first(), day.last()) {
+        for (name, members) in &groups {
+            let mut volume = 0i64;
+            let mut fills: Vec<lifescape_market::PricedFill> = Vec::new();
+            let mut volumes: Vec<(i64, i64)> = Vec::new();
+            for (id, _shop) in members {
+                let day = store.executions_for_item(*id, clock - 86400, clock + 1).unwrap_or_default();
+                let member_volume: i64 = day.iter().map(|exec| exec.quantity).sum();
+                volume += member_volume;
+                volumes.push((*id, member_volume));
+                fills.extend(day.iter().map(|exec| lifescape_market::PricedFill {
+                    quantity: exec.quantity,
+                    price: exec.price,
+                    clock: exec.clock,
+                }));
+            }
+            fills.sort_by_key(|fill| fill.clock);
+            volumes.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+            let canonical = volumes.first().map(|member| member.0).unwrap_or(-1);
+            let shop = members
+                .iter()
+                .find(|member| member.0 == canonical)
+                .map(|member| member.1)
+                .unwrap_or(1);
+            let reference = reference_price(&fills, None, None, shop);
+            let change = match (fills.first(), fills.last()) {
                 (Some(first), Some(last)) if first.price >= 1 => {
                     (last.price - first.price) as f64 / first.price as f64
                 }
                 _ => 0.0,
             };
-            items.push(object(vec![
-                ("item", Value::Int(id)),
-                ("name", str_value(&name)),
-                ("price", Value::Int(reference)),
-                ("change24h", Value::Int((change * 1000.0).round() as i64)),
-                ("volume24h", Value::Int(volume)),
-            ]));
+            items.push((name.clone(), canonical, reference, change, volume));
         }
-        object(vec![("ok", Value::Bool(true)), ("items", Value::Arr(items))])
+        items.sort_by(|left, right| {
+            right.4.cmp(&left.4).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
+        });
+        let rows: Vec<Value> = items
+            .into_iter()
+            .take(limit)
+            .map(|(name, id, reference, change, volume)| {
+                object(vec![
+                    ("item", Value::Int(id)),
+                    ("name", str_value(&name)),
+                    ("price", Value::Int(reference)),
+                    ("change24h", Value::Int((change * 1000.0).round() as i64)),
+                    ("volume24h", Value::Int(volume)),
+                ])
+            })
+            .collect();
+        object(vec![("ok", Value::Bool(true)), ("items", Value::Arr(rows))])
     }
 
     fn side_of(request: &Value) -> Result<Side, String> {

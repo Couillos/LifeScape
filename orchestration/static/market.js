@@ -19,7 +19,7 @@ async function getJson(url) {
 
 async function loadList() {
   try {
-    const payload = await getJson('/api/market/list?limit=500');
+    const payload = await getJson('/api/market/list?limit=2000');
     if (payload.ok) items = payload.items;
   } catch (e) { /* daemon down: keep the last list */ }
   if (selected === null && items.length) selected = items[0].item;

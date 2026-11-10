@@ -548,3 +548,43 @@ fn restart_reloads_resting_orders_into_books() {
     cleanup(&path);
 }
 
+
+#[test]
+fn list_merges_same_name_forms_and_sorts_by_volume() {
+    let path = temp_db("list-merge");
+    let catalogue = vec![
+        CatalogueItem { id: 100, name: "Logs".to_string(), shop_price: 4, alch_value: 2 },
+        CatalogueItem { id: 101, name: "Logs".to_string(), shop_price: 4, alch_value: 2 },
+        CatalogueItem { id: 102, name: "Coal".to_string(), shop_price: 3, alch_value: 1 },
+    ];
+    let service = MarketService::open(&path, catalogue).expect("opens");
+    let clock = MarketService::now_clock();
+    let print = |item: i64, qty: i64, price: i64, at: i64| {
+        service
+            .lock_store()
+            .record_execution(&lifescape_store::NewExecution {
+                item_id: item,
+                quantity: qty,
+                price,
+                clock: at,
+                server_tick: at,
+            })
+            .expect("prints");
+    };
+    print(100, 5, 10, clock - 100);
+    print(101, 7, 12, clock - 50);
+    print(102, 3, 3, clock - 10);
+    let list = service.handle(&request(vec![("op", str_value("list")), ("limit", Value::Int(2000))]));
+    assert_eq!(list.get("ok").as_bool(), Some(true));
+    let rows = list.get("items").as_arr().expect("item rows");
+    assert_eq!(rows.len(), 2, "one row per displayed name, got {rows:?}");
+    // Volume descends: Logs (5 + 7) before Coal (3).
+    assert_eq!(rows[0].get("name").as_str(), Some("Logs"));
+    assert_eq!(rows[0].get("volume24h").as_i64(), Some(12));
+    // Canonical id carries the volume; VWAP prices the merged fills.
+    assert_eq!(rows[0].get("item").as_i64(), Some(101));
+    assert_eq!(rows[0].get("price").as_i64(), Some(11));
+    assert_eq!(rows[0].get("change24h").as_i64(), Some(200));
+    assert_eq!(rows[1].get("name").as_str(), Some("Coal"));
+    cleanup(&path);
+}

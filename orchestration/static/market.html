@@ -7,6 +7,8 @@
 <style>
   body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
   a { color: #04A800; }
+  #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
+  #bar h1 { font-size: 18px; margin: 0; }
   #topnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
   .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
   .navlink:hover { background: #262626; }
@@ -36,12 +38,18 @@
 </style>
 </head>
 <body>
-<nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market" aria-current="page">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a></nav>
+<div id="bar">
+  <div style="display:flex;gap:12px;align-items:center">
+    <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market" aria-current="page">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a></nav>
+  </div>
+</div>
 <h1>Market <span class="muted">· live prices over volume bars</span></h1>
 <div id="layout">
   <div id="list">
     <h2>Items</h2>
     <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
+    <div class="muted">price · 24h change · 24h volume — most traded first</div>
     <ul id="items"></ul>
     <div id="pager">
       <button onclick="page(-1)">‹</button>
