@@ -124,6 +124,9 @@ fn daemon_main() -> i32 {
         }
         Err(error) => eprintln!("market service unavailable ({error}); market page shows the error"),
     };
+    // Handover convocations: sweeps, staggered poses, one delivery per bot.
+    // After the market registry exists (the loop exits when it does not).
+    orch.start_market_convene();
     // E2 persistent pushes: one stream per worker, one reader thread
     // daemon-side (`push.sock`). The CLI socket below keeps its 1
     // req/1 reply shape on a bounded pool (no thread per message).

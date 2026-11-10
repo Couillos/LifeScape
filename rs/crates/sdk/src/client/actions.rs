@@ -3,6 +3,8 @@
 //! Every wait is a pump loop to an observable state plus a tick bound:
 //! never wall-clock sleep.
 
+pub use super::exchange::ExchangeOutcome;
+
 use crate::buffer::Writer;
 use crate::client::Bot;
 use crate::error::{Error, Result, TravelErrorKind};
@@ -13,6 +15,7 @@ use crate::words::to_base37;
 fn op_name(kind: &str, op: u8) -> String {
     format!("{kind}{op}")
 }
+
 
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
@@ -178,7 +181,6 @@ impl Bot {
     pub const TRADE_OFFER: u16 = 3415;
     pub const TRADE_PARTNER_OFFER: u16 = 3416;
     pub const TRADE_PACK: u16 = 3322;
-
     /// 'main', 'confirm' or None from the open window. Interface ids come
     /// from the component tables (the live revision moved the trade side
     /// panel); hardcoded ids are fallback only.
@@ -210,6 +212,19 @@ impl Bot {
             }
         }
         best.map(|(_, pid)| pid)
+    }
+
+    /// Every tracked player: (slot, x, z, level, name or null). Diag for
+    /// rendezvous misses: distinguishes an empty view from a nameless one.
+    pub fn debug_players(&self) -> Vec<(u16, i32, i32, i32, Option<String>)> {
+        let mut out: Vec<(u16, i32, i32, i32, Option<String>)> = self
+            .world
+            .players
+            .iter()
+            .map(|(pid, player)| (*pid, player.x, player.z, player.level, player.name.clone()))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Mutual trade request: knocks until the trademain window opens (the
@@ -245,8 +260,12 @@ impl Bot {
     }
 
     /// Offer `count` of an object from the backpack (inv_button op 1).
+    /// A server "can't trade" refusal (untradeable, members in F2P) reads
+    /// as Ok(false) instead of burning the timeout: the caller maps it to
+    /// its typed refusal.
     pub fn trade_offer(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<bool> {
         self.act(format!("trade_offer {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
+        let seen = self.world.messages.len();
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
             if self.world.modal.is_none() {
@@ -272,6 +291,9 @@ impl Bot {
             let op = if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
             self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
             self.pump(5)?;
+            if Self::trade_refused(&self.world.messages, seen) {
+                return Ok(false);
+            }
         }
         let offered: u32 = self
             .world
@@ -323,6 +345,7 @@ impl Bot {
         }
         Ok(self.world.modal.is_none())
     }
+
 
     /// Pick up ground items: walks to a neighbor tile, clicks, waits for
     /// the carried total to grow. Tick-bounded, no sleep.
@@ -783,4 +806,5 @@ mod tests {
             dossier: None,
         })
     }
+
 }

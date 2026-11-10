@@ -6,6 +6,7 @@
 
 pub mod cook;
 pub mod fishing;
+pub mod market;
 pub mod melee;
 pub mod mining;
 pub mod woodcut;

@@ -34,6 +34,7 @@ const WRITE_METHODS: &[&str] = &[
     "chat_continue",
     "cheat",
     "close_modal",
+    "debug_players",
     "debug_walk",
     "drop",
     "find_npc",
@@ -454,6 +455,20 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
         }
         "find_npc" => Ok(bot.find_npc(need_str(&args, 0, method)?).map(|slot| Value::Int(i64::from(slot))).unwrap_or(Value::Null)),
         "find_player" => Ok(bot.find_player(need_str(&args, 0, method)?).map(|slot| Value::Int(i64::from(slot))).unwrap_or(Value::Null)),
+        "debug_players" => Ok(Value::Arr(
+            bot.debug_players()
+                .into_iter()
+                .map(|(slot, x, z, level, name)| {
+                    object(vec![
+                        ("slot", Value::Int(i64::from(slot))),
+                        ("x", Value::Int(i64::from(x))),
+                        ("z", Value::Int(i64::from(z))),
+                        ("level", Value::Int(i64::from(level))),
+                        ("name", name.map(|label| str_value(&label)).unwrap_or(Value::Null)),
+                    ])
+                })
+                .collect(),
+        )),
         "trade_modal" => Ok(bot.trade_modal().map(str_value).unwrap_or(Value::Null)),
         "trade_status_text" => Ok(str_value(&bot.trade_status_text())),
         "trade_partner_offer" => {

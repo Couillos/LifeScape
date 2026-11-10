@@ -210,6 +210,12 @@ fn cancel_closes_and_deal_walks_every_step() {
         ("price", Value::Int(5)),
     ]));
     let deal = bought.get("deals").as_arr().cloned().unwrap_or_default()[0].as_i64().unwrap();
+    // Fresh matches wait for a convocation before anyone may arrive.
+    let convened = service.handle(&request(vec![
+        ("op", str_value("convene")),
+        ("deals", Value::Arr(vec![convene_payload(deal, 1000, 9000)])),
+    ]));
+    assert_eq!(convened.get("poses").as_arr().map(|rows| rows.len()), Some(2), "both parties posed");
     let arrived = |account: &str| {
         service.handle(&request(vec![
             ("op", str_value("deal_arrived")),
@@ -303,6 +309,194 @@ fn quote_history_and_tick_serve_the_front() {
     assert_eq!(tick.get("trades").as_arr().map(|rows| rows.len()), Some(1));
     let book = service.handle(&request(vec![("op", str_value("book")), ("item", Value::Int(314))]));
     assert_eq!(book.get("ok").as_bool(), Some(true));
+    cleanup(&path);
+}
+
+fn match_one(service: &MarketService, maker: &str, taker: &str, qty: i64, price: i64) -> i64 {
+    service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value(maker)),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(qty)),
+        ("price", Value::Int(price)),
+    ]));
+    let bought = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value(taker)),
+        ("side", str_value("buy")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(qty)),
+        ("price", Value::Int(price + 1)),
+    ]));
+    assert_eq!(bought.get("ok").as_bool(), Some(true));
+    bought.get("deals").as_arr().cloned().unwrap_or_default()[0].as_i64().unwrap()
+}
+
+fn convene_payload(deal: i64, tick: i64, deadline: i64) -> Value {
+    object(vec![
+        ("deal", Value::Int(deal)),
+        ("depart_buyer", Value::Int(tick + 30)),
+        ("depart_seller", Value::Int(tick + 30)),
+        ("deadline_buyer", Value::Int(deadline)),
+        ("deadline_seller", Value::Int(deadline)),
+        ("sweep_wall", Value::Float(deadline as f64)),
+    ])
+}
+
+/// Convene hands adjacent tiles and regroups one bot's deals in a single
+/// pose; a no-show relists the present party with its priority while the
+/// absent loses everything.
+#[test]
+fn convene_tiles_and_no_show_relists_present() {
+    let (service, path) = service("convene");
+    funded(&service, "seller-a");
+    funded(&service, "seller-b");
+    funded(&service, "buyer");
+    let first = match_one(&service, "seller-a", "buyer", 10, 4);
+    let second = match_one(&service, "seller-b", "buyer", 6, 4);
+    let pending = service.handle(&request(vec![("op", str_value("pending")), ("now_wall", Value::Float(1000.0)), ("tick_ms", Value::Int(60))]));
+    assert_eq!(pending.get("deals").as_arr().map(|rows| rows.len()), Some(2));
+    let reply = service.handle(&request(vec![
+        ("op", str_value("convene")),
+        ("deals", Value::Arr(vec![convene_payload(first, 1000, 9000), convene_payload(second, 1000, 9000)])),
+    ]));
+    assert_eq!(reply.get("ok").as_bool(), Some(true));
+    let poses = reply.get("poses").as_arr().cloned().unwrap_or_default();
+    assert_eq!(poses.len(), 3, "one pose per bot");
+    let buyer_pose = poses.iter().find(|pose| pose.get("account").as_str() == Some("buyer")).expect("buyer posed");
+    // Regrouped: both deals in one convocation, one tile each.
+    assert_eq!(buyer_pose.get("deals").as_arr().map(|rows| rows.len()), Some(2));
+    let tiles: Vec<String> = buyer_pose.get("deals").as_arr().cloned().unwrap_or_default().iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    assert!(tiles[0] != tiles[1], "distinct tiles {}", tiles.join(" "));
+    let seller_tile = poses
+        .iter()
+        .find(|pose| pose.get("account").as_str() == Some("seller-a"))
+        .expect("seller posed")
+        .get("deals")
+        .as_arr()
+        .cloned()
+        .unwrap_or_default()[0]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let buyer_first = tiles.iter().find(|tile| tile.starts_with(&format!("{first}="))).expect("buyer first tile");
+    let (bx, by) = buyer_first.split_once('=').unwrap().1.split_once(',').unwrap();
+    let (sx, sy) = seller_tile.split_once('=').unwrap().1.split_once(',').unwrap();
+    let (bx, by, sx, sy): (i64, i64, i64, i64) = (bx.parse().unwrap(), by.parse().unwrap(), sx.parse().unwrap(), sy.parse().unwrap());
+    assert!((bx - sx).abs() <= 1 && (by - sy).abs() <= 1, "pair {buyer_first} ~ {seller_tile} adjacent");
+    // Only the buyer shows up: no-show fails the deal, the buyer relists
+    // with priority, the seller loses theirs.
+    service.handle(&request(vec![
+        ("op", str_value("deal_arrived")),
+        ("account", str_value("buyer")),
+        ("deal", Value::Int(first)),
+    ]));
+    let swept = service.handle(&request(vec![
+        ("op", str_value("sweep")),
+        ("now_wall", Value::Float(9001.0)),
+        ("nav_up", Value::Bool(true)),
+    ]));
+    assert_eq!(swept.get("failed").as_arr().map(|rows| rows.len()), Some(2), "both expire past deadline");
+    let buyer_orders = service.handle(&request(vec![("op", str_value("my_orders")), ("account", str_value("buyer"))]));
+    let buyer_rows = buyer_orders.get("orders").as_arr().cloned().unwrap_or_default();
+    let open: Vec<&Value> =
+        buyer_rows.iter().filter(|row| row.get("status").as_str() == Some("open")).collect();
+    assert!(!open.is_empty(), "present party back on the carnet");
+    assert!(open.iter().all(|row| row.get("price").as_i64() == Some(5)), "same price kept");
+    let seller_orders = service.handle(&request(vec![("op", str_value("my_orders")), ("account", str_value("seller-a"))]));
+    let seller_rows = seller_orders.get("orders").as_arr().cloned().unwrap_or_default();
+    let seller_open = seller_rows.iter().filter(|row| row.get("status").as_str() == Some("open")).count();
+    assert_eq!(seller_open, 0, "absent party re-places by hand");
+    cleanup(&path);
+}
+
+/// Without nav every expiry is `nav_down`: neutral, both relist, nobody
+/// travels blind. Ten simultaneous deals convene on distinct tiles.
+#[test]
+fn nav_down_fails_neutral_and_ten_deals_convene() {
+    let (service, path) = service("navdown");
+    // Full live-shaped ring (no snapshot in unit tests): 56 tiles.
+    service.lock_engine().ring = crate::market_convene::build_ring(&|_, _| true);
+    let mut deals = Vec::new();
+    for index in 0..10 {
+        let maker = format!("maker-{index}");
+        let taker = format!("taker-{index}");
+        funded(&service, &maker);
+        funded(&service, &taker);
+        deals.push(match_one(&service, &maker, &taker, 5, 4));
+    }
+    let payloads: Vec<Value> = deals.iter().map(|deal| convene_payload(*deal, 2000, 8000)).collect();
+    let reply = service.handle(&request(vec![("op", str_value("convene")), ("now", Value::Int(2000)), ("deals", Value::Arr(payloads))]));
+    assert_eq!(reply.get("poses").as_arr().map(|rows| rows.len()), Some(20), "twenty bots posed");
+    let mut tiles = Vec::new();
+    for pose in reply.get("poses").as_arr().cloned().unwrap_or_default() {
+        for deal in pose.get("deals").as_arr().cloned().unwrap_or_default() {
+            tiles.push(deal.as_str().unwrap_or("").to_string());
+        }
+    }
+    tiles.sort();
+    tiles.dedup();
+    assert_eq!(tiles.len(), 20, "no double-booked tile");
+    let swept = service.handle(&request(vec![
+        ("op", str_value("sweep")),
+        ("now_wall", Value::Float(8001.0)),
+        ("nav_up", Value::Bool(false)),
+    ]));
+    assert_eq!(swept.get("failed").as_arr().map(|rows| rows.len()), Some(10), "all expire nav_down");
+    for index in 0..10 {
+        for account in [format!("maker-{index}"), format!("taker-{index}")] {
+            let orders = service.handle(&request(vec![("op", str_value("my_orders")), ("account", str_value(&account))]));
+            let rows = orders.get("orders").as_arr().cloned().unwrap_or_default();
+            let open = rows.iter().filter(|row| row.get("status").as_str() == Some("open")).count();
+            assert_eq!(open, 1, "{account} relisted neutrally");
+        }
+    }
+    cleanup(&path);
+}
+
+/// Fifty deals settle with zero ledger loss: every coin and feather ends
+/// where the carnet said.
+#[test]
+fn fifty_deals_settle_without_loss() {
+    let (service, path) = service("fifty");
+    for index in 0..50 {
+        let maker = format!("maker-{index}");
+        let taker = format!("taker-{index}");
+        funded(&service, &maker);
+        funded(&service, &taker);
+        let deal = match_one(&service, &maker, &taker, 10, 4);
+        service.handle(&request(vec![
+            ("op", str_value("convene")),
+            ("deals", Value::Arr(vec![convene_payload(deal, 3000, 9000)])),
+        ]));
+        let arrived = |account: &str| {
+            service.handle(&request(vec![
+                ("op", str_value("deal_arrived")),
+                ("account", str_value(account)),
+                ("deal", Value::Int(deal)),
+            ]))
+        };
+        arrived(&maker);
+        arrived(&taker);
+        for outcome in ["trading", "settled"] {
+            let report = service.handle(&request(vec![
+                ("op", str_value("deal_report")),
+                ("account", str_value(&maker)),
+                ("deal", Value::Int(deal)),
+                ("outcome", str_value(outcome)),
+            ]));
+            assert_eq!(report.get("ok").as_bool(), Some(true), "deal {deal} {outcome}");
+        }
+    }
+    let engine = service.lock_engine();
+    let coins: i64 = (0..50).map(|index| engine.ledger.coins_of(&format!("maker-{index}")) + engine.ledger.coins_of(&format!("taker-{index}"))).sum();
+    let stock: i64 =
+        (0..50).map(|index| engine.ledger.stock_of(&format!("maker-{index}"), 314) + engine.ledger.stock_of(&format!("taker-{index}"), 314)).sum();
+    // Funded 1M coins + 10k feathers per account, 100 accounts; every deal
+    // moves 10 @ 5, settled fifty times.
+    assert_eq!(coins, 100 * 1_000_000, "coins conserved");
+    assert_eq!(stock, 100 * 10_000, "feathers conserved");
     cleanup(&path);
 }
 

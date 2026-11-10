@@ -163,6 +163,12 @@ pub struct World {
     pub energy: u8,
     pub players: HashMap<u16, PlayerInfo>,
     pub player_order: Vec<u16>,
+    /// Last known display name per server slot. The server stops sending
+    /// appearance blocks for players flickering in and out of view (bank
+    /// trips); without this their re-added entry stays nameless and
+    /// name-based lookups (trade rendezvous) fail. Appearance masks still
+    /// overwrite on arrival.
+    pub player_names: HashMap<u16, String>,
     pub npcs: HashMap<u16, NpcInfo>,
     pub npc_order: Vec<u16>,
     pub locs: HashMap<Tile, Option<LocValue>>,
@@ -540,7 +546,8 @@ impl World {
             let dz = signed(stream.bits(5)?, 5);
             let jump = stream.bits(1)? == 1;
             let extended = stream.bits(1)? == 1;
-            self.players.insert(pid, PlayerInfo { x: self.x + dx, z: self.z + dz, level: self.level, jump, name: None });
+            let name = self.player_names.get(&pid).cloned();
+            self.players.insert(pid, PlayerInfo { x: self.x + dx, z: self.z + dz, level: self.level, jump, name });
             if !self.player_order.contains(&pid) {
                 self.player_order.push(pid);
             }
@@ -605,7 +612,11 @@ impl World {
         match stream.bits(2)? {
             3 => {
                 if let Some(pid) = pid {
-                    self.players.remove(&pid);
+                    if let Some(gone) = self.players.remove(&pid) {
+                        if let Some(name) = gone.name {
+                            self.player_names.insert(pid, name);
+                        }
+                    }
                     self.player_order.retain(|known| *known != pid);
                 }
             }
@@ -879,7 +890,8 @@ impl World {
         data.pos = start + 1 + length;
         if let Some(pid) = pid {
             if let Some(player) = self.players.get_mut(&pid) {
-                player.name = Some(name);
+                player.name = Some(name.clone());
+                self.player_names.insert(pid, name);
             }
         }
         Ok(())
@@ -889,6 +901,26 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::World;
+
+    /// Names survive a view flicker: removal stashes the display name,
+    /// re-entry without an appearance block restores it (bank trips must
+    /// not blind a rendezvous), and the next appearance still overwrites.
+    #[test]
+    fn player_names_survive_view_flicker() {
+        let mut world = World::new();
+        world.players.insert(2, super::PlayerInfo { x: 1, z: 1, level: 0, jump: false, name: Some("t02".to_string()) });
+        // Removal (out of view) stashes the name.
+        if let Some(gone) = world.players.remove(&2) {
+            if let Some(name) = gone.name {
+                world.player_names.insert(2, name);
+            }
+        }
+        assert_eq!(world.player_names.get(&2).map(String::as_str), Some("t02"));
+        // Re-entry restores it (mirrors the player_info insert path).
+        let restored = world.player_names.get(&2).cloned();
+        world.players.insert(2, super::PlayerInfo { x: 2, z: 2, level: 0, jump: false, name: restored });
+        assert_eq!(world.players.get(&2).and_then(|entry| entry.name.clone()).as_deref(), Some("t02"));
+    }
 
     #[test]
     fn rebuild_sets_base() {

@@ -359,71 +359,33 @@ fn dev_reset_quests(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 }
 
 // -- trade_swap ---------------------------------------------------------------
-// Bilateral swap: both sides run this mirrored, each side drives its own
-// window (offer, accept twice) and verifies its own result.
+// Bilateral swap: both sides run this mirrored. Thin caller over the SDK
+// double-screen exchange (both screens verified before either accept).
 
 fn dev_trade_swap(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if args.len() < 3 {
         return Err(ScriptError::Usage("trade_swap <partner> <give_item> <give_n> [want_item] [want_n]".to_string()));
     }
     let partner = args[0].clone();
-    let give = if args[1] == "-" { None } else { Some(obj_id_exact(&args[1])?) };
     let give_n: u32 = args[2].parse().map_err(|_| ScriptError::Usage("give_n must be a number".to_string()))?;
-    let want = if args.len() > 3 && args[3] != "-" { Some(obj_id_exact(&args[3])?) } else { None };
-    let want_n: u32 = args.get(4).and_then(|text| text.parse().ok()).unwrap_or(1);
+    let give = if args[1] == "-" { Vec::new() } else { vec![(obj_id_exact(&args[1])?, give_n)] };
+    let want = if args.len() > 3 && args[3] != "-" {
+        let want_n: u32 = args.get(4).and_then(|text| text.parse().ok()).unwrap_or(1);
+        vec![(obj_id_exact(&args[3])?, want_n)]
+    } else {
+        Vec::new()
+    };
     bot.intend(&format!("trade with {partner}"));
-    if let Some(id) = give {
-        if bot.inventory().get(&id).copied().unwrap_or(0) < give_n {
-            bot.log(&format!("no {} x{give_n} to give", args[1]));
-            return Ok(1);
+    match bot.trade_exchange(&partner, &give, 0, &want, 0, 6000)? {
+        lifescape_sdk::client::actions::ExchangeOutcome::Settled => {
+            bot.log(&format!("swap settled with {partner}"));
+            Ok(0)
+        }
+        other => {
+            bot.log(&format!("swap with {partner} ended: {other:?}"));
+            Ok(1)
         }
     }
-    let deadline = bot.world.ticks + 6000;
-    while bot.world.ticks < deadline && bot.trade_modal().is_none() {
-        if !bot.trade_request(&partner, 600)? {
-            continue;
-        }
-    }
-    if bot.trade_modal().is_none() {
-        bot.log(&format!("no trade window with {partner}"));
-        return Ok(1);
-    }
-    bot.log(&format!("trade window open with {partner}"));
-    while bot.world.ticks < deadline && bot.trade_modal() == Some("main") {
-        if let Some(id) = give {
-            if !bot.trade_offer(id, give_n, 120)? {
-                bot.log("offer failed");
-                return Ok(1);
-            }
-        }
-        if let Some(id) = want {
-            if bot.trade_partner_offer().get(&id).copied().unwrap_or(0) < want_n {
-                bot.pump(10)?;
-                continue;
-            }
-        }
-        bot.trade_accept(120)?;
-        bot.pump(5)?;
-    }
-    if bot.trade_modal() != Some("confirm") {
-        bot.log("no confirm screen");
-        bot.trade_close()?;
-        return Ok(1);
-    }
-    bot.log("confirm screen, accepting");
-    while bot.world.ticks < deadline && bot.trade_modal().is_some() {
-        bot.trade_accept(120)?;
-        bot.pump(5)?;
-    }
-    bot.pump(10)?;
-    let have = want.map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
-    let kept = give.map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
-    bot.log(&format!("after swap: want={have} kept-give={kept}"));
-    if want.is_some_and(|_| have < want_n) {
-        bot.log(&format!("swap failed: no {}", args[3]));
-        return Ok(1);
-    }
-    Ok(0)
 }
 
 // -- capture ------------------------------------------------------------------

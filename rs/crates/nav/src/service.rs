@@ -1017,6 +1017,11 @@ impl Service {
         self.version()
     }
 
+    /// Live snapshot for read-only daemon consumers (handover ring).
+    pub fn snapshot(&self) -> Arc<Snapshot> {
+        self.snapshot.lock().unwrap().clone()
+    }
+
     /// Lot 3 counters: hit-rate verdict reads these, not the logs.
     /// Lot 4 adds the refused_* ones: the fairness verdict reads those.
     pub fn stats(&self) -> CacheStats {

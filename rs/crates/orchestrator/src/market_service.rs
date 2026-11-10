@@ -13,7 +13,7 @@
 //! ledger at match time; a later `failed` report refunds the transfer
 //! and both sides keep their reliability counters.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -21,10 +21,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{check_coverage, check_price, reference_price};
+use lifescape_market::{check_coverage, check_price, reference_price, Order};
 use crate::market_seed::{catalogue, CatalogueItem};
-use lifescape_market::{Book, Deal, DealStatus, FailReason, Side};
-use lifescape_store::{NewDeal, NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
+use lifescape_market::{Book, Deal, Side};
+use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
 
 /// Socket the workers dial (beside `session-<account>.sock`).
 pub fn socket_path() -> PathBuf {
@@ -40,8 +40,9 @@ pub fn db_path() -> PathBuf {
 /// happen on the ring around it.
 pub const FOUNTAIN_X: i64 = 3213;
 pub const FOUNTAIN_Y: i64 = 3429;
-/// Ring of handover tiles around the basin, second ring past eight.
-const RING: [(i64, i64); 8] =
+/// Static fallback when nav was down at boot and no ring computed: the
+/// convene allocator prefers the computed `Engine::ring`.
+pub(crate) const RING: [(i64, i64); 8] =
     [(3211, 3427), (3212, 3427), (3214, 3427), (3215, 3427), (3211, 3431), (3212, 3431), (3214, 3431), (3215, 3431)];
 
 /// In-memory ledger: coins and item units per account. Later lots feed
@@ -88,9 +89,27 @@ pub(crate) struct Engine {
     pub(crate) arrived: HashMap<u64, (bool, bool)>,
     pub(crate) ledger: Ledger,
     pub(crate) recent: VecDeque<Print>,
-    next_seq: u64,
-    placed: u64,
-    matched: u64,
+    /// Handover ring around the fountain (computed at startup via the
+    /// nav `tiles_flags` batch op; empty when nav was down at boot, the
+    /// static fallback ring applies per deal then).
+    pub(crate) ring: Vec<(i64, i64)>,
+    pub(crate) ring_busy: HashSet<(i64, i64)>,
+    /// Convened handover tiles per deal: (buyer tile, seller tile).
+    pub(crate) deal_tiles: HashMap<u64, ((i64, i64), (i64, i64))>,
+    /// Sweep wall per convened deal (daemon wall seconds): session
+    /// ticks are per-login epochs, never comparable across bots.
+    pub(crate) deal_sweep_wall: HashMap<u64, f64>,
+    /// Consumed book rows per deal for a priority-preserving relist when
+    /// the handover fails (original `seq` kept).
+    pub(crate) relist_rows: HashMap<u64, Vec<Order>>,
+    /// Accounts with a live convocation: one at a time, regrouped.
+    pub(crate) convened_accounts: HashSet<String>,
+    /// First convene-tick sighting per matched deal (daemon wall) for
+    /// the grouping window.
+    pub(crate) pending_since_wall: HashMap<u64, f64>,
+    pub(crate) next_seq: u64,
+    pub(crate) placed: u64,
+    pub(crate) matched: u64,
 }
 
 impl Engine {
@@ -103,6 +122,13 @@ impl Engine {
             arrived: HashMap::new(),
             ledger: Ledger::default(),
             recent: VecDeque::new(),
+            ring: Vec::new(),
+            ring_busy: HashSet::new(),
+            deal_tiles: HashMap::new(),
+            deal_sweep_wall: HashMap::new(),
+            relist_rows: HashMap::new(),
+            convened_accounts: HashSet::new(),
+            pending_since_wall: HashMap::new(),
             next_seq: 1,
             placed: 0,
             matched: 0,
@@ -203,6 +229,9 @@ impl MarketService {
             "my_deals" => self.op_my_deals(request),
             "deal_arrived" => self.op_deal_arrived(request),
             "deal_report" => self.op_deal_report(request),
+            "pending" => self.op_pending(request),
+            "convene" => self.op_convene(request),
+            "sweep" => self.op_sweep(request),
             "fund" => self.op_fund(request),
             "tick" => self.op_tick(request),
             "stats" => self.op_stats(),
@@ -213,7 +242,7 @@ impl MarketService {
         }
     }
 
-    fn err(message: String) -> Value {
+    pub(crate) fn err(message: String) -> Value {
         object(vec![("ok", Value::Bool(false)), ("error", str_value(&message))])
     }
 
@@ -459,24 +488,39 @@ impl MarketService {
             }
         };
         let order_key = store_id as u64;
-        let (fills, rests) = {
+        let (matched, rests) = {
             let mut engine = self.lock_engine();
             let book = engine.books.entry(item).or_insert_with(Book::new);
+            // Pre-match snapshot for the priority-preserving relist: the
+            // resting rows keep their `seq`, the taker its arrival rank.
+            let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
+            let taker_seq = book.next_seq();
             match book.place(order_key, &account, item, side, qty, price) {
-                Ok(outcome) => outcome,
+                Ok((fills, rests)) => {
+                    let matched: Vec<(lifescape_market::Fill, Vec<Order>)> = fills
+                        .into_iter()
+                        .map(|fill| {
+                            let rows =
+                                crate::market_convene::relist_for_fill(&pre, taker_seq, side, &account, price, &fill);
+                            (fill, rows)
+                        })
+                        .collect();
+                    (matched, rests)
+                }
                 Err(error) => {
                     self.lock_store().cancel_order(store_id, clock).ok();
                     return Self::err(error.to_string());
                 }
             }
         };
+        let fills: Vec<lifescape_market::Fill> = matched.iter().map(|(fill, _)| fill.clone()).collect();
         self.lock_engine().order_item.insert(order_key, item);
         self.lock_engine().placed += 1;
         // Match-time settlement: executions persist, one deal per fill
         // carries the physical handover; the ledger moves now.
         let mut deal_ids = Vec::new();
-        for fill in &fills {
-            let channel = self.record_fill(fill, clock);
+        for (fill, rows) in &matched {
+            let channel = self.record_fill(fill, rows.clone(), clock);
             match channel {
                 Ok(deal_id) => deal_ids.push(Value::Int(deal_id)),
                 Err(error) => return Self::err(error),
@@ -506,100 +550,7 @@ impl MarketService {
         ])
     }
 
-    /// Persists one fill: execution row, ledger move, live-tail print and
-    /// an auto-convened deal (meeting tile + deadline assigned now).
-    fn record_fill(&self, fill: &lifescape_market::Fill, clock: i64) -> Result<i64, String> {
-        let store = self.lock_store();
-        store
-            .record_execution(&lifescape_store::NewExecution {
-                item_id: fill.item,
-                quantity: fill.quantity,
-                price: fill.price,
-                clock,
-                server_tick: clock,
-            })
-            .map_err(|error| error.to_string())?;
-        drop(store);
-        {
-            let mut engine = self.lock_engine();
-            let cost = fill.quantity * fill.price;
-            engine.ledger.credit_coins(&fill.buyer, -cost);
-            engine.ledger.credit_stock(&fill.buyer, fill.item, fill.quantity);
-            engine.ledger.credit_stock(&fill.seller, fill.item, -fill.quantity);
-            engine.ledger.credit_coins(&fill.seller, cost);
-            engine.matched += 1;
-            engine.remember(Print { item: fill.item, quantity: fill.quantity, price: fill.price, clock });
-        }
-        let (tile_x, tile_y) = {
-            let engine = self.lock_engine();
-            let slot = (engine.deals.len() % RING.len()) as usize;
-            RING[slot]
-        };
-        let deal_id = {
-            let store = self.lock_store();
-            store
-                .create_deal(&NewDeal {
-                    buyer: fill.buyer.clone(),
-                    seller: fill.seller.clone(),
-                    item_id: fill.item,
-                    quantity: fill.quantity,
-                    price: fill.price,
-                    meeting_x: tile_x,
-                    meeting_y: tile_y,
-                    meeting_level: 0,
-                    deadline_tick: clock + 3600,
-                    clock,
-                })
-                .map_err(|error| error.to_string())?
-        };
-        self.lock_store()
-            .set_deal_status(deal_id, lifescape_store::DealStatus::Convened, "", clock)
-            .map_err(|error| error.to_string())?;
-        let mut engine = self.lock_engine();
-        if let Ok(deal) = Deal::fresh(
-            deal_id as u64,
-            &fill.buyer,
-            &fill.seller,
-            fill.item,
-            fill.quantity,
-            fill.price,
-            tile_x,
-            tile_y,
-            clock + 3600,
-        ) {
-            let mut convened = deal;
-            let _ = convened.transition(DealStatus::Convened, None);
-            engine.deals.insert(deal_id as u64, convened);
-            engine.arrived.insert(deal_id as u64, (false, false));
-        }
-        Ok(deal_id)
-    }
 
-    /// Writes post-match remaining quantities back to the store rows.
-    fn refresh_order_rows(&self, incoming: u64, fills: &[lifescape_market::Fill], clock: i64) {
-        let engine = self.lock_engine();
-        let mut touched = vec![incoming];
-        for fill in fills {
-            touched.push(fill.buy_id);
-            touched.push(fill.sell_id);
-        }
-        touched.sort_unstable();
-        touched.dedup();
-        let remaining: Vec<(u64, Option<i64>)> =
-            touched.iter().map(|id| (*id, engine.books.values().filter_map(|book| book.remaining(*id)).next())).collect();
-        drop(engine);
-        let store = self.lock_store();
-        for (id, left) in remaining {
-            let (status, qty) = match left {
-                // Untouched incoming order stays open; a resting order
-                // drained by fills settles, a partial one shows matched.
-                Some(left) if id == incoming && fills.is_empty() => (OrderStatus::Open, left),
-                Some(left) if left > 0 => (OrderStatus::Matched, left),
-                _ => (OrderStatus::Settled, 0),
-            };
-            let _ = store.set_order_status(id as i64, status, qty, clock);
-        }
-    }
 
     fn op_amend(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("").to_string();
@@ -660,16 +611,27 @@ impl MarketService {
             let Some(book) = engine.books.get_mut(&item) else {
                 return Self::err(format!("unknown order {order_id}"));
             };
-            book.amend(order_id as u64, price, replacement as u64)
+            // Same pre-match snapshot as `op_place`: the amended order is
+            // the taker here, with its amended price.
+            let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
+            let taker_seq = book.next_seq();
+            match book.amend(order_id as u64, price, replacement as u64) {
+                Ok((_, fills)) => fills
+                    .into_iter()
+                    .map(|fill| {
+                        let rows =
+                            crate::market_convene::relist_for_fill(&pre, taker_seq, side, &account, price, &fill);
+                        (fill, rows)
+                    })
+                    .collect::<Vec<(lifescape_market::Fill, Vec<Order>)>>(),
+                Err(error) => return Self::err(error.to_string()),
+            }
         };
-        let (fills, _rests) = match amend_outcome {
-            Ok((_, fills)) => (fills, true),
-            Err(error) => return Self::err(error.to_string()),
-        };
+        let fills: Vec<lifescape_market::Fill> = amend_outcome.iter().map(|(fill, _)| fill.clone()).collect();
         self.lock_engine().order_item.insert(replacement as u64, item);
         let mut deal_ids = Vec::new();
-        for fill in &fills {
-            match self.record_fill(fill, clock) {
+        for (fill, rows) in &amend_outcome {
+            match self.record_fill(fill, rows.clone(), clock) {
                 Ok(deal_id) => deal_ids.push(Value::Int(deal_id)),
                 Err(error) => return Self::err(error),
             }
@@ -738,146 +700,6 @@ impl MarketService {
         object(vec![("ok", Value::Bool(true)), ("orders", Value::Arr(values))])
     }
 
-    fn op_my_deals(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("");
-        let store = self.lock_store();
-        let rows = store.open_deals_for_account(account).unwrap_or_default();
-        let values: Vec<Value> = rows
-            .iter()
-            .map(|row| {
-                object(vec![
-                    ("deal", Value::Int(row.deal_id)),
-                    ("buyer", str_value(&row.buyer)),
-                    ("seller", str_value(&row.seller)),
-                    ("item", Value::Int(row.item_id)),
-                    ("qty", Value::Int(row.quantity)),
-                    ("price", Value::Int(row.price)),
-                    ("x", Value::Int(row.meeting_x)),
-                    ("y", Value::Int(row.meeting_y)),
-                    ("status", str_value(match row.status {
-                        lifescape_store::DealStatus::Matched => "matched",
-                        lifescape_store::DealStatus::Convened => "convened",
-                        lifescape_store::DealStatus::BothArrived => "both_arrived",
-                        lifescape_store::DealStatus::Trading => "trading",
-                        lifescape_store::DealStatus::Settled => "settled",
-                        lifescape_store::DealStatus::Failed => "failed",
-                    })),
-                    ("reason", str_value(&row.fail_reason)),
-                    ("deadline", Value::Int(row.deadline_tick)),
-                ])
-            })
-            .collect();
-        object(vec![("ok", Value::Bool(true)), ("deals", Value::Arr(values))])
-    }
-
-    fn op_deal_arrived(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("");
-        let deal_id = request.get("deal").as_i64().unwrap_or(-1);
-        let (buyer, seller, status) = {
-            let engine = self.lock_engine();
-            let Some(deal) = engine.deals.get(&(deal_id as u64)) else {
-                return Self::err(format!("unknown deal {deal_id}"));
-            };
-            if account != deal.buyer && account != deal.seller {
-                return Self::err("not your deal".to_string());
-            }
-            if deal.status != DealStatus::Convened {
-                return Self::err(format!("deal {deal_id} is {}", deal.status.as_str()));
-            }
-            (deal.buyer.clone(), deal.seller.clone(), deal.status.as_str().to_string())
-        };
-        let mut engine = self.lock_engine();
-        let mut marks = engine.arrived.get(&(deal_id as u64)).cloned().unwrap_or((false, false));
-        if account == buyer {
-            marks.0 = true;
-        } else if account == seller {
-            marks.1 = true;
-        }
-        engine.arrived.insert(deal_id as u64, marks);
-        let both = marks.0 && marks.1;
-        drop(engine);
-        if both {
-            let mut engine = self.lock_engine();
-            if let Some(deal) = engine.deals.get_mut(&(deal_id as u64)) {
-                if deal.transition(DealStatus::BothArrived, None).is_ok() {
-                    self.lock_store()
-                        .set_deal_status(deal_id, lifescape_store::DealStatus::BothArrived, "", Self::now_clock())
-                        .ok();
-                }
-            }
-            return object(vec![("ok", Value::Bool(true)), ("deal", Value::Int(deal_id)), ("status", str_value("both_arrived"))]);
-        }
-        object(vec![("ok", Value::Bool(true)), ("deal", Value::Int(deal_id)), ("status", str_value(&status))])
-    }
-
-    fn op_deal_report(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("");
-        let deal_id = request.get("deal").as_i64().unwrap_or(-1);
-        let outcome = request.get("outcome").as_str().unwrap_or("").to_string();
-        let reason = request.get("reason").as_str().unwrap_or("").to_string();
-        let next = match outcome.as_str() {
-            "trading" => DealStatus::Trading,
-            "settled" => DealStatus::Settled,
-            "failed" => DealStatus::Failed,
-            _ => return Self::err(format!("bad outcome '{outcome}'")),
-        };
-        let fail = if next == DealStatus::Failed {
-            match FailReason::parse(&reason) {
-                Ok(why) => Some(why),
-                Err(error) => return Self::err(error.to_string()),
-            }
-        } else if !reason.is_empty() {
-            return Self::err("reason only with failed".to_string());
-        } else {
-            None
-        };
-        let clock = Self::now_clock();
-        // Snapshot the parties first: the ledger refund below needs them
-        // without holding the engine lock across the store calls.
-        let (buyer, seller, item, qty, price) = {
-            let engine = self.lock_engine();
-            let Some(deal) = engine.deals.get(&(deal_id as u64)) else {
-                return Self::err(format!("unknown deal {deal_id}"));
-            };
-            if account != deal.buyer && account != deal.seller {
-                return Self::err("not your deal".to_string());
-            }
-            (deal.buyer.clone(), deal.seller.clone(), deal.item, deal.quantity, deal.price)
-        };
-        let moved = {
-            let mut engine = self.lock_engine();
-            let Some(deal) = engine.deals.get_mut(&(deal_id as u64)) else {
-                return Self::err(format!("unknown deal {deal_id}"));
-            };
-            match deal.transition(next, fail) {
-                Ok(()) => true,
-                Err(error) => return Self::err(error.to_string()),
-            }
-        };
-        assert!(moved);
-        let store_status = match next {
-            DealStatus::Trading => lifescape_store::DealStatus::Trading,
-            DealStatus::Settled => lifescape_store::DealStatus::Settled,
-            _ => lifescape_store::DealStatus::Failed,
-        };
-        self.lock_store().set_deal_status(deal_id, store_status, fail.map(|why| why.as_str()).unwrap_or(""), clock).ok();
-        if next == DealStatus::Failed {
-            // Refund the match-time transfer; the agreement is void.
-            let mut engine = self.lock_engine();
-            let cost = qty * price;
-            engine.ledger.credit_coins(&buyer, cost);
-            engine.ledger.credit_stock(&buyer, item, -qty);
-            engine.ledger.credit_stock(&seller, item, qty);
-            engine.ledger.credit_coins(&seller, -cost);
-        }
-        if next == DealStatus::Settled || next == DealStatus::Failed {
-            let store = self.lock_store();
-            let _ = store.record_deal_outcome(&buyer, next == DealStatus::Settled);
-            let _ = store.record_deal_outcome(&seller, next == DealStatus::Settled);
-        }
-        object(vec![("ok", Value::Bool(true)), ("deal", Value::Int(deal_id)), ("status", str_value(next.as_str()))])
-    }
-
     fn op_fund(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("").to_string();
         if account.is_empty() {
@@ -934,6 +756,11 @@ fn registry() -> &'static OnceLock<Arc<MarketService>> {
     &SERVICE
 }
 
+/// Daemon-side handle for the convene loop (same process, no socket).
+pub(crate) fn shared() -> Option<Arc<MarketService>> {
+    registry().get().cloned()
+}
+
 /// Handle one market request on the daemon service. Down service is a
 /// loud error, never an empty book.
 pub fn handle(request: &Value) -> Value {
@@ -967,6 +794,13 @@ pub fn start() -> Result<Arc<MarketService>, String> {
     let items = catalogue();
     let service = Arc::new(MarketService::open(&db_path(), items).map_err(|error| format!("market open: {error}"))?);
     crate::market_seed::seed_demo_if_empty(&service).map_err(|error| format!("market seed: {error}"))?;
+    // Handover ring around the fountain via the nav batch op (walkable,
+    // no busts or stalls). Read-only nav use; a down service leaves the
+    // ring empty and every deal falls back to the static ring.
+    if let Some(snapshot) = crate::plan_service::snapshot() {
+        let ring = crate::market_convene::build_ring_from_snapshot(&snapshot);
+        service.lock_engine().ring = ring;
+    }
     let sock = socket_path();
     if sock.exists() {
         if UnixStream::connect(&sock).is_ok() {

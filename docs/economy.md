@@ -25,12 +25,36 @@ Couverture vérifiée à l'ordre (objet possédé, pièces disponibles, registre
 en mémoire ; les holdings live des connectés se brancheront sur le même
 contrôle). Bande anti-bug : rejet au-dessus de 5× la référence, achat
 rejeté sous 0,2×, ventes jusqu'à 1 pièce. Deals livrés physiquement place
-de Varrock (anneau autour de la fontaine, cases attribuées par index) :
-`matched → convened → both_arrived → trading → settled |
-failed{no_show|mismatch|death|timeout|nav_down}`, échéance = horloge + 1 h
-(les ETA nav viendront avec les bots live). Le registre règle à
-l'appariement ; un `failed` ultérieur rembourse le transfert et dégrade la
-fiabilité des deux parties.
+de Varrock (anneau autour de la fontaine, voir § Place ci-dessous) :
+`matched → convened(case d'échange, échéance) → both_arrived →
+trading → settled | failed{no_show|mismatch|death|timeout|nav_down}`.
+Échéance = 2× trajet ETA max + marge (ticks) ; départs échelonnés par
+ETA nav (cache par zone de départ, un plan par zone) pour une arrivée
+simultanée ; regroupement 300 ticks (une convocation par bot, paires
+regroupées en un seul échange) ; une convocation = case + heure de
+départ seulement (jamais la position de l'autre). Les ticks sont des
+époques par login : départs et échéances sont exprimés dans l'horloge
+de chaque bot, le balayage des expirés sur l'horloge murale du daemon
+(mesure live du tick, sans interrupteur dev/prod). Le registre règle à
+l'appariement ; un `failed` ultérieur rembourse le transfert, replace
+la partie présente **avec sa priorité** (seq d'origine conservée) et ne
+touche la fiabilité qu'en cas de faute (absent, refuseur ; mort,
+timeout, nav_down : neutre). Sans nav : aucune convocation,
+appariements conservés, expirations en `nav_down` sans pénalité.
+
+## Place de Varrock (échange physique)
+
+Centre : fontaine (3213, 3429, niveau 0), bassin x 3211-3215 / z 3427-3431.
+Anneau calculé au démarrage du market service via l'op `tiles_flags`
+(cases marchables autour du bassin, hors bustes (3210,3429), (3213,3426),
+(3213,3432), (3216,3429) et étals (3220,3425), (3220,3431)) ; banques
+`lifescape_gamedata::banks` (Varrock ouest x 3186 / z 3436-3446, Varrock
+est z 3419 / x 3252-3256). Chaque deal reçoit une paire de cases
+adjacentes libre, répartie autour de la fontaine ; 2e anneau si plein,
+puis file d'attente. Rendez-vous : attente jusqu'à l'échéance, le plus
+petit id de compte envoie la demande. Échange SDK `trade_exchange` :
+billets (`bank_main:com_93` = notes, `com_94` = items) pour les gros
+lots, redépôt après l'échange, les DEUX écrans vérifiés avant accept.
 
 Référence = VWAP glissant des dernières exécutions ; sinon milieu du
 carnet ; sinon prix magasin. Bougies OHLCV en horloge (1 h / 7 jours,

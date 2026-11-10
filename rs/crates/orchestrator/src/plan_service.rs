@@ -85,6 +85,13 @@ fn registry() -> &'static Mutex<Option<Arc<Service>>> {
     SERVICE.get_or_init(|| Mutex::new(None))
 }
 
+/// Daemon-side snapshot for read-only consumers (the market handover
+/// ring): the live `Arc`, or `None` when nav is down. Every worker plan
+/// still fails `nav-down`; this never plans, it only reads tiles.
+pub fn snapshot() -> Option<Arc<Snapshot>> {
+    registry().lock().unwrap().clone().map(|service| service.snapshot())
+}
+
 /// Operator gauge: counters + queue + RAM in one object, same shape
 /// as the service `stats` op, plus one entry per batch op served. None
 /// when the service is down: the gauge is empty rather than stale.

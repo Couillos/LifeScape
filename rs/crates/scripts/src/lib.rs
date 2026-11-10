@@ -9,6 +9,7 @@ pub mod devtools_check;
 pub mod devtools_probe;
 pub mod kit;
 pub mod legacy;
+pub mod market_client;
 pub mod maze;
 pub mod maze_doors;
 pub mod quests;
@@ -175,7 +176,7 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "cook", "fishing", "mining", "woodcut", "melee", "tutorial",
+        "cook", "fishing", "mining", "woodcut", "melee", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -205,6 +206,7 @@ fn runner(name: &str) -> Option<Runner> {
         "mining" => Some(|bot, args| activities::mining::run_mining(bot, args)),
         "woodcut" => Some(|bot, args| activities::woodcut::run_woodcut(bot, args)),
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
+        "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
         "quest_cooks_assistant" => Some(|bot, args| quests::a::run_quest("cook", bot, args)),
@@ -262,7 +264,7 @@ mod tests {
     fn registry_covers_legacy_scripts() {
         // all supervised entry points, checked against names().
         for name in [
-            "cook", "fishing", "mining", "woodcut", "melee", "tutorial",
+            "cook", "fishing", "mining", "woodcut", "melee", "market", "tutorial",
             "quest_cooks_assistant", "quest_dragon_slayer", "rescue_maze",
             "rescue_mime", "rescue_cube", "rescue_down", "rescue_greet", "rescue_fallback",
             "check_transitions", "check_doors", "check_routes", "goto",
@@ -272,7 +274,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 45);
+        assert_eq!(names().len(), 46);
     }
 
     #[test]

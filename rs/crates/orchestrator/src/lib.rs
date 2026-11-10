@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 pub mod paths;
+pub mod market_convene;
+pub mod market_eta;
 pub mod market_service;
 pub mod market_seed;
 #[cfg(test)]

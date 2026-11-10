@@ -7,6 +7,7 @@ pub mod actions;
 pub mod approach;
 pub mod cost_cache;
 pub mod doors;
+pub mod exchange;
 pub mod movement;
 pub mod nav_remote;
 pub mod snapshot_view;

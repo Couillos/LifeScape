@@ -232,6 +232,32 @@ impl Book {
             .map(|order| order.remaining)
     }
 
+    /// Every resting order on both sides, oldest first. Snapshot before a
+    /// match to remember consumed rows for a priority-preserving relist.
+    pub fn orders(&self) -> Vec<Order> {
+        let mut all: Vec<Order> = self.buys.iter().chain(self.sells.iter()).cloned().collect();
+        all.sort_by_key(|order| order.seq);
+        all
+    }
+
+    /// Next arrival rank (the `seq` the following placed order takes).
+    /// Read before a match to stamp the taker's relist row with the rank
+    /// it actually consumed.
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    /// Re-lists a fully consumed order after a failed handover, keeping
+    /// its original queue position (price-time priority preserved for
+    /// the party that showed up). New ids ride the old `seq`.
+    pub fn relist(&mut self, order: Order) {
+        self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
+        match order.side {
+            Side::Buy => Self::insert_sorted(&mut self.buys, order, true),
+            Side::Sell => Self::insert_sorted(&mut self.sells, order, false),
+        }
+    }
+
     /// Cancels one resting order. Fills already taken stay valid.
     pub fn cancel(&mut self, id: u64) -> Result<Order, Error> {
         self.take(id).ok_or_else(|| Error::NotFound(format!("order {id}")))

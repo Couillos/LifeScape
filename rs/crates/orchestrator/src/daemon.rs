@@ -604,6 +604,7 @@ impl Orchestrator {
         true
     }
 
+
     /// One JSON round-trip to the session worker.
     pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
         let (sock_path, _ready) = paths::session_paths(account);
