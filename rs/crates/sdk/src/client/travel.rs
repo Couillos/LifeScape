@@ -170,6 +170,28 @@ impl Bot {
             RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
             RemoteOutcome::NavDown(reason) => return Err(Error::Travel(format!("nav-down: {reason}"))),
         };
+        // A zero-step plan adjusted on place while the destination is far
+        // is a disconnected region the planner reports as Found (blocked
+        // dest, closest is here): executing it is a no-op Ok the gather
+        // loops read as arrived, then hop unreachable spots for the whole
+        // stall budget. Fail loud as NoRoute instead (near no-ops — the
+        // repeat-visit click spot — stay Ok).
+        if plan.segments.is_empty()
+            && plan.adjusted_dest == Some(from)
+            && (from.x - dest.x).abs() + (from.z - dest.z).abs() > 4
+        {
+            return Err(self.fail_no_route(
+                from,
+                dest,
+                &options,
+                NoRoute {
+                    closest_reachable: from,
+                    blocked_by_requirements: Vec::new(),
+                    disabled_transitions_nearby: Vec::new(),
+                    reason: NoRouteReason::Disconnected,
+                },
+            ));
+        }
         let plan_ms = plan_start.elapsed().as_millis();
         Ok((options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
     }
@@ -1649,5 +1671,74 @@ mod tests {
             Some(&Some((1516, 0, 1))),
             "shut reading untouched"
         );
+    }
+
+    /// R9 island trap (b7e2ggbp): a zero-step plan adjusted on place
+    /// while the destination is far is a disconnected region, never an
+    /// arrival. The planner reports it as Found (blocked dest, closest
+    /// is here); executing it is a no-op Ok the gather loops read as
+    /// arrived, then hop Draynor<->Al Kharid for the whole stall budget
+    /// (1055t, 3 fails, graph abandoned). Fail loud here instead so the
+    /// spot bans and the run ends fast with a NoRoute dossier.
+    #[test]
+    fn far_zero_step_adjusted_plan_is_no_route() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "test-r9".to_string()),
+            &test_socket("sdk-r9"),
+            1,
+        )
+        .expect("service starts");
+        let mut island = offline_bot(3132, 3133);
+        island.last_keepalive = Some(std::time::Instant::now());
+        island.last_send_tick = island.world.ticks;
+        island.plan_client = Some(PlanClient::new(service.socket_path(), "r9"));
+        island.plan_data_version = Some("test-r9".to_string());
+        let water = Tile { x: 3086, z: 3227, level: 0 };
+        let err = match island.plan_travel(water) {
+            Ok(_) => panic!("island trap must not plan"),
+            Err(err) => err,
+        };
+        let dossier = match &err {
+            Error::TravelFailure(failure) => {
+                assert_eq!(failure.kind, TravelErrorKind::NoRoute, "disconnected reads NoRoute, got {err:?}");
+                failure.dossier.clone()
+            }
+            other => panic!("NoRoute dossier, never a bare error, got: {other:?}"),
+        };
+        if let Some(path) = dossier {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Healthy path unchanged: mainland bank to water still plans to the
+    /// shore, and standing on the shore is already arrived (near no-op
+    /// Ok, never NoRoute) so repeat visits keep clicking.
+    #[test]
+    fn mainland_water_still_plans_to_shore() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(
+            Snapshot::new(world, tables, "test-r9b".to_string()),
+            &test_socket("sdk-r9b"),
+            1,
+        )
+        .expect("service starts");
+        let mut mainland = offline_bot(3092, 3243);
+        mainland.last_keepalive = Some(std::time::Instant::now());
+        mainland.last_send_tick = mainland.world.ticks;
+        mainland.plan_client = Some(PlanClient::new(service.socket_path(), "r9b"));
+        mainland.plan_data_version = Some("test-r9b".to_string());
+        let water = Tile { x: 3086, z: 3227, level: 0 };
+        let (_, plan, _) = mainland.plan_travel(water).expect("mainland plans to water");
+        assert!(!plan.segments.is_empty(), "shore plan walks, got {plan:?}");
+        let mut shore = offline_bot(3087, 3228);
+        shore.last_keepalive = Some(std::time::Instant::now());
+        shore.last_send_tick = shore.world.ticks;
+        shore.plan_client = Some(PlanClient::new(service.socket_path(), "r9b"));
+        shore.plan_data_version = Some("test-r9b".to_string());
+        let (_, settled, _) = shore.plan_travel(water).expect("shore repeat stays Ok");
+        assert!(settled.segments.is_empty(), "already at the click spot, got {settled:?}");
     }
 }
