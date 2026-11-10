@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod catalog;
 pub mod cost;
 pub mod expand;
 pub mod mapping;
@@ -13,6 +14,10 @@ pub mod model;
 pub mod replan;
 pub mod space;
 
+pub use catalog::{
+    activity_from_value, activity_to_value, catalog_from_value, catalog_to_value, validate, Activity, Arch,
+    Epoch, Prereqs, Stack,
+};
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, resolve_ready};
 pub use mapping::map_method;

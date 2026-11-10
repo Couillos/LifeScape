@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chain_spec;
 pub mod cycle;
 pub mod fight;
 pub mod fish;

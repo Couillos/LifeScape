@@ -3,8 +3,8 @@
 //!   one   - login, one short walk, then pump 30s
 //!   far   - login, one far walk (chained 24-step legs like woodcut), pump
 //! Prints tick + wall time of death. Delete after diagnosis.
-use lifescape_sdk::{Bot, Tables};
-use lifescape_scripts::tables_live::{LIVETABLES, attach_live_tables};
+use lifescape_sdk::Bot;
+use lifescape_scripts::tables_live::attach_live_tables;
 use std::time::Instant;
 
 fn pack_and_key() -> (String, String) {
@@ -19,7 +19,6 @@ fn main() {
     let host = std::env::var("LIFESCAPE_SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port: u16 = std::env::var("LIFESCAPE_SERVER_PORT").ok().and_then(|raw| raw.parse().ok()).unwrap_or(43594);
     let (pack_dir, key_path) = pack_and_key();
-    let tables: Tables = LIVETABLES;
     let mut bot = Bot::new(&host, port, &pack_dir, &key_path);
     attach_live_tables(&mut bot);
     let password = if account == "admin" { Some("admin") } else { None };

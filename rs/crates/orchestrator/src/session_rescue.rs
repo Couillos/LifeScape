@@ -116,7 +116,6 @@ fn clear_rescue_state(shared: &Shared) {
 pub(crate) struct PendingMarket {
     pub(crate) script: String,
     pub(crate) args: Vec<String>,
-    pub(crate) posed_at: u64,
 }
 
 /// Pose a market delivery: same single-level gate as the rescue, lower
@@ -124,7 +123,7 @@ pub(crate) struct PendingMarket {
 /// one convocation at a time.
 pub(crate) fn pose_market(shared: &Shared, script: &str, args: &[String], tick: u64) {
     *shared.pending_market.lock().unwrap() =
-        Some(PendingMarket { script: script.to_string(), args: args.to_vec(), posed_at: tick });
+        Some(PendingMarket { script: script.to_string(), args: args.to_vec() });
     shared.log(&format!("market {script} posed, waits for the safe point"));
     crate::session_push::push_event(&shared.account, "market", script, false, tick, script, args, "", (0, 0, 0));
 }

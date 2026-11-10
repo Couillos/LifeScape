@@ -13,6 +13,7 @@ pub mod nav_remote;
 pub mod snapshot_view;
 pub mod travel;
 pub mod travel_dossier;
+pub mod travel_hook;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

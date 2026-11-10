@@ -214,6 +214,14 @@ pub(crate) fn operable_ring(spot_x: i32, spot_z: i32, width: i64, length: i64) -
 mod tests {
     use super::{operable_ring, operable_stand};
 
+    /// Operable-stand geometry mirrors the server (`ReachStrategy`
+    /// `reachRectangle1`): orthogonal to the footprint, never diagonal to
+    /// the anchor. Live 6/6 fixtures: a yew is 3x3, so (3151,3229) cuts
+    /// (3151,3230) but the diagonal corner (3150,3229) refuses; (3185,3225)
+    /// cuts (3184,3226) but (3183,3225) refuses; (3164,3220) and
+    /// (3166,3218) both cut (3165,3219) (west side, inside the footprint
+    /// edge range).
+    #[test]
     fn operable_stand_matches_server_reach() {
         // Yew 3x3 at (3151,3230): south side works, west corner refuses.
         assert!(operable_stand(3151, 3229, 3151, 3230, 3, 3), "south side cuts");
@@ -233,6 +241,9 @@ mod tests {
         assert!(!operable_stand(4, 4, 5, 5, 1, 1), "diagonal refuses");
     }
 
+    /// Ring: one stand per footprint side, deduped (a 3x3 yields 4
+    /// distinct side middles, a 1x1 the four orthogonals).
+    #[test]
     fn operable_ring_covers_four_sides() {
         let mut ring = operable_ring(3151, 3230, 3, 3);
         ring.sort();

@@ -44,13 +44,10 @@ struct Entry {
     date: String,
 }
 
-/// Filter view of a transition: name, locs and table tiles only.
-struct RowView<'a> {
-    name: &'a str,
+/// Filter view of a transition: locs and table tiles only.
+struct RowView {
     loc: u16,
-    climb_loc: u16,
     from: Tile,
-    to: Tile,
 }
 
 /// Transport and operator stops abort the run; anything else is one
@@ -285,7 +282,6 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         loc: u16,
         climb_loc: u16,
         from: Tile,
-        to: Tile,
         stand: Tile,
         expect: Tile,
         open_to: Option<u16>,
@@ -305,7 +301,6 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             loc: found.view.loc,
             climb_loc: found.view.climb_loc,
             from: found.view.from,
-            to: found.view.to,
             stand,
             expect,
             open_to: found.view.open_to,
@@ -338,7 +333,7 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             target.expect.z,
             target.expect.level,
         ));
-        let view = RowView { name: &target.name, loc: target.loc, climb_loc: target.climb_loc, from: target.from, to: target.to };
+        let view = RowView { loc: target.loc, from: target.from };
         match probe_row(
             bot,
             view,

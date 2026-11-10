@@ -65,6 +65,8 @@ pub struct TaskSpec {
     pub allow_shop: bool,
     /// Graph node id, for the session report.
     pub node_id: String,
+    /// Production chain (PRD 2, D58): `None` for single-link v2 orders.
+    pub chain: Option<super::chain_spec::ChainSpec>,
     /// Skip the bank loop (melee `--no-bank`).
     pub no_bank: bool,
     /// Paid crossings allowed (`toll`).
@@ -85,6 +87,7 @@ impl TaskSpec {
             allow_market: false,
             allow_shop: true,
             node_id: String::new(),
+            chain: None,
             no_bank: false,
             allow_paid: false,
             allow_wild: false,

@@ -202,7 +202,6 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::client::Bot;
     use crate::collision::{self, MapPack};
 

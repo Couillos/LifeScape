@@ -43,8 +43,6 @@ struct Dossier {
     from: Tile,
     dest: Tile,
     options: NavOptions,
-    /// Walk-step pairs of the plan that failed live, in order.
-    pairs: Vec<(Tile, Tile)>,
     /// Every tile the failed plan touched (walk, door, stand, expect).
     path: HashSet<(i32, i32, i32)>,
     plan_segments: usize,
@@ -99,14 +97,12 @@ fn parse_options(value: &Value) -> NavOptions {
     options
 }
 
-/// Walk pairs plus touched tiles of a dossier plan. Door and ride jumps
+/// Touched tiles of a dossier plan. Door and ride jumps
 /// are path tiles but never step-checked: the closed static view blocks
 /// them by design, and teleports are not steps at all.
-fn dossier_path(plan: &Value, from: Tile) -> (Vec<(Tile, Tile)>, HashSet<(i32, i32, i32)>, usize, i64) {
-    let mut pairs = Vec::new();
+fn dossier_path(plan: &Value, from: Tile) -> (HashSet<(i32, i32, i32)>, usize, i64) {
     let mut path = HashSet::new();
     path.insert((from.x, from.z, from.level));
-    let mut cursor = from;
     let mut segments = 0;
     let cost = plan.get("cost").as_i64().unwrap_or(0);
     for seg in plan.get("segments").as_arr().cloned().unwrap_or_default() {
@@ -116,8 +112,6 @@ fn dossier_path(plan: &Value, from: Tile) -> (Vec<(Tile, Tile)>, HashSet<(i32, i
                 for tile in seg.get("tiles").as_arr().cloned().unwrap_or_default() {
                     if let Some(next) = tile_of(&tile) {
                         path.insert((next.x, next.z, next.level));
-                        pairs.push((cursor, next));
-                        cursor = next;
                     }
                 }
             }
@@ -130,9 +124,6 @@ fn dossier_path(plan: &Value, from: Tile) -> (Vec<(Tile, Tile)>, HashSet<(i32, i
                 if let Some(door) = tile_of(&seg.get("door")) {
                     path.insert((door.x, door.z, door.level));
                 }
-                if let Some(cross) = tile_of(seg.get("cross_to")) {
-                    cursor = cross;
-                }
             }
             _ => {
                 for key in ["stand", "expect"] {
@@ -140,24 +131,21 @@ fn dossier_path(plan: &Value, from: Tile) -> (Vec<(Tile, Tile)>, HashSet<(i32, i
                         path.insert((tile.x, tile.z, tile.level));
                     }
                 }
-                if let Some(expect) = tile_of(seg.get("expect")) {
-                    cursor = expect;
-                }
             }
         }
     }
-    (pairs, path, segments, cost)
+    (path, segments, cost)
 }
 
 fn parse_dossier(value: &Value) -> Option<Dossier> {
     let from = tile_of(value.get("from"))?;
     let dest = tile_of(value.get("dest"))?;
-    let (pairs, path, plan_segments, plan_cost) = match value.get("plan").as_obj() {
+    let (path, plan_segments, plan_cost) = match value.get("plan").as_obj() {
         Some(_) => {
-            let (pairs, path, segments, cost) = dossier_path(value.get("plan"), from);
-            (pairs, path, segments, cost)
+            let (path, segments, cost) = dossier_path(value.get("plan"), from);
+            (path, segments, cost)
         }
-        None => (Vec::new(), HashSet::new(), 0, 0),
+        None => (HashSet::new(), 0, 0),
     };
     let mut diff = Vec::new();
     for entry in value.get("static_live_diff").as_arr().cloned().unwrap_or_default() {
@@ -171,7 +159,6 @@ fn parse_dossier(value: &Value) -> Option<Dossier> {
         from,
         dest,
         options: parse_options(value.get("options")),
-        pairs,
         path,
         plan_segments,
         plan_cost,

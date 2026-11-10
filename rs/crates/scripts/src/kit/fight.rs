@@ -584,11 +584,6 @@ mod tests {
 
 
 
-    /// Toll-fence side test: the gate line splits flanks (Al-Kharid gate
-    /// halves 2882/2883); same flank hunts together, never across.
-    #[test]
-
-
     /// Cluster flank filter: mixed flanks keep the bot's side only; an
     /// all-across list falls back to everything only when paid, and
     /// stays empty when unpaid so the caller fails named (t02 live:

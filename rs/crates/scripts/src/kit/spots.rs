@@ -960,11 +960,18 @@ mod tests {
         assert!(matches!(err, ScriptError::Usage(_)), "Usage, got: {err:?}");
     }
 
+    /// Walk-failure bans: planner-proven NoRoute sits out 30k (re-planning
+    /// from the same tile is futile), every transient walk failure rides
+    /// the short ban and is re-tested at expiry.
+    #[test]
     fn walk_fail_ban_is_proven_or_short() {
         assert_eq!(walk_fail_ban(true), UNREACHABLE_BAN_TICKS, "planner proof bans long");
         assert_eq!(walk_fail_ban(false), GONE_BAN_TICKS, "transient walk retries short");
     }
 
+    /// Strike rule: only a refusal from a footprint-operable stand counts
+    /// toward condemning (a corner refusal is a bad stand, retried short).
+    #[test]
     fn direct_refusal_needs_a_repeat_to_condemn() {
         assert_eq!(refusal_ban_ticks(false, false, false, 5), GONE_BAN_TICKS, "far walk retries short");
         assert_eq!(refusal_ban_ticks(true, false, false, 5), GONE_BAN_TICKS, "walk failure retries short");

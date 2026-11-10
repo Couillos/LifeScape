@@ -330,12 +330,6 @@ pub(crate) fn write_heartbeat(shared: &Arc<Shared>) {
     crate::session_log::flush_log(&shared.log_path);
 }
 
-/// Light idle heartbeat (E4): position and status only, no snapshot
-/// rebuild, merged daemon-side. Full frames stay on `write_heartbeat`.
-pub(crate) fn write_light(shared: &Arc<Shared>) {
-    crate::heartbeat_flows::write_light(shared);
-}
-
 /// Last breath: the only disk write left. The daemon already serves the
 /// pushed snapshots from memory; this file is for daemon-restart adoption.
 fn write_last_breath(shared: &Arc<Shared>) {
@@ -886,7 +880,7 @@ pub fn run_session(account: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{budget_due, heartbeat_due, mark_resumed, SessionInner, Shared};
+    use super::{heartbeat_due, mark_resumed, SessionInner, Shared};
 
     fn idle_inner() -> SessionInner {
         SessionInner {

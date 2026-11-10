@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use lifescape_json::{Value, object, str_value};
 
-use crate::session::{Shared, heartbeat_due, now_secs, write_heartbeat};
+use crate::session::{Shared, now_secs, write_heartbeat};
 use crate::session_heartbeat::heartbeat_value;
 
 /// Light cadence: the spectator list never looks older than this.

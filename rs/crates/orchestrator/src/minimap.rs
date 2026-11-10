@@ -251,6 +251,7 @@ impl Grounds {
         }
     }
 
+    #[cfg(test)]
     fn content_tile(&self, level: i32, tile_x: i32, tile_z: i32) -> GroundTile {
         self.tile(self.content_level(level, tile_x, tile_z), tile_x, tile_z)
     }
@@ -537,6 +538,7 @@ impl Minimap {
     }
 
     /// Raw zip bytes backing this renderer, for the stamp hash.
+    #[cfg(test)]
     pub(crate) fn pack_bytes(&self) -> &[u8] {
         &self.grounds.archive
     }

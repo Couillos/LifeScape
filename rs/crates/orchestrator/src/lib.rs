@@ -35,6 +35,7 @@ pub mod session_rescue;
 pub mod staticmap;
 pub mod res_stats;
 pub mod admission;
+pub mod api_shapes;
 pub mod push_hub;
 pub mod push_conn;
 pub mod rates_service;

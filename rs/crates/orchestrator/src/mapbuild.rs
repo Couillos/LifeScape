@@ -87,6 +87,7 @@ pub(crate) fn plan_images(squares: &[(i32, i32)]) -> Vec<ImageSpec> {
 /// Source pixel rect of a 33-tile window at (ox, oz) inside a file, or
 /// None when the window is not fully covered. Row 0 is the northern edge,
 /// like the renderer: the window top tile is oz + 32.
+#[cfg(test)]
 pub(crate) fn source_rect(spec: &ImageSpec, ox: i32, oz: i32) -> Option<(i32, i32)> {
     if ox < spec.x0 || oz < spec.z0 {
         return None;

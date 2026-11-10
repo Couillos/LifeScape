@@ -16,6 +16,7 @@ use lifescape_nav::plan::{EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segm
 use lifescape_nav::service::{self, Poll as ServicePoll, Submit as ServiceSubmit};
 #[cfg(test)]
 use lifescape_nav::static_world::StaticWorld;
+#[cfg(test)]
 use lifescape_nav::tables::Tables;
 
 use super::travel_dossier::{TRAIL_TAKE, dossier_json, trail_mark, write_dossier_file};
@@ -403,6 +404,7 @@ impl Bot {
     /// Options from live state: toll wallet, carried items, quest points.
     /// Tags the data never requires (`quest:<name>`...) stay unsatisfied,
     /// so the planner reports them instead of walking into a refusal.
+    #[cfg(test)]
     pub(crate) fn nav_options(&self, tables: &Tables) -> NavOptions {
         let carried = crate::client::aggregate(&self.world.inv);
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
@@ -1449,7 +1451,7 @@ mod tests {
         // never hangs, never resubmits, never plans local.
         let from = Tile { x: 3228, z: 3214, level: 0 };
         let dest = Tile { x: 3224, z: 3214, level: 0 };
-        let (world, tables) = test_nav_context();
+        let (_, tables) = test_nav_context();
         let options = bot.nav_options(&tables);
         let id = match client.submit(from, dest, &options, "test-unk").expect("submit") {
             ServiceSubmit::Accepted { id, .. } => id,

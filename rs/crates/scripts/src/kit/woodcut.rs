@@ -678,8 +678,7 @@ mod tests {
         let waited_until = 140u64;
         idle_since += waited_until - spent;
         assert_eq!(idle_since, 140, "death wait not billed to the stall budget");
-        let mut spot: Option<(i32, i32)> = Some((3086, 3243));
-        spot = None;
+        let spot: Option<(i32, i32)> = None;
         assert!(spot.is_none(), "spot reset after death");
     }
     #[test]

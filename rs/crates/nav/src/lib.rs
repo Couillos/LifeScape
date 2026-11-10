@@ -16,4 +16,5 @@ pub mod service_plan;
 pub mod service_queries;
 pub mod static_world;
 pub mod tables;
+pub mod walk_costs;
 pub mod walk_rank;

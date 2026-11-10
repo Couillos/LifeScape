@@ -240,7 +240,6 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::client::Bot;
 /// The double-screen gate is exact: same keys and counts pass, an
 /// overpay or a missing lot refuses, zero lots never count.

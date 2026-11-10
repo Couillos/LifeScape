@@ -1140,8 +1140,6 @@ mod tests {
         assert_eq!(bank_trip(&mut bot, &bank, &[coins], 0).expect("pack == keep is a no-op"), 0);
     }
 
-    /// Resilient rediscovers once then fails hard when nothing was deposited.
-    #[test]
     /// Resilient rediscovers once, then fails loud: the first trip finds
     /// no booth at the booth-free tile (served batch confirms), the
     /// rediscovered real bank is a dead-socket walk away, so the typed

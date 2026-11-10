@@ -751,10 +751,6 @@ mod tests {
         assert_eq!(banned.len(), before - 1, "one release per repick, got: {}", banned.len());
     }
 
-    /// Strike rule: only a refusal from a footprint-operable stand counts
-    /// toward condemning (a corner refusal is a bad stand, retried short).
-    #[test]
-
     /// Release rule: only a full ban sweep (100% of spots seen) releases
     /// the oldest; one stump, gate or hunter means genuinely unavailable.
     #[test]
@@ -820,24 +816,6 @@ mod tests {
         let outside = filtered.as_ref().is_some_and(|(_, found_x, found_z)| (*found_x, *found_z) == (2862, 3385));
         assert!(!outside, "filtered pick never returns the F2P-excluded spot, got: {filtered:?}");
     }
-
-    /// Operable-stand geometry mirrors the server (`ReachStrategy`
-    /// `reachRectangle1`): orthogonal to the footprint, never diagonal to
-    /// the anchor. Live 6/6 fixtures: a yew is 3x3, so (3151,3229) cuts
-    /// (3151,3230) but the diagonal corner (3150,3229) refuses; (3185,3225)
-    /// cuts (3184,3226) but (3183,3225) refuses; (3164,3220) and
-    /// (3166,3218) both cut (3165,3219) (west side, inside the footprint
-    /// edge range).
-    #[test]
-
-    /// Ring: one stand per footprint side, deduped (a 3x3 yields 4
-    /// distinct side middles, a 1x1 the four orthogonals).
-    #[test]
-
-    /// Walk-failure bans: planner-proven NoRoute sits out 30k (re-planning
-    /// from the same tile is futile), every transient walk failure rides
-    /// the short ban and is re-tested at expiry.
-    #[test]
 
     /// Planner-proven dead spot (`except`): never picked, never
     /// starvation-released, breaks unanimity so the repick degrades to the
