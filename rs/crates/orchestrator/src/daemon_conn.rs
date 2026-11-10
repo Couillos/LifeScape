@@ -15,10 +15,16 @@ use crate::paths;
 /// (backlog full, nobody accepting) can no longer park the caller
 /// forever; the helper thread is reaped when the worker dies (the
 /// caller kills it on timeout, which unblocks the connect).
+/// E14: a missing socket fails before spawning that thread — a dead
+/// worker needs no connexion attempt at all (same error as a refused
+/// connect, handled by the caller).
 fn connect_worker(
     sock_path: &std::path::Path,
     timeout: Duration,
 ) -> Result<UnixStream, String> {
+    if !sock_path.exists() {
+        return Err(format!("session unreachable (no socket at {})", sock_path.display()));
+    }
     let path = sock_path.to_path_buf();
     let (sender, receiver) = std::sync::mpsc::channel::<Result<UnixStream, String>>();
     if std::thread::Builder::new()
@@ -43,6 +49,10 @@ impl Orchestrator {
     /// a socket nobody accepts never parks the supervisor, the brain,
     /// or a CLI command. A timed-out connect kills the worker on the
     /// spot — it cannot serve anyone — and clean recovery follows.
+    /// One connexion per call by design (E14): the worker answers one
+    /// frame per connexion, so persistence needs its serve loop, and
+    /// these calls are operator-paced, never steady-state traffic
+    /// (pushes ride the persistent hub, plans the single `plan` op).
     pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
         let (sock_path, _ready) = paths::session_paths(account);
         let stream = match connect_worker(&sock_path, timeout) {
@@ -127,7 +137,8 @@ pub(crate) fn tail_lines(path: &std::path::Path, lines: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_pktlog_line, live_binary};
+    use super::{connect_worker, is_pktlog_line, live_binary};
+    use std::time::Duration;
 
     #[test]
     fn live_binary_strips_deleted_marker() {
@@ -153,5 +164,36 @@ mod tests {
         assert!(!is_pktlog_line(""));
         // A line merely mentioning the marker mid-text is game content.
         assert!(!is_pktlog_line("say C>S hello"));
+    }
+
+    /// Live `worker-connect` threads, by comm name (E14 gauge).
+    fn worker_connect_threads() -> usize {
+        let mut count = 0;
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            return 0;
+        };
+        for task in tasks.flatten() {
+            if std::fs::read_to_string(task.path().join("comm"))
+                .is_ok_and(|comm| comm.trim() == "worker-connect")
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// E14: a missing socket fails without spawning the helper thread
+    /// (a dead worker needs no connexion attempt). Fast and typed,
+    /// never a 30 s connect wait.
+    #[test]
+    fn missing_socket_spawns_no_thread() {
+        let missing = std::env::temp_dir().join(format!("lifescape-no-such-sock-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        let before = worker_connect_threads();
+        let start = std::time::Instant::now();
+        let error = connect_worker(&missing, Duration::from_secs(30)).expect_err("missing socket refuses");
+        assert!(error.contains("session unreachable"), "typed, got {error}");
+        assert!(start.elapsed() < Duration::from_secs(5), "no thread, no connect wait");
+        assert_eq!(worker_connect_threads(), before, "no helper thread for a doomed connect");
     }
 }

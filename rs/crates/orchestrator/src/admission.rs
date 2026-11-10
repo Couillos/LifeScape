@@ -3,8 +3,9 @@
 //! bot instead of degrading the 300 already running.
 //!
 //! Envelope (20 Go / 8 cores, prod tick 600 ms): daemon <= 1 core, i.e.
-//! <= 0.33 % per bot; worker PSS <= 20 Mo; continuous writes off-logs
-//! <= 1 Mo/s at 300 bots (<= 3.5 Ko/s/bot); idle worker <= 2 wakeups/s.
+//! <= 0.33 % per bot at active pace (PRD2 §7 allows <= 0.5 % per active
+//! bot); worker PSS <= 20 Mo; continuous writes off-logs <= 1 Mo/s at
+//! 300 bots (<= 3.5 Ko/s/bot); idle worker <= 2 wakeups/s.
 //! `max_online_bots` is computed from the live `res-stats` rates, never
 //! a magic constant: past the envelope `open` fails loud with
 //! `admission:…`, the operator scales or waits.
@@ -36,17 +37,31 @@ pub fn disk_warning(free_bytes: u64) -> Option<String> {
         None
     }
 }
-/// Daemon CPU budget per bot at prod tick, in core-percent.
+/// Daemon CPU budget per bot at active pace, in core-percent. E15 bench
+/// (300 fake workers, 1 plan + 1 push per 700 ms per bot, 100 % L1):
+/// 99 % of one core, i.e. 0.33 %/bot — inside the PRD2 §7 objective
+/// (<= 0.5 % per active bot).
 pub const DAEMON_CORES_PER_BOT: f64 = 0.0033;
 /// Daemon budget: one core shared by nav, brain, market, store, web.
 pub const DAEMON_BUDGET_CORES: f64 = 1.0;
 /// Sustained off-log writes at 300 bots: 1 Mo/s, i.e. ~3.5 Ko/s/bot.
 pub const WRITES_BYTES_PER_S_PER_BOT: f64 = 3500.0;
+/// Daemon socket traffic one core sustains, in units/s (push frames +
+/// plan ops). E15 recalibration (`bench-l2r 300 30`, active pace, 100 %
+/// L1): 854 units/s at 99 % of one core, rounded down to 850. Covers
+/// HIT traffic over plan-op-only exchanges (N9: zero polls on the wire);
+/// Dijkstra misses stay compute-bound on the 4 plan threads and surface
+/// as queue-full refusals, never as silent load.
+pub const BUDGET_TRAFFIC_PER_S: f64 = 850.0;
 /// Minimum spacing between two accepted `open` (E10): reconnect storms
 /// re-enter one by one instead of thundering the login server.
 pub const OPEN_MIN_INTERVAL_SECS: f64 = 2.0;
 
 /// Live rates the admission reads (from `res-stats` + job count).
+/// N9: no poll rate — the `plan` op answers terminal on one connexion,
+/// so polls never ride the daemon socket (the waiter pool polls
+/// in-process in 10 ms slices, invisible here); `plan_submits_per_s`
+/// counts plan ops (one internal admission each).
 #[derive(Clone, Debug, Default)]
 pub struct DaemonLoad {
     pub online_bots: usize,
@@ -54,7 +69,6 @@ pub struct DaemonLoad {
     pub push_bytes_per_s: f64,
     pub files_per_s: f64,
     pub plan_submits_per_s: f64,
-    pub plan_polls_per_s: f64,
 }
 
 /// Free bytes on the filesystem holding `path` (D34 guard input).
@@ -84,22 +98,22 @@ pub enum Admission {
 /// bots admits the ceiling; a saturated daemon refuses nobody new.
 /// Disk never refuses (D34 warning only, see `disk_warning`).
 pub fn max_online_bots(load: &DaemonLoad) -> usize {
-    let traffic_per_s = load.pushes_per_s + load.plan_submits_per_s + load.plan_polls_per_s;
+    // N9: pushes + plan ops only. Zero polls on the wire since the
+    // `plan` op (E3): one connexion per plan, server-side wait.
+    let traffic_per_s = load.pushes_per_s + load.plan_submits_per_s;
     let per_bot = if load.online_bots > 0 {
         traffic_per_s / load.online_bots as f64
     } else {
         0.0
     };
     let by_cpu = if per_bot > 0.0 {
-        // One traffic unit (push/plan/poll) costs the daemon a fixed
-        // slice: scale the observed rate to the 1-core budget by rule of
-        // three. L11 prod-tick measurement (idle bots): ~2.7 % of a core
-        // at ~9 traffic/s, i.e. ~330 traffic/s per core, rounded down to
-        // 300. Re-tune with ACTIVE-bot traffic (plans + reports change
-        // the mix); until then this gate is idle-calibrated and the
-        // absolute ceiling still caps at 300.
-        let budget_traffic_per_s = 300.0_f64;
-        ((budget_traffic_per_s / per_bot.max(0.01)) as usize).max(1)
+        // One traffic unit (push/plan) costs the daemon a fixed slice:
+        // scale the observed rate to the 1-core budget by rule of three.
+        // E15 recalibration (active pace, 100 % L1): 854 units/s at 99 %
+        // of one core, i.e. BUDGET_TRAFFIC_PER_S per core. The retired
+        // idle-derived 300 mixed 2 ms poll round-trips the `plan` op
+        // removed; the absolute ceiling still caps at 300.
+        ((BUDGET_TRAFFIC_PER_S / per_bot.max(0.01)) as usize).max(1)
     } else {
         ABSOLUTE_MAX_BOTS
     };
@@ -185,13 +199,38 @@ mod tests {
     fn saturated_envelope_refuses_typing_envelope() {
         let mut load = idle(ABSOLUTE_MAX_BOTS);
         load.pushes_per_s = 600.0;
-        load.plan_submits_per_s = 450.0;
-        load.plan_polls_per_s = 900.0;
+        load.plan_submits_per_s = 1350.0;
         load.push_bytes_per_s = 2_000_000.0;
         let Admission::Refuse { reason } = admission_check(&load) else {
             panic!("saturated daemon must refuse");
         };
         assert!(reason.starts_with("admission:envelope"), "typed, got {reason}");
+    }
+
+    /// E15 bench shape (1 plan + 1 push per 700 ms per bot, no polls):
+    /// the gate sits at the ceiling, admitting below it and refusing
+    /// past it. 290 x 2.86 units/s = 829/s fits the 850 budget (max 297);
+    /// 300 x 2.86 = 858/s trips it — the bench proves 300 served at ~1
+    /// core, so the gate guards exactly the measured edge.
+    #[test]
+    fn e15_active_pace_gate_sits_at_the_ceiling() {
+        let pace = |online: usize| DaemonLoad {
+            online_bots: online,
+            pushes_per_s: online as f64 * 1.43,
+            push_bytes_per_s: online as f64 * 200.0,
+            plan_submits_per_s: online as f64 * 1.43,
+            ..Default::default()
+        };
+        let max = max_online_bots(&pace(290));
+        assert!((290..=300).contains(&max), "E15 pace fits one core, got max={max}");
+        assert!(
+            matches!(admission_check(&pace(290)), Admission::Accept { .. }),
+            "290 active bots admit"
+        );
+        assert!(
+            matches!(admission_check(&pace(300)), Admission::Refuse { .. }),
+            "300 active bots trip the measured edge"
+        );
     }
 
     /// Pacing lets one `open` through, holds the immediate next.

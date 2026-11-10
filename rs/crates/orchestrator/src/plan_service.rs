@@ -161,13 +161,16 @@ mod tests {
 
     /// Daemon path, read-only: the snapshot loads exactly like a session
     /// worker's (same loaders, strict), then serves one plan over a
-    /// throwaway socket. No live session is touched, nothing under `run/`.
+    /// throwaway socket via the single-round-trip `plan` op (E3, N9: one
+    /// connexion per plan, server-side wait, no submit ticket and no
+    /// 2 ms poll loop). No live session is touched, nothing under `run/`.
     #[test]
     fn daemon_snapshot_loads_and_serves() {
         let snapshot = super::load_snapshot().expect("daemon snapshot loads like a session");
         assert!(!snapshot.version.is_empty(), "version feeds the skew check");
         assert!(!snapshot.tables.transitions.is_empty(), "tables travel with the world");
         let sock = std::env::temp_dir().join(format!("lifescape-plan-daemon-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&sock);
         let service = lifescape_nav::service::Service::start(snapshot, &sock, 1).expect("serves on a temp socket");
         let client = lifescape_nav::service::PlanClient::new(service.socket_path(), "daemon-test");
         let from = lifescape_nav::plan::Tile { x: 3228, z: 3214, level: 0 };
@@ -178,23 +181,27 @@ mod tests {
             satisfied: std::collections::HashSet::new(),
             excluded_edges: std::collections::HashSet::new(),
         };
-        let id = match client.submit(from, dest, &options, "").expect("submit") {
-            lifescape_nav::service::Submit::Accepted { id, .. } => id,
-            lifescape_nav::service::Submit::Refused { reason, .. } => panic!("refused: {reason}"),
-        };
-        let start = std::time::Instant::now();
-        loop {
-            match client.poll(id).expect("poll").0 {
-                lifescape_nav::service::Poll::Ready(plan) => {
-                    assert!(!plan.segments.is_empty(), "daemon snapshot plans");
-                    break;
-                }
-                lifescape_nav::service::Poll::Failed(no) => panic!("daemon snapshot failed: {}", no.reason.as_str()),
-                lifescape_nav::service::Poll::Pending => {}
-                lifescape_nav::service::Poll::Unknown => panic!("lost ticket"),
+        // N9: the `plan` op answers terminal on the same connexion. The
+        // client performs no submit and no poll here: one admission
+        // server-side, zero interrogation on the wire.
+        let before = service.stats();
+        match client.plan_once(from, dest, &options, &service.current_version(), 10_000) {
+            Ok((lifescape_nav::service::Poll::Ready(plan), _served)) => {
+                assert!(!plan.segments.is_empty(), "daemon snapshot plans");
             }
-            assert!(start.elapsed() < std::time::Duration::from_secs(120), "daemon snapshot answers");
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            Ok((lifescape_nav::service::Poll::Failed(no), _)) => {
+                panic!("daemon snapshot failed: {}", no.reason.as_str())
+            }
+            Ok((lifescape_nav::service::Poll::Pending, _)) => panic!("plan op never answers pending"),
+            Ok((lifescape_nav::service::Poll::Unknown, _)) => panic!("plan op never answers unknown"),
+            Err(error) => panic!("plan op refused: {error:?}"),
         }
+        let after = service.stats();
+        assert_eq!(
+            after.submits - before.submits,
+            1,
+            "one plan op = one internal admission, never a resubmit storm"
+        );
+        let _ = std::fs::remove_file(&sock);
     }
 }

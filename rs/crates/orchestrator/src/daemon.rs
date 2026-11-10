@@ -220,7 +220,6 @@ impl Orchestrator {
                 push_bytes_per_s: rate("push_bytes_per_s"),
                 files_per_s: rate("files_per_s"),
                 plan_submits_per_s: rate("plan_submits_per_s"),
-                plan_polls_per_s: rate("plan_polls_per_s"),
             };
             if let crate::admission::Admission::Refuse { reason } = crate::admission::admission_check(&load) {
                 crate::res_stats::record_admission_refused();
