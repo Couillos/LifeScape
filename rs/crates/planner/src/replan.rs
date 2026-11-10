@@ -42,6 +42,10 @@ pub fn needs_replan(stop: &str, missing: &[String], died: bool, stock_lost: bool
     match stop {
         "blocked" => Some(ReplanCause::Blocked),
         "failed" => Some(ReplanCause::Failed),
+        // P1.6: an expired rescue (typed `RescueBudget` in last_error,
+        // dossier on disk) replans like a failure: the node retries with
+        // a fresh method instead of stranding.
+        "rescue_budget" => Some(ReplanCause::Failed),
         _ => {
             if stock_lost {
                 Some(ReplanCause::StockLost)
@@ -160,6 +164,7 @@ mod tests {
     fn triggers_cover_the_prd_list() {
         assert_eq!(needs_replan("blocked", &[], false, false, false), Some(ReplanCause::Blocked));
         assert_eq!(needs_replan("failed", &[], false, false, false), Some(ReplanCause::Failed));
+        assert_eq!(needs_replan("rescue_budget", &[], false, false, false), Some(ReplanCause::Failed), "expired rescue replans");
         assert_eq!(needs_replan("goal_reached", &[], true, false, false), Some(ReplanCause::Death), "death wins over the stop");
         assert_eq!(needs_replan("goal_reached", &[], false, true, false), Some(ReplanCause::StockLost));
         assert_eq!(needs_replan("goal_reached", &[], false, false, true), Some(ReplanCause::PriceDrift));

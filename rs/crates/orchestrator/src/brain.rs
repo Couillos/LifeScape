@@ -321,6 +321,19 @@ fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
     let stock_lost = stop == "failed" && missing.iter().any(|need| need.contains("lost"));
     // Price drift: the market moved >25% on a locked buy since resolve.
     let price_drift = false;
+    // P1.6: a typed `RescueBudget` in last_error replans like a failure
+    // even with no task report detail; consumed here (dossier on disk).
+    let rescue: Option<lifescape_planner::ReplanCause> = job
+        .inner
+        .try_lock()
+        .map(|mut inner| {
+            let cause = inner.last_error.as_ref().and_then(crate::brain_plan::rescue_replan_cause);
+            if cause.is_some() {
+                inner.last_error = None;
+            }
+            cause
+        })
+        .unwrap_or(None);
     life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
     let kind = life.nodes[index].kind.clone();
     match stop.as_str() {
@@ -386,7 +399,7 @@ fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
             // shopping list: count it as a failure so the 3-strike rule
             // bounds the replan-relaunch loop instead of spinning it.
             let effective = if other == "blocked" && missing.is_empty() { "failed" } else { other };
-            if let Some(cause) = needs_replan(effective, &missing, died, stock_lost, price_drift) {
+            if let Some(cause) = rescue.or_else(|| needs_replan(effective, &missing, died, stock_lost, price_drift)) {
                 if fail_count(&life, &life.nodes[index].id) >= 3 && effective == "failed" {
                     let id = life.nodes[index].id.clone();
                     life.nodes[index].status = NodeStatus::Abandoned;

@@ -255,9 +255,34 @@ pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
     totals.into_values().collect()
 }
 
+// P1.6 + P2.5 chaînes/choix: an expired rescue (typed `RescueBudget`
+// in `last_error`, dossier on disk) replans like a failure, even when
+// no task report arrives. Pure bridge: `on_supervise` folds it into
+// the `needs_replan` path, which stays non-null for it (tested below).
+pub fn rescue_replan_cause(last_error: &Value) -> Option<lifescape_planner::ReplanCause> {
+    if last_error.get("type").as_str() == Some("RescueBudget") {
+        Some(lifescape_planner::ReplanCause::Failed)
+    } else {
+        None
+    }
+}
+
+/// Money diversity (P2.5 §4.4): `rank_money_method` plus a ±2% seed
+/// jitter on revenue, so near-ties vary by profile instead of herding
+/// every bot onto one chain. The seed is the bot's own (D22-safe).
+pub fn rank_money_diverse(profit: f64, trend_score: f64, revenue: f64, trend_weight: f64, seed: u64, slot: u64) -> f64 {
+    let mut word = seed.wrapping_add(slot.wrapping_mul(0x9E37_79B9_7F4A_7C15)).max(1);
+    word ^= word << 13;
+    word ^= word >> 7;
+    word ^= word << 17;
+    let jitter = (word % 200) as f64 / 100.0 - 1.0;
+    lifescape_planner::rank_money_method(profit, trend_score, revenue, trend_weight) + jitter * 0.02 * revenue.max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, is_protected_tool, merge_keep, pick_flip_target, sale_blocked};
+    use super::{choose_money, is_protected_tool, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
+    use lifescape_json::{object, str_value};
 
     #[test]
     fn trend_bonus_flips_a_close_money_call() {
@@ -315,5 +340,36 @@ mod tests {
         assert_eq!(picked.0, "yew_logs", "tools, coins and graph items never win, got {picked:?}");
         assert!(pick_flip_target(&[("net".to_string(), 1)], &[], &[]).is_none(), "tools alone mean no target");
         assert!(pick_flip_target(&[], &[], &[]).is_none(), "empty stock means engagement sans objet");
+    }
+
+    /// P1.6 reprise: `on_supervise` folds a typed `RescueBudget`
+    /// `last_error` into the replan path, so `needs_replan` stays
+    /// non-null for it (the node retries with a fresh method).
+    #[test]
+    fn rescue_budget_last_error_replans() {
+        let budget = object(vec![
+            ("where", str_value("maze")),
+            ("type", str_value("RescueBudget")),
+            ("message", str_value("rescue maze over budget")),
+        ]);
+        let cause = rescue_replan_cause(&budget).expect("RescueBudget replans");
+        assert_eq!(lifescape_planner::needs_replan("rescue_budget", &[], false, false, false), Some(cause), "bridge feeds the replan path");
+        assert!(rescue_replan_cause(&lifescape_json::Value::Null).is_none(), "no error never replans");
+        let other = object(vec![("type", str_value("Locked"))]);
+        assert!(rescue_replan_cause(&other).is_none(), "other errors never rescue-replan");
+    }
+
+    #[test]
+    fn money_diversity_flips_only_close_calls() {
+        // Same seed replays.
+        assert_eq!(rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 3), rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 3));
+        // A 10x profit gap never flips on a ±2% jitter.
+        let poor: Vec<f64> = (0..8).map(|slot| rank_money_diverse(100.0, 0.0, 1000.0, 0.1, 7, slot)).collect();
+        let rich = rank_money_diverse(1000.0, -1.0, 1000.0, 0.1, 7, 0);
+        assert!(poor.iter().all(|score| *score < rich), "10x gap stays put");
+        // A tie breaks by seed: two bots need not pick the same slot.
+        let left = rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 0);
+        let varied = (0..8).any(|slot| rank_money_diverse(500.0, 0.0, 1000.0, 0.1, slot + 100, 0) != left);
+        assert!(varied, "seeds vary close calls");
     }
 }

@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod chains;
 pub mod cost;
 pub mod expand;
 pub mod mapping;
@@ -17,6 +18,11 @@ pub mod space;
 pub use catalog::{
     activity_from_value, activity_to_value, catalog_from_value, catalog_to_value, validate, Activity, Arch,
     Epoch, Prereqs, Stack,
+};
+pub use chains::{
+    best_for_money, best_for_xp, boot_covers, boot_plan, chain_by_id, cheapest_source, eval_chain, quest_shortcut,
+    quests_for_goal, synergies, usable_chains, xp_per_tick, BootStep, Chain, ChainEval, ChainPrices, ChainStep,
+    QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, resolve_ready};
