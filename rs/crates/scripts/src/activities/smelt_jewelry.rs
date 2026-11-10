@@ -154,7 +154,7 @@ fn fill_cast(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, bar: u16, ge
 
 #[cfg(test)]
 mod tests {
-    use super::{jewel_row, DEFAULT_PRODUCT, FURNACES, GOLD_BAR, SILVER_BAR, SILVER_PRODUCT};
+    use super::{jewel_row, DEFAULT_PRODUCT, GOLD_BAR, SILVER_BAR, SILVER_PRODUCT};
     use crate::kit::pack::obj_id;
     use crate::kit::produce::grid_button;
     use crate::tables_live::attach_live_tables;
