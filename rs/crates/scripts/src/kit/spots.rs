@@ -457,7 +457,138 @@ pub(crate) fn nearest_live(bot: &Bot, category: &str, near_x: i32, near_z: i32) 
     best.map(|(_, found)| found)
 }
 
-/// Best affordable tier with a live or static spot near a pinned bank.
+/// Static spawns of one fish category plus every live matching spot
+/// NPC the bot sees (level carried along for the same-level filter).
+fn fish_candidates(bot: &Bot, category: &str) -> Vec<(i32, i32, i32)> {
+    let mut cands: Vec<(i32, i32, i32)> = Vec::new();
+    for npc_id in knowledge::fishing::spot_npc_ids(category) {
+        if let Some(entry) = knowledge::npc_by_id(npc_id) {
+            for spawn in entry.spawns {
+                cands.push((spawn.level as i32, spawn.x as i32, spawn.z as i32));
+            }
+        }
+    }
+    for (_, npc) in &bot.world.npcs {
+        if tier_npc_matches(bot, npc.npc_type, category) {
+            cands.push((npc.level, npc.x, npc.z));
+        }
+    }
+    cands
+}
+
+/// Near-bank pool for one tier: the woodcut shape (local filters, one
+/// F2P batch, occupation dodge inside the surviving pool, walk-cost
+/// refinement). Occupation applies AFTER the pin — dodging the global
+/// pool first discards the only locally-viable spawns whenever a
+/// stranger stands near home water.
+fn pick_near_fish_spot(
+    bot: &mut Bot,
+    tier: &knowledge::fishing::FishTier,
+    fence: Option<i32>,
+    banned: &BanSet,
+    now: u64,
+    pinned: &knowledge::banks::Bank,
+) -> Option<(i32, i32)> {
+    let mut spots: Vec<(i32, i32)> = Vec::new();
+    for (spot_level, spot_x, spot_z) in fish_candidates(bot, tier.category) {
+        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
+            continue;
+        }
+        if crate::skill_gather::across_toll(bot.world.x, spot_x, fence) {
+            continue;
+        }
+        let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
+            Some(bank) => bank,
+            None => continue,
+        };
+        if (i64::from(bank.x) - pinned.x).abs() + (i64::from(bank.z) - pinned.z).abs() > 12 {
+            continue;
+        }
+        let dist = (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs();
+        if dist > BANK_TREK_LIMIT {
+            continue;
+        }
+        if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
+            continue;
+        }
+        // shortcut: no hunter table in the gamedata dump (Npc carries no
+        // hunts_players flag), so spots skip the static safety filter;
+        // hurt-driven flee still relocates mid-load.
+        spots.push((spot_x, spot_z));
+    }
+    // Travel always plans F2P-only: an out-of-F2P spot is a guaranteed
+    // NoRoute dossier, never a pick.
+    let Some(inside) = f2p_inside(bot, &spots) else {
+        return None;
+    };
+    let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+    for ((spot_x, spot_z), live) in spots.into_iter().zip(inside) {
+        if !live {
+            continue;
+        }
+        let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
+        cands.push((dist, (spot_x, spot_z)));
+    }
+    if cands.is_empty() {
+        return None;
+    }
+    let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
+    refine_by_walk(bot, cands).map(|(_, pos)| pos)
+}
+
+/// Same-tier hop for one tier: every static spawn of the category, any
+/// bank, when nothing qualifies near the pinned bank (woodcut
+/// `nearest_hop_spot` parity). Without it a bot pinned at a waterless
+/// bank — Varrock — waits at the bank forever.
+fn pick_hop_fish_spot(
+    bot: &mut Bot,
+    tier: &knowledge::fishing::FishTier,
+    fence: Option<i32>,
+    banned: &BanSet,
+    now: u64,
+) -> Option<(i32, i32)> {
+    let mut spots: Vec<(i32, i32)> = Vec::new();
+    for (spot_level, spot_x, spot_z) in fish_candidates(bot, tier.category) {
+        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
+            continue;
+        }
+        if crate::skill_gather::across_toll(bot.world.x, spot_x, fence) {
+            continue;
+        }
+        let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
+            Some(bank) => bank,
+            None => continue,
+        };
+        let trek = (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs();
+        if trek > BANK_TREK_LIMIT {
+            continue;
+        }
+        if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
+            continue;
+        }
+        spots.push((spot_x, spot_z));
+    }
+    let Some(inside) = f2p_inside(bot, &spots) else {
+        return None;
+    };
+    let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+    for ((spot_x, spot_z), live) in spots.into_iter().zip(inside) {
+        if !live {
+            continue;
+        }
+        let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
+        cands.push((dist, (spot_x, spot_z)));
+    }
+    if cands.is_empty() {
+        return None;
+    }
+    let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
+    refine_by_walk(bot, cands).map(|(_, pos)| pos)
+}
+
+/// Best affordable tier with a live or static spot: near the pinned
+/// bank first, then a same-tier hop to real water (never an idle wait
+/// at a waterless bank).
 pub(crate) fn pick_fish_spot(
     bot: &mut Bot,
     level: i64,
@@ -465,57 +596,23 @@ pub(crate) fn pick_fish_spot(
     now: u64,
     pinned: &knowledge::banks::Bank,
 ) -> Option<(knowledge::fishing::FishTier, i32, i32, knowledge::banks::Bank)> {
+    // Toll-fence aware: banks on the far side are last resort, never the
+    // default — same discipline as `nearest_bank` and the tree picker.
+    let fence = if bot.allow_paid { None } else { crate::skill_common::toll_gate_x(&mut *bot) };
     let mut tiers = knowledge::fishing::all_fish_tiers();
     tiers.sort_by_key(|tier| -tier.level);
     for tier in tiers.into_iter().filter(|tier| tier.level <= level) {
-        let mut cands: Vec<(i32, i32, i32)> = Vec::new();
-        for npc_id in knowledge::fishing::spot_npc_ids(tier.category) {
-            if let Some(entry) = knowledge::npc_by_id(npc_id) {
-                for spawn in entry.spawns {
-                    cands.push((spawn.level as i32, spawn.x as i32, spawn.z as i32));
-                }
-            }
+        if let Some((spot_x, spot_z)) = pick_near_fish_spot(bot, &tier, fence, banned, now, pinned) {
+            let bank = nearest_bank_at(spot_x, spot_z, bot.world.level).expect("bank just found");
+            return Some((tier, spot_x, spot_z, bank));
         }
-        for (_, npc) in &bot.world.npcs {
-            if tier_npc_matches(bot, npc.npc_type, tier.category) {
-                cands.push((npc.level, npc.x, npc.z));
-            }
-        }
-        let mut best: Option<(i64, (i32, i32))> = None;
-        // Occupation perçue: dodge spots another visible player works
-        // while free ones exist; a full house keeps the pool.
-        let pool: Vec<(i64, (i32, i32))> =
-            cands.iter().map(|&(_, spot_x, spot_z)| (0i64, (spot_x, spot_z))).collect();
-        let kept = drop_occupied(bot, pool, OCCUPIED_RADIUS);
-        for (spot_level, spot_x, spot_z) in cands {
-            if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
-                continue;
-            }
-            if !kept.iter().any(|&(_, pos)| pos == (spot_x, spot_z)) {
-                continue;
-            }
-            let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
-                Some(bank) => bank,
-                None => continue,
-            };
-            if (i64::from(bank.x) - pinned.x).abs() + (i64::from(bank.z) - pinned.z).abs() > 12 {
-                continue;
-            }
-            let dist = (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs();
-            if dist > BANK_TREK_LIMIT {
-                continue;
-            }
-            if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
-                continue;
-            }
-            // shortcut: no hunter table in the gamedata dump (Npc carries no
-            // hunts_players flag), so spots skip the static safety filter;
-            // hurt-driven flee still relocates mid-load.
-            if best.as_ref().is_none_or(|(known, _)| dist < *known) {
-                best = Some((dist, (spot_x, spot_z)));
-            }
-        }
-        if let Some((_, (spot_x, spot_z))) = best {
+        if let Some((spot_x, spot_z)) = pick_hop_fish_spot(bot, &tier, fence, banned, now) {
+            bot.log(&format!(
+                "no {} near bank ({},{}), hopping same tier to ({spot_x},{spot_z})",
+                tier.products.first().unwrap_or(&"?"),
+                pinned.x,
+                pinned.z
+            ));
             let bank = nearest_bank_at(spot_x, spot_z, bot.world.level).expect("bank just found");
             return Some((tier, spot_x, spot_z, bank));
         }
@@ -713,6 +810,61 @@ mod tests {
         assert!(start.elapsed() < std::time::Duration::from_secs(30), "stop cancels, never blocks");
     }
 
+    /// Mapless worker against a real nav service (repo dumps): no painted
+    /// world, only the plan handle — the same shape as a live worker.
+    fn served_spot_bot(socket_tag: &str, x: i32, z: i32) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        let (mut bot, service) = served_mining_bot(socket_tag);
+        bot.world.x = x;
+        bot.world.z = z;
+        (bot, service)
+    }
+
+    /// Varrock-banked bots must hop to real water instead of waiting at
+    /// the bank forever: no saltfish water sits near a Varrock bank, so
+    /// the near-bank pool is empty and only a same-tier hop (woodcut
+    /// parity) saves the pick.
+    #[test]
+    fn varrock_bank_hops_to_water() {
+        let (mut bot, _service) = served_spot_bot("fish-hop-varrock", 3185, 3436);
+        let banned = crate::skill_gather::BanSet::new();
+        let pinned = super::nearest_bank_at(3185, 3436, 0).expect("a Varrock bank");
+        let found = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned);
+        let (tier, spot_x, spot_z, bank) = found.expect("hop to water from a Varrock bank");
+        assert_eq!(tier.category, "saltfish");
+        // Really at water: the hop leaves the pinned-bank neighbourhood.
+        assert!(
+            (i64::from(spot_x) - pinned.x).abs() + (i64::from(spot_z) - pinned.z).abs() > 12,
+            "hopped away from the bank, got ({spot_x},{spot_z})"
+        );
+        // Sane trek from its own bank, and F2P like every tree hop.
+        assert!(
+            (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs() <= super::BANK_TREK_LIMIT,
+            "trek sane from ({},{}) to ({spot_x},{spot_z})",
+            bank.x,
+            bank.z
+        );
+        assert_eq!(bot.in_f2p_batch(&[(spot_x, spot_z, 0)]).expect("f2p answers"), vec![true], "hop stays F2P");
+    }
+
+    /// Crowded home water still fishes: occupation dodges inside the
+    /// near-bank pool, never the global one — a stranger on the Draynor
+    /// spawns must not push the pick out to pin-killed far water.
+    #[test]
+    fn crowded_home_water_still_picks() {
+        let (mut bot, _service) = served_spot_bot("fish-crowd-draynor", 3092, 3242);
+        bot.world.players.insert(
+            7u16,
+            lifescape_sdk::world::PlayerInfo { x: 3085, z: 3230, level: 0, jump: false, name: None },
+        );
+        let banned = crate::skill_gather::BanSet::new();
+        let pinned = super::nearest_bank_at(3092, 3242, 0).expect("a Draynor bank");
+        let found = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned);
+        let (_, spot_x, spot_z, _) = found.expect("crowded home water still picks");
+        assert!(
+            (spot_x - 3092).abs() + (spot_z - 3242).abs() <= 60,
+            "stays near home water, got ({spot_x},{spot_z})"
+        );
+    }
     /// Mapless worker against a real nav service (repo dumps): no painted
     /// world, only the plan handle — the same shape as a live worker.
     fn served_mining_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
