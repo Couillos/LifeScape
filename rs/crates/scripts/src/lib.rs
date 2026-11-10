@@ -173,7 +173,8 @@ impl Script for DebugWalk {
 pub fn names() -> Vec<&'static str> {
     vec![
         "cook", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
-        "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "market", "tutorial",
+        "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
+        "milk", "telegrab_wine", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -212,6 +213,10 @@ fn runner(name: &str) -> Option<Runner> {
         "alchemy" => Some(|bot, args| activities::alchemy::run_alchemy(bot, args)),
         "superheat" => Some(|bot, args| activities::superheat::run_superheat(bot, args)),
         "enchant_teleport" => Some(|bot, args| activities::enchant_teleport::run_enchant_teleport(bot, args)),
+        "ground_pickup" => Some(|bot, args| activities::ground_pickup::run_ground_pickup(bot, args)),
+        "shear" => Some(|bot, args| activities::shear::run_shear(bot, args)),
+        "milk" => Some(|bot, args| activities::milk::run_milk(bot, args)),
+        "telegrab_wine" => Some(|bot, args| activities::telegrab_wine::run_telegrab_wine(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -280,7 +285,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 55);
+        assert_eq!(names().len(), 59);
     }
 
     #[test]
