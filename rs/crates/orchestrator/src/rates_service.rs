@@ -474,6 +474,26 @@ impl Snapshot {
     pub fn pause_per_6000(&self, method: &str, band: i64) -> f64 {
         self.pauses.get(&(method.to_string(), band)).map(|stat| stat.mean()).unwrap_or(0.0)
     }
+
+    fn bucket_mean(&self, buckets: &BTreeMap<(String, String, i64), BucketStat>, method: &str, name: &str, band: i64) -> Option<f64> {
+        buckets.get(&(method.to_string(), name.to_string(), band)).filter(|stat| stat.count > 0).map(|stat| stat.mean())
+    }
+}
+
+/// Live snapshot clone for the brain (read-only planning input: public
+/// yields only, never another bot's state).
+pub fn live_snapshot() -> Snapshot {
+    global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+}
+
+/// Measured mean yield per 6000 for one (method, item, band) bucket.
+pub fn measured_yield(snapshot: &Snapshot, method: &str, item: &str, band: i64) -> Option<f64> {
+    snapshot.bucket_mean(&snapshot.yields, method, item, band)
+}
+
+/// Measured mean XP per 6000 for one (method, skill, band) bucket.
+pub fn measured_xp(snapshot: &Snapshot, method: &str, skill: &str, band: i64) -> Option<f64> {
+    snapshot.bucket_mean(&snapshot.xp, method, skill, band)
 }
 
 /// Cold-start XP estimate per (method, skill), twin of `prior_for`.

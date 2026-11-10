@@ -7,6 +7,9 @@
 pub mod cook;
 pub mod fishing;
 pub mod market;
+pub mod market_flip;
+pub mod market_deliver;
+pub mod market_shop;
 pub mod melee;
 pub mod mining;
 pub mod woodcut;

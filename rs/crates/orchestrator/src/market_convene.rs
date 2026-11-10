@@ -21,6 +21,7 @@ use lifescape_market::{Deal, DealStatus, FailReason, Fill, Order, Side};
 use lifescape_nav::plan::Tile;
 
 use crate::daemon::Orchestrator;
+use crate::jobs::Job;
 use crate::market_eta::{EtaCache, TickMeter};
 use crate::market_service::MarketService;
 
@@ -915,9 +916,16 @@ impl Orchestrator {
     /// snapshot appear, so offline bots never convene (their orders stay
     /// dormant, matches wait).
     pub fn market_live_positions(&self) -> HashMap<String, (u64, i32, i32, i32)> {
+        // Never hold the jobs map while locking a job: a wedged job
+        // would freeze every jobs.lock() taker (dispatch, ingest,
+        // convene itself). Snapshot the Arcs, release, then read.
+        // Contended inners keep their last position (skip this sweep).
+        let jobs: Vec<Arc<Job>> = self.jobs.lock().unwrap().values().cloned().collect();
         let mut parties = HashMap::new();
-        for job in self.jobs.lock().unwrap().values() {
-            let inner = job.inner.lock().unwrap();
+        for job in &jobs {
+            let Ok(inner) = job.inner.try_lock() else {
+                continue;
+            };
             let Some(live) = inner.live.as_ref() else {
                 continue;
             };

@@ -683,7 +683,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ...");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -723,6 +723,58 @@ pub fn cli(argv: &[String]) -> i32 {
         })
     };
     match command {
+        "create-user" => {
+            let mut iron = false;
+            let mut no_tutorial = false;
+            let mut goal: Option<String> = None;
+            // argv[2] already holds the account (or the first flag when
+            // the pseudo is generated).
+            let explicit = !account.starts_with("--") && !account.is_empty();
+            let mut index = if explicit { 3 } else { 2 };
+            while index < argv.len() {
+                match argv[index].as_str() {
+                    "--iron" => {
+                        iron = true;
+                    }
+                    "--no-tutorial" => {
+                        no_tutorial = true;
+                    }
+                    "--goal" => {
+                        goal = argv.get(index + 1).cloned();
+                        index += 1;
+                    }
+                    other => {
+                        eprintln!("create-user: unknown flag {other:?} (usage: create-user [pseudo] [--iron] [--goal kind] [--no-tutorial])");
+                        return 2;
+                    }
+                }
+                index += 1;
+            }
+            let name = match crate::brain::create_user(if explicit { Some(account) } else { None }, iron, goal) {
+                Ok(name) => name,
+                Err(error) => {
+                    eprintln!("create-user: {error}");
+                    return 1;
+                }
+            };
+            println!("created {name}");
+            if no_tutorial {
+                return 0;
+            }
+            let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&name))]));
+            println!("{}", json::stringify_pretty(&reply));
+            if reply.get("ok").as_bool() != Some(true) {
+                return 1;
+            }
+            let run = send(object(vec![
+                ("cmd", str_value("run")),
+                ("account", str_value(&name)),
+                ("script", str_value("tutorial")),
+                ("args", Value::Arr(Vec::new())),
+            ]));
+            println!("{}", json::stringify_pretty(&run));
+            if run.get("ok").as_bool() == Some(true) { 0 } else { 1 }
+        }
         "open" => {
             let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&account))]));
             println!("{}", json::stringify_pretty(&reply));

@@ -125,14 +125,18 @@ pub struct TaskStart {
     pub pause_ticks: u64,
 }
 
-/// Start carrier for the four contract scripts; anything else runs the
-/// legacy minimal path (no budget hook, no structured diff).
+/// Start carrier for the contract scripts; anything else runs the
+/// legacy minimal path (no budget hook, no structured diff). Cook rides
+/// the cycle parser; market flip carries its budget/node flags by hand
+/// (its CLI is orders, not cycle targets).
 pub fn task_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskStart> {
     let activity: &'static str = match script {
         "fishing" => "fishing",
         "mining" => "mining",
         "woodcut" => "woodcut",
         "melee" => "melee",
+        "cook" => "cook",
+        "market" => return market_start_for(bot, args),
         _ => return None,
     };
     let spec = lifescape_scripts::kit::cycle::parse_cli(activity, args).ok()?;
@@ -140,6 +144,42 @@ pub fn task_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskSt
         script: script.to_string(),
         budget_max: spec.budget_max_ticks,
         node_id: spec.node_id.clone(),
+        holdings: snapshot_holdings(bot),
+        pause_ticks: bot.pause_ticks,
+    })
+}
+
+/// Flip engagements are time-boxed orders; buy/sell/shopbuy legs carry
+/// the same budget/node flags for the session report. Their CLI is
+/// orders, not cycle targets, so the flags are read straight off the
+/// market CLI.
+fn market_start_for(bot: &Bot, args: &[String]) -> Option<TaskStart> {
+    match args.first().map(String::as_str) {
+        Some("flip") | Some("buy") | Some("sell") | Some("shopbuy") => {}
+        _ => return None,
+    }
+    let mut budget_max = 0u64;
+    let mut node_id = String::new();
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--budget-max" => {
+                budget_max = args.get(index + 1).and_then(|raw| raw.parse().ok())?;
+                index += 2;
+            }
+            "--node" => {
+                node_id = args.get(index + 1).cloned()?;
+                index += 2;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+    Some(TaskStart {
+        script: "market".to_string(),
+        budget_max,
+        node_id,
         holdings: snapshot_holdings(bot),
         pause_ticks: bot.pause_ticks,
     })
@@ -495,6 +535,21 @@ mod tests {
         assert_eq!((start.budget_max, start.node_id.as_str()), (6000, "n9"));
         assert!(task_start_for(&bot, "quest_cook", &[]).is_none(), "quests stay on the minimal path");
         assert!(task_start_for(&bot, "woodcut", &["--frobnicate".to_string()]).is_none(), "junk CLI carries nothing");
+        let cook = task_start_for(
+            &bot,
+            "cook",
+            &["--budget-max".to_string(), "6000".to_string(), "--node".to_string(), "n9".to_string()],
+        )
+        .expect("cook carries a start");
+        assert_eq!((cook.budget_max, cook.node_id.as_str()), (6000, "n9"));
+        let flip = task_start_for(
+            &bot,
+            "market",
+            &["flip".to_string(), "--budget-max".to_string(), "9000".to_string(), "--node".to_string(), "n3".to_string()],
+        )
+        .expect("flip carries a start");
+        assert_eq!((flip.budget_max, flip.node_id.as_str()), (9000, "n3"));
+        assert!(task_start_for(&bot, "market", &["deliver".to_string(), "1".to_string(), "2".to_string(), "3=1,1".to_string()]).is_none(), "deliver legs stay minimal");
     }
 
     /// Live snapshot reads the combined inventories (pack, bank, worn all

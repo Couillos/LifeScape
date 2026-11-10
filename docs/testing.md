@@ -1,7 +1,7 @@
 # Tests et debug live
 
 Unitaires : `cargo test --manifest-path rs/Cargo.toml` (tout), ou `-p lifescape-sdk`
-`-p lifescape-gamedata` `-p lifescape-orchestrator` `-p lifescape-scripts`.
+`-p lifescape-gamedata` `-p lifescape-orchestrator` `-p lifescape-scripts -p lifescape-planner`.
 Chaque module gamedata rejoue 2-3 vecteurs connus ; tant qu'un contrôle échoue,
 corriger le dump ou le code puis relancer.
 

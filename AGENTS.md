@@ -26,7 +26,7 @@ restent minces et stateless. Ticks serveur : voir `../lostcity/engine/data/confi
 
 ```sh
 cargo build --manifest-path rs/Cargo.toml
-cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata -p lifescape-orchestrator -p lifescape-scripts
+cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata -p lifescape-orchestrator -p lifescape-scripts -p lifescape-planner
 ./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
 ./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | shutdown
 ./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]

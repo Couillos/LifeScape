@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 pub mod paths;
+pub mod brain;
 pub mod market_convene;
 pub mod market_eta;
 pub mod market_service;

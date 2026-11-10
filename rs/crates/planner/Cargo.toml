@@ -1,0 +1,15 @@
+[package]
+name = "lifescape-planner"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lifescape_planner"
+path = "src/lib.rs"
+
+[dependencies]
+lifescape-json = { path = "../json" }
+lifescape-gamedata = { path = "../gamedata" }
+
+[lints]
+workspace = true

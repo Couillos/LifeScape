@@ -18,6 +18,7 @@ lifescape-nav = { path = "../nav" }
 lifescape-sdk = { path = "../sdk" }
 lifescape-scripts = { path = "../scripts" }
 lifescape-market = { path = "../market" }
+lifescape-planner = { path = "../planner" }
 lifescape-store = { path = "../store" }
 
 [lints]

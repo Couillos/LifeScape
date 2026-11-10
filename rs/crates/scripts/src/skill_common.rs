@@ -408,8 +408,7 @@ pub fn live_bank_booths(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i3
 }
 
 /// Withdraw up to `count` items total, across `ids`, from the bank at
-/// `bank`. Used to pull banked produce back out for selling (the axe
-/// bootstrap sells wood it banked on earlier runs). Returns how many came
+/// `bank`. Used to pull banked produce back out for selling. Returns how many came
 /// out of the bank. Bounded in ticks, loud when the bank will not open.
 pub fn bank_withdraw_items(
     bot: &mut Bot,

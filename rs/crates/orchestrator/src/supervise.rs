@@ -53,8 +53,17 @@ fn supervise_all() {
         std::thread::sleep(Duration::from_millis(500));
         let pairs: Vec<(Arc<Orchestrator>, Arc<Job>)> = {
             let mut guard = registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Never block the loop on a wedged job: a contended inner
+            // lock keeps its entry (it rejoins next pass) instead of
+            // parking the single supervisor behind an unrelated stall.
             guard.retain(|(orch, job)| {
-                orch.running.load(Ordering::SeqCst) && job.inner.lock().unwrap().supervise
+                if !(orch.running.load(Ordering::SeqCst)) {
+                    return false;
+                }
+                match job.inner.try_lock() {
+                    Ok(inner) => inner.supervise,
+                    Err(_) => true,
+                }
             });
             guard.clone()
         };
@@ -64,25 +73,31 @@ fn supervise_all() {
             continue;
         }
         for (orch, job) in &pairs {
+            let pass_start = crate::jobs::now_secs();
             orch.supervise_once(job, &mut written);
+            let after_once = crate::jobs::now_secs();
+            if after_once - pass_start > 10.0 {
+                println!("brain {}: supervise_once took {:.0}s", job.account, after_once - pass_start);
+            }
             let watchdog = watchdogs.entry(job.account.clone()).or_insert_with(Watchdog::new);
             orch.watchdog_tick(job, watchdog);
             // E8 brain trigger: a pushed task report wakes handling on
             // the next pass instead of waiting for a poll. The brain
-            // itself lands in a later lot; the flag guarantees no report
-            // waits longer than one 500 ms pass.
-            if std::mem::replace(&mut job.inner.lock().unwrap().report_pending, false) {
-                // Rendements: one TaskReport in, raw store rows plus the
-                // persisted snapshot buckets out. Loud on failure, never
-                // a silent drop (the staging log keeps the raw report).
-                let report = job.inner.lock().unwrap().last_report.clone();
-                if let Some(report) = report {
-                    if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                        println!("job {}: rates ingest failed: {error}", job.account);
-                    }
+            // folds it into the life graph, then launches the next node.
+            let (_had_report, report) = match job.inner.try_lock() {
+                // A wedged job must not park the single supervisor: skip
+                // this pass, the flag waits for the next one.
+                Ok(mut inner) => {
+                    let pending = std::mem::replace(&mut inner.report_pending, false);
+                    let report = if pending { inner.last_report.clone() } else { None };
+                    (pending, report)
                 }
-                let _ = &written;
-            }
+                Err(_) => {
+                    println!("brain {}: inner busy, pass deferred", job.account);
+                    (false, None)
+                }
+            };
+            crate::brain::on_supervise(orch, job, report);
         }
     }
 }
@@ -105,6 +120,9 @@ impl Orchestrator {
     /// E8 single supervisor entry: registered above, polled by the one
     /// `supervise-all` thread. Telemetry still arrives as worker pushes.
     fn supervise_once(&self, job: &Arc<Job>, written: &mut HashMap<String, (f64, String)>) {
+        // Never park the single supervisor on a wedged job: every lock
+        // below is a try_lock, contention defers to the next 500 ms pass.
+        // A wedged job stalls its own telemetry, never the daemon.
         if self.procs.lock().unwrap().contains_key(&job.account) && !self.proc_alive(&job.account) {
             self.handle_worker_death(job);
             return;
@@ -124,6 +142,8 @@ impl Orchestrator {
                 }
             });
         if let Some(ref session) = session {
+            // apply_session try_locks internally: a wedged job defers to
+            // the next pass instead of parking the supervisor here.
             job.apply_session(session);
         }
         // Telemetry arrives as worker push frames (ingest_push): the worker
@@ -135,7 +155,9 @@ impl Orchestrator {
         // visible change (phase/status/script), not every 2 s per bot.
         // At 300 bots that is ~10 files/s worst case, ~0 idle.
         let (key, due) = {
-            let inner = job.inner.lock().unwrap();
+            let Ok(inner) = job.inner.try_lock() else {
+                return;
+            };
             let key = format!("{}|{}|{:?}", inner.phase, inner.status, inner.script);
             let seen = written.get(&job.account);
             let changed = seen.map(|(_, old)| old != &key).unwrap_or(true);
@@ -152,10 +174,11 @@ impl Orchestrator {
     /// shows none (maze/mime rooms, fail tiles, carried cube). Rescues
     /// replay a stale unresolved event every tick otherwise.
     fn clear_event_if_gone(&self, job: &Arc<Job>) {
-        let state = match job.inner.lock().unwrap().live.clone() {
-            Some(state) => state,
-            // No push yet (daemon just restarted): wait for the next one.
-            None => return,
+        let state = match job.inner.try_lock().map(|inner| inner.live.clone()) {
+            Ok(Some(state)) => state,
+            // No push yet (daemon just restarted) or wedged job: wait
+            // for the next pass instead of parking the supervisor.
+            _ => return,
         };
         if state.as_obj().is_none() {
             return;
@@ -185,7 +208,9 @@ impl Orchestrator {
         if present {
             return;
         }
-        let mut inner = job.inner.lock().unwrap();
+        let Ok(mut inner) = job.inner.try_lock() else {
+            return;
+        };
         if let Some(Value::Obj(mut obj)) = inner.last_event.take() {
             if obj.get("resolved").and_then(|v| v.as_bool()) != Some(true) {
                 obj.insert("resolved".to_string(), Value::Bool(true));
@@ -197,7 +222,9 @@ impl Orchestrator {
     /// Finished is transient: unload it back to idle.
     fn auto_idle_finished(&self, job: &Arc<Job>) {
         {
-            let inner = job.inner.lock().unwrap();
+            let Ok(inner) = job.inner.try_lock() else {
+                return;
+            };
             if inner.phase != "idle" || inner.status != "finished" {
                 return;
             }
@@ -210,9 +237,10 @@ impl Orchestrator {
         if let Ok(reply) = reply {
             if reply.get("ok").as_bool() == Some(true) {
                 job.apply_session(reply.get("session"));
-                let mut inner = job.inner.lock().unwrap();
-                if inner.status == "finished" {
-                    inner.status = "idle".to_string();
+                if let Ok(mut inner) = job.inner.try_lock() {
+                    if inner.status == "finished" {
+                        inner.status = "idle".to_string();
+                    }
                 }
             }
         }
@@ -220,7 +248,9 @@ impl Orchestrator {
 
     fn handle_worker_death(&self, job: &Arc<Job>) {
         self.procs.lock().unwrap().remove(&job.account);
-        let mut inner = job.inner.lock().unwrap();
+        let Ok(mut inner) = job.inner.try_lock() else {
+            return;
+        };
         inner.supervise = false;
         inner.phase = "idle".to_string();
         inner.script = None;

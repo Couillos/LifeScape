@@ -99,7 +99,9 @@ impl Job {
         if session.as_obj().is_none() {
             return;
         }
-        let mut inner = self.inner.lock().unwrap();
+        let Ok(mut inner) = self.inner.try_lock() else {
+            return;
+        };
         if !session.get("phase").is_null() {
             if let Some(phase) = session.get("phase").as_str() {
                 inner.phase = phase.to_string();
@@ -127,29 +129,69 @@ impl Job {
     }
 
     /// Merged daemon + bot view, written to run/users/<account>.json.
-    /// Same keys as the heartbeat state.
+    /// Same keys as the heartbeat state. try_lock: a wedged job reports
+    /// a contended stub instead of parking the dashboard, the supervisor
+    /// or a market sweep on it.
     pub fn describe(&self) -> Value {
         let (_merged, partial, log_path) = paths::user_paths(&self.account);
         // Pushed snapshots first (tens of ms fresh); the heartbeat file is
         // only the last-breath fallback before the first push arrives.
-        let live = self.inner.lock().unwrap().live.clone();
+        let (live, inner) = match self.inner.try_lock() {
+            Ok(guard) => {
+                let live = guard.live.clone();
+                let copied = (
+                    guard.phase.clone(),
+                    guard.script.clone(),
+                    guard.script_args.clone(),
+                    guard.status.clone(),
+                    guard.paused,
+                    guard.held,
+                    guard.session_pid,
+                    guard.started,
+                    guard.last_error.clone(),
+                    guard.last_event.clone(),
+                    guard.last_code.clone(),
+                    guard.requirements.clone(),
+                );
+                (live, copied)
+            }
+            _ => {
+                return object(vec![
+                    ("account", str_value(&self.account)),
+                    ("status", str_value("contended")),
+                ]);
+            }
+        };
+        let (
+            phase,
+            script,
+            script_args,
+            status,
+            paused,
+            held,
+            session_pid,
+            started,
+            last_error,
+            last_event,
+            last_code,
+            requirements,
+        ) = inner;
         let bot = live.unwrap_or_else(|| paths::read_json(&partial).unwrap_or(Value::Null));
-        let inner = self.inner.lock().unwrap();
         let mut intention = bot.get("intention").as_str().unwrap_or("").to_string();
-        if inner.phase == "running"
+        if phase == "running"
             && matches!(
-                inner.script.as_deref(),
+                script.as_deref(),
                 Some("rescue_maze" | "rescue_down" | "rescue_fallback")
             )
         {
-            intention = format!("rescue {}", inner.script.clone().unwrap_or_default());
+            intention = format!("rescue {}", script.clone().unwrap_or_default());
         }
-        let script = match &inner.script {
+        let script = match &script {
             Some(name) => Value::Str(name.clone()),
             None => Value::Null,
         };
-        let args = Value::Arr(inner.script_args.clone());
-        let pid = match inner.session_pid {
+        let args = Value::Arr(script_args.clone());
+        let pid = match session_pid {
             Some(pid) => Value::Int(pid as i64),
             None => Value::Null,
         };
@@ -158,12 +200,12 @@ impl Job {
             ("script", script.clone()),
             ("script_args", args.clone()),
             ("args", args),
-            ("phase", str_value(&inner.phase)),
-            ("paused", Value::Bool(inner.paused)),
-            ("held", Value::Bool(inner.held)),
-            ("status", str_value(&inner.status)),
+            ("phase", str_value(&phase)),
+            ("paused", Value::Bool(paused)),
+            ("held", Value::Bool(held)),
+            ("status", str_value(&status)),
             ("session_pid", pid),
-            ("started", Value::Float(inner.started)),
+            ("started", Value::Float(started)),
             ("intention", str_value(&intention)),
             ("position", bot.get("position").clone()),
             ("zone", bot.get("zone").clone()),
@@ -193,13 +235,13 @@ impl Job {
             ("message_ticks", arr_or_empty(bot.get("message_ticks"))),
             ("texts", obj_or_empty(bot.get("texts"))),
             ("log", str_value(&log_path.to_string_lossy())),
-            ("last_event", inner.last_event.clone().unwrap_or(Value::Null)),
+            ("last_event", last_event.unwrap_or(Value::Null)),
             (
                 "requirements",
-                inner.requirements.clone().unwrap_or(Value::Null),
+                requirements.unwrap_or(Value::Null),
             ),
-            ("last_error", inner.last_error.clone().unwrap_or(Value::Null)),
-            ("last_code", inner.last_code.clone().unwrap_or(Value::Null)),
+            ("last_error", last_error.unwrap_or(Value::Null)),
+            ("last_code", last_code.unwrap_or(Value::Null)),
         ])
     }
 }

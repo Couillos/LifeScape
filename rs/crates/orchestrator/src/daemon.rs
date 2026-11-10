@@ -110,6 +110,33 @@ pub struct Orchestrator {
     pub running: AtomicBool,
 }
 
+/// Bounded unix connect: the blocking `connect` runs on a helper
+/// thread and the caller waits at most `timeout`. A wedged listener
+/// (backlog full, nobody accepting) can no longer park the caller
+/// forever; the helper thread is reaped when the worker dies (the
+/// caller kills it on timeout, which unblocks the connect).
+fn connect_worker(
+    sock_path: &std::path::Path,
+    timeout: Duration,
+) -> Result<UnixStream, String> {
+    let path = sock_path.to_path_buf();
+    let (sender, receiver) = std::sync::mpsc::channel::<Result<UnixStream, String>>();
+    if std::thread::Builder::new()
+        .name("worker-connect".to_string())
+        .spawn(move || {
+            let _ = sender.send(
+                UnixStream::connect(&path).map_err(|error| format!("session unreachable: {error}")),
+            );
+        })
+        .is_err()
+    {
+        return Err("connect spawn failed".to_string());
+    }
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| "connect timed out (wedged session)".to_string())?
+}
+
 impl Orchestrator {
     pub fn new() -> Self {
         paths::ensure_dirs();
@@ -142,7 +169,9 @@ impl Orchestrator {
     /// wedges park the job loudly instead of respawning forever.
     pub(crate) fn watchdog_tick(&self, job: &Arc<Job>, state: &mut Watchdog) {
         let (phase, script, args, status, paused, held, updated) = {
-            let inner = job.inner.lock().unwrap();
+            let Ok(inner) = job.inner.try_lock() else {
+                return;
+            };
             let updated = inner.live.as_ref().and_then(|frame| frame.get("updated").as_f64());
             (
                 inner.phase.clone(),
@@ -173,12 +202,14 @@ impl Orchestrator {
         }
         state.restarts.retain(|seen| now - seen < WATCHDOG_WINDOW_SECS);
         if state.restarts.len() >= WATCHDOG_MAX_RESTARTS {
-            job.inner.lock().unwrap().last_error = Some(object(vec![
-                ("where", str_value("watchdog")),
-                ("type", str_value("watchdog")),
-                ("message", str_value("session wedged repeatedly, parked for operator")),
-                ("at", Value::Arr(vec![])),
-            ]));
+            if let Ok(mut inner) = job.inner.try_lock() {
+                inner.last_error = Some(object(vec![
+                    ("where", str_value("watchdog")),
+                    ("type", str_value("watchdog")),
+                    ("message", str_value("session wedged repeatedly, parked for operator")),
+                    ("at", Value::Arr(vec![])),
+                ]));
+            }
             return;
         }
         state.restarts.push(now);
@@ -380,7 +411,7 @@ impl Orchestrator {
         object(vec![("ok", Value::Bool(true)), ("job", job.describe())])
     }
 
-    fn run_job(&self, account: &str, script: &str, args: &[Value]) -> Value {
+    pub(crate) fn run_job(&self, account: &str, script: &str, args: &[Value]) -> Value {
         let job = match self.jobs.lock().unwrap().get(account).cloned() {
             Some(job) => job,
             None => {
@@ -558,7 +589,9 @@ impl Orchestrator {
                 ]);
             }
         };
-        job.inner.lock().unwrap().supervise = false;
+        if let Ok(mut inner) = job.inner.try_lock() {
+            inner.supervise = false;
+        }
         let mut session = Value::Null;
         // Best-effort graceful logout only: a wedged worker cannot ack (it
         // reads commands at safe-points), and kill_process below always
@@ -605,11 +638,22 @@ impl Orchestrator {
     }
 
 
-    /// One JSON round-trip to the session worker.
+    /// One JSON round-trip to the session worker. The connect itself
+    /// is bounded (helper thread + timeout, reaped on worker death):
+    /// a socket nobody accepts never parks the supervisor, the brain,
+    /// or a CLI command. A timed-out connect kills the worker on the
+    /// spot — it cannot serve anyone — and clean recovery follows.
     pub(crate) fn send_worker(&self, account: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
         let (sock_path, _ready) = paths::session_paths(account);
-        let stream = UnixStream::connect(&sock_path)
-            .map_err(|_| format!("session unreachable for {account}"))?;
+        let stream = match connect_worker(&sock_path, timeout) {
+            Ok(stream) => stream,
+            Err(_) => {
+                println!("daemon: connect to {account} wedged, killing the worker");
+                self.kill_process(account);
+                let _ = std::fs::remove_file(&sock_path);
+                return Err(format!("session unreachable for {account}"));
+            }
+        };
         stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
         stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
         let mut buf = json::stringify(request);
@@ -656,17 +700,20 @@ impl Orchestrator {
         };
         match frame.get("type").as_str().unwrap_or("") {
             "snapshot" => {
-                job.inner.lock().unwrap().live = Some(frame.get("snapshot").clone());
+                if let Ok(mut inner) = job.inner.try_lock() {
+                    inner.live = Some(frame.get("snapshot").clone());
+                }
                 object(vec![("ok", Value::Bool(true))])
             }
             "snapshot_light" => {
                 // E4 two-flow: merge the light keys into the last full
                 // state (or hold the light alone before the first full).
                 crate::res_stats::record_light();
-                let mut inner = job.inner.lock().unwrap();
-                match inner.live.as_mut() {
-                    Some(cached) => crate::heartbeat_flows::merge_light(cached, frame),
-                    None => inner.live = Some(frame.clone()),
+                if let Ok(mut inner) = job.inner.try_lock() {
+                    match inner.live.as_mut() {
+                        Some(cached) => crate::heartbeat_flows::merge_light(cached, frame),
+                        None => inner.live = Some(frame.clone()),
+                    }
                 }
                 object(vec![("ok", Value::Bool(true))])
             }
@@ -678,7 +725,9 @@ impl Orchestrator {
                 let args = frame.get("args").as_arr().cloned().unwrap_or_default();
                 println!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push)");
                 {
-                    let mut inner = job.inner.lock().unwrap();
+                    let Ok(mut inner) = job.inner.try_lock() else {
+                        return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
+                    };
                     if kind == "script_error" {
                         inner.last_error = Some(object(vec![
                             ("where", str_value(frame.get("script").as_str().unwrap_or(""))),
@@ -710,7 +759,9 @@ impl Orchestrator {
                 if let Err(error) = crate::store_queue::stage_report(&report) {
                     println!("job {account}: staging failed: {error}");
                 }
-                let mut inner = job.inner.lock().unwrap();
+                let Ok(mut inner) = job.inner.try_lock() else {
+                    return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
+                };
                 inner.last_report = Some(report);
                 inner.report_pending = true;
                 self.write_state(&job);

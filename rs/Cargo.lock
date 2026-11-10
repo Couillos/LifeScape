@@ -101,9 +101,18 @@ dependencies = [
  "lifescape-json",
  "lifescape-market",
  "lifescape-nav",
+ "lifescape-planner",
  "lifescape-scripts",
  "lifescape-sdk",
  "lifescape-store",
+]
+
+[[package]]
+name = "lifescape-planner"
+version = "0.1.0"
+dependencies = [
+ "lifescape-gamedata",
+ "lifescape-json",
 ]
 
 [[package]]

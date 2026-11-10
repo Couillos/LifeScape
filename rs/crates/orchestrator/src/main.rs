@@ -26,6 +26,7 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
             object(vec![("ok", Value::Bool(false)), ("error", str_value(&error.to_string()))])
         })
     };
+    let start = std::time::Instant::now();
     let reply = if request.as_obj().is_some() && request.get("ok").is_null() {
         match request.get("type").as_str() {
             // Worker push frames (snapshots/events): no CLI round-trip.
@@ -36,6 +37,9 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
         // A parse error already carries ok:false; never dispatch it.
         request
     };
+    if start.elapsed() > std::time::Duration::from_secs(2) {
+        println!("daemon: slow dispatch {:?}s", start.elapsed());
+    }
     let mut buf = json::stringify(&reply);
     buf.push('\n');
     let _ = (&stream).write_all(buf.as_bytes());
