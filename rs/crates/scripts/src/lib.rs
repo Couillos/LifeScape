@@ -175,7 +175,7 @@ pub fn names() -> Vec<&'static str> {
         "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
         "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
         "milk", "telegrab_wine", "runecraft", "smelt", "smith", "picking", "fill_water",
-        "mill_grain", "essence_run", "market", "tutorial",
+        "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -227,6 +227,10 @@ fn runner(name: &str) -> Option<Runner> {
         "fill_water" => Some(|bot, args| activities::fill_water::run_fill_water(bot, args)),
         "mill_grain" => Some(|bot, args| activities::mill_grain::run_mill_grain(bot, args)),
         "essence_run" => Some(|bot, args| activities::essence_run::run_essence_run(bot, args)),
+        "spin" => Some(|bot, args| activities::spin::run_spin(bot, args)),
+        "pottery" => Some(|bot, args| activities::pottery::run_pottery(bot, args)),
+        "smelt_jewelry" => Some(|bot, args| activities::smelt_jewelry::run_smelt_jewelry(bot, args)),
+        "dye" => Some(|bot, args| activities::dye::run_dye(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -295,7 +299,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 68);
+        assert_eq!(names().len(), 72);
     }
 
     #[test]
