@@ -1,9 +1,9 @@
 //! Web view over the orchestrator: dashboard and HTTP/WS API.
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
-//! /market /market.js /rates /rates.js /life /life.js /economy /economy.js
+//! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /economy /economy.js
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
-//! /api/map /api/status /api/state/<account> /api/items/history
+//! /api/map /api/status /api/state/<account> /api/items /api/items/history
 //! /api/rates/table /api/lives /api/life/<account> /api/economy
 //! /api/market/<op>?… /api/scripts /api/accounts /api/logs/<account> +
 //! POST /api/open|run|unload|pause|resume|close + /ws pushing every 1 s.
@@ -202,6 +202,22 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
                 body: asset("market.js").map_err(|error| error.to_string())?,
             });
         }
+        if parts == ["chart.js"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "application/javascript",
+                cache: "no-store",
+                body: asset("chart.js").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["table.js"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "application/javascript",
+                cache: "no-store",
+                body: asset("table.js").map_err(|error| error.to_string())?,
+            });
+        }
         if parts == ["rates"] {
             return Ok(Response {
                 status: 200,
@@ -267,9 +283,10 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
             return Ok(crate::web_market::market_api(parts[2], query, dispatch));
         }
         if parts == ["api", "items", "history"] {
-            let reply = dispatch(object(vec![("cmd", str_value("items"))]));
-            let data = reply.get("data").clone();
-            return Ok(ok_json(if data.is_null() { reply } else { data }));
+            return Ok(crate::web_items::items_history_api(query, &crate::paths::run_dir()));
+        }
+        if parts == ["api", "items"] {
+            return Ok(crate::web_items::items_list_api(dispatch));
         }
         if parts == ["api", "scripts"] {
             return Ok(ok_json(dispatch(object(vec![("cmd", str_value("scripts"))]))));

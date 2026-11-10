@@ -19,6 +19,7 @@ pub mod minimap;
 pub mod plan_service;
 pub mod png;
 pub mod web;
+pub mod web_items;
 pub mod web_ws;
 pub mod web_lives;
 pub mod web_market;

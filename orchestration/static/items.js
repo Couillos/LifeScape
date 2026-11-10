@@ -1,28 +1,57 @@
+// Item holdings front: live item list plus the 24h / 6-month curve
+// (§6.5, D42, D48) drawn by the shared chart.js (D49). Read-only
+// dashboard page: bots never read it.
 const PAGE_SIZE = 25;
-let data = null;
+let list = null;
 let selected = null;
 let pageIndex = 0;
 let query = "";
+let res = "1h";
+let curve = null;
 
-async function load() {
+async function getJson(url) {
+  const response = await fetch(url);
+  return response.json();
+}
+
+async function loadList() {
   try {
-    const response = await fetch('/api/items/history');
-    const payload = await response.json();
-    data = payload.data ?? payload;
-  } catch (e) { return; }
-  renderList();
+    const payload = await getJson('/api/items');
+    if (payload.items) list = payload;
+  } catch (e) { /* daemon down: keep the last list */ }
+  if (list) {
+    if (selected !== null && !list.items.some(item => item.id === selected)) selected = null;
+    renderList();
+  }
+}
+
+async function loadCurve() {
+  const key = selected === null ? '' : '&item=' + encodeURIComponent(selected);
+  try {
+    const payload = await getJson('/api/items/history?res=' + res + key);
+    if (payload.ok) curve = payload;
+  } catch (e) { /* daemon down: keep the last curve */ }
   draw();
 }
 
 function filtered() {
+  if (!list) return [];
   const needle = query.trim().toLowerCase();
-  if (!needle) return data.items;
-  return data.items.filter(item => item.name.toLowerCase().includes(needle));
+  if (!needle) return list.items;
+  return list.items.filter(item => item.name.toLowerCase().includes(needle));
 }
 
-function series() {
-  if (!selected) return data.total;
-  return data.items.find(item => item.id === selected)?.series ?? [];
+function title() {
+  if (selected === null) return 'Total items';
+  const found = (list.items || []).find(item => item.id === selected);
+  return found ? found.name : ('obj ' + selected);
+}
+
+function liveCount() {
+  if (!list) return 0;
+  if (selected === null) return list.liveTotal || 0;
+  const found = list.items.find(item => item.id === selected);
+  return found ? found.count : 0;
 }
 
 function renderList() {
@@ -33,8 +62,8 @@ function renderList() {
   const slice = matches.slice(start, start + PAGE_SIZE);
 
   const rows = [];
-  if (selected === null) rows.push(`<li class="cur" onclick="pick(null)">Total <span class="qty">(${data.liveTotal})</span></li>`);
-  else rows.push(`<li onclick="pick(null)">Total <span class="qty">(${data.liveTotal})</span></li>`);
+  if (selected === null) rows.push(`<li class="cur" onclick="pick(null)">Total <span class="qty">(${(list.liveTotal || 0)})</span></li>`);
+  else rows.push(`<li onclick="pick(null)">Total <span class="qty">(${(list.liveTotal || 0)})</span></li>`);
   for (const item of slice) {
     rows.push(`<li class="${selected === item.id ? 'cur' : ''}" data-id="${item.id}" onclick="pick(${item.id})">${item.name} <span class="qty">(${item.count})</span></li>`);
   }
@@ -51,108 +80,52 @@ function onSearch() {
   query = document.getElementById('search').value;
   pageIndex = 0;
   renderList();
-  const match = data.items.find(item => item.name.toLowerCase() === query.trim().toLowerCase());
+  const match = (list.items || []).find(item => item.name.toLowerCase() === query.trim().toLowerCase());
   if (match) pick(match.id);
 }
 
 function pick(id) {
   selected = id;
   renderList();
-  draw();
+  loadCurve();
+}
+
+function setRes(next) {
+  res = next;
+  document.getElementById('res1h').className = res === '1h' ? 'cur' : '';
+  document.getElementById('res1d').className = res === '1d' ? 'cur' : '';
+  loadCurve();
 }
 
 function draw() {
   const canvas = document.getElementById('chart');
-  const ctx = canvas.getContext('2d');
-  // Back the canvas at device resolution so the chart stays crisp.
-  const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(320, canvas.clientWidth);
-  const height = Math.round(width * 340 / 720);
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(height * ratio);
-  canvas.style.height = height + 'px';
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.fillStyle = '#111';
-  ctx.fillRect(0, 0, width, height);
-
-  const values = series();
-  document.getElementById('title').textContent = selected === null
-    ? 'Total items'
-    : (data.items.find(item => item.id === selected)?.name ?? ('obj ' + selected));
-  const live = selected === null
-    ? data.liveTotal
-    : (data.items.find(item => item.id === selected)?.count ?? 0);
-
-  if (!values.length) {
-    ctx.fillStyle = '#888';
-    ctx.font = '14px monospace';
-    ctx.fillText('No point yet (one every ' + data.intervalMinutes + ' min).', 20, height / 2);
-    return;
-  }
-
-  const points = values.map((value, index) => ({ value, time: data.samples[index] ?? null, live: false }));
-  points.push({ value: live, time: Date.now(), live: true });
-
-  let min = Infinity, max = -Infinity;
-  for (const point of points) { min = Math.min(min, point.value); max = Math.max(max, point.value); }
-  if (min === max) { min -= 1; max += 1; }
-  const pad = 40;
-  const chartW = width - pad * 2, chartH = height - pad * 2;
-  const yOf = value => pad + chartH - ((value - min) / (max - min)) * chartH;
-  const slot = points.length > 1 ? chartW / (points.length - 1) : 0;
-
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1;
-  ctx.font = '10px monospace';
-  for (let step = 0; step <= 4; step++) {
-    const y = pad + (chartH * step) / 4;
-    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(width - pad, y); ctx.stroke();
-    ctx.fillStyle = '#888';
-    ctx.fillText(String(Math.round(max - ((max - min) * step) / 4)), 4, y + 3);
-  }
-
-  ctx.strokeStyle = '#4caf50';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    const x = pad + slot * index, y = yOf(point.value);
-    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  document.getElementById('title').textContent = title();
+  const live = liveCount();
+  const width = res === '1h' ? 3600 : 86400;
+  const count = res === '1h' ? 24 : 183;
+  const now = Math.floor(Date.now() / 1000);
+  const from = Math.floor(now / width) * width - (count - 1) * width;
+  const slots = LifeChart.slotStarts(from, width, count);
+  // Fixed slots (§6.1): sparse measures align, empty slots stay gaps.
+  const aligned = LifeChart.fillSlots(slots, ((curve && curve.res === res) ? curve.points : []) || []);
+  const rows = aligned.map(row => row ? row.v : null);
+  LifeChart.draw(canvas, {
+    slots, width, kind: 'line', rows,
+    leftTitle: 'Nombre d’objets',
+    legend: [{ swatch: 'line', color: '#4caf50', label: title() + ' — en direct : ' + live }],
+    live: true,
+    emptyText: 'No point yet (the sampler records hourly).',
   });
-  ctx.stroke();
-  ctx.lineWidth = 1;
-
-  points.forEach((point, index) => {
-    const x = pad + slot * index, y = yOf(point.value);
-    ctx.fillStyle = point.live ? '#fff' : '#4caf50';
-    ctx.beginPath();
-    ctx.arc(x, y, point.live ? 4 : 2.5, 0, Math.PI * 2);
-    ctx.fill();
-    if (point.live) {
-      ctx.fillStyle = '#888';
-      ctx.font = '10px monospace';
-      ctx.fillText(String(point.value), x + 6, y + 3);
-    }
-  });
-
-  const step = Math.max(1, Math.ceil(points.length / 8));
-  ctx.fillStyle = '#888';
-  ctx.font = '10px monospace';
-  for (let index = 0; index < points.length; index += step) {
-    const x = pad + slot * index, point = points[index];
-    let label = 'live';
-    if (!point.live && point.time) {
-      const date = new Date(point.time * 1000);
-      label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    }
-    ctx.fillText(label, x - 14, height - pad + 14);
-  }
+  document.getElementById('legend').textContent =
+    res === '1h' ? 'one point per hour, last 24h' : 'last measure of each day, last 6 months';
 }
 
 let resizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (data) draw(); }, 150);
+  resizeTimer = setTimeout(() => { if (curve || list) draw(); }, 150);
 });
 
-load();
-setInterval(load, 60000);
+loadList().then(loadCurve);
+setInterval(loadList, 60000);
+setInterval(loadCurve, 60000);

@@ -1,8 +1,27 @@
-// Life front: one bot's goal, task graph, engagement and history.
-// Read-only dashboard page: bots never read it.
+// Lives front: full-width table, one account per row (§6.4, D47),
+// detail below. Sorting rides the shared table.js (D46). Read-only
+// dashboard page: bots never read it.
 let lives = [];
 let selected = null;
 let query = "";
+
+// Column order matches LIVES_COLUMNS; TableSort keeps the sort state
+// across refreshes, missing values last in both directions.
+const COLS = [
+  { key: "account", label: "Compte", kind: "str" },
+  { key: "goal", label: "But", kind: "str" },
+  { key: "profile", label: "Profil", kind: "str" },
+  { key: "active_task", label: "Tâche active", kind: "str" },
+  { key: "chain", label: "Chaîne en cours", kind: "str" },
+  { key: "engagement", label: "Engagement", kind: "str" },
+  { key: "active", label: "Actives", kind: "num" },
+  { key: "ready", label: "Prêtes", kind: "num" },
+  { key: "pending", label: "En attente", kind: "num" },
+  { key: "blocked", label: "Bloquées", kind: "num" },
+  { key: "failed", label: "Échouées", kind: "num" },
+  { key: "done", label: "Faites", kind: "num" },
+  { key: "updated", label: "Dernier changement", kind: "num", fmt: (v) => dateText(v) },
+];
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -20,6 +39,103 @@ function goalText(goal) {
   if (kind === 'make_money') return 'make money';
   if (kind === 'get_rich') return 'get rich' + (goal.merchant === true ? ' (merchant)' : goal.merchant === false ? ' (producer)' : '');
   return kind;
+}
+
+function profileText(profile) {
+  if (!profile || typeof profile !== 'object') return '-';
+  const bits = [];
+  if (profile.ironman) bits.push('ironman');
+  if (profile.archetype) bits.push(profile.archetype);
+  return bits.join(' · ') || '-';
+}
+
+function engText(engagement) {
+  if (!engagement || typeof engagement !== 'object' || !engagement.node) return '-';
+  return engagement.node + ': ' + engagement.min_ticks + '–' + engagement.max_ticks + 't';
+}
+
+function dateText(stamp) {
+  if (!stamp) return '-';
+  const date = new Date(stamp * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return pad(date.getDate()) + '/' + pad(date.getMonth() + 1) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+}
+
+function renderIndex() {
+  const rows = filtered().map(displayRow);
+  TableSort.render("index", COLS, rows);
+  // Row click selects the bot for the detail below; the account is the
+  // first cell. Rebound after every render (sort rebuilds the rows).
+  const table = document.getElementById("index");
+  const trs = table.getElementsByTagName("tr");
+  const known = new Set(rows.map((row) => row.account));
+  for (let i = 1; i < trs.length; i++) {
+    const first = trs[i].getElementsByTagName("td")[0];
+    if (!first || !known.has(first.textContent)) continue;
+    const account = first.textContent;
+    if (account === selected) trs[i].className = "cur";
+    trs[i].onclick = ((name) => () => pick(name))(account);
+  }
+  document.getElementById("count").textContent = rows.length + " account(s)";
+}
+
+// Sortable text rides beside the raw values: TableSort sorts the raw
+// cell, fmt only changes the display.
+function displayRow(row) {
+  return {
+    account: row.account,
+    goal: goalText(row.goal),
+    profile: profileText(row.profile),
+    active_task: row.active_task || null,
+    chain: row.chain && row.chain.length ? row.chain.join(" → ") : null,
+    engagement: engText(row.engagement) === "-" ? null : engText(row.engagement),
+    active: row.active,
+    ready: row.ready,
+    pending: row.pending,
+    blocked: row.blocked,
+    failed: row.failed,
+    done: row.done,
+    updated: row.updated || null,
+  };
+}
+
+async function loadLives() {
+  try {
+    const payload = await getJson('/api/lives');
+    if (payload.ok) lives = payload.lives;
+  } catch (e) { /* daemon down: keep the last list */ }
+  const fromHash = (location.hash || '').replace(/^#/, '');
+  if (selected === null) {
+    const known = lives.some(row => row.account === fromHash);
+    selected = known ? fromHash : (lives.length ? lives[0].account : null);
+  }
+  renderIndex();
+}
+
+function filtered() {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return lives;
+  return lives.filter(row => row.account.toLowerCase().includes(needle));
+}
+
+function renderIndex() {
+  const rows = sortRows(filtered());
+  const arrow = key => key === sortKey ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+  const head = '<thead><tr>' + COLS.map(col =>
+    '<th class="' + (col[2] ? 'num' : 'left') + '" onclick="onSort(\'' + col[0] + '\')">' +
+    col[1] + arrow(col[0]) + '</th>').join('') + '</tr></thead>';
+  const body = rows.map(row =>
+    '<tr class="' + (selected === row.account ? 'cur' : '') + '" onclick="pick(\'' + row.account + '\')">' +
+    COLS.map(col => '<td class="' + (col[2] ? 'num' : 'left') + '">' + cellText(row, col[0]) + '</td>').join('') +
+    '</tr>').join('');
+  document.getElementById('index').innerHTML = head +
+    '<tbody>' + (body || '<tr><td class="left muted" colspan="13">no life file</td></tr>') + '</tbody>';
+  document.getElementById('count').textContent = rows.length + ' account(s)';
+}
+
+function onSearch() {
+  query = document.getElementById('search').value;
+  renderIndex();
 }
 
 function kindText(node) {
@@ -40,48 +156,10 @@ function statusChip(status) {
   return '<span class="chip st-' + safe + '">' + safe + '</span>';
 }
 
-async function loadLives() {
-  try {
-    const payload = await getJson('/api/lives');
-    if (payload.ok) lives = payload.lives;
-  } catch (e) { /* daemon down: keep the last list */ }
-  const fromHash = (location.hash || '').replace(/^#/, '');
-  if (selected === null) {
-    const known = lives.some(row => row.account === fromHash);
-    selected = known ? fromHash : (lives.length ? lives[0].account : null);
-  }
-  renderList();
-}
-
-function filtered() {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return lives;
-  return lives.filter(row => row.account.toLowerCase().includes(needle));
-}
-
-function nodeSummary(row) {
-  const counts = row.nodes || {};
-  const order = ['active', 'ready', 'pending', 'blocked', 'failed', 'done', 'abandoned'];
-  return order.filter(key => counts[key]).map(key => key + ':' + counts[key]).join(' ');
-}
-
-function renderList() {
-  const rows = filtered().map(row =>
-    '<li class="' + (selected === row.account ? 'cur' : '') + '" data-id="' + row.account + '"' +
-    ' onclick="pick(\'' + row.account + '\')">' + row.account +
-    ' <span class="muted">' + goalText(row.goal) + ' · ' + nodeSummary(row) + '</span></li>');
-  document.getElementById('bots').innerHTML = rows.join('') || '<li class="muted">no life file</li>';
-}
-
-function onSearch() {
-  query = document.getElementById('search').value;
-  renderList();
-}
-
 function pick(account) {
   selected = account;
   try { history.replaceState(null, '', '#' + account); } catch (e) { /* file:// */ }
-  renderList();
+  renderIndex();
   loadDetail();
 }
 

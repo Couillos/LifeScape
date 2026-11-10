@@ -24,6 +24,9 @@
   #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
   #pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 4px; }
   #pager button { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; }
+  #resbar { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+  #resbar button { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 10px; cursor: pointer; }
+  #resbar button.cur { color: #ff0; border-color: #ff0; }
   #detail { flex: 2 1 520px; min-width: 340px; }
   canvas { background: #111; border: 1px solid #444; width: 100%; height: auto; display: block; }
   .muted { color: #888; }
@@ -50,9 +53,15 @@
   </div>
   <div id="detail">
     <h2 id="title">Total items</h2>
+    <div id="resbar">
+      <button id="res1h" class="cur" onclick="setRes('1h')">24h</button>
+      <button id="res1d" onclick="setRes('1d')">6 mois</button>
+      <span id="legend" class="muted"></span>
+    </div>
     <canvas id="chart" width="720" height="340"></canvas>
   </div>
 </div>
+<script src="/chart.js"></script>
 <script src="/items.js"></script>
 </body>
 </html>

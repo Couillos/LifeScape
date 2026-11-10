@@ -441,9 +441,6 @@ fn read_sqlite_history(path: &Path) -> Result<History, String> {
     }
     let mut history = History { samples: ordered };
     history.samples.sort_by_key(|(taken_at, _)| *taken_at);
-    if history.samples.len() > MAX_POINTS {
-        history.samples.drain(..history.samples.len() - MAX_POINTS);
-    }
     Ok(history)
 }
 
@@ -832,15 +829,20 @@ mod tests {
             r#"{"samples": [{"time": 1000, "items": {"995": 7, "1521": 2}}, {"time": 1900, "items": {"995": 5}}, {"time": 90000, "items": {"995": 9}}]}"#,
         )
         .unwrap();
-        let live = vec![described("t01", jobs::now_secs(), vec![(995, 1)], vec![])];
-        assert!(maybe_sample_in(&live, &items, &save_arg, 1_762_675_200), "import plus fresh sample");
+        // Import alone: hourly keeps the last write of each hour.
+        ensure_imported(&items);
         assert!(!history_path(&items).exists(), "JSON set aside after import");
         assert!(imported_path(&items).exists());
         let store = lifescape_store::Store::open(&store_path(&items)).unwrap();
-        // 1000 and 1900 share an hour: last write wins; 90000 lands alone.
-        assert_eq!(store.hourly_points(Some(995)).unwrap(), vec![(0, 5), (86400, 9), (1_762_675_200, 1)]);
-        assert_eq!(store.daily_points(Some(995)).unwrap(), vec![(0, 5), (86400, 9), ((1_762_675_200 / 86400) * 86400, 1)]);
+        // 1000 and 1900 share an hour: last write wins; 90000 (next day, 01:00) lands alone.
+        assert_eq!(store.hourly_points(Some(995)).unwrap(), vec![(0, 5), (90000, 9)]);
+        assert_eq!(store.daily_points(Some(995)).unwrap(), vec![(0, 5), (86400, 9)]);
         assert_eq!(store.hourly_points(Some(1521)).unwrap(), vec![(0, 2)]);
+        // A fresh sample records on top and prunes past retention.
+        let live = vec![described("t01", jobs::now_secs(), vec![(995, 1)], vec![])];
+        assert!(maybe_sample_in(&live, &items, &save_arg, 1_762_675_200));
+        assert_eq!(store.hourly_points(Some(995)).unwrap(), vec![(1_762_675_200, 1)]);
+        assert_eq!(store.daily_points(Some(995)).unwrap(), vec![((1_762_675_200 / 86400) * 86400, 1)]);
         // Second run sees the store filled: no reimport, no rename failure.
         assert!(!maybe_sample_in(&live, &items, &save_arg, 1_762_675_200), "same hour: quiet");
         assert!(imported_path(&items).exists());

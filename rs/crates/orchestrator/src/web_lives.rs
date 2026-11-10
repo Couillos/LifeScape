@@ -33,45 +33,113 @@ pub fn life_response_in(run_dir: &std::path::Path, account: &str) -> Value {
     }
 }
 
-/// Every account with a life file: goal plus node counts by status.
+/// Every account with a life file: one flat row per account (PRD 2,
+/// §6.4, D47). Column order follows `LIVES_COLUMNS`; counts cover the
+/// six frozen statuses (an `abandoned` node is a replaced method, not a
+/// finished one, so it counts nowhere).
 pub fn lives_response() -> Value {
     lives_response_in(&crate::paths::run_dir())
+}
+
+fn life_updated(life: &Value, file_modified: i64) -> i64 {
+    let mut updated = file_modified;
+    for entry in life.get("history").as_arr().cloned().unwrap_or_default() {
+        if let Some(ended) = entry.get("ended").as_i64() {
+            updated = updated.max(ended);
+        }
+    }
+    updated
+}
+
+/// Active production chain, oldest link first. The brain (P2.5) will
+/// write an explicit `chain` array; until then the dependency path of
+/// the active node stands in (each link's method, active last).
+fn life_chain(life: &Value) -> Vec<String> {
+    if let Some(explicit) = life.get("chain").as_arr() {
+        let links: Vec<String> =
+            explicit.iter().filter_map(|link| link.as_str().map(str::to_string)).collect();
+        if !links.is_empty() {
+            return links;
+        }
+    }
+    let nodes = life.get("nodes").as_arr().cloned().unwrap_or_default();
+    let by_id: std::collections::HashMap<String, &Value> = nodes
+        .iter()
+        .filter_map(|node| node.get("id").as_str().map(|id| (id.to_string(), node)))
+        .collect();
+    let Some(mut current) = life.get("active").as_str().map(str::to_string) else {
+        return Vec::new();
+    };
+    let mut chain = Vec::new();
+    for _ in 0..nodes.len().saturating_add(1) {
+        let Some(node) = by_id.get(&current) else { break };
+        if let Some(method) = node.get("method").as_str() {
+            if !method.is_empty() && chain.last().is_none_or(|last: &String| last != method) {
+                chain.push(method.to_string());
+            }
+        }
+        let Some(next) = node.get("deps").as_arr().and_then(|deps| deps.first()).and_then(|dep| dep.as_str()) else {
+            break;
+        };
+        if next == current || !by_id.contains_key(next) {
+            break;
+        }
+        current = next.to_string();
+    }
+    chain.reverse();
+    chain
+}
+
+fn life_row(account: &str, life: &Value, file_modified: i64) -> Value {
+    let mut counts = std::collections::BTreeMap::new();
+    for node in life.get("nodes").as_arr().cloned().unwrap_or_default() {
+        let status = node.get("status").as_str().unwrap_or("pending");
+        if crate::api_shapes::LIVES_COLUMNS.iter().skip(6).any(|column| *column == status) {
+            *counts.entry(status.to_string()).or_insert(0i64) += 1;
+        }
+    }
+    let row = crate::api_shapes::LivesRow {
+        account: account.to_string(),
+        goal: life.get("goal").clone(),
+        profile: life.get("profile").clone(),
+        active_task: life.get("active").as_str().map(str::to_string),
+        chain: life_chain(life),
+        engagement: if life.get("engagement").is_null() { None } else { Some(life.get("engagement").clone()) },
+        active: counts.get("active").copied().unwrap_or(0),
+        ready: counts.get("ready").copied().unwrap_or(0),
+        pending: counts.get("pending").copied().unwrap_or(0),
+        blocked: counts.get("blocked").copied().unwrap_or(0),
+        failed: counts.get("failed").copied().unwrap_or(0),
+        done: counts.get("done").copied().unwrap_or(0),
+        updated: life_updated(life, file_modified),
+    };
+    row.to_value()
 }
 
 /// Life index (see `lives_response`) over an explicit root.
 pub fn lives_response_in(run_dir: &std::path::Path) -> Value {
     let mut rows = Vec::new();
     if let Ok(entries) = std::fs::read_dir(lives_dir(run_dir)) {
-        let mut names: Vec<String> = entries
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().to_string())
-            .filter(|name| name.ends_with(".json"))
-            .collect();
-        names.sort();
-        for name in names {
+        let mut names: Vec<std::fs::DirEntry> =
+            entries.flatten().filter(|entry| entry.file_name().to_string_lossy().ends_with(".json")).collect();
+        names.sort_by_key(|entry| entry.file_name());
+        for entry in names {
+            let name = entry.file_name().to_string_lossy().to_string();
             let account = name[..name.len() - 5].to_string();
-            let Ok(text) = std::fs::read_to_string(lives_dir(run_dir).join(&name)) else {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
                 continue;
             };
             let Ok(life) = json::parse(&text) else {
                 continue;
             };
-            let mut counts = std::collections::BTreeMap::new();
-            for node in life.get("nodes").as_arr().cloned().unwrap_or_default() {
-                let status = node.get("status").as_str().unwrap_or("pending").to_string();
-                *counts.entry(status).or_insert(0i64) += 1;
-            }
-            let mut summary = std::collections::BTreeMap::new();
-            for (status, count) in counts {
-                summary.insert(status, Value::Int(count));
-            }
-            rows.push(object(vec![
-                ("account", str_value(&account)),
-                ("goal", life.get("goal").clone()),
-                ("active", life.get("active").clone()),
-                ("ironman", life.get("profile").get("ironman").clone()),
-                ("nodes", Value::Obj(summary)),
-            ]));
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|span| span.as_secs() as i64)
+                .unwrap_or(0);
+            rows.push(life_row(&account, &life, modified));
         }
     }
     object(vec![("ok", Value::Bool(true)), ("lives", Value::Arr(rows))])
@@ -348,6 +416,58 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn life_updated_takes_the_max_of_history_and_mtime() {
+        let empty = object(vec![]);
+        assert_eq!(life_updated(&empty, 100), 100);
+        let life = object(vec![(
+            "history",
+            Value::Arr(vec![
+                object(vec![("ended", Value::Int(50))]),
+                object(vec![("ended", Value::Int(300))]),
+                object(vec![("outcome", str_value("goal_reached"))]),
+            ]),
+        )]);
+        assert_eq!(life_updated(&life, 100), 300, "a newer history entry beats the file mtime");
+        assert_eq!(life_updated(&life, 500), 500, "a newer mtime beats history");
+    }
+
+    #[test]
+    fn lives_row_derives_chain_counts_and_updated() {
+        let root = std::env::temp_dir().join(format!("lifescape-l11-{}", std::process::id()));
+        let run = root.join("run");
+        std::fs::create_dir_all(run.join("lives")).expect("scratch lives dir");
+        std::fs::write(
+            run.join("lives").join("t01.json"),
+            r#"{"account":"t01","goal":{"kind":"make_money"},"profile":{"ironman":false},
+                "nodes":[
+                 {"id":"n1","status":"done","method":"mining/iron","deps":[]},
+                 {"id":"n2","status":"active","method":"smelting/iron","deps":["n1"]},
+                 {"id":"n3","status":"abandoned","method":"smithing/plate","deps":["n2"]}],
+                "engagement":{"node":"n2","min_ticks":6000,"max_ticks":12000,"chosen":9000},
+                "active":"n2","history":[{"node":"n1","ended":1700000000,"outcome":"goal_reached"}]}"#,
+        )
+        .expect("scratch life file");
+        std::fs::write(run.join("lives").join("t02.json"), r#"{"account":"t02","goal":null,"nodes":[],"active":null}"#)
+            .expect("scratch life file");
+        let lives = lives_response_in(&run);
+        let rows = lives.get("lives").as_arr().expect("lives array");
+        assert_eq!(rows.len(), 2);
+        let first = &rows[0];
+        assert_eq!(first.get("account").as_str(), Some("t01"));
+        let chain: Vec<String> =
+            first.get("chain").as_arr().unwrap().iter().filter_map(|link| link.as_str().map(str::to_string)).collect();
+        assert_eq!(chain, vec!["mining/iron".to_string(), "smelting/iron".to_string()]);
+        assert_eq!(first.get("done").as_i64(), Some(1), "abandoned counts nowhere");
+        assert_eq!(first.get("engagement").get("node").as_str(), Some("n2"));
+        assert!(first.get("updated").as_i64().unwrap_or(0) >= 1700000000, "last change covers history and mtime");
+        let second = &rows[1];
+        assert_eq!(second.get("active_task"), &Value::Null);
+        assert!(second.get("chain").as_arr().map(|links| links.is_empty()).unwrap_or(false));
+        assert_eq!(second.get("goal"), &Value::Null);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn life_and_economy_shapes() {
         let root = std::env::temp_dir().join(format!("lifescape-l10-{}", std::process::id()));
         let run = root.join("run");
@@ -379,12 +499,27 @@ mod tests {
         assert_eq!(life_response_in(&run, "nobody").get("ok").as_bool(), Some(false));
         assert_eq!(life_response_in(&run, "..").get("ok").as_bool(), Some(false));
 
-        // Index: goal plus counts by status.
+        // Index: one flat row per account (§6.4, D47), every frozen
+        // column present, sortable counts plus last change.
         let lives = lives_response_in(&run);
         let rows = lives.get("lives").as_arr().expect("lives array");
         assert_eq!(rows.len(), 1);
+        let mut got: Vec<String> = rows[0].as_obj().map(|map| map.keys().cloned().collect()).unwrap_or_default();
+        got.sort();
+        let mut want: Vec<String> = crate::api_shapes::LIVES_COLUMNS.iter().map(|key| key.to_string()).collect();
+        want.sort();
+        assert_eq!(got, want, "lives row covers every §6.4 column");
         assert_eq!(rows[0].get("account").as_str(), Some("m1"));
-        assert_eq!(rows[0].get("nodes").get("active").as_i64(), Some(1));
+        assert_eq!(rows[0].get("goal").get("kind").as_str(), Some("get_rich"));
+        assert_eq!(rows[0].get("profile").get("archetype").as_str(), Some("merchant"));
+        assert_eq!(rows[0].get("active_task").as_str(), Some("n1"));
+        assert_eq!(rows[0].get("active").as_i64(), Some(1));
+        assert_eq!(rows[0].get("ready").as_i64(), Some(0));
+        assert_eq!(rows[0].get("done").as_i64(), Some(0));
+        assert!(rows[0].get("updated").as_i64().unwrap_or(0) > 0, "mtime feeds the last change");
+        let chain: Vec<String> =
+            rows[0].get("chain").as_arr().unwrap().iter().filter_map(|link| link.as_str().map(str::to_string)).collect();
+        assert_eq!(chain, vec!["market:flip".to_string()], "active method is the chain until the brain writes one");
 
         // Economy: one stub dispatch for every daemon command used.
         fn stub(request: Value) -> Value {
