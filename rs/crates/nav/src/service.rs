@@ -262,9 +262,10 @@ pub struct CacheStats {
     pub polls: u64,
     /// Multi-target cost batches served (N1), one search each.
     pub walk_costs: u64,
-    /// Detour sums (N8): plan cost minus the Chebyshev straight-line
-    /// bound, accumulated over computed plans. `detour_sum / detour_plans`
-    /// is the mean extra walking per plan; `detour_max` the worst.
+    /// Detour sums (N8): excess over the cheapest served cost for the
+    /// same pair, accumulated over computed plans. `detour_sum /
+    /// detour_plans` is the mean regression per plan (0 on healthy
+    /// traffic); `detour_max` the worst single regression.
     pub detour_sum: u64,
     pub detour_max: u32,
     pub detour_plans: u64,
@@ -1050,6 +1051,10 @@ pub struct Service {
     admission: Mutex<HashMap<String, usize>>,
     l1: Mutex<Lru>,
     costs_cache: Mutex<HashMap<CostsKey, Vec<Option<u32>>>>,
+    /// N8 best-served baselines: cheapest computed cost per PlanKey. A
+    /// repeated pair must re-price identically (deterministic planner),
+    /// so any excess is a regression, never geometry.
+    best_costs: Mutex<HashMap<PlanKey, u32>>,
     l2: Mutex<(HashMap<String, Arc<SharedEdges>>, Vec<String>)>,
     inflight: Mutex<HashMap<PlanKey, u64>>,
     tickets: Mutex<HashMap<u64, (PlanKey, String)>>,
@@ -1117,6 +1122,7 @@ impl Service {
             admission: Mutex::new(HashMap::new()),
             l1: Mutex::new(Lru::new()),
             costs_cache: Mutex::new(HashMap::new()),
+            best_costs: Mutex::new(HashMap::new()),
             l2: Mutex::new((HashMap::new(), Vec::new())),
             inflight: Mutex::new(HashMap::new()),
             tickets: Mutex::new(HashMap::new()),
@@ -1267,6 +1273,8 @@ impl Service {
         let old = guard.version.clone();
         let new = snapshot.version.clone();
         *guard = snapshot;
+        // New world, new baselines: old floors never price new geometry.
+        self.best_costs.lock().unwrap().clear();
         (old, new)
     }
 
@@ -1395,7 +1403,7 @@ impl Service {
     /// exits, never spins).
     pub(crate) fn op_poll_public(&self, id: u64) -> crate::service_plan::WaitPoll {
         use crate::service_plan::WaitPoll;
-        let reply = self.op_poll(&object(vec![("id", Value::Int(id as i64))]));
+        let reply = self.poll_slot(&object(vec![("id", Value::Int(id as i64))]));
         if reply.get("ok").as_bool() != Some(true) {
             return WaitPoll::Terminal(reply);
         }
@@ -1754,6 +1762,14 @@ impl Service {
 
     fn op_poll(&self, request: &Value) -> Value {
         self.polls_served.fetch_add(1, Ordering::Relaxed);
+        self.poll_slot(request)
+    }
+
+    /// Poll core without the public gauge. The waiter pool (E3
+    /// server-side wait) spins here every 10 ms, so counting it priced
+    /// every `plan` at ~7 polls and read 1.4 polls/s with no client
+    /// polling at all. Only client `poll` ops move the gauge now.
+    fn poll_slot(&self, request: &Value) -> Value {
         let version = self.version();
         let id = match request.get("id").as_i64() {
             Some(id) => id as u64,
@@ -2315,13 +2331,22 @@ impl Service {
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
             };
-            // N8 detour: plan cost minus the Chebyshev straight-line
-            // bound, accumulated over computed plans (the nav-stats gauge
-            // reads the sum, the max and the count).
+            // N8 detour, best-served baseline: the planner is deterministic,
+            // so a repeated pair must cost exactly its cheapest served
+            // cost. `detour` is the excess over that baseline (0 on
+            // healthy traffic: straight walks, obstacle walks, door
+            // clicks and transition rides all re-price identically);
+            // only a regression — a worse plan for a known pair — moves
+            // the gauge. Bounded like the costs cache: a full map clears
+            // and re-baselines at zero, never spikes.
             if let Ok(plan) = &outcome {
-                let straight =
-                    (job.from.x - job.dest.x).abs().max((job.from.z - job.dest.z).abs()) as u32;
-                let detour = plan.cost.saturating_sub(straight);
+                let mut best = self.best_costs.lock().unwrap();
+                if best.len() >= BEST_COSTS_CAP {
+                    best.clear();
+                }
+                let (detour, floor) = best_detour(best.get(&job.key).copied(), plan.cost);
+                best.insert(job.key.clone(), floor);
+                drop(best);
                 self.detour_sum.fetch_add(u64::from(detour), Ordering::Relaxed);
                 self.detour_plans.fetch_add(1, Ordering::Relaxed);
                 self.detour_max.fetch_max(detour, Ordering::Relaxed);
@@ -2413,6 +2438,22 @@ impl Service {
         }
     }
 }
+
+/// N8 baseline core, pure: excess over the cheapest served cost for
+/// the pair, and the new floor. First sighting and improvements read
+/// 0 and re-baseline; a regression keeps the old floor so every bad
+/// plan counts, not just the first.
+fn best_detour(known: Option<u32>, cost: u32) -> (u32, u32) {
+    match known {
+        None => (0, cost),
+        Some(floor) if cost <= floor => (0, cost),
+        Some(floor) => (cost - floor, floor),
+    }
+}
+
+/// Best-served baseline cap: pairs, not bytes (keys are small). A full
+/// map clears and re-baselines at zero, like the costs cache.
+const BEST_COSTS_CAP: usize = 4096;
 
 // -- client ------------------------------------------------------------------
 
@@ -3496,10 +3537,59 @@ mod tests {
         assert_eq!(served.cost, sync.cost, "truncated tail is substructure-optimal");
     }
 
-    /// N8 detour: every computed plan accumulates cost minus the
-    /// straight-line bound (sum, max, count) for the nav-stats gauge.
+    /// Waiter-pool polls stay off the public gauge: `op_poll_public`
+    /// (the E3 server-side wait, one poll per 10 ms slice) never moves
+    /// `polls`; only a client `poll` op does. A `plan` round trip
+    /// therefore costs one internal admission and zero polls.
     #[test]
-    fn detour_metric_tracks_computed_plans() {
+    fn waiter_polls_stay_off_the_public_gauge() {
+        use crate::service_plan::WaitPoll;
+        let (world, tables) = shared_world();
+        let service = Service::start(
+            Snapshot::new(world, tables, "waiter-polls".to_string()),
+            &test_socket("plan-waiter-polls"),
+            2,
+        )
+        .expect("service starts");
+        let client = PlanClient::new(service.socket_path(), "waiter-polls");
+        let from = Tile { x: 3228, z: 3214, level: 0 };
+        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        let id = match client.submit(from, dest, &short_options(), "waiter-polls").expect("submit") {
+            Submit::Accepted { id, .. } => id,
+            Submit::Refused { reason, .. } => panic!("refused: {reason}"),
+        };
+        let before = service.stats().polls;
+        loop {
+            match service.op_poll_public(id) {
+                WaitPoll::Terminal(_) => break,
+                WaitPoll::Pending => {}
+            }
+        }
+        let _ = service.op_poll_public(id);
+        let _ = service.op_poll_public(999_999);
+        assert_eq!(service.stats().polls, before, "waiter polls stay off the gauge");
+        let _ = client.poll(id).expect("poll answers");
+        assert_eq!(service.stats().polls, before + 1, "one client poll counts once");
+        client.cancel(id).expect("cancel");
+    }
+
+    /// N8 baseline core: first sighting and improvements read 0 and
+    /// (re-)baseline; a regression reads the excess and keeps the old
+    /// floor so every bad plan counts.
+    #[test]
+    fn best_detour_prices_regressions_only() {
+        assert_eq!(super::best_detour(None, 13), (0, 13), "first sighting baselines");
+        assert_eq!(super::best_detour(Some(13), 13), (0, 13), "identical re-price reads zero");
+        assert_eq!(super::best_detour(Some(13), 9), (0, 9), "improvement re-baselines");
+        assert_eq!(super::best_detour(Some(10), 13), (3, 10), "regression reads the excess");
+        assert_eq!(super::best_detour(Some(0), 207), (207, 0), "worst case keeps the floor");
+    }
+
+    /// N8 acceptance: healthy traffic — straight walks, a door leg, an
+    /// obstacle walk and a stairs ride — accumulates zero detour (every
+    /// leg re-prices its own baseline), so the mean reads 0 <= 1.2.
+    #[test]
+    fn detour_metric_reads_zero_on_healthy_traffic() {
         let (world, tables) = shared_world();
         let service = Service::start(
             Snapshot::new(world, tables, "detour".to_string()),
@@ -3508,16 +3598,25 @@ mod tests {
         )
         .expect("service starts");
         let client = PlanClient::new(service.socket_path(), "detour");
-        let from = Tile { x: 3228, z: 3214, level: 0 };
-        let dest = Tile { x: 3224, z: 3214, level: 0 };
+        // Straight walks, a door leg, an obstacle walk, a stairs ride:
+        // every shape the old Chebyshev bound miscounted.
+        let legs = [
+            (Tile { x: 3220, z: 3218, level: 0 }, Tile { x: 3220, z: 3228, level: 0 }),
+            (Tile { x: 3220, z: 3228, level: 0 }, Tile { x: 3220, z: 3218, level: 0 }),
+            (Tile { x: 3228, z: 3214, level: 0 }, Tile { x: 3224, z: 3214, level: 0 }),
+            (Tile { x: 3235, z: 3235, level: 0 }, Tile { x: 3245, z: 3235, level: 0 }),
+            (Tile { x: 3228, z: 3215, level: 0 }, Tile { x: 3229, z: 3212, level: 2 }),
+        ];
         let before = service.stats();
-        let planned = submit_ready(&client, from, dest, &short_options(), "detour");
+        for (from, dest) in legs {
+            let outcome = submit_terminal(&client, from, dest, &short_options(), "detour");
+            assert!(matches!(outcome, Poll::Ready(_)), "healthy leg plans");
+        }
         let after = service.stats();
-        let straight = (from.x - dest.x).abs().max((from.z - dest.z).abs()) as u32;
-        let want = planned.cost.saturating_sub(straight);
-        assert_eq!(after.detour_plans - before.detour_plans, 1, "one computed plan counted");
-        assert_eq!(after.detour_sum - before.detour_sum, u64::from(want), "sum prices this plan's detour");
-        assert!(after.detour_max >= want, "max covers this plan's detour");
+        assert_eq!(after.detour_plans - before.detour_plans, legs.len() as u64, "every computed plan counted");
+        assert_eq!(after.detour_sum, before.detour_sum, "healthy traffic reads zero detour");
+        let mean = (after.detour_sum - before.detour_sum) as f64 / legs.len() as f64;
+        assert!(mean <= 1.2, "healthy mean <= 1.2, got {mean}");
     }
 
     /// LOT3 bump: a reloaded version serves zero stale plans — neither

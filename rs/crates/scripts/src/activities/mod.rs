@@ -12,6 +12,7 @@ pub mod cook_meals;
 pub mod cut_gems;
 pub mod dye;
 pub mod enchant_teleport;
+pub mod equip;
 pub mod essence_run;
 pub mod fill_water;
 pub mod firemaking;

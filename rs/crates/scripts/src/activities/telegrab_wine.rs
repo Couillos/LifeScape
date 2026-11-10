@@ -9,6 +9,7 @@ use lifescape_sdk::Bot;
 
 use crate::kit::bank::nearest_bank;
 use crate::kit::cycle::{parse_cli, resolve_keep};
+use crate::kit::magic::cast_on_ground;
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::survival::{check_events, is_walk_abort, learn_level, wait_pack_streamed};
 use crate::skill_walk::walk_checked;
@@ -44,13 +45,23 @@ fn missing_runes(have_air: u32, have_law: u32) -> Vec<String> {
     missing
 }
 
-// shortcut: no spell-on-item send brick in the SDK (OPOBJT has no wrapper)
-// and no magic driver in the frozen kit; wire this to them when they land.
-fn cast_telegrab(bot: &Bot, wine: u16) -> Result<u32, ScriptError> {
-    let _ = (bot, wine);
-    Err(ScriptError::Usage(
-        "telegrab needs the spell-on-item send brick (SDK op_obj_t + kit magic driver)".to_string(),
-    ))
+/// Cast on the nearest visible wine, then pump until it leaves the
+/// ground (the server answers with the item removal + XP drop).
+fn cast_telegrab(bot: &mut Bot, wine: u16) -> Result<(), ScriptError> {
+    let ground = bot.world.ground_items(bot.world.x, bot.world.z, bot.world.level, 15, Some(wine));
+    let ((tile, _), _) = ground
+        .iter()
+        .min_by_key(|((tile, _), _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs())
+        .ok_or_else(|| ScriptError::Usage(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())))?;
+    cast_on_ground(bot, "telekinetic_grab", tile.0, tile.1, wine)?;
+    for _ in 0..CAST_TICKS {
+        bot.pump(1)?;
+        if !wine_on_floor(bot, wine) {
+            bot.log("ok wine grabbed");
+            return Ok(());
+        }
+    }
+    Err(ScriptError::Usage(format!("telegrab fizzled at {WINE_SPAWN:?} from {:?}", bot.position())))
 }
 
 /// Stand on the altar tile or an orthogonal neighbour (the altar loc
@@ -187,6 +198,24 @@ mod tests {
         assert_eq!(missing_runes(0, 1), vec![RUNE_AIR.to_string()], "air missing");
         assert_eq!(missing_runes(1, 0), vec![RUNE_LAW.to_string()], "law missing");
         assert_eq!(missing_runes(0, 0).len(), 2, "both missing");
+    }
+
+    /// Cast reaches the send brick: a visible wine on a dead socket
+    /// fails `Sdk` (the packet cannot leave), never the old dette
+    /// `Usage` — and no wine at all stays a loud `Usage`.
+    #[test]
+    fn cast_reaches_the_send_brick() {
+        let mut bot = offline_bot();
+        let wine = obj_id(&bot, PRODUCT).expect("wine resolves");
+        bot.world.x = 2930;
+        bot.world.z = 3514;
+        bot.world.level = 0;
+        let error = super::cast_telegrab(&mut bot, wine).expect_err("no wine, no cast");
+        assert!(format!("{error}").contains("wine gone"), "loud usage, got {error}");
+        bot.world.objs.insert(((2930, 3515, 0), wine), Some(1));
+        let error = super::cast_telegrab(&mut bot, wine).expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+        assert!(!format!("{error}").contains("dette"), "the dette Usage is gone: {error}");
     }
 
     /// Budget: one cast fits in tens of ticks (server delays + approach),

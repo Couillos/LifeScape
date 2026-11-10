@@ -147,6 +147,10 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         (quest_script(quest).to_string(), Vec::new())
     } else if let Some(area) = method.strip_prefix("access:") {
         ("goto".to_string(), vec![area.to_string()])
+    } else if let Some(style) = method.strip_prefix("equip:") {
+        // The brain's EquipBest order: the script wears the best carried
+        // kit through kit::gear (melee when the goal left it blank).
+        ("equip".to_string(), vec![if style.is_empty() { "melee".to_string() } else { style.to_string() }])
     } else {
         return None;
     };
@@ -298,7 +302,11 @@ mod tests {
         assert!(args.contains(&"shopbuy".to_string()), "shopbuy subcommand rides along");
         let (script, _) = map_method("quest:cook", &obtain(), None).expect("quest maps");
         assert_eq!(script, "quest_cooks_assistant");
-        assert!(map_method("equip:melee", &obtain(), None).is_none(), "equip is not a script order");
+        assert!(map_method("equip:melee", &obtain(), None).is_some(), "equip wires to the equip script");
+        let (script, args) = map_method("equip:ranged", &obtain(), None).expect("equip:ranged maps");
+        assert_eq!(script, "equip");
+        assert_eq!(args.first().map(String::as_str), Some("ranged"), "style rides first, got {args:?}");
+        assert!(map_method("nope:x", &obtain(), None).is_none(), "unknown methods fail loud");
         assert!(map_method("nope:x", &obtain(), None).is_none(), "unknown methods fail loud");
     }
 

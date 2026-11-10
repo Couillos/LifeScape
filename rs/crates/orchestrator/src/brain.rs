@@ -933,7 +933,7 @@ mod tests {
             "essence:blankrune",
             "fight:melee/cows", "fight:ranged/cows", "fight:magic/cows",
             "farm:feather", "market:buy", "shop:buy", "market:flip", "space:cleanup",
-            "quest:cook", "access:varrock",
+            "equip:melee", "quest:cook", "access:varrock",
         ] {
             let node = if method.starts_with("gather:") || method.starts_with("smelt:") || method.starts_with("cook/") {
                 &reach

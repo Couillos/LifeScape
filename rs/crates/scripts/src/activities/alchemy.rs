@@ -12,13 +12,16 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::pack::obj_id;
+use crate::kit::magic::{cast_on_held, missing_runes};
+use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
 pub const MAGIC_STAT: u8 = 6;
 pub const LOW_SPELL: &str = "lowlvl_alchemy";
 pub const HIGH_SPELL: &str = "highlvl_alchemy";
+/// Ticks to wait out one cast (server delays plus the consume tick).
+pub const CAST_TICKS: u64 = 40;
 
 /// Runes of a spell from the dump (case-insensitive debugname).
 pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
@@ -31,8 +34,9 @@ pub fn alch_value(name: &str) -> Option<(i64, i64)> {
 }
 
 /// Alch a banked item in the open session: `alchemy <item> [count]`
-/// (low below 55, high from 55). Resolves the spell, the level and the
-/// runes, then fails loud: no spell-cast op in the SDK (dette P2.4).
+/// (low below 55, high from 55; count omitted or 0 = the pack). Missing
+/// runes or items fail `Blocked` (the brain files obtain tasks); one
+/// cast consumes the item and pays ~60% of its value in coins.
 pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
     let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
@@ -53,20 +57,97 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if level < need {
         return Err(ScriptError::Usage(format!("{spell} needs level {need} at {:?}", bot.position())));
     }
-    let _ = obj_id(bot, item_name)?;
+    let item = obj_id(bot, item_name)?;
+    let coins = obj_id(bot, "coins")?;
     let runes = spell_runes(spell);
     if runes.is_empty() {
         return Err(ScriptError::Usage(format!("{spell} has no runes in the dump at {:?}", bot.position())));
     }
     let (worth_high, worth_low) = alch_value(item_name).ok_or_else(|| ScriptError::Usage(format!("{item_name} never alchs at {:?}", bot.position())))?;
     let worth = if high { worth_high } else { worth_low };
-    bot.log(&format!("{spell} on {item_name} for {worth} coins"));
-    Err(ScriptError::Usage(format!("alchemy needs a spell-cast op in the SDK (dette P2.4): cast {spell} on {item_name} with {runes:?} at {:?}", bot.position())))
+    let missing = missing_runes(bot, &runes);
+    if !missing.is_empty() {
+        return Err(ScriptError::Blocked { missing });
+    }
+    if pack_total(bot, item) == 0 {
+        return Err(ScriptError::Blocked { missing: vec![item_name.to_string()] });
+    }
+    let want = spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX);
+    let mut done = 0u32;
+    while done < want {
+        if pack_total(bot, item) == 0 || !missing_runes(bot, &runes).is_empty() {
+            break;
+        }
+        alch_one(bot, spell, item, coins)?;
+        done += 1;
+    }
+    bot.log(&format!("ok {spell} x{done} on {item_name} (~{worth} coins each)"));
+    Ok(done as i32)
+}
+
+/// One cast: the item leaves (or the coins grow) within the budget.
+fn alch_one(bot: &mut Bot, spell: &str, item: u16, coins: u16) -> Result<(), ScriptError> {
+    let had_item = pack_total(bot, item);
+    let had_coins = pack_total(bot, coins);
+    cast_on_held(bot, spell, item)?;
+    let target = bot.world.ticks + CAST_TICKS;
+    while bot.world.ticks < target {
+        bot.pump(2)?;
+        if pack_total(bot, item) < had_item || pack_total(bot, coins) > had_coins {
+            return Ok(());
+        }
+    }
+    Err(ScriptError::Usage(format!("{spell} never landed at {:?}", bot.position())))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{alch_value, spell_runes, HIGH_SPELL, LOW_SPELL, MAGIC_STAT};
+    use super::{alch_value, run_alchemy, spell_runes, HIGH_SPELL, LOW_SPELL, MAGIC_STAT};
+    use crate::kit::pack::{obj_id, pack_total};
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    fn offline_bot() -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot
+    }
+
+    /// Fund the pack through the live tables (pack com + slots).
+    fn fund_pack(bot: &mut Bot, stock: &[(u8, &str, u32)]) {
+        let com = (bot.tables.com_id)("inventory:inv").expect("pack com in dumps");
+        let slots: std::collections::HashMap<u8, (u16, u32)> = stock
+            .iter()
+            .map(|(slot, name, count)| (*slot, (obj_id(bot, name).expect("funded obj resolves"), *count)))
+            .collect();
+        bot.world.inv.insert(com, slots);
+        bot.world.inv_cap.insert(com, 28);
+    }
+
+    /// Runes starve loud: an unfunded pack blocks with the rune names
+    /// (the brain files them as obtain tasks), never a blind cast.
+    #[test]
+    fn unfunded_pack_blocks_on_runes() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (21, 0));
+        fund_pack(&mut bot, &[(0, "yew_logs", 1)]);
+        let error = run_alchemy(&mut bot, &["yew_logs".to_string()]).expect_err("no runes, no cast");
+        assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got {error}");
+        assert!(format!("{error}").contains("naturerune"), "names the rune, got {error}");
+    }
+
+    /// A funded cast reaches the send brick: dead socket fails `Sdk`,
+    /// never the old dette `Usage`.
+    #[test]
+    fn funded_cast_reaches_the_send_brick() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (21, 0));
+        fund_pack(&mut bot, &[(0, "yew_logs", 1), (1, "naturerune", 1), (2, "firerune", 3)]);
+        let logs = obj_id(&bot, "yew_logs").expect("logs resolve");
+        let error = run_alchemy(&mut bot, &["yew_logs".to_string()]).expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+        assert_eq!(pack_total(&bot, logs), 1, "nothing consumed offline");
+    }
 
     /// Catalogue §5.10: low 21 (1 nature + 3 fire), high 55 (1 + 5).
     #[test]

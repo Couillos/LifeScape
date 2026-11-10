@@ -173,7 +173,7 @@ impl Script for DebugWalk {
 pub fn names() -> Vec<&'static str> {
     vec![
         "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
-        "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
+        "equip", "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
         "milk", "telegrab_wine", "runecraft", "smelt", "smith", "picking", "fill_water",
         "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
@@ -211,6 +211,7 @@ fn runner(name: &str) -> Option<Runner> {
         "magic" => Some(|bot, args| activities::magic_style::run_magic(bot, args)),
         "firemaking" => Some(|bot, args| activities::firemaking::run_firemaking(bot, args)),
         "cut_gems" => Some(|bot, args| activities::cut_gems::run_cut_gems(bot, args)),
+        "equip" => Some(|bot, args| activities::equip::run_equip(bot, args)),
         "leatherwork" => Some(|bot, args| activities::leatherwork::run_leatherwork(bot, args)),
         "stringing" => Some(|bot, args| activities::stringing::run_stringing(bot, args)),
         "alchemy" => Some(|bot, args| activities::alchemy::run_alchemy(bot, args)),
@@ -299,7 +300,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 72);
+        assert_eq!(names().len(), 73);
     }
 
     #[test]

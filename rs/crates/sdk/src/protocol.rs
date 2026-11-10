@@ -158,6 +158,10 @@ mod tests {
     fn known_ops_resolve() {
         assert_eq!(client_op("MOVE_GAMECLICK"), Some((207, -1)));
         assert_eq!(client_op("NO_TIMEOUT"), Some((120, 0)));
+        assert_eq!(client_op("OPNPCT"), Some((181, 4)));
+        assert_eq!(client_op("OPOBJT"), Some((91, 8)), "telegrab brick");
+        assert_eq!(client_op("OPHELDT"), Some((135, 8)), "alch/superheat/enchant brick");
+        assert_eq!(client_op("OPLOCT"), Some((213, 8)), "scenery spell brick");
         assert_eq!(server_op(167), Some(("PLAYER_INFO", -2)));
         assert_eq!(server_op(81), Some(("OBJ_ADD", 5)));
         assert_eq!(client_op("NOPE"), None);

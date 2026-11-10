@@ -14,7 +14,8 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::pack::obj_id;
+use crate::kit::magic::{cast_on_held, missing_runes, spell_com};
+use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -42,14 +43,20 @@ pub fn enchant_for(amulet: &str) -> Option<(&'static str, i64, &'static str)> {
     ENCHANTS.iter().find(|(_, _, input, _)| input.eq_ignore_ascii_case(&strung)).map(|(spell, level, _, product)| (*spell, *level, *product))
 }
 
+/// Strung input of an (un)strung amulet name, mirroring `enchant_for`.
+fn strung_input(wanted: &str) -> String {
+    wanted.strip_prefix("unstrung_").map(|rest| format!("strung_{rest}")).unwrap_or_else(|| wanted.to_string())
+}
+
 /// Required level of a teleport spell (`None` for anything else).
 pub fn teleport_level(name: &str) -> Option<i64> {
     TELEPORTS.iter().find(|(spell, _)| spell.eq_ignore_ascii_case(name)).map(|(_, level)| *level)
 }
 
 /// Cast in the open session: `enchant_teleport <spell|amulet> [count]`.
-/// Resolves spell, level, runes and target, then fails loud: no
-/// spell-cast op in the SDK (dette P2.4).
+/// Enchants and bananas cast on the carried target (`OPHELDT`);
+/// teleports press the spellbook button (`IF_BUTTON`) and land the bot
+/// elsewhere. Missing runes or targets fail `Blocked`.
 pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
     let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
@@ -64,8 +71,8 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
     let wanted = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("enchant_teleport <spell|amulet> [count], nothing named at {:?}", bot.position())))?;
-    let (spell, need, target) = if let Some((spell, need, product)) = enchant_for(wanted) {
-        (spell.to_string(), need, product.to_string())
+    let (spell, need, input) = if let Some((spell, need, _)) = enchant_for(wanted) {
+        (spell.to_string(), need, strung_input(wanted))
     } else if let Some(need) = teleport_level(wanted) {
         (wanted.to_string(), need, String::new())
     } else if wanted.eq_ignore_ascii_case(BONES_TO_BANANAS) {
@@ -80,16 +87,131 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if runes.is_empty() {
         return Err(ScriptError::Usage(format!("{spell} has no runes in the dump at {:?}", bot.position())));
     }
-    if !target.is_empty() {
-        let _ = obj_id(bot, &target)?;
+    let target_obj = if input.is_empty() { None } else { Some(obj_id(bot, &input)?) };
+    let missing = missing_runes(bot, &runes);
+    if !missing.is_empty() {
+        return Err(ScriptError::Blocked { missing });
     }
-    bot.log(&format!("{spell} with {runes:?}"));
-    Err(ScriptError::Usage(format!("spellcasting needs a spell-cast op in the SDK (dette P2.4): cast {spell} with {runes:?} at {:?}", bot.position())))
+    if target_obj.is_some_and(|obj| pack_total(bot, obj) == 0) {
+        return Err(ScriptError::Blocked { missing: vec![input.clone()] });
+    }
+    // Teleports move the bot, not an item: exactly one cast per run.
+    // Held targets run the pack (count omitted or 0 = the load).
+    let want = if target_obj.is_none() { 1 } else { spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX) };
+    let mut done = 0u32;
+    while done < want {
+        if !missing_runes(bot, &runes).is_empty() {
+            break;
+        }
+        if target_obj.is_some_and(|obj| pack_total(bot, obj) == 0) {
+            break;
+        }
+        cast_one(bot, &spell, target_obj)?;
+        done += 1;
+    }
+    bot.log(&format!("ok {spell} x{done}"));
+    Ok(done as i32)
+}
+
+/// Ticks to wait out one cast (server delays plus the convert tick).
+pub const CAST_TICKS: u64 = 40;
+
+/// One cast: held targets convert in the pack (input count moves),
+/// teleports move the bot. Anything quiet past the budget is loud.
+fn cast_one(bot: &mut Bot, spell: &str, target: Option<u16>) -> Result<(), ScriptError> {
+    match target {
+        Some(obj) => {
+            let had = pack_total(bot, obj);
+            cast_on_held(bot, spell, obj)?;
+            let deadline = bot.world.ticks + CAST_TICKS;
+            while bot.world.ticks < deadline {
+                bot.pump(2)?;
+                if pack_total(bot, obj) != had {
+                    return Ok(());
+                }
+            }
+            Err(ScriptError::Usage(format!("{spell} never landed at {:?}", bot.position())))
+        }
+        None => {
+            let before = bot.position();
+            let com = spell_com(bot, spell)?;
+            bot.if_button(com)?;
+            let deadline = bot.world.ticks + CAST_TICKS;
+            while bot.world.ticks < deadline {
+                bot.pump(2)?;
+                if bot.position() != before {
+                    return Ok(());
+                }
+            }
+            Err(ScriptError::Usage(format!("{spell} never moved at {:?}", bot.position())))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{enchant_for, spell_runes, teleport_level, BONES_TO_BANANAS, ENCHANTS, TELEPORTS};
+    use super::{enchant_for, run_enchant_teleport, spell_runes, teleport_level, BONES_TO_BANANAS, CAST_TICKS, ENCHANTS, MAGIC_STAT, TELEPORTS};
+    use crate::kit::pack::{obj_id, pack_total};
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    fn offline_bot() -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot
+    }
+
+    /// Fund the pack through the live tables (pack com + slots).
+    fn fund_pack(bot: &mut Bot, stock: &[(u8, &str, u32)]) {
+        let com = (bot.tables.com_id)("inventory:inv").expect("pack com in dumps");
+        let slots: std::collections::HashMap<u8, (u16, u32)> = stock
+            .iter()
+            .map(|(slot, name, count)| (*slot, (obj_id(bot, name).expect("funded obj resolves"), *count)))
+            .collect();
+        bot.world.inv.insert(com, slots);
+        bot.world.inv_cap.insert(com, 28);
+    }
+
+    /// Runes starve loud: an unfunded pack blocks with the rune names.
+    #[test]
+    fn unfunded_pack_blocks_on_runes() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (7, 0));
+        fund_pack(&mut bot, &[(0, "strung_sapphire_amulet", 1)]);
+        let error = run_enchant_teleport(&mut bot, &["strung_sapphire_amulet".to_string()])
+            .expect_err("no runes, no cast");
+        assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got {error}");
+        assert!(format!("{error}").contains("cosmicrune"), "names the rune, got {error}");
+    }
+
+    /// A funded enchant reaches the send brick: dead socket fails `Sdk`,
+    /// never the old dette `Usage`.
+    #[test]
+    fn funded_enchant_reaches_the_send_brick() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (7, 0));
+        // cosmic + water for enchant_lvl1 (dump runes, sorted check below).
+        let mut runes = spell_runes("enchant_lvl1");
+        runes.sort();
+        fund_pack(&mut bot, &[(0, "strung_sapphire_amulet", 1), (1, "cosmicrune", 1), (2, "waterrune", 1)]);
+        let input = obj_id(&bot, "strung_sapphire_amulet").expect("input resolves");
+        let error = run_enchant_teleport(&mut bot, &["strung_sapphire_amulet".to_string()])
+            .expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+        assert_eq!(pack_total(&bot, input), 1, "nothing converted offline");
+        assert!(CAST_TICKS >= 3, "covers the server delays");
+    }
+
+    /// A funded teleport reaches the button press: dead socket fails
+    /// `Sdk`, never the old dette `Usage`.
+    #[test]
+    fn funded_teleport_reaches_the_send_brick() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (25, 0));
+        fund_pack(&mut bot, &[(0, "airrune", 3), (1, "lawrune", 1), (2, "firerune", 1)]);
+        let error = run_enchant_teleport(&mut bot, &["varrock_teleport".to_string()]).expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+    }
 
     /// Catalogue §5.10 ladder matches the spell dump: levels, cosmic
     /// rune counts and F2P flags.

@@ -18,6 +18,7 @@ use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::produce::{count_answer, match_option};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
 use crate::quests::common::inv_slot;
+use crate::skill_walk::walk_checked;
 use crate::{ScriptError, ScriptResult};
 
 pub const CRAFTING_STAT: u8 = 12;
@@ -25,8 +26,8 @@ pub const NEEDLE: &str = "needle";
 pub const THREAD: &str = "thread";
 pub const HIDE: &str = "cow_hide";
 pub const LEATHER: &str = "leather";
-/// Tanning NPC family (catalogue §5.6: Al-Kharid and Crafting Guild).
-pub const TANNERS: [&str; 1] = ["tanner"];
+/// Tanning NPC family: `kit::tan` owns the grid (verified buttons).
+pub use crate::kit::tan::TANNERS;
 pub const DEFAULT_PRODUCT: &str = "leather_gloves";
 const ITEM_TICKS: u64 = 40;
 
@@ -69,9 +70,11 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     fill_sew(bot, &bank, leather, thread)?;
     if pack_total(bot, leather) == 0 {
         if bot.bank_items().get(&hide).copied().unwrap_or(0) > 0 {
-            return Err(ScriptError::Usage(format!("tanning needs the tanner grid mapping (dette P2.4): {TANNERS:?} button for {LEATHER} unknown at {:?}", bot.position())));
+            tan_from_bank(bot, &bank, &keep_sew, product_name, leather, thread)?;
         }
-        return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
+        if pack_total(bot, leather) == 0 {
+            return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
+        }
     }
     let outcome = run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
@@ -103,6 +106,37 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
         Ok(StepControl::UnitDone)
     });
     outcome
+}
+
+/// Tan a pack of banked hides at Ellis, then come back and reload the
+/// sew kit: withdraw hides + fare, walk, tan, walk back, redeposit the
+/// leftovers and top up leather + thread for the loop.
+fn tan_from_bank(
+    bot: &mut Bot,
+    bank: &lifescape_gamedata::banks::Bank,
+    keep_sew: &[u16],
+    product: &str,
+    leather: u16,
+    thread: u16,
+) -> Result<(), ScriptError> {
+    let Some((hide_name, _, cost, _)) = crate::kit::tan::tan_spec(product) else {
+        return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
+    };
+    let hide = obj_id(bot, hide_name)?;
+    let coins = obj_id(bot, "coins")?;
+    let free = free_slots(bot) as u32;
+    bank_withdraw_items(bot, bank, &[hide], free.saturating_sub(1))?;
+    let held = pack_total(bot, hide);
+    bank_withdraw_items(bot, bank, &[coins], held.saturating_mul(cost))?;
+    crate::kit::tan::walk_to_tanner(bot)?;
+    let tanned = crate::kit::tan::tan_run(bot, product)?;
+    bot.log(&format!("ok tanned {tanned} {hide_name}"));
+    if !walk_checked(bot, bank.x as i32, bank.z as i32, crate::kit::tan::TANNER_WALK_TICKS)? {
+        return Err(ScriptError::Usage(format!("no walk back to the bank at {:?}", bot.position())));
+    }
+    bank_trip(bot, bank, keep_sew, 0)?;
+    fill_sew(bot, bank, leather, thread)?;
+    Ok(())
 }
 
 /// Top the pack up with banked leather and thread (nothing when the bank

@@ -16,6 +16,37 @@ fn op_name(kind: &str, op: u8) -> String {
     format!("{kind}{op}")
 }
 
+/// OPOBJT payload, split out so the field order locks by test (x, z,
+/// obj, spell com, big-endian like every other op).
+fn opobjt_bytes(x: i32, z: i32, obj: u16, spell_com: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.u16(x as u16);
+    body.u16(z as u16);
+    body.u16(obj);
+    body.u16(spell_com);
+    body.bytes()
+}
+
+/// OPHELDT payload (obj, pack slot, pack com, spell com).
+fn opheldt_bytes(obj: u16, slot: u8, com: u16, spell_com: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.u16(obj);
+    body.u16(u16::from(slot));
+    body.u16(com);
+    body.u16(spell_com);
+    body.bytes()
+}
+
+/// OPLOCT payload (x, z, loc, spell com).
+fn oploct_bytes(x: i32, z: i32, loc: u16, spell_com: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.u16(x as u16);
+    body.u16(z as u16);
+    body.u16(loc);
+    body.u16(spell_com);
+    body.bytes()
+}
+
 
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
@@ -72,6 +103,28 @@ impl Bot {
         body.u16(u16::from(slot));
         body.u16(spell_com);
         self.send_named("OPNPCT", &body.bytes())
+    }
+
+    /// Cast a spellbook spell on a ground object (telegrab): x, z, obj,
+    /// then the spell button com, exactly the `OpObjTDecoder` order.
+    pub fn op_obj_t(&mut self, x: i32, z: i32, obj_id: u16, spell_com: u16) -> Result<()> {
+        self.act(format!("op_obj_t {} id={obj_id} at ({x},{z})", (self.tables.obj_name)(obj_id).unwrap_or_default()));
+        self.send_named("OPOBJT", &opobjt_bytes(x, z, obj_id, spell_com))
+    }
+
+    /// Cast a spellbook spell on a carried item (alchemy, superheat,
+    /// enchant): obj, pack slot, pack com, then the spell button com,
+    /// exactly the `OpHeldTDecoder` order.
+    pub fn op_held_t(&mut self, obj: u16, slot: u8, com: u16, spell_com: u16) -> Result<()> {
+        self.act(format!("op_held_t {} x1 slot={slot}", (self.tables.obj_name)(obj).unwrap_or_default()));
+        self.send_named("OPHELDT", &opheldt_bytes(obj, slot, com, spell_com))
+    }
+
+    /// Cast a spellbook spell on a scenery object: x, z, loc, then the
+    /// spell button com, exactly the `OpLocTDecoder` order.
+    pub fn op_loc_t(&mut self, x: i32, z: i32, loc_id: u16, spell_com: u16) -> Result<()> {
+        self.act(format!("op_loc_t {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
+        self.send_named("OPLOCT", &oploct_bytes(x, z, loc_id, spell_com))
     }
 
     pub fn op_player(&mut self, op: u8, slot: u16) -> Result<()> {
@@ -757,8 +810,7 @@ mod tests {
     /// Ok(false): adjacent to the booth the approach short-circuits, the
     /// click send fails loud, never masked as a refusal.
     #[test]
-    fn open_bank_offline_propagates_send_error() {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    fn open_bank_offline_propagates_send_error() {let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         bot.world.level = 0;
         bot.world.x = 3091;
         bot.world.z = 3246;
@@ -816,6 +868,38 @@ mod tests {
             observed: String::new(),
             dossier: None,
         })
+    }
+
+    /// Spell-cast payloads lock the server decoder order (LostCity
+    /// OpObjT/OpHeldT/OpLocTDecoder: g2 fields, big-endian): a swapped
+    /// field ships a silent bad packet, so the bytes pin by hand.
+    #[test]
+    fn spell_cast_payloads_match_the_server_decoders() {
+        // x=2930 (0x0B72), z=3515 (0x0DBB), obj=0x0010, spell=0x00A0.
+        assert_eq!(super::opobjt_bytes(2930, 3515, 0x10, 0xA0), vec![0x0B, 0x72, 0x0D, 0xBB, 0x00, 0x10, 0x00, 0xA0]);
+        // obj=0x0200, slot=3, com=0x0D12, spell=0x00A1.
+        assert_eq!(super::opheldt_bytes(0x0200, 3, 0x0D12, 0xA1), vec![0x02, 0x00, 0x00, 0x03, 0x0D, 0x12, 0x00, 0xA1]);
+        // x=100 (0x0064), z=200 (0x00C8), loc=0x0600, spell=0x00A2.
+        assert_eq!(super::oploct_bytes(100, 200, 0x0600, 0xA2), vec![0x00, 0x64, 0x00, 0xC8, 0x06, 0x00, 0x00, 0xA2]);
+    }
+
+    /// The wrappers resolve their op names (a bad name fails `Protocol`,
+    /// never reaches the socket): dead socket reads `Login`, proving the
+    /// send path is wired, framing included (8-byte payloads fit the
+    /// table sizes or `frame_packet` would reject them live).
+    #[test]
+    fn spell_cast_wrappers_reach_the_send_path() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        for outcome in [
+            bot.op_obj_t(2930, 3515, 0x10, 0xA0),
+            bot.op_held_t(0x0200, 3, 0x0D12, 0xA1),
+            bot.op_loc_t(100, 200, 0x0600, 0xA2),
+        ] {
+            assert!(
+                matches!(outcome, Err(Error::Login(_))),
+                "dead socket fails at login, never at the op name: {outcome:?}"
+            );
+        }
     }
 
 }
