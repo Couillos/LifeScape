@@ -11,6 +11,13 @@ use crate::kit::bank::nearest_bank;
 use crate::kit::pack::obj_id;
 use crate::{ScriptError, ScriptResult};
 
+/// Pack ids to redeposit: everything carried except the untouched.
+/// The touched set must hold every dealt form (base AND note): the
+/// seller's window form may differ from the trade id, and a form kept
+/// by mistake never returns to the bank.
+pub fn redeposit_keep(carried: &[u16], touched: &[u16]) -> Vec<u16> {
+    carried.iter().copied().filter(|held| !touched.contains(held)).collect()
+}
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
 /// short, wait for the staggered departure, walk to the tile, trade with
 /// a double-screen check, redeposit, walk back to the start tile.
@@ -40,6 +47,11 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
         };
         let trade = trade_id(row.item);
         touched.push(trade);
+        // Redeposit both forms: the seller's window form (base preferred)
+        // may differ from the trade id (note).
+        if row.item != trade {
+            touched.push(row.item);
+        }
         if !ensure_goods(bot, row, trade, coins)? {
             bot.log(&format!("deal {id}: lots short, reporting no_show"));
             deal_report(&bot.username, id, "failed", "no_show");
@@ -138,7 +150,7 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300).unwrap_or(false) {
             if let Some(side_com) = (bot.tables.com_id)("bank_side:inv") {
                 let carried: Vec<u16> = bot.backpack().1.iter().map(|(_, (held, _))| *held).collect();
-                let keep: Vec<u16> = carried.into_iter().filter(|held| !touched.contains(held)).collect();
+                let keep: Vec<u16> = redeposit_keep(&carried, &touched);
                 match bot.bank_deposit_all(side_com, &keep, 300) {
                     Ok(true) => {}
                     other => bot.log(&format!("redeposit outcome: {other:?}")),
@@ -152,4 +164,18 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (level, x, z) = start;
     let _ = bot.travel_to(lifescape_sdk::plan::Tile { x, z, level });
     Ok(if ok { 0 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redeposit_keep;
+
+    /// Deal 24 regression: the seller delivered base willow (1519) while
+    /// the trade id is the note (1520) — both forms must redeposit.
+    #[test]
+    fn redeposit_covers_both_dealt_forms() {
+        let carried = [995u16, 1519, 314];
+        let touched = [995u16, 1520, 1519];
+        assert_eq!(redeposit_keep(&carried, &touched), vec![314u16]);
+    }
 }
