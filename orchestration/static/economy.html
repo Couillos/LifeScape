@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Economy - LifeScape</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  td, th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
+  td.left, th.left { text-align: left; }
+  th { color: #888; font-weight: normal; }
+  .muted { color: #888; }
+  .up { color: #4caf50; }
+  .down { color: #e05252; }
+  #grid { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+</style>
+</head>
+<body>
+<h1>Economy <span class="muted">(<a href="/">back to bots</a>) · money, deals, activities, trends, merchants</span></h1>
+<div class="muted" id="clock"></div>
+<div id="grid">
+  <div>
+    <h2>Money supply <span class="muted">(holdings, iron excluded)</span></h2>
+    <div id="money"></div>
+    <h2>Top holdings</h2>
+    <table id="holdings"></table>
+  </div>
+  <div>
+    <h2>Deals</h2>
+    <table id="deals"></table>
+    <h2>Top activities <span class="muted">(profit / 6000 ticks)</span></h2>
+    <table id="activities"></table>
+  </div>
+  <div>
+    <h2>Trends <span class="muted">(public 24h: shortage, momentum, score)</span></h2>
+    <table id="trends"></table>
+    <h2>Merchants</h2>
+    <table id="merchants"></table>
+  </div>
+</div>
+<script src="/economy.js"></script>
+</body>
+</html>

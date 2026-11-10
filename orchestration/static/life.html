@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life - LifeScape</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  .muted { color: #888; }
+  #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  #list { min-width: 220px; max-width: 300px; flex: 1 1 220px; }
+  #list ul { list-style: none; padding: 0; margin: 8px 0; max-height: 70vh; overflow-y: auto; }
+  #list li { margin: 2px 0; cursor: pointer; }
+  #list li.cur { font-weight: bold; color: #ff0; }
+  #detail { flex: 3 1 520px; min-width: 340px; }
+  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  td, th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
+  td.left, th.left { text-align: left; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; }
+  .st-pending { background: #333; color: #ccc; }
+  .st-ready { background: #1d3f5e; color: #9fd0ff; }
+  .st-active { background: #1d5e2a; color: #c8ffd2; }
+  .st-done { background: #2c4a2c; color: #9ccc9c; }
+  .st-blocked { background: #5e3c1d; color: #ffd9a0; }
+  .st-failed { background: #5e1d1d; color: #ffb0b0; }
+  .st-abandoned { background: #222; color: #777; text-decoration: line-through; }
+  .alt { color: #888; font-size: 11px; }
+  #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<h1>Life <span class="muted">(<a href="/">back to bots</a>) · goal, task graph, engagement, history</span></h1>
+<div id="layout">
+  <div id="list">
+    <h2>Bots</h2>
+    <input id="search" placeholder="Filter account…" autocomplete="off" oninput="onSearch()">
+    <ul id="bots"></ul>
+  </div>
+  <div id="detail">
+    <h2 id="title">Pick a bot</h2>
+    <div id="goal" class="muted"></div>
+    <div id="profile" class="muted"></div>
+    <h2>Engagement</h2>
+    <div id="engaged" class="muted">-</div>
+    <h2>Tasks</h2>
+    <table id="nodes"></table>
+    <h2>History</h2>
+    <table id="history"></table>
+  </div>
+</div>
+<script src="/life.js"></script>
+</body>
+</html>

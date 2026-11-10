@@ -130,8 +130,21 @@ de Varrock, plafonds de risque, garde-fou 25 % du carnet.
 
 Page `market` (prix au-dessus des bâtons de volume, 6 mois / jour et
 24 h / heure, dernier point temps réel par le WS, carnet + dernières
-exécutions ; canvas maison, zéro dépendance), alimentée en démonstration
-simulée (24 objets, 36 h d'historique, profondeur de part et d'autre de la
-référence) tant qu'aucun bot ne trade. Pages rendements, vie, économie :
-inchangées ce lot. Base `lifescape-store` (SQLite, daemon seul) : ordres,
-deals, exécutions, bougies, rapports, rendements, fiabilité, tendances.
+exécutions ; canvas maison, zéro dépendance). La fenêtre demandée est
+recalée sur les bornes des bougies (`web::snap_range`) pour que la
+bougie en cours reste dedans. Page rendements : tableaux méthode ×
+objet × tranche de niveau, rentabilité courante, nombre de bots engagés
+par script (information pour l'opérateur humain uniquement, jamais lue
+par les bots). Page `life` (`/api/lives`, `/api/life/<compte>`) : but,
+profil, engagement en cours, graphe des tâches (statuts colorés,
+méthode choisie et alternatives avec coûts estimés, avancement,
+ticks dépensés), historique des issues. Page `economy`
+(`/api/economy`) : masse monétaire (holdings, hors Iron), deals
+(réglés, ratés, taux d'échec), top activités par profit/6000 ticks,
+tendances publiques 24 h (pénurie, momentum, score), marchands
+(capital engagé en achats ouverts, stock en ventes ouvertes, deals
+réglés/ratés, ordres et deals ouverts, part maximale du carnet, profit
+de référence `market:flip`). Les bots ne lisent aucune de ces pages.
+
+Base `lifescape-store` (SQLite, daemon seul) : ordres, deals,
+exécutions, bougies, rapports, rendements, fiabilité, tendances.
