@@ -1,7 +1,7 @@
 //! Bury + arrow sweep: bones from our own kills never sit in the pack
 //! (slots and prayer in one click each), and spent arrows come back the
 //! same way coins do. Anywhere goes: no spot, no bank, no queue — the
-//! combat loops call `bury_now` after each kill and `loot_arrows` with the
+//! combat loops, or call `bury_now` after each kill and `loot_arrows` with the
 //! coin sweep. Certificates (`cert_*`) are bank paper, never buried.
 
 #![forbid(unsafe_code)]
