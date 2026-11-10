@@ -10,6 +10,8 @@
   a { color: #04A800; }
   .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
   .navlink:hover { background: #262626; }
+  .navlink[aria-current="page"] { color: #ff0; border-color: #ff0; }
+  #topnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   h1 { font-size: 18px; margin: 0; }
   h2 { font-size: 13px; margin: 10px 0 4px; color: #ff0; font-weight: 700; }
   #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
@@ -26,13 +28,22 @@
   #controls .sep { color: #555; }
   #ctlmsg { color: #d9a441; min-height: 1em; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  body:not(.list-hidden) { padding-left: 316px; }
-  #list { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 280px; max-width: 85vw;
-    background: #050505; border-right: 1px solid #444; padding: 12px; margin: 0; overflow-y: auto; }
-  body.list-hidden #list { transform: translateX(-105%); }
+  /* Sessions list: always visible on the left on PC, drawer on mobile only. */
+  #list { width: 280px; flex: 0 0 280px; background: #050505; border: 1px solid #444; padding: 12px; margin: 0; overflow-y: auto; max-height: calc(100vh - 24px); position: sticky; top: 12px; box-sizing: border-box; }
+  #toggle, #drawer-close { display: none; }
   #list ul { list-style: none; padding: 0; margin: 8px 0; }
-  @media (max-width: 700px) {
-    body:not(.list-hidden) { padding-left: 0; }
+  @media (max-width: 768px) {
+    #list { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 280px; max-width: 85vw; flex: none; max-height: none; border-right: 1px solid #444; border-top: 0; border-bottom: 0; border-left: 0; }
+    body.list-hidden #list { transform: translateX(-105%); }
+    #toggle, #drawer-close { display: inline-block; }
+    /* Mobile block order: canvas, infotext, dialogue, message, inventory,
+       skills, scenery, log. Columns dissolve so blocks order directly. */
+    #layout { flex-direction: column; }
+    #left, #center, #mid, #side { display: contents; }
+    .block { width: 100%; max-width: none; }
+    .b-canvas { order: 1; } .b-info { order: 2; } .b-dialog { order: 3; }
+    .b-msg { order: 4; } .b-inv { order: 5; } .b-skills { order: 6; }
+    .b-scenery { order: 7; } .b-log { order: 8; }
   }
   #list li { margin: 3px 0; }
   #list li a { text-decoration: none; }
@@ -69,11 +80,7 @@
     <button id="toggle" onclick="window.spectator.toggle()" aria-expanded="true" title="Show/hide sessions">☰ Sessions</button>
     <button id="rtbtn" title="Limit canvas redraws to once per second (default). Real-time redraws every frame.">Real-time: off</button>
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
-    <a class="navlink" href="/items">Item holdings</a>
-    <a class="navlink" href="/market">Market</a>
-    <a class="navlink" href="/rates">Rates</a>
-    <a class="navlink" href="/life">Lives</a>
-    <a class="navlink" href="/economy">Economy</a>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/" aria-current="page">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a></nav>
   </div>
 </div>
 <div id="controls">
@@ -100,27 +107,20 @@
     <ul id="players"><li class="muted">loading…</li></ul>
   </div>
   <div id="left">
-    <div class="panel"><pre id="infotext"></pre></div>
-    <h2>Log</h2>
-    <div class="panel logpanel"><pre id="log"></pre></div>
+    <div class="block b-info"><div class="panel"><pre id="infotext"></pre></div></div>
+    <div class="block b-log"><h2>Log</h2><div class="panel logpanel"><pre id="log"></pre></div></div>
   </div>
   <div id="center">
-    <div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="scriptname" class="pill empty" style="display:none"></span><span id="zonename"></span> <button id="btn-close" title="Cut the session: log out and drop the connection">close</button></div>
-    <canvas id="map" width="560" height="560"></canvas>
+    <div class="block b-canvas"><div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="scriptname" class="pill empty" style="display:none"></span><span id="zonename"></span> <button id="btn-close" title="Cut the session: log out and drop the connection">close</button></div><canvas id="map" width="560" height="560"></canvas></div>
   </div>
   <div id="mid">
-    <h2>Dialogue / window</h2>
-    <div class="panel"><pre id="dialog"></pre></div>
-    <h2>Messages</h2>
-    <div class="panel"><pre id="chat"></pre></div>
-    <h2>Scenery &amp; ground items</h2>
-    <div class="panel"><pre id="scenery"></pre></div>
+    <div class="block b-dialog"><h2>Dialogue / window</h2><div class="panel"><pre id="dialog"></pre></div></div>
+    <div class="block b-msg"><h2>Messages</h2><div class="panel"><pre id="chat"></pre></div></div>
+    <div class="block b-scenery"><h2>Scenery &amp; ground items</h2><div class="panel"><pre id="scenery"></pre></div></div>
   </div>
   <div id="side">
-    <h2 id="invtitle">Inventory</h2>
-    <div class="panel"><pre id="inv"></pre></div>
-    <h2>Skills</h2>
-    <div class="panel"><pre id="skills"></pre></div>
+    <div class="block b-inv"><h2 id="invtitle">Inventory</h2><div class="panel"><pre id="inv"></pre></div></div>
+    <div class="block b-skills"><h2>Skills</h2><div class="panel"><pre id="skills"></pre></div></div>
   </div>
 </div>
 <script src="/spectator.js"></script>

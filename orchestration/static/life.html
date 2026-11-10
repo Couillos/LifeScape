@@ -29,10 +29,15 @@
   .st-abandoned { background: #222; color: #777; text-decoration: line-through; }
   .alt { color: #888; font-size: 11px; }
   #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  #topnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
+  .navlink:hover { background: #262626; }
+  .navlink[aria-current="page"] { color: #ff0; border-color: #ff0; }
 </style>
 </head>
 <body>
-<h1>Life <span class="muted">(<a href="/">back to bots</a>) · goal, task graph, engagement, history</span></h1>
+<nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life" aria-current="page">Lives</a><a class="navlink" href="/economy">Economy</a></nav>
+<h1>Life <span class="muted">· goal, task graph, engagement, history</span></h1>
 <div id="layout">
   <div id="list">
     <h2>Bots</h2>
