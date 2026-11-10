@@ -21,7 +21,7 @@ use lifescape_planner::{
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
-use crate::brain_plan::{bank_types, holdings_count, ready_ctx};
+use crate::brain_plan::{bank_types, holdings_count, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names};
 pub use crate::brain_plan::{TRIP_TICKS, choose_money};
 
 /// Merchant share of `get_rich` draws (D18, calibrated in L5).
@@ -611,11 +611,26 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     };
     let mut args = args;
+    // D52: flip and cleanup never sell worn, tools or graph items. The
+    // graph keep merges the live worn names here; tools ride in the same
+    // gate via `sale_blocked`, so the merchant no longer flips its net.
+    // The flip leaves auto-pick only with no safe target (sans objet).
+    if method == "market:flip" {
+        let keep = cleanup_keep(&life);
+        let worn = worn_names(job);
+        if let Some((item, qty)) = pick_flip_target(&live_stacks(job), &keep, &worn) {
+            println!("brain {}: flip D52 target {item} x{qty}", job.account);
+            args.push(item);
+            args.push(qty.min(100).max(1).to_string());
+        } else {
+            println!("brain {}: flip D52 no safe stock, clock ends it", job.account);
+        }
+    }
     // Cleanup carries its keep-list (graph obtains, quest checks) and the
     // Iron flag (D2 direct, no carnet) to the worker; coins, food and best
     // tools resolve worker-side.
     if method == "space:cleanup" {
-        for kept in cleanup_keep(&life) {
+        for kept in merge_keep(cleanup_keep(&life), worn_names(job)) {
             args.push("--keep".to_string());
             args.push(kept);
         }

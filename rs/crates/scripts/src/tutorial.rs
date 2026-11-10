@@ -1,9 +1,5 @@
-//! Tutorial island driver: detect the stage from the server-shown
-//! instruction box, then do what that stage asks. Works from any point
-//! mid-quest.
-//!
-//! Stage signal: the instruction box (coms 6180-6184), never the tutorial
-//! varp (the server does not transmit it) and never the inventory.
+//! Tutorial island driver: stage from the server instruction box
+//! (coms 6180-6184, never the varp nor the inventory), any point mid-quest.
 
 use lifescape_sdk::{Bot, Error};
 
@@ -30,9 +26,7 @@ fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> 
     }
 }
 
-/// Ticks since `started`, surviving a server tick reset: area changes and
-/// relogins restart the counter near zero (t02 live: 1439 -> 0 entering
-/// the mine), and plain subtraction panics on the wrap.
+/// Ticks since `started`; survives tick resets (t02: 1439 -> 0).
 fn elapsed_ticks(now: u64, started: u64) -> u64 {
     now.saturating_sub(started)
 }
@@ -115,7 +109,7 @@ fn detect_stage(bot: &Bot) -> Option<&'static str> {
     STAGE_MATCHERS.iter().find(|(_, fragments)| fragments.iter().all(|fragment| text.contains(fragment))).map(|(key, _)| *key)
 }
 
-/// Talk + answer list with the tutorial's fail-fast stall detection.
+/// Talk + answers with fail-fast stall detection.
 fn finish_dialog(bot: &mut Bot, answers: &[&str], timeout: u64) -> Result<bool, ScriptError> {
     let target = bot.world.ticks + timeout;
     let mut answered: Vec<String> = Vec::new();
@@ -151,11 +145,8 @@ fn finish_dialog(bot: &mut Bot, answers: &[&str], timeout: u64) -> Result<bool, 
     Ok(false)
 }
 
-// shortcut: the Rust SDK tracks no door state (no recent_doors/unseal),
-// so a clicked door is re-walked raw instead of routed as known-open.
-// Doors only answer orthogonal clicks (diagonals refuse), and the server
-// lands the clicker one tile across: through means the far side, not one
-// exact tile.
+// No door state in the SDK: re-walk raw, orthogonal clicks only (the
+// server lands the clicker one tile across).
 fn crossed_door(bot: &Bot, door: (i32, i32), start: (i32, i32)) -> bool {
     (bot.world.x - door.0) * (start.0 - door.0) + (bot.world.z - door.1) * (start.1 - door.1) < 0
 }
@@ -196,9 +187,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
     check(bot.position(), through(bot), &format!("through {door_name}"))
 }
 
-/// Loc the server wants clicked: the hint arrow tile when set, else the
-/// bot tile. The hint names the intended tree/rock/door; the nearest one to
-/// the bot is not always it (fences sit between the survival trees).
+/// Hint tile when set, else the bot tile (nearest is not always the target).
 fn target_ref(bot: &Bot) -> (i32, i32) {
     match bot.world.hint {
         Some(lifescape_sdk::world::Hint::Coord(x, z, _)) => (i32::from(x), i32::from(z)),
@@ -215,9 +204,7 @@ fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i3
     }
 }
 
-/// Candidate stand tiles around a loc, orthogonal adjacents first: walls,
-/// gates, ladders and fires refuse diagonal clicks, so nearest-first wastes
-/// the whole timeout on tiles that can never work.
+/// Stand tiles, orthogonal first (diagonals never answer).
 fn ordered_stands(x: i32, z: i32, bot_x: i32, bot_z: i32) -> Vec<(i32, i32)> {
     let mut cands: Vec<(i32, i32)> = (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
     cands.sort_by_key(|tile| {
@@ -316,6 +303,13 @@ fn wait_modal_closed(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
 
 fn chop(bot: &mut Bot) -> Result<(), ScriptError> {
     let axe = obj("bronze_axe")?;
+    if !bot.inventory().contains_key(&axe) {
+        // Defaut 1 offline cause: the box already asks for a tree while
+        // the axe never landed (login lag, or a mid-quest resume that
+        // skipped the grant). Re-talk before failing loud (t03/t05).
+        let _ = talk_step(bot, "survival", (3103, 3095), &[], "survival re-grant");
+        let _ = wait_inv(bot, "bronze_axe", 1, 60);
+    }
     check(bot.position(), bot.inventory().contains_key(&axe), "axe held")?;
     let logs = obj("newbielogs")?;
     while bot.inventory().get(&logs).copied().unwrap_or(0) < 2 {
@@ -821,12 +815,8 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
     }
 }
 
-/// Click a tutorial wall gate from on top of its tile: gates that face away
-/// refuse every adjacent stand under the server wall reach rule, but their
-/// own tile is standable and clicks from on top always reach. Steps are
-/// direct (server-validated); the router refuses gate tiles. The first
-/// click opens the gate for good (halves deleted), so a missing gate means
-/// walk straight through.
+/// Wall gate from on top of its tile (orthogonal stands only); an opened
+/// gate is gone, so a missing gate means walk through.
 fn cross_gate(bot: &mut Bot, loc_names: &[&str], beyond: (i32, i32), what: &str) -> Result<(), ScriptError> {
     let start = (bot.world.x, bot.world.z);
     let mut last_gate: Option<(i32, i32)> = None;
@@ -880,8 +870,7 @@ fn cross_gate(bot: &mut Bot, loc_names: &[&str], beyond: (i32, i32), what: &str)
     check(bot.position(), done, &format!("through {what}"))
 }
 
-/// Step onto an exact tile, verifying arrival: the planner reports Ok
-/// without moving when its mesh refuses the tile.
+/// Exact tile step: the planner reports Ok without moving on refusal.
 fn step_onto(bot: &mut Bot, tile_x: i32, tile_z: i32, timeout: u64) -> bool {
     if (bot.world.x, bot.world.z) == (tile_x, tile_z) {
         return true;
@@ -939,10 +928,8 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
             }
             bot.log(&format!("no stage match for instruction: {:?}", &instruction(bot)[..instruction(bot).len().min(200)]));
             if instruction(bot).trim().is_empty() {
-                // Empty box right after a step or a relogin: re-click the
-                // tab to resend the current stage, several rounds. Tab
-                // clicks only ever advance to the next required click-tab
-                // stage, so this cannot skip real work.
+                // Empty box after a step or relogin: re-click the tab,
+                // several rounds (tab clicks cannot skip real work).
                 let mut recovered = false;
                 for _ in 0..5 {
                     bot.tut_clickside(TUT_TAB)?;
@@ -953,11 +940,8 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
                     }
                 }
                 if !recovered {
-                    // The silent advance: completed -> open_player_controls
-                    // sends no text (enable_run early-returns), so tab
-                    // clicks alone never reshow a box here. The run button
-                    // advances that stage with text, and is a harmless run
-                    // toggle anywhere else.
+                    // Silent advance (completed -> open_player_controls
+                    // sends no text): the run button advances it here.
                     bot.if_button(COM_RUN)?;
                     bot.pump(15)?;
                     recovered = detect_stage(bot).is_some();
@@ -991,13 +975,25 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::elapsed_ticks;
+    use super::{elapsed_ticks, STAGE_MATCHERS};
 
-    /// t02 live: server ticks reset 1439 -> 0 on the mine transition and
-    /// the plain subtraction panicked instead of timing out.
+    /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
     #[test]
     fn elapsed_survives_tick_reset() {
         assert_eq!(elapsed_ticks(100, 50), 50);
         assert_eq!(elapsed_ticks(5, 1439), 0, "reset: no panic, no false timeout");
+    }
+
+    /// Defaut 1 offline pin (replay-nav style, no live run): the t03/t05
+    /// `FAIL axe held` shows the box already asks for a tree, so the
+    /// matcher must name `chop` and `chop` must re-grant before failing.
+    /// R9 (compte neuf -> autopilote) replays this in the final wave.
+    #[test]
+    fn chop_matcher_names_the_tree_step() {
+        let keys: Vec<&str> = STAGE_MATCHERS.iter().map(|(key, _)| *key).collect();
+        assert!(keys.contains(&"chop"), "tree step pinned, got {keys:?}");
+        let chop = STAGE_MATCHERS.iter().find(|(key, _)| *key == "chop").expect("chop row");
+        assert!(chop.1.iter().any(|fragment| fragment.contains("cut down a tree")), "t03/t05 text, got {:?}", chop.1);
+        assert!(keys.contains(&"open_inventory"), "grant step precedes chop");
     }
 }

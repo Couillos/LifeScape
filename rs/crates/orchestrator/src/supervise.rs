@@ -44,16 +44,53 @@ impl Orchestrator {
     }
 }
 
+/// Defaut 5, verrou fantome: holder instrumentation for every `inner`
+/// lock on the hot path. Each `try_lock` site names its op; on
+/// contention the log names the wedged account, the failing op and how
+/// long it has been failing, instead of "holder unknown". Pure helpers
+/// below keep the thresholds testable; the maps stay local to the one
+/// supervisor thread (no new shared lock to wedge).
+pub const CONTEND_LOG_FIRST: u32 = 10;
+pub const CONTEND_LOG_EVERY: u32 = 60;
+
+/// Log on the 10th consecutive contention then every 60 passes (30 s):
+/// names the wedged account instead of stalling silently.
+pub fn should_log_contended(hits: u32) -> bool {
+    hits == CONTEND_LOG_FIRST || (hits >= CONTEND_LOG_EVERY && hits % CONTEND_LOG_EVERY == 0)
+}
+
+/// Circuit breaker: a `supervise_once` past 5 s backs the account off
+/// 30 s, past 10 s backs it off 60 s. The single supervisor then skips
+/// the blocking `send_worker` RPC for that account (telemetry deferred,
+/// watchdog still runs) instead of queueing 5 s stalls behind one wedge.
+pub fn backoff_secs(elapsed: f64) -> f64 {
+    if elapsed > 10.0 {
+        60.0
+    } else if elapsed > 5.0 {
+        30.0
+    } else {
+        0.0
+    }
+}
+
+pub fn backoff_active(until: f64, now: f64) -> bool {
+    now < until
+}
+
 /// The one supervision loop: poll every account, prune parked/closed
 /// jobs, drain report flags (brain trigger hook) immediately.
 fn supervise_all() {
     let mut watchdogs: HashMap<String, Watchdog> = HashMap::new();
     let mut written: HashMap<String, (f64, String)> = HashMap::new();
-    // Consecutive report-drain contentions per account: the lock holder
-    // is still unidentified (verrou fantome, L7), so at least the wedged
-    // account names itself loudly instead of stalling silently. Resets
-    // on the first clean drain.
+    // Consecutive contentions per account plus the failing op and the
+    // first-failure time: the holder trace that isolates the verrou
+    // fantome to one site instead of "holder unknown". Resets on the
+    // first clean drain. Circuit-breaker deadlines skip the blocking
+    // worker RPC while a wedge cools down.
     let mut contended: HashMap<String, u32> = HashMap::new();
+    let mut contended_op: HashMap<String, &'static str> = HashMap::new();
+    let mut contended_since: HashMap<String, f64> = HashMap::new();
+    let mut backed_off: HashMap<String, f64> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_millis(500));
         let pairs: Vec<(Arc<Orchestrator>, Arc<Job>)> = {
@@ -66,8 +103,30 @@ fn supervise_all() {
                     return false;
                 }
                 match job.inner.try_lock() {
-                    Ok(inner) => inner.supervise,
-                    Err(_) => true,
+                    Ok(inner) => {
+                        if !inner.supervise {
+                            return false;
+                        }
+                        true
+                    }
+                    Err(_) => {
+                        // Registry scan is the first hot-path lock: trace
+                        // it like the drain below so a wedge here names
+                        // itself instead of vanishing from the loop.
+                        let now = crate::jobs::now_secs();
+                        let hits = contended.get(&job.account).cloned().unwrap_or(0) + 1;
+                        contended.insert(job.account.clone(), hits);
+                        contended_op.insert(job.account.clone(), "registry-retain");
+                        contended_since.entry(job.account.clone()).or_insert(now);
+                        if should_log_contended(hits) {
+                            let age = now - contended_since.get(&job.account).copied().unwrap_or(now);
+                            println!(
+                                "brain {}: inner contended x{hits} at registry-retain (~{:.0}s), telemetry stalled; watchdog restarts the worker if it fires",
+                                job.account, age
+                            );
+                        }
+                        true
+                    }
                 }
             });
             guard.clone()
@@ -78,11 +137,40 @@ fn supervise_all() {
             continue;
         }
         for (orch, job) in &pairs {
+            let now = crate::jobs::now_secs();
+            // Circuit breaker: skip the blocking RPC while cooling down.
+            // The watchdog below still runs, so a dead worker restarts;
+            // the brain tick still enqueues (it never blocks).
+            if let Some(until) = backed_off.get(&job.account) {
+                if backoff_active(*until, now) {
+                    let (_had_report, report) = match job.inner.try_lock() {
+                        Ok(mut inner) => {
+                            let pending = std::mem::replace(&mut inner.report_pending, false);
+                            let report = if pending { inner.last_report.clone() } else { None };
+                            contended.remove(&job.account);
+                            contended_op.remove(&job.account);
+                            contended_since.remove(&job.account);
+                            (pending, report)
+                        }
+                        Err(_) => (false, None),
+                    };
+                    crate::brain::on_supervise(orch, job, report);
+                    continue;
+                } else {
+                    backed_off.remove(&job.account);
+                }
+            }
             let pass_start = crate::jobs::now_secs();
             orch.supervise_once(job, &mut written);
             let after_once = crate::jobs::now_secs();
-            if after_once - pass_start > 10.0 {
-                println!("brain {}: supervise_once took {:.0}s", job.account, after_once - pass_start);
+            let elapsed = after_once - pass_start;
+            if elapsed > 10.0 {
+                println!("brain {}: supervise_once took {:.0}s", job.account, elapsed);
+            }
+            let wait = backoff_secs(elapsed);
+            if wait > 0.0 {
+                backed_off.insert(job.account.clone(), after_once + wait);
+                println!("brain {}: backing off {:.0}s after a {:.0}s pass", job.account, wait, elapsed);
             }
             let watchdog = watchdogs.entry(job.account.clone()).or_insert_with(Watchdog::new);
             orch.watchdog_tick(job, watchdog);
@@ -96,16 +184,21 @@ fn supervise_all() {
                     let pending = std::mem::replace(&mut inner.report_pending, false);
                     let report = if pending { inner.last_report.clone() } else { None };
                     contended.remove(&job.account);
+                    contended_op.remove(&job.account);
+                    contended_since.remove(&job.account);
                     (pending, report)
                 }
                 Err(_) => {
+                    let at = crate::jobs::now_secs();
                     let hits = contended.get(&job.account).cloned().unwrap_or(0) + 1;
                     contended.insert(job.account.clone(), hits);
-                    if hits == 10 || hits % 60 == 0 {
+                    contended_op.insert(job.account.clone(), "report-drain");
+                    contended_since.entry(job.account.clone()).or_insert(at);
+                    if should_log_contended(hits) {
+                        let age = at - contended_since.get(&job.account).copied().unwrap_or(at);
                         println!(
-                            "brain {}: inner contended x{hits} (~{}s), job telemetry stalled; holder unknown, worker restart parks it if the watchdog fires",
-                            job.account,
-                            hits / 2
+                            "brain {}: inner contended x{hits} at report-drain (~{:.0}s, {:.0}s/pass), job telemetry stalled; watchdog restarts the worker if it fires",
+                            job.account, age, hits as f64 / 2.0
                         );
                     }
                     (false, None)
@@ -281,5 +374,32 @@ impl Orchestrator {
         println!("job {}: worker died", job.account);
         drop(inner);
         self.write_state(job);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{backoff_active, backoff_secs, should_log_contended, CONTEND_LOG_EVERY, CONTEND_LOG_FIRST};
+
+    /// Defaut 5: contention names itself on a fixed cadence (10, 60,
+    /// 120...), never silently and never every pass.
+    #[test]
+    fn contention_log_cadence_is_pinned() {
+        assert_eq!((CONTEND_LOG_FIRST, CONTEND_LOG_EVERY), (10, 60));
+        assert!(should_log_contended(10), "first report at x10");
+        assert!(!should_log_contended(11), "quiet between reports");
+        assert!(should_log_contended(60) && should_log_contended(120), "then every 60");
+        assert!(!should_log_contended(9) && !should_log_contended(1), "early wedges stay quiet");
+    }
+
+    /// Circuit breaker: slow passes back off, fast passes never do.
+    #[test]
+    fn slow_passes_back_off_fast_passes_do_not() {
+        assert_eq!(backoff_secs(4.9), 0.0, "fast pass keeps polling");
+        assert_eq!(backoff_secs(5.1), 30.0, "5 s stall cools down 30 s");
+        assert_eq!(backoff_secs(10.1), 60.0, "10 s wedge cools down 60 s");
+        assert!(backoff_active(100.0, 99.9), "deadline in the future skips the RPC");
+        assert!(!backoff_active(100.0, 100.0), "expired deadline polls again");
+        assert!(!backoff_active(100.0, 101.0), "past deadline polls again");
     }
 }

@@ -22,10 +22,80 @@ use lifescape_scripts::randomevent::{self, EventKind};
 use lifescape_json::{object, str_value, Value};
 use crate::session::{now_secs, script_error_type, Shared};
 
-/// One posed rescue: the registry script name plus where it was seen.
+/// One posed rescue: the registry script name, where it was seen, and the
+/// tick it was posed (Defaut 4 budget start). Same (rescue, position)
+/// repeats are dropped, a new key replaces the old one.
 pub(crate) struct PendingRescue {
     pub(crate) rescue: String,
     pub(crate) pos: (i32, i32, i32),
+    pub(crate) started: u64,
+}
+
+/// Defaut 4, rescue borne: a rescue that never clears (tower fail spot,
+/// olivia_king > 90 min) stops consuming the worker. 1800 ticks ~= 108 s
+/// en dev, 18 min en prod: 30x un climb normal, bien sous les 9000 ticks
+/// du cas observe.
+pub const RESCUE_BUDGET_TICKS: u64 = 1800;
+
+/// Budget check on game ticks (saturating: tick resets never fake an expiry).
+pub fn rescue_expired(started: u64, now: u64) -> bool {
+    now.saturating_sub(started) >= RESCUE_BUDGET_TICKS
+}
+
+/// Dossier path for an expired rescue (hors-ligne, rejouable comme les
+/// dossiers nav): `run/failures/<compte>-rescue-<tick>.json`.
+pub fn rescue_dossier_path(account: &str, tick: u64) -> std::path::PathBuf {
+    crate::paths::run_dir().join("failures").join(format!("{account}-rescue-{tick}.json"))
+}
+
+/// Expire one rescue loudly: dossier on disk, typed `RescueBudget` in
+/// `last_error`, repeat guard set so the observer does not re-pose the
+/// same spot. The main script resumes (pause, never re-run) and its own
+/// report drives the brain replan; idle workers simply stop looping.
+pub(crate) fn fail_rescue_budget(shared: &Shared, pending: &PendingRescue, now: u64) {
+    let dossier = object(vec![
+        ("account", str_value(&shared.account)),
+        ("rescue", str_value(&pending.rescue)),
+        (
+            "pos",
+            Value::Arr(vec![
+                Value::Int(i64::from(pending.pos.0)),
+                Value::Int(i64::from(pending.pos.1)),
+                Value::Int(i64::from(pending.pos.2)),
+            ]),
+        ),
+        ("started", Value::Int(pending.started as i64)),
+        ("tick", Value::Int(now as i64)),
+        ("budget_ticks", Value::Int(RESCUE_BUDGET_TICKS as i64)),
+        ("stop", str_value("rescue_budget")),
+    ]);
+    let path = rescue_dossier_path(&shared.account, now);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, lifescape_json::stringify(&dossier));
+    let script_args = shared.inner.lock().unwrap().script_args.clone();
+    crate::session_push::push_event(
+        &shared.account,
+        "rescue_budget",
+        &pending.rescue,
+        false,
+        now,
+        &pending.rescue,
+        &script_args,
+        &format!("rescue {} over budget ({} ticks)", pending.rescue, RESCUE_BUDGET_TICKS),
+        pending.pos,
+    );
+    *shared.rescue_done.lock().unwrap() = Some((pending.rescue.clone(), pending.pos));
+    shared.inner.lock().unwrap().last_error = Some(object(vec![
+        ("where", str_value(&pending.rescue)),
+        ("type", str_value("RescueBudget")),
+        (
+            "message",
+            str_value(&format!("rescue {} over budget at {:?}", pending.rescue, pending.pos)),
+        ),
+    ]));
+    shared.log(&format!("rescue {} over budget at {:?}, dossier {}", pending.rescue, pending.pos, path.display()));
 }
 
 /// Live-bot detection: maze, mime, carried cube, fail-teleport landing,
@@ -82,10 +152,29 @@ pub(crate) fn pose(shared: &Shared, kind: EventKind, pos: (i32, i32, i32), tick:
     let rescue = randomevent::rescue_for(kind).to_string();
     {
         let mut slot = shared.pending_rescue.lock().unwrap();
-        if slot.as_ref().is_some_and(|pending| pending.rescue == rescue && pending.pos == pos) {
+        if let Some(existing) = slot.as_ref() {
+            // Budget first: an expired pose fails loudly instead of
+            // refreshing silently (olivia_king tower loop).
+            if rescue_expired(existing.started, tick) {
+                let expired = PendingRescue {
+                    rescue: existing.rescue.clone(),
+                    pos: existing.pos,
+                    started: existing.started,
+                };
+                drop(slot);
+                fail_rescue_budget(shared, &expired, tick);
+                shared.pending_rescue.lock().unwrap().take();
+                return;
+            }
+            if existing.rescue == rescue && existing.pos == pos {
+                return;
+            }
+        }
+        // Repeat guard: a budgeted rescue never re-poses at the same spot.
+        if shared.rescue_done.lock().unwrap().as_ref().is_some_and(|done| done.0 == rescue && done.1 == pos) {
             return;
         }
-        *slot = Some(PendingRescue { rescue, pos });
+        *slot = Some(PendingRescue { rescue, pos, started: tick });
     }
     let name = format!("{kind:?}").to_lowercase();
     {
@@ -143,6 +232,14 @@ pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
     let Some(pending) = pending else {
         return gate_market(shared, bot, stopped());
     };
+    // Defaut 4: bounded inline rescue. Over budget, the pose fails
+    // typed (dossier + RescueBudget) and the script resumes; its own
+    // end report drives the brain replan, never another rescue loop.
+    if rescue_expired(pending.started, bot.world.ticks) {
+        fail_rescue_budget(shared, &pending, bot.world.ticks);
+        shared.rescue_gate.store(false, Ordering::SeqCst);
+        return !stopped();
+    }
     if shared.rescue_done.lock().unwrap().as_ref().is_some_and(|done| done.0 == pending.rescue && done.1 == pending.pos) {
         *shared.pending_rescue.lock().unwrap() = Some(pending);
         shared.rescue_gate.store(false, Ordering::SeqCst);
@@ -319,6 +416,13 @@ pub(crate) fn drain_idle(shared: &Arc<Shared>) -> bool {
     let Some(pending) = pending else {
         return false;
     };
+    // Defaut 4: bounded idle rescue. Over budget, fail typed and stay
+    // idle: the brain replans the graph instead of looping the tower.
+    let now = shared.inner.lock().unwrap().last_heartbeat_tick;
+    if rescue_expired(pending.started, now) {
+        fail_rescue_budget(shared, &pending, now);
+        return false;
+    }
     let launch = {
         let mut inner = shared.inner.lock().unwrap();
         if inner.script_alive || inner.held || !inner.connected || inner.closing {
@@ -392,7 +496,7 @@ pub(crate) fn idle_scan(shared: &Shared) {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_live, detect_snapshot, pose};
+    use super::{detect_live, detect_snapshot, pose, rescue_dossier_path, rescue_expired, RESCUE_BUDGET_TICKS};
     use crate::session::{SessionInner, Shared};
     use lifescape_sdk::client::Snapshot;
     use lifescape_sdk::Bot;
@@ -609,5 +713,35 @@ mod tests {
         assert!(super::gate_tick(&shared, &mut bot), "market runs next, loop alive");
         assert!(shared.pending_market.lock().unwrap().is_none(), "market consumed second");
         assert!(!shared.rescue_gate.load(std::sync::atomic::Ordering::SeqCst), "single level released");
+    }
+
+    /// Defaut 4: the tower loop is bounded. 1800 ticks, not 90 minutes:
+    /// at the budget the pose fails typed (dossier + RescueBudget) and
+    /// the same spot never re-poses.
+    #[test]
+    fn rescue_budget_bounds_the_tower_loop() {
+        assert_eq!(RESCUE_BUDGET_TICKS, 1800, "budget pinned");
+        assert!(!rescue_expired(100, 100 + RESCUE_BUDGET_TICKS - 1), "one tick under keeps running");
+        assert!(rescue_expired(100, 100 + RESCUE_BUDGET_TICKS), "at budget fails typed");
+        assert!(!rescue_expired(1439, 5), "tick reset saturates, never fakes an expiry");
+        let path = rescue_dossier_path("olivia_king", 9000);
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("olivia_king-rescue-9000.json"), "dossier rejouable, got {path:?}");
+    }
+
+    #[test]
+    fn expired_pose_never_reposes_the_same_spot() {
+        let shared = test_shared(idle_bot_at(1, 3278, 3500));
+        pose(&shared, EventKind::Tower, (1, 3278, 3500), 100);
+        assert!(shared.pending_rescue.lock().unwrap().is_some(), "tower posed");
+        // Same spot at the budget: expire loudly instead of refreshing.
+        pose(&shared, EventKind::Tower, (1, 3278, 3500), 100 + RESCUE_BUDGET_TICKS);
+        assert!(shared.pending_rescue.lock().unwrap().is_none(), "expired pose consumed");
+        let done = shared.rescue_done.lock().unwrap().clone().expect("repeat guard set");
+        assert_eq!(done.0, "rescue_down", "tower rescue named, got {done:?}");
+        // Still on the fail spot: no re-pose, the graph resumes instead.
+        pose(&shared, EventKind::Tower, (1, 3278, 3500), 100 + RESCUE_BUDGET_TICKS + 1);
+        assert!(shared.pending_rescue.lock().unwrap().is_none(), "same spot stays quiet after the budget");
+        let error = shared.inner.lock().unwrap().last_error.clone().expect("typed failure");
+        assert_eq!(error.get("type").as_str(), Some("RescueBudget"), "typed, got {error:?}");
     }
 }

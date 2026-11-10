@@ -141,9 +141,123 @@ pub(crate) fn bank_types(job: &Job) -> usize {
     types.len()
 }
 
+/* P1.6 D52: sale gate (worn, protected tools, graph items never list). */
+/// D52 protected tool debug names (kit orders + tinderbox): never sold by flip or
+/// cleanup, whether carried, worn or banked. Debug names, as the keep
+/// list and the live snapshots carry them.
+pub const PROTECTED_TOOLS: &[&str] = &[
+    "rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe",
+    "rune_pickaxe", "adamant_pickaxe", "mithril_pickaxe", "steel_pickaxe", "iron_pickaxe", "bronze_pickaxe",
+    "lobster_pot", "harpoon", "fishing_rod", "fly_fishing_rod", "net",
+    "tinderbox",
+];
+
+/// D52 tool gate (case-insensitive): the flip auto-pick sold its own
+/// net because it only excluded worn ids, never carried tools.
+pub fn is_protected_tool(name: &str) -> bool {
+    PROTECTED_TOOLS.iter().any(|tool| tool.eq_ignore_ascii_case(name))
+}
+
+/// D52 sale gate: true when `name` must never list (worn, tools, graph keep, coins).
+pub fn sale_blocked(name: &str, keep: &[String], worn: &[String]) -> bool {
+    if name.eq_ignore_ascii_case("coins") {
+        return true;
+    }
+    if is_protected_tool(name) {
+        return true;
+    }
+    if worn.iter().any(|held| held.eq_ignore_ascii_case(name)) {
+        return true;
+    }
+    keep.iter().any(|kept| kept.eq_ignore_ascii_case(name))
+}
+
+/// Merge the graph keep-list with the live worn names (D52): sorted, deduplicated.
+pub fn merge_keep(graph: Vec<String>, worn: Vec<String>) -> Vec<String> {
+    let mut keep = graph;
+    keep.extend(worn);
+    keep.sort_by_key(|name| name.to_lowercase());
+    keep.dedup_by(|second, first| second.eq_ignore_ascii_case(first));
+    keep
+}
+
+/// D52 flip pick: richest F2P tradeable stack outside the sale gate.
+/// `None` means engagement sans objet (the clock ends it, no doomed order).
+pub fn pick_flip_target(
+    stacks: &[(String, i64)],
+    keep: &[String],
+    worn: &[String],
+) -> Option<(String, i64)> {
+    let mut best: Option<(String, i64, i64)> = None;
+    for (name, qty) in stacks {
+        if *qty <= 0 || sale_blocked(name, keep, worn) {
+            continue;
+        }
+        let Some(entry) = lifescape_gamedata::objs_by_name(name).into_iter().next() else {
+            continue;
+        };
+        if !entry.tradeable || entry.members == Some(true) {
+            continue;
+        }
+        let value = entry.price.max(1).saturating_mul(*qty);
+        if best.as_ref().is_none_or(|(_, _, top)| value > *top) {
+            best = Some((name.clone(), *qty, value));
+        }
+    }
+    best.map(|(name, qty, _)| (name, qty))
+}
+
+fn live_names(job: &Job, key: &str) -> Vec<String> {
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let mut names = Vec::new();
+    for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+        if let Value::Obj(_) = &entry {
+            if let Some(name) = entry.get("name").as_str() {
+                if entry.get("count").as_i64().unwrap_or(1) > 0 {
+                    names.push(name.to_string());
+                }
+            }
+        } else if let Value::Str(name) = &entry {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+/// Live worn debug names (D52) for the `--keep` merge.
+pub(crate) fn worn_names(job: &Job) -> Vec<String> {
+    live_names(job, "worn")
+}
+
+/// Live carried + banked stacks (debug name, summed quantity) for the flip pick.
+pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let mut totals: std::collections::HashMap<String, (String, i64)> = std::collections::HashMap::new();
+    for key in ["inv", "bank"] {
+        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+            let (name, qty) = match &entry {
+                Value::Obj(_) => match entry.get("name").as_str() {
+                    Some(name) => (name.to_string(), entry.get("count").as_i64().unwrap_or(1)),
+                    None => continue,
+                },
+                Value::Str(name) => (name.clone(), 1),
+                _ => continue,
+            };
+            if qty <= 0 {
+                continue;
+            }
+            totals
+                .entry(name.to_lowercase())
+                .and_modify(|held| held.1 = held.1.saturating_add(qty))
+                .or_insert((name, qty));
+        }
+    }
+    totals.into_values().collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::choose_money;
+    use super::{choose_money, is_protected_tool, merge_keep, pick_flip_target, sale_blocked};
 
     #[test]
     fn trend_bonus_flips_a_close_money_call() {
@@ -162,5 +276,44 @@ mod tests {
             ("gather:woodcut/yew_logs".to_string(), 480.0, 1000.0, 0.8),
         ];
         assert_eq!(choose_money(&flip, 0.1).as_deref(), Some("gather:woodcut/yew_logs"), "trend flips the money call");
+    }
+
+    /// D52: worn, tools and graph items never sell. The L11 flip sold
+    /// its own net (only worn ids were excluded, never carried tools).
+    #[test]
+    fn sale_gate_blocks_worn_tools_and_graph() {
+        let keep = vec!["feather".to_string()];
+        let worn = vec!["iron_sword".to_string()];
+        assert!(sale_blocked("net", &[], &[]), "carried tool never lists");
+        assert!(sale_blocked("bronze_axe", &[], &[]), "axe never lists");
+        assert!(sale_blocked("tinderbox", &[], &[]), "tinderbox never lists");
+        assert!(sale_blocked("iron_sword", &[], &worn), "worn never lists");
+        assert!(sale_blocked("feather", &keep, &[]), "graph item never lists");
+        assert!(sale_blocked("coins", &[], &[]), "wallet never lists");
+        assert!(!sale_blocked("yew_logs", &keep, &worn), "plain surplus lists");
+        assert!(is_protected_tool("NET"), "gate is case-insensitive");
+    }
+
+    #[test]
+    fn keep_merge_dedups_worn_into_graph() {
+        let merged = merge_keep(vec!["feather".to_string()], vec!["Iron_Sword".to_string(), "feather".to_string()]);
+        assert_eq!(merged.len(), 2, "dedup is case-insensitive, got {merged:?}");
+        assert!(merged.contains(&"feather".to_string()));
+        assert!(merged.contains(&"Iron_Sword".to_string()));
+    }
+
+    #[test]
+    fn flip_pick_skips_the_gate_and_takes_the_richest() {
+        let stacks = vec![
+            ("net".to_string(), 1),
+            ("coins".to_string(), 5000),
+            ("feather".to_string(), 2000),
+            ("yew_logs".to_string(), 400),
+        ];
+        let keep = vec!["feather".to_string()];
+        let picked = pick_flip_target(&stacks, &keep, &[]).expect("surplus lists");
+        assert_eq!(picked.0, "yew_logs", "tools, coins and graph items never win, got {picked:?}");
+        assert!(pick_flip_target(&[("net".to_string(), 1)], &[], &[]).is_none(), "tools alone mean no target");
+        assert!(pick_flip_target(&[], &[], &[]).is_none(), "empty stock means engagement sans objet");
     }
 }
