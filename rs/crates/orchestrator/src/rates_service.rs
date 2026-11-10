@@ -8,16 +8,25 @@
 //! edited here) and hands the parsed report to `Snapshot::record` below.
 //! The snapshot is the aggregate state: one bucket per
 //! (method, item, level-band) plus one per (method, skill, level-band)
-//! for XP. It lives in memory, is rewritten atomically to
+//! for XP, plus the merchant book (`trading`) for `market`/`shop`
+//! methods. It lives in memory, is rewritten atomically to
 //! `run/rates-snapshot.json` on every ingest, and reloads from that file
-//! when the daemon restarts, so no measured yield is lost with the
-//! process. The store rows stay the durable raw log (re-cuttable later).
+//! when the daemon restarts (schema 1 files load with an empty book), so
+//! no measured yield is lost with the process. When the file is missing
+//! or corrupt, trading positions rebuild from the store log
+//! (`rebuild_from_store`); yields and XP do not (no per-report ticks in
+//! the store read API) and restart from priors. The store rows stay the
+//! durable raw log (re-cuttable later).
 //!
 //! Rules applied here, all measured or explicitly marked:
-//! - Only farm flows count (D16): `produced`, `loot`, `ground_spawn` and
-//!   `picked`. Shop and trade flows (`shop_bought`, `traded`, `shop_sold`),
-//!   `consumed` inputs and `lost` never enter a yield rate; `consumed`
-//!   lines feed the input-cost side of profitability instead.
+//! - Only farm flows count (D16): `produced`, `loot` and `ground_spawn`.
+//!   Trading methods (`market`, `market:*`, `shop:*`, D44) never enter a
+//!   yield or XP rate: their coin P&L feeds the trading book instead.
+//!   Shop and trade flows (`shop_bought`, `shop_sold`, `traded`),
+//!   `consumed` inputs, `lost`, `death` and `unattributed` never enter a
+//!   yield rate either; `consumed` lines feed the input-cost side of
+//!   profitability instead. Provenances validate against the frozen ten
+//!   at parse time (`picked` is retired, D45): unknown labels fail loud.
 //! - Normalisation per 6000 ticks of engagement, levels in bands of 5,
 //!   per bucket: report count, mean, population standard deviation and
 //!   an exponential moving average (alpha 0.3, arrival order).
@@ -43,6 +52,11 @@ use std::sync::{Mutex, OnceLock};
 use lifescape_json::{object, str_value, Value};
 use lifescape_store::Store;
 
+#[path = "rates_trading.rs"]
+mod trading;
+#[path = "web_rates.rs"]
+mod web_rates;
+
 /// Ticks of one normalised engagement window (one in-game hour in prod).
 pub const NORMALIZE_TICKS: f64 = 6000.0;
 /// Width of a level band: bands are 1-5, 6-10, ...
@@ -53,13 +67,23 @@ pub const MIN_MEASURED_REPORTS: usize = 3;
 pub const EMA_ALPHA: f64 = 0.3;
 /// Weight of the public trend bonus inside profitability.
 pub const TREND_WEIGHT: f64 = 0.1;
-/// Snapshot schema, bumped when the file layout changes.
-const SNAPSHOT_SCHEMA: i64 = 1;
+/// Snapshot schema, bumped when the file layout changes: 1 is the
+/// pre-trading layout (loads with an empty book), 2 adds it.
+const SNAPSHOT_SCHEMA: i64 = 2;
 
-/// Provenances that count as farm output. `picked` is accepted although
-/// no session labels it yet (today such takes read `ground_spawn`).
+/// Provenances that count as farm output. `picked` is retired (D45): the
+/// SDK no longer emits or parses it, so it never rates.
 pub fn is_farm_provenance(provenance: &str) -> bool {
-    matches!(provenance, "produced" | "loot" | "ground_spawn" | "picked")
+    matches!(provenance, "produced" | "loot" | "ground_spawn")
+}
+
+/// Trading methods (D44): never a yield, never XP. Bare `market` is
+/// today's flip script (the session reports the script name); `market:*`
+/// and `shop:*` are the planner's finer legs. Bare `shop` is reserved
+/// for the symmetric script name. Coin P&L of these methods feeds the
+/// trading book instead of the rate buckets.
+pub fn is_trading_method(method: &str) -> bool {
+    method == "market" || method == "shop" || method.starts_with("market:") || method.starts_with("shop:")
 }
 
 /// Provenances that count as an engagement input cost (bait, food).
@@ -236,6 +260,12 @@ pub fn parse_report(report: &Value) -> Result<ParsedReport, String> {
             if provenance.is_empty() {
                 return Err(format!("rates: item '{}' has no provenance", row.get("name").as_str().unwrap_or("?")));
             }
+            if lifescape_sdk::provenance::Provenance::parse(&provenance).is_none() {
+                return Err(format!(
+                    "rates: item '{}' has unknown provenance '{provenance}'",
+                    row.get("name").as_str().unwrap_or("?")
+                ));
+            }
             items.push(ParsedItem {
                 name: row.get("name").as_str().unwrap_or("").to_string(),
                 provenance,
@@ -365,13 +395,15 @@ impl BucketStat {
 }
 
 /// Whole rates state: farm yields, XP and input costs per bucket, plus
-/// measured market pauses per (method, band) for the friction term.
+/// measured market pauses per (method, band) for the friction term, plus
+/// the merchant book for trading methods (D44, never rated).
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     yields: BTreeMap<(String, String, i64), BucketStat>,
     xp: BTreeMap<(String, String, i64), BucketStat>,
     inputs: BTreeMap<(String, String, i64), BucketStat>,
     pauses: BTreeMap<(String, i64), BucketStat>,
+    pub(crate) trades: trading::TradeBook,
 }
 
 impl Snapshot {
@@ -379,10 +411,15 @@ impl Snapshot {
         Snapshot::default()
     }
 
-    /// Folds one parsed engagement into the buckets. Lines that carry
-    /// no rate (zero tick budget, non-farm provenance) are skipped;
-    /// the raw store rows keep them.
+    /// Folds one parsed engagement into the buckets. Trading methods
+    /// feed the merchant book only (D44: no yields, no XP); lines that
+    /// carry no rate (zero tick budget, non-farm provenance) are
+    /// skipped; the raw store rows keep them.
     pub fn record(&mut self, parsed: &ParsedReport) {
+        if is_trading_method(&parsed.method) {
+            self.trades.record_trade(parsed);
+            return;
+        }
         let work_ticks = parsed.wall_ticks.saturating_sub(parsed.pause_ticks);
         if work_ticks <= 0 {
             return;
@@ -693,11 +730,20 @@ fn global_snapshot() -> &'static Mutex<Snapshot> {
 
 fn load_snapshot_file() -> Snapshot {
     let path = snapshot_path();
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(_) => return Snapshot::new(),
+    match std::fs::read_to_string(&path) {
+        Ok(text) => snapshot_from_json(&text).unwrap_or_else(store_fallback),
+        Err(_) => store_fallback(),
+    }
+}
+
+/// File missing or corrupt: trading positions rebuild exactly from the
+/// store log; yields and XP restart empty (priors cover the cold start).
+fn store_fallback() -> Snapshot {
+    let database = crate::paths::run_dir().join("lifescape.db");
+    let Ok(store) = Store::open(&database) else {
+        return Snapshot::new();
     };
-    snapshot_from_json(&text).unwrap_or_default()
+    trading::rebuild_from_store(&store).unwrap_or_default()
 }
 
 fn snapshot_to_value(snapshot: &Snapshot) -> Value {
@@ -753,12 +799,15 @@ fn snapshot_to_value(snapshot: &Snapshot) -> Value {
             ]),
         );
     }
+    let (trade_items, trade_last) = snapshot.trades.to_value();
     object(vec![
         ("schema", Value::Int(SNAPSHOT_SCHEMA)),
         ("yields", Value::Obj(yields)),
         ("xp", Value::Obj(xp)),
         ("inputs", Value::Obj(inputs)),
         ("pauses", Value::Obj(pauses)),
+        ("trades", trade_items),
+        ("trade_last", trade_last),
     ])
 }
 
@@ -795,7 +844,7 @@ fn split_three(key: &str) -> Option<(String, String, i64)> {
 
 fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     let value = lifescape_json::parse(text).ok()?;
-    if value.get("schema").as_i64() != Some(SNAPSHOT_SCHEMA) {
+    if value.get("schema").as_i64() != Some(1) && value.get("schema").as_i64() != Some(SNAPSHOT_SCHEMA) {
         return None;
     }
     let mut snapshot = Snapshot::new();
@@ -834,6 +883,7 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
             }
         }
     }
+    snapshot.trades = trading::TradeBook::from_value(value.get("trades"), value.get("trade_last"));
     Some(snapshot)
 }
 
@@ -891,12 +941,14 @@ pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
 }
 
 /// Full rates payload for the dashboard: yield rows, XP rows,
-/// profitability (priced through the store) and engaged counts supplied
-/// by the caller (operator eyes only, never read by bots).
+/// profitability (priced through the store), the trading table and
+/// engaged counts supplied by the caller (operator eyes only, never read
+/// by bots).
 pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<String, i64>) -> Value {
     let yields: Vec<Value> = snapshot.yield_rows().iter().map(yield_value).collect();
     let xp: Vec<Value> = snapshot.xp_rows().iter().map(xp_value).collect();
     let profits: Vec<Value> = profit_rows(store, snapshot).iter().map(profit_value).collect();
+    let trading: Vec<Value> = web_rates::trading_values(store, snapshot);
     let mut engaged_map = BTreeMap::new();
     for (script, count) in engaged {
         engaged_map.insert(script, Value::Int(count));
@@ -906,6 +958,7 @@ pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<Strin
         ("rates", Value::Arr(yields)),
         ("xp", Value::Arr(xp)),
         ("profit", Value::Arr(profits)),
+        ("trading", Value::Arr(trading)),
         ("engaged", Value::Obj(engaged_map)),
     ])
 }

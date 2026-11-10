@@ -4,6 +4,10 @@
 //! landing with skill XP is `produced`; melee gains are `loot`; the rest
 //! is `ground_spawn`. Negative flows: shop-coupled items are `shop_sold`;
 //! food, bait and buried bones are `consumed`; the rest is `lost`.
+//! Market runs (D44, D45): every leg flow reads `traded` (player fills),
+//! food eaten on the way stays `consumed`. A lone coin gain with no sale,
+//! no drop and no shop behind it is `unattributed`: an unexplained gap,
+//! never a yield.
 //! shortcut: net-diff heuristic, exact for bounded skill runs; upgrade to
 //! a per-flow SDK ledger when shop and trade flows need exactness too
 //! (market lot).
@@ -268,18 +272,26 @@ pub fn build_report(
     // are sales, not losses (eating still wins: food never sells).
     let shop_visit = positives && coins_delta < 0;
     let prayer_gain = xp_gain(before, after, 5);
+    let trading = crate::rates_service::is_trading_method(&ctx.activity);
     let mut items: Vec<FlowLine> = Vec::new();
     for (id, delta) in deltas {
         let name = display_name(bot, id);
         let low = name.to_lowercase();
-        let provenance = if delta > 0 {
+        let consumable = lifescape_gamedata::food::heal(&low) > 0 || baits.contains(&id) || (low.contains("bones") && prayer_gain > 0);
+        let provenance = if trading && (delta > 0 || !consumable) {
+            // Merchant legs are player fills, never skill products or
+            // shop moves; lunch eaten on the way stays consumption.
+            lifescape_sdk::provenance::Provenance::Traded.as_str()
+        } else if delta > 0 {
             if Some(id) == coins {
                 if negatives {
                     lifescape_sdk::provenance::Provenance::ShopSold.as_str()
                 } else if ctx.activity == "melee" {
                     lifescape_sdk::provenance::Provenance::Loot.as_str()
                 } else {
-                    lifescape_sdk::provenance::Provenance::GroundSpawn.as_str()
+                    // No sale, no drop, no shop behind lone coins: an
+                    // unexplained gap (D45), never a yield.
+                    lifescape_sdk::provenance::Provenance::Unattributed.as_str()
                 }
             } else if coins_delta < 0 {
                 lifescape_sdk::provenance::Provenance::ShopBought.as_str()
@@ -298,7 +310,7 @@ pub fn build_report(
             }
         } else if coins_delta > 0 {
             lifescape_sdk::provenance::Provenance::ShopSold.as_str()
-        } else if lifescape_gamedata::food::heal(&low) > 0 || baits.contains(&id) || (low.contains("bones") && prayer_gain > 0) {
+        } else if consumable {
             lifescape_sdk::provenance::Provenance::Consumed.as_str()
         } else if shop_visit {
             lifescape_sdk::provenance::Provenance::ShopSold.as_str()
@@ -432,7 +444,7 @@ mod tests {
     /// Woodcut gains with WC XP land as produced; levels ride along.
     #[test]
     fn logs_with_xp_are_produced() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let logs = (bot.tables.find_obj_by_name)("logs").expect("logs in dumps");
         let before = holdings(&[], &[(8, (2, 100))], 1000);
         let after = holdings(&[(logs, 25)], &[(8, (2, 350))], 1600);
@@ -448,7 +460,7 @@ mod tests {
     /// Melee gains are loot, even with combat XP; eaten food is consumed.
     #[test]
     fn melee_drops_are_loot_food_is_consumed() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let bones = (bot.tables.find_obj_by_name)("bones").expect("bones in dumps");
         let shrimp = (bot.tables.find_obj_by_name)("shrimp").expect("shrimp in dumps");
         let before = holdings(&[(shrimp, 3)], &[(0, (23, 6900))], 1000);
@@ -466,7 +478,7 @@ mod tests {
     /// in; coins alone without a counterpart are found, not earned.
     #[test]
     fn coins_coupling_marks_shop_flows() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let logs = (bot.tables.find_obj_by_name)("logs").expect("logs in dumps");
         let axe = (bot.tables.find_obj_by_name)("bronze_axe").expect("bronze_axe in dumps");
         let coins = (bot.tables.find_obj_by_name)("coins").expect("coins in dumps");
@@ -498,7 +510,7 @@ mod tests {
     /// spawns, never as skill products.
     #[test]
     fn uncoupled_gains_are_ground_spawns() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let feather = (bot.tables.find_obj_by_name)("feather").expect("feather in dumps");
         let before = holdings(&[], &[(8, (2, 100))], 100);
         let after = holdings(&[(feather, 5)], &[(8, (2, 100))], 200);
@@ -605,7 +617,7 @@ mod tests {
     /// deposited in-run reports +25 produced (with XP), never +125.
     #[test]
     fn prestock_cancels_against_the_baseline() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let logs = (bot.tables.find_obj_by_name)("logs").expect("logs in dumps");
         let before = holdings(&[(logs, 3)], &[(8, (2, 100))], 100);
         let after = holdings(&[(logs, 3)], &[(8, (2, 350))], 200);
@@ -623,7 +635,7 @@ mod tests {
     /// Report JSON carries every contract field for the daemon push.
     #[test]
     fn report_json_carries_the_contract() {
-        let mut bot = live_bot();
+        let bot = live_bot();
         let logs = (bot.tables.find_obj_by_name)("logs").expect("logs in dumps");
         let before = holdings(&[], &[(8, (2, 100))], 100);
         let after = holdings(&[(logs, 25)], &[(8, (2, 350))], 700);
@@ -637,5 +649,54 @@ mod tests {
         assert_eq!(value.get("xp").as_arr().map(|rows| rows.len()), Some(1));
         assert_eq!(value.get("items").as_arr().map(|rows| rows.len()), Some(1));
         assert!(!value.get("levels_before").is_null() && !value.get("levels_after").is_null());
+    }
+
+    /// Market runs label every leg `traded` at the source (D45): buy legs,
+    /// sell legs, and the completed flip whose item nets to zero and
+    /// leaves pure coins (never `ground_spawn`).
+    #[test]
+    fn market_runs_label_traded() {
+        let bot = live_bot();
+        let feather = (bot.tables.find_obj_by_name)("feather").expect("feather in dumps");
+        let coins = (bot.tables.find_obj_by_name)("coins").expect("coins in dumps");
+        // Buy leg: stock in, coins out.
+        let before = holdings(&[(coins, 200)], &[], 100);
+        let after = holdings(&[(feather, 100)], &[], 200);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("market", "budget_exhausted"));
+        let by_name: HashMap<&str, &str> =
+            report.items.iter().map(|flow| (flow.name.as_str(), flow.provenance)).collect();
+        let feather_name = (bot.tables.obj_name)(feather).expect("feather display");
+        assert_eq!(by_name[feather_name.as_str()], "traded");
+        // Completed flip: pure coins, the item netted to zero in-run.
+        let before = holdings(&[(coins, 200)], &[], 100);
+        let after = holdings(&[(coins, 260)], &[], 200);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("market", "budget_exhausted"));
+        assert_eq!(report.items.len(), 1);
+        assert_eq!((report.items[0].provenance, report.items[0].qty), ("traded", 60));
+    }
+
+    /// Lunch eaten on a flip stays `consumed`, not traded.
+    #[test]
+    fn market_food_stays_consumed() {
+        let bot = live_bot();
+        let shrimp = (bot.tables.find_obj_by_name)("shrimp").expect("shrimp in dumps");
+        let before = holdings(&[(shrimp, 3)], &[], 100);
+        let after = holdings(&[(shrimp, 2)], &[], 200);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("market", "budget_exhausted"));
+        assert_eq!(report.items.len(), 1);
+        assert_eq!((report.items[0].provenance, report.items[0].qty), ("consumed", -1));
+    }
+
+    /// Lone coin gains with no sale, no drop and no shop behind them are
+    /// `unattributed` (D45): an unexplained gap, never a yield.
+    #[test]
+    fn lone_coin_gains_are_unattributed() {
+        let bot = live_bot();
+        let coins = (bot.tables.find_obj_by_name)("coins").expect("coins in dumps");
+        let before = holdings(&[(coins, 200)], &[], 100);
+        let after = holdings(&[(coins, 250)], &[], 200);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("woodcut", "goal_reached"));
+        assert_eq!(report.items.len(), 1);
+        assert_eq!((report.items[0].provenance, report.items[0].qty), ("unattributed", 50));
     }
 }

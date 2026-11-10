@@ -1,7 +1,11 @@
-// Rates front: yield, XP and profit tables per (method x band),
+// Rates front: yield, XP, profit and trading tables per 6000 ticks,
 // refreshed every 30 s. Read-only dashboard page: bots never read it.
+// Sorting rides the shared TableSort helper (table.js, D46); when the
+// table.js route is not served yet, tables render unsorted instead of
+// blank.
 let payload = null;
 let filter = "";
+const sorter = (typeof TableSort !== 'undefined') ? TableSort : null;
 
 function bandLabel(band) {
   return band + "-" + (band + 4);
@@ -11,6 +15,56 @@ function number(value) {
   if (!isFinite(value)) return "-";
   return Math.round(value * 10) / 10;
 }
+
+function srcHtml(prior) {
+  return prior ? '<span class="prior">prior</span>' : 'measured';
+}
+
+function priceHtml(prior) {
+  return prior ? '<span class="prior">prior</span>' : 'market';
+}
+
+const YIELD_COLS = [
+  { key: 'method', label: 'method', kind: 'str' },
+  { key: 'item', label: 'item', kind: 'str' },
+  { key: 'band', label: 'band', kind: 'num', fmt: (v) => bandLabel(v) },
+  { key: 'count', label: 'n', kind: 'num' },
+  { key: 'mean', label: 'mean/6000', kind: 'num', fmt: (v) => number(v) },
+  { key: 'stddev', label: 'stddev', kind: 'num', fmt: (v) => number(v) },
+  { key: 'ema', label: 'ema', kind: 'num', fmt: (v) => number(v) },
+  { key: 'prior', label: 'src', kind: 'str', fmt: (v) => srcHtml(v) },
+];
+const XP_COLS = [
+  { key: 'method', label: 'method', kind: 'str' },
+  { key: 'skill', label: 'skill', kind: 'str' },
+  { key: 'band', label: 'band', kind: 'num', fmt: (v) => bandLabel(v) },
+  { key: 'count', label: 'n', kind: 'num' },
+  { key: 'mean', label: 'mean/6000', kind: 'num', fmt: (v) => number(v) },
+  { key: 'stddev', label: 'stddev', kind: 'num', fmt: (v) => number(v) },
+  { key: 'ema', label: 'ema', kind: 'num', fmt: (v) => number(v) },
+  { key: 'prior', label: 'src', kind: 'str', fmt: (v) => srcHtml(v) },
+];
+const PROFIT_COLS = [
+  { key: 'method', label: 'method', kind: 'str' },
+  { key: 'band', label: 'band', kind: 'num', fmt: (v) => bandLabel(v) },
+  { key: 'revenue', label: 'revenue', kind: 'num', fmt: (v) => number(v) },
+  { key: 'input_cost', label: 'inputs', kind: 'num', fmt: (v) => number(v) },
+  { key: 'friction', label: 'friction', kind: 'num', fmt: (v) => number(v) },
+  { key: 'trend_bonus', label: 'trend bonus', kind: 'num', fmt: (v) => number(v) },
+  { key: 'profit', label: 'profit', kind: 'num', fmt: (v) => number(v) },
+  { key: 'price_prior', label: 'price', kind: 'str', fmt: (v) => priceHtml(v) },
+];
+const TRADING_COLS = [
+  { key: 'item', label: 'item', kind: 'str' },
+  { key: 'profit_per_6000', label: 'profit/6000', kind: 'num', fmt: (v) => number(v) },
+  { key: 'deals_settled', label: 'settled', kind: 'num' },
+  { key: 'fill_rate', label: 'fill', kind: 'num', fmt: (v) => (isFinite(v) ? Math.round(v * 100) + '%' : '-') },
+  { key: 'stock_value', label: 'stock', kind: 'num', fmt: (v) => number(v) },
+];
+const ENGAGED_COLS = [
+  { key: 'script', label: 'script', kind: 'str' },
+  { key: 'bots', label: 'bots', kind: 'num' },
+];
 
 async function load() {
   try {
@@ -32,53 +86,45 @@ function onSearch() {
   render();
 }
 
+// Plain unsorted fallback while the shared table.js route is unwired:
+// same cells, no arrows, never blank.
+function plainRender(id, columns, rows) {
+  const table = document.getElementById(id);
+  if (!table) return;
+  let html = '<tr>' + columns.map((c) => '<th class="left">' + c.label + '</th>').join('') + '</tr>';
+  for (const row of rows) {
+    html += '<tr>' + columns.map((c) => {
+      const raw = row[c.key];
+      const cell = c.fmt ? c.fmt(raw, row) : (raw === null || raw === undefined || raw === '' ? '-' : raw);
+      return '<td class="left">' + cell + '</td>';
+    }).join('') + '</tr>';
+  }
+  table.innerHTML = rows.length ? html : html + '<tr><td class="left muted" colspan="' + columns.length + '">-</td></tr>';
+}
+
+function renderTable(id, columns, rows) {
+  if (sorter) sorter.render(id, columns, rows);
+  else plainRender(id, columns, rows);
+}
+
 function render() {
   if (!payload) return;
   const yields = (payload.rates || []).filter(matches);
   const xp = (payload.xp || []).filter(matches);
   const profit = (payload.profit || []).filter(matches);
+  const trading = payload.trading || [];
   document.getElementById('summary').textContent =
-    yields.length + ' yield row(s) · ' + xp.length + ' xp row(s) · ' + profit.length + ' profit row(s)';
+    yields.length + ' yield row(s) · ' + xp.length + ' xp row(s) · ' + profit.length + ' profit row(s) · ' +
+    trading.length + ' trading row(s)';
 
-  const yieldRows = ['<tr><th class="left">method</th><th class="left">item</th><th>band</th>' +
-    '<th>n</th><th>mean/6000</th><th>stddev</th><th>ema</th><th class="left">src</th></tr>'];
-  for (const row of yields) {
-    const src = row.prior ? '<span class="prior">prior</span>' : 'measured';
-    yieldRows.push('<tr><td class="left">' + row.method + '</td><td class="left">' + row.item + '</td>' +
-      '<td>' + bandLabel(row.band) + '</td><td>' + row.count + '</td><td>' + number(row.mean) + '</td>' +
-      '<td>' + number(row.stddev) + '</td><td>' + number(row.ema) + '</td><td class="left">' + src + '</td></tr>');
-  }
-  document.getElementById('yields').innerHTML = yieldRows.join('');
-
-  const xpRows = ['<tr><th class="left">method</th><th class="left">skill</th><th>band</th>' +
-    '<th>n</th><th>mean/6000</th><th>stddev</th><th>ema</th><th class="left">src</th></tr>'];
-  for (const row of xp) {
-    const src = row.prior ? '<span class="prior">prior</span>' : 'measured';
-    xpRows.push('<tr><td class="left">' + row.method + '</td><td class="left">' + row.skill + '</td>' +
-      '<td>' + bandLabel(row.band) + '</td><td>' + row.count + '</td><td>' + number(row.mean) + '</td>' +
-      '<td>' + number(row.stddev) + '</td><td>' + number(row.ema) + '</td><td class="left">' + src + '</td></tr>');
-  }
-  document.getElementById('xp').innerHTML = xpRows.join('');
-
-  const profitRows = ['<tr><th class="left">method</th><th>band</th><th>revenue</th>' +
-    '<th>inputs</th><th>friction</th><th>trend bonus</th><th>profit</th><th class="left">price</th></tr>'];
-  for (const row of profit) {
-    const price = row.price_prior ? '<span class="prior">prior</span>' : 'market';
-    profitRows.push('<tr><td class="left">' + row.method + '</td><td>' + bandLabel(row.band) + '</td>' +
-      '<td>' + number(row.revenue) + '</td><td>' + number(row.input_cost) + '</td>' +
-      '<td>' + number(row.friction) + '</td><td>' + number(row.trend_bonus) + '</td>' +
-      '<td>' + number(row.profit) + '</td><td class="left">' + price + '</td></tr>');
-  }
-  document.getElementById('profit').innerHTML = profitRows.join('');
+  renderTable('yields', YIELD_COLS, yields);
+  renderTable('xp', XP_COLS, xp);
+  renderTable('profit', PROFIT_COLS, profit);
+  renderTable('trading', TRADING_COLS, trading);
 
   const engaged = payload.engaged || {};
-  const names = Object.keys(engaged).sort();
-  const engagedRows = ['<tr><th class="left">script</th><th>bots</th></tr>'];
-  for (const name of names) {
-    engagedRows.push('<tr><td class="left">' + name + '</td><td>' + engaged[name] + '</td></tr>');
-  }
-  document.getElementById('engaged').innerHTML =
-    names.length ? engagedRows.join('') : '<tr><td class="left muted" colspan="2">no running bot</td></tr>';
+  const engagedRows = Object.keys(engaged).sort().map((name) => ({ script: name, bots: engaged[name] }));
+  renderTable('engaged', ENGAGED_COLS, engagedRows);
 }
 
 load();
