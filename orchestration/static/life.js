@@ -118,21 +118,6 @@ function filtered() {
   return lives.filter(row => row.account.toLowerCase().includes(needle));
 }
 
-function renderIndex() {
-  const rows = sortRows(filtered());
-  const arrow = key => key === sortKey ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
-  const head = '<thead><tr>' + COLS.map(col =>
-    '<th class="' + (col[2] ? 'num' : 'left') + '" onclick="onSort(\'' + col[0] + '\')">' +
-    col[1] + arrow(col[0]) + '</th>').join('') + '</tr></thead>';
-  const body = rows.map(row =>
-    '<tr class="' + (selected === row.account ? 'cur' : '') + '" onclick="pick(\'' + row.account + '\')">' +
-    COLS.map(col => '<td class="' + (col[2] ? 'num' : 'left') + '">' + cellText(row, col[0]) + '</td>').join('') +
-    '</tr>').join('');
-  document.getElementById('index').innerHTML = head +
-    '<tbody>' + (body || '<tr><td class="left muted" colspan="13">no life file</td></tr>') + '</tbody>';
-  document.getElementById('count').textContent = rows.length + ' account(s)';
-}
-
 function onSearch() {
   query = document.getElementById('search').value;
   renderIndex();

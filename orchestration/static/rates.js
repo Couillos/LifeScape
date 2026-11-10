@@ -86,7 +86,7 @@ function onSearch() {
   render();
 }
 
-// Plain unsorted fallback while the shared table.js route is unwired:
+// Plain unsorted fallback if the shared table.js fails to load:
 // same cells, no arrows, never blank.
 function plainRender(id, columns, rows) {
   const table = document.getElementById(id);
