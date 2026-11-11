@@ -1369,4 +1369,25 @@ mod tests {
         let beside = Tile { x: 3185, z: 3446, level: 0 };
         assert!(beside.fallback_rank(dest, 3) < upstairs.fallback_rank(dest, 23), "bank booth stays on its level");
     }
+    #[test]
+    fn describe_blockers_names_door_tile_op_and_stand() {
+        let door = super::Blocker {
+            loc: 1530,
+            name: String::from("Door"),
+            x: 3076,
+            z: 3427,
+            level: 0,
+            open_op: Some(1),
+            is_door: true,
+            stand: Some(super::Tile { x: 3077, z: 3427, level: 0 }),
+        };
+        let text = super::describe_blockers(std::slice::from_ref(&door));
+        assert!(text.contains("door 'Door'"), "kind+nom, got {text}");
+        assert!(text.contains("loc=1530"), "loc, got {text}");
+        assert!(text.contains("(3076,3427,0)"), "tuile, got {text}");
+        assert!(text.contains("op=1"), "op, got {text}");
+        assert!(text.contains("stand=(3077,3427,0)"), "stand, got {text}");
+        assert_eq!(super::describe_blockers(&[]), "", "vide = pas de bruit");
+    }
 }
+
