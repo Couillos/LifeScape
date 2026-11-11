@@ -794,6 +794,24 @@
   {
     "arrived": [
       1,
+      2971,
+      3373
+    ],
+    "choice": "",
+    "date": "2026-11-10",
+    "from": [
+      0,
+      2971,
+      3370
+    ],
+    "loc": 1722,
+    "message": "",
+    "result": "ok",
+    "ticks": 1
+  },
+  {
+    "arrived": [
+      1,
       3021,
       3344
     ],
@@ -1914,14 +1932,14 @@
       3228
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-10",
     "from": [
       0,
       3204,
       3229
     ],
     "loc": 1738,
-    "message": "I can't reach that!",
+    "message": "",
     "result": "no_move",
     "ticks": 41
   },
