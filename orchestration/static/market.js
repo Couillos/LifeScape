@@ -148,12 +148,19 @@ function renderTrades() {
   document.getElementById('trades').innerHTML = rows.join('');
 }
 
+function statusLabel(status) {
+  if (status === 'settled') return 'settled';
+  if (status === 'failed') return 'failed';
+  if (status === 'matched') return 'pending';
+  return '—';
+}
+
 function renderRecent() {
-  const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>time</th></tr>'];
+  const rows = ['<tr><th>item</th><th>qty</th><th>price</th><th>buyer</th><th>seller</th><th>status</th><th>time</th></tr>'];
   for (const trade of recent.slice(0, 15)) {
     const date = new Date(trade.t * 1000);
     const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    rows.push('<tr><td>' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + label + '</td></tr>');
+    rows.push('<tr><td>' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('recent').innerHTML = rows.join('');
 }
@@ -171,7 +178,7 @@ async function loadRecent() {
     const payload = await getJson('/api/market/recent?limit=20');
     if (payload.ok && Array.isArray(payload.deals)) {
       recentHavePseudos = true;
-      recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller }));
+      recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller, status: deal.status }));
       renderRecent();
       return;
     }
@@ -180,7 +187,7 @@ async function loadRecent() {
     const payload = await getJson('/api/market/trades?limit=20');
     if (payload.ok) {
       recentHavePseudos = false;
-      recent = payload.trades.slice().reverse().map(trade => ({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—' }));
+      recent = payload.trades.slice().reverse().map(trade => ({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—', status: 'settled' }));
       renderRecent();
     }
   } catch (e) { /* keep the last frame */ }
@@ -264,7 +271,7 @@ function watchLive() {
     let moved = false;
     for (const trade of fresh) {
       if (!recentHavePseudos && (!recent.length || trade.t > recent[0].t)) {
-        recent.unshift({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—' });
+        recent.unshift({ item: trade.item, q: trade.q, p: trade.p, t: trade.t, buyer: '—', seller: '—', status: 'settled' });
         recent = recent.slice(0, 30);
         renderRecent();
       }
