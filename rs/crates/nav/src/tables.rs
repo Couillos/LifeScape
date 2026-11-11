@@ -135,6 +135,10 @@ pub struct Tables {
     pub transitions: Vec<Transition>,
     pub verified: HashMap<(u16, i32, i32, i32), Verdict>,
     pub verified_any_level: Vec<((u16, i32, i32), Verdict)>,
+    /// Where the probe landed per transition (`arrived` in the verdict
+    /// file). For delta rows the proven stand replays exactly as
+    /// arrived minus delta; see `plan::stands`.
+    pub proven: HashMap<(u16, i32, i32, i32), Tile>,
     pub requirements: Vec<Requirement>,
     pub one_way: Vec<OneWay>,
     pub customs: Vec<CustomEdge>,
@@ -151,9 +155,9 @@ impl Tables {
     /// transitions plan with the unverified penalty).
     pub fn load(data_dir: &Path) -> Result<Tables, String> {
         let transitions = load_transitions(&data_dir.join("transitions.json"))?;
-        let (verified, verified_any_level) = load_verified(&data_dir.join("transitions_verified.json"));
+        let (verified, verified_any_level, proven) = load_verified(&data_dir.join("transitions_verified.json"));
         let (requirements, one_way, customs, blocked, sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
-        Ok(Tables { transitions, verified, verified_any_level, requirements, one_way, customs, blocked, sky_floors })
+        Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors })
     }
 
     /// Prober verdict for one transition, if it ever rode it.
@@ -162,6 +166,11 @@ impl Tables {
             return Some(*seen);
         }
         self.verified_any_level.iter().find(|((id, x, z), _)| *id == loc && *x == from.x && *z == from.z).map(|(_, seen)| *seen)
+    }
+
+    /// Where the probe landed for one transition, if it ever rode it.
+    pub fn proven_arrival(&self, loc: u16, from: Tile) -> Option<Tile> {
+        self.proven.get(&(loc, from.level, from.x, from.z)).copied()
     }
 
     /// Missing tags for a door tile, empty when it swings freely.
@@ -255,14 +264,15 @@ fn load_transitions(path: &Path) -> Result<Vec<Transition>, String> {
     Ok(out)
 }
 
-fn load_verified(path: &Path) -> (HashMap<(u16, i32, i32, i32), Verdict>, Vec<((u16, i32, i32), Verdict)>) {
+fn load_verified(path: &Path) -> (HashMap<(u16, i32, i32, i32), Verdict>, Vec<((u16, i32, i32), Verdict)>, HashMap<(u16, i32, i32, i32), Tile>) {
     let mut exact = HashMap::new();
     let mut loose = Vec::new();
+    let mut proven = HashMap::new();
     let Ok(text) = std::fs::read_to_string(path) else {
-        return (exact, loose);
+        return (exact, loose, proven);
     };
     let Ok(parsed) = lifescape_json::parse(&text) else {
-        return (exact, loose);
+        return (exact, loose, proven);
     };
     let rows = parsed.as_arr().cloned().unwrap_or_default();
     for row in &rows {
@@ -278,6 +288,11 @@ fn load_verified(path: &Path) -> (HashMap<(u16, i32, i32, i32), Verdict>, Vec<((
         if items.len() == 3 {
             if let (Some(level), Some(x), Some(z)) = (items[0].as_i64(), items[1].as_i64(), items[2].as_i64()) {
                 exact.insert((loc, level as i32, x as i32, z as i32), verdict);
+                // The landing replays the proven stand on delta rows
+                // (stand = arrived - delta); a 2-shape file never lands here.
+                if let Some(landing) = row.get("arrived").as_arr().and_then(|at| tile_of(at)) {
+                    proven.insert((loc, level as i32, x as i32, z as i32), landing);
+                }
             }
         } else if items.len() == 2 {
             if let (Some(x), Some(z)) = (items[0].as_i64(), items[1].as_i64()) {
@@ -285,7 +300,7 @@ fn load_verified(path: &Path) -> (HashMap<(u16, i32, i32, i32), Verdict>, Vec<((
             }
         }
     }
-    (exact, loose)
+    (exact, loose, proven)
 }
 
 fn parse_tile(value: &Value) -> Option<Tile> {

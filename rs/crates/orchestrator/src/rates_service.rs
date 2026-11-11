@@ -851,6 +851,11 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     if let Some(map) = value.get("yields").as_obj() {
         for (key, entry) in map {
             if let Some((method, item, band)) = split_three(key) {
+                // Pre-P1.4 files stored trading methods as yield rows;
+                // `record` never does (D44, book only): drop them on load.
+                if is_trading_method(&method) {
+                    continue;
+                }
                 snapshot.yields.insert((method, item, band), read_bucket(entry));
             }
         }
@@ -858,6 +863,9 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     if let Some(map) = value.get("xp").as_obj() {
         for (key, entry) in map {
             if let Some((method, skill, band)) = split_three(key) {
+                if is_trading_method(&method) {
+                    continue;
+                }
                 snapshot.xp.insert((method, skill, band), read_bucket(entry));
             }
         }
@@ -865,6 +873,9 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     if let Some(map) = value.get("inputs").as_obj() {
         for (key, entry) in map {
             if let Some((method, item, band)) = split_three(key) {
+                if is_trading_method(&method) {
+                    continue;
+                }
                 snapshot.inputs.insert((method, item, band), read_bucket(entry));
             }
         }
@@ -876,6 +887,9 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
                 continue;
             };
             if parts.next().is_some() {
+                continue;
+            }
+            if is_trading_method(method) {
                 continue;
             }
             if let Ok(band) = band.parse::<i64>() {

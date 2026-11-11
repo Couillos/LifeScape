@@ -210,10 +210,11 @@ pub(crate) fn relist_for_fill(
 }
 
 impl MarketService {
-    /// Persists one fill: execution row, ledger move, live-tail print and
-    /// an auto-convened deal (meeting tile + deadline assigned now).
+    /// Persists one fill: execution row, candle repaint, ledger move,
+    /// live-tail print and an auto-convened deal (meeting tile +
+    /// deadline assigned now).
     pub(crate) fn record_fill(&self, fill: &lifescape_market::Fill, relist: Vec<Order>, clock: i64) -> Result<i64, String> {
-        let store = self.lock_store();
+        let mut store = self.lock_store();
         store
             .record_execution(&lifescape_store::NewExecution {
                 item_id: fill.item,
@@ -222,6 +223,15 @@ impl MarketService {
                 clock,
                 server_tick: clock,
             })
+            .map_err(|error| error.to_string())?;
+        // `history` reads the `candles` cache, never executions: repaint
+        // both resolutions on the fill or every live trade stays
+        // invisible on the market page.
+        store
+            .rebuild_candles(fill.item, lifescape_store::YieldCandleResolution::Hour1)
+            .map_err(|error| error.to_string())?;
+        store
+            .rebuild_candles(fill.item, lifescape_store::YieldCandleResolution::Day1)
             .map_err(|error| error.to_string())?;
         drop(store);
         {

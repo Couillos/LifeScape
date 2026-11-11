@@ -343,6 +343,12 @@ pub(crate) fn plan_yielding_with(
         }
         Outcome::Closest(_) => {}
     }
+    // The exhaustive miss above burns the shared wall budget: without a
+    // fresh diagnosis budget every follow-up search stops at its first
+    // 1024-visit check and the toll diagnosis (PaidOnly) degrades into a
+    // bare Disconnected (admin-7526 live). B/C/D share one fresh budget:
+    // the diagnosis usually Finds fast, the pathological case caps at 2x.
+    let deadline = std::time::Instant::now() + PLAN_BUDGET;
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
@@ -988,6 +994,27 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
             out.push(stand);
         }
     }
+    // Stand-dependent verdict (stairs_316 live): the probe rode the
+    // first stand only, so its Ok covers that stand alone — a
+    // geometrically valid sibling (east of the stair) never moved
+    // server-side. On delta rows the proven stand replays exactly
+    // (proven arrival minus delta), so only it plans. The filter
+    // keeps every candidate when the proven stand drops out (rather
+    // than bricking the row) and never touches fixed-dest rows.
+    if let Some((dl, dx, dz)) = row.delta {
+        if let Some(landed) = search.tables.proven_arrival(row.loc, row.from) {
+            let proven: Vec<Tile> = out
+                .iter()
+                .cloned()
+                .filter(|stand| {
+                    Tile { x: stand.x + dx, z: stand.z + dz, level: stand.level + dl } == landed
+                })
+                .collect();
+            if !proven.is_empty() {
+                return proven;
+            }
+        }
+    }
     out
 }
 
@@ -1077,6 +1104,52 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
 mod tests {
     use super::yield_due;
     use std::time::{Duration, Instant};
+
+    fn real_world() -> (std::sync::Arc<crate::static_world::StaticWorld>, crate::tables::Tables) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+        let gametypes = std::fs::read_to_string(root.join("LifeScape/gamedata/data/gametypes.json")).expect("gametypes");
+        let overrides = std::fs::read_to_string(root.join("LifeScape/gamedata/data/nav_overrides.json")).expect("overrides");
+        let defs = crate::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+        let world = crate::static_world::StaticWorld::open(&zip, defs).expect("static world");
+        let zones = crate::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+        world.set_f2p(zones);
+        let tables = crate::tables::Tables::load(&root.join("LifeScape/gamedata/data")).expect("tables");
+        world.set_sky_floors(tables.sky_floors.clone());
+        (world, tables)
+    }
+
+    /// stairs_316 is stand-dependent (admin-5709 live): the probe rode
+    /// the south stand to (2971,3373,1), the planner picked the east
+    /// stand (2973,3371) and never moved. Only the proven stand plans.
+    #[test]
+    fn stairs_316_rides_the_proven_south_stand() {
+        let (world, tables) = real_world();
+        let row = tables.transitions.iter().find(|row| row.name == "stairs_316").expect("stairs_316 row");
+        let options = super::NavOptions::default();
+        let stands = super::ride_stands(&world, &tables, &options, row);
+        assert_eq!(stands, vec![super::Tile { x: 2971, z: 3369, level: 0 }], "only the probed stand plans, got {stands:?}");
+    }
+
+    /// End to end on the live dossier inputs: the golden rides south,
+    /// never the dead east stand.
+    #[test]
+    fn stairs_316_golden_plans_through_the_south_stand() {
+        let (world, tables) = real_world();
+        let from = super::Tile { x: 3222, z: 3218, level: 0 };
+        let dest = super::Tile { x: 2970, z: 3376, level: 1 };
+        let planned = super::plan(&world, &tables, from, dest, &super::NavOptions::default()).expect("stairs_316 plans");
+        let ride = planned
+            .segments
+            .iter()
+            .find_map(|segment| match segment {
+                super::Segment::Ride { transition, stand, expect, .. } if transition.name == "stairs_316" => Some((*stand, *expect)),
+                _ => None,
+            })
+            .expect("plan rides stairs_316");
+        assert_eq!(ride.0, super::Tile { x: 2971, z: 3369, level: 0 }, "south stand, not the dead east one");
+        assert_eq!(ride.1, super::Tile { x: 2971, z: 3373, level: 1 }, "probe landing");
+    }
 
     /// The keepalive gate: count abort every 16384 visits, wall-clock
     /// yield every 16 visits past one second, silence otherwise.

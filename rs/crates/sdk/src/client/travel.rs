@@ -54,6 +54,10 @@ const RIDE_WAIT: u64 = 41;
 /// Trapdoor pre-open watch: the lid flips within a few ticks, 17 leaves
 /// the swing plus two slow pumps.
 const PRE_OPEN_WAIT: u64 = 17;
+/// Toll dialog watch: the guard's lines stream in over several ticks
+/// (ask, answer, then the 3-way choice), 25 covers the exchange plus a
+/// slow-pump margin.
+const TOLL_DIALOG_WAIT: u64 = 25;
 /// Crossing step for an open door: the tiles are adjacent, measured
 /// 1-2 ticks, 7 leaves a re-closed fast door plus margin. Same bound
 /// serves the single orthogonal sidestep before a click.
@@ -996,13 +1000,52 @@ impl Bot {
     }
 
 
-    /// Toll dialog after a paid-door click: pick the affirmative option so
-    /// the swing proceeds. True when an option was picked (re-watch the
-    /// swing); a dialog with no yes/pay option is DoorDidNotOpen.
+    /// Toll dialog after a paid-door click: the guard's lines stream in
+    /// over several ticks (ask, answer, then the 3-way choice), so pump
+    /// until the options show, continuing through NPC chat on the way
+    /// (same discipline as the quest drain). Only then pick the
+    /// affirmative ("Yes, ok.", like the boat's 30-coin fare): the old
+    /// single synchronous read almost always saw no options yet and
+    /// fell through to DoorDidNotOpen (Al-Kharid gate live).
+    /// True when an option was picked (re-watch the swing); a dialog
+    /// with no yes/pay option is DoorDidNotOpen.
     fn take_toll_option(&mut self) -> Result<bool> {
+        let watched = self.world.ticks + TOLL_DIALOG_WAIT;
+        loop {
+            match self.toll_pick()? {
+                Some(picked) => {
+                    self.chat_choose(&picked)?;
+                    return Ok(true);
+                }
+                None => {
+                    if self.world.modal.is_some() && !self.allow_paid {
+                        return Err(Error::DoorDidNotOpen(format!(
+                            "toll dialog at {:?} with paid paths off; last game: {}",
+                            self.position(),
+                            last_message(self),
+                        )));
+                    }
+                    if self.world.ticks >= watched {
+                        return Ok(false);
+                    }
+                    // NPC chat lines need a continue before the choice
+                    // appears; a trade modal is never ours to dismiss.
+                    if self.world.modal.as_ref().is_some_and(|modal| modal.layer != "main") {
+                        self.chat_continue()?;
+                    }
+                    self.pump(1)?;
+                }
+            }
+        }
+    }
+
+    /// Pure pick over the CURRENT options (testable offline): the
+    /// guard's affirmative, yes/pay-shaped. None while the dialog
+    /// streams in.
+    fn toll_pick(&self) -> Result<Option<String>> {
         let options = self.chat_options();
         if options.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
         if !self.allow_paid {
             return Err(Error::DoorDidNotOpen(format!(
@@ -1012,16 +1055,11 @@ impl Bot {
                 last_message(self),
             )));
         }
-        let picked = options.iter().find(|(_, text)| {
+        match options.iter().find(|(_, text)| {
             let lower = text.to_lowercase();
             lower.contains("yes") || lower.contains("pay") || lower == "ok."
-        });
-        match picked {
-            Some((_, text)) => {
-                let text = text.clone();
-                self.chat_choose(&text)?;
-                Ok(true)
-            }
+        }) {
+            Some((_, text)) => Ok(Some(text.clone())),
             None => Err(Error::DoorDidNotOpen(format!(
                 "toll dialog at {:?} has no yes/pay option: {}; last game: {}",
                 self.position(),
@@ -1670,6 +1708,40 @@ mod tests {
             bot.world.locs.get(&(3212, 3470, 0)),
             Some(&Some((1516, 0, 1))),
             "shut reading untouched"
+        );
+    }
+
+    /// Toll pick over the CURRENT options only (offline, no pump): the
+    /// guard's 3-way choice reads "Yes, ok.", empty options read None
+    /// (the dialog streams in later), anything without yes/pay fails
+    /// loud, and paid-off fails loud while options show.
+    #[test]
+    fn toll_pick_reads_the_guard_choice() {
+        let mut bot = offline_bot(3267, 3227);
+        assert_eq!(bot.toll_pick().expect("empty options never fail"), None, "streaming dialog picks nothing yet");
+        bot.world.modal = Some(crate::world::Modal { layer: "chat".to_string(), interface_id: 2469 });
+        bot.world.texts.insert(2471, "No thank you, I'll walk around.".to_string());
+        bot.world.texts.insert(2472, "Who does my money go to?".to_string());
+        bot.world.texts.insert(2473, "Yes, ok.".to_string());
+        bot.allow_paid = true;
+        assert_eq!(
+            bot.toll_pick().expect("guard choice picks"),
+            Some("Yes, ok.".to_string()),
+            "affirmative, like the boat fare"
+        );
+        bot.allow_paid = false;
+        assert!(
+            matches!(bot.toll_pick(), Err(Error::DoorDidNotOpen(_))),
+            "paid-off with options showing fails loud, never auto-pays"
+        );
+        bot.allow_paid = true;
+        bot.world.texts.insert(2471, "No thank you, I'll walk around.".to_string());
+        bot.world.texts.insert(2472, "Who does my money go to?".to_string());
+        bot.world.texts.insert(2473, "The money goes to the city.".to_string());
+        assert!(
+            matches!(bot.toll_pick(), Err(Error::DoorDidNotOpen(_))),
+            "no yes/pay option fails loud, got: {:?}",
+            bot.toll_pick()
         );
     }
 

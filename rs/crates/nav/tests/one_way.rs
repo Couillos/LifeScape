@@ -129,6 +129,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         transitions: Vec::new(),
         verified: HashMap::new(),
         verified_any_level: Vec::new(),
+        proven: HashMap::new(),
         requirements: Vec::new(),
         one_way: vec![OneWay {
             loc: DOOR_ID,

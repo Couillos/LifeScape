@@ -663,6 +663,30 @@ fn history_stays_sparse_for_empty_windows() {
     cleanup(&path);
 }
 
+/// A live fill repaints the history candles at once: `history` reads
+/// the `candles` cache, never executions, so without a rebuild on the
+/// fill path every live trade stays invisible on the market page.
+#[test]
+fn live_fill_repaints_history_candles() {
+    let (service, path) = service("fill-candles");
+    funded(&service, "seller-a");
+    funded(&service, "buyer");
+    match_one(&service, "seller-a", "buyer", 10, 4);
+    // No manual rebuild: the fill itself repaints both resolutions.
+    for res in ["1h", "1d"] {
+        let history = service.handle(&request(vec![
+            ("op", str_value("history")),
+            ("item", Value::Int(314)),
+            ("res", str_value(res)),
+        ]));
+        let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
+        assert_eq!(candles.len(), 1, "{res} shows the live fill, got {candles:?}");
+        assert_eq!(candles[0].get("v").as_i64(), Some(10));
+        assert_eq!(candles[0].get("n").as_i64(), Some(1));
+    }
+    cleanup(&path);
+}
+
 #[test]
 fn recent_lists_newest_deal_first_with_pseudos() {
     let (service, path) = service("recent");

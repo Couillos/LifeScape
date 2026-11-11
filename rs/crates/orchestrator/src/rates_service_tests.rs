@@ -396,6 +396,50 @@ fn trading_positions_rebuild_from_store() -> Result<(), lifescape_store::Error> 
     Ok(())
 }
 
+/// Pre-P1.4 snapshot files carry `market` rows in yields/inputs/pauses
+/// (live file: 15 yield rows, 1 input, 3 pauses, xp clean): `record`
+/// routes trading methods to the book only, so reload drops them —
+/// the trading book rides along untouched.
+#[test]
+fn reload_drops_stale_trading_rows_but_keeps_the_book() {
+    let bucket = || {
+        object(vec![
+            ("count", Value::Int(2)),
+            ("sum", Value::Float(600.0)),
+            ("sum_squares", Value::Float(180_000.0)),
+            ("ema", Value::Float(300.0)),
+            ("ordered", Value::Arr(vec![Value::Float(300.0), Value::Float(300.0)])),
+        ])
+    };
+    let stat = || {
+        object(vec![
+            ("reports", Value::Int(2)),
+            ("settled", Value::Int(1)),
+            ("profits", Value::Arr(vec![Value::Float(60.0)])),
+            ("bought", Value::Int(100)),
+            ("sold", Value::Int(0)),
+        ])
+    };
+    let text = lifescape_json::stringify(&object(vec![
+        ("schema", Value::Int(2)),
+        ("yields", Value::Obj([(String::from("fishing\u{1f}Raw shrimps\u{1f}6"), bucket()), (String::from("market\u{1f}Coal\u{1f}6"), bucket())].into_iter().collect())),
+        ("xp", Value::Obj([(String::from("fishing\u{1f}fishing\u{1f}6"), bucket())].into_iter().collect())),
+        ("inputs", Value::Obj([(String::from("market\u{1f}Fishing bait\u{1f}6"), bucket())].into_iter().collect())),
+        ("pauses", Value::Obj([(String::from("market\u{1f}6"), bucket()), (String::from("fishing\u{1f}6"), bucket())].into_iter().collect())),
+        ("trades", Value::Obj([(String::from("Feather"), stat())].into_iter().collect())),
+        ("trade_last", Value::Obj([(String::from("market"), str_value("Feather"))].into_iter().collect())),
+    ]));
+    let reloaded = super::snapshot_from_json(&text).expect("stale file loads");
+    assert_eq!(reloaded.yield_rows().len(), 1, "market yield row dropped");
+    assert_eq!(reloaded.yield_rows()[0].method, "fishing");
+    assert_eq!(reloaded.xp_rows().len(), 1);
+    assert_eq!(reloaded.pause_per_6000("market", 6), 0.0, "market pause dropped");
+    assert!(reloaded.pause_per_6000("fishing", 6) > 0.0, "fishing pause kept");
+    let rows = super::trading::trading_rows_without_store(&reloaded.trades);
+    assert_eq!(rows.len(), 1, "trading book survives the purge, got {rows:?}");
+    assert_eq!(rows[0].item, "Feather");
+}
+
 /// Schema 1 files (pre-trading) still load with an empty book; schema 2
 /// round-trips the trading positions.
 #[test]

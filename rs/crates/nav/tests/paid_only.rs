@@ -133,6 +133,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         transitions: Vec::new(),
         verified: HashMap::new(),
         verified_any_level: Vec::new(),
+        proven: HashMap::new(),
         requirements: Vec::new(),
         one_way: Vec::new(),
         customs: Vec::new(),
@@ -168,5 +169,124 @@ fn toll_gate_alone_is_paid_only_then_reachable_with_paid() {
         "paid plan swings the toll gate",
     );
     println!("paid_only: PaidOnly [{unpaid_ms}ms] paid_ok [{paid_ms}ms]");
+    let _ = std::fs::remove_file(&path);
+}
+
+// -- starvation golden (admin-7526 live) --------------------------------------
+// A ~440k-tile pocket burns the shared wall budget in search A, so B/C/D
+// inherit an expired deadline, stop at their first 1024-visit check and
+// the toll diagnosis degrades into a bare Disconnected. Post-fix B gets
+// a fresh budget and names the price. Timings are debug-calibrated
+// (~45k visits/s here): A always burns its 3 s, B needs ~16k visits.
+
+const WIDE_SQUARES: i32 = 11;
+const WALL_X: i32 = BASE + 630;
+const GATE_Z: i32 = BASE + 352;
+
+fn wide_start() -> Tile {
+    Tile { x: WALL_X - 70, z: GATE_Z, level: DOOR_LEVEL }
+}
+
+fn wide_dest() -> Tile {
+    Tile { x: WALL_X + 1, z: GATE_Z, level: DOOR_LEVEL }
+}
+
+/// Smart encoding (pack reader): one byte under 128, else two bytes
+/// biased by 32768.
+fn smart(value: i32, out: &mut Vec<u8>) {
+    if value < 128 {
+        out.push(value as u8);
+    } else {
+        let biased = (value + 32768) as u16;
+        out.push((biased >> 8) as u8);
+        out.push((biased & 0xFF) as u8);
+    }
+}
+
+fn wide_setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for square_x in SQUARE..SQUARE + WIDE_SQUARES {
+        for square_z in SQUARE..SQUARE + WIDE_SQUARES {
+            let mut ground = Vec::with_capacity(4 * 64 * 64);
+            for level in 0..4 {
+                for local_x in 0..64 {
+                    for local_z in 0..64 {
+                        let (x, z) = (square_x * 64 + local_x, square_z * 64 + local_z);
+                        let wall = level == 0 && x == WALL_X && z != GATE_Z;
+                        if level == 0 && !wall {
+                            ground.push(0);
+                        } else {
+                            ground.push(50);
+                            ground.push(0);
+                        }
+                    }
+                }
+            }
+            let locs = if square_x == WALL_X / 64 && square_z == GATE_Z / 64 {
+                let (local_x, local_z) = (WALL_X % 64, GATE_Z % 64);
+                let mut bytes = Vec::new();
+                smart(DOOR_ID as i32 + 1, &mut bytes);
+                smart(local_x * 64 + local_z + 1, &mut bytes);
+                bytes.push(0);
+                smart(0, &mut bytes);
+                smart(0, &mut bytes);
+                bytes
+            } else {
+                vec![0]
+            };
+            files.push((format!("m{square_x}_{square_z}"), ground));
+            files.push((format!("l{square_x}_{square_z}"), locs));
+        }
+    }
+    let refs: Vec<(&str, &[u8])> = files.iter().map(|(name, data)| (name.as_str(), data.as_slice())).collect();
+    let zip = stored_zip(&refs);
+    let path = std::env::temp_dir().join(format!("lifescape-paid-wide-{}.zip", std::process::id()));
+    std::fs::write(&path, &zip).expect("write synthetic pack");
+    let mut defs = vec![None; DOOR_ID as usize + 1];
+    defs[DOOR_ID as usize] = Some(LocDef {
+        blockwalk: true,
+        blockrange: true,
+        length: 1,
+        width: 1,
+        active: 1,
+        has_ops: true,
+        open_op: Some(1),
+        toll: true,
+    });
+    let world = StaticWorld::open(&path, defs).expect("synthetic world");
+    let tables = Tables {
+        transitions: Vec::new(),
+        verified: HashMap::new(),
+        verified_any_level: Vec::new(),
+        proven: HashMap::new(),
+        requirements: Vec::new(),
+        one_way: Vec::new(),
+        customs: Vec::new(),
+        blocked: Vec::new(),
+        sky_floors: HashSet::new(),
+    };
+    (world, tables, path)
+}
+
+#[test]
+fn starved_search_still_diagnoses_paid_only() {
+    let (world, tables, path) = wide_setup();
+    let unpaid = NavOptions::default();
+    let denied = plan::plan(&world, &tables, wide_start(), wide_dest(), &unpaid)
+        .expect_err("unpaid plan must not cross the toll gate");
+    assert_eq!(denied.reason, NoRouteReason::PaidOnly, "starved A must not eat the toll diagnosis, got {:?}", denied.reason);
+    assert_eq!(denied.closest_reachable, wide_dest(), "coins, not walls, block the way");
+    assert!(
+        denied.blocked_by_requirements.iter().any(|(_, tags)| tags.iter().any(|tag| tag == "coins:10")),
+        "the toll diagnosis names its price: {:?}",
+        denied.blocked_by_requirements,
+    );
+    let mut paid = NavOptions::default();
+    paid.allow_paid = true;
+    let crossed = plan::plan(&world, &tables, wide_start(), wide_dest(), &paid).expect("paid plan crosses the toll gate");
+    assert!(
+        crossed.segments.iter().any(|segment| matches!(segment, Segment::OpenDoor { door, .. } if door.loc == DOOR_ID)),
+        "paid plan swings the toll gate",
+    );
     let _ = std::fs::remove_file(&path);
 }
