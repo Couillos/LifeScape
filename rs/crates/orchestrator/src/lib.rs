@@ -29,6 +29,7 @@ pub mod await_cmd;
 pub mod verify_assert;
 pub mod verify_cmd;
 pub mod verify_scenario;
+pub mod verify_reject;
 pub mod daemon;
 pub mod daemon_watch;
 pub mod daemon_conn;

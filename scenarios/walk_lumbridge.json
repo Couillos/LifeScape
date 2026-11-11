@@ -5,7 +5,7 @@
     {"op": "tele_admin", "level": 0, "x": 3220, "z": 3217},
     {"op": "teleother"}
   ],
-  "run": {"script": "walkto", "args": ["3223", "3217"], "budget_ticks": 600},
+  "run": {"script": "walkto", "args": ["3223", "3217"], "budget_ticks": 150},
   "assert": [
     {"type": "position", "level": 0, "x": 3223, "z": 3217, "radius": 3}
   ],

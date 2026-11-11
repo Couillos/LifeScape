@@ -62,7 +62,28 @@ Budget : pire cas borné par le pack (28) ; cook = trek ~1100 + 28 cuissons → 
 Porte Port Sarim loc 1530 flaky (« I can't reach that », 2/4, W4) : cook passe
 par Al Kharid (banque 3268,3167 + range 3271,3180, ~13 cases, budget 1700) ;
 récolte = blé (3220,3335) + banque Varrock-est, budget 1700 ; marche = spawn
-Lumbridge, budget 600.
+Lumbridge, budget 150.
 
 Preuve : `verify --all` série == `--parallel 3` (t40/t41/t42) : 3 ok des deux
 côtés ; échec forcé → dossier 17 lignes, cause + position.
+
+## Échec rapide et budgets (W4)
+
+Rejets explicites (`verify_reject.rs`, branché sur `watch_run`) : `can't reach
+that`, `inventory space` (dont `too full`/`can't carry`), `UNSET_MAP_FLAG`,
+`NoRoute` frais dans `last_error`. Premier rejet arme un compteur 20 ticks
+game ; un bot cloué sur sa case échoue avec le rejet en cause (dossier
+inchangé), un bot qui bouge réarme (bank, re-pick : récupérations normales).
+Fin <20 ticks après le rejet au lieu du budget.
+
+Budgets = 2-3× p95 W5/W2, écrêtés par le smoke cap 2000 :
+
+| Scénario | p95 | Budget | Mur |
+| --- | --- | --- | --- |
+| walk_lumbridge | ~50t | 150 (3×) | 150 s |
+| cook_shrimp | ~1000t | 1700 (pack 28, <2000) | 180 s |
+| harvest_grain | ~1500t | 1700 (pack 28, <2000) | 180 s |
+
+Aucun scénario >5 min (~5000 ticks) : pas de réouverture de session (désynchro
+PNJ). Porte Port Sarim loc 1530 flaky évitée par les scénarios ; couverte par
+le test `stuck_bot_fails_within_20_ticks` (rejet `can't reach` → fail ≤20t).

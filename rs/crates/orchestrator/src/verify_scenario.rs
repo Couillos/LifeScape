@@ -261,4 +261,26 @@ mod tests {
         assert!(parse_setup(&json::parse(r#"{"op": "fly"}"#).unwrap()).is_err(), "unknown op");
         assert!(parse_assert(&json::parse(r#"{"type": "loot"}"#).unwrap()).is_err(), "unknown assert");
     }
+
+    /// W4 budgets: 2-3x the W5/W2 p95 (walk ~50t, cook ~1000t, harvest
+    /// ~1500t), clipped by the smoke cap 2000 (pack-bounded worst case),
+    /// each with a wall ceiling (`timeout_s`).
+    #[test]
+    fn w4_budgets_follow_p95_bands() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scenarios");
+        let scenario = |id: &str| {
+            let text = std::fs::read_to_string(dir.join(format!("{id}.json"))).expect("scenario reads");
+            parse_scenario(&text).expect("parses")
+        };
+        let walk = scenario("walk_lumbridge");
+        assert_eq!(walk.run.budget_ticks, 150, "3x walk p95 (~50t)");
+        let cook = scenario("cook_shrimp");
+        assert_eq!(cook.run.budget_ticks, 1700, "pack-bounded cook, under smoke cap");
+        let harvest = scenario("harvest_grain");
+        assert_eq!(harvest.run.budget_ticks, 1700, "pack-bounded harvest, under smoke cap");
+        for scenario in [walk, cook, harvest] {
+            assert!(scenario.run.budget_ticks <= 2000, "smoke cap");
+            assert!(scenario.timeout_s >= 60.0, "wall ceiling present");
+        }
+    }
 }

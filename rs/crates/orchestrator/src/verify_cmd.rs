@@ -23,6 +23,7 @@ use lifescape_json::{self as json, Value, object, str_value};
 use crate::await_cmd::{AwaitError, Baseline, DaemonSource, StateSource, Verdict, WaitEnd, POLL_MS, terminal};
 use crate::daemon::WORKER_TIMEOUT;
 use crate::verify_assert::{check_assert, item_count, position_of};
+use crate::verify_reject::{RejectWatch, max_msg_tick};
 use crate::verify_scenario::{Scenario, SetupOp, list_scenarios, load_scenario};
 
 const SETUP_WAIT_S: f64 = 10.0;
@@ -242,7 +243,7 @@ fn setup_account(scenario: &Scenario, account: &str) -> Result<Value, String> {
                     return Err(format!("bank_all run refused: {}", json::stringify(reply.get("error"))));
                 }
                 let start = crate::jobs::now_secs();
-                let (end, _) = watch_run(account, &Baseline::capture(&pre), pre.get("ticks").as_i64(), start, 300.0, 3000);
+                let (end, _) = watch_run(account, &Baseline::capture(&pre), max_msg_tick(&pre), pre.get("ticks").as_i64(), start, 300.0, 3000);
                 match end {
                     WaitEnd::Done(Verdict::Ok, _) => {}
                     WaitEnd::Done(other, detail) => return Err(format!("bank_all: {result} {detail}", result = other.name())),
@@ -279,9 +280,10 @@ fn unload(account: &str) {
     );
 }
 
-fn watch_run(account: &str, baseline: &Baseline, start_ticks: Option<i64>, start_wall: f64, timeout_s: f64, budget_ticks: i64) -> (WaitEnd, Value) {
+fn watch_run(account: &str, baseline: &Baseline, baseline_msg: i64, start_ticks: Option<i64>, start_wall: f64, timeout_s: f64, budget_ticks: i64) -> (WaitEnd, Value) {
     let mut source = DaemonSource { account: account.to_string() };
     let mut failures = 0;
+    let mut rejects = RejectWatch::new();
     let mut last = Value::Null;
     let saw_running = true;
     loop {
@@ -316,6 +318,12 @@ fn watch_run(account: &str, baseline: &Baseline, start_ticks: Option<i64>, start
                 }
                 if let Some((verdict, detail)) = terminal(&state, &baseline, saw_running) {
                     return (WaitEnd::Done(verdict, detail), state);
+                }
+                // W4: an explicit server rejection on a stuck bot ends the
+                // run here with its cause, never at the budget.
+                if let Some(cause) = rejects.note(&state, baseline_msg, &baseline.error) {
+                    unload(account);
+                    return (WaitEnd::Done(Verdict::Fail, cause), state);
                 }
                 last = state;
             }
@@ -425,7 +433,7 @@ fn finish_single(scenario: &Scenario, account: &str, baseline: &Value, wall_star
         }
         Err(error) => return fail(Verdict::Fail, error.clone(), start_ticks, vec![format!("FAIL {} on {account}: {error}", scenario.id)]),
     }
-    let (end, state) = watch_run(account, &Baseline::capture(&baseline), start_ticks, start_wall, scenario.timeout_s, scenario.run.budget_ticks);
+    let (end, state) = watch_run(account, &Baseline::capture(&baseline), max_msg_tick(&baseline), start_ticks, start_wall, scenario.timeout_s, scenario.run.budget_ticks);
     let (verdict, detail) = match end {
         WaitEnd::Done(verdict, detail) => (verdict, detail),
         WaitEnd::NoSession => (Verdict::NoSession, format!("no session, open {account} first")),
