@@ -687,6 +687,33 @@ fn live_fill_repaints_history_candles() {
     cleanup(&path);
 }
 
+/// Restart backfill: executions persisted but the `candles` cache empty
+/// (old items whose fills predate the live repaint) still serve
+/// history — `history` rebuilds from the store on demand, no live fill.
+#[test]
+fn restart_backfills_history_from_executions() {
+    let (service, path) = service("candle-backfill");
+    let hour = 48_000 * 3600;
+    print_at(&service, hour + 60, 4, 2);
+    print_at(&service, hour + 120, 6, 3);
+    // No rebuild, no fill: the candle cache is empty like after a
+    // restart for items whose fills predate the repaint path.
+    for res in ["1h", "1d"] {
+        let history = service.handle(&request(vec![
+            ("op", str_value("history")),
+            ("item", Value::Int(314)),
+            ("res", str_value(res)),
+            ("from", Value::Int(hour - 3600)),
+            ("to", Value::Int(hour + 3 * 3600)),
+        ]));
+        let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
+        assert_eq!(candles.len(), 1, "{res} backfills from executions, got {candles:?}");
+        assert_eq!(candles[0].get("v").as_i64(), Some(5));
+        assert_eq!(candles[0].get("n").as_i64(), Some(2));
+    }
+    cleanup(&path);
+}
+
 #[test]
 fn recent_lists_newest_deal_first_with_pseudos() {
     let (service, path) = service("recent");

@@ -446,8 +446,8 @@ impl MarketService {
             YieldCandleResolution::Day1 => to - 183 * 86400,
         };
         let from = request.get("from").as_i64().unwrap_or(default_from);
-        let store = self.lock_store();
-        let candles = store.candles_for(item, resolution, from, to).unwrap_or_default();
+        let mut store = self.lock_store();
+        let candles = store.candles_or_rebuild(item, resolution, from, to).unwrap_or_default();
         let executions = store.executions_for_item(item, from, to).unwrap_or_default();
         // Execution count per candle window (tooltip §6.2, `n`): the
         // candles table carries OHLCV only, so count the window's fills.

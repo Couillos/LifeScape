@@ -179,6 +179,25 @@ impl Store {
         Ok(buckets)
     }
 
+    /// Cached candles, rebuilt from executions when the cache holds
+    /// nothing for the window but fills exist (post-restart backfill:
+    /// old executions predate the live repaint, so their items would
+    /// otherwise serve zero candles forever).
+    pub fn candles_or_rebuild(
+        &mut self,
+        item_id: i64,
+        resolution: YieldCandleResolution,
+        from_window: i64,
+        to_window: i64,
+    ) -> Result<Vec<Candle>, Error> {
+        let cached = self.candles_for(item_id, resolution, from_window, to_window)?;
+        if !cached.is_empty() || self.executions_for_item(item_id, from_window, to_window)?.is_empty() {
+            return Ok(cached);
+        }
+        self.rebuild_candles(item_id, resolution)?;
+        self.candles_for(item_id, resolution, from_window, to_window)
+    }
+
     /// Recomputes every candle of one item and resolution from executions.
     /// Needs `&mut` for the delete+insert transaction; everything else on
     /// this store takes `&self`.
