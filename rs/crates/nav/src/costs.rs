@@ -139,12 +139,20 @@ impl Search<'_> {
     }
 }
 
-fn relax(dist: &mut HashMap<Key, u32>, heap: &mut BinaryHeap<(Reverse<u32>, Reverse<Key>)>, next: Key, cost: u32) {
-    if dist.get(&next).is_some_and(|known| *known <= cost) {
+fn relax(
+    dist: &mut HashMap<Key, u32>,
+    dist_open: &mut HashMap<Key, u32>,
+    heap: &mut BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)>,
+    next: Key,
+    cost: u32,
+    opened: bool,
+) {
+    let map = if opened { dist_open } else { dist };
+    if map.get(&next).is_some_and(|known| *known <= cost) {
         return;
     }
-    dist.insert(next, cost);
-    heap.push((Reverse(cost), Reverse(next)));
+    map.insert(next, cost);
+    heap.push((Reverse(cost), Reverse(next), opened));
 }
 
 /// One search, many targets: `costs[i]` prices `dests[i]`, `None` where
@@ -205,12 +213,18 @@ pub(crate) fn plan_costs_with(
     }
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
     let mut dist: HashMap<Key, u32> = HashMap::new();
-    let mut heap: BinaryHeap<(Reverse<u32>, Reverse<Key>)> = BinaryHeap::new();
+    // Tiles reached through a door click (door stands open), apart from
+    // the cheap walked-onto shut tiles (same rule as `dijkstra`: shut
+    // wall doors never open from their own tile, the click needs a real
+    // stand). No prev map here: costs never rebuild a chain.
+    let mut dist_open: HashMap<Key, u32> = HashMap::new();
+    let mut heap: BinaryHeap<(Reverse<u32>, Reverse<Key>, bool)> = BinaryHeap::new();
     dist.insert(key_of(from), 0);
-    heap.push((Reverse(0), Reverse(key_of(from))));
+    heap.push((Reverse(0), Reverse(key_of(from)), false));
     let mut visits = 0usize;
-    while let Some((Reverse(cost), Reverse(found))) = heap.pop() {
-        if dist.get(&found).is_some_and(|known| *known != cost) {
+    while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
+        let known = if opened { &dist_open } else { &dist };
+        if known.get(&found).is_some_and(|known| *known != cost) {
             continue;
         }
         visits += 1;
@@ -254,15 +268,16 @@ pub(crate) fn plan_costs_with(
             // A step off a door tile, or anywhere no usable door stands,
             // walks when the shut view allows it (same rule as `dijkstra`).
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut heap, next_key, cost + 1);
+                relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1, false);
                 continue;
             }
-            // Stop onto a usable door tile from a table-allowed side.
+            // Stop onto a usable door tile from a table-allowed side,
+            // walking only: the click edge rides along below when this
+            // side is a real stand (same rule as `dijkstra`).
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut heap, next_key, cost + 1);
-                        continue;
+                        relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1, false);
                     }
                 }
             }
@@ -278,6 +293,13 @@ pub(crate) fn plan_costs_with(
                 None => continue,
             };
             if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
+                continue;
+            }
+            // A step off the door tile itself only continues an opening
+            // the click made (open state: arrived through this door's
+            // edge). Same rule as `dijkstra`: a shut wall door never
+            // opens from its own tile, the click needs a real stand.
+            if here == door_tile && matches!(shape, 0 | 1 | 2 | 3 | 9) && !opened {
                 continue;
             }
             // Clickable stand only: the engine takes the op from an
@@ -315,7 +337,11 @@ pub(crate) fn plan_costs_with(
             if options.excluded_edges.contains(&edge) {
                 continue;
             }
-            relax(&mut dist, &mut heap, next_key, cost + DOOR_COST);
+            relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + DOOR_COST, false);
+            // A real click opens the tile: same open state as `dijkstra`.
+            if here != door_tile && next == door_tile {
+                relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + DOOR_COST, true);
+            }
         }
         // Transition and custom rides from this stand. The shared L2 is
         // the permissive superset (requires/tolls/F2P lifted), so a stand
@@ -331,7 +357,7 @@ pub(crate) fn plan_costs_with(
                     if options.excluded_edges.contains(&EdgeId::Ride(tables.transitions[edge.index].name.clone())) {
                         continue;
                     }
-                    relax(&mut dist, &mut heap, key_of(edge.dest), cost + edge.cost);
+                    relax(&mut dist, &mut dist_open, &mut heap, key_of(edge.dest), cost + edge.cost, false);
                 }
             }
         }
@@ -343,7 +369,7 @@ pub(crate) fn plan_costs_with(
                 if options.excluded_edges.contains(&EdgeId::Custom(tables.customs[edge.index].name.clone())) {
                     continue;
                 }
-                relax(&mut dist, &mut heap, key_of(edge.dest), cost + edge.cost);
+                relax(&mut dist, &mut dist_open, &mut heap, key_of(edge.dest), cost + edge.cost, false);
             }
         }
     }
@@ -403,6 +429,29 @@ mod tests {
         }
         assert!(costs.iter().all(|cost| cost.is_some()), "all three walk, got: {costs:?}");
         assert!(costs[1] < costs[0], "walk-cheap beats the Manhattan lure, got: {costs:?}");
+    }
+
+    /// Porte Peksa : le batch cote comme le plan unitaire, y compris la
+    /// sortie par le stand est (pas de clic src==dest). Meme regle
+    /// d'ouverture des deux cotes, jamais de divergence.
+    #[test]
+    fn peksa_exit_costs_match_the_unit_plan() {
+        let (world, tables) = setup();
+        let from = Tile { x: 3076, z: 3428, level: 0 };
+        let dest = Tile { x: 3076, z: 3425, level: 0 };
+        let options = NavOptions::default();
+        let planned = plan::plan(&world, &tables, from, dest, &options).expect("la sortie Peksa planifie");
+        assert!(
+            planned.segments.iter().any(|segment| matches!(
+                segment,
+                plan::Segment::OpenDoor { door, stand, .. }
+                if door.loc == 1530 && (stand.x, stand.z) == (3077, 3427)
+            )),
+            "le plan clique depuis l'est, got: {:?}",
+            planned.segments,
+        );
+        let costs = plan_costs(&world, &tables, from, &[dest], &options);
+        assert_eq!(costs, vec![Some(planned.cost)], "le batch cote comme le plan, got: {costs:?}");
     }
 
     /// Unplannable targets read None, like the failing unit plan; repeats

@@ -13,7 +13,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
 use crate::bfs::can_step;
-use crate::collision::{tile_walkable, CollisionMap};
+use crate::collision::{tile_walkable, CollisionMap, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
@@ -53,6 +53,13 @@ pub(crate) type SharedEdges = (U64Map<Vec<RideEdge>>, U64Map<Vec<CustomPrepared>
 
 /// Door crossing: 10 walk steps worth of swinging and stepping.
 pub const DOOR_COST: u32 = 10;
+/// Open-door mark on a search key: a tile reached through a door click
+/// (the door stands open), as opposed to walked onto shut. The mark lives
+/// in the top key bit, outside the packed level/z/x, so `unkey` reads the
+/// same tile and only `rebuild` must carry the full key. One extra state
+/// per door tile: a walked-onto tile is cheap but shut (its click would
+/// be a refused src==dest), the clicked tile costs more but steps off.
+const FRESH: u64 = 1 << 63;
 /// One transition ride: 20 walk steps of climbing and waiting.
 pub const TRANSITION_COST: u32 = 20;
 /// Riding blind: the prober never saw this transition work.
@@ -461,6 +468,36 @@ fn aborted(from: Tile) -> NoRoute {
     }
 }
 
+/// Every click stand of a straight wall door (shape 0), nearest the
+/// bot's side first: the door tile itself (walkable stands live there),
+/// the unconditional arm of the server reach rule (the exterior side),
+/// then the lateral arms whose edge is open in the shut view. Laterals
+/// with a shut edge never click (the handler reads "I can't reach
+/// that!"); the planner picks the first stand reachable without crossing
+/// the shut door, so entry keeps the exterior stand and the Peksa exit
+/// clicks from the east (3077,3427, live-proven). Other shapes have no
+/// single exterior side: just the tile.
+pub fn door_stands(world: &StaticWorld, shape: u8, angle: u8, at: Tile) -> Vec<Tile> {
+    let mut stands = vec![at];
+    if shape != 0 {
+        return stands;
+    }
+    let (exterior, laterals) = match angle {
+        0 => (Tile { x: at.x - 1, z: at.z, level: at.level }, vec![(Tile { x: at.x, z: at.z + 1, level: at.level }, BLOCK_NORTH), (Tile { x: at.x, z: at.z - 1, level: at.level }, BLOCK_SOUTH)]),
+        1 => (Tile { x: at.x, z: at.z + 1, level: at.level }, vec![(Tile { x: at.x - 1, z: at.z, level: at.level }, BLOCK_WEST), (Tile { x: at.x + 1, z: at.z, level: at.level }, BLOCK_EAST)]),
+        2 => (Tile { x: at.x + 1, z: at.z, level: at.level }, vec![(Tile { x: at.x, z: at.z + 1, level: at.level }, BLOCK_NORTH), (Tile { x: at.x, z: at.z - 1, level: at.level }, BLOCK_SOUTH)]),
+        3 => (Tile { x: at.x, z: at.z - 1, level: at.level }, vec![(Tile { x: at.x - 1, z: at.z, level: at.level }, BLOCK_WEST), (Tile { x: at.x + 1, z: at.z, level: at.level }, BLOCK_EAST)]),
+        _ => return stands,
+    };
+    stands.push(exterior);
+    for (tile, edge) in laterals {
+        if (world.get(tile.x, tile.z, tile.level) & edge) == 0 {
+            stands.push(tile);
+        }
+    }
+    stands
+}
+
 /// The click tile a straight wall door (shape 0) always accepts under
 /// the server reach rule: WEST stands west, NORTH stands north, and so
 /// on. Mirrors the unconditional arms in `reach.rs` exactly; other
@@ -736,6 +773,7 @@ fn dijkstra(
             break;
         }
         let here = unkey(key);
+        let fresh = key & FRESH != 0;
         let rank = here.fallback_rank(dest, cost);
         if rank < best_rank {
             best_rank = rank;
@@ -772,16 +810,16 @@ fn dijkstra(
                 continue;
             }
             // Stop onto a usable door tile from a side the table lets
-            // through, no opening yet (Peksa inside: the server holds the
-            // tile walkable, the src==dest click opens it live). `usable`
-            // gates tolls/requirements/blocked, `side_ok` one-way doors,
-            // `step_closed` walled sides. THROUGH still opens: walking off
+            // through, walking only (Peksa inside: the server holds the
+            // tile walkable, the walk reaches far-side stands like the
+            // east one). The click edge rides along below when this side
+            // is a real stand: the search takes whichever wins, never a
+            // blind src==dest click. THROUGH still opens: walking off
             // past the tile rides the door edge below.
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
                         relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
-                        continue;
                     }
                 }
             }
@@ -797,6 +835,17 @@ fn dijkstra(
                 None => continue,
             };
             if here != door_tile && !search.tables.side_ok(id, door_tile, here) {
+                continue;
+            }
+            // A step off the door tile itself only continues an opening
+            // the click made (fresh state: arrived through this door's
+            // edge): the op handler runs reachWall1 with no src==dest
+            // arm, so a shut wall door never opens from its own tile
+            // (Peksa 1530 live: tile click refused, east-stand click
+            // opens). Walking onto the tile stays free (stands live
+            // there), but the click needs a real stand. Non-wall shapes
+            // keep the legacy edge (their handlers are unprobed).
+            if here == door_tile && matches!(shape, 0 | 1 | 2 | 3 | 9) && !fresh {
                 continue;
             }
             // Clickable stand only: the engine takes the op from an
@@ -834,29 +883,32 @@ fn dijkstra(
             if options.excluded_edges.contains(&edge) {
                 continue;
             }
-            relax(
-                &mut dist,
-                &mut prev,
-                &mut heap,
-                key,
-                next_key,
-                cost + DOOR_COST,
-                PrevEdge::Door(DoorRef {
-                    loc: id,
-                    x: door_tile.x,
-                    z: door_tile.z,
-                    level: door_tile.level,
-                    open_op: search.world.loc_def(id as usize).and_then(|def| def.open_op),
-                    toll: search.world.is_toll(door_tile.x, door_tile.z, door_tile.level),
-                }),
-            );
+            let door = DoorRef {
+                loc: id,
+                x: door_tile.x,
+                z: door_tile.z,
+                level: door_tile.level,
+                open_op: search.world.loc_def(id as usize).and_then(|def| def.open_op),
+                toll: search.world.is_toll(door_tile.x, door_tile.z, door_tile.level),
+            };
+            relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + DOOR_COST, PrevEdge::Door(door.clone()));
+            // A real click (stand beside the tile, stepping onto it)
+            // opens the door: the tile is now passable open, a separate
+            // search state from the cheap walked-onto shut tile (same
+            // tile bits, FRESH mark). Only the open state steps off (see
+            // above); the shut one keeps reaching far-side stands.
+            if here != door_tile && next == door_tile {
+                relax(&mut dist, &mut prev, &mut heap, key, next_key | FRESH, cost + DOOR_COST, PrevEdge::Door(door));
+            }
         }
         // Transition and custom rides from this stand. The shared L2 is
         // the permissive superset (requires/tolls/F2P lifted), so a stand
         // this search could not use, or a dest outside its bounds, is
         // skipped here: each search sees exactly the edges its own
-        // prepare_edges would have built.
-        if let Some(edges) = rides.get(&key) {
+        // prepare_edges would have built. Fresh (opened) tiles ride from
+        // the same stands: the FRESH mark is search state, not a tile.
+        let l2_key = key & !FRESH;
+        if let Some(edges) = rides.get(&l2_key) {
             if search.in_bounds(here) && tile_walkable(search.open(here)) {
                 for edge in edges {
                     if !search.in_bounds(edge.dest) {
@@ -870,7 +922,7 @@ fn dijkstra(
                 }
             }
         }
-        if let Some(edges) = customs.get(&key) {
+        if let Some(edges) = customs.get(&l2_key) {
             for edge in edges {
                 if !search.ignore_requires
                     && !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag))
@@ -917,14 +969,19 @@ fn relax(
     heap.push((Reverse(cost), Reverse(next_key)));
 }
 
-fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Tile, PrevEdge)> {
+fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, dest: Tile) -> Vec<(Tile, PrevEdge)> {
+    // Full keys, FRESH mark included: an opened tile and its shut twin
+    // are different search states with different parents (the open one
+    // continues the click, the shut one the walk that reached the stand).
+    // Recomputing the key from the tile would resurrect the shut path.
     let mut chain = Vec::new();
-    while at.key() != from.key() {
-        let Some((parent, _)) = prev.get(&at.key()) else {
+    let mut at_key = dest.key();
+    while at_key != from.key() {
+        let Some((parent, _)) = prev.get(&at_key) else {
             break;
         };
-        let parent_tile = unkey(*parent);
-        let Some((_, edge)) = prev.get(&at.key()) else {
+        let parent_key = *parent;
+        let Some((_, edge)) = prev.get(&at_key) else {
             break;
         };
         let edge = match edge {
@@ -935,8 +992,8 @@ fn rebuild(prev: &U64Map<(u64, PrevEdge)>, from: Tile, mut at: Tile) -> Vec<(Til
             }
             PrevEdge::Custom { index, dest } => PrevEdge::Custom { index: *index, dest: *dest },
         };
-        chain.push((at, edge));
-        at = parent_tile;
+        chain.push((unkey(at_key), edge));
+        at_key = parent_key;
     }
     chain.reverse();
     chain

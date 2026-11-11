@@ -248,11 +248,13 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
         }
     }
     // Every door stand must be a tile the engine would take the click
-    // from: the door tile itself (src==dest opens live, Peksa door 1530
-    // proven admin-side) or an orthogonal neighbour passing the server
-    // reach rule for the door's shape and angle. A diagonal or
-    // wrong-sided stand reads "I can't reach that!" live (castle double
-    // doors 1516/1519).
+    // from: an orthogonal neighbour passing the server reach rule for
+    // the door's shape and angle. A diagonal or wrong-sided stand reads
+    // "I can't reach that!" live (castle double doors 1516/1519). The
+    // door tile itself (manhattan 0) never clicks on a straight wall
+    // door: the op handler runs reachWall1 with no src==dest arm, so a
+    // shut door only opens from a real stand (Peksa 1530: tile click
+    // refused live, east-stand click opens).
     if let Ok(plan) = &result {
         for seg in &plan.segments {
             if let Segment::OpenDoor { door, stand, cross_to } = seg {
@@ -264,12 +266,17 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
                     stand.x,
                     stand.z,
                 );
-                if manhattan == 0 {
-                    continue;
-                }
                 let (_, shape, angle) = world
                     .door_at(door.x, door.z, door.level)
                     .unwrap_or_else(|| panic!("route {name}: door {} has no static shape", door.loc));
+                if manhattan == 0 {
+                    assert!(
+                        !matches!(shape, 0 | 1 | 2 | 3 | 9),
+                        "route {name}: door {} clicks from its own tile, refused live on wall doors (stand east/west/north/south)",
+                        door.loc,
+                    );
+                    continue;
+                }
                 let (width, height) = world
                     .loc_def(door.loc as usize)
                     .map(|def| (def.length, def.width))

@@ -1,9 +1,10 @@
-//! Poche Peksa (boutique des casques, dossier `admin-4975`) : la porte
-//! 1530 est dans les dumps et franchissable des deux cotes — depuis le
-//! stand exterieur (entree) comme depuis la tuile porte elle-meme
-//! (sortie : src==dest accepte par le dispatcher `reachWall`, prouve
-//! live admin). La traversee reste une ouverture : passer vite
-//! (re-fermeture auto ~500 ticks).
+//! Poche Peksa (boutique des casques, dossier porte 1530) : la porte
+//! 1530 est dans les dumps et ne s'ouvre que depuis un vrai stand — le
+//! sud exterieur (entree) ou l'est (sortie). Le handler op n'a pas le
+//! bras src==dest du dispatcher `reachWall` (clic tuile refuse live) :
+//! la sortie marche jusqu'au stand est (3077,3427) puis clique (ouverture
+//! silencieuse, scripts doors.rs2 `mes()` commentes) et traverse aussitot
+//! vers le sud (re-fermeture auto ~500 ticks : passer vite).
 
 use std::sync::Arc;
 
@@ -60,8 +61,10 @@ fn peksa_enter_swings_door_1530() {
     assert_eq!((stand.x, stand.z), (3076, 3426), "stand exterieur, le seul que le moteur accepte");
 }
 
-/// Sortie `admin-4975` : le plan s'arrete sur la tuile porte (stand
-/// tuile, src==dest ouvre live) puis traverse aussitot vers le sud.
+/// Sortie porte 1530 : le plan marche jusqu'au stand est (3077,3427)
+/// — atteignable depuis l'interieur par la tuile porte marchable — puis
+/// clique depuis l'est (le seul clic interieur que le handler accepte)
+/// et traverse aussitot vers le sud, avant la re-fermeture.
 /// L'entree par le stand exterieur est inchangee (voir ci-dessus).
 #[test]
 fn peksa_exit_stands_on_the_door_tile() {
@@ -84,8 +87,8 @@ fn peksa_exit_stands_on_the_door_tile() {
     assert_eq!((door.x, door.z, door.level), (3076, 3427, 0));
     assert_eq!(
         (*stand, *cross_to),
-        (Tile { x: 3076, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
-        "stand tuile (arret dessus) puis traversee vers le sud, avant la re-fermeture",
+        (Tile { x: 3077, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
+        "stand est (marche dessus) puis clic et traversee vers le sud, avant la re-fermeture",
     );
 }
 

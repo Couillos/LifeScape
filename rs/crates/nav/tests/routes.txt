@@ -81,12 +81,13 @@ hache_rimmington | 2971,3375,0 | 2970,3376,1 | f2p | reachable ; rides>=1 ; uses
 # budget relevé.
 traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
 # 20-21. poche Peksa (boutique des casques, 3074-3077x3428-3431) :
-# la porte est 1530 (mur droit angle SUD, (3076,3427)). Le moteur clique
-# la porte depuis le stand sud exterieur (3076,3426) comme depuis la
-# tuile porte elle-meme (src==dest accepte, prouve live admin) :
-# l'entree passe par le stand exterieur, la sortie s'arrete sur la
-# tuile porte (stand tuile) puis traverse aussitot (re-fermeture auto
-# ~500 ticks : passer vite). Comme les doubles portes 1516/1519 (voir
-# 16), une porte sans stand atteignable reste scellee.
+# la porte est 1530 (mur droit angle SUD, (3076,3427)). Le handler op
+# n'a pas le bras src==dest du dispatcher `reachWall` (clic depuis la
+# tuile refuse live avec message) : l'entree clique depuis le stand sud
+# exterieur (3076,3426), la sortie marche jusqu'au stand est (3077,3427,
+# bord EST ouvert, prouve live) puis clique (ouverture silencieuse) et
+# traverse aussitot vers le sud (re-fermeture auto ~500 ticks : passer
+# vite). Comme les doubles portes 1516/1519 (voir 16), une porte sans
+# stand atteignable reste scellee.
 peksa_entree | 3076,3424,0 | 3075,3429,0 | - | reachable ; uses_loc=1530 ; doors<=1
-peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3076,3427
+peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3077,3427
