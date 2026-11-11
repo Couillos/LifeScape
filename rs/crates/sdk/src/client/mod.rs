@@ -438,6 +438,10 @@ impl Bot {
 
     /// Copy of the live state for read-only serving off the pump path.
     pub fn snapshot(&self) -> Snapshot {
+        // Tells cap with the heartbeat (matches the 25 chat lines): the
+        // live log is unbounded, the snapshot is per-second traffic.
+        let mut private: Vec<crate::world::ChatLine> = self.world.private.iter().rev().take(25).cloned().collect();
+        private.reverse();
         Snapshot {
             position: self.world.position(),
             ticks: self.world.ticks,
@@ -447,6 +451,7 @@ impl Bot {
             inv_cap: self.world.inv_cap.clone(),
             backpack_com: (self.tables.com_id)("inventory:inv"),
             texts: self.world.texts.clone(),
+            private,
             energy: self.world.energy,
             intent: self.intent.clone(),
         }
@@ -482,6 +487,25 @@ mod tests {
         bot.world.ticks = 447;
         bot.zone_label = "Lumbridge".to_string();
         assert_eq!(bot.tag(), "[t=447 Lumbridge]");
+    }
+
+    /// Received tells are observable off the pump path: a fed
+    /// `MESSAGE_PRIVATE` lands in the snapshot the calls serve.
+    #[test]
+    fn received_tells_reach_the_snapshot() {
+        use crate::words::{pack, to_base37, unpack};
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        let mut body = to_base37("t02").to_be_bytes().to_vec();
+        body.extend([0, 0, 0, 0, 0]);
+        body.extend(pack("meet at varrock"));
+        bot.world.feed("MESSAGE_PRIVATE", &body).expect("tell feeds");
+        assert_eq!(bot.world.private.len(), 1, "live log records the tell");
+        let snap = bot.snapshot();
+        assert_eq!(snap.private.len(), 1, "snapshot carries the tell");
+        assert_eq!(snap.private[0].who, "t02");
+        // Wire packing capitalizes and pads: the snapshot carries the
+        // decoded text, whatever the packing normalized.
+        assert_eq!(snap.private[0].text, unpack(&pack("meet at varrock")));
     }
 
     /// Held-name probe backs off (2 s, 4 s, 8 s capped) instead of

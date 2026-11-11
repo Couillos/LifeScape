@@ -20,6 +20,7 @@ const READ_METHODS: &[&str] = &[
     "invs",
     "chat_texts",
     "chat_options",
+    "tells",
     "combat_level",
     "position",
 ];
@@ -202,6 +203,13 @@ pub(crate) fn read_from_snapshot(snapshot: &Snapshot, method: &str) -> Result<Va
         "combat_level" => Ok(lifescape_sdk::snapshot::combat_level(&snapshot.stats)
             .map(|level| Value::Int(i64::from(level)))
             .unwrap_or(Value::Null)),
+        "tells" => Ok(Value::Arr(
+            snapshot
+                .private
+                .iter()
+                .map(|line| object(vec![("who", str_value(&line.who)), ("text", str_value(&line.text))]))
+                .collect(),
+        )),
         _ => Err(format!("unknown method {method:?}")),
     }
 }
@@ -571,6 +579,12 @@ mod tests {
             inv_cap: [(99u16, 28u8)].into_iter().collect(),
             backpack_com: Some(99),
             texts: [(100u16, "Select an Option".to_string()), (101u16, "Yes".to_string())].into_iter().collect(),
+            private: vec![lifescape_sdk::world::ChatLine {
+                who: "t02".to_string(),
+                text: "meet at varrock".to_string(),
+                color: 0,
+                effect: 0,
+            }],
             energy: 100,
             intent: "testing".to_string(),
         }
@@ -589,6 +603,11 @@ mod tests {
         assert_eq!(texts.as_arr().map(Vec::len), Some(2));
         let options = read_from_snapshot(&snapshot, "chat_options").unwrap();
         assert_eq!(options.as_arr().map(Vec::len), Some(1));
+        let tells = read_from_snapshot(&snapshot, "tells").unwrap();
+        let tells = tells.as_arr().expect("tells read an array");
+        assert_eq!(tells.len(), 1, "one tell received");
+        assert_eq!(tells[0].get("who").as_str(), Some("t02"));
+        assert_eq!(tells[0].get("text").as_str(), Some("meet at varrock"));
         assert!(read_from_snapshot(&snapshot, "nope").is_err());
     }
 

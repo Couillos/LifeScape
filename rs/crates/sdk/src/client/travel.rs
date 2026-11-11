@@ -58,6 +58,10 @@ const PRE_OPEN_WAIT: u64 = 17;
 /// (ask, answer, then the 3-way choice), 25 covers the exchange plus a
 /// slow-pump margin.
 const TOLL_DIALOG_WAIT: u64 = 25;
+/// Post-pick drain: one chatplayer page streams in after the choice and
+/// the teleport follows the next continue, 10 covers the page plus a
+/// slow-pump margin.
+const TOLL_POST_PICK_WAIT: u64 = 10;
 /// Crossing step for an open door: the tiles are adjacent, measured
 /// 1-2 ticks, 7 leaves a re-closed fast door plus margin. Same bound
 /// serves the single orthogonal sidestep before a click.
@@ -1015,6 +1019,7 @@ impl Bot {
             match self.toll_pick()? {
                 Some(picked) => {
                     self.chat_choose(&picked)?;
+                    self.drain_toll_pick()?;
                     return Ok(true);
                 }
                 None => {
@@ -1037,6 +1042,31 @@ impl Bot {
                 }
             }
         }
+    }
+
+    /// Post-pick drain: `~chatplayer("Yes, ok.")` needs one more
+    /// continue before `inv_del` + teleport (`border_gate.rs2`,
+    /// `chat.rs2` p_choice3/chatplayer). A plain chat page with no
+    /// options means continue; a closed dialog or a new choice ends
+    /// the drain and `finish_door` decides. Bounded like the pre-pick
+    /// wait, so a stuck dialog fails loud instead of wedging the leg.
+    fn drain_toll_pick(&mut self) -> Result<()> {
+        let watched = self.world.ticks + TOLL_POST_PICK_WAIT;
+        while self.world.ticks < watched {
+            if !self.toll_continue_due() {
+                return Ok(());
+            }
+            self.chat_continue()?;
+            self.pump(1)?;
+        }
+        Ok(())
+    }
+
+    /// True while a plain chat page is up with no choice to pick: the
+    /// pick landed and the server waits on the pause button. Pure so
+    /// the post-pick drain is testable offline.
+    fn toll_continue_due(&self) -> bool {
+        self.world.modal.as_ref().is_some_and(|modal| modal.layer != "main") && self.chat_options().is_empty()
     }
 
     /// Pure pick over the CURRENT options (testable offline): the
@@ -1743,6 +1773,37 @@ mod tests {
             "no yes/pay option fails loud, got: {:?}",
             bot.toll_pick()
         );
+    }
+
+    /// Post-pick drain (`border_gate.rs2` + `chat.rs2`): after the
+    /// "Yes, ok." pick the server shows a chatplayer page (`chat1`, com
+    /// 2473 spent) and waits on the pause button before `inv_del` +
+    /// teleport. The drain keeps a continue due while that plain page
+    /// shows, drops it once a choice or a closed dialog lands, and the
+    /// continue itself reaches the send path (dead socket reads
+    /// `Login`, like the quest drains it mirrors).
+    #[test]
+    fn toll_post_pick_drains_the_chatplayer_page() {
+        let mut bot = offline_bot(3267, 3227);
+        assert!(!bot.toll_continue_due(), "no dialog, no continue");
+        // The spent choice: chat1 page open, no options (com 2473 gone).
+        bot.world.modal = Some(crate::world::Modal { layer: "chat".to_string(), interface_id: 968 });
+        bot.world.texts.insert(2, "Yes, ok.".to_string());
+        assert!(bot.toll_continue_due(), "plain chatplayer page needs the extra continue");
+        assert!(
+            matches!(bot.chat_continue(), Err(Error::Login(_))),
+            "continue emitted (dead socket fails at login, never at the op name)"
+        );
+        // A fresh choice ends the drain instead of continuing past it.
+        bot.world.modal = Some(crate::world::Modal { layer: "chat".to_string(), interface_id: 2469 });
+        bot.world.texts.insert(2471, "No thank you, I'll walk around.".to_string());
+        bot.world.texts.insert(2473, "Yes, ok.".to_string());
+        assert!(!bot.toll_continue_due(), "choice page is picked, never continued");
+        bot.world.modal = Some(crate::world::Modal { layer: "main".to_string(), interface_id: 1 });
+        bot.world.texts.clear();
+        assert!(!bot.toll_continue_due(), "main window is never continued");
+        bot.world.modal = None;
+        assert!(!bot.toll_continue_due(), "closed dialog ends the drain");
     }
 
     /// R9 island trap (b7e2ggbp): a zero-step plan adjusted on place

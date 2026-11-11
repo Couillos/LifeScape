@@ -158,6 +158,17 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
     let start = paired.len().saturating_sub(25);
     let chat_msgs: Vec<Value> = bot.world.chat.iter().rev().take(25).map(|line| str_value(&line.text)).collect();
     let chat: Vec<Value> = chat_msgs.into_iter().rev().collect();
+    // Last tells, oldest first (matches the chat shape): reception
+    // becomes visible in `see` and the dashboard, not just in calls.
+    let tell_msgs: Vec<Value> = bot
+        .world
+        .private
+        .iter()
+        .rev()
+        .take(10)
+        .map(|line| object(vec![("who", str_value(&line.who)), ("text", str_value(&line.text))]))
+        .collect();
+    let tells: Vec<Value> = tell_msgs.into_iter().rev().collect();
     let messages: Vec<Value> = paired[start..].iter().map(|(line, _)| str_value(line)).collect();
     let message_ticks: Vec<Value> = paired[start..].iter().map(|(_, tick)| Value::Int(**tick as i64)).collect();
     let mut texts: Vec<(u16, &String)> = bot.world.texts.iter().map(|(com, text)| (*com, text)).collect();
@@ -219,8 +230,35 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
         ("models", Value::Obj(Default::default())),
         ("bank", Value::Arr(slot_items(bank_com))),
         ("chat", Value::Arr(chat)),
+        ("tells", Value::Arr(tells)),
         ("messages", Value::Arr(messages)),
         ("message_ticks", Value::Arr(message_ticks)),
         ("texts", Value::Obj(text_map)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heartbeat_value;
+    use lifescape_json::Value;
+
+    /// Received tells surface in the heartbeat JSON (who + text, oldest
+    /// first), so `see` and the dashboard show reception live.
+    #[test]
+    fn heartbeat_carries_received_tells() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.private.push(lifescape_sdk::world::ChatLine {
+            who: "t02".to_string(),
+            text: "meet at varrock".to_string(),
+            color: 0,
+            effect: 0,
+        });
+        let value = heartbeat_value(&bot, "t01", "testing", &[]);
+        let Value::Arr(tells) = value.get("tells") else {
+            panic!("tells is an array");
+        };
+        assert_eq!(tells.len(), 1, "one tell received");
+        assert_eq!(tells[0].get("who").as_str(), Some("t02"));
+        assert_eq!(tells[0].get("text").as_str(), Some("meet at varrock"));
+    }
 }
