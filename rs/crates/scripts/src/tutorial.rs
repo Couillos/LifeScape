@@ -151,6 +151,23 @@ fn crossed_door(bot: &Bot, door: (i32, i32), start: (i32, i32)) -> bool {
     (bot.world.x - door.0) * (start.0 - door.0) + (bot.world.z - door.1) * (start.1 - door.1) < 0
 }
 
+/// Finish standing on the far tile: the crossing click lands the bot
+/// anywhere past the door (advisor door: 3131 vs beyond 3132) and a fresh
+/// refusal with no motion after kills the run on the rejection watch.
+/// The breather first lets the watch arm on the pre-step tile, so the
+/// step itself resets it; best effort, the crossing is already proven.
+fn settle_beyond(bot: &mut Bot, beyond: (i32, i32)) -> Result<(), ScriptError> {
+    if (bot.world.x, bot.world.z) == beyond {
+        return Ok(());
+    }
+    bot.pump(10)?;
+    if (bot.world.x, bot.world.z) == beyond {
+        return Ok(());
+    }
+    let _ = bot.walk_to(beyond.0, beyond.1, bot.world.level, 1500);
+    Ok(())
+}
+
 fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), ScriptError> {
     let (x, z, _level, loc) = kit::find_loc(bot, &[door_name], 150)?;
     let start = (bot.world.x, bot.world.z);
@@ -161,6 +178,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
     for _ in 0..2 {
         if through(bot) {
             bot.log(&format!("ok {door_name}"));
+            settle_beyond(bot, beyond)?;
             return Ok(());
         }
         let mut tiles = vec![(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)];
@@ -168,6 +186,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
         for (tile_x, tile_z) in tiles {
             if through(bot) {
                 bot.log(&format!("ok {door_name}"));
+                settle_beyond(bot, beyond)?;
                 return Ok(());
             }
             if !step_onto(bot, tile_x, tile_z, 1000) {
@@ -179,6 +198,7 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
                 bot.pump(1)?;
                 if through(bot) {
                     bot.log(&format!("ok {door_name}"));
+                    settle_beyond(bot, beyond)?;
                     return Ok(());
                 }
             }
@@ -277,6 +297,10 @@ fn guide(bot: &mut Bot) -> Result<(), ScriptError> {
     talk_step(bot, "basics_instructor", (3095, 3107), &["No, thank you."], "guide")
 }
 
+fn is_chat_modal(modal: &Option<lifescape_sdk::world::Modal>) -> bool {
+    modal.as_ref().is_some_and(|open| open.layer == "chat")
+}
+
 fn design(bot: &mut Bot) -> Result<(), ScriptError> {
     let target = bot.world.ticks + 50;
     while bot.world.ticks < target && bot.world.modal.is_none() {
@@ -284,6 +308,16 @@ fn design(bot: &mut Bot) -> Result<(), ScriptError> {
     }
     if bot.world.modal.is_none() {
         bot.log("ok no design screen, already validated");
+        return Ok(());
+    }
+    if is_chat_modal(&bot.world.modal) {
+        // Resume with a leftover dialog (interrupted run, post-relogin):
+        // the accept button lives on the `player_kit` main interface
+        // (server `[if_button,player_kit:accept]`), never in a chat box —
+        // firing it there answers "I can't reach that!" and the rejection
+        // watch kills the run. Close it, the stage loop re-talks.
+        bot.log("ok leftover dialog closed, stage loop re-drives");
+        bot.close_modal()?;
         return Ok(());
     }
     bot.if_button(COM_DESIGN_ACCEPT)?;
@@ -975,13 +1009,27 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_ticks, STAGE_MATCHERS};
+    use super::{elapsed_ticks, is_chat_modal, STAGE_MATCHERS};
+    use lifescape_sdk::world::Modal;
 
     /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
     #[test]
     fn elapsed_survives_tick_reset() {
         assert_eq!(elapsed_ticks(100, 50), 50);
         assert_eq!(elapsed_ticks(5, 1439), 0, "reset: no panic, no false timeout");
+    }
+
+    /// Defaut 2 (btjk4cpk, mine, dialogue mineur resté ouvert) : le préambule
+    /// tirait l'accept du design dans la boîte de chat — "I can't reach
+    /// that!" frais + 20 ticks sans bouger (FAIL verify), ou 50 ticks
+    /// d'attente modale (FAIL design accepted). Seul le chat ferme.
+    #[test]
+    fn leftover_chat_modal_never_takes_design_accept() {
+        let chat = Some(Modal { layer: "chat".to_string(), interface_id: 4887 });
+        assert!(is_chat_modal(&chat), "resume leftover closes, never presses accept");
+        let main = Some(Modal { layer: "main".to_string(), interface_id: 1 });
+        assert!(!is_chat_modal(&main), "design screen keeps its accept press");
+        assert!(!is_chat_modal(&None), "no modal stays a clean start");
     }
 
     /// Defaut 1 offline pin (replay-nav style, no live run): the t03/t05
