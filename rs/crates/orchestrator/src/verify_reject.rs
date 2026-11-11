@@ -71,36 +71,58 @@ pub fn rejection_of(state: &Value, since_tick: i64, baseline_error: &Value) -> O
 }
 
 /// Armed first-rejection state: cause, game tick and tile at arming time.
-/// Same tile plus 20 ticks with no terminal verdict means stuck: fail.
+/// `last_ticks` is the newest game tick seen on the previous poll
+/// (baseline watermark before the first): only a rejection NEWER than
+/// this arms the watch. The daemon serves message views in bursts
+/// dozens of ticks late, so any absolute floor (baseline or consumed
+/// watermark) arms on already-recovered refusals — the cook stand
+/// probe, the full pack — and the grace then kills the next normal
+/// park (cooking, bank heal). Newness is relative to the previous
+/// poll, never absolute: a recovered line is old on arrival, a stuck
+/// bot re-emits fresh ones on every retry. The armed grace below is
+/// unchanged, so a truly stuck bot still fails within 20 ticks.
 pub struct RejectWatch {
     armed: Option<(String, Option<i64>, Option<(i64, i64, i64)>)>,
+    last_ticks: Option<i64>,
 }
 
 impl RejectWatch {
     pub fn new() -> Self {
-        RejectWatch { armed: None }
+        RejectWatch { armed: None, last_ticks: None }
     }
 
     /// Feed one `show` snapshot. `Some(cause)` the first poll at least 20
     /// game ticks after the arming sighting with no move since; `None`
     /// otherwise (no rejection yet, bot moved, or grace still running).
     pub fn note(&mut self, state: &Value, since_tick: i64, baseline_error: &Value) -> Option<String> {
+        let now_ticks = state.get("ticks").as_i64();
         if let Some((cause, first_tick, first_pos)) = self.armed.clone() {
             if position_of(state) != first_pos {
                 self.armed = None;
+            } else {
+                let done = match (now_ticks, first_tick) {
+                    (Some(now), Some(first)) => now.saturating_sub(first) >= REJECT_GRACE_TICKS,
+                    // No game clock (pre-stream snapshot): fail on sight
+                    // rather than burn a budget blind.
+                    (None, _) => true,
+                    _ => false,
+                };
+                self.last_ticks = now_ticks.or(self.last_ticks);
+                if done {
+                    return Some(cause);
+                }
                 return None;
             }
-            match (state.get("ticks").as_i64(), first_tick) {
-                (Some(now), Some(first)) if now.saturating_sub(first) >= REJECT_GRACE_TICKS => return Some(cause),
-                // No game clock (pre-stream snapshot): fail on sight
-                // rather than burn a budget blind.
-                (None, _) => return Some(cause),
-                _ => return None,
-            }
         }
-        if let Some(cause) = rejection_of(state, since_tick, baseline_error) {
-            self.armed = Some((cause, state.get("ticks").as_i64(), position_of(state)));
+        // Newer than the previous poll (baseline before the first): a
+        // lagged burst carries only old lines and never arms, while a
+        // stuck bot's retried refusal is fresh on arrival. Capped below
+        // by the baseline so a pre-run line never arms the first poll.
+        let threshold = self.last_ticks.max(Some(since_tick)).unwrap_or(since_tick);
+        if let Some(cause) = rejection_of(state, threshold, baseline_error) {
+            self.armed = Some((cause, now_ticks, position_of(state)));
         }
+        self.last_ticks = now_ticks.or(self.last_ticks);
         None
     }
 }
@@ -175,6 +197,42 @@ mod tests {
         }
         let cause = watch.note(&show(&[("I can't reach that!", 101)], 120, pos), 90, &baseline).expect("fails at +20");
         assert!(cause.to_ascii_lowercase().contains("can't reach"), "dossier cause names the door: {cause}");
+    }
+
+    /// A rejection followed by a recovery (stand retry, banked full pack)
+    /// never fails a later park: the stale line stays past the baseline
+    /// in the 25-line window, but the watch already consumed it. The live
+    /// cook case: the walled west stand (3317,3138) refuses, the east
+    /// stand cooks, then the bank heal parks 200+ ticks on the old line.
+    #[test]
+    fn recovered_rejection_never_re_arms() {
+        let baseline = Value::Null;
+        let mut watch = RejectWatch::new();
+        let refused = (0, 3317, 3138);
+        let recovered = (0, 3319, 3138);
+        let bank = (0, 3269, 3164);
+        assert!(watch.note(&show(&[("I can't reach that!", 7245)], 7245, refused), 7200, &baseline).is_none(), "arming poll never fails");
+        assert!(watch.note(&show(&[("You put the shrimps on the stove.", 7250)], 7250, recovered), 7200, &baseline).is_none(), "moved bot resets");
+        for tick in (7260..7330).step_by(5) {
+            let state = show(&[("I can't reach that!", 7245), ("You put the shrimps on the stove.", 7250)], tick, bank);
+            assert!(watch.note(&state, 7200, &baseline).is_none(), "stale refusal fails the bank park at tick {tick}");
+        }
+    }
+
+    /// A strictly newer rejection arms again after a recovery: the grain
+    /// pack fills twice (two bank trips), the second full-pack line is a
+    /// new sighting on the current tile, not the consumed one.
+    #[test]
+    fn fresh_second_rejection_arms_again() {
+        let baseline = Value::Null;
+        let mut watch = RejectWatch::new();
+        let field = (0, 3220, 3339);
+        let bank = (0, 3251, 3420);
+        assert!(watch.note(&show(&[("You can't carry any more grain.", 1886)], 1886, field), 1800, &baseline).is_none());
+        assert!(watch.note(&show(&[("You open the bank.", 1900)], 1900, bank), 1800, &baseline).is_none(), "bank trip resets");
+        assert!(watch.note(&show(&[("You open the bank.", 1900), ("You can't carry any more grain.", 2012)], 2012, bank), 1800, &baseline).is_none(), "new line only arms");
+        let cause = watch.note(&show(&[("You open the bank.", 1900), ("You can't carry any more grain.", 2012)], 2032, bank), 1800, &baseline).expect("parked 20 ticks on a fresh refusal fails");
+        assert!(cause.contains("carry"), "cause names the refusal: {cause}");
     }
 
     /// A bot that moves after the rejection is retrying (bank side, next
