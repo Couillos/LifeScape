@@ -303,7 +303,7 @@ pub fn replay_nav_cmd(args: &[String]) -> i32 {
             0
         }
         Err(no) => {
-            println!("replay: pas de route ({}) closest=({},{},{})", no.reason.as_str(), no.closest_reachable.x, no.closest_reachable.z, no.closest_reachable.level);
+            println!("replay: pas de route ({}) closest=({},{},{}) blockers=[{}]", no.reason.as_str(), no.closest_reachable.x, no.closest_reachable.z, no.closest_reachable.level, lifescape_nav::plan::describe_blockers(&no.blockers));
             for (edge, tags) in &no.blocked_by_requirements {
                 println!("  blocked by {edge:?} missing {tags:?}");
             }

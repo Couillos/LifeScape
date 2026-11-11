@@ -326,8 +326,9 @@ impl Bot {
         let mut blocked: Vec<String> =
             no.blocked_by_requirements.iter().map(|(edge, tags)| format!("{edge:?} missing {tags:?}")).collect();
         blocked.sort();
+        let blockers = lifescape_nav::plan::describe_blockers(&no.blockers);
         let observed = format!(
-            "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{}) blocked=[{}] disabled_nearby={}",
+            "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{}) blocked=[{}] disabled_nearby={} blockers=[{}]",
             from.x,
             from.z,
             from.level,
@@ -340,6 +341,7 @@ impl Bot {
             no.closest_reachable.level,
             blocked.join("; "),
             no.disabled_transitions_nearby.len(),
+            blockers,
         );
         let expected = format!("route ({},{},{}) -> ({},{},{})", from.x, from.z, from.level, dest.x, dest.z, dest.level);
         self.fail(from, dest, options, None, None, &expected, &Error::Travel(observed))

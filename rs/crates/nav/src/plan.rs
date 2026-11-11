@@ -143,6 +143,32 @@ pub struct Blocker {
     pub stand: Option<Tile>,
 }
 
+impl Blocker {
+    /// One-line human context: which object or door blocks, where it is,
+    /// and how to click it (op + stand). Used by every NoRoute display
+    /// instead of a bare `closest=`.
+    pub fn describe(&self) -> String {
+        let kind = if self.is_door { "door" } else { "loc" };
+        let mut text = format!(
+            "{} '{}' loc={} at ({},{},{})",
+            kind, self.name, self.loc, self.x, self.z, self.level
+        );
+        if let Some(op) = self.open_op {
+            text += &format!(" op={op}");
+        }
+        if let Some(stand) = self.stand {
+            text += &format!(" stand=({},{},{})", stand.x, stand.z, stand.level);
+        }
+        text
+    }
+}
+
+/// `blockers` rendered for humans, doors first (already ordered upstream).
+/// Empty when nothing was identified — never `closest=` alone anymore.
+pub fn describe_blockers(blockers: &[Blocker]) -> String {
+    blockers.iter().map(Blocker::describe).collect::<Vec<_>>().join("; ")
+}
+
 /// Which closed door a step swings through. `open_op`/`toll` ride along
 /// for the executor (no pack read worker-side): `None` on old plans
 /// means the door stays shut, never clicked blind.

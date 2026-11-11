@@ -183,7 +183,7 @@ pub fn route_cmd(args: &[String]) -> i32 {
         }
         Err(no) => {
             println!(
-                "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{})",
+                "no route ({},{},{}) -> ({},{},{}): {} closest=({},{},{}) blockers=[{}]",
                 from.x,
                 from.z,
                 from.level,
@@ -194,6 +194,7 @@ pub fn route_cmd(args: &[String]) -> i32 {
                 no.closest_reachable.x,
                 no.closest_reachable.z,
                 no.closest_reachable.level,
+                lifescape_nav::plan::describe_blockers(&no.blockers),
             );
             for (edge, tags) in &no.blocked_by_requirements {
                 println!("  blocked by {edge:?} missing {tags:?}");

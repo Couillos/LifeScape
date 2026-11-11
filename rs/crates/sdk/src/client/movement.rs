@@ -254,7 +254,7 @@ impl Bot {
                         }
                     }
                     Err(no) => lines.push(format!(
-                        "UNREACHABLE {} closest=({},{},{}) blocked=[{}]",
+                        "UNREACHABLE {} closest=({},{},{}) blocked=[{}] blockers=[{}]",
                         no.reason.as_str(),
                         no.closest_reachable.x,
                         no.closest_reachable.z,
@@ -264,6 +264,7 @@ impl Bot {
                             .map(|(edge, tags)| format!("{edge:?} missing {tags:?}"))
                             .collect::<Vec<_>>()
                             .join("; "),
+                        lifescape_nav::plan::describe_blockers(&no.blockers),
                     )),
                 }
             }
