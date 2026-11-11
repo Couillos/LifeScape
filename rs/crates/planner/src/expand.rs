@@ -320,6 +320,17 @@ fn obtain_node(item: &str, count: i64, deps: Vec<String>, counter: &mut usize, i
     node
 }
 
+/// Guild key to its gated skill (services GUILDS order, from the 274
+/// scripts): the mining entry carries no uniform, only the level.
+fn guild_skill(guild: &str) -> Option<&'static str> {
+    match guild {
+        "cooks_guild" => Some("cooking"),
+        "crafting_guild" => Some("crafting"),
+        "mining_guild" => Some("mining"),
+        _ => None,
+    }
+}
+
 /// Full skeleton at creation: every step present, leaf methods resolved
 /// later (alternatives carry est 0 until `resolve_ready` prices them).
 pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
@@ -368,8 +379,37 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
             nodes.push(node);
         }
         GoalKind::AccessArea { area } => {
+            // Guild gates (services GUILDS, from the 274 scripts): the
+            // skill chain first, then the uniform to obtain — the access
+            // node never stands depless when a requirement exists.
+            let mut deps = Vec::new();
+            if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
+                if let Some(skill) = guild_skill(area) {
+                    let mut after = String::new();
+                    let chain = reach_chain(skill, 1, (*level).min(99) as u8, &mut counter, &mut after);
+                    if let Some(last) = chain.last() {
+                        deps.push(last.id.clone());
+                    }
+                    nodes.extend(chain);
+                }
+                if !uniform.is_empty() {
+                    let node = obtain_node(uniform, 1, Vec::new(), &mut counter, profile.ironman);
+                    deps.push(node.id.clone());
+                    nodes.push(node);
+                }
+            } else if area == "champions_guild" {
+                // shortcut: qp:32 needs the 32-QP ladder, but quest rewards
+                // are not in the dumps, so no minimal quest set derives —
+                // the cheapest QP rung (Cook's Assistant) gates the node
+                // until the ladder lands.
+                let quest_nodes = expand_quest("cook", profile, &mut counter);
+                if let Some(last) = quest_nodes.last() {
+                    deps.push(last.id.clone());
+                }
+                nodes.extend(quest_nodes);
+            }
             let id = next_id(&mut counter);
-            let mut node = Node::new(&id, NodeKind::AccessArea { area: area.clone() }, Vec::new(), 1);
+            let mut node = Node::new(&id, NodeKind::AccessArea { area: area.clone() }, deps, 1);
             node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 1200, est_coins: 0 });
             nodes.push(node);
         }
@@ -606,6 +646,30 @@ mod tests {
         // Feathers drop from chickens: the farm leg stays.
         let feather = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 100 }, &profile());
         assert!(feather[0].alternatives.iter().any(|alt| alt.method == "farm:feather"), "feathers farm");
+    }
+
+    #[test]
+    fn access_area_derives_guild_deps() {
+        // Cooks: cooking 32 chain plus the toque to obtain, gating the
+        // access node; mining: level only, no uniform; champions: the
+        // cheapest QP rung; unknown zones stay bare (no known gate).
+        let cooks = expand_goal(&GoalKind::AccessArea { area: "cooks_guild".to_string() }, &profile());
+        let leaf = cooks.last().expect("access leaf");
+        assert!(matches!(leaf.kind, NodeKind::AccessArea { .. }), "leaf accesses, got {:?}", leaf.kind);
+        assert!(!leaf.deps.is_empty(), "guild gate leaves no depless node");
+        assert!(cooks.iter().any(|node| matches!(&node.kind, NodeKind::ReachLevel { skill, level } if skill == "cooking" && *level == 32)));
+        assert!(cooks.iter().any(|node| matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item == "chefs_hat")));
+        let mining = expand_goal(&GoalKind::AccessArea { area: "mining_guild".to_string() }, &profile());
+        let leaf = mining.last().expect("access leaf");
+        assert!(!leaf.deps.is_empty(), "level gate leaves no depless node");
+        assert!(mining.iter().any(|node| matches!(&node.kind, NodeKind::ReachLevel { skill, level } if skill == "mining" && *level == 60)));
+        assert!(!mining.iter().any(|node| matches!(node.kind, NodeKind::ObtainItems { .. })), "no uniform on the mining guild");
+        let champions = expand_goal(&GoalKind::AccessArea { area: "champions_guild".to_string() }, &profile());
+        let leaf = champions.last().expect("access leaf");
+        assert!(!leaf.deps.is_empty(), "qp gate leaves no depless node");
+        assert!(champions.iter().any(|node| matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "cook")));
+        let bare = expand_goal(&GoalKind::AccessArea { area: "karamja".to_string() }, &profile());
+        assert_eq!(bare.len(), 1, "unknown zone stays bare, got {bare:?}");
     }
 
     #[test]

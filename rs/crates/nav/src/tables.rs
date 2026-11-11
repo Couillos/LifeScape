@@ -4,7 +4,8 @@
 //! dump, the optional prober verdicts, and the hand-checked door rules.
 //! No network, no live state. Tag vocabulary for `requires` and
 //! `satisfied`: `quest:<name>`, `item:<id>`, `coins:<n>`, `qp:<n>`
-//! (quest-point total, as checked by the content scripts).
+//! (quest-point total, as checked by the content scripts),
+//! `skill:<skill>:<n>` (live stat level) and `worn:<id>` (equipped obj).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

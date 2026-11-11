@@ -50,6 +50,13 @@
   ],
   "requirements": [
     {
+      "loc": 1804,
+      "at": [3115, 3450, 0],
+      "requires": ["item:983"],
+      "reason": "brasskeydoor: the Edgeville dungeon script only unlocks for the carried brass key (edgevilledungeonkey, obj 983), otherwise the door answers locked",
+      "verified": "2026-11-11"
+    },
+    {
       "loc": 1805,
       "at": [3191, 3363, 0],
       "requires": ["qp:32"],

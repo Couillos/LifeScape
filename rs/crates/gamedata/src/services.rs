@@ -63,11 +63,13 @@ pub fn all_services() -> Vec<Service> {
 pub const BOAT_FARE_GP: i64 = 30;
 pub const TOLL_GP: i64 = 10;
 
-/// Guild entries (level + item, from the 274 scripts).
+/// Guild entries (level + uniform, from the 274 scripts). The uniform
+/// is empty when the script checks no item: the Mining Guild dwarf only
+/// asks for mining 60, so the entry carries no pickaxe.
 pub const GUILDS: [(&str, i64, &str); 3] = [
     ("cooks_guild", 32, "chefs_hat"),
     ("crafting_guild", 40, "brown_apron"),
-    ("mining_guild", 60, "rune_pickaxe"),
+    ("mining_guild", 60, ""),
 ];
 
 #[cfg(test)]
@@ -97,5 +99,6 @@ mod tests {
         assert_eq!(boat.cost_gp, 30);
         assert_eq!(GUILDS.len(), 3);
         assert_eq!(GUILDS[0], ("cooks_guild", 32, "chefs_hat"));
+        assert_eq!(GUILDS[2], ("mining_guild", 60, ""), "no item gate on the mining guild");
     }
 }

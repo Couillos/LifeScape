@@ -273,6 +273,30 @@ mod tests {
     }
 
     #[test]
+    fn guild_uniforms_and_brass_key_are_sourced() {
+        // Guild gates need buyable uniforms and the dungeon key spawn:
+        // the toque and the apron restock in Varrock clothes shops, the
+        // brass key (obj 983) has its single Edgeville dungeon spawn.
+        let hat = sources_for_name("chefs_hat");
+        assert!(
+            hat.iter().any(|entry| matches!(entry, ItemSource::Shop { shop } if shop == "fancyclothesstore")),
+            "toque shops: {hat:?}"
+        );
+        let apron = sources_for_name("brown_apron");
+        assert!(
+            apron.iter().any(|entry| matches!(entry, ItemSource::Shop { shop } if shop == "clotheshop" || shop == "fancyclothesstore")),
+            "apron shops: {apron:?}"
+        );
+        let key = sources_for_name("edgevilledungeonkey");
+        assert_eq!(key.iter().filter(|entry| matches!(entry, ItemSource::Spawn { .. })).count(), 1, "key spawns: {key:?}");
+        let spawn = key.iter().find_map(|entry| match entry {
+            ItemSource::Spawn { x, z, level } => Some((*x, *z, *level)),
+            _ => None,
+        });
+        assert_eq!(spawn, Some((3131, 9862, 0)), "key spawn, got {spawn:?}");
+    }
+
+    #[test]
     fn catalogue_sources_cover_tradeables() {
         // M10b acceptance: every F2P tradeable object either has an F2P
         // source or is a documented no-source rare (trimmed, partyhat,

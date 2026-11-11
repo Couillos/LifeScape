@@ -242,14 +242,20 @@ mod tests {
             }
             let scenario = parse_scenario(&std::fs::read_to_string(&path).expect("reads")).expect("parses");
             assert!(lifescape_scripts::names().contains(&scenario.run.script.as_str()), "known script");
-            assert!(scenario.run.budget_ticks <= 2000, "smoke budget (W4)");
+            // Smoke budget (W4): 2000 ticks max, sauf scénarios longs déclarés.
+            let long = [("tutorial_fresh", "tutoriel complet, pas un smoke")];
+            if let Some((_, why)) = long.iter().find(|(id, _)| *id == scenario.id) {
+                assert!(scenario.run.budget_ticks > 2000, "{why}");
+            } else {
+                assert!(scenario.run.budget_ticks <= 2000, "smoke budget (W4)");
+            }
             count += 1;
             names.push(scenario.id);
         }
-        for want in ["walk_lumbridge", "harvest_grain", "cook_shrimp"] {
+        for want in ["walk_lumbridge", "harvest_grain", "cook_shrimp", "pickup_falador_pickaxe", "tutorial_fresh"] {
             assert!(names.contains(&want.to_string()), "ships {want}");
         }
-        assert_eq!(count, 3, "exactly the three W2 scenarios");
+        assert_eq!(count, 5, "W2 (3) + pickup + tutorial");
     }
 
     /// Unknown ids, ops and asserts fail loud with a typed message.
