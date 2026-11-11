@@ -312,6 +312,160 @@ pub(crate) enum CombatStep {
     Fail(String),
 }
 
+/// Tutorial-first (b3vsmjbc, bbdvmczd) : un bot sur Tutorial Island
+/// n'a pas fini le tutoriel, donc aucun `gather:*` mainland ne peut
+/// passer. La zone live tranche ; la tuile aide quand la zone manque.
+pub fn tutorial_needed(live: &Value) -> bool {
+    if live.get("zone").as_str() == Some("Tutorial Island") {
+        return true;
+    }
+    if let Some(pos) = live.get("position").as_arr() {
+        if pos.len() == 3 {
+            if let (Some(x), Some(z)) = (pos[1].as_i64(), pos[2].as_i64()) {
+                if let Some((name, _)) = crate::zones::zone_name(x as i32, z as i32) {
+                    return name == "Tutorial Island";
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Nœud tutoriel prioritaire : réutilise l'ouvert (méthode reportée
+/// après un reset Active→Ready), jamais de doublon.
+pub fn ensure_tutorial_node(life: &mut Life) -> usize {
+    if let Some(at) = life.nodes.iter().position(|node| {
+        matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
+            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+    }) {
+        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
+            life.nodes[at].method = Some("tutorial".to_string());
+        }
+        if life.nodes[at].alternatives.is_empty() {
+            life.nodes[at].alternatives.push(Alternative { method: "tutorial".to_string(), est_ticks: 6000, est_coins: 0 });
+        }
+        return at;
+    }
+    let mut node = Node::new(&next_node_id(life), NodeKind::CompleteQuest { quest: "tutorial".to_string() }, Vec::new(), 1);
+    node.status = NodeStatus::Ready;
+    node.method = Some("tutorial".to_string());
+    node.alternatives.push(Alternative { method: "tutorial".to_string(), est_ticks: 6000, est_coins: 0 });
+    life.nodes.push(node);
+    life.nodes.len() - 1
+}
+
+/// Ce que le pas tutoriel décide : lancer le script, clore un nœud
+/// ouvert hors de l'île (la sortie exige la fin), ou ne rien faire.
+pub enum TutorialStep {
+    Launch(usize),
+    Cleared,
+    Idle,
+}
+
+fn push_graph_history(life: &mut Life, node: &str, outcome: &str) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    life.history.push(lifescape_planner::HistoryEntry { node: node.to_string(), started: now, ended: now, outcome: outcome.to_string() });
+}
+
+/// Pas tutoriel : sur l'île on lance (le nœud `tutorial` porte
+/// directement le script, sans passer par `map_method`) ; hors de
+/// l'île un nœud ouvert se clôt ; sinon calme.
+pub fn tutorial_step(life: &mut Life, live: &Value) -> TutorialStep {
+    let open = life.nodes.iter().position(|node| {
+        matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
+            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+    });
+    if !tutorial_needed(live) {
+        if let Some(at) = open {
+            let id = life.nodes[at].id.clone();
+            life.nodes[at].status = NodeStatus::Done;
+            life.nodes[at].progress_current = life.nodes[at].progress_target;
+            if life.active.as_deref() == Some(id.as_str()) {
+                life.active = None;
+            }
+            push_graph_history(life, &id, "tutorial_done");
+            println!("brain {}: off tutorial island, closing tutorial {id}", life.account);
+            return TutorialStep::Cleared;
+        }
+        return TutorialStep::Idle;
+    }
+    TutorialStep::Launch(open.unwrap_or_else(|| ensure_tutorial_node(life)))
+}
+
+/// Graphe épuisé (t02) : ouvert (rien à faire), succès (tout Done,
+/// intact), réessai borné (abandonnés → Ready, méthode effacée), ou
+/// repos avec dossier (deux épuisements déjà).
+pub enum DeadGraph {
+    Open,
+    Success,
+    Revived,
+    Rested,
+}
+
+/// Réessaie un graphe mort une fois de plus (borné à deux), sinon
+/// dossier bruyant et repos : jamais d'idle silencieux.
+pub fn revive_dead_graph(life: &mut Life) -> DeadGraph {
+    let terminal = life.nodes.iter().all(|node| matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned));
+    if !terminal {
+        return DeadGraph::Open;
+    }
+    if life.nodes.iter().all(|node| node.status == NodeStatus::Done) {
+        return DeadGraph::Success;
+    }
+    let exhausted = life.history.iter().filter(|entry| entry.outcome == "exhausted" || entry.outcome == "exhausted-idle").count();
+    if exhausted < 2 {
+        for node in &mut life.nodes {
+            if node.status == NodeStatus::Abandoned {
+                node.status = NodeStatus::Ready;
+                node.method = None;
+                node.spent_ticks = 0;
+            }
+        }
+        if life.active.as_deref().is_some_and(|id| !life.nodes.iter().any(|node| node.id == id && node.status == NodeStatus::Active)) {
+            life.active = None;
+        }
+        push_graph_history(life, "graph", "exhausted");
+        println!("brain {}: dead graph, retrying abandoned nodes (exhaustion #{})", life.account, exhausted + 1);
+        DeadGraph::Revived
+    } else {
+        if life.history.last().is_none_or(|entry| entry.outcome != "exhausted-idle") {
+            push_graph_history(life, "graph", "exhausted-idle");
+            println!("brain {}: dead graph twice exhausted, standing by (dossier in history)", life.account);
+        }
+        DeadGraph::Rested
+    }
+}
+
+/// Échec de voyage : la signature vit dans `last_error.message`
+/// ("travel failure NoRoute ...", "bank unreachable ...").
+pub fn is_travel_failure(last_error: &Value) -> bool {
+    let message = last_error.get("message").as_str().unwrap_or("").to_lowercase();
+    ["noroute", "travel failure", "unreachable", "unset_map_flag", "no-route", "no route"]
+        .iter()
+        .any(|mark| message.contains(mark))
+}
+
+/// Ce que le repli voyage décide : réessayer (il reste une
+/// alternative) ou abandon typé (plus aucun exécutable).
+pub enum TravelFold {
+    Retry,
+    NoRoute(String),
+}
+
+/// Bannit la méthode prouvée injoignable : retirée des alternatives,
+/// verrou effacé, jamais relancée telle quelle.
+pub fn fold_travel_failure(node: &mut Node, method: &str) -> TravelFold {
+    node.alternatives.retain(|alt| alt.method != method);
+    if node.method.as_deref() == Some(method) {
+        node.method = None;
+    }
+    if node.alternatives.is_empty() {
+        TravelFold::NoRoute(method.to_string())
+    } else {
+        TravelFold::Retry
+    }
+}
+
 fn next_node_id(life: &Life) -> String {
     let mut counter = life.nodes.len();
     for node in &life.nodes {
@@ -628,5 +782,115 @@ mod tests {
         assert!(!coal.nodes[reache].alternatives.is_empty(), "alternative backfilled with the method");
         let (script, _) = lifescape_planner::map_method("fight:ranged/chickens", &coal.nodes[reache], None).expect("training executes");
         assert_eq!(script, "ranged");
+    }
+
+    /// Dispatch aveugle (b3vsmjbc, bbdvmczd) : la zone live dit si le
+    /// tutoriel reste à faire. Chaîne "Tutorial Island" d'abord, tuile
+    /// ensuite (heartbeat sans zone).
+    #[test]
+    fn tutorial_needed_reads_zone_then_position() {
+        use super::{ensure_tutorial_node, tutorial_needed, tutorial_step, TutorialStep};
+        let island = object(vec![("zone", str_value("Tutorial Island"))]);
+        assert!(tutorial_needed(&island), "la zone nomme l'île");
+        let market = object(vec![("zone", str_value("Market"))]);
+        assert!(!tutorial_needed(&market), "le mainland ne relance rien");
+        assert!(!tutorial_needed(&lifescape_json::Value::Null), "sans live, rien");
+        let pos_island = object(vec![("position", lifescape_json::Value::Arr(vec![
+            lifescape_json::Value::Int(0),
+            lifescape_json::Value::Int(3104),
+            lifescape_json::Value::Int(3093),
+        ]))]);
+        assert!(tutorial_needed(&pos_island), "la tuile 3104,3093 est l'île");
+        let pos_main = object(vec![("position", lifescape_json::Value::Arr(vec![
+            lifescape_json::Value::Int(0),
+            lifescape_json::Value::Int(3098),
+            lifescape_json::Value::Int(3266),
+        ]))]);
+        assert!(!tutorial_needed(&pos_main), "le mainland reste calme");
+
+        // Nœud tutoriel : créé une fois, réutilisé, méthode reportée.
+        let mut life = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        let at = ensure_tutorial_node(&mut life);
+        assert!(
+            matches!(&life.nodes[at].kind, NodeKind::CompleteQuest { quest } if quest == "tutorial"),
+            "quinzaine tutoriel, got {:?}",
+            life.nodes[at].kind
+        );
+        assert_eq!(life.nodes[at].method.as_deref(), Some("tutorial"));
+        assert_eq!(ensure_tutorial_node(&mut life), at, "pas de doublon");
+        life.nodes[at].method = None;
+        assert_eq!(ensure_tutorial_node(&mut life), at, "le nœud ouvert se réutilise");
+        assert_eq!(life.nodes[at].method.as_deref(), Some("tutorial"), "la méthode est reportée");
+
+        // Sur l'île on lance ; hors de l'île un nœud ouvert se clôt (la
+        // sortie exige la fin) ; un graphe sans nœud reste calme.
+        let launching = match tutorial_step(&mut life, &island) {
+            TutorialStep::Launch(at) => at,
+            _ => panic!("l'île lance le tutoriel"),
+        };
+        assert_eq!(launching, at, "le nœud assuré part");
+        life.nodes[at].status = NodeStatus::Ready;
+        assert!(matches!(tutorial_step(&mut life, &market), TutorialStep::Cleared), "hors île, clôture");
+        assert_eq!(life.nodes[at].status, NodeStatus::Done, "la sortie clôt le tutoriel");
+        assert!(matches!(tutorial_step(&mut life, &market), TutorialStep::Idle), "plus rien à faire");
+        let mut bare = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        assert!(matches!(tutorial_step(&mut bare, &market), TutorialStep::Idle), "sans île, sans nœud : calme");
+    }
+
+    /// Graphes morts (t02) : tout abandonné → réessaie borné, jamais
+    /// d'idle silencieux ; tout Done → succès intact ; deux épuisements
+    /// déjà → repos avec dossier.
+    #[test]
+    fn dead_graph_revives_bounded_then_rests() {
+        use super::{revive_dead_graph, DeadGraph};
+        let mut dead = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        dead.nodes[0].status = NodeStatus::Abandoned;
+        dead.active = None;
+        assert!(matches!(revive_dead_graph(&mut dead), DeadGraph::Revived), "le mort réessaie");
+        assert_eq!(dead.nodes[0].status, NodeStatus::Ready, "prêt, got {:?}", dead.nodes[0].status);
+        assert!(dead.nodes[0].method.is_none(), "nouvelle résolution");
+        assert_eq!(dead.history.last().map(|entry| entry.outcome.as_str()), Some("exhausted"), "dossier, got {:?}", dead.history.last());
+
+        let mut done = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        done.nodes[0].status = NodeStatus::Done;
+        assert!(matches!(revive_dead_graph(&mut done), DeadGraph::Success), "le succès reste intact");
+        assert!(done.history.is_empty(), "aucun dossier sur un succès");
+
+        let mut tired = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        tired.nodes[0].status = NodeStatus::Abandoned;
+        for _ in 0..2 {
+            tired.history.push(lifescape_planner::HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "exhausted".to_string() });
+        }
+        assert!(matches!(revive_dead_graph(&mut tired), DeadGraph::Rested), "deux épuisements suffisent");
+        assert_eq!(tired.nodes[0].status, NodeStatus::Abandoned, "nœuds intacts au repos");
+        assert_eq!(tired.history.last().map(|entry| entry.outcome.as_str()), Some("exhausted-idle"), "dossier final");
+
+        let mut open = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
+        assert!(matches!(revive_dead_graph(&mut open), DeadGraph::Open), "graphe ouvert intact");
+        assert!(open.history.is_empty(), "rien à consigner");
+    }
+
+    /// Marche impossible : l'échec de voyage bannit la méthode (jamais
+    /// relancée) ; sans alternative, échec typé au lieu d'une boucle.
+    #[test]
+    fn travel_failure_bans_then_abandons_typed() {
+        use super::{fold_travel_failure, is_travel_failure, TravelFold};
+        let travel = object(vec![("message", str_value("travel failure NoRoute seg=2 at (0,1,2)"))]);
+        assert!(is_travel_failure(&travel), "NoRoute voyage");
+        let bank = object(vec![("message", str_value("bank unreachable from (0,3222,3219)"))]);
+        assert!(is_travel_failure(&bank), "banque injoignable");
+        assert!(!is_travel_failure(&lifescape_json::Value::Null), "sans erreur, rien");
+        let plain = object(vec![("message", str_value("died"))]);
+        assert!(!is_travel_failure(&plain), "un échec franc n'est pas un voyage");
+
+        let mut node = Node::new("n1", NodeKind::ReachLevel { skill: "fishing".to_string(), level: 5 }, Vec::new(), 5);
+        node.status = NodeStatus::Ready;
+        node.method = Some("gather:fishing/raw_sardine".to_string());
+        node.alternatives.push(lifescape_planner::Alternative { method: "gather:fishing/raw_sardine".to_string(), est_ticks: 6000, est_coins: 0 });
+        node.alternatives.push(lifescape_planner::Alternative { method: "gather:fishing/raw_shrimp".to_string(), est_ticks: 7000, est_coins: 0 });
+        assert!(matches!(fold_travel_failure(&mut node, "gather:fishing/raw_sardine"), TravelFold::Retry), "il reste une alternative");
+        assert!(node.method.is_none(), "verrou effacé");
+        assert!(!node.alternatives.iter().any(|alt| alt.method == "gather:fishing/raw_sardine"), "bannie");
+        assert!(matches!(fold_travel_failure(&mut node, "gather:fishing/raw_shrimp"), TravelFold::NoRoute(method) if method == "gather:fishing/raw_shrimp"), "vide = typé");
     }
 }

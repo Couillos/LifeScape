@@ -15,13 +15,14 @@ use std::sync::Arc;
 use lifescape_json::Value;
 use lifescape_planner::{
     Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus, Profile,
-    draw_engagement_ticks, expand_goal, life_from_value, life_to_value, map_method, needs_replan,
-    replan_node, resolve_ready,
+    draw_engagement_ticks, expand_goal, life_from_value, life_to_value, map_method, resolve_ready,
 };
+
+use crate::brain_fold::handle_report;
+use crate::brain_plan::{bank_types, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep, DeadGraph, TutorialStep, revive_dead_graph, tutorial_step};
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
-use crate::brain_plan::{bank_types, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep};
 pub use crate::brain_plan::{TRIP_TICKS, choose_money};
 
 /// Merchant share of `get_rich` draws (D18, calibrated in L5).
@@ -272,32 +273,9 @@ pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
     true
 }
 
-fn reach_level(report: &Value, skill: &str) -> Option<u8> {
-    let stat = lifescape_sdk::provenance::skill_id(&skill.to_lowercase())? as i64;
-    report
-        .get("levels_after")
-        .as_arr()?
-        .iter()
-        .find(|row| row.get("stat").as_i64() == Some(stat))
-        .and_then(|row| row.get("level").as_i64())
-        .map(|level| level.clamp(1, 99) as u8)
-}
-
-fn report_missing(report: &Value) -> Vec<String> {
-    report
-        .get("missing")
-        .as_arr()
-        .map(|rows| rows.iter().filter_map(|row| row.as_str().map(str::to_string)).collect())
-        .unwrap_or_default()
-}
-
-fn push_history(life: &mut Life, node: &str, outcome: &str) {
+pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     life.history.push(HistoryEntry { node: node.to_string(), started: now, ended: now, outcome: outcome.to_string() });
-}
-
-fn fail_count(life: &Life, node: &str) -> usize {
-    life.history.iter().filter(|entry| entry.node == node && entry.outcome == "failed").count()
 }
 
 /// Typed launch failure (P3.6): the locked method names no executable
@@ -319,152 +297,6 @@ fn done_ids(life: &Life) -> Vec<String> {
     life.nodes.iter().filter(|node| node.status == NodeStatus::Done).map(|node| node.id.clone()).collect()
 }
 
-/// Fold one pushed report into the graph; launches nothing (the launch
-/// pass below runs right after, same tick).
-fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
-    let account = job.account.clone();
-    let Some(mut life) = load_life(&account) else { return };
-    let node_id = report.get("node_id").as_str().unwrap_or("").to_string();
-    if node_id.is_empty() {
-        return;
-    }
-    let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else { return };
-    let stop = report.get("stop").as_str().unwrap_or("").to_string();
-    let missing = report_missing(report);
-    let ticks = report.get("ticks").as_i64().unwrap_or(0).max(0) as u64;
-    let died = missing.iter().any(|need| need.contains("died") || need.contains("death"));
-    let stock_lost = stop == "failed" && missing.iter().any(|need| need.contains("lost"));
-    // Price drift: the market moved >25% on a locked buy since resolve.
-    let price_drift = false;
-    // P1.6: a typed `RescueBudget` in last_error replans like a failure
-    // even with no task report detail; consumed here (dossier on disk).
-    let rescue: Option<lifescape_planner::ReplanCause> = job
-        .inner
-        .try_lock()
-        .map(|mut inner| {
-            let cause = inner.last_error.as_ref().and_then(crate::brain_plan::rescue_replan_cause);
-            if cause.is_some() {
-                inner.last_error = None;
-            }
-            cause
-        })
-        .unwrap_or(None);
-    life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
-    let kind = life.nodes[index].kind.clone();
-    match stop.as_str() {
-        "goal_reached" => {
-            let done = match &kind {
-                NodeKind::ReachLevel { skill, level } => {
-                    if let Some(reached) = reach_level(report, skill) {
-                        life.nodes[index].progress_current = i64::from(reached);
-                        reached >= *level
-                    } else {
-                        life.nodes[index].progress_current = life.nodes[index].progress_target;
-                        true
-                    }
-                }
-                NodeKind::ObtainItems { item, count } => {
-                    // Market buys settle later: a placed order is not a
-                    // filled one. Shop buys settle now: a shortfall means
-                    // the leg failed (broke or unstocked), never a wait.
-                    let held = holdings_count(job, item);
-                    life.nodes[index].progress_current = held;
-                    held >= *count
-                }
-                _ => {
-                    life.nodes[index].progress_current = life.nodes[index].progress_target;
-                    true
-                }
-            };
-            if done {
-                life.nodes[index].status = NodeStatus::Done;
-                if life.active.as_deref() == Some(life.nodes[index].id.as_str()) {
-                    life.active = None;
-                }
-                if life.engagement.as_ref().is_some_and(|engaged| engaged.node == life.nodes[index].id) {
-                    life.engagement = None;
-                }
-                let id = life.nodes[index].id.clone();
-                push_history(&mut life, &id, "goal_reached");
-            } else if matches!(&kind, NodeKind::ObtainItems { .. })
-                && life.nodes[index].method.as_deref() != Some("market:buy")
-            {
-                // Instant leg, still short: the method failed, not the
-                // market. Replan (bounded by the 3-strike rule) instead
-                // of waiting for a fill that never comes on its own.
-                let id = life.nodes[index].id.clone();
-                life.nodes[index].status = NodeStatus::Ready;
-                life.nodes[index].method = None;
-                if life.active.as_deref() == Some(id.as_str()) {
-                    life.active = None;
-                }
-                if fail_count(&life, &id) >= 2 {
-                    life.nodes[index].status = NodeStatus::Abandoned;
-                    push_history(&mut life, &id, "abandoned");
-                } else {
-                    push_history(&mut life, &id, "failed");
-                }
-            } else {
-                // Placed but unfilled: wait for stock, keep the method.
-                life.nodes[index].status = NodeStatus::Active;
-            }
-        }
-        other => {
-            // `blocked` without a typed `missing` is a script bug, not a
-            // shopping list: count it as a failure so the 3-strike rule
-            // bounds the replan-relaunch loop instead of spinning it.
-            let effective = if other == "blocked" && missing.is_empty() { "failed" } else { other };
-            if let Some(cause) = rescue.or_else(|| needs_replan(effective, &missing, died, stock_lost, price_drift)) {
-                if fail_count(&life, &life.nodes[index].id) >= 3 && effective == "failed" {
-                    let id = life.nodes[index].id.clone();
-                    life.nodes[index].status = NodeStatus::Abandoned;
-                    life.active = None;
-                    push_history(&mut life, &id, "abandoned");
-                } else {
-                    let id = life.nodes[index].id.clone();
-                    let mut counter = life.nodes.len();
-                    // Unique ids across growth: bump past every n<k>.
-                    for node in &life.nodes {
-                        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
-                            counter = counter.max(number);
-                        }
-                    }
-                    let fresh = {
-                        let node = &mut life.nodes[index];
-                        replan_node(node, &cause, &missing, &mut counter)
-                    };
-                    if effective == "failed" {
-                        push_history(&mut life, &id, "failed");
-                    }
-                    if matches!(cause, lifescape_planner::ReplanCause::EngagementEnd)
-                        && life.nodes[index].status == NodeStatus::Done
-                    {
-                        push_history(&mut life, &id, "engagement_end");
-                    }
-                    life.nodes.extend(fresh);
-                    // A replanned node leaves Active: the launch pass may
-                    // pick it up again, never strand on the old lock.
-                    if life.nodes[index].status != NodeStatus::Done
-                        && life.active.as_deref() == Some(id.as_str())
-                    {
-                        life.active = None;
-                    }
-                }
-            }
-        }
-    }
-    if save_life(&life).is_err() {
-        println!("brain {}: life save failed, report dropped", job.account);
-        return;
-    }
-    println!(
-        "brain {}: folded report node={} stop={}",
-        job.account,
-        node_id,
-        report.get("stop").as_str().unwrap_or("?")
-    );
-    let _ = orch;
-}
 
 fn job_idle(job: &Job) -> bool {
     let Ok(inner) = job.inner.try_lock() else {
@@ -494,8 +326,51 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         println!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
         dirty = true;
     }
-    if life.nodes.iter().all(|node| node.status == NodeStatus::Done || node.status == NodeStatus::Abandoned) {
-        return;
+    // Tutorial-first (b3vsmjbc, bbdvmczd) : sur Tutorial Island, seul
+    // le tutoriel part — jamais un gather mainland voué à l'échec.
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    match tutorial_step(&mut life, &live) {
+        TutorialStep::Launch(at) => {
+            if !crate::registry::script_known("tutorial") {
+                fail_no_script(&mut life, at, "tutorial");
+                let _ = save_life(&life);
+                return;
+            }
+            let id = life.nodes[at].id.clone();
+            println!("brain {}: launching tutorial --node {id}", job.account);
+            life.nodes[at].status = NodeStatus::Active;
+            life.active = Some(id.clone());
+            note_launch(&job.account);
+            let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
+            let reply = orch.run_job(&job.account, "tutorial", &args);
+            if reply.get("ok").as_bool() != Some(true) {
+                println!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+            }
+            let _ = save_life(&life);
+            return;
+        }
+        TutorialStep::Cleared => {
+            dirty = true;
+        }
+        TutorialStep::Idle => {}
+    }
+    // Dead graph (t02) : réessai borné puis repos avec dossier —
+    // jamais d'idle silencieux. Le succès (tout Done) reste calme.
+    match revive_dead_graph(&mut life) {
+        DeadGraph::Revived => {
+            dirty = true;
+        }
+        DeadGraph::Success => {
+            if dirty {
+                let _ = save_life(&life);
+            }
+            return;
+        }
+        DeadGraph::Rested => {
+            let _ = save_life(&life);
+            return;
+        }
+        DeadGraph::Open => {}
     }
     let done = done_ids(&life);
     let abandoned: Vec<String> = life
@@ -576,6 +451,9 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     }
     let ready = life.nodes.iter().position(|node| {
         node.status == NodeStatus::Ready && node.ready(&done_ids(&life)) && life.active.as_deref() != Some(node.id.as_str())
+            // Le tutoriel ne part que par le pas prioritaire (méthode
+            // `tutorial`, jamais `map_method`) : ici on le saute.
+            && !matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
     });
     let Some(position) = ready else {
         if dirty {
