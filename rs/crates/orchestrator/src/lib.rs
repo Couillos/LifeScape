@@ -25,6 +25,7 @@ pub mod web_lives;
 pub mod web_market;
 pub mod zones;
 pub mod cli;
+pub mod await_cmd;
 pub mod daemon;
 pub mod daemon_watch;
 pub mod daemon_conn;

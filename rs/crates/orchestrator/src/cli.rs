@@ -15,7 +15,7 @@ use crate::daemon::WORKER_TIMEOUT;
 use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 
-fn send_command(request: &Value, timeout: Duration) -> Result<Value, String> {
+pub(crate) fn send_command(request: &Value, timeout: Duration) -> Result<Value, String> {
     let stream = UnixStream::connect(paths::socket_path())
         .map_err(|error| format!("session unreachable: {error}"))?;
     stream
@@ -688,7 +688,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ...");
+        println!("usage: orchestrator open|run|await|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json])");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -792,7 +792,11 @@ pub fn cli(argv: &[String]) -> i32 {
         }
         "run" => {
             let script = argv.get(3).cloned().unwrap_or_default();
-            let args = Value::Arr(argv.get(4..).unwrap_or(&[]).iter().map(|a| str_value(a)).collect());
+            let raw_args: Vec<String> = argv.get(4..).unwrap_or(&[]).to_vec();
+            if let Some(exit) = crate::await_cmd::run_if_wait(&account, &script, &raw_args) {
+                return exit;
+            }
+            let args = Value::Arr(raw_args.iter().map(|a| str_value(a)).collect());
             let reply = send(object(vec![
                 ("cmd", str_value("run")),
                 ("account", str_value(&account)),
@@ -807,6 +811,7 @@ pub fn cli(argv: &[String]) -> i32 {
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
+        "await" => return crate::await_cmd::await_cli(&account, argv.get(3..).unwrap_or(&[])),
         "call" => {
             let method = argv.get(3).cloned().unwrap_or_default();
             let args = Value::Arr(argv.get(4..).unwrap_or(&[]).iter().map(|a| str_value(a)).collect());
