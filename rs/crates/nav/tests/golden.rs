@@ -248,14 +248,25 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
         }
     }
     // Every door stand must be a tile the engine would take the click
-    // from: orthogonal neighbour passing the server reach rule for the
-    // door's shape and angle. A diagonal or wrong-sided stand reads
-    // "I can't reach that!" live (castle double doors 1516/1519).
+    // from: the door tile itself (src==dest opens live, Peksa door 1530
+    // proven admin-side) or an orthogonal neighbour passing the server
+    // reach rule for the door's shape and angle. A diagonal or
+    // wrong-sided stand reads "I can't reach that!" live (castle double
+    // doors 1516/1519).
     if let Ok(plan) = &result {
         for seg in &plan.segments {
             if let Segment::OpenDoor { door, stand, cross_to } = seg {
                 let manhattan = (stand.x - door.x).abs() + (stand.z - door.z).abs();
-                assert_eq!(manhattan, 1, "route {name}: door {} stand ({},{}) is not orthogonal", door.loc, stand.x, stand.z);
+                assert!(
+                    manhattan <= 1,
+                    "route {name}: door {} stand ({},{}) is not on or beside the door",
+                    door.loc,
+                    stand.x,
+                    stand.z,
+                );
+                if manhattan == 0 {
+                    continue;
+                }
                 let (_, shape, angle) = world
                     .door_at(door.x, door.z, door.level)
                     .unwrap_or_else(|| panic!("route {name}: door {} has no static shape", door.loc));

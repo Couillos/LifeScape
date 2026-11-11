@@ -764,12 +764,26 @@ fn dijkstra(
                 continue;
             }
             let next_key = next.key();
-            // A step onto a usable door tile always swings it: the live
-            // server refuses entry onto a closed door from any side, so
-            // even an along-the-wall step is a door edge, never a walk.
+            // A step off a door tile, or anywhere no usable door stands,
+            // walks when the shut view allows it: the opening (if any)
+            // already rode the step onto the tile.
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
                 relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
                 continue;
+            }
+            // Stop onto a usable door tile from a side the table lets
+            // through, no opening yet (Peksa inside: the server holds the
+            // tile walkable, the src==dest click opens it live). `usable`
+            // gates tolls/requirements/blocked, `side_ok` one-way doors,
+            // `step_closed` walled sides. THROUGH still opens: walking off
+            // past the tile rides the door edge below.
+            if search.usable_door(here).is_none() {
+                if let Some((id, _, _)) = search.usable_door(next) {
+                    if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
+                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
+                        continue;
+                    }
+                }
             }
             if !search.step_open(here, next) {
                 continue;

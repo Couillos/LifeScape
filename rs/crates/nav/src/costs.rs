@@ -251,12 +251,20 @@ pub(crate) fn plan_costs_with(
                 continue;
             }
             let next_key = key_of(next);
-            // A step onto a usable door tile always swings it: the live
-            // server refuses entry onto a closed door from any side, so
-            // even an along-the-wall step is a door edge, never a walk.
+            // A step off a door tile, or anywhere no usable door stands,
+            // walks when the shut view allows it (same rule as `dijkstra`).
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
                 relax(&mut dist, &mut heap, next_key, cost + 1);
                 continue;
+            }
+            // Stop onto a usable door tile from a table-allowed side.
+            if search.usable_door(here).is_none() {
+                if let Some((id, _, _)) = search.usable_door(next) {
+                    if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
+                        relax(&mut dist, &mut heap, next_key, cost + 1);
+                        continue;
+                    }
+                }
             }
             if !search.step_open(here, next) {
                 continue;

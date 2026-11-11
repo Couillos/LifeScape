@@ -1,7 +1,9 @@
 //! Poche Peksa (boutique des casques, dossier `admin-4975`) : la porte
-//! 1530 est dans les dumps et franchissable du bon cote, la sortie
-//! reste un `Disconnected` fidele au serveur (porte unilaterale angle
-//! SUD) qui nomme desormais son joint : loc, nom, porte, tuile, stand.
+//! 1530 est dans les dumps et franchissable des deux cotes — depuis le
+//! stand exterieur (entree) comme depuis la tuile porte elle-meme
+//! (sortie : src==dest accepte par le dispatcher `reachWall`, prouve
+//! live admin). La traversee reste une ouverture : passer vite
+//! (re-fermeture auto ~500 ticks).
 
 use std::sync::Arc;
 
@@ -58,32 +60,32 @@ fn peksa_enter_swings_door_1530() {
     assert_eq!((stand.x, stand.z), (3076, 3426), "stand exterieur, le seul que le moteur accepte");
 }
 
-/// Sortie `admin-4975` : `Disconnected` fidele au serveur, mais le
-/// joint est nomme — porte 1530, tuile, op et stand exterieur.
+/// Sortie `admin-4975` : le plan s'arrete sur la tuile porte (stand
+/// tuile, src==dest ouvre live) puis traverse aussitot vers le sud.
+/// L'entree par le stand exterieur est inchangee (voir ci-dessus).
 #[test]
-fn peksa_exit_names_the_seal() {
+fn peksa_exit_stands_on_the_door_tile() {
     let (world, tables) = setup();
     let from = Tile { x: 3077, z: 3429, level: 0 };
     let dest = Tile { x: 3081, z: 3428, level: 0 };
     let mut options = NavOptions::default();
     options.f2p_only = true;
-    let no = plan::plan(&world, &tables, from, dest, &options).expect_err("la sortie reste scellee (porte unilaterale)");
-    assert_eq!(no.reason, plan::NoRouteReason::Disconnected);
-    assert_eq!(no.closest_reachable, from);
-    assert!(!no.blockers.is_empty(), "un Disconnected doit dire ce qui scelle");
-    let seal = no
-        .blockers
+    let plan = plan::plan(&world, &tables, from, dest, &options).expect("la sortie Peksa planifie par la tuile porte");
+    let (door, stand, cross_to) = plan
+        .segments
         .iter()
-        .find(|blocker| blocker.loc == 1530 && (blocker.x, blocker.z) == (3076, 3427))
-        .expect("la porte 1530 de la boutique scelle la poche");
-    assert_eq!((seal.x, seal.z, seal.level), (3076, 3427, 0), "OÙ");
-    assert_eq!(seal.name, "loc_1530", "QUEL objet");
-    assert_eq!(seal.open_op, Some(1), "QUELLE porte : op Open");
-    assert!(seal.is_door);
+        .find_map(|segment| match segment {
+            Segment::OpenDoor { door, stand, cross_to } if door.loc == 1530 && (door.x, door.z) == (3076, 3427) => {
+                Some((door, stand, cross_to))
+            }
+            _ => None,
+        })
+        .expect("la sortie ouvre la porte 1530 de la boutique");
+    assert_eq!((door.x, door.z, door.level), (3076, 3427, 0));
     assert_eq!(
-        seal.stand,
-        Some(Tile { x: 3076, z: 3426, level: 0 }),
-        "QUEL stand : le clic ne passe que depuis l'exterieur"
+        (*stand, *cross_to),
+        (Tile { x: 3076, z: 3427, level: 0 }, Tile { x: 3076, z: 3426, level: 0 }),
+        "stand tuile (arret dessus) puis traversee vers le sud, avant la re-fermeture",
     );
 }
 
