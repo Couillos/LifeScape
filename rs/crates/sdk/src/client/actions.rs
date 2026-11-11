@@ -465,7 +465,12 @@ impl Bot {
             let here = (self.world.x, self.world.z);
             let mut neighbors: Vec<(i32, i32)> =
                 [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)].iter().map(|(dx, dz)| (x + dx, z + dz)).collect();
-            neighbors.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
+            // Orthogonal stands answer, diagonal corners often refuse
+            // (server NO_STRATEGY): try straight sides first.
+            neighbors.sort_by_key(|tile| {
+                let diagonal = (tile.0 - x != 0) && (tile.1 - z != 0);
+                (diagonal, (tile.0 - here.0).abs() + (tile.1 - here.1).abs())
+            });
             let mut stepped = false;
             for (nx, nz) in neighbors {
                 let rest = deadline.saturating_sub(self.world.ticks).max(500);
@@ -483,22 +488,55 @@ impl Bot {
             }
         }
         let had: u32 = self.inventory().values().sum();
-        let seen = self.world.messages.len();
-        self.op_obj(op, x, z, oid)?;
-        while self.world.ticks < deadline {
-            self.pump(3)?;
-            if self.inventory().values().sum::<u32>() > had {
-                return Ok(true);
+        let mut seen = self.world.messages.len();
+        // One re-stand: a diagonal corner refuses even when an orthogonal
+        // side would answer (proven live: pickaxe 3081,3429 from 3082,3428
+        // refused, from 3081,3428 taken). Bounded by the same deadline.
+        let mut restood = false;
+        loop {
+            self.op_obj(op, x, z, oid)?;
+            while self.world.ticks < deadline {
+                self.pump(3)?;
+                if self.inventory().values().sum::<u32>() > had {
+                    return Ok(true);
+                }
+                // The engine answers an unpathable click with "I can't reach
+                // that!" (Player.ts) and never picks up: fail typed instead
+                // of burning the timeout (a ground item on a blocked tile,
+                // e.g. under a table, refuses every sweep otherwise).
+                if Self::bank_click_refused(&self.world.messages, seen) {
+                    let diagonal = (self.world.x - x != 0) && (self.world.z - z != 0);
+                    if !restood && diagonal {
+                        restood = true;
+                        let here = (self.world.x, self.world.z);
+                        let mut sides: Vec<(i32, i32)> =
+                            [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().map(|(dx, dz)| (x + dx, z + dz)).collect();
+                        sides.sort_by_key(|tile| (tile.0 - here.0).abs() + (tile.1 - here.1).abs());
+                        let mut moved = false;
+                        for (nx, nz) in sides {
+                            let rest = deadline.saturating_sub(self.world.ticks).max(500);
+                            match self.walk_to(nx, nz, level, rest) {
+                                Ok(()) => {
+                                    moved = true;
+                                    break;
+                                }
+                                Err(err) if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) => return Err(err),
+                                Err(_) => {}
+                            }
+                        }
+                        if moved {
+                            seen = self.world.messages.len();
+                            break;
+                        }
+                    }
+                    return Err(Error::Unreachable(format!(
+                        "obj {oid} at {x},{z} refused from {:?} (blocked tile?)",
+                        self.position()
+                    )));
+                }
             }
-            // The engine answers an unpathable click with "I can't reach
-            // that!" (Player.ts) and never picks up: fail typed instead
-            // of burning the timeout (a ground item on a blocked tile,
-            // e.g. under a table, refuses every sweep otherwise).
-            if Self::bank_click_refused(&self.world.messages, seen) {
-                return Err(Error::Unreachable(format!(
-                    "obj {oid} at {x},{z} refused from {:?} (blocked tile?)",
-                    self.position()
-                )));
+            if self.world.ticks >= deadline {
+                break;
             }
         }
         Ok(false)

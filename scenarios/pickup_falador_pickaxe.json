@@ -1,0 +1,30 @@
+{
+  "id": "pickup_falador_pickaxe",
+  "accounts": [
+    "t42"
+  ],
+  "setup": [
+    {
+      "op": "tele_admin",
+      "level": 0,
+      "x": 3077,
+      "z": 3429
+    },
+    {
+      "op": "teleother"
+    }
+  ],
+  "run": {
+    "script": "ground_pickup",
+    "args": [],
+    "budget_ticks": 2000
+  },
+  "assert": [
+    {
+      "type": "inventory_delta",
+      "item": "bronze_pickaxe",
+      "min_delta": 1
+    }
+  ],
+  "timeout_s": 300.0
+}
