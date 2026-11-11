@@ -146,7 +146,28 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else if let Some(quest) = method.strip_prefix("quest:") {
         (quest_script(quest).to_string(), Vec::new())
     } else if let Some(area) = method.strip_prefix("access:") {
-        ("goto".to_string(), vec![area.to_string()])
+        // Safe areas are walk targets, not names: `goto`/`walkto` need
+        // coordinates (a bare name fails Usage). Unknown area = None.
+        let spot = match area {
+            "lumbridge" => Some((3222, 3219)),
+            "cooks_guild" => Some((3143, 3442)),
+            "crafting_guild" => Some((2936, 3289)),
+            "mining_guild" => Some((3017, 3339)),
+            "champions_guild" => Some((3191, 3360)),
+            "karamja" => Some((2924, 3180)),
+            "al_kharid" => Some((3268, 3164)),
+            "varrock" => Some((3205, 3429)),
+            "falador" => Some((2966, 3378)),
+            "draynor" => Some((3105, 3244)),
+            "port_sarim" => Some((3040, 3215)),
+            "barbarian_village" => Some((3080, 3424)),
+            "edgeville" => Some((3086, 3500)),
+            _ => None,
+        };
+        match spot {
+            Some((x, z)) => ("walkto".to_string(), vec![x.to_string(), z.to_string()]),
+            None => return None,
+        }
     } else if let Some(style) = method.strip_prefix("equip:") {
         // The brain's EquipBest order: the script wears the best carried
         // kit through kit::gear (melee when the goal left it blank).
@@ -355,5 +376,14 @@ mod tests {
         // `cook:` names the product but the script eats the raw input.
         let (_, args) = map_method("cook:trout", &obtain(), None).expect("cook maps");
         assert_eq!(args.first().map(String::as_str), Some("raw_trout"), "product resolves to raw, got {args:?}");
+    }
+
+    #[test]
+    fn access_maps_to_walkto_coords() {
+        let access = Node::new("n3", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
+        let (script, args) = map_method("access:lumbridge", &access, None).expect("access maps");
+        assert_eq!(script, "walkto", "access walks, got {script}");
+        assert_eq!(&args[..2], &["3222".to_string(), "3219".to_string()], "coords first, got {args:?}");
+        assert!(map_method("access:nowhere", &access, None).is_none(), "unknown area fails typed");
     }
 }
