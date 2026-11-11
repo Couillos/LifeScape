@@ -47,6 +47,25 @@ fn oploct_bytes(x: i32, z: i32, loc: u16, spell_com: u16) -> Vec<u8> {
     body.bytes()
 }
 
+/// OPPLAYERT payload (slot, spell com), the `OpPlayerTDecoder` order.
+fn opplayert_bytes(slot: u16, spell_com: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.u16(slot);
+    body.u16(spell_com);
+    body.bytes()
+}
+
+/// OPPLAYERU payload (slot, obj com, use slot, use com), the
+/// `OpPlayerUDecoder` order (mirrors `op_npc_u`).
+fn opplayeru_bytes(slot: u16, obj_com: u16, use_slot: u16, use_com: u16) -> Vec<u8> {
+    let mut body = Writer::new();
+    body.u16(slot);
+    body.u16(obj_com);
+    body.u16(use_slot);
+    body.u16(use_com);
+    body.bytes()
+}
+
 
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
@@ -132,6 +151,20 @@ impl Bot {
         let mut body = Writer::new();
         body.u16(u16::from(slot));
         self.send_named(&op_name("OPPLAYER", op), &body.bytes())
+    }
+
+    /// Cast a spellbook spell on a player: slot, then the spell button
+    /// com, exactly the client `OPPLAYERT` order (`Client.ts` TGT_PLAYER).
+    pub fn op_player_t(&mut self, slot: u16, spell_com: u16) -> Result<()> {
+        self.act(format!("op_player_t slot={slot}"));
+        self.send_named("OPPLAYERT", &opplayert_bytes(slot, spell_com))
+    }
+
+    /// Use an item on a player: slot, obj com, use slot, use com,
+    /// exactly the client `OPPLAYERU` order (mirrors `op_npc_u`).
+    pub fn op_player_u(&mut self, slot: u16, obj_com: u16, use_slot: u16, use_com: u16) -> Result<()> {
+        self.act(format!("op_player_u slot={slot} obj={obj_com}"));
+        self.send_named("OPPLAYERU", &opplayeru_bytes(slot, obj_com, use_slot, use_com))
     }
 
     pub fn op_held(&mut self, op: u8, obj: u16, slot: u8, com: u16) -> Result<()> {
@@ -881,6 +914,26 @@ mod tests {
         assert_eq!(super::opheldt_bytes(0x0200, 3, 0x0D12, 0xA1), vec![0x02, 0x00, 0x00, 0x03, 0x0D, 0x12, 0x00, 0xA1]);
         // x=100 (0x0064), z=200 (0x00C8), loc=0x0600, spell=0x00A2.
         assert_eq!(super::oploct_bytes(100, 200, 0x0600, 0xA2), vec![0x00, 0x64, 0x00, 0xC8, 0x06, 0x00, 0x00, 0xA2]);
+    }
+
+    /// Player spell/use payloads lock the server decoder order
+    /// (`OpPlayerTDecoder`: slot, spell com; `OpPlayerUDecoder`: slot,
+    /// obj com, use slot, use com — the same shape as `op_npc_t/u`).
+    #[test]
+    fn player_spell_and_use_payloads_match_the_server_decoders() {
+        assert_eq!(super::opplayert_bytes(0x0007, 0x00A0), vec![0x00, 0x07, 0x00, 0xA0]);
+        assert_eq!(super::opplayeru_bytes(0x0007, 0x0D12, 0x0003, 0x0A1B), vec![0x00, 0x07, 0x0D, 0x12, 0x00, 0x03, 0x0A, 0x1B]);
+    }
+
+    /// The wrappers resolve their op names (a bad name fails `Protocol`,
+    /// never reaches the socket): dead socket reads `Login`, proving the
+    /// send path is wired, framing included.
+    #[test]
+    fn player_spell_and_use_wrappers_reach_the_send_path() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        for outcome in [bot.op_player_t(0x0007, 0x00A0), bot.op_player_u(0x0007, 0x0D12, 0x0003, 0x0A1B)] {
+            assert!(matches!(outcome, Err(Error::Login(_))), "dead socket fails at login, never at the op name: {outcome:?}");
+        }
     }
 
     /// The wrappers resolve their op names (a bad name fails `Protocol`,

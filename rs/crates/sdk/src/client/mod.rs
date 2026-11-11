@@ -11,6 +11,7 @@ pub mod exchange;
 pub mod movement;
 pub mod nav_remote;
 pub mod snapshot_view;
+pub mod social;
 pub mod travel;
 pub mod travel_dossier;
 pub mod travel_hook;
@@ -319,6 +320,17 @@ impl Bot {
         format!("[t={} {}]", self.world.ticks, self.zone_label)
     }
 
+    /// Feed one pumped frame, acking rebuilds like the client: after
+    /// `mapBuild` it sends `MAP_BUILD_COMPLETE` (`Client.ts:5137`), and
+    /// the server streams the new region only once the ack lands.
+    fn feed(&mut self, frame: &Frame) -> Result<()> {
+        self.world.feed(&frame.name, &frame.body)?;
+        if frame.name == "REBUILD_NORMAL" {
+            self.send_named("MAP_BUILD_COMPLETE", &[])?;
+        }
+        Ok(())
+    }
+
     /// Pump `count` ticks: recv frames, feed the world, keep the session
     /// alive. Every game wait loops on this, never on wall-clock sleep.
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {
@@ -326,7 +338,7 @@ impl Bot {
         for _ in 0..count {
             self.keepalive_if_due()?;
             let frame = self.conn.recv()?;
-            self.world.feed(&frame.name, &frame.body)?;
+            self.feed(&frame)?;
             frames.push(frame);
             for _ in 0..DRAIN_PER_PUMP {
                 if !self.conn.available()? {
@@ -334,7 +346,7 @@ impl Bot {
                 }
                 self.keepalive_if_due()?;
                 let frame = self.conn.recv()?;
-                self.world.feed(&frame.name, &frame.body)?;
+                self.feed(&frame)?;
                 frames.push(frame);
             }
         }
@@ -478,5 +490,30 @@ mod tests {
     fn relogin_backoff_grows_then_caps() {
         let waits: Vec<u64> = (0..8).map(|attempt| Bot::relogin_backoff(attempt).as_secs()).collect();
         assert_eq!(waits, vec![2, 4, 8, 8, 8, 8, 8, 8]);
+    }
+
+    /// A fed rebuild updates the zone first, then attempts the ack: the
+    /// dead socket fails at `Login`, proving the send was reached (the
+    /// client sends `MAP_BUILD_COMPLETE` after every rebuild). A plain
+    /// frame feeds clean offline, proving only rebuilds ack.
+    #[test]
+    fn rebuild_feeds_state_then_acks_like_the_client() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        let rebuild = Frame { opcode: 231, name: "REBUILD_NORMAL".to_string(), body: vec![0, 50, 0, 50] };
+        let err = bot.feed(&rebuild).expect_err("ack send needs a socket");
+        assert!(format!("{err}").contains("not logged in"), "ack attempted after feed, got: {err}");
+        assert_eq!((bot.world.base_x, bot.world.base_z), ((50 - 6) << 3, (50 - 6) << 3), "feed ran before the ack");
+        let plain = Frame { opcode: 171, name: "IF_CLOSE".to_string(), body: vec![] };
+        assert!(bot.feed(&plain).is_ok(), "non-rebuild sends nothing");
+    }
+
+    /// The ack resolves its op name (a bad name fails `Protocol`, never
+    /// reaches the socket): dead socket reads `Login`, proving the send
+    /// path is wired for the empty payload.
+    #[test]
+    fn map_build_complete_reaches_the_send_path() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        let outcome = bot.send_named("MAP_BUILD_COMPLETE", &[]);
+        assert!(matches!(outcome, Err(Error::Login(_))), "dead socket fails at login, never at the op name: {outcome:?}");
     }
 }

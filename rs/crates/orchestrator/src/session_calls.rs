@@ -32,6 +32,7 @@ const WRITE_METHODS: &[&str] = &[
     "bank_withdraw",
     "chat_choose",
     "chat_continue",
+    "chat_setmode",
     "cheat",
     "close_modal",
     "debug_players",
@@ -56,12 +57,15 @@ const WRITE_METHODS: &[&str] = &[
     "op_npc_u",
     "op_obj",
     "op_player",
+    "op_player_t",
+    "op_player_u",
     "resume_pcount",
     "save_design",
     "say",
     "step_to",
     "take",
     "talk_to",
+    "tell",
     "trade_accept",
     "trade_close",
     "trade_modal",
@@ -345,6 +349,20 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             bot.op_player(need_i64(&args, 0, method)? as u8, need_i64(&args, 1, method)? as u16).map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
+        "op_player_t" => {
+            bot.op_player_t(need_i64(&args, 0, method)? as u16, need_i64(&args, 1, method)? as u16).map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
+        "op_player_u" => {
+            bot.op_player_u(
+                need_i64(&args, 0, method)? as u16,
+                need_i64(&args, 1, method)? as u16,
+                need_i64(&args, 2, method)? as u16,
+                need_i64(&args, 3, method)? as u16,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
         "op_held" => {
             bot.op_held(need_i64(&args, 0, method)? as u8, need_i64(&args, 1, method)? as u16, need_i64(&args, 2, method)? as u8, need_i64(&args, 3, method)? as u16)
                 .map_err(|error| error.to_string())?;
@@ -389,6 +407,15 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             Ok(Value::Null)
         }
         "chat_choose" => bot.chat_choose(need_str(&args, 0, method)?).map_err(|error| error.to_string()).map(|com| Value::Int(i64::from(com))),
+        "chat_setmode" => {
+            bot.chat_setmode(need_i64(&args, 0, method)? as u8, need_i64(&args, 1, method)? as u8, need_i64(&args, 2, method)? as u8)
+                .map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
+        "tell" => {
+            bot.tell(need_str(&args, 0, method)?, need_str(&args, 1, method)?).map_err(|error| error.to_string())?;
+            Ok(Value::Null)
+        }
         "take" => {
             // One arg: id or name. Three args: id, name, timeout.
             if args.len() >= 3 {
