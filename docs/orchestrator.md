@@ -15,6 +15,14 @@ servi sur `run/pathfinding.sock`. Les workers ne portent que le handle
 
 CLI (`src/cli.rs`, `src/main.rs`, le daemon démarre seul) :
 `open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|route|replay-nav|dump-transitions|reload-nav|nav-stats`.
+
+`verify` (W2) : runner de scénarios déclaratifs (`scenarios/*.json`, lus avec
+`lifescape-json`). Setup série via `admin` (cheats + `bank_all`, effets
+vérifiés), runs parallèles sur comptes distincts (N clampé à 20 D38, tête
+d'admission), verdicts `show` vs baseline (position, inventaire pack+banque,
+delta, XP, message par tick, PNJ). Dossier <40 lignes en échec uniquement.
+Modules : `verify_cmd.rs` (runner), `verify_scenario.rs` (format),
+`verify_assert.rs` (asserts).
 `direct` rejoue un script sans daemon : il branche le handle du service
 de navigation comme une session et refuse le run au démarrage si le
 service ne répond pas (jamais de divergence silencieuse). `route`

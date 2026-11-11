@@ -1,0 +1,14 @@
+{
+  "id": "harvest_grain",
+  "accounts": ["t40", "t41", "t42"],
+  "setup": [
+    {"op": "tele_admin", "level": 0, "x": 3220, "z": 3335},
+    {"op": "teleother"},
+    {"op": "bank_all", "keep": []}
+  ],
+  "run": {"script": "picking", "args": ["wheat", "1"], "budget_ticks": 1700},
+  "assert": [
+    {"type": "message", "contains": "You pick some grain"}
+  ],
+  "timeout_s": 180.0
+}

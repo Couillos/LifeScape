@@ -217,7 +217,7 @@ fn verdict_by_code(code: &Value, error: &Value) -> (Verdict, String) {
 
 /// The terminal verdict for one polled state, if any. Fresh markers win
 /// over a stale `running` status (W5); status/phase arbitrate the rest.
-fn terminal(state: &Value, baseline: &Baseline, saw_running: bool) -> Option<(Verdict, String)> {
+pub fn terminal(state: &Value, baseline: &Baseline, saw_running: bool) -> Option<(Verdict, String)> {
     let code = state.get("last_code");
     let error = state.get("last_error");
     let status = state.get("status").as_str().unwrap_or("");

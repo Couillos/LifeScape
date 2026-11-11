@@ -44,3 +44,25 @@ Preuve 2026-11-11 : `walkto` Lumbridge (3220,3217)→(3223,3217) rejoué 5× sur
 t40 `held`, setup `teleother` avant chaque run : 5 verdicts `ok code=0`,
 même départ et même arrivée (0,3222,3216) au log, 0 marqueur
 rescue/market/brain, 1 appel LLM par run (`run --wait`), mur < 4 s.
+
+## Scénarios live `verify` (W2)
+
+Un scénario = un JSON dans `scenarios/` (`id`, `accounts` admis, `setup[]`,
+`run` script/args/budget en ticks, `assert[]`, `timeout_s` mural) :
+`orchestrator verify [ids|--all] [--parallel N]` (N ≤ 20, admission respectée).
+Un compte distinct par scénario ; setup en série (un seul `admin` positionne),
+runs en parallèle. Tableau id/compte/résultat/ticks/wall/cause, dossier
+(<40 lignes) seulement en échec. Sortie 0 si tout ok, 1 sinon, 2 usage.
+
+Setup : `tele_admin` → `teleother`/`giveother`/`setvarother` (via `admin`,
+effet re-vérifié par `show` : `give` répond Ok même plein, compte en login
+répond Ok dans le vide — invisible = setup en échec, jamais de run condamné)
+→ `bank_all` (vide le pack via le devtool `bank_deposit`). Comptes en `hold`.
+Budget : pire cas borné par le pack (28) ; cook = trek ~1100 + 28 cuissons → budget 1700 (<2000).
+Porte Port Sarim loc 1530 flaky (« I can't reach that », 2/4, W4) : cook passe
+par Al Kharid (banque 3268,3167 + range 3271,3180, ~13 cases, budget 1700) ;
+récolte = blé (3220,3335) + banque Varrock-est, budget 1700 ; marche = spawn
+Lumbridge, budget 600.
+
+Preuve : `verify --all` série == `--parallel 3` (t40/t41/t42) : 3 ok des deux
+côtés ; échec forcé → dossier 17 lignes, cause + position.

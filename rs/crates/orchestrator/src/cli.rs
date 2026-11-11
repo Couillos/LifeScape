@@ -688,7 +688,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|await|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json])");
+        println!("usage: orchestrator open|run|await|verify|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N])");
         return 2;
     }
     if argv[1].as_str() == "dump-transitions" {
@@ -812,6 +812,7 @@ pub fn cli(argv: &[String]) -> i32 {
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
         "await" => return crate::await_cmd::await_cli(&account, argv.get(3..).unwrap_or(&[])),
+        "verify" => return crate::verify_cmd::verify_cli(argv.get(2..).unwrap_or(&[])),
         "call" => {
             let method = argv.get(3).cloned().unwrap_or_default();
             let args = Value::Arr(argv.get(4..).unwrap_or(&[]).iter().map(|a| str_value(a)).collect());

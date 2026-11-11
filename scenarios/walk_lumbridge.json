@@ -1,0 +1,13 @@
+{
+  "id": "walk_lumbridge",
+  "accounts": ["t40", "t41", "t42"],
+  "setup": [
+    {"op": "tele_admin", "level": 0, "x": 3220, "z": 3217},
+    {"op": "teleother"}
+  ],
+  "run": {"script": "walkto", "args": ["3223", "3217"], "budget_ticks": 600},
+  "assert": [
+    {"type": "position", "level": 0, "x": 3223, "z": 3217, "radius": 3}
+  ],
+  "timeout_s": 150.0
+}
