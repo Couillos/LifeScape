@@ -147,17 +147,22 @@ pub struct Tables {
     /// the pack leaves OPEN (ship decks, L3 tops) proven live by the prober.
     /// `StaticWorld` keeps them OPEN; everything else upper-OPEN stays void.
     pub sky_floors: HashSet<(i32, i32, i32)>,
+    /// Loc names by id (`locs.json`, index-aligned): what NoRoute and
+    /// adjusted plans name. Unknown ids read `loc_<id>`, never empty.
+    pub loc_names: Vec<String>,
 }
 
 impl Tables {
     /// Load `transitions.json` plus `nav_overrides.json` from `data_dir`;
     /// `transitions_verified.json` is optional (absent means all
-    /// transitions plan with the unverified penalty).
+    /// transitions plan with the unverified penalty). Loc names come
+    /// from `locs.json` (same directory, index-aligned with the loc id).
     pub fn load(data_dir: &Path) -> Result<Tables, String> {
         let transitions = load_transitions(&data_dir.join("transitions.json"))?;
         let (verified, verified_any_level, proven) = load_verified(&data_dir.join("transitions_verified.json"));
         let (requirements, one_way, customs, blocked, sky_floors) = load_overrides(&data_dir.join("nav_overrides.json"))?;
-        Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors })
+        let loc_names = load_loc_names(&data_dir.join("locs.json"))?;
+        Ok(Tables { transitions, verified, verified_any_level, proven, requirements, one_way, customs, blocked, sky_floors, loc_names })
     }
 
     /// Prober verdict for one transition, if it ever rode it.
@@ -204,6 +209,12 @@ impl Tables {
     pub fn is_blocked(&self, loc: u16, at: Tile) -> bool {
         self.blocked.iter().any(|entry| entry.at == at && (entry.loc == 0 || entry.loc == loc))
     }
+
+    /// Display name for a loc id (`loc_1530` when the dump has no name):
+    /// what blockers and doors print in diagnoses.
+    pub fn loc_name(&self, loc: u16) -> &str {
+        self.loc_names.get(loc as usize).map(String::as_str).unwrap_or("?")
+    }
 }
 
 fn tile_of(items: &[Value]) -> Option<Tile> {
@@ -218,6 +229,20 @@ fn triple(items: &[Value]) -> Option<(i32, i32, i32)> {
         return None;
     }
     Some((items[0].as_i64()? as i32, items[1].as_i64()? as i32, items[2].as_i64()? as i32))
+}
+
+/// Loc names by id (`locs.json` is index-aligned with the loc id).
+/// Missing or empty rows read `loc_<id>`, never blank.
+fn load_loc_names(path: &Path) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
+    let parsed = lifescape_json::parse(&text).map_err(|err| format!("parse {}: {err}", path.display()))?;
+    let rows = parsed.as_arr().ok_or_else(|| format!("{} is not an array", path.display()))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let name = row.get("name").as_str().filter(|name| !name.is_empty()).map(str::to_string).unwrap_or_else(|| format!("loc_{index}"));
+        out.push(name);
+    }
+    Ok(out)
 }
 
 fn load_transitions(path: &Path) -> Result<Vec<Transition>, String> {

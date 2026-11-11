@@ -424,4 +424,24 @@ mod tests {
         assert!(collision.has(6, 5, 0));
         assert!(!collision.has(8, 5, 0));
     }
+
+    /// Furniture paints exactly like the server: centrepiece tables and
+    /// chairs (shape 10, blockwalk) mask the ground layer, and ground
+    /// decor only paints when active (the server `active === 1` gate).
+    /// A table that did not block would read OPEN here.
+    #[test]
+    fn furniture_blocks_like_the_server() {
+        let mut collision = CollisionMap::new();
+        // Round table 598 and chair 1088: 1x1 centrepieces, blockwalk.
+        change_loc_collision(&mut collision, 10, 3, false, 1, 1, 1, 20, 20, 0, true);
+        assert!(collision.is_flagged(20, 20, 0, LOC), "table footprint must block");
+        assert!(!tile_walkable(collision.get(20, 20, 0) | crate::collision::FLOOR | crate::collision::BLOCK_NPC_AND_PLAYERS), "blocked tile reads like the server WALK_BLOCKED");
+        // Ground decor with active 0 (rugs, grass): no paint at all.
+        let mut decor = CollisionMap::new();
+        change_loc_collision(&mut decor, 22, 0, false, 1, 1, 0, 30, 30, 0, true);
+        assert!(!decor.has(30, 30, 0), "inactive decor paints nothing, not even a zone");
+        // Same decor active: floor flag, like the server changeFloor.
+        change_loc_collision(&mut decor, 22, 0, false, 1, 1, 1, 31, 31, 0, true);
+        assert!(decor.is_flagged(31, 31, 0, crate::collision::FLOOR), "active decor paints floor");
+    }
 }

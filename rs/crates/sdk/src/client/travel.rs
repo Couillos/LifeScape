@@ -197,6 +197,7 @@ impl Bot {
                     blocked_by_requirements: Vec::new(),
                     disabled_transitions_nearby: Vec::new(),
                     reason: NoRouteReason::Disconnected,
+                    blockers: Vec::new(),
                 },
             ));
         }
@@ -1369,7 +1370,7 @@ mod tests {
     use crate::waits::tick_ms;
 
     fn empty_plan() -> Plan {
-        Plan { segments: Vec::new(), cost: 0, adjusted_dest: None }
+        Plan { segments: Vec::new(), cost: 0, adjusted_dest: None, dest_blocker: None }
     }
 
     fn offline_bot(x: i32, z: i32) -> Bot {

@@ -78,3 +78,12 @@ hache_rimmington | 2971,3375,0 | 2970,3376,1 | f2p | reachable ; rides>=1 ; uses
 # closest=(3182,3399) alors que les deux segments passent). Fige le
 # budget relevé.
 traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
+# 20-21. poche Peksa (boutique des casques, 3074-3077x3428-3431) :
+# la seule porte est 1530 (mur droit angle SUD, (3076,3427)) et le
+# moteur ne la clique que depuis le stand sud exterieur (3076,3426)
+# — comme les doubles portes 1516/1519 (voir 16), les portes droites
+# sont unilaterales dans cette revision. L'entree planifie par la
+# porte ; la sortie echoue en Disconnected fidele au serveur (live :
+# "I can't reach that" si clic depuis l'interieur, dossier admin-4975).
+peksa_entree | 3076,3424,0 | 3075,3429,0 | - | reachable ; uses_loc=1530 ; doors<=1
+peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | unreachable=Disconnected

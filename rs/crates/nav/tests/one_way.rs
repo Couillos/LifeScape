@@ -140,6 +140,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         customs: Vec::new(),
         blocked: Vec::new(),
         sky_floors: HashSet::new(),
+        loc_names: Vec::new(),
     };
     (world, tables, path)
 }

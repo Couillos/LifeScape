@@ -116,6 +116,26 @@ fn unkey(key: u64) -> Tile {
     }
 }
 
+/// One loc the planner names in a diagnosis: the object on a blocked
+/// destination or a wall/door sealing it. `open_op` is the 1-based door
+/// op when the loc swings (`None` on plain walls and furniture);
+/// `is_door` is true when this tile is recorded as a swinging door.
+/// `stand` is the click tile a straight wall door always accepts (the
+/// unconditional arm of the server reach rule) — the actionable side
+/// when a pocket seals behind the operator. Other shapes leave it
+/// empty: several stands may answer.
+#[derive(Clone, Debug)]
+pub struct Blocker {
+    pub loc: u16,
+    pub name: String,
+    pub x: i32,
+    pub z: i32,
+    pub level: i32,
+    pub open_op: Option<u8>,
+    pub is_door: bool,
+    pub stand: Option<Tile>,
+}
+
 /// Which closed door a step swings through. `open_op`/`toll` ride along
 /// for the executor (no pack read worker-side): `None` on old plans
 /// means the door stays shut, never clicked blind.
@@ -179,6 +199,10 @@ pub struct Plan {
     /// Set when the destination tile itself is blocked (tree, counter):
     /// the route ends on the closest reachable tile instead.
     pub adjusted_dest: Option<Tile>,
+    /// The loc sitting on the requested destination that forced the
+    /// adjustment above (`None` on exact plans). Names the object so an
+    /// adjustment never reads as a bare coordinate again.
+    pub dest_blocker: Option<Blocker>,
 }
 
 /// Planner inputs: tolls, F2P bounds, owned tags, banned edges.
@@ -229,6 +253,11 @@ pub struct NoRoute {
     pub blocked_by_requirements: Vec<(EdgeId, Vec<String>)>,
     pub disabled_transitions_nearby: Vec<TransitionRef>,
     pub reason: NoRouteReason,
+    /// Blocking locs near the requested destination, doors first then
+    /// nearest (object on the dest tile, sealing doors and walls with
+    /// their loc identity): what `Disconnected closest=` never said.
+    /// Empty on `Aborted`: the search never ran to a verdict.
+    pub blockers: Vec<Blocker>,
 }
 
 #[derive(Clone, Debug)]
@@ -288,6 +317,7 @@ pub fn plan_yielding(
             blocked_by_requirements: Vec::new(),
             disabled_transitions_nearby: disabled_nearby(tables, dest),
             reason: NoRouteReason::OutsideF2p,
+            blockers: seal_nearby(world, tables, dest),
         });
     }
     // LOT1 L2: one permissive prepare_edges per plan, shared by A/B/C/D.
@@ -332,13 +362,18 @@ pub(crate) fn plan_yielding_with(
                 }
             }
             if blocked.is_empty() {
-                return Ok(assemble(tables, from, dest, chain, cost));
+                let mut plan = assemble(tables, from, dest, chain, cost);
+                if plan.adjusted_dest.is_some() {
+                    plan.dest_blocker = blocker_at(world, tables, dest);
+                }
+                return Ok(plan);
             }
             return Err(NoRoute {
                 closest_reachable: best,
                 blocked_by_requirements: blocked,
                 disabled_transitions_nearby: disabled_nearby(tables, dest),
                 reason: NoRouteReason::NeedsRequirement,
+                blockers: seal_nearby(world, tables, dest),
             });
         }
         Outcome::Closest(_) => {}
@@ -372,6 +407,7 @@ pub(crate) fn plan_yielding_with(
                         blocked_by_requirements: tolls,
                         disabled_transitions_nearby: disabled_nearby(tables, dest),
                         reason: NoRouteReason::PaidOnly,
+                        blockers: seal_nearby(world, tables, dest),
                     });
                 }
             }
@@ -389,6 +425,7 @@ pub(crate) fn plan_yielding_with(
                     blocked_by_requirements: Vec::new(),
                     disabled_transitions_nearby: disabled_nearby(tables, dest),
                     reason: NoRouteReason::OutsideF2p,
+                    blockers: seal_nearby(world, tables, dest),
                 });
             }
             Outcome::Closest(_) => {}
@@ -405,6 +442,7 @@ pub(crate) fn plan_yielding_with(
         blocked_by_requirements: Vec::new(),
         disabled_transitions_nearby: disabled_nearby(tables, dest),
         reason: NoRouteReason::Disconnected,
+        blockers: seal_nearby(world, tables, dest),
     })
 }
 
@@ -419,7 +457,67 @@ fn aborted(from: Tile) -> NoRoute {
         blocked_by_requirements: Vec::new(),
         disabled_transitions_nearby: Vec::new(),
         reason: NoRouteReason::Aborted,
+        blockers: Vec::new(),
     }
+}
+
+/// The click tile a straight wall door (shape 0) always accepts under
+/// the server reach rule: WEST stands west, NORTH stands north, and so
+/// on. Mirrors the unconditional arms in `reach.rs` exactly; other
+/// shapes have no single stand, so they report none.
+fn door_stand(shape: u8, angle: u8, at: Tile) -> Option<Tile> {
+    if shape != 0 {
+        return None;
+    }
+    match angle {
+        0 => Some(Tile { x: at.x - 1, z: at.z, level: at.level }),
+        1 => Some(Tile { x: at.x, z: at.z + 1, level: at.level }),
+        2 => Some(Tile { x: at.x + 1, z: at.z, level: at.level }),
+        3 => Some(Tile { x: at.x, z: at.z - 1, level: at.level }),
+        _ => None,
+    }
+}
+
+/// The blocking loc on one tile, if any: the static pick (already the
+/// actionable occupant) with its dump name, door op and click side.
+fn blocker_at(world: &StaticWorld, tables: &Tables, at: Tile) -> Option<Blocker> {
+    let (loc, shape, angle) = world.loc_at(at.x, at.z, at.level)?;
+    let def = world.loc_def(loc as usize)?;
+    if !def.blockwalk {
+        return None;
+    }
+    let is_door = world.door_at(at.x, at.z, at.level).is_some_and(|(id, _, _)| id == loc);
+    Some(Blocker {
+        loc,
+        name: tables.loc_name(loc).to_string(),
+        x: at.x,
+        z: at.z,
+        level: at.level,
+        open_op: def.open_op,
+        is_door,
+        stand: if is_door { door_stand(shape, angle, at) } else { None },
+    })
+}
+
+/// Blocking locs in a 25x25 box around the destination, doors first
+/// (they swing: loc, op and click side included) then nearest, capped:
+/// the object on the dest tile (distance 0) plus the sealing ring.
+/// Failure-path only: every tile read may page a map square in.
+fn seal_nearby(world: &StaticWorld, tables: &Tables, dest: Tile) -> Vec<Blocker> {
+    let mut out = Vec::new();
+    for dx in -12..=12 {
+        for dz in -12..=12 {
+            let at = Tile { x: dest.x + dx, z: dest.z + dz, level: dest.level };
+            if let Some(blocker) = blocker_at(world, tables, at) {
+                if !out.iter().any(|known: &Blocker| known.x == at.x && known.z == at.z && known.loc == blocker.loc) {
+                    out.push(blocker);
+                }
+            }
+        }
+    }
+    out.sort_by_key(|blocker| (!blocker.is_door, (blocker.x - dest.x).abs() + (blocker.z - dest.z).abs(), blocker.x, blocker.z));
+    out.truncate(8);
+    out
 }
 
 fn disabled_nearby(tables: &Tables, dest: Tile) -> Vec<TransitionRef> {
@@ -1097,7 +1195,7 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
     }
     // Merging happens above: one Walk per run between rides and doors.
     let adjusted_dest = if cursor.key() != dest.key() { Some(cursor) } else { None };
-    Plan { segments, cost, adjusted_dest }
+    Plan { segments, cost, adjusted_dest, dest_blocker: None }
 }
 
 #[cfg(test)]

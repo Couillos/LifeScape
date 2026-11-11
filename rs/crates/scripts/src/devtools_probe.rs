@@ -479,6 +479,7 @@ mod tests {
         )
         .expect("rows");
         std::fs::write(dir.join("nav_overrides.json"), "{}").expect("overrides");
+        std::fs::write(dir.join("locs.json"), r#"[{"name":"ladder"}]"#).expect("locs");
         let ok = Entry {
             loc: 5,
             from: Tile { x: 1, z: 2, level: 0 },

@@ -30,7 +30,7 @@ use std::time::Duration;
 use lifescape_json::{self as json, object, str_value, Value};
 
 use crate::plan::{
-    self, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, SharedEdges, Tile,
+    self, Blocker, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, SharedEdges, Tile,
     TransitionRef,
 };
 use crate::service_queries;
@@ -496,6 +496,7 @@ fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Opti
             segments: Vec::new(),
             cost: 0,
             adjusted_dest: None,
+            dest_blocker: None,
         });
     }
     let mut remaining = pos;
@@ -569,6 +570,7 @@ fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Opti
         segments,
         cost,
         adjusted_dest: None,
+        dest_blocker: None,
     })
 }
 
@@ -646,6 +648,7 @@ fn split_suffix(tables: &Tables, cached_from: Tile, cached: &Plan, from: Tile) -
         cost: cached.cost.saturating_sub(prefix_cost),
         segments: suffix,
         adjusted_dest: None,
+        dest_blocker: None,
     })
 }
 
@@ -940,7 +943,49 @@ pub fn encode_plan(plan: &Plan) -> Value {
     if let Some(adjusted) = plan.adjusted_dest {
         fields.push(("adjusted_dest", tile_value(adjusted)));
     }
+    // Always present (null on exact plans): old readers ignore it.
+    fields.push((
+        "dest_blocker",
+        plan.dest_blocker.as_ref().map_or(Value::Null, blocker_value),
+    ));
     object(fields)
+}
+
+fn blocker_value(blocker: &Blocker) -> Value {
+    let mut fields = vec![
+        ("loc", Value::Int(i64::from(blocker.loc))),
+        ("name", str_value(&blocker.name)),
+        ("x", Value::Int(i64::from(blocker.x))),
+        ("z", Value::Int(i64::from(blocker.z))),
+        ("level", Value::Int(i64::from(blocker.level))),
+        ("door", Value::Bool(blocker.is_door)),
+    ];
+    fields.push((
+        "open_op",
+        blocker.open_op.map_or(Value::Null, |op| Value::Int(i64::from(op))),
+    ));
+    fields.push((
+        "stand",
+        blocker.stand.map_or(Value::Null, tile_value),
+    ));
+    object(fields)
+}
+
+fn parse_blocker(value: &Value) -> Result<Blocker, String> {
+    Ok(Blocker {
+        loc: value.get("loc").as_i64().ok_or("blocker.loc")? as u16,
+        name: value.get("name").as_str().ok_or("blocker.name")?.to_string(),
+        x: value.get("x").as_i64().ok_or("blocker.x")? as i32,
+        z: value.get("z").as_i64().ok_or("blocker.z")? as i32,
+        level: value.get("level").as_i64().ok_or("blocker.level")? as i32,
+        open_op: value.get("open_op").as_i64().map(|op| op as u8),
+        is_door: value.get("door").as_bool().unwrap_or(false),
+        stand: if value.get("stand").is_null() {
+            None
+        } else {
+            Some(parse_tile(value.get("stand"))?)
+        },
+    })
 }
 
 pub fn decode_plan(value: &Value) -> Result<Plan, String> {
@@ -955,6 +1000,12 @@ pub fn decode_plan(value: &Value) -> Result<Plan, String> {
             None
         } else {
             Some(parse_tile(value.get("adjusted_dest"))?)
+        },
+        // Old plans predate the field: exact destination, no blocker.
+        dest_blocker: if value.get("dest_blocker").is_null() {
+            None
+        } else {
+            Some(parse_blocker(value.get("dest_blocker"))?)
         },
     })
 }
@@ -1000,6 +1051,12 @@ pub fn encode_noroute(no: &NoRoute) -> Value {
                     .collect(),
             ),
         ),
+        // Always present (empty on old-style diagnoses): what seals the
+        // destination — loc names, door ops and click sides included.
+        (
+            "blockers",
+            Value::Arr(no.blockers.iter().map(blocker_value).collect()),
+        ),
     ])
 }
 
@@ -1016,11 +1073,19 @@ pub fn decode_noroute(value: &Value) -> Result<NoRoute, String> {
     for ride in value.get("disabled").as_arr().ok_or("disabled")? {
         disabled.push(parse_ride(ride)?);
     }
+    // Old dossiers predate the field: no named seal, same verdict.
+    let mut blockers = Vec::new();
+    if let Some(rows) = value.get("blockers").as_arr() {
+        for row in rows {
+            blockers.push(parse_blocker(row)?);
+        }
+    }
     Ok(NoRoute {
         closest_reachable: parse_tile(value.get("closest"))?,
         blocked_by_requirements: blocked,
         disabled_transitions_nearby: disabled,
         reason: reason_from_str(value.get("reason").as_str().ok_or("reason")?)?,
+        blockers,
     })
 }
 
@@ -2878,6 +2943,16 @@ mod tests {
             )),
             "the door leg carries its open op"
         );
+        // Old NoRoute bodies predate "blockers": same verdict, no seal.
+        let old_no = decode_noroute(&object(vec![
+            ("reason", str_value("Disconnected")),
+            ("closest", tile_value(Tile { x: 3077, z: 3429, level: 0 })),
+            ("blocked", Value::Arr(Vec::new())),
+            ("disabled", Value::Arr(Vec::new())),
+        ]))
+        .expect("old noroute decodes");
+        assert!(old_no.blockers.is_empty(), "absent seal names nothing");
+        assert_eq!(old_no.reason, NoRouteReason::Disconnected);
     }
 
     #[test]
@@ -3358,6 +3433,7 @@ mod tests {
             segments: vec![Segment::Walk { tiles: tiles.clone() }],
             cost: 5,
             adjusted_dest: None,
+            dest_blocker: None,
         };
         let prefix = truncate_plan(&tables, from, &walk, Tile { x: 3, z: 0, level: 0 }).expect("on-path");
         assert_eq!(prefix.cost, 3, "walk prefix priced per tile");
@@ -3417,6 +3493,7 @@ mod tests {
             ],
             cost: 1 + 2 * plan::DOOR_COST + 1,
             adjusted_dest: None,
+            dest_blocker: None,
         };
         let prefix = truncate_plan(&tables, from, &merged, beyond).expect("on-path");
         assert_eq!(prefix.cost, 1 + 2 * plan::DOOR_COST, "merged door counts two edges");
@@ -3428,6 +3505,7 @@ mod tests {
             ],
             cost: 1 + plan::DOOR_COST,
             adjusted_dest: None,
+            dest_blocker: None,
         };
         let prefix = truncate_plan(&tables, from, &single, door_tile).expect("on-path");
         assert_eq!(prefix.cost, 1 + plan::DOOR_COST, "single door counts one edge");
@@ -3506,6 +3584,7 @@ mod tests {
             segments: vec![Segment::Walk { tiles: tiles.clone() }],
             cost: 5,
             adjusted_dest: None,
+            dest_blocker: None,
         };
         let tail = split_suffix(&tables, from, &walk, Tile { x: 2, z: 0, level: 0 }).expect("mid-path");
         assert_eq!(tail.cost, 3, "dropped prefix priced per tile");
