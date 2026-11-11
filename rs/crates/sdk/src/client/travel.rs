@@ -43,6 +43,8 @@ const COINS_OBJ: u16 = 995;
 /// Quest-point varp id (`gamedata/data/varps.json`, name "qp",
 /// transmit=true, so the live value is always on hand).
 const QP_VARP: u16 = 101;
+/// Worn inventory id (`inv.pack` order: 93=inv, 94=worn, 95=bank).
+const WORN_COM: u16 = 94;
 
 /// Door swing watch: the click resolves through the interaction queue
 /// (measured 17 ticks send-to-visible in a freshly streamed area), 23
@@ -66,6 +68,11 @@ const TOLL_POST_PICK_WAIT: u64 = 10;
 /// 1-2 ticks, 7 leaves a re-closed fast door plus margin. Same bound
 /// serves the single orthogonal sidestep before a click.
 const CROSS_WAIT: u64 = 7;
+/// Parked-on-tile settle before a teleport-door second click: an
+/// `open_and_close` traverse parks one tick mid-flight (p_delay(1)),
+/// 4 covers its landing plus a slow-pump margin. Expiry keeps the
+/// legacy second click (diagonal push parks for good).
+const TRAVERSE_SETTLE: u64 = 4;
 /// Walk budget per planned cost unit: walking runs ~1 tile per 2 ticks,
 /// 4 per unit plus 347 base leaves stalls and door queues inside.
 const COST_PER_TICK: u64 = 4;
@@ -419,7 +426,14 @@ impl Bot {
         NavOptions {
             allow_paid: self.allow_paid,
             f2p_only: true,
-            satisfied: Self::satisfy_tags(wants, &carried, coins, quest_points),
+            satisfied: Self::satisfy_tags(
+                wants,
+                &carried,
+                &Self::worn_counts(&self.world.inv),
+                &self.world.stats,
+                coins,
+                quest_points,
+            ),
             excluded_edges: HashSet::new(),
         }
     }
@@ -447,16 +461,27 @@ impl Bot {
         Ok(NavOptions {
             allow_paid: self.allow_paid,
             f2p_only: true,
-            satisfied: Self::satisfy_tags(tags.iter().map(String::as_str), &carried, coins, quest_points),
+            satisfied: Self::satisfy_tags(
+                tags.iter().map(String::as_str),
+                &carried,
+                &Self::worn_counts(&self.world.inv),
+                &self.world.stats,
+                coins,
+                quest_points,
+            ),
             excluded_edges: HashSet::new(),
         })
     }
 
     /// Tags the live state covers: coins, quest points, carried items.
     /// Anything else stays unsatisfied so the planner reports it.
+    /// `skill:<skill>:<level>` reads the live stat (engine PlayerStat
+    /// order); `worn:<id>` needs the object equipped, not just carried.
     fn satisfy_tags<'tag>(
         wants: impl IntoIterator<Item = &'tag str>,
         carried: &HashMap<u16, u32>,
+        worn: &HashMap<u16, u32>,
+        stats: &HashMap<u8, (u8, i32)>,
         coins: u32,
         quest_points: i32,
     ) -> HashSet<String> {
@@ -474,9 +499,57 @@ impl Bot {
                 if id.parse::<u16>().ok().is_some_and(|obj| carried.contains_key(&obj)) {
                     satisfied.insert(tag.to_string());
                 }
+            } else if let Some(rest) = tag.strip_prefix("skill:") {
+                if let Some((name, need)) = rest.rsplit_once(':') {
+                    let level = need.parse::<u8>().unwrap_or(u8::MAX);
+                    if Self::skill_index(name).is_some_and(|index| stats.get(&index).is_some_and(|(at, _)| *at >= level)) {
+                        satisfied.insert(tag.to_string());
+                    }
+                }
+            } else if let Some(id) = tag.strip_prefix("worn:") {
+                if id.parse::<u16>().ok().is_some_and(|obj| worn.contains_key(&obj)) {
+                    satisfied.insert(tag.to_string());
+                }
             }
         }
         satisfied
+    }
+
+    /// Equipped items only: {obj_id: count} from the worn inventory.
+    fn worn_counts(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>) -> HashMap<u16, u32> {
+        let mut out = HashMap::new();
+        if let Some(slots) = inv.get(&WORN_COM) {
+            for (_, (obj, count)) in slots {
+                *out.entry(*obj).or_insert(0) += *count;
+            }
+        }
+        out
+    }
+
+    /// Live stat index for a `skill:` tag (engine PlayerStat order).
+    fn skill_index(name: &str) -> Option<u8> {
+        Some(match name {
+            "attack" => 0,
+            "defence" => 1,
+            "strength" => 2,
+            "hitpoints" => 3,
+            "ranged" => 4,
+            "prayer" => 5,
+            "magic" => 6,
+            "cooking" => 7,
+            "woodcutting" => 8,
+            "fletching" => 9,
+            "fishing" => 10,
+            "firemaking" => 11,
+            "crafting" => 12,
+            "smithing" => 13,
+            "mining" => 14,
+            "herblore" => 15,
+            "agility" => 16,
+            "thieving" => 17,
+            "runecraft" => 20,
+            _ => return None,
+        })
     }
 
     /// Batch walking costs in ONE `walk_costs` round-trip (N1): the
@@ -952,8 +1025,13 @@ impl Bot {
         Ok(())
     }
 
-    /// Teleport model, second half: parked on the door tile, click once
-    /// more and land past it. No walking, no third click.
+    /// Teleport model, second half: parked on the door tile, wait out
+    /// the in-flight traverse, then click once more only if still
+    /// parked. `open_and_close` entries park the clicker on the tile
+    /// one tick before crossing (p_delay(1) then the far teleport),
+    /// so an immediate second click races the handler (manor backdoor
+    /// west entry: two op_loc one tick apart live). No walking, no
+    /// third click.
     fn finish_teleport_door(
         &mut self,
         door: &lifescape_nav::plan::DoorRef,
@@ -961,6 +1039,20 @@ impl Bot {
         cross_to: Tile,
         deadline: u64,
     ) -> Result<()> {
+        // Settle first: the delayed second half lands on cross_to by
+        // itself (measured 3 ticks click-to-arrival live). A diagonal
+        // push parks for good, so expiry still falls through to the
+        // legacy second click below — never a silent skip.
+        let settled = self.world.ticks + TRAVERSE_SETTLE;
+        while self.world.ticks < settled {
+            self.pump(1)?;
+            if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+                return Ok(());
+            }
+            if self.world.ticks > deadline {
+                return Err(Error::Timeout(format!("door loc {} timed out at {:?}", door.loc, self.position())));
+            }
+        }
         self.op_loc(open_op, door.x, door.z, door.loc)?;
         let watched = self.world.ticks + DOOR_SWING_WAIT;
         while self.world.ticks < watched {
@@ -1418,6 +1510,32 @@ mod tests {
         bot.plan_data_version = Some("test".to_string());
         let (_, plan, _) = bot.plan_travel(Tile { x: 3224, z: 3214, level: 0 }).expect("bare bot plans remote");
         assert!(!plan.segments.is_empty(), "the door route lands with no local map");
+    }
+
+    #[test]
+    fn satisfy_tags_covers_skill_and_worn() {
+        // Cooks' gate (cooking 32 + hat equipped) passes; the mining
+        // gate (60) and the unequipped apron fail; carried key, QP and
+        // unknown tags behave as before.
+        let carried: HashMap<u16, u32> = [(983, 1)].into_iter().collect();
+        let worn: HashMap<u16, u32> = [(1949, 1)].into_iter().collect();
+        let stats: HashMap<u8, (u8, i32)> = [(7, (33, 10_000)), (14, (59, 100_000))].into_iter().collect();
+        let got = Bot::satisfy_tags(
+            ["skill:cooking:32", "skill:mining:60", "worn:1949", "worn:1757", "item:983", "qp:32", "coins:10", "quest:cook"],
+            &carried,
+            &worn,
+            &stats,
+            5,
+            40,
+        );
+        assert!(got.contains("skill:cooking:32"), "cooking 33 covers 32, got {got:?}");
+        assert!(!got.contains("skill:mining:60"), "mining 59 misses 60, got {got:?}");
+        assert!(got.contains("worn:1949"), "hat equipped, got {got:?}");
+        assert!(!got.contains("worn:1757"), "apron only carried, got {got:?}");
+        assert!(got.contains("item:983"), "key carried, got {got:?}");
+        assert!(got.contains("qp:32"), "40 QP, got {got:?}");
+        assert!(!got.contains("coins:10"), "5 coins miss 10, got {got:?}");
+        assert!(!got.contains("quest:cook"), "unknown tags stay unsatisfied, got {got:?}");
     }
 
     #[test]
