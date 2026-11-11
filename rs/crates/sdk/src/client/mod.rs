@@ -139,6 +139,10 @@ pub struct Bot {
     /// Zone label for log stamps (`zones::zone_name`), refreshed by the
     /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
     pub zone_label: String,
+    /// Auto-run latch: set when energy hits full, held while it drains,
+    /// released at empty. Two thresholds so the run flag never flaps
+    /// around one (walk legs read it through `want_run`).
+    pub run_latch: bool,
 }
 
 impl Bot {
@@ -177,6 +181,7 @@ impl Bot {
             pause_gate: None,
             pause_ticks: 0,
             zone_label: "?".to_string(),
+            run_latch: false,
         }
     }
 
@@ -368,8 +373,16 @@ impl Bot {
         crate::snapshot::combat_level(&self.world.stats)
     }
 
-    pub fn want_run(&self) -> bool {
-        self.world.energy >= 100
+    /// Auto-run for every walk leg: latches on at full energy, stays on
+    /// while it drains, releases at empty. Mirrors the run button (the
+    /// server forces run off at 0 too); MOVE legs just carry the flag.
+    pub fn want_run(&mut self) -> bool {
+        if self.world.energy >= 100 {
+            self.run_latch = true;
+        } else if self.world.energy == 0 {
+            self.run_latch = false;
+        }
+        self.run_latch
     }
 
     pub fn say(&mut self, text: &str) -> Result<()> {
@@ -487,6 +500,27 @@ mod tests {
         bot.world.ticks = 447;
         bot.zone_label = "Lumbridge".to_string();
         assert_eq!(bot.tag(), "[t=447 Lumbridge]");
+    }
+
+    /// Auto-run latches at full, holds while draining, releases at
+    /// empty, stays off through the regen climb: no flap, one place
+    /// (every walk leg reads `want_run`).
+    #[test]
+    fn run_latch_holds_until_empty() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.energy = 100;
+        assert!(bot.want_run(), "full energy latches run on");
+        assert!(bot.want_run(), "already on stays on, no re-toggle");
+        bot.world.energy = 93;
+        assert!(bot.want_run(), "draining holds the latch");
+        bot.world.energy = 1;
+        assert!(bot.want_run(), "near-empty still holds");
+        bot.world.energy = 0;
+        assert!(!bot.want_run(), "empty releases the latch");
+        bot.world.energy = 50;
+        assert!(!bot.want_run(), "regen climb stays off until full");
+        bot.world.energy = 100;
+        assert!(bot.want_run(), "full latches back on");
     }
 
     /// Received tells are observable off the pump path: a fed
