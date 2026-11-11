@@ -21,7 +21,7 @@ use lifescape_planner::{
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
-use crate::brain_plan::{bank_types, holdings_count, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names};
+use crate::brain_plan::{bank_types, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep};
 pub use crate::brain_plan::{TRIP_TICKS, choose_money};
 
 /// Merchant share of `get_rich` draws (D18, calibrated in L5).
@@ -601,13 +601,32 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let _ = save_life(&life);
         return;
     }
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    // Combat gate: never assign past the bot's CB (XP-max formula).
+    // Relocate accesses safe ground first, train-first fights chickens
+    // first (goal style), clear dispatches unchanged.
+    let mut launch = position;
+    match combat_step(&mut life, position, live_combat(&live)) {
+        CombatStep::Direct => {}
+        CombatStep::Redirect(at) => launch = at,
+        CombatStep::Wait => {
+            let _ = save_life(&life);
+            return;
+        }
+        CombatStep::Fail(method) => {
+            fail_no_script(&mut life, position, &method);
+            let _ = save_life(&life);
+            return;
+        }
+    }
+    let method = life.nodes[launch].method.clone().unwrap_or_default();
     // Iron never trades (D15): a stale market lock from an old file resets
     // instead of launching; the planner never locks one on fresh resolves.
     if !lifescape_planner::launch_allowed(&method, life.profile.ironman) {
         println!("brain {}: refusing {method} for Ironman", job.account);
-        let node_id = life.nodes[position].id.clone();
-        life.nodes[position].status = NodeStatus::Ready;
-        life.nodes[position].method = None;
+        let node_id = life.nodes[launch].id.clone();
+        life.nodes[launch].status = NodeStatus::Ready;
+        life.nodes[launch].method = None;
         if life.active.as_deref() == Some(node_id.as_str()) {
             life.active = None;
         }
@@ -617,11 +636,11 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Engagement: money draws [6000, 18000] at the activity start;
     // reach boxes at one window and retries; farm obtains work one
     // window then recheck holdings; cleanup works one window per pass.
-    let budget: Option<(u64, u64)> = match &life.nodes[position].kind {
+    let budget: Option<(u64, u64)> = match &life.nodes[launch].kind {
         NodeKind::MakeMoney => {
             let chosen = draw_engagement_ticks(life.seed, life.history.len() as u64);
             life.engagement = Some(Engagement {
-                node: life.nodes[position].id.clone(),
+                node: life.nodes[launch].id.clone(),
                 min_ticks: 6000,
                 max_ticks: chosen.max(6000),
                 chosen: chosen.max(6000),
@@ -629,17 +648,17 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             let max = life.engagement.as_ref().map(|engaged| engaged.max_ticks).unwrap_or(6000);
             Some((6000, max))
         }
-        NodeKind::ReachLevel { .. } => Some((0, 18000)),
+        NodeKind::ReachLevel { .. } | NodeKind::ReachCombat { .. } => Some((0, 18000)),
         NodeKind::ObtainItems { .. } if method.starts_with("farm:") => Some((6000, 6000)),
         NodeKind::SpaceCleanup => Some((0, 6000)),
         _ => None,
     };
-    let node_snapshot = life.nodes[position].clone();
+    let node_snapshot = life.nodes[launch].clone();
     let Some((script, args)) = map_method(&method, &node_snapshot, budget) else {
         // No executable for this method: typed failure, never a silent
         // spin — the dashboard shows it and the 3-strike rule can
         // abandon it (replan on new scripts, never ghost-retry).
-        fail_no_script(&mut life, position, &method);
+        fail_no_script(&mut life, launch, &method);
         let _ = save_life(&life);
         return;
     };
@@ -674,7 +693,7 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !crate::registry::script_known(&script) {
         // The method is wired but its P3 script has not landed yet:
         // same typed failure, the script name rides in the error.
-        fail_no_script(&mut life, position, &format!("{method} -> {script}"));
+        fail_no_script(&mut life, launch, &format!("{method} -> {script}"));
         let _ = save_life(&life);
         return;
     }
@@ -683,8 +702,8 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Queued, not run: the launcher thread owns the blocking worker RPC.
     // Mark Active now so the next pass does not double-queue; a refused
     // launch re-queues via crash recovery (no report ever arrives).
-    life.nodes[position].status = NodeStatus::Active;
-    life.active = Some(life.nodes[position].id.clone());
+    life.nodes[launch].status = NodeStatus::Active;
+    life.active = Some(life.nodes[launch].id.clone());
     note_launch(&job.account);
     // Blocking worker RPC is fine here: this is the brain thread, not
     // the supervisor. A refused launch re-queues via crash recovery.

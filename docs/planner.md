@@ -123,6 +123,18 @@ général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
 la passe suivante, D12). Jambes alchimie décidées mais non exécutées
 (pas de script de magie sur le socle : repli magasin, log).
 
+## L10 : gate combat du cerveau
+
+`planner/src/combat.rs` (pur) : niveau du bot (formule XP-max),
+`min_combat_for_method` par méthode, `safe_area` et `combat_gate`
+`Clear`/`Relocate`/`TrainFirst`, `training_method` (style du but,
+poulets). Le cerveau (`maybe_launch`) évalue la gate au CB live avant
+toute assignation récolte/transformation : `Relocate` lance d'abord un
+nœud prioritaire `access:lumbridge` (même méthode après, one-shot),
+`TrainFirst` un nœud prioritaire `reach_combat` (poulets, style du but)
+avant tout trip, `Clear` inchangé. Garde : jamais d'assignation vers un
+spot au-delà du CB (test `launch_never_dispatches_past_the_level`).
+
 ## L9 : profils et Iron
 
 Tirage à la création (`draw_profile`, graine persistée, reproductible) :

@@ -54,6 +54,9 @@ impl Profile {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     ReachLevel { skill: String, level: u8 },
+    /// Priority combat training (cerveau gate): train to this combat
+    /// level on the goal's style before any trip past it.
+    ReachCombat { level: u8 },
     ObtainItems { item: String, count: i64 },
     HaveCoins { amount: i64 },
     MakeMoney,
@@ -270,6 +273,10 @@ fn kind_to_parts(kind: &NodeKind) -> (String, Value) {
             "reach_level".to_string(),
             object(vec![("skill", str_value(skill)), ("level", Value::Int(i64::from(*level)))]),
         ),
+        NodeKind::ReachCombat { level } => (
+            "reach_combat".to_string(),
+            object(vec![("level", Value::Int(i64::from(*level)))]),
+        ),
         NodeKind::ObtainItems { item, count } => (
             "obtain_items".to_string(),
             object(vec![("item", str_value(item)), ("count", Value::Int(*count))]),
@@ -300,6 +307,9 @@ fn kind_from_parts(kind: &str, params: &Value) -> Option<NodeKind> {
         "reach_level" => Some(NodeKind::ReachLevel {
             skill: params.get("skill").as_str().unwrap_or("").to_string(),
             level: params.get("level").as_i64().unwrap_or(2).clamp(2, 99) as u8,
+        }),
+        "reach_combat" => Some(NodeKind::ReachCombat {
+            level: params.get("level").as_i64().unwrap_or(3).clamp(3, 126) as u8,
         }),
         "obtain_items" => Some(NodeKind::ObtainItems {
             item: params.get("item").as_str().unwrap_or("").to_string(),
@@ -549,5 +559,18 @@ mod tests {
             map.insert("goal".to_string(), lifescape_json::Value::Null);
         }
         assert!(life_from_value(&no_goal).is_none(), "missing goal fails loud");
+    }
+
+    #[test]
+    fn reach_combat_roundtrips() {
+        let mut trained = life();
+        trained.nodes.push(super::Node::new(
+            "n9",
+            super::NodeKind::ReachCombat { level: 43 },
+            Vec::new(),
+            43,
+        ));
+        let back = life_from_value(&life_to_value(&trained)).expect("reach_combat parses back");
+        assert_eq!(back.nodes.last().map(|node| &node.kind), Some(&super::NodeKind::ReachCombat { level: 43 }));
     }
 }

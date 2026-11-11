@@ -6,7 +6,7 @@
 use crate::jobs::Job;
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::{Life, Node, NodeKind};
+use lifescape_planner::{Alternative, Life, Node, NodeKind, NodeStatus};
 
 /// Fixed round-trip estimate to Varrock for cost comparisons.
 // shortcut: fixed 800-tick round trip; replaced by measured convene
@@ -279,10 +279,119 @@ pub fn rank_money_diverse(profit: f64, trend_score: f64, revenue: f64, trend_wei
     lifescape_planner::rank_money_method(profit, trend_score, revenue, trend_weight) + jitter * 0.02 * revenue.max(0.0)
 }
 
+/// Bot combat level for the gate (cerveau): the live heartbeat value
+/// (server XP-max formula), else recomputed from the skill XP rows
+/// with the same formula, else 3 (fresh account).
+pub(crate) fn live_combat(live: &Value) -> u8 {
+    if let Some(level) = live.get("combat").as_i64() {
+        return level.clamp(1, 126) as u8;
+    }
+    let stats: std::collections::HashMap<u8, (u8, i32)> = live
+        .get("skills")
+        .as_arr()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| {
+            let id = row.get("id").as_i64()?;
+            let xp = row.get("xp").as_i64()?;
+            let level = row.get("level").as_i64().unwrap_or(1).clamp(1, 99) as u8;
+            Some((id as u8, (level, xp as i32)))
+        })
+        .collect();
+    lifescape_sdk::snapshot::combat_level(&stats).unwrap_or(3)
+}
+
+/// One gated launch step: the ready node dispatches, a priority node
+/// (safe access or combat training) launches instead, the brain waits
+/// on a node already running, or the style fails typed (no fallback).
+pub(crate) enum CombatStep {
+    Direct,
+    Redirect(usize),
+    Wait,
+    Fail(String),
+}
+
+fn next_node_id(life: &Life) -> String {
+    let mut counter = life.nodes.len();
+    for node in &life.nodes {
+        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
+            counter = counter.max(number);
+        }
+    }
+    format!("n{}", counter + 1)
+}
+
+/// Priority safe-area access (cerveau relocate): reuses the open one,
+/// never doubles it.
+fn ensure_access_node(life: &mut Life, area: &str) -> usize {
+    if let Some(at) = life.nodes.iter().position(|node| {
+        matches!(&node.kind, NodeKind::AccessArea { area: reached } if reached == area)
+            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+    }) {
+        return at;
+    }
+    let mut node = Node::new(&next_node_id(life), NodeKind::AccessArea { area: area.to_string() }, Vec::new(), 1);
+    node.status = NodeStatus::Ready;
+    node.method = Some(format!("access:{area}"));
+    node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 0, est_coins: 0 });
+    life.nodes.push(node);
+    life.nodes.len() - 1
+}
+
+/// Priority combat training (cerveau train-first): reuses the open
+/// one, locks the goal-style method on chickens at creation.
+fn ensure_training_node(life: &mut Life, required: u8, method: &str) -> usize {
+    if let Some(at) = life.nodes.iter().position(|node| {
+        matches!(&node.kind, NodeKind::ReachCombat { .. })
+            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
+    }) {
+        return at;
+    }
+    let mut node = Node::new(&next_node_id(life), NodeKind::ReachCombat { level: required }, Vec::new(), i64::from(required));
+    node.status = NodeStatus::Ready;
+    node.method = Some(method.to_string());
+    node.alternatives.push(Alternative { method: method.to_string(), est_ticks: 0, est_coins: 0 });
+    life.nodes.push(node);
+    life.nodes.len() - 1
+}
+
+/// Gate one locked method on the bot's combat level: dispatch it, or
+/// point at the priority node to launch instead (`position` keeps its
+/// method; the access/training node runs first).
+pub(crate) fn combat_step(life: &mut Life, position: usize, combat: u8) -> CombatStep {
+    let method = life.nodes.get(position).and_then(|node| node.method.clone()).unwrap_or_default();
+    match lifescape_planner::combat_launch(combat, &method, &life.nodes) {
+        lifescape_planner::CombatLaunch::Direct => CombatStep::Direct,
+        lifescape_planner::CombatLaunch::Access { area } => {
+            let at = ensure_access_node(life, area);
+            if matches!(life.nodes[at].status, NodeStatus::Ready) {
+                CombatStep::Redirect(at)
+            } else {
+                CombatStep::Wait
+            }
+        }
+        lifescape_planner::CombatLaunch::Train { required } => {
+            let style = lifescape_planner::goal_combat_style(&life.goal).to_string();
+            let training = match lifescape_planner::training_method(&style) {
+                Ok(training) => training.to_string(),
+                Err(_) => return CombatStep::Fail(format!("fight:{style}/chickens")),
+            };
+            let at = ensure_training_node(life, required, &training);
+            if matches!(life.nodes[at].status, NodeStatus::Ready) {
+                CombatStep::Redirect(at)
+            } else {
+                CombatStep::Wait
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, is_protected_tool, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
+    use super::{choose_money, combat_step, is_protected_tool, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked, CombatStep};
     use lifescape_json::{object, str_value};
+    use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
     #[test]
     fn trend_bonus_flips_a_close_money_call() {
@@ -371,5 +480,96 @@ mod tests {
         let left = rank_money_diverse(500.0, 0.0, 1000.0, 0.1, 7, 0);
         let varied = (0..8).any(|slot| rank_money_diverse(500.0, 0.0, 1000.0, 0.1, slot + 100, 0) != left);
         assert!(varied, "seeds vary close calls");
+    }
+
+    fn gate_life(goal: GoalKind, method: &str) -> Life {
+        let mut node = Node::new(
+            "n1",
+            NodeKind::ReachLevel { skill: "woodcutting".to_string(), level: 30 },
+            Vec::new(),
+            30,
+        );
+        node.status = NodeStatus::Ready;
+        node.method = Some(method.to_string());
+        Life {
+            schema: lifescape_planner::model::LIFE_SCHEMA,
+            account: "t99".to_string(),
+            created_at: 0,
+            seed: 7,
+            profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Producer),
+            goal,
+            nodes: vec![node],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn gate_reads_xp_max_combat_then_skills_then_fresh() {
+        let heartbeat = object(vec![("combat", lifescape_json::Value::Int(43))]);
+        assert_eq!(live_combat(&heartbeat), 43, "heartbeat combat wins");
+        let skills = lifescape_json::Value::Arr(
+            [0u8, 1, 2, 3, 4, 5, 6]
+                .iter()
+                .map(|id| {
+                    let (level, xp) = if *id == 3 { (10, 1154) } else { (1, 0) };
+                    object(vec![
+                        ("id", lifescape_json::Value::Int(i64::from(*id))),
+                        ("level", lifescape_json::Value::Int(level)),
+                        ("xp", lifescape_json::Value::Int(xp)),
+                    ])
+                })
+                .collect(),
+        );
+        let fallback = object(vec![("skills", skills)]);
+        let stats: std::collections::HashMap<u8, (u8, i32)> =
+            [(0u8, (1u8, 0i32)), (1, (1, 0)), (2, (1, 0)), (3, (10, 1154)), (4, (1, 0)), (5, (1, 0)), (6, (1, 0))]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            live_combat(&fallback),
+            lifescape_sdk::snapshot::combat_level(&stats).unwrap_or(3),
+            "skills recompute the XP-max formula"
+        );
+        assert_eq!(live_combat(&lifescape_json::Value::Null), 3, "no snapshot reads fresh");
+    }
+
+    /// Cerveau gate: CB3 aux saules -> Lumbridge d'abord (la même
+    /// méthode après) ; CB3 au charbon -> combat d'abord (chickens,
+    /// style du but) ; jamais d'envoi vers la mort.
+    #[test]
+    fn under_level_redirects_instead_of_dispatching() {
+        let mut willows = gate_life(GoalKind::MakeMoney, "gather:woodcut/willow_logs");
+        let at = match combat_step(&mut willows, 0, 3) {
+            CombatStep::Redirect(at) => at,
+            other => panic!("CB3 willows redirect, got {}", matches!(other, CombatStep::Direct)),
+        };
+        assert!(matches!(&willows.nodes[at].kind, NodeKind::AccessArea { area } if area == "lumbridge"), "safe area first, got {:?}", willows.nodes[at].kind);
+        assert_eq!(willows.nodes[at].method.as_deref(), Some("access:lumbridge"), "fallback method, pas la dangereuse");
+        assert_eq!(willows.nodes[0].method.as_deref(), Some("gather:woodcut/willow_logs"), "original keeps its method");
+        // An open access reuses (no double), a running one waits.
+        let again = match combat_step(&mut willows, 0, 3) {
+            CombatStep::Redirect(at) => at,
+            _ => panic!("open access reuses"),
+        };
+        assert_eq!(again, at, "no double insert");
+        willows.nodes[at].status = NodeStatus::Active;
+        assert!(matches!(combat_step(&mut willows, 0, 3), CombatStep::Wait), "running access waits");
+        // Done access clears: the same method dispatches.
+        willows.nodes[at].status = NodeStatus::Done;
+        assert!(matches!(combat_step(&mut willows, 0, 3), CombatStep::Direct), "relocated bots dispatch");
+
+        let mut coal = gate_life(GoalKind::MaxSkills { skills: vec!["ranged".to_string()], level: 40 }, "gather:mining/coal");
+        let train = match combat_step(&mut coal, 0, 3) {
+            CombatStep::Redirect(at) => at,
+            _ => panic!("CB3 coal trains first"),
+        };
+        assert!(matches!(&coal.nodes[train].kind, NodeKind::ReachCombat { level } if *level == 43), "priority reach_combat, got {:?}", coal.nodes[train].kind);
+        assert_eq!(coal.nodes[train].method.as_deref(), Some("fight:ranged/chickens"), "goal style on the clean camp");
+        let (script, _) = lifescape_planner::map_method("fight:ranged/chickens", &coal.nodes[train], None).expect("training executes");
+        assert_eq!(script, "ranged");
+        // At level the dangerous method dispatches unchanged.
+        assert!(matches!(combat_step(&mut coal, 0, 43), CombatStep::Direct), "CB43 coal clears");
     }
 }

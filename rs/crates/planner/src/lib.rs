@@ -26,8 +26,8 @@ pub use chains::{
     QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };
 pub use combat::{
-    combat_gate, combat_level, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError,
-    CombatGate,
+    combat_gate, combat_launch, combat_level, goal_combat_style, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError,
+    CombatGate, CombatLaunch,
 };
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, resolve_ready};

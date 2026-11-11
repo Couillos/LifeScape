@@ -149,9 +149,64 @@ pub fn training_method(style: &str) -> Result<&'static str, CombatError> {
     }
 }
 
+/// Combat style the goal trains under: its own style when it fights,
+/// else melee (prayer buries where melee fights, producers fight
+/// melee). Feeds `training_method` for the priority `reach_combat`.
+pub fn goal_combat_style(goal: &crate::model::GoalKind) -> &str {
+    match goal {
+        crate::model::GoalKind::EquipBest { style } if style == "ranged" || style == "magic" => style,
+        crate::model::GoalKind::MaxSkills { skills, .. } => {
+            if skills.iter().any(|skill| skill == "ranged") {
+                "ranged"
+            } else if skills.iter().any(|skill| skill == "magic") {
+                "magic"
+            } else {
+                "melee"
+            }
+        }
+        _ => "melee",
+    }
+}
+
+/// What the brain dispatches for one locked method at the bot's
+/// current combat level: the method itself, the safe-area access
+/// first (same method after, one-shot), or a priority training trip
+/// first (never the dangerous spot while under level).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatLaunch {
+    /// Strong enough (or already relocated): dispatch as planned.
+    Direct,
+    /// Same method, safe area first: launch `access:{area}` now.
+    Access { area: &'static str },
+    /// No safe ground: launch a priority `reach_combat` to this level.
+    Train { required: u8 },
+}
+
+/// Gate one method dispatch on the bot's combat level and its graph:
+/// a `Done` access to the safe area clears the relocate (one-shot),
+/// so the same method never loops on its own fallback.
+pub fn combat_launch(current: u8, method: &str, nodes: &[crate::model::Node]) -> CombatLaunch {
+    match combat_gate(current, method) {
+        CombatGate::Clear { .. } => CombatLaunch::Direct,
+        CombatGate::Relocate { area, .. } => {
+            let relocated = nodes.iter().any(|node| {
+                matches!(&node.kind, crate::model::NodeKind::AccessArea { area: reached } if reached == area)
+                    && node.status == crate::model::NodeStatus::Done
+            });
+            if relocated {
+                CombatLaunch::Direct
+            } else {
+                CombatLaunch::Access { area }
+            }
+        }
+        CombatGate::TrainFirst { required } => CombatLaunch::Train { required },
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{combat_gate, combat_level, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError, CombatGate};
+    use super::{combat_gate, combat_launch, combat_level, goal_combat_style, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError, CombatGate, CombatLaunch};
+    use crate::model::{GoalKind, Node, NodeKind, NodeStatus};
 
     fn levels(attack: u8, strength: u8, defence: u8, hitpoints: u8, ranged: u8, prayer: u8, magic: u8) -> BaseLevels {
         BaseLevels { attack, strength, defence, hitpoints, ranged, prayer, magic }
@@ -285,8 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn priority_training_follows_the_goal_style_on_clean_camps() {
-        assert_eq!(training_method("ranged"), Ok("fight:ranged/chickens"));
+    fn priority_training_follows_the_goal_style_on_clean_camps() {        assert_eq!(training_method("ranged"), Ok("fight:ranged/chickens"));
         assert_eq!(training_method("magic"), Ok("fight:magic/chickens"));
         for style in ["melee", "attack", "strength", "prayer"] {
             assert_eq!(training_method(style), Ok("fight:melee/chickens"), "{style} trains melee");
@@ -311,5 +365,86 @@ mod tests {
             let method = training_method(style).expect("style trains");
             assert!(crate::mapping::map_method(method, &probe, None).is_some(), "{method} executes");
         }
+    }
+
+    #[test]
+    fn goal_style_feeds_the_priority_training() {
+        assert_eq!(goal_combat_style(&GoalKind::EquipBest { style: "ranged".to_string() }), "ranged");
+        assert_eq!(goal_combat_style(&GoalKind::EquipBest { style: "magic".to_string() }), "magic");
+        assert_eq!(goal_combat_style(&GoalKind::EquipBest { style: "melee".to_string() }), "melee");
+        assert_eq!(
+            goal_combat_style(&GoalKind::MaxSkills { skills: vec!["attack".to_string(), "ranged".to_string()], level: 40 }),
+            "ranged",
+            "ranged wins the mix"
+        );
+        assert_eq!(
+            goal_combat_style(&GoalKind::MaxSkills { skills: vec!["magic".to_string()], level: 40 }),
+            "magic"
+        );
+        assert_eq!(goal_combat_style(&GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 40 }), "melee");
+        assert_eq!(goal_combat_style(&GoalKind::MakeMoney), "melee", "producers fight melee");
+        // Every goal style trains (jamais d'envoi vers la mort).
+        for goal in [
+            GoalKind::MakeMoney,
+            GoalKind::MaxSkills { skills: vec!["ranged".to_string()], level: 40 },
+            GoalKind::EquipBest { style: "magic".to_string() },
+        ] {
+            assert!(training_method(goal_combat_style(&goal)).is_ok(), "{goal:?} trains");
+        }
+    }
+
+    #[test]
+    fn launch_never_dispatches_past_the_level() {
+        // Garde: one below the requirement never dispatches the method
+        // itself (safe area first, or combat first); at the requirement
+        // it dispatches unchanged.
+        let pinned = [
+            "gather:woodcut/willow_logs",
+            "fight:melee/men",
+            "fight:ranged/men",
+            "fight:magic/men",
+            "gather:mining/coal",
+            "gather:mining/gold_ore",
+            "fight:melee/lesser_demons",
+            "fight:ranged/lesser_demons",
+            "fight:magic/lesser_demons",
+            "smith:steel_platebody",
+        ];
+        let empty: Vec<Node> = Vec::new();
+        for method in pinned {
+            let required = min_combat_for_method(method);
+            let short = combat_launch(required - 1, method, &empty);
+            assert!(
+                !matches!(short, CombatLaunch::Direct),
+                "{method} under {required} never dispatches, got {short:?}"
+            );
+            assert_eq!(
+                combat_launch(required, method, &empty),
+                CombatLaunch::Direct,
+                "{method} at {required} dispatches"
+            );
+        }
+        // CB3 aux saules -> Lumbridge, pas Draynor; charbon -> combat.
+        assert_eq!(
+            combat_launch(3, "gather:woodcut/willow_logs", &empty),
+            CombatLaunch::Access { area: "lumbridge" }
+        );
+        assert_eq!(combat_launch(3, "gather:mining/coal", &empty), CombatLaunch::Train { required: 43 });
+        // A done Lumbridge access clears the relocate one-shot (same
+        // method after, no loop on its own fallback).
+        let mut done_access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
+        done_access.status = NodeStatus::Done;
+        assert_eq!(
+            combat_launch(3, "gather:woodcut/willow_logs", std::slice::from_ref(&done_access)),
+            CombatLaunch::Direct,
+            "relocated bots work the same method"
+        );
+        let mut open_access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
+        open_access.status = NodeStatus::Active;
+        assert_eq!(
+            combat_launch(3, "gather:woodcut/willow_logs", std::slice::from_ref(&open_access)),
+            CombatLaunch::Access { area: "lumbridge" },
+            "an open access is not a relocation yet"
+        );
     }
 }
