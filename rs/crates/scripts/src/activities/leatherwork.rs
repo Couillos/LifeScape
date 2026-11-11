@@ -37,8 +37,9 @@ pub fn leather_recipe(product: &str) -> Option<knowledge::recipes::Recipe> {
 }
 
 /// Sew banked loads in the open session: `leatherwork [product] [count]`
-/// (gloves when omitted, 0 = forever). Hides without leather fail loud:
-/// the tanner grid mapping is unverified (dette P2.4), never pressed blind.
+/// (gloves when omitted, 0 = forever). Hides without leather tan at Ellis
+/// first (verified `tanner` grid in `kit::tan`); the sew uses the verified
+/// `leather_crafting` x1 buttons, chat options only if they speak.
 pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
     let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
@@ -61,7 +62,6 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let needle = obj_id(bot, NEEDLE)?;
     let thread = obj_id(bot, THREAD)?;
     let _ = obj_id(bot, product_name)?;
-    let hide = obj_id(bot, HIDE)?;
     let mut bank = nearest_bank(bot)?;
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut keep_sew: Vec<u16> = vec![needle, thread, leather];
@@ -69,9 +69,9 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bank_trip(bot, &bank, &keep_sew, 0)?;
     fill_sew(bot, &bank, leather, thread)?;
     if pack_total(bot, leather) == 0 {
-        if bot.bank_items().get(&hide).copied().unwrap_or(0) > 0 {
-            tan_from_bank(bot, &bank, &keep_sew, product_name, leather, thread)?;
-        }
+        // The withdraw inside names the real missing (hide or coins);
+        // no `bank_items` read here: the stream is empty after close.
+        tan_from_bank(bot, &bank, &keep_sew, product_name, leather, thread)?;
         if pack_total(bot, leather) == 0 {
             return Err(ScriptError::Blocked { missing: vec![LEATHER.to_string()] });
         }
@@ -127,6 +127,12 @@ fn tan_from_bank(
     let free = free_slots(bot) as u32;
     bank_withdraw_items(bot, bank, &[hide], free.saturating_sub(1))?;
     let held = pack_total(bot, hide);
+    // No stale bank-stream read: the withdraw above is the verdict. Zero
+    // hides withdrawn means none banked (the old `bank_items` check after
+    // `close_modal` read an empty stream and skipped the tan).
+    if held == 0 {
+        return Err(ScriptError::Blocked { missing: vec![hide_name.to_string()] });
+    }
     bank_withdraw_items(bot, bank, &[coins], held.saturating_mul(cost))?;
     crate::kit::tan::walk_to_tanner(bot)?;
     let tanned = crate::kit::tan::tan_run(bot, product)?;
@@ -151,13 +157,34 @@ fn fill_sew(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, leather: u16,
     Ok(())
 }
 
+/// x1 button of the verified `leather_crafting` grid (`tanner.rs2` style
+/// mapping from `content/scripts/.../leather/leather.rs2`): gloves 116,
+/// boots 119, vambraces 122, chaps 125, cowl 131, armour 113. Hard leather
+/// sews direct (no modal), so it maps to nothing here.
+fn sew_button(product_name: &str) -> Option<&'static str> {
+    match product_name.to_lowercase().as_str() {
+        "leather_gloves" => Some("leather_crafting:com_116"),
+        "leather_boots" => Some("leather_crafting:com_119"),
+        "leather_vambraces" => Some("leather_crafting:com_122"),
+        "leather_chaps" => Some("leather_crafting:com_125"),
+        "leather_cowl" => Some("leather_crafting:com_131"),
+        "leather_armour" => Some("leather_crafting:com_113"),
+        _ => None,
+    }
+}
+
 /// Sew one piece: click, answer the choice or counter, wait out the
-/// consumption. A grid modal is loud (button mapping unverified).
+/// consumption. `op_held_u` opens the `leather_crafting` grid live (see
+/// `leather.rs2`), never chat options: when options stay silent but the
+/// grid modal is open, press the verified x1 button instead.
 fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Result<(), ScriptError> {
     let had = pack_total(bot, leather);
     let (com, slot) = inv_slot(bot, leather)?;
     let (use_com, use_slot) = inv_slot(bot, needle)?;
     bot.op_held_u(leather, slot, com, needle, use_slot, use_com)?;
+    let grid: Option<u16> = (bot.tables.com_id)("leather_crafting");
+    let button: Option<u16> = sew_button(product_name).and_then(|name| (bot.tables.com_id)(name));
+    let mut pressed = false;
     let target = bot.world.ticks + ITEM_TICKS;
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() {
@@ -165,6 +192,16 @@ fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Resu
                 return Err(ScriptError::Usage(format!("sew {product_name:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(product_name)?;
+        } else if !pressed
+            && grid.is_some_and(|grid| {
+                bot.world.modal.as_ref().is_some_and(|modal| modal.interface_id == grid)
+            })
+        {
+            let Some(com) = button else {
+                return Err(ScriptError::Usage(format!("sew {product_name:?} has no verified grid button at {:?}", bot.position())));
+            };
+            bot.if_button(com)?;
+            pressed = true;
         }
         if bot.world.count_dialog {
             bot.resume_pcount(count_answer(had, 0))?;
@@ -215,5 +252,25 @@ mod tests {
         }
         let npcs = lifescape_gamedata::npcs_by_name(TANNERS[0]);
         assert!(!npcs.is_empty(), "a tanner NPC exists");
+    }
+
+    /// Sew buttons come from `leather.rs2` (x1 of each F2P product);
+    /// hard leather sews direct, so it maps to nothing.
+    #[test]
+    fn sew_buttons_match_the_server_script() {
+        for (product, com) in [
+            ("leather_gloves", "leather_crafting:com_116"),
+            ("leather_boots", "leather_crafting:com_119"),
+            ("leather_vambraces", "leather_crafting:com_122"),
+            ("leather_chaps", "leather_crafting:com_125"),
+            ("leather_cowl", "leather_crafting:com_131"),
+            ("leather_armour", "leather_crafting:com_113"),
+        ] {
+            assert_eq!(super::sew_button(product), Some(com), "{product} button");
+            let bot = offline_bot();
+            assert!((bot.tables.com_id)(com).is_some(), "{com} resolves");
+        }
+        assert_eq!(super::sew_button("hardleather_body"), None, "hard sews direct");
+        assert_eq!(super::sew_button("LEATHER_GLOVES"), Some("leather_crafting:com_116"), "case-insensitive");
     }
 }

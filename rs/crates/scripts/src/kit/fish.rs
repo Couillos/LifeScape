@@ -344,6 +344,29 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
     }
 }
 
+/// Named failure when no fishing water sits in range: toll hint when the
+/// fence is the reason (mirrors the melee toll-fence Usage), plain dry
+/// reason otherwise. The brain 3-strikes named failures instead of
+/// re-fishing a dry pit in a loop.
+pub(crate) fn dry_water_error(bot: &mut Bot) -> ScriptError {
+    let mut detail = format!("no fishing water in range of {:?} (level {})", bot.position(), bot.world.level);
+    if !bot.allow_paid {
+        if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
+            detail.push_str(&format!(": only water sits across the toll fence (line {line}), re-run with `toll` once the bot carries coins"));
+        }
+    }
+    ScriptError::Usage(detail)
+}
+
+/// True when no fishing water sits in range even with a clean slate (no
+/// bans): structural dry (a pit with no water), never a transient lull
+/// (crowded or banned spots still read wet here).
+pub(crate) fn structurally_dry(bot: &mut Bot, level: i64, bank: &knowledge::banks::Bank) -> bool {
+    let now = bot.world.ticks;
+    let clean = crate::kit::bans::BanSet::new();
+    crate::kit::spots::pick_fish_spot(bot, level, &clean, now, bank).is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 
 pub fn fish_load(
@@ -362,4 +385,29 @@ pub fn fish_load(
         &mut ops,
     )?;
     Ok((ok, learn_level(bot, FISH_STAT, ops.level)))
+}
+
+#[cfg(test)]
+mod dry_tests {
+    use super::{dry_water_error, structurally_dry};
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    /// Without a nav service the F2P batch never answers, so the pool is
+    /// dry: the guard fires instead of burning dead repicks (live, a
+    /// served batch distinguishes dry pits from transient lulls).
+    #[test]
+    fn dry_without_service_fails_fast() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3092;
+        bot.world.z = 3243;
+        let bank = crate::kit::bank::nearest_bank(&mut bot).expect("a bank resolves unfenced");
+        assert!(structurally_dry(&mut bot, 1, &bank), "no service means no verifiable water");
+        let error = dry_water_error(&mut bot);
+        assert!(error.to_string().contains("no fishing water in range"), "named, got: {error}");
+        assert!(error.to_string().contains("3092"), "names where, got: {error}");
+        assert!(!error.to_string().contains("toll"), "no fence proof offline, no hint, got: {error}");
+    }
 }

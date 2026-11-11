@@ -97,7 +97,21 @@ pub fn f2p_spells() -> Vec<Spell> {
 /// The dump `members` flag is ignored: it follows the object type, not
 /// the spawn position.
 pub fn f2p_obj_spawns(obj_id: Option<usize>) -> Vec<ObjSpawn> {
-    crate::spawns::all_obj_spawns(obj_id).into_iter().filter(|entry| is_free(entry.x, entry.z)).collect()
+    crate::spawns::all_obj_spawns(obj_id)
+        .into_iter()
+        .filter(|entry| is_free(entry.x, entry.z) && !is_unreachable_spawn(entry.x, entry.z, entry.level))
+        .collect()
+}
+
+/// Static spawns no live bot can pick up (proven blocked tiles): the
+/// Rimmington bronze axe upstairs (2970,3376,1) and the Varrock
+/// bronze pickaxe (3009,3342,0). Both stand on tiles the router calls
+/// disconnected/blocked live, so D51 never proposes them (axe falls back
+/// to `axeshop`, pickaxe to its 4 reachable spawns or `pickaxeshop`).
+pub const UNREACHABLE_OBJ_SPAWNS: [(i64, i64, i64); 2] = [(2970, 3376, 1), (3009, 3342, 0)];
+
+fn is_unreachable_spawn(x: i64, z: i64, level: i64) -> bool {
+    UNREACHABLE_OBJ_SPAWNS.contains(&(x, z, level))
 }
 
 /// NPC spawns standing in an F2P zone, optionally for one NPC. The dump
@@ -176,18 +190,25 @@ mod tests {
     #[test]
     fn obj_spawns_come_from_free_zones() {
         // The dump flags 799 spawns F2P; only the 452 standing in an
-        // F2P zone survive (verified counts from the catalogue).
+        // F2P zone survive (verified counts from the catalogue), minus
+        // the 2 live-blocked boot spawns (axe upstairs, Varrock pickaxe).
         assert_eq!(all_obj_spawns(None).len(), 1151);
         let free = f2p_obj_spawns(None);
-        assert_eq!(free.len(), 452, "f2p ground spawns, got {}", free.len());
+        assert_eq!(free.len(), 450, "f2p ground spawns, got {}", free.len());
         assert!(free.iter().all(|entry| is_free(entry.x, entry.z)), "no f2p spawn outside the zones");
+        for (x, z, level) in super::UNREACHABLE_OBJ_SPAWNS {
+            assert!(
+                !free.iter().any(|entry| entry.x == x && entry.z == z && entry.level == level),
+                "blocked spawn ({x},{z},{level}) never proposed"
+            );
+        }
         let count = |name: &str| {
             let id =
                 crate::objs_by_name(name).into_iter().next().unwrap_or_else(|| panic!("{name} in dumps")).obj_id;
             f2p_obj_spawns(Some(id)).len()
         };
-        assert_eq!(count("bronze_pickaxe"), 5, "bronze pick spawns");
-        assert_eq!(count("bronze_axe"), 1, "bronze axe spawns");
+        assert_eq!(count("bronze_pickaxe"), 4, "bronze pick spawns minus the blocked Varrock tile");
+        assert_eq!(count("bronze_axe"), 0, "blocked Rimmington axe falls back to axeshop");
         assert_eq!(count("iron_pickaxe"), 0, "no iron pick spawn");
         assert_eq!(count("fishing_rod"), 0, "no fishing rod spawn");
         assert_eq!(count("coins"), 39, "coin piles");

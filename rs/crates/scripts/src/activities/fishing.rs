@@ -63,6 +63,12 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
     }
+    // Picker guard: no water in range is structural (spots don't respawn
+    // like fish), so fail fast with the reason instead of burning dead
+    // repicks in a dry pit while the brain re-assigns fishing in a loop.
+    if crate::kit::fish::structurally_dry(bot, level, &bank) {
+        return Err(crate::kit::fish::dry_water_error(bot));
+    }
     let outcome = run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, side_shop, main_shop)?;

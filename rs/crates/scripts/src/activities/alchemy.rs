@@ -82,7 +82,7 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         done += 1;
     }
     bot.log(&format!("ok {spell} x{done} on {item_name} (~{worth} coins each)"));
-    Ok(done as i32)
+    Ok(0)
 }
 
 /// One cast: the item leaves (or the coins grow) within the budget.

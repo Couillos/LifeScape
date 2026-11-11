@@ -79,7 +79,7 @@ pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
         done += 1;
     }
     bot.log(&format!("ok {SUPERHEAT_SPELL} x{done} on {ore_name} for {bar_name}"));
-    Ok(done as i32)
+    Ok(0)
 }
 
 /// One cast: the ore leaves (or the bar lands) within the budget.

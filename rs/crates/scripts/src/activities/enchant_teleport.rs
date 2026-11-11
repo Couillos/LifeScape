@@ -110,7 +110,7 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
         done += 1;
     }
     bot.log(&format!("ok {spell} x{done}"));
-    Ok(done as i32)
+    Ok(0)
 }
 
 /// Ticks to wait out one cast (server delays plus the convert tick).

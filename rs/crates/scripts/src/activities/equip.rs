@@ -20,7 +20,8 @@ use crate::{ScriptError, ScriptResult};
 pub const STYLES: [&str; 3] = ["melee", "ranged", "magic"];
 
 /// Wear the best carried kit: `equip [style]` (melee when omitted).
-/// Returns the equipped slot count.
+/// Exit `Ok(0)` like every supervised script (the session maps any other
+/// code to `failed`; the slot count rides in the log, never the code).
 pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let style = args
         .first()
@@ -44,7 +45,7 @@ pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log(&format!("equipped {name} (slot {slot}) for {style}"));
     }
     bot.log(&format!("ok equip {style}: {} slots", slots.len()));
-    Ok(slots.len() as i32)
+    Ok(0)
 }
 
 #[cfg(test)]
