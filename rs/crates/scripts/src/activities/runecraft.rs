@@ -13,11 +13,12 @@
 
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
+use super::runecraft_temple::{craft_at_altar, exit_temple};
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
-use crate::quests::common::{find_loc, operate_loc, use_item_on_loc};
+use crate::quests::common::use_item_on_loc;
 use crate::{ScriptError, ScriptResult};
 
 pub const RUNECRAFT_STAT: u8 = 20;
@@ -60,18 +61,29 @@ fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: 
 }
 
 /// One full load: walk to the ruins, talisman in, craft at the altar,
-/// portal out. Returns the essence the altar consumed.
-fn craft_load(bot: &mut Bot, essence: u16, talisman_name: &str, ruin: &str, altar: &str, portal: &str, ruin_at: (i64, i64, i64)) -> Result<u32, ScriptError> {
+/// portal out. Returns the essence the altar consumed. A sterile altar
+/// never strands: the error reports the last game message and the portal
+/// is still attempted before failing.
+fn craft_load(
+    bot: &mut Bot,
+    essence: u16,
+    talisman_name: &str,
+    ruin: &str,
+    altar: &str,
+    portal: &str,
+    prefix: &str,
+    ruin_at: (i64, i64, i64),
+) -> Result<u32, ScriptError> {
     bot.travel_to(lifescape_sdk::plan::Tile { x: ruin_at.0 as i32, z: ruin_at.1 as i32, level: ruin_at.2 as i32 })?;
     use_item_on_loc(bot, talisman_name, &[ruin])?;
-    let _ = find_loc(bot, &[altar], 150)?;
-    let before = pack_total(bot, essence);
-    operate_loc(bot, &[altar], 1, None)?;
-    let made = before.saturating_sub(pack_total(bot, essence));
-    if made == 0 {
-        return Err(ScriptError::Usage(format!("{altar} bound no {ESSENCE} at {:?}", bot.position())));
-    }
-    operate_loc(bot, &[portal], 1, None)?;
+    let made = match craft_at_altar(bot, essence, ESSENCE, altar) {
+        Ok(made) => made,
+        Err(error) => {
+            let _ = exit_temple(bot, prefix, portal);
+            return Err(error);
+        }
+    };
+    exit_temple(bot, prefix, portal)?;
     Ok(made)
 }
 
@@ -127,7 +139,7 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Blocked { missing: vec![talisman_name.to_string()] });
             }
         }
-        let made = match craft_load(step_bot, essence, talisman_name, &ruin, &altar, &portal, ruin_at) {
+        let made = match craft_load(step_bot, essence, talisman_name, &ruin, &altar, &portal, prefix, ruin_at) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died runecrafting, restocking to retry");
                 return Ok(StepControl::Continue);
@@ -146,6 +158,7 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
 #[cfg(test)]
 mod tests {
     use super::{rune_for, ruin_tile, ESSENCE, RUNECRAFT_STAT, RUNES};
+    use super::super::runecraft_temple::PORTALS;
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
@@ -208,6 +221,25 @@ mod tests {
             assert!(!knowledge::locs_by_name(&format!("{prefix}temple_exit_portal")).is_empty(), "{prefix} portal in locs");
         }
         assert!(ruin_tile("cosmic").is_none(), "members never placed");
+    }
+
+    /// Exit portal rows cover exactly the six F2P altars, with distinct
+    /// temple tiles (server land files l44_75..l39_75; the air pair is
+    /// live-proven: altar 2843,4833, portal 2841,4828, exit 2983,3288).
+    #[test]
+    fn portals_cover_f2p_altars() {
+        assert_eq!(PORTALS.len(), RUNES.len(), "one portal per F2P altar");
+        for (prefix, id, x, z) in PORTALS {
+            let row = rune_for(prefix).unwrap_or_else(|| panic!("{prefix} portal without a rune row"));
+            assert_eq!(row.0, prefix, "{prefix} prefix");
+            assert!((2465..=2470).contains(&id), "{prefix} portal id {id}");
+            assert!((2500..2900).contains(&x) && (4820..4860).contains(&z), "{prefix} portal tile ({x},{z})");
+        }
+        assert!(PORTALS.contains(&("air", 2465, 2841, 4828)), "live-proven air portal");
+        let mut tiles: Vec<(i32, i32)> = PORTALS.iter().map(|(_, _, x, z)| (*x, *z)).collect();
+        tiles.sort();
+        tiles.dedup();
+        assert_eq!(tiles.len(), PORTALS.len(), "distinct portal tiles");
     }
 
     /// Level gate reads the live runecraft level (stat 20, quest-unlocked

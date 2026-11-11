@@ -33,6 +33,7 @@ pub mod picking;
 pub mod pottery;
 pub mod ranged_style;
 pub mod runecraft;
+pub mod runecraft_temple;
 pub mod shear;
 pub mod smelt;
 pub mod smelt_jewelry;
