@@ -18,3 +18,29 @@ Erreurs franches : `no session` (ouvrir d'abord), `already open`, `busy`
 
 Mesures : durées calibrées en live, borne en ticks = mesure + petite marge ;
 préférer un état observable (message, inventaire, PNJ visible) à l'attente aveugle.
+
+## État de départ reproductible (W3)
+
+Setup par `admin` sur compte `hold` (`hold` coupe brain, market, rescue et
+watchdog : le run reste en `held`, vérifier `held: true` dans `show`) :
+`open admin`, `open <tNN>`, `hold <tNN>`, puis `call admin cheat "<cmd>"`.
+`tele <lvl,mx,mz,lx,lz>` (staff≥2) place admin ; `teleother <tNN>` amène le
+testé sur la case d'admin (aucun message de succès : vérifier par `show`) ;
+`giveother <tNN> <objet> <n>` et `setvarother <tNN> <var> <v>` (+ lecture
+`getvarother`) fixent inventaire et variables — noms d'objets = debug names
+serveur minuscules (`coins`, `raw_shrimp`). `giveother`/`setvarother`/
+`teleother` sont staff≥3 **sans gate production** (`ClientCheatHandler.ts`) ;
+`~procs`/`speed` exigent staff≥4 hors prod (non testés : side effects).
+Après un cheat, attendre ~8–10 s avant le `show` de contrôle (snapshot en
+retard possible). Niveau remis à 0 après usage (`setvarother tNN qp 0`).
+
+Restauration `.sav` (validée 2026-11-11, t40) : `close <tNN>` (compte fermé :
+le serveur lit au login, écrit au logout), `cp
+data/players/main/<tNN>.sav <ref>`, muter, `close`, `cp <ref> …/<tNN>.sav`,
+`open` → position, inventaire et HP identiques (md5 égaux). Référence
+pristine restaurée après usage.
+
+Preuve 2026-11-11 : `walkto` Lumbridge (3220,3217)→(3223,3217) rejoué 5× sur
+t40 `held`, setup `teleother` avant chaque run : 5 verdicts `ok code=0`,
+même départ et même arrivée (0,3222,3216) au log, 0 marqueur
+rescue/market/brain, 1 appel LLM par run (`run --wait`), mur < 4 s.
