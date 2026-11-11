@@ -329,6 +329,15 @@ fn ensure_access_node(life: &mut Life, area: &str) -> usize {
         matches!(&node.kind, NodeKind::AccessArea { area: reached } if reached == area)
             && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
     }) {
+        // Crash recovery re-queues Active as Ready with method=None: the
+        // redirect would launch empty (fail_no_script vide). The gate
+        // carries the method itself, so backfill it on reuse.
+        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
+            life.nodes[at].method = Some(format!("access:{area}"));
+        }
+        if life.nodes[at].alternatives.is_empty() {
+            life.nodes[at].alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 6000, est_coins: 0 });
+        }
         return at;
     }
     let mut node = Node::new(&next_node_id(life), NodeKind::AccessArea { area: area.to_string() }, Vec::new(), 1);
@@ -346,6 +355,14 @@ fn ensure_training_node(life: &mut Life, required: u8, method: &str) -> usize {
         matches!(&node.kind, NodeKind::ReachCombat { .. })
             && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
     }) {
+        // Same crash-recovery hole as the access gate: a reused open
+        // training node without a method would redirect empty.
+        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
+            life.nodes[at].method = Some(method.to_string());
+        }
+        if life.nodes[at].alternatives.is_empty() {
+            life.nodes[at].alternatives.push(Alternative { method: method.to_string(), est_ticks: 6000, est_coins: 0 });
+        }
         return at;
     }
     let mut node = Node::new(&next_node_id(life), NodeKind::ReachCombat { level: required }, Vec::new(), i64::from(required));
@@ -571,5 +588,45 @@ mod tests {
         assert_eq!(script, "ranged");
         // At level the dangerous method dispatches unchanged.
         assert!(matches!(combat_step(&mut coal, 0, 43), CombatStep::Direct), "CB43 coal clears");
+    }
+
+    /// Crash-recovery hole (fail_no_script vide): an Active access or
+    /// training node re-queued Ready loses its lock (method=None, brain
+    /// crash recovery); the gate reuses the open node, so the redirect
+    /// carries the method itself — never an empty launch.
+    #[test]
+    fn redirect_recarries_a_crash_cleared_method() {
+        // Access: Ready Lumbridge node with a cleared lock (alternatives kept).
+        let mut willows = gate_life(GoalKind::MakeMoney, "gather:woodcut/willow_logs");
+        let mut access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
+        access.status = NodeStatus::Ready;
+        access.method = None;
+        access.alternatives.push(lifescape_planner::Alternative { method: "access:lumbridge".to_string(), est_ticks: 6000, est_coins: 0 });
+        willows.nodes.push(access);
+        let at = match combat_step(&mut willows, 0, 3) {
+            CombatStep::Redirect(at) => at,
+            _ => panic!("cleared access still redirects"),
+        };
+        assert_eq!(willows.nodes[at].method.as_deref(), Some("access:lumbridge"), "gate re-carries, got {:?}", willows.nodes[at].method);
+        let (script, _) = lifescape_planner::map_method("access:lumbridge", &willows.nodes[at], None).expect("redirect executes");
+        assert_eq!(script, "walkto", "restored method names a script, never fail_no_script vide");
+
+        // Training: same hole on a node that never resolved (no alternatives at all).
+        let mut coal = gate_life(
+            GoalKind::MaxSkills { skills: vec!["ranged".to_string()], level: 40 },
+            "gather:mining/coal",
+        );
+        let mut training = Node::new("n2", NodeKind::ReachCombat { level: 43 }, Vec::new(), 43);
+        training.status = NodeStatus::Ready;
+        training.method = None;
+        coal.nodes.push(training);
+        let reache = match combat_step(&mut coal, 0, 3) {
+            CombatStep::Redirect(at) => at,
+            _ => panic!("cleared training still redirects"),
+        };
+        assert_eq!(coal.nodes[reache].method.as_deref(), Some("fight:ranged/chickens"), "goal style re-carried, got {:?}", coal.nodes[reache].method);
+        assert!(!coal.nodes[reache].alternatives.is_empty(), "alternative backfilled with the method");
+        let (script, _) = lifescape_planner::map_method("fight:ranged/chickens", &coal.nodes[reache], None).expect("training executes");
+        assert_eq!(script, "ranged");
     }
 }

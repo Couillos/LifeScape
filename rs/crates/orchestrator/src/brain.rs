@@ -620,6 +620,13 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
     }
     let method = life.nodes[launch].method.clone().unwrap_or_default();
+    // A redirect target without a method never fails typed on the empty
+    // string: wait a pass (the gate re-carries it, then it launches).
+    if method.is_empty() {
+        println!("brain {}: redirect {} has no method yet, waiting", job.account, life.nodes[launch].id);
+        let _ = save_life(&life);
+        return;
+    }
     // Iron never trades (D15): a stale market lock from an old file resets
     // instead of launching; the planner never locks one on fresh resolves.
     if !lifescape_planner::launch_allowed(&method, life.profile.ironman) {
