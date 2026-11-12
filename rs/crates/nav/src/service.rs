@@ -1030,17 +1030,6 @@ pub fn decode_plan(value: &Value) -> Result<Plan, String> {
     })
 }
 
-fn reason_from_str(raw: &str) -> Result<NoRouteReason, String> {
-    match raw {
-        "Disconnected" => Ok(NoRouteReason::Disconnected),
-        "NeedsRequirement" => Ok(NoRouteReason::NeedsRequirement),
-        "PaidOnly" => Ok(NoRouteReason::PaidOnly),
-        "OutsideF2p" => Ok(NoRouteReason::OutsideF2p),
-        "Aborted" => Ok(NoRouteReason::Aborted),
-        other => Err(format!("NoRoute reason {other:?}")),
-    }
-}
-
 pub fn encode_noroute(no: &NoRoute) -> Value {
     object(vec![
         ("reason", str_value(no.reason.as_str())),
@@ -1104,7 +1093,7 @@ pub fn decode_noroute(value: &Value) -> Result<NoRoute, String> {
         closest_reachable: parse_tile(value.get("closest"))?,
         blocked_by_requirements: blocked,
         disabled_transitions_nearby: disabled,
-        reason: reason_from_str(value.get("reason").as_str().ok_or("reason")?)?,
+        reason: NoRouteReason::parse(value.get("reason").as_str().ok_or("reason")?)?,
         blockers,
     })
 }
@@ -2444,11 +2433,9 @@ impl Service {
                 Ok(plan) => (true, encode_plan(plan)),
                 Err(no) => (false, encode_noroute(no)),
             };
-            // Negatives cache (the dearest hits); Aborted never does.
-            let cacheable = match &outcome {
-                Ok(_) => true,
-                Err(no) => no.reason != NoRouteReason::Aborted,
-            };
+            // Negatives cache (the dearest hits); Aborted and
+            // BudgetExhausted never do (they depend on stop and load).
+            let cacheable = outcome.as_ref().err().is_none_or(|no| no.reason.cacheable());
             if cacheable {
                 self.l1.lock().unwrap().insert(key, is_plan, body.clone());
             }

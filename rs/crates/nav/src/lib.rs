@@ -9,7 +9,10 @@ pub mod costs;
 pub mod f2p;
 pub mod loctypes;
 pub mod nav;
+pub mod no_route;
 pub mod plan;
+#[cfg(test)]
+mod plan_budget_tests;
 pub mod reach;
 pub mod route;
 pub mod service;

@@ -179,7 +179,8 @@ fn toll_gate_alone_is_paid_only_then_reachable_with_paid() {
 // inherit an expired deadline, stop at their first 1024-visit check and
 // the toll diagnosis degrades into a bare Disconnected. Post-fix B gets
 // a fresh budget and names the price. Timings are debug-calibrated
-// (~45k visits/s here): A always burns its 3 s, B needs ~16k visits.
+// (~45k visits/s here): A burns ~10 s (or its whole budget under load,
+// a cut B's toll path still outranks), B needs ~16k visits.
 
 const WIDE_SQUARES: i32 = 11;
 const WALL_X: i32 = BASE + 630;

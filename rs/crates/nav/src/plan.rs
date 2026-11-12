@@ -18,6 +18,9 @@ use crate::reach;
 use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
+pub use crate::no_route::{NoRoute, NoRouteReason};
+pub(crate) use crate::no_route::{DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
+
 /// Identity hash with a bit mixer: tile keys pack level/z/x, so the
 /// raw low bits are just the x coordinate and whole columns would
 /// share one bucket. The mixer spreads every bit over the key.
@@ -64,26 +67,6 @@ const FRESH: u64 = 1 << 63;
 pub const TRANSITION_COST: u32 = 20;
 /// Riding blind: the prober never saw this transition work.
 pub const UNVERIFIED_PENALTY: u32 = 50;
-
-/// Search budget: explored tiles before calling the area disconnected.
-const MAX_VISITS: usize = 500_000;
-
-/// Wall-clock budget for one `plan` call, every search included: an
-/// exhaustive NoRoute once burned ~25 s of worker CPU (up to four
-/// 500k-visit searches back to back), freezing ticks, snapshots and
-/// spectate while the status stayed `running`. Legit plans stay far
-/// below (worst golden reachable: 264 tiles in ~1.1 s debug, live legs
-/// plan in ~0.2 s); past the budget each pending search stops at its
-/// current best, the same Disconnected answer exhaustion would give.
-/// Calibrated against the longest legit trek (south Varrock crossing,
-/// ~86k visits / ~1.7 s of search loop in debug plus ~0.7 s of edge
-/// setup): 3000 ms leaves headroom in debug and stays snappy in
-/// release. Edge setup (`prepare_edges`) is finite — one pass over the
-/// transition table, it always terminates — so it carries no deadline,
-/// only a yield: a slow setup still proves the session alive instead of
-/// starving the socket into a server reap, and still honors the
-/// operator stop.
-const PLAN_BUDGET: Duration = Duration::from_millis(3000);
 
 /// One map tile on one level.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -304,44 +287,6 @@ pub enum EdgeId {
     Custom(String),
 }
 
-/// Why no route exists.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NoRouteReason {
-    Disconnected,
-    NeedsRequirement,
-    PaidOnly,
-    OutsideF2p,
-    /// The search stopped at a yield point (keepalive or operator stop):
-    /// no diagnosis, the caller maps it to `Interrupted`, never a dossier.
-    Aborted,
-}
-
-impl NoRouteReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            NoRouteReason::Disconnected => "Disconnected",
-            NoRouteReason::NeedsRequirement => "NeedsRequirement",
-            NoRouteReason::PaidOnly => "PaidOnly",
-            NoRouteReason::OutsideF2p => "OutsideF2p",
-            NoRouteReason::Aborted => "Aborted",
-        }
-    }
-}
-
-/// A failed plan plus the diagnosis for `replay-nav`.
-#[derive(Clone, Debug)]
-pub struct NoRoute {
-    pub closest_reachable: Tile,
-    pub blocked_by_requirements: Vec<(EdgeId, Vec<String>)>,
-    pub disabled_transitions_nearby: Vec<TransitionRef>,
-    pub reason: NoRouteReason,
-    /// Blocking locs near the requested destination, doors first then
-    /// nearest (object on the dest tile, sealing doors and walls with
-    /// their loc identity): what `Disconnected closest=` never said.
-    /// Empty on `Aborted`: the search never ran to a verdict.
-    pub blockers: Vec<Blocker>,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct RideEdge {
     pub(crate) index: usize,
@@ -427,8 +372,23 @@ pub(crate) fn plan_yielding_with(
     shared: &SharedEdges,
     yield_: &mut dyn FnMut() -> bool,
 ) -> Result<Plan, NoRoute> {
-    let deadline = std::time::Instant::now() + PLAN_BUDGET;
-    match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
+    plan_budgeted(world, tables, from, dest, options, shared, yield_, PLAN_BUDGET)
+}
+
+/// Same plan under an explicit wall budget (tests force a cut with it).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_budgeted(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    shared: &SharedEdges,
+    yield_: &mut dyn FnMut() -> bool,
+    budget: Duration,
+) -> Result<Plan, NoRoute> {
+    let deadline = std::time::Instant::now() + budget;
+    let verdict_cut = match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
             let mut blocked = Vec::new();
@@ -458,14 +418,14 @@ pub(crate) fn plan_yielding_with(
                 blockers: seal_nearby(world, tables, dest),
             });
         }
-        Outcome::Closest(_) => {}
-    }
-    // The exhaustive miss above burns the shared wall budget: without a
-    // fresh diagnosis budget every follow-up search stops at its first
+        Outcome::Closest(_) => None,
+        Outcome::OverBudget(best) => Some(best),
+    };
+    // The miss above may burn its whole wall budget: without a fresh
+    // diagnosis budget every follow-up search stops at its first
     // 1024-visit check and the toll diagnosis (PaidOnly) degrades into a
-    // bare Disconnected (admin-7526 live). B/C/D share one fresh budget:
-    // the diagnosis usually Finds fast, the pathological case caps at 2x.
-    let deadline = std::time::Instant::now() + PLAN_BUDGET;
+    // bare Disconnected (admin-7526 live). B/C/D share one fresh budget.
+    let deadline = std::time::Instant::now() + DIAGNOSIS_BUDGET;
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
@@ -493,8 +453,20 @@ pub(crate) fn plan_yielding_with(
                     });
                 }
             }
-            Outcome::Closest(_) => {}
+            Outcome::Closest(_) | Outcome::OverBudget(_) => {}
         }
+    }
+    // A cut proved nothing: a path past the F2P fence (C) or a closest
+    // tile (D) would read as a verdict. Only B's toll path, a route that
+    // paying opens, outranks the cut.
+    if let Some(best) = verdict_cut {
+        return Err(NoRoute {
+            closest_reachable: best,
+            blocked_by_requirements: Vec::new(),
+            disabled_transitions_nearby: disabled_nearby(tables, dest),
+            reason: NoRouteReason::BudgetExhausted,
+            blockers: seal_nearby(world, tables, dest),
+        });
     }
     if options.f2p_only {
         // C: bounds lifted, requirements enforced. Reaching the dest this
@@ -510,14 +482,13 @@ pub(crate) fn plan_yielding_with(
                     blockers: seal_nearby(world, tables, dest),
                 });
             }
-            Outcome::Closest(_) => {}
+            Outcome::Closest(_) | Outcome::OverBudget(_) => {}
         }
     }
     // D: fully filtered search, for the closest reachable tile.
     let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
-        Outcome::Found(_, _, best) => best,
-        Outcome::Closest(best) => best,
+        Outcome::Found(_, _, best) | Outcome::Closest(best) | Outcome::OverBudget(best) => best,
     };
     Err(NoRoute {
         closest_reachable: closest,
@@ -659,6 +630,8 @@ fn transition_ref(row: &Transition, tables: &Tables) -> TransitionRef {
 enum Outcome {
     Found(Vec<(Tile, PrevEdge)>, u32, Tile),
     Closest(Tile),
+    /// Cut by `MAX_VISITS` or the wall deadline: the best tile so far.
+    OverBudget(Tile),
     Aborted,
 }
 
@@ -838,15 +811,12 @@ fn dijkstra(
         if heap.len() > heap_max {
             heap_max = heap.len();
         }
-        if visits > MAX_VISITS {
-            break;
-        }
-        // Shared wall budget (PLAN_BUDGET): an exhaustive miss stops at
-        // its current best instead of burning the worker. Same
-        // Disconnected answer as visit exhaustion; the operator stop
-        // (yield false above) still wins as Aborted.
-        if visits % 1024 == 0 && std::time::Instant::now() >= deadline {
-            break;
+        // Visit cap or wall deadline (`no_route`): the search stops at its
+        // current best instead of burning the worker, as OverBudget —
+        // never a Closest (Disconnected) nor a blocked-dest adjustment
+        // to wherever the cut fell. The operator stop still wins above.
+        if visits > MAX_VISITS || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
+            return Outcome::OverBudget(best);
         }
         let here = unkey(key);
         let fresh = key & FRESH != 0;

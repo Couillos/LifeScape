@@ -63,7 +63,10 @@ rempart_1530 | 3224,3223,0 | 3228,3226,0 | - | reachable ; doors<=0 ; walk_tiles
 # angle OUEST) ne se cliquent que depuis l'ouest, soit l'interieur.
 # L'entree du chateau est impossible dans cette revision (stand
 # orthogonal valide requis, aucun praticable depuis l'exterieur).
-chateau_scell | 3219,3218,0 | 3215,3218,0 | - | unreachable=Disconnected
+# Borne F2P (comme les bots) : la recherche s'epuise (~239k visites) et
+# prouve le scelle ; le monde membres entier depasse MAX_VISITS, la
+# coupe y repond BudgetExhausted (avant : Disconnected sur la coupe).
+chateau_scell | 3219,3218,0 | 3215,3218,0 | f2p | unreachable=Disconnected
 # 17. banque Draynor -> chateau de Lumbridge : route directe par le nord
 # (contournement du manoir puis du chateau scelle), jamais par le marais
 # au sud-ouest. Le crochet "par le marais puis retour vers l'est" vu en
