@@ -477,6 +477,15 @@ impl Connection {
         Connection { stream: None, outgoing: None, incoming: None, buffer: Vec::new(), packet_index: 0, timeout, last_send: None, sent_total: 0, sent_window_start: None, sent_window: 0, last_op: String::new(), recent_ops: Vec::new() }
     }
 
+    /// Test hook: a logged-in session on a loopback socket, both ISAAC
+    /// streams seeded by the caller (the fake server mirrors them).
+    #[cfg(test)]
+    pub(crate) fn attach_for_test(&mut self, stream: TcpStream, outgoing: [i32; 4], incoming: [i32; 4]) {
+        self.stream = Some(stream);
+        self.outgoing = Some(Isaac::new(outgoing));
+        self.incoming = Some(Isaac::new(incoming));
+    }
+
     /// Read-only view of the ring for Io error messages.
     fn ops_ring(&self) -> String {
         self.recent_ops.join(",")

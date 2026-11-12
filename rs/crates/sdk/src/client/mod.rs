@@ -50,6 +50,9 @@ const KEEPALIVE_TICKS: u64 = 50;
 /// fires first keeps the session alive.
 const KEEPALIVE_WALL: Duration = Duration::from_secs(3);
 const DRAIN_PER_PUMP: usize = 256;
+/// Frame bound of one `catch_up`: a 45-tick backlog is a few hundred
+/// frames; the bound only guards a server that never stops talking.
+const CATCH_UP_CAP: usize = 4096;
 /// Trail marks kept for the failure dossier (one per moved/ticked pump).
 const TRAIL_CAP: usize = 256;
 
@@ -409,6 +412,27 @@ impl Bot {
             }
         }
         Ok(frames)
+    }
+
+    /// Read every frame the server already sent, never blocking. After
+    /// a stretch without pumping (a slow plan answer: 0.2-2.7 s live,
+    /// i.e. 3-45 dev ticks) the socket holds ticks that predate the next
+    /// send; a tick watch started before reading them counts them as
+    /// its own. Returns the ticks drained. No hooks: the next pump runs
+    /// them.
+    pub(crate) fn catch_up(&mut self) -> Result<u64> {
+        let before = self.world.ticks;
+        let mut drained = 0usize;
+        while drained < CATCH_UP_CAP && self.conn.available()? {
+            self.keepalive_if_due()?;
+            let frame = self.conn.recv()?;
+            self.feed(&frame)?;
+            drained += 1;
+        }
+        if drained > 0 {
+            self.note_trail();
+        }
+        Ok(self.world.ticks.saturating_sub(before))
     }
 
     pub fn combat_level(&self) -> Option<u8> {
