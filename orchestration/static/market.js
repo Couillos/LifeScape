@@ -26,7 +26,7 @@ async function loadList() {
     const payload = await getJson('/api/market/list?limit=2000&with_orders=1');
     // `with_orders=1` keeps every good with at least one open order (bid
     // or ask), sorted server-side by descending 24h volume, then by the
-    // number of open orders.
+    // open quantity (remaining units, bids and asks).
     if (payload.ok) items = payload.items;
   } catch (e) { /* daemon down: keep the last list */ }
   if (selected === null && items.length) selected = items[0].item;

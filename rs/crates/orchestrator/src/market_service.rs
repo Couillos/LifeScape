@@ -537,8 +537,16 @@ impl MarketService {
             }
             groups.entry(row.name.clone()).or_default().push((row.id, row.shop_price));
         }
-        let open_orders: std::collections::HashMap<i64, usize> =
-            engine.books.iter().map(|(item, book)| (*item, book.orders().len())).filter(|(_, count)| *count > 0).collect();
+        // Open orders and open quantity (remaining units, both sides) per form.
+        let open_orders: std::collections::HashMap<i64, (usize, i64)> = engine
+            .books
+            .iter()
+            .map(|(item, book)| {
+                let orders = book.orders();
+                (*item, (orders.len(), orders.iter().map(|order| order.remaining).sum::<i64>()))
+            })
+            .filter(|(_, (count, _))| *count > 0)
+            .collect();
         drop(engine);
         // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
         let traded: std::collections::HashSet<i64> = if traded_only {
@@ -554,7 +562,8 @@ impl MarketService {
             if traded_only && !members.iter().any(|member| traded.contains(&member.0)) {
                 continue;
             }
-            let order_count: usize = members.iter().filter_map(|member| open_orders.get(&member.0)).sum();
+            let order_count: usize = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(count, _)| count).sum();
+            let open_qty: i64 = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(_, qty)| qty).sum();
             if with_orders && order_count == 0 {
                 continue;
             }
@@ -588,18 +597,19 @@ impl MarketService {
                 }
                 _ => 0.0,
             };
-            items.push((name.clone(), canonical, reference, change, volume, order_count));
+            items.push((name.clone(), canonical, reference, change, volume, order_count, open_qty));
         }
-        // Descending 24h volume, then the busiest books, then the name.
+        // Descending 24h volume, then the largest open quantity, then the name.
         items.sort_by(|left, right| {
-            right.4.cmp(&left.4).then(right.5.cmp(&left.5)).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
+            right.4.cmp(&left.4).then(right.6.cmp(&left.6)).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
         });
         let rows: Vec<Value> = items
             .into_iter()
             .take(limit)
-            .map(|(name, id, reference, change, volume, order_count)| {
+            .map(|(name, id, reference, change, volume, order_count, open_qty)| {
                 object(vec![
                     ("orders", Value::Int(order_count as i64)),
+                    ("open_qty", Value::Int(open_qty)),
                     ("item", Value::Int(id)),
                     ("name", str_value(&name)),
                     ("price", Value::Int(reference)),

@@ -851,5 +851,6 @@ fn list_with_orders_shows_every_resting_book() {
     assert_eq!(rows.len(), 1, "the resting ask lists its good: {rows:?}");
     assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
     assert_eq!(rows[0].get("orders").as_i64(), Some(1));
+    assert_eq!(rows[0].get("open_qty").as_i64(), Some(5), "open quantity, not order count");
     cleanup(&path);
 }
