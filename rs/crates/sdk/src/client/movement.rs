@@ -41,6 +41,16 @@ pub struct DebugReport {
 }
 
 impl Bot {
+    /// Deadline of a walk of `timeout` ticks, counted from the server's
+    /// tick, not a stale one: frames already received (ticks the server
+    /// sent while a slow plan blocked the script) are read first. Live
+    /// 2026-11-12: an 18 s refused plan left `world.ticks` 338 behind, the
+    /// next 90-tick walk was born expired and "timed out" without a step.
+    pub(crate) fn walk_deadline(&mut self, timeout: u64) -> Result<u64> {
+        self.catch_up()?;
+        Ok(self.world.ticks + timeout)
+    }
+
     pub(crate) fn send_and_await(&mut self, leg: &[(i32, i32)], run: bool, deadline: u64, immediate: bool) -> Result<()> {
         if leg.is_empty() {
             return Ok(());
@@ -474,6 +484,46 @@ mod tests {
     /// answer: live, plans of 0.8 s+ = 13+ dev ticks were "refused" 93%
     /// of the time) predate the walk: they are no stall. 20 idle ticks
     /// queued before the send, then two east steps: the leg arrives.
+    /// A walk deadline counts from the server's tick: 20 ticks queued
+    /// while the script was blocked are read before the budget starts.
+    #[test]
+    fn walk_deadline_counts_from_the_server_tick() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        use crate::isaac::Isaac;
+
+        let (client_seed, server_seed) = ([11, 22, 33, 44], [55, 66, 77, 88]);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+        let port = listener.local_addr().expect("local addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_read_timeout(Some(Duration::from_secs(2))).expect("server read timeout");
+            let mut cipher = Isaac::new(server_seed);
+            let mut queued = Vec::new();
+            for _ in 0..20 {
+                // Idle PLAYER_INFO tick (opcode 167).
+                queued.extend([167u8.wrapping_add(cipher.next_int() as u8), 0, 2, 0x00, 0x00]);
+            }
+            sock.write_all(&queued).expect("backlog written");
+            let mut probe = [0u8; 16];
+            let _ = sock.read(&mut probe);
+        });
+        let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+        client.set_read_timeout(Some(Duration::from_millis(500))).expect("client read timeout");
+        let mut bot = Bot::new("127.0.0.1", port, ".", ".");
+        bot.conn.attach_for_test(client, client_seed, server_seed);
+        bot.last_keepalive = Some(Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        std::thread::sleep(Duration::from_millis(100));
+        let stale = bot.world.ticks;
+        let deadline = bot.walk_deadline(90).expect("deadline");
+        assert_eq!(deadline, stale + 20 + 90, "backlog read before the budget starts");
+        drop(bot);
+        server.join().expect("server thread");
+    }
+
     #[test]
     fn walk_leg_ignores_ticks_buffered_before_send() {
         let (outcome, end) = fake_leg(20, vec![true, true]);

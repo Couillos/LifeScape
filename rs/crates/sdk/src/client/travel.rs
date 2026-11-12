@@ -707,7 +707,8 @@ impl Bot {
         timings: PlanTimings,
         timeout: u64,
     ) -> Result<()> {
-        let deadline = self.world.ticks + timeout;
+        // Counted from the server's tick: the plan just blocked us.
+        let deadline = self.walk_deadline(timeout)?;
         self.log(&format!(
             "nav timing options={}ms plan={}ms{}",
             timings.options_ms,
