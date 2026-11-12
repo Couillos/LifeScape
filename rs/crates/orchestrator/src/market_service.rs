@@ -281,6 +281,7 @@ impl MarketService {
                 reopened += 1;
             }
         }
+        drop(store);
         crate::logln!(
             "market reload: {} resting orders back in {} books ({reopened} stranded matched reopened)",
             rows.len(),
@@ -705,7 +706,7 @@ impl MarketService {
             }
         };
         let order_key = store_id as u64;
-        let (matched, rests) = {
+        let placed = {
             let mut engine = self.lock_engine();
             let book = engine.books.entry(item).or_insert_with(Book::new);
             // Pre-match snapshot for the priority-preserving relist: the
@@ -722,12 +723,17 @@ impl MarketService {
                             (fill, rows)
                         })
                         .collect();
-                    (matched, rests)
+                    Ok((matched, rests))
                 }
-                Err(error) => {
-                    self.lock_store().cancel_order(store_id, clock).ok();
-                    return Self::err(error.to_string());
-                }
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        // The store is touched only once the engine guard is gone.
+        let (matched, rests) = match placed {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.lock_store().cancel_order(store_id, clock).ok();
+                return Self::err(error);
             }
         };
         let fills: Vec<lifescape_market::Fill> = matched.iter().map(|(fill, _)| fill.clone()).collect();
@@ -800,20 +806,24 @@ impl MarketService {
             return Self::err(error.to_string());
         }
         let clock = Self::now_clock();
-        {
+        // Lock order: engine and store are never held together (live
+        // 2026-11-12: this amend held the store while taking the engine,
+        // `op_deal_arrived` the reverse — the whole market froze). The
+        // remaining quantity is read under the engine alone.
+        let remaining = {
             let mut engine = self.lock_engine();
             let Some(book) = engine.books.get_mut(&item) else {
                 return Self::err(format!("unknown order {order_id}"));
             };
-            if book.remaining(order_id as u64).is_none() {
-                return Self::err(format!("order {order_id} already filled"));
+            match book.remaining(order_id as u64) {
+                Some(left) => left,
+                None => return Self::err(format!("order {order_id} already filled")),
             }
-        }
+        };
         let store = self.lock_store();
         if store.cancel_order(order_id, clock).is_err() {
             return Self::err(format!("order {order_id} is closed"));
         }
-        let remaining = self.lock_engine().books.get(&item).and_then(|book| book.remaining(order_id as u64)).unwrap_or(row.remaining);
         let replacement = match store.place_order(&NewOrder {
             account: account.clone(),
             side: row.side,

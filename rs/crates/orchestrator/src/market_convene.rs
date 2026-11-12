@@ -401,13 +401,14 @@ impl MarketService {
         let both = marks.0 && marks.1;
         drop(engine);
         if both {
-            let mut engine = self.lock_engine();
-            if let Some(deal) = engine.deals.get_mut(&(deal_id as u64)) {
-                if deal.transition(DealStatus::BothArrived, None).is_ok() {
-                    self.lock_store()
-                        .set_deal_status(deal_id, lifescape_store::DealStatus::BothArrived, "", Self::now_clock())
-                        .ok();
-                }
+            // Engine first, released before the store (never both held:
+            // the amend path takes them in the other order).
+            let moved = {
+                let mut engine = self.lock_engine();
+                engine.deals.get_mut(&(deal_id as u64)).is_some_and(|deal| deal.transition(DealStatus::BothArrived, None).is_ok())
+            };
+            if moved {
+                self.lock_store().set_deal_status(deal_id, lifescape_store::DealStatus::BothArrived, "", Self::now_clock()).ok();
             }
             return object(vec![("ok", Value::Bool(true)), ("deal", Value::Int(deal_id)), ("status", str_value("both_arrived"))]);
         }
