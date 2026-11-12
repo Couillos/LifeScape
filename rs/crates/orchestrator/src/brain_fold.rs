@@ -11,7 +11,7 @@ use lifescape_json::Value;
 use lifescape_planner::{needs_replan, replan_node};
 
 use crate::brain::{load_life, push_history, save_life};
-use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, rescue_replan_cause, TravelFold};
+use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, is_usage_error, rescue_replan_cause, TravelFold};
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
 
@@ -59,15 +59,16 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     // even with no task report detail; consumed here (dossier on disk).
     // A travel failure also reads here (typed NoRoute vocabulary), and
     // bans the method below instead of re-locking it.
-    let (rescue, travel): (Option<lifescape_planner::ReplanCause>, bool) = job
+    let (rescue, travel, usage): (Option<lifescape_planner::ReplanCause>, bool, bool) = job
         .inner
         .try_lock()
         .map(|inner| {
             let cause = inner.last_error.as_ref().and_then(rescue_replan_cause);
             let travel = inner.last_error.as_ref().is_some_and(is_travel_failure);
-            (cause, travel)
+            let usage = inner.last_error.as_ref().is_some_and(is_usage_error);
+            (cause, travel, usage)
         })
-        .unwrap_or((None, false));
+        .unwrap_or((None, false, false));
     life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
     let kind = life.nodes[index].kind.clone();
     match stop.as_str() {
@@ -133,6 +134,27 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             // shopping list: count it as a failure so the 3-strike rule
             // bounds the replan-relaunch loop instead of spinning it.
             let effective = if other == "blocked" && missing.is_empty() { "failed" } else { other };
+            // Contrat cassé (`usage: ...`) : replanifier à l'identique ne
+            // guérira jamais (même méthode → même Usage). Abandon typé
+            // immédiat, jamais de relance en boucle.
+            if usage && effective == "failed" {
+                let id = life.nodes[index].id.clone();
+                let method = life.nodes[index].method.clone().unwrap_or_else(|| "?".to_string());
+                job.inner.try_lock().map(|mut inner| inner.last_error = None).ok();
+                life.nodes[index].status = lifescape_planner::NodeStatus::Abandoned;
+                if life.active.as_deref() == Some(id.as_str()) {
+                    life.active = None;
+                }
+                push_history(&mut life, &id, "abandoned");
+                println!("brain {}: {id} usage error for {method}, abandoning (contract, never retries)", job.account);
+                if save_life(&life).is_err() {
+                    println!("brain {}: life save failed, report dropped", job.account);
+                    return;
+                }
+                println!("brain {}: folded report node={} stop={}", job.account, node_id, report.get("stop").as_str().unwrap_or("?"));
+                let _ = orch;
+                return;
+            }
             // Voyage prouvé impossible : la méthode bannie ne repart
             // jamais telle quelle (replan sur l'alternative suivante,
             // abandon typé quand il n'en reste aucune).

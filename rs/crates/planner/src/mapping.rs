@@ -20,8 +20,10 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
             NodeKind::ReachLevel { level, .. } => *level,
             _ => 0,
         };
-        let mut head = vec!["--level".to_string(), "fishing".to_string()];
+        let mut head = Vec::new();
         if level >= 2 {
+            head.push("--level".to_string());
+            head.push("fishing".to_string());
             head.push(level.to_string());
         }
         // No resource positional: the gatherer works the best tier at or

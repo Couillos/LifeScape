@@ -445,6 +445,14 @@ pub fn is_travel_failure(last_error: &Value) -> bool {
         .any(|mark| message.contains(mark))
 }
 
+/// Erreur de contrat (`usage: ...`) : la commande est mal formée,
+/// replanifier à l'identique ne guérira jamais. À abandonner typé,
+/// pas à réessayer (ex : `--level` sans nombre relancé en boucle).
+pub fn is_usage_error(last_error: &Value) -> bool {
+    let message = last_error.get("message").as_str().unwrap_or("").to_lowercase();
+    message.starts_with("usage:") || message.contains("usage: ")
+}
+
 /// Ce que le repli voyage décide : réessayer (il reste une
 /// alternative) ou abandon typé (plus aucun exécutable).
 pub enum TravelFold {
@@ -560,7 +568,7 @@ pub(crate) fn combat_step(life: &mut Life, position: usize, combat: u8) -> Comba
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, combat_step, is_protected_tool, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked, CombatStep};
+    use super::{choose_money, combat_step, is_protected_tool, is_usage_error, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked, CombatStep};
     use lifescape_json::{object, str_value};
     use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
@@ -892,5 +900,14 @@ mod tests {
         assert!(node.method.is_none(), "verrou effacé");
         assert!(!node.alternatives.iter().any(|alt| alt.method == "gather:fishing/raw_sardine"), "bannie");
         assert!(matches!(fold_travel_failure(&mut node, "gather:fishing/raw_shrimp"), TravelFold::NoRoute(method) if method == "gather:fishing/raw_shrimp"), "vide = typé");
+    }
+
+    #[test]
+    fn usage_error_never_replans_identically() {
+        let usage = object(vec![("message", str_value("usage: fishing [count|spot...]"))]);
+        assert!(is_usage_error(&usage), "contrat cassé détecté");
+        let plain = object(vec![("message", str_value("died"))]);
+        assert!(!is_usage_error(&plain), "un échec franc n'est pas un contrat");
+        assert!(!is_usage_error(&lifescape_json::Value::Null), "sans erreur, rien");
     }
 }
