@@ -322,6 +322,18 @@ pub fn tutorial_needed(live: &Value) -> bool {
     if let Some(pos) = live.get("position").as_arr() {
         if pos.len() == 3 {
             if let (Some(x), Some(z)) = (pos[1].as_i64(), pos[2].as_i64()) {
+                // Rectangles, pas labels : l'île n'a pas de label propre
+                // partout (ex : (3072,3133) lu "Wizards' Tower").
+                // Surface : x 3050-3160, z 3070-3140 (hors mainland :
+                // Draynor z≥3264, Port Sarim z≥3215, Lumbridge x≥3222,
+                // Rimmington x≤3050). Souterrain : mine (3079,9505),
+                // rat pit (3107-3110,9510-9519).
+                if (3050..=3160).contains(&x) && (3070..=3140).contains(&z) {
+                    return true;
+                }
+                if (3070..=3115).contains(&x) && (9495..=9530).contains(&z) {
+                    return true;
+                }
                 if let Some((name, _)) = crate::zones::zone_name(x as i32, z as i32) {
                     return name == "Tutorial Island";
                 }
@@ -809,6 +821,24 @@ mod tests {
             lifescape_json::Value::Int(3093),
         ]))]);
         assert!(tutorial_needed(&pos_island), "la tuile 3104,3093 est l'île");
+        let pos_iron = object(vec![("position", lifescape_json::Value::Arr(vec![
+            lifescape_json::Value::Int(0),
+            lifescape_json::Value::Int(3072),
+            lifescape_json::Value::Int(3133),
+        ]))]);
+        assert!(tutorial_needed(&pos_iron), "la tuile 3072,3133 est l'île (pas Wizards' Tower)");
+        let pos_pit = object(vec![("position", lifescape_json::Value::Arr(vec![
+            lifescape_json::Value::Int(0),
+            lifescape_json::Value::Int(3107),
+            lifescape_json::Value::Int(9512),
+        ]))]);
+        assert!(tutorial_needed(&pos_pit), "la fosse aux rats est l'île");
+        let pos_draynor = object(vec![("position", lifescape_json::Value::Arr(vec![
+            lifescape_json::Value::Int(0),
+            lifescape_json::Value::Int(3090),
+            lifescape_json::Value::Int(3264),
+        ]))]);
+        assert!(!tutorial_needed(&pos_draynor), "Draynor n'est pas l'île");
         let pos_main = object(vec![("position", lifescape_json::Value::Arr(vec![
             lifescape_json::Value::Int(0),
             lifescape_json::Value::Int(3098),

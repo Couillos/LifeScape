@@ -235,4 +235,19 @@ mod tests {
         let twin = Arc::clone(&world);
         assert_eq!(world.get(3091, 3235, 0), twin.get(3091, 3235, 0));
     }
+
+    #[test]
+    fn tmp_dump_grass_flags2() {
+        let Some(world) = test_world() else { return };
+        for z in (3214..=3224).rev() {
+            let mut line = format!("{z:4} ");
+            for x in 3218..=3228 {
+                line.push_str(&format!("{:08x} ", world.get(x, z, 0)));
+            }
+            eprintln!("{line}");
+        }
+        eprintln!("loc_at 3074,3133: {:?}", world.loc_at(3074, 3133, 0));
+        eprintln!("loc_at 3070,3132: {:?}", world.loc_at(3070, 3132, 0));
+    }
 }
+
