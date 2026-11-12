@@ -5,7 +5,7 @@
 //! script only finds where to exploit it.
 
 use crate::cost::{choose_market_or_farm, cost_farm, cost_market_buy};
-use crate::model::{Alternative, GoalKind, Node, NodeKind, Profile};
+use crate::model::{Alternative, GoalKind, Node, NodeKind, NodeStatus, Profile};
 
 /// Public numbers the brain hands over at resolve time (market
 /// reference, published yields, trend): never another bot's state.
@@ -23,6 +23,12 @@ pub struct ReadyCtx {
     /// cannot cover is dropped before the choice (same coverage rule
     /// as the carnet, planner-side).
     pub coins: i64,
+    /// Carried item debug names (live inventory the brain already
+    /// reads): a gather method whose tool is missing is dropped
+    /// before assignment unless the pack can buy it.
+    pub tools: Vec<String>,
+    /// False on `--no-shop` runs: no tool is buyable, only carried.
+    pub allow_shop: bool,
 }
 
 impl ReadyCtx {
@@ -37,7 +43,115 @@ impl ReadyCtx {
             yield_per_6000: 200.0,
             xp_per_6000: 4000.0,
             coins: 0,
+            tools: Vec::new(),
+            allow_shop: true,
         }
+    }
+}
+
+/// One carried tool a gather method needs: the cheapest canonical
+/// buyable of its family (as `kit::tools::blocked_tool` names it),
+/// plus the consumable bait when the tier burns one (the script funds
+/// bait from the catch, so shop coverage gates it like the tool).
+pub struct ToolNeed {
+    pub tool: &'static str,
+    pub bait: Option<&'static str>,
+}
+
+/// Required carried gear per gather method. Mirrors the `kit::tools`
+/// ranks (best-first orders) and the fishing tiers (tool + bait per
+/// product); the minimum duplicated planner-side, names only.
+pub fn required_tool(method: &str) -> Option<ToolNeed> {
+    if let Some(product) = method.strip_prefix("gather:fishing/") {
+        let need = match product {
+            "raw_shrimp" | "raw_anchovies" => ToolNeed { tool: "net", bait: None },
+            "raw_sardine" | "raw_herring" | "raw_pike" => {
+                ToolNeed { tool: "fishing_rod", bait: Some("fishing_bait") }
+            }
+            "raw_trout" | "raw_salmon" => ToolNeed { tool: "fly_fishing_rod", bait: Some("feather") },
+            "raw_lobster" => ToolNeed { tool: "lobster_pot", bait: None },
+            "raw_tuna" | "raw_swordfish" => ToolNeed { tool: "harpoon", bait: None },
+            _ => return None,
+        };
+        Some(need)
+    } else if method.starts_with("gather:mining/") {
+        Some(ToolNeed { tool: "bronze_pickaxe", bait: None })
+    } else if method.starts_with("gather:woodcut/") {
+        Some(ToolNeed { tool: "bronze_axe", bait: None })
+    } else {
+        None
+    }
+}
+
+/// Every name that satisfies `tool`: the whole `kit::tools` family
+/// (any carried pickaxe mines, any carried axe chops), the single
+/// name otherwise (a harpoon never catches sardines).
+fn tool_family(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "bronze_pickaxe" => &[
+            "rune_pickaxe",
+            "adamant_pickaxe",
+            "mithril_pickaxe",
+            "steel_pickaxe",
+            "iron_pickaxe",
+            "bronze_pickaxe",
+        ],
+        "bronze_axe" => &[
+            "rune_axe",
+            "adamant_axe",
+            "mithril_axe",
+            "black_axe",
+            "steel_axe",
+            "iron_axe",
+            "bronze_axe",
+        ],
+        "net" => &["net"],
+        "fishing_rod" => &["fishing_rod"],
+        "fly_fishing_rod" => &["fly_fishing_rod"],
+        "lobster_pot" => &["lobster_pot"],
+        "harpoon" => &["harpoon"],
+        "fishing_bait" => &["fishing_bait"],
+        "feather" => &["feather"],
+        _ => &[],
+    }
+}
+
+fn tool_price(item: &str) -> i64 {
+    lifescape_gamedata::objs_by_name(item).into_iter().next().map(|entry| entry.price.max(1)).unwrap_or(i64::MAX)
+}
+
+/// One item the pack holds or can fund: carried (any family rank)
+/// or a purchasable shop stock the wallet covers. Ground spawns do
+/// not count: no script path picks up a ground-spawned tool (the
+/// recoveries reattach, rebuy or restore from the bank). Bait rides
+/// the same gate as the tool.
+fn gear_ok(item: &str, ctx: &ReadyCtx) -> bool {
+    if tool_family(item).iter().any(|name| ctx.tools.iter().any(|held| held.eq_ignore_ascii_case(name))) {
+        return true;
+    }
+    use lifescape_gamedata::item_sources::ItemSource;
+    let stocked = lifescape_gamedata::item_sources::sources_for_name(item)
+        .iter()
+        .any(|source| matches!(source, ItemSource::Shop { .. }));
+    ctx.allow_shop && stocked && ctx.coins >= tool_price(item)
+}
+
+/// True when the bot can work `method` now: no gear needed, or the
+/// tool (and bait) carried or fundable.
+pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
+    match required_tool(method) {
+        None => true,
+        Some(need) => gear_ok(need.tool, ctx) && need.bait.is_none_or(|bait| gear_ok(bait, ctx)),
+    }
+}
+
+/// Safe fallback for an unworkable reach tranche: shrimp on the net
+/// (level 1, no bait), the only tier that needs nothing funded.
+fn safe_fallback(skill: &str, method: &str) -> Option<&'static str> {
+    if skill == "fishing" && method != "gather:fishing/raw_shrimp" {
+        Some("gather:fishing/raw_shrimp")
+    } else {
+        None
     }
 }
 
@@ -528,7 +642,20 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
                 }
             }
             node.alternatives.sort_by_key(|alt| alt.est_ticks);
-            node.method = node.alternatives.first().map(|alt| alt.method.clone());
+            // A gather leg without its tool and without the coins to
+            // buy it never assigns (t04: rod-less sardines): the first
+            // workable alternative wins instead.
+            node.method = node
+                .alternatives
+                .iter()
+                .find(|alt| method_feasible(&alt.method, ctx))
+                .map(|alt| alt.method.clone());
+            if node.method.is_none() {
+                let missing = node.alternatives.first().and_then(|first| required_tool(&first.method));
+                if let Some(need) = missing {
+                    node.status = NodeStatus::Blocked { reason: format!("missing:{}", need.tool) };
+                }
+            }
         }
         NodeKind::SpaceCleanup => {
             node.alternatives = vec![Alternative {
@@ -540,7 +667,52 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
         }
         _ => {
             if node.method.is_none() {
-                node.method = node.alternatives.first().map(|alt| alt.method.clone());
+                // The tranche method may name gear the pack lacks
+                // (sardines want a rod): only a workable method locks,
+                // the safe fallback (shrimp on the net) preferred over
+                // a typed block, the block over a doomed dispatch.
+                let workable = node.alternatives.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
+                let picked = workable.or_else(|| {
+                    let first = node.alternatives.first()?.method.clone();
+                    let skill = match &node.kind {
+                        NodeKind::ReachLevel { skill, .. } => skill.clone(),
+                        _ => String::new(),
+                    };
+                    let safe = safe_fallback(&skill, &first)?;
+                    if method_feasible(safe, ctx) {
+                        node.alternatives.push(Alternative { method: safe.to_string(), est_ticks: 6000, est_coins: 0 });
+                        Some(safe.to_string())
+                    } else {
+                        None
+                    }
+                });
+                match picked {
+                    Some(method) => node.method = Some(method),
+                    // No workable method and no fallback: block typed so
+                    // the obtain chain funds the tool (never a doomed
+                    // dispatch, never a silent skip). Bare nodes with no
+                    // alternative at all keep the old quiet None. When a
+                    // safe fallback was attempted but is short of gear
+                    // too, its tool is the missing one (the cheaper fund:
+                    // a net unlocks shrimp when the rod stays out of
+                    // reach).
+                    None => {
+                        if let Some(first) = node.alternatives.first() {
+                            let skill = match &node.kind {
+                                NodeKind::ReachLevel { skill, .. } => skill.clone(),
+                                _ => String::new(),
+                            };
+                            let missing = match safe_fallback(&skill, &first.method) {
+                                Some(safe) if !method_feasible(safe, ctx) => required_tool(safe),
+                                _ => required_tool(&first.method),
+                            }
+                            .map(|need| need.tool.to_string())
+                            .unwrap_or_else(|| "tool".to_string());
+                            node.method = None;
+                            node.status = NodeStatus::Blocked { reason: format!("missing:{missing}") };
+                        }
+                    }
+                }
             }
             for alt in &mut node.alternatives {
                 if alt.est_ticks == 0 {
@@ -713,5 +885,66 @@ mod tests {
         let mut net = expand_goal(&GoalKind::Obtain { item: "net".to_string(), count: 1 }, &profile());
         resolve_ready(&mut net[0], &ctx);
         assert!(matches!(net[0].method.as_deref(), Some("shop:buy") | Some("market:buy")), "nets never farm, got {:?}", net[0].method);
+    }
+
+    /// t04: a net in the pack and no coins, handed sardines, never
+    /// touches the rod it lacks — the planner drops the tranche for
+    /// the workable one (or blocks typed when nothing works).
+    #[test]
+    fn tool_gate_drops_unworkable_tranches() {
+        use super::{method_feasible, required_tool};
+        use crate::model::NodeStatus;
+        fn sardine_node() -> Node {
+            let mut node = Node::new(
+                "n1",
+                NodeKind::ReachLevel { skill: "fishing".to_string(), level: 5 },
+                Vec::new(),
+                5,
+            );
+            node.alternatives.push(crate::model::Alternative {
+                method: "gather:fishing/raw_sardine".to_string(),
+                est_ticks: 0,
+                est_coins: 0,
+            });
+            node
+        }
+        // The table names rod plus bait for sardines, net alone for shrimp.
+        let need = required_tool("gather:fishing/raw_sardine").expect("sardines need gear");
+        assert_eq!((need.tool, need.bait), ("fishing_rod", Some("fishing_bait")));
+        assert_eq!(required_tool("gather:fishing/raw_shrimp").expect("shrimp needs gear").tool, "net");
+        assert!(required_tool("fight:melee/cows").is_none(), "fights need no gear");
+
+        // Rod-less and broke: sardines unworkable, shrimp on the
+        // carried net takes the lock instead.
+        let mut with_net = sardine_node();
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.tools = vec!["net".to_string()];
+        assert!(!method_feasible("gather:fishing/raw_sardine", &ctx), "no rod, no bait, no coins");
+        assert!(method_feasible("gather:fishing/raw_shrimp", &ctx), "the net works");
+        resolve_ready(&mut with_net, &ctx);
+        assert_eq!(with_net.method.as_deref(), Some("gather:fishing/raw_shrimp"), "safe fallback wins, got {:?}", with_net.method);
+
+        // Same empty pack but funded: the rod and the bait are shop
+        // stock, so the tranche stays (the script bootstraps the buy).
+        let mut funded = sardine_node();
+        let mut rich = ReadyCtx::blind(0.5);
+        rich.coins = 100;
+        assert!(method_feasible("gather:fishing/raw_sardine", &rich), "rod plus bait fundable");
+        resolve_ready(&mut funded, &rich);
+        assert_eq!(funded.method.as_deref(), Some("gather:fishing/raw_sardine"), "buyable gear keeps the tranche");
+
+        // Nothing carried, nothing funded, no shop: typed block naming
+        // the missing tool (the obtain chain funds it), never Usage,
+        // never a silent skip.
+        let mut broke = sardine_node();
+        let mut dry = ReadyCtx::blind(0.5);
+        dry.allow_shop = false;
+        resolve_ready(&mut broke, &dry);
+        assert!(broke.method.is_none(), "no method locks, got {:?}", broke.method);
+        assert!(
+            matches!(&broke.status, NodeStatus::Blocked { reason } if reason == "missing:net"),
+            "blocked names the net, got {:?}",
+            broke.status
+        );
     }
 }

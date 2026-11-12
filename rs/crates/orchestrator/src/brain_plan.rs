@@ -229,6 +229,12 @@ pub(crate) fn worn_names(job: &Job) -> Vec<String> {
     live_names(job, "worn")
 }
 
+/// Carried debug names (live pack the brain already reads) for the
+/// planner tool gate: only positive counts ride along.
+pub(crate) fn carried_tools(job: &Job) -> Vec<String> {
+    live_names(job, "inv")
+}
+
 /// Live carried + banked stacks (debug name, summed quantity) for the flip pick.
 pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);

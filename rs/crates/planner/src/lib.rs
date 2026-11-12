@@ -30,7 +30,7 @@ pub use combat::{
     CombatGate, CombatLaunch,
 };
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
-pub use expand::{expand_goal, resolve_ready};
+pub use expand::{expand_goal, method_feasible, required_tool, resolve_ready};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

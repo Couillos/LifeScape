@@ -19,7 +19,7 @@ use lifescape_planner::{
 };
 
 use crate::brain_fold::handle_report;
-use crate::brain_plan::{bank_types, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep, DeadGraph, TutorialStep, revive_dead_graph, tutorial_step};
+use crate::brain_plan::{bank_types, carried_tools, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep, DeadGraph, TutorialStep, revive_dead_graph, tutorial_step};
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
@@ -467,7 +467,10 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     // Own wallet gates the market leg (same coverage rule as the
     // carnet): a broke bot farms instead of placing doomed orders.
+    // Carried tools gate the gather legs the same way (t04: rod-less
+    // sardines never dispatch).
     ctx.coins = holdings_count(job, "coins");
+    ctx.tools = carried_tools(job);
     {
         let node = &mut life.nodes[position];
         resolve_ready(node, &ctx);
