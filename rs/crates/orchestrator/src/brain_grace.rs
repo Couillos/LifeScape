@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 //! Uncounted retries (split from `brain.rs`, rule 4): an active node
 //! whose worker reads idle without a report after a daemon restart or an
-//! operator `unload`/`close` is a stop, never a crash.
+//! operator `unload`/`close`/`open` (redeploy) is a stop, never a crash.
+//! A stop flag covers the run it interrupted only: the next launch clears
+//! it (`brain::note_launch`), so a later crash still counts.
 
 /// True the first time this daemon finds `account`'s active node with an
 /// idle worker and no report: after a daemon restart every restored
@@ -18,8 +20,8 @@ fn operator_stops() -> &'static std::sync::Mutex<std::collections::HashSet<Strin
     STOPS.get_or_init(Default::default)
 }
 
-/// The operator unloaded or closed `account`'s worker: its active node
-/// goes idle without a report, which is a stop, never a crash.
+/// The operator unloaded, closed or (re)opened `account`'s worker: its
+/// active node goes idle without a report, which is a stop, never a crash.
 pub fn note_operator_stop(account: &str) {
     operator_stops().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string());
 }
@@ -27,4 +29,17 @@ pub fn note_operator_stop(account: &str) {
 /// True (once) when the idle worker follows an operator stop.
 pub fn take_operator_stop(account: &str) -> bool {
     operator_stops().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(account)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{note_operator_stop, take_operator_stop};
+
+    /// One stop excuses one report-less idle, never two.
+    #[test]
+    fn a_stop_flag_is_taken_once() {
+        note_operator_stop("grace_probe");
+        assert!(take_operator_stop("grace_probe"));
+        assert!(!take_operator_stop("grace_probe"), "a later crash counts");
+    }
 }

@@ -1,0 +1,151 @@
+#![forbid(unsafe_code)]
+//! Stuck graphs in the brain (split from `brain.rs`, rule 4). A stuck
+//! spell is the run of passes where nothing is launchable: it opens with
+//! one log line and one `graph: stuck` history entry (causes kept in the
+//! file), closes the goal once (done when the live levels meet it, stuck
+//! otherwise) and draws the next one. With no goal left, the spell waits
+//! for the lifecycle's cooldown revive (`revive_stuck`); past its cap the
+//! spell ends `graph: final` and the operator decides (rule 7).
+//!
+//! Live 2026-11-12 (bh99tw2f, bbkjz2vk): the spell was re-noted on every
+//! pass (the goal entry hid the stuck one: one log line and two history
+//! entries every 4 s), every goal reached alongside an older abandoned
+//! node was tagged stuck (fishing 15 done, then never trained again),
+//! and with every skill "stuck" the bots idled forever.
+
+use lifescape_json::Value;
+use lifescape_planner::{GoalKind, HistoryEntry, Life, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+
+use crate::brain::push_history;
+
+/// History outcome that ends a spell for good (revive cap reached).
+pub const FINAL: &str = "final";
+
+/// State of the stuck spell read back from the history: the last entry
+/// that is not goal bookkeeping decides.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Spell {
+    /// No spell open: the graph just turned stuck.
+    Fresh,
+    /// A spell opened at this unix second, waiting for the revive.
+    Waiting(i64),
+    /// The revive cap was reached: the operator decides.
+    Final,
+}
+
+pub fn spell(history: &[HistoryEntry]) -> Spell {
+    match history.iter().rev().find(|entry| entry.node != "goal") {
+        Some(entry) if entry.node == "graph" && entry.outcome == "stuck" => Spell::Waiting(entry.ended),
+        Some(entry) if entry.node == "graph" && entry.outcome == FINAL => Spell::Final,
+        _ => Spell::Fresh,
+    }
+}
+
+/// True when the live snapshot already meets the goal (skill goals: every
+/// skill at its target). Other goals answer from the graph, never here.
+pub fn goal_met(goal: &GoalKind, live: &Value) -> bool {
+    match goal {
+        GoalKind::MaxSkills { skills, level } => {
+            !skills.is_empty() && skills.iter().all(|skill| crate::brain_succession::live_level(live, skill) >= *level)
+        }
+        _ => false,
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
+/// Wall seconds to D1 ticks (60 ms dev, 600 ms prod).
+pub fn seconds_to_ticks(seconds: i64) -> u64 {
+    (seconds.max(0) as u64).saturating_mul(1000) / lifescape_sdk::waits::tick_ms().max(1)
+}
+
+/// One stuck pass. Returns true when the life changed (save it).
+pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> bool {
+    match spell(&life.history) {
+        Spell::Final => false,
+        Spell::Fresh => {
+            let causes: Vec<String> = life
+                .nodes
+                .iter()
+                .filter(|node| abandoned.contains(&node.id))
+                .map(|node| format!("{}={}", node.id, if node.last_error.is_empty() { "?" } else { node.last_error.as_str() }))
+                .collect();
+            crate::logln!("brain {}: graph stuck, nothing left to run; abandoned: {}", life.account, causes.join(" | "));
+            push_history(life, "graph", "stuck");
+            // A goal the bot already meets is done, whatever older
+            // abandoned nodes linger in the graph.
+            let stuck = !goal_met(&life.goal, live);
+            match crate::brain_succession::succeed_goal(life, live, stuck) {
+                Some(label) => {
+                    crate::logln!("brain {}: goal {} -> next goal {label}", life.account, if stuck { "stuck" } else { "done" });
+                    lifescape_planner::normalize(life);
+                }
+                None => crate::logln!(
+                    "brain {}: no goal left to draw; abandoned nodes retry after {REVIVE_COOLDOWN_TICKS} ticks (at most {MAX_REVIVES} times), then the operator decides",
+                    life.account
+                ),
+            }
+            true
+        }
+        Spell::Waiting(since) => {
+            let waited = seconds_to_ticks(now_secs() - since);
+            if waited < REVIVE_COOLDOWN_TICKS {
+                return false;
+            }
+            let changes = lifescape_planner::revive_stuck(life, waited);
+            if changes.is_empty() {
+                crate::logln!("brain {}: revive cap reached ({MAX_REVIVES} per node), standing by (operator decides)", life.account);
+                push_history(life, "graph", FINAL);
+            } else {
+                for change in &changes {
+                    crate::logln!("brain {}: revive {change}", life.account);
+                }
+                push_history(life, "graph", "revived");
+            }
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{goal_met, spell, Spell, FINAL};
+    use lifescape_json::{object, Value};
+    use lifescape_planner::{GoalKind, HistoryEntry};
+
+    fn entry(node: &str, outcome: &str, at: i64) -> HistoryEntry {
+        HistoryEntry { node: node.to_string(), started: at, ended: at, outcome: outcome.to_string() }
+    }
+
+    /// The goal entry pushed after the stuck one never reopens the spell
+    /// (live: one stuck line and two history entries every pass).
+    #[test]
+    fn a_spell_is_noted_once_and_ends_on_any_node_event() {
+        assert_eq!(spell(&[]), Spell::Fresh);
+        let mut history = vec![entry("n24", "abandoned", 10), entry("graph", "stuck", 11), entry("goal", "stuck:woodcutting", 11)];
+        assert_eq!(spell(&history), Spell::Waiting(11), "the goal bookkeeping keeps the spell open");
+        history.push(entry("graph", "revived", 20));
+        assert_eq!(spell(&history), Spell::Fresh, "a revive ends the spell");
+        history.push(entry("graph", "stuck", 30));
+        history.push(entry("graph", FINAL, 40));
+        assert_eq!(spell(&history), Spell::Final);
+        history.push(entry("n30", "launched", 50));
+        assert_eq!(spell(&history), Spell::Fresh, "operator work reopens the cycle");
+    }
+
+    /// bh99tw2f: fishing 15 reached (live 16) was tagged stuck because
+    /// older nodes were abandoned; a met skill goal is done.
+    #[test]
+    fn a_met_skill_goal_is_done_whatever_lingers() {
+        let live = object(vec![(
+            "skills",
+            Value::Arr(vec![object(vec![("id", Value::Int(10)), ("level", Value::Int(16))])]),
+        )]);
+        assert!(goal_met(&GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 15 }, &live));
+        assert!(!goal_met(&GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 20 }, &live));
+        assert!(!goal_met(&GoalKind::MaxSkills { skills: vec!["woodcutting".to_string()], level: 15 }, &live), "unknown = level 1");
+        assert!(!goal_met(&GoalKind::MakeMoney, &live), "non-skill goals answer from the graph");
+    }
+}

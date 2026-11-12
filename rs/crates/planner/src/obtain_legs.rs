@@ -89,6 +89,22 @@ pub fn production_legs(item: &str) -> Vec<ProductionLeg> {
     out
 }
 
+/// Legs of an obtain node that name no executable (`map_method` refuses
+/// them): legacy legs an older planner froze in a life file (pre-PRD3
+/// `farm:<item>` for any object with a drop source, e.g. imps' wool balls
+/// or dwarves' pickaxes, which no combat spot hunts). The `market:bid`
+/// marker is no leg: it rides beside a production. Empty for other kinds.
+pub fn dead_legs(node: &Node) -> Vec<String> {
+    if !matches!(node.kind, NodeKind::ObtainItems { .. }) {
+        return Vec::new();
+    }
+    node.alternatives
+        .iter()
+        .map(|alt| alt.method.clone())
+        .filter(|method| method != "market:bid" && crate::mapping::map_method(method, node, None).is_none())
+        .collect()
+}
+
 /// True when the object is F2P tradeable (the market universe).
 pub fn tradeable_f2p(item: &str) -> bool {
     lifescape_gamedata::objs_by_name(item).into_iter().next().is_some_and(|entry| entry.tradeable && entry.members == Some(false))

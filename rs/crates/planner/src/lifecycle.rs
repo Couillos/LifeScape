@@ -10,7 +10,12 @@
 //! - `Ready` ⇔ every dependency is `Done` (`Pending`/`Blocked` otherwise);
 //! - at most one `Active` node, and it is `life.active`;
 //! - liveness: a graph with an unfinished node has either an active node
-//!   or a ready one — never an open graph with nothing to launch.
+//!   or a ready one — never an open graph with nothing to launch;
+//! - an open obtain node never carries a leg that names no executable.
+//!
+//! Stuck graphs: `revive_stuck` is the one rule that reopens abandoned
+//! nodes — after `REVIVE_COOLDOWN_TICKS` of a stuck spell, at most
+//! `MAX_REVIVES` times per node; past the cap the operator decides.
 
 use std::collections::HashSet;
 
@@ -22,6 +27,15 @@ pub const MAX_FAILURES: u32 = 3;
 /// Blocked stops (missing tool/input) before a node is abandoned: a node
 /// that keeps blocking after its sub-tasks landed never heals alone.
 pub const MAX_BLOCKS: u32 = 3;
+/// Length of a stuck spell before its abandoned nodes are retried (D1
+/// ticks: 1 h in prod at 600 ms, 6 min in dev at 60 ms). Abandon causes
+/// are often transient (operator redeploys, empty market, nav timeouts,
+/// a wallet seen empty): a bounded, slow retry beats idling forever.
+pub const REVIVE_COOLDOWN_TICKS: u64 = 6000;
+/// Revivals per node: past it the abandonment is final (rule 7: the
+/// operator decides), so a node that can never work costs at most
+/// `MAX_REVIVES` × its failure budget.
+pub const MAX_REVIVES: u32 = 3;
 
 /// What the launch pass may do with a normalized graph.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,8 +46,9 @@ pub enum GraphState {
     Launchable,
     /// Every node is done (an empty graph counts as done).
     Finished,
-    /// Nothing left to run and some nodes were abandoned: the operator
-    /// decides (rule 7), the brain never revives on its own.
+    /// Nothing left to run and some nodes were abandoned: the brain draws
+    /// the next goal, else waits for `revive_stuck` (cooldown, capped);
+    /// past the cap the operator decides (rule 7).
     Stuck { abandoned: Vec<String> },
 }
 
@@ -70,12 +85,35 @@ fn max_id_number(life: &Life) -> usize {
         .max(life.nodes.len())
 }
 
+/// Structural abandon (cascade, cycle): the dependency is the cause, so
+/// it replaces whatever the node last waited on (bbkjz2vk n19 kept
+/// "Blocked: missing coins:1" after its coin node died, hiding the root).
 fn abandon(node: &mut Node, why: String, changes: &mut Vec<String>) {
     changes.push(format!("{} abandoned: {why}", node.id));
     node.status = NodeStatus::Abandoned;
     node.method = None;
-    if node.last_error.is_empty() {
-        node.last_error = why;
+    node.last_error = why;
+}
+
+/// Open obtain nodes whose legs name no executable (legacy legs frozen
+/// in the life file by an older planner) re-derive them from the obtain
+/// index: the legs are game data, never a choice to preserve.
+fn rederive_dead_legs(life: &mut Life, changes: &mut Vec<String>) {
+    let ironman = life.profile.ironman;
+    for node in &mut life.nodes {
+        if is_terminal(&node.status) || node.status == NodeStatus::Active {
+            continue;
+        }
+        let dead = crate::obtain_legs::dead_legs(node);
+        if dead.is_empty() {
+            continue;
+        }
+        if let NodeKind::ObtainItems { item, .. } = &node.kind {
+            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            node.method = None;
+            let fresh: Vec<&str> = node.alternatives.iter().map(|alt| alt.method.as_str()).collect();
+            changes.push(format!("{} legs re-derived ({} name no script) -> {}", node.id, dead.join(", "), fresh.join(", ")));
+        }
     }
 }
 
@@ -112,6 +150,7 @@ pub fn normalize(life: &mut Life) -> Vec<String> {
             node.method = None;
         }
     }
+    rederive_dead_legs(life, &mut changes);
     cascade_abandon(life, &mut changes);
     abandon_unresolvable(life, &mut changes);
     let done: HashSet<String> = life.nodes.iter().filter(|node| node.status == NodeStatus::Done).map(|node| node.id.clone()).collect();
@@ -207,6 +246,64 @@ pub fn graph_state(life: &Life) -> GraphState {
     GraphState::Stuck {
         abandoned: life.nodes.iter().filter(|node| node.status == NodeStatus::Abandoned).map(|node| node.id.clone()).collect(),
     }
+}
+
+/// The cooldown revive (live 2026-11-12: bh99tw2f and bbkjz2vk idled
+/// forever on abandons caused by operator redeploys and legacy legs).
+/// `stuck_ticks` is how long the graph has been stuck (the brain owns the
+/// clock). Below `REVIVE_COOLDOWN_TICKS`, or on a graph that is not
+/// stuck, nothing moves. Otherwise every abandoned node under
+/// `MAX_REVIVES` reopens with fresh failure/block budgets and re-derived
+/// legs (its cascade reopens with it); cleanup janitors keep their own
+/// stop rule. Returns one line per change; empty = the operator decides.
+pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
+    if stuck_ticks < REVIVE_COOLDOWN_TICKS || !matches!(graph_state(life), GraphState::Stuck { .. }) {
+        return Vec::new();
+    }
+    let ironman = life.profile.ironman;
+    let style = crate::combat::goal_combat_style(&life.goal).to_string();
+    let mut changes = Vec::new();
+    for node in &mut life.nodes {
+        if node.status != NodeStatus::Abandoned || node.revives >= MAX_REVIVES || matches!(node.kind, NodeKind::SpaceCleanup) {
+            continue;
+        }
+        node.revives += 1;
+        node.status = NodeStatus::Pending;
+        node.failures = 0;
+        node.blocks = 0;
+        node.method = None;
+        node.site = None;
+        node.spent_ticks = 0;
+        rederive_legs(node, ironman, &style);
+        changes.push(format!("{} revived ({}/{MAX_REVIVES}) after {stuck_ticks} stuck ticks; was: {}", node.id, node.revives, node.last_error));
+    }
+    if !changes.is_empty() {
+        changes.extend(normalize(life));
+    }
+    changes
+}
+
+/// A revived node starts from the planner's current legs: obtain legs
+/// from the obtain index (a travel ban is forgotten with the rest), a
+/// tranche or combat training whose legs were all banned gets its
+/// creation method back.
+fn rederive_legs(node: &mut Node, ironman: bool, style: &str) {
+    let method = match &node.kind {
+        NodeKind::ObtainItems { item, .. } => {
+            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            return;
+        }
+        NodeKind::ReachLevel { skill, level } if node.alternatives.is_empty() => {
+            let start = crate::tranches::tranches(skill, 1, *level).into_iter().filter(|target| target < level).last().unwrap_or(1);
+            crate::tranches::reach_method(skill, start)
+        }
+        NodeKind::ReachCombat { .. } if node.alternatives.is_empty() => match crate::combat::training_method(style) {
+            Ok(method) => method.to_string(),
+            Err(_) => return,
+        },
+        _ => return,
+    };
+    node.alternatives.push(crate::model::Alternative { method, est_ticks: 0, est_coins: 0 });
 }
 
 /// Mark `index` launched: the only way a node becomes active.
@@ -363,3 +460,7 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lifecycle_revive_tests.rs"]
+mod revive_tests;

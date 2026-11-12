@@ -26,6 +26,7 @@ pub mod brain_plan;
 pub mod brain_sales;
 pub mod brain_wishlist;
 pub mod brain_succession;
+pub mod brain_stuck;
 pub mod brain_tutorial;
 pub mod market_convene;
 pub mod market_eta;

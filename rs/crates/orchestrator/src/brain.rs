@@ -309,23 +309,6 @@ fn save_or_log(life: &Life) {
     }
 }
 
-/// One stuck line per stuck spell (history `stuck`), never a revive:
-/// the operator decides what an abandoned graph does next (rule 7).
-fn note_stuck(life: &mut Life, abandoned: &[String]) -> bool {
-    if life.history.last().is_some_and(|entry| entry.node == "graph" && entry.outcome == "stuck") {
-        return false;
-    }
-    let causes: Vec<String> = life
-        .nodes
-        .iter()
-        .filter(|node| abandoned.contains(&node.id))
-        .map(|node| format!("{}={}", node.id, if node.last_error.is_empty() { "?" } else { node.last_error.as_str() }))
-        .collect();
-    crate::logln!("brain {}: graph stuck, nothing left to run; abandoned: {} — operator decides", life.account, causes.join(" | "));
-    push_history(life, "graph", "stuck");
-    true
-}
-
 /// Launch pass for one idle worker. Order: live snapshot (no decision
 /// without it), invariants (`normalize`), the running node (market fill
 /// wait, lost report), the tutorial gate, then the next ready node.
@@ -379,7 +362,8 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 // Right after a daemon restart the restored workers read
                 // idle before their scripts report: an operator restart,
                 // never a crash (live 2026-11-12: every restart cost each
-                // active node one failure). Retry uncounted, like `stopped`.
+                // active node one failure). Same for an operator `unload`,
+                // `close` or `open` (redeploy). Retry uncounted, like `stopped`.
                 _ if crate::brain_grace::take_operator_stop(&job.account) || crate::brain_grace::first_idle_since_start(&job.account) => {
                     crate::logln!("brain {}: {active_id} idle after a daemon restart or an operator stop, retrying uncounted", job.account);
                     life.nodes[position].status = NodeStatus::Ready;
@@ -459,28 +443,24 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
             return;
         }
-        // A life never ends on a goal: done draws the next one; stuck
-        // records the causes and moves on to a goal that does not retrain
-        // the stuck skills. Nothing left = stand by for the operator.
-        state @ (GraphState::Finished | GraphState::Stuck { .. }) => {
-            let stuck = match &state {
-                GraphState::Stuck { abandoned } => {
-                    note_stuck(&mut life, abandoned);
-                    true
-                }
-                _ => false,
-            };
-            match crate::brain_succession::succeed_goal(&mut life, &live, stuck) {
-                Some(label) => {
-                    crate::logln!("brain {}: goal {} -> next goal {label}", job.account, if stuck { "stuck" } else { "done" });
-                    lifescape_planner::normalize(&mut life);
-                    save_or_log(&life);
-                }
-                None => {
-                    crate::logln!("brain {}: no goal left to draw, standing by (operator decides)", job.account);
-                    save_or_log(&life);
-                }
+        // A life never ends on a goal: done draws the next one. Stuck is
+        // one spell (`brain_stuck`): noted once, goal closed and redrawn,
+        // else the cooldown revive, else the operator decides.
+        GraphState::Stuck { abandoned } => {
+            if crate::brain_stuck::on_stuck(&mut life, &live, &abandoned) || dirty {
+                save_or_log(&life);
             }
+            return;
+        }
+        GraphState::Finished => {
+            match crate::brain_succession::succeed_goal(&mut life, &live, false) {
+                Some(label) => {
+                    crate::logln!("brain {}: goal done -> next goal {label}", job.account);
+                    lifescape_planner::normalize(&mut life);
+                }
+                None => crate::logln!("brain {}: no goal left to draw, standing by (operator decides)", job.account),
+            }
+            save_or_log(&life);
             return;
         }
     }
@@ -713,6 +693,9 @@ fn recent_launch(account: &str) -> bool {
 }
 
 fn note_launch(account: &str) {
+    // A stop noted before this launch (reopen of an idle bot) covered an
+    // earlier run: it never excuses this one.
+    crate::brain_grace::take_operator_stop(account);
     launch_marks()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -775,6 +758,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
 /// drained, so the brain never misses a push.
 pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Value>) {
     ensure_brain(orch);
+    let had_report = report.is_some();
     let queued = inbox()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -782,7 +766,15 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
         .map(|sender| sender.try_send((job.account.clone(), report)))
         .is_some_and(|sent| sent.is_ok());
     if !queued {
-        crate::logln!("brain {}: inbox full, tick deferred to next pass", job.account);
+        // The drained report goes back to pending (`last_report` still
+        // holds it): dropped here, its node read "no report" later.
+        let kept = had_report && job.inner.try_lock().map(|mut inner| inner.report_pending = true).is_ok();
+        let note = match (had_report, kept) {
+            (true, true) => " (report kept pending)",
+            (true, false) => " (report dropped: job contended)",
+            _ => "",
+        };
+        crate::logln!("brain {}: inbox full, tick deferred to next pass{note}", job.account);
     }
 }
 
