@@ -19,6 +19,7 @@ pub fn daemon_clock() -> String {
 pub mod paths;
 pub mod brain;
 pub mod brain_fold;
+pub mod brain_grace;
 pub mod brain_market;
 pub mod brain_plan;
 pub mod brain_sales;

@@ -699,11 +699,17 @@ impl Orchestrator {
                 let args = request.get("args").as_arr().cloned().unwrap_or_default();
                 return self.run_job(account, script, &args);
             }
-            "unload" => return self.simple_worker_cmd(account, "unload"),
+            "unload" => {
+                crate::brain_grace::note_operator_stop(account);
+                return self.simple_worker_cmd(account, "unload");
+            }
             "pause" => return self.simple_worker_cmd(account, "pause"),
             "resume" => return self.resume_job(account),
             "hold" => return self.hold_job(account),
-            "close" => return self.close_job(account),
+            "close" => {
+                crate::brain_grace::note_operator_stop(account);
+                return self.close_job(account);
+            }
             "call" => {
                 let method = request.get("method").as_str().unwrap_or("");
                 let args = request.get("args").as_arr().cloned().unwrap_or_default();

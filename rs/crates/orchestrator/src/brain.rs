@@ -302,16 +302,6 @@ fn job_idle(job: &Job) -> bool {
 /// at most this many ticks (wall time = ticks × tick length, D7).
 const AWAIT_FILL_TICKS: u64 = 6000;
 
-/// True the first time this daemon finds `account`'s active node with an
-/// idle worker and no report: after a daemon restart every restored
-/// worker reads idle before its script reports (an operator restart,
-/// never a crash), and restoring 14 workers plus brain back-off can take
-/// minutes, so no time window fits. Later sightings count normally.
-fn first_idle_since_start(account: &str) -> bool {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
-    SEEN.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string())
-}
-
 /// Cancels the account's open buy orders on `item` (debug name) through
 /// the daemon market. 0 when the market is down or the item unknown.
 fn cancel_stale_buy(account: &str, item: &str) -> usize {
@@ -416,8 +406,8 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 // idle before their scripts report: an operator restart,
                 // never a crash (live 2026-11-12: every restart cost each
                 // active node one failure). Retry uncounted, like `stopped`.
-                _ if first_idle_since_start(&job.account) => {
-                    crate::logln!("brain {}: {active_id} idle right after a daemon restart, retrying uncounted", job.account);
+                _ if crate::brain_grace::take_operator_stop(&job.account) || crate::brain_grace::first_idle_since_start(&job.account) => {
+                    crate::logln!("brain {}: {active_id} idle after a daemon restart or an operator stop, retrying uncounted", job.account);
                     life.nodes[position].status = NodeStatus::Ready;
                     life.nodes[position].method = None;
                     life.active = None;
