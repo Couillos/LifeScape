@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::buffer::{ReadError, Reader};
 use super::flags::*;
+use super::gate_swing::ClosedLeaf;
 use super::loc_collision::{CollisionMap, LocDef, change_loc_collision, layer_of};
 
 /// Priority for the single-slot static table: actionable/blocking locs
@@ -67,8 +68,9 @@ pub fn paint_square(
     if let Some(map) = collision.as_mut() {
         load_ground(map, &lands, square_x, square_z);
     }
+    let mut gate_leaves = Vec::new();
     load_locs(
-        collision,
+        collision.as_mut().map(|map| &mut **map),
         &lands,
         locs,
         square_x,
@@ -77,7 +79,13 @@ pub fn paint_square(
         static_locs,
         static_actions,
         static_layers,
-    )
+        &mut gate_leaves,
+    )?;
+    // Open double gates wall the tiles past the fence (see gate_swing).
+    if let Some(map) = collision {
+        super::gate_swing::paint_gate_swings(map, &gate_leaves);
+    }
+    Ok(())
 }
 
 /// Static locs without building the collision map (spectator path).
@@ -632,6 +640,7 @@ fn load_locs(
     static_locs: &mut StaticLocs,
     static_actions: &mut StaticLocs,
     static_layers: &mut StaticLayers,
+    gate_leaves: &mut Vec<ClosedLeaf>,
 ) -> Result<(), ReadError> {
     let mut packet = Reader::new(locs);
     let mut loc_id: i32 = -1;
@@ -681,6 +690,9 @@ fn load_locs(
                 (loc_id as u16, shape, angle),
             );
             let loc = loctypes.get(loc_id as usize).and_then(|slot| *slot);
+            if let Some(leaf) = loc.and_then(|def| def.gate_leaf) {
+                gate_leaves.push(ClosedLeaf { x: absolute_x, z: absolute_z, level: actual, leaf, shape, angle });
+            }
             if loc.is_some_and(|def| def.has_ops) {
                 static_actions
                     .entry((absolute_x, absolute_z, actual))
