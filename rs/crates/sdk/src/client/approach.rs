@@ -99,8 +99,19 @@ impl Bot {
         Err(Error::Unreachable(format!("nothing reachable within {radius} of {x},{z} from {:?}.{cause}", self.position())))
     }
 
-    /// Stand on an orthogonally adjacent tile of an NPC: the server only
-    /// accepts NPC clicks from a side, never from a diagonal.
+    /// True when the bot stands where the server accepts a click on this
+    /// NPC: same level, touching its footprint (`npc_size`, SW anchored)
+    /// by a side. False when the slot left view.
+    pub fn adjacent_to_npc(&self, slot: u16) -> bool {
+        self.world.npcs.get(&slot).is_some_and(|npc| {
+            let size = i32::from((self.tables.npc_size)(npc.npc_type).max(1));
+            npc.level == self.world.level && side_adjacent((self.world.x, self.world.z), (npc.x, npc.z), size)
+        })
+    }
+
+    /// Stand on a tile touching an NPC's footprint by a side: the server
+    /// only accepts NPC clicks from a side, never from a corner. A size-2
+    /// cow has two such tiles per side, not just the SW anchor's four.
     pub fn approach_npc(&mut self, slot: u16, timeout: u64) -> Result<()> {
         let deadline = self.world.ticks + timeout;
         while self.world.ticks < deadline {
@@ -110,7 +121,7 @@ impl Bot {
             if npc.level != self.world.level {
                 return Err(Error::Unreachable(format!("NPC {slot} is on level {} at {:?}", npc.level, self.position())));
             }
-            if (npc.x - self.world.x).abs() + (npc.z - self.world.z).abs() == 1 {
+            if self.adjacent_to_npc(slot) {
                 return Ok(());
             }
             let size = (self.tables.npc_size)(npc.npc_type).max(1) as i32;
@@ -150,10 +161,8 @@ impl Bot {
             if !moved {
                 self.pump(1)?;
             }
-            if let Some(npc) = self.world.npcs.get(&slot) {
-                if npc.level == self.world.level && (npc.x - self.world.x).abs() + (npc.z - self.world.z).abs() == 1 {
-                    return Ok(());
-                }
+            if self.adjacent_to_npc(slot) {
+                return Ok(());
             }
         }
         Err(Error::Unreachable(format!("no clickable tile for NPC {slot} from {:?}", self.position())))
@@ -198,6 +207,18 @@ impl Bot {
         }
         Ok((self.world.x, self.world.z) == steps[steps.len() - 1])
     }
+}
+
+/// Side adjacency to a square footprint anchored at its SW tile: on
+/// the row just below/above it within its columns, or on the column
+/// just left/right of it within its rows. Corners and tiles under the
+/// footprint never count.
+pub(crate) fn side_adjacent(tile: (i32, i32), anchor: (i32, i32), size: i32) -> bool {
+    let size = size.max(1);
+    let within_columns = tile.0 >= anchor.0 && tile.0 < anchor.0 + size;
+    let within_rows = tile.1 >= anchor.1 && tile.1 < anchor.1 + size;
+    (within_columns && (tile.1 == anchor.1 - 1 || tile.1 == anchor.1 + size))
+        || (within_rows && (tile.0 == anchor.0 - 1 || tile.0 == anchor.0 + size))
 }
 
 #[cfg(test)]
@@ -249,6 +270,34 @@ mod tests {
         // not count, or this never reaches the pump below, offline or live.
         assert!(bot.approach_npc(7, 60).is_err(), "blocked ring terminates loud");
         assert_eq!((bot.world.x, bot.world.z), (0, 0), "never moved");
+    }
+
+    /// A size-2 cow at SW (3198,3331) covers (3198..3199, 3331..3332):
+    /// both north-side tiles touch it. Live (bb4v5d9m 17:52:38) the
+    /// size-1 check read them as "not adjacent" and the bot paced
+    /// (3198,3333) <-> (3199,3333) until the budget ran out. Offline:
+    /// any walk would fail, so Ok proves no step was taken.
+    #[test]
+    fn approach_npc_size_two_side_tile_is_adjacent() {
+        use crate::tables::{Tables, NOTABLES};
+        use crate::world::NpcInfo;
+        fn size_two(_npc_type: u16) -> u8 {
+            2
+        }
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".").with_tables(Tables { npc_size: size_two, ..NOTABLES });
+        bot.world.level = 0;
+        bot.world.npcs.insert(472, NpcInfo { npc_type: 81, x: 3198, z: 3331, level: 0, name: None, anim: None });
+        for tile in [(3198, 3333), (3199, 3333), (3200, 3331), (3197, 3332), (3199, 3330)] {
+            bot.world.x = tile.0;
+            bot.world.z = tile.1;
+            assert!(bot.adjacent_to_npc(472), "{tile:?} touches the footprint by a side");
+            assert!(bot.approach_npc(472, 60).is_ok(), "{tile:?} needs no step");
+        }
+        for tile in [(3197, 3330), (3200, 3333), (3198, 3331), (3199, 3332), (3201, 3331)] {
+            bot.world.x = tile.0;
+            bot.world.z = tile.1;
+            assert!(!bot.adjacent_to_npc(472), "{tile:?} is a corner, under, or out of reach");
+        }
     }
 
     /// Far target with no maps: the exact walk fails offline at the first
