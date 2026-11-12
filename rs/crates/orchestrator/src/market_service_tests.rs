@@ -854,3 +854,20 @@ fn list_with_orders_shows_every_resting_book() {
     assert_eq!(rows[0].get("open_qty").as_i64(), Some(5), "open quantity, not order count");
     cleanup(&path);
 }
+
+/// AGENTS rule 13: admin never places an order.
+#[test]
+fn admin_never_trades() {
+    let (service, path) = service("admin-rule");
+    funded(&service, "admin");
+    let refused = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("admin")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(5)),
+    ]));
+    assert_eq!(refused.get("ok").as_bool(), Some(false), "{refused:?}");
+    cleanup(&path);
+}

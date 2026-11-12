@@ -145,20 +145,34 @@ function aggregateLevels(levels, descending) {
   return rows.map(([price, qty]) => ({ price, qty, cumul: cumul += qty }));
 }
 
-function depthTable(title, rows) {
-  const out = ['<tr><th colspan="3">' + title + '</th></tr><tr><th>price</th><th>qty</th><th>cumul</th></tr>'];
-  for (const row of rows) {
-    out.push('<tr><td>' + row.price + '</td><td>' + row.qty + '</td><td>' + row.cumul + '</td></tr>');
-  }
-  return out.join('');
+function depthRows(rows, side) {
+  return rows.map(row => '<tr class="' + side + '"><td>' + row.price + '</td><td>' + row.qty + '</td><td>' + row.cumul + '</td></tr>');
 }
 
+// Exchange-style ladder: asks on top (best ask right above the spread),
+// the spread line, then bids (best bid right below it). Cumuls grow away
+// from the spread on both sides.
 function renderBook(book) {
   const bids = aggregateLevels(book.buys, true);
   const asks = aggregateLevels(book.sells, false);
-  let html = depthTable('bids', bids) + depthTable('asks', asks);
-  if (!bids.length && !asks.length) html += '<tr><td colspan="3" class="muted">empty book</td></tr>';
-  document.getElementById('book').innerHTML = html;
+  const out = ['<tr><th>price</th><th>qty</th><th>cumul</th></tr>'];
+  if (!bids.length && !asks.length) {
+    out.push('<tr><td colspan="3" class="muted">empty book</td></tr>');
+  } else {
+    out.push(...depthRows(asks, 'ask').reverse());
+    let spread = '—';
+    if (bids.length && asks.length) {
+      const gap = asks[0].price - bids[0].price;
+      spread = 'spread ' + gap + ' · mid ' + ((asks[0].price + bids[0].price) / 2);
+    } else if (asks.length) {
+      spread = 'no bids';
+    } else {
+      spread = 'no asks';
+    }
+    out.push('<tr class="spread"><td colspan="3">' + spread + '</td></tr>');
+    out.push(...depthRows(bids, 'bid'));
+  }
+  document.getElementById('book').innerHTML = out.join('');
 }
 
 function renderTrades() {

@@ -641,6 +641,11 @@ impl MarketService {
         if account.is_empty() {
             return Self::err("account is required".to_string());
         }
+        // AGENTS rule 13: admin's cheated goods and coins never reach
+        // another account, so admin never trades on the market.
+        if account.eq_ignore_ascii_case("admin") {
+            return Self::err("admin never trades: cheated goods stay out of the economy (rule 13)".to_string());
+        }
         let side = match Self::side_of(request) {
             Ok(side) => side,
             Err(error) => return Self::err(error),
