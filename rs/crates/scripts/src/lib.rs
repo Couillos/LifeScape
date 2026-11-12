@@ -21,6 +21,7 @@ pub mod tables_live;
 pub mod tutorial;
 pub(crate) mod tutorial_detect;
 pub mod tutorial_design;
+pub(crate) mod tutorial_skills;
 
 use lifescape_sdk::{Bot, Error};
 

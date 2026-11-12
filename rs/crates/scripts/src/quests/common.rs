@@ -211,7 +211,24 @@ fn scan_and_talk(bot: &mut Bot, name: &str, near: Option<(i32, i32)>, timeout: u
     Ok(false)
 }
 
+/// A dialogue (or main interface) already open before an NPC click is not
+/// the NPC's answer: the server closes it on the click (`OpNpcHandler` ->
+/// `clearPendingAction` -> `closeModal`) and opens the real dialogue only
+/// once the player reaches the NPC. Counted as "opened", the talk ends on
+/// the close and nobody continues the real one (nina_rhodes, frank_lane:
+/// Terrova's rune dialogue left open, `FAIL runes held`). Overlays stay.
+pub(crate) fn stale_modal_before_click(modal: Option<&lifescape_sdk::world::Modal>) -> bool {
+    modal.is_some_and(|open| matches!(open.layer.as_str(), "chat" | "main" | "main_side"))
+}
+
 fn click_npc(bot: &mut Bot, slot: u16) -> Result<bool, ScriptError> {
+    if stale_modal_before_click(bot.world.modal.as_ref()) {
+        bot.close_modal()?;
+        let target = bot.world.ticks + 10;
+        while bot.world.modal.is_some() && bot.world.ticks < target {
+            bot.pump(2)?;
+        }
+    }
     let seen = bot.world.messages.len();
     bot.talk_to(slot)?;
     let target = bot.world.ticks + 15;
@@ -719,9 +736,25 @@ fn skill_index(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::take_near;
+    use super::{stale_modal_before_click, take_near};
     use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::world::Modal;
     use lifescape_sdk::Bot;
+
+    /// nina_rhodes / frank_lane (Terrova, %tutorial 630): the tab click had
+    /// already opened Terrova's dialogue, the talk click read it as its own
+    /// answer, the server closed it and the real one opened unanswered.
+    /// Chat and main modals are closed before the click; overlays stay.
+    #[test]
+    fn open_dialog_before_npc_click_is_stale() {
+        let chat = Modal { layer: "chat".to_string(), interface_id: 4882 };
+        assert!(stale_modal_before_click(Some(&chat)), "chat box before the click is not the answer");
+        let main = Modal { layer: "main".to_string(), interface_id: 5292 };
+        assert!(stale_modal_before_click(Some(&main)), "server closes main interfaces on op_npc too");
+        let overlay = Modal { layer: "overlay".to_string(), interface_id: 197 };
+        assert!(!stale_modal_before_click(Some(&overlay)), "wilderness overlay is informational");
+        assert!(!stale_modal_before_click(None), "nothing open: plain click");
+    }
 
     /// No socket and no such item: the pickup fails typed (the first pump
     /// already reports the dead socket) instead of retrying to the bound
