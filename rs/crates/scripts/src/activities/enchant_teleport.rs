@@ -130,7 +130,7 @@ fn cast_one(bot: &mut Bot, spell: &str, target: Option<u16>) -> Result<(), Scrip
                     return Ok(());
                 }
             }
-            Err(ScriptError::Usage(format!("{spell} never landed at {:?}", bot.position())))
+            Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
         }
         None => {
             let before = bot.position();
@@ -143,7 +143,7 @@ fn cast_one(bot: &mut Bot, spell: &str, target: Option<u16>) -> Result<(), Scrip
                     return Ok(());
                 }
             }
-            Err(ScriptError::Usage(format!("{spell} never moved at {:?}", bot.position())))
+            Err(ScriptError::Failed(format!("{spell} never moved at {:?}", bot.position())))
         }
     }
 }

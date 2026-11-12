@@ -21,12 +21,14 @@ restent minces et stateless. Ticks serveur : voir `../lostcity/engine/data/confi
 - `lifescape-scripts` (`rs/crates/scripts/`) : registre compilé des scripts minces ; jamais de paquet ni d'opcode.
 - `lifescape-json` (`rs/crates/json/`) : parseur/écrivain JSON unique, std only ; aucune logique métier.
 - `lifescape-nav` (`rs/crates/nav/`) : collision statique, recherche locale, planification pure ; aucun réseau ni état live.
+- `lifescape-planner` (`rs/crates/planner/`) : buts → graphe, cycle de vie des nœuds (`lifecycle.rs`, seul à changer un statut) ; pur.
+- `lifescape-market` / `lifescape-store` : carnet d'ordres pur / persistance SQLite (exception D3).
 
 ## 3. Commandes
 
 ```sh
 cargo build --manifest-path rs/Cargo.toml
-cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata -p lifescape-orchestrator -p lifescape-scripts -p lifescape-planner
+cargo test --manifest-path rs/Cargo.toml --workspace
 ./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
 ./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | shutdown
 ./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
@@ -47,6 +49,7 @@ cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata 
 10. Serveur = vérité : `../lostcity/engine` + `../lostcity/content` (rev 274) ; lecture/dump autorisés, modification seulement sur demande explicite. Client JS de référence (arbitrage protocole/contenu, lecture seule) : `../Client-TS` (branche 274, `src/client/Client.ts`, opcodes `src/io/ClientProt.ts|ServerProt.ts`) — le consulter en cas de doute paquet/modale/séquence, avant tout fix SDK.
 11. Comptes : `admin` pour les tests de dev, jamais `bite` (personnel) ; `t01`… et nommés = runs légitimes.
 12. Aucun cheat en code commité (`bot.cheat`, `::...`) hors outils dev autorisés (`give`, `goto`, `probe_*`, `debug_walk`, `check_*`).
+13. Économie propre : `admin` ne transmet jamais à un autre compte un objet ou de l'argent obtenu en trichant (`give`, `giveother`, échange, dépôt au sol, ordre au marché) ; ce qu'il triche reste chez lui, pour ses tests.
 
 ## 5. Protocole debug
 

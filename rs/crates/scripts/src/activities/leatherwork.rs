@@ -189,7 +189,7 @@ fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Resu
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() {
             if match_option(&bot.chat_options(), product_name).is_none() {
-                return Err(ScriptError::Usage(format!("sew {product_name:?} matches no option at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("sew {product_name:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(product_name)?;
         } else if !pressed
@@ -211,7 +211,7 @@ fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Resu
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{product_name} never sewed at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("{product_name} never sewed at {:?}", bot.position())))
 }
 
 #[cfg(test)]

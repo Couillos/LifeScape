@@ -114,6 +114,7 @@ impl Job {
             inner.script_args = args.to_vec();
         }
         inner.paused = session.get("paused").as_bool().unwrap_or(inner.paused);
+        inner.held = session.get("held").as_bool().unwrap_or(inner.held);
         if let Some(status) = session.get("status").as_str() {
             inner.status = status.to_string();
         }
@@ -441,7 +442,7 @@ pub fn ingest_report_into(
             .map_err(|error| format!("rates store xp: {error}"))?;
         lines += 1;
     }
-    println!(
+    crate::logln!(
         "rates: stored report {report_id} {} {} ({} lines)",
         parsed.account, parsed.method, lines
     );
@@ -482,6 +483,15 @@ mod tests {
         assert_eq!(humanize("olivia_king"), "Olivia king");
         assert_eq!(humanize("0 48 50 saltfish"), "Saltfish");
         assert_eq!(humanize(""), "");
+    }
+
+    /// A held bot stays held across a daemon restart: the worker's
+    /// session carries `held`, `restore_jobs` applies it.
+    #[test]
+    fn restored_session_keeps_its_hold() {
+        let job = Job::new("b0");
+        job.apply_session(&lifescape_json::object(vec![("held", Value::Bool(true))]));
+        assert!(job.inner.lock().unwrap().held, "hold read back from the worker");
     }
 
     #[test]

@@ -94,7 +94,7 @@ fn superheat_one(bot: &mut Bot, ore: u16, bar: u16) -> Result<(), ScriptError> {
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{SUPERHEAT_SPELL} never landed at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("{SUPERHEAT_SPELL} never landed at {:?}", bot.position())))
 }
 
 #[cfg(test)]

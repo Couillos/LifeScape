@@ -13,11 +13,16 @@ couverture), `deals` (machine à états), `price` (VWAP → mid → magasin,
 bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
 
-Stratégie de cotation inspirée de ZIP : marge ajustée sur les dernières
-cotations, plancher = réserve (rachat magasin, alchimie, valeur d'usage),
-plafond = magasin PNJ ou temps économisé. Les bornes PNJ ancrent
-l'économie : personne ne vend sous le rachat magasin, personne n'achète
-au-dessus du magasin qui stocke. Marchands (`market:flip`, ~10 %) :
+Stratégie de cotation inspirée de ZIP (PRD3) : un ordre posé avec un
+`ceiling` (acheteur) ou un `floor` (vendeur) marche d'un pas de 5 % (≥ 1
+pièce) par fenêtre de patience (200 ticks) tant qu'il reste au carnet
+(`market_reprice`, piloté par la boucle de convocation). Acheteur :
+ouvre à l'ask s'il le couvre, sinon à la référence, monte jusqu'à ce
+qu'il peut payer. Vendeur : ouvre à référence + 10 % (ou au meilleur bid
+s'il est plus riche), descend jusqu'à son plancher (moitié de la
+référence échangée, 1 sinon). Les PNJ n'ancrent plus rien : aucun bot ne
+vend à un marchand, et l'achat marchand est réservé aux objets non
+productibles en F2P (D-A, voir `decisions.md`). Marchands (`market:flip`, ~10 %) :
 sélection sur écart/volume, plafonds `max_capital_share` (10 %),
 `max_stock_items` (500), `max_book_share` (25 % du côté).
 
@@ -56,8 +61,9 @@ petit id de compte envoie la demande. Échange SDK `trade_exchange` :
 billets (`bank_main:com_93` = notes, `com_94` = items) pour les gros
 lots, redépôt après l'échange, les DEUX écrans vérifiés avant accept.
 
-Référence = VWAP glissant des dernières exécutions ; sinon milieu du
-carnet ; sinon prix magasin. Bougies OHLCV en horloge (1 h / 7 jours,
+Référence (PRD3) = VWAP 24 h ; sinon dernier print ; sinon milieu du
+carnet ; sinon **1 pièce** (jamais le prix magasin). La bande anti-bug ne
+s'applique qu'à une référence issue de vraies transactions. Bougies OHLCV en horloge (1 h / 7 jours,
 1 jour / 6 mois et plus), recalculables depuis `executions` (source de
 vérité), tick serveur stocké avec chaque exécution. Tendances calculées
 uniquement sur données publiques (profondeur du carnet + exécutions :
@@ -110,8 +116,9 @@ froid (tables de skills du jeu et pratiques de l'époque, marquée
 `prior`) ; à 3 rapports et plus, la mesure remplace l'estimation.
 
 Rentabilité d'une activité et d'une tranche : Σ rendement × prix de
-vente estimé (VWAP 24 h du market quand le carnet a des exécutions,
-sinon prix magasin, cas marqué `price_prior`) − intrants consommés −
+vente estimé (VWAP 24 h, sinon dernier print, sinon meilleur bid au
+repos, sinon 1 pièce ; `price_prior` tant qu'aucune transaction ne le
+porte) − intrants consommés −
 friction des pauses market (pauses mesurées par rapport, valorisées au
 taux de l'activité : une pause ne rapporte rien) + bonus de tendance
 (score public × chiffre × 0,1). Page `rates` : tableaux méthode × objet
@@ -148,3 +155,19 @@ de référence `market:flip`). Les bots ne lisent aucune de ces pages.
 
 Base `lifescape-store` (SQLite, daemon seul) : ordres, deals,
 exécutions, bougies, rapports, rendements, fiabilité, tendances.
+
+## PRD3 : économie centrale
+
+- Ventes par défaut : le cerveau liste le surplus échangeable des bots
+  inactifs (`brain_sales`, toutes les 600 s) ; protégés : pièces,
+  nourriture ≤ 100, keep-list du graphe, intrants du skill entraîné,
+  outils, porté, envies.
+- Achats : `market:buy` posé par le cerveau (offre avec plafond, attente
+  de la livraison) ; à côté d'une production, offre permanente (D-B)
+  annulée quand le nœud aboutit.
+- Envies (`brain_wishlist`) : meilleur équipement du style du but et
+  meilleurs outils (gamedata `gear`), enchères non bloquantes sur les
+  deux premières, plafond = pièces disponibles, réévaluées toutes les
+  600 s ; jamais vendues.
+- Pièces comme objectif : un achat non couvert crée `have_coins`, résolu
+  par la méthode d'argent la plus rentable (rates par script).

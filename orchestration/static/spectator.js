@@ -127,18 +127,60 @@ function toggleList(force) {
 }
 if (localStorage.getItem("list-hidden") === "0") toggleList(false);
 
+// HTML-escaped text for the bot table (esc above only stringifies: it
+// also feeds canvas labels, which must stay raw).
+const escHtml = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const dash = (value) => (value === null || value === undefined || value === "") ? "-" : value;
+// Bot table columns (shared TableSort, table.js): raw values sort, fmt
+// only changes the display. Goal/task come from the life file (backend
+// web_job_lives.rs); manual bots have none.
+const BOT_COLUMNS = [
+  { key: "state", label: "●", kind: "str",
+    fmt: (value, row) => `<span class="dot ${statusClass(row.status)}" title="${escHtml(row.status)}"></span>${row.paused ? "⏸" : ""}` },
+  { key: "name", label: "Bot", kind: "str" },
+  { key: "combat", label: "Cb", kind: "num" },
+  { key: "hitpoints", label: "PV", kind: "num" },
+  { key: "script", label: "Script", kind: "str" },
+  { key: "zone", label: "Zone", kind: "str" },
+  { key: "position", label: "Position", kind: "str" },
+  { key: "goal", label: "But", kind: "str" },
+  { key: "task", label: "Tâche", kind: "str",
+    fmt: (value, row) => `<span class="clip" title="${escHtml(row.task_title || dash(value))}">${escHtml(dash(value))}</span>` },
+];
+function botRow(job) {
+  const position = Array.isArray(job.position) && job.position.length >= 3 ? `${job.position[1]},${job.position[2]}` : null;
+  return {
+    account: job.account,
+    status: job.status,
+    paused: !!job.paused,
+    state: (job.status || "") + (job.paused ? " paused" : ""),
+    name: job.account_name || job.account,
+    combat: job.combat ?? null,
+    hitpoints: job.hitpoints ?? null,
+    script: job.script || null,
+    zone: typeof job.zone === "string" ? job.zone : null,
+    position: position,
+    goal: job.goal || null,
+    task: job.task || null,
+    task_title: job.task_title || "",
+  };
+}
+// The rows re-render 1x/s: while a mouse button is held inside the table
+// the render waits for the release, so a header click (press + release
+// on the same <th>) is never split across two rebuilt nodes. A press
+// older than 2 s (release lost outside the page) stops holding it.
+let listPressed = false;
+let listPressedAt = 0;
+let pendingJobs = null;
 function renderList(jobs) {
   document.getElementById("count").textContent = jobs.length;
-  const ul = document.getElementById("players");
-  if (!jobs.length) { ul.innerHTML = '<li class="muted">Nobody supervised.</li>'; return jobs; }
-  ul.innerHTML = jobs.map(job => {
-    const [, x, z] = job.position || [0,0,0];
-    const cur = job.account === selected ? "cur" : "";
-    const paused = job.paused ? " ⏸ paused" : "";
-    return `<li><a href="#" data-account="${esc(job.account)}" class="${cur}">
-      <span class="dot ${statusClass(job.status)}"></span><b>${esc(job.account_name || job.account)}</b> lvl ${job.combat ?? "-"} (${x},${z})${job.modal ? " [window]" : ""}${paused}
-      <br><span class="muted">${esc(job.intention || job.status)} · ${esc(job.script)}${paused} · hp ${job.hitpoints ?? "-"}</span></a></li>`;
-  }).join("");
+  if (listPressed && Date.now() - listPressedAt < 2000) { pendingJobs = jobs; return jobs; }
+  pendingJobs = null;
+  const table = document.getElementById("players");
+  if (!jobs.length) { table.innerHTML = '<tr><td class="left muted">Nobody supervised.</td></tr>'; return jobs; }
+  TableSort.render("players", BOT_COLUMNS, jobs.map(botRow), {
+    rowAttrs: (row) => ({ "data-account": row.account, class: row.account === selected ? "cur" : "" }),
+  });
   return jobs;
 }
 
@@ -554,8 +596,10 @@ function updatePanels() {
   const fmt = (items, empty) => (items && items.length)
     ? items.map(i => (i.count > 1 ? i.count + 'x ' : '') + (i.name || 'object'))
     : [empty];
-  const carried = (last.inv || []).reduce((n, i) => n + (i.count || 0), 0);
-  setText(document.getElementById('invtitle'), `Inventory (${carried})`);
+  // One `inv` entry per backpack slot (session_heartbeat slot_items):
+  // occupied slots, not the sum of the stacks.
+  const occupied = (last.inv || []).filter(i => (i.count || 0) > 0).length;
+  setText(document.getElementById('invtitle'), `Inventory (${occupied}/28)`);
   syncStatePre(document.getElementById('inv'),
     ['Backpack:'].concat(fmt(last.inv, '(empty)'), ['', 'Worn:'], fmt(last.worn, '(nothing)')),
     '(empty)');
@@ -629,19 +673,38 @@ async function loadAccounts() {
     if (current && [...picker.options].some(o => o.value === current)) picker.value = current;
   } catch (e) { /* read-only fallback */ }
 }
-// One listener on the stable <ul>: the rows are re-rendered 1x/s, so a
-// click often spans two different row nodes (press on one, release on
-// its replacement) and never fires on the link. Selecting on mousedown
+// One listener on the stable <table>: the rows are re-rendered 1x/s, so
+// a click often spans two different row nodes (press on one, release on
+// its replacement) and never fires on the row. Selecting on mousedown
 // registers before any re-render can swap the node; click stays as a
 // fallback (keyboard, touch edge cases). select() is idempotent.
 ["mousedown", "click"].forEach((kind) => {
   document.getElementById("players").addEventListener(kind, (event) => {
-    const link = event.target.closest("a[data-account]");
-    if (!link) return;
+    if (kind === "mousedown") { listPressed = true; listPressedAt = Date.now(); }
+    const row = event.target.closest("tr[data-account]");
+    if (!row) return;
     event.preventDefault();
-    select(link.getAttribute("data-account"));
+    const account = row.getAttribute("data-account");
+    if (account !== selected) {
+      select(account);
+      for (const other of document.querySelectorAll("#players tr[data-account]")) {
+        other.classList.toggle("cur", other === row);
+      }
+    }
     toggleList(true); // user picked: drawer closes (auto-follow on load must not)
   });
+});
+// Release anywhere ends the press; the deferred render runs after the
+// click event of this release (setTimeout), so header sorting still fires.
+document.addEventListener("mouseup", () => {
+  if (!listPressed) return;
+  listPressed = false;
+  setTimeout(() => {
+    if (listPressed || !pendingJobs) return;
+    const jobs = pendingJobs;
+    pendingJobs = null;
+    renderList(jobs);
+  }, 0);
 });
 document.getElementById("drawer-close").onclick = () => toggleList(true);
 document.getElementById("btn-open").onclick = () => { const typed = (document.getElementById("account").value || "").trim(); if (!typed) return ctlMsg("pick a bot first", false); ctlCall("opening", "open", "/api/open", {account: typed}); };

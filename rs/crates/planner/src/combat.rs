@@ -55,71 +55,51 @@ pub fn combat_level(levels: &BaseLevels) -> u8 {
     (base + melee.max(ranged).max(magic)) as u8
 }
 
-/// True for any fight method against `foe` (`fight:melee/men`,
-/// `fight:ranged/men`, `fight:magic/men` share one hunting ground).
-fn fights_foe(method: &str, foe: &str) -> bool {
-    method.starts_with("fight:") && method.ends_with(foe)
+/// Site family and resource a method works (`None`: no site in the data,
+/// e.g. smithing at any anvil).
+fn method_sites(method: &str) -> Option<(&'static str, String)> {
+    let (kind, resource) = if let Some(fish) = method.strip_prefix("gather:fishing/") {
+        ("fishing", fish)
+    } else if let Some(ore) = method.strip_prefix("gather:mining/") {
+        ("mining", ore)
+    } else if let Some(logs) = method.strip_prefix("gather:woodcut/") {
+        ("woodcut", logs)
+    } else if let Some(rest) = method.strip_prefix("fight:") {
+        ("fight", rest.rsplit('/').next().unwrap_or(rest))
+    } else if let Some(item) = method.strip_prefix("farm:") {
+        if item.starts_with("raw_") {
+            ("fishing", item)
+        } else if item.ends_with("_ore") || item == "coal" || item == "clay" {
+            ("mining", item)
+        } else if item.ends_with("logs") {
+            ("woodcut", item)
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    Some((kind, resource.to_string()))
 }
 
-/// Minimum combat level to work one planner method without being
-/// hunted on the way in. Every harvest/transform method carries one;
-/// unknown methods are safe at 3 (CLEAN unless the matrix says else).
+/// Minimum combat level to work one planner method without being hunted
+/// on the way in, computed from the game data (no zone written by hand):
+/// the least demanding site of the method, a site counting its bank
+/// (`gamedata::danger::method_requirement`). `NEVER` when no site is
+/// workable at any level; 3 for methods without sites.
 pub fn min_combat_for_method(method: &str) -> u8 {
-    if method == "gather:woodcut/willow_logs" {
-        15
-    } else if fights_foe(method, "/men") {
-        13
-    } else if method == "gather:mining/coal" {
-        43
-    } else if method == "gather:mining/gold_ore" {
-        41
-    } else if fights_foe(method, "/lesser_demons") {
-        // Volcano entrance transit (scorpion 14): the demons themselves
-        // are the training target, the walk in is the gate.
-        29
-    } else if method.starts_with("smith:") {
-        5
-    } else {
-        3
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u8>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(known) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
+        return *known;
     }
-}
-
-/// Safe ground for the same method when the level falls short: the
-/// same resource exists hunter-free around Lumbridge (willows south of
-/// the castle with only far spiders, men with no hunter in 25 tiles).
-/// None when no safe same-skill ground exists (train first instead).
-pub fn safe_area_for_method(method: &str) -> Option<&'static str> {
-    if method == "gather:woodcut/willow_logs" || fights_foe(method, "/men") {
-        Some("lumbridge")
-    } else {
-        None
-    }
-}
-
-/// What the brain owes a bot whose level falls short: run the same
-/// method from safe ground (an access-like move first), or train
-/// combat to the requirement before any trip past it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CombatGate {
-    /// Strong enough: dispatch the method as planned.
-    Clear { required: u8 },
-    /// Same method, safe area first (Lumbridge ground, same resource).
-    Relocate { required: u8, area: &'static str },
-    /// No safe ground: a priority `reach_combat` task to this level
-    /// runs before the dangerous one (never a trip past the level).
-    TrainFirst { required: u8 },
-}
-
-/// Gate one method dispatch on the bot's current combat level.
-pub fn combat_gate(current: u8, method: &str) -> CombatGate {
-    let required = min_combat_for_method(method);
-    if current >= required {
-        CombatGate::Clear { required }
-    } else if let Some(area) = safe_area_for_method(method) {
-        CombatGate::Relocate { required, area }
-    } else {
-        CombatGate::TrainFirst { required }
-    }
+    let computed = match method_sites(method) {
+        Some((kind, resource)) => lifescape_gamedata::danger::method_requirement(kind, &resource).unwrap_or(3),
+        None if method.starts_with("smith:") => 5,
+        None => 3,
+    };
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), computed);
+    computed
 }
 
 /// Typed failure of the combat brain: only unknown training styles.
@@ -168,45 +148,62 @@ pub fn goal_combat_style(goal: &crate::model::GoalKind) -> &str {
     }
 }
 
-/// What the brain dispatches for one locked method at the bot's
-/// current combat level: the method itself, the safe-area access
-/// first (same method after, one-shot), or a priority training trip
-/// first (never the dangerous spot while under level).
+/// Where the brain sends one method for a bot: a workable site, the
+/// combat level the least demanding site needs (a sub-task to train),
+/// or nothing to choose (the method works anywhere).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CombatLaunch {
-    /// Strong enough (or already relocated): dispatch as planned.
-    Direct,
-    /// Same method, safe area first: launch `access:{area}` now.
-    Access { area: &'static str },
-    /// No safe ground: launch a priority `reach_combat` to this level.
-    Train { required: u8 },
+pub enum SitePick {
+    /// No site family for this method (smithing, quests...).
+    Anywhere,
+    /// The nearest site this bot works safely (x, z, level).
+    At((i64, i64, i64)),
+    /// No site is safe at this combat level: train to this level first
+    /// (`NEVER`: no level ever makes one safe, the method is unworkable).
+    Needs(u8),
 }
 
-/// Gate one method dispatch on the bot's combat level and its graph:
-/// a `Done` access to the safe area clears the relocate (one-shot),
-/// so the same method never loops on its own fallback.
-pub fn combat_launch(current: u8, method: &str, nodes: &[crate::model::Node]) -> CombatLaunch {
-    match combat_gate(current, method) {
-        CombatGate::Clear { .. } => CombatLaunch::Direct,
-        CombatGate::Relocate { area, .. } => {
-            let relocated = nodes.iter().any(|node| {
-                matches!(&node.kind, crate::model::NodeKind::AccessArea { area: reached } if reached == area)
-                    && node.status == crate::model::NodeStatus::Done
-            });
-            if relocated {
-                CombatLaunch::Direct
-            } else {
-                CombatLaunch::Access { area }
-            }
-        }
-        CombatGate::TrainFirst { required } => CombatLaunch::Train { required },
+/// (site, requirement) list of one method, computed once from the data.
+fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<((i64, i64, i64), u8)>>> {
+    type Table = std::collections::HashMap<String, Option<std::sync::Arc<Vec<((i64, i64, i64), u8)>>>>;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Table>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(known) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
+        return known.clone();
+    }
+    let table = method_sites(method).map(|(kind, resource)| {
+        std::sync::Arc::new(
+            lifescape_gamedata::danger::sites(kind, &resource)
+                .into_iter()
+                .map(|(x, z, level)| ((x, z, level), lifescape_gamedata::danger::site_requirement(x, z, level)))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let table = table.filter(|rows| !rows.is_empty());
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), table.clone());
+    table
+}
+
+/// The brain's site choice for one method: among the sites this combat
+/// level works safely (site and bank), the nearest to the bot; else the
+/// level the least demanding site needs.
+pub fn pick_site(method: &str, combat: u8, position: Option<(i64, i64, i64)>) -> SitePick {
+    let Some(table) = method_site_table(method) else {
+        return SitePick::Anywhere;
+    };
+    let distance = |site: &(i64, i64, i64)| match position {
+        Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },
+        None => 0,
+    };
+    match table.iter().filter(|(_, required)| *required <= combat).min_by_key(|(site, _)| distance(site)) {
+        Some((site, _)) => SitePick::At(*site),
+        None => SitePick::Needs(table.iter().map(|(_, required)| *required).min().unwrap_or(lifescape_gamedata::danger::NEVER)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{combat_gate, combat_launch, combat_level, goal_combat_style, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError, CombatGate, CombatLaunch};
-    use crate::model::{GoalKind, Node, NodeKind, NodeStatus};
+    use super::{combat_level, goal_combat_style, min_combat_for_method, pick_site, training_method, BaseLevels, CombatError, SitePick};
+    use crate::model::GoalKind;
 
     fn levels(attack: u8, strength: u8, defence: u8, hitpoints: u8, ranged: u8, prayer: u8, magic: u8) -> BaseLevels {
         BaseLevels { attack, strength, defence, hitpoints, ranged, prayer, magic }
@@ -229,114 +226,33 @@ mod tests {
         assert_eq!(combat_level(&levels(99, 99, 99, 99, 99, 99, 99)), 126);
     }
 
+    /// Requirements are computed from the data (no zone in the code): the
+    /// least demanding site of each method, its bank included.
     #[test]
-    fn matrix_pins_every_risky_spot() {
-        assert_eq!(min_combat_for_method("gather:woodcut/willow_logs"), 15, "saules Draynor");
-        assert_eq!(min_combat_for_method("fight:melee/men"), 13, "hommes Varrock-Est");
-        assert_eq!(min_combat_for_method("fight:ranged/men"), 13, "style keeps the ground");
-        assert_eq!(min_combat_for_method("fight:magic/men"), 13, "style keeps the ground");
-        assert_eq!(min_combat_for_method("gather:mining/coal"), 43, "charbon 2701,3331");
-        assert_eq!(min_combat_for_method("gather:mining/gold_ore"), 41, "or 2733,3225");
-        assert_eq!(min_combat_for_method("fight:melee/lesser_demons"), 29, "volcan entree");
-        assert_eq!(min_combat_for_method("smith:steel_platebody"), 5, "enclume 2991,3689");
-        for safe in [
-            "gather:fishing/raw_trout",
-            "gather:mining/iron_ore",
-            "smelt:steel_bar",
-            "cook:trout",
-            "farm:feather",
-            "quest:cook",
-        ] {
-            assert_eq!(min_combat_for_method(safe), 3, "{safe} sur par defaut");
-        }
+    fn requirements_come_from_the_sites() {
+        assert_eq!(min_combat_for_method("gather:fishing/raw_shrimp"), 15, "only Draynor water, under the level-7 wizards");
+        assert_eq!(min_combat_for_method("farm:raw_shrimp"), 15, "the obtain leg fishes the same water");
+        assert_eq!(min_combat_for_method("gather:woodcut/willow_logs"), 3, "some willows sit outside every hunter");
+        assert_eq!(min_combat_for_method("fight:melee/chickens"), 3);
+        assert_eq!(min_combat_for_method("gather:fishing/raw_lobster"), lifescape_gamedata::danger::NEVER, "no bank within reach of Karamja water");
+        assert_eq!(min_combat_for_method("smith:steel_platebody"), 5);
+        assert_eq!(min_combat_for_method("quest:cook"), 3);
     }
 
+    /// The brain sends a fresh bot to a site it works safely, and asks for
+    /// training when no site is safe yet.
     #[test]
-    fn matrix_matches_the_2x_rule_in_the_dumps() {
-        // Requirement is 2 * hunter vislevel + 1 (Npc.ts:1014).
-        let hunter = |name: &str| {
-            let entry = lifescape_gamedata::npcs_by_name(name).into_iter().next().unwrap_or_else(|| panic!("{name} in dumps"));
-            assert!(entry.hunts_players, "{name} hunts");
-            entry.vislevel
-        };
-        assert_eq!(min_combat_for_method("gather:woodcut/willow_logs"), 2 * hunter("young_dark_wizard") as u8 + 1);
-        assert_eq!(min_combat_for_method("fight:melee/men"), 2 * hunter("mugger") as u8 + 1);
-        assert_eq!(min_combat_for_method("gather:mining/coal"), 2 * hunter("brownbear") as u8 + 1);
-        assert_eq!(min_combat_for_method("gather:mining/gold_ore"), 2 * hunter("poison_scorpion") as u8 + 1);
-        assert_eq!(min_combat_for_method("fight:melee/lesser_demons"), 2 * hunter("scorpion") as u8 + 1);
-        assert_eq!(min_combat_for_method("smith:steel_platebody"), 2 * hunter("giantspider1") as u8 + 1);
-        // Fallback ground is hunter-free (Lumbridge): men with no hunter
-        // in 25 tiles, willows with only far spiders around.
-        let lumb_men = lifescape_gamedata::spawns::npc_spawns_near(3222, 3218, 0, 25);
-        assert!(!lumb_men.is_empty(), "men stand around Lumbridge");
-        for spawn in &lumb_men {
-            let entry = lifescape_gamedata::npc_by_id(spawn.npc_id).expect("npc resolves");
-            assert!(!entry.hunts_players, "hunter {} near Lumbridge men", entry.name.unwrap_or("?"));
+    fn site_pick_orients_or_requires_training() {
+        let lumbridge = Some((3222, 3218, 0));
+        match pick_site("gather:woodcut/willow_logs", 3, lumbridge) {
+            SitePick::At((x, z, level)) => {
+                assert!(lifescape_gamedata::danger::site_requirement(x, z, level) <= 3, "picked a site a CB3 cannot work: ({x},{z})");
+            }
+            other => panic!("willows are open to CB3, got {other:?}"),
         }
-        let willow_near_lumbridge = lifescape_gamedata::locs_by_name("willowtree")
-            .iter()
-            .flat_map(|loc| loc.spawns)
-            .any(|spawn| (spawn.x - 3222).abs() + (spawn.z - 3218).abs() <= 60);
-        assert!(willow_near_lumbridge, "saules Lumbridge exist");
-    }
-
-    #[test]
-    fn under_level_picks_the_safe_fallback_or_trains_first() {
-        assert_eq!(
-            combat_gate(3, "gather:woodcut/willow_logs"),
-            CombatGate::Relocate { required: 15, area: "lumbridge" },
-            "CB3 aux saules -> Lumbridge, pas Draynor"
-        );
-        assert_eq!(
-            combat_gate(3, "fight:melee/men"),
-            CombatGate::Relocate { required: 13, area: "lumbridge" },
-            "men at Lumbridge under level"
-        );
-        assert_eq!(
-            combat_gate(3, "gather:mining/coal"),
-            CombatGate::TrainFirst { required: 43 },
-            "no safe coal: combat d'abord"
-        );
-        assert_eq!(
-            combat_gate(40, "gather:mining/gold_ore"),
-            CombatGate::TrainFirst { required: 41 },
-            "one short still trains"
-        );
-        assert_eq!(
-            combat_gate(43, "gather:mining/coal"),
-            CombatGate::Clear { required: 43 },
-            "at level dispatches"
-        );
-        assert_eq!(safe_area_for_method("gather:mining/coal"), None, "coal has no safe ground");
-    }
-
-    #[test]
-    fn no_trip_past_the_level_on_any_pinned_method() {
-        // Guard: one below the requirement never clears, at the
-        // requirement always clears (jamais d'envoi vers la mort).
-        for method in [
-            "gather:woodcut/willow_logs",
-            "fight:melee/men",
-            "fight:ranged/men",
-            "fight:magic/men",
-            "gather:mining/coal",
-            "gather:mining/gold_ore",
-            "fight:melee/lesser_demons",
-            "fight:ranged/lesser_demons",
-            "fight:magic/lesser_demons",
-            "smith:steel_platebody",
-        ] {
-            let required = min_combat_for_method(method);
-            assert!(
-                !matches!(combat_gate(required - 1, method), CombatGate::Clear { .. }),
-                "{method} below {required} never clears"
-            );
-            assert_eq!(
-                combat_gate(required, method),
-                CombatGate::Clear { required },
-                "{method} at {required} clears"
-            );
-        }
+        assert_eq!(pick_site("gather:fishing/raw_shrimp", 3, lumbridge), SitePick::Needs(15));
+        assert!(matches!(pick_site("gather:fishing/raw_shrimp", 15, lumbridge), SitePick::At(_)));
+        assert_eq!(pick_site("smith:bronze_bar", 3, lumbridge), SitePick::Anywhere);
     }
 
     #[test]
@@ -393,58 +309,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn launch_never_dispatches_past_the_level() {
-        // Garde: one below the requirement never dispatches the method
-        // itself (safe area first, or combat first); at the requirement
-        // it dispatches unchanged.
-        let pinned = [
-            "gather:woodcut/willow_logs",
-            "fight:melee/men",
-            "fight:ranged/men",
-            "fight:magic/men",
-            "gather:mining/coal",
-            "gather:mining/gold_ore",
-            "fight:melee/lesser_demons",
-            "fight:ranged/lesser_demons",
-            "fight:magic/lesser_demons",
-            "smith:steel_platebody",
-        ];
-        let empty: Vec<Node> = Vec::new();
-        for method in pinned {
-            let required = min_combat_for_method(method);
-            let short = combat_launch(required - 1, method, &empty);
-            assert!(
-                !matches!(short, CombatLaunch::Direct),
-                "{method} under {required} never dispatches, got {short:?}"
-            );
-            assert_eq!(
-                combat_launch(required, method, &empty),
-                CombatLaunch::Direct,
-                "{method} at {required} dispatches"
-            );
-        }
-        // CB3 aux saules -> Lumbridge, pas Draynor; charbon -> combat.
-        assert_eq!(
-            combat_launch(3, "gather:woodcut/willow_logs", &empty),
-            CombatLaunch::Access { area: "lumbridge" }
-        );
-        assert_eq!(combat_launch(3, "gather:mining/coal", &empty), CombatLaunch::Train { required: 43 });
-        // A done Lumbridge access clears the relocate one-shot (same
-        // method after, no loop on its own fallback).
-        let mut done_access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
-        done_access.status = NodeStatus::Done;
-        assert_eq!(
-            combat_launch(3, "gather:woodcut/willow_logs", std::slice::from_ref(&done_access)),
-            CombatLaunch::Direct,
-            "relocated bots work the same method"
-        );
-        let mut open_access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
-        open_access.status = NodeStatus::Active;
-        assert_eq!(
-            combat_launch(3, "gather:woodcut/willow_logs", std::slice::from_ref(&open_access)),
-            CombatLaunch::Access { area: "lumbridge" },
-            "an open access is not a relocation yet"
-        );
-    }
 }

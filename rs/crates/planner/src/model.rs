@@ -134,6 +134,17 @@ pub struct Node {
     pub progress_current: i64,
     pub progress_target: i64,
     pub spent_ticks: u64,
+    /// Runtime failures counted against this node (`lifecycle`): bounded
+    /// by `MAX_FAILURES`, never reset by a replan (no ghost retries).
+    pub failures: u32,
+    /// Blocked stops (missing tool/input) counted the same way.
+    pub blocks: u32,
+    /// Last typed error seen on this node (`Type: message`), shown on the
+    /// dashboard and in the dossier when the node is abandoned.
+    pub last_error: String,
+    /// Site the brain sends the bot to (x, z, level), chosen at resolve
+    /// from the game data for the bot's combat level (`pick_site`).
+    pub site: Option<(i64, i64, i64)>,
 }
 
 impl Node {
@@ -148,6 +159,10 @@ impl Node {
             progress_current: 0,
             progress_target: target,
             spent_ticks: 0,
+            failures: 0,
+            blocks: 0,
+            last_error: String::new(),
+            site: None,
         }
     }
 
@@ -363,6 +378,16 @@ fn node_to_value(node: &Node) -> Value {
             ("target", Value::Int(node.progress_target)),
         ])),
         ("spent_ticks", Value::Int(node.spent_ticks as i64)),
+        ("failures", Value::Int(i64::from(node.failures))),
+        ("blocks", Value::Int(i64::from(node.blocks))),
+        ("last_error", str_value(&node.last_error)),
+        (
+            "site",
+            match node.site {
+                Some((x, z, level)) => Value::Arr(vec![Value::Int(x), Value::Int(z), Value::Int(level)]),
+                None => Value::Null,
+            },
+        ),
     ])
 }
 
@@ -398,6 +423,14 @@ fn node_from_value(value: &Value) -> Option<Node> {
         progress_current: value.get("progress").get("current").as_i64().unwrap_or(0),
         progress_target: value.get("progress").get("target").as_i64().unwrap_or(0),
         spent_ticks: value.get("spent_ticks").as_i64().unwrap_or(0).max(0) as u64,
+        // Absent in files written before the lifecycle counters: zero.
+        failures: value.get("failures").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
+        blocks: value.get("blocks").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
+        last_error: value.get("last_error").as_str().unwrap_or("").to_string(),
+        site: value.get("site").as_arr().and_then(|cells| {
+            let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
+            Some((part(0)?, part(1)?, part(2)?))
+        }),
     })
 }
 

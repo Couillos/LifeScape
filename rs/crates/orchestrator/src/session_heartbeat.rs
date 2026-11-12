@@ -226,6 +226,10 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
         ("objs", Value::Arr(objs)),
         ("players", Value::Arr(players)),
         ("inv", Value::Arr(slot_items(pack_com))),
+        // The brain never decides on a pack that has not streamed yet
+        // (an empty `inv` right after login read as "no net").
+        ("inv_streamed", Value::Bool(pack_com.is_some_and(|com| bot.world.inv.contains_key(&com)))),
+        ("bank_streamed", Value::Bool(bank_com.is_some_and(|com| bot.world.inv.contains_key(&com)))),
         ("worn", Value::Arr(slot_items(worn_com))),
         ("models", Value::Obj(Default::default())),
         ("bank", Value::Arr(slot_items(bank_com))),

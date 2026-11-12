@@ -1,7 +1,8 @@
 //! Magic style: F2P combat spell picks (strikes, bolts, blasts, curses,
 //! bind, crumble undead) and the same hunt loop as `melee` (spot queue,
 //! death tally, re-pick all live in `kit::fight`, read-only). The kill loop
-//! clicks attack, not the spell (`op_npc_t`): true spell casting needs a kit
+//! casts (`op_npc_t`) through the shared fight loop (`combat_style`
+//! magic, PRD3 lot 6); historical note: the loop used to click attack, a kit
 //! change (kit/ frozen this wave), so the picks below are advisory (logged)
 //! until then. Every pick is members=false (checked against the dumps).
 
@@ -91,6 +92,30 @@ pub fn required_runes(spell: &str) -> &'static [(&'static str, i64)] {
     }
 }
 
+/// Strongest damage spell the level unlocks whose runes the pack holds
+/// (PRD3 lot 6: the fight loop casts it on the target).
+pub fn castable_spell(bot: &Bot) -> Option<&'static str> {
+    let level = magic_level(bot);
+    DAMAGE_SPELLS.iter().rev().filter(|(_, need, _)| level >= *need).map(|(spell, _, _)| *spell).find(|spell| {
+        let runes: Vec<(String, i64)> = required_runes(spell).iter().map(|(name, count)| (name.to_string(), *count)).collect();
+        crate::kit::magic::missing_runes(bot, &runes).is_empty()
+    })
+}
+
+/// Wind-strike runes somewhere in the pack or the bank; else blocked on
+/// them (the brain files the obtain: market or runecraft).
+fn require_combat_gear(bot: &Bot) -> Result<(), crate::ScriptError> {
+    let mut missing = Vec::new();
+    for rune in ["mindrune", "airrune"] {
+        let Ok(id) = crate::kit::pack::obj_id(bot, rune) else { continue };
+        let held = crate::kit::pack::pack_total(bot, id) + bot.bank_items().get(&id).copied().unwrap_or(0);
+        if held == 0 {
+            missing.push(rune.to_string());
+        }
+    }
+    if missing.is_empty() { Ok(()) } else { Err(crate::ScriptError::Blocked { missing }) }
+}
+
 /// Magic farmer: `magic [spot ...] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("magic", args)?;
@@ -103,8 +128,12 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.allow_shop = spec.allow_shop;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
+    // PRD3 lot 6: the run fights magic for real (gear scored for it,
+    // spells cast); missing gear blocks typed for the brain to obtain.
+    bot.combat_style = "magic".to_string();
+    require_combat_gear(bot)?;
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
-        let named: Vec<_> = spots.iter().filter_map(|key| knowledge::combat_spots::by_key(key)).collect();
+        let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() { vec![knowledge::combat_spots::best_spot(magic_level(bot))] } else { named }
     };
     bot.log(&format!("magic={} spell={} spots={}", magic_level(bot), best_damage_spell(magic_level(bot)), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));

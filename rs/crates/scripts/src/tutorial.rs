@@ -834,7 +834,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
             }
             check(bot.position(), false, "teleported to mainland")
         }
-        _ => Err(ScriptError::Usage(format!("tutorial stuck: unknown stage {stage:?}"))),
+        _ => Err(ScriptError::Failed(format!("tutorial stuck: unknown stage {stage:?}"))),
     }
 }
 

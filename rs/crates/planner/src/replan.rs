@@ -77,30 +77,10 @@ pub fn replan_node(node: &mut Node, cause: &ReplanCause, missing: &[String], cou
                     Vec::new(),
                     1,
                 );
-                // Same source-aware legs as creation (tools never farm);
-                // `resolve_ready` re-prices them with fresh public data.
-                let (farmable, shopable) = crate::expand::source_flags(need);
-                if farmable {
-                    sub.alternatives.push(crate::model::Alternative {
-                        method: format!("farm:{need}"),
-                        est_ticks: 0,
-                        est_coins: 0,
-                    });
-                }
-                if shopable {
-                    sub.alternatives.push(crate::model::Alternative {
-                        method: "shop:buy".to_string(),
-                        est_ticks: 0,
-                        est_coins: 0,
-                    });
-                }
-                // Market leg re-added at `resolve_ready` for non-Iron
-                // only; the farm/shop legs always apply.
-                sub.alternatives.push(crate::model::Alternative {
-                    method: "market:buy".to_string(),
-                    est_ticks: 0,
-                    est_coins: 0,
-                });
+                // Same legs as creation (PRD3: market first, every
+                // production way, the shop under D-A); Iron is filtered
+                // at resolve time, which re-prices them.
+                sub.alternatives = crate::obtain_legs::obtain_alternatives(need, false);
                 fresh.push(sub);
             }
             // The blocked node waits on its new deps (or retries when

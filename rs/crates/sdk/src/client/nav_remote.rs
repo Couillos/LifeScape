@@ -292,6 +292,7 @@ mod tests {
             f2p_only: true,
             satisfied: std::collections::HashSet::new(),
             excluded_edges: std::collections::HashSet::new(),
+            danger: Vec::new(),
         }
     }
 

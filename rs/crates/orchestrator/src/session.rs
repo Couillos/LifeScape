@@ -226,6 +226,8 @@ impl Shared {
                 Value::Arr(inner.script_args.iter().map(|arg| str_value(arg)).collect()),
             ),
             ("paused", Value::Bool(inner.paused)),
+            // Hold survives a daemon restart: `restore_jobs` reads it back.
+            ("held", Value::Bool(inner.held)),
             ("status", str_value(&inner.status)),
             ("session_pid", Value::Int(Self::session_pid() as i64)),
             ("last_error", inner.last_error.clone().unwrap_or(Value::Null)),
@@ -377,6 +379,7 @@ pub(crate) fn script_error_type(error: &lifescape_scripts::ScriptError) -> &'sta
     match error {
         lifescape_scripts::ScriptError::Sdk(_) => "Sdk",
         lifescape_scripts::ScriptError::Usage(_) => "Usage",
+        lifescape_scripts::ScriptError::Failed(_) => "Failed",
         lifescape_scripts::ScriptError::Blocked { .. } => "Blocked",
     }
 }
@@ -468,7 +471,7 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                     (level, pos_x, pos_z),
                 );
                 shared.inner.lock().unwrap().last_heartbeat_tick = tick;
-                shared.log(&format!("event script_error {script} resolved=false"));
+                shared.log(&format!("event script_error {script} resolved=false {error_type}: {message}"));
                 let error = object(vec![
                     ("where", str_value(script)),
                     ("type", str_value(error_type)),
@@ -553,6 +556,12 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
                     node_id: start.node_id,
                     stop: outcome.3.clone(),
                     missing: outcome.4.clone(),
+                    error: outcome.2.as_ref().map(|error| {
+                        (
+                            error.get("type").as_str().unwrap_or("?").to_string(),
+                            error.get("message").as_str().unwrap_or("").to_string(),
+                        )
+                    }),
                 },
             );
             drop(bot);

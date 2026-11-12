@@ -31,6 +31,11 @@ check('auto string', TableSort.sortData(autoCols, mixed, 'method', 1).map(functi
 check('unknown key keeps order', TableSort.sortData(numCols, rows, 'nope', 1).map(function (r) { return r.mean; }), [300, null, 100, 200]);
 check('empty rows', TableSort.sortData(numCols, [], 'mean', 1), []);
 
+check('row tag escapes and drops missing', TableSort.rowOpenTag({ 'data-account': 'a"<b', class: '', title: null }), '<tr data-account="a&quot;&lt;b">');
+check('sortedRows keeps input order before any click', TableSort.sortedRows('fresh', numCols, rows).map(function (r) { return r.mean; }), [300, null, 100, 200]);
+TableSort._state.clicked = { key: 'mean', dir: -1 };
+check('sortedRows follows the table state', TableSort.sortedRows('clicked', numCols, rows).map(function (r) { return r.mean; }), [300, 200, 100, null]);
+
 if (failures) {
   console.log(failures + ' FAILURE(S)');
   process.exit(1);

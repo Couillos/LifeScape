@@ -97,7 +97,7 @@ fn alch_one(bot: &mut Bot, spell: &str, item: u16, coins: u16) -> Result<(), Scr
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{spell} never landed at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
 }
 
 #[cfg(test)]

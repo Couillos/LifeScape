@@ -238,13 +238,62 @@ pub struct Plan {
     pub dest_blocker: Option<Blocker>,
 }
 
-/// Planner inputs: tolls, F2P bounds, owned tags, banned edges.
+/// Planner inputs: tolls, F2P bounds, owned tags, banned edges, and the
+/// squares where aggressive NPCs would attack this bot.
 #[derive(Clone, Debug, Default)]
 pub struct NavOptions {
     pub allow_paid: bool,
     pub f2p_only: bool,
     pub satisfied: HashSet<String>,
     pub excluded_edges: HashSet<EdgeId>,
+    /// Danger squares (client-computed for the bot's combat level):
+    /// walking inside costs `DANGER_STEP_COST` more per step, so routes
+    /// go around hunters when a way exists and cross only when none does.
+    pub danger: Vec<DangerZone>,
+}
+
+/// One danger square: aggressive spawn plus its reach (Chebyshev).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DangerZone {
+    pub x: i32,
+    pub z: i32,
+    pub level: i32,
+    pub radius: i32,
+}
+
+/// Extra cost of one walk step landing in a danger square: a detour of
+/// up to this many tiles per avoided tile beats walking past a hunter.
+pub const DANGER_STEP_COST: u32 = 8;
+
+/// Danger tiles of one search, built once (squares overlap; lookups are
+/// one hash probe per step instead of a scan of every zone).
+#[derive(Default)]
+pub struct DangerMap {
+    tiles: HashSet<(i32, i32, i32)>,
+}
+
+impl DangerMap {
+    pub fn new(zones: &[DangerZone]) -> DangerMap {
+        let mut tiles = HashSet::new();
+        for zone in zones {
+            let radius = zone.radius.clamp(0, 32);
+            for tile_x in zone.x - radius..=zone.x + radius {
+                for tile_z in zone.z - radius..=zone.z + radius {
+                    tiles.insert((tile_x, tile_z, zone.level));
+                }
+            }
+        }
+        DangerMap { tiles }
+    }
+
+    /// Extra cost of stepping onto `tile`.
+    pub fn extra(&self, tile: Tile) -> u32 {
+        if !self.tiles.is_empty() && self.tiles.contains(&(tile.x, tile.z, tile.level)) {
+            DANGER_STEP_COST
+        } else {
+            0
+        }
+    }
 }
 
 /// One banned edge, for the single executor replan.
@@ -754,6 +803,7 @@ fn dijkstra(
 
     };
     let dest_walkable = tile_walkable(search.open(dest));
+    let danger = DangerMap::new(&options.danger);
     let (rides, customs) = shared;
     let mut dist: U64Map<u32> = U64Map::default();
     let mut prev: U64Map<(u64, PrevEdge)> = U64Map::default();
@@ -832,7 +882,7 @@ fn dijkstra(
             // walks when the shut view allows it: the opening (if any)
             // already rode the step onto the tile.
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
+                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
                 continue;
             }
             // Stop onto a usable door tile from a side the table lets
@@ -845,7 +895,7 @@ fn dijkstra(
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1, PrevEdge::Walk);
+                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
                     }
                 }
             }

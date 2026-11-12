@@ -185,8 +185,8 @@ fn profit_subtracts_costs_and_friction() {
     assert!((loaded - 1225.0).abs() < 0.001, "got {loaded}");
 }
 
-/// End to end on an in-memory store: price from the shop row,
-/// profit aggregates the bucket.
+/// End to end on an in-memory store: an untraded, unbid item values at
+/// 1 coin (never its shop price), flagged prior; profit aggregates.
 #[test]
 fn profit_prices_through_the_store() -> Result<(), lifescape_store::Error> {
     let store = Store::open_in_memory()?;
@@ -202,9 +202,9 @@ fn profit_prices_through_the_store() -> Result<(), lifescape_store::Error> {
     }
     let rows = profit_rows(&store, &snapshot);
     assert_eq!(rows.len(), 1);
-    assert!((rows[0].revenue - 1500.0).abs() < 0.001, "got {}", rows[0].revenue);
-    assert!((rows[0].profit - 1500.0).abs() < 0.001, "no inputs, no pauses, no trend");
-    assert!(rows[0].price_prior, "shop price is the cold-start prior, not a market print");
+    assert!((rows[0].revenue - 300.0).abs() < 0.001, "300 shrimps at 1 coin, got {}", rows[0].revenue);
+    assert!((rows[0].profit - 300.0).abs() < 0.001, "no inputs, no pauses, no trend");
+    assert!(rows[0].price_prior, "1 coin is the cold-start prior, not a market print");
     Ok(())
 }
 
@@ -345,7 +345,7 @@ fn pure_coin_reports_inherit_last_item() -> Result<(), lifescape_store::Error> {
     assert!((rows[0].profit_per_6000 - (-260.0 / 3.0)).abs() < 0.01, "got {}", rows[0].profit_per_6000);
     assert_eq!(rows[0].deals_settled, 2, "failed exit is not settled");
     assert!((rows[0].fill_rate - 2.0 / 3.0).abs() < 0.001);
-    assert_eq!(rows[0].stock_value, 450, "150 feathers at 3 coins");
+    assert_eq!(rows[0].stock_value, 150, "150 untraded feathers at 1 coin");
     Ok(())
 }
 
@@ -522,4 +522,19 @@ fn market_report(method: &str, stop: &str, flows: Vec<(&str, &str, i64)>) -> Par
             .collect(),
         xp: Vec::new(),
     }
+}
+
+/// User rule (2026-11-12): the tutorial never feeds the rates — its
+/// kit, XP and drops describe no activity a bot can choose.
+#[test]
+fn tutorial_reports_never_feed_the_rates() {
+    let mut snapshot = Snapshot::new();
+    let mut tutorial = parsed_fishing(300, 6000, 3);
+    tutorial.method = "tutorial".to_string();
+    tutorial.script = "tutorial".to_string();
+    snapshot.record(&tutorial);
+    assert!(snapshot.yield_rows().is_empty(), "no tutorial yield");
+    assert!(snapshot.xp_rows().is_empty(), "no tutorial XP rate");
+    snapshot.record(&parsed_fishing(300, 6000, 3));
+    assert_eq!(snapshot.yield_rows().len(), 1, "real activities still count");
 }

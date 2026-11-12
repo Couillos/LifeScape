@@ -16,13 +16,18 @@
   h1 { font-size: 18px; margin: 0 0 4px; }
   h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  #list { min-width: 250px; max-width: 330px; flex: 1 1 250px; }
-  #list ul { list-style: none; padding: 0; margin: 8px 0; max-height: 56vh; overflow-y: auto; }
-  #list li { margin: 2px 0; cursor: pointer; }
-  #list li.cur { font-weight: bold; color: #ff0; }
-  #list li .qty { color: #888; }
-  #list li .up { color: #4caf50; }
-  #list li .down { color: #e05252; }
+  #list { min-width: 250px; max-width: 420px; flex: 1 1 250px; }
+  /* Item table: click = pick, header click = sort the whole list. */
+  #itemswrap { margin: 8px 0; max-height: 56vh; overflow: auto; }
+  #items { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #items td, #items th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #items th { color: #888; font-weight: normal; }
+  #items td.left, #items th.left { text-align: left; }
+  #items tr[data-id] { cursor: pointer; }
+  #items tr[data-id]:hover { background: #1a1a1a; }
+  #items tr.cur { font-weight: bold; color: #ff0; }
+  #items .up { color: #4caf50; }
+  #items .down { color: #e05252; }
   #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
   #pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 4px; }
   #pager button { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; }
@@ -34,6 +39,9 @@
   #tables table { border-collapse: collapse; font-size: 12px; }
   #tables td, #tables th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
   #tables th { color: #888; font-weight: normal; }
+  #book tr.ask td:first-child { color: #e05252; }
+  #book tr.bid td:first-child { color: #4caf50; }
+  #book tr.spread td { color: #888; text-align: center; }
   .muted { color: #888; }
 </style>
 </head>
@@ -49,8 +57,8 @@
   <div id="list">
     <h2>Items</h2>
     <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
-    <div class="muted">traded items only · price · 24h change · 24h volume — most traded first</div>
-    <ul id="items"></ul>
+    <div class="muted">traded items only — most traded first, click a header to sort</div>
+    <div id="itemswrap"><table id="items"></table></div>
     <div id="pager">
       <button onclick="page(-1)">‹</button>
       <span id="pageinfo"></span>
@@ -73,6 +81,7 @@
   </div>
 </div>
 <script src="/chart.js"></script>
+<script src="/table.js"></script>
 <script src="/market.js"></script>
 </body>
 </html>

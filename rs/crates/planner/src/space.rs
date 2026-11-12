@@ -6,13 +6,13 @@
 //! goal-style gear; tools ride in it too, resolved worker-side to the
 //! best banked tool per kit spec). Everything else banked is surplus:
 //! market sells (D12, down to 1 coin), floor invendus fall back to D2
-//! (alch when the formula wins, else best shop, else drop for D10), and a
+//! (alch when the formula wins, else drop for D10; PRD3: never an NPC
+//! shop sale), and a
 //! bank still full of unsold D12 stock drops whole stacks cheapest-total
 //! first with the orders cancelled (D17).
 //!
-//! Alchemy legs are decided here but not executed yet: no alchemy script
-//! exists on the socle, so the worker maps them onto the shop leg and
-//! logs the paper win (`shortcut: cast only once a magic script lands`).
+//! Alchemy legs are decided here; the worker casts them when it holds the
+//! runes and the level, and otherwise keeps the stack listed.
 
 #![forbid(unsafe_code)]
 
@@ -62,19 +62,18 @@ pub enum Fallback {
     Market,
     AlchHigh,
     AlchLow,
-    Shop,
     Drop,
 }
 
-/// Priced context for one surplus item: general-store buyback, alchemy
-/// values, the caster's level and runes, the rune cost at market prices.
+/// Priced context for one surplus item: its market value (reference),
+/// alchemy values, the caster's level and runes, the rune cost at market
+/// prices. PRD3: no NPC buyback exists in the economy.
 #[derive(Debug, Clone)]
 pub struct ItemEcon {
     pub tradeable: bool,
-    pub shop_buys: bool,
     pub alch_high: i64,
     pub alch_low: i64,
-    pub shop_price: i64,
+    pub market_value: i64,
     pub magic_level: i64,
     pub has_runes: bool,
     pub rune_cost: i64,
@@ -86,31 +85,22 @@ pub fn market_leg(tradeable: bool, iron: bool) -> bool {
 }
 
 /// D2 decision: high alchemy (55) or low alchemy (21) when the caster has
-/// the runes and `alch − rune_cost > shop buyback`, else the shop, else
-/// the drop for untradeable unsellable stock (D10).
+/// the runes and `alch − rune_cost > market value`, else the drop (D10).
+/// PRD3: never a sale to an NPC shop.
 pub fn fallback_for(item: &ItemEcon) -> Fallback {
-    if item.magic_level >= 55
-        && item.has_runes
-        && item.alch_high.saturating_sub(item.rune_cost) > item.shop_price
-    {
+    if item.magic_level >= 55 && item.has_runes && item.alch_high.saturating_sub(item.rune_cost) > item.market_value {
         return Fallback::AlchHigh;
     }
-    if item.magic_level >= 21
-        && item.has_runes
-        && item.alch_low.saturating_sub(item.rune_cost) > item.shop_price
-    {
+    if item.magic_level >= 21 && item.has_runes && item.alch_low.saturating_sub(item.rune_cost) > item.market_value {
         return Fallback::AlchLow;
-    }
-    if item.shop_buys {
-        return Fallback::Shop;
     }
     Fallback::Drop
 }
 
-/// Reserve floor (§5.5): the bot never sells under the best of the shop
-/// buyback and the castable alchemy net, and D12 never prices under 1.
-pub fn reserve_floor(shop_price: i64, alch_net: Option<i64>) -> i64 {
-    shop_price.max(alch_net.unwrap_or(0)).max(1)
+/// Reserve floor (§5.5): the bot never sells under its castable alchemy
+/// net, and D12 never prices under 1. PRD3: no shop buyback term.
+pub fn reserve_floor(alch_net: Option<i64>) -> i64 {
+    alch_net.unwrap_or(0).max(1)
 }
 
 /// D17 drop order for stock stuck at the carnet with a full bank: whole
@@ -214,10 +204,9 @@ mod tests {
     fn econ() -> ItemEcon {
         ItemEcon {
             tradeable: true,
-            shop_buys: true,
             alch_high: 100,
             alch_low: 30,
-            shop_price: 40,
+            market_value: 40,
             magic_level: 55,
             has_runes: true,
             rune_cost: 20,
@@ -234,18 +223,16 @@ mod tests {
     #[test]
     fn d2_falls_through_to_shop_then_drop() {
         let poor_alch = ItemEcon { rune_cost: 90, ..econ() };
-        assert_eq!(fallback_for(&poor_alch), Fallback::Shop, "100 - 90 < 40 sells");
+        assert_eq!(fallback_for(&poor_alch), Fallback::Drop, "100 - 90 < 40: never a shop sale, drop");
         let no_runes = ItemEcon { has_runes: false, ..econ() };
-        assert_eq!(fallback_for(&no_runes), Fallback::Shop, "no runes sells");
-        let unsellable = ItemEcon { shop_buys: false, rune_cost: 90, ..econ() };
-        assert_eq!(fallback_for(&unsellable), Fallback::Drop, "D10: nowhere to sell");
+        assert_eq!(fallback_for(&no_runes), Fallback::Drop, "no runes: drop (PRD3, no NPC buyback)");
     }
 
     #[test]
     fn reserve_floor_takes_the_best_and_never_drops_under_one() {
-        assert_eq!(reserve_floor(40, Some(80)), 80, "castable alch wins");
-        assert_eq!(reserve_floor(40, Some(10)), 40, "shop wins");
-        assert_eq!(reserve_floor(0, None), 1, "D12 minimum one coin");
+        assert_eq!(reserve_floor(Some(80)), 80, "castable alch is the reserve");
+        assert_eq!(reserve_floor(Some(0)), 1, "worthless alch: one coin");
+        assert_eq!(reserve_floor(None), 1, "D12 minimum one coin");
     }
 
     #[test]

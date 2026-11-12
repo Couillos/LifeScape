@@ -12,6 +12,9 @@ pub(crate) struct StaticWearable {
     pub strength: i64,
     pub prayer: i64,
     pub requirements: &'static [(&'static str, i64)],
+    pub quest: Option<&'static str>,
+    pub tier: i64,
+    pub rangebonus: i64,
 }
 
 mod generated {
@@ -32,6 +35,14 @@ pub struct Wearable {
     pub strength: i64,
     pub prayer: i64,
     pub requirements: Vec<(String, i64)>,
+    /// Quest directory the wield check needs first (`quest_dragon` for
+    /// rune platebodies), from the levelrequire labels.
+    pub quest: Option<String>,
+    /// `levelrequire` param: bow/arrow tier (ammo rule) or tool level
+    /// (pickaxe mining level); -1 when absent.
+    pub tier: i64,
+    /// Arrow ranged strength (`rangebonus`); -1 when absent.
+    pub rangebonus: i64,
 }
 
 /// Level-gated stats, mirroring `equipment.STATS`.
@@ -66,6 +77,9 @@ fn wearable_from_static(row: &StaticWearable) -> Wearable {
         strength: row.strength,
         prayer: row.prayer,
         requirements: pair_list(row.requirements),
+        quest: row.quest.map(str::to_string),
+        tier: row.tier,
+        rangebonus: row.rangebonus,
     }
 }
 
@@ -116,6 +130,23 @@ mod tests {
         assert!(!requirements_met(&excal, &[("attack", 19)]));
         assert!(covers_slot(&excal, 3));
         assert!(!covers_slot(&excal, 4));
+    }
+
+    /// PRD3 lot 5: ranged and magic gates, combo labels in argument
+    /// order, quest gates and tiers come from the server labels.
+    #[test]
+    fn server_labels_decide_the_gates() {
+        let req = |name: &str| by_name(name).expect(name).requirements;
+        assert!(req("oak_shortbow").contains(&("ranged".to_string(), 5)));
+        assert!(req("coif").contains(&("ranged".to_string(), 20)));
+        let staff = req("battlestaff");
+        assert!(staff.contains(&("magic".to_string(), 30)) && staff.contains(&("attack".to_string(), 30)));
+        let hide = req("blue_dragonhide_body");
+        assert!(hide.contains(&("ranged".to_string(), 50)) && hide.contains(&("defence".to_string(), 40)), "ranged first, then defence: {hide:?}");
+        assert_eq!(by_name("rune_platebody").expect("plate").quest.as_deref(), Some("quest_dragon"));
+        assert_eq!(by_name("rune_arrow").expect("arrow").tier, 40);
+        assert!(by_name("rune_arrow").expect("arrow").rangebonus > by_name("bronze_arrow").expect("arrow").rangebonus);
+        assert_eq!(by_name("rune_pickaxe").expect("pick").tier, 41);
     }
 
     #[test]

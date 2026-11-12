@@ -26,6 +26,9 @@ pub struct LoadCfg {
     pub flee_cap: u32,
     pub flee_ban: u64,
     pub flee_wait: u64,
+    /// A death bans the spot far longer than a flee: the threat that
+    /// killed the bot is still there (Draynor wizards, ~100 deaths).
+    pub death_ban: u64,
     pub death_wait: u64,
     pub repick_tries: u32,
     pub repick_wait: u64,
@@ -37,7 +40,7 @@ impl LoadCfg {
     pub fn gather() -> LoadCfg {
         LoadCfg {
             stall_ticks: 1000, gone_ban: 250, structural_ban: 7200, unreach_ban: 1800, refusal_ban: 500,
-            flee_cap: 2, flee_ban: 500, flee_wait: 200, death_wait: 40,
+            flee_cap: 2, flee_ban: 500, flee_wait: 200, death_ban: 18000, death_wait: 40,
             repick_tries: 16, repick_wait: 15, round_idle: 12,
         }
     }
@@ -264,6 +267,10 @@ pub fn run_load<Ops: LoopOps>(
         let (died, fresh) = death_since(bot, state.seen_death);
         state.seen_death = fresh;
         if died {
+            if let Some(pos) = state.spot {
+                state.banned.ban_for(pos, bot.world.ticks, cfg.death_ban);
+                bot.log(&format!("died working ({},{}), spot banned {} ticks", pos.0, pos.1, cfg.death_ban));
+            }
             let spent = bot.world.ticks;
             respawn_wait(bot, cfg, state)?;
             state.idle_since += bot.world.ticks - spent;

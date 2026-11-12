@@ -122,7 +122,7 @@ fn jewel_one(bot: &mut Bot, furnace_x: i32, furnace_z: i32, furnace: u16, bar: u
         let target = bot.world.ticks + 30;
         while bot.world.modal.is_none() && bot.world.ticks < target { bot.pump(2)?; }
         if bot.world.modal.is_none() {
-            return Err(ScriptError::Usage(format!("jewellery grid never opened at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("jewellery grid never opened at {:?}", bot.position())));
         }
     }
     let com = grid_button(bot, inv_name)?;
@@ -134,7 +134,7 @@ fn jewel_one(bot: &mut Bot, furnace_x: i32, furnace_z: i32, furnace: u16, bar: u
         bot.pump(2)?;
         if pack_total(bot, bar) < had { return Ok(()); }
     }
-    Err(ScriptError::Usage(format!("jewellery never cast at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("jewellery never cast at {:?}", bot.position())))
 }
 
 /// Top the pack up: mould first (kept across loads), then bars and gems

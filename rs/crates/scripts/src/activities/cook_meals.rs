@@ -127,7 +127,7 @@ pub fn run_cook_meals(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 step_bot.pump(2)?;
             }
             if pack_total(step_bot, input) >= had {
-                return Err(ScriptError::Usage(format!("wine never fermented at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("wine never fermented at {:?}", step_bot.position())));
             }
         } else {
             let job = ProduceJob { spec: &BAKE, input, input_name: meal.input, want: 0, products: products.clone(), near: (bank.x as i32, bank.z as i32) };
@@ -220,10 +220,10 @@ fn click_inv(bot: &mut Bot, held: u16, target: u16, pick: Option<&str>) -> Resul
     while bot.world.ticks < until {
         if !bot.chat_options().is_empty() {
             let Some(choice) = pick else {
-                return Err(ScriptError::Usage(format!("unexpected choice at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("unexpected choice at {:?}", bot.position())));
             };
             if produce::match_option(&bot.chat_options(), choice).is_none() {
-                return Err(ScriptError::Usage(format!("choice {choice:?} matches no option at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("choice {choice:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(choice)?;
             bot.pump(5)?;
@@ -236,7 +236,7 @@ fn click_inv(bot: &mut Bot, held: u16, target: u16, pick: Option<&str>) -> Resul
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("nothing mixed at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("nothing mixed at {:?}", bot.position())))
 }
 
 #[cfg(test)]

@@ -52,6 +52,16 @@ impl ZipQuote {
     }
 }
 
+/// One repricing step toward the other side (PRD3 lot 2): 5% of the
+/// current price, at least one coin, kept inside `[floor, ceiling]`. A
+/// seller walks down to its floor, a buyer up to its ceiling; at 1 coin
+/// (never-traded default) a buyer climbs one coin per step.
+pub fn step_toward(current: i64, sell: bool, floor: i64, ceiling: i64) -> i64 {
+    let step = (current / 20).max(1);
+    let moved = if sell { current - step } else { current + step };
+    clamp_quote(moved, floor.max(1), ceiling.max(floor.max(1)))
+}
+
 fn clamp_quote(price: i64, floor: i64, ceiling: i64) -> i64 {
     price.max(floor).min(ceiling).max(1)
 }
@@ -117,6 +127,21 @@ pub fn pick_table(spreads: &[(i64, i64, i64)]) -> Option<i64> {
     let mut ranked: Vec<(i64, i64, i64)> = spreads.to_vec();
     ranked.sort_by(|left, right| right.1.cmp(&left.1));
     ranked.into_iter().next().map(|row| row.0)
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::step_toward;
+
+    #[test]
+    fn steps_walk_toward_the_bounds() {
+        assert_eq!(step_toward(1, false, 1, 50), 2, "a 1-coin bid climbs one coin");
+        assert_eq!(step_toward(100, false, 1, 200), 105, "5% up");
+        assert_eq!(step_toward(198, false, 1, 200), 200, "capped at the ceiling");
+        assert_eq!(step_toward(100, true, 60, 1000), 95, "5% down");
+        assert_eq!(step_toward(61, true, 60, 1000), 60, "held at the floor");
+        assert_eq!(step_toward(1, true, 1, 1), 1, "never under 1");
+    }
 }
 
 #[cfg(test)]

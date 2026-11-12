@@ -12,20 +12,24 @@ use lifescape_sdk::Bot;
 use crate::kit::spots::{nearest_bank_at, nearest_live, pick_hop_fish_spot, pick_near_fish_spot};
 use crate::kit::tools::{blocked_tool, FISH_SPEC};
 use crate::kit::bank::bank_trip;
-use crate::kit::pack::{free_slots, obj_id, obj_price, pack_total};
-use crate::kit::shop::{buy_stock, sell_for_target};
+use crate::kit::pack::{free_slots, obj_id, obj_price, pack_total, shop_price};
+use crate::kit::shop::buy_stock;
 use crate::kit::harvest::WorkOutcome;
 use crate::kit::survival::learn_level;
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 pub const FISH_STAT: u8 = 10;
+/// A live spot NPC farther than this from the chosen tile is another
+/// spot: the chosen one moved (spots hop every 280-530 ticks).
+const SPOT_MOVED_TILES: i32 = 6;
 const BAIT_MIN: u32 = 20;
 const BAIT_WANT: u32 = 200;
 
 /// Server start-of-work acks: the action loop runs on the server's side.
 /// Fishing-only vocabulary (point 1: skill-specific stays with the skill).
-pub const FISHING_ACKS: [&str; 2] = ["cast out your line", "attempt to catch"];
+/// Net and harpoon spots ack with their own lines (content skill_fishing).
+pub const FISHING_ACKS: [&str; 4] = ["cast out your line", "attempt to catch", "cast out your net", "start harpooning"];
 
 /// One click, then watch the chain: re-clicking restarts it, so never
 /// spam. A cast acked on a still-live spot is a dry streak, not a dead
@@ -59,7 +63,7 @@ impl<'a> crate::kit::harvest::HarvestSource for FishSource<'a> {
 
     fn slot_moved(&self, bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
         nearest_live(bot, self.tier.category, self.x, self.z).is_some_and(|(_, live_x, live_z)| {
-            (live_x - self.x).abs() + (live_z - self.z).abs() > 6
+            (live_x - self.x).abs() + (live_z - self.z).abs() > SPOT_MOVED_TILES
         })
     }
 
@@ -121,7 +125,13 @@ fn work_spot(
     let Some((slot, live_x, live_z)) = nearest_live(bot, tier.category, spot_x, spot_z) else {
         return Ok((WorkOutcome::Gone, 0));
     };
-    let _ = (live_x, live_z);
+    // Only the chosen spot: a same-category NPC across the bay is another
+    // spot (the picker never vetted it for danger or its bank), so a
+    // moved spot is a repick, never a click on whatever is in view.
+    if (live_x - spot_x).abs() + (live_z - spot_z).abs() > SPOT_MOVED_TILES {
+        bot.log(&format!("spot ({spot_x},{spot_z}) moved away (nearest live at ({live_x},{live_z})), repicking"));
+        return Ok((WorkOutcome::Gone, 0));
+    }
     let mut source = FishSource { tier, slot, x: spot_x, z: spot_z, patient: false };
     crate::kit::harvest::watch_stand(bot, &mut source, spot_x, spot_z, product_ids, had_fish)
 }
@@ -145,7 +155,7 @@ fn ensure_gear(
         let side_bank = (bot.tables.com_id)("bank_side:inv").ok_or_else(|| ScriptError::Usage("bank com missing".to_string()))?;
         let main_bank = (bot.tables.com_id)("bank_main:inv").ok_or_else(|| ScriptError::Usage("bank com missing".to_string()))?;
         if bank_trip(bot, bank, &keep, 0)? == 0 && pack_total(bot, tool) == 0 {
-            let price = obj_price(tier.tool) as u32;
+            let price = shop_price(tier.tool).unwrap_or(i64::MAX).min(i64::from(u32::MAX)) as u32;
             if pack_total(bot, coins) < price {
                 return Ok(false);
             }
@@ -179,11 +189,7 @@ fn restock_bait(
     if need == 0 {
         return Ok(true);
     }
-    let price = obj_price(bait).max(1) as u32;
-    let shortfall = need * price - pack_total(bot, coins).min(need * price);
-    if shortfall > 0 {
-        sell_for_target(bot, &[], coins, shortfall)?;
-    }
+    let price = shop_price(bait).unwrap_or(i64::MAX).clamp(1, i64::from(u32::MAX)) as u32;
     if pack_total(bot, coins) < price {
         let keep: Vec<u16> = FISH_SPEC.known_ids(bot).into_iter().collect();
         bank_trip(bot, bank, &keep, (need * price).min(5000))?;
@@ -201,14 +207,13 @@ fn restock_bait(
 fn tier_pass(bot: &Bot, tier: &knowledge::fishing::FishTier) -> Option<u8> {
     let tool_held = obj_id(bot, tier.tool).is_ok_and(|id| pack_total(bot, id) > 0);
     let coins = obj_id(bot, "coins").map(|id| pack_total(bot, id)).unwrap_or(0);
-    let tool_price = obj_price(tier.tool);
-    let tool_fundable = tool_price > 0 && coins >= tool_price as u32;
+    let tool_fundable = shop_price(tier.tool).is_some_and(|price| i64::from(coins) >= price);
     let (bait_ready, bait_fundable) = match tier.bait {
         None => (true, true),
         Some(bait) => {
             let held = obj_id(bot, bait).map(|id| pack_total(bot, id)).unwrap_or(0);
-            let price = obj_price(bait);
-            (held >= BAIT_MIN, price > 0 && coins >= BAIT_MIN.saturating_mul(price as u32))
+            let fundable = shop_price(bait).is_some_and(|price| i64::from(coins) >= i64::from(BAIT_MIN) * price);
+            (held >= BAIT_MIN, fundable)
         }
     };
     if tool_held && bait_ready {
@@ -380,10 +385,18 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
         cfg: &crate::kit::load::LoadCfg,
         state: &mut crate::kit::load::LoopState,
     ) -> Result<bool, ScriptError> {
-        bot.log("hurt, fleeing");
+        bot.log(&format!("hurt, fleeing to the bank ({},{})", self.bank.x, self.bank.z));
         bot.intend("fleeing a hunter");
         let abort = crate::kit::load::register_hurt(cfg, state, bot.world.ticks);
-        wait_ticks(bot, 200)?;
+        // Run, never stand: waiting in place under a ranged hunter is how
+        // the Draynor bots died. The bank is the known-safe tile.
+        match walk_checked(bot, self.bank.x as i32, self.bank.z as i32, 3000) {
+            Ok(true) => {}
+            Ok(false) => bot.log("flee walk did not arrive, waiting out the flee window"),
+            Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
+            Err(error) => bot.log(&format!("flee walk failed ({error}), waiting out the flee window")),
+        }
+        wait_ticks(bot, cfg.flee_wait.min(50))?;
         Ok(abort)
     }
 
@@ -460,7 +473,7 @@ pub(crate) fn dry_water_error(bot: &mut Bot) -> ScriptError {
             detail.push_str(&format!(": only water sits across the toll fence (line {line}), re-run with `toll` once the bot carries coins"));
         }
     }
-    ScriptError::Usage(detail)
+    ScriptError::Failed(detail)
 }
 
 /// True when no fishing water sits in range even with a clean slate (no

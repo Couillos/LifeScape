@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::buffer::{BitReader, Reader};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::words::{base37_name, unpack};
 
 const DIRS: [(i32, i32); 8] = [(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (-1, -1), (0, -1), (1, -1)];
@@ -591,8 +591,9 @@ impl World {
                 if level != self.level || (x - self.x).abs() > 15 || (z - self.z).abs() > 15 {
                     self.players.clear();
                     self.player_order.clear();
-                    self.npcs.clear();
-                    self.npc_order.clear();
+                    // NPCs are not cleared here: the server keeps its own
+                    // list and removes them in the next NPC_INFO (op 3 or
+                    // a shorter count), as Client-TS expects.
                 }
                 self.level = level;
                 self.x = x;
@@ -666,10 +667,22 @@ impl World {
         let mut stream = BitReader::new(body);
         let mut pending: Vec<u16> = Vec::new();
         let mut fresh: Vec<u16> = Vec::new();
-        let mut cursor = 0usize;
         let known = stream.bits(8)? as usize;
-        for _ in 0..known {
-            self.read_known_npc(&mut stream, &mut cursor, &mut pending)?;
+        // Rebuild the list from the previous one, like Client-TS
+        // `getNpcPosOldVis`: entry `index` of the packet updates entry
+        // `index` of the old list, survivors are re-appended in order and
+        // the tail past `known` left the view.
+        let previous = std::mem::take(&mut self.npc_order);
+        if known > previous.len() {
+            return Err(Error::Protocol(format!("npc_info: {known} known npcs but only {} tracked", previous.len())));
+        }
+        for gone in &previous[known..] {
+            self.npcs.remove(gone);
+        }
+        for nid in &previous[..known] {
+            if self.read_known_npc(&mut stream, *nid, &mut pending)? {
+                self.npc_order.push(*nid);
+            }
         }
         while stream.remaining_bits() > 21 {
             let nid = stream.bits(14)? as u16;
@@ -697,59 +710,33 @@ impl World {
         Ok(())
     }
 
-    fn read_known_npc(&mut self, stream: &mut BitReader, cursor: &mut usize, pending: &mut Vec<u16>) -> Result<()> {
-        let nid = self.npc_order.get(*cursor).copied();
-        *cursor += 1;
+    /// Reads one entry of the known list; `Ok(false)` when the server
+    /// removed it (the caller drops it from the rebuilt order).
+    /// Reads one entry of the known list; `Ok(false)` when the server
+    /// removed it (the caller drops it from the rebuilt order).
+    fn read_known_npc(&mut self, stream: &mut BitReader, nid: u16, pending: &mut Vec<u16>) -> Result<bool> {
         if stream.bits(1)? == 0 {
-            return Ok(());
+            return Ok(true);
         }
-        match stream.bits(2)? {
-            3 => {
-                if let Some(nid) = nid {
-                    self.npcs.remove(&nid);
-                    self.npc_order.retain(|known| *known != nid);
-                }
-            }
-            0 => {
-                if let Some(nid) = nid {
-                    pending.push(nid);
-                }
-            }
-            kind => {
-                if let Some(nid) = nid {
-                    if let Some(npc) = self.npcs.get_mut(&nid) {
-                        match kind {
-                            1 => {
-                                let (dx, dz) = DIRS[stream.bits(3)? as usize];
-                                npc.x += dx;
-                                npc.z += dz;
-                            }
-                            _ => {
-                                for _ in 0..2 {
-                                    let (dx, dz) = DIRS[stream.bits(3)? as usize];
-                                    npc.x += dx;
-                                    npc.z += dz;
-                                }
-                            }
-                        }
-                    } else if kind == 1 {
-                        stream.bits(3)?;
-                    } else {
-                        stream.bits(6)?;
-                    }
-                } else if kind == 1 {
-                    stream.bits(3)?;
-                } else {
-                    stream.bits(6)?;
-                }
-                if stream.bits(1)? == 1 {
-                    if let Some(nid) = nid {
-                        pending.push(nid);
-                    }
+        let kind = stream.bits(2)?;
+        if kind == 3 {
+            self.npcs.remove(&nid);
+            return Ok(false);
+        }
+        if kind != 0 {
+            let steps = if kind == 1 { 1 } else { 2 };
+            for _ in 0..steps {
+                let (dx, dz) = DIRS[stream.bits(3)? as usize];
+                if let Some(npc) = self.npcs.get_mut(&nid) {
+                    npc.x += dx;
+                    npc.z += dz;
                 }
             }
         }
-        Ok(())
+        if kind == 0 || stream.bits(1)? == 1 {
+            pending.push(nid);
+        }
+        Ok(true)
     }
 
     // -- masks -------------------------------------------------------------
@@ -899,94 +886,5 @@ impl World {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::World;
-
-    /// Names survive a view flicker: removal stashes the display name,
-    /// re-entry without an appearance block restores it (bank trips must
-    /// not blind a rendezvous), and the next appearance still overwrites.
-    #[test]
-    fn player_names_survive_view_flicker() {
-        let mut world = World::new();
-        world.players.insert(2, super::PlayerInfo { x: 1, z: 1, level: 0, jump: false, name: Some("t02".to_string()) });
-        // Removal (out of view) stashes the name.
-        if let Some(gone) = world.players.remove(&2) {
-            if let Some(name) = gone.name {
-                world.player_names.insert(2, name);
-            }
-        }
-        assert_eq!(world.player_names.get(&2).map(String::as_str), Some("t02"));
-        // Re-entry restores it (mirrors the player_info insert path).
-        let restored = world.player_names.get(&2).cloned();
-        world.players.insert(2, super::PlayerInfo { x: 2, z: 2, level: 0, jump: false, name: restored });
-        assert_eq!(world.players.get(&2).and_then(|entry| entry.name.clone()).as_deref(), Some("t02"));
-    }
-
-    #[test]
-    fn rebuild_sets_base() {
-        let mut world = World::new();
-        // zone (50, 50) -> base (44 << 3, 44 << 3).
-        world.feed("REBUILD_NORMAL", &[0, 50, 0, 50]).unwrap();
-        assert_eq!((world.base_x, world.base_z), (44 << 3, 44 << 3));
-    }
-
-    #[test]
-    fn ground_items_merge_live_static() {
-        let mut world = World::new();
-        world.static_objs.insert(((1, 2, 0), 5), 3);
-        world.objs.insert(((1, 2, 0), 5), None);
-        assert!(world.ground_items(1, 2, 0, 15, None).is_empty());
-    }
-
-    #[test]
-    fn overlay_minus_one_closes_modal() {
-        let mut world = World::new();
-        // Level-up splash opens...
-        world.feed("IF_OPENOVERLAY", &[0, 193]).unwrap();
-        assert!(world.modal.is_some(), "splash opens the modal");
-        // ...then the server closes it with component -1, sent unsigned.
-        world.feed("IF_OPENOVERLAY", &[0xFF, 0xFF]).unwrap();
-        assert!(world.modal.is_none(), "65535 overlay must clear, not stick");
-        // A real overlay still opens normally afterwards.
-        world.feed("IF_OPENOVERLAY", &[0, 193]).unwrap();
-        assert!(world.modal.is_some(), "real overlays still open");
-    }
-
-    #[test]
-    fn message_burst_stays_capped_and_paired() {
-        use super::MESSAGE_CAP;
-        let mut world = World::new();
-        for index in 0..20_000u64 {
-            world.ticks = index;
-            world.push_message(format!("line {index}"));
-        }
-        let kept = world.messages.len();
-        assert!(kept <= MESSAGE_CAP, "burst capped, got {kept}");
-        assert!(kept > MESSAGE_CAP / 2, "drain keeps the newest half, got {kept}");
-        assert_eq!(world.message_ticks.len(), kept, "ticks stay paired");
-        for (offset, tick) in world.message_ticks.iter().enumerate() {
-            let line_number = 20_000 - kept as u64 + offset as u64;
-            assert_eq!(*tick, line_number, "tick paired at {offset}");
-            assert_eq!(world.messages[offset], format!("line {line_number}"));
-        }
-    }
-
-    #[test]
-    fn stale_cursor_reads_empty_after_drain() {
-        let mut world = World::new();
-        for index in 0..8_000u64 {
-            world.ticks = index;
-            world.push_message(format!("line {index}"));
-        }
-        let seen = world.messages.len();
-        for index in 8_000..10_000u64 {
-            world.ticks = index;
-            world.push_message(format!("line {index}"));
-        }
-        assert!(world.messages.len() < seen, "drain shrank the log");
-        assert!(world.messages[seen..].is_empty(), "direct index reads empty");
-        assert!(world.message_ticks[seen..].is_empty(), "paired ticks read empty");
-        assert!(world.messages.get(seen..).unwrap_or(&[]).is_empty());
-        assert!(!world.messages.is_empty(), "newest lines survive");
-    }
-}
+#[path = "world_tests.rs"]
+mod tests;

@@ -49,3 +49,12 @@ Serveur de jeu via `LIFESCAPE_SERVER_HOST` / `LIFESCAPE_SERVER_PORT`
 Ne jamais lancer un bot en direct hors orchestrateur (ni rescue manuel) :
 sessions orphelines et états faux. Diagnostics aussi via l'orchestrateur
 (`check_transitions`, `check_doors`).
+
+Redémarrage (2026-11-12) : `shutdown` ferme les sessions puis termine
+vraiment le daemon (la boucle `accept` lit `running`). Un daemon tué
+(SIGTERM) laisse les workers connectés ; le suivant les reprend
+(`restore_jobs`, statut retenté 3 s puis 10 s) sans jamais supprimer le
+socket d'un worker vivant (seul un socket sans écoute est effacé : plus
+de worker orphelin). La pause `hold` est portée par le worker et relue à
+la reprise. `run/orchestrator.log` (sortie du daemon) est horodaté ; les
+erreurs de script y figurent avec leur type et leur message.

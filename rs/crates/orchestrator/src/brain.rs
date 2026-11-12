@@ -19,7 +19,9 @@ use lifescape_planner::{
 };
 
 use crate::brain_fold::handle_report;
-use crate::brain_plan::{bank_types, carried_tools, combat_step, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names, CombatStep, DeadGraph, TutorialStep, revive_dead_graph, tutorial_step};
+use crate::brain_plan::{bank_types, carried_tools, holdings_count, live_combat, live_stacks, merge_keep, pick_flip_target, ready_ctx, worn_names};
+use crate::brain_tutorial::{tutorial_gate, TutorialGate};
+use lifescape_planner::GraphState;
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
@@ -113,16 +115,10 @@ fn xorshift(seed: u64, stream: u64) -> u64 {
     word
 }
 
-/// `Iron` + 8 chars (12 max, RS2 rule); others get a short `b`-prefixed
-/// name. Charset avoids ambiguous glyphs.
+/// Natural player-like name (`olivia_king`, `IronOlivia`; 12 max, RS2
+/// rule), see `names`.
 pub fn generate_pseudo(iron: bool, seed: u64) -> String {
-    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-    let mut name = if iron { "Iron".to_string() } else { "b".to_string() };
-    let width = if iron { 8 } else { 7 };
-    for slot in 0..width {
-        name.push(ALPHABET[(xorshift(seed, slot + 1) % ALPHABET.len() as u64) as usize] as char);
-    }
-    name
+    crate::names::natural_name(iron, seed)
 }
 
 /// Profile draw from the seed: affinity and patience uniform in [0,1],
@@ -214,7 +210,9 @@ pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|span| span.as_nanos() as u64)
                 .unwrap_or(1);
-            generate_pseudo(iron, seed)
+            // A name already used by a known account draws again.
+            let taken = |name: &str| lives_dir().join(format!("{name}.json")).exists();
+            (0..64u64).map(|attempt| generate_pseudo(iron, seed.wrapping_add(attempt))).find(|name| !taken(name)).ok_or("no free account name after 64 draws")?
         }
     };
     ensure_life(&account, iron, goal.as_deref().unwrap_or("max:fishing:40"))?;
@@ -279,24 +277,14 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 }
 
 /// Typed launch failure (P3.6): the locked method names no executable
-/// (unmapped prefix) or its script is not registered yet (P3 waves
-/// land in parallel). Failed, never silent: the front counts it, the
-/// 3-strike rule bounds it, and a landed script replans it via a fresh
-/// life, not a ghost retry.
+/// (unmapped prefix, unregistered script) or resolves to nothing. A
+/// contract error: abandoned at once with its cause, never retried.
 fn fail_no_script(life: &mut Life, position: usize, method: &str) {
     let id = life.nodes[position].id.clone();
-    println!("brain {}: no script for {method}, failing {}", life.account, id);
-    life.nodes[position].status = NodeStatus::Failed { error: format!("no-script:{method}") };
-    if life.active.as_deref() == Some(id.as_str()) {
-        life.active = None;
-    }
-    push_history(life, &id, "failed");
+    crate::logln!("brain {}: no script for {method}, abandoning {id}", life.account);
+    lifescape_planner::record_contract_error(life, position, &format!("no-script: {method}"));
+    push_history(life, &id, "abandoned");
 }
-
-fn done_ids(life: &Life) -> Vec<String> {
-    life.nodes.iter().filter(|node| node.status == NodeStatus::Done).map(|node| node.id.clone()).collect()
-}
-
 
 fn job_idle(job: &Job) -> bool {
     let Ok(inner) = job.inner.try_lock() else {
@@ -310,154 +298,236 @@ fn job_idle(job: &Job) -> bool {
     inner.phase == "idle" && !inner.held && !inner.paused && inner.status != "disconnected"
 }
 
-/// Launch the next ready node when the worker idles. Blocked nodes whose
-/// deps landed flip back to ready here; price drift re-locks a cheaper
-/// method before launch.
+/// Market fills settle through other players: an unfilled order waits
+/// at most this many ticks (wall time = ticks × tick length, D7).
+const AWAIT_FILL_TICKS: u64 = 6000;
+
+/// True the first time this daemon finds `account`'s active node with an
+/// idle worker and no report: after a daemon restart every restored
+/// worker reads idle before its script reports (an operator restart,
+/// never a crash), and restoring 14 workers plus brain back-off can take
+/// minutes, so no time window fits. Later sightings count normally.
+fn first_idle_since_start(account: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    SEEN.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string())
+}
+
+/// Cancels the account's open buy orders on `item` (debug name) through
+/// the daemon market. 0 when the market is down or the item unknown.
+fn cancel_stale_buy(account: &str, item: &str) -> usize {
+    crate::brain_market::cancel_open_buys(account, item)
+}
+
+fn seconds_since_history(life: &Life, node: &str, outcome: &str) -> Option<i64> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    life.history.iter().rev().find(|entry| entry.node == node && entry.outcome == outcome).map(|entry| now - entry.ended)
+}
+
+fn save_or_log(life: &Life) {
+    if let Err(error) = save_life(life) {
+        crate::logln!("{error}");
+    }
+}
+
+/// One stuck line per stuck spell (history `stuck`), never a revive:
+/// the operator decides what an abandoned graph does next (rule 7).
+fn note_stuck(life: &mut Life, abandoned: &[String]) -> bool {
+    if life.history.last().is_some_and(|entry| entry.node == "graph" && entry.outcome == "stuck") {
+        return false;
+    }
+    let causes: Vec<String> = life
+        .nodes
+        .iter()
+        .filter(|node| abandoned.contains(&node.id))
+        .map(|node| format!("{}={}", node.id, if node.last_error.is_empty() { "?" } else { node.last_error.as_str() }))
+        .collect();
+    crate::logln!("brain {}: graph stuck, nothing left to run; abandoned: {} — operator decides", life.account, causes.join(" | "));
+    push_history(life, "graph", "stuck");
+    true
+}
+
+/// Launch pass for one idle worker. Order: live snapshot (no decision
+/// without it), invariants (`normalize`), the running node (market fill
+/// wait, lost report), the tutorial gate, then the next ready node.
 fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if !job_idle(job) {
         return;
     }
     let Some(mut life) = load_life(&job.account) else { return };
+    // Never decide on a missing snapshot (bt7ktb8c: an empty live read as
+    // "not on the island" launched fishing there). A contended lock is
+    // the same: next pass.
+    let live = match job.inner.try_lock() {
+        Ok(inner) => inner.live.clone(),
+        Err(_) => return,
+    };
+    let Some(live) = live else { return };
     let mut dirty = false;
     // Space pressure (L8) precedes the terminal check: a full bank needs
     // its janitor even when the graph is done.
     if maybe_insert_cleanup(&mut life, bank_types(job)) {
         let inserted = life.nodes.last().map(|node| node.id.clone()).unwrap_or_default();
-        println!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
+        crate::logln!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
         dirty = true;
     }
-    // Tutorial-first (b3vsmjbc, bbdvmczd) : sur Tutorial Island, seul
-    // le tutoriel part — jamais un gather mainland voué à l'échec.
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
-    match tutorial_step(&mut life, &live) {
-        TutorialStep::Launch(at) => {
-            if !crate::registry::script_known("tutorial") {
-                fail_no_script(&mut life, at, "tutorial");
-                let _ = save_life(&life);
-                return;
-            }
-            let id = life.nodes[at].id.clone();
-            println!("brain {}: launching tutorial --node {id}", job.account);
-            life.nodes[at].status = NodeStatus::Active;
-            life.active = Some(id.clone());
-            note_launch(&job.account);
-            let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
-            let reply = orch.run_job(&job.account, "tutorial", &args);
-            if reply.get("ok").as_bool() != Some(true) {
-                println!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
-            }
-            let _ = save_life(&life);
-            return;
-        }
-        TutorialStep::Cleared => {
-            dirty = true;
-        }
-        TutorialStep::Idle => {}
+    for change in lifescape_planner::normalize(&mut life) {
+        crate::logln!("brain {}: normalize {change}", job.account);
+        dirty = true;
     }
-    // Dead graph (t02) : réessai borné puis repos avec dossier —
-    // jamais d'idle silencieux. Le succès (tout Done) reste calme.
-    match revive_dead_graph(&mut life) {
-        DeadGraph::Revived => {
-            dirty = true;
-        }
-        DeadGraph::Success => {
-            if dirty {
-                let _ = save_life(&life);
-            }
-            return;
-        }
-        DeadGraph::Rested => {
-            let _ = save_life(&life);
-            return;
-        }
-        DeadGraph::Open => {}
-    }
-    let done = done_ids(&life);
-    let abandoned: Vec<String> = life
-        .nodes
-        .iter()
-        .filter(|node| node.status == NodeStatus::Abandoned)
-        .map(|node| node.id.clone())
-        .collect();
-    for node in &mut life.nodes {
-        if matches!(node.status, NodeStatus::Pending | NodeStatus::Blocked { .. }) && node.ready(&done) {
-            node.status = NodeStatus::Ready;
-            if matches!(node.kind, NodeKind::ObtainItems { .. } | NodeKind::MakeMoney) {
-                node.method = None;
-            }
-            dirty = true;
-        }
-        // An abandoned dependency strands its dependents: abandon them
-        // loudly instead of pending forever. Re-planning an abandoned
-        // branch (new sources, new funds) is future work.
-        if matches!(node.status, NodeStatus::Pending | NodeStatus::Blocked { .. })
-            && node.deps.iter().any(|dep| abandoned.contains(dep))
-        {
-            node.status = NodeStatus::Abandoned;
-            dirty = true;
-        }
-    }
-    // A market node placed but unfilled waits instead of reordering: the
-    // holdings check below closes it once the deal settles.
-    let mut await_fill = false;
+    // The running node with an idle worker: either a market order
+    // awaiting its fill (bounded), or a run whose report never came
+    // (worker crash, daemon restart): counted as a failure, so a script
+    // that kills its worker cannot relaunch forever.
     if let Some(active_id) = life.active.clone() {
-        if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {            let done = match life.nodes[position].kind.clone() {
-                NodeKind::ObtainItems { item, count } if life.nodes[position].status == NodeStatus::Active => {
-                    let held = holdings_count(job, &item);
+        if recent_launch(&job.account) {
+            if dirty {
+                save_or_log(&life);
+            }
+            return;
+        }
+        if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {
+            let awaiting = seconds_since_history(&life, &active_id, "awaiting_fill");
+            match (&life.nodes[position].kind.clone(), awaiting) {
+                (NodeKind::ObtainItems { item, count }, Some(waited)) => {
+                    let held = holdings_count(job, item);
                     life.nodes[position].progress_current = held;
-                    if held >= count {
+                    let deadline = (AWAIT_FILL_TICKS * lifescape_sdk::waits::tick_ms() / 1000) as i64;
+                    if held >= *count {
+                        cancel_stale_buy(&job.account, item);
                         life.nodes[position].status = NodeStatus::Done;
                         life.active = None;
-                        let id = life.nodes[position].id.clone();
-                        push_history(&mut life, &id, "goal_reached");
-                        dirty = true;
-                        true
+                        push_history(&mut life, &active_id, "goal_reached");
+                    } else if waited > deadline {
+                        // The stale resting order goes before the retry
+                        // places a fresh one (PRD3 lot 0: bots stacked two
+                        // identical bids on the same axe).
+                        let closed = cancel_stale_buy(&job.account, item);
+                        let text = format!("market order for {count} {item} unfilled after {AWAIT_FILL_TICKS} ticks (held {held}, {closed} cancelled)");
+                        let fold = lifescape_planner::record_failure(&mut life, position, &text);
+                        push_history(&mut life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
                     } else {
-                        await_fill = true;
-                        false
+                        if dirty {
+                            save_or_log(&life);
+                        }
+                        return;
                     }
                 }
-                _ => false,
-            };
-            let _ = done;
-            if await_fill {
-                let _ = save_life(&life);
-                return;
-            }
-        }
-    }
-    // Crash recovery: an Active node with an idle worker and no
-    // report coming (restart, lost push, refused launch) re-queues
-    // instead of stranding. A launch grace period (30 s, memory only)
-    // stops the reset while the worker is still picking the order up;
-    // the worker takes the first `run` and refuses later doubles as
-    // busy, so execution stays at-most-once.
-    if !recent_launch(&job.account) {
-        if let Some(active_id) = life.active.clone() {
-            if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {
-                let awaiting = matches!(&life.nodes[position].kind, NodeKind::ObtainItems { .. })
-                    && life.nodes[position].status == NodeStatus::Active;
-                if !awaiting && life.nodes[position].status == NodeStatus::Active {
+                // Right after a daemon restart the restored workers read
+                // idle before their scripts report: an operator restart,
+                // never a crash (live 2026-11-12: every restart cost each
+                // active node one failure). Retry uncounted, like `stopped`.
+                _ if first_idle_since_start(&job.account) => {
+                    crate::logln!("brain {}: {active_id} idle right after a daemon restart, retrying uncounted", job.account);
                     life.nodes[position].status = NodeStatus::Ready;
                     life.nodes[position].method = None;
                     life.active = None;
-                    dirty = true;
+                    push_history(&mut life, &active_id, "stopped");
                 }
-            } else {
-                life.active = None;
-                dirty = true;
+                _ => {
+                    let text = "no report: worker went idle without reporting (crash or restart)";
+                    crate::logln!("brain {}: {active_id} {text}", job.account);
+                    let fold = lifescape_planner::record_failure(&mut life, position, text);
+                    push_history(&mut life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
+                }
             }
+            lifescape_planner::normalize(&mut life);
+            dirty = true;
+        }
+    }
+    // Tutorial gate: on the island only the tutorial runs; no position
+    // yet means no launch at all.
+    match tutorial_gate(&mut life, &live) {
+        TutorialGate::Launch(at) => {
+            if !crate::registry::script_known("tutorial") {
+                fail_no_script(&mut life, at, "tutorial");
+                save_or_log(&life);
+                return;
+            }
+            let id = life.nodes[at].id.clone();
+            crate::logln!("brain {}: launching tutorial --node {id}", job.account);
+            lifescape_planner::mark_launched(&mut life, at);
+            push_history(&mut life, &id, "launched");
+            note_launch(&job.account);
+            save_or_log(&life);
+            let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
+            let reply = orch.run_job(&job.account, "tutorial", &args);
+            if reply.get("ok").as_bool() != Some(true) {
+                crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
+            }
+            return;
+        }
+        TutorialGate::Hold(reason) => {
+            if life.history.last().is_none_or(|entry| entry.outcome != "hold") {
+                crate::logln!("brain {}: holding launches: {reason}", job.account);
+            }
+            if dirty {
+                save_or_log(&life);
+            }
+            return;
+        }
+        TutorialGate::Closed(id) => {
+            crate::logln!("brain {}: seen off the island, closing tutorial {id}", job.account);
+            push_history(&mut life, &id, "tutorial_done");
+            lifescape_planner::normalize(&mut life);
+            dirty = true;
+        }
+        TutorialGate::Clear => {}
+    }
+    // Graph tasks read the pack (tools, coins): none before it streamed.
+    // The tutorial above needs only the position (the island hides the
+    // pack until its own tab opens).
+    if live.get("inv_streamed").as_bool() != Some(true) {
+        if dirty {
+            save_or_log(&life);
+        }
+        return;
+    }
+    // PRD3 lot 3: idle bots list their tradeable surplus on the market
+    // (rate-limited, never an NPC sale).
+    crate::brain_sales::maybe_list_surplus(job, &life);
+    // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
+    crate::brain_wishlist::maybe_bid_wishes(job, &life);
+    match lifescape_planner::graph_state(&life) {
+        GraphState::Launchable => {}
+        GraphState::Running(_) => {
+            if dirty {
+                save_or_log(&life);
+            }
+            return;
+        }
+        // A life never ends on a goal: done draws the next one; stuck
+        // records the causes and moves on to a goal that does not retrain
+        // the stuck skills. Nothing left = stand by for the operator.
+        state @ (GraphState::Finished | GraphState::Stuck { .. }) => {
+            let stuck = match &state {
+                GraphState::Stuck { abandoned } => {
+                    note_stuck(&mut life, abandoned);
+                    true
+                }
+                _ => false,
+            };
+            match crate::brain_succession::succeed_goal(&mut life, &live, stuck) {
+                Some(label) => {
+                    crate::logln!("brain {}: goal {} -> next goal {label}", job.account, if stuck { "stuck" } else { "done" });
+                    lifescape_planner::normalize(&mut life);
+                    save_or_log(&life);
+                }
+                None => {
+                    crate::logln!("brain {}: no goal left to draw, standing by (operator decides)", job.account);
+                    save_or_log(&life);
+                }
+            }
+            return;
         }
     }
     let ready = life.nodes.iter().position(|node| {
-        node.status == NodeStatus::Ready && node.ready(&done_ids(&life)) && life.active.as_deref() != Some(node.id.as_str())
-            // Le tutoriel ne part que par le pas prioritaire (méthode
-            // `tutorial`, jamais `map_method`) : ici on le saute.
+        node.status == NodeStatus::Ready
+            // The tutorial only ever starts through its gate.
             && !matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
     });
     let Some(position) = ready else {
         if dirty {
-            let _ = save_life(&life);
+            save_or_log(&life);
         }
         return;
     };
@@ -471,47 +541,76 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // sardines never dispatch).
     ctx.coins = holdings_count(job, "coins");
     ctx.tools = carried_tools(job);
+    ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
+    // The brain picks the site: the bot's combat level and position.
+    ctx.combat = live_combat(&live);
+    ctx.position = live.get("position").as_arr().and_then(|cells| {
+        let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
+        Some((part(1)?, part(2)?, part(0)?))
+    });
+    crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live);
+    // A coin target already met closes without a launch (PRD3 lot 4).
+    if let NodeKind::HaveCoins { amount } = life.nodes[position].kind {
+        if ctx.coins >= amount {
+            let id = life.nodes[position].id.clone();
+            life.nodes[position].status = NodeStatus::Done;
+            life.nodes[position].progress_current = ctx.coins;
+            push_history(&mut life, &id, "goal_reached");
+            crate::logln!("brain {}: {id} holds {} coins >= {amount}, done", job.account, ctx.coins);
+            lifescape_planner::normalize(&mut life);
+            save_or_log(&life);
+            return;
+        }
+    }
     {
         let node = &mut life.nodes[position];
         resolve_ready(node, &ctx);
-        println!("brain {}: resolve {} -> {:?} (ctx coins={})", job.account, node.id, node.method, ctx.coins);
+        crate::logln!("brain {}: resolve {} -> {:?} (ctx coins={})", job.account, node.id, node.method, ctx.coins);
+    }
+    // The planner blocks typed when no method is workable (tool to
+    // fund): the block becomes an obtain sub-task now, never a node that
+    // flips Ready/Blocked forever without launching.
+    if let NodeStatus::Blocked { reason } = life.nodes[position].status.clone() {
+        let missing: Vec<String> = reason.strip_prefix("missing:").map(|need| vec![need.to_string()]).unwrap_or_default();
+        let id = life.nodes[position].id.clone();
+        if missing.is_empty() {
+            lifescape_planner::record_contract_error(&mut life, position, &format!("resolve blocked: {reason}"));
+            push_history(&mut life, &id, "abandoned");
+        } else {
+            let fold = lifescape_planner::record_block(&mut life, position, &missing);
+            push_history(&mut life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "blocked" });
+        }
+        crate::logln!("brain {}: {id} blocked at resolve ({reason}) -> {}", job.account, life.nodes[position].status.as_str());
+        lifescape_planner::normalize(&mut life);
+        save_or_log(&life);
+        return;
     }
     let method = life.nodes[position].method.clone().unwrap_or_default();
     if method.is_empty() {
-        println!("brain {}: no method for {} (unresolvable obtain?)", job.account, life.nodes[position].id);
-        let _ = save_life(&life);
+        let id = life.nodes[position].id.clone();
+        crate::logln!("brain {}: no method resolvable for {id}, abandoning", job.account);
+        lifescape_planner::record_contract_error(&mut life, position, "no method resolvable (no workable source for this node)");
+        push_history(&mut life, &id, "abandoned");
+        lifescape_planner::normalize(&mut life);
+        save_or_log(&life);
         return;
     }
-    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
-    // Combat gate: never assign past the bot's CB (XP-max formula).
-    // Relocate accesses safe ground first, train-first fights chickens
-    // first (goal style), clear dispatches unchanged.
-    let mut launch = position;
-    match combat_step(&mut life, position, live_combat(&live)) {
-        CombatStep::Direct => {}
-        CombatStep::Redirect(at) => launch = at,
-        CombatStep::Wait => {
-            let _ = save_life(&life);
-            return;
-        }
-        CombatStep::Fail(method) => {
-            fail_no_script(&mut life, position, &method);
-            let _ = save_life(&life);
-            return;
-        }
-    }
+    // Combat requirements are graph dependencies now: the site pick in
+    // `resolve_ready` blocked typed (`missing:combat:N`) above, and the
+    // block filed a `reach_combat` node the node depends on.
+    let launch = position;
     let method = life.nodes[launch].method.clone().unwrap_or_default();
     // A redirect target without a method never fails typed on the empty
     // string: wait a pass (the gate re-carries it, then it launches).
     if method.is_empty() {
-        println!("brain {}: redirect {} has no method yet, waiting", job.account, life.nodes[launch].id);
+        crate::logln!("brain {}: redirect {} has no method yet, waiting", job.account, life.nodes[launch].id);
         let _ = save_life(&life);
         return;
     }
     // Iron never trades (D15): a stale market lock from an old file resets
     // instead of launching; the planner never locks one on fresh resolves.
     if !lifescape_planner::launch_allowed(&method, life.profile.ironman) {
-        println!("brain {}: refusing {method} for Ironman", job.account);
+        crate::logln!("brain {}: refusing {method} for Ironman", job.account);
         let node_id = life.nodes[launch].id.clone();
         life.nodes[launch].status = NodeStatus::Ready;
         life.nodes[launch].method = None;
@@ -537,11 +636,31 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             Some((6000, max))
         }
         NodeKind::ReachLevel { .. } | NodeKind::ReachCombat { .. } => Some((0, 18000)),
-        NodeKind::ObtainItems { .. } if method.starts_with("farm:") => Some((6000, 6000)),
+        // Every production leg of an obtain works one window, then the
+        // holdings recheck (PRD3: smith, spin, mill… not only farm).
+        NodeKind::ObtainItems { .. } if !method.starts_with("market:") && !method.starts_with("shop:") => Some((6000, 6000)),
+        NodeKind::HaveCoins { .. } => Some((6000, 6000)),
         NodeKind::SpaceCleanup => Some((0, 6000)),
         _ => None,
     };
     let node_snapshot = life.nodes[launch].clone();
+    // A market buy needs no worker (PRD3 lot 4): the brain places the
+    // bid on the daemon market and the node waits for the fill.
+    if method == "market:buy" {
+        let id = node_snapshot.id.clone();
+        match crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx) {
+            Ok(_) => {
+                lifescape_planner::mark_launched(&mut life, launch);
+                push_history(&mut life, &id, "awaiting_fill");
+            }
+            Err(error) => {
+                let fold = lifescape_planner::record_failure(&mut life, launch, &format!("market bid refused: {error}"));
+                push_history(&mut life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
+            }
+        }
+        save_or_log(&life);
+        return;
+    }
     let Some((script, args)) = map_method(&method, &node_snapshot, budget) else {
         // No executable for this method: typed failure, never a silent
         // spin — the dashboard shows it and the 3-strike rule can
@@ -551,6 +670,9 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     };
     let mut args = args;
+    if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
+        crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx);
+    }
     // D52: flip and cleanup never sell worn, tools or graph items. The
     // graph keep merges the live worn names here; tools ride in the same
     // gate via `sale_blocked`, so the merchant no longer flips its net.
@@ -559,11 +681,11 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let keep = cleanup_keep(&life);
         let worn = worn_names(job);
         if let Some((item, qty)) = pick_flip_target(&live_stacks(job), &keep, &worn) {
-            println!("brain {}: flip D52 target {item} x{qty}", job.account);
+            crate::logln!("brain {}: flip D52 target {item} x{qty}", job.account);
             args.push(item);
             args.push(qty.min(100).max(1).to_string());
         } else {
-            println!("brain {}: flip D52 no safe stock, clock ends it", job.account);
+            crate::logln!("brain {}: flip D52 no safe stock, clock ends it", job.account);
         }
     }
     // Cleanup carries its keep-list (graph obtains, quest checks) and the
@@ -586,22 +708,22 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     }
     let values: Vec<Value> = args.iter().map(|arg| lifescape_json::str_value(arg)).collect();
-    println!("brain {}: launching {script} {}", job.account, args.join(" "));
+    crate::logln!("brain {}: launching {script} {}", job.account, args.join(" "));
     // Queued, not run: the launcher thread owns the blocking worker RPC.
     // Mark Active now so the next pass does not double-queue; a refused
     // launch re-queues via crash recovery (no report ever arrives).
-    life.nodes[launch].status = NodeStatus::Active;
-    life.active = Some(life.nodes[launch].id.clone());
+    lifescape_planner::mark_launched(&mut life, launch);
+    let launched_id = life.nodes[launch].id.clone();
+    push_history(&mut life, &launched_id, "launched");
     note_launch(&job.account);
+    // Saved before the blocking RPC: a report racing the reply must find
+    // the node active.
+    save_or_log(&life);
     // Blocking worker RPC is fine here: this is the brain thread, not
     // the supervisor. A refused launch re-queues via crash recovery.
     let reply = orch.run_job(&job.account, &script, &values);
     if reply.get("ok").as_bool() != Some(true) {
-        println!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
-    }
-    dirty = true;
-    if dirty {
-        let _ = save_life(&life);
+        crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
     }
 }
 
@@ -669,9 +791,9 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
                     // then the life graph. Both are bounded file/store
                     // writes on the brain thread, never the supervisor.
                     if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                        println!("job {account}: rates ingest failed: {error}");
+                        crate::logln!("job {account}: rates ingest failed: {error}");
                     }
-                    println!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
+                    crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
                     handle_report(&orch, &job, &report);
                 }
                 maybe_launch(&orch, &job);
@@ -692,7 +814,7 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
         .map(|sender| sender.try_send((job.account.clone(), report)))
         .is_some_and(|sent| sent.is_ok());
     if !queued {
-        println!("brain {}: inbox full, tick deferred to next pass", job.account);
+        crate::logln!("brain {}: inbox full, tick deferred to next pass", job.account);
     }
 }
 
@@ -717,7 +839,8 @@ mod tests {
     #[test]
     fn pseudos_fit_rs2_and_replay() {
         let iron = generate_pseudo(true, 42);
-        assert!(iron.starts_with("Iron") && iron.len() == 12, "Iron + 8 = 12 max, got {iron}");
+        assert!(iron.starts_with("Iron") && iron.len() <= 12, "Iron + name, 12 max, got {iron}");
+        assert!(crate::names::valid_name(&generate_pseudo(false, 42)), "natural and valid");
         assert_eq!(iron, generate_pseudo(true, 42), "seeded pseudos replay");
         assert_ne!(generate_pseudo(false, 1), generate_pseudo(false, 2), "names vary");
     }
@@ -853,27 +976,17 @@ mod tests {
         }
     }
 
-    /// P3.6: a method without script fails typed (no-script), never
-    /// silent — the front counts it and the 3-strike rule can abandon.
+    /// P3.6: a method without script is a contract error: abandoned at
+    /// once with its cause (relaunching the same method can never work).
     #[test]
-    fn no_script_fails_typed_never_silent() {
+    fn no_script_abandons_typed_never_silent() {
         let mut life = terminal_life();
-        life.nodes[0].status = lifescape_planner::NodeStatus::Ready;
+        life.nodes[0].status = lifescape_planner::NodeStatus::Active;
         life.active = Some("n1".to_string());
         super::fail_no_script(&mut life, 0, "smelt:iron_bar");
-        assert!(matches!(
-            life.nodes[0].status,
-            lifescape_planner::NodeStatus::Failed { .. }
-        ), "failed, got {:?}", life.nodes[0].status);
+        assert_eq!(life.nodes[0].status, lifescape_planner::NodeStatus::Abandoned);
         assert!(life.active.is_none(), "no stranded lock");
-        assert_eq!(
-            life.history.iter().filter(|entry| entry.outcome == "failed").count(),
-            1,
-            "one typed failure in history"
-        );
-        assert!(matches!(
-            &life.nodes[0].status,
-            lifescape_planner::NodeStatus::Failed { error } if error == "no-script:smelt:iron_bar"
-        ), "the missing method rides in the error");
+        assert_eq!(life.nodes[0].last_error, "no-script: smelt:iron_bar", "the missing method rides in the error");
+        assert_eq!(life.history.iter().filter(|entry| entry.outcome == "abandoned").count(), 1, "one typed entry in history");
     }
 }

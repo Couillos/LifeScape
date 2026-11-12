@@ -137,7 +137,7 @@ fn relist_rows_keep_consumed_ranks() {
 /// two sightings; stale or duplicate ticks never move it.
 #[test]
 fn tick_meter_converges_on_live_rate() {
-    use super::TickMeter;
+    use crate::market_eta::TickMeter;
     let mut meter = TickMeter::new();
     assert_eq!(meter.observe(1000.0, 100), 600, "prod-safe start");
     let ms = meter.observe(1000.0 + 60.0 * 20.0 / 1000.0, 120);

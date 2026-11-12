@@ -96,6 +96,9 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else if let Some(_product) = method.strip_prefix("mill:") {
         // Grain + empty pot ride every load: no positional.
         ("mill_grain".to_string(), Vec::new())
+    } else if method.starts_with("milk:") {
+        // Bucket in, dairy cow, bank loop: no positional.
+        ("milk".to_string(), Vec::new())
     } else if let Some(container) = method.strip_prefix("fill:") {
         ("fill_water".to_string(), vec![container.to_string()])
     } else if let Some(_kind) = method.strip_prefix("essence:") {
@@ -124,7 +127,7 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else if let Some(spot) = method.strip_prefix("fight:melee/") {
         ("melee".to_string(), vec![spot.to_string()])
     } else if let Some(resource) = method.strip_prefix("farm:") {
-        farm_args(resource)
+        farm_args(resource)?
     } else if method == "market:buy" || method == "market:sell" {
         let (item, count) = obtain_pair(node)?;
         let side = if method == "market:buy" { "buy" } else { "sell" };
@@ -177,6 +180,13 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else {
         return None;
     };
+    // The brain picked the site (`pick_site`): gatherers work there.
+    if let Some((x, z, level)) = node.site {
+        if matches!(script.as_str(), "fishing" | "mining" | "woodcut") {
+            head.push("--site".to_string());
+            head.push(format!("{x},{z},{level}"));
+        }
+    }
     head.extend(tail);
     Some((script, head))
 }
@@ -221,22 +231,20 @@ fn spin_input(product: &str) -> String {
 
 /// Farm routing: fish and logs/ore go to their gatherer; drops go to
 /// the combat spot whose NPCs drop the item (goblins for bronze axes,
-/// chickens for feathers); everything else falls back to chickens until
-/// more activities branch off the socle.
-fn farm_args(resource: &str) -> (String, Vec<String>) {
+/// chickens for feathers). `None` when no activity yields the item: the
+/// brain abandons typed (no-script) instead of hunting chickens for an
+/// egg or a pickaxe.
+fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
     if resource.starts_with("raw_") {
-        return ("fishing".to_string(), Vec::new());
+        return Some(("fishing".to_string(), Vec::new()));
     }
-    if resource.ends_with("_logs") {
-        return ("woodcut".to_string(), Vec::new());
+    if resource.ends_with("_logs") || resource == "logs" {
+        return Some(("woodcut".to_string(), Vec::new()));
     }
     if resource.ends_with("_ore") || resource == "coal" || resource == "clay" {
-        return ("mining".to_string(), Vec::new());
+        return Some(("mining".to_string(), Vec::new()));
     }
-    if let Some(spot) = spot_for_drop(resource) {
-        return ("melee".to_string(), vec![spot]);
-    }
-    ("melee".to_string(), vec!["chickens".to_string()])
+    spot_for_drop(resource).map(|spot| ("melee".to_string(), vec![spot]))
 }
 
 /// Combat spot whose NPCs drop `item` (debug-name prefix match: the
@@ -303,6 +311,8 @@ mod tests {
         let (script, args) = map_method("farm:feather", &obtain(), None).expect("farm maps");
         assert_eq!(script, "melee");
         assert!(args.contains(&"chickens".to_string()), "feathers drop from chickens, got {args:?}");
+        let egg = Node::new("n9", NodeKind::ObtainItems { item: "egg".to_string(), count: 1 }, Vec::new(), 1);
+        assert_eq!(map_method("farm:egg", &egg, None), None, "no activity yields eggs: no chicken fallback");
     }
 
     #[test]

@@ -39,7 +39,7 @@ pub fn missing_runes(bot: &Bot, runes: &[(String, i64)]) -> Vec<String> {
 pub fn cast_on_held(bot: &mut Bot, spell: &str, obj: u16) -> Result<(), ScriptError> {
     let spell_com = spell_com(bot, spell)?;
     let Some(pack_com) = bot.backpack().0 else {
-        return Err(ScriptError::Usage(format!("pack not streamed at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("pack not streamed at {:?}", bot.position())));
     };
     let slot = pack_slot(bot, obj)?;
     bot.op_held_t(obj, slot, pack_com, spell_com)?;

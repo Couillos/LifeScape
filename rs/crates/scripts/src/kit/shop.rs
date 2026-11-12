@@ -11,62 +11,42 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::pack::{obj_id, obj_price, pack_slot, pack_total};
+use crate::kit::pack::{obj_id, obj_price, pack_total};
 use crate::kit::survival::{is_conn_abort, is_death_abort};
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
 /// Nearest-shop trek range: keeper spawns past this never count.
 const TREK_LIMIT: i64 = 400;
-pub fn general_store(bot: &Bot) -> Option<(String, (i32, i32, i32))> {
-    let mut best: Option<(i64, (String, (i32, i32, i32)))> = None;
-    for shop in knowledge::shops::all_shops() {
-        if !shop.name.to_lowercase().contains("general") {
-            continue;
-        }
-        for keeper in &shop.keepers {
-            for entry in knowledge::npcs_by_name(&keeper.npc) {
-                for spawn in entry.spawns {
-                    if spawn.level != i64::from(bot.world.level) {
-                        continue;
-                    }
-                    let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
-                    if dist > TREK_LIMIT {
-                        continue;
-                    }
-                    let tile = (spawn.level as i32, spawn.x as i32, spawn.z as i32);
-                    if best.as_ref().is_none_or(|(known, _)| dist < *known) {
-                        best = Some((dist, (keeper.npc.clone(), tile)));
-                    }
-                }
-            }
-        }
-    }
-    best.map(|(_, found)| found)
-}
 
 /// Nearest shop stocking `obj_name` (stock count > 0) with its keeper spawn.
 // shortcut: keeper NPC op for Trade is assumed to be op 2 (talk/trade op
 // order is pack data, not in the gamedata dump); fails loudly otherwise.
 pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32, i32))> {
     let mut best: Option<(i64, (String, (i32, i32, i32)))> = None;
-    for shop in knowledge::shops::all_shops() {
-        if !shop.stocks.iter().any(|stock| stock.obj == obj_name && stock.count > 0) {
+    // Only shops an NPC opens on an F2P world without a quest gate
+    // (`f2p_shop_access`): Zaff's staffs count, Shantay's pass never.
+    for shop in knowledge::f2p::f2p_shops() {
+        if !knowledge::f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == obj_name && stock.count > 0) {
             continue;
         }
-        for keeper in &shop.keepers {
-            for entry in knowledge::npcs_by_name(&keeper.npc) {
-                for spawn in entry.spawns {
-                    if spawn.level != i64::from(bot.world.level) {
-                        continue;
-                    }
-                    let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
-                    if dist > TREK_LIMIT {
-                        continue;
-                    }
-                    if best.as_ref().is_none_or(|(known, _)| dist < *known) {
-                        best = Some((dist, (keeper.npc.clone(), (spawn.level as i32, spawn.x as i32, spawn.z as i32))));
-                    }
+        let Some(access) = knowledge::f2p::f2p_shop_access(&shop.name) else { continue };
+        if access.quest.is_some() {
+            continue;
+        }
+        for npc_id in access.npcs {
+            let Some(entry) = knowledge::npc_by_id(npc_id) else { continue };
+            let Some(keeper_name) = entry.name else { continue };
+            for spawn in entry.spawns {
+                if spawn.level != i64::from(bot.world.level) {
+                    continue;
+                }
+                let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
+                if dist > TREK_LIMIT {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(known, _)| dist < *known) {
+                    best = Some((dist, (keeper_name.to_string(), (spawn.level as i32, spawn.x as i32, spawn.z as i32))));
                 }
             }
         }
@@ -298,87 +278,8 @@ fn trade_live_rounds(bot: &mut Bot, keeper: &str, main_com: u16, deadline: u64) 
 /// sale rejected), never a silent `Ok(0)`. Both sell and buy share it.
 fn require_trade_gain(gained: u32, what: &str, bot: &Bot) -> Result<u32, ScriptError> {
     if gained == 0 {
-        return Err(ScriptError::Usage(format!("trade gave no {what} at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("trade gave no {what} at {:?}", bot.position())));
     }
-    Ok(gained)
-}
-
-/// Sell carried products until `target_coins` are raised (shortfall only,
-// never stockpiles sale coins). Returns coins gained.
-pub fn sell_for_target(
-    bot: &mut Bot,
-    product_ids: &[u16],
-    coins: u16,
-    target_coins: u32,
-) -> Result<u32, ScriptError> {
-    if target_coins == 0 || !product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
-        return Ok(0);
-    }
-    let side_com = (bot.tables.com_id)("shop_template_side:inv")
-        .ok_or_else(|| ScriptError::Usage("shop_template_side:inv missing from component table".to_string()))?;
-    let Some((keeper, spawn)) = general_store(bot) else {
-        bot.log("no general store found");
-        return Ok(0);
-    };
-    if !trade_to_keeper(bot, &keeper, spawn)? {
-        bot.log(&format!("general store trade failed at {:?}", bot.position()));
-        return Ok(0);
-    }
-    let coins_before = pack_total(bot, coins);
-    if !product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
-        bot.close_modal()?;
-        return Err(ScriptError::Usage(format!("products vanished after trade opened at {:?}", bot.position())));
-    };
-    // Probe each product's first unit: a low-cost item sells for 0 coins at
-    // general-store rates (shop.rs2 sell_item moves the item but pays nothing
-    // under 1 gp, silently), so skip worthless stock instead of failing the
-    // whole sale on the first click.
-    let mut unit = 0u32;
-    let mut worthless: Vec<u16> = Vec::new();
-    let held: Vec<u16> = product_ids.iter().filter(|id| pack_total(bot, **id) > 0).copied().collect();
-    for id in held {
-        let Ok(slot) = pack_slot(bot, id) else {
-            continue;
-        };
-        bot.inv_button(2, id, slot, side_com)?;
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target && pack_total(bot, coins) <= coins_before {
-            bot.pump(5)?;
-        }
-        unit = pack_total(bot, coins).saturating_sub(coins_before);
-        if unit > 0 {
-            break;
-        }
-        let name = (bot.tables.obj_name)(id).unwrap_or_else(|| format!("obj{id}"));
-        bot.log(&format!("{name} sells for 0, skipping it"));
-        worthless.push(id);
-    }
-    if unit == 0 {
-        bot.close_modal()?;
-        bot.pump(5)?;
-    }
-    let unit = require_trade_gain(unit, "coins", bot)?;
-    while pack_total(bot, coins) < coins_before + target_coins {
-        let Some(next) =
-            product_ids.iter().find(|id| !worthless.contains(id) && pack_total(bot, **id) > 0).copied()
-        else {
-            break;
-        };
-        let need = coins_before + target_coins - pack_total(bot, coins);
-        let amount = pack_total(bot, next).min(((need + unit - 1) / unit).max(1));
-        let Some((op, _)) = sell_batches(amount).first().copied() else {
-            break;
-        };
-        let Ok(slot) = pack_slot(bot, next) else {
-            break;
-        };
-        bot.inv_button(op, next, slot, side_com)?;
-        bot.pump(5)?;
-    }
-    let gained = pack_total(bot, coins) - coins_before;
-    bot.log(&format!("ok sold products for {gained} coins"));
-    bot.close_modal()?;
-    bot.pump(5)?;
     Ok(gained)
 }
 
@@ -390,6 +291,13 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     if !bot.allow_shop {
         bot.log(&format!("shop buys refused for this task, {obj_name} stays unbought"));
         return Ok(0);
+    }
+    // D-A (PRD3): NPC purchases only for objects nobody makes or
+    // gathers in F2P. A producible object comes from the market or the
+    // bot's own work: blocked typed, so the brain files the obtain.
+    if !knowledge::obtain::merchant_buy_allowed(obj_name) {
+        bot.log(&format!("merchant purchase of {obj_name} forbidden: producible in F2P (market or craft it)"));
+        return Err(ScriptError::Blocked { missing: vec![obj_name.to_string()] });
     }
     let main_com = (bot.tables.com_id)("shop_template:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
@@ -417,7 +325,7 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     let Some(shop_slot) = slot_found else {
         bot.close_modal()?;
         bot.pump(5)?;
-        return Err(ScriptError::Usage(format!("no {obj_name} in shop stock at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("no {obj_name} in shop stock at {:?}", bot.position())));
     };
     for (op, _) in sell_batches(count) {
         bot.inv_button(op, wanted, shop_slot, main_com)?;
@@ -479,7 +387,7 @@ pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{buy_best_affordable, buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, sell_for_target, shop_mates, trade_to_keeper};
+    use super::{buy_best_affordable, buy_stock, keeper_fallback_log, live_keeper, require_trade_gain, shop_mates, trade_to_keeper};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::world::NpcInfo;
     use lifescape_sdk::Bot;
@@ -499,9 +407,20 @@ mod tests {
     fn zero_targets_stay_silent_ok() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        assert_eq!(sell_for_target(&mut bot, &[], 995, 0).expect("target 0 stays Ok(0)"), 0);
-        assert_eq!(sell_for_target(&mut bot, &[], 995, 10).expect("no products stays Ok(0)"), 0);
         assert_eq!(buy_stock(&mut bot, "bronze_axe", 0).expect("count 0 stays Ok(0)"), 0);
+    }
+
+    /// PRD3 D-A: a producible object (smithed bronze axe) is never bought
+    /// from a merchant; the refusal is typed `Blocked` so the brain files
+    /// an obtain (market or craft), before any walk.
+    #[test]
+    fn producible_objects_never_buy_from_merchants() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        match buy_stock(&mut bot, "bronze_axe", 1) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["bronze_axe".to_string()]),
+            other => panic!("producible axe must block, got {other:?}"),
+        }
     }
 
     /// Shared loud guard: zero progress after a trade click is an error,

@@ -70,6 +70,25 @@ fn shelter_or_best(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
     knowledge::combat_spots::best_spot(ranged_level(bot))
 }
 
+/// A bow and arrows somewhere in the pack, worn or banked; else blocked
+/// on the cheapest of each (the brain files the obtain).
+fn require_combat_gear(bot: &Bot) -> Result<(), crate::ScriptError> {
+    // Debug names (`oak_shortbow`): the table speaks display names.
+    let owned: Vec<String> = crate::kit::gear::available_gear(bot)
+        .into_keys()
+        .filter_map(|id| knowledge::obj_by_id(usize::from(id)).and_then(|obj| obj.name).map(str::to_string))
+        .collect();
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let mut missing = Vec::new();
+    if best_bow(&refs).is_none() {
+        missing.push("shortbow".to_string());
+    }
+    if best_arrows(&refs).is_none() {
+        missing.push("bronze_arrow".to_string());
+    }
+    if missing.is_empty() { Ok(()) } else { Err(crate::ScriptError::Blocked { missing }) }
+}
+
 /// Ranged farmer: `ranged [spot ...] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("ranged", args)?;
@@ -82,8 +101,12 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.allow_shop = spec.allow_shop;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
+    // PRD3 lot 6: the run fights ranged for real (gear scored for it,
+    // bow + arrows worn); missing gear blocks typed for the brain to obtain.
+    bot.combat_style = "ranged".to_string();
+    require_combat_gear(bot)?;
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
-        let named: Vec<_> = spots.iter().filter_map(|key| knowledge::combat_spots::by_key(key)).collect();
+        let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() { vec![shelter_or_best(bot)] } else { named }
     };
     bot.log(&format!("ranged={} spots={}", ranged_level(bot), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));

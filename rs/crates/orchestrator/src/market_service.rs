@@ -14,16 +14,14 @@
 //! and both sides keep their reliability counters.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Write;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{check_coverage, check_price, reference_price, Order};
 use crate::jobs::Job;
-use crate::market_seed::{catalogue, CatalogueItem};
+use crate::market_seed::CatalogueItem;
 use lifescape_market::{Book, Deal, Side};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
 
@@ -175,11 +173,9 @@ pub struct MarketService {
 }
 
 impl MarketService {
+    #[cfg(test)]
     pub(crate) fn rebuild_candles(&self, item: i64, resolution: lifescape_store::YieldCandleResolution) -> Result<(), String> {
-        self.lock_store()
-            .rebuild_candles(item, resolution)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.lock_store().rebuild_candles(item, resolution).map(|_| ()).map_err(|error| error.to_string())
     }
 
     pub(crate) fn open(db: &std::path::Path, catalogue: Vec<CatalogueItem>) -> Result<Self, String> {
@@ -211,12 +207,12 @@ impl MarketService {
         let clock = Self::now_clock();
         let stale_deals = self.lock_store().fail_stale_deals("daemon restart", clock).unwrap_or(0);
         if stale_deals > 0 {
-            println!("market reload: failed {stale_deals} stale in-flight deals (daemon restart)");
+            crate::logln!("market reload: failed {stale_deals} stale in-flight deals (daemon restart)");
         }
         let rows = match self.lock_store().resting_orders() {
             Ok(rows) => rows,
             Err(error) => {
-                println!("market reload: no book rebuild, store read failed: {error}");
+                crate::logln!("market reload: no book rebuild, store read failed: {error}");
                 return;
             }
         };
@@ -257,7 +253,7 @@ impl MarketService {
                 reopened += 1;
             }
         }
-        println!(
+        crate::logln!(
             "market reload: {} resting orders back in {} books ({reopened} stranded matched reopened)",
             rows.len(),
             self.lock_engine().books.len()
@@ -326,27 +322,26 @@ impl MarketService {
     }
 
     /// Reference price: VWAP of the last day, else book mid, else shop.
-    fn reference(&self, item: i64) -> i64 {
+    /// Reference of one item (PRD3 lot 2): 24 h VWAP, else the last
+    /// print ever, else the book midpoint, else 1 coin. The shop price
+    /// never anchors it.
+    pub(crate) fn reference(&self, item: i64) -> lifescape_market::Reference {
         let clock = Self::now_clock();
-        let shop = self.lock_engine().find_item(item).map(|entry| entry.shop_price).unwrap_or(1);
-        let fills: Vec<lifescape_market::PricedFill> = self
-            .lock_store()
-            .executions_for_item(item, clock - 86400, clock + 1)
-            .unwrap_or_default()
+        let all = self.lock_store().executions_for_item(item, 0, clock + 1).unwrap_or_default();
+        let last_print = all.iter().max_by_key(|exec| exec.clock).map(|exec| exec.price);
+        let fills: Vec<lifescape_market::PricedFill> = all
             .iter()
-            .map(|exec| lifescape_market::PricedFill {
-                quantity: exec.quantity,
-                price: exec.price,
-                clock: exec.clock,
-            })
+            .filter(|exec| exec.clock >= clock - 86400)
+            .map(|exec| lifescape_market::PricedFill { quantity: exec.quantity, price: exec.price, clock: exec.clock })
             .collect();
-        let (bid, ask) = self
-            .lock_engine()
-            .books
-            .get(&item)
-            .map(|book| book.best())
-            .unwrap_or((None, None));
-        reference_price(&fills, bid, ask, shop)
+        let (bid, ask) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
+        reference_price(&fills, last_print, bid, ask)
+    }
+
+    /// The guard anchor: only a traded reference caps an order.
+    fn guard_anchor(&self, item: i64) -> Option<i64> {
+        let reference = self.reference(item);
+        reference.traded.then_some(reference.price)
     }
 
     /// One JSON-lines request in, one reply out. Pure dispatch: every
@@ -394,14 +389,24 @@ impl MarketService {
         let shop = row.shop_price;
         drop(engine);
         let reference = self.reference(item);
-        let last = self.lock_engine().recent.iter().rev().find(|print| print.item == item).map(|print| print.price);
+        // Last print from the store (durable): the in-memory ring forgot
+        // it at every daemon restart.
+        let clock = Self::now_clock();
+        let last = self
+            .lock_store()
+            .executions_for_item(item, 0, clock + 1)
+            .unwrap_or_default()
+            .iter()
+            .max_by_key(|exec| exec.clock)
+            .map(|exec| exec.price);
         object(vec![
             ("ok", Value::Bool(true)),
             ("item", Value::Int(item)),
             ("name", str_value(&name)),
             ("bid", bid.map(Value::Int).unwrap_or(Value::Null)),
             ("ask", ask.map(Value::Int).unwrap_or(Value::Null)),
-            ("reference", Value::Int(reference)),
+            ("reference", Value::Int(reference.price)),
+            ("traded", Value::Bool(reference.traded)),
             ("shop", Value::Int(shop)),
             ("last", last.map(Value::Int).unwrap_or(Value::Null)),
         ])
@@ -516,6 +521,8 @@ impl MarketService {
         let query = request.get("q").as_str().unwrap_or("").to_lowercase();
         let limit = request.get("limit").as_i64().unwrap_or(200).clamp(1, 2000) as usize;
         let traded_only = request.get("traded_only").as_i64().unwrap_or(0) == 1;
+        // `with_orders=1`: keep goods with >= 1 open order (either side).
+        let with_orders = request.get("with_orders").as_i64().unwrap_or(0) == 1;
         let clock = Self::now_clock();
         // One row per displayed name: base objects and their banknotes
         // (`cert_*` rows share the display) trade as a single named good —
@@ -530,6 +537,16 @@ impl MarketService {
             }
             groups.entry(row.name.clone()).or_default().push((row.id, row.shop_price));
         }
+        // Open orders and open quantity (remaining units, both sides) per form.
+        let open_orders: std::collections::HashMap<i64, (usize, i64)> = engine
+            .books
+            .iter()
+            .map(|(item, book)| {
+                let orders = book.orders();
+                (*item, (orders.len(), orders.iter().map(|order| order.remaining).sum::<i64>()))
+            })
+            .filter(|(_, (count, _))| *count > 0)
+            .collect();
         drop(engine);
         // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
         let traded: std::collections::HashSet<i64> = if traded_only {
@@ -543,6 +560,11 @@ impl MarketService {
         let mut items = Vec::new();
         for (name, members) in &groups {
             if traded_only && !members.iter().any(|member| traded.contains(&member.0)) {
+                continue;
+            }
+            let order_count: usize = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(count, _)| count).sum();
+            let open_qty: i64 = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(_, qty)| qty).sum();
+            if with_orders && order_count == 0 {
                 continue;
             }
             let mut volume = 0i64;
@@ -567,23 +589,27 @@ impl MarketService {
                 .find(|member| member.0 == canonical)
                 .map(|member| member.1)
                 .unwrap_or(1);
-            let reference = reference_price(&fills, None, None, shop);
+            let _ = shop;
+            let reference = reference_price(&fills, fills.last().map(|fill| fill.price), None, None).price;
             let change = match (fills.first(), fills.last()) {
                 (Some(first), Some(last)) if first.price >= 1 => {
                     (last.price - first.price) as f64 / first.price as f64
                 }
                 _ => 0.0,
             };
-            items.push((name.clone(), canonical, reference, change, volume));
+            items.push((name.clone(), canonical, reference, change, volume, order_count, open_qty));
         }
+        // Descending 24h volume, then the largest open quantity, then the name.
         items.sort_by(|left, right| {
-            right.4.cmp(&left.4).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
+            right.4.cmp(&left.4).then(right.6.cmp(&left.6)).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
         });
         let rows: Vec<Value> = items
             .into_iter()
             .take(limit)
-            .map(|(name, id, reference, change, volume)| {
+            .map(|(name, id, reference, change, volume, order_count, open_qty)| {
                 object(vec![
+                    ("orders", Value::Int(order_count as i64)),
+                    ("open_qty", Value::Int(open_qty)),
                     ("item", Value::Int(id)),
                     ("name", str_value(&name)),
                     ("price", Value::Int(reference)),
@@ -615,6 +641,11 @@ impl MarketService {
         if account.is_empty() {
             return Self::err("account is required".to_string());
         }
+        // AGENTS rule 13: admin's cheated goods and coins never reach
+        // another account, so admin never trades on the market.
+        if account.eq_ignore_ascii_case("admin") {
+            return Self::err("admin never trades: cheated goods stay out of the economy (rule 13)".to_string());
+        }
         let side = match Self::side_of(request) {
             Ok(side) => side,
             Err(error) => return Self::err(error),
@@ -625,8 +656,7 @@ impl MarketService {
         if self.lock_engine().find_item(item).is_none() {
             return Self::err(format!("unknown item {item}"));
         }
-        let reference = self.reference(item);
-        if let Err(error) = check_price(side, price, Some(reference)) {
+        if let Err(error) = check_price(side, price, self.guard_anchor(item)) {
             return Self::err(error.to_string());
         }
         {
@@ -640,15 +670,20 @@ impl MarketService {
         let clock = Self::now_clock();
         let store_id = {
             let store = self.lock_store();
-            let _ = store.upsert_account(&lifescape_store::AccountEcon {
-                account: account.clone(),
-                iron: false,
-                deals_settled: 0,
-                deals_failed: 0,
-                market_affinity: 0.5,
-                price_patience: 0.5,
-                archetype: String::new(),
-            });
+            // First order creates the economic profile; later orders
+            // never reset its counters (PRD3 lot 0: every place used to
+            // zero deals_settled / deals_failed and the reliability).
+            if store.get_account(&account).ok().flatten().is_none() {
+                let _ = store.upsert_account(&lifescape_store::AccountEcon {
+                    account: account.clone(),
+                    iron: false,
+                    deals_settled: 0,
+                    deals_failed: 0,
+                    market_affinity: 0.5,
+                    price_patience: 0.5,
+                    archetype: String::new(),
+                });
+            }
             match store.place_order(&NewOrder {
                 account: account.clone(),
                 side: Self::order_side(side),
@@ -690,6 +725,11 @@ impl MarketService {
         };
         let fills: Vec<lifescape_market::Fill> = matched.iter().map(|(fill, _)| fill.clone()).collect();
         self.lock_engine().order_item.insert(order_key, item);
+        if rests {
+            if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price) {
+                crate::market_reprice::register(store_id, bounds);
+            }
+        }
         self.lock_engine().placed += 1;
         // Match-time settlement: executions persist, one deal per fill
         // carries the physical handover; the ledger moves now.
@@ -749,8 +789,7 @@ impl MarketService {
             return Self::err(format!("order {order_id} is closed"));
         }
         let side = if row.side == OrderSide::Buy { Side::Buy } else { Side::Sell };
-        let reference = self.reference(item);
-        if let Err(error) = check_price(side, price, Some(reference)) {
+        if let Err(error) = check_price(side, price, self.guard_anchor(item)) {
             return Self::err(error.to_string());
         }
         let clock = Self::now_clock();
@@ -845,6 +884,22 @@ impl MarketService {
         object(vec![("ok", Value::Bool(true)), ("cancelled", Value::Int(order_id))])
     }
 
+    /// Cancels every open order of `account` on `item` and `side`
+    /// (daemon-side, no socket): the brain calls it when a fill wait
+    /// expires, so a retry never stacks a second resting order beside
+    /// the stale one. Returns how many orders it closed.
+    pub(crate) fn cancel_open_for(&self, account: &str, item: i64, side: OrderSide) -> usize {
+        let rows = self.lock_store().account_orders(account).unwrap_or_default();
+        let mut closed = 0;
+        for row in rows.iter().filter(|row| row.item_id == item && row.side == side && row.status == OrderStatus::Open) {
+            let reply = self.op_cancel(&object(vec![("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+            if reply.get("ok").as_bool() == Some(true) {
+                closed += 1;
+            }
+        }
+        closed
+    }
+
     fn op_my_orders(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("");
         let store = self.lock_store();
@@ -926,74 +981,4 @@ impl MarketService {
     }
 }
 
-fn registry() -> &'static OnceLock<Arc<MarketService>> {
-    static SERVICE: OnceLock<Arc<MarketService>> = OnceLock::new();
-    &SERVICE
-}
-
-/// Daemon-side handle for the convene loop (same process, no socket).
-pub(crate) fn shared() -> Option<Arc<MarketService>> {
-    registry().get().cloned()
-}
-
-/// Handle one market request on the daemon service. Down service is a
-/// loud error, never an empty book.
-pub fn handle(request: &Value) -> Value {
-    match registry().get() {
-        Some(service) => service.handle(request),
-        None => object(vec![
-            ("ok", Value::Bool(false)),
-            ("error", str_value("market service not running")),
-        ]),
-    }
-}
-
-/// Serve one worker connection: a single JSON-lines frame in, a single
-/// frame out, then close (CLI shape, no thread per message past the
-/// bounded pool).
-fn serve_one(service: Arc<MarketService>, stream: UnixStream) {
-        let request = match crate::daemon_pool::read_frame(&stream) {
-        Some(frame) if frame.as_obj().is_some() => frame,
-        _ => object(vec![]),
-    };
-    let reply = service.handle(&request);
-    let mut buf = lifescape_json::stringify(&reply);
-    buf.push('\n');
-    let _ = (&stream).write_all(buf.as_bytes());
-}
-
-/// Starts the daemon market: catalogue from the dumps, store opened
-/// here alone, demo history seeded when empty, socket served on the
-/// bounded pool. Idempotent: a live socket refuses a second server.
-pub fn start() -> Result<Arc<MarketService>, String> {
-    let items = catalogue();
-    let service = Arc::new(MarketService::open(&db_path(), items).map_err(|error| format!("market open: {error}"))?);
-    crate::market_seed::seed_demo_if_empty(&service).map_err(|error| format!("market seed: {error}"))?;
-    // Handover ring around the fountain via the nav batch op (walkable,
-    // no busts or stalls). Read-only nav use; a down service leaves the
-    // ring empty and every deal falls back to the static ring.
-    if let Some(snapshot) = crate::plan_service::snapshot() {
-        let ring = crate::market_convene::build_ring_from_snapshot(&snapshot);
-        service.lock_engine().ring = ring;
-    }
-    let sock = socket_path();
-    if sock.exists() {
-        if UnixStream::connect(&sock).is_ok() {
-            return Err(format!("market already serving on {}", sock.display()));
-        }
-        let _ = std::fs::remove_file(&sock);
-    }
-    let listener = UnixListener::bind(&sock).map_err(|error| format!("bind {}: {error}", sock.display()))?;
-    let serving = service.clone();
-    std::thread::Builder::new()
-        .name("market-accept".to_string())
-        .spawn(move || {
-            crate::daemon_pool::serve_pooled(
-                listener,
-                Arc::new(move |stream: UnixStream| serve_one(serving.clone(), stream)),
-            );
-        })
-        .map_err(|error| error.to_string())?;
-    let _ = registry().set(service.clone());
-    Ok(service)
-}
+pub use crate::market_daemon::{handle, shared, start};

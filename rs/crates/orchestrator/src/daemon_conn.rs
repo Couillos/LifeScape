@@ -57,11 +57,16 @@ impl Orchestrator {
         let (sock_path, _ready) = paths::session_paths(account);
         let stream = match connect_worker(&sock_path, timeout) {
             Ok(stream) => stream,
-            Err(_) => {
-                println!("daemon: connect to {account} wedged, killing the worker");
+            Err(error) => {
+                crate::logln!("daemon: connect to {account} wedged ({error}), killing the worker");
                 self.kill_process(account);
-                let _ = std::fs::remove_file(&sock_path);
-                return Err(format!("session unreachable for {account}"));
+                // Only a socket nobody listens on is removed: a worker the
+                // daemon does not track yet (restore) and could not kill
+                // would be orphaned, logged in and unreachable.
+                if error.contains("refused") || error.contains("no socket") {
+                    let _ = std::fs::remove_file(&sock_path);
+                }
+                return Err(format!("session unreachable for {account}: {error}"));
             }
         };
         stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;

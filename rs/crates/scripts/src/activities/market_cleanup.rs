@@ -2,10 +2,10 @@
 //! (graph obtains, quest checks) and `--iron` (D2 direct, no carnet); coins,
 //! food to 100 units and the best banked tool per kit spec resolve here.
 //! One pass: market sells for tradeable surplus (skipped when `--iron`),
-//! general-store sale, drop the rest (D10); a bank still past the limit
-//! drops whole listed stacks cheapest-total first with orders cancelled
-//! (D17). Sells list at the reserve floor at once: step-down across runs
-//! is deferred (no order age in `my_orders` to pace it).
+//! drop the rest (D10; PRD3: never an NPC shop sale); a bank still past
+//! the limit drops whole listed stacks cheapest-total first with orders
+//! cancelled (D17). Sells open at the market and walk down to the
+//! reserve floor daemon-side (`market_reprice`).
 
 #![forbid(unsafe_code)]
 
@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use lifescape_sdk::Bot;
 
-use crate::kit::{bank::nearest_bank, pack::{free_slots, obj_id, pack_total}, tools::cleanup_keep_names};
+use crate::kit::{bank::nearest_bank, pack::{free_slots, obj_id}, tools::cleanup_keep_names};
 use crate::market_client::{cancel_for, open_sell_items, place_sell};
 use crate::{ScriptError, ScriptResult};
 
@@ -128,7 +128,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // Triage reads the live bank dialog: open first, since a closed
     // dialog reads stale (or empty) and would mis-sort the whole pass.
     bank_open(bot)?;
-    let coins = obj_id(bot, "coins")?;
+    obj_id(bot, "coins")?;
     let keep = [parsed.keep.clone(), vec!["coins".to_string()], cleanup_keep_names(bot, &bot.bank_items().keys().copied().collect())].concat();
     // Unknown keeps fail loud: silence would sell what the brain forbade.
     for name in &keep {
@@ -165,11 +165,9 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
                     return Ok(crate::kit::cycle::BUDGET_EXIT);
                 }
                 let held = i64::from(bot.inventory().get(&id).copied().unwrap_or(0));
-                let price = lifescape_gamedata::obj_by_id(usize::from(id)).map(|entry| entry.price).unwrap_or(1);
-                // Reserve floor at once (general-store buyback estimate); the
-                // passthrough alchemy win stays planner-side until a magic
-                // script can cast it.
-                if place_sell(bot, id, held, lifescape_planner::space::reserve_floor(price * 400 / 1000, None))? {
+                // Reserve floor: 1 coin (no NPC buyback in the economy);
+                // the alchemy win stays planner-side (D2).
+                if place_sell(bot, id, held, lifescape_planner::space::reserve_floor(None))? {
                     listed_now += 1;
                 }
                 todo.retain(|keep| keep != &id);
@@ -179,16 +177,12 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             withdraw_all(bot, &chunk)?;
         }
     }
-    // Shop pass on the non-carnet rest, chunked like the market pass: the
-    // probe inside keeps worthless stock, dropped at once per chunk (D10).
+    // Non-carnet rest (untradeable surplus, or Iron stock), chunked like
+    // the market pass: dropped (D10). PRD3: never sold to an NPC shop.
     let mut rest: Vec<u16> = surplus_ids.iter().filter(|id| !market_ids.contains(id)).copied().collect();
     loop {
         let carried = packed(bot, &rest);
         if !carried.is_empty() {
-            match crate::kit::shop::sell_for_target(bot, &carried, coins, u32::MAX - pack_total(bot, coins)) {
-                Ok(gained) => bot.log(&format!("cleanup shop sold for {gained}")),
-                Err(error) => bot.log(&format!("cleanup shop pass skipped ({error}), dropping leftovers")),
-            }
             for id in packed(bot, &rest) {
                 if !drop_all(bot, id, start_tick, start_pause, parsed.budget_max)? {
                     return Ok(crate::kit::cycle::BUDGET_EXIT);

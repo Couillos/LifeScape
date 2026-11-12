@@ -65,6 +65,8 @@ pub struct TaskSpec {
     pub allow_shop: bool,
     /// Graph node id, for the session report.
     pub node_id: String,
+    /// Site the brain picked (`--site x,z,level`): pickers stay there.
+    pub site: Option<(i32, i32, i32)>,
     /// Production chain (PRD 2, D58): `None` for single-link v2 orders.
     pub chain: Option<super::chain_spec::ChainSpec>,
     /// Skip the bank loop (melee `--no-bank`).
@@ -87,6 +89,7 @@ impl TaskSpec {
             allow_market: false,
             allow_shop: true,
             node_id: String::new(),
+            site: None,
             chain: None,
             no_bank: false,
             allow_paid: false,
@@ -101,7 +104,7 @@ impl TaskSpec {
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -193,6 +196,13 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 spec.keep.push(name);
                 index += 2;
             }
+            "--site" => {
+                let raw = args.get(index + 1).ok_or_else(usage)?;
+                let parts: Vec<i32> = raw.split(',').map(|part| part.trim().parse::<i32>()).collect::<Result<_, _>>().map_err(|_| usage())?;
+                let [x, z, level] = parts[..] else { return Err(usage()) };
+                spec.site = Some((x, z, level));
+                index += 2;
+            }
             "--node" => {
                 let node = args.get(index + 1).cloned().filter(|node| !node.is_empty()).ok_or_else(usage)?;
                 spec.node_id = node;
@@ -200,7 +210,11 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
             }
             other if other.starts_with("--") => return Err(usage()),
             other => {
-                if activity == "melee"
+                // Combat spots ride positionally for every style: the
+                // brain sends `ranged cows` / `magic chickens` like
+                // `melee cows` (PRD3 lot 6: both failed Usage before).
+                if matches!(activity, "melee" | "ranged" | "magic") && other.parse::<u32>().is_err()
+                    || activity == "melee"
                     || (activity == "cook" && spec.resource.is_empty() && other.parse::<u32>().is_err())
                 {
                     spec.resource.push(other.to_string());
@@ -352,6 +366,7 @@ pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopR
 /// one unit, repeat. Goal and budget end the run with their exit codes;
 /// every other error propagates (blocked included).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
+    bot.assigned_site = spec.site;
     let mut state = CycleState::start(bot);
     loop {
         if let Some(stop) = poll_stop(bot, &state, spec) {
@@ -366,10 +381,40 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
 }
 
 #[cfg(test)]
+mod spot_tests {
+    #[test]
+    fn combat_styles_take_spot_names() {
+        for activity in ["melee", "ranged", "magic"] {
+            let spec = super::parse_cli(activity, &["cows".to_string(), "--ticks".to_string(), "600".to_string()]).expect("spot parses");
+            assert_eq!(spec.resource, vec!["cows".to_string()], "{activity}");
+            assert_eq!(spec.budget_max_ticks, 600);
+        }
+        let counted = super::parse_cli("magic", &["25".to_string()]).expect("count parses");
+        assert_eq!(counted.targets.count, Some(25));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{exit_code, parse_cli, poll_stop, run, CycleState, StepControl, StopReason, BUDGET_EXIT};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    /// The brain's site rides as `--site x,z,level`; the driver hands it
+    /// to the pickers, which keep only the resources around it.
+    #[test]
+    fn site_flag_parses_and_bounds_the_pickers() {
+        let args: Vec<String> = ["--site", "3086,3227,0", "--node", "n1"].iter().map(|arg| arg.to_string()).collect();
+        let spec = super::parse_cli("fishing", &args).expect("site parses");
+        assert_eq!(spec.site, Some((3086, 3227, 0)));
+        assert!(super::parse_cli("fishing", &["--site".to_string(), "3086,3227".to_string()]).is_err(), "three numbers");
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.assigned_site = spec.site;
+        assert!(crate::kit::spots::in_assigned_site(&bot, 3090, 3230), "inside the working area");
+        assert!(!crate::kit::spots::in_assigned_site(&bot, 2996, 3158), "Mudskipper is another site");
+        bot.assigned_site = None;
+        assert!(crate::kit::spots::in_assigned_site(&bot, 2996, 3158), "manual runs choose freely");
+    }
 
     fn offline_bot() -> Bot {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");

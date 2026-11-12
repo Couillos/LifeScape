@@ -60,6 +60,15 @@ pub fn run_firemaking(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_log: Vec<u16> = vec![tinderbox, log];
     keep_log.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_log, 0)?;
+    // The tinderbox may sit in the bank (or was lost on a death): pull it
+    // back, else block typed so the brain buys one (never a raw Sdk error
+    // retried three times in six seconds).
+    if pack_total(bot, tinderbox) == 0 {
+        bank_withdraw_items(bot, &bank, &[tinderbox], 1)?;
+        if pack_total(bot, tinderbox) == 0 {
+            return Err(ScriptError::Blocked { missing: vec![TINDERBOX.to_string()] });
+        }
+    }
     fill_logs(bot, &bank, log)?;
     if pack_total(bot, log) == 0 {
         return Err(ScriptError::Blocked { missing: vec![log_name.to_string()] });
@@ -120,7 +129,7 @@ fn light_one(bot: &mut Bot, log: u16, tinderbox: u16) -> Result<(), ScriptError>
     }
     let _ = bot.walk_to(here.0 + 2, here.1, bot.world.level, 1500);
     if pack_total(bot, log) >= had {
-        return Err(ScriptError::Usage(format!("log did not catch fire at {here:?}")));
+        return Err(ScriptError::Failed(format!("log did not catch fire at {here:?}")));
     }
     Ok(())
 }

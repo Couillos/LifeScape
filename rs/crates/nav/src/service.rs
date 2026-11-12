@@ -126,6 +126,7 @@ pub struct PlanKey {
     pub f2p_only: bool,
     pub satisfied: Vec<String>,
     pub excluded: Vec<String>,
+    pub danger: Vec<crate::plan::DangerZone>,
     pub version: String,
 }
 
@@ -142,6 +143,11 @@ impl PlanKey {
             f2p_only: options.f2p_only,
             satisfied,
             excluded,
+            danger: {
+                let mut danger = options.danger.clone();
+                danger.sort();
+                danger
+            },
             version: version.to_string(),
         }
     }
@@ -724,6 +730,16 @@ pub fn encode_options(options: &NavOptions) -> Value {
             "excluded_edges",
             Value::Arr(options.excluded_edges.iter().map(edge_value).collect()),
         ),
+        (
+            "danger",
+            Value::Arr(
+                options
+                    .danger
+                    .iter()
+                    .map(|zone| Value::Arr(vec![Value::Int(i64::from(zone.x)), Value::Int(i64::from(zone.z)), Value::Int(i64::from(zone.level)), Value::Int(i64::from(zone.radius))]))
+                    .collect(),
+            ),
+        ),
     ])
 }
 
@@ -732,8 +748,7 @@ pub fn decode_options(value: &Value) -> Result<NavOptions, String> {
         allow_paid: value.get("allow_paid").as_bool().ok_or("allow_paid")?,
         f2p_only: value.get("f2p_only").as_bool().ok_or("f2p_only")?,
         satisfied: std::collections::HashSet::new(),
-        excluded_edges: std::collections::HashSet::new(),
-    };
+        excluded_edges: std::collections::HashSet::new(), danger: Vec::new() };
     for tag in value.get("satisfied").as_arr().ok_or("satisfied")? {
         options
             .satisfied
@@ -747,6 +762,11 @@ pub fn decode_options(value: &Value) -> Result<NavOptions, String> {
         .ok_or("excluded_edges")?
     {
         options.excluded_edges.insert(parse_edge(edge)?);
+    }
+    // Optional (older clients send none): [x, z, level, radius] squares.
+    for zone in value.get("danger").as_arr().map(|rows| rows.to_vec()).unwrap_or_default() {
+        let part = |slot: usize| zone.as_arr().and_then(|cells| cells.get(slot)).and_then(|cell| cell.as_i64()).map(|cell| cell as i32).ok_or("danger zone");
+        options.danger.push(crate::plan::DangerZone { x: part(0)?, z: part(1)?, level: part(2)?, radius: part(3)? });
     }
     Ok(options)
 }
@@ -2753,6 +2773,7 @@ mod tests {
             f2p_only: true,
             satisfied: HashSet::new(),
             excluded_edges: HashSet::new(),
+            danger: Vec::new(),
         }
     }
 
@@ -4095,7 +4116,7 @@ mod tests {
         assert!(!targets.is_empty(), "unfiltered probes");
         let probed: Vec<_> = tables.transitions.iter().filter(|row| !row.disabled).collect();
         assert_eq!(targets.len(), probed.len(), "disabled excluded, rest kept");
-        let options = NavOptions { allow_paid: true, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new() };
+        let options = NavOptions { allow_paid: true, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new(), danger: Vec::new() };
         for target in targets.iter().take(25) {
             let row = tables.transitions.iter().find(|row| row.name == target.view.name).expect("row exists");
             let direct = crate::plan::ride_stands(&world, &tables, &options, row).into_iter().next();

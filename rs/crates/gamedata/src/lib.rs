@@ -8,20 +8,26 @@
 
 pub mod banks;
 pub mod combat_spots;
+pub mod danger;
 pub mod drops;
 pub mod equipment;
 pub mod extra_recipes;
 pub mod fishing;
 pub mod food;
+pub mod gear;
 pub mod f2p;
 pub mod free_zones;
 pub mod item_sources;
+pub mod obtain;
 pub mod methods;
+pub mod npc_ranges;
 pub mod quest_requirements;
 pub mod quests;
 pub mod recipes;
 pub mod rocks;
+pub mod script_sources;
 pub mod services;
+pub mod shop_access;
 pub mod shops;
 pub mod spawns;
 pub mod spells;

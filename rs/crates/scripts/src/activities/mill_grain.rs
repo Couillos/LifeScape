@@ -55,9 +55,9 @@ pub fn lever_near(bot: &Bot, x: i32, z: i32, level: i32) -> Option<(i32, i32, u1
 fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grain: u16, pot: u16, flour: u16) -> Result<(u32, u32), ScriptError> {
     let (hx, hz, hl) = (hopper.x as i32, hopper.z as i32, hopper.level as i32);
     bot.travel_to(lifescape_sdk::plan::Tile { x: hx, z: hz, level: hl })?;
-    let (hopper_id, _, _) = bot.world.loc_at(hx, hz, hl).ok_or_else(|| ScriptError::Usage(format!("no hopper loc at ({hx},{hz})")))?;
+    let (hopper_id, _, _) = bot.world.loc_at(hx, hz, hl).ok_or_else(|| ScriptError::Failed(format!("no hopper loc at ({hx},{hz})")))?;
     let Some((lever_x, lever_z, lever_id)) = lever_near(bot, hx, hz, hl) else {
-        return Err(ScriptError::Usage(format!("no hopper lever near ({hx},{hz}) at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("no hopper lever near ({hx},{hz}) at {:?}", bot.position())));
     };
     let grain_before = pack_total(bot, grain);
     let mut passes = 0;
@@ -74,7 +74,7 @@ fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grai
     // the Varrock millbase stands one tile west of its hopper.
     let (bx, bz) = lifescape_gamedata::stations::stations_of("mill").iter().filter(|mill| mill.level == 0)
         .min_by_key(|mill| (mill.x - hopper.x).abs() + (mill.z - hopper.z).abs())
-        .map(|mill| (mill.x as i32, mill.z as i32)).ok_or_else(|| ScriptError::Usage(format!("no millbase near ({hx},{hz})")))?;
+        .map(|mill| (mill.x as i32, mill.z as i32)).ok_or_else(|| ScriptError::Failed(format!("no millbase near ({hx},{hz})")))?;
     bot.travel_to(lifescape_sdk::plan::Tile { x: bx, z: bz, level: 0 })?;
     let Some((mill_id, _, _)) = bot.world.loc_at(bx, bz, 0) else {
         return Ok((milled, 0));
@@ -136,7 +136,7 @@ pub fn run_mill_grain(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if !ensure_inputs(step_bot, &bank, grain, pot)? {
             return Err(ScriptError::Blocked { missing: vec![GRAIN.to_string(), POT_EMPTY.to_string()] });
         }
-        let hopper = pick_hopper(step_bot).ok_or_else(|| ScriptError::Usage(format!("no usable mill hopper near {:?}", step_bot.position())))?;
+        let hopper = pick_hopper(step_bot).ok_or_else(|| ScriptError::Failed(format!("no usable mill hopper near {:?}", step_bot.position())))?;
         let (milled, taken) = mill_pack(step_bot, &hopper, grain, pot, flour)?;
         if milled + taken == 0 { return Err(ScriptError::Usage(format!("mill gave nothing at {:?}", step_bot.position()))); }
         step_bot.log(&format!("ok milled {milled} grain, took {taken} flour"));

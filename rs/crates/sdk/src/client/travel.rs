@@ -149,6 +149,12 @@ pub fn with_between_legs<T>(bot: &mut Bot, hook: BetweenLegsHook, trip: impl FnO
     out
 }
 
+
+/// Farthest the planner may move an unreachable destination and still
+/// call it arrived (Chebyshev): a stand beside a big tree or the shore
+/// beside water is 1-2 tiles; anything beyond is another place.
+const ADJUST_REACH: i32 = 4;
+
 impl Bot {
     /// Travel to a tile on any level: plan, publish the full plan as the
     /// live route, execute every segment in order. `NoRoute` becomes
@@ -207,6 +213,29 @@ impl Bot {
                     blockers: Vec::new(),
                 },
             ));
+        }
+        // Same trap with steps: the planner swaps an unreachable target
+        // for its closest reachable tile and walks there (bb4v5d9m: an
+        // Al-Kharid spot behind the toll became a dead-end corner of the
+        // swamp at (3247,3190), where the bot then sat). A substitute far
+        // from the target is not an arrival: NoRoute, nothing walked.
+        // Near substitutes stay (shore beside water, stand beside a tree).
+        if let Some(adjusted) = plan.adjusted_dest {
+            let far = adjusted.level != dest.level || (adjusted.x - dest.x).abs().max((adjusted.z - dest.z).abs()) > ADJUST_REACH;
+            if far && !plan.segments.is_empty() {
+                return Err(self.fail_no_route(
+                    from,
+                    dest,
+                    &options,
+                    NoRoute {
+                        closest_reachable: adjusted,
+                        blocked_by_requirements: Vec::new(),
+                        disabled_transitions_nearby: Vec::new(),
+                        reason: NoRouteReason::Disconnected,
+                        blockers: Vec::new(),
+                    },
+                ));
+            }
         }
         let plan_ms = plan_start.elapsed().as_millis();
         Ok((options, plan, PlanTimings { options_ms, plan_ms, service_ms }))
@@ -435,6 +464,7 @@ impl Bot {
                 quest_points,
             ),
             excluded_edges: HashSet::new(),
+            danger: self.nav_danger.clone(),
         }
     }
 
@@ -470,6 +500,7 @@ impl Bot {
                 quest_points,
             ),
             excluded_edges: HashSet::new(),
+            danger: self.nav_danger.clone(),
         })
     }
 
@@ -1963,6 +1994,32 @@ mod tests {
         };
         if let Some(path) = dossier {
             let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// bb4v5d9m: from Lumbridge the Al-Kharid shrimp (behind the toll,
+    /// no coins) used to plan to the swamp corner (3247,3190) and walk
+    /// there. A far substitute is NoRoute, nothing walks.
+    #[test]
+    fn far_adjusted_plan_with_steps_is_no_route() {
+        use lifescape_nav::service::{PlanClient, Service, Snapshot, test_socket};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(Snapshot::new(world, tables, "test-far-adjust".to_string()), &test_socket("sdk-far-adjust"), 1)
+            .expect("service starts");
+        let mut lumbridge = offline_bot(3222, 3218);
+        lumbridge.last_keepalive = Some(std::time::Instant::now());
+        lumbridge.last_send_tick = lumbridge.world.ticks;
+        lumbridge.plan_client = Some(PlanClient::new(service.socket_path(), "far-adjust"));
+        lumbridge.plan_data_version = Some("test-far-adjust".to_string());
+        match lumbridge.plan_travel(Tile { x: 3267, z: 3148, level: 0 }) {
+            Ok((_, plan, _)) => panic!("an unreachable spot must not plan a walk, got {plan:?}"),
+            Err(Error::TravelFailure(failure)) => {
+                assert_eq!(failure.kind, TravelErrorKind::NoRoute);
+                if let Some(path) = failure.dossier {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            Err(other) => panic!("NoRoute dossier, got {other:?}"),
         }
     }
 

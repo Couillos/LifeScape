@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Reference price and OHLCV buckets. The reference prefers traded
-//! reality (VWAP), then the live book midpoint, then the shop price.
+//! reality (VWAP, then the last print ever), then the live book
+//! midpoint, then 1 coin: an object nobody ever traded is worth 1 until
+//! buyers bid it up (PRD3: NPC shop prices never anchor the market).
 //! Buckets align on multiples of the width since the epoch, in clock
 //! seconds; every fill also carries its server tick for later joins.
 
@@ -40,22 +42,29 @@ pub fn vwap(fills: &[PricedFill]) -> Option<i64> {
     Some(((coins + qty / 2) / qty).max(1) as i64)
 }
 
-/// Reference price: VWAP, else book midpoint, else the shop price.
-pub fn reference_price(
-    recent: &[PricedFill],
-    best_bid: Option<i64>,
-    best_ask: Option<i64>,
-    shop_price: i64,
-) -> i64 {
+/// Reference price with its provenance: `traded` when it comes from
+/// real fills (only then does the 5x / 0.2x guard band apply).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reference {
+    pub price: i64,
+    pub traded: bool,
+}
+
+/// Reference price: VWAP of `recent`, else the `last_print` ever, else
+/// the book midpoint (both sides needed), else 1 coin.
+pub fn reference_price(recent: &[PricedFill], last_print: Option<i64>, best_bid: Option<i64>, best_ask: Option<i64>) -> Reference {
     if let Some(average) = vwap(recent) {
-        return average.max(1);
+        return Reference { price: average.max(1), traded: true };
+    }
+    if let Some(last) = last_print.filter(|price| *price >= 1) {
+        return Reference { price: last, traded: true };
     }
     if let (Some(bid), Some(ask)) = (best_bid, best_ask) {
         if bid >= 1 && ask >= 1 {
-            return ((bid + ask) / 2).max(1);
+            return Reference { price: ((bid + ask) / 2).max(1), traded: false };
         }
     }
-    shop_price.max(1)
+    Reference { price: 1, traded: false }
 }
 
 /// Groups ordered fills into OHLCV buckets of `width_seconds`.
@@ -110,10 +119,13 @@ mod tests {
 
     #[test]
     fn reference_falls_back_in_order() {
-        assert_eq!(reference_price(&[fill(10, 7, 1)], Some(1), Some(2), 99), 7);
-        assert_eq!(reference_price(&[], Some(4), Some(6), 99), 5);
-        assert_eq!(reference_price(&[], Some(4), None, 99), 99);
-        assert_eq!(reference_price(&[], None, None, 0), 1);
+        let traded = |price| super::Reference { price, traded: true };
+        let quoted = |price| super::Reference { price, traded: false };
+        assert_eq!(reference_price(&[fill(10, 7, 1)], Some(3), Some(1), Some(2)), traded(7));
+        assert_eq!(reference_price(&[], Some(3), Some(4), Some(6)), traded(3), "last print beats the book");
+        assert_eq!(reference_price(&[], None, Some(4), Some(6)), quoted(5));
+        assert_eq!(reference_price(&[], None, Some(4), None), quoted(1), "one-sided book: never traded, 1 coin");
+        assert_eq!(reference_price(&[], None, None, None), quoted(1), "never traded: 1 coin, no shop anchor");
     }
 
     #[test]

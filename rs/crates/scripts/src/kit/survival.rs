@@ -175,6 +175,12 @@ pub fn hitpoints(bot: &Bot) -> u8 {
     bot.world.stats.get(&3).map(|(level, _)| *level).unwrap_or(10)
 }
 
+/// Base hitpoints (the level the XP buys, i.e. full health): 10 before
+/// the stats stream.
+pub fn max_hitpoints(bot: &Bot) -> u8 {
+    bot.world.stats.get(&3).map(|(_, exp)| lifescape_sdk::snapshot::level_for_xp(*exp)).unwrap_or(10)
+}
+
 /// True when the server announced death since `seen`: "Oh dear you are
 /// dead!" arrives even when the hitpoints stream lags behind.
 pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
@@ -186,8 +192,10 @@ pub fn death_message_seen(bot: &Bot, seen: usize) -> bool {
 /// before the next step. The worker pause gate runs the mapped rescue
 /// inline and the loop retries after the next pump.
 pub fn check_events(bot: &mut Bot) -> ScriptResult {
+    // Routes planned from here on avoid the hunters near the bot.
+    crate::kit::danger::arm(bot);
     if !crate::randomevent_full::check(bot)? {
-        return Err(ScriptError::Usage(format!("random event unresolved at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("random event unresolved at {:?}", bot.position())));
     }
     Ok(0)
 }
@@ -195,7 +203,7 @@ pub fn check_events(bot: &mut Bot) -> ScriptResult {
 /// Wait until the backpack streams after login (tick-bounded).
 pub fn wait_pack_streamed(bot: &mut Bot) -> Result<(), ScriptError> {
     if !wait_backpack(bot, 150)? {
-        return Err(ScriptError::Usage(format!("backpack never streamed at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("backpack never streamed at {:?}", bot.position())));
     }
     Ok(())
 }

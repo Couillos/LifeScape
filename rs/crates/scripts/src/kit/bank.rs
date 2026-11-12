@@ -45,8 +45,18 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     };
     let mut best: Option<(i64, knowledge::banks::Bank)> = None;
     let mut fallback: Option<(i64, knowledge::banks::Bank)> = None;
+    // A bank inside an aggro square of a hunter that can kill this bot
+    // (Draynor's, beside the young dark wizards, for combat 14 and
+    // under) is never picked while a safe one exists on this level.
+    let threats = crate::kit::danger::threats(bot);
+    let safe_exists = knowledge::banks::all_banks().iter().any(|bank| {
+        !bank.members && bank.level == i64::from(bot.world.level) && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()
+    });
     for bank in knowledge::banks::all_banks() {
         if bank.members || bank.level != i64::from(bot.world.level) {
+            continue;
+        }
+        if safe_exists && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_some() {
             continue;
         }
         let dist = (bank.x - i64::from(here_x)).abs() + (bank.z - i64::from(here_z)).abs();
@@ -62,7 +72,7 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     }
     best.or(fallback)
         .map(|(_, bank)| bank)
-        .ok_or_else(|| ScriptError::Usage(format!("no reachable bank from {:?}", bot.position())))
+        .ok_or_else(|| ScriptError::Failed(format!("no reachable bank from {:?}", bot.position())))
 }
 
 /// X of the nearest toll fence, served by the nav service. `None` when no
@@ -149,7 +159,7 @@ fn gate_id(bot: &mut Bot, gate: (i32, i32, i32)) -> Result<u16, ScriptError> {
         .into_iter()
         .find(|entry| (entry.x, entry.z, entry.level) == gate)
         .map(|entry| entry.loc)
-        .ok_or_else(|| ScriptError::Usage(format!("toll gate gone at {gate:?}")))
+        .ok_or_else(|| ScriptError::Failed(format!("toll gate gone at {gate:?}")))
 }
 
 /// Live bankbooth loc nearest to the booth spawn (loc id comes from the
@@ -283,7 +293,7 @@ pub fn require_deposit_cleared(bot: &Bot, deposited: bool) -> Result<(), ScriptE
     if deposited {
         return Ok(());
     }
-    Err(ScriptError::Usage(format!("deposit did not clear at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("deposit did not clear at {:?}", bot.position())))
 }
 
 /// One more transit injury: logs `hurt en route` with the hp drop, waits
@@ -293,7 +303,7 @@ fn register_transit_hurt(bot: &mut Bot, hurts: &mut u32, hp_entry: u8) -> Result
     *hurts += 1;
     bot.log(&format!("hurt en route at {:?} (hp {hp_entry}->{}, injury {hurts})", bot.position(), hitpoints(bot)));
     if *hurts > TRANSIT_MAX_HURTS {
-        return Err(ScriptError::Usage(format!("too hurt en route, aborting trip at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("too hurt en route, aborting trip at {:?}", bot.position())));
     }
     wait_healed(bot, TRANSIT_HEAL_TICKS)?;
     Ok(())
@@ -313,7 +323,7 @@ pub fn bank_trip_resilient(
     let first_trip = bank_trip(bot, bank, keep, withdraw_coins);
     let mut bank_coins = match first_trip {
         Ok(coins) => coins,
-        Err(ScriptError::Usage(text)) if text.contains("bank unreachable") => {
+        Err(ScriptError::Failed(text)) if text.contains("bank unreachable") => {
             bot.log(&format!("bank unreachable from {:?}, re-discovering", bot.position()));
             *bank = nearest_bank(bot)?;
             bank_trip(bot, bank, keep, withdraw_coins)?
@@ -325,7 +335,7 @@ pub fn bank_trip_resilient(
         *bank = nearest_bank(bot)?;
         bank_coins = bank_trip(bot, bank, keep, withdraw_coins)?;
         if product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
-            return Err(ScriptError::Usage(format!("bank unreachable, load stuck at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("bank unreachable, load stuck at {:?}", bot.position())));
         }
     }
     Ok(bank_coins)
@@ -364,7 +374,7 @@ fn death_resume(
         return Ok(());
     }
     let kept: Vec<u16> = pack_slots(bot).iter().map(|(_, (held, _))| *held).collect();
-    Err(ScriptError::Usage(format!(
+    Err(ScriptError::Failed(format!(
         "died en route at {:?}, load lost (kept {kept:?}), aborting trip to ({bank_x},{bank_z})",
         bot.position()
     )))
@@ -466,7 +476,7 @@ pub fn bank_trip(
     if !reached {
         bot.log(&format!("bank trip: could not reach ({bank_x},{bank_z})"));
         if bank_work_pending(bot, &keep, withdraw_coins) {
-            return Err(ScriptError::Usage(format!(
+            return Err(ScriptError::Failed(format!(
                 "bank unreachable: could not reach ({bank_x},{bank_z}) from {:?}, load stuck",
                 bot.position()
             )));
@@ -487,7 +497,7 @@ pub fn bank_trip(
     if booths.is_empty() {
         bot.log(&format!("bank trip: no live bankbooth near ({bank_x},{bank_z})"));
         if bank_work_pending(bot, &keep, withdraw_coins) {
-            return Err(ScriptError::Usage(format!(
+            return Err(ScriptError::Failed(format!(
                 "bank unreachable: no live bankbooth near ({bank_x},{bank_z}) at {:?}, load stuck",
                 bot.position()
             )));
@@ -508,7 +518,7 @@ pub fn bank_trip(
     if !opened {
         bot.log(&format!("bank trip: bank did not open at {:?}", bot.position()));
         if bank_work_pending(bot, &keep, withdraw_coins) {
-            return Err(ScriptError::Usage(format!(
+            return Err(ScriptError::Failed(format!(
                 "bank unreachable: bank did not open at {:?}, load stuck",
                 bot.position()
             )));
@@ -547,18 +557,26 @@ pub fn wait_healed(bot: &mut Bot, timeout: u64) -> Result<(), ScriptError> {
 pub const HEAL_TARGET_HP: u8 = 12;
 const HEAL_MAX_TICKS: u64 = 617;
 
+/// Heal target for a bot whose full health is `max_hp`.
+pub fn heal_target(max_hp: u8) -> u8 {
+    HEAL_TARGET_HP.min(max_hp)
+}
+
 /// Heal on the spot when below target. Called at the bank (safe), never
 /// mid-route. Logs the ticks actually spent for the regen measure.
 /// Best-effort: a dead socket or stop still aborts, anything else just
 /// logs (the booth open below surfaces the real failure).
 pub fn heal_at_bank(bot: &mut Bot) -> Result<(), ScriptError> {
     let hp = hitpoints(bot);
-    if hp >= HEAL_TARGET_HP {
+    // Never above full health: a fresh 10-HP account waited the whole
+    // 617-tick bound at every bank trip for a 12 it can never reach.
+    let target = heal_target(crate::kit::survival::max_hitpoints(bot));
+    if hp >= target {
         return Ok(());
     }
     let start = bot.world.ticks;
-    bot.log(&format!("heal at bank: hp {hp}->{HEAL_TARGET_HP} at {:?}", bot.position()));
-    match wait_hitpoints(bot, HEAL_TARGET_HP, HEAL_MAX_TICKS) {
+    bot.log(&format!("heal at bank: hp {hp}->{target} at {:?}", bot.position()));
+    match wait_hitpoints(bot, target, HEAL_MAX_TICKS) {
         Ok(_) => {}
         Err(lifescape_sdk::Error::Interrupted(reason)) => {
             return Err(ScriptError::Sdk(lifescape_sdk::Error::Interrupted(reason)))
@@ -580,6 +598,29 @@ mod tests {
     use super::{bank_trip, bank_trip_resilient, is_bankbooth, live_bank_booth, live_bank_booths, nearest_bank, register_transit_hurt, require_deposit_cleared};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    /// Standing at Draynor, a low-level bot never banks beside the young
+    /// dark wizards: a safe bank is picked instead (bots died on every
+    /// Draynor deposit, cook and fishing runs alike).
+    #[test]
+    fn low_level_bot_never_picks_the_draynor_bank() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3092;
+        bot.world.z = 3245;
+        let bank = super::nearest_bank(&mut bot).expect("a bank");
+        assert!((bank.x - 3092).abs() + (bank.z - 3243).abs() > 20, "picked the Draynor bank at ({},{})", bank.x, bank.z);
+        let threats = crate::kit::danger::threats(&bot);
+        assert!(crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none());
+    }
+
+    /// Fresh accounts have 10 HP: the target never exceeds full health.
+    #[test]
+    fn heal_target_never_exceeds_full_health() {
+        assert_eq!(super::heal_target(10), 10, "a 10-HP bot heals to 10, not 12");
+        assert_eq!(super::heal_target(25), super::HEAL_TARGET_HP);
+    }
 
     /// Mapless worker against a real nav service (repo dumps): the bot
     /// carries no `nav_world`/`nav_tables`, only the plan handle. Each
@@ -908,6 +949,9 @@ mod tests {
         bot.world.level = 0;
         bot.world.x = 3091;
         bot.world.z = 3242;
+        // Fence fallback only: the danger rule (Draynor wizards vs an
+        // unknown level) is `low_level_bot_never_picks_the_draynor_bank`.
+        bot.allow_wild = true;
         let got = nearest_bank(&mut bot).expect("unfenced pick resolves");
         assert_eq!((got.x, got.z, got.level), (3091, 3242, 0), "draynor wins unfenced, got: {got:?}");
     }

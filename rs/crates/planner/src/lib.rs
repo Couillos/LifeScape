@@ -11,10 +11,16 @@ pub mod chains;
 pub mod combat;
 pub mod cost;
 pub mod expand;
+pub mod goals;
+pub mod lifecycle;
 pub mod mapping;
 pub mod model;
+pub mod obtain_legs;
 pub mod replan;
+pub mod resolve_obtain;
 pub mod space;
+pub mod tools;
+pub mod tranches;
 
 pub use catalog::{
     activity_from_value, activity_to_value, catalog_from_value, catalog_to_value, validate, Activity, Arch,
@@ -25,12 +31,11 @@ pub use chains::{
     quests_for_goal, synergies, usable_chains, xp_per_tick, BootStep, Chain, ChainEval, ChainPrices, ChainStep,
     QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };
-pub use combat::{
-    combat_gate, combat_launch, combat_level, goal_combat_style, min_combat_for_method, safe_area_for_method, training_method, BaseLevels, CombatError,
-    CombatGate, CombatLaunch,
-};
+pub use combat::{combat_level, goal_combat_style, min_combat_for_method, pick_site, training_method, BaseLevels, CombatError, SitePick};
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, method_feasible, required_tool, resolve_ready};
+pub use lifecycle::{graph_state, mark_launched, next_id, normalize, record_block, record_contract_error, record_failure, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES};
+pub use goals::{append_goal, goal_skills, next_goal, stuck_skills, DONE_TAG, STUCK_TAG, TRAINABLE};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

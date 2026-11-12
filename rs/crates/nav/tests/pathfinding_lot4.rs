@@ -49,6 +49,7 @@ fn short_options() -> NavOptions {
         f2p_only: true,
         satisfied: HashSet::new(),
         excluded_edges: HashSet::new(),
+        danger: Vec::new(),
     }
 }
 

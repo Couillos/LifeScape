@@ -128,8 +128,9 @@ fn amend_is_cancel_and_replace_behind_the_queue() {
 fn guards_reject_bands_and_naked_orders() {
     let (service, path) = service("guards");
     funded(&service, "poor");
-    // No reference yet: shop price anchors at 2; 5x = 10.
-    let over = service.handle(&request(vec![
+    // Never traded (PRD3 lot 2): the reference is 1 coin and does not
+    // cap anything, so a buyer may bid an untraded item up freely.
+    let free_bid = service.handle(&request(vec![
         ("op", str_value("place")),
         ("account", str_value("poor")),
         ("side", str_value("buy")),
@@ -137,7 +138,7 @@ fn guards_reject_bands_and_naked_orders() {
         ("qty", Value::Int(1)),
         ("price", Value::Int(11)),
     ]));
-    assert_eq!(over.get("ok").as_bool(), Some(false));
+    assert_eq!(free_bid.get("ok").as_bool(), Some(true), "untraded items have no band: {free_bid:?}");
     // Naked sell: no stock funded on this account.
     let naked = service.handle(&request(vec![
         ("op", str_value("place")),
@@ -282,7 +283,8 @@ fn quote_history_and_tick_serve_the_front() {
     funded(&service, "taker");
     let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
     assert_eq!(quote.get("ok").as_bool(), Some(true));
-    assert_eq!(quote.get("reference").as_i64(), Some(2), "shop anchors the void");
+    assert_eq!(quote.get("reference").as_i64(), Some(1), "never traded: 1 coin, the shop never anchors");
+    assert_eq!(quote.get("traded").as_bool(), Some(false));
     service.handle(&request(vec![
         ("op", str_value("place")),
         ("account", str_value("maker")),
@@ -752,5 +754,120 @@ fn list_traded_only_hides_untraded_goods() {
     let rows = reply.get("items").as_arr().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
+    cleanup(&path);
+}
+
+/// PRD3 lot 2: the first print turns the band on. Before it, any bid
+/// lists; after a trade at 2, a bid above 5x (10) is refused.
+#[test]
+fn first_print_turns_the_band_on() {
+    let (service, path) = service("band");
+    funded(&service, "maker");
+    funded(&service, "taker");
+    let place = |account: &str, side: &str, price: i64| {
+        service.handle(&request(vec![
+            ("op", str_value("place")),
+            ("account", str_value(account)),
+            ("side", str_value(side)),
+            ("item", Value::Int(314)),
+            ("qty", Value::Int(1)),
+            ("price", Value::Int(price)),
+        ]))
+    };
+    assert_eq!(place("maker", "sell", 2).get("ok").as_bool(), Some(true));
+    let traded = place("taker", "buy", 2);
+    assert_eq!(traded.get("fills").as_arr().map(|fills| fills.len()), Some(1), "crossed at 2: {traded:?}");
+    let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
+    assert_eq!(quote.get("reference").as_i64(), Some(2));
+    assert_eq!(quote.get("traded").as_bool(), Some(true));
+    assert_eq!(place("taker", "buy", 11).get("ok").as_bool(), Some(false), "11 > 5x the traded 2");
+    assert_eq!(place("taker", "buy", 10).get("ok").as_bool(), Some(true), "10 = 5x stays inside");
+    cleanup(&path);
+}
+
+/// PRD3 lot 2: a bounded bid walks up one step per patience window and
+/// crosses the resting ask once it reaches it; never past its ceiling.
+#[test]
+fn bounded_bids_walk_up_and_cross() {
+    let (service, path) = service("reprice");
+    funded(&service, "reprice_seller");
+    funded(&service, "reprice_buyer");
+    let ask = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("reprice_seller")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(5)),
+    ]));
+    assert_eq!(ask.get("ok").as_bool(), Some(true));
+    let bid = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("reprice_buyer")),
+        ("side", str_value("buy")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(1)),
+        ("ceiling", Value::Int(8)),
+        ("patience", Value::Int(1)),
+    ]));
+    assert_eq!(bid.get("status").as_str(), Some("open"), "1 does not cross 5: {bid:?}");
+    let mut wall = 4_000_000_000.0;
+    let mut crossed = false;
+    for _ in 0..10 {
+        wall += 10.0;
+        crate::market_reprice::reprice_round(&service, wall, 600.0);
+        let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
+        if quote.get("traded").as_bool() == Some(true) {
+            assert_eq!(quote.get("reference").as_i64(), Some(5), "crossed at the resting ask");
+            crossed = true;
+            break;
+        }
+    }
+    assert!(crossed, "the bid walked 1 -> 5 and crossed");
+    cleanup(&path);
+}
+
+/// Market page (user rule 2026-11-12): every good with an open order is
+/// listed, traded or not, with its open-order count; empty books never.
+#[test]
+fn list_with_orders_shows_every_resting_book() {
+    let (service, path) = service("with-orders");
+    funded(&service, "lister");
+    let list = |service: &MarketService| {
+        service.handle(&request(vec![("op", str_value("list")), ("with_orders", Value::Int(1))])).get("items").as_arr().cloned().unwrap_or_default()
+    };
+    assert!(list(&service).is_empty(), "no order, no row");
+    let placed = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("lister")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(5)),
+        ("price", Value::Int(9)),
+    ]));
+    assert_eq!(placed.get("ok").as_bool(), Some(true));
+    let rows = list(&service);
+    assert_eq!(rows.len(), 1, "the resting ask lists its good: {rows:?}");
+    assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
+    assert_eq!(rows[0].get("orders").as_i64(), Some(1));
+    assert_eq!(rows[0].get("open_qty").as_i64(), Some(5), "open quantity, not order count");
+    cleanup(&path);
+}
+
+/// AGENTS rule 13: admin never places an order.
+#[test]
+fn admin_never_trades() {
+    let (service, path) = service("admin-rule");
+    funded(&service, "admin");
+    let refused = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("admin")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(5)),
+    ]));
+    assert_eq!(refused.get("ok").as_bool(), Some(false), "{refused:?}");
     cleanup(&path);
 }

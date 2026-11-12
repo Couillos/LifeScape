@@ -96,7 +96,7 @@ pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if taken == 0 {
             empty += 1;
             if empty >= EMPTY_SWEEPS_LIMIT {
-                return Err(ScriptError::Usage(format!("nothing to pick near {here:?} at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("nothing to pick near {here:?} at {:?}", step_bot.position())));
             }
             step_bot.log("sweep empty, waiting for respawns");
             for _ in 0..10 {

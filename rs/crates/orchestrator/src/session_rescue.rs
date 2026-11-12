@@ -274,7 +274,7 @@ pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
                 end_pos,
             );
             shared.inner.lock().unwrap().last_heartbeat_tick = bot.world.ticks;
-            shared.log(&format!("event script_error {} resolved=false", pending.rescue));
+            shared.log(&format!("event script_error {} resolved=false: {message}", pending.rescue));
             shared.inner.lock().unwrap().last_error = Some(object(vec![
                 ("where", str_value(&pending.rescue)),
                 ("type", str_value(script_error_type(&error))),
@@ -345,7 +345,7 @@ fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
                 (end_level, end_x, end_z),
             );
             shared.inner.lock().unwrap().last_heartbeat_tick = bot.world.ticks;
-            shared.log(&format!("event script_error {} resolved=false", market.script));
+            shared.log(&format!("event script_error {} resolved=false: {message}", market.script));
         }
     }
     shared.rescue_gate.store(false, Ordering::SeqCst);

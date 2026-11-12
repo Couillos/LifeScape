@@ -141,7 +141,7 @@ fn smith_one(bot: &mut Bot, bar_name: &str, product: u16, column: u8, slot: u8) 
         bot.pump(2)?;
     }
     if bot.world.modal.is_none() {
-        return Err(ScriptError::Usage(format!("smithing interface never opened at {:?} (Doric anvils need Doric's Quest)", bot.position())));
+        return Err(ScriptError::Failed(format!("smithing interface never opened at {:?} (Doric anvils need Doric's Quest)", bot.position())));
     }
     let column_com = (bot.tables.com_id)(&format!("smithing:column{column}")).ok_or_else(|| ScriptError::Usage(format!("unknown smithing column{column} at {:?}", bot.position())))?;
     bot.inv_button(1, product, slot, column_com)?;
@@ -153,7 +153,7 @@ fn smith_one(bot: &mut Bot, bar_name: &str, product: u16, column: u8, slot: u8) 
         bot.close_modal()?;
     }
     if pack_total(bot, product) <= had {
-        return Err(ScriptError::Usage(format!("nothing smithed at {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("nothing smithed at {:?}", bot.position())));
     }
     Ok(())
 }

@@ -22,7 +22,7 @@ use lifescape_nav::plan::Tile;
 
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
-use crate::market_eta::{EtaCache, TickMeter};
+use crate::market_eta::EtaCache;
 use crate::market_service::MarketService;
 
 /// Matched deals wait this long (server ticks) before a convocation, so
@@ -882,64 +882,7 @@ pub fn convene_round(
     poses
 }
 
-/// Daemon convene thread: every round sweeps expired deals, convokes
-/// what waited out the grouping window, and poses one `market deliver`
-/// per bot. Unposeable convokes retry next round; expired ones sweep.
-pub fn start_convene_loop(orch: Arc<Orchestrator>) {
-    std::thread::Builder::new()
-        .name("market-convene".to_string())
-        .spawn(move || {
-            // The registry lands when the market starts (just above the
-            // call site); wait a minute before giving up, never spin.
-            let mut service = None;
-            for _ in 0..12 {
-                if let Some(running) = crate::market_service::shared() {
-                    service = Some(running);
-                    break;
-                }
-                std::thread::sleep(Duration::from_secs(5));
-            }
-            let Some(service) = service else {
-                return;
-            };
-            let mut eta = EtaCache::new();
-            let mut meter = TickMeter::new();
-            let mut unposed: Vec<ConvocationPose> = Vec::new();
-            loop {
-                std::thread::sleep(Duration::from_secs(CONVENE_EVERY_SECS));
-                let parties = orch.market_live_positions();
-                // Live tick rate from the freshest snapshot: session
-                // ticks are per-login epochs but advance at one per
-                // server tick, so wall-per-tick calibrates grouping and
-                // sweep with no env switch.
-                let wall = wall_now();
-                let Some(truth) = parties.values().map(|party| party.0).max() else {
-                    continue;
-                };
-                let tick_ms = meter.observe(wall, truth);
-                let nav_up = crate::plan_service::stats_json().is_some();
-                // Never hold the jobs map while locking a job (same
-                // discipline as `market_live_positions`).
-                let jobs: Vec<Arc<Job>> = orch.jobs.lock().unwrap().values().cloned().collect();
-                service.sync_ledger_from_jobs(&jobs);
-                for pose in convene_round(&service, nav_up, &parties, &mut eta, tick_ms) {
-                    eprintln!("market-convene: pose {} {:?}", pose.account, pose.args);
-                    unposed.push(pose);
-                }
-                unposed.retain(|pose| {
-                    if orch.pose_market_script(&pose.account, &pose.args) {
-                        false
-                    } else {
-                        true
-                    }
-                });
-                if unposed.len() > 200 {
-                    unposed.drain(..unposed.len() - 200);
-                }
-            }
-        })
-        .expect("market convene thread spawns");
-}
+pub use crate::market_daemon::start_convene_loop;
 
 #[cfg(test)]
 #[path = "market_convene_tests.rs"]

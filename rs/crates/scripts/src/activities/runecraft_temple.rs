@@ -107,5 +107,5 @@ pub(crate) fn exit_temple(bot: &mut Bot, prefix: &str, portal: &str) -> Result<(
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{portal} did not move us from {:?} (stands {})", bot.position(), stands.len())))
+    Err(ScriptError::Failed(format!("{portal} did not move us from {:?} (stands {})", bot.position(), stands.len())))
 }

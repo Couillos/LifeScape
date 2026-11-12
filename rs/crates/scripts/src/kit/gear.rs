@@ -16,7 +16,9 @@ use crate::kit::pack::{free_slots, obj_id};
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
-pub const ARMOUR_SLOTS: [i64; 9] = [0, 1, 2, 4, 5, 7, 9, 10, 12];
+pub const ARMOUR_SLOTS: [i64; 10] = [0, 1, 2, 4, 5, 7, 9, 10, 12, 13];
+/// Quiver (arrows): worn only by a ranged run (PRD3 lot 6).
+pub const AMMO_SLOT: i64 = 13;
 /// Server wearpos slots: 3 is the weapon, 5 the shield.
 pub const WEAPON_SLOT: i64 = 3;
 pub const WORN_COM_NAME: &str = "wornitems:wear";
@@ -88,6 +90,10 @@ pub fn gear_plan(
         if !ids.contains(&obj) || !knowledge::equipment::requirements_met(&entry, &refs) {
             continue;
         }
+        // Arrows ride only a ranged run (a melee bot keeps them banked).
+        if entry.wearpos == AMMO_SLOT && bot.combat_style != "ranged" {
+            continue;
+        }
         for slot in [WEAPON_SLOT].into_iter().chain(ARMOUR_SLOTS) {
             if knowledge::equipment::covers_slot(&entry, slot) {
                 plan.entry(slot).or_default().push(entry.clone());
@@ -104,9 +110,17 @@ pub fn gear_plan(
                 .then_with(|| loss_cost(&a.name).cmp(&loss_cost(&b.name)))
                 .then_with(|| a.name.cmp(&b.name))
         });
-        if *slot == WEAPON_SLOT {
-            // Prefer a one-handed weapon so the shield slot stays useful.
+        if *slot == WEAPON_SLOT && bot.combat_style == "melee" {
+            // Melee prefers a one-handed weapon so the shield slot stays
+            // useful; bows are two-handed by nature, never demoted.
             cands.sort_by_key(|entry| knowledge::equipment::covers_slot(entry, 5));
+        }
+    }
+    // Server ammo rule (player_ranged.rs2): an arrow above the bow's tier
+    // is refused, so the quiver follows the bow the plan wears.
+    if let Some(bow_tier) = plan.get(&WEAPON_SLOT).and_then(|cands| cands.first()).map(|bow| bow.tier.max(1)) {
+        if let Some(arrows) = plan.get_mut(&AMMO_SLOT) {
+            arrows.retain(|arrow| arrow.tier <= bow_tier);
         }
     }
     plan
@@ -127,6 +141,13 @@ fn gear_score(
     weapon_style: impl Fn(&Bot, &str) -> &'static str,
     style_damage_key: impl Fn(&str, &str) -> Option<&'static str>,
 ) -> f64 {
+    // Ranged and magic runs score through the gear resolver (bow, arrow
+    // strength, robes): the melee formula below would always pick a
+    // sword over a bow (PRD3 lot 6).
+    if bot.combat_style != "melee" {
+        let style = knowledge::gear::Style::parse(&bot.combat_style);
+        return knowledge::gear::score(entry, style) as f64;
+    }
     if slot == WEAPON_SLOT {
         let category = entry.category.as_deref().unwrap_or("");
         // Controlled trains everything when the category offers it,
@@ -174,6 +195,55 @@ fn equip(bot: &mut Bot, entry: &knowledge::equipment::Wearable) -> Result<bool, 
             lowered.contains("not a high enough level") || lowered.contains("free space")
         }) {
             return Ok(false);
+        }
+    }
+    Ok(false)
+}
+
+/// Wield one carried object by id (arrows merge into the worn quiver
+/// stack). True when the pack no longer holds it afterwards.
+pub fn wield_held(bot: &mut Bot, obj: u16) -> Result<bool, ScriptError> {
+    let wearable = knowledge::obj_by_id(usize::from(obj)).and_then(|entry| entry.name).and_then(knowledge::equipment::by_name);
+    if wearable.is_none() {
+        return Ok(false);
+    }
+    let Some(pack_com) = bot.backpack().0 else { return Ok(false) };
+    let Some(slot) = bot.backpack().1.into_iter().find(|(_, (held, _))| *held == obj).map(|(slot, _)| slot) else { return Ok(false) };
+    bot.op_held(2, obj, slot, pack_com)?;
+    let target = bot.world.ticks + 10;
+    while bot.world.ticks < target {
+        bot.pump(2)?;
+        if !bot.backpack().1.iter().any(|(_, (held, _))| *held == obj) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Keep the quiver loaded on a ranged run (PRD3 lot 6): an empty slot 13
+/// wields the best carried arrow the worn bow accepts (server ammo rule:
+/// arrow tier <= bow tier). True when arrows are worn afterwards.
+pub fn refill_quiver(bot: &mut Bot) -> Result<bool, ScriptError> {
+    if worn_obj(bot, AMMO_SLOT).is_some() {
+        return Ok(true);
+    }
+    let bow_tier = worn_obj(bot, WEAPON_SLOT)
+        .and_then(|id| knowledge::obj_by_id(usize::from(id)).and_then(|obj| obj.name))
+        .and_then(knowledge::equipment::by_name)
+        .map(|bow| bow.tier.max(1))
+        .unwrap_or(1);
+    let mut arrows: Vec<knowledge::equipment::Wearable> = bot
+        .inventory()
+        .keys()
+        .filter_map(|id| knowledge::obj_by_id(usize::from(*id)).and_then(|obj| obj.name))
+        .filter_map(knowledge::equipment::by_name)
+        .filter(|entry| entry.wearpos == AMMO_SLOT && entry.rangebonus > 0 && entry.tier <= bow_tier)
+        .collect();
+    arrows.sort_by_key(|entry| std::cmp::Reverse(entry.rangebonus));
+    for entry in arrows {
+        if equip(bot, &entry)? {
+            bot.log(&format!("ok quiver refilled with {}", entry.name));
+            return Ok(true);
         }
     }
     Ok(false)
@@ -321,6 +391,20 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             break;
         }
     }
+    // Ammunition rides whole stacks (PRD3 lot 6): the quiver for a
+    // ranged run, the wind-strike runes for a magic run.
+    let ammo: Vec<String> = match bot.combat_style.as_str() {
+        "ranged" => plan.get(&AMMO_SLOT).and_then(|cands| cands.first()).map(|arrow| vec![arrow.name.clone()]).unwrap_or_default(),
+        "magic" => vec!["airrune".to_string(), "mindrune".to_string()],
+        _ => Vec::new(),
+    };
+    for name in ammo {
+        let Ok(obj) = obj_id(bot, &name) else { continue };
+        let stock = bot.bank_items().get(&obj).copied().unwrap_or(0);
+        if stock > 0 && (bot.inventory().contains_key(&obj) || free_slots(bot) > 0) {
+            let _ = bot.bank_withdraw(obj, stock, 25);
+        }
+    }
     crate::kit::survival::withdraw_food(bot)?;
     bot.close_modal()?;
     bot.pump(5)?;
@@ -407,6 +491,9 @@ mod tests {
             strength: 0,
             prayer: 0,
             requirements: Vec::new(),
+            quest: None,
+            tier: -1,
+            rangebonus: -1,
         }
     }
 

@@ -303,9 +303,16 @@ impl ToolSpec {
         self.order.iter().position(|tool| *tool == name)
     }
 
-    /// Best held tool, best-first.
+    /// Best held tool, best-first: the pack or the worn right hand (the
+    /// server accepts a wielded pickaxe or axe: pickaxe_checker.rs2,
+    /// woodcut.rs2).
     pub fn best_held(&self, bot: &Bot) -> Option<String> {
-        let held = pack_ids(bot);
+        let mut held = pack_ids(bot);
+        if let Some(worn_com) = (bot.tables.com_id)(crate::kit::gear::WORN_COM_NAME) {
+            if let Some(slots) = bot.world.inv.get(&worn_com) {
+                held.extend(slots.values().map(|(id, _)| *id));
+            }
+        }
         self.order
             .iter()
             .find(|name| obj_id(bot, name).is_ok_and(|id| held.contains(&id)))

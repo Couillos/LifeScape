@@ -183,9 +183,14 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
         toolless = 0;
         let now = step_bot.world.ticks;
         let Some((slot, x, z)) = pick_sheep(step_bot, &banned, now) else {
+            // PRD3 lot 7: a bot banking in Varrock never saw the pen.
+            if empty == 0 && crate::kit::harvest::walk_to_nearest_spawn(step_bot, SHEEP_NAMES[0], SHEEP_WALK_TICKS)? {
+                empty += 1;
+                return Ok(StepControl::Continue);
+            }
             empty += 1;
             if empty >= EMPTY_LIMIT {
-                return Err(ScriptError::Usage(format!("no sheep near {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("no sheep near {:?}", step_bot.position())));
             }
             step_bot.log("no sheep, waiting for respawns");
             for _ in 0..10 {
@@ -209,7 +214,7 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Ok(StepControl::Continue);
             }
             WorkOutcome::Threat | WorkOutcome::Blocked | WorkOutcome::LevelLocked => {
-                return Err(ScriptError::Usage(format!("shear stopped ({outcome:?}) at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("shear stopped ({outcome:?}) at {:?}", step_bot.position())));
             }
             WorkOutcome::Full | WorkOutcome::NoBait => {}
         }

@@ -61,7 +61,7 @@ pub fn tan_spec(product: &str) -> Option<(&'static str, &'static str, u32, [&'st
 /// Walk to the Al-Kharid tanner from wherever the bank left us.
 pub fn walk_to_tanner(bot: &mut Bot) -> Result<(), ScriptError> {
     if !walk_checked(bot, TANNER_X, TANNER_Z, TANNER_WALK_TICKS)? {
-        return Err(ScriptError::Usage(format!("no walk to the tanner ({TANNER_X},{TANNER_Z}) from {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("no walk to the tanner ({TANNER_X},{TANNER_Z}) from {:?}", bot.position())));
     }
     Ok(())
 }
@@ -115,7 +115,7 @@ fn tanner_slot(bot: &mut Bot) -> Result<u16, ScriptError> {
         }
         bot.pump(TANNER_RESYNC_PUMP)?;
     }
-    Err(ScriptError::Usage(format!("no tanner in view at {:?} (walk to ({TANNER_X},{TANNER_Z}))", bot.position())))
+    Err(ScriptError::Failed(format!("no tanner in view at {:?} (walk to ({TANNER_X},{TANNER_Z}))", bot.position())))
 }
 
 /// Trade direct (op 3): `tanner.rs2` opnpc3 opens the grid with no
@@ -156,7 +156,7 @@ fn answer_yes_please(bot: &mut Bot) -> Result<(), ScriptError> {
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("tanner never offered tanning at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("tanner never offered tanning at {:?}", bot.position())))
 }
 
 /// Wait until the tanner grid modal is open.
@@ -170,7 +170,7 @@ fn open_tanner(bot: &mut Bot) -> Result<(), ScriptError> {
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("tanner grid never opened at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("tanner grid never opened at {:?}", bot.position())))
 }
 
 /// Tan step for the leatherwork run: the product, or 0 hides tanned.
