@@ -26,7 +26,9 @@ watchdog : le run reste en `held`, vérifier `held: true` dans `show`) :
 `open admin`, `open <tNN>`, `hold <tNN>`, puis `call admin cheat "<cmd>"`.
 `tele <lvl,mx,mz,lx,lz>` (staff≥2) place admin ; `teleother <tNN>` amène le
 testé sur la case d'admin (aucun message de succès : vérifier par `show`) ;
-`giveother <tNN> <objet> <n>` et `setvarother <tNN> <var> <v>` (+ lecture
+`giveother` est **interdit** (AGENTS.md règle 13 : aucun objet ni argent
+triché ne quitte `admin`, l'économie reste propre) ;
+`setvarother <tNN> <var> <v>` (+ lecture
 `getvarother`) fixent inventaire et variables — noms d'objets = debug names
 serveur minuscules (`coins`, `raw_shrimp`). `giveother`/`setvarother`/
 `teleother` sont staff≥3 **sans gate production** (`ClientCheatHandler.ts`) ;
