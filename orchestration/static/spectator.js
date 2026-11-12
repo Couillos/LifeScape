@@ -272,6 +272,19 @@ function connectSocket() {
         });
       }
       const merged = last ? Object.assign({}, last, incoming) : incoming;
+      // Light frames (1 Hz) carry compact entity positions only
+      // (`[nid,x,z]`, `[name,x,z]`); names ride the rare full frames.
+      // Rebuild the drawn arrays from the fresh positions, keeping the
+      // last known name per nid: without this the followed bot moved
+      // every second while the scene around it froze until the next full
+      // frame (100 ticks, i.e. 30 s in prod).
+      if (Array.isArray(incoming.npcs_at)) {
+        const named = new Map(((last && last.npcs) || []).map(npc => [npc.nid, npc.name]));
+        merged.npcs = incoming.npcs_at.map(([nid, x, z]) => ({nid, x, z, name: named.get(nid) || ""}));
+      }
+      if (Array.isArray(incoming.players_at)) {
+        merged.players = incoming.players_at.map(([name, x, z]) => ({name, x, z}));
+      }
       last = merged;
       // Session gap, not a dead pipe: the socket stays open while the
       // worker relogs. Say so with the stale age instead of showing a

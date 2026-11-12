@@ -24,7 +24,52 @@ pub const LIGHT_WALL_SECS: f64 = 1.0;
 pub const FULL_TICKS: u64 = 100;
 pub const FULL_WALL_SECS: f64 = 30.0;
 
+/// Compact entity positions for the light flow: `[nid, x, z]` per NPC,
+/// `[name, x, z]` per player, same selection as the full frame (12 tiles,
+/// 25 NPCs; 20 named players). Names ride the full frames only — the
+/// spectator keeps the last known name per `nid` — so a second of
+/// movement costs tens of bytes instead of a whole snapshot.
+pub fn light_entities(bot: &lifescape_sdk::Bot) -> (Value, Value) {
+    let mut npcs: Vec<(i64, Value)> = bot
+        .world
+        .npcs
+        .iter()
+        .map(|(slot, npc)| {
+            let dist = (npc.x - bot.world.x).abs() + (npc.z - bot.world.z).abs();
+            (
+                dist as i64,
+                Value::Arr(vec![
+                    Value::Int(i64::from(*slot)),
+                    Value::Int(i64::from(npc.x)),
+                    Value::Int(i64::from(npc.z)),
+                ]),
+            )
+        })
+        .filter(|(dist, _)| *dist <= 12)
+        .collect();
+    npcs.sort_by_key(|(dist, _)| *dist);
+    let npcs: Vec<Value> = npcs.into_iter().take(25).map(|(_, row)| row).collect();
+    let players: Vec<Value> = bot
+        .world
+        .players
+        .values()
+        .filter(|player| player.name.is_some())
+        .take(20)
+        .map(|player| {
+            Value::Arr(vec![
+                str_value(player.name.as_deref().unwrap_or("?")),
+                Value::Int(i64::from(player.x)),
+                Value::Int(i64::from(player.z)),
+            ])
+        })
+        .collect();
+    (Value::Arr(npcs), Value::Arr(players))
+}
+
 /// Minimal live state: enough for minimap, list and spectate routing.
+/// `npcs_at`/`players_at` carry the moving entities every second: without
+/// them the spectator redrew the followed bot at 1 Hz while the NPCs
+/// around it only moved on a full frame (100 ticks, or 30 s in prod).
 pub fn light_value(
     account: &str,
     script: &str,
@@ -34,6 +79,8 @@ pub fn light_value(
     zone: &str,
     intention: &str,
     updated: f64,
+    npcs_at: Value,
+    players_at: Value,
 ) -> Value {
     object(vec![
         ("type", str_value("snapshot_light")),
@@ -52,6 +99,8 @@ pub fn light_value(
         ("zone", str_value(zone)),
         ("intention", str_value(intention)),
         ("updated", Value::Float(updated)),
+        ("npcs_at", npcs_at),
+        ("players_at", players_at),
     ])
 }
 
@@ -59,7 +108,7 @@ pub fn light_value(
 /// move, everything else (inv, bank, npcs…) stays from the last full.
 pub fn merge_light(cached: &mut Value, light: &Value) {
     let Value::Obj(map) = cached else { return };
-    for key in ["script", "status", "position", "ticks", "zone", "intention", "updated"] {
+    for key in ["script", "status", "position", "ticks", "zone", "intention", "updated", "npcs_at", "players_at"] {
         let value = light.get(key);
         if !value.is_null() {
             map.insert(key.to_string(), value.clone());
@@ -118,7 +167,9 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
         drop(inner);
         crate::session_push::push_snapshot(&shared.account, &state);
     } else {
-        // Light flow: position and status only, merged daemon-side.
+        // Light flow: position, status and entity positions, merged
+        // daemon-side (the spectator moves the whole scene at 1 Hz).
+        let (npcs_at, players_at) = light_entities(bot);
         let light = light_value(
             &shared.account,
             &script,
@@ -128,6 +179,8 @@ pub(crate) fn pump_heartbeat(shared: &Shared, bot: &lifescape_sdk::Bot, trail: &
             &zone,
             &bot.intent,
             now_secs(),
+            npcs_at,
+            players_at,
         );
         let mut inner = shared.inner.lock().unwrap();
         inner.last_heartbeat_tick = tick;
@@ -172,10 +225,11 @@ pub(crate) fn write_light(shared: &Arc<Shared>) {
     let tick = bot.world.ticks;
     let position = (bot.world.level, bot.world.x, bot.world.z);
     let intent = bot.intent.clone();
+    let (npcs_at, players_at) = light_entities(&bot);
     drop(bot);
     drop(inner);
     let now = now_secs();
-    let light = light_value(&shared.account, &script, &status, position, tick, &zone, &intent, now);
+    let light = light_value(&shared.account, &script, &status, position, tick, &zone, &intent, now, npcs_at, players_at);
     let mut inner = shared.inner.lock().unwrap();
     inner.last_heartbeat_tick = tick;
     inner.last_heartbeat_wall = now;
@@ -188,14 +242,51 @@ mod tests {
     use super::{full_due, light_value, merge_light};
     use lifescape_json::{object, str_value, Value};
 
+    fn npc_row(nid: i64, x: i64, z: i64) -> Value {
+        Value::Arr(vec![Value::Int(nid), Value::Int(x), Value::Int(z)])
+    }
+
     /// Light frames are tiny and carry exactly the list keys.
     #[test]
     fn light_frame_stays_tiny() {
-        let light = light_value("t01", "woodcut", "running", (0, 3228, 3214), 700, "Lumbridge", "chop", 1.0);
+        let light = light_value(
+            "t01", "woodcut", "running", (0, 3228, 3214), 700, "Lumbridge", "chop", 1.0,
+            Value::Arr(Vec::new()), Value::Arr(Vec::new()),
+        );
         assert_eq!(light.get("type").as_str(), Some("snapshot_light"));
         assert_eq!(light.get("ticks").as_i64(), Some(700));
         let wire = lifescape_json::stringify(&light);
         assert!(wire.len() < 400, "list frame must stay small, got {}", wire.len());
+    }
+
+    /// Live 2026-11-12 (user): in the spectator the followed bot moved
+    /// every second while the NPCs and players around it only moved on a
+    /// full frame — 100 ticks, i.e. 30 s in prod. Their positions ride the
+    /// light flow now, and a loaded scene still fits in one small frame.
+    #[test]
+    fn light_frame_carries_entity_positions() {
+        let npcs = Value::Arr((0..25).map(|index| npc_row(1200 + index, 3228 + index, 3214)).collect());
+        let players = Value::Arr(
+            (0..20)
+                .map(|index| Value::Arr(vec![str_value("olivia_king"), Value::Int(3230 + index), Value::Int(3216)]))
+                .collect(),
+        );
+        let light = light_value(
+            "t01", "woodcut", "running", (0, 3228, 3214), 700, "Lumbridge", "chop", 1.0, npcs, players,
+        );
+        let rows = light.get("npcs_at").as_arr().cloned().unwrap_or_default();
+        assert_eq!(rows.len(), 25, "every streamed npc rides the light frame");
+        let first = rows[0].as_arr().cloned().unwrap_or_default();
+        assert_eq!(first[0].as_i64(), Some(1200), "nid first, then x and z");
+        let wire = lifescape_json::stringify(&light);
+        assert!(wire.len() < 1500, "a full scene stays one small frame, got {}", wire.len());
+
+        // The daemon merges the fresh positions into the cached full state.
+        let mut cached = object(vec![("npcs", Value::Arr(Vec::new())), ("inv", Value::Arr(Vec::new()))]);
+        merge_light(&mut cached, &light);
+        assert_eq!(cached.get("npcs_at").as_arr().map(Vec::len), Some(25), "npc positions merged");
+        assert_eq!(cached.get("players_at").as_arr().map(Vec::len), Some(20), "player positions merged");
+        assert_eq!(cached.get("inv").as_arr().map(Vec::len), Some(0), "full-only keys survive");
     }
 
     /// Merge moves only the light keys; the last full keeps the rest.
@@ -206,7 +297,10 @@ mod tests {
             ("ticks", Value::Int(600)),
             ("zone", str_value("old")),
         ]);
-        let light = light_value("t01", "woodcut", "running", (0, 3228, 3214), 700, "Lumbridge", "chop", 1.0);
+        let light = light_value(
+            "t01", "woodcut", "running", (0, 3228, 3214), 700, "Lumbridge", "chop", 1.0,
+            Value::Arr(Vec::new()), Value::Arr(Vec::new()),
+        );
         merge_light(&mut cached, &light);
         assert_eq!(cached.get("ticks").as_i64(), Some(700));
         assert_eq!(cached.get("zone").as_str(), Some("Lumbridge"));

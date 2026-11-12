@@ -106,12 +106,16 @@ pub fn watch_stand<Source: HarvestSource>(
             if hitpoints(bot) < hitpoints_before {
                 return Ok((WorkOutcome::Threat, gained));
             }
-            if bot.world.modal.is_some() && !dismiss_modal(bot)? {
-                // Fishing answers in a mesbox, not the chat log (no net,
-                // no bait, pack full): read it before calling it Blocked.
+            // Fishing answers in a mesbox, not the chat log (no net, no
+            // bait, pack full): read it BEFORE the item-box dismissal, which
+            // would close an option-less refusal unread (live 2026-11-12:
+            // fiona_park re-clicked the net for 10+ minutes on a full pack).
+            if bot.world.modal.is_some() {
                 if let Some(outcome) = modal_outcome(bot)? {
                     return Ok((outcome, gained));
                 }
+            }
+            if bot.world.modal.is_some() && !dismiss_modal(bot)? {
                 bot.pump(10)?;
                 if bot.world.modal.is_some() && !dismiss_modal(bot)? {
                     return Ok((WorkOutcome::Blocked, gained));
@@ -134,6 +138,11 @@ pub fn watch_stand<Source: HarvestSource>(
                 product_ids.iter().map(|id| crate::kit::pack::pack_total(bot, *id)).sum();
             if now_have > had + gained {
                 gained = now_have - had;
+                // The catch that filled the last slot ends the stand: the
+                // next click could only be refused.
+                if crate::kit::pack::free_slots(bot) == 0 {
+                    return Ok((WorkOutcome::Full, gained));
+                }
                 quiet = false;
                 break;
             }
@@ -247,7 +256,10 @@ pub fn classify_message(line: &str) -> Option<WorkOutcome> {
     if lowered.contains("can't reach that") {
         return Some(WorkOutcome::UnreachableSpot);
     }
-    if lowered.contains("too full to hold any more") || lowered.contains("can't carry any more") {
+    if lowered.contains("too full to hold any more")
+        || lowered.contains("can't carry any more")
+        || lowered.contains("enough inventory space")
+    {
         return Some(WorkOutcome::Full);
     }
     if lowered.contains("no ore currently available") || lowered.contains("no minerals currently available") {
@@ -457,6 +469,9 @@ mod tests {
         for (text, expected) in [
             ("You need a net to catch these fish.", WorkOutcome::NoTool),
             ("You can't carry any more fish.", WorkOutcome::Full),
+            // Live 2026-11-12 (fiona_park): the server's full-pack box.
+            // Dismissed as an item box, it was re-clicked for 10+ minutes.
+            ("You don't have enough inventory space.", WorkOutcome::Full),
             ("You don't have any fishing bait left.", WorkOutcome::NoBait),
             ("You need at least 20 Fishing to lure these fish.", WorkOutcome::LevelLocked),
         ] {
