@@ -48,6 +48,15 @@ impl Bot {
         if let (Some(first), Some(last)) = (leg.first(), leg.last()) {
             self.act(format!("walk leg {} steps ({},{})>({},{})", leg.len(), first.0, first.1, last.0, last.1));
         }
+        // Stale ticks first: frames queued while we planned predate this
+        // send, so the stall watch below must not count them (live: legs
+        // sent after a 0.8 s+ plan read "refused" 93% of the time, the
+        // server never having seen the MOVE). Also makes the start tile
+        // current; the deadline keeps counting them (real time spent).
+        let stale = self.catch_up()?;
+        if stale > STALL_TICKS {
+            self.log(&format!("walk leg: {stale} stale ticks drained before send"));
+        }
         let (start_x, start_z, start_level) = (self.world.x, self.world.z, self.world.level);
         let outcome = match self.send_walk(leg, run, immediate) {
             Err(err) => Err(err),
@@ -389,6 +398,96 @@ mod tests {
             })
             .expect("door leg starts with a walk");
         assert!(bot.suspect_tile(&leg, (3228, 3214, 0)).is_none(), "planned walk reads clean");
+    }
+
+    /// Loopback game server for one walk leg: queues `backlog` idle
+    /// ticks before the send, then answers the MOVE with `after` ticks
+    /// (true = the bot steps one tile east). Returns the leg outcome and
+    /// where the bot ended, from (3200,3200,0).
+    fn fake_leg(backlog: usize, after: Vec<bool>) -> (Result<()>, (i32, i32)) {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::mpsc::channel;
+        use std::time::{Duration, Instant};
+
+        use crate::isaac::Isaac;
+
+        const PLAYER_INFO: u8 = 167;
+        let (client_seed, server_seed) = ([11, 22, 33, 44], [55, 66, 77, 88]);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+        let port = listener.local_addr().expect("local addr").port();
+        let (queued_tx, queued_rx) = channel();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.set_read_timeout(Some(Duration::from_secs(5))).expect("server read timeout");
+            let mut cipher = Isaac::new(server_seed);
+            let mut frame = |body: &[u8]| -> Vec<u8> {
+                let mut bytes = vec![PLAYER_INFO.wrapping_add(cipher.next_int() as u8), 0, body.len() as u8];
+                bytes.extend_from_slice(body);
+                bytes
+            };
+            // Idle tick: own player not updated, no known players.
+            let idle = [0x00u8, 0x00];
+            // Walk tick: update=1, walk=1, dir=4 (east), no mask, no known.
+            let east = [0xB0u8, 0x00];
+            let mut queued = Vec::new();
+            for _ in 0..backlog {
+                queued.extend(frame(&idle));
+            }
+            sock.write_all(&queued).expect("backlog written");
+            queued_tx.send(()).expect("signal backlog");
+            // The MOVE lands: from now on the server ticks after it.
+            let mut probe = [0u8; 64];
+            if sock.read(&mut probe).is_err() {
+                return;
+            }
+            for steps in after {
+                std::thread::sleep(Duration::from_millis(2));
+                if sock.write_all(&frame(if steps { &east } else { &idle })).is_err() {
+                    return;
+                }
+            }
+            // Keep the socket open until the client is done reading.
+            let _ = sock.read(&mut probe);
+        });
+        let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+        client.set_read_timeout(Some(Duration::from_millis(500))).expect("client read timeout");
+        let mut bot = Bot::new("127.0.0.1", port, ".", ".");
+        bot.conn.attach_for_test(client, client_seed, server_seed);
+        bot.last_keepalive = Some(Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.world.x = 3200;
+        bot.world.z = 3200;
+        bot.world.level = 0;
+        queued_rx.recv_timeout(Duration::from_secs(5)).expect("backlog queued");
+        // Let the backlog reach the client socket before the send.
+        std::thread::sleep(Duration::from_millis(50));
+        let deadline = bot.world.ticks + 100;
+        let outcome = bot.send_and_await(&[(3201, 3200), (3202, 3200)], false, deadline, false);
+        let end = (bot.world.x, bot.world.z);
+        drop(bot);
+        server.join().expect("server thread");
+        (outcome, end)
+    }
+
+    /// Ticks the server sent while the bot was not reading (a slow plan
+    /// answer: live, plans of 0.8 s+ = 13+ dev ticks were "refused" 93%
+    /// of the time) predate the walk: they are no stall. 20 idle ticks
+    /// queued before the send, then two east steps: the leg arrives.
+    #[test]
+    fn walk_leg_ignores_ticks_buffered_before_send() {
+        let (outcome, end) = fake_leg(20, vec![true, true]);
+        assert!(outcome.is_ok(), "stale ticks are no refusal, got {outcome:?}");
+        assert_eq!(end, (3202, 3200), "leg arrived");
+    }
+
+    /// The catch-up never hides a real refusal: same backlog, then the
+    /// server never moves the bot after the MOVE: stalled, typed.
+    #[test]
+    fn walk_leg_still_reports_a_real_stall() {
+        let (outcome, end) = fake_leg(20, vec![false; 20]);
+        assert!(matches!(&outcome, Err(Error::Timeout(text)) if text.contains("stalled")), "real stall, got {outcome:?}");
+        assert_eq!(end, (3200, 3200), "never moved");
     }
 
     /// `debug_walk` plans through the service like `travel_to`: same
