@@ -123,6 +123,11 @@ t01 (deal 26), et `admin` avait vendu au marché des objets trichés (deals
 - Code : `economy_guard.rs` refuse `giveother` (call et setup `verify`) ;
   la liste d'exclusion des totaux devient `run/economy-excluded.txt`
   (admin et bite toujours exclus).
-Non traité (hors périmètre validé) : les autres `giveother` historiques des
-comptes de test (filets, outils, 588 crevettes de t40…), la bosse +375 du
-11/11 08:00.
+Second passage (validé par l'utilisateur) : tous les autres `giveother`
+historiques retirés des `.sav` hors ligne (sauvegarde `sav2/`), plafonnés à
+ce que le compte détient encore : filets (t01, t02, t04, t06–t08, t14–t16,
+t18, t19, joe_cooper, olivia_king), outils, runes, appâts, seaux, grain…
+de t01/t05, clé de b9htjtfz ; t40 : 278 crevettes cuites et 74 brûlées
+(dérivées des 588 crevettes crues trichées) et 2 cisailles. Ordre 5926 de
+t08 (filet triché en vente) annulé. Connexions de contrôle t01/t40 OK.
+Reste inexpliquée : la bosse +375 pièces du 11/11 08:00.
