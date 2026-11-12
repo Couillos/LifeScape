@@ -154,3 +154,20 @@ fn take_clicks_an_item_in_view_without_pumping_first() {
     let err = bot.take(Some(1739), None, 30).expect_err("offline tables know no Take op");
     assert!(format!("{err}").contains("has no Take op"), "decided on the visible item at once, got: {err}");
 }
+
+/// A ground object the server refused this session is no longer offered
+/// to `take` (live: an egg past a pen fence was re-clicked after every
+/// kill); other objects and other tiles stay takeable.
+#[test]
+fn refused_ground_objects_are_skipped_for_the_session() {
+    let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    bot.world.level = 0;
+    bot.world.x = 3017;
+    bot.world.z = 3294;
+    bot.world.static_objs.insert(((3017, 3295, 0), 1944), 1);
+    bot.world.static_objs.insert(((3016, 3293, 0), 1944), 1);
+    assert_eq!(bot.reachable_ground_items(Some(1944)).len(), 2);
+    bot.unreachable_objs.insert((1944, 3017, 3295, 0));
+    let left = bot.reachable_ground_items(Some(1944));
+    assert_eq!(left, vec![((3016, 3293, 0), 1944)], "only the refused tile drops out");
+}

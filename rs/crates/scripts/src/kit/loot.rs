@@ -130,6 +130,8 @@ pub fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
         .ground_items(bot.world.x, bot.world.z, bot.world.level, LOOT_RADIUS, None)
         .into_iter()
         .map(|((tile, oid), _)| (tile, oid))
+        // Refused this session (past a fence): never re-clicked per kill.
+        .filter(|(tile, oid)| !bot.unreachable_objs.contains(&(*oid, tile.0, tile.1, tile.2)))
         .collect();
     items.sort_by_key(|(tile, _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
     // Coins first: a nearly-full pack never starves the coin pickup.

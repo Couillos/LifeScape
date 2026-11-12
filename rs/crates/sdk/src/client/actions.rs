@@ -435,7 +435,18 @@ impl Bot {
 
     /// Pick up ground items: walks to a neighbor tile, clicks, waits for
     /// the carried total to grow. Tick-bounded, no sleep.
-    pub fn take(&mut self, obj_id: Option<u16>, name: Option<&str>, timeout: u64) -> Result<bool> {
+/// Ground items within 15 tiles (of `wanted` when set), minus the ones
+    /// the server already refused this session.
+    pub fn reachable_ground_items(&self, wanted: Option<u16>) -> Vec<((i32, i32, i32), u16)> {
+        self.world
+            .ground_items(self.world.x, self.world.z, self.world.level, 15, wanted)
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|((x, z, level), oid)| !self.unreachable_objs.contains(&(*oid, *x, *z, *level)))
+            .collect()
+    }
+
+        pub fn take(&mut self, obj_id: Option<u16>, name: Option<&str>, timeout: u64) -> Result<bool> {
         self.act(format!("take {:?}", name));
         let mut wanted = obj_id;
         if let Some(name) = name {
@@ -444,10 +455,10 @@ impl Bot {
         }
         let deadline = self.world.ticks + timeout;
         // Already in view: decide at once, never a blind pump first.
-        let mut items = self.world.ground_items(self.world.x, self.world.z, self.world.level, 15, wanted);
+        let mut items = self.reachable_ground_items(wanted);
         while self.world.ticks < deadline && items.is_empty() {
             self.pump(3)?;
-            items = self.world.ground_items(self.world.x, self.world.z, self.world.level, 15, wanted);
+            items = self.reachable_ground_items(wanted);
         }
         if items.is_empty() {
             return Err(Error::Unreachable(format!(
@@ -456,8 +467,11 @@ impl Bot {
                 self.world.ticks
             )));
         }
-        let ((tile, oid), _) =
-            items.iter().min_by_key(|((tile, _), _)| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs()).unwrap();
+        let Some((tile, oid)) =
+            items.iter().min_by_key(|(tile, _)| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs())
+        else {
+            return Ok(false);
+        };
         let (x, z, level) = *tile;
         let oid = *oid;
         let op = (self.tables.obj_take_op)(oid)
@@ -530,6 +544,7 @@ impl Bot {
                             break;
                         }
                     }
+                    self.unreachable_objs.insert((oid, x, z, level));
                     return Err(Error::Unreachable(format!(
                         "obj {oid} at {x},{z} refused from {:?} (blocked tile?)",
                         self.position()

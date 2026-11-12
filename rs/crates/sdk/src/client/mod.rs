@@ -98,6 +98,12 @@ pub struct Bot {
     /// `approach_depth`.
     pub approach_opened: HashSet<(i32, i32, i32)>,
     pub approach_depth: u32,
+    /// Ground objects the server refused to hand over this session
+    /// (`(obj, x, z, level)`, "I can't reach that!" from every side):
+    /// `take` skips them instead of re-clicking after every kill (live
+    /// 2026-11-12: an egg past the Port Sarim pen fence, ~340 refused
+    /// clicks in 10 min). Memory only, gone with the session.
+    pub unreachable_objs: HashSet<(u16, i32, i32, i32)>,
     /// Opt-in to paid paths (toll gates). Default false: routing and bank
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
@@ -182,6 +188,7 @@ impl Bot {
             doors: HashMap::new(),
             toll_gates: HashSet::new(),
             approach_opened: HashSet::new(),
+            unreachable_objs: HashSet::new(),
             approach_depth: 0,
             allow_paid: false,
             allow_shop: true,
