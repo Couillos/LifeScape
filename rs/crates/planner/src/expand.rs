@@ -46,6 +46,9 @@ pub struct ReadyCtx {
     pub levels: Vec<(String, u8)>,
     /// Published profit per 6000 ticks per money method (rates).
     pub method_profit: Vec<(String, f64)>,
+    /// Units of the node's object the bot already holds (pack, bank,
+    /// worn): an obtain buys or makes only what is still missing.
+    pub held: i64,
 }
 
 impl ReadyCtx {
@@ -68,6 +71,7 @@ impl ReadyCtx {
             best_ask: None,
             levels: Vec::new(),
             method_profit: Vec::new(),
+            held: 0,
         }
     }
 }

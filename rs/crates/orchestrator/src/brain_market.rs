@@ -91,13 +91,16 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
 /// A `market:buy` leg, placed daemon-side (no worker round-trip: the
 /// order is pure bookkeeping, the handover is the convene loop's): the
 /// covered best ask at once, else a bid at the reference walking up to
-/// the ceiling. Replaces any open bid of the account on that object.
+/// the ceiling. Orders what is still missing, capped by the wallet (a
+/// partial buy: the next resolve produces or buys the rest). Replaces
+/// any open bid of the account on that object.
 pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, String> {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return Err("not an obtain node".to_string()) };
     let service = crate::market_service::shared().ok_or("market service not running")?;
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
     service.cancel_open_for(&job.account, id, lifescape_store::OrderSide::Buy);
-    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, *count);
+    let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
+    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
     let (_, ask) = service.lock_engine().books.get(&id).map(|book| book.best()).unwrap_or((None, None));
     let price = match ask {
         Some(best) if best <= ceiling => best,
@@ -108,15 +111,30 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, S
         ("account", str_value(&job.account)),
         ("side", str_value("buy")),
         ("item", Value::Int(id)),
-        ("qty", Value::Int((*count).max(1))),
+        ("qty", Value::Int(quantity)),
         ("price", Value::Int(price)),
         ("ceiling", Value::Int(ceiling.max(price))),
     ]));
     if reply.get("ok").as_bool() != Some(true) {
         return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
     }
-    crate::logln!("brain {}: bid {count} {item} @ {price} (ceiling {ceiling}), awaiting the fill", job.account);
+    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} (ceiling {ceiling}, held {}), awaiting the fill", job.account, ctx.held);
     Ok(reply.get("order").as_i64().unwrap_or(-1))
+}
+
+/// True once the account's buy on `item` (debug name) has run its course:
+/// no open or matched buy order on it, and no handover in flight. With
+/// holdings above the launch baseline, a partial buy landed.
+pub fn buy_closed(account: &str, item: &str) -> bool {
+    let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return false };
+    let store = service.lock_store();
+    let order_live = store.account_orders(account).unwrap_or_default().iter().any(|row| {
+        row.item_id == id
+            && row.side == lifescape_store::OrderSide::Buy
+            && matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched)
+    });
+    let deal_live = store.open_deals_for_account(account).unwrap_or_default().iter().any(|deal| deal.item_id == id && deal.buyer == account);
+    !order_live && !deal_live
 }
 
 /// Cancels the account's open buy orders on `item` (debug name): a

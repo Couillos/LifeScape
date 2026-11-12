@@ -298,16 +298,6 @@ fn job_idle(job: &Job) -> bool {
     inner.phase == "idle" && !inner.held && !inner.paused && inner.status != "disconnected"
 }
 
-/// Market fills settle through other players: an unfilled order waits
-/// at most this many ticks (wall time = ticks × tick length, D7).
-const AWAIT_FILL_TICKS: u64 = 6000;
-
-/// Cancels the account's open buy orders on `item` (debug name) through
-/// the daemon market. 0 when the market is down or the item unknown.
-fn cancel_stale_buy(account: &str, item: &str) -> usize {
-    crate::brain_market::cancel_open_buys(account, item)
-}
-
 fn seconds_since_history(life: &Life, node: &str, outcome: &str) -> Option<i64> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     life.history.iter().rev().find(|entry| entry.node == node && entry.outcome == outcome).map(|entry| now - entry.ended)
@@ -379,23 +369,7 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             let awaiting = seconds_since_history(&life, &active_id, "awaiting_fill");
             match (&life.nodes[position].kind.clone(), awaiting) {
                 (NodeKind::ObtainItems { item, count }, Some(waited)) => {
-                    let held = holdings_count(job, item);
-                    life.nodes[position].progress_current = held;
-                    let deadline = (AWAIT_FILL_TICKS * lifescape_sdk::waits::tick_ms() / 1000) as i64;
-                    if held >= *count {
-                        cancel_stale_buy(&job.account, item);
-                        life.nodes[position].status = NodeStatus::Done;
-                        life.active = None;
-                        push_history(&mut life, &active_id, "goal_reached");
-                    } else if waited > deadline {
-                        // The stale resting order goes before the retry
-                        // places a fresh one (PRD3 lot 0: bots stacked two
-                        // identical bids on the same axe).
-                        let closed = cancel_stale_buy(&job.account, item);
-                        let text = format!("market order for {count} {item} unfilled after {AWAIT_FILL_TICKS} ticks (held {held}, {closed} cancelled)");
-                        let fold = lifescape_planner::record_failure(&mut life, position, &text);
-                        push_history(&mut life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
-                    } else {
+                    if crate::brain_await::settle_fill(job, &mut life, position, item, *count, waited) {
                         if dirty {
                             save_or_log(&life);
                         }
@@ -530,6 +504,9 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Carried tools gate the gather legs the same way (t04: rod-less
     // sardines never dispatch).
     ctx.coins = holdings_count(job, "coins");
+    if let NodeKind::ObtainItems { item, .. } = &life.nodes[position].kind {
+        ctx.held = holdings_count(job, item);
+    }
     ctx.tools = carried_tools(job);
     ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
     // The brain picks the site: the bot's combat level and position.
@@ -640,6 +617,7 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let id = node_snapshot.id.clone();
         match crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx) {
             Ok(_) => {
+                life.nodes[launch].progress_current = ctx.held;
                 lifescape_planner::mark_launched(&mut life, launch);
                 push_history(&mut life, &id, "awaiting_fill");
             }

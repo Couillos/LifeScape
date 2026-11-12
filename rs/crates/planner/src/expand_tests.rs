@@ -163,6 +163,30 @@ fn ready_resolution_prices_and_picks() {
     assert_eq!(skint.method.as_deref(), Some("farm:feather"), "broke bots produce");
     assert!(!skint.alternatives.iter().any(|alt| alt.method == "market:bid"), "no coins, no bid");
 
+    // Live 2026-11-12: 340 raw chickens resting at 1 coin, a
+    // cook with 25 coins needing 100 hunted chickens instead. A wallet
+    // covering part of the need takes that part at the ask.
+    let mut thin = ctx.clone();
+    thin.coins = 25;
+    thin.best_ask = Some(1);
+    thin.price = 1;
+    let mut partial = nodes[0].clone();
+    partial.method = None;
+    resolve_ready(&mut partial, &thin);
+    assert_eq!(partial.method.as_deref(), Some("market:buy"), "a covered part of the need is bought");
+    assert_eq!(crate::resolve_obtain::buy_quantity(&thin, 200), 25, "the wallet caps the order");
+    let mut stocked = thin.clone();
+    stocked.held = 190;
+    assert_eq!(crate::resolve_obtain::buy_quantity(&stocked, 200), 10, "only what is still missing");
+    // An ask far above the item's value is no bargain: produce instead.
+    let mut dear = thin.clone();
+    dear.best_ask = Some(21);
+    dear.coins = 25;
+    let mut steep = nodes[0].clone();
+    steep.method = None;
+    resolve_ready(&mut steep, &dear);
+    assert_eq!(steep.method.as_deref(), Some("farm:feather"), "an unfair partial ask is not taken");
+
     // A net is not producible: the merchant sells it (D-A), never the field.
     let mut net = expand_goal(&GoalKind::Obtain { item: "net".to_string(), count: 1 }, &profile());
     resolve_ready(&mut net[0], &quiet);

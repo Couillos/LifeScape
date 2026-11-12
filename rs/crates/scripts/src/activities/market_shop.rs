@@ -50,22 +50,26 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     // Wallet is pack-first, bank-backed: withdraw the shortfall so a
     // funded bot is never stopped by pocket change. The shop itself
-    // refuses true broke (0 bought, loud, no silent spend).
+    // refuses true broke (0 bought, loud, no silent spend). A fresh
+    // session has not seen its bank yet (live 2026-11-12: harry_page
+    // went to the shop "carrying 0 coins" with 25 banked, three times):
+    // the bank is opened to look whenever the pack falls short.
     let coins = obj_id(bot, "coins")?;
     let price_each = entry.price.max(1) as u32;
     let need = qty.max(1) as u32 * price_each;
     let mut held = bot.inventory().get(&coins).copied().unwrap_or(0);
     if held < need {
-        let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
-        if banked > 0 {
-            let bank = crate::kit::bank::nearest_bank(bot)?;
-            if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
+        let bank = crate::kit::bank::nearest_bank(bot)?;
+        if bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
+            bot.pump(2)?;
+            let banked = bot.bank_items().get(&coins).copied().unwrap_or(0);
+            if banked > 0 {
                 let _ = bot.bank_withdraw(coins, (need - held).min(banked), 300);
-                let _ = bot.close_modal();
-                bot.pump(3)?;
             }
-            held = bot.inventory().get(&coins).copied().unwrap_or(0);
+            let _ = bot.close_modal();
+            bot.pump(3)?;
         }
+        held = bot.inventory().get(&coins).copied().unwrap_or(0);
     }
     bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
     let bought = crate::kit::shop::buy_stock(bot, &item, qty)?;

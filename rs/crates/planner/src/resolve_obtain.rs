@@ -1,7 +1,9 @@
 //! Ready-time resolution of obtain, coin and money nodes (PRD3 lot 4).
 //!
 //! Obtain order:
-//! 1. market buy when an ask exists the wallet covers (take it);
+//! 1. market buy when an ask exists the wallet covers (take it), or
+//!    covers in part (take what it covers: the rest is produced or
+//!    bought on the next resolve);
 //! 2. the cheapest production the bot can work now (skill level, tool),
 //!    with a standing market bid beside it when the bot has coins (D-B:
 //!    the first of the two to land closes the node, the brain cancels
@@ -33,11 +35,25 @@ fn level_of(ctx: &ReadyCtx, skill: &str) -> Option<u8> {
 /// must be biddable above its 1-coin default).
 pub fn bid_ceiling(ctx: &ReadyCtx, count: i64) -> i64 {
     let affordable = ctx.coins / count.max(1);
-    affordable.min((ctx.price.max(1) * 3).max(20)).max(1)
+    affordable.min(fair_unit(ctx)).max(1)
+}
+
+/// One unit's fair price: three times the market value, at least 20.
+fn fair_unit(ctx: &ReadyCtx) -> i64 {
+    (ctx.price.max(1) * 3).max(20)
+}
+
+/// Units a `market:buy` leg orders: what is still missing, capped by
+/// what the wallet covers at the best ask (else the reference).
+pub fn buy_quantity(ctx: &ReadyCtx, count: i64) -> i64 {
+    let need = (count.max(1) - ctx.held).max(1);
+    let unit = ctx.best_ask.unwrap_or(ctx.price).max(1);
+    need.min(ctx.coins / unit).max(1)
 }
 
 pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &ReadyCtx) {
     let count = count.max(1);
+    let need = (count - ctx.held).max(1);
     let legs = production_legs(item);
     let candidates: Vec<String> = node.alternatives.iter().map(|alt| alt.method.clone()).collect();
     let market_ok = !ctx.ironman && tradeable_f2p(item) && candidates.iter().any(|method| method == "market:buy");
@@ -73,8 +89,8 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     if market_ok {
         priced.push(Alternative {
             method: "market:buy".to_string(),
-            est_ticks: cost_market_buy(ctx.trip_ticks, unit, count, ctx.coins_per_tick.max(0.01)),
-            est_coins: unit * count,
+            est_ticks: cost_market_buy(ctx.trip_ticks, unit, need, ctx.coins_per_tick.max(0.01)),
+            est_coins: unit * need,
         });
     }
     let shop_cover = ctx.shop_price.max(1) * count;
@@ -86,21 +102,24 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             est_coins: shop_cover,
         });
     }
-    // 1. A covered ask: take it.
-    let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * count <= ctx.coins);
-    let pick: Option<String> = if ask_covered {
+    // 1. A covered ask: take it, whole or the part the wallet covers
+    // (a fair ask only: at most the bid ceiling of one unit).
+    let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= ctx.coins);
+    let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= ctx.coins && ask <= fair_unit(ctx));
+    let pick: Option<String> = if ask_covered || ask_partial {
         Some("market:buy".to_string())
     } else if let Some(best) = workable.iter().min_by_key(|alt| alt.est_ticks) {
         // 2. Produce it, with a standing bid beside it (D-B).
-        if market_ok && ctx.coins >= count {
-            priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, count) * count });
+        if market_ok && ctx.coins >= need {
+            priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, need) * need });
         }
         Some(best.method.clone())
     } else if shop_listed && shop_cover <= ctx.coins {
         // 3. Merchant, D-A allowed.
         Some("shop:buy".to_string())
-    } else if market_ok && ctx.coins >= count {
-        // 4. Resting bid, the brain waits for the fill.
+    } else if market_ok && ctx.coins >= unit {
+        // 4. Resting bid for what the wallet covers, the brain waits for
+        // the fill.
         Some("market:buy".to_string())
     } else {
         None
@@ -124,7 +143,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             Some(format!("missing:{tool}"))
         } else if market_ok || shop_listed {
             let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
-            Some(format!("missing:coins:{}", price * count))
+            Some(format!("missing:coins:{}", price * need))
         } else {
             None
         };
