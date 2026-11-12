@@ -6,17 +6,17 @@
 use lifescape_sdk::{Bot, Error};
 
 use crate::quests::common as kit;
+use crate::tutorial_design::design;
 use crate::tutorial_detect::{all_matches, fallback_stage, has, obj};
 use crate::{ScriptError, ScriptResult};
 
-const COM_DESIGN_ACCEPT: u16 = 3651;
 const COM_RUN: u16 = 153;
 const COM_SMITH_COL1: u16 = 1119;
 const SPELL_WIND_STRIKE: u16 = 1152;
 const TUT_TAB: u8 = 3;
 const TAB_WORN: u8 = 4;
 
-fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> {
+pub(crate) fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> {
     println!("{} {what}", if ok { "ok" } else { "FAIL" });
     if ok {
         Ok(())
@@ -285,34 +285,9 @@ fn guide(bot: &mut Bot) -> Result<(), ScriptError> {
     talk_step(bot, "basics_instructor", (3095, 3107), &["No, thank you."], "guide")
 }
 
-fn is_chat_modal(modal: &Option<lifescape_sdk::world::Modal>) -> bool {
-    modal.as_ref().is_some_and(|open| open.layer == "chat")
-}
 
-fn design(bot: &mut Bot) -> Result<(), ScriptError> {
-    let target = bot.world.ticks + 50;
-    while bot.world.ticks < target && bot.world.modal.is_none() {
-        bot.pump(5)?;
-    }
-    if bot.world.modal.is_none() {
-        bot.log("ok no design screen, already validated");
-        return Ok(());
-    }
-    if is_chat_modal(&bot.world.modal) {
-        // Resume with a leftover dialog (interrupted run, post-relogin):
-        // the accept button lives on the `player_kit` main interface
-        // (server `[if_button,player_kit:accept]`), never in a chat box —
-        // firing it there answers "I can't reach that!" and the rejection
-        // watch kills the run. Close it, the stage loop re-talks.
-        bot.log("ok leftover dialog closed, stage loop re-drives");
-        bot.close_modal()?;
-        return Ok(());
-    }
-    bot.if_button(COM_DESIGN_ACCEPT)?;
-    check(bot.position(), wait_modal_closed(bot, 50)?, "design accepted")
-}
 
-fn wait_modal_closed(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
+pub(crate) fn wait_modal_closed(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
     let target = bot.world.ticks + timeout;
     while bot.world.ticks < target {
         bot.pump(5)?;
@@ -1008,28 +983,14 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_ticks, is_chat_modal, is_mine_region};
+    use super::{elapsed_ticks, is_mine_region};
     use crate::tutorial_detect::STAGE_MATCHERS;
-    use lifescape_sdk::world::Modal;
 
     /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
     #[test]
     fn elapsed_survives_tick_reset() {
         assert_eq!(elapsed_ticks(100, 50), 50);
         assert_eq!(elapsed_ticks(5, 1439), 0, "reset: no panic, no false timeout");
-    }
-
-    /// Defaut 2 (btjk4cpk, mine, dialogue mineur resté ouvert) : le préambule
-    /// tirait l'accept du design dans la boîte de chat — "I can't reach
-    /// that!" frais + 20 ticks sans bouger (FAIL verify), ou 50 ticks
-    /// d'attente modale (FAIL design accepted). Seul le chat ferme.
-    #[test]
-    fn leftover_chat_modal_never_takes_design_accept() {
-        let chat = Some(Modal { layer: "chat".to_string(), interface_id: 4887 });
-        assert!(is_chat_modal(&chat), "resume leftover closes, never presses accept");
-        let main = Some(Modal { layer: "main".to_string(), interface_id: 1 });
-        assert!(!is_chat_modal(&main), "design screen keeps its accept press");
-        assert!(!is_chat_modal(&None), "no modal stays a clean start");
     }
 
     /// Defaut 3 (Iron, boucle ranged_prep depuis la surface 3072,3133) :

@@ -99,6 +99,9 @@ pub fn fight(
     let mut kills = 0u32;
     let started = bot.world.ticks;
     let mut target_npc: Option<u16> = None;
+    // Last tile the target was seen on: its drop (bones included) lands
+    // there on death, after the slot already left the NPC list.
+    let mut foe_tile = (bot.world.x, bot.world.z);
     let mut last_attack = 0u64;
     let mut last_event_check = bot.world.ticks;
     let mut max_hp = hitpoints(bot).max(10);
@@ -168,7 +171,8 @@ pub fn fight(
             eat(bot)?;
         }
         if let Some(slot) = target_npc {
-            if bot.world.npcs.contains_key(&slot) {
+            if let Some(foe) = bot.world.npcs.get(&slot) {
+                foe_tile = (foe.x, foe.z);
                 // One foe never holds the bot past the cap, xp trickle or
                 // not: ban, step toward it (door-aware), repick. A target at
                 // 1 hp retried after the ban expiry, nothing is lost.
@@ -331,14 +335,22 @@ pub fn fight(
             kills += 1;
             let loot_from = bot.world.ticks;
             // Out of combat: a ranged run picks its arrows back up first
-            // and merges them into the quiver, then the regular loot.
+            // and merges them into the quiver (its reserved slot is free
+            // again), then the kill's bones are picked up and buried on
+            // the spot (every style, user rule), then the regular loot.
             let mut taken = 0;
             if bot.combat_style == "ranged" {
                 taken += crate::kit::loot::recover_arrows(bot)?;
                 crate::kit::loot::merge_arrows(bot)?;
             }
+            let buried = crate::kit::loot::bury_kill_bones(bot, foe_tile)?;
             taken += crate::kit::loot::loot_ground(bot)?;
-            bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks.saturating_sub(loot_from)));
+            bot.log(&format!(
+                "kill {kills} at {:?} (+{}t loot, bones {})",
+                bot.position(),
+                bot.world.ticks.saturating_sub(loot_from),
+                if buried { "buried" } else { "none" }
+            ));
             // Loot can change the best: one re-evaluation when something
             // was picked up, never on empty kills.
             if taken > 0 {
@@ -386,6 +398,9 @@ pub fn fight(
             acquire_xp = combat_xp(bot);
             prev_hp = hitpoints(bot);
             acquire_anim = bot.world.npcs.get(&slot).and_then(|npc| npc.anim);
+            if let Some(foe) = bot.world.npcs.get(&slot) {
+                foe_tile = (foe.x, foe.z);
+            }
             last_attack = bot.world.ticks;
             engaged_at = bot.world.ticks;
             attempts = 0;
@@ -579,6 +594,9 @@ pub fn run_spot(
                     walk_fails = 0;
                 }
             }
+            // The status line reads the last intent: without this the
+            // whole hunt showed "banking at (x,z)" from prepare_at_bank.
+            bot.intend(&format!("hunting {} near ({center_x},{center_z})", spot.key));
             {
                 let (kills, bank_wanted, died) =
                     crate::kit::fight::fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), budget_left(ticks_limit, run_started, bot.world.ticks), no_bank)?;

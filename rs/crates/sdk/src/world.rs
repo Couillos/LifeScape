@@ -272,8 +272,12 @@ impl World {
             }
             "PLAYER_INFO" => self.player_info(body)?,
             "NPC_INFO" => self.npc_info(body)?,
-            "UPDATE_ZONE_PARTIAL_FOLLOWS" | "UPDATE_ZONE_FULL_FOLLOWS" => {
+            "UPDATE_ZONE_PARTIAL_FOLLOWS" => {
                 self.set_zone(i32::from(zone.u8()?), i32::from(zone.u8()?));
+            }
+            "UPDATE_ZONE_FULL_FOLLOWS" => {
+                self.set_zone(i32::from(zone.u8()?), i32::from(zone.u8()?));
+                self.reset_zone();
             }
             "UPDATE_ZONE_PARTIAL_ENCLOSED" => self.zone_enclosed(body)?,
             "UPDATE_INV_FULL" => self.inv_full(body)?,
@@ -419,6 +423,24 @@ impl World {
     fn set_zone(&mut self, local_x: i32, local_z: i32) {
         self.zone_x = (local_x + self.base_x) >> 3;
         self.zone_z = (local_z + self.base_z) >> 3;
+    }
+
+    /// Full follows: the server "completely resets the client zone to
+    /// default — no objs and the original locs" (Zone.ts writeFullFollows,
+    /// Client.ts clears groundObj and reverts locChanges), then re-sends
+    /// every obj and changed loc still there. A zone re-enters view this
+    /// way, so anything taken or despawned while it was out of view would
+    /// otherwise stay a ghost forever. Static spawns are shadowed until
+    /// their OBJ_ADD comes back.
+    fn reset_zone(&mut self) {
+        let (min_x, min_z, level) = (self.zone_x << 3, self.zone_z << 3, self.level);
+        let inside = |tile: &Tile| tile.2 == level && (min_x..min_x + 8).contains(&tile.0) && (min_z..min_z + 8).contains(&tile.1);
+        self.objs.retain(|(tile, _), _| !inside(tile));
+        let shadowed: Vec<(Tile, u16)> = self.static_objs.keys().filter(|(tile, _)| inside(tile)).copied().collect();
+        for key in shadowed {
+            self.objs.insert(key, None);
+        }
+        self.locs.retain(|tile, _| !inside(tile));
     }
 
     fn zone_enclosed(&mut self, body: &[u8]) -> Result<()> {

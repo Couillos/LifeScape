@@ -58,5 +58,11 @@ dumps (`dump_plan.mts`) : `drops.json` (+ `rate`, `qty_min/max`,
 `node gamedata/tools/drop_rates_check.mts <content/scripts> <sujet>…`.
 Table d'XP (`lifescape-gamedata::xp`, unités serveur = 10× l'affichage :
 niveau 2 à 830, 99 à 130344310).
+Apparence (`lifescape-gamedata::player_design`) : kits idk activés par
+genre et partie (`idk.pack` + `{man,woman}.idk`, mâchoire femme = -1),
+nombre de couleurs (`Player.DESIGN_BODY_COLORS`), tirage déterministe
+par nom de compte ; le test `tables_match_the_server_content` relit
+`../lostcity/content`. Envoi : `Bot::save_player_design` (SDK), appelé
+par l'écran de design du tutoriel (`scripts/src/tutorial_design.rs`).
 
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.

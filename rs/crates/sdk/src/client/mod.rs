@@ -6,6 +6,7 @@
 pub mod actions;
 pub mod approach;
 pub mod cost_cache;
+pub mod design;
 pub mod doors;
 pub mod exchange;
 pub mod movement;
