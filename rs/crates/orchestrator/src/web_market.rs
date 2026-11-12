@@ -29,7 +29,7 @@ pub(crate) fn market_api(op: &str, query: &str, dispatch: &Dispatch) -> Response
         let params = parse_query(query);
         let num = |key: &str| params.get(key).and_then(|raw| raw.parse::<i64>().ok());
         let mut fields: Vec<(String, Value)> = vec![("cmd".to_string(), str_value("market")), ("op".to_string(), str_value(&op))];
-        for key in ["item", "depth", "from", "to", "limit", "since", "traded_only"] {
+        for key in ["item", "depth", "from", "to", "limit", "since", "traded_only", "with_orders"] {
             if let Some(value) = num(key) {
                 fields.push((key.to_string(), Value::Int(value)));
             }

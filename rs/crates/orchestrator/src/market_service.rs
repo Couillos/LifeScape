@@ -521,6 +521,8 @@ impl MarketService {
         let query = request.get("q").as_str().unwrap_or("").to_lowercase();
         let limit = request.get("limit").as_i64().unwrap_or(200).clamp(1, 2000) as usize;
         let traded_only = request.get("traded_only").as_i64().unwrap_or(0) == 1;
+        // `with_orders=1`: keep goods with >= 1 open order (either side).
+        let with_orders = request.get("with_orders").as_i64().unwrap_or(0) == 1;
         let clock = Self::now_clock();
         // One row per displayed name: base objects and their banknotes
         // (`cert_*` rows share the display) trade as a single named good —
@@ -535,6 +537,16 @@ impl MarketService {
             }
             groups.entry(row.name.clone()).or_default().push((row.id, row.shop_price));
         }
+        // Open orders and open quantity (remaining units, both sides) per form.
+        let open_orders: std::collections::HashMap<i64, (usize, i64)> = engine
+            .books
+            .iter()
+            .map(|(item, book)| {
+                let orders = book.orders();
+                (*item, (orders.len(), orders.iter().map(|order| order.remaining).sum::<i64>()))
+            })
+            .filter(|(_, (count, _))| *count > 0)
+            .collect();
         drop(engine);
         // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
         let traded: std::collections::HashSet<i64> = if traded_only {
@@ -548,6 +560,11 @@ impl MarketService {
         let mut items = Vec::new();
         for (name, members) in &groups {
             if traded_only && !members.iter().any(|member| traded.contains(&member.0)) {
+                continue;
+            }
+            let order_count: usize = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(count, _)| count).sum();
+            let open_qty: i64 = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(_, qty)| qty).sum();
+            if with_orders && order_count == 0 {
                 continue;
             }
             let mut volume = 0i64;
@@ -580,16 +597,19 @@ impl MarketService {
                 }
                 _ => 0.0,
             };
-            items.push((name.clone(), canonical, reference, change, volume));
+            items.push((name.clone(), canonical, reference, change, volume, order_count, open_qty));
         }
+        // Descending 24h volume, then the largest open quantity, then the name.
         items.sort_by(|left, right| {
-            right.4.cmp(&left.4).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
+            right.4.cmp(&left.4).then(right.6.cmp(&left.6)).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
         });
         let rows: Vec<Value> = items
             .into_iter()
             .take(limit)
-            .map(|(name, id, reference, change, volume)| {
+            .map(|(name, id, reference, change, volume, order_count, open_qty)| {
                 object(vec![
+                    ("orders", Value::Int(order_count as i64)),
+                    ("open_qty", Value::Int(open_qty)),
                     ("item", Value::Int(id)),
                     ("name", str_value(&name)),
                     ("price", Value::Int(reference)),
@@ -620,6 +640,11 @@ impl MarketService {
         let account = request.get("account").as_str().unwrap_or("").to_string();
         if account.is_empty() {
             return Self::err("account is required".to_string());
+        }
+        // AGENTS rule 13: admin's cheated goods and coins never reach
+        // another account, so admin never trades on the market.
+        if account.eq_ignore_ascii_case("admin") {
+            return Self::err("admin never trades: cheated goods stay out of the economy (rule 13)".to_string());
         }
         let side = match Self::side_of(request) {
             Ok(side) => side,

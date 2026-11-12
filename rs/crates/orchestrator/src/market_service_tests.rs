@@ -827,3 +827,47 @@ fn bounded_bids_walk_up_and_cross() {
     assert!(crossed, "the bid walked 1 -> 5 and crossed");
     cleanup(&path);
 }
+
+/// Market page (user rule 2026-11-12): every good with an open order is
+/// listed, traded or not, with its open-order count; empty books never.
+#[test]
+fn list_with_orders_shows_every_resting_book() {
+    let (service, path) = service("with-orders");
+    funded(&service, "lister");
+    let list = |service: &MarketService| {
+        service.handle(&request(vec![("op", str_value("list")), ("with_orders", Value::Int(1))])).get("items").as_arr().cloned().unwrap_or_default()
+    };
+    assert!(list(&service).is_empty(), "no order, no row");
+    let placed = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("lister")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(5)),
+        ("price", Value::Int(9)),
+    ]));
+    assert_eq!(placed.get("ok").as_bool(), Some(true));
+    let rows = list(&service);
+    assert_eq!(rows.len(), 1, "the resting ask lists its good: {rows:?}");
+    assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
+    assert_eq!(rows[0].get("orders").as_i64(), Some(1));
+    assert_eq!(rows[0].get("open_qty").as_i64(), Some(5), "open quantity, not order count");
+    cleanup(&path);
+}
+
+/// AGENTS rule 13: admin never places an order.
+#[test]
+fn admin_never_trades() {
+    let (service, path) = service("admin-rule");
+    funded(&service, "admin");
+    let refused = service.handle(&request(vec![
+        ("op", str_value("place")),
+        ("account", str_value("admin")),
+        ("side", str_value("sell")),
+        ("item", Value::Int(314)),
+        ("qty", Value::Int(1)),
+        ("price", Value::Int(5)),
+    ]));
+    assert_eq!(refused.get("ok").as_bool(), Some(false), "{refused:?}");
+    cleanup(&path);
+}

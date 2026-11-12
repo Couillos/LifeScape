@@ -64,6 +64,7 @@ pub mod session;
 pub mod session_cmds;
 pub mod dump_npc_ranges;
 pub mod dump_transitions;
+pub mod names;
 pub mod obtaincmd;
 pub mod routecmd;
 pub mod replaynav;
