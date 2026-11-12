@@ -826,16 +826,11 @@ impl Bot {
         self.send_named("TUT_CLICKSIDE", &body.bytes())
     }
 
+    /// Loose form for `call save_design`: 7 kits (negative = none), 5 colours.
     pub fn save_design(&mut self, gender: u8, kits: &[i8], colors: &[u8]) -> Result<()> {
-        let mut body = Writer::new();
-        body.u8(gender);
-        for kit in kits {
-            body.u8(if *kit < 0 { 255 } else { *kit as u8 });
-        }
-        for color in colors {
-            body.u8(*color);
-        }
-        self.send_named("IDK_SAVEDESIGN", &body.bytes())
+        let kit_slots: [Option<u8>; 7] = kits.iter().map(|kit| u8::try_from(*kit).ok()).collect::<Vec<_>>().try_into().map_err(|_| Error::State(format!("save_design: 7 kits expected, got {}", kits.len())))?;
+        let colour_slots: [u8; 5] = colors.try_into().map_err(|_| Error::State(format!("save_design: 5 colours expected, got {}", colors.len())))?;
+        self.save_player_design(gender, &kit_slots, &colour_slots)
     }
 
     pub fn friend_add(&mut self, name: &str) -> Result<()> {

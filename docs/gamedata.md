@@ -44,5 +44,11 @@ test `coverage_report`) : récompenses de quêtes/pistes/événements,
 dialogue (teintures, tannage), préparations de cuisine et restes mangés.
 Table d'XP (`lifescape-gamedata::xp`, unités serveur = 10× l'affichage :
 niveau 2 à 830, 99 à 130344310).
+Apparence (`lifescape-gamedata::player_design`) : kits idk activés par
+genre et partie (`idk.pack` + `{man,woman}.idk`, mâchoire femme = -1),
+nombre de couleurs (`Player.DESIGN_BODY_COLORS`), tirage déterministe
+par nom de compte ; le test `tables_match_the_server_content` relit
+`../lostcity/content`. Envoi : `Bot::save_player_design` (SDK), appelé
+par l'écran de design du tutoriel (`scripts/src/tutorial_design.rs`).
 
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.

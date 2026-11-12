@@ -17,6 +17,7 @@ pub mod f2p;
 pub mod free_zones;
 pub mod item_sources;
 pub mod methods;
+pub mod player_design;
 pub mod quest_requirements;
 pub mod quests;
 pub mod recipes;
