@@ -207,6 +207,24 @@ fn pass_door(bot: &mut Bot, door_name: &str, beyond: (i32, i32)) -> Result<(), S
     check(bot.position(), through(bot), &format!("through {door_name}"))
 }
 
+/// Mine region (z ~9500) vs surface island (z ~3100), same level 0: a
+/// walk_to across regions is unroutable, never attempt it.
+fn is_mine_region(z: i32) -> bool {
+    z > 9000
+}
+
+/// Down the mine ladder (surface -> underground). The post-kill box can
+/// outlive our position (death respawn, mid-quest resume): ranged_prep
+/// climbs back down instead of walking across map regions.
+fn climb_down_mine(bot: &mut Bot) -> Result<(), ScriptError> {
+    if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbieladdertop1"], 150) {
+        stand_orthogonal(bot, x, z)?;
+        bot.op_loc(1, x, z, loc)?;
+    }
+    check(bot.position(), wait_moved(bot, 20)?, "down the mine ladder")?;
+    check(bot.position(), is_mine_region(bot.world.z), "back underground for ranged prep")
+}
+
 /// Hint tile when set, else the bot tile (nearest is not always the target).
 fn target_ref(bot: &Bot) -> (i32, i32) {
     match bot.world.hint {
@@ -698,13 +716,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "quest_door" => pass_door(bot, "newbie_door4", (3086, 3128)),
         "quest_talk" | "quest_recap" => talk_step(bot, "quest_instructor", (3086, 3121), &["Nope, I'm ready to move on!"], "quest guide"),
         "quest_tab" => click_tab(bot, 2, "quest tab"),
-        "ladder_down" => {
-            if let Ok((x, z, _level, loc)) = kit::find_loc(bot, &["newbieladdertop1"], 150) {
-                stand_orthogonal(bot, x, z)?;
-                bot.op_loc(1, x, z, loc)?;
-            }
-            check(bot.position(), wait_moved(bot, 20)?, "down the mine ladder")
-        }
+        "ladder_down" => climb_down_mine(bot),
         "mining_intro" => talk_step(bot, "mining_instructor", (3079, 9505), &["Nope, I'm ready to move on!"], "miner"),
         "prospect" => prospect(bot),
         "dig_tin_first" => dig(bot, "newbietinrock", "tin_ore"),
@@ -753,6 +765,13 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         }
         "melee" | "melee_watch" => melee(bot),
         "ranged_prep" => {
+            // Post-kill box with a surface position (death respawn,
+            // mid-quest resume): Vannaka is underground, the cross-region
+            // walk_to is unroutable and scan_and_talk would swallow it.
+            if !is_mine_region(bot.world.z) {
+                bot.log("ranged prep on surface, climbing back down");
+                climb_down_mine(bot)?;
+            }
             // Exit east through the rat gate: click from the inside stand
             // (the gate faces the pit), the handler parks us on the gate,
             // then walk out. The gate stays open after the first entry.
@@ -1009,7 +1028,7 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_ticks, is_chat_modal, STAGE_MATCHERS};
+    use super::{elapsed_ticks, is_chat_modal, is_mine_region, STAGE_MATCHERS};
     use lifescape_sdk::world::Modal;
 
     /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
@@ -1032,12 +1051,29 @@ mod tests {
         assert!(!is_chat_modal(&None), "no modal stays a clean start");
     }
 
-    /// Defaut 1 offline pin (replay-nav style, no live run): the t03/t05
-    /// `FAIL axe held` shows the box already asks for a tree, so the
-    /// matcher must name `chop` and `chop` must re-grant before failing.
-    /// R9 (compte neuf -> autopilote) replays this in the final wave.
+    /// Defaut 3 (Iron, boucle ranged_prep depuis la surface 3072,3133) :
+    /// le texte "made your first kill" est authentique (varp post-kill,
+    /// pas un stale) mais Vannaka vit au sous-sol (z ~9500) : le walk_to
+    /// inter-regions est imroutable, scan_and_talk l'avale, talk FAIL
+    /// "not found" 150 ticks plus tard. Le garde remonte par l'echelle.
+    #[test]
+    fn mine_region_splits_surface_from_mine() {
+        assert!(is_mine_region(9510), "pit Vannaka 3107,9510");
+        assert!(!is_mine_region(3133), "surface Iron 3072,3133");
+    }
+
+    /// Q1 : le seul texte qui matche ranged_prep (serveur
+    /// tut_chatbox_steps.rs2 tutorial_step_first_kill_melee).
+    #[test]
+    fn ranged_prep_matcher_is_post_kill_box() {
+        let prep = STAGE_MATCHERS.iter().find(|(key, _)| *key == "ranged_prep").expect("ranged_prep row");
+        assert!(prep.1.iter().any(|fragment| fragment.contains("made your first kill")), "varp post-kill, got {:?}", prep.1);
+    }
     #[test]
     fn chop_matcher_names_the_tree_step() {
+        // Defaut 1 offline pin (replay-nav style, no live run): the t03/t05
+        // `FAIL axe held` shows the box already asks for a tree, so the
+        // matcher must name `chop` and `chop` must re-grant before failing.
         let keys: Vec<&str> = STAGE_MATCHERS.iter().map(|(key, _)| *key).collect();
         assert!(keys.contains(&"chop"), "tree step pinned, got {keys:?}");
         let chop = STAGE_MATCHERS.iter().find(|(key, _)| *key == "chop").expect("chop row");
