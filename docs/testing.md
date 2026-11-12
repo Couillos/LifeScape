@@ -26,8 +26,9 @@ watchdog : le run reste en `held`, vérifier `held: true` dans `show`) :
 `open admin`, `open <tNN>`, `hold <tNN>`, puis `call admin cheat "<cmd>"`.
 `tele <lvl,mx,mz,lx,lz>` (staff≥2) place admin ; `teleother <tNN>` amène le
 testé sur la case d'admin (aucun message de succès : vérifier par `show`) ;
-`giveother` est **interdit** (AGENTS.md règle 13 : aucun objet ni argent
-triché ne quitte `admin`, l'économie reste propre) ;
+`giveother` est **interdit** et refusé par le code (AGENTS.md règle 13 :
+aucun objet ni argent triché ne quitte `admin` ; `economy_guard.rs` le
+refuse sur `call admin cheat` comme en setup `verify`) ;
 `setvarother <tNN> <var> <v>` (+ lecture
 `getvarother`) fixent inventaire et variables — noms d'objets = debug names
 serveur minuscules (`coins`, `raw_shrimp`). `giveother`/`setvarother`/
@@ -56,10 +57,12 @@ Un compte distinct par scénario ; setup en série (un seul `admin` positionne),
 runs en parallèle. Tableau id/compte/résultat/ticks/wall/cause, dossier
 (<40 lignes) seulement en échec. Sortie 0 si tout ok, 1 sinon, 2 usage.
 
-Setup : `tele_admin` → `teleother`/`giveother`/`setvarother` (via `admin`,
+Setup : `tele_admin` → `teleother`/`setvarother` (via `admin`,
 effet re-vérifié par `show` : `give` répond Ok même plein, compte en login
 répond Ok dans le vide — invisible = setup en échec, jamais de run condamné)
 → `bank_all` (vide le pack via le devtool `bank_deposit`). Comptes en `hold`.
+`cook_shrimp` cuit les crevettes crues que le compte de test a en banque
+(le script les retire) : plus aucun `giveother` (règle 13).
 Budget : pire cas borné par le pack (28) ; cook = trek ~1100 + 28 cuissons → budget 1700 (<2000).
 Porte Port Sarim loc 1530 flaky (« I can't reach that », 2/4, W4) : cook passe
 par Al Kharid (banque 3268,3167 + range 3271,3180, ~13 cases, budget 1700) ;

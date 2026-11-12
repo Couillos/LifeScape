@@ -12,3 +12,6 @@ orchestration/static/map-*.stamp
 orchestration/static/map-current.json
 # Worktrees of Claude Code subagents (separate checkouts).
 .claude/worktrees/
+
+# Sauvegardes de nettoyage (base + .sav), jamais commitees
+backup/poison-*/

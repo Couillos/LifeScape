@@ -556,7 +556,11 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
             Ok(Value::Null)
         }
         "cheat" => {
-            bot.cheat(need_str(&args, 0, method)?).map_err(|error| error.to_string())?;
+            let command = need_str(&args, 0, method)?;
+            if let Some(refusal) = crate::economy_guard::cheat_refusal(command) {
+                return Err(refusal);
+            }
+            bot.cheat(command).map_err(|error| error.to_string())?;
             Ok(Value::Null)
         }
         _ => Err(format!("unknown method {method:?}")),

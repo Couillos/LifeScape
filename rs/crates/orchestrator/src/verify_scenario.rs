@@ -19,7 +19,6 @@ pub struct ScenarioRun {
 pub enum SetupOp {
     TeleAdmin { level: i64, x: i64, z: i64 },
     Teleother,
-    Giveother { item: String, count: i64 },
     Setvarother { var: String, value: i64 },
     BankAll { keep: Vec<String> },
 }
@@ -88,10 +87,9 @@ pub fn parse_setup(value: &Value) -> Result<SetupOp, String> {
             z: need_i64(value.get("z"), "setup.tele_admin.z")?,
         }),
         "teleother" => Ok(SetupOp::Teleother),
-        "giveother" => Ok(SetupOp::Giveother {
-            item: need_str(value.get("item"), "setup.giveother.item")?,
-            count: need_i64(value.get("count"), "setup.giveother.count")?,
-        }),
+        // Rule 13: a scenario never hands cheated goods to its account;
+        // the run uses what the account holds (banked, the script withdraws).
+        "giveother" => Err(crate::economy_guard::cheat_refusal("giveother").unwrap_or_default()),
         "setvarother" => Ok(SetupOp::Setvarother {
             var: need_str(value.get("var"), "setup.setvarother.var")?,
             value: need_i64(value.get("value"), "setup.setvarother.value")?,
@@ -104,7 +102,7 @@ pub fn parse_setup(value: &Value) -> Result<SetupOp, String> {
                 .transpose()?
                 .unwrap_or_default(),
         }),
-        other => Err(format!("unknown setup op {other:?} (want tele_admin|teleother|giveother|setvarother|bank_all)")),
+        other => Err(format!("unknown setup op {other:?} (want tele_admin|teleother|setvarother|bank_all)")),
     }
 }
 

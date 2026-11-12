@@ -21,8 +21,6 @@ pub const INTERVAL_SECONDS: i64 = 60 * 60;
 pub const COINS: i64 = 995;
 const LIVE_FRESH_SECONDS: f64 = 600.0;
 const TOP_ITEMS: usize = 500;
-/// Staff/private accounts: never counted in the public holdings totals.
-const EXCLUDED_ACCOUNTS: &[&str] = &["admin", "bite"];
 
 fn items_dir() -> PathBuf {
     crate::paths::run_dir().join("items")
@@ -104,10 +102,12 @@ fn snapshot_bank_empty(snapshot: &Value) -> bool {
 pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i64> {
     let now = jobs::now_secs();
     let iron = iron_accounts();
+    // Staff/private plus the persisted list (`run/economy-excluded.txt`).
+    let excluded = crate::economy_guard::excluded_accounts();
     let mut live: HashMap<String, Value> = HashMap::new();
     for state in described {
         let account = state.get("account").as_str().unwrap_or("").to_lowercase();
-        if account.is_empty() || EXCLUDED_ACCOUNTS.contains(&account.as_str()) || iron.contains(&account) {
+        if account.is_empty() || excluded.contains(&account) || iron.contains(&account) {
             continue;
         }
         let fresh = state.get("updated").as_f64().is_some_and(|at| now - at < LIVE_FRESH_SECONDS);
@@ -128,7 +128,7 @@ pub fn current_holdings(described: &[Value], save_dir: &str) -> BTreeMap<i64, i6
     names.sort();
     for name in names {
         let account = name[..name.len() - 4].to_lowercase();
-        if EXCLUDED_ACCOUNTS.contains(&account.as_str()) || iron.contains(&account) {
+        if excluded.contains(&account) || iron.contains(&account) {
             continue;
         }
         let path = format!("{save_dir}/{name}");

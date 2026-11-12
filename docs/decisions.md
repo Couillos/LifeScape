@@ -104,3 +104,25 @@
 - 2026-11-12 — Redémarrage daemon sans pénalité : un worker restauré lit `idle` avant que son script ne rapporte ; pendant 120 s après la première supervision d'un compte par ce daemon, un nœud actif sans rapport repasse `ready` sans échec compté (`brain::daemon_warming`, par compte : la restauration de 14 workers dure ~90 s). Constaté live : chaque redémarrage coûtait un échec par nœud actif (trois redémarrages = nœuds abandonnés). Compteurs gonflés corrigés à la main (pénalités loggées 15:51-15:55 retirées, dépendants rétablis).
 - 2026-11-12 — Graphes bloqués à vie (bh99tw2f, bbkjz2vk : « graph stuck … operator decides » puis « no goal left »). Causes : (1) jambes `farm:ball_of_wool` / `farm:bronze_pickaxe` figées dans le fichier de vie par le planner pré-PRD3 (`farm:` dès qu'une source drop existe : diablotins, nains) que `map_method` refuse (aucun spot ne chasse ces PNJ) ⇒ `no-script` ; le planner actuel dérive filage / marché+marchand D-A, mais les vies persistées gardaient l'ancienne liste ; (2) trois « no report » causés par redéploiements opérateur (16:48 : `open` qui remplace le job, le rapport `stopped` poussé juste avant part avec l'ancien job ; file du cerveau pleine qui jetait le rapport drainé) ont abandonné `have_coins` n20, et la cascade a emporté n19/n18/n14… en gardant leurs anciens `Blocked: missing …` (cause masquée) ; relance manuelle de n20 seul ⇒ dépendants restés abandonnés ; (3) un but atteint à côté d'un vieux nœud abandonné était classé `stuck` (pêche 15 faite puis jamais retirée) ⇒ toutes les compétences « stuck » ⇒ plus aucun but ; (4) la ligne « stuck » + deux entrées d'historique se répétaient à chaque passe. Correctifs : `normalize` re-dérive les jambes mortes d'un `obtain` ouvert ; la cascade écrit `dependency nX abandoned` ; `open` excuse l'arrêt (comme `unload`/`close`, effacé au lancement suivant) ; rapport remis en attente si la file est pleine ; but `done` si les niveaux live l'atteignent ; période de blocage notée une fois (`brain_stuck.rs`). Politique (règle de cycle de vie, pas un repli) : après 6000 ticks de blocage sans but à tirer, `lifecycle::revive_stuck` relance chaque nœud abandonné (budgets neufs, jambes re-dérivées, cascade comprise), au plus 3 fois par nœud, puis `graph final` et l'opérateur décide. Rejeté : relance immédiate ou illimitée, relance silencieuse sans trace (`history: graph revived`), compter les arrêts opérateur comme des crashs.
 - 2026-11-12 — Budget de plan typé `BudgetExhausted` (handovers marché « square unreachable ») : le daemon debug (4 threads pool) coupait Falador/Draynor → fontaine de Varrock au `PLAN_BUDGET` 3000 ms (même jambes : 3,7-6,2 s de boucle sous charge, 2 s à vide) et la coupe répondait `Disconnected closest=` près du départ, mise en cache L1. Désormais : coupe (visites ou mur) = `BudgetExhausted` jamais caché, C/D sautés après une coupe de A (seul le péage B reste), budgets A 20 s + diagnostic 8 s (< `SERVICE_WAIT_MAX` 30 s), pire jambe mesurée 11,5 s (Varrock est → ferme Falador, 183k visites). Rejeté : garder Disconnected sur coupe (faux verdict caché), budget visites seul (25 s+ de CPU par NoRoute exhaustif).
+
+## 2026-11-12 — Nettoyage de l'économie empoisonnée (règle 13)
+
+Constat : `cheat giveother` depuis `admin` avait injecté 10 000 pièces à t03
+(11/11 00:20Z) et 1 000 à t99 (11/11 11:11Z) ; 100 pièces étaient passées à
+t01 (deal 26), et `admin` avait vendu au marché des objets trichés (deals
+22, 24, 27). Décision utilisateur : plan complet.
+- Sauvegarde `backup/poison-2026-11-12/` (base, `.sav`, `run/lives`, users).
+- Ordres 5932/5934 de t03 annulés ; comptes t03 et t99 supprimés (`.sav`,
+  `run/lives`, `run/users`) ; lignes de base gardées comme trace d'audit.
+- `.sav` hors ligne édités (inventaires ré-encodés, CRC recalculé, connexion
+  vérifiée) : t01 −100 pièces, t02 −1 bûche de saule, t06 −5 plumes ; t18
+  avait déjà consommé sa crevette.
+- Historique `holdings_*` des pièces : −10 000 du 11/11 01:00 au 11:00,
+  −11 000 du 11/11 12:00 au 12/11 20:00, −100 au 12/11 21:00 (courbe
+  continue : 757 avant et après l'injection).
+- Code : `economy_guard.rs` refuse `giveother` (call et setup `verify`) ;
+  la liste d'exclusion des totaux devient `run/economy-excluded.txt`
+  (admin et bite toujours exclus).
+Non traité (hors périmètre validé) : les autres `giveother` historiques des
+comptes de test (filets, outils, 588 crevettes de t40…), la bosse +375 du
+11/11 08:00.

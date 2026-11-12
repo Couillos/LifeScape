@@ -22,7 +22,7 @@ use lifescape_json::{self as json, Value, object, str_value};
 
 use crate::await_cmd::{AwaitError, Baseline, DaemonSource, StateSource, Verdict, WaitEnd, POLL_MS, terminal};
 use crate::daemon::WORKER_TIMEOUT;
-use crate::verify_assert::{check_assert, item_count, position_of};
+use crate::verify_assert::{check_assert, position_of};
 use crate::verify_reject::{RejectWatch, max_msg_tick};
 use crate::verify_scenario::{Scenario, SetupOp, list_scenarios, load_scenario};
 
@@ -227,7 +227,7 @@ fn setup_account(scenario: &Scenario, account: &str) -> Result<Value, String> {
                 // Hermetic pack: the `bank_deposit` devtool (never game
                 // logic) empties the pack so the run below harvests fresh
                 // goods instead of re-banking leftovers. Runs in order:
-                // authors list it before any `giveother`.
+                // authors list it first in the setup.
                 let pre = show_of(account).map_err(|error| format!("show {account}: {error}"))?;
                 let reply = daemon_send(
                     &object(vec![
@@ -249,16 +249,6 @@ fn setup_account(scenario: &Scenario, account: &str) -> Result<Value, String> {
                     WaitEnd::Done(other, detail) => return Err(format!("bank_all: {result} {detail}", result = other.name())),
                     WaitEnd::NoSession => return Err(format!("bank_all: no session, open {account} first")),
                     WaitEnd::WallTimeout => return Err("bank_all: wall timeout".to_string()),
-                }
-            }
-            SetupOp::Giveother { item, count } => {
-                let had = item_count(&before, item);
-                cheat_on_admin(&format!("giveother {account} {item} {count}"))?;
-                // A full pack still answers Ok: only the visible count
-                // proves the give landed, never the cheat reply.
-                let (_, landed) = poll_until("giveother", account, SETUP_WAIT_S, &|state| item_count(state, item) >= had + count);
-                if !landed {
-                    return Err(format!("giveother {account} {item} x{count}: not visible after {SETUP_WAIT_S}s (pack full?)"));
                 }
             }
             SetupOp::Setvarother { var, value } => {

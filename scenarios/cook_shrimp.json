@@ -4,8 +4,7 @@
   "setup": [
     {"op": "tele_admin", "level": 0, "x": 3268, "z": 3167},
     {"op": "teleother"},
-    {"op": "bank_all", "keep": []},
-    {"op": "giveother", "item": "raw_shrimp", "count": 14}
+    {"op": "bank_all", "keep": []}
   ],
   "run": {"script": "cook", "args": ["raw_shrimp", "1"], "budget_ticks": 1700},
   "assert": [
