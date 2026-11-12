@@ -105,6 +105,48 @@ fn rebuild_sets_base() {
     assert_eq!((world.base_x, world.base_z), (44 << 3, 44 << 3));
 }
 
+/// UPDATE_ZONE_FULL_FOLLOWS resets the 8x8 zone to its default (no objs,
+/// original locs) before the server re-sends what is still there
+/// (Zone.ts writeFullFollows, Client.ts clears groundObj). Without the
+/// reset an obj taken or despawned while the zone was out of view stays
+/// a ghost forever: live melee bots clicked the same "Cow hide" at
+/// (3259,3291) 55 times over 30k ticks, ~97 ticks lost per click.
+#[test]
+fn zone_full_follows_drops_ghost_objs_and_loc_changes() {
+    let mut world = World::new();
+    world.feed("REBUILD_NORMAL", &[0, 50, 0, 50]).unwrap();
+    // Zone local (8,16) -> absolute zone tiles x 360..=367, z 368..=375.
+    world.feed("UPDATE_ZONE_PARTIAL_FOLLOWS", &[8, 16]).unwrap();
+    // Cow hide (1739) at (362,371): coord byte (2 << 4) | 3.
+    world.feed("OBJ_ADD", &[0x23, 0x06, 0xCB, 0x00, 0x01]).unwrap();
+    assert_eq!(world.ground_items(362, 371, 0, 0, Some(1739)).len(), 1, "seen live");
+    world.static_objs.insert(((364, 370, 0), 526), 1);
+    world.objs.insert(((359, 371, 0), 1739), Some(1));
+    world.locs.insert((361, 369, 0), Some((1553, 0, 0)));
+    world.locs.insert((359, 369, 0), Some((1553, 0, 0)));
+    // Zone leaves view, the hide is taken by someone else, zone re-enters.
+    world.feed("UPDATE_ZONE_FULL_FOLLOWS", &[8, 16]).unwrap();
+    assert!(world.ground_items(362, 371, 0, 0, None).is_empty(), "ghost obj cleared");
+    assert!(world.ground_items(364, 370, 0, 0, None).is_empty(), "static spawn hidden until re-sent");
+    assert_eq!(world.ground_items(359, 371, 0, 0, None).len(), 1, "neighbour zone untouched");
+    assert!(!world.locs.contains_key(&(361, 369, 0)), "loc change reverted to the static map");
+    assert!(world.locs.contains_key(&(359, 369, 0)), "neighbour zone loc untouched");
+    // The server then re-sends the still-active static spawn.
+    world.feed("OBJ_ADD", &[0x42, 0x02, 0x0E, 0x00, 0x01]).unwrap();
+    assert_eq!(world.ground_items(364, 370, 0, 0, Some(526)).len(), 1, "re-sent spawn visible again");
+}
+
+/// Partial follows only moves the zone cursor: never a reset.
+#[test]
+fn zone_partial_follows_keeps_objs() {
+    let mut world = World::new();
+    world.feed("REBUILD_NORMAL", &[0, 50, 0, 50]).unwrap();
+    world.feed("UPDATE_ZONE_PARTIAL_FOLLOWS", &[8, 16]).unwrap();
+    world.feed("OBJ_ADD", &[0x23, 0x06, 0xCB, 0x00, 0x01]).unwrap();
+    world.feed("UPDATE_ZONE_PARTIAL_FOLLOWS", &[8, 16]).unwrap();
+    assert_eq!(world.ground_items(362, 371, 0, 0, Some(1739)).len(), 1, "partial keeps the obj");
+}
+
 #[test]
 fn ground_items_merge_live_static() {
     let mut world = World::new();
