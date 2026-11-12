@@ -112,6 +112,7 @@ pub fn parse_loctypes(gametypes_text: &str, overrides_text: &str) -> Result<Vec<
             has_ops,
             open_op,
             toll,
+            gate_leaf: crate::collision::gate_leaf_of_category(category),
         }));
     }
     for loc in &blocked {
@@ -148,5 +149,11 @@ mod tests {
         assert!(defs[3635].as_ref().is_some_and(|def| def.open_op.is_none()));
         // Untouched doors keep their op.
         assert_eq!(defs[3].as_ref().and_then(|def| def.open_op), Some(1));
+        // Double gates: categories gate_main_closed / gate_outer_closed.
+        use crate::collision::GateLeaf;
+        assert_eq!(defs[1551].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Main));
+        assert_eq!(defs[1553].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Outer));
+        assert_eq!(defs[1552].as_ref().and_then(|def| def.gate_leaf), None);
+        assert_eq!(defs[3].as_ref().and_then(|def| def.gate_leaf), None);
     }
 }

@@ -45,6 +45,16 @@ la fenêtre live envoyée par le worker (rayon 10). `orchestrator
 replay-nav` rejoue le dossier et classe A (plan faux) / B (monde ≠ carte)
 / C (exécution) (`rs/crates/orchestrator/src/replaynav.rs`).
 
+Portails doubles (catégories `gate_main_closed`/`gate_outer_closed`,
+ids 28/29) : à l'ouverture le contenu (`gates.rs2`, `open_gate`) repose
+les deux battants en murs droits `angle+3`, à 1 et 2 tuiles au-delà de
+la clôture côté battant principal. Le peintre statique
+(`rs/crates/nav/src/collision/gate_swing.rs`) peint ces murs en
+permanence : un portail fermé coûte 1-2 tuiles de détour, un portail
+ouvert ne fait plus refuser le pas suivant (avant : ~5000 refus/jour
+aux portails Falador/Lumbridge, replan identique, aller-retour par le
+portail). Goldens : `rs/crates/nav/tests/gate_swing.rs`.
+
 Versions et reload : chaque réponse porte la version snapshot ;
 `reload-nav` rebâtit le snapshot à côté et l'échange atomiquement
 (l'in-flight finit sur l'ancien `Arc`, le bump de version rend les

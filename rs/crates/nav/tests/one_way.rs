@@ -123,6 +123,7 @@ fn setup() -> (std::sync::Arc<StaticWorld>, Tables, std::path::PathBuf) {
         has_ops: true,
         open_op: Some(1),
         toll: false,
+        gate_leaf: None,
     });
     let world = StaticWorld::open(&path, defs).expect("synthetic world");
     let tables = Tables {

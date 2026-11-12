@@ -18,6 +18,9 @@ pub struct LocDef {
     /// The "open" action charges a toll (Al-Kharid gate): never routed
     /// through unless the session explicitly allows paid paths.
     pub toll: bool,
+    /// Closed double gate leaf (main or outer): its open leaves are
+    /// painted as walls past the fence (`gate_swing`).
+    pub gate_leaf: Option<super::gate_swing::GateLeaf>,
 }
 
 /// 8x8-tile zones keyed like the server, flags painted by locs and walls.

@@ -68,7 +68,7 @@ pub fn paint_square(
         load_ground(map, &lands, square_x, square_z);
     }
     load_locs(
-        collision,
+        collision.as_mut().map(|map| &mut **map),
         &lands,
         locs,
         square_x,
@@ -77,7 +77,12 @@ pub fn paint_square(
         static_locs,
         static_actions,
         static_layers,
-    )
+    )?;
+    // Open double gates wall the tiles past the fence (see gate_swing).
+    if let Some(map) = collision {
+        super::gate_swing::paint_gate_swings(map, static_layers, loctypes, square_x, square_z);
+    }
+    Ok(())
 }
 
 /// Static locs without building the collision map (spectator path).
