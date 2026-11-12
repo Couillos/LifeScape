@@ -89,8 +89,7 @@ fn plan_eta_ticks(from: (i32, i32, i32), dest: Tile, version: &mut String) -> Op
         allow_paid: false,
         f2p_only: true,
         satisfied: HashSet::new(),
-        excluded_edges: HashSet::new(),
-    };
+        excluded_edges: HashSet::new(), danger: Vec::new() };
     let from_tile = Tile { x: from.1, z: from.2, level: from.0 };
     for _ in 0..2 {
         match client.plan_once(from_tile, dest, &options, version, 8000) {

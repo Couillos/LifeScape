@@ -125,7 +125,7 @@ fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str) -> Result<(),
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() {
             if match_option(&bot.chat_options(), cut_name).is_none() {
-                return Err(ScriptError::Usage(format!("cut {cut_name:?} matches no option at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("cut {cut_name:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(cut_name)?;
         }
@@ -137,7 +137,7 @@ fn cut_one(bot: &mut Bot, uncut: u16, chisel: u16, cut_name: &str) -> Result<(),
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{cut_name} never cut at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("{cut_name} never cut at {:?}", bot.position())))
 }
 
 #[cfg(test)]

@@ -75,7 +75,14 @@ static ALL: &[StaticExtra] = &[
     // Amulet stringing (stringing.rs2: 40 XP, inventory).
     StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("unstrung_gold_amulet", 1)], outputs: &[("strung_gold_amulet", 1)], station: None, source: "string_gold_amulet" },
     StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("unstrung_sapphire_amulet", 1)], outputs: &[("strung_sapphire_amulet", 1)], station: None, source: "string_sapphire_amulet" },
+    StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("unstrung_emerald_amulet", 1)], outputs: &[("strung_emerald_amulet", 1)], station: None, source: "string_emerald_amulet" },
+    StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("unstrung_ruby_amulet", 1)], outputs: &[("strung_ruby_amulet", 1)], station: None, source: "string_ruby_amulet" },
+    StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("unstrung_diamond_amulet", 1)], outputs: &[("strung_diamond_amulet", 1)], station: None, source: "string_diamond_amulet" },
     StaticExtra { kind: "string", level: 1, xp: 40, inputs: &[("ball_of_wool", 1), ("nostringstar", 1)], outputs: &[("stringstar", 1)], station: None, source: "string_holy_symbol" },
+    // Windmill (general_use/scripts/windmills.rs2): grain in the hopper
+    // (`hopper_fill`), lever, then an empty pot on the flour bin
+    // (`take_flour_bin`). No skill, no XP.
+    StaticExtra { kind: "mill", level: 1, xp: 0, inputs: &[("grain", 1), ("pot_empty", 1)], outputs: &[("pot_flour", 1)], station: Some("hopper"), source: "mill_flour" },
     // Cook prep (inventory, no XP; the bake pays in `recipes` cook rows).
     StaticExtra { kind: "cook_prep", level: 1, xp: 0, inputs: &[("pot_flour", 1), ("jug_water", 1)], outputs: &[("bread_dough", 1)], station: None, source: "mix_bread_dough" },
     StaticExtra { kind: "cook_prep", level: 1, xp: 0, inputs: &[("pot_flour", 1), ("jug_water", 1)], outputs: &[("pastry_dough", 1)], station: None, source: "mix_pastry_dough" },

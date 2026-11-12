@@ -344,43 +344,13 @@ fn buy_from_shop(bot: &mut Bot, obj_name: &str) -> Result<(), ScriptError> {
     if solver::count(bot, wanted) > 0 {
         return Ok(());
     }
-    let main_shop = lifescape_gamedata::com_id("shop_template:inv")
-        .ok_or_else(|| ScriptError::Sdk(Error::State("shop_template:inv missing".to_string())))?;
-    let mut cands: Vec<(i32, String, i32, i32, i32)> = Vec::new();
-    for shop in lifescape_gamedata::shops::all_shops() {
-        if !shop.stocks.iter().any(|stock| stock.obj == obj_name && stock.count > 0) {
-            continue;
-        }
-        for keeper in &shop.keepers {
-            for spawn in lifescape_gamedata::spawns::all_npc_spawns(Some(keeper.npc_id as usize)) {
-                if spawn.level as i32 != bot.world.level {
-                    continue;
-                }
-                cands.push((((spawn.x as i32 - bot.world.x).abs() + (spawn.z as i32 - bot.world.z).abs()), keeper.npc.clone(), spawn.x as i32, spawn.z as i32, spawn.level as i32));
-            }
-        }
+    // Through the shared kit (PRD3 lot 1B): F2P shop access and the D-A
+    // merchant rule apply to quest purchases too.
+    crate::kit::shop::buy_stock(bot, obj_name, 1)?;
+    if solver::count(bot, wanted) > 0 {
+        return Ok(());
     }
-    cands.sort_by_key(|cand| cand.0);
-    for (_, name, x, z, level) in cands {
-        bot.approach(x, z, level, 2, 6000)?;
-        if bot.trade_request(&name, 60).unwrap_or(false) {
-            bot.pump(10)?;
-            let before = solver::count(bot, wanted);
-            if let Some(slot) = bot.world.inv.get(&main_shop).and_then(|slots| slots.iter().find(|(_, (held, _))| *held == wanted).map(|(slot, _)| *slot)) {
-                bot.inv_button(2, wanted, slot, main_shop)?;
-                let target = bot.world.ticks + 60;
-                while bot.world.ticks < target && solver::count(bot, wanted) <= before {
-                    bot.pump(2)?;
-                }
-            }
-            bot.close_modal()?;
-            bot.pump(5)?;
-            if solver::count(bot, wanted) > 0 {
-                return Ok(());
-            }
-        }
-    }
-    Err(ScriptError::Sdk(Error::Unreachable(format!("no shop sold {obj_name} near {:?}", bot.position()))))
+    Err(ScriptError::Failed(format!("could not buy {obj_name} from any F2P shop")))
 }
 
 fn solve_prince(bot: &mut Bot) -> Result<(), ScriptError> {

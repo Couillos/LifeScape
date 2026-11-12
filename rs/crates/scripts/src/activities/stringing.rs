@@ -119,14 +119,14 @@ fn string_one(bot: &mut Bot, unstrung: u16, ball: u16, strung_name: &str) -> Res
     let target = bot.world.ticks + 40;
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() || bot.world.count_dialog || bot.world.modal.is_some() {
-            return Err(ScriptError::Usage(format!("stringing {strung_name} opened an interface at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("stringing {strung_name} opened an interface at {:?}", bot.position())));
         }
         bot.pump(2)?;
         if pack_total(bot, unstrung) < had {
             return Ok(());
         }
     }
-    Err(ScriptError::Usage(format!("{strung_name} never strung at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("{strung_name} never strung at {:?}", bot.position())))
 }
 
 #[cfg(test)]

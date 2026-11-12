@@ -36,6 +36,11 @@ pub enum ProduceUi<'a> {
     Choice { pick: &'a str },
     Count,
     Grid { button: &'a str },
+    /// Station op (no item use) opening a chat make-menu: press `button`
+    /// (a make-X resume button, IF_BUTTON), answer the count with every carried
+    /// input, then the server chains (spinning wheel `op2` Spin opens
+    /// `skill_multi2`, PRD3 lot 7).
+    Multi { op: u8, menu: &'a str, button: &'a str },
 }
 
 /// One produce declaration: what the activity owns, nothing else.
@@ -153,7 +158,7 @@ fn answer_choice(bot: &mut Bot, pick: &str) -> Result<bool, ScriptError> {
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() {
             if match_option(&bot.chat_options(), pick).is_none() {
-                return Err(ScriptError::Usage(format!("choice {pick:?} matches no option at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("choice {pick:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(pick)?;
             bot.pump(5)?;
@@ -220,7 +225,11 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
     let (use_com, use_slot) = crate::quests::common::inv_slot(bot, job.input)?;
     match site {
         ClickedSite::Loc { x, z, loc } => {
-            bot.op_loc_u(*x, *z, *loc, job.input, u16::from(use_slot), use_com)?;
+            if let ProduceUi::Multi { op, .. } = &job.spec.ui {
+                bot.op_loc(*op, *x, *z, *loc)?;
+            } else {
+                bot.op_loc_u(*x, *z, *loc, job.input, u16::from(use_slot), use_com)?;
+            }
         }
         ClickedSite::Npc { slot } => {
             bot.op_npc_u(*slot, job.input, u16::from(use_slot), use_com)?;
@@ -230,7 +239,7 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
         ProduceUi::Direct => Ok(()),
         ProduceUi::Choice { pick } => {
             if !answer_choice(bot, pick)? {
-                return Err(ScriptError::Usage(format!("choice {pick:?} never answered at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("choice {pick:?} never answered at {:?}", bot.position())));
             }
             Ok(())
         }
@@ -245,6 +254,30 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
             }
             Ok(())
         }
+        ProduceUi::Multi { menu, button, .. } => {
+            let root = (bot.tables.com_id)(menu).ok_or_else(|| ScriptError::Usage(format!("{menu} missing from component table")))?;
+            let press = (bot.tables.com_id)(button).ok_or_else(|| ScriptError::Usage(format!("{button} missing from component table")))?;
+            // The live modal, not the chat history (it keeps the last 8).
+            let menu_open = |bot: &Bot| bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "chat" && modal.interface_id == root);
+            let target = bot.world.ticks + UI_TICKS;
+            while bot.world.ticks < target && !menu_open(bot) {
+                bot.pump(2)?;
+            }
+            if !menu_open(bot) {
+                return Err(ScriptError::Failed(format!("make menu {menu:?} never opened at {:?}", bot.position())));
+            }
+            // `if_addresumebutton` components are plain buttons: the
+            // client sends IF_BUTTON, the server records `last_com` and
+            // resumes the paused script (IfButtonHandler.ts:
+            // resumeButtons). RESUME_PAUSEBUTTON carries no com there.
+            bot.if_button(press)?;
+            bot.pump(5)?;
+            if bot.world.count_dialog {
+                bot.resume_pcount(count_answer(have, remaining))?;
+                bot.pump(5)?;
+            }
+            Ok(())
+        }
         ProduceUi::Grid { button } => {
             let com = grid_button(bot, button)?;
             let target = bot.world.ticks + UI_TICKS;
@@ -252,7 +285,7 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
                 bot.pump(2)?;
             }
             if bot.world.modal.is_none() {
-                return Err(ScriptError::Usage(format!("grid {button:?} never opened at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("grid {button:?} never opened at {:?}", bot.position())));
             }
             bot.if_button(com)?;
             bot.pump(10)?;
@@ -287,7 +320,7 @@ fn died(bot: &Bot, seen: &mut usize) -> bool {
 /// the server refuses reads as `NextStand` while nothing was consumed
 /// there, so the caller moves on instead of failing the job.
 fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u32, made_before: u32) -> Result<SiteDone, ScriptError> {
-    let single_shot = matches!(job.spec.ui, ProduceUi::Count | ProduceUi::Grid { .. });
+    let single_shot = matches!(job.spec.ui, ProduceUi::Count | ProduceUi::Grid { .. } | ProduceUi::Multi { .. });
     let mut consumed = 0u32;
     let mut seen_death = bot.world.messages.len();
     let mut retries = 0u32;
@@ -296,7 +329,7 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
         if died(bot, &mut seen_death) {
             let mut hp = hitpoints(bot);
             death_resume(bot, 40, &mut hp, &mut seen_death)?;
-            return Err(ScriptError::Usage(format!("died {} at {:?}", job.spec.verb, bot.position())));
+            return Err(ScriptError::Failed(format!("died {} at {:?}", job.spec.verb, bot.position())));
         }
         if bot.world.modal.is_some() && matches!(job.spec.ui, ProduceUi::Direct) && !dismiss_modal(bot)? {
             break;
@@ -341,7 +374,7 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
                 }
             }
             Drain::PumpFailed => {
-                return Err(ScriptError::Usage(format!("{} pump failed at {:?}", job.spec.verb, bot.position())));
+                return Err(ScriptError::Failed(format!("{} pump failed at {:?}", job.spec.verb, bot.position())));
             }
         }
     }
@@ -422,7 +455,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
                 }
             }
             let Some((x, z, _, loc)) = picked else {
-                return Err(ScriptError::Usage(format!("no produce station {names:?} near {:?}", job.near)));
+                return Err(ScriptError::Failed(format!("no produce station {names:?} near {:?}", job.near)));
             };
             work_loc(bot, job, x, z, loc)?
         }
@@ -436,7 +469,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
                 }
             }
             let Some(slot) = slot else {
-                return Err(ScriptError::Usage(format!("no produce NPC {names:?} near {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("no produce NPC {names:?} near {:?}", bot.position())));
             };
             bot.approach_npc(slot, 15000)?;
             match work_site(bot, job, &ClickedSite::Npc { slot }, target, made_before)? {
@@ -446,7 +479,7 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
         }
     };
     if batch.consumed == 0 {
-        return Err(ScriptError::Usage(format!("{} consumed nothing at {:?}", job.spec.verb, bot.position())));
+        return Err(ScriptError::Failed(format!("{} consumed nothing at {:?}", job.spec.verb, bot.position())));
     }
     bot.log(&format!("ok {} consumed {}, made {}", job.spec.verb, batch.consumed, batch.made));
     Ok(batch)

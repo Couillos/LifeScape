@@ -1,17 +1,28 @@
-//! Brain report folding (split from brain.rs, same behavior): pushed
-//! task reports replan the graph; launching stays in brain.rs. A
-//! travel failure bans the proven-unreachable method instead of
-//! re-locking it (dispatch aveugle : jamais de marche impossible).
+//! Brain report folding: one pushed task report moves one node through
+//! `lifescape_planner::lifecycle` (the only place that changes statuses),
+//! then the graph is normalized and saved. Launching stays in brain.rs.
+//!
+//! Classification reads the report's own typed `error` (never a
+//! session-wide `last_error` that may belong to an older run):
+//! - `Usage` (bad CLI, dispatch the script can never serve): abandoned at
+//!   once, the same launch would fail the same way;
+//! - `Failed`/`Sdk`/`exit`, death, lost stock: counted, retried with a
+//!   fresh resolve until `MAX_FAILURES`, then abandoned;
+//! - travel failure: the unreachable method is banned (never relaunched
+//!   as is) and the failure counted;
+//! - `blocked` with a typed `missing`: one obtain sub-task per item,
+//!   reused when already open, bounded by `MAX_BLOCKS`;
+//! - `stopped` (operator unload, daemon restart): back to ready, uncounted.
 
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_planner::{needs_replan, replan_node};
+use lifescape_planner::{normalize, record_block, record_contract_error, record_failure, replan_node, FailureFold, NodeKind, NodeStatus, ReplanCause};
 
 use crate::brain::{load_life, push_history, save_life};
-use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, is_usage_error, rescue_replan_cause, TravelFold};
+use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, rescue_replan_cause, TravelFold};
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
 
@@ -26,6 +37,21 @@ fn reach_level(report: &Value, skill: &str) -> Option<u8> {
         .map(|level| level.clamp(1, 99) as u8)
 }
 
+/// Combat level from the report's `levels_after` (XP-max formula).
+fn reach_combat(report: &Value) -> Option<u8> {
+    let rows = report.get("levels_after").as_arr()?;
+    let stat = |id: i64| rows.iter().find(|row| row.get("stat").as_i64() == Some(id)).and_then(|row| row.get("level").as_i64()).unwrap_or(1).clamp(1, 99) as u8;
+    Some(lifescape_planner::combat_level(&lifescape_planner::BaseLevels {
+        attack: stat(0),
+        defence: stat(1),
+        strength: stat(2),
+        hitpoints: stat(3).max(10),
+        ranged: stat(4),
+        prayer: stat(5),
+        magic: stat(6),
+    }))
+}
+
 fn report_missing(report: &Value) -> Vec<String> {
     report
         .get("missing")
@@ -34,210 +60,236 @@ fn report_missing(report: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn fail_count(life: &lifescape_planner::Life, node: &str) -> usize {
-    life.history.iter().filter(|entry| entry.node == node && entry.outcome == "failed").count()
+/// Typed error carried by the report: (`type`, `message`).
+pub(crate) fn report_error(report: &Value) -> Option<(String, String)> {
+    let error = report.get("error");
+    let kind = error.get("type").as_str()?.to_string();
+    Some((kind, error.get("message").as_str().unwrap_or("").to_string()))
+}
+
+/// What one report does to its node (pure decision, applied by
+/// `handle_report`; unit-tested without a daemon).
+#[derive(Debug, PartialEq)]
+pub(crate) enum Verdict {
+    /// Goal reached: the node is done.
+    Done,
+    /// Market order placed but not filled yet: keep waiting (bounded).
+    AwaitFill,
+    /// Engagement window spent: money closes, levels continue.
+    EngagementEnd,
+    /// Operator stop or daemon restart: retry later, uncounted.
+    Stopped,
+    /// Typed missing requirements: sub-tasks.
+    Blocked(Vec<String>),
+    /// Contract error: abandon now.
+    Contract(String),
+    /// Unreachable method: ban it, count the failure.
+    Travel(String),
+    /// Runtime failure: count it.
+    Failure(String),
+}
+
+/// Decide from the stop, the typed error, missing items, and what the
+/// goal check says (`goal_met`, `market_pending`).
+pub(crate) fn verdict(stop: &str, error: Option<(String, String)>, missing: &[String], goal_met: bool, market_pending: bool) -> Verdict {
+    let text = error.as_ref().map(|(kind, message)| format!("{kind}: {message}")).unwrap_or_default();
+    match stop {
+        "goal_reached" if goal_met => Verdict::Done,
+        "goal_reached" if market_pending => Verdict::AwaitFill,
+        "goal_reached" => Verdict::Failure("goal_reached but the goal check is short (method ended without the items/level)".to_string()),
+        // A window can end exactly when the goal lands (level reached,
+        // stock farmed): that is a success, not one more window.
+        "budget_exhausted" if goal_met => Verdict::Done,
+        "budget_exhausted" => Verdict::EngagementEnd,
+        "stopped" => Verdict::Stopped,
+        "blocked" if !missing.is_empty() => Verdict::Blocked(missing.to_vec()),
+        "blocked" => Verdict::Failure(format!("blocked without a typed missing item ({text})")),
+        _ => match error {
+            Some((kind, _)) if kind == "Usage" => Verdict::Contract(text),
+            Some((_, message)) if is_travel_failure(&lifescape_json::object(vec![("message", lifescape_json::str_value(&message))])) => Verdict::Travel(text),
+            Some(_) => Verdict::Failure(text),
+            None if missing.iter().any(|need| need.contains("died") || need.contains("death")) => Verdict::Failure("died".to_string()),
+            None => Verdict::Failure(format!("stop {stop} without a typed error")),
+        },
+    }
 }
 
 /// Fold one pushed report into the graph; launches nothing (the launch
-/// pass below runs right after, same tick).
+/// pass runs right after, same brain tick).
 pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
+    let _ = orch;
     let account = job.account.clone();
     let Some(mut life) = load_life(&account) else { return };
     let node_id = report.get("node_id").as_str().unwrap_or("").to_string();
     if node_id.is_empty() {
         return;
     }
-    let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else { return };
+    let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else {
+        crate::logln!("brain {account}: report for unknown node {node_id}, ignored");
+        return;
+    };
+    if life.nodes[index].status != NodeStatus::Active {
+        // A late report for a node the graph already moved (crash
+        // recovery counted it, operator reset): never fold twice.
+        crate::logln!("brain {account}: report for {node_id} which is {}, ignored", life.nodes[index].status.as_str());
+        return;
+    }
     let stop = report.get("stop").as_str().unwrap_or("").to_string();
     let missing = report_missing(report);
     let ticks = report.get("ticks").as_i64().unwrap_or(0).max(0) as u64;
-    let died = missing.iter().any(|need| need.contains("died") || need.contains("death"));
-    let stock_lost = stop == "failed" && missing.iter().any(|need| need.contains("lost"));
-    // Price drift: the market moved >25% on a locked buy since resolve.
-    let price_drift = false;
-    // P1.6: a typed `RescueBudget` in last_error replans like a failure
-    // even with no task report detail; consumed here (dossier on disk).
-    // A travel failure also reads here (typed NoRoute vocabulary), and
-    // bans the method below instead of re-locking it.
-    let (rescue, travel, usage): (Option<lifescape_planner::ReplanCause>, bool, bool) = job
-        .inner
-        .try_lock()
-        .map(|inner| {
-            let cause = inner.last_error.as_ref().and_then(rescue_replan_cause);
-            let travel = inner.last_error.as_ref().is_some_and(is_travel_failure);
-            let usage = inner.last_error.as_ref().is_some_and(is_usage_error);
-            (cause, travel, usage)
-        })
-        .unwrap_or((None, false, false));
     life.nodes[index].spent_ticks = life.nodes[index].spent_ticks.saturating_add(ticks);
+    // A rescue that ran out of budget mid-script is typed in the
+    // session's last_error only (P1.6): read it when the report carries
+    // no error of its own.
+    let mut error = report_error(report);
+    if error.is_none() && stop == "failed" {
+        let rescue = job.inner.try_lock().ok().and_then(|inner| inner.last_error.as_ref().and_then(rescue_replan_cause));
+        if rescue.is_some() {
+            error = Some(("RescueBudget".to_string(), "random event rescue ran out of budget".to_string()));
+        }
+    }
     let kind = life.nodes[index].kind.clone();
-    match stop.as_str() {
-        "goal_reached" => {
-            let done = match &kind {
-                lifescape_planner::NodeKind::ReachLevel { skill, level } => {
-                    if let Some(reached) = reach_level(report, skill) {
-                        life.nodes[index].progress_current = i64::from(reached);
-                        reached >= *level
-                    } else {
-                        life.nodes[index].progress_current = life.nodes[index].progress_target;
-                        true
-                    }
-                }
-                lifescape_planner::NodeKind::ObtainItems { item, count } => {
-                    // Market buys settle later: a placed order is not a
-                    // filled one. Shop buys settle now: a shortfall means
-                    // the leg failed (broke or unstocked), never a wait.
-                    let held = holdings_count(job, item);
-                    life.nodes[index].progress_current = held;
-                    held >= *count
-                }
-                _ => {
-                    life.nodes[index].progress_current = life.nodes[index].progress_target;
-                    true
-                }
-            };
-            if done {
-                life.nodes[index].status = lifescape_planner::NodeStatus::Done;
-                if life.active.as_deref() == Some(life.nodes[index].id.as_str()) {
-                    life.active = None;
-                }
-                if life.engagement.as_ref().is_some_and(|engaged| engaged.node == life.nodes[index].id) {
-                    life.engagement = None;
-                }
-                let id = life.nodes[index].id.clone();
-                push_history(&mut life, &id, "goal_reached");
-            } else if matches!(&kind, lifescape_planner::NodeKind::ObtainItems { .. })
-                && life.nodes[index].method.as_deref() != Some("market:buy")
-            {
-                // Instant leg, still short: the method failed, not the
-                // market. Replan (bounded by the 3-strike rule) instead
-                // of waiting for a fill that never comes on its own.
-                let id = life.nodes[index].id.clone();
-                life.nodes[index].status = lifescape_planner::NodeStatus::Ready;
-                life.nodes[index].method = None;
-                if life.active.as_deref() == Some(id.as_str()) {
-                    life.active = None;
-                }
-                if fail_count(&life, &id) >= 2 {
-                    life.nodes[index].status = lifescape_planner::NodeStatus::Abandoned;
-                    push_history(&mut life, &id, "abandoned");
-                } else {
-                    push_history(&mut life, &id, "failed");
-                }
-            } else {
-                // Placed but unfilled: wait for stock, keep the method.
-                life.nodes[index].status = lifescape_planner::NodeStatus::Active;
+    let method = life.nodes[index].method.clone().unwrap_or_default();
+    let (goal_met, market_pending) = match &kind {
+        NodeKind::ReachLevel { skill, level } => match reach_level(report, skill) {
+            Some(reached) => {
+                life.nodes[index].progress_current = i64::from(reached);
+                (reached >= *level, false)
             }
+            None => (true, false),
+        },
+        NodeKind::ObtainItems { item, count } => {
+            let held = holdings_count(job, item);
+            life.nodes[index].progress_current = held;
+            (held >= *count, method == "market:buy")
         }
-        other => {
-            // `blocked` without a typed `missing` is a script bug, not a
-            // shopping list: count it as a failure so the 3-strike rule
-            // bounds the replan-relaunch loop instead of spinning it.
-            let effective = if other == "blocked" && missing.is_empty() { "failed" } else { other };
-            // Contrat cassé (`usage: ...`) : replanifier à l'identique ne
-            // guérira jamais (même méthode → même Usage). Abandon typé
-            // immédiat, jamais de relance en boucle.
-            if usage && effective == "failed" {
-                let id = life.nodes[index].id.clone();
-                let method = life.nodes[index].method.clone().unwrap_or_else(|| "?".to_string());
-                job.inner.try_lock().map(|mut inner| inner.last_error = None).ok();
-                life.nodes[index].status = lifescape_planner::NodeStatus::Abandoned;
-                if life.active.as_deref() == Some(id.as_str()) {
-                    life.active = None;
-                }
+        // A coin target is met by the wallet, whatever the method sold.
+        NodeKind::HaveCoins { amount } => {
+            let held = holdings_count(job, "coins");
+            life.nodes[index].progress_current = held;
+            (held >= *amount, false)
+        }
+        // A training node is done when the combat level is reached, not
+        // when one window ends (the dependent re-picks its site then).
+        NodeKind::ReachCombat { level } => match reach_combat(report) {
+            Some(reached) => {
+                life.nodes[index].progress_current = i64::from(reached);
+                (reached >= *level, false)
+            }
+            None => (false, false),
+        },
+        _ => (true, false),
+    };
+    let decision = verdict(&stop, error, &missing, goal_met, market_pending);
+    let id = life.nodes[index].id.clone();
+    match &decision {
+        Verdict::Done => {
+            // D-B: whichever leg landed first, the other one closes.
+            if let NodeKind::ObtainItems { item, .. } = &kind {
+                crate::brain_market::cancel_open_buys(&account, item);
+            }
+            life.nodes[index].status = NodeStatus::Done;
+            life.nodes[index].progress_current = life.nodes[index].progress_target.max(life.nodes[index].progress_current);
+            life.active = None;
+            if life.engagement.as_ref().is_some_and(|engaged| engaged.node == id) {
+                life.engagement = None;
+            }
+            push_history(&mut life, &id, "goal_reached");
+        }
+        Verdict::AwaitFill => {
+            // Stays active (the lock holds) until the holdings check in
+            // the launch pass closes it or its deadline fails it.
+            push_history(&mut life, &id, "awaiting_fill");
+        }
+        Verdict::EngagementEnd => {
+            let mut counter = 0;
+            replan_node(&mut life.nodes[index], &ReplanCause::EngagementEnd, &[], &mut counter);
+            life.active = None;
+            push_history(&mut life, &id, "engagement_end");
+        }
+        Verdict::Stopped => {
+            life.nodes[index].status = NodeStatus::Ready;
+            life.nodes[index].method = None;
+            life.active = None;
+            push_history(&mut life, &id, "stopped");
+        }
+        Verdict::Blocked(needs) => {
+            let fold = record_block(&mut life, index, needs);
+            push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "blocked" });
+        }
+        Verdict::Contract(text) => {
+            record_contract_error(&mut life, index, text);
+            push_history(&mut life, &id, "abandoned");
+        }
+        Verdict::Travel(text) => {
+            let banned = matches!(fold_travel_failure(&mut life.nodes[index], &method), TravelFold::NoRoute(_));
+            if banned {
+                record_contract_error(&mut life, index, &format!("no reachable method left ({text})"));
                 push_history(&mut life, &id, "abandoned");
-                println!("brain {}: {id} usage error for {method}, abandoning (contract, never retries)", job.account);
-                if save_life(&life).is_err() {
-                    println!("brain {}: life save failed, report dropped", job.account);
-                    return;
-                }
-                println!("brain {}: folded report node={} stop={}", job.account, node_id, report.get("stop").as_str().unwrap_or("?"));
-                let _ = orch;
-                return;
-            }
-            // Voyage prouvé impossible : la méthode bannie ne repart
-            // jamais telle quelle (replan sur l'alternative suivante,
-            // abandon typé quand il n'en reste aucune).
-            if travel && effective == "failed" {
-                if let Some(locked) = life.nodes[index].method.clone() {
-                    job.inner.try_lock().map(|mut inner| inner.last_error = None).ok();
-                    match fold_travel_failure(&mut life.nodes[index], &locked) {
-                        TravelFold::Retry => {
-                            let id = life.nodes[index].id.clone();
-                            life.nodes[index].status = lifescape_planner::NodeStatus::Ready;
-                            if life.active.as_deref() == Some(id.as_str()) {
-                                life.active = None;
-                            }
-                            push_history(&mut life, &id, "failed");
-                            println!("brain {}: {id} no route for {locked}, retrying next alternative", job.account);
-                        }
-                        TravelFold::NoRoute(banned) => {
-                            let id = life.nodes[index].id.clone();
-                            life.nodes[index].status = lifescape_planner::NodeStatus::Abandoned;
-                            if life.active.as_deref() == Some(id.as_str()) {
-                                life.active = None;
-                            }
-                            push_history(&mut life, &id, "abandoned");
-                            println!("brain {}: {id} no route for {banned}, abandoning (typed, no alternative)", job.account);
-                        }
-                    }
-                    if save_life(&life).is_err() {
-                        println!("brain {}: life save failed, report dropped", job.account);
-                        return;
-                    }
-                    println!("brain {}: folded report node={} stop={}", job.account, node_id, report.get("stop").as_str().unwrap_or("?"));
-                    let _ = orch;
-                    return;
-                }
-            }
-            if let Some(cause) = rescue.or_else(|| needs_replan(effective, &missing, died, stock_lost, price_drift)) {
-                if fail_count(&life, &life.nodes[index].id) >= 3 && effective == "failed" {
-                    let id = life.nodes[index].id.clone();
-                    life.nodes[index].status = lifescape_planner::NodeStatus::Abandoned;
-                    life.active = None;
-                    push_history(&mut life, &id, "abandoned");
-                } else {
-                    let id = life.nodes[index].id.clone();
-                    let mut counter = life.nodes.len();
-                    // Unique ids across growth: bump past every n<k>.
-                    for node in &life.nodes {
-                        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
-                            counter = counter.max(number);
-                        }
-                    }
-                    let fresh = {
-                        let node = &mut life.nodes[index];
-                        replan_node(node, &cause, &missing, &mut counter)
-                    };
-                    if effective == "failed" {
-                        push_history(&mut life, &id, "failed");
-                    }
-                    if matches!(cause, lifescape_planner::ReplanCause::EngagementEnd)
-                        && life.nodes[index].status == lifescape_planner::NodeStatus::Done
-                    {
-                        push_history(&mut life, &id, "engagement_end");
-                    }
-                    life.nodes.extend(fresh);
-                    // A replanned node leaves Active: the launch pass may
-                    // pick it up again, never strand on the old lock.
-                    if life.nodes[index].status != lifescape_planner::NodeStatus::Done
-                        && life.active.as_deref() == Some(id.as_str())
-                    {
-                        life.active = None;
-                    }
-                }
+            } else {
+                let fold = record_failure(&mut life, index, text);
+                push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "failed" });
             }
         }
+        Verdict::Failure(text) => {
+            let fold = record_failure(&mut life, index, text);
+            push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "failed" });
+        }
+    }
+    let node = &life.nodes[index];
+    crate::logln!(
+        "brain {account}: {id} {:?} -> {} (failures {}/{} blocks {}) {}",
+        decision,
+        node.status.as_str(),
+        node.failures,
+        lifescape_planner::MAX_FAILURES,
+        node.blocks,
+        node.last_error
+    );
+    for change in normalize(&mut life) {
+        crate::logln!("brain {account}: normalize {change}");
     }
     if save_life(&life).is_err() {
-        println!("brain {}: life save failed, report dropped", job.account);
-        return;
+        crate::logln!("brain {account}: life save failed, report dropped");
     }
-    println!(
-        "brain {}: folded report node={} stop={}",
-        job.account,
-        node_id,
-        report.get("stop").as_str().unwrap_or("?")
-    );
-    let _ = orch;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{verdict, Verdict};
+
+    fn typed(kind: &str, message: &str) -> Option<(String, String)> {
+        Some((kind.to_string(), message.to_string()))
+    }
+
+    /// t14/t20: the fishing run failed with `failed: fish failed at …`
+    /// (runtime) — counted, never abandoned at the first try; a real
+    /// `Usage` (CLI refused) abandons.
+    #[test]
+    fn runtime_failures_count_and_usage_abandons() {
+        assert_eq!(
+            verdict("failed", typed("Failed", "fish failed at (0, 3086, 3227)"), &[], false, false),
+            Verdict::Failure("Failed: fish failed at (0, 3086, 3227)".to_string())
+        );
+        assert!(matches!(verdict("failed", typed("Usage", "fishing [count|spot...]"), &[], false, false), Verdict::Contract(_)));
+        assert!(matches!(verdict("failed", typed("Sdk", "sdk: travel failure NoRoute seg=None"), &[], false, false), Verdict::Travel(_)));
+        assert!(matches!(verdict("failed", None, &["died at (0,1,2)".to_string()], false, false), Verdict::Failure(text) if text == "died"));
+        assert!(matches!(verdict("failed", None, &[], false, false), Verdict::Failure(_)), "an untyped failure still counts");
+    }
+
+    #[test]
+    fn success_waits_and_stops() {
+        assert_eq!(verdict("goal_reached", None, &[], true, false), Verdict::Done);
+        assert_eq!(verdict("goal_reached", None, &[], false, true), Verdict::AwaitFill, "placed market order");
+        assert!(matches!(verdict("goal_reached", None, &[], false, false), Verdict::Failure(_)), "short instant leg");
+        assert_eq!(verdict("budget_exhausted", None, &[], false, false), Verdict::EngagementEnd);
+        assert_eq!(verdict("budget_exhausted", None, &[], true, false), Verdict::Done, "goal landed with the window");
+        assert_eq!(verdict("stopped", None, &[], false, false), Verdict::Stopped);
+        assert_eq!(verdict("blocked", typed("Blocked", "x"), &["small_fishing_net".to_string()], false, false), Verdict::Blocked(vec!["small_fishing_net".to_string()]));
+        assert!(matches!(verdict("blocked", None, &[], false, false), Verdict::Failure(_)), "blocked without missing counts");
+    }
+}
+
+#[cfg(test)]
+#[path = "brain_sim_tests.rs"]
+mod sim;

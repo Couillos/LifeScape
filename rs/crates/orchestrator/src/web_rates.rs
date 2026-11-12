@@ -67,7 +67,7 @@ mod tests {
         assert!((row.get("profit_per_6000").as_f64().unwrap_or(0.0) - -200.0).abs() < 0.001);
         assert_eq!(row.get("deals_settled").as_i64(), Some(1));
         assert!((row.get("fill_rate").as_f64().unwrap_or(0.0) - 1.0).abs() < 0.001);
-        assert_eq!(row.get("stock_value").as_i64(), Some(300));
+        assert_eq!(row.get("stock_value").as_i64(), Some(100), "100 untraded feathers at 1 coin");
         Ok(())
     }
 

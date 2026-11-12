@@ -120,7 +120,7 @@ fn supervise_all() {
                         contended_since.entry(job.account.clone()).or_insert(now);
                         if should_log_contended(hits) {
                             let age = now - contended_since.get(&job.account).copied().unwrap_or(now);
-                            println!(
+                            crate::logln!(
                                 "brain {}: inner contended x{hits} at registry-retain (~{:.0}s), telemetry stalled; watchdog restarts the worker if it fires",
                                 job.account, age
                             );
@@ -165,12 +165,12 @@ fn supervise_all() {
             let after_once = crate::jobs::now_secs();
             let elapsed = after_once - pass_start;
             if elapsed > 10.0 {
-                println!("brain {}: supervise_once took {:.0}s", job.account, elapsed);
+                crate::logln!("brain {}: supervise_once took {:.0}s", job.account, elapsed);
             }
             let wait = backoff_secs(elapsed);
             if wait > 0.0 {
                 backed_off.insert(job.account.clone(), after_once + wait);
-                println!("brain {}: backing off {:.0}s after a {:.0}s pass", job.account, wait, elapsed);
+                crate::logln!("brain {}: backing off {:.0}s after a {:.0}s pass", job.account, wait, elapsed);
             }
             let watchdog = watchdogs.entry(job.account.clone()).or_insert_with(Watchdog::new);
             orch.watchdog_tick(job, watchdog);
@@ -196,7 +196,7 @@ fn supervise_all() {
                     contended_since.entry(job.account.clone()).or_insert(at);
                     if should_log_contended(hits) {
                         let age = at - contended_since.get(&job.account).copied().unwrap_or(at);
-                        println!(
+                        crate::logln!(
                             "brain {}: inner contended x{hits} at report-drain (~{:.0}s, {:.0}s/pass), job telemetry stalled; watchdog restarts the worker if it fires",
                             job.account, age, hits as f64 / 2.0
                         );
@@ -371,7 +371,7 @@ impl Orchestrator {
             ),
             ("at", Value::Arr(vec![])),
         ]));
-        println!("job {}: worker died", job.account);
+        crate::logln!("job {}: worker died", job.account);
         drop(inner);
         self.write_state(job);
     }

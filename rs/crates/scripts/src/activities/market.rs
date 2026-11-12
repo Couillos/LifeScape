@@ -31,23 +31,56 @@ pub(super) fn tradeable_id(name: &str) -> Result<u16, ScriptError> {
     Ok(entry.obj_id as u16)
 }
 
+/// Opening price of an unpriced order (PRD3 lot 2). A buyer takes the
+/// best ask when its ceiling covers it, else opens at the reference
+/// (never above the ceiling); a seller asks 10% over the reference, or
+/// the best bid when a buyer already pays more.
+pub(crate) fn opening_price(buying: bool, reference: i64, bid: Option<i64>, ask: Option<i64>, ceiling: Option<i64>) -> i64 {
+    let reference = reference.max(1);
+    if buying {
+        let cap = ceiling.unwrap_or(reference).max(1);
+        match ask {
+            Some(best) if best <= cap => best,
+            _ => reference.min(cap),
+        }
+    } else {
+        let asking = reference + (reference / 10).max(if reference > 1 { 1 } else { 0 });
+        asking.max(bid.unwrap_or(0)).max(1)
+    }
+}
+
 fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
+    const USAGE: &str = "market sell|buy <item> <qty> [price] [--ceiling N] [--floor N]";
     if args.len() < 3 {
-        return Err(ScriptError::Usage("market sell|buy <item> <qty> [price]".to_string()));
+        return Err(ScriptError::Usage(USAGE.to_string()));
     }
     let item = tradeable_id(&args[1])?;
     let qty: i64 = args[2].parse().map_err(|_| ScriptError::Usage("qty must be a number".to_string()))?;
     // Positional price only: brain flags (--node, --budget-*) ride
     // along for the session report and must not parse as a price.
     let mut price: Option<i64> = None;
+    let mut ceiling: Option<i64> = None;
+    let mut floor: Option<i64> = None;
     let mut index = 3;
     while index < args.len() {
         match args[index].as_str() {
             "--node" | "--budget-min" | "--budget-max" => {
                 index += 2;
             }
+            "--ceiling" | "--floor" => {
+                let value: i64 = args
+                    .get(index + 1)
+                    .and_then(|text| text.parse().ok())
+                    .ok_or_else(|| ScriptError::Usage(USAGE.to_string()))?;
+                if args[index] == "--ceiling" {
+                    ceiling = Some(value.max(1));
+                } else {
+                    floor = Some(value.max(1));
+                }
+                index += 2;
+            }
             other if other.starts_with("--") => {
-                return Err(ScriptError::Usage("market sell|buy <item> <qty> [price]".to_string()));
+                return Err(ScriptError::Usage(USAGE.to_string()));
             }
             text => {
                 price = Some(text.parse().map_err(|_| ScriptError::Usage("price must be a number".to_string()))?);
@@ -55,31 +88,42 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
             }
         }
     }
-    let price = match price {
-        Some(price) => price,
-        None => {
-            let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
-            quote.get("reference").as_i64().unwrap_or(1)
-        }
-    };
-    let reply = market_call(
-        "place",
-        vec![
-            ("account", str_value(&bot.username)),
-            ("side", str_value(if buying { "buy" } else { "sell" })),
-            ("item", Value::Int(i64::from(item))),
-            ("qty", Value::Int(qty)),
-            ("price", Value::Int(price)),
-        ],
-    )?;
+    let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
+    let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
+    let price = price.unwrap_or_else(|| opening_price(buying, reference, quote.get("bid").as_i64(), quote.get("ask").as_i64(), ceiling));
+    // Sellers walk down to a floor: half a traded reference by default,
+    // 1 coin for a never-traded object (the buyers set its price).
+    if !buying && floor.is_none() {
+        floor = Some(if quote.get("traded").as_bool() == Some(true) { (reference / 2).max(1) } else { 1 });
+    }
+    let mut params = vec![
+        ("account", str_value(&bot.username)),
+        ("side", str_value(if buying { "buy" } else { "sell" })),
+        ("item", Value::Int(i64::from(item))),
+        ("qty", Value::Int(qty)),
+        ("price", Value::Int(price)),
+    ];
+    if let Some(cap) = ceiling.filter(|_| buying) {
+        params.push(("ceiling", Value::Int(cap.max(price))));
+    }
+    if let Some(reserve) = floor.filter(|_| !buying) {
+        params.push(("floor", Value::Int(reserve.min(price))));
+    }
+    let reply = market_call("place", params)?;
     if reply.get("ok").as_bool() != Some(true) {
         bot.log(&format!("place refused: {}", reply.get("error").as_str().unwrap_or("?")));
         return Ok(1);
     }
-    bot.log(&format!("placed {} order {} for {qty} x{} @ {price}", if buying { "buy" } else { "sell" }, reply.get("order").as_i64().unwrap_or(-1), args[1]));
+    bot.log(&format!(
+        "placed {} order {} for {qty} x{} @ {price} (ceiling {:?}, floor {:?})",
+        if buying { "buy" } else { "sell" },
+        reply.get("order").as_i64().unwrap_or(-1),
+        args[1],
+        ceiling,
+        floor
+    ));
     Ok(0)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -96,6 +140,18 @@ mod tests {
         let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
         crate::tables_live::attach_live_tables(&mut bot);
         assert!(place_side(&mut bot, &botched, true).is_err(), "unknown flags fail loud");
+    }
+
+    #[test]
+    fn opening_prices_follow_the_book() {
+        use super::opening_price;
+        assert_eq!(opening_price(true, 1, None, None, Some(20)), 1, "untraded: bid opens at 1");
+        assert_eq!(opening_price(true, 1, None, Some(12), Some(20)), 12, "covered ask: take it");
+        assert_eq!(opening_price(true, 10, None, Some(30), Some(20)), 10, "ask above the ceiling: rest at the reference");
+        assert_eq!(opening_price(true, 50, None, None, Some(20)), 20, "never above the ceiling");
+        assert_eq!(opening_price(false, 100, None, None, None), 110, "ask 10% over");
+        assert_eq!(opening_price(false, 100, Some(130), None, None), 130, "a richer bid wins");
+        assert_eq!(opening_price(false, 1, None, None, None), 1, "untraded seller asks 1");
     }
 
     #[test]

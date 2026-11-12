@@ -1,5 +1,5 @@
 //! Build-time codegen for `drops.json`: flat array of `{npc, npc_id,
-//! obj, obj_id}` rows (see `gamedata/tools/dump_plan.mts`), kept in dump
+//! obj, obj_id, rate, qty_min, qty_max, exact}` rows (see `gamedata/tools/dump_plan.mts`), kept in dump
 //! order. Unknown ids render `-1`, like the other tables' fallbacks.
 
 /// Render `drops_generated.rs` from the parsed dump.
@@ -12,11 +12,15 @@ pub fn generate(manifest_dir: &str) {
     );
     for row in rows {
         generated.push_str(&format!(
-            "    super::StaticDrop {{ npc: \"{}\", npc_id: {}, obj: \"{}\", obj_id: {} }},\n",
+            "    super::StaticDrop {{ npc: \"{}\", npc_id: {}, obj: \"{}\", obj_id: {}, rate: {:?}, qty_min: {}, qty_max: {}, exact: {} }},\n",
             crate::escape_for_rust_literal(row.get("npc").as_str().unwrap_or("")),
             row.get("npc_id").as_i64().unwrap_or(-1),
             crate::escape_for_rust_literal(row.get("obj").as_str().unwrap_or("")),
             row.get("obj_id").as_i64().unwrap_or(-1),
+            row.get("rate").as_f64().unwrap_or(-1.0),
+            row.get("qty_min").as_i64().unwrap_or(-1),
+            row.get("qty_max").as_i64().unwrap_or(-1),
+            row.get("exact").as_bool().unwrap_or(false),
         ));
     }
     generated.push_str("];\n");

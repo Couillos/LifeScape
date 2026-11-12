@@ -57,3 +57,31 @@ chargement local : `route` (+ `--paid`, `--ascii`), `map`,
 run au démarrage au lieu de diverger. Référence moteur : goldens
 `rs/crates/nav/tests/` (`routes.txt`, `golden.rs`, `paid_only`,
 `one_way`, `abort`, `probe`) — le planificateur `plan` n'a pas changé.
+
+## Danger et destinations substituées (2026-11-12)
+
+- `NavOptions::danger` : carrés `(x, z, niveau, rayon)` où un PNJ agressif
+  attaquerait le bot. Chaque pas de marche dans un carré coûte
+  `DANGER_STEP_COST` (8) de plus : la route contourne quand un chemin
+  existe, traverse sinon (destination dangereuse comprise, jamais
+  d'interdiction ; un surcoût plus fort faisait exploser la recherche
+  vers une destination en zone). Calculés côté scripts
+  (`kit::danger::arm`, appelé par `check_events`) : `hunts_players`,
+  agressif selon la règle serveur (`Npc.ts` : passif seulement si
+  `combat > vislevel × 2`, jamais dans le Wilderness) ET létal
+  (`vislevel ≥ 5` ou `vislevel ≥ combat` : les gobelins niveau 2 ne
+  comptent pas pour un combat 3), rayon `huntrange + wanderrange + 1`, l'errance
+  venant des configs serveur (`gamedata/data/npc_ranges.json`, généré par
+  `orchestrator dump-npc-ranges` ; gardes de la prison 11, mages 3, défaut
+  moteur 5), spawns à moins de 250 cases. Mêmes carrés pour le choix de
+  spot. Golden : `nav/tests/danger.rs` (Lumbridge → banque de Draynor :
+  43 cases sous les gardes → 0, pour 12 pas de plus).
+- Destination substituée lointaine : un plan dont `adjusted_dest` est à
+  plus de 4 cases (Chebyshev) de la cible, ou sur un autre niveau, est un
+  `NoRoute` côté SDK (`plan_travel`), rien n'est marché (avant : un spot
+  derrière le péage devenait un coin du marais où le bot restait).
+- Limite connue : `walk_costs` renvoie `None` pour une case bloquée
+  (arbre, eau) et un lot contenant une cible inatteignable épuise la
+  recherche ; les pickers ne peuvent donc pas encore vérifier
+  l'atteignabilité d'un spot avant de le choisir (à faire côté nav :
+  coût vers la case d'appui la plus proche, recherche bornée).

@@ -130,7 +130,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
     }
     // Already dead (respawn pending): no point walking a corpse.
     if hitpoints(bot) == 0 {
-        return Err(ScriptError::Usage(format!(
+        return Err(ScriptError::Failed(format!(
             "died walking to {dest_x},{dest_z} at {:?}",
             bot.position()
         )));
@@ -149,7 +149,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             return Ok(true);
         }
         if hitpoints(bot) == 0 {
-            return Err(ScriptError::Usage(format!(
+            return Err(ScriptError::Failed(format!(
                 "died walking to {dest_x},{dest_z} at {:?}",
                 bot.position()
             )));
@@ -186,7 +186,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
                 // re-gear and continue the job instead of mistaking a
                 // corpse for a limp.
                 if hitpoints(bot) == 0 {
-                    return Err(ScriptError::Usage(format!(
+                    return Err(ScriptError::Failed(format!(
                         "died walking to {dest_x},{dest_z} at {:?}",
                         bot.position()
                     )));

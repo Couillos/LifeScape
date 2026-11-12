@@ -38,7 +38,7 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
         request
     };
     if start.elapsed() > std::time::Duration::from_secs(2) {
-        println!("daemon: slow dispatch {:?}s", start.elapsed());
+        lifescape_orchestrator::logln!("daemon: slow dispatch {:?}s", start.elapsed());
     }
     let mut buf = json::stringify(&reply);
     buf.push('\n');
@@ -150,7 +150,11 @@ fn daemon_main() -> i32 {
             let inner = orch.clone();
             Arc::new(move |stream: UnixStream| serve_client(&inner, stream))
         };
-        lifescape_orchestrator::daemon_pool::serve_pooled(server, serve);
+        let keep_running: Arc<dyn Fn() -> bool + Send + Sync> = {
+            let inner = orch.clone();
+            Arc::new(move || inner.running.load(std::sync::atomic::Ordering::SeqCst))
+        };
+        lifescape_orchestrator::daemon_pool::serve_pooled(server, serve, keep_running);
     }
     let _ = std::fs::remove_file(paths::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());

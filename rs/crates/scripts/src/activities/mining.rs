@@ -4,13 +4,12 @@
 
 #![forbid(unsafe_code)]
 
-use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::bank::{bank_trip, nearest_bank};
 use crate::kit::pack::{obj_id, obj_price, pack_ids, pack_total};
-use crate::kit::shop::{buy_best_affordable, buy_stock, sell_for_target};
+use crate::kit::shop::{buy_best_affordable, buy_stock};
 use crate::kit::survival::{check_events, learn_level};
 use crate::{ScriptError, ScriptResult};
 
@@ -49,7 +48,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 bank_coins = bank_trip(bot, &bank, &keep, u32::MAX / 2)?;
             }
             if need_cross && pack_total(bot, coins) >= target && !crate::kit::bank::cross_toll_gate(bot)? {
-                return Err(ScriptError::Usage(format!("cannot cross toll gate at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("cannot cross toll gate at {:?}", bot.position())));
             }
             if pack_total(bot, coins) >= bronze_price && buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
                 bot.log("ok bootstrapped bronze pickaxe");
@@ -64,12 +63,11 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level)?;
         level = new_level;
         if !ok {
-            return Err(ScriptError::Usage(format!("mine failed at {:?}", step_bot.position())));
+            return Err(ScriptError::Failed(format!("mine failed at {:?}", step_bot.position())));
         }
+        // PRD3: ore is never sold to a shop; an upgrade is funded from
+        // banked coins (market sales), never from a general-store dump.
         let (cands, cheapest) = crate::kit::tools::cheapest_pickaxe_upgrade(step_bot, level);
-        if !cands.is_empty() {
-            sell_for_target(step_bot, &ore_ids_for(step_bot, &tiers), coins, cheapest as u32)?;
-        }
         let mut keep: Vec<u16> = crate::kit::tools::PICK_SPEC.known_ids(step_bot).into_iter().collect();
         keep.extend(task_keep.iter().copied());
         bank_coins = bank_trip(step_bot, &bank, &keep, cheapest as u32)?;
@@ -85,8 +83,4 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     });
     let _ = bank_coins;
     outcome
-}
-
-fn ore_ids_for(bot: &Bot, tiers: &[knowledge::rocks::RockTier]) -> Vec<u16> {
-    tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect()
 }

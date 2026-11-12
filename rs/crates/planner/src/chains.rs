@@ -75,7 +75,8 @@ const ESSENCE_STEPS: &[ChainStep] = &[
     ChainStep { method: "runecraft:airrune", skill: "runecraft", level: 1, ticks_each: 8.0, xp_each: 5.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "blankrune", takes_qty: 1.0, makes: "airrune", makes_qty: 1.0 },
 ];
 const WOOL_STEPS: &[ChainStep] = &[
-    ChainStep { method: "gather:sheep/wool", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 2.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "wool", makes_qty: 1.0 },
+    // shear_sheep.rs2 grants no XP at all (PRD3 lot 7: was 2.5).
+    ChainStep { method: "gather:sheep/wool", skill: "crafting", level: 1, ticks_each: 4.0, xp_each: 0.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "wool", makes_qty: 1.0 },
     ChainStep { method: "spin:ball_of_wool", skill: "crafting", level: 1, ticks_each: 3.0, xp_each: 2.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "wool", takes_qty: 1.0, makes: "ball_of_wool", makes_qty: 1.0 },
     ChainStep { method: "string:unstrung_gold_amulet", skill: "crafting", level: 1, ticks_each: 2.0, xp_each: 4.0, coin_each: 0.0, epoch: Epoch::P2, wilderness: false, takes: "ball_of_wool", takes_qty: 1.0, makes: "strung_gold_amulet", makes_qty: 1.0 },
 ];

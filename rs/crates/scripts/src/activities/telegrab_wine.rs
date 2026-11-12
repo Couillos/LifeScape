@@ -52,7 +52,7 @@ fn cast_telegrab(bot: &mut Bot, wine: u16) -> Result<(), ScriptError> {
     let ((tile, _), _) = ground
         .iter()
         .min_by_key(|((tile, _), _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs())
-        .ok_or_else(|| ScriptError::Usage(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())))?;
+        .ok_or_else(|| ScriptError::Failed(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())))?;
     cast_on_ground(bot, "telekinetic_grab", tile.0, tile.1, wine)?;
     for _ in 0..CAST_TICKS {
         bot.pump(1)?;
@@ -82,7 +82,7 @@ fn walk_to_stand(bot: &mut Bot) -> Result<(), ScriptError> {
             Err(_) => {}
         }
     }
-    Err(ScriptError::Usage(format!("no altar stand near ({x},{z}) from {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("no altar stand near ({x},{z}) from {:?}", bot.position())))
 }
 
 /// True when the wine is on the floor nearby.
@@ -129,7 +129,7 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     }
     if !wine_on_floor(bot, wine) {
-        return Err(ScriptError::Usage(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())));
+        return Err(ScriptError::Failed(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())));
     }
     bot.log(&format!("ok casting telegrab near {WINE_SPAWN:?} (magic={level})"));
     bot.intend("telegrabbing the wine of Zamorak");

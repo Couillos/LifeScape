@@ -93,6 +93,10 @@ pub struct ReportCtx {
     pub node_id: String,
     pub stop: String,
     pub missing: Vec<String>,
+    /// Typed cause of a non-success stop: (`Usage`|`Failed`|`Sdk`|
+    /// `Blocked`|`exit`, message). The brain classifies on this, never on
+    /// a session-wide `last_error` that may belong to an older run.
+    pub error: Option<(String, String)>,
 }
 
 /// One reported item flow, in display names.
@@ -116,6 +120,7 @@ pub struct TaskReport {
     pub items: Vec<FlowLine>,
     pub levels_before: Vec<(u8, u8)>,
     pub levels_after: Vec<(u8, u8)>,
+    pub error: Option<(String, String)>,
 }
 
 /// Run start snapshot: what the session needs to close the report at
@@ -141,9 +146,13 @@ pub fn task_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskSt
         "melee" => "melee",
         "cook" => "cook",
         "market" => return market_start_for(bot, args),
-        _ => return None,
+        _ => return node_start_for(bot, script, args),
     };
-    let spec = lifescape_scripts::kit::cycle::parse_cli(activity, args).ok()?;
+    // A CLI the cycle parser refuses still reports when the brain sent
+    // it (`--node`): the script fails `Usage` and the brain must see it.
+    let Ok(spec) = lifescape_scripts::kit::cycle::parse_cli(activity, args) else {
+        return node_start_for(bot, script, args);
+    };
     Some(TaskStart {
         script: script.to_string(),
         budget_max: spec.budget_max_ticks,
@@ -151,6 +160,15 @@ pub fn task_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskSt
         holdings: snapshot_holdings(bot),
         pause_ticks: bot.pause_ticks,
     })
+}
+
+/// Any script launched for a graph node (`--node ID`) reports its end,
+/// so no node is left without an outcome (tutorial, walkto, quests,
+/// equip...). No budget: those scripts end on their own.
+fn node_start_for(bot: &Bot, script: &str, args: &[String]) -> Option<TaskStart> {
+    let at = args.iter().position(|arg| arg == "--node")?;
+    let node_id = args.get(at + 1).filter(|id| !id.is_empty() && !id.starts_with("--"))?.clone();
+    Some(TaskStart { script: script.to_string(), budget_max: 0, node_id, holdings: snapshot_holdings(bot), pause_ticks: bot.pause_ticks })
 }
 
 /// Flip engagements are time-boxed orders; buy/sell/shopbuy legs carry
@@ -340,6 +358,7 @@ pub fn build_report(
         node_id: ctx.node_id.clone(),
         stop: ctx.stop.clone(),
         missing: ctx.missing.clone(),
+        error: ctx.error.clone(),
         ticks: after.tick.saturating_sub(before.tick),
         market_pause_ticks: after.pause_ticks.saturating_sub(before.pause_ticks),
         xp,
@@ -400,6 +419,13 @@ pub fn report_value(account: &str, report: &TaskReport) -> Value {
         ("items", Value::Arr(items)),
         ("levels_before", levels(&report.levels_before)),
         ("levels_after", levels(&report.levels_after)),
+        (
+            "error",
+            match &report.error {
+                Some((kind, message)) => object(vec![("type", str_value(kind)), ("message", str_value(message))]),
+                None => Value::Null,
+            },
+        ),
     ])
 }
 
@@ -438,7 +464,7 @@ mod tests {
     }
 
     fn ctx(activity: &str, stop: &str) -> ReportCtx {
-        ReportCtx { activity: activity.to_string(), node_id: "n9".to_string(), stop: stop.to_string(), missing: Vec::new() }
+        ReportCtx { activity: activity.to_string(), node_id: "n9".to_string(), stop: stop.to_string(), missing: Vec::new(), error: None }
     }
 
     /// Woodcut gains with WC XP land as produced; levels ride along.
@@ -547,6 +573,19 @@ mod tests {
         assert_eq!((start.budget_max, start.node_id.as_str()), (6000, "n9"));
         assert!(task_start_for(&bot, "quest_cook", &[]).is_none(), "quests stay on the minimal path");
         assert!(task_start_for(&bot, "woodcut", &["--frobnicate".to_string()]).is_none(), "junk CLI carries nothing");
+        // Brain launches always report, whatever the script or CLI.
+        let node = |script: &str, args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+            task_start_for(&bot, script, &args).map(|start| (start.script, start.budget_max, start.node_id))
+        };
+        assert_eq!(node("tutorial", &["--node", "n2"]), Some(("tutorial".to_string(), 0, "n2".to_string())));
+        assert_eq!(node("walkto", &["3222", "3218", "--node", "n4"]), Some(("walkto".to_string(), 0, "n4".to_string())));
+        assert_eq!(
+            node("fishing", &["--level", "fishing", "--node", "n1"]),
+            Some(("fishing".to_string(), 0, "n1".to_string())),
+            "a CLI the parser refuses still reports (the run fails Usage)"
+        );
+        assert_eq!(node("tutorial", &["--node"]), None, "a bare flag names no node");
         let cook = task_start_for(
             &bot,
             "cook",

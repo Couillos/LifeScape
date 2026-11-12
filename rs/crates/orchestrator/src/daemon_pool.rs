@@ -28,6 +28,7 @@ const STREAM_TIMEOUT: Duration = Duration::from_secs(30);
 pub fn serve_pooled(
     listener: UnixListener,
     serve_one: Arc<dyn Fn(UnixStream) + Send + Sync>,
+    keep_running: Arc<dyn Fn() -> bool + Send + Sync>,
 ) {
     let (sender, receiver) = mpsc::sync_channel::<UnixStream>(POOL_QUEUE);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -51,6 +52,11 @@ pub fn serve_pooled(
     let accepted = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let refused = Arc::new(std::sync::atomic::AtomicU64::new(0));
     for stream in listener.incoming() {
+        // `shutdown` clears the flag then connects once to wake this
+        // accept: the loop ends and the daemon exits (it never did).
+        if !keep_running() {
+            break;
+        }
         let Ok(stream) = stream else { break };
         let _ = stream.set_read_timeout(Some(STREAM_TIMEOUT));
         match sender.try_send(stream) {

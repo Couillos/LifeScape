@@ -122,7 +122,7 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
     if !live_locs(bot, ESSENCE_ROCK, 60).is_empty() {
         return Ok(());
     }
-    let slot = bot.find_npc("aubury").ok_or_else(|| ScriptError::Usage(format!("no Aubury near {:?}", bot.position())))?;
+    let slot = bot.find_npc("aubury").ok_or_else(|| ScriptError::Failed(format!("no Aubury near {:?}", bot.position())))?;
     bot.approach_npc(slot, ESSENCE_WALK_TICKS)?;
     bot.log("asking Aubury for the essence mine");
     bot.intend("teleporting to the rune essence mine");
@@ -138,7 +138,7 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
     if crate::quests::common::has_message(bot, "rune mysteries") {
         return Err(ScriptError::Usage(format!("essence needs {NEED_QUEST} at {:?}", bot.position())));
     }
-    Err(ScriptError::Usage(format!("Aubury did not teleport at {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("Aubury did not teleport at {:?}", bot.position())))
 }
 
 /// Step back through the exit portal (op 1, `essence_mine.rs2` picks the
@@ -147,7 +147,7 @@ fn return_through_portal(bot: &mut Bot) -> Result<(), ScriptError> {
     let target = bot.world.ticks + 200;
     while bot.world.ticks < target {
         if let Some((x, z, loc)) = live_locs(bot, PORTAL, 60).into_iter().next() {
-            if !walk_checked(bot, x, z, ESSENCE_WALK_TICKS)? { return Err(ScriptError::Usage(format!("portal unreachable at ({x},{z})"))); }
+            if !walk_checked(bot, x, z, ESSENCE_WALK_TICKS)? { return Err(ScriptError::Failed(format!("portal unreachable at ({x},{z})"))); }
             bot.op_loc(1, x, z, loc)?;
             let back = bot.world.ticks + 100;
             while bot.world.ticks < back {
@@ -157,11 +157,11 @@ fn return_through_portal(bot: &mut Bot) -> Result<(), ScriptError> {
                     return Ok(());
                 }
             }
-            return Err(ScriptError::Usage(format!("portal did not move us at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("portal did not move us at {:?}", bot.position())));
         }
         bot.pump(5)?;
     }
-    Err(ScriptError::Usage(format!("no essence portal near {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("no essence portal near {:?}", bot.position())))
 }
 
 /// Talismans and tools the bank trip keeps (the runecraft chain spends the

@@ -528,6 +528,18 @@ pub fn measured_yield(snapshot: &Snapshot, method: &str, item: &str, band: i64) 
     snapshot.bucket_mean(&snapshot.yields, method, item, band)
 }
 
+/// Measured mean yield per 6000 for one (script, item) pair when the
+/// caller knows no level band (an obtain node): the bucket with the most
+/// samples wins, so a thin band never outvotes a well-measured one.
+pub fn measured_yield_any_band(snapshot: &Snapshot, method: &str, item: &str) -> Option<f64> {
+    snapshot
+        .yields
+        .iter()
+        .filter(|((bucket_method, bucket_item, _), stat)| bucket_method == method && bucket_item == item && stat.count > 0)
+        .max_by_key(|(_, stat)| stat.count)
+        .map(|(_, stat)| stat.mean())
+}
+
 /// Measured mean XP per 6000 for one (method, skill, band) bucket.
 pub fn measured_xp(snapshot: &Snapshot, method: &str, skill: &str, band: i64) -> Option<f64> {
     snapshot.bucket_mean(&snapshot.xp, method, skill, band)
@@ -599,29 +611,7 @@ fn xp_value(row: &XpRow) -> Value {
     ])
 }
 
-/// Estimated sale price of an item display name: 24 h market VWAP when
-/// the store holds prints, else the shop price, else 0 with a prior
-/// price flag. Name matching is exact on the catalogue display name.
-pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
-    let catalogue = match store.list_items() {
-        Ok(rows) => rows,
-        Err(_) => return (0.0, true),
-    };
-    let Some(found) = catalogue.iter().find(|row| row.name == item) else {
-        return (0.0, true);
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|span| span.as_secs() as i64)
-        .unwrap_or(0);
-    let prints = store.executions_for_item(found.item_id, now - 86400, now + 1).unwrap_or_default();
-    let volume: i64 = prints.iter().map(|print| print.quantity).sum();
-    if volume > 0 {
-        let turnover: i64 = prints.iter().map(|print| print.quantity * print.price).sum();
-        return (turnover as f64 / volume as f64, false);
-    }
-    (found.shop_price as f64, true)
-}
+pub use crate::rates_price::price_estimate;
 
 /// Public trend score of an item display name (24 h period preferred),
 /// 0.0 when unscored.

@@ -95,11 +95,11 @@ impl Orchestrator {
             return;
         }
         state.restarts.push(now);
-        println!("watchdog {}: no heartbeat for {:.0}s, restarting worker", job.account, now - at);
+        crate::logln!("watchdog {}: no heartbeat for {:.0}s, restarting worker", job.account, now - at);
         self.kill_process(&job.account);
         std::thread::sleep(Duration::from_millis(1500));
         if let Err(error) = self.spawn(job, false) {
-            println!("watchdog {}: respawn failed: {error}", job.account);
+            crate::logln!("watchdog {}: respawn failed: {error}", job.account);
             return;
         }
         let deadline = crate::jobs::now_secs() + 15.0;
@@ -114,12 +114,12 @@ impl Orchestrator {
             }
         }
         if !ready {
-            println!("watchdog {}: respawned worker never answered", job.account);
+            crate::logln!("watchdog {}: respawned worker never answered", job.account);
             return;
         }
         if phase == "running" {
             if let Some(name) = script {
-                println!("watchdog {}: resuming {name} after restart", job.account);
+                crate::logln!("watchdog {}: resuming {name} after restart", job.account);
                 self.run_job(&job.account, &name, &args);
             }
         }

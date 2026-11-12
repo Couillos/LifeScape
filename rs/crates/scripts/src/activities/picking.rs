@@ -159,7 +159,7 @@ pub fn run_picking(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let Some((x, z, loc)) = pick_field(step_bot, kind, &banned, now) else {
             empty += 1;
             if empty >= EMPTY_LIMIT {
-                return Err(ScriptError::Usage(format!("no {kind} field near {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("no {kind} field near {:?}", step_bot.position())));
             }
             step_bot.log("field empty, waiting for respawns");
             for _ in 0..10 {
@@ -176,10 +176,10 @@ pub fn run_picking(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Ok(StepControl::Continue);
             }
             WorkOutcome::NoTool | WorkOutcome::NoBait => {
-                return Err(ScriptError::Usage(format!("picking {kind} refused at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("picking {kind} refused at {:?}", step_bot.position())));
             }
             WorkOutcome::Threat | WorkOutcome::Blocked | WorkOutcome::LevelLocked => {
-                return Err(ScriptError::Usage(format!("picking stopped ({outcome:?}) at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("picking stopped ({outcome:?}) at {:?}", step_bot.position())));
             }
             WorkOutcome::Full => {}
         }

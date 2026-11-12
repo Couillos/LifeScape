@@ -500,7 +500,7 @@ pub fn start_web(dispatch: Dispatch, port: u16) {
             std::process::exit(1);
         }
     };
-    println!("webapp listening on http://0.0.0.0:{port}/");
+    crate::logln!("webapp listening on http://0.0.0.0:{port}/");
     std::thread::Builder::new()
         .name("web-accept".to_string())
         .spawn(move || {

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spectator — LifeScape bots</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --head: 28px; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
   a { color: #04A800; }
   .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
@@ -29,25 +29,47 @@
   #ctlmsg { color: #d9a441; min-height: 1em; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
   /* Sessions list: always visible on the left on PC, drawer on mobile only. */
-  #list { width: 280px; flex: 0 0 280px; background: #050505; border: 1px solid #444; padding: 12px; margin: 0; overflow-y: auto; max-height: calc(100vh - 24px); position: sticky; top: 12px; box-sizing: border-box; }
+  #list { width: 560px; flex: 0 0 560px; background: #050505; border: 1px solid #444; padding: 12px; margin: 0; overflow-y: auto; max-height: calc(100vh - 24px); position: sticky; top: 12px; box-sizing: border-box; }
   #toggle, #drawer-close { display: none; }
-  #list ul { list-style: none; padding: 0; margin: 8px 0; }
+  /* Every box top border sits on the canvas top border: one header row
+     (--head) above each first box, then the same 6px gap. */
+  #list { margin-top: calc(var(--head) + 6px); }
+  #layout .block > h2 { height: var(--head); line-height: var(--head); margin: 0; }
+  #layout .block + .block > h2 { margin-top: 10px; }
+  #layout .block > .panel { margin-top: 6px; }
+  /* Right of the list: the top row (canvas, dialogue, inventory), then
+     info + log side by side, half of that width each. */
+  #main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  #top { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  #bottom { display: flex; gap: 16px; align-items: flex-start; }
+  #bottom > .block { flex: 1 1 50%; min-width: 0; }
+  #layout #bottom .panel { max-width: none; }
+  #layout #bottom .block > h2 { margin-top: 0; }
+  #bottom .infopanel { max-height: 260px; }
+  /* Bot table: one row per bot, click = follow, header click = sort. */
+  #playerswrap { overflow-x: auto; margin: 8px 0; }
+  #players { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #players td, #players th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #players th { color: #888; font-weight: normal; }
+  #players td.left, #players th.left { text-align: left; }
+  #players tr[data-account] { cursor: pointer; }
+  #players tr[data-account]:hover { background: #1a1a1a; }
+  #players tr.cur { font-weight: bold; color: #ff0; }
+  #players .dot { margin-right: 2px; vertical-align: 0; }
+  #players .clip { display: inline-block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
   @media (max-width: 768px) {
-    #list { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 280px; max-width: 85vw; flex: none; max-height: none; border-right: 1px solid #444; border-top: 0; border-bottom: 0; border-left: 0; }
+    #list { margin-top: 0; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; width: 560px; max-width: 95vw; flex: none; max-height: none; border-right: 1px solid #444; border-top: 0; border-bottom: 0; border-left: 0; }
     body.list-hidden #list { transform: translateX(-105%); }
     #toggle, #drawer-close { display: inline-block; }
     /* Mobile block order: canvas, infotext, dialogue, message, inventory,
        skills, scenery, log. Columns dissolve so blocks order directly. */
     #layout { flex-direction: column; }
-    #left, #center, #mid, #side { display: contents; }
+    #main, #top, #bottom, #center, #mid, #side { display: contents; }
     .block { width: 100%; max-width: none; }
     .b-canvas { order: 1; } .b-info { order: 2; } .b-dialog { order: 3; }
     .b-msg { order: 4; } .b-inv { order: 5; } .b-skills { order: 6; }
     .b-scenery { order: 7; } .b-log { order: 8; }
   }
-  #list li { margin: 3px 0; }
-  #list li a { text-decoration: none; }
-  #list li a.cur { font-weight: bold; color: #ff0; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: #555; }
   .running { background: #46c46f; } .reconnecting, .busy, .starting { background: #d9a441; }
   .failed, .disconnected { background: #e05a5a; } .finished, .stopped { background: #6b7280; }
@@ -55,10 +77,9 @@
   .pill.running { background: #46c46f; color: #000; } .pill.crashed { background: #e05a5a; color: #000; }
   .pill.paused { background: #d9a441; color: #000; } .pill.stopped { background: #6b7280; color: #000; }
   .pill.empty { background: none; border: 1px solid #555; color: #888; }
-  #left { flex: 1 1 260px; min-width: 250px; max-width: 560px; }
   #center { flex: 2 1 420px; min-width: 300px; max-width: 560px; }
   #mid { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
-  #title { color: #888; margin-bottom: 6px; }
+  #title { color: #888; height: var(--head); margin: 0 0 6px; display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow: hidden; box-sizing: border-box; }
   #zonename { color: #ff0; margin-left: 8px; }
   canvas { background: #111; border: 1px solid #444; image-rendering: pixelated; width: 100%; max-width: 560px; aspect-ratio: 1; display: block; box-sizing: border-box; }
   #layout .panel { max-width: 560px; box-sizing: border-box; }
@@ -70,7 +91,8 @@
   .muted { color: #888; }
   @media (max-width: 900px) {
     #layout { flex-direction: column; }
-    #left, #center, #mid, #side { max-width: none; width: 100%; flex: 1 1 auto; }
+    #top, #bottom { flex-direction: column; }
+    #center, #mid, #side, #bottom > .block { max-width: none; width: 100%; flex: 1 1 auto; }
   }
 </style>
 </head>
@@ -105,12 +127,10 @@
       <div><span id="count">0</span> bot(s) supervised</div>
       <button id="drawer-close" title="Close sessions">×</button>
     </div>
-    <ul id="players"><li class="muted">loading…</li></ul>
+    <div id="playerswrap"><table id="players"><tr><td class="left muted">loading…</td></tr></table></div>
   </div>
-  <div id="left">
-    <div class="block b-info"><div class="panel"><pre id="infotext"></pre></div></div>
-    <div class="block b-log"><h2>Log</h2><div class="panel logpanel"><pre id="log"></pre></div></div>
-  </div>
+  <div id="main">
+  <div id="top">
   <div id="center">
     <div class="block b-canvas"><div id="title" class="muted"><span id="titletext">Click a bot to follow it.</span><span id="scriptpill" class="pill" style="display:none"></span><span id="scriptname" class="pill empty" style="display:none"></span><span id="zonename"></span> <button id="btn-close" title="Cut the session: log out and drop the connection">close</button></div><canvas id="map" width="560" height="560"></canvas></div>
   </div>
@@ -123,7 +143,15 @@
     <div class="block b-inv"><h2 id="invtitle">Inventory</h2><div class="panel"><pre id="inv"></pre></div></div>
     <div class="block b-skills"><h2>Skills</h2><div class="panel"><pre id="skills"></pre></div></div>
   </div>
+  </div>
+  <!-- Under the canvas: info and log, half of the area right of the list each. -->
+  <div id="bottom">
+    <div class="block b-info"><h2>Info</h2><div class="panel infopanel"><pre id="infotext"></pre></div></div>
+    <div class="block b-log"><h2>Log</h2><div class="panel logpanel"><pre id="log"></pre></div></div>
+  </div>
+  </div>
 </div>
+<script src="/table.js"></script>
 <script src="/spectator.js"></script>
 </body>
 </html>

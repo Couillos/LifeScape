@@ -13,7 +13,7 @@ Actions via les méthodes `Bot` (`src/client/actions.rs`, `src/client/movement.r
 `src/client/approach.rs`, `src/client/doors.rs`) : `op_loc`, `op_npc_t`,
 `if_button`, `close`, `walk_to`, `take`, `approach`. Attentes :
 `src/waits.rs` (`wait_ticks`, `wait_hitpoints`, `wait_backpack`,
-`TICK_MS = 20`). Erreurs : `src/error.rs` (`Error` typée : position, cible,
+`tick_ms()` : 60 ms en dev, 600 ms en prod via `NODE_TICK_RATE`). Erreurs : `src/error.rs` (`Error` typée : position, cible,
 état observé, ticks ; `Travel("nav-down: …")` = service de navigation
 injoignable ou refusant, jamais reconnect ni rescue).
 

@@ -9,8 +9,8 @@ use lifescape_sdk::Bot;
 
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::bank::{bank_trip, nearest_bank};
-use crate::kit::pack::{obj_id, obj_price, pack_total};
-use crate::kit::shop::{buy_best_affordable, buy_stock, sell_for_target};
+use crate::kit::pack::{obj_id, pack_total, shop_price};
+use crate::kit::shop::{buy_best_affordable, buy_stock};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -55,7 +55,7 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bot.log("ok net restored from bank");
         }
         if crate::kit::tools::FISH_SPEC.best_held(bot).is_none() {
-            let net_price = obj_price("net") as u32;
+            let net_price = shop_price("net").unwrap_or(i64::MAX).min(i64::from(u32::MAX)) as u32;
             if pack_total(bot, coins) >= net_price && buy_stock(bot, "net", 1)? > 0 {
                 bot.log("ok bootstrapped net");
             } else {
@@ -74,12 +74,20 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, side_shop, main_shop)?;
         level = new_level;
         if !ok {
-            return Err(ScriptError::Usage(format!("fish failed at {:?}", step_bot.position())));
+            return Err(ScriptError::Failed(format!("fish failed at {:?}", step_bot.position())));
         }
-        let (cands, cheapest) = crate::kit::tools::cheapest_fish_upgrade(step_bot, level);
-        if !cands.is_empty() {
-            sell_for_target(step_bot, &[], coins, cheapest.max(0) as u32 - bank_coins.min(cheapest.max(0) as u32))?;
+        // Training a level (`--no-bank`): only XP counts, the catch is
+        // dropped where it was caught. No bank loop at all (the Draynor
+        // bank sits inside the dark wizards' aggro square: bots died on
+        // every trip between it and the water).
+        if spec.no_bank {
+            let dropped = drop_catch(step_bot, &task_keep)?;
+            step_bot.log(&format!("ok load {} dropped ({dropped} fish, fishing={level})", state.units() + 1));
+            return Ok(StepControl::UnitDone);
         }
+        // PRD3: the catch is never sold to a shop; upgrades are funded
+        // from banked coins (market sales).
+        let (cands, _cheapest) = crate::kit::tools::cheapest_fish_upgrade(step_bot, level);
         let mut keep: Vec<u16> = crate::kit::tools::FISH_SPEC.known_ids(step_bot).into_iter().collect();
         keep.extend(task_keep.iter().copied());
         bank_coins = bank_trip(step_bot, &bank, &keep, 0)?;
@@ -91,4 +99,24 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     });
     let _ = bank_coins;
     outcome
+}
+
+/// Drop every raw fish in the pack (any tier's product), except names
+/// the brain asked to keep. Returns how many stacks went.
+fn drop_catch(bot: &mut Bot, keep: &[u16]) -> Result<u32, ScriptError> {
+    let fish: Vec<u16> = lifescape_gamedata::fishing::all_fish_tiers()
+        .iter()
+        .flat_map(|tier| tier.products.iter().filter_map(|product| obj_id(bot, product).ok()))
+        .filter(|id| !keep.contains(id))
+        .collect();
+    let mut dropped = 0u32;
+    for id in fish {
+        while pack_total(bot, id) > 0 {
+            if !bot.drop(id, 20)? {
+                return Err(ScriptError::Failed(format!("drop of obj {id} never landed at {:?}", bot.position())));
+            }
+            dropped += 1;
+        }
+    }
+    Ok(dropped)
 }

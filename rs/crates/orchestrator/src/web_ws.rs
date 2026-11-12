@@ -13,21 +13,22 @@ use crate::minimap::Minimap;
 use crate::paths;
 use crate::web::{Dispatch, WS_INTERVAL};
 
+
 /// Loc columns on the wire. The screen only reads `name` (via `loc_names`),
 /// `cosmetic` (scenery panel) and `id` (the names key): x/z/shape/angle and
 /// the mapscene origin ride no pixel, the map is the static PNG.
 const LOC_FIELDS: &[&str] = &["id", "cosmetic"];
 
-/// Job columns on the wire: exactly what the spectator list renders
-/// (name/level/position/window/state line). Phase/zone/ticks/errors ride the
-/// followed state, not the list.
+/// Job columns on the wire: exactly what the spectator bot table renders
+/// (status/name/level/hp/script/zone/position). Phase/ticks/errors ride the
+/// followed state, not the list. Goal/task come from the life file
+/// (`job_lives`), not from the job.
 const JOB_LIST_FIELDS: &[&str] = &[
     "account",
     "account_name",
     "combat",
     "position",
-    "modal",
-    "intention",
+    "zone",
     "status",
     "paused",
     "script",
@@ -127,6 +128,11 @@ pub fn state_payload(
         let mut slim = std::collections::BTreeMap::new();
         for field in JOB_LIST_FIELDS {
             slim.insert(field.to_string(), job.get(field).clone());
+        }
+        if let Some(life) = job.get("account").as_str().and_then(crate::web_job_lives::summary_for) {
+            slim.insert("goal".to_string(), str_value(&life.goal));
+            slim.insert("task".to_string(), str_value(&life.task));
+            slim.insert("task_title".to_string(), str_value(&life.task_title));
         }
         listed.push(Value::Obj(slim));
     }

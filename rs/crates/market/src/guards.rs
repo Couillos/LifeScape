@@ -6,8 +6,10 @@
 use crate::error::Error;
 use crate::Side;
 
-/// Price band check. `reference` is `None` until the first trade or book
-/// midpoint exists; without one only the 1-coin floor applies.
+/// Price band check. `reference` is `None` until the object has traded
+/// (a quote-only or default 1-coin reference never caps an order, or
+/// nobody could ever bid an untraded object above 5 coins); without one
+/// only the 1-coin floor applies.
 pub fn check_price(side: Side, price: i64, reference: Option<i64>) -> Result<(), Error> {
     if price < 1 {
         return Err(Error::Invalid(format!("bad price {price}")));

@@ -748,7 +748,7 @@ fn transition_matches(row: &Transition, filter: Option<&str>) -> bool {
 /// Stands and expects for the filtered rows, prober options (paid
 /// doors open, no tags held). One verdict covers the whole row.
 pub fn probe_targets(snapshot: &Snapshot, filter: Option<&str>) -> Vec<ProbeTarget> {
-    let options = NavOptions { allow_paid: true, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new() };
+    let options = NavOptions { allow_paid: true, f2p_only: true, satisfied: HashSet::new(), excluded_edges: HashSet::new(), danger: Vec::new() };
     let mut out = Vec::new();
     for row in &snapshot.tables.transitions {
         if row.disabled || !transition_matches(row, filter) {

@@ -100,6 +100,11 @@ pub struct Bot {
     /// (`TaskSpec.allow_shop`) clears it and the buy paths refuse loud
     /// instead of spending, so the run reports blocked, never broke.
     pub allow_shop: bool,
+    /// Combat style the running script trains (`melee`, `ranged`,
+    /// `magic`): the gear kit scores bows/arrows or staves for it and the
+    /// fight loop casts instead of clicking attack. Script state, never
+    /// sent anywhere.
+    pub combat_style: String,
     /// Opt-in to hunter zones (tree spots near aggressive NPCs). Default
     /// false: spots within range of something that would attack us are
     /// skipped.
@@ -117,6 +122,13 @@ pub struct Bot {
     /// service means every plan fails loud with `nav-down`: never a local
     /// plan, the failure stays visible in the logs.
     pub plan_client: Option<lifescape_nav::service::PlanClient>,
+    /// Danger squares for this bot's combat level (scripts arm them from
+    /// gamedata, `kit::danger::arm`): every plan request carries them so
+    /// routes avoid hunters (`NavOptions::danger`).
+    pub nav_danger: Vec<lifescape_nav::plan::DangerZone>,
+    /// Site the brain assigned to this run (x, z, level): gather pickers
+    /// only consider resources around it (`--site`, kit::cycle).
+    pub assigned_site: Option<(i32, i32, i32)>,
     /// Data version sent with submits (set once at session open).
     pub plan_data_version: Option<String>,
     /// Served `wants` tags pinned by version: options build without
@@ -168,11 +180,14 @@ impl Bot {
             approach_depth: 0,
             allow_paid: false,
             allow_shop: true,
+            combat_style: "melee".to_string(),
             allow_wild: false,
             maps: None,
             nav_world: None,
             nav_tables: None,
             plan_client: None,
+            nav_danger: Vec::new(),
+            assigned_site: None,
             plan_data_version: None,
             wants_cache: None,
             cost_stats: cost_cache::CostStats::default(),

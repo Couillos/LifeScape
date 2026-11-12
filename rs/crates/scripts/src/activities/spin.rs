@@ -1,6 +1,8 @@
 //! Spinning: wool into a ball of wool on a spinning wheel (catalogue
-//! §5.6, P1). The wheel is a Direct station (one click spins one wool,
-//! like cooking); the bank loop mirrors `cook`. Wool arrives from `shear`
+//! §5.6, P1). PRD3 lot 7: the wheel's `op2` Spin opens the
+//! `skill_multi2` make-menu (spinning.rs2), answered make-X with the whole
+//! load, so the server chains one ball every 2 ticks instead of one click
+//! per wool; the bank loop mirrors `cook`. Wool arrives from `shear`
 //! (Sheep Shearer quest flock); flax is members and never spins here.
 //!
 //! Process: poste rouet (5) · action filer · interface directe · intrants
@@ -24,7 +26,11 @@ pub const PRODUCT: &str = "ball_of_wool";
 /// Wheel debugname (catalogue §5.6: 5 posts, Lumbridge + Seers + Crafting Guild).
 pub const STATIONS: [&str; 1] = ["spinningwheel"];
 
-const SPIN: Produce<'static> = Produce { verb: "spinning", site: ProduceSite::Loc(&STATIONS), ui: ProduceUi::Direct };
+const SPIN: Produce<'static> = Produce {
+    verb: "spinning",
+    site: ProduceSite::Loc(&STATIONS),
+    ui: ProduceUi::Multi { op: 2, menu: "skill_multi2", button: "skill_multi2:makex_a" },
+};
 
 /// F2P spin recipe eating `name` (wool only: flax stays members).
 pub fn spin_recipe(name: &str) -> Option<ExtraRecipe> {
@@ -57,8 +63,15 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if products.is_empty() {
         return Err(ScriptError::Usage(format!("spin product of {input_name} unknown at {:?}", bot.position())));
     }
-    let mut bank = nearest_bank(bot)?;
-    bot.log(&format!("bank at ({},{})", bank.x, bank.z));
+    // The wheel decides the site (PRD3 lot 7): the produce kit only
+    // searches the bot's plane within 150 tiles of `near`, and the
+    // nearest bank may have no wheel in range (Varrock east). Pick the
+    // nearest same-plane F2P wheel, then the bank nearest to it.
+    let (wheel, bank) = match wheel_site(bot) {
+        Some(found) => found,
+        None => (( bot.world.x, bot.world.z), nearest_bank(bot)?),
+    };
+    bot.log(&format!("wheel at ({},{}), bank at ({},{})", wheel.0, wheel.1, bank.x, bank.z));
     let mut keep_wool: Vec<u16> = vec![wool];
     keep_wool.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_wool, 0)?;
@@ -75,7 +88,7 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Blocked { missing: vec![input_name.to_string()] });
             }
         }
-        let job = ProduceJob { spec: &SPIN, input: wool, input_name, want: 0, products: products.clone(), near: (bank.x as i32, bank.z as i32) };
+        let job = ProduceJob { spec: &SPIN, input: wool, input_name, want: 0, products: products.clone(), near: wheel };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died spinning, restocking to retry");
@@ -86,11 +99,21 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 step_bot.log(&format!("ok spun {} ({} made)", batch.consumed, batch.made));
             }
         }
-        bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
         step_bot.log(&format!("ok load {} spun (crafting={level})", state.units() + 1));
         Ok(StepControl::UnitDone)
     })
+}
+
+/// Nearest F2P wheel on the bot's plane and the bank nearest to it.
+fn wheel_site(bot: &Bot) -> Option<((i32, i32), lifescape_gamedata::banks::Bank)> {
+    let level = i64::from(bot.world.level);
+    let wheel = lifescape_gamedata::stations::stations_of(STATIONS[0])
+        .into_iter()
+        .filter(|station| station.level == level && lifescape_gamedata::free_zones::is_free(station.x, station.z))
+        .min_by_key(|station| (station.x - i64::from(bot.world.x)).abs() + (station.z - i64::from(bot.world.z)).abs())?;
+    let bank = lifescape_gamedata::banks::nearest_bank(wheel.x, wheel.z, level)?;
+    Some(((wheel.x as i32, wheel.z as i32), bank))
 }
 
 /// Top the pack up with wool from the bank (nothing when the bank holds

@@ -149,8 +149,7 @@ pub fn run_bench(config: &BenchConfig) -> Result<BenchReport, String> {
             allow_paid: false,
             f2p_only: true,
             satisfied: std::collections::HashSet::new(),
-            excluded_edges: std::collections::HashSet::new(),
-        };
+            excluded_edges: std::collections::HashSet::new(), danger: Vec::new() };
         let _ = warm.plan_once(*from, *dest, &options, &version, 10_000);
     }
     let before = service.stats();
@@ -186,8 +185,7 @@ pub fn run_bench(config: &BenchConfig) -> Result<BenchReport, String> {
                         allow_paid: false,
                         f2p_only: true,
                         satisfied: std::collections::HashSet::new(),
-                        excluded_edges: std::collections::HashSet::new(),
-                    };
+                        excluded_edges: std::collections::HashSet::new(), danger: Vec::new() };
                     let mut tick = 0u64;
                     while Instant::now() < deadline {
                         let (from, dest) = legs[worker % legs.len()];

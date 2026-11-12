@@ -4,11 +4,18 @@
 // dependency. The rates page and the lives page (P1.5) share it: pass an
 // explicit column list, rows stay plain objects.
 //
-//   TableSort.render(id, columns, rows)
+//   TableSort.render(id, columns, rows, options)
 //     columns: [{key, label, kind}]  kind: 'num' | 'str' | 'auto'
 //     rows: [{key: value, ...}]     values may be null/undefined/'' (missing)
 //     fmt (optional per column): function (value, row) -> display HTML;
 //       sorting always uses the raw value, never the formatted text.
+//     options (optional): {rowAttrs, onSort}
+//       rowAttrs: function (row) -> {attribute: value} on the <tr>
+//         (values escaped; empty/null values dropped), e.g. data-* + class.
+//       onSort: function () called after a header click instead of the
+//         default re-render (paged tables re-sort the whole list first).
+//   TableSort.sortedRows(id, columns, rows): rows in the table's current
+//     sort order (input order while no header was clicked).
 var TableSort = (function () {
   var state = {}; // table id -> {key, dir}
 
@@ -61,14 +68,34 @@ var TableSort = (function () {
   }
 
   function escapeHtml(text) {
-    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function render(id, columns, rows) {
+  // Opening <tr> with escaped attributes; missing values are dropped.
+  function rowOpenTag(attrs) {
+    var html = '<tr';
+    for (var name in attrs) {
+      if (!Object.prototype.hasOwnProperty.call(attrs, name) || isMissing(attrs[name])) continue;
+      html += ' ' + name + '="' + escapeHtml(attrs[name]) + '"';
+    }
+    return html + '>';
+  }
+
+  function stateOf(id) {
+    return state[id] || (state[id] = { key: null, dir: 1 });
+  }
+
+  function sortedRows(id, columns, rows) {
+    var current = stateOf(id);
+    return current.key ? sortData(columns, rows, current.key, current.dir) : rows.slice();
+  }
+
+  function render(id, columns, rows, options) {
     var table = document.getElementById(id);
     if (!table) return;
-    var current = state[id] || (state[id] = { key: null, dir: 1 });
-    var data = current.key ? sortData(columns, rows, current.key, current.dir) : rows.slice();
+    var settings = options || {};
+    var current = stateOf(id);
+    var data = sortedRows(id, columns, rows);
     var head = '<tr>';
     for (var i = 0; i < columns.length; i++) {
       var column = columns[i];
@@ -80,7 +107,7 @@ var TableSort = (function () {
     head += '</tr>';
     var body = '';
     for (var r = 0; r < data.length; r++) {
-      body += '<tr>';
+      body += settings.rowAttrs ? rowOpenTag(settings.rowAttrs(data[r])) : '<tr>';
       for (var c = 0; c < columns.length; c++) {
         var cell = data[r][columns[c].key];
         var html = columns[c].fmt ? columns[c].fmt(cell, data[r]) : escapeHtml(isMissing(cell) ? '-' : cell);
@@ -101,13 +128,14 @@ var TableSort = (function () {
             current.key = key;
             current.dir = 1;
           }
-          render(id, columns, rows);
+          if (settings.onSort) settings.onSort();
+          else render(id, columns, rows, options);
         };
       })(headers[h]);
     }
   }
 
-  return { render: render, sortData: sortData, _state: state };
+  return { render: render, sortData: sortData, sortedRows: sortedRows, rowOpenTag: rowOpenTag, _state: state };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = TableSort;

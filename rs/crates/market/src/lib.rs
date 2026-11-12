@@ -11,6 +11,7 @@ pub mod error;
 pub mod guards;
 pub mod price;
 pub mod sim;
+pub mod sim_prd3;
 pub mod trends;
 pub mod zip;
 
@@ -18,6 +19,6 @@ pub use book::{Book, Fill, Order, Side};
 pub use deals::{Deal, DealStatus, FailReason};
 pub use error::Error;
 pub use guards::{check_coverage, check_price};
-pub use price::{bucketize, reference_price, vwap, Candle, PricedFill};
+pub use price::{bucketize, reference_price, vwap, Candle, PricedFill, Reference};
 pub use trends::{compute_trend, TrendInput, TrendScores};
-pub use zip::{MerchantCaps, ZipQuote};
+pub use zip::{step_toward, MerchantCaps, ZipQuote};

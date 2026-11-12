@@ -1,0 +1,2799 @@
+{
+  "npcs": {
+    "0_33_51_memberfish": {
+      "wanderrange": 0
+    },
+    "0_34_50_freshfish": {
+      "wanderrange": 0
+    },
+    "0_35_50_freshfish": {
+      "wanderrange": 0
+    },
+    "0_41_57_memberfish": {
+      "wanderrange": 0
+    },
+    "0_41_57_rarefish": {
+      "wanderrange": 0
+    },
+    "0_41_57_saltfish": {
+      "wanderrange": 0
+    },
+    "0_43_47_karambwanji": {
+      "wanderrange": 0
+    },
+    "0_45_48_karambwan": {
+      "wanderrange": 0
+    },
+    "0_45_48_seabird1": {
+      "wanderrange": 8
+    },
+    "0_45_48_seabird2": {
+      "wanderrange": 15
+    },
+    "0_45_48_seabird3": {
+      "wanderrange": 20
+    },
+    "0_48_48_newbiefishing": {
+      "wanderrange": 0
+    },
+    "0_53_51_slimey_eel": {
+      "wanderrange": 0
+    },
+    "0_53_53_slimey_eel": {
+      "wanderrange": 0
+    },
+    "0_54_53_slimey_eel": {
+      "wanderrange": 0
+    },
+    "abbot_langley": {
+      "wanderrange": 3
+    },
+    "aggressive_black_knight": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "al_shabim": {
+      "wanderrange": 3
+    },
+    "alomone_hazeel_cultist": {
+      "maxrange": 7,
+      "wanderrange": 3
+    },
+    "aluft_gianne": {
+      "wanderrange": 3
+    },
+    "ana": {
+      "wanderrange": 3
+    },
+    "anabarrel": {
+      "wanderrange": 0
+    },
+    "aprilfoolshorsesalesman": {
+      "wanderrange": 3
+    },
+    "ardougne_archer": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "arena_bouncer": {
+      "maxrange": 25
+    },
+    "arena_guard1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "arena_guard2": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "arena_guard3": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "arena_guard4": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "arena_leadguard": {
+      "wanderrange": 0
+    },
+    "arena_ogre": {
+      "maxrange": 25
+    },
+    "arena_scorpion": {
+      "maxrange": 25
+    },
+    "arenamage1": {
+      "wanderrange": 1
+    },
+    "arenamage2": {
+      "wanderrange": 0
+    },
+    "arhein": {
+      "wanderrange": 0
+    },
+    "armourmaking_wizard": {
+      "wanderrange": 5
+    },
+    "artist1": {
+      "wanderrange": 3
+    },
+    "artist2": {
+      "wanderrange": 3
+    },
+    "babybluedragon": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "babydragon": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "baker_merchant": {
+      "wanderrange": 2
+    },
+    "banker1": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "banker2": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "baraek": {
+      "wanderrange": 2
+    },
+    "barbarian": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "barbarian_woman": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "barbguard1": {
+      "wanderrange": 2
+    },
+    "bat": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "bearded_dark_wizard": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "bedabin": {
+      "wanderrange": 3
+    },
+    "bedabin_fighter": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "bedabin_guard": {
+      "wanderrange": 0
+    },
+    "bigdave": {
+      "wanderrange": 1
+    },
+    "bioguard1": {
+      "wanderrange": 0
+    },
+    "black_demon": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "black_dragon": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "black_knight": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "black_knight_titan": {
+      "maxrange": 0,
+      "wanderrange": 0
+    },
+    "black_unicorn": {
+      "maxrange": 19,
+      "wanderrange": 17
+    },
+    "black_unicorn_foal": {
+      "maxrange": 19,
+      "wanderrange": 17
+    },
+    "blessed_giantrat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "blessed_spider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "bloated_toad": {
+      "wanderrange": 0
+    },
+    "blue_dragon": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "bluemoon_bartender": {
+      "wanderrange": 2
+    },
+    "blurberry": {
+      "wanderrange": 3
+    },
+    "blurberrybarmen": {
+      "wanderrange": 3
+    },
+    "borderguard1": {
+      "wanderrange": 0
+    },
+    "borderguard2": {
+      "wanderrange": 0
+    },
+    "boulder_legends": {
+      "wanderrange": 0
+    },
+    "boulder_upass": {
+      "wanderrange": 0
+    },
+    "brimhavencartdriver": {
+      "wanderrange": 3
+    },
+    "brother_jered": {
+      "wanderrange": 3
+    },
+    "brother_noob": {
+      "wanderrange": 2
+    },
+    "brother_omad": {
+      "wanderrange": 3
+    },
+    "brownbear": {
+      "maxrange": 15,
+      "wanderrange": 13
+    },
+    "brownbear_cub_1": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "brownbear_cub_2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "bugs": {
+      "wanderrange": 3
+    },
+    "butterfly": {
+      "wanderrange": 10
+    },
+    "butterfly2": {
+      "wanderrange": 10
+    },
+    "butterfly_bluemorpo": {
+      "wanderrange": 10
+    },
+    "butterfly_tigerswallowtail": {
+      "wanderrange": 10
+    },
+    "butterfly_viceroy": {
+      "wanderrange": 10
+    },
+    "canafis_man1": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_man2": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_man3": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_man1": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_man2": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_man3": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_woman1": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_woman2": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_werewolf_woman3": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_woman1": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_woman2": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "canafis_woman3": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "candle_maker": {
+      "wanderrange": 2
+    },
+    "capt_siad": {
+      "wanderrange": 3
+    },
+    "captain_barnaby": {
+      "wanderrange": 6
+    },
+    "caroline": {
+      "wanderrange": 2
+    },
+    "cave_monk": {
+      "wanderrange": 0
+    },
+    "caveguide3": {
+      "wanderrange": 2
+    },
+    "caveguide6": {
+      "wanderrange": 5
+    },
+    "chantergnome": {
+      "wanderrange": 0
+    },
+    "chaosmonk1": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "chaosmonk2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "chaosmonk3": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "chompy_bird": {
+      "wanderrange": 3
+    },
+    "chompybird_dead": {
+      "wanderrange": 0
+    },
+    "chronozon": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "clerk": {
+      "wanderrange": 0
+    },
+    "clocktower_rat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "colonel_radick": {
+      "maxrange": 5
+    },
+    "councillor_halgrive": {
+      "wanderrange": 3
+    },
+    "customs_officer": {
+      "wanderrange": 4
+    },
+    "cyclops": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "darkbear": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "davon": {
+      "wanderrange": 0
+    },
+    "deadly_red_spider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "death_archer1": {
+      "maxrange": 12,
+      "wanderrange": 2
+    },
+    "death_archer2": {
+      "maxrange": 12,
+      "wanderrange": 2
+    },
+    "death_archer_trapped": {
+      "maxrange": 12,
+      "wanderrange": 2
+    },
+    "death_barman": {
+      "wanderrange": 1
+    },
+    "death_cook": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_growncat_black": {
+      "maxrange": 30000,
+      "wanderrange": 30000
+    },
+    "death_guard1": {
+      "maxrange": 5,
+      "wanderrange": 0
+    },
+    "death_guard2": {
+      "maxrange": 5,
+      "wanderrange": 0
+    },
+    "death_guard_equiproom": {
+      "wanderrange": 1
+    },
+    "death_headservant": {
+      "wanderrange": 5
+    },
+    "death_hermit": {
+      "wanderrange": 5
+    },
+    "death_ig_commander": {
+      "wanderrange": 2
+    },
+    "death_ig_sergeant_drilling": {
+      "wanderrange": 0
+    },
+    "death_ig_sergeant_training": {
+      "wanderrange": 2
+    },
+    "death_ig_solider_drilling": {
+      "wanderrange": 0
+    },
+    "death_ig_solider_sitting1": {
+      "wanderrange": 0
+    },
+    "death_ig_solider_sitting2": {
+      "wanderrange": 0
+    },
+    "death_ig_solider_sitting3": {
+      "wanderrange": 0
+    },
+    "death_ig_solider_training": {
+      "wanderrange": 0
+    },
+    "death_ig_solider_wander": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_ig_solider_wounded": {
+      "wanderrange": 0
+    },
+    "death_man_indoors1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_man_indoors2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_man_outdoors1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_man_outdoors2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_mountain_goat": {
+      "wanderrange": 5
+    },
+    "death_servant1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_sherpa": {
+      "wanderrange": 5
+    },
+    "death_shopkeeper": {
+      "wanderrange": 5
+    },
+    "death_smithy": {
+      "wanderrange": 5
+    },
+    "death_troll_commander": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "death_troll_cook1": {
+      "wanderrange": 0
+    },
+    "death_troll_cook2": {
+      "wanderrange": 0
+    },
+    "death_troll_guard1": {
+      "maxrange": 5,
+      "wanderrange": 0
+    },
+    "death_troll_guard2": {
+      "maxrange": 5,
+      "wanderrange": 0
+    },
+    "death_troll_leuitanant": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "death_troll_melee1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee3": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee4": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee5": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee6": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_melee7": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_troll_thrower1": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "death_troll_thrower2": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "death_troll_thrower3": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "death_troll_thrower4": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "death_troll_thrower5": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "death_white_knight": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_woman_indoors1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_woman_outdoors1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "death_woman_outdoors2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "deathwing": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "delrith": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "delrith_weakened": {
+      "wanderrange": 0
+    },
+    "desertminingcaptain": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "desertminingmercenary1": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "desertminingmercenary2": {
+      "maxrange": 1,
+      "wanderrange": 1
+    },
+    "direwolf": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "doctor_orbon": {
+      "wanderrange": 3
+    },
+    "donkey_bartender": {
+      "wanderrange": 2
+    },
+    "doomion": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "doorman": {
+      "wanderrange": 2
+    },
+    "dragon_bartender": {
+      "wanderrange": 2
+    },
+    "dragonslayer_demon": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "dragonslayer_ghost": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "dragonslayer_giantrat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "dragonslayer_ned": {
+      "wanderrange": 0
+    },
+    "dragonslayer_skeleton": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "dragonslayer_zombie": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "drogo": {
+      "wanderrange": 13
+    },
+    "drunk1": {
+      "wanderrange": 3
+    },
+    "drunk2": {
+      "wanderrange": 3
+    },
+    "duck": {
+      "maxrange": 40,
+      "wanderrange": 35
+    },
+    "duck_female": {
+      "maxrange": 40,
+      "wanderrange": 35
+    },
+    "duckling": {
+      "maxrange": 40,
+      "wanderrange": 35
+    },
+    "duel_crowdfemale1": {
+      "wanderrange": 10
+    },
+    "duel_crowdfemale2": {
+      "wanderrange": 10
+    },
+    "duel_crowdfemale3": {
+      "wanderrange": 10
+    },
+    "duel_crowdmale1": {
+      "wanderrange": 10
+    },
+    "duel_crowdmale2": {
+      "wanderrange": 10
+    },
+    "duel_crowdmale3": {
+      "wanderrange": 10
+    },
+    "duel_fadli": {
+      "wanderrange": 2
+    },
+    "duel_monk": {
+      "wanderrange": 2
+    },
+    "duel_mubariz": {
+      "wanderrange": 2
+    },
+    "dungeon_rat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "dungeonspider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "dwarf_chaos": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "dwarf_mountain": {
+      "maxrange": 15,
+      "wanderrange": 13
+    },
+    "dwarf_normal": {
+      "maxrange": 15,
+      "wanderrange": 13
+    },
+    "dwarf_tunnel": {
+      "maxrange": 15,
+      "wanderrange": 13
+    },
+    "dwarven_shopkeeper": {
+      "wanderrange": 13
+    },
+    "eadgar_druid_washing": {
+      "wanderrange": 0
+    },
+    "eadgar_parrotts": {
+      "wanderrange": 0
+    },
+    "eadgar_troll_thistle": {
+      "wanderrange": 0
+    },
+    "eadgar_zoo_keeper_aviary": {
+      "wanderrange": 2
+    },
+    "earthwarrior": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "elf_city_guard": {
+      "wanderrange": 5
+    },
+    "elkoy": {
+      "wanderrange": 3
+    },
+    "elkoy_village": {
+      "wanderrange": 3
+    },
+    "elvarg": {
+      "maxrange": 7
+    },
+    "enclave_guard": {
+      "maxrange": 3,
+      "wanderrange": 1
+    },
+    "entrana_monk": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "fairy_banker": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "fairy_ladder_attendant": {
+      "wanderrange": 0
+    },
+    "fairy_lunderwin": {
+      "wanderrange": 2
+    },
+    "falador_gardener": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "falseogretrader": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "farmer1": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "fat_tony": {
+      "wanderrange": 3
+    },
+    "fightslave": {
+      "wanderrange": 1
+    },
+    "fightslave_joe": {
+      "wanderrange": 1
+    },
+    "fightslave_kelvin": {
+      "wanderrange": 1
+    },
+    "filliman_tarlock_ns": {
+      "wanderrange": 0
+    },
+    "filliman_tarlock_spirit": {
+      "wanderrange": 0
+    },
+    "fionella": {
+      "wanderrange": 3
+    },
+    "fire_bird": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "firegiant": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "flyinghorse_bartender": {
+      "wanderrange": 2
+    },
+    "flytrap": {
+      "wanderrange": 0
+    },
+    "foresters_bartender": {
+      "wanderrange": 2
+    },
+    "freshfish": {
+      "wanderrange": 0
+    },
+    "fur_merchant": {
+      "wanderrange": 4
+    },
+    "fycie": {
+      "wanderrange": 3
+    },
+    "gambler1": {
+      "wanderrange": 3
+    },
+    "gambler2": {
+      "wanderrange": 3
+    },
+    "garv": {
+      "wanderrange": 1
+    },
+    "gem_merchant": {
+      "wanderrange": 0
+    },
+    "gem_trader": {
+      "wanderrange": 2
+    },
+    "general_bentnoze": {
+      "wanderrange": 3
+    },
+    "general_karambwan": {
+      "wanderrange": 0
+    },
+    "general_karambwanji": {
+      "wanderrange": 0
+    },
+    "general_khazard": {
+      "maxrange": 25,
+      "wanderrange": 1
+    },
+    "general_wartface": {
+      "wanderrange": 3
+    },
+    "generalassistant8": {
+      "wanderrange": 2
+    },
+    "generalshopkeeper8": {
+      "wanderrange": 2
+    },
+    "gerald_waterfall_quest": {
+      "wanderrange": 2
+    },
+    "ghast_invis": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "ghast_vis": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "ghost": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "ghoul": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "giant": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "giantrat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "giantrat1": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "giantskeleton": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "giantspider1": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "giantspider2": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "gnome_hudo": {
+      "wanderrange": 2
+    },
+    "gnome_waiter": {
+      "wanderrange": 3
+    },
+    "gnomeballer_orange": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_orange_tackled": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_orange_tackled2": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_orange_withball": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_red": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_red_tackled": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_red_tackled2": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_red_withball": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_yellow": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_yellow_tackled": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_yellow_tackled2": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomeballer_yellow_withball": {
+      "maxrange": 4,
+      "wanderrange": 4
+    },
+    "gnomebanker": {
+      "wanderrange": 0
+    },
+    "gnomecheerleader": {
+      "wanderrange": 0
+    },
+    "gnomepilot": {
+      "wanderrange": 1
+    },
+    "gnomereferee": {
+      "wanderrange": 1
+    },
+    "goblin": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "goblin_armed": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "goblin_greenarmour": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "goblin_guard": {
+      "maxrange": 15,
+      "wanderrange": 0
+    },
+    "goblin_helmet": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "goblin_redarmour": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "golrie_waterfall_quest": {
+      "wanderrange": 3
+    },
+    "gorad": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "grandtree_blackdemon": {
+      "maxrange": 21,
+      "wanderrange": 21
+    },
+    "grandtree_charlie": {
+      "wanderrange": 0
+    },
+    "grandtree_femi": {
+      "wanderrange": 1
+    },
+    "grandtree_foreman": {
+      "maxrange": 10,
+      "wanderrange": 2
+    },
+    "grandtree_narnode": {
+      "wanderrange": 2
+    },
+    "grandtree_shipyardguard": {
+      "wanderrange": 2
+    },
+    "grave_scorpion": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "greater_demon": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "green_dragon": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "grip": {
+      "wanderrange": 1
+    },
+    "guard1": {
+      "maxrange": 7,
+      "wanderrange": 2
+    },
+    "guard2": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "guarddog": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "guild_towerarcher1": {
+      "maxrange": 11,
+      "wanderrange": 1
+    },
+    "guild_towerarcher2": {
+      "maxrange": 11,
+      "wanderrange": 1
+    },
+    "guild_towerarcher3": {
+      "maxrange": 11,
+      "wanderrange": 1
+    },
+    "guild_towerarcher4": {
+      "maxrange": 11,
+      "wanderrange": 1
+    },
+    "guild_wizard": {
+      "wanderrange": 4
+    },
+    "guilddwarf": {
+      "wanderrange": 2
+    },
+    "guthix_mage": {
+      "maxrange": 10
+    },
+    "hans": {
+      "maxrange": 50
+    },
+    "happy_peasant": {
+      "wanderrange": 2
+    },
+    "hazeel": {
+      "wanderrange": 0
+    },
+    "head_chef": {
+      "wanderrange": 3
+    },
+    "hellhound": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "hengrad": {
+      "wanderrange": 1
+    },
+    "highwayman": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "hobgoblin_armed": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "hobgoblin_unarmed": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "holgartland": {
+      "wanderrange": 2
+    },
+    "holgartsunkboat": {
+      "wanderrange": 2
+    },
+    "holthion": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "horacio": {
+      "wanderrange": 2
+    },
+    "horror_dagannoth_jr1": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_jr2": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_jr3": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_jr4": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_medium": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_medium_darker": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagannoth_medium_lighter": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_air": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_aira": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_airb": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_airc": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_earth": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_fire": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_jr": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_jr_darker": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_jr_lighter": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_melee": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_ranged": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_dagganoth_water": {
+      "maxrange": 65,
+      "wanderrange": 65
+    },
+    "horror_girlfriend_postquest": {
+      "wanderrange": 5
+    },
+    "horror_girlfriend_prequest": {
+      "wanderrange": 5
+    },
+    "horror_lighthousekeeeper_injured": {
+      "wanderrange": 0
+    },
+    "horror_lighthousekeeeper_well": {
+      "wanderrange": 5
+    },
+    "horror_rockcrab": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "horror_rockcrab_inactive": {
+      "maxrange": 9,
+      "wanderrange": 0
+    },
+    "horror_rockcrab_small": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "horror_rockcrab_small_inactive": {
+      "maxrange": 9,
+      "wanderrange": 0
+    },
+    "hudon_waterfall_quest": {
+      "wanderrange": 1
+    },
+    "iban": {
+      "wanderrange": 0
+    },
+    "ice_spider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "ikov_firewarrior": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "imp": {
+      "maxrange": 25,
+      "wanderrange": 27
+    },
+    "irena": {
+      "wanderrange": 2
+    },
+    "irksol": {
+      "wanderrange": 3
+    },
+    "irvig_senay": {
+      "maxrange": 40,
+      "wanderrange": 3
+    },
+    "jailguard": {
+      "maxrange": 12,
+      "wanderrange": 11
+    },
+    "jakut": {
+      "wanderrange": 2
+    },
+    "jeremy_servil": {
+      "wanderrange": 1
+    },
+    "jeremy_servil_arena": {
+      "wanderrange": 1
+    },
+    "jogre": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "jollyboar_bartender": {
+      "wanderrange": 2
+    },
+    "jonny_the_beard": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "joshua": {
+      "wanderrange": 1
+    },
+    "jungle_savage": {
+      "maxrange": 40,
+      "wanderrange": 38
+    },
+    "jungle_spider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "jungle_wolf": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "jungleforester_f": {
+      "wanderrange": 3
+    },
+    "jungleforester_m": {
+      "wanderrange": 3
+    },
+    "justin_servil": {
+      "wanderrange": 7
+    },
+    "kalphite_flyingqueen": {
+      "maxrange": 25
+    },
+    "kalphite_larva": {
+      "maxrange": 25
+    },
+    "kalphite_lord": {
+      "maxrange": 25
+    },
+    "kalphite_lord_chamber": {
+      "maxrange": 25
+    },
+    "kalphite_queen": {
+      "maxrange": 25
+    },
+    "kalphite_soldier": {
+      "maxrange": 25
+    },
+    "kalphite_worker": {
+      "maxrange": 25
+    },
+    "kalrag": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "kangai_mau": {
+      "wanderrange": 2
+    },
+    "kebab_seller": {
+      "wanderrange": 2
+    },
+    "kennith": {
+      "wanderrange": 1
+    },
+    "kent": {
+      "wanderrange": 2
+    },
+    "kharidbanker1": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "kharidbanker2": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "khazard_commander": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "khazard_troop": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "khazard_troop_spearmen": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "khazard_warlord": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "kilron": {
+      "wanderrange": 0
+    },
+    "king_bolren": {
+      "wanderrange": 2
+    },
+    "king_dragon": {
+      "maxrange": 20,
+      "wanderrange": 20
+    },
+    "kinglathas": {
+      "wanderrange": 2
+    },
+    "kingscorpion": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "kittens_mew": {
+      "wanderrange": 0
+    },
+    "knight_of_ardougne": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "knight_of_ardougne2": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "koldemon": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "kolethereal": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "kolhuman": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "kologre": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "kolspider": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "ladyofthelake": {
+      "wanderrange": 1
+    },
+    "lake_beggar": {
+      "wanderrange": 0
+    },
+    "lathas_shopkeeper": {
+      "wanderrange": 0
+    },
+    "lathastrainer1": {
+      "wanderrange": 1
+    },
+    "lathastrainer2": {
+      "wanderrange": 1
+    },
+    "legends_guild_guard1": {
+      "wanderrange": 3
+    },
+    "legends_guild_guard2": {
+      "wanderrange": 3
+    },
+    "lesser_demon": {
+      "maxrange": 16,
+      "wanderrange": 6
+    },
+    "localgnome": {
+      "wanderrange": 0
+    },
+    "lord_iorwerth": {
+      "wanderrange": 0
+    },
+    "lubufu_karambwan": {
+      "wanderrange": 0
+    },
+    "macro_bigfish": {
+      "wanderrange": 0
+    },
+    "macro_dryhadguardian_1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dryhadguardian_2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dryhadguardian_3": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dryhadguardian_4": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dryhadguardian_5": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dryhadguardian_6": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_dwarf": {
+      "maxrange": 52,
+      "wanderrange": 50
+    },
+    "macro_ent_dead_tree1": {
+      "wanderrange": 0
+    },
+    "macro_ent_dead_tree2": {
+      "wanderrange": 0
+    },
+    "macro_ent_magic": {
+      "wanderrange": 0
+    },
+    "macro_ent_maple": {
+      "wanderrange": 0
+    },
+    "macro_ent_oak": {
+      "wanderrange": 0
+    },
+    "macro_ent_tree1": {
+      "wanderrange": 0
+    },
+    "macro_ent_tree2": {
+      "wanderrange": 0
+    },
+    "macro_ent_willow": {
+      "wanderrange": 0
+    },
+    "macro_ent_yew": {
+      "wanderrange": 0
+    },
+    "macro_golemguardian_1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_golemguardian_2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_golemguardian_3": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_golemguardian_4": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_golemguardian_5": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_golemguardian_6": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_3": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_4": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_5": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_rivertrollguardian_6": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_shade1": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_shade2": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_shade3": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_shade4": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_shade5": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_shade6": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_swarm": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_triffidseed": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_triffidseed_angry": {
+      "maxrange": 3,
+      "wanderrange": 3
+    },
+    "macro_watchman1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_watchman2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_watchman3": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_watchman4": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_watchman5": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_watchman6": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_whirlpool_freshfish": {
+      "wanderrange": 0
+    },
+    "macro_whirlpool_memberfish": {
+      "wanderrange": 0
+    },
+    "macro_whirlpool_rarefish": {
+      "wanderrange": 0
+    },
+    "macro_whirlpool_saltfish": {
+      "wanderrange": 0
+    },
+    "macro_zombie1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_zombie2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_zombie3": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_zombie4": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_zombie5": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "macro_zombie6": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "magicaxe": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "makeover_mage": {
+      "wanderrange": 4
+    },
+    "master_fisher": {
+      "wanderrange": 3
+    },
+    "mcannonguard": {
+      "maxrange": 12,
+      "wanderrange": 5
+    },
+    "melzar_the_mad": {
+      "wanderrange": 2
+    },
+    "memberfish": {
+      "wanderrange": 0
+    },
+    "merlin2": {
+      "wanderrange": 1
+    },
+    "mining_cart_driver": {
+      "wanderrange": 3
+    },
+    "mining_slave_female": {
+      "wanderrange": 3
+    },
+    "mining_slave_male": {
+      "wanderrange": 3
+    },
+    "mmsnailpoint_blue": {
+      "maxrange": 37,
+      "wanderrange": 35
+    },
+    "mmsnailpoint_red+black": {
+      "maxrange": 42,
+      "wanderrange": 40
+    },
+    "mmsnailpoint_swamp": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "mmsnailpoint_yellow": {
+      "maxrange": 27,
+      "wanderrange": 25
+    },
+    "mmsnailround_blue": {
+      "maxrange": 52,
+      "wanderrange": 50
+    },
+    "mmsnailround_orange": {
+      "maxrange": 32,
+      "wanderrange": 30
+    },
+    "mmsnailround_red+black": {
+      "maxrange": 62,
+      "wanderrange": 60
+    },
+    "mmsnailround_swamp": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "mmsnailround_yellow": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "monk": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "monkey": {
+      "maxrange": 13,
+      "wanderrange": 11
+    },
+    "morris": {
+      "wanderrange": 0
+    },
+    "mort_afflicted_man": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "mort_afflicted_man2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "mort_afflicted_woman": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "mort_afflicted_woman2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "mort_myre_gate_guard": {
+      "wanderrange": 5
+    },
+    "mossgiant": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "mountain_goat2": {
+      "wanderrange": 2
+    },
+    "mournerstew2": {
+      "maxrange": 3,
+      "wanderrange": 1
+    },
+    "mournertwb": {
+      "maxrange": 10
+    },
+    "mugger": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "murphy": {
+      "wanderrange": 2
+    },
+    "murphy_halfsunk": {
+      "wanderrange": 7
+    },
+    "murphy_normal": {
+      "wanderrange": 7
+    },
+    "murphy_sunk": {
+      "wanderrange": 1
+    },
+    "nasty_tree": {
+      "wanderrange": 0
+    },
+    "nasty_tree_swamp": {
+      "wanderrange": 0
+    },
+    "newbie_account_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_basics_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_combat_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_cook_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_magic_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_mining_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_quest_instructor": {
+      "wanderrange": 2
+    },
+    "newbie_survival_instructor": {
+      "wanderrange": 2
+    },
+    "newbiegiantrat": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "nezikchened": {
+      "maxrange": 40,
+      "wanderrange": 2
+    },
+    "non_combat_bat": {
+      "wanderrange": 8
+    },
+    "noobbanker": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "nora_t_hagg": {
+      "maxrange": 50
+    },
+    "noterazzo": {
+      "wanderrange": 3
+    },
+    "nurmof": {
+      "wanderrange": 13
+    },
+    "ogre": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "ogre2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "ogre_chieftan": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "ogre_merchant": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "ogre_trader1": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "ogre_trader2": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "omart": {
+      "wanderrange": 0
+    },
+    "othainian": {
+      "maxrange": 9,
+      "wanderrange": 7
+    },
+    "otherworldly_being": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "oziach": {
+      "wanderrange": 3
+    },
+    "pack_wolf": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "paladin": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "partyroom_knight": {
+      "wanderrange": 0
+    },
+    "penguin": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "pirate_guard": {
+      "maxrange": 3,
+      "wanderrange": 1
+    },
+    "plaguesheep_1": {
+      "wanderrange": 3
+    },
+    "plaguesheep_2": {
+      "wanderrange": 3
+    },
+    "plaguesheep_3": {
+      "wanderrange": 3
+    },
+    "plaguesheep_4": {
+      "wanderrange": 3
+    },
+    "poison_scorpion": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "poisonspider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "priestperilevilmonk1": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "priestperilevilmonk2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "priestperilevilmonk3": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "priestperilguarddog": {
+      "maxrange": 5,
+      "wanderrange": 5
+    },
+    "priestperiltrappedmonk": {
+      "wanderrange": 5
+    },
+    "priestperiltrappedmonk2": {
+      "wanderrange": 1
+    },
+    "prince_ali_prison": {
+      "wanderrange": 2
+    },
+    "professor_oddenstein": {
+      "wanderrange": 2
+    },
+    "radimus_erkle": {
+      "wanderrange": 3
+    },
+    "ranalph_devere": {
+      "maxrange": 40,
+      "wanderrange": 3
+    },
+    "ranging_advisor1": {
+      "wanderrange": 0
+    },
+    "ranging_advisor2": {
+      "wanderrange": 0
+    },
+    "ranging_advisor3": {
+      "wanderrange": 0
+    },
+    "ranging_advisor4": {
+      "wanderrange": 0
+    },
+    "ranging_guild_armour_salesman": {
+      "wanderrange": 2
+    },
+    "ranging_guild_bow_salesman": {
+      "wanderrange": 2
+    },
+    "ranging_guild_competition_judge": {
+      "wanderrange": 1
+    },
+    "ranging_guild_doorman": {
+      "wanderrange": 1
+    },
+    "ranging_guild_guard": {
+      "maxrange": 20,
+      "wanderrange": 1
+    },
+    "ranging_guild_leatherworker": {
+      "wanderrange": 2
+    },
+    "ranging_guild_ticket_exchange": {
+      "wanderrange": 3
+    },
+    "rantz": {
+      "wanderrange": 2
+    },
+    "rarefish": {
+      "wanderrange": 0
+    },
+    "rat": {
+      "maxrange": 17,
+      "wanderrange": 15
+    },
+    "razmire_keelgan": {
+      "wanderrange": 5
+    },
+    "razmire_keelgan_afflicted": {
+      "wanderrange": 5
+    },
+    "recruiter": {
+      "wanderrange": 2
+    },
+    "red_dragon": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "regicide_bunny1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_bunny2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_darkbear": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "regicide_darkbear_cub1": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "regicide_darkbear_cub2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "regicide_darkelf": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_darkelf2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_general_hining": {
+      "wanderrange": 5
+    },
+    "regicide_good_elf3": {
+      "wanderrange": 0
+    },
+    "regicide_old_camp_guard": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_old_camp_tracker": {
+      "wanderrange": 0
+    },
+    "regicide_rabbit": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_tyras_camp_guard": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_tyras_camp_tent_guard": {
+      "wanderrange": 0
+    },
+    "regicide_tyras_guard": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "regicide_tyras_lazy_guard": {
+      "wanderrange": 3
+    },
+    "regicide_willothewisp1": {
+      "wanderrange": 5
+    },
+    "regicide_willothewisp2": {
+      "wanderrange": 5
+    },
+    "regicidegeneralshopkeeper": {
+      "wanderrange": 1
+    },
+    "risingsun_barmaid": {
+      "wanderrange": 4
+    },
+    "rowdymineguard": {
+      "maxrange": 40,
+      "wanderrange": 3
+    },
+    "saltfish": {
+      "wanderrange": 0
+    },
+    "san_tojalon": {
+      "maxrange": 15,
+      "wanderrange": 10
+    },
+    "saradomin_mage": {
+      "maxrange": 10
+    },
+    "scorpion": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "seabird1": {
+      "wanderrange": 8
+    },
+    "seaslug": {
+      "wanderrange": 1
+    },
+    "shade_heaven": {
+      "wanderrange": 0
+    },
+    "shade_level1": {
+      "maxrange": 60,
+      "wanderrange": 30
+    },
+    "shade_level2": {
+      "maxrange": 11,
+      "wanderrange": 5
+    },
+    "shade_level3": {
+      "maxrange": 11,
+      "wanderrange": 5
+    },
+    "shade_level4": {
+      "maxrange": 11,
+      "wanderrange": 7
+    },
+    "shade_level5": {
+      "maxrange": 11,
+      "wanderrange": 7
+    },
+    "shadeshadow_level1": {
+      "maxrange": 60,
+      "wanderrange": 30
+    },
+    "shadeshadow_level2": {
+      "maxrange": 11,
+      "wanderrange": 5
+    },
+    "shadeshadow_level3": {
+      "maxrange": 11,
+      "wanderrange": 5
+    },
+    "shadeshadow_level4": {
+      "maxrange": 11,
+      "wanderrange": 7
+    },
+    "shadeshadow_level5": {
+      "maxrange": 11,
+      "wanderrange": 7
+    },
+    "shadow_spider": {
+      "maxrange": 12,
+      "wanderrange": 10
+    },
+    "shadow_warrior": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "shantay": {
+      "wanderrange": 3
+    },
+    "shantay_guard": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "shantay_guard_still": {
+      "wanderrange": 0
+    },
+    "shiloantiques": {
+      "wanderrange": 2
+    },
+    "shilobanker": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "shilocartdriver": {
+      "wanderrange": 3
+    },
+    "shilofishowner": {
+      "wanderrange": 2
+    },
+    "shilofurnaceowner": {
+      "wanderrange": 1
+    },
+    "shilogeneralstore": {
+      "wanderrange": 2
+    },
+    "shiloinnowner": {
+      "wanderrange": 3
+    },
+    "shilop": {
+      "wanderrange": 2
+    },
+    "shiloshiptickets": {
+      "wanderrange": 0
+    },
+    "siegfried_erkle": {
+      "wanderrange": 3
+    },
+    "silk_merchant": {
+      "wanderrange": 0
+    },
+    "silk_trader": {
+      "wanderrange": 2
+    },
+    "silver_merchant": {
+      "wanderrange": 0
+    },
+    "sir_mordred": {
+      "maxrange": 3,
+      "wanderrange": 1
+    },
+    "sir_percival": {
+      "wanderrange": 1
+    },
+    "sir_vyvin": {
+      "wanderrange": 8
+    },
+    "skeleton_armed": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "skeleton_unagressive": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "skeleton_unarmed": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "skull_skeleton": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "slave_rowdy": {
+      "maxrange": 40,
+      "wanderrange": 3
+    },
+    "small_bat": {
+      "maxrange": 32,
+      "wanderrange": 20
+    },
+    "smallscorpion": {
+      "maxrange": 6,
+      "wanderrange": 4
+    },
+    "souless": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "soulman": {
+      "wanderrange": 0
+    },
+    "spice_merchant": {
+      "wanderrange": 2
+    },
+    "spider": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "spirit_of_scorpius": {
+      "wanderrange": 2
+    },
+    "squire": {
+      "wanderrange": 4
+    },
+    "stankers": {
+      "wanderrange": 2
+    },
+    "straven": {
+      "wanderrange": 1
+    },
+    "tbwt_beast": {
+      "maxrange": 64,
+      "wanderrange": 12
+    },
+    "tbwt_beast_cutscene": {
+      "wanderrange": 0
+    },
+    "tbwt_lubufu": {
+      "wanderrange": 5
+    },
+    "tbwt_tamayu": {
+      "wanderrange": 5
+    },
+    "tbwt_tamayu_final": {
+      "wanderrange": 5
+    },
+    "tbwt_tamayu_final_hunter": {
+      "wanderrange": 0
+    },
+    "tbwt_tamayu_hunter": {
+      "wanderrange": 0
+    },
+    "tbwt_tiadeche": {
+      "wanderrange": 5
+    },
+    "tbwt_tiadeche_final": {
+      "wanderrange": 5
+    },
+    "tbwt_timfraku": {
+      "wanderrange": 5
+    },
+    "tbwt_tinsay": {
+      "wanderrange": 5
+    },
+    "tbwt_tinsay_final": {
+      "wanderrange": 5
+    },
+    "tea_seller": {
+      "wanderrange": 2
+    },
+    "terrorbird": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "terrorbird2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "terrorbird3": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "thief1": {
+      "maxrange": 10,
+      "wanderrange": 7
+    },
+    "thrantax": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "tower_guard": {
+      "maxrange": 11,
+      "wanderrange": 8
+    },
+    "trail_hard": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "trail_hard2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "tramp": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "tramppg": {
+      "wanderrange": 2
+    },
+    "troll_champion": {
+      "maxrange": 30,
+      "wanderrange": 0
+    },
+    "troll_cook": {
+      "wanderrange": 3
+    },
+    "troll_cook2": {
+      "wanderrange": 3
+    },
+    "troll_cook3": {
+      "wanderrange": 3
+    },
+    "troll_eadgar": {
+      "wanderrange": 5
+    },
+    "troll_general": {
+      "maxrange": 10,
+      "wanderrange": 3
+    },
+    "troll_general2": {
+      "maxrange": 10,
+      "wanderrange": 3
+    },
+    "troll_general3": {
+      "maxrange": 10,
+      "wanderrange": 3
+    },
+    "troll_godric": {
+      "wanderrange": 2
+    },
+    "troll_melee1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "troll_mountain_goat": {
+      "wanderrange": 2
+    },
+    "troll_mountain_goat_smaller": {
+      "wanderrange": 2
+    },
+    "troll_prison_guard1": {
+      "maxrange": 7,
+      "wanderrange": 0
+    },
+    "troll_prison_guard1_awake": {
+      "maxrange": 7,
+      "wanderrange": 0
+    },
+    "troll_prison_guard2": {
+      "maxrange": 7,
+      "wanderrange": 0
+    },
+    "troll_prison_guard2_awake": {
+      "maxrange": 7,
+      "wanderrange": 0
+    },
+    "troll_spectator1": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator2": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator3": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator4": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator5": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator6": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_spectator7": {
+      "maxrange": 50,
+      "wanderrange": 0
+    },
+    "troll_stronghold_camp_guard": {
+      "wanderrange": 0
+    },
+    "troll_thrower1": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "troll_thrower2": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "troll_thrower3": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "troll_thrower4": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "troll_thrower5": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "ulsquire_shauncy": {
+      "wanderrange": 5
+    },
+    "ulsquire_shauncy_afflicted": {
+      "wanderrange": 5
+    },
+    "ungadulu_bad": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "ungadulu_good": {
+      "maxrange": 40,
+      "wanderrange": 1
+    },
+    "unhappy_peasant": {
+      "wanderrange": 2
+    },
+    "unicorn": {
+      "maxrange": 19,
+      "wanderrange": 17
+    },
+    "unicorn_foal_1": {
+      "maxrange": 19,
+      "wanderrange": 17
+    },
+    "unicorn_upass": {
+      "wanderrange": 1
+    },
+    "upass_little_spider": {
+      "maxrange": 10,
+      "wanderrange": 8
+    },
+    "vampire_flyer": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "vampire_juve": {
+      "maxrange": 30,
+      "wanderrange": 15
+    },
+    "vampire_leech": {
+      "maxrange": 10,
+      "wanderrange": 10
+    },
+    "vampire_spider": {
+      "maxrange": 16,
+      "wanderrange": 14
+    },
+    "veronica": {
+      "wanderrange": 2
+    },
+    "viking_askelapen": {
+      "wanderrange": 1
+    },
+    "viking_brundt": {
+      "wanderrange": 3
+    },
+    "viking_bunny_1": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "viking_bunny_2": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "viking_clothing_shopkeeper": {
+      "wanderrange": 5
+    },
+    "viking_draugen": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "viking_draugen_safe": {
+      "wanderrange": 20
+    },
+    "viking_enemy1": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "viking_enemy2": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "viking_enemy3": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "viking_enemy4": {
+      "maxrange": 20,
+      "wanderrange": 5
+    },
+    "viking_fish_monger": {
+      "wanderrange": 3
+    },
+    "viking_fisherman1": {
+      "wanderrange": 0
+    },
+    "viking_fox": {
+      "maxrange": 7,
+      "wanderrange": 5
+    },
+    "viking_fur_monger": {
+      "wanderrange": 3
+    },
+    "viking_golden_sheepsheered": {
+      "wanderrange": 5
+    },
+    "viking_golden_sheepunsheered": {
+      "wanderrange": 5
+    },
+    "viking_guard": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_guard2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_hallifred": {
+      "wanderrange": 1
+    },
+    "viking_heckler": {
+      "wanderrange": 0
+    },
+    "viking_heckler_2": {
+      "wanderrange": 0
+    },
+    "viking_heckler_3": {
+      "wanderrange": 0
+    },
+    "viking_heckler_4": {
+      "wanderrange": 0
+    },
+    "viking_lake_spirit": {
+      "wanderrange": 0
+    },
+    "viking_lalli_troll": {
+      "wanderrange": 3
+    },
+    "viking_longhall_bouncer": {
+      "wanderrange": 0
+    },
+    "viking_longhall_guard1": {
+      "wanderrange": 0
+    },
+    "viking_longhall_guard2": {
+      "wanderrange": 0
+    },
+    "viking_man": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_man2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_man3": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_man4": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_man5": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_olaf": {
+      "wanderrange": 3
+    },
+    "viking_peer": {
+      "wanderrange": 2
+    },
+    "viking_reveller": {
+      "wanderrange": 3
+    },
+    "viking_reveller_2": {
+      "wanderrange": 5
+    },
+    "viking_reveller_3": {
+      "wanderrange": 5
+    },
+    "viking_sailor": {
+      "wanderrange": 0
+    },
+    "viking_sigli": {
+      "wanderrange": 2
+    },
+    "viking_sigmund": {
+      "wanderrange": 3
+    },
+    "viking_thorvald": {
+      "wanderrange": 5
+    },
+    "viking_town_entrance_guard1": {
+      "wanderrange": 0
+    },
+    "viking_town_entrance_guard2": {
+      "wanderrange": 0
+    },
+    "viking_weapons_salesman": {
+      "wanderrange": 1
+    },
+    "viking_wolf": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "viking_woman": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_woman2": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_woman3": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_woman4": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viking_woman_indoors": {
+      "maxrange": 14,
+      "wanderrange": 12
+    },
+    "viyeldi": {
+      "maxrange": 40,
+      "wanderrange": 3
+    },
+    "vt_council_workmen": {
+      "wanderrange": 1
+    },
+    "werewolfbanker": {
+      "maxrange": 2,
+      "wanderrange": 0
+    },
+    "werewolfinnkeeper": {
+      "wanderrange": 5
+    },
+    "werewolfshopkeeper1": {
+      "wanderrange": 5
+    },
+    "werewolfshopkeeper2": {
+      "wanderrange": 5
+    },
+    "werewolfshopkeeper3": {
+      "wanderrange": 5
+    },
+    "werewolftanner": {
+      "wanderrange": 5
+    },
+    "whitewolf": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "whitewolf_sentry": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "willothewisp": {
+      "wanderrange": 5
+    },
+    "wilough": {
+      "wanderrange": 2
+    },
+    "witch1": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "witch2": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "witchrat": {
+      "wanderrange": 0
+    },
+    "wolf": {
+      "maxrange": 8,
+      "wanderrange": 6
+    },
+    "wolfpack_leader": {
+      "maxrange": 22,
+      "wanderrange": 20
+    },
+    "wormbrain": {
+      "maxrange": 4,
+      "wanderrange": 2
+    },
+    "young_dark_wizard": {
+      "maxrange": 5,
+      "wanderrange": 3
+    },
+    "zadimus_ghost": {
+      "wanderrange": 0
+    },
+    "zambo": {
+      "wanderrange": 3
+    },
+    "zamorak_mage": {
+      "maxrange": 10
+    },
+    "zanarisleprechaun": {
+      "wanderrange": 15
+    },
+    "zombie2": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "zombie_armed": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "zombie_entranan": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "zombie_unarmed": {
+      "maxrange": 11,
+      "wanderrange": 9
+    },
+    "zqskeleton_armed": {
+      "maxrange": 20,
+      "wanderrange": 3
+    },
+    "zqskeleton_unarmed": {
+      "maxrange": 20,
+      "wanderrange": 3
+    },
+    "zqzombie_armed": {
+      "maxrange": 20,
+      "wanderrange": 3
+    },
+    "zqzombiequeen": {
+      "wanderrange": 3
+    }
+  },
+  "source": "lostcity/content/scripts/**/*.npc (orchestrator dump-npc-ranges)"
+}

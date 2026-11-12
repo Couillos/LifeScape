@@ -691,6 +691,16 @@ pub fn cli(argv: &[String]) -> i32 {
         println!("usage: orchestrator open|run|await|verify|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N])");
         return 2;
     }
+    if argv[1].as_str() == "dump-npc-ranges" {
+        let output = argv.get(2).cloned().unwrap_or_else(|| "gamedata/data/npc_ranges.json".to_string());
+        return match crate::dump_npc_ranges::dump_npc_ranges(std::path::Path::new(&output)) {
+            Ok(_) => 0,
+            Err(error) => {
+                eprintln!("dump-npc-ranges: {error}");
+                1
+            }
+        };
+    }
     if argv[1].as_str() == "dump-transitions" {
         let Some(output) = argv.get(2) else {
             eprintln!("usage: orchestrator dump-transitions <sortie>");
@@ -707,11 +717,11 @@ pub fn cli(argv: &[String]) -> i32 {
     if argv[1].as_str() == "map" {
         return crate::mapcli::map_cli(&argv[2..].to_vec());
     }
-    if argv[1].as_str() == "route" {
-        return crate::routecmd::route_cmd(&argv[2..].to_vec());
-    }
-    if argv[1].as_str() == "replay-nav" {
-        return crate::replaynav::replay_nav_cmd(&argv[2..].to_vec());
+    match argv[1].as_str() {
+        "route" => return crate::routecmd::route_cmd(&argv[2..].to_vec()),
+        "replay-nav" => return crate::replaynav::replay_nav_cmd(&argv[2..].to_vec()),
+        "obtain" => return crate::obtaincmd::obtain_cmd(&argv[2..].to_vec()),
+        _ => {}
     }
     if argv[1].as_str() == "direct" {
         return run_direct(&argv[2..].to_vec());
@@ -766,19 +776,18 @@ pub fn cli(argv: &[String]) -> i32 {
             if no_tutorial {
                 return 0;
             }
+            // Open only: the brain's tutorial gate launches the tutorial
+            // as a graph node (reported, failure-bounded) at the first
+            // idle pass with a live position. One path, no race with a
+            // CLI-side `run` that nothing would report.
             let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&name))]));
             println!("{}", json::stringify_pretty(&reply));
-            if reply.get("ok").as_bool() != Some(true) {
-                return 1;
+            if reply.get("ok").as_bool() == Some(true) {
+                println!("{name}: the brain starts the tutorial (gate) then the goal");
+                0
+            } else {
+                1
             }
-            let run = send(object(vec![
-                ("cmd", str_value("run")),
-                ("account", str_value(&name)),
-                ("script", str_value("tutorial")),
-                ("args", Value::Arr(Vec::new())),
-            ]));
-            println!("{}", json::stringify_pretty(&run));
-            if run.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
         "open" => {
             let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&account))]));

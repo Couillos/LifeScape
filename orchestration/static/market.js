@@ -68,21 +68,44 @@ function changeText(promille) {
   return sign + (promille / 10).toFixed(1) + '%';
 }
 
+// Item table columns (shared TableSort, table.js): raw values sort, fmt
+// only changes the display. Default order = the API order (most traded
+// first); a header click sorts the whole filtered list, then pages.
+const ITEM_COLUMNS = [
+  { key: 'name', label: 'Item', kind: 'str' },
+  { key: 'price', label: 'Prix', kind: 'num' },
+  { key: 'change', label: '24 h', kind: 'num', fmt: (value) => {
+    const cls = value > 0 ? 'up' : (value < 0 ? 'down' : '');
+    return '<span class="' + cls + '">' + changeText(value) + '</span>';
+  } },
+  { key: 'volume', label: 'Volume 24 h', kind: 'num' },
+];
+
+function itemRow(item) {
+  return { id: item.item, name: item.name, price: item.price, change: item.change24h, volume: item.volume24h };
+}
+
 function renderList() {
-  const matches = filtered();
+  const matches = TableSort.sortedRows('items', ITEM_COLUMNS, filtered().map(itemRow));
   const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
   pageIndex = Math.min(Math.max(pageIndex, 0), pages - 1);
   const slice = matches.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
-  const rows = [];
-  for (const item of slice) {
-    const cls = item.change24h > 0 ? 'up' : (item.change24h < 0 ? 'down' : '');
-    rows.push('<li class="' + (selected === item.item ? 'cur' : '') + '" data-id="' + item.item +
-      '" onclick="pick(' + item.item + ')">' + item.name +
-      ' <span class="qty">(' + item.price + ' · <span class="' + cls + '">' + changeText(item.change24h) + '</span> · ' + item.volume24h + ')</span></li>');
+  if (slice.length) {
+    TableSort.render('items', ITEM_COLUMNS, slice, {
+      rowAttrs: (row) => ({ 'data-id': row.id, class: selected === row.id ? 'cur' : '' }),
+      onSort: () => { pageIndex = 0; renderList(); },
+    });
+  } else {
+    document.getElementById('items').innerHTML = '<tr><td class="left muted">' + (query ? 'no match' : 'no traded item yet') + '</td></tr>';
   }
-  document.getElementById('items').innerHTML = rows.join('') || '<li class="muted">' + (query ? 'no match' : 'no traded item yet') + '</li>';
   document.getElementById('pageinfo').textContent = 'page ' + (pageIndex + 1) + '/' + pages + ' · ' + matches.length + ' item(s)';
 }
+
+// One listener on the stable <table>: rows are rebuilt on every render.
+document.getElementById('items').addEventListener('click', (event) => {
+  const row = event.target.closest('tr[data-id]');
+  if (row) pick(Number(row.getAttribute('data-id')));
+});
 
 function page(delta) {
   pageIndex += delta;

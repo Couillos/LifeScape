@@ -115,7 +115,7 @@ fn mix_all(bot: &mut Bot, clay: u16, water: u16, soft: u16) -> Result<(), Script
         let target = bot.world.ticks + 40;
         while bot.world.ticks < target {
             if bot.world.modal.is_some() || !bot.chat_options().is_empty() || bot.world.count_dialog {
-                return Err(ScriptError::Usage(format!("mixing {SOFT} opened an interface at {:?}", bot.position())));
+                return Err(ScriptError::Failed(format!("mixing {SOFT} opened an interface at {:?}", bot.position())));
             }
             bot.pump(2)?;
             if pack_total(bot, soft) > had {
@@ -123,7 +123,7 @@ fn mix_all(bot: &mut Bot, clay: u16, water: u16, soft: u16) -> Result<(), Script
             }
         }
         if pack_total(bot, soft) == had {
-            return Err(ScriptError::Usage(format!("{SOFT} never mixed at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("{SOFT} never mixed at {:?}", bot.position())));
         }
     }
     Ok(())

@@ -9,7 +9,8 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::observe::Observe;
-use crate::kit::spots::{drop_occupied, f2p_inside, hunter_covers, hunter_zones, refine_by_walk, OCCUPIED_RADIUS};
+use crate::kit::danger::{covering, threats, Threat};
+use crate::kit::spots::{drop_occupied, f2p_inside, refine_by_walk, OCCUPIED_RADIUS};
 use crate::kit::bans::{across_toll, BanSet};
 use crate::ScriptError;
 
@@ -112,7 +113,7 @@ fn nearest_hop_spot(
     fence: Option<i32>,
     banned: &BanSet,
     except: Option<(i32, i32)>,
-    hunters: &[(i64, i64, i64)],
+    hunters: &[Threat],
     saw_paid_only: &mut bool,
     saw_f2p_only: &mut bool,
     observe: &mut Observe,
@@ -140,7 +141,10 @@ fn nearest_hop_spot(
             *saw_paid_only = true;
             continue;
         }
-        if hunter_covers(&hunters, spot_x, spot_z) {
+        if covering(&hunters, spot_x, spot_z).is_some() {
+            continue;
+        }
+        if !crate::kit::spots::in_assigned_site(bot, spot_x, spot_z) {
             continue;
         }
         spots.push((spot_x, spot_z));
@@ -173,7 +177,7 @@ pub(crate) fn pick_tree_spot(
     let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(&mut *bot) };
     // Hunter filter unless opted out: spots a threat could reach are
     // skipped (the hurt-driven flee below still handles wanderers).
-    let hunters: Vec<(i64, i64, i64)> = if bot.allow_wild { Vec::new() } else { hunter_zones(bot) };
+    let hunters: Vec<Threat> = threats(bot);
     let mut saw_paid_only = false;
     let mut saw_f2p_only = false;
     // F2P only, same rule as `pick_tier`: members tiers (magic) never
@@ -209,7 +213,10 @@ pub(crate) fn pick_tree_spot(
                 saw_paid_only = true;
                 continue;
             }
-            if hunter_covers(&hunters, spot_x, spot_z) {
+            if covering(&hunters, spot_x, spot_z).is_some() {
+                continue;
+            }
+            if !crate::kit::spots::in_assigned_site(bot, spot_x, spot_z) {
                 continue;
             }
             spots.push((spot_x, spot_z));
@@ -334,7 +341,7 @@ pub(crate) fn pick_tree_spot(
                     // shut (no verified spot to retry) and the note tells
                     // the outage apart from a genuinely filtered pool.
                     "nav-down".to_string()
-                } else if hunter_covers(&hunters, spot_x, spot_z) {
+                } else if covering(&hunters, spot_x, spot_z).is_some() {
                     "hunter".to_string()
                 } else {
                     "hop-missed".to_string()
@@ -403,7 +410,7 @@ pub(crate) fn resolve_loc(bot: &mut Bot, tile_x: i32, tile_z: i32) -> Result<(u1
     if let Some((loc, _, angle)) = rows.into_iter().next().and_then(|row| row.loc) {
         return Ok((loc, angle));
     }
-    Err(ScriptError::Usage(format!("no loc at {tile_x},{tile_z} from {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("no loc at {tile_x},{tile_z} from {:?}", bot.position())))
 }
 
 /// Live loc id at a tile (live stream first, static template as fallback).
@@ -613,14 +620,14 @@ mod tests {
         assert_eq!(default_respawn_ticks("something_new"), 160, "unknown falls back to the normal mean");
     }
 
-    /// Threat rule mirrors the server: covered by the kit brick's own
-    /// test (`kit::spots`), kept here as the call-site witness that the
-    /// tree picker filters through it.
+    /// The tree picker filters through the shared danger map
+    /// (`kit::danger`): a covered tile is skipped.
     #[test]
     fn hunter_filter_covers_threatened_tiles() {
-        assert!(hunter_covers(&[(0, 0, 5)], 3, 2), "inside the zone");
-        assert!(!hunter_covers(&[(0, 0, 5)], 4, 2), "outside the zone");
-        assert!(!hunter_covers(&[], 0, 0), "no hunters, nothing covered");
+        let zone = [Threat { x: 0, z: 0, radius: 5, name: "spider" }];
+        assert!(covering(&zone, 3, 5).is_some(), "inside the square");
+        assert!(covering(&zone, 6, 0).is_none(), "outside the square");
+        assert!(covering(&[], 0, 0).is_none(), "no hunters, nothing covered");
     }
 
     /// Toll fence reporting: the Al-Kharid gate line comes from the
@@ -925,7 +932,7 @@ mod tests {
     /// A tile the service has no template for keeps the `Usage` error
     /// (a spot with genuinely no tree), never a guessed id.
     #[test]
-    fn live_loc_id_without_template_stays_usage() {
+    fn live_loc_id_without_template_is_runtime_failure() {
         let (mut bot, _service) = served_spot_bot(3053, 3271, "spot-loc-empty");
         // One batch over open grass: the first tile without a template
         // proves the error path.
@@ -937,7 +944,7 @@ mod tests {
             .find(|(_, row)| row.loc.is_none())
             .map(|(tile, _)| *tile)
             .expect("open grass somewhere");
-        let err = live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is Usage");
-        assert!(matches!(err, ScriptError::Usage(_)), "Usage, got: {err:?}");
+        let err = live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is a runtime failure");
+        assert!(matches!(err, ScriptError::Failed(_)), "Failed, got: {err:?}");
     }
 }

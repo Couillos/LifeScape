@@ -33,7 +33,8 @@ pub(crate) fn controlled_button(category: &str) -> Option<&'static str> {
 /// Combat xp across the four fighting stats (attack 0, defence 1, strength 2,
 /// hitpoints 3): any landed hit moves it, so a flat line means no combat.
 pub(crate) fn combat_xp(bot: &Bot) -> i64 {
-    [0u8, 1, 2, 3].iter().filter_map(|index| bot.world.stats.get(index)).map(|(_, xp)| i64::from(*xp)).sum()
+    // Melee, hitpoints, ranged (4) and magic (6): any style's hit counts.
+    [0u8, 1, 2, 3, 4, 6].iter().filter_map(|index| bot.world.stats.get(index)).map(|(_, xp)| i64::from(*xp)).sum()
 }
 
 /// Level of one melee skill by stat id (0 attack, 1 defence, 2 strength).

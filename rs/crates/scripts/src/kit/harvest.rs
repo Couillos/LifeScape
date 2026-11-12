@@ -107,6 +107,11 @@ pub fn watch_stand<Source: HarvestSource>(
                 return Ok((WorkOutcome::Threat, gained));
             }
             if bot.world.modal.is_some() && !dismiss_modal(bot)? {
+                // Fishing answers in a mesbox, not the chat log (no net,
+                // no bait, pack full): read it before calling it Blocked.
+                if let Some(outcome) = modal_outcome(bot)? {
+                    return Ok((outcome, gained));
+                }
                 bot.pump(10)?;
                 if bot.world.modal.is_some() && !dismiss_modal(bot)? {
                     return Ok((WorkOutcome::Blocked, gained));
@@ -275,8 +280,47 @@ pub fn work_acked(bot: &Bot, seen: usize, acks: &[&str]) -> bool {
     })
 }
 
+/// Verdict of an open chat-layer message box (`~mesbox`: "You need a net
+/// to catch these fish.", "You can't carry any more fish."), closed with
+/// Continue once read. `None` when the box says nothing the gather loop
+/// knows (the caller keeps treating it as Blocked).
+pub fn modal_outcome(bot: &mut Bot) -> Result<Option<WorkOutcome>, ScriptError> {
+    if !bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "chat") {
+        return Ok(None);
+    }
+    let verdict = bot.chat_texts().iter().find_map(|(_, text)| classify_message(text).map(|outcome| (outcome, text.clone())));
+    let Some((outcome, text)) = verdict else {
+        return Ok(None);
+    };
+    bot.log(&format!("message box: {text:?} -> {outcome:?}"));
+    bot.chat_continue()?;
+    bot.pump(3)?;
+    Ok(Some(outcome))
+}
+
 /// Dismiss a level-up / dialog modal with Continue. True when no modal
 /// remains; congratulation dialogs are the only ones auto-dismissed.
+/// Walk to the nearest F2P spawn of `npc` on the bot's plane (a flock,
+/// a herd) when none streams around the bot. False when the dump knows
+/// no such spawn.
+pub fn walk_to_nearest_spawn(bot: &mut Bot, npc: &str, ticks: u64) -> Result<bool, ScriptError> {
+    let mut best: Option<(i64, (i64, i64))> = None;
+    for row in lifescape_gamedata::npcs_by_name(npc) {
+        for spawn in lifescape_gamedata::f2p::f2p_npc_spawns(Some(row.npc_id)) {
+            if spawn.level != i64::from(bot.world.level) {
+                continue;
+            }
+            let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
+            if best.is_none_or(|(known, _)| dist < known) {
+                best = Some((dist, (spawn.x, spawn.z)));
+            }
+        }
+    }
+    let Some((_, (x, z))) = best else { return Ok(false) };
+    bot.log(&format!("no {npc} in view, walking to the nearest at ({x},{z})"));
+    crate::skill_walk::walk_checked(bot, x as i32, z as i32, ticks)
+}
+
 pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
     if bot.world.modal.is_none() {
         return Ok(true);
@@ -289,7 +333,11 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
         return Ok(true);
     }
     let congrats = bot.chat_texts().iter().any(|(_, text)| text.to_lowercase().contains("congratulations"));
-    if !congrats {
+    // An item box (`~objbox`: "You get some wool.", shear_sheep.rs2) is a
+    // click-to-continue chat page with no options: continue it like a
+    // level-up splash (PRD3 lot 7: every shear ended `Blocked` on it).
+    let item_box = bot.world.modal.as_ref().is_some_and(|modal| modal.layer == "chat") && bot.chat_options().is_empty();
+    if !congrats && !item_box {
         return Ok(false);
     }
     for _ in 0..4 {
@@ -391,6 +439,35 @@ mod tests {
         assert!(!work_acked(&bot, 0, &FISHING_ACKS), "no cast, no ack");
         bot.world.messages.push("You attempt to catch a fish.".to_string());
         assert!(work_acked(&bot, seen, &FISHING_ACKS), "attempt counts as fishing ack");
+        // Net and harpoon spots never say "line" nor "attempt" (content
+        // skill_fishing: "You cast out your net...", "You start Harpooning fish.").
+        for line in ["You cast out your net...", "You start Harpooning fish."] {
+            let before = bot.world.messages.len();
+            bot.world.messages.push(line.to_string());
+            assert!(work_acked(&bot, before, &FISHING_ACKS), "{line} acks the cast");
+        }
+    }
+
+    /// The fishing refusals arrive in a chat message box: the gather loop
+    /// reads them (no tool, no bait, pack full) instead of Blocked.
+    #[test]
+    fn fishing_message_box_is_classified() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        for (text, expected) in [
+            ("You need a net to catch these fish.", WorkOutcome::NoTool),
+            ("You can't carry any more fish.", WorkOutcome::Full),
+            ("You don't have any fishing bait left.", WorkOutcome::NoBait),
+            ("You need at least 20 Fishing to lure these fish.", WorkOutcome::LevelLocked),
+        ] {
+            bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "chat".to_string(), interface_id: 210 });
+            bot.world.texts.clear();
+            bot.world.texts.insert(211, text.to_string());
+            let outcome = super::classify_message(text);
+            assert_eq!(outcome, Some(expected), "{text}");
+        }
+        bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "overlay".to_string(), interface_id: 193 });
+        assert!(super::modal_outcome(&mut bot).expect("overlay never errors").is_none(), "only chat boxes are read");
     }
 
 

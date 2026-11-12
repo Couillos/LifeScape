@@ -12,7 +12,7 @@ use crate::drops::{self, Drop};
 use crate::free_zones::is_free;
 use crate::quests::Quest;
 use crate::recipes::Recipe;
-use crate::shops::{Keeper, Shop};
+use crate::shops::Shop;
 use crate::spells::Spell;
 use crate::spawns::{NpcSpawn, ObjSpawn};
 use crate::{npc_by_id, obj_by_id, Obj};
@@ -69,22 +69,58 @@ pub fn f2p_recipes() -> Vec<Recipe> {
         .collect()
 }
 
-/// True when this keeper NPC stands somewhere a non-member can walk
-/// (unknown or spawn-less keeper NPCs never count).
-fn keeper_has_free_spawn(keeper: &Keeper) -> bool {
-    if keeper.npc_id < 0 {
-        return false;
-    }
-    npc_by_id(keeper.npc_id as usize)
-        .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
+/// Quest directories of the 18 F2P quests (`quest_dragon`…).
+pub fn is_f2p_quest_dir(dir: &str) -> bool {
+    F2P_QUESTS.iter().any(|(_, quest_dir)| *quest_dir == dir)
 }
 
-/// Shops a non-member can use: a keeper NPC with an F2P-zone spawn, or
-/// an explicit `_free` world variant (which carries no keeper row).
+/// How a non-member reaches one shop: the NPCs that open it on an F2P
+/// world while standing in an F2P zone, and the F2P quest that gates
+/// it (Oziach's rune plate needs Dragon Slayer). `None` when no such
+/// NPC exists or every path needs a members quest (or an unowned gate).
+#[derive(Debug, Clone)]
+pub struct ShopAccess {
+    pub npcs: Vec<usize>,
+    pub quest: Option<String>,
+}
+
+pub fn f2p_shop_access(shop: &str) -> Option<ShopAccess> {
+    let mut npcs = Vec::new();
+    let mut quests: Vec<Option<String>> = Vec::new();
+    for (npc, opening) in crate::shop_access::openers(shop) {
+        let walkable = npc_by_id(npc.npc_id).is_some_and(|row| row.spawns.iter().any(|spot| is_free(spot.x, spot.z)));
+        // Every gate must belong to an F2P quest; an unowned varp (Mage
+        // Arena) or a members quest shuts the path.
+        let f2p_gates = opening.gates.iter().all(|gate| gate.quest.as_deref().is_some_and(is_f2p_quest_dir));
+        if !walkable || !f2p_gates {
+            continue;
+        }
+        quests.push(opening.gates.first().and_then(|gate| gate.quest.clone()));
+        npcs.push(npc.npc_id);
+    }
+    if npcs.is_empty() {
+        return None;
+    }
+    npcs.sort_unstable();
+    npcs.dedup();
+    // An ungated opener means no quest is needed.
+    let quest = if quests.iter().any(Option::is_none) { None } else { quests.into_iter().flatten().next() };
+    Some(ShopAccess { npcs, quest })
+}
+
+/// Shops a non-member can use: some NPC opens it on an F2P world while
+/// standing in an F2P zone, with only F2P quest gates (`shop_access`).
 pub fn f2p_shops() -> Vec<Shop> {
-    crate::shops::all_shops()
-        .into_iter()
-        .filter(|entry| entry.name.ends_with("_free") || entry.keepers.iter().any(keeper_has_free_spawn))
+    crate::shops::all_shops().into_iter().filter(|entry| f2p_shop_access(&entry.name).is_some()).collect()
+}
+
+/// Stock lines a non-member can buy: members objects never sell to an
+/// F2P player (they are untradeable on F2P worlds).
+pub fn f2p_stock(shop: &Shop) -> Vec<crate::shops::Stock> {
+    shop.stocks
+        .iter()
+        .filter(|stock| crate::objs_by_name(&stock.obj).into_iter().next().is_some_and(|obj| obj.members != Some(true)))
+        .cloned()
         .collect()
 }
 
@@ -138,6 +174,8 @@ pub fn f2p_drops() -> Vec<Drop> {
                     .is_some_and(|obj| obj.members == Some(false) && obj.tradeable)
         })
         .filter(|entry| entry.npc_id < 0 || (entry.npc_id >= 0 && npc_has_free_spawn(entry.npc_id as usize)))
+        // Rate 0 = only a members branch drops it: never on an F2P world.
+        .filter(|entry| entry.rate > 0.0)
         .collect()
 }
 
@@ -231,45 +269,32 @@ mod tests {
 
     #[test]
     fn shops_follow_their_keepers() {
-        // Keepered shops need a keeper standing in an F2P zone; the two
-        // `_free` rows are the explicit F2P-world variants.
+        // A shop is F2P when an NPC standing in an F2P zone opens it on an
+        // F2P world (shop_access): the old keeper join kept 45, among
+        // them four shops shut in F2P, and missed Zaff's staffs.
         let free = f2p_shops();
-        assert_eq!(free.len(), 45, "f2p shops, got {}", free.len());
+        assert_eq!(free.len(), 42, "f2p shops, got {}", free.len());
         let names: Vec<&str> = free.iter().map(|entry| entry.name.as_str()).collect();
         for name in ["scimitarshop", "axeshop", "pickaxeshop", "fishingshop", "craftingshop_free", "craftingshop2_free"] {
             assert!(names.contains(&name), "shop {name} stays f2p");
         }
-        for name in ["khazardshop", "fishingguild", "regicide_general_shop", "memberstaffshop", "foodshop"] {
+        for name in ["staffshop", "runeplateshop"] {
+            assert!(names.contains(&name), "shop {name} opens in f2p");
+        }
+        for name in ["khazardshop", "fishingguild", "regicide_general_shop", "memberstaffshop", "foodshop", "shantayshop", "teashop", "fancyclothesstore", "mcannonshop"] {
             assert!(!names.contains(&name), "shop {name} leaves f2p");
         }
         for shop in &free {
-            if shop.name.ends_with("_free") {
-                continue;
-            }
+            let access = super::f2p_shop_access(&shop.name).expect("listed shops have access");
             assert!(
-                shop.keepers.iter().any(|keeper| {
-                    keeper.npc_id >= 0
-                        && crate::npc_by_id(keeper.npc_id as usize)
-                            .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
-                }),
-                "shop {} has a free keeper",
+                access.npcs.iter().any(|npc| crate::npc_by_id(*npc).is_some_and(|row| row.spawns.iter().any(|spot| is_free(spot.x, spot.z)))),
+                "shop {} has an opener standing in F2P",
                 shop.name
             );
         }
-        for shop in crate::shops::all_shops() {
-            if names.contains(&shop.name.as_str()) || shop.keepers.is_empty() {
-                continue;
-            }
-            assert!(
-                !shop.keepers.iter().any(|keeper| {
-                    keeper.npc_id >= 0
-                        && crate::npc_by_id(keeper.npc_id as usize)
-                            .is_some_and(|npc| npc.spawns.iter().any(|spot| is_free(spot.x, spot.z)))
-                }),
-                "shop {} excluded for a reason",
-                shop.name
-            );
-        }
+        let plate = super::f2p_shop_access("runeplateshop").expect("Oziach opens after Dragon Slayer");
+        assert_eq!(plate.quest.as_deref(), Some("quest_dragon"));
+        assert!(super::f2p_shop_access("generalshop1").expect("Lumbridge store").quest.is_none());
     }
 
     #[test]

@@ -160,7 +160,7 @@ impl Orchestrator {
             inner.started = now_secs();
             inner.session_pid = Some(pid);
         }
-        println!("session {}: worker pid={pid}", job.account);
+        crate::logln!("session {}: worker pid={pid}", job.account);
         let deadline = now_secs() + OPEN_TIMEOUT;
         let mut ready: Option<Value> = None;
         while now_secs() < deadline {
@@ -230,7 +230,7 @@ impl Orchestrator {
             let free = crate::admission::free_disk_bytes(&crate::paths::run_dir());
             crate::res_stats::record_disk(free);
             if let Some(warning) = crate::admission::disk_warning(free) {
-                println!("open {account}: {warning}");
+                crate::logln!("open {account}: {warning}");
             }
         }
         {
@@ -469,7 +469,7 @@ impl Orchestrator {
                 session = reply.get("session").clone();
             }
             Ok(_) => {}
-            Err(error) => println!("close {account}: worker unreachable: {error}"),
+            Err(error) => crate::logln!("close {account}: worker unreachable: {error}"),
         }
         self.kill_process(account);
         let (sock, _ready) = paths::session_paths(account);
@@ -552,7 +552,12 @@ impl Orchestrator {
                 let resolved = frame.get("resolved").as_bool().unwrap_or(false);
                 let tick = frame.get("tick").as_i64().unwrap_or(0);
                 let args = frame.get("args").as_arr().cloned().unwrap_or_default();
-                println!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push)");
+                let message = frame.get("message").as_str().unwrap_or("");
+                if message.is_empty() {
+                    crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push)");
+                } else {
+                    crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push): {message}");
+                }
                 {
                     let Ok(mut inner) = job.inner.try_lock() else {
                         return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
@@ -577,7 +582,7 @@ impl Orchestrator {
             }
             "task_report" => {
                 let report = frame.get("report").clone();
-                println!(
+                crate::logln!(
                     "job {account}: task_report stop={} activity={} ticks={} (push)",
                     report.get("stop").as_str().unwrap_or("?"),
                     report.get("activity").as_str().unwrap_or("?"),
@@ -586,7 +591,7 @@ impl Orchestrator {
                 // E8: stage grouped for the future store import, flag the
                 // single supervisor (brain trigger) immediately.
                 if let Err(error) = crate::store_queue::stage_report(&report) {
-                    println!("job {account}: staging failed: {error}");
+                    crate::logln!("job {account}: staging failed: {error}");
                 }
                 let Ok(mut inner) = job.inner.try_lock() else {
                     return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
@@ -613,14 +618,24 @@ impl Orchestrator {
             if !sock_path.exists() {
                 continue;
             }
-            let mut session = match self.send_worker(
-                &account,
-                &object(vec![("cmd", str_value("status"))]),
-                Duration::from_secs(3),
-            ) {
+            // A worker busy in a script answers late: one longer retry
+            // before giving up on it (never an orphan, see send_worker).
+            let status = object(vec![("cmd", str_value("status"))]);
+            let reply = self
+                .send_worker(&account, &status, Duration::from_secs(3))
+                .or_else(|_| self.send_worker(&account, &status, Duration::from_secs(10)));
+            let mut session = match reply {
                 Ok(reply) => reply.get("session").clone(),
-                Err(_) => {
-                    let _ = std::fs::remove_file(&sock_path);
+                Err(error) => {
+                    // Only a socket nobody listens on is stale. A slow but
+                    // live worker (busy at restart) keeps its socket: removing
+                    // it orphaned the worker, still logged in, unreachable.
+                    let dead = error.contains("refused") || error.contains("No such file") || error.contains("not found");
+                    if dead {
+                        let _ = std::fs::remove_file(&sock_path);
+                    } else {
+                        crate::logln!("restore {account}: worker not answering ({error}), socket kept for the next pass");
+                    }
                     continue;
                 }
             };
@@ -665,7 +680,7 @@ impl Orchestrator {
             }
             self.jobs.lock().unwrap().insert(account.clone(), job.clone());
             self.start_supervisor(job);
-            println!("restored {account} (idle)");
+            crate::logln!("restored {account} (idle)");
         }
     }
 

@@ -42,7 +42,7 @@ fn rescue_maze(bot: &mut Bot) -> ScriptResult {
     // No maze timeout to wait out (verified live: the server does not
     // release an unsolved maze). Fail loud immediately with position.
     if randomevent::in_maze(bot) {
-        return Err(ScriptError::Usage(format!(
+        return Err(ScriptError::Failed(format!(
             "maze stuck at {:?}: centre unreachable",
             bot.position()
         )));

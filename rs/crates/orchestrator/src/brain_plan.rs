@@ -6,7 +6,7 @@
 use crate::jobs::Job;
 use lifescape_json::Value;
 use lifescape_planner::expand::ReadyCtx;
-use lifescape_planner::{Alternative, Life, Node, NodeKind, NodeStatus};
+use lifescape_planner::{Life, Node, NodeKind};
 
 /// Fixed round-trip estimate to Varrock for cost comparisons.
 // shortcut: fixed 800-tick round trip; replaced by measured convene
@@ -51,6 +51,26 @@ fn shop_floor(item_debug: &str) -> i64 {
     if floor == i64::MAX { 1 } else { floor }
 }
 
+/// Rate bucket key of a planner method: reports key their yields by the
+/// script that ran (`melee`, `fishing`…), never by the planner method
+/// (`farm:feather`), so the lookup translates through the same mapping
+/// the brain dispatches with. `None` when the method maps to no script.
+pub(crate) fn rate_key(method: &str, node: &Node) -> Option<String> {
+    lifescape_planner::map_method(method, node, None).map(|(script, _)| script)
+}
+
+/// Yield per 6000 ticks of `method` for `display`: the measured bucket
+/// at `band`, else the best-measured band of that script, else the
+/// cold-start prior, else 200 (blind).
+pub(crate) fn farm_yield(snapshot: &crate::rates_service::Snapshot, method: &str, node: &Node, display: &str, band: i64) -> f64 {
+    let script = rate_key(method, node).unwrap_or_default();
+    crate::rates_service::measured_yield(snapshot, &script, display, band)
+        .or_else(|| crate::rates_service::measured_yield_any_band(snapshot, &script, display))
+        .or_else(|| crate::rates_service::prior_for(&script, &display.to_lowercase()).map(|(yield_per, _)| yield_per))
+        .or_else(|| crate::rates_service::prior_for(method, &display.to_lowercase()).map(|(yield_per, _)| yield_per))
+        .unwrap_or(200.0)
+}
+
 /// Public-data planning context for one node: market reference (or shop
 /// fallback), published yields (or cold-start priors), trend score.
 pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
@@ -76,11 +96,8 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
             let (price, _) = crate::rates_service::price_estimate(&store, &display);
             ctx.price = price.max(1.0) as i64;
             ctx.shop_price = shop_floor(&item_debug);
-            let farm_method = node.alternatives.iter().find(|alt| alt.method.starts_with("farm:")).map(|alt| alt.method.clone()).unwrap_or_default();
-            let key_item = if farm_method.starts_with("farm:") { display.clone() } else { display.clone() };
-            ctx.yield_per_6000 = crate::rates_service::measured_yield(&snapshot, &farm_method, &key_item, band)
-                .or_else(|| crate::rates_service::prior_for(&farm_method, &key_item.to_lowercase()).map(|(yield_per, _)| yield_per))
-                .unwrap_or(200.0);
+            let farm_method = format!("farm:{item_debug}");
+            ctx.yield_per_6000 = farm_yield(&snapshot, &farm_method, node, &display, band);
         } else if matches!(&node.kind, NodeKind::MakeMoney) {
             // Money leaves price the best published profit; the flip leg
             // stays a flat engagement (measured once merchants report).
@@ -207,18 +224,34 @@ pub fn pick_flip_target(
     best.map(|(name, qty, _)| (name, qty))
 }
 
+/// Debug name of one live stack. The snapshot carries display names
+/// ("Small fishing net") plus the obj id; the planner, the tool gate and
+/// `--keep` speak debug names (`net`), so the id decides. A bare string
+/// entry (older snapshot shape) is taken as is.
+pub(crate) fn live_debug_name(entry: &Value) -> Option<String> {
+    match entry {
+        Value::Obj(_) => {
+            if let Some(id) = entry.get("id").as_i64() {
+                if let Some(name) = usize::try_from(id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name) {
+                    return Some(name.to_string());
+                }
+            }
+            entry.get("name").as_str().map(str::to_string)
+        }
+        Value::Str(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 fn live_names(job: &Job, key: &str) -> Vec<String> {
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
     let mut names = Vec::new();
     for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-        if let Value::Obj(_) = &entry {
-            if let Some(name) = entry.get("name").as_str() {
-                if entry.get("count").as_i64().unwrap_or(1) > 0 {
-                    names.push(name.to_string());
-                }
-            }
-        } else if let Value::Str(name) = &entry {
-            names.push(name.clone());
+        if entry.get("count").as_i64().unwrap_or(1) <= 0 {
+            continue;
+        }
+        if let Some(name) = live_debug_name(&entry) {
+            names.push(name);
         }
     }
     names
@@ -232,7 +265,11 @@ pub(crate) fn worn_names(job: &Job) -> Vec<String> {
 /// Carried debug names (live pack the brain already reads) for the
 /// planner tool gate: only positive counts ride along.
 pub(crate) fn carried_tools(job: &Job) -> Vec<String> {
-    live_names(job, "inv")
+    let mut names = live_names(job, "inv");
+    names.extend(live_names(job, "bank"));
+    // A wielded pickaxe or axe works too (PRD3 lot 5).
+    names.extend(live_names(job, "worn"));
+    names
 }
 
 /// Live carried + banked stacks (debug name, summed quantity) for the flip pick.
@@ -241,14 +278,8 @@ pub(crate) fn live_stacks(job: &Job) -> Vec<(String, i64)> {
     let mut totals: std::collections::HashMap<String, (String, i64)> = std::collections::HashMap::new();
     for key in ["inv", "bank"] {
         for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            let (name, qty) = match &entry {
-                Value::Obj(_) => match entry.get("name").as_str() {
-                    Some(name) => (name.to_string(), entry.get("count").as_i64().unwrap_or(1)),
-                    None => continue,
-                },
-                Value::Str(name) => (name.clone(), 1),
-                _ => continue,
-            };
+            let Some(name) = live_debug_name(&entry) else { continue };
+            let qty = entry.get("count").as_i64().unwrap_or(1);
             if qty <= 0 {
                 continue;
             }
@@ -308,152 +339,6 @@ pub(crate) fn live_combat(live: &Value) -> u8 {
     lifescape_sdk::snapshot::combat_level(&stats).unwrap_or(3)
 }
 
-/// One gated launch step: the ready node dispatches, a priority node
-/// (safe access or combat training) launches instead, the brain waits
-/// on a node already running, or the style fails typed (no fallback).
-pub(crate) enum CombatStep {
-    Direct,
-    Redirect(usize),
-    Wait,
-    Fail(String),
-}
-
-/// Tutorial-first (b3vsmjbc, bbdvmczd) : un bot sur Tutorial Island
-/// n'a pas fini le tutoriel, donc aucun `gather:*` mainland ne peut
-/// passer. La zone live tranche ; la tuile aide quand la zone manque.
-pub fn tutorial_needed(live: &Value) -> bool {
-    if live.get("zone").as_str() == Some("Tutorial Island") {
-        return true;
-    }
-    if let Some(pos) = live.get("position").as_arr() {
-        if pos.len() == 3 {
-            if let (Some(x), Some(z)) = (pos[1].as_i64(), pos[2].as_i64()) {
-                // Rectangles, pas labels : l'île n'a pas de label propre
-                // partout (ex : (3072,3133) lu "Wizards' Tower").
-                // Surface : x 3050-3160, z 3070-3140 (hors mainland :
-                // Draynor z≥3264, Port Sarim z≥3215, Lumbridge x≥3222,
-                // Rimmington x≤3050). Souterrain : mine (3079,9505),
-                // rat pit (3107-3110,9510-9519).
-                if (3050..=3160).contains(&x) && (3070..=3140).contains(&z) {
-                    return true;
-                }
-                if (3070..=3115).contains(&x) && (9495..=9530).contains(&z) {
-                    return true;
-                }
-                if let Some((name, _)) = crate::zones::zone_name(x as i32, z as i32) {
-                    return name == "Tutorial Island";
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Nœud tutoriel prioritaire : réutilise l'ouvert (méthode reportée
-/// après un reset Active→Ready), jamais de doublon.
-pub fn ensure_tutorial_node(life: &mut Life) -> usize {
-    if let Some(at) = life.nodes.iter().position(|node| {
-        matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
-            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
-    }) {
-        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
-            life.nodes[at].method = Some("tutorial".to_string());
-        }
-        if life.nodes[at].alternatives.is_empty() {
-            life.nodes[at].alternatives.push(Alternative { method: "tutorial".to_string(), est_ticks: 6000, est_coins: 0 });
-        }
-        return at;
-    }
-    let mut node = Node::new(&next_node_id(life), NodeKind::CompleteQuest { quest: "tutorial".to_string() }, Vec::new(), 1);
-    node.status = NodeStatus::Ready;
-    node.method = Some("tutorial".to_string());
-    node.alternatives.push(Alternative { method: "tutorial".to_string(), est_ticks: 6000, est_coins: 0 });
-    life.nodes.push(node);
-    life.nodes.len() - 1
-}
-
-/// Ce que le pas tutoriel décide : lancer le script, clore un nœud
-/// ouvert hors de l'île (la sortie exige la fin), ou ne rien faire.
-pub enum TutorialStep {
-    Launch(usize),
-    Cleared,
-    Idle,
-}
-
-fn push_graph_history(life: &mut Life, node: &str, outcome: &str) {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
-    life.history.push(lifescape_planner::HistoryEntry { node: node.to_string(), started: now, ended: now, outcome: outcome.to_string() });
-}
-
-/// Pas tutoriel : sur l'île on lance (le nœud `tutorial` porte
-/// directement le script, sans passer par `map_method`) ; hors de
-/// l'île un nœud ouvert se clôt ; sinon calme.
-pub fn tutorial_step(life: &mut Life, live: &Value) -> TutorialStep {
-    let open = life.nodes.iter().position(|node| {
-        matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
-            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
-    });
-    if !tutorial_needed(live) {
-        if let Some(at) = open {
-            let id = life.nodes[at].id.clone();
-            life.nodes[at].status = NodeStatus::Done;
-            life.nodes[at].progress_current = life.nodes[at].progress_target;
-            if life.active.as_deref() == Some(id.as_str()) {
-                life.active = None;
-            }
-            push_graph_history(life, &id, "tutorial_done");
-            println!("brain {}: off tutorial island, closing tutorial {id}", life.account);
-            return TutorialStep::Cleared;
-        }
-        return TutorialStep::Idle;
-    }
-    TutorialStep::Launch(open.unwrap_or_else(|| ensure_tutorial_node(life)))
-}
-
-/// Graphe épuisé (t02) : ouvert (rien à faire), succès (tout Done,
-/// intact), réessai borné (abandonnés → Ready, méthode effacée), ou
-/// repos avec dossier (deux épuisements déjà).
-pub enum DeadGraph {
-    Open,
-    Success,
-    Revived,
-    Rested,
-}
-
-/// Réessaie un graphe mort une fois de plus (borné à deux), sinon
-/// dossier bruyant et repos : jamais d'idle silencieux.
-pub fn revive_dead_graph(life: &mut Life) -> DeadGraph {
-    let terminal = life.nodes.iter().all(|node| matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned));
-    if !terminal {
-        return DeadGraph::Open;
-    }
-    if life.nodes.iter().all(|node| node.status == NodeStatus::Done) {
-        return DeadGraph::Success;
-    }
-    let exhausted = life.history.iter().filter(|entry| entry.outcome == "exhausted" || entry.outcome == "exhausted-idle").count();
-    if exhausted < 2 {
-        for node in &mut life.nodes {
-            if node.status == NodeStatus::Abandoned {
-                node.status = NodeStatus::Ready;
-                node.method = None;
-                node.spent_ticks = 0;
-            }
-        }
-        if life.active.as_deref().is_some_and(|id| !life.nodes.iter().any(|node| node.id == id && node.status == NodeStatus::Active)) {
-            life.active = None;
-        }
-        push_graph_history(life, "graph", "exhausted");
-        println!("brain {}: dead graph, retrying abandoned nodes (exhaustion #{})", life.account, exhausted + 1);
-        DeadGraph::Revived
-    } else {
-        if life.history.last().is_none_or(|entry| entry.outcome != "exhausted-idle") {
-            push_graph_history(life, "graph", "exhausted-idle");
-            println!("brain {}: dead graph twice exhausted, standing by (dossier in history)", life.account);
-        }
-        DeadGraph::Rested
-    }
-}
-
 /// Échec de voyage : la signature vit dans `last_error.message`
 /// ("travel failure NoRoute ...", "bank unreachable ...").
 pub fn is_travel_failure(last_error: &Value) -> bool {
@@ -461,14 +346,6 @@ pub fn is_travel_failure(last_error: &Value) -> bool {
     ["noroute", "travel failure", "unreachable", "unset_map_flag", "no-route", "no route"]
         .iter()
         .any(|mark| message.contains(mark))
-}
-
-/// Erreur de contrat (`usage: ...`) : la commande est mal formée,
-/// replanifier à l'identique ne guérira jamais. À abandonner typé,
-/// pas à réessayer (ex : `--level` sans nombre relancé en boucle).
-pub fn is_usage_error(last_error: &Value) -> bool {
-    let message = last_error.get("message").as_str().unwrap_or("").to_lowercase();
-    message.starts_with("usage:") || message.contains("usage: ")
 }
 
 /// Ce que le repli voyage décide : réessayer (il reste une
@@ -492,103 +369,11 @@ pub fn fold_travel_failure(node: &mut Node, method: &str) -> TravelFold {
     }
 }
 
-fn next_node_id(life: &Life) -> String {
-    let mut counter = life.nodes.len();
-    for node in &life.nodes {
-        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
-            counter = counter.max(number);
-        }
-    }
-    format!("n{}", counter + 1)
-}
-
-/// Priority safe-area access (cerveau relocate): reuses the open one,
-/// never doubles it.
-fn ensure_access_node(life: &mut Life, area: &str) -> usize {
-    if let Some(at) = life.nodes.iter().position(|node| {
-        matches!(&node.kind, NodeKind::AccessArea { area: reached } if reached == area)
-            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
-    }) {
-        // Crash recovery re-queues Active as Ready with method=None: the
-        // redirect would launch empty (fail_no_script vide). The gate
-        // carries the method itself, so backfill it on reuse.
-        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
-            life.nodes[at].method = Some(format!("access:{area}"));
-        }
-        if life.nodes[at].alternatives.is_empty() {
-            life.nodes[at].alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 6000, est_coins: 0 });
-        }
-        return at;
-    }
-    let mut node = Node::new(&next_node_id(life), NodeKind::AccessArea { area: area.to_string() }, Vec::new(), 1);
-    node.status = NodeStatus::Ready;
-    node.method = Some(format!("access:{area}"));
-    node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 0, est_coins: 0 });
-    life.nodes.push(node);
-    life.nodes.len() - 1
-}
-
-/// Priority combat training (cerveau train-first): reuses the open
-/// one, locks the goal-style method on chickens at creation.
-fn ensure_training_node(life: &mut Life, required: u8, method: &str) -> usize {
-    if let Some(at) = life.nodes.iter().position(|node| {
-        matches!(&node.kind, NodeKind::ReachCombat { .. })
-            && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
-    }) {
-        // Same crash-recovery hole as the access gate: a reused open
-        // training node without a method would redirect empty.
-        if life.nodes[at].method.as_deref().is_none_or(str::is_empty) {
-            life.nodes[at].method = Some(method.to_string());
-        }
-        if life.nodes[at].alternatives.is_empty() {
-            life.nodes[at].alternatives.push(Alternative { method: method.to_string(), est_ticks: 6000, est_coins: 0 });
-        }
-        return at;
-    }
-    let mut node = Node::new(&next_node_id(life), NodeKind::ReachCombat { level: required }, Vec::new(), i64::from(required));
-    node.status = NodeStatus::Ready;
-    node.method = Some(method.to_string());
-    node.alternatives.push(Alternative { method: method.to_string(), est_ticks: 0, est_coins: 0 });
-    life.nodes.push(node);
-    life.nodes.len() - 1
-}
-
-/// Gate one locked method on the bot's combat level: dispatch it, or
-/// point at the priority node to launch instead (`position` keeps its
-/// method; the access/training node runs first).
-pub(crate) fn combat_step(life: &mut Life, position: usize, combat: u8) -> CombatStep {
-    let method = life.nodes.get(position).and_then(|node| node.method.clone()).unwrap_or_default();
-    match lifescape_planner::combat_launch(combat, &method, &life.nodes) {
-        lifescape_planner::CombatLaunch::Direct => CombatStep::Direct,
-        lifescape_planner::CombatLaunch::Access { area } => {
-            let at = ensure_access_node(life, area);
-            if matches!(life.nodes[at].status, NodeStatus::Ready) {
-                CombatStep::Redirect(at)
-            } else {
-                CombatStep::Wait
-            }
-        }
-        lifescape_planner::CombatLaunch::Train { required } => {
-            let style = lifescape_planner::goal_combat_style(&life.goal).to_string();
-            let training = match lifescape_planner::training_method(&style) {
-                Ok(training) => training.to_string(),
-                Err(_) => return CombatStep::Fail(format!("fight:{style}/chickens")),
-            };
-            let at = ensure_training_node(life, required, &training);
-            if matches!(life.nodes[at].status, NodeStatus::Ready) {
-                CombatStep::Redirect(at)
-            } else {
-                CombatStep::Wait
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, combat_step, is_protected_tool, is_usage_error, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked, CombatStep};
+    use super::{choose_money, is_protected_tool, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
     use lifescape_json::{object, str_value};
-    use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
+    use lifescape_planner::{Node, NodeKind, NodeStatus};
 
     #[test]
     fn trend_bonus_flips_a_close_money_call() {
@@ -607,6 +392,20 @@ mod tests {
             ("gather:woodcut/yew_logs".to_string(), 480.0, 1000.0, 0.8),
         ];
         assert_eq!(choose_money(&flip, 0.1).as_deref(), Some("gather:woodcut/yew_logs"), "trend flips the money call");
+    }
+
+    /// PRD3 lot 0: rates are keyed by the script that ran; the planner
+    /// asks with its own method. The lookup must translate, or every
+    /// obtain node prices on the blind 200/6000 default.
+    #[test]
+    fn farm_yield_reads_script_keyed_rates() {
+        use super::{farm_yield, rate_key};
+        let node = Node::new("n1", NodeKind::ObtainItems { item: "raw_shrimp".to_string(), count: 100 }, Vec::new(), 100);
+        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("fishing"));
+        assert_eq!(rate_key("farm:logs", &node).as_deref(), Some("woodcut"));
+        let empty = crate::rates_service::Snapshot::new();
+        assert_eq!(farm_yield(&empty, "farm:raw_shrimp", &node, "Raw shrimps", 1), 400.0, "fishing prior reached through the script key");
+        assert_eq!(farm_yield(&empty, "farm:nothing_known", &node, "Nothing", 1), 200.0, "blind default only when nothing matches");
     }
 
     /// D52: worn, tools and graph items never sell. The L11 flip sold
@@ -679,28 +478,6 @@ mod tests {
         assert!(varied, "seeds vary close calls");
     }
 
-    fn gate_life(goal: GoalKind, method: &str) -> Life {
-        let mut node = Node::new(
-            "n1",
-            NodeKind::ReachLevel { skill: "woodcutting".to_string(), level: 30 },
-            Vec::new(),
-            30,
-        );
-        node.status = NodeStatus::Ready;
-        node.method = Some(method.to_string());
-        Life {
-            schema: lifescape_planner::model::LIFE_SCHEMA,
-            account: "t99".to_string(),
-            created_at: 0,
-            seed: 7,
-            profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Producer),
-            goal,
-            nodes: vec![node],
-            engagement: None,
-            active: None,
-            history: Vec::new(),
-        }
-    }
 
     #[test]
     fn gate_reads_xp_max_combat_then_skills_then_fresh() {
@@ -732,186 +509,16 @@ mod tests {
         assert_eq!(live_combat(&lifescape_json::Value::Null), 3, "no snapshot reads fresh");
     }
 
-    /// Cerveau gate: CB3 aux saules -> Lumbridge d'abord (la même
-    /// méthode après) ; CB3 au charbon -> combat d'abord (chickens,
-    /// style du but) ; jamais d'envoi vers la mort.
+    /// t06/bpjms7de: the snapshot says "Small fishing net" (id 303), the
+    /// tool gate wants `net`: the id decides, or the carried net is never
+    /// seen and the node blocks on a net the bot holds.
     #[test]
-    fn under_level_redirects_instead_of_dispatching() {
-        let mut willows = gate_life(GoalKind::MakeMoney, "gather:woodcut/willow_logs");
-        let at = match combat_step(&mut willows, 0, 3) {
-            CombatStep::Redirect(at) => at,
-            other => panic!("CB3 willows redirect, got {}", matches!(other, CombatStep::Direct)),
-        };
-        assert!(matches!(&willows.nodes[at].kind, NodeKind::AccessArea { area } if area == "lumbridge"), "safe area first, got {:?}", willows.nodes[at].kind);
-        assert_eq!(willows.nodes[at].method.as_deref(), Some("access:lumbridge"), "fallback method, pas la dangereuse");
-        assert_eq!(willows.nodes[0].method.as_deref(), Some("gather:woodcut/willow_logs"), "original keeps its method");
-        // An open access reuses (no double), a running one waits.
-        let again = match combat_step(&mut willows, 0, 3) {
-            CombatStep::Redirect(at) => at,
-            _ => panic!("open access reuses"),
-        };
-        assert_eq!(again, at, "no double insert");
-        willows.nodes[at].status = NodeStatus::Active;
-        assert!(matches!(combat_step(&mut willows, 0, 3), CombatStep::Wait), "running access waits");
-        // Done access clears: the same method dispatches.
-        willows.nodes[at].status = NodeStatus::Done;
-        assert!(matches!(combat_step(&mut willows, 0, 3), CombatStep::Direct), "relocated bots dispatch");
-
-        let mut coal = gate_life(GoalKind::MaxSkills { skills: vec!["ranged".to_string()], level: 40 }, "gather:mining/coal");
-        let train = match combat_step(&mut coal, 0, 3) {
-            CombatStep::Redirect(at) => at,
-            _ => panic!("CB3 coal trains first"),
-        };
-        assert!(matches!(&coal.nodes[train].kind, NodeKind::ReachCombat { level } if *level == 43), "priority reach_combat, got {:?}", coal.nodes[train].kind);
-        assert_eq!(coal.nodes[train].method.as_deref(), Some("fight:ranged/chickens"), "goal style on the clean camp");
-        let (script, _) = lifescape_planner::map_method("fight:ranged/chickens", &coal.nodes[train], None).expect("training executes");
-        assert_eq!(script, "ranged");
-        // At level the dangerous method dispatches unchanged.
-        assert!(matches!(combat_step(&mut coal, 0, 43), CombatStep::Direct), "CB43 coal clears");
-    }
-
-    /// Crash-recovery hole (fail_no_script vide): an Active access or
-    /// training node re-queued Ready loses its lock (method=None, brain
-    /// crash recovery); the gate reuses the open node, so the redirect
-    /// carries the method itself — never an empty launch.
-    #[test]
-    fn redirect_recarries_a_crash_cleared_method() {
-        // Access: Ready Lumbridge node with a cleared lock (alternatives kept).
-        let mut willows = gate_life(GoalKind::MakeMoney, "gather:woodcut/willow_logs");
-        let mut access = Node::new("n2", NodeKind::AccessArea { area: "lumbridge".to_string() }, Vec::new(), 1);
-        access.status = NodeStatus::Ready;
-        access.method = None;
-        access.alternatives.push(lifescape_planner::Alternative { method: "access:lumbridge".to_string(), est_ticks: 6000, est_coins: 0 });
-        willows.nodes.push(access);
-        let at = match combat_step(&mut willows, 0, 3) {
-            CombatStep::Redirect(at) => at,
-            _ => panic!("cleared access still redirects"),
-        };
-        assert_eq!(willows.nodes[at].method.as_deref(), Some("access:lumbridge"), "gate re-carries, got {:?}", willows.nodes[at].method);
-        let (script, _) = lifescape_planner::map_method("access:lumbridge", &willows.nodes[at], None).expect("redirect executes");
-        assert_eq!(script, "walkto", "restored method names a script, never fail_no_script vide");
-
-        // Training: same hole on a node that never resolved (no alternatives at all).
-        let mut coal = gate_life(
-            GoalKind::MaxSkills { skills: vec!["ranged".to_string()], level: 40 },
-            "gather:mining/coal",
-        );
-        let mut training = Node::new("n2", NodeKind::ReachCombat { level: 43 }, Vec::new(), 43);
-        training.status = NodeStatus::Ready;
-        training.method = None;
-        coal.nodes.push(training);
-        let reache = match combat_step(&mut coal, 0, 3) {
-            CombatStep::Redirect(at) => at,
-            _ => panic!("cleared training still redirects"),
-        };
-        assert_eq!(coal.nodes[reache].method.as_deref(), Some("fight:ranged/chickens"), "goal style re-carried, got {:?}", coal.nodes[reache].method);
-        assert!(!coal.nodes[reache].alternatives.is_empty(), "alternative backfilled with the method");
-        let (script, _) = lifescape_planner::map_method("fight:ranged/chickens", &coal.nodes[reache], None).expect("training executes");
-        assert_eq!(script, "ranged");
-    }
-
-    /// Dispatch aveugle (b3vsmjbc, bbdvmczd) : la zone live dit si le
-    /// tutoriel reste à faire. Chaîne "Tutorial Island" d'abord, tuile
-    /// ensuite (heartbeat sans zone).
-    #[test]
-    fn tutorial_needed_reads_zone_then_position() {
-        use super::{ensure_tutorial_node, tutorial_needed, tutorial_step, TutorialStep};
-        let island = object(vec![("zone", str_value("Tutorial Island"))]);
-        assert!(tutorial_needed(&island), "la zone nomme l'île");
-        let market = object(vec![("zone", str_value("Market"))]);
-        assert!(!tutorial_needed(&market), "le mainland ne relance rien");
-        assert!(!tutorial_needed(&lifescape_json::Value::Null), "sans live, rien");
-        let pos_island = object(vec![("position", lifescape_json::Value::Arr(vec![
-            lifescape_json::Value::Int(0),
-            lifescape_json::Value::Int(3104),
-            lifescape_json::Value::Int(3093),
-        ]))]);
-        assert!(tutorial_needed(&pos_island), "la tuile 3104,3093 est l'île");
-        let pos_iron = object(vec![("position", lifescape_json::Value::Arr(vec![
-            lifescape_json::Value::Int(0),
-            lifescape_json::Value::Int(3072),
-            lifescape_json::Value::Int(3133),
-        ]))]);
-        assert!(tutorial_needed(&pos_iron), "la tuile 3072,3133 est l'île (pas Wizards' Tower)");
-        let pos_pit = object(vec![("position", lifescape_json::Value::Arr(vec![
-            lifescape_json::Value::Int(0),
-            lifescape_json::Value::Int(3107),
-            lifescape_json::Value::Int(9512),
-        ]))]);
-        assert!(tutorial_needed(&pos_pit), "la fosse aux rats est l'île");
-        let pos_draynor = object(vec![("position", lifescape_json::Value::Arr(vec![
-            lifescape_json::Value::Int(0),
-            lifescape_json::Value::Int(3090),
-            lifescape_json::Value::Int(3264),
-        ]))]);
-        assert!(!tutorial_needed(&pos_draynor), "Draynor n'est pas l'île");
-        let pos_main = object(vec![("position", lifescape_json::Value::Arr(vec![
-            lifescape_json::Value::Int(0),
-            lifescape_json::Value::Int(3098),
-            lifescape_json::Value::Int(3266),
-        ]))]);
-        assert!(!tutorial_needed(&pos_main), "le mainland reste calme");
-
-        // Nœud tutoriel : créé une fois, réutilisé, méthode reportée.
-        let mut life = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        let at = ensure_tutorial_node(&mut life);
-        assert!(
-            matches!(&life.nodes[at].kind, NodeKind::CompleteQuest { quest } if quest == "tutorial"),
-            "quinzaine tutoriel, got {:?}",
-            life.nodes[at].kind
-        );
-        assert_eq!(life.nodes[at].method.as_deref(), Some("tutorial"));
-        assert_eq!(ensure_tutorial_node(&mut life), at, "pas de doublon");
-        life.nodes[at].method = None;
-        assert_eq!(ensure_tutorial_node(&mut life), at, "le nœud ouvert se réutilise");
-        assert_eq!(life.nodes[at].method.as_deref(), Some("tutorial"), "la méthode est reportée");
-
-        // Sur l'île on lance ; hors de l'île un nœud ouvert se clôt (la
-        // sortie exige la fin) ; un graphe sans nœud reste calme.
-        let launching = match tutorial_step(&mut life, &island) {
-            TutorialStep::Launch(at) => at,
-            _ => panic!("l'île lance le tutoriel"),
-        };
-        assert_eq!(launching, at, "le nœud assuré part");
-        life.nodes[at].status = NodeStatus::Ready;
-        assert!(matches!(tutorial_step(&mut life, &market), TutorialStep::Cleared), "hors île, clôture");
-        assert_eq!(life.nodes[at].status, NodeStatus::Done, "la sortie clôt le tutoriel");
-        assert!(matches!(tutorial_step(&mut life, &market), TutorialStep::Idle), "plus rien à faire");
-        let mut bare = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        assert!(matches!(tutorial_step(&mut bare, &market), TutorialStep::Idle), "sans île, sans nœud : calme");
-    }
-
-    /// Graphes morts (t02) : tout abandonné → réessaie borné, jamais
-    /// d'idle silencieux ; tout Done → succès intact ; deux épuisements
-    /// déjà → repos avec dossier.
-    #[test]
-    fn dead_graph_revives_bounded_then_rests() {
-        use super::{revive_dead_graph, DeadGraph};
-        let mut dead = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        dead.nodes[0].status = NodeStatus::Abandoned;
-        dead.active = None;
-        assert!(matches!(revive_dead_graph(&mut dead), DeadGraph::Revived), "le mort réessaie");
-        assert_eq!(dead.nodes[0].status, NodeStatus::Ready, "prêt, got {:?}", dead.nodes[0].status);
-        assert!(dead.nodes[0].method.is_none(), "nouvelle résolution");
-        assert_eq!(dead.history.last().map(|entry| entry.outcome.as_str()), Some("exhausted"), "dossier, got {:?}", dead.history.last());
-
-        let mut done = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        done.nodes[0].status = NodeStatus::Done;
-        assert!(matches!(revive_dead_graph(&mut done), DeadGraph::Success), "le succès reste intact");
-        assert!(done.history.is_empty(), "aucun dossier sur un succès");
-
-        let mut tired = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        tired.nodes[0].status = NodeStatus::Abandoned;
-        for _ in 0..2 {
-            tired.history.push(lifescape_planner::HistoryEntry { node: "n1".to_string(), started: 0, ended: 0, outcome: "exhausted".to_string() });
-        }
-        assert!(matches!(revive_dead_graph(&mut tired), DeadGraph::Rested), "deux épuisements suffisent");
-        assert_eq!(tired.nodes[0].status, NodeStatus::Abandoned, "nœuds intacts au repos");
-        assert_eq!(tired.history.last().map(|entry| entry.outcome.as_str()), Some("exhausted-idle"), "dossier final");
-
-        let mut open = gate_life(GoalKind::MakeMoney, "gather:fishing/raw_sardine");
-        assert!(matches!(revive_dead_graph(&mut open), DeadGraph::Open), "graphe ouvert intact");
-        assert!(open.history.is_empty(), "rien à consigner");
+    fn live_stacks_read_debug_names_from_ids() {
+        use super::live_debug_name;
+        let net = object(vec![("count", lifescape_json::Value::Int(1)), ("id", lifescape_json::Value::Int(303)), ("name", str_value("Small fishing net"))]);
+        assert_eq!(live_debug_name(&net).as_deref(), Some("net"));
+        let bare = str_value("coins");
+        assert_eq!(live_debug_name(&bare).as_deref(), Some("coins"));
     }
 
     /// Marche impossible : l'échec de voyage bannit la méthode (jamais
@@ -938,12 +545,4 @@ mod tests {
         assert!(matches!(fold_travel_failure(&mut node, "gather:fishing/raw_shrimp"), TravelFold::NoRoute(method) if method == "gather:fishing/raw_shrimp"), "vide = typé");
     }
 
-    #[test]
-    fn usage_error_never_replans_identically() {
-        let usage = object(vec![("message", str_value("usage: fishing [count|spot...]"))]);
-        assert!(is_usage_error(&usage), "contrat cassé détecté");
-        let plain = object(vec![("message", str_value("died"))]);
-        assert!(!is_usage_error(&plain), "un échec franc n'est pas un contrat");
-        assert!(!is_usage_error(&lifescape_json::Value::Null), "sans erreur, rien");
-    }
 }

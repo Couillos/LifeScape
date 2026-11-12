@@ -31,7 +31,12 @@ dans la tranche fixée (pas de positionnel ressource : `woodcut`/`mining`/
 `fishing` la liraient comme un compte).
 
 Paliers : pêche [5,10,20,25,35,40], bûcheronnage [15,30,45,60,75], minage
-[10,15,20,30,40,55], cuisine [10,20,30,45], mêlée [10,20,30,40].
+[10,15,20,30,40,55], cuisine [10,20,30,45], mêlée [10,20,30,40]. Chaque
+tranche porte la méthode du palier ouvert à son niveau de DÉPART (1→5
+crevettes, 5→10 sardines ; jamais le homard pour 35→40) : le contrôle
+d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
+méthode de substitution : outil manquant ⇒ `Blocked{missing}` ⇒
+sous-tâche.
 
 ## Coûts (ticks équivalents)
 
@@ -43,9 +48,8 @@ farm (×(1,5 − affinité) : 0,78 à 0,72). Engagement `make_money` : tirage
 suspendues par le compteur (cycle + session). Replanning sur `blocked`,
 `failed`, mort, perte, écart de prix > 25 %, fin d'engagement.
 
-Pas de méthode `shop:buy` exécutable : les magasins PNJ bornent les prix
-(plafond = prix magasin, repli `price_estimate`), les trajets d'achat
-restent dans les scripts. `market:flip` = engagement sans objet (le
+`shop:buy` est exécutable (`market shopbuy`) mais n'existe que pour les
+objets non productibles en F2P (D-A, PRD3). `market:flip` = engagement sans objet (le
 script `market` existant : achète sous la référence, vend le stock au-
 dessus, annule les restes, sort sur budget).
 
@@ -57,32 +61,79 @@ quêtes restent minimales.
 
 ## Cerveau
 
-`on_supervise` (un appel par passe) : plie le dernier rapport dans le
-graphe (progrès, `done`/`blocked`/`failed`, sous-tâches `obtain` sur
-`missing`, abandon au 3ᵉ échec), puis lance le prochain nœud `ready`
-quand le worker est idle. Sans fichier de vie : aucune action (parité
-R1-R7 des bots manuels). `create-user [pseudo] [--iron] [--goal kind]` :
-pseudo (`Iron`+8, 12 max ; 20 Iron max), profil graine, squelette,
-`open` + `tutorial`, puis le cerveau prend la main dès le premier idle.
-`Iron` ne marchande jamais (ni `market:*` ni `flip`, même en `rich`).
+`on_supervise` (un appel par passe) met le compte en file pour le thread
+`brain-tick`, qui plie le rapport reçu (`brain_fold.rs`) puis lance le
+nœud suivant (`brain.rs::maybe_launch`). Sans fichier de vie : aucune
+action (parité R1-R7 des bots manuels).
+
+Cycle de vie (`planner/src/lifecycle.rs`, seul endroit qui change un
+statut). `normalize` est appelé après chaque mutation et garantit :
+dépendance abandonnée, inexistante ou en cycle ⇒ abandon transitif ;
+`Ready` ⇔ toutes les dépendances `Done` ; un seul `Active`, égal à
+`life.active` ; vivacité (graphe non fini ⇒ un nœud actif ou prêt).
+`graph_state` : `Running`, `Launchable`, `Finished`, `Stuck` (une ligne
+de log et `history: stuck`, l'opérateur décide : jamais de relance
+automatique). Compteurs persistés par nœud : `failures` (max 3),
+`blocks` (max 3), `last_error`.
+
+Rapports (contrat v2) : tout lancement `--node` produit un `task_report`
+(tuto, walkto, quêtes compris, échec de parsing compris) portant
+`error: {type, message}`. Classement (`brain_fold::verdict`) : `Usage`
+(arguments, dispatch impossible) ⇒ abandon immédiat ; `Failed`/`Sdk`/
+mort ⇒ échec compté puis relance ; échec de voyage ⇒ méthode bannie +
+échec compté ; `blocked` ⇒ sous-tâche `obtain` par objet manquant
+(réutilisée si déjà ouverte) ; `stopped` (unload, redémarrage) ⇒ prêt,
+non compté ; fenêtre finie avec but atteint ⇒ `done`. Un nœud actif sans
+rapport (worker repassé idle, crash) compte un échec après 30 s. Une
+commande market non remplie attend au plus 6000 ticks puis échoue.
+
+Décision sans données interdite : sans position live, rien ne part.
+Tuto (`brain_tutorial.rs`) : sur Tutorial Island (rectangles, pas les
+labels de zone) seul le tuto part, en nœud rapporté ; clôture sur son
+rapport ou sur preuve positive (bot vu hors de l'île sans tuto en cours) ;
+tuto abandonné sur l'île ⇒ aucun lancement, l'opérateur décide.
+`create-user [pseudo] [--iron] [--goal kind]` : pseudo (`Iron`+8, 12 max ;
+20 Iron max), profil graine, squelette, `open` ; le verrou tuto lance le
+tutoriel au premier passage, puis le but. `Iron` ne marchande jamais
+(ni `market:*` ni `flip`, même en `rich`).
+
+Succession (`planner/src/goals.rs`, `brain_succession.rs`) : un graphe
+fini tire le but suivant (compétence entraînable la plus basse, jusqu'au
+prochain multiple de 5 au moins 5 niveaux plus haut) ; un graphe bloqué
+écrit `goal: stuck:<compétences>` dans l'historique, garde les causes des
+nœuds abandonnés, et passe à un but qui n'entraîne pas ces compétences ;
+les buts d'argent relancent un engagement. Plus rien à tirer ⇒ attente
+opérateur. Le libellé affiché est `fishing 10` (but `max:fishing:10`).
+
+Données avant décision : rien ne part sans position live ni sac reçu
+(`inv_streamed`) ; tant que la banque n'a pas été vue (`bank_streamed`),
+le contrôle d'outils ne conclut jamais « manquant » (le script récupère
+l'outil en banque ou lève `Blocked`). Une montée de niveau au combat
+ne lâche jamais rien (économie : chaque objet compte) ; le mode
+`--no-bank` des scripts (combat sans banque, pêche qui lâche sa prise)
+existe mais le planner ne l'envoie pas. Pêche de débutant (crevettes,
+anchois, sardines, harengs, et `farm:raw_shrimp`) : seule eau gratuite
+sans péage ni bateau = Draynor, chassée par les mages (niveau 7) jusqu'au
+combat 14 ⇒ `min_combat_for_method` = 15, le verrou de combat entraîne
+d'abord (poulets), puis le bot pêche et dépose tout en banque.
+Combat : clés de spot réelles (`chickens`, `cows`) ; un spot inconnu est
+une erreur `Usage` (avant : repli silencieux sur l'auto-pick).
 
 Buts : `max:a,b:40` | `obtain:item:n` | `money` | `quest:clé` |
 `equip:style` | `area:zone` | `rich[:merchant|:producer]`.
 
-## Contournement tutorial (R8)
-
-Le tutorial casse à l'étape `chop` (découpe live non rejouée ici) : les
-runs R8 partent d'un compte existant post-tutorial (ou d'un tutorial
-passé via `admin`), jamais d'un compte neuf. Le cerveau démarre au
-premier idle : graphe, achats/ventes market, `blocked{hache}` →
-sous-tâche, marchand, bonus de tendance — voir le rapport de lot.
+Banc hors ligne : `brain_sim_tests.rs` rejoue 30 comptes (graphes réels,
+issues aléatoires : succès, échec, Usage, blocage, arrêt, rapport perdu)
+et vérifie vivacité, terminaison et scripts enregistrés.
 
 ## L7 : précisions d'implémentation
 
 - Alternatives source-aware (`item_sources`, L1) : `farm` si la source est
   woodcut/mine/fish/drop (socle), `shop:buy` si un magasin PNJ stocke,
-  `market:buy` si échangeable et non-Iron, plus repli market générique
-  pour les objets sans source. Les outils (hache, filet) ne farm jamais.
+  `market:buy` si échangeable, non-Iron et couvert par la bourse (aucun
+  ordre non couvert, même sans autre source). Les outils (hache, filet)
+  ne farm jamais ; `farm:` sans activité productrice ⇒ pas de script
+  (abandon typé, plus de repli poulets).
 - Couverture : une jambe market/shop que la bourse (pack + banque) ne
   couvre pas est retirée avant le choix (même règle que le carnet).
 - `market shopbuy` (nouveau) : achat PNJ via le helper partagé, avec
@@ -149,3 +200,20 @@ agrégats holdings les excluent structurellement ; leurs rendements
 comptent (même snapshot rates). Plafond 20 Iron (`iron_allowed`,
 contrôlé à la création). Wilderness ouverte à tous (D13) : aucune
 préparation, mort → replanning.
+
+## PRD3 : résolution d'un besoin
+
+`obtain_legs.rs` tire toutes les voies de `gamedata::obtain` : `market:buy`
+d'abord, puis chaque production routée (`farm:`, `smith:`, `smelt:`,
+`cook:`, `spin:`, `jewelry:`, `string:`, `mill:`, `runecraft:`,
+`pottery:`, `craft:`, `gather:sheep/`, `pick:`, `fill:`, `tan:`, `milk:`,
+`enchant:`), puis `shop:buy` sous D-A. `resolve_obtain.rs` : ask couvert
+→ production faisable (niveau, outil) + offre permanente `market:bid` →
+marchand → offre au repos → blocage typé (`missing:level:…`,
+`missing:<outil>`, `missing:coins:N`). `record_block` transforme
+`coins:N` en `have_coins` et `level:skill:N` en chaîne de paliers.
+`have_coins`/`make_money` choisissent la méthode d'argent au meilleur
+profit publié. Le repli de site (`place_on_site`) ne ressuscite jamais
+une jambe d'achat refusée. `equip_best` se déplie depuis
+`gamedata::gear::best_gear` ; distance et magie exigent arc + flèches /
+runes (`required_tool`).

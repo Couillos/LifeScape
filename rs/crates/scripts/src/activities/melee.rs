@@ -30,7 +30,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     check_events(bot)?;
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
-        let named: Vec<_> = spots.iter().filter_map(|key| knowledge::combat_spots::by_key(key)).collect();
+        let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() {
             vec![crate::kit::fight::auto_spot(bot)]
         } else {

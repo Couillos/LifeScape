@@ -23,8 +23,9 @@ pub enum ItemSource {
     Extra { kind: String, row: String, level: i64 },
     /// Cooking failure byproduct of this recipe row.
     Burnt { row: String },
-    /// Dropped by this F2P NPC.
-    Drop { npc: String, npc_id: usize },
+    /// Dropped by this F2P NPC: `rate` drops per kill on an F2P world,
+    /// `qty_min..=qty_max` per drop (-1 when computed at runtime).
+    Drop { npc: String, npc_id: usize, rate: f64, qty_min: i64, qty_max: i64 },
     /// Banknote withdrawn at a bank for the base item.
     BankNote { base_id: usize },
     /// Cut at this woodcutting level.
@@ -45,6 +46,103 @@ pub enum ItemSource {
     Tan { cost_gp: i64 },
     /// Made by an F2P NPC service (Aggie dyes, Wyson woad).
     Service { service: String },
+    /// Sold through dialogue by an NPC standing in F2P (Karim's kebab).
+    DialogueBuy { npc: String, npc_id: usize, cost: i64, qty: i64, file: String },
+    /// Given by a script: an F2P quest step or reward (`quest`), an
+    /// item-on-item use (`consumes`), a searched loc, an NPC's gift.
+    Grant { trigger: String, subject: String, consumes: Vec<(String, i64)>, coins: i64, quest: Option<String>, file: String },
+    /// Made by casting an F2P spell on `input` (enchanting amulets).
+    Spell { spell: String, input: String },
+    /// Mixed or dyed from `inputs` (dye mixing, cape dyeing).
+    Mix { kind: String, inputs: Vec<String> },
+    /// What eating or drinking `from` leaves (half a pie, a beer glass).
+    Leftover { from: String },
+}
+
+fn is_f2p_obj(name: &str) -> bool {
+    objs_by_name(name).into_iter().next().is_some_and(|obj| obj.members == Some(false))
+}
+
+fn npc_stands_free(npc_id: usize) -> bool {
+    crate::npc_by_id(npc_id).is_some_and(|npc| npc.spawns.iter().any(|spot| crate::free_zones::is_free(spot.x, spot.z)))
+}
+
+/// One handler a player can trigger in F2P: an NPC standing in an F2P
+/// zone, a loc placed in one, or an item use (no place).
+fn anchor_free(trigger: &str, subject: &str) -> bool {
+    // Category subjects (`_cupboard_closed`) name no single NPC or loc:
+    // the dumps cannot place them, so they count as reachable.
+    if subject.starts_with('_') {
+        return true;
+    }
+    if trigger.starts_with("opnpc") {
+        crate::npcs_by_name(subject).iter().any(|npc| npc_stands_free(npc.npc_id))
+    } else if trigger.starts_with("oploc") {
+        crate::locs_by_name(subject).iter().any(|loc| loc.spawns.iter().any(|spot| crate::free_zones::is_free(spot.x, spot.z)))
+    } else {
+        trigger.starts_with("opheld") || trigger.starts_with("opobj")
+    }
+}
+
+/// A grant counts in F2P when its own handler is F2P-triggerable, or
+/// (labels, procs, queues) when its file holds one F2P-triggerable
+/// handler: the Taverley crystal chest (members loc) never does.
+fn grant_anchor_free(trigger: &str, subject: &str, file: &str) -> bool {
+    if trigger.starts_with("op") {
+        return anchor_free(trigger, subject);
+    }
+    crate::script_sources::file_anchors(file).iter().any(|(anchor, target)| anchor_free(anchor, target))
+}
+
+fn script_sources(name: &str, out: &mut Vec<ItemSource>) {
+    use crate::script_sources::{config_recipes, dialogue_buys, grants};
+    for buy in dialogue_buys().iter().filter(|row| row.obj == name) {
+        if let Ok(npc_id) = usize::try_from(buy.npc_id) {
+            if npc_stands_free(npc_id) {
+                out.push(ItemSource::DialogueBuy { npc: buy.npc.clone(), npc_id, cost: buy.cost, qty: buy.qty, file: buy.file.clone() });
+            }
+        }
+    }
+    for grant in grants().iter().filter(|row| row.obj == name) {
+        // Tutorial Island kits never leave the island.
+        if grant.file.starts_with("tutorial") {
+            continue;
+        }
+        let quest = grant.quest_dir().map(str::to_string);
+        if quest.as_deref().is_some_and(|dir| !f2p::is_f2p_quest_dir(dir)) {
+            continue;
+        }
+        if quest.is_none() && !grant_anchor_free(&grant.trigger, &grant.subject, &grant.file) {
+            continue;
+        }
+        if !grant.consumes.iter().all(|(input, _)| is_f2p_obj(input)) {
+            continue;
+        }
+        out.push(ItemSource::Grant {
+            trigger: grant.trigger.clone(),
+            subject: grant.subject.clone(),
+            consumes: grant.consumes.clone(),
+            coins: grant.coins,
+            quest,
+            file: grant.file.clone(),
+        });
+    }
+    let free_spells: Vec<String> = f2p::f2p_spells().into_iter().map(|spell| spell.spell).collect();
+    for recipe in config_recipes().iter().filter(|row| row.output == name) {
+        if !recipe.inputs.iter().all(|input| is_f2p_obj(input)) {
+            continue;
+        }
+        match recipe.kind.as_str() {
+            "spell" => {
+                let spell = recipe.spell.clone().unwrap_or_default();
+                if free_spells.contains(&spell) {
+                    out.push(ItemSource::Spell { spell, input: recipe.inputs[0].clone() });
+                }
+            }
+            "leftover" => out.push(ItemSource::Leftover { from: recipe.inputs[0].clone() }),
+            kind => out.push(ItemSource::Mix { kind: kind.to_string(), inputs: recipe.inputs.clone() }),
+        }
+    }
 }
 
 /// A shop sells to players when it restocks or has a keeper: interface
@@ -58,7 +156,7 @@ fn shop_sources(name: &str, out: &mut Vec<ItemSource>) {
         if !is_purchasable(&shop) {
             continue;
         }
-        if shop.stocks.iter().any(|stock| stock.obj == name) {
+        if f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == name) {
             out.push(ItemSource::Shop { shop: shop.name });
         }
     }
@@ -144,7 +242,7 @@ pub fn sources_for_obj(obj_id: usize) -> Vec<ItemSource> {
     }
     for drop in f2p::f2p_drops() {
         if drop.obj_id == obj_id as i64 && drop.npc_id >= 0 {
-            out.push(ItemSource::Drop { npc: drop.npc.clone(), npc_id: drop.npc_id as usize });
+            out.push(ItemSource::Drop { npc: drop.npc.clone(), npc_id: drop.npc_id as usize, rate: drop.rate, qty_min: drop.qty_min, qty_max: drop.qty_max });
         }
     }
     banknote_source(name, &mut out);
@@ -165,6 +263,7 @@ pub fn sources_for_obj(obj_id: usize) -> Vec<ItemSource> {
     }
     harvest_sources(name, &mut out);
     extra_sources(name, &mut out);
+    script_sources(name, &mut out);
     out
 }
 
@@ -274,17 +373,17 @@ mod tests {
 
     #[test]
     fn guild_uniforms_and_brass_key_are_sourced() {
-        // Guild gates need buyable uniforms and the dungeon key spawn:
-        // the toque and the apron restock in Varrock clothes shops, the
-        // brass key (obj 983) has its single Edgeville dungeon spawn.
+        // Guild gates need obtainable uniforms and the dungeon key spawn.
+        // The fancy dress shop is shut on F2P worlds (tailorp handlers):
+        // the toque comes from goblin/pirate/imp drops, the apron from
+        // Thessalia's clothes shop; the brass key (obj 983) has its
+        // single Edgeville dungeon spawn.
         let hat = sources_for_name("chefs_hat");
-        assert!(
-            hat.iter().any(|entry| matches!(entry, ItemSource::Shop { shop } if shop == "fancyclothesstore")),
-            "toque shops: {hat:?}"
-        );
+        assert!(!hat.iter().any(|entry| matches!(entry, ItemSource::Shop { .. })), "no F2P toque shop: {hat:?}");
+        assert!(hat.iter().any(|entry| matches!(entry, ItemSource::Drop { npc, .. } if npc == "goblin")), "toque drops: {hat:?}");
         let apron = sources_for_name("brown_apron");
         assert!(
-            apron.iter().any(|entry| matches!(entry, ItemSource::Shop { shop } if shop == "clotheshop" || shop == "fancyclothesstore")),
+            apron.iter().any(|entry| matches!(entry, ItemSource::Shop { shop } if shop == "clotheshop")),
             "apron shops: {apron:?}"
         );
         let key = sources_for_name("edgevilledungeonkey");

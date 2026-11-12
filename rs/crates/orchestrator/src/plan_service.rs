@@ -184,8 +184,7 @@ mod tests {
             allow_paid: false,
             f2p_only: true,
             satisfied: std::collections::HashSet::new(),
-            excluded_edges: std::collections::HashSet::new(),
-        };
+            excluded_edges: std::collections::HashSet::new(), danger: Vec::new() };
         // N9: the `plan` op answers terminal on the same connexion. The
         // client performs no submit and no poll here: one admission
         // server-side, zero interrogation on the wire.

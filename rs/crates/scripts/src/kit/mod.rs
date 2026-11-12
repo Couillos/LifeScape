@@ -20,6 +20,7 @@ pub mod bank;
 pub mod bans;
 pub mod chain_spec;
 pub mod cycle;
+pub mod danger;
 pub mod fight;
 pub mod fish;
 pub mod gear;

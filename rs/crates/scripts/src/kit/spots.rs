@@ -97,39 +97,14 @@ pub(crate) fn refine_by_walk(bot: &mut Bot, mut cands: Vec<(i64, (i32, i32))>) -
     })
 }
 
-/// True when a hunter of this level comes for us: the server skips
-/// players above twice its level, so anything at or under that line is
-/// a threat (unknown own level counts as threatened).
-fn hunter_threatens(our_combat: Option<u8>, vislevel: i64) -> bool {
-    our_combat.is_none_or(|ours| i64::from(ours) <= vislevel * 2)
-}
+/// Radius around the brain's site where a picker may choose (Chebyshev):
+/// a site is one spawn, the resource around it is the working area.
+pub const SITE_RADIUS: i32 = 20;
 
-/// Static hunter spawns on this level that would attack us: (x, z, aggro
-/// range + wander margin). NPCs wander off their spawn, so the raw
-/// huntrange alone under-covers; the hurt-driven flee still handles what
-/// wanders in.
-pub(crate) fn hunter_zones(bot: &Bot) -> Vec<(i64, i64, i64)> {
-    const WANDER: i64 = 2;
-    let ours = bot.combat_level();
-    let mut zones = Vec::new();
-    for entry in knowledge::all_npcs() {
-        if !entry.hunts_players || !hunter_threatens(ours, entry.vislevel) {
-            continue;
-        }
-        for spawn in entry.spawns {
-            if spawn.level == i64::from(bot.world.level) {
-                zones.push((spawn.x, spawn.z, entry.huntrange + WANDER));
-            }
-        }
-    }
-    zones
-}
-
-/// True when a hunter zone covers the tile (Manhattan, like the pickers).
-pub(crate) fn hunter_covers(hunters: &[(i64, i64, i64)], spot_x: i32, spot_z: i32) -> bool {
-    hunters.iter().any(|(hunter_x, hunter_z, range)| {
-        (i64::from(spot_x) - hunter_x).abs() + (i64::from(spot_z) - hunter_z).abs() <= *range
-    })
+/// True when the tile sits in the run's assigned site (always true
+/// without one: manual runs keep choosing freely).
+pub fn in_assigned_site(bot: &Bot, x: i32, z: i32) -> bool {
+    bot.assigned_site.is_none_or(|(site_x, site_z, _)| (x - site_x).abs().max((z - site_z).abs()) <= SITE_RADIUS)
 }
 
 /// One F2P verdict per candidate spot, in order, in a single service
@@ -370,15 +345,16 @@ pub(crate) fn pick_rock_spot(
     let mut affordable: Vec<&knowledge::rocks::RockTier> =
         tiers.iter().filter(|tier| tier.level <= level).collect();
     affordable.sort_by_key(|tier| (-tier.level, -rock_tier_price(tier)));
+    let threats = crate::kit::danger::threats(bot);
     for tier in affordable {
         let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
         for (spot_x, spot_z) in rock_tier_spawns(tier, bank) {
-            if banned.is_banned((spot_x, spot_z), now) {
+            if banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
                 continue;
             }
-            // shortcut: no hunter table in the gamedata dump (Npc carries no
-            // hunts_players flag), so spots skip the static safety filter;
-            // hurt-driven flee still relocates mid-load.
+            if crate::kit::danger::covering(&threats, spot_x, spot_z).is_some() {
+                continue;
+            }
             let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
             cands.push((dist, (spot_x, spot_z)));
         }
@@ -407,7 +383,7 @@ pub(crate) fn rock_live_loc_id(bot: &mut Bot, rock_x: i32, rock_z: i32) -> Resul
     if let Some((loc, _, _)) = rows.into_iter().next().and_then(|row| row.loc) {
         return Ok(loc);
     }
-    Err(ScriptError::Usage(format!("no loc at {rock_x},{rock_z} from {:?}", bot.position())))
+    Err(ScriptError::Failed(format!("no loc at {rock_x},{rock_z} from {:?}", bot.position())))
 }
 
 /// True unless the server confirmed a depleted rock here (unknown = assume
@@ -487,9 +463,11 @@ pub(crate) fn pick_near_fish_spot(
     now: u64,
     pinned: &knowledge::banks::Bank,
 ) -> Option<(i32, i32)> {
+    // Aggressive NPCs that would attack this bot (spot or bank walk).
+    let threats = crate::kit::danger::threats(bot);
     let mut spots: Vec<(i32, i32)> = Vec::new();
     for (spot_level, spot_x, spot_z) in fish_candidates(bot, tier.category) {
-        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
+        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
             continue;
         }
         if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
@@ -509,9 +487,11 @@ pub(crate) fn pick_near_fish_spot(
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
             continue;
         }
-        // shortcut: no hunter table in the gamedata dump (Npc carries no
-        // hunts_players flag), so spots skip the static safety filter;
-        // hurt-driven flee still relocates mid-load.
+        // The spot itself must sit outside every aggro square; the walk
+        // there goes around them (danger-aware routes).
+        if crate::kit::danger::covering(&threats, spot_x, spot_z).is_some() {
+            continue;
+        }
         spots.push((spot_x, spot_z));
     }
     // Travel always plans F2P-only: an out-of-F2P spot is a guaranteed
@@ -545,9 +525,11 @@ pub(crate) fn pick_hop_fish_spot(
     banned: &BanSet,
     now: u64,
 ) -> Option<(i32, i32)> {
+    // Aggressive NPCs that would attack this bot (spot or bank walk).
+    let threats = crate::kit::danger::threats(bot);
     let mut spots: Vec<(i32, i32)> = Vec::new();
     for (spot_level, spot_x, spot_z) in fish_candidates(bot, tier.category) {
-        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) {
+        if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
             continue;
         }
         if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
@@ -562,6 +544,11 @@ pub(crate) fn pick_hop_fish_spot(
             continue;
         }
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
+            continue;
+        }
+        // The spot itself must sit outside every aggro square; the walk
+        // there goes around them (danger-aware routes).
+        if crate::kit::danger::covering(&threats, spot_x, spot_z).is_some() {
             continue;
         }
         spots.push((spot_x, spot_z));
@@ -674,22 +661,12 @@ pub(crate) fn refusal_ban_ticks(operable: bool, stump: bool, direct: bool, prior
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_occupied, hunter_threatens, is_shop_staff, rank_foes, refusal_ban_ticks, rock_live_loc_id, visible_workers, walk_fail_ban, OCCUPIED_RADIUS};
+    use super::{drop_occupied, is_shop_staff, rank_foes, refusal_ban_ticks, rock_live_loc_id, visible_workers, walk_fail_ban, OCCUPIED_RADIUS};
     use crate::kit::{bans::{GONE_BAN_TICKS, UNREACHABLE_BAN_TICKS}, observe::STRUCTURAL_BAN_TICKS};
     use crate::tables_live::attach_live_tables;
     use crate::ScriptError;
     use lifescape_gamedata as knowledge;
     use lifescape_sdk::Bot;
-
-    /// Threat rule (server skips players above twice the hunter level):
-    /// at or under the line is a threat, unknown level stays cautious.
-    #[test]
-    fn hunter_threat_follows_server_rule() {
-        assert!(hunter_threatens(Some(4), 2), "spider hunts combat 4");
-        assert!(!hunter_threatens(Some(5), 2), "combat 5 too strong for spiders");
-        assert!(hunter_threatens(Some(4), 26), "jailguard hunts everyone here");
-        assert!(hunter_threatens(None, 1), "unknown level stays cautious");
-    }
 
     /// Occupation is own vision only: a stranger on the spot dodges it,
     /// nobody around changes nothing, and a full house keeps the pool
@@ -854,6 +831,9 @@ mod tests {
     #[test]
     fn crowded_home_water_still_picks() {
         let (mut bot, _service) = served_spot_bot("fish-crowd-draynor", 3092, 3242);
+        // Occupation only: the danger map (Draynor wizards) is off here,
+        // `fresh_bot_never_picks_draynor` covers it.
+        bot.allow_wild = true;
         bot.world.players.insert(
             7u16,
             lifescape_sdk::world::PlayerInfo { x: 3085, z: 3230, level: 0, jump: false, name: None },
@@ -866,6 +846,19 @@ mod tests {
             (spot_x - 3092).abs() + (spot_z - 3242).abs() <= 60,
             "stays near home water, got ({spot_x},{spot_z})"
         );
+    }
+
+    /// The north Draynor spot sits in the young dark wizards' aggro square
+    /// (bots died there ~100 times): a fresh bot only picks water outside
+    /// every square.
+    #[test]
+    fn fresh_bot_never_picks_covered_water() {
+        let (mut bot, _service) = served_spot_bot("fish-danger-draynor", 3092, 3242);
+        let banned = crate::kit::bans::BanSet::new();
+        let pinned = super::nearest_bank_at(3092, 3242, 0).expect("a Draynor bank");
+        let (_, spot_x, spot_z, _) = super::pick_fish_spot(&mut bot, 1, &banned, 0, &pinned).expect("safe water exists");
+        let threats = crate::kit::danger::threats(&bot);
+        assert!(crate::kit::danger::covering(&threats, spot_x, spot_z).is_none(), "picked a covered spot ({spot_x},{spot_z})");
     }
     /// Mapless worker against a real nav service (repo dumps): no painted
     /// world, only the plan handle — the same shape as a live worker.
@@ -946,7 +939,7 @@ mod tests {
     /// A tile the service has no template for keeps the `Usage` error
     /// (a spot with genuinely no rock), never a guessed id.
     #[test]
-    fn rock_live_loc_id_without_template_stays_usage() {
+    fn rock_live_loc_id_without_template_is_runtime_failure() {
         let (mut bot, _service) = served_mining_bot("mine-loc-empty");
         // One batch over open grass: the first tile without a template
         // proves the error path.
@@ -958,8 +951,8 @@ mod tests {
             .find(|(_, row)| row.loc.is_none())
             .map(|(tile, _)| *tile)
             .expect("open grass somewhere");
-        let err = rock_live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is Usage");
-        assert!(matches!(err, ScriptError::Usage(_)), "Usage, got: {err:?}");
+        let err = rock_live_loc_id(&mut bot, empty.0, empty.1).expect_err("no template is a runtime failure");
+        assert!(matches!(err, ScriptError::Failed(_)), "Failed, got: {err:?}");
     }
 
     /// Walk-failure bans: planner-proven NoRoute sits out 30k (re-planning

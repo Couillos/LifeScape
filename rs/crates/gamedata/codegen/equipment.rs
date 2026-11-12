@@ -16,7 +16,8 @@ pub fn generate(manifest_dir: &str) {
     for (name, row) in fields {
         generated.push_str(&format!(
             "    super::StaticWearable {{ name: \"{}\", wearpos: {}, wearpos2: {}, wearpos3: {}, \
-             category: {}, attack: {}, defence: {}, strength: {}, prayer: {}, requirements: {} }},\n",
+             category: {}, attack: {}, defence: {}, strength: {}, prayer: {}, requirements: {}, \
+             quest: {}, tier: {}, rangebonus: {} }},\n",
             crate::escape_for_rust_literal(name),
             crate::int_or(row, "wearpos", -1),
             crate::int_or(row, "wearpos2", -1),
@@ -27,6 +28,9 @@ pub fn generate(manifest_dir: &str) {
             crate::int_or(row, "strength", 0),
             crate::int_or(row, "prayer", 0),
             crate::render_str_int_map(row, "requirements"),
+            crate::render_opt_str(row.get("quest")),
+            crate::int_or(row, "tier", -1),
+            crate::int_or(row, "rangebonus", -1),
         ));
     }
     generated.push_str("];\n");

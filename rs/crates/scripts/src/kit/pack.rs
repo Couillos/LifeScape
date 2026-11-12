@@ -24,6 +24,21 @@ pub fn obj_price(name: &str) -> i64 {
     knowledge::objs_by_name(name).first().map(|entry| entry.price).unwrap_or(0)
 }
 
+/// Cheapest NPC-shop purchase price at base stock, the server formula
+/// (`shop.rs2` `calc_shop_value`: cost × max(100, sell multiplier) /
+/// 1000). `None` when no keeper stocks it: nothing to buy, never a
+/// guessed price. Understocked shops charge more; the buy itself still
+/// checks the coins the trade asks.
+pub fn shop_price(name: &str) -> Option<i64> {
+    let base = obj_price(name);
+    knowledge::shops::all_shops()
+        .into_iter()
+        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == name))
+        .flat_map(|shop| shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)))
+        .map(|multiplier| (base * multiplier.max(100) / 1000).max(1))
+        .min()
+}
+
 /// Display name for logs, empty when the tables do not know the id.
 pub fn obj_label(bot: &Bot, obj: u16) -> String {
     (bot.tables.obj_name)(obj).unwrap_or_default()
@@ -56,4 +71,16 @@ pub fn free_slots(bot: &Bot) -> usize {
 /// Distinct object ids currently carried.
 pub fn pack_ids(bot: &Bot) -> HashSet<u16> {
     pack_slots(bot).iter().map(|(_, (held, _))| *held).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// Purchase price from the dump (Gerrant sells at 100%, general
+    /// stores at 130%); unstocked items have no price at all.
+    #[test]
+    fn shop_price_follows_the_server_formula() {
+        assert_eq!(super::shop_price("net"), Some(super::obj_price("net")), "Gerrant sells nets at base");
+        assert!(super::shop_price("fishing_rod").is_some_and(|price| price >= super::obj_price("fishing_rod")));
+        assert_eq!(super::shop_price("dragon_platebody"), None, "no keeper stocks it");
+    }
 }

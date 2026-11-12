@@ -26,6 +26,18 @@ use crate::ScriptError;
 /// combat lines are refusals). Pure so the loop stays thin; the caller
 /// owns the snapshots and the re-click throttle. Ready for smithing-
 /// style loops too: any started-loop-vs-dead-click verdict.
+
+/// Spots named on the CLI. An unknown key is a contract error (`Usage`):
+/// the old silent drop sent every `chicken_lumbridge` run to the auto
+/// pick (goblins, cows) where fresh bots died 11-18 times per run.
+pub fn named_spots(keys: &[String]) -> Result<Vec<knowledge::combat_spots::CombatSpot>, ScriptError> {
+    let unknown: Vec<&String> = keys.iter().filter(|key| knowledge::combat_spots::by_key(key).is_none()).collect();
+    if !unknown.is_empty() {
+        return Err(ScriptError::Usage(format!("unknown combat spot {unknown:?}")));
+    }
+    Ok(keys.iter().filter_map(|key| knowledge::combat_spots::by_key(key)).collect())
+}
+
 pub fn fight_engaged(
     xp_now: i64,
     xp_at_click: i64,
@@ -296,7 +308,7 @@ pub fn fight(
                         // silently converted to walks and prove nothing, so
                         // they must not burn the cold-click budget (the
                         // approach above is still closing).
-                        bot.op_npc(2, slot)?;
+                        attack_npc(bot, slot)?;
                         last_attack = bot.world.ticks;
                         cold_clicks += 1;
                         if cold_clicks_spent(cold_clicks) {
@@ -309,8 +321,8 @@ pub fn fight(
                             progress_at = bot.world.ticks;
                         }
                     }
-                } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= 25 {
-                    bot.op_npc(2, slot)?;
+                } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= reattack_ticks(bot) {
+                    attack_npc(bot, slot)?;
                     last_attack = bot.world.ticks;
                 }
                 prev_hp = hitpoints(bot);
@@ -318,7 +330,14 @@ pub fn fight(
             }
             kills += 1;
             let loot_from = bot.world.ticks;
-            let taken = crate::kit::loot::loot_ground(bot)?;
+            // Out of combat: a ranged run picks its arrows back up first
+            // and merges them into the quiver, then the regular loot.
+            let mut taken = 0;
+            if bot.combat_style == "ranged" {
+                taken += crate::kit::loot::recover_arrows(bot)?;
+                crate::kit::loot::merge_arrows(bot)?;
+            }
+            taken += crate::kit::loot::loot_ground(bot)?;
             bot.log(&format!("kill {kills} at {:?} (+{}t loot)", bot.position(), bot.world.ticks.saturating_sub(loot_from)));
             // Loot can change the best: one re-evaluation when something
             // was picked up, never on empty kills.
@@ -426,6 +445,40 @@ pub fn budget_left(ticks_limit: u64, started: u64, now: u64) -> u64 {
         return 0;
     }
     ticks_limit.saturating_sub(now.saturating_sub(started))
+}
+
+/// One attack on `slot` for the run's combat style (PRD3 lot 6). Melee
+/// and ranged click Attack: the server shoots when a bow and arrows are
+/// worn. Magic casts the strongest damage spell the pack funds; no runes
+/// left blocks typed so the brain files the runes as an obtain.
+fn attack_npc(bot: &mut Bot, slot: u16) -> Result<(), ScriptError> {
+    if bot.combat_style == "magic" {
+        let Some(spell) = crate::activities::magic_style::castable_spell(bot) else {
+            bot.log("out of runes for any damage spell");
+            return Err(ScriptError::Blocked { missing: vec!["mindrune".to_string(), "airrune".to_string()] });
+        };
+        let com = crate::kit::magic::spell_com(bot, spell)?;
+        bot.op_npc_t(slot, com)?;
+        return Ok(());
+    }
+    if bot.combat_style == "ranged" && !crate::kit::gear::refill_quiver(bot)? {
+        // Empty quiver and none carried: the arrows on the ground first,
+        // then block typed for the brain to obtain more.
+        crate::kit::loot::recover_arrows(bot)?;
+        if !crate::kit::gear::refill_quiver(bot)? {
+            bot.log("out of arrows");
+            return Err(ScriptError::Blocked { missing: vec!["bronze_arrow".to_string()] });
+        }
+    }
+    bot.op_npc(2, slot)?;
+    Ok(())
+}
+
+/// Ticks between re-attacks while engaged: a manual cast never repeats
+/// (one spell per click, 5-tick cast speed); melee and ranged keep
+/// fighting on their own and only need a nudge.
+fn reattack_ticks(bot: &Bot) -> u64 {
+    if bot.combat_style == "magic" { 5 } else { 25 }
 }
 
 pub fn run_spot(

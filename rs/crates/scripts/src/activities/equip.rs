@@ -36,6 +36,8 @@ pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if !STYLES.contains(&style.as_str()) {
         return Err(ScriptError::Usage(format!("equip melee|ranged|magic, not {style:?} at {:?}", bot.position())));
     }
+    // The kit scores for the asked style (bows + arrows, staves, robes).
+    bot.combat_style = style.clone();
     let available = available_gear(bot);
     let plan = gear_plan(bot, &available, fight_weapon_style, style_damage_key);
     let equipped = equip_plan(bot, &plan)?;

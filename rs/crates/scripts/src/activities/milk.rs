@@ -153,7 +153,7 @@ pub fn run_milk(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let Some((slot, x, z)) = pick_cow(step_bot, &banned, now) else {
             empty_fields += 1;
             if empty_fields >= EMPTY_LIMIT {
-                return Err(ScriptError::Usage(format!("no cows near {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("no cows near {:?}", step_bot.position())));
             }
             step_bot.log("no cows, waiting");
             for _ in 0..10 {
@@ -173,7 +173,7 @@ pub fn run_milk(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Err(ScriptError::Blocked { missing: vec![EMPTY.to_string()] });
             }
             WorkOutcome::Threat | WorkOutcome::Blocked | WorkOutcome::LevelLocked => {
-                return Err(ScriptError::Usage(format!("milk stopped ({outcome:?}) at {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("milk stopped ({outcome:?}) at {:?}", step_bot.position())));
             }
             WorkOutcome::Full => {}
         }

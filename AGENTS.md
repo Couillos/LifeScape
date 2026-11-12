@@ -21,12 +21,14 @@ restent minces et stateless. Ticks serveur : voir `../lostcity/engine/data/confi
 - `lifescape-scripts` (`rs/crates/scripts/`) : registre compilé des scripts minces ; jamais de paquet ni d'opcode.
 - `lifescape-json` (`rs/crates/json/`) : parseur/écrivain JSON unique, std only ; aucune logique métier.
 - `lifescape-nav` (`rs/crates/nav/`) : collision statique, recherche locale, planification pure ; aucun réseau ni état live.
+- `lifescape-planner` (`rs/crates/planner/`) : buts → graphe, cycle de vie des nœuds (`lifecycle.rs`, seul à changer un statut) ; pur.
+- `lifescape-market` / `lifescape-store` : carnet d'ordres pur / persistance SQLite (exception D3).
 
 ## 3. Commandes
 
 ```sh
 cargo build --manifest-path rs/Cargo.toml
-cargo test --manifest-path rs/Cargo.toml -p lifescape-sdk -p lifescape-gamedata -p lifescape-orchestrator -p lifescape-scripts -p lifescape-planner
+cargo test --manifest-path rs/Cargo.toml --workspace
 ./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
 ./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | shutdown
 ./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]

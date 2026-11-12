@@ -39,7 +39,14 @@ pub type ScriptResult = Result<i32, ScriptError>;
 #[derive(Debug)]
 pub enum ScriptError {
     Sdk(Error),
+    /// Contract error: bad arguments or a dispatch the script can never
+    /// serve (unknown item, level below the recipe, missing table). The
+    /// same launch fails the same way, so the brain never retries it.
     Usage(String),
+    /// Runtime failure in the world (nothing caught, trade refused, bank
+    /// unreachable, died en route): a retry may succeed, so the brain
+    /// counts it against the node's failure budget.
+    Failed(String),
     /// A typed requirement the run cannot meet on its own (tool, input,
     /// food, access): carries what is missing so the brain can file it
     /// as a sub-task. Raised by the kit, mapped to `stop: blocked`.
@@ -51,6 +58,7 @@ impl std::fmt::Display for ScriptError {
         match self {
             ScriptError::Sdk(err) => write!(formatter, "sdk: {err}"),
             ScriptError::Usage(text) => write!(formatter, "usage: {text}"),
+            ScriptError::Failed(text) => write!(formatter, "failed: {text}"),
             ScriptError::Blocked { missing } => write!(formatter, "blocked, missing: {}", missing.join(", ")),
         }
     }

@@ -42,6 +42,20 @@ cuisson (`extra.burnt`), drop PNJ, billet (`cert_`), bûcheronnage,
 minage, pêche. Orphelins connus (180/1128 au 2026-11-09, listés par le
 test `coverage_report`) : récompenses de quêtes/pistes/événements,
 dialogue (teintures, tannage), préparations de cuisine et restes mangés.
+Index d'obtention (`lifescape-gamedata::obtain`, PRD3) : pour chaque
+objet F2P, toutes ses voies (fabrication, récolte, drop avec taux et
+niveau du monstre, sol, boutique, dialogue, quête, sort, mélange, reste)
+avec lieux F2P, prérequis, coût ; `producible_f2p` / `merchant_buy_allowed`
+(D-A) ; raisons des inobtenables. CLI : `orchestrator obtain <objet>…`,
+`--shops` (inventaire marchand + verdict), `--unobtainable`. Boutiques
+F2P = ouvertes par un handler évalué en monde F2P (`shop_access`), stock
+members exclu (`f2p_stock`). Équipement : prérequis complets
+(`requirements`, `quest`, `tier`, `rangebonus`) ; meilleur set par style
+et meilleurs outils : `gear::best_gear`, `gear::best_tool`. Nouveaux
+dumps (`dump_plan.mts`) : `drops.json` (+ `rate`, `qty_min/max`,
+`exact`), `shop_access.json`, `dialogue_buys.json`, `script_grants.json`,
+`config_recipes.json` ; vérification manuelle des taux :
+`node gamedata/tools/drop_rates_check.mts <content/scripts> <sujet>…`.
 Table d'XP (`lifescape-gamedata::xp`, unités serveur = 10× l'affichage :
 niveau 2 à 830, 99 à 130344310).
 
