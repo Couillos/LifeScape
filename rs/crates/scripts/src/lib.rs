@@ -19,6 +19,7 @@ pub mod rescues;
 pub mod skill_walk;
 pub mod tables_live;
 pub mod tutorial;
+pub(crate) mod tutorial_detect;
 
 use lifescape_sdk::{Bot, Error};
 

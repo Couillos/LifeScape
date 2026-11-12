@@ -1,9 +1,12 @@
 //! Tutorial island driver: stage from the server instruction box
-//! (coms 6180-6184, never the varp nor the inventory), any point mid-quest.
+//! (coms 6180-6184; the tutorial varp is transmit=false so it is never
+//! used), with a geography-plus-kit fallback when the box is empty or
+//! delayed. Resumable from any point mid-quest.
 
 use lifescape_sdk::{Bot, Error};
 
 use crate::quests::common as kit;
+use crate::tutorial_detect::{all_matches, fallback_stage, has, obj};
 use crate::{ScriptError, ScriptResult};
 
 const COM_DESIGN_ACCEPT: u16 = 3651;
@@ -12,10 +15,6 @@ const COM_SMITH_COL1: u16 = 1119;
 const SPELL_WIND_STRIKE: u16 = 1152;
 const TUT_TAB: u8 = 3;
 const TAB_WORN: u8 = 4;
-
-fn obj(name: &str) -> Result<u16, ScriptError> {
-    kit::obj_id(name)
-}
 
 fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> {
     println!("{} {what}", if ok { "ok" } else { "FAIL" });
@@ -29,10 +28,6 @@ fn check(pos: (i32, i32, i32), ok: bool, what: &str) -> Result<(), ScriptError> 
 /// Ticks since `started`; survives tick resets (t02: 1439 -> 0).
 fn elapsed_ticks(now: u64, started: u64) -> u64 {
     now.saturating_sub(started)
-}
-
-fn has(bot: &Bot, name: &str, count: u32) -> bool {
-    obj(name).ok().is_some_and(|id| bot.inventory().get(&id).copied().unwrap_or(0) >= count)
 }
 
 fn wait_inv(bot: &mut Bot, name: &str, count: u32, timeout: u64) -> Result<bool, ScriptError> {
@@ -68,45 +63,20 @@ fn instruction(bot: &Bot) -> String {
     format!("{title}\n{}", body.join(" "))
 }
 
-// (step key, instruction fragments) in tutorial order.
-const STAGE_MATCHERS: &[(&str, &[&str])] = &[
-    ("guide", &["getting started"]), ("controls_tab", &["spanner icon"]), ("door1", &["interacting with scenery"]),
-    ("survival_start", &["moving around", "survival expert"]), ("open_inventory", &["flashing backpack icon"]),
-    ("chop", &["cut down a tree"]), ("light_fire", &["building a fire"]), ("open_stats", &["bar graph icon"]),
-    ("survival_food", &["these are your stats"]), ("catch", &["catch some shrimp", "fishing spot"]),
-    ("cook_burnt", &["cooking your shrimp"]), ("cook_fresh", &["burning your shrimp"]),
-    ("survival_gate", &["just cooked your first"]), ("chef_path", &["mini-map"]), ("chef", &["talk to the chef"]),
-    ("make_dough", &["making dough"]), ("bake", &["cooking dough"]), ("music_tab", &["first loaf of bread"]),
-    ("chef_door", &["the music player", "next door"]), ("run_controls", &["running man"]),
-    ("run_button", &["click on the run button"]), ("quest_door", &["run to the next guide"]),
-    ("quest_talk", &["talk with the quest guide"]), ("quest_tab", &["open the quest journal"]),
-    ("quest_recap", &["your quest journal"]), ("ladder_down", &["enter some caves"]),
-    ("mining_intro", &["mining and smithing"]), ("dig_tin_first", &["mine one tin ore"]),
-    ("dig_copper", &["need some copper"]), ("dig_tin", &["need some tin"]), ("prospect", &["prospect"]),
-    ("smelt", &["smelting"]), ("smith_talk", &["made a bronze bar"]), ("smith_anvil", &["smithing a dagger"]),
-    ("mine_exit", &["finished this area"]), ("combat_intro", &["find out about combat"]),
-    ("wield_tab", &["wielding weapons"]), ("wield", &["select wield from the menu"]),
-    ("sword_talk", &["now holding your dagger"]), ("sword_equip", &["wield the sword and shield"]),
-    ("combat_tab", &["crossed swords"]), ("rat_cage", &["tools needed for battle"]), ("melee", &["to attack the rat"]),
-    ("melee_watch", &["sit back and watch"]), ("ranged_prep", &["made your first kill"]),
-    ("ranged_kill", &["rat ranging"]), ("ladder_bank", &["completed the tasks here"]),
-    ("bank_booth", &["bank of runescape"]), ("bank_door", &["this is your bank box"]),
-    ("advisor_talk", &["financial advice"]), ("advisor_door", &["continue through the next door"]),
-    ("chapel_path", &["follow the path to the chapel"]), ("prayer_tab", &["prayer menu", "flashing icon"]),
-    ("chapel_recap", &["tell you about prayers"]), ("friends_tab", &["flashing smily"]),
-    ("ignore_tab", &["this is your friends list"]), ("chapel_final", &["this is your ignore list"]),
-    ("chapel_door", &["almost finished", "pass through the"]), ("terrova_talk", &["wizards house"]),
-    ("magic_tab", &["open up your final menu"]), ("oops_runes", &["unhandled tutorial step"]),
-    ("wind", &["several tries"]), ("wind_retry", &["didn't have any effect"]),
-    ("final", &["almost completed the tutorial"]), ("wait", &["please wait"]),
-];
+// (step key, instruction fragments) live in tutorial_detect::STAGE_MATCHERS,
+// audited against the exact server box corpus.
 
 fn detect_stage(bot: &Bot) -> Option<&'static str> {
     let text = instruction(bot).to_lowercase();
     if text.trim().is_empty() {
         return None;
     }
-    STAGE_MATCHERS.iter().find(|(_, fragments)| fragments.iter().all(|fragment| text.contains(fragment))).map(|(key, _)| *key)
+    let hits = all_matches(&text);
+    if hits.len() > 1 {
+        let snippet: String = text.chars().take(160).collect();
+        bot.log(&format!("ambiguous tutorial box {snippet:?} candidates {hits:?}"));
+    }
+    hits.into_iter().next()
 }
 
 /// Talk + answers with fail-fast stall detection.
@@ -718,7 +688,7 @@ fn step(bot: &mut Bot, stage: &str) -> Result<(), ScriptError> {
         "quest_tab" => click_tab(bot, 2, "quest tab"),
         "ladder_down" => climb_down_mine(bot),
         "mining_intro" => talk_step(bot, "mining_instructor", (3079, 9505), &["Nope, I'm ready to move on!"], "miner"),
-        "prospect" => prospect(bot),
+        "prospect" | "prospect_done" => prospect(bot),
         "dig_tin_first" => dig(bot, "newbietinrock", "tin_ore"),
         "dig_copper" => dig(bot, "newbiecopperrock", "copper_ore"),
         "dig_tin" => dig(bot, "newbietinrock", "tin_ore"),
@@ -1000,6 +970,15 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
                     recovered = detect_stage(bot).is_some();
                 }
                 if !recovered {
+                    // Empty box after login, death or resume: re-enter from
+                    // geography plus kit instead of failing the run.
+                    if let Some(stage) = fallback_stage(bot) {
+                        bot.log(&format!("empty box at {:?}, fallback: {stage}", bot.position()));
+                        bot.intend(&format!("tutorial: {stage}"));
+                        step(bot, stage)?;
+                        bot.pump(5)?;
+                        continue;
+                    }
                     return Err(ScriptError::Sdk(Error::Timeout(format!("tutorial stuck: no instruction at {:?}", bot.position()))));
                 }
                 continue;
@@ -1019,7 +998,8 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
         } else {
             last_key = stage.to_string();
             repeats = 0;
-            bot.log(&format!("stage {stage} hint={:?} flash={:?}", bot.world.hint, bot.world.side_flash));
+            let boxed: String = instruction(bot).chars().take(160).collect();
+            bot.log(&format!("stage {stage} hint={:?} flash={:?} box={boxed:?}", bot.world.hint, bot.world.side_flash));
         }
         step(bot, stage)?;
         bot.pump(5)?;
@@ -1028,7 +1008,8 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_ticks, is_chat_modal, is_mine_region, STAGE_MATCHERS};
+    use super::{elapsed_ticks, is_chat_modal, is_mine_region};
+    use crate::tutorial_detect::STAGE_MATCHERS;
     use lifescape_sdk::world::Modal;
 
     /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
