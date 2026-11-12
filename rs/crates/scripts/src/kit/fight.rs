@@ -70,12 +70,30 @@ fn cold_clicks_spent(cold: u32) -> bool {
     cold >= MAX_COLD_CLICKS
 }
 
-/// True when the bot stands on a tile the server accepts NPC clicks
-/// from: orthogonal adjacency, never a diagonal (see `approach_npc`).
-/// Clicks thrown from further out are silently converted to walks, so
-/// throwing them only burns the cold-click budget for nothing.
-fn click_adjacent(bot_x: i32, bot_z: i32, npc_x: i32, npc_z: i32) -> bool {
-    (npc_x - bot_x).abs() + (npc_z - bot_z).abs() == 1
+/// Server refusal of an attack click (player_combat.rs2), by what the
+/// bot should do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FoeRefusal {
+    /// "I can't reach that": one door-aware step may burn the door and
+    /// prove it uncrossable (excluded for the whole fight).
+    Unreachable,
+    /// Someone else holds the foe (or holds us): skip it, never step
+    /// toward it.
+    Taken,
+}
+
+fn foe_refusal(line: &str) -> Option<FoeRefusal> {
+    let lowered = line.to_lowercase();
+    if lowered.contains("can't reach that") {
+        Some(FoeRefusal::Unreachable)
+    } else if lowered.contains("already under attack")
+        || lowered.contains("someone else is fighting")
+        || lowered.contains("not after you")
+    {
+        Some(FoeRefusal::Taken)
+    } else {
+        None
+    }
 }
 
 /// One foe never holds the bot longer than this, xp trickle or not: a normal
@@ -187,26 +205,28 @@ pub fn fight(
                     progress_at = bot.world.ticks;
                     continue;
                 }
-                let blocked = bot.world.messages.get(seen_msgs..).unwrap_or(&[]).iter().any(|line| {
-                    // Server refusals (player_combat.rs2 player_in_combat_check)
-                    // or unreachable foe: repick instead of spamming the same
-                    // click every 5 ticks forever (t01 baseline: 229 "can't
-                    // reach" + 36 "already under attack" for 26 kills).
-                    let lowered = line.to_lowercase();
-                    lowered.contains("can't reach that")
-                        || lowered.contains("already under attack")
-                        || lowered.contains("someone else is fighting")
-                        || lowered.contains("not after you")
-                });
+                // Server refusals (player_combat.rs2 player_in_combat_check)
+                // or unreachable foe: repick instead of spamming the same
+                // click every 5 ticks forever (t01 baseline: 229 "can't
+                // reach" + 36 "already under attack" for 26 kills).
+                let refusals: Vec<FoeRefusal> =
+                    bot.world.messages.get(seen_msgs..).unwrap_or(&[]).iter().filter_map(|line| foe_refusal(line)).collect();
                 let (foe_x, foe_z) =
                     bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
-                if blocked {
+                if !refusals.is_empty() {
                     unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                     // The step toward a door-blocked foe re-burns the door
                     // (click + watch, refused again): inspect it, and when
                     // the server proves the door uncrossable the tile stays
-                    // out for the whole fight instead of 200 ticks.
-                    if let Err(step_error) = bot.approach_npc(slot, 60) {
+                    // out for the whole fight instead of 200 ticks. A taken
+                    // foe gets no step: skipped on the spot.
+                    let step = if refusals.contains(&FoeRefusal::Unreachable) {
+                        bot.approach_npc(slot, 60)
+                    } else {
+                        bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) taken, skipping"));
+                        Ok(())
+                    };
+                    if let Err(step_error) = step {
                         if matches!(step_error, lifescape_sdk::Error::DoorDidNotOpen(_)) {
                             bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) behind uncrossable door, excluding"));
                             unreachable.ban_until((foe_x, foe_z), DOOR_BAN_TICKS);
@@ -305,9 +325,7 @@ pub fn fight(
                     ) {
                         fighting = true;
                         bot.log(&format!("engaged npc {slot}, holding clicks"));
-                    } else if bot.world.npcs.get(&slot).is_some_and(|foe| {
-                        click_adjacent(bot.world.x, bot.world.z, foe.x, foe.z)
-                    }) {
+                    } else if bot.adjacent_to_npc(slot) {
                         // Adjacent throws only: clicks from further out are
                         // silently converted to walks and prove nothing, so
                         // they must not burn the cold-click budget (the
@@ -852,14 +870,17 @@ mod engaged_tests {
         assert!(super::cold_clicks_spent(40), "40 silent clicks repick");
     }
 
-    /// Clicks only land from orthogonal adjacency: diagonals and range
-    /// never start combat (the server silently walks instead).
+    /// Server refusals split in two: an unreachable foe is worth one
+    /// door-aware step (it may burn a door and prove it uncrossable), a
+    /// foe already taken by someone else is skipped on the spot — live
+    /// (bb4v5d9m 17:52:38) the step toward a taken cow paced ~20 walks.
     #[test]
-    fn clicks_gate_on_orthogonal_adjacency() {
-        assert!(super::click_adjacent(0, 0, 1, 0), "side adjacent clicks");
-        assert!(super::click_adjacent(0, 0, 0, 1), "side adjacent clicks");
-        assert!(!super::click_adjacent(0, 0, 1, 1), "diagonal never clicks");
-        assert!(!super::click_adjacent(0, 0, 2, 0), "range never clicks");
-        assert!(!super::click_adjacent(0, 0, 0, 0), "same tile never clicks");
+    fn taken_foe_is_skipped_without_a_step() {
+        use super::{foe_refusal, FoeRefusal};
+        assert_eq!(foe_refusal("Someone else is fighting that."), Some(FoeRefusal::Taken));
+        assert_eq!(foe_refusal("I'm already under attack."), Some(FoeRefusal::Taken));
+        assert_eq!(foe_refusal("It's not after you."), Some(FoeRefusal::Taken));
+        assert_eq!(foe_refusal("I can't reach that!"), Some(FoeRefusal::Unreachable));
+        assert_eq!(foe_refusal("You bury the bones."), None);
     }
 }
