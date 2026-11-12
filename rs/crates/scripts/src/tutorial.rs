@@ -6,8 +6,9 @@
 use lifescape_sdk::{Bot, Error};
 
 use crate::quests::common as kit;
-use crate::tutorial_design::design;
+use crate::tutorial_design::{design, is_chat_modal};
 use crate::tutorial_detect::{all_matches, fallback_stage, has, obj};
+use crate::tutorial_skills::{catch_shrimp, chop, cook_on_fire, light_fire, use_held_on_loc_near};
 use crate::{ScriptError, ScriptResult};
 
 const COM_RUN: u16 = 153;
@@ -30,7 +31,7 @@ fn elapsed_ticks(now: u64, started: u64) -> u64 {
     now.saturating_sub(started)
 }
 
-fn wait_inv(bot: &mut Bot, name: &str, count: u32, timeout: u64) -> Result<bool, ScriptError> {
+pub(crate) fn wait_inv(bot: &mut Bot, name: &str, count: u32, timeout: u64) -> Result<bool, ScriptError> {
     let id = obj(name)?;
     let target = bot.world.ticks + timeout;
     while bot.world.ticks < target {
@@ -203,7 +204,7 @@ fn target_ref(bot: &Bot) -> (i32, i32) {
     }
 }
 
-fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i32, i32, i32, u16), ScriptError> {
+pub(crate) fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i32, i32, i32, u16), ScriptError> {
     let from = target_ref(bot);
     match kit::find_loc_from(bot, loc_names, radius, from) {
         Ok(found) => Ok(found),
@@ -213,7 +214,7 @@ fn find_target_loc(bot: &mut Bot, loc_names: &[&str], radius: i32) -> Result<(i3
 }
 
 /// Stand tiles, orthogonal first (diagonals never answer).
-fn ordered_stands(x: i32, z: i32, bot_x: i32, bot_z: i32) -> Vec<(i32, i32)> {
+pub(crate) fn ordered_stands(x: i32, z: i32, bot_x: i32, bot_z: i32) -> Vec<(i32, i32)> {
     let mut cands: Vec<(i32, i32)> = (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (x + dx, z + dz))).filter(|tile| *tile != (x, z)).collect();
     cands.sort_by_key(|tile| {
         let orthogonal = (tile.0 == x) != (tile.1 == z);
@@ -223,7 +224,7 @@ fn ordered_stands(x: i32, z: i32, bot_x: i32, bot_z: i32) -> Vec<(i32, i32)> {
     cands
 }
 
-fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
+pub(crate) fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
     let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
     let cands = ordered_stands(x, z, bot.world.x, bot.world.z);
     let target = bot.world.ticks + timeout;
@@ -250,31 +251,7 @@ fn op_loc_near(bot: &mut Bot, loc_names: &[&str], op: u8, done: impl Fn(&Bot) ->
     Ok(false)
 }
 
-fn use_held_on_loc_near(bot: &mut Bot, loc_names: &[&str], tool: u16, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
-    let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
-    let cands = ordered_stands(x, z, bot.world.x, bot.world.z);
-    let target = bot.world.ticks + timeout;
-    for (cx, cz) in cands {
-        if bot.world.ticks > target {
-            break;
-        }
-        if bot.walk_to(cx, cz, level, 1250).is_err() {
-            continue;
-        }
-        let (use_com, use_slot) = kit::inv_slot(bot, tool)?;
-        bot.op_loc_u(x, z, loc, tool, u16::from(use_slot), use_com)?;
-        let inner = bot.world.ticks + 20;
-        while bot.world.ticks < inner {
-            bot.pump(2)?;
-            if done(bot) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn talk_step(bot: &mut Bot, npc: &str, near: (i32, i32), answers: &[&str], what: &str) -> Result<(), ScriptError> {
+pub(crate) fn talk_step(bot: &mut Bot, npc: &str, near: (i32, i32), answers: &[&str], what: &str) -> Result<(), ScriptError> {
     check(bot.position(), kit::talk(bot, npc, Some(near), 150)?, &format!("{what} found"))?;
     finish_dialog(bot, answers, 300)?;
     Ok(())
@@ -296,111 +273,6 @@ pub(crate) fn wait_modal_closed(bot: &mut Bot, timeout: u64) -> Result<bool, Scr
         }
     }
     Ok(false)
-}
-
-fn chop(bot: &mut Bot) -> Result<(), ScriptError> {
-    let axe = obj("bronze_axe")?;
-    if !bot.inventory().contains_key(&axe) {
-        // Defaut 1 offline cause: the box already asks for a tree while
-        // the axe never landed (login lag, or a mid-quest resume that
-        // skipped the grant). Re-talk before failing loud (t03/t05).
-        let _ = talk_step(bot, "survival", (3103, 3095), &[], "survival re-grant");
-        let _ = wait_inv(bot, "bronze_axe", 1, 60);
-    }
-    check(bot.position(), bot.inventory().contains_key(&axe), "axe held")?;
-    let logs = obj("newbielogs")?;
-    while bot.inventory().get(&logs).copied().unwrap_or(0) < 2 {
-        if bot.world.modal.is_some() {
-            bot.chat_continue()?;
-            bot.pump(5)?;
-        }
-        let had = bot.inventory().get(&logs).copied().unwrap_or(0);
-        check(bot.position(), op_loc_near(bot, &["newbietree", "newbietree2", "newbiedeadtree2"], 1, |candidate| candidate.inventory().get(&logs).copied().unwrap_or(0) > had, 120)?, "logs chopped")?;
-    }
-    Ok(())
-}
-
-fn light_fire(bot: &mut Bot) -> Result<(), ScriptError> {
-    let logs = obj("newbielogs")?;
-    let tinderbox = obj("tinderbox")?;
-    if bot.inventory().get(&logs).copied().unwrap_or(0) < 1 {
-        chop(bot)?;
-    }
-    for _ in 0..3 {
-        if bot.inventory().get(&logs).copied().unwrap_or(0) < 1 {
-            chop(bot)?;
-        }
-        let here = (bot.world.x, bot.world.z);
-        let (com, slot) = kit::inv_slot(bot, logs)?;
-        let (use_com, use_slot) = kit::inv_slot(bot, tinderbox)?;
-        bot.op_held_u(logs, slot, com, tinderbox, use_slot, use_com)?;
-        let target = bot.world.ticks + 50;
-        while bot.world.ticks < target {
-            bot.pump(5)?;
-            if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
-                if (fire_x - here.0).abs() + (fire_z - here.1).abs() <= 1 {
-                    bot.log("ok fire lit");
-                    return Ok(());
-                }
-            }
-        }
-        let _ = bot.walk_to(here.0 + 2, here.1, bot.world.level, 1500);
-    }
-    check(bot.position(), false, "fire lighting")
-}
-
-fn catch_shrimp(bot: &mut Bot, timeout: u64) -> Result<bool, ScriptError> {
-    let raw = obj("newbieraw_shrimp")?;
-    let had = bot.inventory().get(&raw).copied().unwrap_or(0);
-    let target = bot.world.ticks + timeout;
-    // One spot can go stale (ghost slot answers nothing): rotate through
-    // all visible spots instead of hammering the nearest forever.
-    let mut dud: Vec<u16> = Vec::new();
-    while bot.world.ticks < target {
-        bot.pump(5)?;
-        let mut spots: Vec<u16> = bot.find_npcs("newbiefishing").into_iter().filter(|slot| !dud.contains(slot)).collect();
-        if spots.is_empty() {
-            dud.clear();
-            spots = bot.find_npcs("newbiefishing");
-        }
-        let Some(slot) = spots.into_iter().next() else { continue };
-        let _ = bot.approach_npc(slot, 30);
-        bot.op_npc(1, slot)?;
-        let inner = bot.world.ticks + 60;
-        while bot.world.ticks < inner {
-            bot.pump(5)?;
-            if bot.inventory().get(&raw).copied().unwrap_or(0) > had {
-                return Ok(true);
-            }
-        }
-        dud.push(slot);
-    }
-    Ok(false)
-}
-
-fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<(), ScriptError> {
-    let raw = obj(raw_name)?;
-    if !has(bot, raw_name, 1) {
-        check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught for cooking")?;
-    }
-    check(bot.position(), wait_inv(bot, raw_name, 1, 90)?, &format!("has {raw_name}"))?;
-    // Tutorial fires burn out after 100-200 ticks: short cook rounds with a
-    // relight between them, never one long hammering of a dead fire.
-    for _ in 0..3 {
-        if kit::find_loc(bot, &["fire"], 15).is_err() {
-            bot.log("no fire nearby, lighting");
-            light_fire(bot)?;
-        }
-        let want_id = obj(want)?;
-        if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
-            bot.log(&format!("cooking on fire at {fire_x},{fire_z}"));
-        }
-        if use_held_on_loc_near(bot, &["fire"], raw, |candidate| candidate.inventory().contains_key(&want_id), 100)? {
-            return Ok(());
-        }
-        bot.log(&format!("{want} missed this fire, relighting"));
-    }
-    check(bot.position(), false, &format!("{want} cooked"))
 }
 
 fn chef(bot: &mut Bot) -> Result<(), ScriptError> {
@@ -599,13 +471,49 @@ fn wind_strike(bot: &mut Bot) -> Result<(), ScriptError> {
     Ok(())
 }
 
+/// Option-less chat page (npc line, `~objbox`/`~doubleobjbox` item box):
+/// one RESUME_PAUSEBUTTON advances it (the server ignores the component).
+fn is_pause_page(modal: &Option<lifescape_sdk::world::Modal>, has_options: bool) -> bool {
+    is_chat_modal(modal) && !has_options
+}
+
+/// Wait for `count` of `name`, continuing option-less pages on the way:
+/// Terrova grants the runes only after the `~doubleobjbox` pause
+/// (magic_instructor.rs2 `newbie_magic_instructor_give_runes`), so a page
+/// left open blocks the `inv_add` for good.
+fn wait_inv_through_dialog(bot: &mut Bot, name: &str, count: u32, timeout: u64) -> Result<bool, ScriptError> {
+    let id = obj(name)?;
+    let target = bot.world.ticks + timeout;
+    while bot.world.ticks < target {
+        bot.pump(5)?;
+        if kit::count(bot, id) >= count {
+            return Ok(true);
+        }
+        if is_pause_page(&bot.world.modal, !bot.chat_options().is_empty()) {
+            bot.chat_continue()?;
+        }
+    }
+    Ok(false)
+}
+
 fn terrova_runes(bot: &mut Bot) -> Result<(), ScriptError> {
     if has(bot, "airrune", 1) && has(bot, "mindrune", 1) {
         bot.log("ok runes already held");
         return Ok(());
     }
+    // At 620 any tab click (ours, or the empty-box recovery) runs
+    // `[tutorial,_]`: 630, then a jump into Terrova's rune dialogue with
+    // no talk (tutorial.rs2). Continue it: clicking Terrova over it closes
+    // it before the runes (nina_rhodes stuck at 630).
+    if is_chat_modal(&bot.world.modal) {
+        bot.log("ok terrova dialogue already open, continuing it");
+        finish_dialog(bot, &["Yes."], 300)?;
+        if wait_inv_through_dialog(bot, "airrune", 1, 20)? {
+            return check(bot.position(), true, "runes held");
+        }
+    }
     talk_step(bot, "magic_instructor", (3141, 3089), &["Yes."], "terrova runes")?;
-    check(bot.position(), wait_inv(bot, "airrune", 1, 60)?, "runes held")
+    check(bot.position(), wait_inv_through_dialog(bot, "airrune", 1, 60)?, "runes held")
 }
 
 // -- driver ------------------------------------------------------------------
@@ -983,8 +891,22 @@ pub fn run_tutorial(bot: &mut Bot, _args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_ticks, is_mine_region};
+    use super::{elapsed_ticks, is_mine_region, is_pause_page};
     use crate::tutorial_detect::STAGE_MATCHERS;
+    use lifescape_sdk::world::Modal;
+
+    /// nina_rhodes (%tutorial 630): the runes come after the
+    /// `~doubleobjbox` pause; the rune wait continues option-less chat
+    /// pages (item box, npc line) but never a choice or a main interface.
+    #[test]
+    fn rune_wait_continues_item_box_only() {
+        let doubleobjbox = Some(Modal { layer: "chat".to_string(), interface_id: 4950 });
+        assert!(is_pause_page(&doubleobjbox, false), "item box: one continue releases inv_add");
+        assert!(!is_pause_page(&doubleobjbox, true), "a choice page is answered, not continued");
+        let bank = Some(Modal { layer: "main".to_string(), interface_id: 5292 });
+        assert!(!is_pause_page(&bank, false), "main interface is not a pause page");
+        assert!(!is_pause_page(&None, false), "nothing open");
+    }
 
     /// t02: ticks reset 1439 -> 0 on the mine transition; no panic.
     #[test]
