@@ -130,6 +130,17 @@ pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Res
         }
         bot.pump(2)?;
     }
+    // Empty the pack before withdrawing the lots (user rule: both sides
+    // bank their goods at the nearest bank first, so nothing of the trade
+    // rides along and a death on the road costs nothing). Live
+    // 2026-11-12: b5xntyz6 carried 99 cow hides and 99 raw beef from its
+    // melee run, so every `bank_withdraw` answered "You don't have enough
+    // inventory space.", it walked back empty, and the buyer waiting at
+    // the fountain lost the deal to `no_show` — three times in a row.
+    if let Some(side_com) = (bot.tables.com_id)("bank_side:inv") {
+        let _ = bot.bank_deposit_all(side_com, &[], 300);
+        bot.pump(2)?;
+    }
     if row.buying {
         let need_n = (i64::from(row.qty) * row.price) as u32;
         bot.bank_withdraw(coins, need_n, 300)?;
@@ -147,11 +158,22 @@ pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Res
     }
     let _ = bot.close_modal();
     bot.pump(3)?;
-    Ok(if row.buying {
+    let carried = if row.buying {
         bot.inventory().get(&coins).copied().unwrap_or(0) >= (i64::from(row.qty) * row.price) as u32
     } else {
         bot.inventory().get(&row.item).copied().unwrap_or(0) >= row.qty || bot.inventory().get(&trade).copied().unwrap_or(0) >= row.qty
-    })
+    };
+    if !carried {
+        // Loud: a silent false sent the partner to the square alone.
+        bot.log(&format!(
+            "handover: lots never landed ({} {} x{}) at {:?}, the bank is short",
+            if row.buying { "coins for" } else { "item" },
+            row.item,
+            row.qty,
+            bot.position()
+        ));
+    }
+    Ok(carried)
 }
 
 /// The seller's offered form: base when carried, else notes. The buyer
