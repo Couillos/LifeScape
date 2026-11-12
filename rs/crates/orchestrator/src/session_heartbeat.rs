@@ -134,9 +134,13 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
     let bank_com = (LIVETABLES.com_id)("bank_main:inv");
     let worn_com = (LIVETABLES.com_id)("wornitems:wear");
     let pack_com = (LIVETABLES.com_id)("inventory:inv");
+    // The bank reads its last known contents once closed (the server
+    // stops transmitting it at every close): banked coins and stock stay
+    // visible to the brain and the market ledger between bank visits.
     let slot_items = |com: Option<u16>| -> Vec<Value> {
         let Some(com) = com else { return Vec::new() };
-        let Some(slots) = bot.world.inv.get(&com) else { return Vec::new() };
+        let known = if Some(com) == bank_com { bot.world.inv_known(com) } else { bot.world.inv.get(&com) };
+        let Some(slots) = known else { return Vec::new() };
         let mut items: Vec<(u8, Value)> = slots
             .iter()
             .map(|(slot, (held, count))| {
@@ -229,7 +233,7 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
         // The brain never decides on a pack that has not streamed yet
         // (an empty `inv` right after login read as "no net").
         ("inv_streamed", Value::Bool(pack_com.is_some_and(|com| bot.world.inv.contains_key(&com)))),
-        ("bank_streamed", Value::Bool(bank_com.is_some_and(|com| bot.world.inv.contains_key(&com)))),
+        ("bank_streamed", Value::Bool(bank_com.is_some_and(|com| bot.world.inv_known(com).is_some()))),
         ("worn", Value::Arr(slot_items(worn_com))),
         ("models", Value::Obj(Default::default())),
         ("bank", Value::Arr(slot_items(bank_com))),
@@ -264,5 +268,24 @@ mod tests {
         assert_eq!(tells.len(), 1, "one tell received");
         assert_eq!(tells[0].get("who").as_str(), Some("t02"));
         assert_eq!(tells[0].get("text").as_str(), Some("meet at varrock"));
+    }
+
+    /// Live 2026-11-12: every bot banks its coins and the server stops
+    /// transmitting the bank at close, so the snapshot read 0 coins and
+    /// the brain never bid. A closed bank now reports its last contents.
+    #[test]
+    fn heartbeat_keeps_the_closed_bank() {
+        let bank_com = (lifescape_scripts::tables_live::LIVETABLES.com_id)("bank_main:inv").expect("bank com");
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(0u8, (995u16, 344u32));
+        bot.world.inv.insert(bank_com, slots);
+        bot.world.feed("UPDATE_INV_STOP_TRANSMIT", &bank_com.to_be_bytes()).expect("stop transmit");
+        let value = heartbeat_value(&bot, "t01", "testing", &[]);
+        assert_eq!(value.get("bank_streamed").as_bool(), Some(true), "last contents known");
+        let Value::Arr(bank) = value.get("bank") else {
+            panic!("bank is an array");
+        };
+        assert!(bank.iter().any(|row| row.get("id").as_i64() == Some(995) && row.get("count").as_i64() == Some(344)), "{bank:?}");
     }
 }

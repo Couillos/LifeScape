@@ -176,6 +176,12 @@ pub struct World {
     pub objs: HashMap<(Tile, u16), Option<u32>>,
     pub static_objs: HashMap<(Tile, u16), u32>,
     pub inv: HashMap<u16, HashMap<u8, (u16, u32)>>,
+    /// Last contents of an inventory the server stopped transmitting
+    /// (`inv_stoptransmit`: the bank at every close). `inv` keeps its
+    /// "interface open" meaning; this keeps the last truth readable, so
+    /// banked coins and stock stay visible between bank visits (only a
+    /// bank visit can change them). A fresh `UPDATE_INV_FULL` replaces it.
+    pub inv_closed: HashMap<u16, HashMap<u8, (u16, u32)>>,
     pub inv_cap: HashMap<u16, u8>,
     pub varps: HashMap<u16, i32>,
     pub stats: HashMap<u8, (u8, i32)>,
@@ -283,7 +289,10 @@ impl World {
             "UPDATE_INV_FULL" => self.inv_full(body)?,
             "UPDATE_INV_PARTIAL" => self.inv_partial(body)?,
             "UPDATE_INV_STOP_TRANSMIT" => {
-                self.inv.remove(&zone.u16()?);
+                let com = zone.u16()?;
+                if let Some(items) = self.inv.remove(&com) {
+                    self.inv_closed.insert(com, items);
+                }
             }
             "UPDATE_STAT" => {
                 let index = zone.u8()?;
@@ -520,8 +529,30 @@ impl World {
             }
         }
         self.inv_cap.insert(com, slots);
+        self.inv_closed.remove(&com);
         self.inv.insert(com, items);
         Ok(())
+    }
+
+    /// Contents of `com`: live while transmitted, else the last known
+    /// contents (bank closed), else `None` (never seen this session).
+    pub fn inv_known(&self, com: u16) -> Option<&HashMap<u8, (u16, u32)>> {
+        self.inv.get(&com).or_else(|| self.inv_closed.get(&com))
+    }
+
+    /// Seeds the last known contents of `com` from per-object counts (the
+    /// account save read at login: the server loaded it, so it is the
+    /// truth until the first live transmit). Never overrides a live or
+    /// already known inventory.
+    pub fn seed_closed_inv(&mut self, com: u16, counts: &HashMap<u16, u32>) {
+        if self.inv.contains_key(&com) || self.inv_closed.contains_key(&com) {
+            return;
+        }
+        let mut objs: Vec<(&u16, &u32)> = counts.iter().filter(|(_, count)| **count > 0).collect();
+        objs.sort();
+        let items: HashMap<u8, (u16, u32)> =
+            objs.into_iter().enumerate().filter_map(|(slot, (obj, count))| u8::try_from(slot).ok().map(|slot| (slot, (*obj, *count)))).collect();
+        self.inv_closed.insert(com, items);
     }
 
     fn inv_partial(&mut self, body: &[u8]) -> Result<()> {

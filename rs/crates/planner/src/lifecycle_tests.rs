@@ -252,3 +252,27 @@ fn coin_and_level_blocks_file_earning_and_training() {
     ids.dedup();
     assert_eq!(ids.len(), before, "unique ids");
 }
+
+/// A cook blocks on raw fish once per inventory load: level progress
+/// clears the count, so only blocks that lead nowhere abandon the node.
+#[test]
+fn progress_clears_the_block_count() {
+    let mut cook = reach("n1", &[], NodeStatus::Active);
+    cook.kind = NodeKind::ReachLevel { skill: "cooking".to_string(), level: 30 };
+    cook.method = Some("cook/raw_shrimp".to_string());
+    cook.progress_current = 5;
+    let mut life = life_of(vec![cook], Some("n1"));
+    record_block(&mut life, 0, &["raw_shrimp".to_string()]);
+    let batch = life.nodes.iter().find_map(|node| match &node.kind {
+        NodeKind::ObtainItems { item, count } if item == "raw_shrimp" => Some(*count),
+        _ => None,
+    });
+    assert_eq!(batch, Some(crate::replan::INPUT_BATCH), "the block sized its batch from the cook method");
+    assert_eq!(life.nodes[0].blocks, 1);
+    assert_eq!(life.nodes[0].method, None, "the method clears once the sub-task is filed");
+    super::record_progress(&mut life, 0, 5);
+    assert_eq!(life.nodes[0].blocks, 1, "no level gained: the block still counts");
+    super::record_progress(&mut life, 0, 9);
+    assert_eq!(life.nodes[0].blocks, 0, "levels gained: the load did its job");
+    assert_eq!(life.nodes[0].progress_current, 9);
+}

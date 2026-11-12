@@ -170,4 +170,17 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   deux premières, plafond = pièces disponibles, réévaluées toutes les
   600 s ; jamais vendues.
 - Pièces comme objectif : un achat non couvert crée `have_coins`, résolu
-  par la méthode d'argent la plus rentable (rates par script).
+  d'abord par les PNJ qui lâchent des pièces (hommes ~8,2/kill, gobelins
+  ~2,2, tables de drop F2P : seule entrée de pièces sans acheteur, les
+  magasins n'achetant jamais), puis la méthode d'argent la plus rentable
+  (rates par script) ; le choix de site redescend la liste si le niveau
+  de combat manque.
+- Intrants des skills de transformation : un `blocked{missing}` (cuisinier
+  sans poisson cru, allumeur sans bûches, fondeur sans minerai) crée une
+  obtention dimensionnée à la charge d'inventaire (`planner::need_count` :
+  27 intrants, 13+13 pour le bronze ; un outil = 1), résolue marché
+  d'abord ; la progression de niveau remet le compteur de blocages à zéro
+  (une charge par blocage est le rythme normal).
+- Couverture : pièces et stock en banque comptent (banque connue gardée
+  par le SDK après fermeture, voir `docs/protocol.md`) côté cerveau
+  (`holdings_count`) et registre (`market_service::ledger_holdings`).

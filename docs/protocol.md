@@ -9,6 +9,14 @@ hint, side_flash), `src/snapshot.rs` (+ `src/client/snapshot_view.rs`),
 si présent, sinon `rs/crates/gamedata/build.rs`) ; le SDK ne parse aucun
 dump au runtime.
 
+Inventaires : `world.inv` = inventaires transmis (interface ouverte) ;
+`UPDATE_INV_STOP_TRANSMIT` (banque à chaque fermeture,
+`bank.rs2 [label,closebank]`) déplace le contenu dans `world.inv_closed`
+(dernier contenu connu, `World::inv_known`), conservé au relogin et amorcé
+au login depuis la sauvegarde du compte (`save.rs`). Le heartbeat publie
+la banque connue (`bank_streamed` = connue) : pièces et stock bancaires
+restent visibles au cerveau et au registre du market entre deux visites.
+
 Actions via les méthodes `Bot` (`src/client/actions.rs`, `src/client/movement.rs`,
 `src/client/approach.rs`, `src/client/doors.rs`) : `op_loc`, `op_npc_t`,
 `if_button`, `close`, `walk_to`, `take`, `approach`. Attentes :

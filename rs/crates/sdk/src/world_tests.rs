@@ -238,3 +238,39 @@ fn npc_list_survives_own_level_change_until_npc_info() {
     world.feed("NPC_INFO", &npcs.bytes).unwrap();
     assert!(world.npcs.is_empty() && world.npc_order.is_empty(), "both removed by op 3");
 }
+
+/// The server stops transmitting the bank at every close
+/// (`bank.rs2: inv_stoptransmit(bank_main:inv)`): `inv` drops it (the
+/// open-interface meaning holds) but the last contents stay known, so
+/// banked coins remain visible to the brain and the market ledger.
+#[test]
+fn closed_bank_stays_known_until_retransmitted() {
+    let mut world = World::new();
+    let bank_com: u16 = 2006;
+    // UPDATE_INV_FULL: com, slot count, then (obj + 1, count) per slot.
+    let full = |coins: u8| vec![(bank_com >> 8) as u8, bank_com as u8, 2, 0x03, 0xE4, coins, 0x01, 0x3B, 7];
+    world.feed("UPDATE_INV_FULL", &full(200)).expect("full");
+    assert!(world.inv.contains_key(&bank_com), "open bank is live");
+    world.feed("UPDATE_INV_STOP_TRANSMIT", &[(bank_com >> 8) as u8, bank_com as u8]).expect("stop");
+    assert!(!world.inv.contains_key(&bank_com), "closed bank leaves the live inventories");
+    let known = world.inv_known(bank_com).expect("last contents kept");
+    assert!(known.values().any(|(obj, count)| *obj == 995 && *count == 200), "coins still known: {known:?}");
+    // A fresh transmit replaces the closed copy.
+    world.feed("UPDATE_INV_FULL", &full(50)).expect("full again");
+    assert!(world.inv_closed.is_empty());
+    assert!(world.inv_known(bank_com).expect("live").values().any(|(obj, count)| *obj == 995 && *count == 50));
+}
+
+/// A login seeds the bank from the save only when nothing is known yet.
+#[test]
+fn bank_seed_never_overrides_known_contents() {
+    let mut world = World::new();
+    let counts: std::collections::HashMap<u16, u32> = [(995u16, 427u32), (1739, 3), (314, 0)].into_iter().collect();
+    world.seed_closed_inv(2006, &counts);
+    let seeded = world.inv_known(2006).expect("seeded");
+    assert_eq!(seeded.len(), 2, "empty stacks skipped: {seeded:?}");
+    assert!(seeded.values().any(|(obj, count)| *obj == 995 && *count == 427));
+    let other: std::collections::HashMap<u16, u32> = [(995u16, 1u32)].into_iter().collect();
+    world.seed_closed_inv(2006, &other);
+    assert!(world.inv_known(2006).expect("kept").values().any(|(obj, count)| *obj == 995 && *count == 427), "first truth kept");
+}

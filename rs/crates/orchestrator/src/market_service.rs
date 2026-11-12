@@ -90,6 +90,34 @@ impl Ledger {
     }
 }
 
+/// Coins and per-object stock of one live snapshot (pack, bank, worn:
+/// numeric ids). The bank row is the last known bank (the heartbeat keeps
+/// it once closed): banked coins fund bids, banked stock covers asks.
+pub(crate) fn ledger_holdings(live: &Value, coins_id: i64) -> (i64, Vec<(i64, i64)>) {
+    let mut coins = 0i64;
+    let mut stock: HashMap<i64, i64> = HashMap::new();
+    for key in ["inv", "bank", "worn"] {
+        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+            if !matches!(entry, Value::Obj(_)) {
+                continue;
+            }
+            let id = entry.get("id").as_i64().unwrap_or(-1);
+            let count = entry.get("count").as_i64().unwrap_or(1).max(0);
+            if id < 0 {
+                continue;
+            }
+            if id == coins_id {
+                coins += count;
+            } else {
+                *stock.entry(id).or_insert(0) += count;
+            }
+        }
+    }
+    let mut stock: Vec<(i64, i64)> = stock.into_iter().collect();
+    stock.sort();
+    (coins, stock)
+}
+
 /// Recent print kept for the WS live tail (no cross-item store query).
 #[derive(Clone, Debug)]
 pub(crate) struct Print {
@@ -283,28 +311,7 @@ impl MarketService {
             if !live.get("updated").as_f64().is_some_and(|at| now - at < 30.0) {
                 continue;
             }
-            let mut coins = 0i64;
-            let mut stock: HashMap<i64, i64> = HashMap::new();
-            for key in ["inv", "bank", "worn"] {
-                for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-                    let (id, count) = match &entry {
-                        Value::Obj(_) => (
-                            entry.get("id").as_i64().unwrap_or(-1),
-                            entry.get("count").as_i64().unwrap_or(1).max(0),
-                        ),
-                        _ => continue,
-                    };
-                    if id < 0 {
-                        continue;
-                    }
-                    if id == coins_id {
-                        coins += count;
-                    } else {
-                        *stock.entry(id).or_insert(0) += count;
-                    }
-                }
-            }
-            let stock: Vec<(i64, i64)> = stock.into_iter().collect();
+            let (coins, stock) = ledger_holdings(&live, coins_id);
             self.lock_engine().ledger.sync_account(&job.account, coins, &stock);
         }
     }

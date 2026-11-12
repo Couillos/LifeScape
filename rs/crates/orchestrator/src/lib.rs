@@ -35,6 +35,9 @@ pub mod market_seed;
 #[cfg(test)]
 #[path = "market_service_tests.rs"]
 mod market_service_tests;
+#[cfg(test)]
+#[path = "market_crossing_tests.rs"]
+mod market_crossing_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;

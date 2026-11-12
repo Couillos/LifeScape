@@ -153,7 +153,9 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     let (goal_met, market_pending) = match &kind {
         NodeKind::ReachLevel { skill, level } => match reach_level(report, skill) {
             Some(reached) => {
-                life.nodes[index].progress_current = i64::from(reached);
+                // Progress clears the block count (one input batch per
+                // block is the normal rhythm of a transformation skill).
+                lifescape_planner::record_progress(&mut life, index, i64::from(reached));
                 (reached >= *level, false)
             }
             None => (true, false),
@@ -173,7 +175,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         // when one window ends (the dependent re-picks its site then).
         NodeKind::ReachCombat { level } => match reach_combat(report) {
             Some(reached) => {
-                life.nodes[index].progress_current = i64::from(reached);
+                lifescape_planner::record_progress(&mut life, index, i64::from(reached));
                 (reached >= *level, false)
             }
             None => (false, false),

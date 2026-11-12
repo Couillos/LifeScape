@@ -243,6 +243,18 @@ pub fn record_contract_error(life: &mut Life, index: usize, error: &str) {
     node.status = NodeStatus::Abandoned;
 }
 
+/// A reported level (or combat level) for a reach node. Real progress
+/// clears its block count: a transformation skill blocks on its inputs
+/// once per inventory load by design (cook, smelt, burn), and only a
+/// block that never leads anywhere must count toward `MAX_BLOCKS`.
+pub fn record_progress(life: &mut Life, index: usize, current: i64) {
+    let node = &mut life.nodes[index];
+    if current > node.progress_current {
+        node.blocks = 0;
+    }
+    node.progress_current = current;
+}
+
 /// A blocked stop: the node waits on one `obtain_items` per missing
 /// item, reusing an open obtain for the same item instead of stacking
 /// duplicates. Past `MAX_BLOCKS` the node is abandoned.
@@ -251,8 +263,10 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
     let blocks = life.nodes[index].blocks.saturating_add(1);
     life.nodes[index].blocks = blocks;
     life.nodes[index].last_error = format!("Blocked: missing {}", missing.join(", "));
-    life.nodes[index].method = None;
+    // The blocked method sizes the input batches (`replan::need_count`):
+    // it clears once the sub-tasks are filed.
     if blocks > MAX_BLOCKS {
+        life.nodes[index].method = None;
         life.nodes[index].status = NodeStatus::Abandoned;
         return FailureFold::Abandoned;
     }
@@ -335,6 +349,7 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
     let mut counter = max_id_number(life);
     let fresh = replan_node(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter);
     let node = &mut life.nodes[index];
+    node.method = None;
     for id in reused {
         if !node.deps.contains(&id) {
             node.deps.push(id);
