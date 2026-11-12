@@ -10,3 +10,5 @@ rs/target/
 orchestration/static/map-*/
 orchestration/static/map-*.stamp
 orchestration/static/map-current.json
+# Worktrees of Claude Code subagents (separate checkouts).
+.claude/worktrees/
