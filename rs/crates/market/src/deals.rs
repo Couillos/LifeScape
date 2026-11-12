@@ -47,6 +47,11 @@ impl DealStatus {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FailReason {
     NoShow,
+    /// A party could not produce its side of the trade: the seller has
+    /// no goods, the buyer no coins (checked against the real bank and
+    /// pack at the handover). Its orders are phantom stock and are
+    /// cancelled, never relisted.
+    Short,
     Mismatch,
     Death,
     Timeout,
@@ -58,6 +63,7 @@ impl FailReason {
     pub fn as_str(self) -> &'static str {
         match self {
             FailReason::NoShow => "no_show",
+            FailReason::Short => "short",
             FailReason::Mismatch => "mismatch",
             FailReason::Death => "death",
             FailReason::Timeout => "timeout",
@@ -69,6 +75,7 @@ impl FailReason {
     pub fn parse(text: &str) -> Result<Self, Error> {
         match text {
             "no_show" => Ok(FailReason::NoShow),
+            "short" => Ok(FailReason::Short),
             "mismatch" => Ok(FailReason::Mismatch),
             "death" => Ok(FailReason::Death),
             "timeout" => Ok(FailReason::Timeout),
@@ -193,10 +200,20 @@ mod tests {
         assert!(current.transition(DealStatus::Failed, Some(FailReason::Timeout)).is_err());
     }
 
+    /// `short` round-trips on the wire: the daemon parses it back to
+    /// cancel the defaulter's orders instead of relisting phantom stock.
+    #[test]
+    fn short_is_its_own_wire_reason() {
+        assert_eq!(FailReason::Short.as_str(), "short");
+        assert_eq!(FailReason::parse("short").expect("parses"), FailReason::Short);
+        assert_ne!(FailReason::Short, FailReason::NoShow, "a missing lot is not a missing bot");
+    }
+
     #[test]
     fn every_open_state_can_fail_with_its_reason() {
         for reason in [
             FailReason::NoShow,
+            FailReason::Short,
             FailReason::Mismatch,
             FailReason::Death,
             FailReason::Timeout,

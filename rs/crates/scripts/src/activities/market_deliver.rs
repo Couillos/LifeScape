@@ -53,8 +53,11 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
             touched.push(row.item);
         }
         if !ensure_goods(bot, row, trade, coins)? {
-            bot.log(&format!("deal {id}: lots short, reporting no_show"));
-            deal_report(&bot.username, id, "failed", "no_show");
+            // `short`, not `no_show`: the goods (or the coins) are not
+            // there at all. The daemon cancels this side's orders instead
+            // of relisting phantom stock that would fail forever.
+            bot.log(&format!("deal {id}: lots short, reporting short"));
+            deal_report(&bot.username, id, "failed", "short");
             ok = false;
             continue;
         }

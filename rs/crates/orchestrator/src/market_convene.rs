@@ -481,9 +481,29 @@ impl MarketService {
                     )
                 }
                 FailReason::NoShow => (marks.0, marks.1, (arrival_score(marks.0), arrival_score(marks.1))),
+                // The reporter cannot produce its side: the honest party
+                // keeps its priority, the defaulter never relists.
+                FailReason::Short => {
+                    let reporter_is_buyer = account == buyer;
+                    (!reporter_is_buyer, reporter_is_buyer, (Some(!reporter_is_buyer), Some(reporter_is_buyer)))
+                }
                 _ => (true, true, (None, None)),
             };
             self.refund_and_relist(deal_id as u64, &buyer, &seller, item, qty, price, relist_buyer, relist_seller, reliability);
+            // User rule: a party that cannot deliver loses the deal AND
+            // the orders behind it. Its other rows on the same object are
+            // backed by the same missing stock (live 2026-11-12:
+            // lara_lane sold 26 raw shrimps it did not own across three
+            // deals, each one dying and relisting forever).
+            if why == FailReason::Short {
+                let side = if account == seller {
+                    lifescape_store::OrderSide::Sell
+                } else {
+                    lifescape_store::OrderSide::Buy
+                };
+                let cancelled = self.cancel_open_for(account, item, side);
+                crate::logln!("market: {account} short on obj {item}, {cancelled} phantom order(s) cancelled");
+            }
         }
         if next == DealStatus::Settled {
             self.release_convene(deal_id as u64);
