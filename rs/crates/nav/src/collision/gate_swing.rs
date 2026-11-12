@@ -13,10 +13,8 @@
 //! walls for good: a shut gate only costs a tile or two of detour,
 //! an open one no longer refuses the step.
 
-use std::collections::HashMap;
-
-use super::flags::{ANGLE_EAST, ANGLE_NORTH, ANGLE_SOUTH, ANGLE_WEST, LAYER_WALL, WALL_STRAIGHT};
-use super::loc_collision::{CollisionMap, LocDef};
+use super::flags::{ANGLE_EAST, ANGLE_NORTH, ANGLE_SOUTH, ANGLE_WEST, WALL_STRAIGHT};
+use super::loc_collision::CollisionMap;
 
 /// Role of a closed double gate leaf (content categories
 /// `gate_main_closed` / `gate_outer_closed`, `content/pack/category.pack`
@@ -65,38 +63,32 @@ pub fn open_leaves(main_x: i32, main_z: i32, angle: u8, has_outer: bool) -> Vec<
     leaves
 }
 
-/// Paint the open leaves of every closed main gate leaf in one 64x64
-/// square (absolute base `square_x`/`square_z`). The outer leaf is the
-/// server's: a closed outer leaf within one tile of the main one, looked
-/// up in this square's wall layer (a pair split across two squares
-/// keeps its main leaf only). Walk walls only, never projectile bits.
-pub fn paint_gate_swings(
-    collision: &mut CollisionMap,
-    wall_layers: &HashMap<(i32, i32, i32, u8), (u16, u8, u8)>,
-    loctypes: &[Option<LocDef>],
-    square_x: i32,
-    square_z: i32,
-) {
-    let leaf_at = |x: i32, z: i32, level: i32| -> Option<(GateLeaf, u8, u8)> {
-        let (loc, shape, angle) = wall_layers.get(&(x, z, level, LAYER_WALL))?;
-        let def = loctypes.get(*loc as usize).and_then(|slot| slot.as_ref())?;
-        def.gate_leaf.map(|leaf| (leaf, *shape, *angle))
-    };
-    for level in 0..4 {
-        for x in square_x..square_x + 64 {
-            for z in square_z..square_z + 64 {
-                let Some((GateLeaf::Main, WALL_STRAIGHT, angle)) = leaf_at(x, z, level) else {
-                    continue;
-                };
-                let has_outer = (-1..=1).any(|dx| {
-                    (-1..=1).any(|dz| {
-                        (dx, dz) != (0, 0) && matches!(leaf_at(x + dx, z + dz, level), Some((GateLeaf::Outer, _, _)))
-                    })
-                });
-                for (leaf_x, leaf_z, leaf_angle) in open_leaves(x, z, angle, has_outer) {
-                    collision.change_wall(leaf_x, leaf_z, level, leaf_angle, WALL_STRAIGHT, false, true);
-                }
-            }
+/// One closed gate leaf as the square loader met it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClosedLeaf {
+    pub x: i32,
+    pub z: i32,
+    pub level: i32,
+    pub leaf: GateLeaf,
+    pub shape: u8,
+    pub angle: u8,
+}
+
+/// Paint the open leaves of every closed main leaf of one 64x64 square
+/// (`leaves`: the gate leaves that square loaded). The outer leaf is the
+/// server's: a closed outer leaf within one tile of the main one (a pair
+/// split across two squares keeps its main leaf only). Walk walls only,
+/// never projectile bits.
+pub fn paint_gate_swings(collision: &mut CollisionMap, leaves: &[ClosedLeaf]) {
+    for main in leaves.iter().filter(|leaf| leaf.leaf == GateLeaf::Main && leaf.shape == WALL_STRAIGHT) {
+        let has_outer = leaves.iter().any(|other| {
+            other.leaf == GateLeaf::Outer
+                && other.level == main.level
+                && (other.x - main.x).abs() <= 1
+                && (other.z - main.z).abs() <= 1
+        });
+        for (leaf_x, leaf_z, leaf_angle) in open_leaves(main.x, main.z, main.angle, has_outer) {
+            collision.change_wall(leaf_x, leaf_z, main.level, leaf_angle, WALL_STRAIGHT, false, true);
         }
     }
 }
@@ -106,18 +98,8 @@ mod tests {
     use super::*;
     use crate::collision::{step_open, WALL_EAST, WALL_NORTH, WALL_SOUTH, WALL_WEST};
 
-    fn gate_def(leaf: GateLeaf) -> Option<LocDef> {
-        Some(LocDef {
-            blockwalk: true,
-            blockrange: false,
-            length: 1,
-            width: 1,
-            active: 1,
-            has_ops: true,
-            open_op: Some(1),
-            toll: false,
-            gate_leaf: Some(leaf),
-        })
+    fn closed(x: i32, z: i32, leaf: GateLeaf, angle: u8) -> ClosedLeaf {
+        ClosedLeaf { x, z, level: 0, leaf, shape: WALL_STRAIGHT, angle }
     }
 
     /// Live: 1551 (3031,3313) angle north -> 1552 (3031,3314) and 1556
@@ -143,19 +125,14 @@ mod tests {
     /// leaves wall their west edge, the gate crossing itself stays free.
     #[test]
     fn painted_pair_walls_the_swing_side_only() {
-        let mut defs = vec![None; 1554];
-        defs[1551] = gate_def(GateLeaf::Main);
-        defs[1553] = gate_def(GateLeaf::Outer);
-        let mut layers = HashMap::new();
-        layers.insert((3031, 3313, 0, LAYER_WALL), (1551u16, WALL_STRAIGHT, ANGLE_NORTH));
-        layers.insert((3032, 3313, 0, LAYER_WALL), (1553u16, WALL_STRAIGHT, ANGLE_NORTH));
+        let leaves = [closed(3031, 3313, GateLeaf::Main, ANGLE_NORTH), closed(3032, 3313, GateLeaf::Outer, ANGLE_NORTH)];
         let mut map = CollisionMap::new();
         for x in 3028..3036 {
             for z in 3310..3318 {
                 map.set(x, z, 0, 0);
             }
         }
-        paint_gate_swings(&mut map, &layers, &defs, 3008, 3264);
+        paint_gate_swings(&mut map, &leaves);
         assert_ne!(map.get(3031, 3314, 0) & WALL_WEST, 0);
         assert_ne!(map.get(3031, 3315, 0) & WALL_WEST, 0);
         assert_ne!(map.get(3030, 3314, 0) & WALL_EAST, 0);
@@ -168,17 +145,14 @@ mod tests {
     /// A lone main leaf (no closed outer leaf beside it) swings alone.
     #[test]
     fn lone_main_leaf_paints_one_wall() {
-        let mut defs = vec![None; 1552];
-        defs[1551] = gate_def(GateLeaf::Main);
-        let mut layers = HashMap::new();
-        layers.insert((10, 10, 0, LAYER_WALL), (1551u16, WALL_STRAIGHT, ANGLE_EAST));
+        let leaves = [closed(10, 10, GateLeaf::Main, ANGLE_EAST)];
         let mut map = CollisionMap::new();
         for x in 8..14 {
             for z in 8..14 {
                 map.set(x, z, 0, 0);
             }
         }
-        paint_gate_swings(&mut map, &layers, &defs, 0, 0);
+        paint_gate_swings(&mut map, &leaves);
         assert_ne!(map.get(11, 10, 0) & WALL_NORTH, 0);
         assert_eq!(map.get(12, 10, 0) & WALL_NORTH, 0);
     }
