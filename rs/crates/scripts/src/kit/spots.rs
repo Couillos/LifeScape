@@ -479,7 +479,7 @@ fn fish_candidates(bot: &Bot, category: &str) -> Vec<(i32, i32, i32)> {
 /// refinement). Occupation applies AFTER the pin — dodging the global
 /// pool first discards the only locally-viable spawns whenever a
 /// stranger stands near home water.
-fn pick_near_fish_spot(
+pub(crate) fn pick_near_fish_spot(
     bot: &mut Bot,
     tier: &knowledge::fishing::FishTier,
     fence: Option<i32>,
@@ -538,7 +538,7 @@ fn pick_near_fish_spot(
 /// bank, when nothing qualifies near the pinned bank (woodcut
 /// `nearest_hop_spot` parity). Without it a bot pinned at a waterless
 /// bank — Varrock — waits at the bank forever.
-fn pick_hop_fish_spot(
+pub(crate) fn pick_hop_fish_spot(
     bot: &mut Bot,
     tier: &knowledge::fishing::FishTier,
     fence: Option<i32>,

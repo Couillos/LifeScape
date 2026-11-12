@@ -9,8 +9,8 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
-use crate::kit::spots::{nearest_live, pick_fish_spot};
-use crate::kit::tools::FISH_SPEC;
+use crate::kit::spots::{nearest_bank_at, nearest_live, pick_hop_fish_spot, pick_near_fish_spot};
+use crate::kit::tools::{blocked_tool, FISH_SPEC};
 use crate::kit::bank::bank_trip;
 use crate::kit::pack::{free_slots, obj_id, obj_price, pack_total};
 use crate::kit::shop::{buy_stock, sell_for_target};
@@ -147,7 +147,7 @@ fn ensure_gear(
         if bank_trip(bot, bank, &keep, 0)? == 0 && pack_total(bot, tool) == 0 {
             let price = obj_price(tier.tool) as u32;
             if pack_total(bot, coins) < price {
-                sell_for_target(bot, &[], coins, price - pack_total(bot, coins))?;
+                return Ok(false);
             }
             if buy_stock(bot, tier.tool, 1)? == 0 {
                 return Ok(false);
@@ -193,6 +193,97 @@ fn restock_bait(
     Ok(pack_total(bot, bait_id) >= BAIT_MIN)
 }
 
+/// Gear-first tier choice: the best tier whose tool is carried (bait
+/// ready or fundable) fishes before any higher tier we'd have to buy;
+/// buyable tiers follow; nothing fishable blocks with the missing tool
+/// or bait, never Usage. Pass 0 fishes now, 1 restocks bait, 2 buys the
+/// tool — porté first, achetable second.
+fn tier_pass(bot: &Bot, tier: &knowledge::fishing::FishTier) -> Option<u8> {
+    let tool_held = obj_id(bot, tier.tool).is_ok_and(|id| pack_total(bot, id) > 0);
+    let coins = obj_id(bot, "coins").map(|id| pack_total(bot, id)).unwrap_or(0);
+    let tool_price = obj_price(tier.tool);
+    let tool_fundable = tool_price > 0 && coins >= tool_price as u32;
+    let (bait_ready, bait_fundable) = match tier.bait {
+        None => (true, true),
+        Some(bait) => {
+            let held = obj_id(bot, bait).map(|id| pack_total(bot, id)).unwrap_or(0);
+            let price = obj_price(bait);
+            (held >= BAIT_MIN, price > 0 && coins >= BAIT_MIN.saturating_mul(price as u32))
+        }
+    };
+    if tool_held && bait_ready {
+        Some(0)
+    } else if tool_held && bait_fundable {
+        Some(1)
+    } else if tool_fundable && bait_fundable {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// Best funded tier by (pass, level): a carried net beats a rod to buy
+/// (live t04: net + 0 coins fishes shrimp, never sardine).
+pub(crate) fn select_fish_tier(bot: &Bot, level: i64) -> Result<knowledge::fishing::FishTier, ScriptError> {
+    let mut best: Option<(u8, knowledge::fishing::FishTier)> = None;
+    for tier in knowledge::fishing::affordable_tiers(level) {
+        if let Some(pass) = tier_pass(bot, &tier) {
+            let better = best.is_none_or(|(known_pass, known): (u8, knowledge::fishing::FishTier)| {
+                (pass, known.level) < (known_pass, tier.level)
+            });
+            if better {
+                best = Some((pass, tier));
+            }
+        }
+    }
+    if let Some((_, tier)) = best {
+        return Ok(tier);
+    }
+    // Nothing fishable: the bait when the best tool is already held,
+    // else the cheapest affordable tool (net) — the brain funds that.
+    let mut by_level = knowledge::fishing::affordable_tiers(level);
+    by_level.sort_by_key(|tier| -tier.level);
+    if let Some(top) = by_level.first() {
+        if let Some(bait) = top.bait {
+            if obj_id(bot, top.tool).is_ok_and(|id| pack_total(bot, id) > 0) {
+                return Err(blocked_tool(bait));
+            }
+        }
+    }
+    let mut by_price = knowledge::fishing::affordable_tiers(level);
+    by_price.sort_by_key(|tier| obj_price(tier.tool));
+    if let Some(cheapest) = by_price.first() {
+        return Err(blocked_tool(cheapest.tool));
+    }
+    Err(blocked_tool("net"))
+}
+
+/// Affordable tiers, funded (pass, level) first, unfunded after for the
+/// blocked path (water with no gear blocks typed, never reads dry).
+/// Bait-banned tiers are skipped: the repick lands on net water instead
+/// of retrying the baited tier in a loop.
+pub(crate) fn ordered_fish_tiers(
+    bot: &Bot,
+    level: i64,
+    bait_ban_until: u64,
+    now: u64,
+) -> Vec<knowledge::fishing::FishTier> {
+    let mut funded: Vec<(u8, knowledge::fishing::FishTier)> = Vec::new();
+    let mut rest: Vec<knowledge::fishing::FishTier> = Vec::new();
+    for tier in knowledge::fishing::affordable_tiers(level) {
+        if tier.bait.is_some() && now < bait_ban_until {
+            continue;
+        }
+        match tier_pass(bot, &tier) {
+            Some(pass) => funded.push((pass, tier)),
+            None => rest.push(tier),
+        }
+    }
+    funded.sort_by(|left, right| left.0.cmp(&right.0).then(right.1.level.cmp(&left.1.level)));
+    rest.sort_by_key(|tier| -tier.level);
+    funded.into_iter().map(|(_, tier)| tier).chain(rest).collect()
+}
+
 /// Fishing policy on the shared driver: the pack-full gate ends the
 /// load, gear (tool + bait) is ensured per spot inside `work` (bank and
 /// shop walks bill like the old pick phase), the trek retries in `work`,
@@ -231,19 +322,32 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
     fn pick(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Option<(Self::Spot, i32, i32)> {
         self.level = learn_level(bot, FISH_STAT, self.level);
         let now = bot.world.ticks;
-        match pick_fish_spot(bot, self.level, &state.banned, now, &*self.bank) {
-            Some((tier, spot_x, spot_z, use_bank)) => {
-                *self.bank = use_bank;
+        let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(&mut *bot) };
+        for tier in ordered_fish_tiers(bot, self.level, self.bait_ban, now) {
+            if let Some((spot_x, spot_z)) = pick_near_fish_spot(bot, &tier, fence, &state.banned, now, &*self.bank) {
+                let bank = nearest_bank_at(spot_x, spot_z, bot.world.level).expect("bank just found");
+                *self.bank = bank;
                 bot.log(&format!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?")));
                 bot.intend(&format!("walking to the fishing spot at ({spot_x},{spot_z})"));
-                Some((tier, spot_x, spot_z))
+                return Some((tier, spot_x, spot_z));
             }
-            None => {
-                bot.log("no fish spot, waiting for respawns");
-                bot.intend("waiting for a safe fishing spot");
-                None
+            if let Some((spot_x, spot_z)) = pick_hop_fish_spot(bot, &tier, fence, &state.banned, now) {
+                bot.log(&format!(
+                    "no {} near bank ({},{}), hopping same tier to ({spot_x},{spot_z})",
+                    tier.products.first().unwrap_or(&"?"),
+                    self.bank.x,
+                    self.bank.z
+                ));
+                let bank = nearest_bank_at(spot_x, spot_z, bot.world.level).expect("bank just found");
+                *self.bank = bank;
+                bot.log(&format!("fishing {} at ({spot_x},{spot_z})", tier.products.first().unwrap_or(&"?")));
+                bot.intend(&format!("walking to the fishing spot at ({spot_x},{spot_z})"));
+                return Some((tier, spot_x, spot_z));
             }
         }
+        bot.log("no fish spot, waiting for respawns");
+        bot.intend("waiting for a safe fishing spot");
+        None
     }
 
     fn keep_spot(
@@ -254,7 +358,7 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
         _at: (i32, i32),
     ) -> bool {
         self.level = learn_level(bot, FISH_STAT, self.level);
-        if let Some(top) = knowledge::fishing::best_fish_tier(self.level) {
+        if let Ok(top) = select_fish_tier(bot, self.level) {
             if spot.level < top.level {
                 bot.log("level up, switching tier");
                 return false;
@@ -316,8 +420,9 @@ impl crate::kit::load::LoopOps for FishOps<'_> {
         if !ensure_gear(bot, spot, self.side_shop, self.main_shop, self.coins, self.bank, &mut self.bait_ban)? {
             if pack_total(bot, obj_id(bot, spot.tool).unwrap_or(0)) == 0 {
                 bot.log(&format!("no gear for {}", spot.tool));
-                // Broke without a tool: the load aborts, like the old loop.
-                return Ok((WorkOutcome::Blocked, 0));
+                // Broke without a tool: typed blocked (the brain funds an
+                // obtain task), never a silent drop or a shop Usage.
+                return Err(blocked_tool(spot.tool));
             }
             return Ok((WorkOutcome::NoBait, 0));
         }
@@ -385,6 +490,96 @@ pub fn fish_load(
         &mut ops,
     )?;
     Ok((ok, learn_level(bot, FISH_STAT, ops.level)))
+}
+
+#[cfg(test)]
+mod gear_tests {
+    use super::{ordered_fish_tiers, select_fish_tier};
+    use crate::kit::pack::obj_id;
+    use crate::tables_live::attach_live_tables;
+    use lifescape_sdk::Bot;
+
+    fn pack_bot(items: &[(&str, u32)]) -> Bot {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let ids: Vec<(u16, u32)> = items
+            .iter()
+            .map(|(name, count)| {
+                (obj_id(&bot, name).unwrap_or_else(|_| panic!("{name} in tables")), *count)
+            })
+            .collect();
+        let com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+        bot.world.inv.insert(
+            com,
+            ids.into_iter().enumerate().map(|(slot, (id, count))| (slot as u8, (id, count))).collect(),
+        );
+        bot
+    }
+
+    /// Live t04: net carried, 0 coins, level 5 — the shrimp tier (net)
+    /// fishes, never the sardine tier (rod to buy).
+    #[test]
+    fn net_held_broke_picks_shrimp_not_sardine() {
+        let bot = pack_bot(&[("net", 1)]);
+        let tier = select_fish_tier(&bot, 5).expect("net held, shrimp fishes");
+        assert_eq!((tier.tool, tier.level), ("net", 1), "crevette au filet, pas sardine, got: {}", tier.tool);
+    }
+
+    /// Rod without bait or coins: shrimp when the net is also carried,
+    /// typed blocked otherwise — never Usage, never a silent Ok(false).
+    #[test]
+    fn rod_without_bait_or_coins_falls_back_or_blocks() {
+        let both = pack_bot(&[("fishing_rod", 1), ("net", 1)]);
+        let tier = select_fish_tier(&both, 5).expect("net fallback fishes");
+        assert_eq!(tier.tool, "net", "crevette si filet, got: {}", tier.tool);
+        let bare = pack_bot(&[("fishing_rod", 1)]);
+        let error = select_fish_tier(&bare, 5).expect_err("rod without bait or coins blocks");
+        assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got: {error}");
+        assert!(!matches!(error, crate::ScriptError::Usage(_)), "never Usage, got: {error}");
+        assert!(error.to_string().contains("fishing_bait"), "names the bait, got: {error}");
+    }
+
+    /// Level 1 only knows shrimp: net held fishes it, empty and broke
+    /// blocks on the net itself (the cheapest family tool), never Usage.
+    #[test]
+    fn level_1_picks_shrimp() {
+        let bot = pack_bot(&[("net", 1)]);
+        let tier = select_fish_tier(&bot, 1).expect("level 1 fishes shrimp");
+        assert_eq!((tier.tool, tier.level), ("net", 1));
+        let broke = pack_bot(&[]);
+        let error = select_fish_tier(&broke, 1).expect_err("nothing held blocks");
+        assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got: {error}");
+        assert!(error.to_string().contains("net"), "cheapest tool named, got: {error}");
+    }
+
+    /// Fully geared rod (tool + bait + coins) still takes the best tier.
+    #[test]
+    fn rod_and_bait_held_picks_sardine() {
+        let bot = pack_bot(&[("fishing_rod", 1), ("fishing_bait", 200), ("coins", 100)]);
+        let tier = select_fish_tier(&bot, 5).expect("geared rod fishes sardine");
+        assert_eq!((tier.tool, tier.level), ("fishing_rod", 5));
+    }
+
+    /// Funded but tool-less: the buyable best tier still wins (porté
+    /// first, achetable second — never blocked while coins cover it).
+    #[test]
+    fn funded_but_toolless_buys_best() {
+        let bot = pack_bot(&[("coins", 100)]);
+        let tier = select_fish_tier(&bot, 5).expect("100 coins fund rod+bait");
+        assert_eq!(tier.tool, "fishing_rod", "achetable après le porté, got: {}", tier.tool);
+    }
+
+    /// A bait ban (restock failed) drops baited tiers from the order so
+    /// the repick lands on net water instead of retrying sardine in a loop.
+    #[test]
+    fn bait_ban_drops_baited_tiers() {
+        let bot = pack_bot(&[("fishing_rod", 1), ("fishing_bait", 200)]);
+        let plain: Vec<&str> = ordered_fish_tiers(&bot, 5, 0, 0).iter().map(|tier| tier.tool).collect();
+        assert_eq!(plain.first(), Some(&"fishing_rod"), "unbanned rod first, got: {plain:?}");
+        let banned: Vec<&str> = ordered_fish_tiers(&bot, 5, 1000, 10).iter().map(|tier| tier.tool).collect();
+        assert!(!banned.contains(&"fishing_rod"), "banned rod out of the order, got: {banned:?}");
+        assert_eq!(banned.first(), Some(&"net"), "net water next, got: {banned:?}");
+    }
 }
 
 #[cfg(test)]
