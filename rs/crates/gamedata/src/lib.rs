@@ -21,6 +21,7 @@ pub mod item_sources;
 pub mod obtain;
 pub mod methods;
 pub mod npc_ranges;
+pub mod player_design;
 pub mod quest_requirements;
 pub mod quests;
 pub mod recipes;
