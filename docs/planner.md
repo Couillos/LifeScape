@@ -71,10 +71,25 @@ statut). `normalize` est appelé après chaque mutation et garantit :
 dépendance abandonnée, inexistante ou en cycle ⇒ abandon transitif ;
 `Ready` ⇔ toutes les dépendances `Done` ; un seul `Active`, égal à
 `life.active` ; vivacité (graphe non fini ⇒ un nœud actif ou prêt).
-`graph_state` : `Running`, `Launchable`, `Finished`, `Stuck` (une ligne
-de log et `history: stuck`, l'opérateur décide : jamais de relance
-automatique). Compteurs persistés par nœud : `failures` (max 3),
-`blocks` (max 3), `last_error`.
+`graph_state` : `Running`, `Launchable`, `Finished`, `Stuck`. Compteurs
+persistés par nœud : `failures` (max 3), `blocks` (max 3), `revives`
+(max 3), `last_error`. Un abandon en cascade écrit sa cause
+(`dependency nX abandoned`), jamais l'ancien blocage du nœud. Un nœud
+`obtain` ouvert dont une jambe ne mappe aucun script (jambes figées par
+un ancien planner, ex. `farm:ball_of_wool`) re-dérive ses jambes de
+l'index d'obtention à `normalize`.
+
+Graphe bloqué (`brain_stuck.rs`) : une période de blocage = une ligne de
+log + `history: graph stuck`, une seule fois. Le but courant est clos
+une fois : `done` si les niveaux live l'atteignent (des nœuds abandonnés
+plus anciens n'en font pas un échec), `stuck` sinon ; puis but suivant.
+Plus aucun but ⇒ règle de relance (`lifecycle::revive_stuck`) : après
+`REVIVE_COOLDOWN_TICKS` = 6000 ticks de blocage (1 h en prod, 6 min en
+dev), chaque nœud abandonné (sauf les concierges `space_cleanup`, qui ont
+leur propre arrêt) repart avec des budgets neufs et des jambes re-dérivées
+(index d'obtention ; méthode de palier si toutes bannies), sa cascade
+avec lui ; `history: graph revived`. Au plus `MAX_REVIVES` = 3 relances
+par nœud ; au-delà `history: graph final`, une ligne, l'opérateur décide.
 
 Rapports (contrat v2) : tout lancement `--node` produit un `task_report`
 (tuto, walkto, quêtes compris, échec de parsing compris) portant
@@ -84,7 +99,11 @@ mort ⇒ échec compté puis relance ; échec de voyage ⇒ méthode bannie +
 échec compté ; `blocked` ⇒ sous-tâche `obtain` par objet manquant
 (réutilisée si déjà ouverte) ; `stopped` (unload, redémarrage) ⇒ prêt,
 non compté ; fenêtre finie avec but atteint ⇒ `done`. Un nœud actif sans
-rapport (worker repassé idle, crash) compte un échec après 30 s. Une
+rapport (worker repassé idle, crash) compte un échec après 30 s, sauf
+s'il suit un redémarrage du daemon ou un `unload`/`close`/`open`
+opérateur (`brain_grace.rs`, une excuse par arrêt, effacée au lancement
+suivant). Un rapport drainé quand la file du cerveau est pleine repasse
+en attente au lieu d'être perdu. Une
 commande market non remplie attend au plus 6000 ticks puis échoue.
 
 Décision sans données interdite : sans position live, rien ne part.
@@ -100,10 +119,11 @@ tutoriel au premier passage, puis le but. `Iron` ne marchande jamais
 Succession (`planner/src/goals.rs`, `brain_succession.rs`) : un graphe
 fini tire le but suivant (compétence entraînable la plus basse, jusqu'au
 prochain multiple de 5 au moins 5 niveaux plus haut) ; un graphe bloqué
-écrit `goal: stuck:<compétences>` dans l'historique, garde les causes des
-nœuds abandonnés, et passe à un but qui n'entraîne pas ces compétences ;
-les buts d'argent relancent un engagement. Plus rien à tirer ⇒ attente
-opérateur. Le libellé affiché est `fishing 10` (but `max:fishing:10`).
+écrit `goal: stuck:<compétences>` dans l'historique (sauf but atteint en
+live : `done:`), garde les causes des nœuds abandonnés, et passe à un but
+qui n'entraîne pas ces compétences ; les buts d'argent relancent un
+engagement. Plus rien à tirer ⇒ relance après refroidissement (ci-dessus),
+puis attente opérateur. Le libellé affiché est `fishing 10` (but `max:fishing:10`).
 
 Données avant décision : rien ne part sans position live ni sac reçu
 (`inv_streamed`) ; tant que la banque n'a pas été vue (`bank_streamed`),

@@ -139,6 +139,9 @@ pub struct Node {
     pub failures: u32,
     /// Blocked stops (missing tool/input) counted the same way.
     pub blocks: u32,
+    /// Cooldown revivals of this node once abandoned (`revive_stuck`):
+    /// bounded by `MAX_REVIVES`, past it the abandonment is final.
+    pub revives: u32,
     /// Last typed error seen on this node (`Type: message`), shown on the
     /// dashboard and in the dossier when the node is abandoned.
     pub last_error: String,
@@ -161,6 +164,7 @@ impl Node {
             spent_ticks: 0,
             failures: 0,
             blocks: 0,
+            revives: 0,
             last_error: String::new(),
             site: None,
         }
@@ -380,6 +384,7 @@ fn node_to_value(node: &Node) -> Value {
         ("spent_ticks", Value::Int(node.spent_ticks as i64)),
         ("failures", Value::Int(i64::from(node.failures))),
         ("blocks", Value::Int(i64::from(node.blocks))),
+        ("revives", Value::Int(i64::from(node.revives))),
         ("last_error", str_value(&node.last_error)),
         (
             "site",
@@ -426,6 +431,7 @@ fn node_from_value(value: &Value) -> Option<Node> {
         // Absent in files written before the lifecycle counters: zero.
         failures: value.get("failures").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
         blocks: value.get("blocks").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
+        revives: value.get("revives").as_i64().unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
         last_error: value.get("last_error").as_str().unwrap_or("").to_string(),
         site: value.get("site").as_arr().and_then(|cells| {
             let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
