@@ -23,9 +23,10 @@ async function getJson(url) {
 
 async function loadList() {
   try {
-    const payload = await getJson('/api/market/list?limit=2000&traded_only=1');
-    // `traded_only=1` keeps goods with >= 1 recorded execution; no
-    // client-side volume proxy (a good can trade outside the last 24h).
+    const payload = await getJson('/api/market/list?limit=2000&with_orders=1');
+    // `with_orders=1` keeps every good with at least one open order (bid
+    // or ask), sorted server-side by descending 24h volume, then by the
+    // number of open orders.
     if (payload.ok) items = payload.items;
   } catch (e) { /* daemon down: keep the last list */ }
   if (selected === null && items.length) selected = items[0].item;

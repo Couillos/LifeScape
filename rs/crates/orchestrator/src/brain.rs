@@ -115,16 +115,10 @@ fn xorshift(seed: u64, stream: u64) -> u64 {
     word
 }
 
-/// `Iron` + 8 chars (12 max, RS2 rule); others get a short `b`-prefixed
-/// name. Charset avoids ambiguous glyphs.
+/// Natural player-like name (`olivia_king`, `IronOlivia`; 12 max, RS2
+/// rule), see `names`.
 pub fn generate_pseudo(iron: bool, seed: u64) -> String {
-    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-    let mut name = if iron { "Iron".to_string() } else { "b".to_string() };
-    let width = if iron { 8 } else { 7 };
-    for slot in 0..width {
-        name.push(ALPHABET[(xorshift(seed, slot + 1) % ALPHABET.len() as u64) as usize] as char);
-    }
-    name
+    crate::names::natural_name(iron, seed)
 }
 
 /// Profile draw from the seed: affinity and patience uniform in [0,1],
@@ -216,7 +210,9 @@ pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|span| span.as_nanos() as u64)
                 .unwrap_or(1);
-            generate_pseudo(iron, seed)
+            // A name already used by a known account draws again.
+            let taken = |name: &str| lives_dir().join(format!("{name}.json")).exists();
+            (0..64u64).map(|attempt| generate_pseudo(iron, seed.wrapping_add(attempt))).find(|name| !taken(name)).ok_or("no free account name after 64 draws")?
         }
     };
     ensure_life(&account, iron, goal.as_deref().unwrap_or("max:fishing:40"))?;
@@ -306,16 +302,14 @@ fn job_idle(job: &Job) -> bool {
 /// at most this many ticks (wall time = ticks × tick length, D7).
 const AWAIT_FILL_TICKS: u64 = 6000;
 
-/// Grace after this daemon first supervises an account (wall seconds).
-const RESTART_GRACE_SECS: u64 = 120;
-
-/// True during the first two minutes this daemon supervises `account`:
-/// restored workers come back one by one over a minute or more, so the
-/// grace runs per account from its first supervise pass, not per daemon.
-fn daemon_warming(account: &str) -> bool {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
-    let mut seen = SEEN.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    seen.entry(account.to_string()).or_insert_with(std::time::Instant::now).elapsed().as_secs() < RESTART_GRACE_SECS
+/// True the first time this daemon finds `account`'s active node with an
+/// idle worker and no report: after a daemon restart every restored
+/// worker reads idle before its script reports (an operator restart,
+/// never a crash), and restoring 14 workers plus brain back-off can take
+/// minutes, so no time window fits. Later sightings count normally.
+fn first_idle_since_start(account: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    SEEN.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(account.to_string())
 }
 
 /// Cancels the account's open buy orders on `item` (debug name) through
@@ -422,7 +416,7 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 // idle before their scripts report: an operator restart,
                 // never a crash (live 2026-11-12: every restart cost each
                 // active node one failure). Retry uncounted, like `stopped`.
-                _ if daemon_warming(&job.account) => {
+                _ if first_idle_since_start(&job.account) => {
                     crate::logln!("brain {}: {active_id} idle right after a daemon restart, retrying uncounted", job.account);
                     life.nodes[position].status = NodeStatus::Ready;
                     life.nodes[position].method = None;
@@ -812,7 +806,6 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
 /// reports and launches; `had_report` mirrors the flag the loop already
 /// drained, so the brain never misses a push.
 pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Value>) {
-    let _ = daemon_warming(&job.account); // arms the restart grace on the first pass
     ensure_brain(orch);
     let queued = inbox()
         .lock()
@@ -846,7 +839,8 @@ mod tests {
     #[test]
     fn pseudos_fit_rs2_and_replay() {
         let iron = generate_pseudo(true, 42);
-        assert!(iron.starts_with("Iron") && iron.len() == 12, "Iron + 8 = 12 max, got {iron}");
+        assert!(iron.starts_with("Iron") && iron.len() <= 12, "Iron + name, 12 max, got {iron}");
+        assert!(crate::names::valid_name(&generate_pseudo(false, 42)), "natural and valid");
         assert_eq!(iron, generate_pseudo(true, 42), "seeded pseudos replay");
         assert_ne!(generate_pseudo(false, 1), generate_pseudo(false, 2), "names vary");
     }
