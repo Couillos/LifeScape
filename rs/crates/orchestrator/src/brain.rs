@@ -306,6 +306,18 @@ fn job_idle(job: &Job) -> bool {
 /// at most this many ticks (wall time = ticks × tick length, D7).
 const AWAIT_FILL_TICKS: u64 = 6000;
 
+/// Grace after this daemon first supervises an account (wall seconds).
+const RESTART_GRACE_SECS: u64 = 120;
+
+/// True during the first two minutes this daemon supervises `account`:
+/// restored workers come back one by one over a minute or more, so the
+/// grace runs per account from its first supervise pass, not per daemon.
+fn daemon_warming(account: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    let mut seen = SEEN.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    seen.entry(account.to_string()).or_insert_with(std::time::Instant::now).elapsed().as_secs() < RESTART_GRACE_SECS
+}
+
 /// Cancels the account's open buy orders on `item` (debug name) through
 /// the daemon market. 0 when the market is down or the item unknown.
 fn cancel_stale_buy(account: &str, item: &str) -> usize {
@@ -405,6 +417,17 @@ fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                         }
                         return;
                     }
+                }
+                // Right after a daemon restart the restored workers read
+                // idle before their scripts report: an operator restart,
+                // never a crash (live 2026-11-12: every restart cost each
+                // active node one failure). Retry uncounted, like `stopped`.
+                _ if daemon_warming(&job.account) => {
+                    crate::logln!("brain {}: {active_id} idle right after a daemon restart, retrying uncounted", job.account);
+                    life.nodes[position].status = NodeStatus::Ready;
+                    life.nodes[position].method = None;
+                    life.active = None;
+                    push_history(&mut life, &active_id, "stopped");
                 }
                 _ => {
                     let text = "no report: worker went idle without reporting (crash or restart)";
@@ -789,6 +812,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
 /// reports and launches; `had_report` mirrors the flag the loop already
 /// drained, so the brain never misses a push.
 pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Value>) {
+    let _ = daemon_warming(&job.account); // arms the restart grace on the first pass
     ensure_brain(orch);
     let queued = inbox()
         .lock()

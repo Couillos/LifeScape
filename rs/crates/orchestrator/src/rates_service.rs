@@ -82,6 +82,12 @@ pub fn is_farm_provenance(provenance: &str) -> bool {
 /// and `shop:*` are the planner's finer legs. Bare `shop` is reserved
 /// for the symmetric script name. Coin P&L of these methods feeds the
 /// trading book instead of the rate buckets.
+/// Activities that never feed the rates: the tutorial's kit, XP and
+/// drops say nothing about any activity a bot can choose (user rule).
+pub fn is_unrated_method(method: &str) -> bool {
+    method.eq_ignore_ascii_case("tutorial")
+}
+
 pub fn is_trading_method(method: &str) -> bool {
     method == "market" || method == "shop" || method.starts_with("market:") || method.starts_with("shop:")
 }
@@ -418,6 +424,9 @@ impl Snapshot {
     pub fn record(&mut self, parsed: &ParsedReport) {
         if is_trading_method(&parsed.method) {
             self.trades.record_trade(parsed);
+            return;
+        }
+        if is_unrated_method(&parsed.method) {
             return;
         }
         let work_ticks = parsed.wall_ticks.saturating_sub(parsed.pause_ticks);
@@ -843,7 +852,7 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
             if let Some((method, item, band)) = split_three(key) {
                 // Pre-P1.4 files stored trading methods as yield rows;
                 // `record` never does (D44, book only): drop them on load.
-                if is_trading_method(&method) {
+                if is_trading_method(&method) || is_unrated_method(&method) {
                     continue;
                 }
                 snapshot.yields.insert((method, item, band), read_bucket(entry));
@@ -853,7 +862,7 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     if let Some(map) = value.get("xp").as_obj() {
         for (key, entry) in map {
             if let Some((method, skill, band)) = split_three(key) {
-                if is_trading_method(&method) {
+                if is_trading_method(&method) || is_unrated_method(&method) {
                     continue;
                 }
                 snapshot.xp.insert((method, skill, band), read_bucket(entry));
@@ -863,7 +872,7 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     if let Some(map) = value.get("inputs").as_obj() {
         for (key, entry) in map {
             if let Some((method, item, band)) = split_three(key) {
-                if is_trading_method(&method) {
+                if is_trading_method(&method) || is_unrated_method(&method) {
                     continue;
                 }
                 snapshot.inputs.insert((method, item, band), read_bucket(entry));
@@ -879,7 +888,7 @@ fn snapshot_from_json(text: &str) -> Option<Snapshot> {
             if parts.next().is_some() {
                 continue;
             }
-            if is_trading_method(method) {
+            if is_trading_method(method) || is_unrated_method(method) {
                 continue;
             }
             if let Ok(band) = band.parse::<i64>() {

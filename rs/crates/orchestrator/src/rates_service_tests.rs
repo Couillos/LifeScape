@@ -523,3 +523,18 @@ fn market_report(method: &str, stop: &str, flows: Vec<(&str, &str, i64)>) -> Par
         xp: Vec::new(),
     }
 }
+
+/// User rule (2026-11-12): the tutorial never feeds the rates — its
+/// kit, XP and drops describe no activity a bot can choose.
+#[test]
+fn tutorial_reports_never_feed_the_rates() {
+    let mut snapshot = Snapshot::new();
+    let mut tutorial = parsed_fishing(300, 6000, 3);
+    tutorial.method = "tutorial".to_string();
+    tutorial.script = "tutorial".to_string();
+    snapshot.record(&tutorial);
+    assert!(snapshot.yield_rows().is_empty(), "no tutorial yield");
+    assert!(snapshot.xp_rows().is_empty(), "no tutorial XP rate");
+    snapshot.record(&parsed_fishing(300, 6000, 3));
+    assert_eq!(snapshot.yield_rows().len(), 1, "real activities still count");
+}
