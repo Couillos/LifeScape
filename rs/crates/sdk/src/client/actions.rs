@@ -616,89 +616,70 @@ impl Bot {
         crate::snapshot::bank_items(&self.world.inv, (self.tables.com_id)("bank_main:inv"))
     }
 
-    /// Consecutive fan refusals (walk or click) before the booth is
-    /// declared unusable from here: two refusals still precede a success
-    /// live (booth 3243 opened on its 3rd fan side after 2 refused clicks
-    /// and a refused walk), the 3rd consecutive refusal never did — it is
-    /// a counter or wall, not a busy booth. Measured 127-128 ticks per
-    /// refused 1-tile walk (6 live samples), so 3 bounds the fan waste to
-    /// ~400 ticks instead of ~1790.
-    const BANK_FAN_MAX_REFUSALS: u32 = 3;
+    /// Walk budget to one stand, in ticks: 10 per Manhattan tile plus a
+    /// 60-tick floor (the `approach` exact-walk formula). Adjacent stands
+    /// land in 2-12 ticks live; a far stand (market handover from across
+    /// the map) needs the per-tile share — the old 60-tick cap timed the
+    /// trek out and fell into the blind fan.
+    fn bank_stand_walk_ticks(from: (i32, i32), stand: (i32, i32)) -> u64 {
+        let distance = (stand.0 - from.0).abs() + (stand.1 - from.1).abs();
+        distance.max(0) as u64 * 10 + 60
+    }
 
-    /// One fan side step, in ticks. A fan tile is adjacent: successes land
-    /// in 2-12 ticks live (28 samples, worst 28 after a stall burst), a
-    /// refusal trips the 13-tick stall watch twice (send + the one replan)
-    /// in the low 30s. 41 = worst success (28) + one stall window (13):
-    /// a good side always fits, a dead side fails in ~41 instead of
-    /// ~85-128 (the old approach ran an exact walk plus a 250-floored fan
-    /// walk per tile). Same decision (try every side, abort at 3
-    /// refusals), just faster.
-    const BANK_FAN_STEP_TICKS: u64 = 41;
-
+    /// Open the bank at booth `loc_id` (x, z) on the bot's level. Only the
+    /// stands the server accepts the op from are tried (side tile, no wall
+    /// on the shared edge: `loc_stands`), nearest first: walk onto the
+    /// stand exactly, click. Ok(false) once every stand refused (teller
+    /// side disconnected, click ignored): the caller tries another booth.
+    /// The old blind fan clicked from diagonals and wall-separated sides
+    /// (Varrock east: 2303 "I can't reach that!" from (3251,3420)).
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("open_bank {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
-        self.approach(x, z, self.world.level, 1, 60)?;
-        if self.click_bank(x, z, loc_id, timeout)? {
-            return Ok(true);
+        let level = self.world.level;
+        let stands = self.bank_booth_stands(x, z, level, loc_id)?;
+        if stands.is_empty() {
+            return Err(Error::Unreachable(format!(
+                "booth {loc_id} at ({x},{z},{level}) has no stand tile the server accepts the op from"
+            )));
         }
-        // Booths sit behind counters: the nearest tile within 1 can face
-        // a wall ("I can't reach that"). Walk around and click the booth
-        // from neighboring sides, nearest first — but stop after consecutive
-        // refusals: the booth is behind a counter here, try the next booth
-        // instead of grinding all 8 sides (~1790 ticks measured live).
-        let mut tiles: Vec<(i32, i32)> = (-1..=1)
-            .flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
-            .filter(|tile| *tile != (x, z))
-            .collect();
-        tiles.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
-        let mut refusals = 0u32;
-        for (tile_x, tile_z) in tiles {
-            // One bounded walk, not an approach: the tile is adjacent, so
-            // a 41-tick walk covers the worst live success (28) plus the
-            // stall/replan settle of a refusal (low 30s). approach would
-            // run an exact walk plus a 250-floored fan walk per tile and
-            // burn ~85-128 ticks on each dead side.
-            match self.walk_to(tile_x, tile_z, self.world.level, Self::BANK_FAN_STEP_TICKS) {
-                Ok(()) => {}
-                Err(err) if Self::bank_fan_counts_as_refusal(&err) => {
-                    refusals += 1;
-                    if Self::bank_fan_refused(refusals) {
-                        return Ok(false);
+        let from = (self.world.x, self.world.z);
+        let mut refused: Vec<String> = Vec::new();
+        for stand in super::loc_stands::nearest_first(&stands, from) {
+            if (self.world.x, self.world.z) != stand || self.world.level != level {
+                let budget = Self::bank_stand_walk_ticks((self.world.x, self.world.z), stand);
+                match self.walk_to(stand.0, stand.1, level, budget) {
+                    Ok(()) => {}
+                    Err(err) if Self::bank_stand_walk_refused(&err) => {
+                        refused.push(format!("({},{}) walk: {err}", stand.0, stand.1));
+                        continue;
                     }
+                    Err(err) => return Err(err),
+                }
+                if (self.world.x, self.world.z) != stand || self.world.level != level {
+                    refused.push(format!("({},{}) walk ended at {:?}", stand.0, stand.1, self.position()));
                     continue;
                 }
-                Err(err) => return Err(err),
             }
             if self.click_bank(x, z, loc_id, timeout)? {
                 return Ok(true);
             }
-            refusals += 1;
-            if Self::bank_fan_refused(refusals) {
-                return Ok(false);
-            }
+            refused.push(format!("({},{}) click refused", stand.0, stand.1));
         }
-        Err(Error::Timeout(format!("bank did not open at {x},{z} from {:?} ({} ticks)", self.position(), timeout)))
+        self.log(&format!("open_bank: booth ({x},{z}) refused from every stand: {}", refused.join("; ")));
+        Ok(false)
     }
 
-    /// True once refusals prove the booth unusable from here. Pure so the
-    /// threshold is locked by test, not by live luck.
-    fn bank_fan_refused(refusals: u32) -> bool {
-        refusals >= Self::BANK_FAN_MAX_REFUSALS
-    }
-
-    /// True when a fan walk error proves the booth unusable from here:
-    /// only Unreachable/Timeout are refusals (counter, wall). Transport
+    /// True when a stand walk error proves that stand unusable from here:
+    /// only Unreachable/Timeout are refusals (teller side, wall). Transport
     /// and operator stops (Io/Login/Interrupted, anything else) propagate
     /// so the session reconnects instead of stranding on Ok(false). Pure
-    /// so the classification is locked by test: the fan itself is
-    /// unreachable offline (the click send fails first), but every error
-    /// it can meet goes through here.
-    fn bank_fan_counts_as_refusal(error: &Error) -> bool {
+    /// so the classification is locked by test.
+    fn bank_stand_walk_refused(error: &Error) -> bool {
         match error {
             Error::Unreachable(_) | Error::Timeout(_) | Error::StepRefused(_) => true,
             // walk_to wraps its failures with a replay dossier: a refused
-            // step (server shut), a stalled leg (no progress in 41 ticks)
-            // and no route (planner says wall) all prove counter-or-wall.
+            // step (server shut), a stalled leg and no route (teller side
+            // of the counter: Disconnected) all prove this stand dead.
             // Every other kind (door, ride, choice) and transport stops
             // propagate loud instead of stranding on Ok(false).
             Error::TravelFailure(failure) => matches!(

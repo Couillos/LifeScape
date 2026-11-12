@@ -9,6 +9,7 @@ pub mod cost_cache;
 pub mod design;
 pub mod doors;
 pub mod exchange;
+pub mod loc_stands;
 pub mod movement;
 pub mod nav_remote;
 pub mod snapshot_view;

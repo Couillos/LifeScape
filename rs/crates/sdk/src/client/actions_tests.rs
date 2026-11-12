@@ -14,37 +14,35 @@ fn bank_click_refused_only_matches_fresh_refusal() {
     assert!(!Bot::bank_click_refused(&other, 0), "unrelated text passes");
 }
 
-/// Two consecutive refusals still precede a success live (booth 3243
-/// opened on its 3rd fan side): only the 3rd consecutive refusal aborts.
+/// The stands come from the plan service: without it open_bank fails
+/// loud `nav-down` before any click, never Ok(false) and never a blind
+/// click from wherever the bot stands.
 #[test]
-fn bank_fan_aborts_on_third_consecutive_refusal() {
-    assert!(!Bot::bank_fan_refused(0), "no refusal keeps trying");
-    assert!(!Bot::bank_fan_refused(1), "first refusal keeps trying");
-    assert!(!Bot::bank_fan_refused(2), "second refusal keeps trying");
-    assert!(Bot::bank_fan_refused(3), "third consecutive aborts");
-    assert!(Bot::bank_fan_refused(8), "late refusal aborts");
-}
-
-/// A dead socket still propagates typed instead of degrading into
-/// Ok(false): adjacent to the booth the approach short-circuits, the
-/// click send fails loud, never masked as a refusal.
-#[test]
-fn open_bank_offline_propagates_send_error() {let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+fn open_bank_without_nav_service_fails_loud() {
+    let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
     bot.world.level = 0;
     bot.world.x = 3091;
     bot.world.z = 3246;
-    let err = bot.open_bank(3091, 3245, 2213, 50).expect_err("dead socket fails loud");
-    assert!(format!("{err}").contains("not logged in"), "typed conn error, got: {err}");
+    let err = bot.open_bank(3091, 3245, 2213, 50).expect_err("no service fails loud");
+    assert!(format!("{err}").contains("nav-down"), "typed nav-down, got: {err}");
 }
 
-/// Socket dead mid-fan degrades into Ok(false) under the old
-/// `.is_err()` count: 3 swallowed Io errors read as 3 refusals and
-/// `bank_trip` strands instead of reconnecting. Only true refusals
-/// count now, so transport/operator stops propagate. The fan loop
-/// itself is unreachable offline (the click send fails before it),
-/// so this locks the classification every fan error goes through.
+/// Stand walk budget: 60-tick floor plus 10 per tile, so a handover
+/// from across the map is not timed out by the old 60-tick cap.
 #[test]
-fn bank_fan_propagates_dead_socket_instead_of_refusing() {
+fn bank_stand_walk_budget_scales_with_distance() {
+    assert_eq!(Bot::bank_stand_walk_ticks((3251, 3420), (3252, 3420)), 70);
+    assert_eq!(Bot::bank_stand_walk_ticks((3199, 3333), (3185, 3436)), 1230);
+}
+
+/// Socket dead mid-walk degrades into Ok(false) under the old
+/// `.is_err()` count: swallowed Io errors read as refusals and
+/// `bank_trip` strands instead of reconnecting. Only true refusals
+/// count, so transport/operator stops propagate. The stand loop is
+/// unreachable offline (the service read fails before it), so this
+/// locks the classification every stand walk error goes through.
+#[test]
+fn bank_stand_walk_propagates_dead_socket_instead_of_refusing() {
     for err in [
         Error::Io("not logged in".to_string()),
         Error::Login("stale session".to_string()),
@@ -52,20 +50,20 @@ fn bank_fan_propagates_dead_socket_instead_of_refusing() {
         Error::State("bank_main:inv missing".to_string()),
         Error::Protocol("bad frame".to_string()),
     ] {
-        assert!(!Bot::bank_fan_counts_as_refusal(&err), "propagates, never a refusal: {err}");
+        assert!(!Bot::bank_stand_walk_refused(&err), "propagates, never a refusal: {err}");
     }
 }
 
-/// 3 true refusals still abort the booth as before: Unreachable (wall,
-/// counter) and Timeout (stalled leg) are the only fan refusals.
+/// Unreachable (wall, teller side) and Timeout (stalled leg) are the
+/// only stand-walk refusals.
 #[test]
-fn bank_fan_counts_only_true_refusals() {
-    assert!(Bot::bank_fan_counts_as_refusal(&Error::Unreachable("counter".to_string())), "wall counts");
-    assert!(Bot::bank_fan_counts_as_refusal(&Error::Timeout("stalled leg".to_string())), "stall counts");
-    assert!(Bot::bank_fan_counts_as_refusal(&Error::StepRefused("shut".to_string())), "raw refused step counts");
+fn bank_stand_walk_counts_only_true_refusals() {
+    assert!(Bot::bank_stand_walk_refused(&Error::Unreachable("counter".to_string())), "wall counts");
+    assert!(Bot::bank_stand_walk_refused(&Error::Timeout("stalled leg".to_string())), "stall counts");
+    assert!(Bot::bank_stand_walk_refused(&Error::StepRefused("shut".to_string())), "raw refused step counts");
     for kind in [TravelErrorKind::NoRoute, TravelErrorKind::StepRefused, TravelErrorKind::Timeout] {
         assert!(
-            Bot::bank_fan_counts_as_refusal(&travel_failure(kind)),
+            Bot::bank_stand_walk_refused(&travel_failure(kind)),
             "walk_to dossier {:?} counts",
             kind
         );
@@ -73,7 +71,7 @@ fn bank_fan_counts_only_true_refusals() {
     for kind in
         [TravelErrorKind::DoorDidNotOpen, TravelErrorKind::RideDidNotMove, TravelErrorKind::Io, TravelErrorKind::Interrupted]
     {
-        assert!(!Bot::bank_fan_counts_as_refusal(&travel_failure(kind)), "walk_to dossier {:?} propagates", kind);
+        assert!(!Bot::bank_stand_walk_refused(&travel_failure(kind)), "walk_to dossier {:?} propagates", kind);
     }
 }
 
