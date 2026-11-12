@@ -61,6 +61,59 @@ pub fn needs_replan(stop: &str, missing: &[String], died: bool, stock_lost: bool
     }
 }
 
+/// One inventory load of a consumed input (the last slot holds the tool:
+/// tinderbox, hammer, knife).
+pub const INPUT_BATCH: i64 = 27;
+
+/// Object a skill method works on: the tail of `cook/raw_shrimp`,
+/// `fire:logs`, `smelt:bronze_bar`, `spin:ball_of_wool`.
+fn method_subject(method: &str) -> Option<&str> {
+    let (_, tail) = method.split_once(['/', ':'])?;
+    Some(tail.rsplit('/').next().unwrap_or(tail))
+}
+
+/// How many of `need` an obtain sub-task asks for. A consumed input of
+/// the node's own work comes by the inventory load: a cook missing raw
+/// shrimps asks 27, a smelter 13 copper and 13 tin (live 2026-11-12: one
+/// unit per block bought one fish, and three blocks abandoned the
+/// node). An obtain node's input scales with its count (5 bronze bars =
+/// 5 copper + 5 tin). Tools and anything else come one at a time.
+pub fn need_count(node: &Node, need: &str) -> i64 {
+    let (product, units) = match &node.kind {
+        NodeKind::ObtainItems { item, count } => (item.clone(), Some((*count).max(1))),
+        _ => {
+            let method = node.method.clone().or_else(|| node.alternatives.first().map(|alt| alt.method.clone())).unwrap_or_default();
+            match method_subject(&method) {
+                Some(subject) => (subject.to_string(), None),
+                None => return 1,
+            }
+        }
+    };
+    // `cook/raw_shrimp`, `fire:logs`, `tan:cow_hide`: the subject is the
+    // consumed input itself.
+    if units.is_none() && product == need {
+        return INPUT_BATCH;
+    }
+    for way in lifescape_gamedata::obtain::ways(&product) {
+        if !way.is_production() {
+            continue;
+        }
+        if way.tools.iter().any(|tool| tool == need) {
+            return 1;
+        }
+        let Some((_, per_action)) = way.inputs.iter().find(|(input, _)| input == need) else { continue };
+        let per_action = (*per_action).max(1);
+        return match units {
+            Some(count) => count.saturating_mul(per_action),
+            None => {
+                let load: i64 = way.inputs.iter().map(|(_, qty)| (*qty).max(1)).sum();
+                (INPUT_BATCH / load.max(1)).max(1) * per_action
+            }
+        };
+    }
+    1
+}
+
 /// Apply one replan cause: returns fresh sub-task nodes to insert (e.g. an
 /// `obtain_items` for each missing tool/input). The node itself moves to
 /// `ready` (retry with a new method) or stays `blocked` until its deps
@@ -71,11 +124,12 @@ pub fn replan_node(node: &mut Node, cause: &ReplanCause, missing: &[String], cou
             let mut fresh = Vec::new();
             for need in missing {
                 *counter += 1;
+                let count = need_count(node, need);
                 let mut sub = Node::new(
                     &format!("n{}", *counter),
-                    NodeKind::ObtainItems { item: need.clone(), count: 1 },
+                    NodeKind::ObtainItems { item: need.clone(), count },
                     Vec::new(),
-                    1,
+                    count,
                 );
                 // Same legs as creation (PRD3: market first, every
                 // production way, the shop under D-A); Iron is filtered
@@ -160,6 +214,26 @@ mod tests {
         assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, .. } if item == "bronze_axe"));
         assert_eq!(node.status, NodeStatus::Pending, "waits on its new dep");
         assert_eq!(node.deps, vec!["n10".to_string()]);
+    }
+
+    /// Live 2026-11-12: a cook missing raw shrimps filed `obtain 1`: one
+    /// fish per block, abandoned after three. Inputs now come by the load.
+    #[test]
+    fn missing_inputs_come_by_the_inventory_load() {
+        let reach = |method: &str| {
+            let mut node = Node::new("n7", NodeKind::ReachLevel { skill: "cooking".to_string(), level: 20 }, Vec::new(), 20);
+            node.method = Some(method.to_string());
+            node
+        };
+        assert_eq!(super::need_count(&reach("cook/raw_shrimp"), "raw_shrimp"), super::INPUT_BATCH, "the cook's own input");
+        assert_eq!(super::need_count(&reach("fire:logs"), "logs"), super::INPUT_BATCH);
+        assert_eq!(super::need_count(&reach("fire:logs"), "tinderbox"), 1, "a tool comes alone");
+        assert_eq!(super::need_count(&reach("smelt:bronze_bar"), "copper_ore"), 13, "copper + tin share the pack");
+        let bars = Node::new("n8", NodeKind::ObtainItems { item: "bronze_bar".to_string(), count: 5 }, Vec::new(), 5);
+        assert_eq!(super::need_count(&bars, "tin_ore"), 5, "an obtain scales its inputs");
+        let mut cook = reach("cook/raw_shrimp");
+        let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);
+        assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == 27), "{:?}", fresh[0].kind);
     }
 
     #[test]

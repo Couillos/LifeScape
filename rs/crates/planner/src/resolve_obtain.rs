@@ -134,9 +134,17 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     }
 }
 
+/// Melee spots whose NPCs drop coins, the only coins that enter the
+/// economy without a buyer (NPC shops never buy, PRD3): men 8.2 and
+/// goblins 2.2 coins per kill in the F2P drop tables.
+pub const COIN_SPOTS: [&str; 2] = ["men", "goblins"];
+/// Obj id of coins.
+const COINS_OBJ: usize = 995;
+
 /// Money methods a bot can consider at its levels: the gather tier open
-/// at each gathering level, shearing, and the low-level melee spots
-/// (cowhides, feathers). The site pick filters what is safe.
+/// at each gathering level, shearing, the low-level melee spots
+/// (cowhides, feathers) and the coin-dropping spots. The site pick
+/// filters what is safe.
 pub fn money_methods(ctx: &ReadyCtx) -> Vec<String> {
     let level = |skill: &str| level_of(ctx, skill).unwrap_or(1);
     let mut out = vec![
@@ -147,8 +155,21 @@ pub fn money_methods(ctx: &ReadyCtx) -> Vec<String> {
         "fight:melee/cows".to_string(),
         "fight:melee/chickens".to_string(),
     ];
+    out.extend(COIN_SPOTS.iter().map(|spot| format!("fight:melee/{spot}")));
     out.dedup();
     out
+}
+
+/// Expected coins per kill of a melee method's spot (F2P drop tables,
+/// best NPC of the spot); 0 for anything else.
+pub fn coins_per_kill(method: &str) -> f64 {
+    let Some(spot) = method.strip_prefix("fight:melee/") else { return 0.0 };
+    let Some(entry) = lifescape_gamedata::combat_spots::by_key(spot) else { return 0.0 };
+    lifescape_gamedata::drops::drops_for_obj(COINS_OBJ)
+        .iter()
+        .filter(|drop| entry.npc_names.contains(&drop.npc.as_str()))
+        .map(|drop| drop.expected_per_kill())
+        .fold(0.0, f64::max)
 }
 
 /// Profit per 6000 ticks of a method from the brain's published rates
@@ -187,7 +208,17 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
     if !ctx.ironman && node.alternatives.iter().any(|alt| alt.method == "market:flip") {
         ranked.push(Alternative { method: "market:flip".to_string(), est_ticks: 6000, est_coins: 0 });
     }
-    ranked.sort_by_key(|alt| alt.est_ticks);
+    // A coin target is met by coins in the wallet: goods only turn into
+    // coins when a buyer shows up, a coin drop is coins at once. Coin
+    // spots lead (most coins per kill first); the site pick falls back
+    // down the list when the bot's combat level cannot work them yet.
+    let coin_first = matches!(node.kind, crate::model::NodeKind::HaveCoins { .. });
+    let mut keyed: Vec<(f64, Alternative)> =
+        ranked.into_iter().map(|alt| (if coin_first { coins_per_kill(&alt.method) } else { 0.0 }, alt)).collect();
+    keyed.sort_by(|(left_coins, left), (right_coins, right)| {
+        right_coins.total_cmp(left_coins).then_with(|| left.est_ticks.cmp(&right.est_ticks))
+    });
+    let ranked: Vec<Alternative> = keyed.into_iter().map(|(_, alt)| alt).collect();
     node.method = ranked.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
     if node.method.is_none() {
         if let Some(need) = ranked.first().and_then(|first| required_tool(&first.method)) {
@@ -195,4 +226,31 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
         }
     }
     node.alternatives = ranked;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{coins_per_kill, resolve_money};
+    use crate::expand::ReadyCtx;
+    use crate::model::{Node, NodeKind};
+
+    /// NPC shops never buy (PRD3): coins enter only as drops. A coin
+    /// target goes to the spot that drops the most coins; the site pick
+    /// falls back down the list when combat is too low.
+    #[test]
+    fn coin_targets_farm_coin_drops_first() {
+        assert!((coins_per_kill("fight:melee/men") - 8.2).abs() < 0.1, "men drop ~8.2 coins: {}", coins_per_kill("fight:melee/men"));
+        assert!(coins_per_kill("fight:melee/goblins") > 1.0);
+        assert_eq!(coins_per_kill("fight:melee/cows"), 0.0);
+        let ctx = ReadyCtx::blind(0.5);
+        let mut coins = Node::new("n9", NodeKind::HaveCoins { amount: 200 }, Vec::new(), 200);
+        resolve_money(&mut coins, &ctx);
+        assert_eq!(coins.method.as_deref(), Some("fight:melee/men"));
+        let order: Vec<&str> = coins.alternatives.iter().map(|alt| alt.method.as_str()).collect();
+        assert_eq!(&order[..2], &["fight:melee/men", "fight:melee/goblins"], "{order:?}");
+        // A plain money engagement keeps the profit ranking.
+        let mut money = Node::new("n10", NodeKind::MakeMoney, Vec::new(), 0);
+        resolve_money(&mut money, &ctx);
+        assert_ne!(money.method.as_deref(), Some("fight:melee/men"), "unmeasured ties keep the historic order");
+    }
 }

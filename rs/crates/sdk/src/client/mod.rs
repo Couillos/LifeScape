@@ -245,8 +245,19 @@ impl Bot {
                     // service owns it); kept locs only matter to offline
                     // and direct tools that paint locally.
                     let static_locs = std::mem::take(&mut self.world.static_locs);
+                    // The last known bank survives a relogin (only a bank
+                    // visit changes it); a first login seeds it from the
+                    // account save the server just loaded.
+                    let bank_com = (self.tables.com_id)("bank_main:inv");
+                    let mut closed = std::mem::take(&mut self.world.inv_closed);
+                    if let Some(open_bank) = bank_com.and_then(|com| self.world.inv.remove(&com).map(|items| (com, items))) {
+                        closed.insert(open_bank.0, open_bank.1);
+                    }
+                    closed.retain(|com, _| Some(*com) == bank_com);
                     self.world = World::new();
                     self.world.static_locs = static_locs;
+                    self.world.inv_closed = closed;
+                    self.seed_bank_from_save();
                     self.last_send_tick = 0;
                     self.last_keepalive = None;
                     self.drain_startup()?;
@@ -261,6 +272,20 @@ impl Bot {
             }
         }
         Err(last)
+    }
+
+    /// Seeds the last known bank from the account save when this session
+    /// never saw it: the server loads that file at login, so it is the
+    /// truth until the first bank visit retransmits. A missing save (other
+    /// server dir, fresh account) leaves the bank unknown, as before.
+    fn seed_bank_from_save(&mut self) {
+        let Some(bank_com) = (self.tables.com_id)("bank_main:inv") else { return };
+        if self.world.inv_known(bank_com).is_some() {
+            return;
+        }
+        if let Some(save) = crate::save::load_account(&self.username, None) {
+            self.world.seed_closed_inv(bank_com, &save.bank);
+        }
     }
 
     /// Reconnect after a dropped connection (bounded, process-guard sleep).
