@@ -126,3 +126,18 @@ porte_port_sarim_range | 3018,3237,0 | 3013,3237,0 | f2p | reachable ; uses_loc=
 # 26. meme motif au sud-est de Lumbridge (melee dark_wizards, ~50 refus/h) :
 # 1530 (3234,3207) angle OUEST s'ouvre en 1531 (3233,3207) angle NORD.
 porte_lumbridge_sud | 3233,3208,0 | 3245,3206,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3233,3208,3233,3207
+# 27-34. banques F2P (rev 274, pas de banque au chateau de Lumbridge) :
+# de la case exterieure de gamedata/data/bank_stands.json au stand client
+# d'un guichet. open_bank ne vise plus que ces stands (cote banquier =
+# poche fermee : NoRoute epuisant 3-11 s, ~1000 dossiers/jour a Varrock
+# ouest/est et Falador ouest). Table recalculee par tests/bank_stands.rs.
+banque_al_kharid | 3277,3168,0 | 3269,3164,0 | f2p | reachable ; walk_tiles<=12
+banque_draynor | 3100,3245,0 | 3092,3242,0 | f2p | reachable ; walk_tiles<=16
+banque_edgeville | 3093,3500,0 | 3094,3489,0 | f2p | reachable ; walk_tiles<=14
+banque_falador_est | 3013,3362,0 | 3011,3355,0 | f2p | reachable ; walk_tiles<=10
+banque_falador_ouest | 2945,3375,0 | 2945,3368,0 | f2p | reachable ; walk_tiles<=10
+banque_varrock_est | 3253,3428,0 | 3252,3420,0 | f2p | reachable ; walk_tiles<=11
+banque_varrock_ouest | 3182,3428,0 | 3185,3436,0 | f2p | reachable ; walk_tiles<=13
+# depuis la place de Varrock (dossier lara_lane-11257) : l'ancien premier
+# choix etait le stand est (3187,3436), cote banquier.
+banque_varrock_ouest_place | 3213,3425,0 | 3185,3436,0 | f2p | reachable ; walk_tiles<=40

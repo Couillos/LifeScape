@@ -1,0 +1,51 @@
+{
+  "_doc": "Client stands of every F2P bank booth (rev 274, no booth at Lumbridge castle in this revision). Per bank: a public tile outside the building; per booth: the stands the server accepts the booth op from (reach rule), split into client (planned in from the outside tile) and teller (bankers' side of the counter: sealed pocket, plans out as Disconnected). Recomputed and checked by rs/crates/nav/tests/bank_stands.rs (prints the table on mismatch); the SDK open_bank walks to client stands only.",
+  "banks": [
+    {"name": "al_kharid", "outside": {"x": 3277, "z": 3168, "level": 0}, "booths": [
+      {"x": 3268, "z": 3164, "level": 0, "client": [[3269, 3164]], "teller": [[3267, 3164]]},
+      {"x": 3268, "z": 3166, "level": 0, "client": [[3269, 3166]], "teller": [[3267, 3166]]},
+      {"x": 3268, "z": 3167, "level": 0, "client": [[3269, 3167]], "teller": [[3267, 3167]]},
+      {"x": 3268, "z": 3168, "level": 0, "client": [[3269, 3168]], "teller": [[3267, 3168]]},
+      {"x": 3268, "z": 3169, "level": 0, "client": [[3269, 3169]], "teller": [[3267, 3169]]}
+    ]},
+    {"name": "draynor", "outside": {"x": 3100, "z": 3245, "level": 0}, "booths": [
+      {"x": 3091, "z": 3242, "level": 0, "client": [[3092, 3242]], "teller": [[3090, 3242]]},
+      {"x": 3091, "z": 3243, "level": 0, "client": [[3092, 3243]], "teller": [[3090, 3243]]},
+      {"x": 3091, "z": 3245, "level": 0, "client": [[3092, 3245]], "teller": [[3090, 3245], [3091, 3246]]}
+    ]},
+    {"name": "edgeville", "outside": {"x": 3093, "z": 3500, "level": 0}, "booths": [
+      {"x": 3095, "z": 3489, "level": 0, "client": [[3094, 3489]], "teller": [[3095, 3488], [3096, 3489]]},
+      {"x": 3095, "z": 3491, "level": 0, "client": [[3094, 3491]], "teller": [[3095, 3490], [3096, 3491]]},
+      {"x": 3096, "z": 3493, "level": 0, "client": [[3096, 3494]], "teller": [[3095, 3493], [3096, 3492]]},
+      {"x": 3098, "z": 3493, "level": 0, "client": [[3098, 3494]], "teller": [[3097, 3493], [3098, 3492]]}
+    ]},
+    {"name": "falador_east", "outside": {"x": 3013, "z": 3362, "level": 0}, "booths": [
+      {"x": 3011, "z": 3354, "level": 0, "client": [[3011, 3355]], "teller": [[3011, 3353]]},
+      {"x": 3012, "z": 3354, "level": 0, "client": [[3012, 3355]], "teller": [[3012, 3353]]},
+      {"x": 3013, "z": 3354, "level": 0, "client": [[3013, 3355]], "teller": [[3013, 3353]]},
+      {"x": 3014, "z": 3354, "level": 0, "client": [[3014, 3355]], "teller": [[3014, 3353]]},
+      {"x": 3015, "z": 3354, "level": 0, "client": [[3015, 3355]], "teller": [[3015, 3353], [3016, 3354]]}
+    ]},
+    {"name": "falador_west", "outside": {"x": 2945, "z": 3375, "level": 0}, "booths": [
+      {"x": 2945, "z": 3367, "level": 0, "client": [[2945, 3368]], "teller": [[2945, 3366]]},
+      {"x": 2946, "z": 3367, "level": 0, "client": [[2946, 3368]], "teller": [[2946, 3366]]},
+      {"x": 2947, "z": 3367, "level": 0, "client": [[2947, 3368]], "teller": [[2947, 3366]]},
+      {"x": 2948, "z": 3367, "level": 0, "client": [[2948, 3368]], "teller": [[2948, 3366]]},
+      {"x": 2949, "z": 3367, "level": 0, "client": [[2949, 3368]], "teller": [[2949, 3366]]}
+    ]},
+    {"name": "varrock_east", "outside": {"x": 3253, "z": 3428, "level": 0}, "booths": [
+      {"x": 3252, "z": 3419, "level": 0, "client": [[3252, 3420]], "teller": [[3252, 3418]]},
+      {"x": 3253, "z": 3419, "level": 0, "client": [[3253, 3420]], "teller": [[3253, 3418]]},
+      {"x": 3254, "z": 3419, "level": 0, "client": [[3254, 3420]], "teller": [[3254, 3418]]},
+      {"x": 3256, "z": 3419, "level": 0, "client": [[3256, 3420], [3257, 3419]], "teller": [[3256, 3418]]}
+    ]},
+    {"name": "varrock_west", "outside": {"x": 3182, "z": 3428, "level": 0}, "booths": [
+      {"x": 3186, "z": 3436, "level": 0, "client": [[3185, 3436]], "teller": [[3186, 3437], [3187, 3436]]},
+      {"x": 3186, "z": 3438, "level": 0, "client": [[3185, 3438]], "teller": [[3186, 3439], [3187, 3438]]},
+      {"x": 3186, "z": 3440, "level": 0, "client": [[3185, 3440]], "teller": [[3186, 3441], [3187, 3440]]},
+      {"x": 3186, "z": 3442, "level": 0, "client": [[3185, 3442]], "teller": [[3186, 3443], [3187, 3442]]},
+      {"x": 3186, "z": 3444, "level": 0, "client": [[3185, 3444]], "teller": [[3186, 3445], [3187, 3444]]},
+      {"x": 3186, "z": 3446, "level": 0, "client": [[3185, 3446], [3186, 3447]], "teller": [[3187, 3446]]}
+    ]}
+  ]
+}

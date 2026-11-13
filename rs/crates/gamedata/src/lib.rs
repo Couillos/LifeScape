@@ -6,6 +6,7 @@
 //! table in `xp`. This crate ships a small std-only JSON reader so the
 //! workspace stays dependency-free.
 
+pub mod bank_stands;
 pub mod banks;
 pub mod combat_spots;
 pub mod danger;
