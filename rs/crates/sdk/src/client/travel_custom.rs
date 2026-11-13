@@ -30,6 +30,20 @@ const LOC_JUMP_WAIT: u64 = 20;
 /// dialogue without sailing; the second talk sails.
 const FARE_TALKS: u32 = 2;
 
+/// Al-Kharid toll (`border_gate.rs2`: `inv_total(inv, coins) < 10`
+/// refuses with a chatplayer line, no message, the gate stays shut).
+pub(crate) const TOLL_FARE: u32 = 10;
+
+/// Paid paths only with the toll in the pack: a script's `allow_paid`
+/// on an empty wallet routed through the gate, the guard said "Oh dear,
+/// I don't actually seem to have enough money" and the door segment
+/// failed twice (live 2026-11-13, bct5rxpg-13908/13942, ground_pickup
+/// with no coins). Without the fare the planner walks around the fence
+/// (golden `peage_detour`) or reports `PaidOnly coins:10`.
+pub(crate) fn paid_allowed(allow_paid: bool, coins: u32) -> bool {
+    allow_paid && coins >= TOLL_FARE
+}
+
 /// The dialogue option to pick among `options`: the first edge choice
 /// (in edge order) some option contains, case-insensitive. `None` when no
 /// option matches (the dialogue asks something the edge does not know).
@@ -234,7 +248,18 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::fare_pick;
+    use super::{fare_pick, paid_allowed};
+
+    /// Live 2026-11-13 (bct5rxpg-13908): allow_paid with an empty wallet
+    /// planned through the toll the guard then refused. Paid paths need
+    /// the 10-coin toll in the pack; the script switch still gates them.
+    #[test]
+    fn paid_paths_need_the_toll_in_the_pack() {
+        assert!(!paid_allowed(true, 0), "broke: walk around");
+        assert!(!paid_allowed(true, 9), "one short: walk around");
+        assert!(paid_allowed(true, 10), "the toll in hand: pay");
+        assert!(!paid_allowed(false, 500), "the script never allowed paying");
+    }
 
     fn options(texts: &[&str]) -> Vec<(u16, String)> {
         texts.iter().enumerate().map(|(index, text)| (index as u16, text.to_string())).collect()

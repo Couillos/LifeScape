@@ -75,7 +75,8 @@ impl Bot {
         // Refusal probe, read-only: a chunk ending on its start tile moved
         // nowhere, so the server refused the step (or nothing was sent) —
         // never a slow walk. Stops and deadline timeouts report elsewhere.
-        let stopped = matches!(&outcome, Err(err) if crate::error::is_interrupted(err));
+        // A market pause in the wait moved us on purpose: no refusal.
+        let stopped = matches!(&outcome, Err(err) if crate::error::is_interrupted(err) || crate::client::travel_pause::is_paused_mark(err));
         if !stopped
             && !matches!(&outcome, Err(Error::Io(_) | Error::Login(_)))
             && self.world.ticks <= deadline
@@ -154,7 +155,11 @@ impl Bot {
         for (index, tile) in leg.iter().enumerate() {
             let (tile_x, tile_z) = *tile;
             let (dx, dz) = (tile_x - prev.0, tile_z - prev.1);
-            if (dx == 0 || dz == 0)
+            // One orthogonal step only: a leg resent from where a pause
+            // left us starts on (or far from) its first tile, and that
+            // zero or long "step" read as a shut wall ("step 0 shut
+            // (3208,3383)->(3208,3383) flags=0x0/0x0", live 2026-11-13).
+            if dx.abs() + dz.abs() == 1
                 && !crate::collision::step_open(&scratch, prev.0, prev.1, level, dx, dz)
             {
                 let here = scratch.get(prev.0, prev.1, level);
@@ -201,6 +206,9 @@ impl Bot {
         // fields legs cut "stalled" while moving one tile a tick).
         let mut furthest: Option<usize> = None;
         let mut last_move = self.world.ticks;
+        // Closed-pause counter: a market pause run by this wait's pump
+        // walked us away and back, the leg we sent is gone server-side.
+        let pause_mark = self.pause_ticks;
         loop {
             let position = (self.world.x, self.world.z);
             if position == target {
@@ -226,6 +234,9 @@ impl Bot {
                 return Err(Error::Timeout(format!("leg to {target:?} timed out at {:?}", self.position())));
             }
             self.pump(1)?;
+            if self.pause_ticks != pause_mark && (self.world.x, self.world.z) != target {
+                return Err(self.paused_mark());
+            }
         }
     }
 
@@ -426,6 +437,16 @@ mod tests {
     /// direction 1 north / 3 west / 4 east; `None` = idle). Returns the
     /// leg outcome and where the bot ended, from (3200,3200,0).
     fn fake_leg(backlog: usize, leg: &[(i32, i32)], after: Vec<Option<u8>>) -> (Result<()>, (i32, i32)) {
+        fake_leg_with(backlog, leg, after, |_| {})
+    }
+
+    /// `fake_leg` with the bot prepared by `setup` (gates, hooks).
+    fn fake_leg_with(
+        backlog: usize,
+        leg: &[(i32, i32)],
+        after: Vec<Option<u8>>,
+        setup: impl FnOnce(&mut Bot),
+    ) -> (Result<()>, (i32, i32)) {
         use std::io::{Read, Write};
         use std::net::{TcpListener, TcpStream};
         use std::sync::mpsc::channel;
@@ -481,6 +502,7 @@ mod tests {
         bot.world.x = 3200;
         bot.world.z = 3200;
         bot.world.level = 0;
+        setup(&mut bot);
         queued_rx.recv_timeout(Duration::from_secs(5)).expect("backlog queued");
         // Let the backlog reach the client socket before the send.
         std::thread::sleep(Duration::from_millis(50));
@@ -534,6 +556,31 @@ mod tests {
         assert_eq!(deadline, stale + 20 + 90, "backlog read before the budget starts");
         drop(bot);
         server.join().expect("server thread");
+    }
+
+    /// Live 2026-11-13 (bcm9kxn4-43018): the session pause gate ran a
+    /// market delivery inside a leg's pump and brought the bot back idle;
+    /// the leg then stalled or timed out on a walk the server had long
+    /// dropped. A pause closed during the wait ends the leg at once with
+    /// the pause marker (the trip replans), never a refusal.
+    #[test]
+    fn walk_leg_ends_on_a_closed_pause() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let fired = std::sync::Arc::new(AtomicBool::new(false));
+        let (outcome, end) = fake_leg_with(0, &[(3201, 3200), (3202, 3200)], vec![None; 20], |bot| {
+            let fired = std::sync::Arc::clone(&fired);
+            bot.pause_gate = Some(std::sync::Arc::new(move |bot: &mut Bot| {
+                if !fired.swap(true, Ordering::SeqCst) {
+                    bot.note_pause(426);
+                }
+                true
+            }));
+        });
+        assert!(
+            matches!(&outcome, Err(err) if crate::client::travel_pause::is_paused_mark(err)),
+            "a closed pause ends the leg with its marker, got {outcome:?}"
+        );
+        assert_eq!(end, (3200, 3200), "nothing walked");
     }
 
     #[test]

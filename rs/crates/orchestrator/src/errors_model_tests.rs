@@ -110,6 +110,19 @@ fn dossier_row_has_from_dest_and_ref() {
     assert!(from_dossier("x.json", 1, &object(vec![]), &town).is_none(), "no kind, no row");
 }
 
+/// Live 2026-11-13: 28 `interrupted: run stopped` nav rows in 40 min,
+/// every one a budget end (`stop: budget_exhausted`) or an operator stop
+/// landing mid-walk. A stop is no navigation failure: no row.
+#[test]
+fn interrupted_dossier_is_no_error() {
+    let dossier = json::parse(
+        r#"{"account":"bxkchh6x","from":{"level":0,"x":3233,"z":3409},"dest":{"level":0,"x":3222,"z":3395},
+            "error":{"kind":"Interrupted","expected":"Walk tiles=41","observed":"interrupted: run stopped at (0, 3210, 3401)"}}"#,
+    )
+    .unwrap();
+    assert!(from_dossier("bxkchh6x-16623.json", 7_000, &dossier, &town).is_none(), "a stop is not an error");
+}
+
 #[test]
 fn deal_row_groups_by_reason_and_item() {
     let deal = FailedDeal {

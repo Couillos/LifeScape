@@ -204,6 +204,11 @@ pub(crate) fn plan_costs_with(
     let mut blocked: Vec<Blocked> = Vec::new();
     for (index, dest) in dests.iter().enumerate() {
         if collision::tile_walkable(search.open(*dest)) {
+            // A sealed pocket never settles: left `None` at once instead
+            // of exhausting the search for every other target.
+            if crate::pocket::sealed(world, tables, shared, from, *dest) {
+                continue;
+            }
             settle.entry(key_of(*dest)).or_default().push(index);
         } else if let Some(known) = blocked.iter_mut().find(|known| known.dest == *dest) {
             known.indices.push(index);

@@ -34,6 +34,7 @@ use lifescape_nav::tables::Tables;
 
 use super::travel_dossier::{TRAIL_TAKE, dossier_json, trail_mark, write_dossier_file};
 use super::travel_hook::{BetweenLegsHook, LegInfo, LegVerdict};
+use super::travel_pause::{TripRun, PAUSE_REPLANS};
 use crate::client::Bot;
 use crate::client::movement::STEP_CAP;
 use crate::error::{Error, Result, TravelError, TravelErrorKind};
@@ -90,7 +91,7 @@ pub(crate) struct PlanTimings {
 /// One remote plan attempt: ready, a real diagnosis, a service failure
 /// (`nav-down`), or an operator stop.
 #[derive(Debug)]
-enum RemoteOutcome {
+pub(crate) enum RemoteOutcome {
     Ready(Plan, u128),
     NoRoute(NoRoute),
     NavDown(String),
@@ -251,7 +252,7 @@ impl Bot {
     /// `nav-down`, never a local plan. Stale version: the served version
     /// replaces ours and the `plan` retries exactly once; a second skew
     /// is `nav-down`, never a loop.
-    fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
+    pub(crate) fn plan_remote(&mut self, options: &NavOptions, from: Tile, dest: Tile) -> RemoteOutcome {
         let client = match self.plan_client.clone() {
             Some(client) => client,
             None => return RemoteOutcome::NavDown("no-service-handle".to_string()),
@@ -381,7 +382,7 @@ impl Bot {
 
     /// Shared NoRoute mapping: sync and remote diagnoses become the same
     /// dossier-carrying error (wrapper, not fork).
-    fn fail_no_route(&mut self, from: Tile, dest: Tile, options: &NavOptions, no: NoRoute) -> Error {
+    pub(crate) fn fail_no_route(&mut self, from: Tile, dest: Tile, options: &NavOptions, no: NoRoute) -> Error {
         if no.reason == NoRouteReason::Aborted {
             return Error::Interrupted(format!("plan aborted at {:?}", self.position()));
         }
@@ -479,7 +480,7 @@ impl Bot {
             wants.extend(edge.requires.iter().map(String::as_str));
         }
         NavOptions {
-            allow_paid: self.allow_paid,
+            allow_paid: super::travel_custom::paid_allowed(self.allow_paid, coins),
             f2p_only: true,
             satisfied: Self::satisfy_tags(
                 wants,
@@ -515,7 +516,7 @@ impl Bot {
         let coins = carried.get(&COINS_OBJ).copied().unwrap_or(0);
         let quest_points = self.world.varps.get(&QP_VARP).copied().unwrap_or(0);
         Ok(NavOptions {
-            allow_paid: self.allow_paid,
+            allow_paid: super::travel_custom::paid_allowed(self.allow_paid, coins),
             f2p_only: true,
             satisfied: Self::satisfy_tags(
                 tags.iter().map(String::as_str),
@@ -699,7 +700,7 @@ impl Bot {
     }
 
     /// Full plan into the live route: the dashboard trace is the plan.
-    fn publish_plan(&mut self, plan: &Plan, dest: Tile) {
+    pub(crate) fn publish_plan(&mut self, plan: &Plan, dest: Tile) {
         let mut trace = Vec::new();
         for seg in &plan.segments {
             match seg {
@@ -728,17 +729,19 @@ impl Bot {
     /// segment failure replans with the faulty edge banned, a hook `Fled`
     /// between legs replans from the new position with no ban. Returns
     /// the second failure (or the replan diagnosis) to the caller; never
-    /// retries anything else.
+    /// retries anything else. A failure a market pause caused replans
+    /// apart, without a dossier (`travel_pause`).
     fn run_with_replan(
         &mut self,
         dest: Tile,
         mut options: NavOptions,
-        plan: Plan,
+        mut plan: Plan,
         timings: PlanTimings,
         timeout: u64,
     ) -> Result<()> {
         // Counted from the server's tick: the plan just blocked us.
-        let deadline = self.walk_deadline(timeout)?;
+        let mut deadline = self.walk_deadline(timeout)?;
+        let mut pause_budget = PAUSE_REPLANS;
         self.log(&format!(
             "nav timing options={}ms plan={}ms{}",
             timings.options_ms,
@@ -747,8 +750,13 @@ impl Bot {
         ));
         self.publish_plan(&plan, dest);
         let start = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        let outcome = match self.run_plan_through_pauses(&mut plan, dest, &options, &mut deadline, &mut pause_budget) {
+            TripRun::Done => Ok(()),
+            TripRun::Failed(failed, err) => Err((failed, err)),
+            TripRun::Final(error) => return Err(error),
+        };
         let segments = plan.segments.len().max(1);
-        match self.run_plan(&plan, segments, deadline) {
+        match outcome {
             Ok(()) => {
                 self.route.clear();
                 self.route_target = None;
@@ -796,14 +804,15 @@ impl Bot {
                     replan_start.elapsed().as_millis(),
                 ));
                 self.publish_plan(&retry, dest);
-                let segments = retry.segments.len().max(1);
-                match self.run_plan(&retry, segments, deadline) {
-                    Ok(()) => {
+                let mut retry = retry;
+                match self.run_plan_through_pauses(&mut retry, dest, &options, &mut deadline, &mut pause_budget) {
+                    TripRun::Done => {
                         self.route.clear();
                         self.route_target = None;
                         Ok(())
                     }
-                    Err((second, second_err)) => {
+                    TripRun::Final(error) => Err(error),
+                    TripRun::Failed(second, second_err) => {
                         let expected = seg_summary(&retry.segments[second.min(retry.segments.len().saturating_sub(1))]);
                         Err(self.fail(start, dest, &options, Some(&retry), Some(second), &expected, &second_err))
                     }
@@ -820,7 +829,7 @@ impl Bot {
     /// failing segment index rides along for the replan ban. The door
     /// registry is seeded from the plan on entry and cleared on exit:
     /// ephemeral per execution, never painted, never kept.
-    fn run_plan(&mut self, plan: &Plan, total: usize, deadline: u64) -> std::result::Result<(), (usize, Error)> {
+    pub(crate) fn run_plan(&mut self, plan: &Plan, total: usize, deadline: u64) -> std::result::Result<(), (usize, Error)> {
         self.seed_plan_doors(plan);
         for (index, seg) in plan.segments.iter().enumerate() {
             let started = self.world.ticks;
@@ -892,7 +901,10 @@ impl Bot {
             let leg: Vec<(i32, i32)> = pending[..end].to_vec();
             leg_no += 1;
             if let Err(err) = self.send_and_await(&leg, run, deadline, false) {
-                if crate::error::is_interrupted(&err) || matches!(err, Error::Io(_) | Error::Login(_)) {
+                if crate::error::is_interrupted(&err)
+                    || matches!(err, Error::Io(_) | Error::Login(_))
+                    || super::travel_pause::is_paused_mark(&err)
+                {
                     return Err(err);
                 }
                 if self.world.ticks > deadline {
@@ -968,13 +980,19 @@ impl Bot {
     /// `doors.rs2`, second click finishes), and a blind live stream
     /// can miss a real swing (one crossing attempt, server decides).
     /// Any failure is DoorDidNotOpen.
-    fn exec_door(
+    pub(crate) fn exec_door(
         &mut self,
         door: &lifescape_nav::plan::DoorRef,
         stand: Tile,
         cross_to: Tile,
         deadline: u64,
     ) -> Result<()> {
+        // Already through: a plan asked while the last crossing step was
+        // still landing (a market pause opening mid-crossing) starts on
+        // the door just crossed. The postcondition holds (`travel_pause`).
+        if (self.world.x, self.world.z, self.world.level) == (cross_to.x, cross_to.z, cross_to.level) {
+            return Ok(());
+        }
         if (self.world.x, self.world.z, self.world.level) != (stand.x, stand.z, stand.level) {
             return Err(Error::StepRefused(format!(
                 "door loc {}: off stand ({},{},{}) at {:?}",

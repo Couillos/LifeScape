@@ -13,6 +13,7 @@ pub mod loctypes;
 pub mod nav;
 pub mod no_route;
 pub mod plan;
+mod pocket;
 #[cfg(test)]
 mod plan_budget_tests;
 pub mod reach;

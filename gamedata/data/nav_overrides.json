@@ -1,5 +1,7 @@
 {
-  "blocked_locs": [],
+  "blocked_locs": [
+    {"loc": 1591, "reason": "lockeddoor1 (name Door, op1 Open): locked_doors.rs2 [oploc1,lockeddoor1] only says 'You try and open the door...' then 'The door is locked tight, I can't open it.', never swings; live bct5rxpg-14906 (3268,3435) DoorDidNotOpen", "verified": "2026-11-13"}
+  ],
   "custom_edges": [
     {"name": "boat_port_sarim_to_karamja", "kind": "npc_fare", "npcs": ["captain_tobias", "seaman_lorris", "seaman_thresnor"], "op": 1, "choices": ["Yes please."], "fare": 30, "stand": [3027, 3218, 0], "to": [2956, 3143, 1], "reason": "sailors.rs2 [opnpc1,_sailor]: p_choice2 'Yes please.' takes 30 coins from the inventory (inv_total(inv, coins) < 30 refuses) then ~set_sail onto the ship deck 1_46_49_12_7; sailors spawn (3026..3028, 3216..3221) on the Port Sarim dock", "verified": "2026-11-13"},
     {"name": "gangplank_karamja_dock", "kind": "loc", "loc": 2082, "op": 1, "at": [2956, 3144, 1], "stand": [2956, 3143, 1], "to": [2956, 3146, 0], "reason": "sarimshipplank_off (m46_49 '1 12 8: 2082 10 1', angle north): gangplank.rs2 _gangplank_disembark telejumps movecoord(coord, 0, -1, 2) onto the Karamja dock", "verified": "2026-11-13"},
