@@ -14,7 +14,9 @@
 //! 5. a typed block: the skill level a production needs
 //!    (`missing:level:smithing:15`), its tool (`missing:bronze_axe`), or
 //!    the coins a purchase needs (`missing:coins:N`, filed as a
-//!    `have_coins` node that earns them). Never a silent substitute.
+//!    `have_coins` node that earns them), else the quest the only ways
+//!    need (`missing:quest:runemysteries`, filed as the quest's nodes).
+//!    Never a silent substitute.
 //!
 //! Coin and money nodes pick the most profitable money method the bot
 //! can work at its levels (published rates, market prices), not the
@@ -24,7 +26,8 @@ use crate::cost::{cost_farm, cost_market_buy};
 use crate::expand::ReadyCtx;
 use crate::model::{Alternative, Node, NodeStatus};
 use crate::obtain_legs::{production_legs, tradeable_f2p};
-use crate::tools::{method_feasible, required_tool};
+use crate::quests::missing_quest;
+use crate::tools::{gear_ok, method_feasible, required_tool};
 
 /// Live level of `skill` (unknown = not gated: offline contexts).
 fn level_of(ctx: &ReadyCtx, skill: &str) -> Option<u8> {
@@ -87,6 +90,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let mut workable: Vec<Alternative> = Vec::new();
     let mut level_gap: Option<(String, i64)> = None;
     let mut tool_gap: Option<String> = None;
+    let mut quest_gap: Option<String> = None;
     for method in &candidates {
         if method == "market:buy" || method == "shop:buy" || method == "market:bid" {
             continue;
@@ -95,6 +99,13 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         let est = cost_farm(count, ctx.yield_per_6000.max(1.0), ctx.trip_ticks);
         let alt = Alternative { method: method.clone(), est_ticks: est, est_coins: 0 };
         priced.push(alt.clone());
+        // A way behind an unfinished quest never launches: the quest is
+        // the dependency when nothing else works (Rune Mysteries before
+        // essence).
+        if let Some(quest) = missing_quest(method, Some(item), ctx) {
+            quest_gap.get_or_insert(quest);
+            continue;
+        }
         if let Some((skill, needed)) = &leg.skill {
             if level_of(ctx, skill).is_some_and(|have| i64::from(have) < *needed) {
                 if level_gap.as_ref().is_none_or(|(_, known)| needed < known) {
@@ -105,7 +116,11 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         }
         if !method_feasible(method, ctx) {
             if tool_gap.is_none() {
-                tool_gap = required_tool(method).map(|need| need.tool.to_string());
+                // The tool first; with the tool at hand, the bait it burns
+                // (feathers for trout, fishing bait for pike).
+                tool_gap = required_tool(method).map(|need| {
+                    if gear_ok(need.tool, ctx) { need.bait.unwrap_or(need.tool).to_string() } else { need.tool.to_string() }
+                });
             }
             continue;
         }
@@ -119,7 +134,13 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         });
     }
     let shop_cover = ctx.shop_price.max(1) * count;
-    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && crate::expand::source_flags(item).1;
+    let shop_quest = missing_quest("shop:buy", Some(item), ctx);
+    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && crate::expand::source_flags(item).1 && shop_quest.is_none();
+    if candidates.iter().any(|method| method == "shop:buy") {
+        if let Some(quest) = shop_quest {
+            quest_gap.get_or_insert(quest);
+        }
+    }
     if shop_listed {
         priced.push(Alternative {
             method: "shop:buy".to_string(),
@@ -181,7 +202,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
             Some(format!("missing:coins:{}", wallet_for(ctx, price * need)))
         } else {
-            None
+            quest_gap.map(|quest| format!("missing:quest:{quest}"))
         };
         if let Some(reason) = reason {
             node.status = NodeStatus::Blocked { reason };

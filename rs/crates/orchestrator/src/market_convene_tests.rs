@@ -81,6 +81,23 @@ fn stagger_lands_together_before_deadline() {
     assert_eq!(same_end_a, same_end_b, "same epoch same deadline");
 }
 
+/// Deal 1276: the daemon's snapshot of a reopened worker still carried
+/// the previous login's tick (61796) while the worker counted from 1;
+/// absolute departs made the seller wait 61 800 ticks. Convocations now
+/// carry offsets from reception (`+N`), anchored by the worker on its
+/// own clock (`market_handover::anchor_deliver_args`).
+#[test]
+fn convocation_carries_offsets_never_absolute_ticks() {
+    let (depart_buyer, deadline_buyer, depart_seller, deadline_seller) = super::relative_schedule(298, 154);
+    assert_eq!(depart_buyer, super::PREP_MARGIN_TICKS, "the farther party leaves after the prep margin");
+    assert_eq!(depart_seller, super::PREP_MARGIN_TICKS + 144, "the nearer one waits the leg difference");
+    assert_eq!(deadline_buyer, deadline_seller, "one span for both");
+    let args = super::deliver_args(depart_seller, deadline_seller, &["1276=3209,3425".to_string()]);
+    assert_eq!(args, vec!["deliver".to_string(), "+174".to_string(), format!("+{deadline_seller}"), "1276=3209,3425".to_string()]);
+    let anchored = lifescape_scripts::market_handover::anchor_deliver_args(&args, 1);
+    assert_eq!(anchored[1], "175", "a worker reopened at tick 1 leaves at once");
+}
+
 /// Zones quantize positions 32 by 32 for the ETA cache.
 #[test]
 fn zones_quantize_32_wide() {

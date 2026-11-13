@@ -152,6 +152,10 @@ pub struct Node {
     /// Site the brain sends the bot to (x, z, level), chosen at resolve
     /// from the game data for the bot's combat level (`pick_site`).
     pub site: Option<(i64, i64, i64)>,
+    /// The chosen site lies across the Al Kharid toll fence: the fare is
+    /// budgeted (or Prince Ali Rescue makes it free) and the launch
+    /// carries `toll` (`place_on_site`, `gamedata::toll`).
+    pub toll: bool,
 }
 
 impl Node {
@@ -171,6 +175,7 @@ impl Node {
             revives: 0,
             last_error: String::new(),
             site: None,
+            toll: false,
         }
     }
 
@@ -411,6 +416,7 @@ fn node_to_value(node: &Node) -> Value {
                 None => Value::Null,
             },
         ),
+        ("toll", Value::Bool(node.toll)),
     ])
 }
 
@@ -455,6 +461,7 @@ fn node_from_value(value: &Value) -> Option<Node> {
             let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
             Some((part(0)?, part(1)?, part(2)?))
         }),
+        toll: value.get("toll").as_bool() == Some(true),
     })
 }
 

@@ -122,10 +122,7 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("magic", args)?;
     let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;

@@ -63,7 +63,7 @@ pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool) {
 }
 
 fn close_goal_history(life: &mut Life, stuck: bool) {
-    let skills = goal_skills(&life.goal);
+    let mut skills = goal_skills(&life.goal);
     if !stuck {
         push_history(life, "goal", &format!("{DONE_TAG}{}", skills.join(",")));
         return;
@@ -73,6 +73,15 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
         class: "graph stuck".to_string(),
         last_error: "no abandoned node found".to_string(),
     });
+    // The failed item takes its dependency subtree down (user decision
+    // 2026-11-13): every skill that needs it, not only the goal's (a
+    // failed bronze axe bans woodcutting and the firemaking that burns
+    // its logs). The market rescue ran first (`brain_rescue`).
+    for skill in lifescape_planner::banned_scope(life, &cause.node) {
+        if !skills.contains(&skill) {
+            skills.push(skill);
+        }
+    }
     if skills.is_empty() {
         crate::logln!("brain {}: goal {} stuck: {}", life.account, goal_label(&life.goal), cause.describe());
         push_history(life, "goal", &ban_entry("", 0, &cause));

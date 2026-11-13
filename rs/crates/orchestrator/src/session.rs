@@ -394,7 +394,7 @@ pub(crate) fn budget_due(shared: &Shared, bot: &lifescape_sdk::Bot) -> bool {
         return false;
     }
     let wall = bot.world.ticks.saturating_sub(start.holdings.tick);
-    let work = wall.saturating_sub(bot.pause_ticks.saturating_sub(start.pause_ticks));
+    let work = wall.saturating_sub(bot.pause_ticks_now().saturating_sub(start.pause_ticks));
     work >= start.budget_max && lifescape_scripts::kit::survival::at_safe_point(bot)
 }
 

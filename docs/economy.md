@@ -48,8 +48,11 @@ ETA nav (cache par zone de départ, un plan par zone) pour une arrivée
 simultanée ; regroupement 300 ticks (une convocation par bot, paires
 regroupées en un seul échange) ; une convocation = case + heure de
 départ seulement (jamais la position de l'autre). Les ticks sont des
-époques par login : départs et échéances sont exprimés dans l'horloge
-de chaque bot, le balayage des expirés sur l'horloge murale du daemon
+époques par login : la convocation porte des décalages
+(`deliver +<départ> +<échéance>`, `market_convene::deliver_args`), que le
+worker ancre sur sa propre horloge à la réception
+(`market_handover::anchor_deliver_args`) ; un `+N` non ancré est refusé
+(`Usage`). Le balayage des expirés suit l'horloge murale du daemon
 (mesure live du tick, sans interrupteur dev/prod). Le registre règle à
 l'appariement ; un `failed` ultérieur rembourse le transfert, replace
 la partie présente **avec sa priorité** (seq d'origine conservée) et ne
@@ -101,9 +104,30 @@ tick/stats` ; persistance via `lifescape-store` (ouvert par le daemon
 seul). Page `/market` (2026-11-13) : liste `list?active=1` = biens avec
 au moins un ordre ouvert OU au moins une exécution passée (pas de
 plafond ; carnet vide jamais échangé caché) ; `recent` porte le `name`
-de chaque deal, le flux et le titre ne dépendent plus de la liste. Reliquat connu : les ETA de convocation passent par une constante
-d'horloge, pas par le service de navigation ; les holdings live ne sont
-pas encore branchées au registre.
+de chaque deal, le flux et le titre ne dépendent plus de la liste. Les
+ETA de convocation passent par le service de navigation (un plan par
+zone de départ, `market_eta`).
+
+Échecs de remise (revue 2026-11-13, deals 1100–1285) :
+- `timeout` dominant : la pause market tourne DANS la tâche en cours
+  (souvent une fenêtre d'argent de 1500 ticks) et le crochet de budget
+  comptait la pause en vol comme du travail → `interrupted: run stopped`
+  au milieu de la remise, souvent sur la case. La pause est facturée dès
+  son premier tick (`Bot::begin_pause` / `pause_ticks_now`, `budget_due`).
+- Convocation calée sur l'instantané d'un login précédent (worker rouvert
+  à t=1, départ 61826) : corrigé par les décalages ci-dessus.
+- `mismatch` à tort (1116, 1124) : une relance (marche d'approche ou
+  `op_player`) croise la fenêtre que le partenaire vient d'ouvrir et la
+  ferme (« Other player declined trade. »), les deux côtés lisaient un
+  désaccord. `trade_request` relit le flux avant tout clic ; une fenêtre
+  fermée avant les lots est `ExchangeOutcome::WindowClosed` /
+  `SellerOffer::Closed` : la paire se retrouve (`MEET_RETRIES` = 3) tant
+  que le daemon garde le deal.
+- Restent hors marché : « nearest bank did not open » (marche vers la
+  banque refusée par une porte/un loc, nav) et paires adjacentes qui ne
+  se voient jamais (`cannot see`, liste joueurs SDK ; la ligne journalise
+  désormais `debug_players`).
+Les holdings live ne sont pas encore branchées au registre.
 
 ## Simulateur
 

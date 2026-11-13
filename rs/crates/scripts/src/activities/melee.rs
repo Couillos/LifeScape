@@ -69,10 +69,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("melee", args)?;
     let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
     // The session's Bot outlives one run: a ranged or magic run before
     // this one left its style behind. Melee scores, plans and attacks

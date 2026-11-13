@@ -38,6 +38,7 @@ pub mod shops;
 pub mod spawns;
 pub mod spells;
 pub mod stations;
+pub mod toll;
 pub mod trees;
 pub mod varps;
 pub mod xp;

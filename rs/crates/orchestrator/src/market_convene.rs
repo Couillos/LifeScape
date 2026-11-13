@@ -180,6 +180,23 @@ pub fn stagger(tick_a: u64, eta_a: u64, tick_b: u64, eta_b: u64) -> (u64, u64, u
     (depart_a, tick_a + span, depart_b, tick_b + span)
 }
 
+/// Convocation schedule as offsets from reception (buyer depart,
+/// buyer deadline, seller depart, seller deadline): session ticks are
+/// per-login epochs and the daemon's snapshot of a reopened worker can
+/// still carry the previous login's tick, so the daemon never stamps
+/// absolute ticks; the worker anchors them on its own clock.
+pub fn relative_schedule(eta_buyer: u64, eta_seller: u64) -> (u64, u64, u64, u64) {
+    stagger(0, eta_buyer, 0, eta_seller)
+}
+
+/// Pose args of one convocation: `deliver +<depart_in> +<deadline_in>
+/// <deal>=<x>,<y> ...`.
+pub fn deliver_args(depart_in: u64, deadline_in: u64, deals: &[String]) -> Vec<String> {
+    let mut args = vec!["deliver".to_string(), format!("+{depart_in}"), format!("+{deadline_in}")];
+    args.extend(deals.iter().cloned());
+    args
+}
+
 // -- deal ops (state machine behind the socket) -------------------------------
 
 /// Consumed book rows for one fill, stamped before the match: the
@@ -730,9 +747,9 @@ pub struct ConvocationPose {
 
 /// Daemon convene round: sweep expired deals, then convene what waits.
 /// Positions map account to (own tick epoch, level, x, z); only listed
-/// accounts convene, and each bot gets a single pose with all its deals
-/// in its own tick epoch. Without nav nothing convenes and matches stay
-/// put.
+/// accounts convene, and each bot gets a single pose with all its deals,
+/// timed as offsets from reception (`deliver_args`). Without nav
+/// nothing convenes and matches stay put.
 pub fn convene_round(
     service: &MarketService,
     nav_up: bool,
@@ -783,8 +800,7 @@ pub fn convene_round(
             eprintln!("market-convene: deal {} eta unknown", entry.get("deal").as_i64().unwrap_or(-1));
             continue;
         };
-        let (depart_buyer, deadline_buyer, depart_seller, deadline_seller) =
-            stagger(buyer_party.0, eta_buyer, seller_party.0, eta_seller);
+        let (depart_buyer, deadline_buyer, depart_seller, deadline_seller) = relative_schedule(eta_buyer, eta_seller);
         let span = PREP_MARGIN_TICKS + BANK_DETOUR_TICKS + eta_buyer.max(eta_seller).saturating_mul(2) + DEADLINE_MARGIN_TICKS;
         want.push(object(vec![
             ("deal", entry.get("deal").clone()),
@@ -804,10 +820,9 @@ pub fn convene_round(
         let account = pose.get("account").as_str().unwrap_or("").to_string();
         let depart = pose.get("depart").as_i64().unwrap_or(0);
         let deadline = pose.get("deadline").as_i64().unwrap_or(0);
-        let mut args = vec!["deliver".to_string(), depart.to_string(), deadline.to_string()];
-        for deal in pose.get("deals").as_arr().cloned().unwrap_or_default() {
-            args.push(deal.as_str().unwrap_or("").to_string());
-        }
+        let deals: Vec<String> =
+            pose.get("deals").as_arr().cloned().unwrap_or_default().iter().map(|deal| deal.as_str().unwrap_or("").to_string()).collect();
+        let args = deliver_args(depart.max(0) as u64, deadline.max(0) as u64, &deals);
         if account.is_empty() || args.len() < 4 {
             continue;
         }

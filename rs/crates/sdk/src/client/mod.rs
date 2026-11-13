@@ -164,6 +164,11 @@ pub struct Bot {
     /// counter from the wall-clock tick delta. Advanced by the session
     /// pause gate around the inline market run, never by scripts.
     pub pause_ticks: u64,
+    /// Start tick of the market pause in flight (`begin_pause`), cleared
+    /// by `note_pause`: the budget hook bills the running pause as pause,
+    /// never as work (live 2026-11-13: a 1500-tick fill run killed its
+    /// own inline delivery at the square, deal `timeout`).
+    pub pause_since: Option<u64>,
     /// Zone label for log stamps (`zones::zone_name`), refreshed by the
     /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
     pub zone_label: String,
@@ -213,6 +218,7 @@ impl Bot {
             on_pump: None,
             pause_gate: None,
             pause_ticks: 0,
+            pause_since: None,
             zone_label: "?".to_string(),
             run_latch: false,
         }
@@ -335,6 +341,20 @@ impl Bot {
     /// engagement budget. Session gate only.
     pub fn note_pause(&mut self, ticks: u64) {
         self.pause_ticks = self.pause_ticks.saturating_add(ticks);
+        self.pause_since = None;
+    }
+
+    /// Open one market pause at the current tick (session gate only);
+    /// `note_pause` closes it.
+    pub fn begin_pause(&mut self) {
+        self.pause_since = Some(self.world.ticks);
+    }
+
+    /// Pause ticks billed so far, the pause in flight included: what the
+    /// engagement budget subtracts from the wall-clock delta.
+    pub fn pause_ticks_now(&self) -> u64 {
+        let running = self.pause_since.map(|since| self.world.ticks.saturating_sub(since)).unwrap_or(0);
+        self.pause_ticks.saturating_add(running)
     }
 
     /// Record what the bot is doing right now (dashboard state).
@@ -571,6 +591,23 @@ pub fn aggregate(inv: &HashMap<u16, HashMap<u8, (u16, u32)>>) -> HashMap<u16, u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The market pause in flight counts as pause from its first tick;
+    /// `note_pause` closes it into the billed total.
+    #[test]
+    fn pause_in_flight_is_billed_as_pause() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.ticks = 1000;
+        bot.note_pause(40);
+        assert_eq!(bot.pause_ticks_now(), 40, "closed pauses only");
+        bot.begin_pause();
+        bot.world.ticks = 1700;
+        assert_eq!(bot.pause_ticks_now(), 740, "the running pause counts too");
+        bot.note_pause(700);
+        assert_eq!(bot.pause_since, None, "closed");
+        bot.world.ticks = 1800;
+        assert_eq!(bot.pause_ticks_now(), 740, "no double count once closed");
+    }
 
     #[test]
     fn tag_stamps_tick_and_zone() {

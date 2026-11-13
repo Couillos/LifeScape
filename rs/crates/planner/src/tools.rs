@@ -17,6 +17,20 @@ pub struct ToolNeed {
 /// ranks (best-first orders) and the fishing tiers (tool + bait per
 /// product); the minimum duplicated planner-side, names only.
 pub fn required_tool(method: &str) -> Option<ToolNeed> {
+    // An obtain's `farm:` leg works the same gatherer: same gear (a trout
+    // quota needs the fly rod AND feathers, b8jxrdd2 live 2026-11-13).
+    if let Some(item) = method.strip_prefix("farm:") {
+        if crate::mapping::is_fish(item) {
+            return required_tool(&format!("gather:fishing/{item}"));
+        }
+        if item.ends_with("_ore") || item == "coal" || item == "clay" || item == "blankrune" {
+            return required_tool(&format!("gather:mining/{item}"));
+        }
+        if item.ends_with("logs") {
+            return required_tool(&format!("gather:woodcut/{item}"));
+        }
+        return None;
+    }
     if let Some(product) = method.strip_prefix("gather:fishing/") {
         let need = match product {
             "raw_shrimp" | "raw_anchovies" => ToolNeed { tool: "net", bait: None },
@@ -45,9 +59,53 @@ pub fn required_tool(method: &str) -> Option<ToolNeed> {
     } else if method.starts_with("fight:magic/") {
         // Wind strike: one mind rune and one air rune per cast.
         Some(ToolNeed { tool: "mindrune", bait: Some("airrune") })
+    } else if method.starts_with("smith:") {
+        // Every anvil recipe carries a hammer (obtain way tools).
+        Some(ToolNeed { tool: "hammer", bait: None })
+    } else if method.starts_with("fire:") {
+        // Lighting logs takes a tinderbox in the pack.
+        Some(ToolNeed { tool: "tinderbox", bait: None })
+    } else if let Some(product) = method.strip_prefix("jewelry:") {
+        // The furnace casts gold in the product's mould (kept, never used up).
+        jewelry_mould(product).map(|mould| ToolNeed { tool: mould, bait: None })
+    } else if let Some(rune) = method.strip_prefix("runecraft:") {
+        // The altar ruins open to the rune's talisman.
+        rune_talisman(rune).map(|talisman| ToolNeed { tool: talisman, bait: None })
+    } else if let Some(product) = method.strip_prefix("craft:") {
+        // Leather is sewn with a needle and thread (thread wears out).
+        crate::mapping::is_leather_recipe(product).then_some(ToolNeed { tool: "needle", bait: Some("thread") })
     } else {
         None
     }
+}
+
+/// Mould a jewellery product is cast in (gold and gem rings, necklaces,
+/// amulets; the unstrung holy symbol `nostringstar`).
+pub fn jewelry_mould(product: &str) -> Option<&'static str> {
+    if product == "nostringstar" {
+        Some("holy_symbol_mould")
+    } else if product.contains("necklace") {
+        Some("necklace_mould")
+    } else if product.contains("amulet") {
+        Some("amulet_mould")
+    } else if product.contains("ring") {
+        Some("ring_mould")
+    } else {
+        None
+    }
+}
+
+/// Talisman whose altar crafts `rune` (F2P altars).
+pub fn rune_talisman(rune: &str) -> Option<&'static str> {
+    Some(match rune {
+        "airrune" => "air_talisman",
+        "mindrune" => "mind_talisman",
+        "waterrune" => "water_talisman",
+        "earthrune" => "earth_talisman",
+        "firerune" => "fire_talisman",
+        "bodyrune" => "body_talisman",
+        _ => return None,
+    })
 }
 
 /// Every name that satisfies `tool`: the whole `kit::tools` family
@@ -85,6 +143,20 @@ pub fn tool_family(tool: &str) -> &'static [&'static str] {
         "harpoon" => &["harpoon"],
         "fishing_bait" => &["fishing_bait"],
         "feather" => &["feather"],
+        "hammer" => &["hammer"],
+        "tinderbox" => &["tinderbox"],
+        "needle" => &["needle"],
+        "thread" => &["thread"],
+        "ring_mould" => &["ring_mould"],
+        "necklace_mould" => &["necklace_mould"],
+        "amulet_mould" => &["amulet_mould"],
+        "holy_symbol_mould" => &["holy_symbol_mould"],
+        "air_talisman" => &["air_talisman"],
+        "mind_talisman" => &["mind_talisman"],
+        "water_talisman" => &["water_talisman"],
+        "earth_talisman" => &["earth_talisman"],
+        "fire_talisman" => &["fire_talisman"],
+        "body_talisman" => &["body_talisman"],
         _ => &[],
     }
 }
@@ -114,11 +186,19 @@ pub fn gear_ok(item: &str, ctx: &ReadyCtx) -> bool {
     ctx.allow_shop && stocked && lifescape_gamedata::obtain::merchant_buy_allowed(item) && ctx.coins >= tool_price(item)
 }
 
-/// True when the bot can work `method` now: no gear needed, or the
-/// tool (and bait) carried or fundable.
+/// True when the bot can work `method` now: its quest done, no gear
+/// needed or the tool (and bait) carried or fundable.
 pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
+    // A method whose quest the bot has not finished never launches.
+    if crate::quests::missing_quest(method, None, ctx).is_some() {
+        return false;
+    }
     match required_tool(method) {
         None => true,
         Some(need) => gear_ok(need.tool, ctx) && need.bait.is_none_or(|bait| gear_ok(bait, ctx)),
     }
 }
+
+#[cfg(test)]
+#[path = "tools_tests.rs"]
+mod tests;

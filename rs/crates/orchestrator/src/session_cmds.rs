@@ -281,6 +281,8 @@ fn cmd_pose_market(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value 
         })
         .collect();
     let tick = current_ticks(shared);
+    // Offsets (`+N`) anchor on this login's clock at reception.
+    let string_args = lifescape_scripts::market_handover::anchor_deliver_args(&string_args, tick);
     crate::session_rescue::pose_market(shared, script, &string_args, tick);
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }

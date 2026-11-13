@@ -308,6 +308,9 @@ fn gate_market(shared: &Shared, bot: &mut Bot, stopped: bool) -> bool {
     let return_to = bot.position();
     bot.intend(&format!("pausing for market {}", market.script));
     let pause_start = bot.world.ticks;
+    // The pause is billed from its first tick: the budget hook never
+    // aborts the delivery (or its walk back) as if it were work.
+    bot.begin_pause();
     let outcome = lifescape_scripts::run(&market.script, bot, &market.args);
     // Best effort walk back to the work tile: a failed return degrades
     // to resuming wherever the delivery left us, never to a re-run.
@@ -696,6 +699,35 @@ mod tests {
         bot.world.modal = None;
         assert!(super::gate_tick(&shared, &mut bot), "loop resumes after the inline run");
         assert!(shared.pending_market.lock().unwrap().is_none(), "pose consumed at the safe point");
+    }
+
+    /// Live 2026-11-13 (bcm9kxn4 deal 1117, bbkjz2vk 1252, will_field
+    /// 1217): a fill run (budget 1500) hosting an inline delivery hit its
+    /// budget mid-pause, the hook aborted the delivery at the square and
+    /// the deal died `timeout`. The pause in flight is never work.
+    #[test]
+    fn budget_never_fires_inside_a_market_pause() {
+        let shared = test_shared(idle_bot_at(0, 3212, 3426));
+        let mut bot = idle_bot_at(0, 3212, 3426);
+        bot.world.ticks = 1000;
+        let mut holdings = crate::session_report::snapshot_holdings(&bot);
+        holdings.tick = 1000;
+        *shared.task_start.lock().unwrap() = Some(crate::session_report::TaskStart {
+            script: "melee".to_string(),
+            budget_max: 1500,
+            node_id: "fill-n1".to_string(),
+            holdings,
+            pause_ticks: 0,
+        });
+        bot.world.ticks = 2000;
+        bot.begin_pause();
+        bot.world.ticks = 2600;
+        assert!(!crate::session::budget_due(&shared, &bot), "600 work ticks + a running pause: keep going");
+        bot.note_pause(600);
+        bot.world.ticks = 3099;
+        assert!(!crate::session::budget_due(&shared, &bot), "1499 work ticks after the pause");
+        bot.world.ticks = 3100;
+        assert!(crate::session::budget_due(&shared, &bot), "budget reached on work ticks");
     }
 
     /// One level, rescue first: with both posed the rescue runs inline

@@ -15,18 +15,15 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         tail.push("--budget-max".to_string());
         tail.push(max_ticks.to_string());
     }
-    let (script, mut head): (String, Vec<String>) = if method.starts_with("gather:fishing/") {
-        let head = level_flag(node, Some("fishing"));
-        // No resource positional: the gatherer works the best tier at or
-        // below its live level inside the brain-fixed palier (D21: the
-        // palier, not the exact tier, is the brain's order).
-        ("fishing".to_string(), head)
-    } else if method.starts_with("gather:woodcut/") {
-        let head = level_flag(node, Some("woodcutting"));
-        ("woodcut".to_string(), head)
-    } else if method.starts_with("gather:mining/") {
-        let head = level_flag(node, Some("mining"));
-        ("mining".to_string(), head)
+    // Gatherers get their target resource first (args contract
+    // 2026-11-13, user rule "precise instructions"): the script works that
+    // resource only, never the best tier its level opens.
+    let (script, mut head): (String, Vec<String>) = if let Some(fish) = method.strip_prefix("gather:fishing/") {
+        ("fishing".to_string(), gather_head(fish, node, "fishing"))
+    } else if let Some(logs) = method.strip_prefix("gather:woodcut/") {
+        ("woodcut".to_string(), gather_head(logs, node, "woodcutting"))
+    } else if let Some(ore) = method.strip_prefix("gather:mining/") {
+        ("mining".to_string(), gather_head(ore, node, "mining"))
     } else if let Some(raw) = method.strip_prefix("cook/") {
         ("cook".to_string(), vec![raw.to_string()])
     } else if let Some(product) = method.strip_prefix("cook:") {
@@ -122,7 +119,9 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
             ("cook".to_string(), vec![recipe.to_string()])
         }
     } else if let Some(quest) = method.strip_prefix("quest:") {
-        (quest_script(quest).to_string(), Vec::new())
+        // An unknown quest key names no script: typed no-script, never
+        // a silent Cook's Assistant.
+        (quest_script(quest)?.to_string(), Vec::new())
     } else if let Some(area) = method.strip_prefix("access:") {
         // Safe areas are walk targets, not names: `goto`/`walkto` need
         // coordinates (a bare name fails Usage). Unknown area = None.
@@ -160,6 +159,21 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
             head.push(format!("{x},{z},{level}"));
         }
     }
+    // Quantity target of an obtain's production leg (`--want <item> N`,
+    // N = count minus what the bot holds, recorded at launch in
+    // `progress_current`): the script stops at N.
+    if let NodeKind::ObtainItems { item, .. } = &node.kind {
+        if !matches!(script.as_str(), "market" | "walkto" | "equip") && !script.starts_with("quest_") {
+            head.push("--want".to_string());
+            head.push(item.clone());
+            head.push(remaining(node).to_string());
+        }
+    }
+    // The site lies across the Al Kharid toll fence and the brain
+    // budgeted the fare (`place_on_site`): the run may pay the gate.
+    if node.toll && matches!(script.as_str(), "fishing" | "mining" | "woodcut" | "melee" | "ranged" | "magic") {
+        head.push("toll".to_string());
+    }
     head.extend(tail);
     Some((script, head))
 }
@@ -177,6 +191,22 @@ fn level_flag(node: &Node, skill: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Gatherer head: the resource first, then the tranche's level target.
+fn gather_head(resource: &str, node: &Node, skill: &str) -> Vec<String> {
+    let mut head = vec![resource.to_string()];
+    head.extend(level_flag(node, Some(skill)));
+    head
+}
+
+/// Units an obtain still needs: its count minus what the bot held at
+/// launch (`progress_current`), at least 1.
+fn remaining(node: &Node) -> i64 {
+    match &node.kind {
+        NodeKind::ObtainItems { count, .. } => (*count - node.progress_current.max(0)).max(1),
+        _ => 1,
+    }
+}
+
 /// Fight scripts: the spot first (positional), then the level target.
 fn fight_head(spot: &str, node: &Node) -> Vec<String> {
     let mut head = vec![spot.to_string()];
@@ -184,9 +214,11 @@ fn fight_head(spot: &str, node: &Node) -> Vec<String> {
     head
 }
 
+/// Item and units a purchase or sale leg moves: what is still missing,
+/// never the whole node count (the bot may hold part of it).
 fn obtain_pair(node: &Node) -> Option<(String, String)> {
     match &node.kind {
-        NodeKind::ObtainItems { item, count } => Some((item.clone(), count.to_string())),
+        NodeKind::ObtainItems { item, .. } => Some((item.clone(), remaining(node).to_string())),
         _ => None,
     }
 }
@@ -203,7 +235,7 @@ fn cook_raw(product: &str) -> String {
 }
 
 /// True when the dump sews `product` from leather (the `craft:` router).
-fn is_leather_recipe(product: &str) -> bool {
+pub(crate) fn is_leather_recipe(product: &str) -> bool {
     !lifescape_gamedata::recipes::making(product, Some("leather")).is_empty()
 }
 
@@ -228,14 +260,17 @@ fn spin_input(product: &str) -> String {
 /// brain abandons typed (no-script) instead of hunting chickens for an
 /// egg or a pickaxe.
 fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
-    if resource.starts_with("raw_") {
-        return Some(("fishing".to_string(), Vec::new()));
+    // The fish itself rides as the target (`fishing raw_trout`): the
+    // script works that tier's water, never the best tier its level
+    // opens (b8jxrdd2: a trout quota bait-fished pike at fishing 50).
+    if is_fish(resource) {
+        return Some(("fishing".to_string(), vec![resource.to_string()]));
     }
     if resource.ends_with("_logs") || resource == "logs" {
-        return Some(("woodcut".to_string(), Vec::new()));
+        return Some(("woodcut".to_string(), vec![resource.to_string()]));
     }
     if resource.ends_with("_ore") || resource == "coal" || resource == "clay" {
-        return Some(("mining".to_string(), Vec::new()));
+        return Some(("mining".to_string(), vec![resource.to_string()]));
     }
     // Rune essence is mined only through Aubury's teleport (`essence:`).
     if resource == "blankrune" {
@@ -244,30 +279,26 @@ fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
     spot_for_drop(resource).map(|spot| ("melee".to_string(), vec![spot]))
 }
 
-/// Combat spot whose NPCs drop `item` (debug-name prefix match: the
-/// `goblin_greenarmour` drop row meets the `goblins` spot hunting plain
-/// `goblin`s): the weakest UNGATED one (`all_spots` is weakest first).
-/// Gated spots never farm: the brain never passes `toll`, and a bare key
-/// never walks underground (`kit::hunt::run_spot_with` refuses both with
-/// a Usage). Live 2026-11-13: the first dropper by name sent "produce
-/// bones" to al_kharid_warriors across the toll fence, magic staffs to
-/// the moss giants. None when no ungated F2P spot hunts a dropper.
-fn spot_for_drop(item: &str) -> Option<String> {
-    let obj = lifescape_gamedata::objs_by_name(item).into_iter().next()?;
-    let npcs: Vec<String> = lifescape_gamedata::drops::drops_for_obj(obj.obj_id)
-        .into_iter()
-        .filter(|drop| drop.npc_id >= 0)
-        .map(|drop| drop.npc)
-        .collect();
-    lifescape_gamedata::combat_spots::all_spots()
-        .into_iter()
-        .filter(|spot| spot.access.is_none() && spot.entrance.is_none())
-        .find(|spot| npcs.iter().any(|npc| spot.npc_names.iter().any(|hunted| npc.starts_with(hunted))))
-        .map(|spot| spot.key.to_string())
+/// True when `item` is an F2P catch (a fishing tier's product): raw
+/// beef and raw chicken are drops, never fish.
+pub(crate) fn is_fish(item: &str) -> bool {
+    lifescape_gamedata::fishing::all_fish_tiers().iter().any(|tier| !tier.product_members && tier.products.contains(&item))
 }
 
-fn quest_script(quest: &str) -> &'static str {
-    match quest {
+/// Combat spot whose NPCs drop `item` (`gamedata::combat_spots::drop_spots`):
+/// the weakest UNGATED one first; a spot behind the Al Kharid toll only
+/// when no ungated spot drops it (the site pick then budgets the fare
+/// and the launch carries `toll`). Never underground, behind a key or a
+/// boat (`kit::hunt::run_spot_with` refuses a bare key underground).
+/// Live 2026-11-13: the first dropper by name sent "produce bones" to
+/// al_kharid_warriors across the fence and magic staffs to the moss
+/// giants. None when no such F2P spot hunts a dropper.
+pub(crate) fn spot_for_drop(item: &str) -> Option<String> {
+    lifescape_gamedata::combat_spots::drop_spots(item).first().map(|spot| spot.key.to_string())
+}
+
+fn quest_script(quest: &str) -> Option<&'static str> {
+    Some(match quest {
         "cook" => "quest_cooks_assistant",
         "sheep" => "quest_sheep_shearer",
         "hetty" => "quest_witchs_potion",
@@ -286,8 +317,8 @@ fn quest_script(quest: &str) -> &'static str {
         "priest" => "quest_restless_ghost",
         "vampire" => "quest_vampire_slayer",
         "prince" => "quest_prince_ali_rescue",
-        _ => "quest_cooks_assistant",
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -400,7 +431,8 @@ mod tests {
             let (mapped, args) = map_method(method, &obtain(), None).unwrap_or_else(|| panic!("{method} maps"));
             assert_eq!(mapped, script, "{method} names {script}");
             if resource.is_empty() {
-                assert_eq!(args, vec!["--node".to_string(), "n9".to_string()], "{method} takes no resource, got {args:?}");
+                // No resource positional: only the obtain's quantity target.
+                assert_eq!(args, vec!["--want".to_string(), "feather".to_string(), "2000".to_string(), "--node".to_string(), "n9".to_string()], "{method} takes no resource, got {args:?}");
             } else {
                 assert_eq!(args.first().map(String::as_str), Some(resource), "{method} carries {resource} first, got {args:?}");
             }
@@ -430,6 +462,65 @@ mod tests {
         assert!(!args.contains(&"--level".to_string()), "combat level is no skill, got {args:?}");
         let (_, args) = map_method("fight:melee/chickens", &obtain(), None).expect("farm maps");
         assert!(!args.contains(&"--level".to_string()));
+    }
+
+    /// b8jxrdd2 (live 2026-11-13): a trout quota launched a bare
+    /// `fishing` that bait-fished pike at level 50. The fish rides as the
+    /// target; raw beef is a cow drop, never a fishing run.
+    #[test]
+    fn fish_farms_name_their_fish_and_meat_hunts() {
+        let trout = Node::new("n9", NodeKind::ObtainItems { item: "raw_trout".to_string(), count: 100 }, Vec::new(), 100);
+        let (script, args) = map_method("farm:raw_trout", &trout, None).expect("trout maps");
+        assert_eq!(script, "fishing");
+        assert_eq!(args.first().map(String::as_str), Some("raw_trout"), "the fish rides first, got {args:?}");
+        assert!(args.windows(3).any(|window| window == ["--want", "raw_trout", "100"]), "quantity target, got {args:?}");
+        let beef = Node::new("n9", NodeKind::ObtainItems { item: "raw_beef".to_string(), count: 10 }, Vec::new(), 10);
+        let (script, args) = map_method("farm:raw_beef", &beef, None).expect("beef maps");
+        assert_eq!((script.as_str(), args.first().map(String::as_str)), ("melee", Some("cows")), "got {args:?}");
+    }
+
+    /// Args contract 2026-11-13: gatherers get their resource first, an
+    /// obtain asks only what is still missing (`--want`), purchases move
+    /// the missing units, an unknown quest names no script.
+    #[test]
+    fn launches_carry_the_exact_order() {
+        let mut ore = Node::new("n9", NodeKind::ObtainItems { item: "copper_ore".to_string(), count: 100 }, Vec::new(), 100);
+        ore.progress_current = 40;
+        let (script, args) = map_method("farm:copper_ore", &ore, None).expect("mining maps");
+        assert_eq!((script.as_str(), args[0].as_str()), ("mining", "copper_ore"));
+        assert!(args.windows(3).any(|window| window == ["--want", "copper_ore", "60"]), "got {args:?}");
+        let climb = Node::new("n4", NodeKind::ReachLevel { skill: "mining".to_string(), level: 20 }, Vec::new(), 20);
+        let (_, args) = map_method("gather:mining/iron_ore", &climb, None).expect("maps");
+        assert_eq!(args[0], "iron_ore", "the tranche's ore rides first: {args:?}");
+        assert!(!args.contains(&"--want".to_string()), "a climb has no quantity");
+        let mut shears = Node::new("n5", NodeKind::ObtainItems { item: "shears".to_string(), count: 3 }, Vec::new(), 3);
+        shears.progress_current = 1;
+        let (_, args) = map_method("shop:buy", &shears, None).expect("shop maps");
+        assert_eq!(&args[..3], &["shopbuy".to_string(), "shears".to_string(), "2".to_string()]);
+        assert!(map_method("quest:no_such_quest", &shears, None).is_none(), "unknown quest: no script");
+    }
+
+    /// A site across the toll fence with the fare budgeted launches with
+    /// `toll` (the scripts pay the gate); never without the flag.
+    #[test]
+    fn a_tolled_node_launches_with_toll() {
+        let mut climb = Node::new("n4", NodeKind::ReachLevel { skill: "attack".to_string(), level: 20 }, Vec::new(), 20);
+        let (_, args) = map_method("fight:melee/cows", &climb, None).expect("melee maps");
+        assert!(!args.contains(&"toll".to_string()), "no fare budgeted, no toll: {args:?}");
+        climb.toll = true;
+        let (_, args) = map_method("fight:melee/cows", &climb, None).expect("melee maps");
+        assert_eq!(args[0], "cows", "the spot stays first");
+        assert!(args.contains(&"toll".to_string()), "got {args:?}");
+        let mut gold = Node::new("n5", NodeKind::ObtainItems { item: "gold_ore".to_string(), count: 100 }, Vec::new(), 100);
+        gold.site = Some((3294, 3287, 0));
+        gold.toll = true;
+        let (script, args) = map_method("farm:gold_ore", &gold, None).expect("mining maps");
+        assert_eq!(script, "mining");
+        assert!(args.contains(&"toll".to_string()) && args.contains(&"3294,3287,0".to_string()), "got {args:?}");
+        // Bones: chickens first; the toll-gated warriors only rank last.
+        let bones: Vec<&str> = lifescape_gamedata::combat_spots::drop_spots("bones").iter().map(|spot| spot.key).collect();
+        assert_eq!(bones.first(), Some(&"chickens"));
+        assert_eq!(bones.last(), Some(&"al_kharid_warriors"), "toll spots legal but last: {bones:?}");
     }
 
     #[test]

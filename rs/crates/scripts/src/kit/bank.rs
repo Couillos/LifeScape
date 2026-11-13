@@ -355,6 +355,17 @@ pub fn bank_trip(
             keep.push(lamp);
         }
     }
+    // A paid run (`toll`) keeps the fare in the pack: the guard takes it
+    // from the inventory, never from the bank (`kit::toll`).
+    let mut withdraw_coins = withdraw_coins;
+    if bot.allow_paid {
+        if let Ok(coins) = obj_id(bot, "coins") {
+            if !keep.contains(&coins) {
+                keep.push(coins);
+            }
+            withdraw_coins = withdraw_coins.max(crate::kit::toll::fare_short(pack_total(bot, coins)));
+        }
+    }
     let bank_x = bank.x as i32;
     let bank_z = bank.z as i32;
     let bank_level = bank.level as i32;

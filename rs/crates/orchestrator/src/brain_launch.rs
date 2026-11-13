@@ -224,6 +224,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         // one spell (`brain_stuck`): noted once, goal closed and redrawn,
         // else the cooldown revive, else the operator decides.
         GraphState::Stuck { abandoned } => {
+            // Before any ban (user decision 2026-11-13): an item on the
+            // failed path the market can sell is bought instead.
+            if crate::brain_rescue::market_rescue(job, &mut life, &live) {
+                save_or_log(&life);
+                return;
+            }
             if crate::brain_stuck::on_stuck(&mut life, &live, &abandoned) || dirty {
                 save_or_log(&life);
             }
@@ -278,10 +284,19 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         save_or_log(&life);
         return;
     }
+    // Quests the bot finished (engine save + done quest nodes): a quest
+    // node already complete closes, a method behind a missing quest never
+    // launches (the resolver plans the quest first).
+    let quests_done = crate::brain_rescue::quests_done(&life);
+    if crate::brain_rescue::close_done_quest(&mut life, position, &quests_done) {
+        save_or_log(&life);
+        return;
+    }
     let mut ctx = {
         let node = life.nodes[position].clone();
         ready_ctx(&life, &node)
     };
+    ctx.quests_done = quests_done;
     // Own wallet gates the market leg (same coverage rule as the
     // carnet): a broke bot farms instead of placing doomed orders.
     // Carried tools gate the gather legs the same way (t04: rod-less
@@ -439,6 +454,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         NodeKind::SpaceCleanup => Some((0, 6000)),
         _ => None,
     };
+    // The held units ride as the obtain's progress: the launch asks only
+    // what is still missing (`--want <item> N`, shopbuy, sell legs).
+    if matches!(life.nodes[launch].kind, NodeKind::ObtainItems { .. }) {
+        lifescape_planner::record_progress(&mut life, launch, ctx.held);
+    }
     let node_snapshot = life.nodes[launch].clone();
     // A market buy needs no worker (PRD3 lot 4): the brain places the
     // bid on the daemon market and the node waits for the fill.

@@ -67,12 +67,15 @@ fn method_sites(method: &str) -> Option<(&'static str, String)> {
     } else if let Some(rest) = method.strip_prefix("fight:") {
         ("fight", rest.rsplit('/').next().unwrap_or(rest))
     } else if let Some(item) = method.strip_prefix("farm:") {
-        if item.starts_with("raw_") {
+        if crate::mapping::is_fish(item) {
             ("fishing", item)
         } else if item.ends_with("_ore") || item == "coal" || item == "clay" {
             ("mining", item)
         } else if item.ends_with("logs") {
             ("woodcut", item)
+        } else if let Some(spot) = crate::mapping::spot_for_drop(item) {
+            // A drop farm hunts its spot: the spot's spawns are its sites.
+            return Some(("fight", spot));
         } else {
             return None;
         }
@@ -157,6 +160,12 @@ pub enum SitePick {
     Anywhere,
     /// The nearest site this bot works safely (x, z, level).
     At((i64, i64, i64)),
+    /// Only across the Al Kharid toll fence: the fare is budgeted (or
+    /// free), the launch carries `toll`.
+    Tolled((i64, i64, i64)),
+    /// Only across the toll fence and the wallet lacks the fare: these
+    /// coins are the need (`missing:coins:N`).
+    Fare(i64),
     /// No site is safe at this combat level: train to this level first
     /// (`NEVER`: no level ever makes one safe, the method is unworkable).
     Needs(u8),
@@ -183,10 +192,38 @@ fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<((i64, i64, i64)
     table
 }
 
-/// The brain's site choice for one method: among the sites this combat
-/// level works safely (site and bank), the nearest to the bot; else the
-/// level the least demanding site needs.
+/// What the bot can spend on the Al Kharid toll: its wallet (pack and
+/// bank) and whether Prince Ali Rescue made the crossing free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fare {
+    pub wallet: i64,
+    pub free_pass: bool,
+}
+
+impl Fare {
+    /// The fare a ready node can spend: its wallet, and the free pass
+    /// when the bot finished Prince Ali Rescue.
+    pub fn of(ctx: &crate::expand::ReadyCtx) -> Fare {
+        Fare { wallet: ctx.coins, free_pass: ctx.quests_done.iter().any(|quest| quest == lifescape_gamedata::toll::FREE_PASS_QUEST) }
+    }
+
+    fn covered(&self) -> bool {
+        self.free_pass || self.wallet >= lifescape_gamedata::toll::FARE
+    }
+}
+
+/// `pick_site_paid` for a broke bot without the free pass: across the
+/// toll fence only as a fare need (side goals, offline checks).
 pub fn pick_site(method: &str, combat: u8, position: Option<(i64, i64, i64)>) -> SitePick {
+    pick_site_paid(method, combat, position, Fare { wallet: 0, free_pass: false })
+}
+
+/// The brain's site choice for one method: among the sites this combat
+/// level works safely (site and bank), the nearest on the bot's side of
+/// the toll fence; else the nearest across it when the fare is covered
+/// (`Tolled`), else the fare as the need (`Fare`); with no safe site at
+/// all, the level the least demanding site needs.
+pub fn pick_site_paid(method: &str, combat: u8, position: Option<(i64, i64, i64)>, fare: Fare) -> SitePick {
     let Some(table) = method_site_table(method) else {
         return SitePick::Anywhere;
     };
@@ -194,11 +231,21 @@ pub fn pick_site(method: &str, combat: u8, position: Option<(i64, i64, i64)>) ->
         Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },
         None => 0,
     };
-    match table.iter().filter(|(_, required)| *required <= combat).min_by_key(|(site, _)| distance(site)) {
-        Some((site, _)) => SitePick::At(*site),
+    let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
+    let safe: Vec<(i64, i64, i64)> = table.iter().filter(|(_, required)| *required <= combat).map(|(site, _)| *site).collect();
+    if let Some(site) = safe.iter().filter(|site| !across(site)).min_by_key(|site| distance(site)) {
+        return SitePick::At(*site);
+    }
+    match safe.iter().min_by_key(|site| distance(site)) {
+        Some(site) if fare.covered() => SitePick::Tolled(*site),
+        Some(_) => SitePick::Fare(lifescape_gamedata::toll::FARE),
         None => SitePick::Needs(table.iter().map(|(_, required)| *required).min().unwrap_or(lifescape_gamedata::danger::NEVER)),
     }
 }
+
+#[cfg(test)]
+#[path = "combat_toll_tests.rs"]
+mod toll_tests;
 
 #[cfg(test)]
 mod tests {

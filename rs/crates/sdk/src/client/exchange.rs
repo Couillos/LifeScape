@@ -28,6 +28,11 @@ pub enum ExchangeOutcome {
     Untradeable,
     /// The partner's main-screen offer differs from the want lots.
     PartnerMismatch,
+    /// The main-screen window closed before both offers were verified:
+    /// nothing moved and nobody is wrong (a re-knock or a walk click
+    /// crossing the freshly opened window closes it, "Other player
+    /// declined trade."). The caller may meet again.
+    WindowClosed,
     /// The confirm screen differs from the agreed lots.
     ConfirmMismatch,
     /// The confirm window closed without the server's "Accepted trade.":
@@ -102,6 +107,17 @@ impl Bot {
         self.trade_offer(obj_id, count, timeout)
     }
 
+    /// Main-screen loop left without verified lots: a closed window is
+    /// no mismatch (live 2026-11-13, deals 1116 and 1124: the partner's
+    /// re-knock closed the window it had just opened, both sides
+    /// reported `mismatch` and the honest one lost its relist).
+    pub(crate) fn off_main_verdict(modal: Option<&str>) -> ExchangeOutcome {
+        match modal {
+            None => ExchangeOutcome::WindowClosed,
+            Some(_) => ExchangeOutcome::PartnerMismatch,
+        }
+    }
+
     pub(crate) fn offered_of(&self, obj_id: u16) -> u32 {
         self.world
             .inv
@@ -173,6 +189,9 @@ impl Bot {
         for (obj, count) in &full_give {
             let left = deadline.saturating_sub(self.world.ticks).max(1);
             if !self.offer_lot(*obj, *count, left.min(300))? {
+                if self.trade_modal().is_none() {
+                    return Ok(ExchangeOutcome::WindowClosed);
+                }
                 let _ = self.trade_close();
                 if Self::trade_refused(&self.world.messages, seen) {
                     return Ok(ExchangeOutcome::Untradeable);
@@ -198,8 +217,11 @@ impl Bot {
             self.pump(5)?;
         }
         if self.trade_modal() != Some("main") {
-            let _ = self.trade_close();
-            return Ok(ExchangeOutcome::PartnerMismatch);
+            let verdict = Self::off_main_verdict(self.trade_modal());
+            if verdict != ExchangeOutcome::WindowClosed {
+                let _ = self.trade_close();
+            }
+            return Ok(verdict);
         }
         let partner_now = self.trade_partner_offer();
         if !Self::lots_match(&partner_now, &full_want) {
@@ -284,6 +306,14 @@ fn lots_match_is_exact_on_both_screens() {
     assert!(!Bot::lots_match(&offered, &[(10, 6), (995, 100)]), "overpay refuses");
     assert!(Bot::lots_match(&HashMap::new(), &[]), "empty agrees with empty");
     assert!(!Bot::lots_match(&HashMap::new(), &[(10, 1)]), "empty never matches a lot");
+}
+
+/// Deals 1116/1124: the main screen closing under us is a closed
+/// window (meet again), never a partner mismatch.
+#[test]
+fn closed_main_screen_is_not_a_mismatch() {
+    assert_eq!(Bot::off_main_verdict(None), super::ExchangeOutcome::WindowClosed);
+    assert_eq!(Bot::off_main_verdict(Some("confirm")), super::ExchangeOutcome::PartnerMismatch, "moved on without us");
 }
 
 /// Refusal scope is the same discipline as the bank fan: fresh
