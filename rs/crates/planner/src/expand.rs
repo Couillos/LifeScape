@@ -107,8 +107,14 @@ fn next_id(counter: &mut usize) -> String {
     format!("n{}", *counter)
 }
 
+/// Reach tranches from the live level `from` (1 when unknown) to `to`:
+/// never a tranche at or below `from` (a level already held is never
+/// replayed), empty when the bot already holds `to`.
 pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String) -> Vec<Node> {
     let mut out = Vec::new();
+    if to <= from.max(1) {
+        return out;
+    }
     // Each tranche works the tier open at its START level (1→5 fishes
     // shrimp, 5→10 sardines): the tier unlocked at the target is out of
     // reach for the whole tranche (lobster needs 40 to train 35→40).

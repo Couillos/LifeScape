@@ -106,9 +106,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                 // `close` or `open` (redeploy). Retry uncounted, like `stopped`.
                 _ if crate::brain_grace::take_operator_stop(&job.account) || crate::brain_grace::first_idle_since_start(&job.account) => {
                     crate::logln!("brain {}: {active_id} idle after a daemon restart or an operator stop, retrying uncounted", job.account);
-                    life.nodes[position].status = NodeStatus::Ready;
-                    life.nodes[position].method = None;
-                    life.active = None;
+                    lifescape_planner::retry_uncounted(&mut life, position);
                     push_history(&mut life, &active_id, "stopped");
                 }
                 _ => {
@@ -215,6 +213,18 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
         return;
     };
+    // A climb the live levels already meet closes without a launch (live
+    // 2026-11-13: b8jxrdd2 ran "attack 10" at attack 45 for 18 015 ticks).
+    let level_of = |skill: &str| crate::brain_succession::live_level(&live, skill);
+    if let Some(reached) = lifescape_planner::reached_live(&life.nodes[position], &level_of, live_combat(&live)) {
+        let id = life.nodes[position].id.clone();
+        crate::logln!("brain {}: {id} {:?} already reached (live {reached}), done without launch", job.account, life.nodes[position].kind);
+        lifescape_planner::complete_node(&mut life, position, i64::from(reached));
+        push_history(&mut life, &id, "already_reached");
+        lifescape_planner::normalize(&mut life);
+        save_or_log(&life);
+        return;
+    }
     let mut ctx = {
         let node = life.nodes[position].clone();
         ready_ctx(&life, &node)
@@ -240,8 +250,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if let NodeKind::HaveCoins { amount } = life.nodes[position].kind {
         if ctx.coins >= amount {
             let id = life.nodes[position].id.clone();
-            life.nodes[position].status = NodeStatus::Done;
-            life.nodes[position].progress_current = ctx.coins;
+            lifescape_planner::complete_node(&mut life, position, ctx.coins);
             push_history(&mut life, &id, "goal_reached");
             crate::logln!("brain {}: {id} holds {} coins >= {amount}, done", job.account, ctx.coins);
             lifescape_planner::normalize(&mut life);
@@ -264,7 +273,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             lifescape_planner::record_contract_error(&mut life, position, &format!("resolve blocked: {reason}"));
             push_history(&mut life, &id, "abandoned");
         } else {
-            let fold = lifescape_planner::record_block(&mut life, position, &missing);
+            let level_of = |skill: &str| crate::brain_succession::live_level(&live, skill);
+            let fold = lifescape_planner::record_block_from(&mut life, position, &missing, &level_of);
             push_history(&mut life, &id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "blocked" });
         }
         crate::logln!("brain {}: {id} blocked at resolve ({reason}) -> {}", job.account, life.nodes[position].status.as_str());
@@ -298,12 +308,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // instead of launching; the planner never locks one on fresh resolves.
     if !lifescape_planner::launch_allowed(&method, life.profile.ironman) {
         crate::logln!("brain {}: refusing {method} for Ironman", job.account);
-        let node_id = life.nodes[launch].id.clone();
-        life.nodes[launch].status = NodeStatus::Ready;
-        life.nodes[launch].method = None;
-        if life.active.as_deref() == Some(node_id.as_str()) {
-            life.active = None;
-        }
+        lifescape_planner::retry_uncounted(&mut life, launch);
         let _ = save_life(&life);
         return;
     }

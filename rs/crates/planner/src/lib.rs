@@ -34,7 +34,7 @@ pub use chains::{
 pub use combat::{combat_level, goal_combat_style, min_combat_for_method, pick_site, training_method, BaseLevels, CombatError, SitePick};
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, method_feasible, required_tool, resolve_ready};
-pub use lifecycle::{graph_state, mark_launched, next_id, normalize, record_block, record_contract_error, record_failure, record_progress, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+pub use lifecycle::{complete_node, end_engagement, graph_state, insert_ready, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_progress, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 pub use goals::{append_goal, goal_skills, next_goal, stuck_skills, DONE_TAG, STUCK_TAG, TRAINABLE};
 pub use mapping::map_method;
 pub use model::{

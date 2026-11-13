@@ -258,9 +258,7 @@ pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
             counter = counter.max(number);
         }
     }
-    let mut node = Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0);
-    node.status = NodeStatus::Ready;
-    life.nodes.push(node);
+    lifescape_planner::insert_ready(life, Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0));
     true
 }
 

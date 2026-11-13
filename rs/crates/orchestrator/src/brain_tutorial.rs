@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 
 use lifescape_json::Value;
-use lifescape_planner::{next_id, Alternative, Life, Node, NodeKind, NodeStatus};
+use lifescape_planner::{complete_node, insert_ready, next_id, Alternative, Life, Node, NodeKind, NodeStatus};
 
 /// Island rectangles (surface and the two underground areas). The zone
 /// labels are wrong on parts of the island ("Wizards' Tower" at
@@ -55,11 +55,9 @@ pub fn ensure_tutorial_node(life: &mut Life) -> usize {
         return at;
     }
     let mut node = Node::new(&next_id(life), NodeKind::CompleteQuest { quest: "tutorial".to_string() }, Vec::new(), 1);
-    node.status = NodeStatus::Ready;
     node.method = Some("tutorial".to_string());
     node.alternatives.push(Alternative { method: "tutorial".to_string(), est_ticks: 6000, est_coins: 0 });
-    life.nodes.push(node);
-    life.nodes.len() - 1
+    insert_ready(life, node)
 }
 
 /// What the launch pass may do this pass.
@@ -94,10 +92,9 @@ pub fn tutorial_gate(life: &mut Life, live: &Value) -> TutorialGate {
         return TutorialGate::Launch(ensure_tutorial_node(life));
     }
     if let Some(at) = open {
-        let node = &mut life.nodes[at];
-        node.status = NodeStatus::Done;
-        node.progress_current = node.progress_target;
-        return TutorialGate::Closed(node.id.clone());
+        let target = life.nodes[at].progress_target;
+        complete_node(life, at, target);
+        return TutorialGate::Closed(life.nodes[at].id.clone());
     }
     TutorialGate::Clear
 }

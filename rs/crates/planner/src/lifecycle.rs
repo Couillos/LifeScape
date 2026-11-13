@@ -312,6 +312,58 @@ pub fn mark_launched(life: &mut Life, index: usize) {
     life.active = Some(life.nodes[index].id.clone());
 }
 
+/// A node whose target is met on positive proof (its report, the
+/// holdings after a market fill, the wallet, the live level, the bot
+/// seen off the island): done, lock released, its engagement over.
+/// `progress` is the caller's proof (level, held count, coins).
+pub fn complete_node(life: &mut Life, index: usize, progress: i64) {
+    release_active(life, index);
+    if life.engagement.as_ref().is_some_and(|engaged| engaged.node == life.nodes[index].id) {
+        life.engagement = None;
+    }
+    let node = &mut life.nodes[index];
+    node.status = NodeStatus::Done;
+    node.progress_current = progress;
+}
+
+/// Back to ready without spending any budget: operator stop, daemon
+/// restart, a partial market fill, a stale lock refused at launch. The
+/// method drops so the next pass resolves afresh.
+pub fn retry_uncounted(life: &mut Life, index: usize) {
+    release_active(life, index);
+    let node = &mut life.nodes[index];
+    node.status = NodeStatus::Ready;
+    node.method = None;
+}
+
+/// An engagement window ended (`budget_exhausted` short of the goal):
+/// money closes (one engagement is the task), every other node retries.
+pub fn end_engagement(life: &mut Life, index: usize) {
+    release_active(life, index);
+    let mut counter = 0;
+    replan_node(&mut life.nodes[index], &ReplanCause::EngagementEnd, &[], &mut counter);
+}
+
+/// Live proof that a climb is already over: `Some(level)` when the live
+/// level (`level_of`, 1 when unknown) or combat level meets the target of
+/// a `reach_level` / `reach_combat` node. Pure decision; the brain closes
+/// the node with `complete_node`, never launching a replayed tranche.
+pub fn reached_live(node: &Node, level_of: &dyn Fn(&str) -> u8, combat: u8) -> Option<u8> {
+    match &node.kind {
+        NodeKind::ReachLevel { skill, level } => Some(level_of(skill)).filter(|live| live >= level),
+        NodeKind::ReachCombat { level } => Some(combat).filter(|live| live >= level),
+        _ => None,
+    }
+}
+
+/// File a node that runs at once (space janitor, tutorial): ready on
+/// arrival, no dependency. Returns its index.
+pub fn insert_ready(life: &mut Life, mut node: Node) -> usize {
+    node.status = NodeStatus::Ready;
+    life.nodes.push(node);
+    life.nodes.len() - 1
+}
+
 /// A runtime failure (`Failed`, `Sdk`, bad exit): counted, retried with a
 /// fresh resolve until `MAX_FAILURES`, then abandoned.
 pub fn record_failure(life: &mut Life, index: usize, error: &str) -> FailureFold {
@@ -352,10 +404,18 @@ pub fn record_progress(life: &mut Life, index: usize, current: i64) {
     node.progress_current = current;
 }
 
+/// `record_block_from` with every live level unknown (level 1): offline
+/// replays and tests. The brain passes the live levels.
+pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
+    record_block_from(life, index, missing, &|_| 1)
+}
+
 /// A blocked stop: the node waits on one `obtain_items` per missing
 /// item, reusing an open obtain for the same item instead of stacking
-/// duplicates. Past `MAX_BLOCKS` the node is abandoned.
-pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
+/// duplicates. A missing skill level climbs from `level_of` (the live
+/// level): never a tranche the bot already holds. Past `MAX_BLOCKS` the
+/// node is abandoned.
+pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8) -> FailureFold {
     release_active(life, index);
     let blocks = life.nodes[index].blocks.saturating_add(1);
     life.nodes[index].blocks = blocks;
@@ -423,7 +483,7 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
                     let mut after = String::new();
-                    let chain = crate::expand::reach_chain(&skill, 1, level, &mut counter, &mut after);
+                    let chain = crate::expand::reach_chain(&skill, level_of(&skill), level, &mut counter, &mut after);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -464,3 +524,7 @@ mod tests;
 #[cfg(test)]
 #[path = "lifecycle_revive_tests.rs"]
 mod revive_tests;
+
+#[cfg(test)]
+#[path = "lifecycle_moves_tests.rs"]
+mod moves_tests;
