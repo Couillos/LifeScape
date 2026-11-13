@@ -155,3 +155,10 @@ donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
 accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
 terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
 combat (`CycleState::begin`).
+
+Lecture des ordres : `cycle::parse_order` (positionnel ressource des
+scripts de production via `split_resource`, puis `parse_cli`). Le test
+`every_mapped_order_parses_in_its_script` traduit chaque méthode de
+`planner::mapping` (obtention avec `--want`/`--site`/`toll`, montée de
+niveau) et vérifie que le script nommé est enregistré et accepte ses
+arguments. Pièces manquantes : `blocked{coins:N}`.
