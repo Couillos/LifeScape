@@ -9,19 +9,12 @@
 # 1. longue marche meme niveau en exterieur (Lumbridge -> Varrock est).
 longue_marche | 3222,3222,0 | 3250,3420,0 | - | reachable ; walk_tiles<=400
 # 2. entree par une porte fermee (1530 angle EST, stand est valide).
-# L'ancien or (chateau 1516/1519, angle OUEST) exigeait l'impossible :
-# ces portes doubles ne se cliquent que depuis l'ouest (moteur : mur
-# droit angle 0, stands valides ouest/nord/sud), or l'ouest est a
-# l'interieur et nord/sud impraticables. Donjon scelle depuis
-# l'exterieur dans cette revision ; l'entree demandera une decision
-# contenu (angles de la carte). La regression est figee en 16.
+# L'entree du chateau (doubles portes 1516/1519) est figee en 16.
 entree_1530 | 3228,3214,0 | 3224,3214,0 | - | reachable ; uses_loc=1530 ; doors<=1
 # 3. montee 0>1>2 par echelles (tour est du chateau, 1747 puis 1748).
-# L'ancien or (escaliers du chateau) exigeait l'entree scellee (voir 2).
 etages_echelle | 3228,3215,0 | 3229,3212,2 | - | reachable ; rides>=2 ; levels=0>1>2
-# 4. descente de trappe vers un donjon (+6400). L'ancien or (cellier du
-# chateau 3209,9616) demarrait dans le donjon scelle (voir 2) ; la
-# mecanique est la meme ici (trappe 1568, open_to 1570, delta +6400).
+# 4. descente de trappe vers un donjon (+6400) (trappe 1568, open_to
+# 1570, delta +6400).
 # Pas de sortie dans le dump pour ce donjon (ni 9616, ni egouts 9858) :
 # le prober phase 7 devra la decouvrir en live (ne pas l'inventer).
 cave_trappe | 3097,3469,0 | 3097,9868,0 | - | reachable ; rides>=1 ; levels=0
@@ -60,16 +53,25 @@ isolee_entrana | 2820,3357,0 | 3222,3222,0 | - | unreachable=Disconnected
 bk_porte3_nord | 3025,3512,1 | 3025,3511,1 | - | reachable ; walk_tiles<=1
 # 15. rempart 1530 : le plan contourne sans ouvrir de porte.
 rempart_1530 | 3224,3223,0 | 3228,3226,0 | - | reachable ; doors<=0 ; walk_tiles>=6 ; avoids=3226,3223
-# 16. regression donjon scelle : les doubles portes 1516/1519 (mur droit
-# angle OUEST) ne se cliquent que depuis l'ouest, soit l'interieur.
-# L'entree du chateau est impossible dans cette revision (stand
-# orthogonal valide requis, aucun praticable depuis l'exterieur).
-# Borne F2P (comme les bots) : la recherche s'epuise (~239k visites) et
-# prouve le scelle ; le monde membres entier depasse MAX_VISITS, la
-# coupe y repond BudgetExhausted (avant : Disconnected sur la coupe).
-chateau_scell | 3219,3218,0 | 3215,3218,0 | f2p | unreachable=Disconnected
+# 16. entree du chateau de Lumbridge par sa porte (decision utilisateur
+# 2026-11-13 : le chateau a une vraie porte ; le portail des remparts est
+# toujours ouvert, cosmetique, pas une loc). Doubles portes 1516 (gauche,
+# (3217,3218)) / 1519 (droite, (3217,3219)), mur droit angle OUEST, op1
+# Open sans controle de cote (doubledoors.rs2 : open_double_doors_left
+# ouvre aussi le battant oppose). reachWall1 angle OUEST accepte le stand
+# nord (3217,3219) pour 1516 (tuile du battant 1519, marchable depuis
+# l'est, sans BLOCK_NORTH) : clic depuis l'exterieur, traversee a l'ouest.
+# Avant : override one_way « passable_from: west » (sans appui serveur)
+# scellait le chateau, NoRoute exhaustif 3-9 s (melee men/dark_wizards,
+# ~50/h).
+chateau_entree | 3219,3218,0 | 3215,3218,0 | f2p | reachable ; uses_loc=1516 ; doors<=1 ; walk_tiles<=4
+# 16b. live dark_wizards/men : du sud de Lumbridge au voisin interieur de
+# la porte (3216,3218), et de Draynor au centre de cluster men (3215,3225,
+# porte 1536 entre deux salles interieures).
+chateau_sud_interieur | 3216,3203,0 | 3216,3218,0 | f2p | reachable ; uses_loc=1516 ; doors<=1 ; walk_tiles<=25
+chateau_draynor_men | 3092,3242,0 | 3215,3225,0 | f2p | reachable ; doors<=2 ; walk_tiles<=200
 # 17. banque Draynor -> chateau de Lumbridge : route directe par le nord
-# (contournement du manoir puis du chateau scelle), jamais par le marais
+# (contournement du manoir puis du chateau), jamais par le marais
 # au sud-ouest. Le crochet "par le marais puis retour vers l'est" vu en
 # live venait de l'ancien executeur local, pas du planificateur : cette
 # ligne fige le plan direct (cout + tuile coeur du marais intouchable).
@@ -91,8 +93,7 @@ traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
 # exterieur (3076,3426), la sortie marche jusqu'au stand est (3077,3427,
 # bord EST ouvert, prouve live) puis clique (ouverture silencieuse) et
 # traverse aussitot vers le sud (re-fermeture auto ~500 ticks : passer
-# vite). Comme les doubles portes 1516/1519 (voir 16), une porte sans
-# stand atteignable reste scellee.
+# vite). Une porte sans stand atteignable reste scellee.
 peksa_entree | 3076,3424,0 | 3075,3429,0 | - | reachable ; uses_loc=1530 ; doors<=1
 peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3077,3427
 # 22-23. guichet de la banque ouest de Falador (booth 2945,3367, angle 2) :

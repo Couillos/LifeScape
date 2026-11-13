@@ -20,20 +20,6 @@
   ],
   "one_way_doors": [
     {
-      "loc": 1516,
-      "at": [3217, 3218, 0],
-      "passable_from": "west",
-      "reason": "castle double door west leaf: clicks only from the west (interior), dungeon sealed from the exterior in this revision (route chateau_scell); entry needs a content decision on the map angles",
-      "verified": "2026-11-11"
-    },
-    {
-      "loc": 1519,
-      "at": [3217, 3219, 0],
-      "passable_from": "west",
-      "reason": "castle double door east leaf: same as 1516, west leaf pair (3217,3218), sealed from the exterior",
-      "verified": "2026-11-11"
-    },
-    {
       "loc": 134,
       "at": [3108, 3353, 0],
       "passable_from": "not-north",

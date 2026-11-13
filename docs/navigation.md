@@ -69,6 +69,20 @@ qui l'effleure comprise) coûte `DOOR_LEAF_STEP_COST` (10) de plus, dans
 contourne quand un détour court existe, traverse sinon. Goldens
 `porte_port_sarim_*`, `porte_lumbridge_sud` (assertion `never_steps=`).
 
+Doubles portes (catégories `door_left_closed`/`door_right_closed`,
+`doubledoors.rs2`) : op1 ouvre les deux battants, sans contrôle de côté.
+Château de Lumbridge (décision utilisateur 2026-11-13 : vraie porte, le
+portail des remparts est toujours ouvert, cosmétique, jamais une loc) :
+1516 (3217,3218) / 1519 (3217,3219), mur droit angle OUEST. Depuis
+l'extérieur, le stand est la tuile du battant voisin (reachWall1 angle
+OUEST : stand nord/sud valide sans BLOCK_NORTH/SOUTH), ex. clic 1516
+depuis (3217,3219) puis traversée à l'ouest. Les anciens overrides
+`one_way_doors` « passable_from: west » (sans appui serveur) scellaient
+le château : NoRoute exhaustif 3-9 s (men/dark_wizards, ~50/h). Un
+override `one_way_doors` exige une preuve contenu (refus scripté de côté,
+ex. `haunteddoorl`). Goldens `chateau_entree`, `chateau_sud_interieur`,
+`chateau_draynor_men`.
+
 Destination bloquée (guichet, comptoir, arbre, eau) : le plan finit sur
 la tuile de repli de meilleur rang (`Tile::fallback_rank`) : niveau,
 puis Chebyshev, puis `fallback::walled_off` (voisin séparé de la cible
