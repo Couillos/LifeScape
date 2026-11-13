@@ -18,6 +18,8 @@ use crate::kit::pack::free_slots;
 use crate::kit::survival::{check_events, hitpoints};
 use crate::skill_walk::walk_checked;
 use crate::kit::bans::{same_side, BanSet};
+use crate::kit::ammo::{resolve as resolve_weapon_refusal, weapon_refusal, AmmoFix};
+use crate::kit::strike::{attack_npc, foe_refusal, reattack_ticks, FoeRefusal};
 use crate::ScriptError;
 
 /// True when the fight started since the click: xp flowing, hp taken,
@@ -68,32 +70,6 @@ const MAX_COLD_CLICKS: u32 = 40;
 /// True once the cold-click budget is spent: ban and repick.
 fn cold_clicks_spent(cold: u32) -> bool {
     cold >= MAX_COLD_CLICKS
-}
-
-/// Server refusal of an attack click (player_combat.rs2), by what the
-/// bot should do about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FoeRefusal {
-    /// "I can't reach that": one door-aware step may burn the door and
-    /// prove it uncrossable (excluded for the whole fight).
-    Unreachable,
-    /// Someone else holds the foe (or holds us): skip it, never step
-    /// toward it.
-    Taken,
-}
-
-fn foe_refusal(line: &str) -> Option<FoeRefusal> {
-    let lowered = line.to_lowercase();
-    if lowered.contains("can't reach that") {
-        Some(FoeRefusal::Unreachable)
-    } else if lowered.contains("already under attack")
-        || lowered.contains("someone else is fighting")
-        || lowered.contains("not after you")
-    {
-        Some(FoeRefusal::Taken)
-    } else {
-        None
-    }
 }
 
 /// One foe never holds the bot longer than this, xp trickle or not: a normal
@@ -213,6 +189,34 @@ pub fn fight(
                     bot.world.messages.get(seen_msgs..).unwrap_or(&[]).iter().filter_map(|line| foe_refusal(line)).collect();
                 let (foe_x, foe_z) =
                     bot.world.npcs.get(&slot).map(|npc| (npc.x, npc.z)).unwrap_or((bot.world.x, bot.world.z));
+                // Weapon refusal (empty quiver, wrong ammo): the click is
+                // refused every time, so fix the kit instead of clicking
+                // (will_field live: melee run, shortbow, minutes of "no
+                // ammo"). Melee re-plans its weapon, ranged reloads,
+                // banks or blocks typed.
+                let weapon_refused = bot.world.messages.get(seen_msgs..).unwrap_or(&[]).iter().find_map(|line| weapon_refusal(line));
+                if let Some(refusal) = weapon_refused {
+                    seen_msgs = bot.world.messages.len();
+                    target_npc = None;
+                    attempts = 0;
+                    progress_at = bot.world.ticks;
+                    match resolve_weapon_refusal(bot, refusal, no_bank)? {
+                        AmmoFix::Resume => continue,
+                        AmmoFix::BankTrip => return Ok((kills, true, false)),
+                    }
+                }
+                // Proactive twin of the Taken refusal: the foe started
+                // fighting someone else while we walked up (it faces
+                // another player, or took a hit that was not ours: our
+                // own first hit moves our xp, so xp flowing never counts).
+                if !fighting && combat_xp(bot) == acquire_xp && bot.npc_engaged_by_other(slot) {
+                    bot.log(&format!("npc {slot} at ({foe_x},{foe_z}) engaged by another player, skipping"));
+                    unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
+                    target_npc = None;
+                    attempts = 0;
+                    progress_at = bot.world.ticks;
+                    continue;
+                }
                 if !refusals.is_empty() {
                     unreachable.ban_for((foe_x, foe_z), bot.world.ticks, BLOCKED_BAN_TICKS);
                     // The step toward a door-blocked foe re-burns the door
@@ -330,7 +334,9 @@ pub fn fight(
                         // silently converted to walks and prove nothing, so
                         // they must not burn the cold-click budget (the
                         // approach above is still closing).
-                        attack_npc(bot, slot)?;
+                        if !attack_npc(bot, slot, no_bank)? {
+                            return Ok((kills, true, false));
+                        }
                         last_attack = bot.world.ticks;
                         cold_clicks += 1;
                         if cold_clicks_spent(cold_clicks) {
@@ -344,7 +350,9 @@ pub fn fight(
                         }
                     }
                 } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= reattack_ticks(bot) {
-                    attack_npc(bot, slot)?;
+                    if !attack_npc(bot, slot, no_bank)? {
+                        return Ok((kills, true, false));
+                    }
                     last_attack = bot.world.ticks;
                 }
                 prev_hp = hitpoints(bot);
@@ -478,40 +486,6 @@ pub fn budget_left(ticks_limit: u64, started: u64, now: u64) -> u64 {
         return 0;
     }
     ticks_limit.saturating_sub(now.saturating_sub(started))
-}
-
-/// One attack on `slot` for the run's combat style (PRD3 lot 6). Melee
-/// and ranged click Attack: the server shoots when a bow and arrows are
-/// worn. Magic casts the strongest damage spell the pack funds; no runes
-/// left blocks typed so the brain files the runes as an obtain.
-fn attack_npc(bot: &mut Bot, slot: u16) -> Result<(), ScriptError> {
-    if bot.combat_style == "magic" {
-        let Some(spell) = crate::activities::magic_style::castable_spell(bot) else {
-            bot.log("out of runes for any damage spell");
-            return Err(ScriptError::Blocked { missing: vec!["mindrune".to_string(), "airrune".to_string()] });
-        };
-        let com = crate::kit::magic::spell_com(bot, spell)?;
-        bot.op_npc_t(slot, com)?;
-        return Ok(());
-    }
-    if bot.combat_style == "ranged" && !crate::kit::gear::refill_quiver(bot)? {
-        // Empty quiver and none carried: the arrows on the ground first,
-        // then block typed for the brain to obtain more.
-        crate::kit::loot::recover_arrows(bot)?;
-        if !crate::kit::gear::refill_quiver(bot)? {
-            bot.log("out of arrows");
-            return Err(ScriptError::Blocked { missing: vec!["bronze_arrow".to_string()] });
-        }
-    }
-    bot.op_npc(2, slot)?;
-    Ok(())
-}
-
-/// Ticks between re-attacks while engaged: a manual cast never repeats
-/// (one spell per click, 5-tick cast speed); melee and ranged keep
-/// fighting on their own and only need a nudge.
-fn reattack_ticks(bot: &Bot) -> u64 {
-    if bot.combat_style == "magic" { 5 } else { 25 }
 }
 
 pub fn run_spot(
@@ -868,19 +842,5 @@ mod engaged_tests {
         assert!(!super::cold_clicks_spent(0), "fresh target holds");
         assert!(!super::cold_clicks_spent(39), "39 silent clicks hold");
         assert!(super::cold_clicks_spent(40), "40 silent clicks repick");
-    }
-
-    /// Server refusals split in two: an unreachable foe is worth one
-    /// door-aware step (it may burn a door and prove it uncrossable), a
-    /// foe already taken by someone else is skipped on the spot — live
-    /// (bb4v5d9m 17:52:38) the step toward a taken cow paced ~20 walks.
-    #[test]
-    fn taken_foe_is_skipped_without_a_step() {
-        use super::{foe_refusal, FoeRefusal};
-        assert_eq!(foe_refusal("Someone else is fighting that."), Some(FoeRefusal::Taken));
-        assert_eq!(foe_refusal("I'm already under attack."), Some(FoeRefusal::Taken));
-        assert_eq!(foe_refusal("It's not after you."), Some(FoeRefusal::Taken));
-        assert_eq!(foe_refusal("I can't reach that!"), Some(FoeRefusal::Unreachable));
-        assert_eq!(foe_refusal("You bury the bones."), None);
     }
 }

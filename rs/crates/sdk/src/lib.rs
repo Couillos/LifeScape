@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod connection;
+pub mod engagement;
 pub mod error;
 pub mod isaac;
 pub mod protocol;

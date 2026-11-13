@@ -44,6 +44,11 @@ pub struct NpcInfo {
     pub level: i32,
     pub name: Option<String>,
     pub anim: Option<u16>,
+    /// FACE_ENTITY mask (0x4): the npc's target, Client-TS encoding
+    /// (< 32768 npc slot, >= 32768 player slot + 32768); None = no target.
+    pub face_entity: Option<u16>,
+    /// Tick of the last damage mask (0x1/0x10, any hitter, misses too).
+    pub hit_tick: Option<u64>,
 }
 
 /// Hint arrow target: npc slot, coord, player slot, or cleared.
@@ -200,6 +205,8 @@ pub struct World {
     pub chat: Vec<ChatLine>,
     pub private: Vec<ChatLine>,
     pub logged_out: bool,
+    /// Our own player slot (`UPDATE_PID`), the pid other entities face.
+    pub self_slot: Option<u16>,
 }
 
 impl World {
@@ -277,6 +284,7 @@ impl World {
                 self.base_z = (self.zone_z - 6) << 3;
             }
             "PLAYER_INFO" => self.player_info(body)?,
+            "UPDATE_PID" => self.self_slot = Some(zone.u16()?),
             "NPC_INFO" => self.npc_info(body)?,
             "UPDATE_ZONE_PARTIAL_FOLLOWS" => {
                 self.set_zone(i32::from(zone.u8()?), i32::from(zone.u8()?));
@@ -371,7 +379,7 @@ impl World {
                 self.zone_message(opcode, &mut stream)?;
             }
             "CHAT_FILTER_SETTINGS" | "RESET_CLIENT_VARCACHE" | "RESET_ANIMS" | "CAM_LOOKAT" | "CAM_SHAKE" | "CAM_MOVETO"
-            | "CAM_RESET" | "UPDATE_PID" | "LAST_LOGIN_INFO" | "FRIENDLIST_LOADED" | "UPDATE_FRIENDLIST"
+            | "CAM_RESET" | "LAST_LOGIN_INFO" | "FRIENDLIST_LOADED" | "UPDATE_FRIENDLIST"
             | "UPDATE_IGNORELIST" | "UNSET_MAP_FLAG" | "UPDATE_RUNWEIGHT" | "UPDATE_REBOOT_TIMER" | "SET_MULTIWAY"
             | "IF_SETTAB" | "IF_SETTAB_ACTIVE" | "IF_SETCOLOUR" | "IF_SETHIDE" | "IF_SETMODEL" | "IF_SETANIM"
             | "IF_SETPLAYERHEAD" | "IF_SETNPCHEAD" | "IF_SETPOSITION" | "IF_SETSCROLLPOS" | "SYNTH_SOUND" | "MIDI_SONG"
@@ -767,7 +775,7 @@ impl World {
             let _ = jump;
             self.npcs.insert(
                 nid,
-                NpcInfo { npc_type: ntype, x: self.x + dx, z: self.z + dz, level: self.level, name: None, anim: None },
+                NpcInfo { npc_type: ntype, x: self.x + dx, z: self.z + dz, level: self.level, name: None, anim: None, face_entity: None, hit_tick: None },
             );
             if !self.npc_order.contains(&nid) {
                 self.npc_order.push(nid);
@@ -877,6 +885,18 @@ impl World {
                 if let Some(npc) = self.npcs.get_mut(&nid) {
                     npc.anim = Some(anim);
                 }
+            }
+        } else if !player && bit == 0x4 {
+            let entity = data.u16()?;
+            if let Some(npc) = pid.and_then(|nid| self.npcs.get_mut(&nid)) {
+                npc.face_entity = (entity != 65535).then_some(entity);
+            }
+        } else if !player && (bit == 0x1 || bit == 0x10) {
+            // NpcInfoDamage(2): damage, type, hp, max hp (4 bytes).
+            data.raw(4)?;
+            let now = self.ticks;
+            if let Some(npc) = pid.and_then(|nid| self.npcs.get_mut(&nid)) {
+                npc.hit_tick = Some(now);
             }
         } else if player && bit == 0x2 {
             data.raw(3)?;

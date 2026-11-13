@@ -63,6 +63,23 @@ fn is_staff(entry: &Wearable) -> bool {
     entry.category.as_deref() == Some("weapon_staff") || entry.name.contains("staff")
 }
 
+/// A weapon that shoots or throws: bows, crossbows and the range-only
+/// throwables (darts, knives, thrown axes, javelins: dump range bonus
+/// with no melee bonus). Wielded in a melee run it refuses every click
+/// with "There is no ammo left in your quiver." (player_ranged.rs2).
+pub fn is_ranged_weapon(entry: &Wearable) -> bool {
+    let melee_bonus = ["stab", "slash", "crush"].iter().map(|key| bonus(&entry.attack, key)).max().unwrap_or(0);
+    entry.wearpos == WEAPON
+        && (is_bow(entry)
+            || entry.category.as_deref() == Some("weapon_crossbow")
+            || (bonus(&entry.attack, "range") > 0 && melee_bonus <= 0))
+}
+
+/// A magic weapon (staves, battlestaves): never swung by a melee run.
+pub fn is_magic_weapon(entry: &Wearable) -> bool {
+    entry.wearpos == WEAPON && is_staff(entry)
+}
+
 fn is_tool(entry: &Wearable) -> bool {
     entry.name.ends_with("_pickaxe") || entry.name.ends_with("_axe") && !entry.name.contains("battleaxe")
 }
@@ -75,7 +92,7 @@ pub fn score(entry: &Wearable, style: Style) -> i64 {
     let melee_def = defence("stab") + defence("slash") + defence("crush");
     if entry.wearpos == WEAPON {
         return match style {
-            Style::Melee if !is_bow(entry) && !is_staff(entry) => attack("stab").max(attack("slash")).max(attack("crush")) + 2 * entry.strength,
+            Style::Melee if !is_ranged_weapon(entry) && !is_magic_weapon(entry) => attack("stab").max(attack("slash")).max(attack("crush")) + 2 * entry.strength,
             Style::Ranged if is_bow(entry) => attack("range"),
             Style::Magic if is_staff(entry) => attack("magic") + 1,
             _ => -1,
@@ -227,6 +244,25 @@ mod tests {
     fn magic_wears_a_staff() {
         let mage = best_gear(Style::Magic, &[("magic", 1)], &[]);
         assert!(pick(&mage, WEAPON).is_some_and(|staff| staff.contains("staff")), "{mage:?}");
+    }
+
+    /// will_field live: a melee run wielded its shortbow and clicked
+    /// "There is no ammo left in your quiver." for minutes. No bow,
+    /// crossbow, throwable or staff ever scores for melee; real melee
+    /// weapons still do.
+    #[test]
+    fn melee_never_scores_a_ranged_or_magic_weapon() {
+        for name in ["shortbow", "oak_longbow", "crossbow", "bronze_dart", "bronze_knife", "bronze_thrownaxe", "bronze_javelin", "staff_of_air", "battlestaff"] {
+            let entry = crate::equipment::by_name(name).unwrap_or_else(|| panic!("{name} row"));
+            assert!(super::score(&entry, Style::Melee) < 0, "{name} is not a melee weapon");
+        }
+        for name in ["bronze_sword", "bronze_pickaxe", "bronze_spear", "bronze_2h_sword"] {
+            let entry = crate::equipment::by_name(name).unwrap_or_else(|| panic!("{name} row"));
+            assert!(!super::is_ranged_weapon(&entry) && !super::is_magic_weapon(&entry), "{name} is melee");
+            assert!(super::score(&entry, Style::Melee) >= 0, "{name} scores for melee");
+        }
+        let bow = crate::equipment::by_name("shortbow").expect("shortbow row");
+        assert!(super::score(&bow, Style::Ranged) > 0, "the bow still scores for ranged");
     }
 
     #[test]

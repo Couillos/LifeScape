@@ -23,6 +23,10 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
+    // The session's Bot outlives one run: a ranged or magic run before
+    // this one left its style behind. Melee scores, plans and attacks
+    // melee (no bow, no quiver refill).
+    bot.combat_style = "melee".to_string();
     crate::kit::survival::wait_pack_streamed(bot)?;
     let target = bot.world.ticks + 60;
     while bot.world.ticks < target && (!bot.world.stats.contains_key(&0) || !bot.world.stats.contains_key(&3)) {

@@ -470,7 +470,7 @@ mod tests {
         bot.world.z = 3240;
         bot.world.npcs.insert(
             7,
-            NpcInfo { npc_type: bob_type(), x: 3096, z: 3241, level: 0, name: None, anim: None },
+            NpcInfo { npc_type: bob_type(), x: 3096, z: 3241, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         let found = live_keeper(&bot, "bob").expect("streamed bob resolves live");
         assert_eq!((found.1, found.2), (3096, 3241), "live tile wins, got: {found:?}");
@@ -491,7 +491,7 @@ mod tests {
         bot.world.z = 3240;
         bot.world.npcs.insert(
             7,
-            NpcInfo { npc_type: bob_type(), x: 3096, z: 3241, level: 0, name: None, anim: None },
+            NpcInfo { npc_type: bob_type(), x: 3096, z: 3241, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         let error = trade_to_keeper(&mut bot, "bob", (0, 3232, 3203)).expect_err("no service, nav-down is loud");
         assert!(

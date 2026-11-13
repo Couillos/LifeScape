@@ -30,7 +30,7 @@ impl BitPacker {
 fn world_with_npcs(ids: &[u16]) -> World {
     let mut world = World::new();
     for (offset, nid) in ids.iter().enumerate() {
-        world.npcs.insert(*nid, super::NpcInfo { npc_type: 1, x: 3200 + offset as i32, z: 3200, level: 0, name: None, anim: None });
+        world.npcs.insert(*nid, super::NpcInfo { npc_type: 1, x: 3200 + offset as i32, z: 3200, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
         world.npc_order.push(*nid);
     }
     world

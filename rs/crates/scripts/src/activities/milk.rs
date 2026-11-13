@@ -249,7 +249,7 @@ mod tests {
         let mut bot = offline_bot();
         bot.world.level = 0;
         let cow = cow_type(&bot);
-        bot.world.npcs.insert(3u16, lifescape_sdk::world::NpcInfo { npc_type: cow, x: 10, z: 10, level: 0, name: None, anim: None });
+        bot.world.npcs.insert(3u16, lifescape_sdk::world::NpcInfo { npc_type: cow, x: 10, z: 10, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
         let source = super::MilkSource { slot: 3, x: 10, z: 10 };
         let target = crate::kit::harvest::HarvestTarget::Npc { slot: 3 };
         assert!(crate::kit::harvest::HarvestSource::target_live(&source, &mut bot, &target), "present cow is live");
@@ -268,7 +268,7 @@ mod tests {
         bot.world.z = 0;
         let cow = cow_type(&bot);
         for (slot, x) in [(3u16, 10i32), (4, 30)] {
-            bot.world.npcs.insert(slot, lifescape_sdk::world::NpcInfo { npc_type: cow, x, z: 0, level: 0, name: None, anim: None });
+            bot.world.npcs.insert(slot, lifescape_sdk::world::NpcInfo { npc_type: cow, x, z: 0, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
         }
         let banned = BanSet::new();
         assert_eq!(pick_cow(&mut bot, &banned, 0).map(|(_, x, _)| x), Some(10), "nearest wins");
