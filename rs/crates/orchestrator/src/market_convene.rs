@@ -350,9 +350,19 @@ impl MarketService {
             rows.retain(|row| row.item_id == wanted);
         }
         rows.truncate(limit as usize);
+        drop(store);
+        // Display name from the catalogue: the page must not depend on its
+        // filtered item list to label a deal (a traded good without open
+        // order printed `#839`).
+        let names: std::collections::HashMap<i64, String> = {
+            let engine = self.lock_engine();
+            engine.catalogue.iter().map(|row| (row.id, row.name.clone())).collect()
+        };
         let values: Vec<Value> = rows.iter().map(|row| {
+            let name = names.get(&row.item_id).cloned().unwrap_or_else(|| format!("#{}", row.item_id));
             object(vec![
                 ("deal", Value::Int(row.deal_id)),
+                ("name", str_value(&name)),
                 ("buyer", str_value(&row.buyer)),
                 ("seller", str_value(&row.seller)),
                 ("item", Value::Int(row.item_id)),

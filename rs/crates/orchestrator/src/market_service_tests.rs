@@ -747,6 +747,7 @@ fn recent_lists_newest_deal_first_with_pseudos() {
     assert_eq!(rows[0].get("buyer").as_str(), Some("buyer"));
     assert_eq!(rows[0].get("seller").as_str(), Some("seller-a"));
     assert_eq!(rows[0].get("item").as_i64(), Some(314));
+    assert_eq!(rows[0].get("name").as_str(), Some("Feather"), "the feed names its good itself");
     assert_eq!(rows[0].get("qty").as_i64(), Some(10));
     assert_eq!(rows[0].get("price").as_i64(), Some(4));
     // Narrowing to an untraded item hides the deal, like `trades`.
@@ -756,6 +757,26 @@ fn recent_lists_newest_deal_first_with_pseudos() {
         ("limit", Value::Int(20)),
     ]));
     assert_eq!(narrowed.get("deals").as_arr().map(|rows| rows.len()), Some(0));
+    cleanup(&path);
+}
+
+/// Market page (user rule 2026-11-13): a good stays listed once its book
+/// empties if it ever traded; never-traded empty books stay hidden.
+#[test]
+fn list_active_keeps_traded_goods_with_empty_books() {
+    let (service, path) = service("active");
+    funded(&service, "seller-a");
+    funded(&service, "buyer");
+    let list = |service: &MarketService| {
+        service.handle(&request(vec![("op", str_value("list")), ("active", Value::Int(1))])).get("items").as_arr().cloned().unwrap_or_default()
+    };
+    assert!(list(&service).is_empty(), "no order, no trade, no row");
+    match_one(&service, "seller-a", "buyer", 10, 4);
+    crate::market_test_support::settle_matched(&service);
+    let rows = list(&service);
+    assert_eq!(rows.len(), 1, "the traded good stays listed: {rows:?}");
+    assert_eq!(rows[0].get("name").as_str(), Some("Feather"));
+    assert_eq!(rows[0].get("orders").as_i64(), Some(0), "its book is empty");
     cleanup(&path);
 }
 

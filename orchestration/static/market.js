@@ -21,6 +21,9 @@ let query = "";
 let liveClock = 0;
 let recent = [];
 let recentHavePseudos = false;
+// Names seen in the deal feed: a traded good with no open order is not in
+// `items` (list = open books only) but must still show and open by name.
+const knownNames = new Map();
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -29,9 +32,9 @@ async function getJson(url) {
 
 async function loadList() {
   try {
-    const payload = await getJson('/api/market/list?limit=2000&with_orders=1');
-    // `with_orders=1` keeps every good with at least one open order (bid
-    // or ask), sorted server-side by descending 24h volume, then by the
+    const payload = await getJson('/api/market/list?limit=2000&active=1');
+    // `active=1` keeps every good with at least one open order (bid or
+    // ask) or at least one past execution, sorted server-side by descending 24h volume, then by the
     // open quantity (remaining units, bids and asks).
     if (payload.ok) items = payload.items;
   } catch (e) { /* daemon down: keep the last list */ }
@@ -222,7 +225,8 @@ document.getElementById('recent').addEventListener('click', (event) => {
 
 function itemName(id) {
   const item = items.find(entry => entry.item === id);
-  return item ? item.name : ('#' + id);
+  if (item) return item.name;
+  return knownNames.has(id) ? knownNames.get(id) : ('#' + id);
 }
 
 async function loadRecent() {
@@ -233,6 +237,9 @@ async function loadRecent() {
     const payload = await getJson('/api/market/recent?limit=20');
     if (payload.ok && Array.isArray(payload.deals)) {
       recentHavePseudos = true;
+      for (const deal of payload.deals) {
+        if (deal.name) knownNames.set(deal.item, deal.name);
+      }
       recent = payload.deals.map(deal => ({ item: deal.item, q: deal.qty, p: deal.price, t: deal.t, buyer: deal.buyer, seller: deal.seller, status: deal.status }));
       renderRecent();
       return;
@@ -263,7 +270,7 @@ function currentSlots() {
 function draw() {
   const canvas = document.getElementById('chart');
   const item = items.find(entry => entry.item === selected);
-  document.getElementById('title').textContent = item ? item.name : 'Pick an item';
+  document.getElementById('title').textContent = item ? item.name : (selected === null ? 'Pick an item' : itemName(selected));
   document.getElementById('refline').textContent = item ? ' ref ' + item.price + ' · 24h ' + changeText(item.change24h) + ' · vol ' + item.volume24h : '';
 
   const { slots, width } = currentSlots();

@@ -98,7 +98,10 @@ catalogue F2P + historique de démonstration) : socket `run/market.sock`
 (JSON-lines, une requête une réponse), API `quote/book/history/trades/
 list/place/amend/cancel/my_orders/my_deals/deal_arrived/deal_report/fund/
 tick/stats` ; persistance via `lifescape-store` (ouvert par le daemon
-seul). Reliquat connu : les ETA de convocation passent par une constante
+seul). Page `/market` (2026-11-13) : liste `list?active=1` = biens avec
+au moins un ordre ouvert OU au moins une exécution passée (pas de
+plafond ; carnet vide jamais échangé caché) ; `recent` porte le `name`
+de chaque deal, le flux et le titre ne dépendent plus de la liste. Reliquat connu : les ETA de convocation passent par une constante
 d'horloge, pas par le service de navigation ; les holdings live ne sont
 pas encore branchées au registre.
 

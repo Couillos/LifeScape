@@ -508,6 +508,10 @@ impl MarketService {
         let traded_only = request.get("traded_only").as_i64().unwrap_or(0) == 1;
         // `with_orders=1`: keep goods with >= 1 open order (either side).
         let with_orders = request.get("with_orders").as_i64().unwrap_or(0) == 1;
+        // `active=1`: keep goods with >= 1 open order OR >= 1 execution ever
+        // (market page, user rule 2026-11-13: a traded good stays listed
+        // once its book empties; never-traded empty books stay hidden).
+        let active = request.get("active").as_i64().unwrap_or(0) == 1;
         let clock = Self::now_clock();
         // One row per displayed name: base objects and their banknotes
         // (`cert_*` rows share the display) trade as a single named good —
@@ -534,7 +538,7 @@ impl MarketService {
             .collect();
         drop(engine);
         // `traded_only=1`: keep goods with >= 1 execution ever (not 24h volume).
-        let traded: std::collections::HashSet<i64> = if traded_only {
+        let traded: std::collections::HashSet<i64> = if traded_only || active {
             self.lock_store().items_with_executions().unwrap_or_default().into_iter().collect()
         } else { std::collections::HashSet::new() };
         // One row per named good: 24h volume summed over every form,
@@ -550,6 +554,9 @@ impl MarketService {
             let order_count: usize = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(count, _)| count).sum();
             let open_qty: i64 = members.iter().filter_map(|member| open_orders.get(&member.0)).map(|(_, qty)| qty).sum();
             if with_orders && order_count == 0 {
+                continue;
+            }
+            if active && order_count == 0 && !members.iter().any(|member| traded.contains(&member.0)) {
                 continue;
             }
             let mut volume = 0i64;
