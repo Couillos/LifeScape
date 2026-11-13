@@ -24,6 +24,9 @@ pub mod paths;
 pub mod brain;
 pub mod brain_ambition;
 pub mod brain_await;
+pub mod brain_bids;
+#[cfg(test)]
+mod brain_bids_sim_tests;
 pub mod economy_guard;
 pub mod brain_fold;
 pub mod brain_gear;

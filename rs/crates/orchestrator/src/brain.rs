@@ -224,10 +224,13 @@ pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>
 }
 
 /// Keep-list for a cleanup order: unfinished graph obtain items plus the
-/// item checks of unfinished quests, deduplicated and sorted. Coins, food
-/// and best tools are added worker-side (planner triage, kit specs).
+/// item checks of unfinished quests, plus what the ambition's own open
+/// milestones will consume (`market_fit::own_use_items`: a firemaker's
+/// logs, a cook's raw fish, a smith's bars and ores, a priest's bones —
+/// never sold, never dropped), deduplicated and sorted. Coins, food and
+/// best tools are added worker-side (planner triage, kit specs).
 pub fn cleanup_keep(life: &Life) -> Vec<String> {
-    let mut keep = Vec::new();
+    let mut keep = life.ambition.as_ref().map(lifescape_planner::market_fit::own_use_items).unwrap_or_default();
     for node in &life.nodes {
         if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
             continue;

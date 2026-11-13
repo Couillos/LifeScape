@@ -432,6 +432,13 @@ un cuisinier à 100 crevettes protégées bouclait jalon/fait/réinsertion).
 Les jalons faits sont bornés à `MAX_DONE_KEPT` = 40 (les plus anciens
 partent, ids jamais réutilisés).
 
+Réponse aux offres (2026-11-14, `brain_bids` + `planner::bid_response`,
+voir `docs/economy.md` § Producteurs qui répondent aux offres) : à chaque
+tirage, AVANT le jalon, une offre d'achat publique que le bot fabrique
+maintenant à un taux ≥ 2 × la valeur de son temps devient un quota
+`Produce` d'origine `bid:<objet>` (ambition intacte, comme un but
+d'appoint) ; sinon le tirage ci-dessous.
+
 Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
 premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
 respecté), but + `life.goal_origin = "mN"` + historique `goal:
