@@ -58,3 +58,16 @@ socket d'un worker vivant (seul un socket sans écoute est effacé : plus
 de worker orphelin). La pause `hold` est portée par le worker et relue à
 la reprise. `run/orchestrator.log` (sortie du daemon) est horodaté ; les
 erreurs de script y figurent avec leur type et leur message.
+
+Déploiement (2026-11-13) : `restore_jobs` tourne en arrière-plan, après le
+hub d'envoi, les chemins, le marché et l'écoute : `status` répond en ~1 s,
+la reprise des ~25 workers finit en ~30–60 s (ligne `restore_jobs done in
+Ns` du journal). Seul le daemon a changé → ne pas redéployer les workers.
+Code worker changé (sdk, scripts, envois) → après `restore_jobs done`,
+`close` puis `open` par compte de la flotte (liste lue dans `status` une
+fois la reprise finie, jamais `run/lives` qui garde d'anciens comptes) ;
+l'admission limite les ouvertures (`admission:open-rate wait`) : relancer
+après ~0,8 s, jamais en parallèle (~40 s pour 25 comptes). Les envois des
+workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
+leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
+(`.cargo/config.toml`).
