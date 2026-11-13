@@ -50,7 +50,7 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, CRAFTING_STAT, 1);
     if level < STRING_LEVEL {
-        return Err(ScriptError::Usage(format!("stringing needs level {STRING_LEVEL} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("fletching", i64::from(STRING_LEVEL)));
     }
     let unstrung_name = resource.as_deref().unwrap_or("unstrung_gold_amulet");
     let strung_name = strung_for(unstrung_name).ok_or_else(|| ScriptError::Usage(format!("no F2P stringing amulet named {unstrung_name:?} at {:?}", bot.position())))?;

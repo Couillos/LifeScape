@@ -465,7 +465,10 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
     if pack_total(bot, job.input) == 0 {
         return Err(ScriptError::Blocked { missing: vec![job.input_name.to_string()] });
     }
-    bot.log(&format!("{} {} near {:?}", job.spec.verb, job.input_name, job.near));
+    // The brain's `--site` (set by `cycle::run`) wins over the script's
+    // own anchor: the station is the one the brain picked.
+    let near = bot.assigned_site.map_or(job.near, |(site_x, site_z, _)| (site_x, site_z));
+    bot.log(&format!("{} {} near {:?}", job.spec.verb, job.input_name, near));
     bot.intend(&format!("{} {}", job.spec.verb, job.input_name));
     let target = if job.want == 0 { u32::MAX } else { job.want };
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
@@ -473,14 +476,14 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
         ProduceSite::Loc(names) => {
             let mut picked: Option<(i32, i32, i32, u16)> = None;
             for name in *names {
-                if let Some(tile) = site_tiles(bot, name, job.near).into_iter().next() {
+                if let Some(tile) = site_tiles(bot, name, near).into_iter().next() {
                     bot.log(&format!("{} on {name} at ({},{})", job.spec.verb, tile.0, tile.1));
                     picked = Some(tile);
                     break;
                 }
             }
             let Some((x, z, _, loc)) = picked else {
-                return Err(ScriptError::Failed(format!("no produce station {names:?} near {:?}", job.near)));
+                return Err(ScriptError::Failed(format!("no produce station {names:?} near {near:?}")));
             };
             work_loc(bot, job, x, z, loc)?
         }

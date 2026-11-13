@@ -46,7 +46,7 @@ pub fn run_bake_bread(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, COOK_STAT, 1);
     if level < BREAD_LEVEL {
-        return Err(ScriptError::Usage(format!("baking bread needs level {BREAD_LEVEL} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("cooking", i64::from(BREAD_LEVEL)));
     }
     let recipe = produce::cook_recipe(DOUGH)
         .ok_or_else(|| ScriptError::Usage(format!("no F2P cook recipe bakes {DOUGH:?} at {:?}", bot.position())))?;

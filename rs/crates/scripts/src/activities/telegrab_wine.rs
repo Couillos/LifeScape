@@ -103,7 +103,7 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
     if level < i64::from(NEED_LEVEL) {
-        return Err(ScriptError::Usage(format!("telegrab needs magic {NEED_LEVEL}, bot is {level} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("magic", i64::from(i64::from(NEED_LEVEL))));
     }
     let air = obj_id(bot, RUNE_AIR)?;
     let law = obj_id(bot, RUNE_LAW)?;

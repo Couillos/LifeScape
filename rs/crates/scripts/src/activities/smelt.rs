@@ -82,7 +82,7 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(ScriptError::Usage(format!("smelt {wanted:?} makes nothing at {:?}", bot.position())));
     };
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("smelting {bar_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("smithing", i64::from(recipe.level)));
     }
     // The ore used on the furnace: the server picks the bar from it
     // (`smelt_ore_single`: copper → bronze, iron + 2 coal → steel), never

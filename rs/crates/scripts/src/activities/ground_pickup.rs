@@ -47,27 +47,46 @@ fn rank_pickups(
     ranked
 }
 
-/// Pick banked sweeps in the open session: `ground_pickup [count]`.
+/// Pick banked sweeps in the open session: `ground_pickup [item] [count]
+/// [--site x,z,level] [--want item N]`. With an item (the brain's
+/// `ground:` order) only that object is taken, at the brain's site.
 pub fn run_ground_pickup(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let spec = crate::kit::cycle::parse_cli("ground_pickup", args)?;
+    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
+    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let spec = crate::kit::cycle::parse_cli("ground_pickup", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
+    bot.assigned_site = spec.site;
     let task_keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
-    let mut wanted: Vec<u16> = vec![coins];
-    for name in WANTED {
-        wanted.push(obj_id(bot, name)?);
-    }
+    let wanted: Vec<u16> = match resource.as_deref() {
+        Some(item) => vec![obj_id(bot, item)?],
+        None => {
+            let mut wanted = vec![coins];
+            for name in WANTED {
+                wanted.push(obj_id(bot, name)?);
+            }
+            wanted
+        }
+    };
     let mut bank = nearest_bank(bot)?;
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut empty = 0u32;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
+        // The brain's spawn site first: never sweep wherever the bot stands.
+        if let Some((site_x, site_z, _)) = step_bot.assigned_site {
+            if (step_bot.world.x - site_x).abs().max((step_bot.world.z - site_z).abs()) > PICKUP_RADIUS
+                && !crate::skill_walk::walk_checked(step_bot, site_x, site_z, crate::kit::site::SITE_WALK_TICKS)?
+            {
+                return Err(ScriptError::Failed(format!("spawn site ({site_x},{site_z}) not reached from {:?}", step_bot.position())));
+            }
+        }
         bank = nearest_bank(step_bot)?;
         let here = (step_bot.world.x, step_bot.world.z);
         let floor: Vec<((i32, i32, i32), u16)> = step_bot

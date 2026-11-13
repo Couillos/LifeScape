@@ -18,7 +18,6 @@ use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::produce::{self, Produce, ProduceJob, ProduceSite, ProduceUi};
 use crate::kit::survival::{check_events, is_death_abort, wait_pack_streamed};
-use crate::quests::common::talk_like;
 use crate::{ScriptError, ScriptResult};
 
 pub const AGGIE: &str = "aggie";
@@ -38,8 +37,8 @@ pub fn dye_row(name: &str) -> Option<(&'static str, u32, &'static str)> {
 }
 
 /// Make banked loads of dye in the open session: `dye [dye] [count]`
-/// (yellow when omitted, 0 = forever). Woad leaves route through Wyson
-/// when the bank holds none.
+/// (yellow when omitted, 0 = forever). A missing ingredient blocks by
+/// name (woad leaves: Wyson, through the brain's obtain leg).
 pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
     let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
@@ -63,13 +62,10 @@ pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
     keep_dye.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_dye, 0)?;
     fill_dye(bot, &bank, ingredient, coins)?;
+    // Woad leaves come from Wyson through the brain's obtain leg, never
+    // a purchase inside this script: a missing ingredient blocks by name.
     if pack_total(bot, ingredient) == 0 {
-        if ingredient_name == "woadleaf" {
-            buy_woad(bot, coins)?;
-        }
-        if pack_total(bot, ingredient) == 0 {
-            return Err(ScriptError::Blocked { missing: vec![ingredient_name.to_string()] });
-        }
+        return Err(ScriptError::Blocked { missing: vec![ingredient_name.to_string()] });
     }
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
@@ -77,12 +73,7 @@ pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
             bank_trip(step_bot, &bank, &keep_dye, 0)?;
             fill_dye(step_bot, &bank, ingredient, coins)?;
             if pack_total(step_bot, ingredient) == 0 {
-                if ingredient_name == "woadleaf" {
-                    buy_woad(step_bot, coins)?;
-                }
-                if pack_total(step_bot, ingredient) == 0 {
-                    return Err(ScriptError::Blocked { missing: vec![ingredient_name.to_string()] });
-                }
+                return Err(ScriptError::Blocked { missing: vec![ingredient_name.to_string()] });
             }
         }
         if pack_total(step_bot, coins) < FEE_GP {
@@ -106,22 +97,6 @@ pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
     })
 }
 
-/// Buy one woad leaf from Wyson (15 coins through his haggle dialogue).
-/// Loud when the leaf never lands (broke or refused), never retried blind.
-fn buy_woad(bot: &mut Bot, coins: u16) -> Result<(), ScriptError> {
-    if pack_total(bot, coins) < WOAD_PRICE_GP {
-        return Err(ScriptError::Blocked { missing: vec![COINS.to_string()] });
-    }
-    let woad = obj_id(bot, "woadleaf")?;
-    let had = pack_total(bot, woad);
-    talk_like(bot, WYSON, &["woad leaves", "15 coins"], None, 6000)?;
-    if pack_total(bot, woad) > had {
-        bot.log("ok bought a woad leaf from Wyson");
-        return Ok(());
-    }
-    Err(ScriptError::Usage(format!("Wyson sold no woad leaf at {:?}", bot.position())))
-}
-
 /// Top the pack up with the ingredient, topping coins up to 100 first
 /// (nothing when the booth is far: the caller reports `blocked`).
 fn fill_dye(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, ingredient: u16, coins: u16) -> Result<(), ScriptError> {
@@ -140,7 +115,6 @@ mod tests {
     use super::{dye_row, AGGIE, COINS, DEFAULT_DYE, DYES, FEE_GP, WOAD_PRICE_GP, WYSON};
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
-    use crate::ScriptError;
     use lifescape_gamedata::services::{all_services, GUILDS};
     use lifescape_sdk::Bot;
 
@@ -178,17 +152,14 @@ mod tests {
         assert!(!lifescape_gamedata::npcs_by_name(WYSON).is_empty(), "wyson placed");
     }
 
-    /// Every ingredient, dye and coin name resolves through live tables;
-    /// the woad buy fails loud (never blind) when broke.
+    /// Every ingredient, dye and coin name resolves through live tables.
     #[test]
-    fn dye_names_resolve_and_broke_woad_blocks() {
-        let mut bot = offline_bot();
+    fn dye_names_resolve() {
+        let bot = offline_bot();
         assert!(obj_id(&bot, COINS).is_ok(), "coins resolve");
         for (ingredient, _, product) in DYES {
             assert!(obj_id(&bot, ingredient).is_ok(), "{ingredient} resolves");
             assert!(obj_id(&bot, product).is_ok(), "{product} resolves");
         }
-        let coins = obj_id(&bot, COINS).expect("coins");
-        assert!(matches!(super::buy_woad(&mut bot, coins), Err(ScriptError::Blocked { .. })), "broke woad blocks");
     }
 }

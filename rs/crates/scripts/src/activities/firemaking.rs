@@ -50,7 +50,7 @@ pub fn run_firemaking(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let log_name = resource.as_deref().unwrap_or_else(|| best_log(level));
     let need = log_level(log_name).ok_or_else(|| ScriptError::Usage(format!("no F2P firemaking log named {log_name:?} at {:?}", bot.position())))?;
     if level < need {
-        return Err(ScriptError::Usage(format!("firemaking {log_name} needs level {need} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("firemaking", i64::from(need)));
     }
     let log = obj_id(bot, log_name)?;
     let tinderbox = obj_id(bot, TINDERBOX)?;

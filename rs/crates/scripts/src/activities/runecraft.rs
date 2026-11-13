@@ -106,7 +106,7 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (prefix, need, talisman_name, rune_name) = rune_for(wanted).ok_or_else(|| ScriptError::Usage(format!("no F2P runecraft rune named {wanted:?} at {:?}", bot.position())))?;
     let level = learn_level(bot, RUNECRAFT_STAT, 1);
     if level < need {
-        return Err(ScriptError::Usage(format!("{prefix} runes need runecraft {need}, bot is {level} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("runecraft", i64::from(need)));
     }
     let essence = obj_id(bot, ESSENCE)?;
     let talisman = obj_id(bot, talisman_name)?;

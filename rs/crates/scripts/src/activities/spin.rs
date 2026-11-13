@@ -56,7 +56,7 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let input_name = resource.as_deref().unwrap_or(DEFAULT_INPUT);
     let recipe = spin_recipe(input_name).ok_or_else(|| ScriptError::Usage(format!("no F2P spin recipe eats {input_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("spinning {input_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let wool = obj_id(bot, input_name)?;
     let products: Vec<u16> = recipe.outputs.iter().filter_map(|(name, _)| obj_id(bot, name).ok()).collect();

@@ -658,6 +658,18 @@ mod tests {
         assert!(parse_cli("mining", &["--want".to_string(), "gold_ore".to_string()]).is_err(), "want needs a count");
     }
 
+    /// Typed gaps the brain files as sub-goals (never a Usage retry).
+    #[test]
+    fn gap_kinds_are_typed_blocks() {
+        let named = |error: crate::ScriptError| match error {
+            crate::ScriptError::Blocked { missing } => missing,
+            other => panic!("blocked expected, got {other:?}"),
+        };
+        assert_eq!(named(super::blocked_level("smithing", 30)), vec!["level:smithing:30".to_string()]);
+        assert_eq!(named(super::blocked_quest("runemysteries")), vec!["quest:runemysteries".to_string()]);
+        assert_eq!(named(super::blocked_access("al_kharid_toll")), vec!["access:al_kharid_toll".to_string()]);
+    }
+
     /// `--want item N`: the run ends once N more are held (pack + known
     /// bank) than at its start, whatever the loads count.
     #[test]

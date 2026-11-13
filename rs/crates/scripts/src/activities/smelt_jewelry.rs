@@ -67,7 +67,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or(DEFAULT_PRODUCT);
     let silver = product_name.eq_ignore_ascii_case(SILVER_PRODUCT);
     let (inv_name, slot, gem_name, mould_name, need) = jewel_row(product_name).ok_or_else(|| ScriptError::Usage(format!("{product_name:?} is no F2P jewel at {:?}", bot.position())))?;
-    if level < need { return Err(ScriptError::Usage(format!("casting {product_name} needs level {need} at {:?}", bot.position()))); }
+    if level < need { return Err(crate::kit::cycle::blocked_level("crafting", i64::from(need))); }
     let bar = obj_id(bot, if silver { SILVER_BAR } else { GOLD_BAR })?;
     let mould = obj_id(bot, mould_name)?;
     let gem = if gem_name.is_empty() { None } else { Some(obj_id(bot, gem_name)?) };
@@ -79,12 +79,14 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     crate::kit::withdraw::ensure_tool(bot, &bank, mould, mould_name)?;
     fill_cast(bot, &bank, bar, gem, mould)?;
     if pack_total(bot, bar) == 0 { return Err(ScriptError::Blocked { missing: vec![if silver { SILVER_BAR } else { GOLD_BAR }.to_string()] }); }
+    if gem.is_some_and(|id| pack_total(bot, id) == 0) { return Err(ScriptError::Blocked { missing: vec![gem_name.to_string()] }); }
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, bar) == 0 || gem.is_some_and(|id| pack_total(step_bot, id) == 0) {
             bank_trip(step_bot, &bank, &keep_cast, 0)?;
             fill_cast(step_bot, &bank, bar, gem, mould)?;
             if pack_total(step_bot, bar) == 0 { return Err(ScriptError::Blocked { missing: vec![if silver { SILVER_BAR } else { GOLD_BAR }.to_string()] }); }
+            if gem.is_some_and(|id| pack_total(step_bot, id) == 0) { return Err(ScriptError::Blocked { missing: vec![gem_name.to_string()] }); }
         }
         if silver {
             let job = ProduceJob { spec: &SILVER, input: bar, input_name: SILVER_BAR, want: 0, products: vec![obj_id(step_bot, SILVER_PRODUCT)?], near: (bank.x as i32, bank.z as i32) };
@@ -97,7 +99,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         bank = nearest_bank(step_bot)?;
-        bank_trip(step_bot, &bank, &task_keep, 0)?;
+        bank_trip(step_bot, &bank, &keep_cast, 0)?;
         step_bot.log(&format!("ok load {} cast {product_name} (crafting={level})", state.units() + 1));
         Ok(StepControl::UnitDone)
     })

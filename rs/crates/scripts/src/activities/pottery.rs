@@ -66,7 +66,7 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let shape = extra_row("pottery_shape", UNFIRED).expect("shape row placed");
     let fire = extra_row("pottery_fire", PRODUCT).expect("fire row placed");
     if level < shape.level || level < fire.level {
-        return Err(ScriptError::Usage(format!("pottery needs level {} at {:?}", shape.level.max(fire.level), bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(shape.level.max(fire.level))));
     }
     let (clay, water, soft, unfired) = (obj_id(bot, CLAY)?, obj_id(bot, WATER)?, obj_id(bot, SOFT)?, obj_id(bot, UNFIRED)?);
     let mut bank = nearest_bank(bot)?;

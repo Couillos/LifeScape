@@ -56,7 +56,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or(DEFAULT_PRODUCT);
     let recipe = leather_recipe(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P leather recipe makes {product_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("sewing {product_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let leather = obj_id(bot, LEATHER)?;
     let needle = obj_id(bot, NEEDLE)?;

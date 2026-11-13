@@ -31,6 +31,38 @@ pub fn bury_now(bot: &mut Bot) -> ScriptResult {
     Ok(0)
 }
 
+/// Prayer from banked bones: `bury_loot [bones|big_bones] [count]
+/// [--want ...] [--level prayer N]`. Each load withdraws a pack of the
+/// named bones and buries them; none banked or carried blocks by name.
+pub fn run_bury_loot(bot: &mut Bot, args: &[String]) -> ScriptResult {
+    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && !first.starts_with("--")).cloned();
+    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let spec = crate::kit::cycle::parse_cli("bury_loot", &rest)?;
+    let bones_name = resource.unwrap_or_else(|| BURYABLE[0].to_string());
+    if !is_bones(&bones_name) {
+        return Err(crate::ScriptError::Usage(format!("{bones_name:?} is no buryable F2P bone")));
+    }
+    let keep = crate::kit::cycle::resolve_keep(bot, &spec)?;
+    crate::kit::survival::wait_pack_streamed(bot)?;
+    crate::kit::survival::check_events(bot)?;
+    let bones = crate::kit::pack::obj_id(bot, &bones_name)?;
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    crate::kit::cycle::run(bot, &spec, |step_bot, state| {
+        crate::kit::survival::check_events(step_bot)?;
+        if crate::kit::pack::pack_total(step_bot, bones) == 0 {
+            crate::kit::bank::bank_trip(step_bot, &bank, &keep, 0)?;
+            let room = crate::kit::pack::free_slots(step_bot) as u32;
+            crate::kit::withdraw::bank_withdraw_items(step_bot, &bank, &[bones], room)?;
+            if crate::kit::pack::pack_total(step_bot, bones) == 0 {
+                return Err(crate::ScriptError::Blocked { missing: vec![bones_name.clone()] });
+            }
+        }
+        let buried = crate::kit::loot::bury_bones(step_bot)?;
+        step_bot.log(&format!("ok load {} buried {buried} {bones_name}", state.units() + 1));
+        Ok(crate::kit::cycle::StepControl::UnitDone)
+    })
+}
+
 /// Pick up spent arrows around the killer spot, nearest first, then bury.
 /// Dead sockets fail typed; refused takes only log.
 pub fn loot_arrows(bot: &mut Bot) -> Result<u32, crate::ScriptError> {

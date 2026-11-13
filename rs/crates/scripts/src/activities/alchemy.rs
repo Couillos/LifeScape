@@ -55,7 +55,7 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spell = if high { HIGH_SPELL } else { LOW_SPELL };
     let need = if high { 55 } else { 21 };
     if level < need {
-        return Err(ScriptError::Usage(format!("{spell} needs level {need} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("magic", i64::from(need)));
     }
     let item = obj_id(bot, item_name)?;
     let coins = obj_id(bot, "coins")?;

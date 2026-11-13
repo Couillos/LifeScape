@@ -81,7 +81,7 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(ScriptError::Usage(format!("no F2P enchant, teleport or {BONES_TO_BANANAS} named {wanted:?} at {:?}", bot.position())));
     };
     if level < need {
-        return Err(ScriptError::Usage(format!("{spell} needs level {need} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("magic", i64::from(need)));
     }
     let runes = spell_runes(&spell);
     if runes.is_empty() {

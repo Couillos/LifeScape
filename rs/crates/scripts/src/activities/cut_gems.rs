@@ -55,7 +55,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let uncut_name = resource.as_deref().unwrap_or_else(|| uncut_for_level(level));
     let recipe = gem_recipe(uncut_name).ok_or_else(|| ScriptError::Usage(format!("no F2P gem recipe eats {uncut_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("cutting {uncut_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let cut_name = recipe.outputs.first().map(|(name, _)| name.clone()).unwrap_or_default();
     let uncut = obj_id(bot, uncut_name)?;

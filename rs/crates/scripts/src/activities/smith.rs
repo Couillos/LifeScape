@@ -77,7 +77,7 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or_else(|| product_for_level(level));
     let recipe = smith_recipe(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smith recipe makes {product_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("smithing {product_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("smithing", i64::from(recipe.level)));
     }
     let (bar_name, bars_each) = recipe.inputs.first().ok_or_else(|| ScriptError::Usage(format!("smith {product_name} has no bar input at {:?}", bot.position())))?;
     let bars_each = *bars_each as u32;
