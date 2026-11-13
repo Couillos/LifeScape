@@ -49,6 +49,11 @@ pub fn register(order: i64, bounds: QuoteBounds) {
     table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(order, bounds);
 }
 
+/// Bounds of a resting order, if it reprices.
+pub fn bounds_of(order: i64) -> Option<QuoteBounds> {
+    table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&order).cloned()
+}
+
 /// Bounds parsed from a `place` request: `ceiling` (buy) or `floor`
 /// (sell), optional `patience` ticks. `None` = fixed-price order.
 pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64) -> Option<QuoteBounds> {

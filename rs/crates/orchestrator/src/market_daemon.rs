@@ -138,6 +138,11 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     if cancelled > 0 {
                         eprintln!("market-audit: {cancelled} uncovered order(s) cancelled");
                     }
+                    // Then fold same-price fragments into one order each.
+                    let merged = service.consolidate_round();
+                    if merged > 0 {
+                        eprintln!("market-merge: {merged} fragment(s) folded");
+                    }
                 }
                 round += 1;
                 // Locks every round: what open orders and deals promise

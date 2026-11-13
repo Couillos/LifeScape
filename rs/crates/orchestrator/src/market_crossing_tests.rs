@@ -182,3 +182,51 @@ fn open_orders_and_deals_lock_their_lots() {
     assert_eq!(locks["idle"], (0, Default::default()), "no order, no lock");
     cleanup(&path);
 }
+
+/// Live 2026-11-13: fiona_park's raw shrimps rested as a dozen 1–6 unit
+/// asks at 1 coin. The consolidation folds same-price fragments into one
+/// order (other prices and other accounts untouched), and a bid crossing
+/// several fragments of one seller makes one deal.
+#[test]
+fn same_price_fragments_fold_and_cross_as_one_deal() {
+    let (service, path) = service("fold");
+    sync(&service, "fiona_park", &snapshot(Vec::new(), vec![row(RAW_SHRIMP, 40)]));
+    sync(&service, "harry_page", &snapshot(Vec::new(), vec![row(RAW_SHRIMP, 5)]));
+    sync(&service, "bbkjz2vk", &snapshot(Vec::new(), vec![row(COINS, 100)]));
+    for qty in [2, 13, 4] {
+        assert_eq!(place(&service, "fiona_park", "sell", RAW_SHRIMP, qty, 3, ("floor", 1)).get("status").as_str(), Some("open"));
+    }
+    assert_eq!(place(&service, "fiona_park", "sell", RAW_SHRIMP, 5, 4, ("floor", 1)).get("status").as_str(), Some("open"));
+    assert_eq!(place(&service, "harry_page", "sell", RAW_SHRIMP, 5, 3, ("floor", 1)).get("status").as_str(), Some("open"));
+    assert_eq!(service.consolidate_round(), 2, "three fiona@3 fragments become one");
+    let open = |account: &str| -> Vec<(i64, i64)> {
+        let mut rows: Vec<(i64, i64)> = service
+            .lock_store()
+            .account_orders(account)
+            .unwrap_or_default()
+            .iter()
+            .filter(|row| row.status == lifescape_store::OrderStatus::Open)
+            .map(|row| (row.price, row.remaining))
+            .collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(open("fiona_park"), vec![(3, 19), (4, 5)]);
+    assert_eq!(open("harry_page"), vec![(3, 5)], "another seller is never folded in");
+    assert_eq!(service.consolidate_round(), 0, "nothing left to fold");
+    cleanup(&path);
+
+    // Without the fold, one bid over several fragments of one seller at
+    // one price still makes a single deal.
+    let (service, path) = crate::market_crossing_tests::service("fold-deal");
+    sync(&service, "fiona_park", &snapshot(Vec::new(), vec![row(RAW_SHRIMP, 40)]));
+    sync(&service, "bbkjz2vk", &snapshot(Vec::new(), vec![row(COINS, 100)]));
+    for qty in [2, 13, 4] {
+        place(&service, "fiona_park", "sell", RAW_SHRIMP, qty, 3, ("floor", 1));
+    }
+    let bought = place(&service, "bbkjz2vk", "buy", RAW_SHRIMP, 19, 3, ("ceiling", 3));
+    assert_eq!(bought.get("status").as_str(), Some("filled"), "{bought:?}");
+    assert_eq!(bought.get("deals").as_arr().map(|deals| deals.len()), Some(1), "one deal: {bought:?}");
+    cleanup(&path);
+}
+

@@ -35,6 +35,7 @@ pub mod market_daemon;
 pub mod market_reprice;
 pub mod market_service;
 pub mod market_audit;
+pub mod market_merge;
 #[cfg(test)]
 pub(crate) mod market_test_support;
 pub mod market_seed;

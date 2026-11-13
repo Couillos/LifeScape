@@ -686,6 +686,9 @@ impl MarketService {
             }
         };
         let fills: Vec<lifescape_market::Fill> = matched.iter().map(|(fill, _)| fill.clone()).collect();
+        // One deal per counterparty and price (the book rows above keep
+        // their per-fill remaining; `market_merge`).
+        let matched = crate::market_merge::merge_fills(matched);
         self.lock_engine().order_item.insert(order_key, item);
         if rests {
             if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price) {
@@ -808,6 +811,7 @@ impl MarketService {
             }
         };
         let fills: Vec<lifescape_market::Fill> = amend_outcome.iter().map(|(fill, _)| fill.clone()).collect();
+        let amend_outcome = crate::market_merge::merge_fills(amend_outcome);
         self.lock_engine().order_item.insert(replacement as u64, item);
         let mut deal_ids = Vec::new();
         for (fill, rows) in &amend_outcome {
