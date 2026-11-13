@@ -207,6 +207,7 @@ impl MarketService {
             Ok(kept) => crate::logln!("market: execution log = {kept} settled handover(s)"),
             Err(error) => crate::logln!("market: execution resync failed: {error}"),
         }
+        service.reload_prints();
         service.reload_books();
         Ok(service)
     }
@@ -440,11 +441,13 @@ impl MarketService {
         };
         let from = request.get("from").as_i64().unwrap_or(default_from);
         let mut store = self.lock_store();
-        let candles = store.candles_or_rebuild(item, resolution, from, to).unwrap_or_default();
+        // No gap (user rule 2026-11-13): candles open at the previous
+        // close and trade-less windows are flat at the last close, up to
+        // the live window (`to` capped at now: the web bridge ceils it).
+        let live_edge = to.min(Self::now_clock() + 1);
+        let (candles, previous_close) =
+            store.continuous_candles(item, resolution, from, live_edge).unwrap_or_default();
         let executions = store.executions_for_item(item, from, to).unwrap_or_default();
-        // Close carried by the trade-less slots before the window's first
-        // candle (the front draws one flat candle per empty slot).
-        let previous_close = store.last_price_before(item, from).ok().flatten();
         // Execution count per candle window (tooltip §6.2, `n`): the
         // candles table carries OHLCV only, so count the window's fills.
         let width = resolution.width_seconds();

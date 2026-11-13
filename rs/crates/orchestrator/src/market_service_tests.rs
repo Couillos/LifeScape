@@ -640,7 +640,7 @@ fn history_candles_carry_execution_counts() {
     assert_eq!(history.get("ok").as_bool(), Some(true));
     assert_eq!(history.get("res").as_str(), Some("1h"));
     let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
-    assert_eq!(candles.len(), 2);
+    assert_eq!(candles.len(), 3, "two traded hours, then a flat one up to `to`");
     assert_eq!(candles[0].get("t").as_i64(), Some(hour));
     assert_eq!(candles[0].get("o").as_i64(), Some(4));
     assert_eq!(candles[0].get("h").as_i64(), Some(6));
@@ -651,14 +651,18 @@ fn history_candles_carry_execution_counts() {
     assert_eq!(candles[1].get("t").as_i64(), Some(hour + 3600));
     assert_eq!(candles[1].get("v").as_i64(), Some(10));
     assert_eq!(candles[1].get("n").as_i64(), Some(1), "single fill in the window");
+    assert_eq!(candles[1].get("o").as_i64(), Some(5), "opens at the previous close");
+    assert_eq!(candles[2].get("n").as_i64(), Some(0), "trade-less window: flat, no fill");
+    assert_eq!(candles[2].get("v").as_i64(), Some(0));
     cleanup(&path);
 }
 
-/// History stays sparse: windows without executions return no candle,
-/// so the front draws the fixed-slot gap (never a fake flat line).
+/// No gap (user rule 2026-11-13): a window without executions is a flat
+/// candle at the last close (volume 0, `n` 0), and every candle opens at
+/// the previous close. Nothing before the first known price.
 #[test]
-fn history_stays_sparse_for_empty_windows() {
-    let (service, path) = service("candle-sparse");
+fn history_fills_empty_windows_at_the_previous_close() {
+    let (service, path) = service("candle-continuous");
     let hour = 48_000 * 3600;
     print_at(&service, hour + 60, 4, 2);
     print_at(&service, hour + 2 * 3600 + 60, 9, 5);
@@ -671,10 +675,20 @@ fn history_stays_sparse_for_empty_windows() {
         ("to", Value::Int(hour + 4 * 3600)),
     ]));
     let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
-    assert_eq!(candles.len(), 2, "the empty middle hour is the front's gap");
-    assert_eq!(candles[0].get("t").as_i64(), Some(hour));
-    assert_eq!(candles[1].get("t").as_i64(), Some(hour + 2 * 3600));
-    assert_eq!(candles[1].get("n").as_i64(), Some(1));
+    let ohlcvn: Vec<[i64; 7]> = candles
+        .iter()
+        .map(|row| ["t", "o", "h", "l", "c", "v", "n"].map(|key| row.get(key).as_i64().unwrap_or(-1)))
+        .collect();
+    assert_eq!(
+        ohlcvn,
+        vec![
+            [hour, 4, 4, 4, 4, 2, 1],
+            [hour + 3600, 4, 4, 4, 4, 0, 0],
+            [hour + 2 * 3600, 4, 9, 4, 9, 5, 1],
+            [hour + 3 * 3600, 9, 9, 9, 9, 0, 0],
+        ]
+    );
+    assert!(history.get("prev_close").is_null(), "nothing traded before the window");
     cleanup(&path);
 }
 
@@ -723,7 +737,7 @@ fn restart_backfills_history_from_executions() {
             ("item", Value::Int(314)),
             ("res", str_value(res)),
             ("from", Value::Int(hour - 3600)),
-            ("to", Value::Int(hour + 3 * 3600)),
+            ("to", Value::Int(hour + 3600)),
         ]));
         let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
         assert_eq!(candles.len(), 1, "{res} backfills from executions, got {candles:?}");
