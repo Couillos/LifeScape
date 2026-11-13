@@ -565,6 +565,15 @@ impl Bot {
         crate::snapshot::aggregate(&self.world.inv)
     }
 
+    /// Units of `obj` in the backpack alone. `inventory()` sums every
+    /// streamed container: with the bank open it also counts the bank
+    /// stack and the `bank_side:inv` mirror of the pack, whose partials
+    /// land one by one (live 2026-11-13: a withdrawal read mid-stream
+    /// waited 300 ticks for a gain it had already counted).
+    pub fn pack_count(&self, obj: u16) -> u32 {
+        self.backpack().1.iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).fold(0u32, u32::saturating_add)
+    }
+
     /// Deposit the backpack with the bank's "Deposit All" action (op 4 per
     /// slot, one burst, then one retry of leftovers). Tick-bounded.
     pub fn bank_deposit_all(&mut self, side_com: u16, keep_ids: &[u16], timeout: u64) -> Result<bool> {
@@ -766,7 +775,7 @@ impl Bot {
             if locked > 0 {
                 self.log(&format!("bank_withdraw {bank_obj}: {locked} locked by open market orders, nothing usable"));
             }
-            return Ok(self.inventory().get(&pack_obj).copied().unwrap_or(0));
+            return Ok(self.pack_count(pack_obj));
         }
         let mut remaining = count;
         while remaining > 0 {
@@ -787,13 +796,13 @@ impl Bot {
             } else {
                 (1, 1)
             };
-            let before = self.inventory().get(&pack_obj).copied().unwrap_or(0);
+            let before = self.pack_count(pack_obj);
             self.inv_button(op, bank_obj, slot, main_com)?;
             let deadline = self.world.ticks + timeout;
             let mut grew = false;
             while self.world.ticks < deadline {
                 self.pump(2)?;
-                if self.inventory().get(&pack_obj).copied().unwrap_or(0) > before {
+                if self.pack_count(pack_obj) > before {
                     grew = true;
                     break;
                 }
@@ -807,7 +816,7 @@ impl Bot {
             }
             remaining = remaining.saturating_sub(step);
         }
-        Ok(self.inventory().get(&pack_obj).copied().unwrap_or(0))
+        Ok(self.pack_count(pack_obj))
     }
 
     pub fn cheat(&mut self, text: &str) -> Result<()> {

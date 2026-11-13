@@ -171,3 +171,65 @@ fn refused_ground_objects_are_skipped_for_the_session() {
     let left = bot.reachable_ground_items(Some(1944));
     assert_eq!(left, vec![((3016, 3293, 0), 1944)], "only the refused tile drops out");
 }
+
+/// Live 2026-11-13 14:10:31 (bh99tw2f, deals 1063/1064): `bank_withdraw
+/// Feather x100` clicked twice, then waited 300 ticks for nothing while
+/// the bank held 2969 feathers. The server streams one withdrawal as
+/// three partials in listener order (`inventory:inv` +10, `bank_side:inv`
+/// +10, `bank_main:inv` -10, NetworkPlayer.updateInvs); a pump returning
+/// between the second and the third left a pack+side+bank total 10 too
+/// high, the next click's `before` was taken from it, and the settled
+/// total never exceeded it. Progress is read on the pack alone.
+#[test]
+fn withdraw_progress_never_reads_a_transient_overcount() {
+    const PACK: u16 = 3214;
+    const SIDE: u16 = 2006;
+    const BANK: u16 = 5382;
+    const FEATHER: u16 = 314;
+    let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    bot.tables.com_id = |name| match name {
+        "inventory:inv" => Some(PACK),
+        "bank_side:inv" => Some(SIDE),
+        "bank_main:inv" => Some(BANK),
+        _ => None,
+    };
+    // UPDATE_INV_FULL: com, slot count, then (obj + 1, count) per slot.
+    let empty = |com: u16, slots: u8| {
+        let mut body = vec![(com >> 8) as u8, com as u8, slots];
+        for _ in 0..slots {
+            body.extend([0, 0, 0]);
+        }
+        body
+    };
+    // UPDATE_INV_PARTIAL: com, then (slot, obj + 1, count; 255 + u32 past 254).
+    let partial = |com: u16, slot: u8, count: u32| {
+        let mut body = vec![(com >> 8) as u8, com as u8, slot, ((FEATHER + 1) >> 8) as u8, (FEATHER + 1) as u8];
+        if count < 255 {
+            body.push(count as u8);
+        } else {
+            body.push(255);
+            body.extend(count.to_be_bytes());
+        }
+        body
+    };
+    bot.world.feed("UPDATE_INV_FULL", &empty(PACK, 28)).expect("pack");
+    bot.world.feed("UPDATE_INV_FULL", &empty(SIDE, 28)).expect("side");
+    bot.world.feed("UPDATE_INV_FULL", &empty(BANK, 9)).expect("bank");
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(BANK, 8, 2969)).expect("bank stack");
+    assert_eq!(bot.pack_count(FEATHER), 0, "the bank stack is not carried");
+    // Click 1: the pump returns after two of the three partials.
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(PACK, 0, 10)).expect("pack +10");
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(SIDE, 0, 10)).expect("side +10");
+    let before_second_click = bot.pack_count(FEATHER);
+    // The rest of click 1, then click 2 in full.
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(BANK, 8, 2959)).expect("bank -10");
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(PACK, 0, 20)).expect("pack +10");
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(SIDE, 0, 20)).expect("side +10");
+    bot.world.feed("UPDATE_INV_PARTIAL", &partial(BANK, 8, 2949)).expect("bank -10");
+    assert!(
+        bot.pack_count(FEATHER) > before_second_click,
+        "the second click landed: {} after vs {before_second_click} before",
+        bot.pack_count(FEATHER)
+    );
+    assert_eq!(bot.pack_count(FEATHER), 20, "the pack alone");
+}
