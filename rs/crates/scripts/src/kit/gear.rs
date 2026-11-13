@@ -12,7 +12,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::bank::{heal_at_bank, live_bank_booths, nearest_bank};
-use crate::kit::pack::{free_slots, obj_id};
+use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
 
@@ -442,6 +442,13 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
     keep.sort();
     keep.dedup();
     bot.bank_deposit_all(side_bank, &keep, 25)?;
+    // A paid run (`toll`) leaves the bank with the fare in the pack.
+    if let Ok(coins) = obj_id(bot, "coins") {
+        let short = crate::kit::toll::restock_fare(bot.allow_paid, pack_total(bot, coins));
+        if short > 0 && bot.bank_items().contains_key(&coins) {
+            let _ = bot.bank_withdraw(coins, short, 25);
+        }
+    }
     for (name, units) in keep_items {
         let Ok(obj) = obj_id(bot, name) else { continue };
         let carried: u32 = bot.backpack().1.iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).sum();

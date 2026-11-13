@@ -139,10 +139,7 @@ fn work_sheep(bot: &mut Bot, slot: u16, x: i32, z: i32, wool: u16) -> Result<(Wo
 /// Shear banked loads in the open session: `shear [count]`.
 pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("shear", args)?;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
