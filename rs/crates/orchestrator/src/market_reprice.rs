@@ -75,7 +75,11 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     let mut moved = 0;
     for (order, bounds) in entries {
         let row = service.lock_store().get_order(order).ok().flatten();
-        let Some(row) = row.filter(|row| row.status == lifescape_store::OrderStatus::Open && row.remaining > 0) else {
+        // Partly filled orders (`matched`) keep walking their remainder.
+        let resting = |row: &lifescape_store::Order| {
+            row.remaining > 0 && matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched)
+        };
+        let Some(row) = row.filter(resting) else {
             service.lock_engine().quote_bounds.remove(&order);
             continue;
         };

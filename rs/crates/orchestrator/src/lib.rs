@@ -36,6 +36,7 @@ pub mod market_reprice;
 pub mod market_service;
 pub mod market_audit;
 pub mod market_merge;
+pub mod market_orders;
 #[cfg(test)]
 pub(crate) mod market_test_support;
 pub mod market_seed;
@@ -45,6 +46,9 @@ mod market_service_tests;
 #[cfg(test)]
 #[path = "market_crossing_tests.rs"]
 mod market_crossing_tests;
+#[cfg(test)]
+#[path = "market_integrity_tests.rs"]
+mod market_integrity_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;

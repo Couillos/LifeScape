@@ -13,7 +13,6 @@
 
 use std::collections::BTreeMap;
 
-use lifescape_json::{object, str_value, Value};
 use lifescape_market::{Fill, Order};
 
 use crate::market_service::MarketService;
@@ -56,19 +55,25 @@ fn fold_rows(rows: Vec<Order>) -> Vec<Order> {
 
 impl MarketService {
     /// Merges every account's resting orders that share object, side and
-    /// price into one: cancel the fragments, place their summed remainder
-    /// once with the oldest fragment's repricing bounds. Returns the
-    /// fragments merged away.
+    /// price into one, directly in book and carnet: the fragments were
+    /// covered and inside the price band when placed, so the fold never
+    /// runs them through the placement guards again (a band that moved
+    /// since, or a stale ledger, used to refuse the re-place after every
+    /// fragment was cancelled: the lots vanished). Returns the fragments
+    /// merged away.
     pub(crate) fn consolidate_round(&self) -> usize {
-        let open: Vec<lifescape_store::Order> = self
+        let resting: Vec<lifescape_store::Order> = self
             .lock_store()
             .resting_orders()
             .unwrap_or_default()
             .into_iter()
-            .filter(|order| order.status == lifescape_store::OrderStatus::Open && order.remaining > 0)
+            .filter(|order| {
+                order.remaining > 0
+                    && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched)
+            })
             .collect();
         let mut groups: BTreeMap<(String, i64, bool, i64), Vec<lifescape_store::Order>> = BTreeMap::new();
-        for order in open {
+        for order in resting {
             let sell = order.side == lifescape_store::OrderSide::Sell;
             groups.entry((order.account.clone(), order.item_id, sell, order.price)).or_default().push(order);
         }
@@ -78,48 +83,90 @@ impl MarketService {
                 continue;
             }
             rows.sort_by_key(|row| (row.created_clock, row.order_id));
-            let total: i64 = rows.iter().map(|row| row.remaining).sum();
-            let bounds = crate::market_reprice::bounds_of(self, rows[0].order_id);
-            let mut cancelled = 0usize;
-            for row in &rows {
-                let reply = self.handle(&object(vec![
-                    ("op", str_value("cancel")),
-                    ("account", str_value(&account)),
-                    ("order", Value::Int(row.order_id)),
-                ]));
-                if reply.get("ok").as_bool() == Some(true) {
-                    cancelled += 1;
+            let side = if sell { "sell" } else { "buy" };
+            match self.fold_fragments(&account, item, sell, price, &rows) {
+                Ok((folded, total)) => {
+                    merged += folded.saturating_sub(1);
+                    crate::logln!("market-merge: {account}: {folded} {side} order(s) on obj {item} at {price} merged into one of {total}");
                 }
-            }
-            if cancelled == 0 {
-                continue;
-            }
-            let replaced: i64 = rows.iter().take(cancelled).map(|row| row.remaining).sum::<i64>().min(total);
-            let mut fields = vec![
-                ("op", str_value("place")),
-                ("account", str_value(&account)),
-                ("side", str_value(if sell { "sell" } else { "buy" })),
-                ("item", Value::Int(item)),
-                ("qty", Value::Int(replaced)),
-                ("price", Value::Int(price)),
-            ];
-            if let Some(bounds) = bounds {
-                if sell {
-                    fields.push(("floor", Value::Int(bounds.floor)));
-                } else {
-                    fields.push(("ceiling", Value::Int(bounds.ceiling)));
-                }
-                fields.push(("patience", Value::Int(bounds.patience_ticks as i64)));
-            }
-            let reply = self.handle(&object(fields));
-            if reply.get("ok").as_bool() == Some(true) {
-                merged += cancelled.saturating_sub(1);
-                crate::logln!("market-merge: {account}: {cancelled} {} order(s) on obj {item} at {price} merged into one of {replaced}", if sell { "sell" } else { "buy" });
-            } else {
-                crate::logln!("market-merge: {account}: re-place of {replaced} obj {item} refused: {:?}", reply.get("error").as_str());
+                Err(error) => crate::logln!("market-merge: {account}: {side} obj {item} at {price} not folded: {error}"),
             }
         }
         merged
+    }
+
+    /// Folds one group of fragments (same account, object, side, price;
+    /// oldest first). Returns (fragments folded, merged remainder).
+    ///
+    /// Engine and store are never held together:
+    /// 1. carnet: the merged row is created (open, at the oldest
+    ///    fragment's clock so a reload keeps its rank);
+    /// 2. book, one engine section: the fragments leave and the merged
+    ///    order enters with their summed remainder and the oldest rank,
+    ///    without matching (the fragments rested uncrossed at that very
+    ///    price). When the book disagrees with the carnet read (a fill or
+    ///    cancel raced the round), the fragments go back untouched and the
+    ///    next round retries: the merged row is never resized afterwards,
+    ///    where it could overwrite a concurrent fill's refresh;
+    /// 3. carnet: the folded fragments close, or the merged row closes
+    ///    when nothing folded.
+    fn fold_fragments(&self, account: &str, item: i64, sell: bool, price: i64, rows: &[lifescape_store::Order]) -> Result<(usize, i64), String> {
+        let clock = Self::now_clock();
+        let planned: i64 = rows.iter().map(|row| row.remaining).sum();
+        let oldest_clock = rows.first().map(|row| row.created_clock).ok_or("no fragment")?;
+        let merged_id = self
+            .lock_store()
+            .place_order(&lifescape_store::NewOrder {
+                account: account.to_string(),
+                side: if sell { lifescape_store::OrderSide::Sell } else { lifescape_store::OrderSide::Buy },
+                item_id: item,
+                quantity: planned,
+                price,
+                dormant: false,
+                clock: oldest_clock,
+            })
+            .map_err(|error| format!("merged row refused: {error}"))?;
+        let taken = {
+            let mut engine = self.lock_engine();
+            let book = engine.books.entry(item).or_default();
+            let taken: Vec<Order> = rows.iter().filter_map(|row| book.cancel(row.order_id as u64).ok()).collect();
+            let total: i64 = taken.iter().map(|order| order.remaining).sum();
+            match taken.iter().min_by_key(|order| order.seq).cloned() {
+                Some(first) if taken.len() == rows.len() && total == planned => {
+                    book.relist(Order { id: merged_id as u64, quantity: total, remaining: total, ..first });
+                    engine.order_item.insert(merged_id as u64, item);
+                    taken
+                }
+                _ => {
+                    for order in taken {
+                        book.relist(order);
+                    }
+                    Vec::new()
+                }
+            }
+        };
+        let store = self.lock_store();
+        if taken.is_empty() {
+            let _ = store.cancel_order(merged_id, clock);
+            return Err("book and carnet disagree (a fill or cancel raced the round), retried next round".to_string());
+        }
+        for order in &taken {
+            if let Err(error) = store.cancel_order(order.id as i64, clock) {
+                crate::logln!("market-merge: fragment {} already closed in the carnet ({error})", order.id);
+            }
+        }
+        drop(store);
+        // The oldest fragment's repricing bounds carry over; the others go.
+        let mut engine = self.lock_engine();
+        let oldest = taken.iter().min_by_key(|order| order.seq).map(|order| order.id as i64);
+        let bounds = oldest.and_then(|id| engine.quote_bounds.get(&id).cloned());
+        for order in &taken {
+            engine.quote_bounds.remove(&(order.id as i64));
+        }
+        if let Some(bounds) = bounds {
+            engine.quote_bounds.insert(merged_id, bounds);
+        }
+        Ok((taken.len(), planned))
     }
 }
 

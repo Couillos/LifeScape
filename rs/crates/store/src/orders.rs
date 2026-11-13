@@ -178,6 +178,9 @@ impl Store {
     }
 
     /// Marks an order matched or settled after a deal moves forward.
+    /// Final rows (`settled`, `cancelled`) never move again: a late
+    /// refresh racing a cancel would otherwise revive a withdrawn order
+    /// (review 2026-11-13). Refused writes report `NotFound`.
     pub fn set_order_status(
         &self,
         order_id: i64,
@@ -190,11 +193,11 @@ impl Store {
         }
         let touched = self.connection.execute(
             "UPDATE orders SET status = ?1, remaining = ?2, updated_clock = ?3 \
-             WHERE order_id = ?4",
+             WHERE order_id = ?4 AND status IN ('open','matched')",
             rusqlite::params![status.as_str(), remaining, clock, order_id],
         )?;
         if touched == 0 {
-            return Err(Error::NotFound(format!("order {order_id}")));
+            return Err(Error::NotFound(format!("non-final order {order_id}")));
         }
         Ok(())
     }
@@ -313,6 +316,21 @@ mod orders_tests {
             Some(OrderStatus::Cancelled)
         );
         assert!(store.account_orders("t02")?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn final_rows_never_move_again() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let cancelled = store.place_order(&sample_order("t03"))?;
+        store.cancel_order(cancelled, 1_700_000_100)?;
+        assert!(store.set_order_status(cancelled, OrderStatus::Matched, 40, 1_700_000_200).is_err());
+        let settled = store.place_order(&sample_order("t03"))?;
+        store.set_order_status(settled, OrderStatus::Settled, 0, 1_700_000_100)?;
+        assert!(store.set_order_status(settled, OrderStatus::Open, 100, 1_700_000_200).is_err());
+        assert_eq!(store.get_order(cancelled)?.map(|found| found.status), Some(OrderStatus::Cancelled));
+        assert_eq!(store.get_order(settled)?.map(|found| (found.status, found.remaining)), Some((OrderStatus::Settled, 0)));
         Ok(())
     }
 }

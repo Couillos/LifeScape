@@ -215,6 +215,66 @@ impl Store {
         )?;
         Ok(touched)
     }
+
+    /// Boot-time variant of `fail_stale_deals` that gives the lots back:
+    /// every non-final deal fails with `reason` and both parties get an
+    /// open order of the deal's quantity at the deal's price, created at
+    /// the deal's clock so the reload keeps its rank (same outcome as a
+    /// neutral runtime failure: both relist). The carnet rows behind a
+    /// match were settled at match time; without this the quantity of a
+    /// deal killed by a daemon restart vanished for both sides. One
+    /// transaction: a crash mid-way fails nothing and relists nothing.
+    /// Returns the deals failed.
+    pub fn fail_stale_deals_relisting(&self, reason: &str, clock: i64) -> Result<Vec<Deal>, Error> {
+        if reason.is_empty() {
+            return Err(Error::Invalid("failed deal needs a reason".to_string()));
+        }
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
+        match self.fail_and_relist_inner(reason, clock) {
+            Ok(failed) => {
+                self.connection.execute_batch("COMMIT")?;
+                Ok(failed)
+            }
+            Err(error) => {
+                let _ignored = self.connection.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn fail_and_relist_inner(&self, reason: &str, clock: i64) -> Result<Vec<Deal>, Error> {
+        let query = format!(
+            "SELECT {DEAL_COLUMNS} FROM deals WHERE status NOT IN ('settled','failed') \
+             ORDER BY created_clock, deal_id"
+        );
+        let mut stale = Vec::new();
+        {
+            let mut statement = self.connection.prepare(&query)?;
+            let mut found_rows = statement.query(rusqlite::params![])?;
+            while let Some(row) = found_rows.next()? {
+                stale.push(map_deal(row)?);
+            }
+        }
+        for deal in &stale {
+            self.connection.execute(
+                "UPDATE deals SET status = 'failed', fail_reason = ?1, updated_clock = ?2 \
+                 WHERE deal_id = ?3",
+                rusqlite::params![reason, clock, deal.deal_id],
+            )?;
+            for (account, side) in [(&deal.buyer, crate::OrderSide::Buy), (&deal.seller, crate::OrderSide::Sell)] {
+                self.place_order(&crate::NewOrder {
+                    account: account.clone(),
+                    side,
+                    item_id: deal.item_id,
+                    quantity: deal.quantity,
+                    price: deal.price,
+                    dormant: false,
+                    clock: deal.created_clock,
+                })?;
+            }
+        }
+        Ok(stale)
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +305,40 @@ mod deals_tests {
             store.get_deal(deal_id)?.map(|found| found.status),
             Some(DealStatus::Settled)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_deals_fail_and_relist_both_sides_once() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let fresh = |status: DealStatus| -> Result<i64, Error> {
+            let deal_id = store.create_deal(&NewDeal {
+                buyer: "t01".to_string(),
+                seller: "t02".to_string(),
+                item_id: 314,
+                quantity: 7,
+                price: 3,
+                meeting_x: 3212,
+                meeting_y: 3428,
+                meeting_level: 0,
+                deadline_tick: 9999,
+                clock: 1_700_000_000,
+            })?;
+            store.set_deal_status(deal_id, status, "", 1_700_000_005)?;
+            Ok(deal_id)
+        };
+        let live = fresh(DealStatus::Convened)?;
+        fresh(DealStatus::Settled)?;
+        let failed = store.fail_stale_deals_relisting("daemon restart", 1_700_000_100)?;
+        assert_eq!(failed.iter().map(|deal| deal.deal_id).collect::<Vec<_>>(), vec![live]);
+        let rows = |account: &str| -> Result<Vec<(crate::OrderSide, i64, i64, i64)>, Error> {
+            Ok(store.account_orders(account)?.iter().map(|row| (row.side, row.remaining, row.price, row.created_clock)).collect())
+        };
+        assert_eq!(rows("t01")?, vec![(crate::OrderSide::Buy, 7, 3, 1_700_000_000)]);
+        assert_eq!(rows("t02")?, vec![(crate::OrderSide::Sell, 7, 3, 1_700_000_000)]);
+        assert!(store.fail_stale_deals_relisting("daemon restart", 1_700_000_200)?.is_empty(), "idempotent");
+        assert_eq!(store.account_orders("t01")?.len(), 1);
         Ok(())
     }
 }

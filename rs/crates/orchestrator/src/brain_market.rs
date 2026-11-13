@@ -61,13 +61,9 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
         return;
     }
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return };
-    let open = service
-        .lock_store()
-        .account_orders(&job.account)
-        .unwrap_or_default()
-        .iter()
-        .any(|row| row.item_id == id && row.side == lifescape_store::OrderSide::Buy && row.status == lifescape_store::OrderStatus::Open);
-    if open {
+    // A partly filled bid (`matched`, remainder resting) still stands:
+    // only open rows used to count, so bids piled up beside it.
+    if !service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy).is_empty() {
         return;
     }
     // What is still missing, capped by the wallet; at the best ask when

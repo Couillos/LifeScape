@@ -156,3 +156,11 @@ Décisions (règles utilisateur) :
   compte (sauvegarde hors ligne) moins ses deals en cours ; les non couverts
   sont annulés (`market_audit.rs`). Premier passage : 222 ordres annulés.
 - Un ordre partiellement rempli (`matched`) reste annulable.
+- Intégrité des carnets (revue du 13) : le livre en mémoire fait foi. Annuler
+  ou amender retire d'abord l'ordre du livre (verrou moteur seul), puis écrit
+  le carnet (verrou store seul) ; un ordre absent du livre (rempli, en vol)
+  n'est jamais « annulé », et une ligne finale (`settled`/`cancelled`) ne
+  bouge plus. La fusion des fragments se fait dans livre + carnet sans repasser
+  par les gardes de placement (bande de prix, couverture). Au redémarrage, les
+  deals en vol échouent et leurs lots reviennent aux deux parties (comme un
+  `nav_down`). Verrous et audit comptent un ordre sur billet sur l'objet de base.
