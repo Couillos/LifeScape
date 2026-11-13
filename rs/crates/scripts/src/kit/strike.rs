@@ -38,16 +38,32 @@ pub(crate) fn foe_refusal(line: &str) -> Option<FoeRefusal> {
 
 /// One attack on `slot` for the run's combat style (PRD3 lot 6). Melee
 /// and ranged click Attack: the server shoots when a bow and arrows are
-/// worn. Magic casts the strongest damage spell the pack funds; no runes
+/// worn. Magic casts the ordered spell (`bot.combat_spell`), else the
+/// strongest damage spell the pack funds; no runes
 /// left blocks typed so the brain files the runes as an obtain. False
 /// when an empty quiver wants a bank trip (arrows banked) instead.
 pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool, ScriptError> {
     if bot.combat_style == "magic" {
-        let Some(spell) = crate::activities::magic_style::castable_spell(bot) else {
-            bot.log("out of runes for any damage spell");
-            return Err(ScriptError::Blocked { missing: vec!["mindrune".to_string(), "airrune".to_string()] });
+        // The planner's spell (`--spell`) and nothing else: its runes run
+        // short, the run blocks on exactly those (staff element excluded).
+        let spell = match bot.combat_spell.clone() {
+            Some(ordered) => {
+                let missing = crate::kit::magic::spell_shortfall(bot, &crate::activities::magic_style::spell_runes(&ordered));
+                if !missing.is_empty() {
+                    bot.log(&format!("out of runes for {ordered}: {}", missing.join(", ")));
+                    return Err(ScriptError::Blocked { missing });
+                }
+                ordered
+            }
+            None => match crate::activities::magic_style::castable_spell(bot) {
+                Some(best) => best.to_string(),
+                None => {
+                    bot.log("out of runes for any damage spell");
+                    return Err(ScriptError::Blocked { missing: vec!["mindrune".to_string(), "airrune".to_string()] });
+                }
+            },
         };
-        let com = crate::kit::magic::spell_com(bot, spell)?;
+        let com = crate::kit::magic::spell_com(bot, &spell)?;
         bot.op_npc_t(slot, com)?;
         return Ok(true);
     }

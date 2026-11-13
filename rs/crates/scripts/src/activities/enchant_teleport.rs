@@ -97,8 +97,16 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // Teleports move the bot, not an item: exactly one cast per run.
     // Held targets run the pack (count omitted or 0 = the load).
     let want = if target_obj.is_none() { 1 } else { spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX) };
+    // The order's other stops (`--want`, `--level magic N`, budget).
+    let mut spec = spec;
+    spec.targets.count = None;
+    let state = crate::kit::cycle::CycleState::begin(bot, &spec);
     let mut done = 0u32;
     while done < want {
+        if let Some(stop) = crate::kit::cycle::poll_stop(bot, &state, &spec).filter(|_| target_obj.is_some()) {
+            bot.log(&format!("ok {spell} x{done}, order met"));
+            return crate::kit::cycle::exit_code(stop);
+        }
         if !missing_runes(bot, &runes).is_empty() {
             break;
         }

@@ -559,7 +559,7 @@ Drapeaux communs :
 | `--budget-min/--budget-max <ticks>` | engagements `make_money` | fenêtre d'engagement |
 | `--level <comp> <N>` | nœud `reach_level` (N ≥ 2) | s'arrêter au niveau N de `<comp>` (récolteurs : leur compétence ; combat : la compétence du nœud) |
 | `--want <objet> <N>` | nœud `obtain` (sauf `market`, `walkto`, `equip`, quêtes) | s'arrêter quand N unités de plus sont détenues (N = quantité − détenu au lancement) |
-| `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
+| `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` et `market buy|sell|flip|cleanup` (seul `shopbuy` marche vers un marchand) | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
 | `--wear <objet>` | le site est dans une guilde à uniforme (artisanat : `brown_apron`, cuisiniers : `chefs_hat`) | porter l'objet avant la porte (le planner l'a fait obtenir) |
 | `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm`) |
 | `--spell <sort>` | magie | lancer CE sort (le planner a dimensionné ses runes) |
@@ -586,20 +586,20 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
 | `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
-| `superheat:<barre>` | `superheat` | `<barre>` | `--want` (minerais + runes de feu + nature) |
+| `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais + runes de feu + nature dans le sac ; bâton de feu porté accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
 | `spin:<produit>` | `spin` | `<intrant>` (`wool`) | `--level crafting N`, `--want`, `--site` (rouet) |
-| `pottery:<produit>` | `pottery` | `<produit>` (`pot_empty`, `piedish`, `bowl_empty`) | `--level crafting N`, `--want`, `--site` ; **à faire côté script : accepter le produit en positionnel (aujourd'hui : pots seulement)** |
+| `pottery:<produit>` | `pottery` | `<produit>` (`pot_empty`, `piedish`, `bowl_empty`) | `--level crafting N`, `--want`, `--site` |
 | `cut:<gemme>` | `cut_gems` | `<brut>` (`uncut_sapphire`) | `--want` ; ciseau = outil porté |
 | `craft:<cuir>` | `leatherwork` | `<produit>` | `--want` ; aiguille portée, fil consommé |
 | `tan:<peau>` | `leatherwork` | `<peau>` | `--want`, `--site` (tanneur), `toll`, `--wear` |
 | `runecraft:<rune>` | `runecraft` | `<rune>` | `--level runecraft N`, `--want`, `--site` (autel), `toll` ; talisman = outil porté |
 | `essence:<…>` | `essence_run` | — | `--want` |
 | `fire:<bûches>` | `firemaking` | `<bûches>` | `--level firemaking N` ; briquet porté |
-| `bury:<os>` | `bury_loot` | `<os>` (`bones`, `big_bones`) | `--level prayer N` ; **à faire côté script : enregistrer `bury_loot` (retirer les os en banque, enterrer, recommencer)** |
+| `bury:<os>` | `bury_loot` | `<os>` (`bones`, `big_bones`) | `--level prayer N` (retire les os en banque, enterre, recommence) |
 | `dye:<teinture>` | `dye` | `<teinture>` (`yellowdye`…) | `--want`, `--site` (Aggie) |
-| `ground:<objet>` | `ground_pickup` | `<objet>` | `--want`, `--site` (apparition choisie) ; **à faire : accepter l'objet en positionnel** |
+| `ground:<objet>` | `ground_pickup` | `<objet>` | `--want`, `--site` (apparition choisie) (ne ramasse que cet objet) |
 | `telegrab:wine_of_zamorak` | `telegrab_wine` | — | `--want`, `--site` |
 | `pick:<champ>` / `gather:wheat/<r>` | `picking` | `<champ>` | `--want` |
 | `mill:<produit>` | `mill_grain` | — | `--want`, `--site` (trémie ; `--wear chefs_hat` si guilde) |
@@ -609,7 +609,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` |
 | `alch:<objet>` | `alchemy` | `<objet>` | — |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
-| `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `toll` |
+| `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `market:flip` | `market` | `flip` | budget |
 | `space:cleanup` | `market` | `cleanup` | — |
 | `quest:<clé>` | `quest_<nom>` (table `quest_script`) | — | clé inconnue = aucun script (abandon typé) |

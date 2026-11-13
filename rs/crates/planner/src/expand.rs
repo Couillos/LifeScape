@@ -394,7 +394,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
 /// combat level): the node records where the bot goes; no safe site
 /// yet blocks typed on the combat level to train (`missing:combat:N`),
 /// a method no level makes safe blocks as unworkable.
-fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
+pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     node.site = None;
     node.toll = false;
     if matches!(node.status, NodeStatus::Blocked { .. }) {
@@ -424,6 +424,9 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     if locked == "shop:buy" {
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
             node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
+            // `pick_shop` keeps a keeper across the Al Kharid fence only
+            // with the fare covered: the launch then carries `toll`.
+            node.toll = node.site.is_some_and(|site| ctx.position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, site)));
         }
         return;
     }

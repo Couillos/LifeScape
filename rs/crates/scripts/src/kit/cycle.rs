@@ -79,6 +79,12 @@ pub struct TaskSpec {
     pub allow_paid: bool,
     /// Hunter zones allowed (`wild`, woodcut only today).
     pub allow_wild: bool,
+    /// Spell the brain sized the runes for (`--spell`, magic): cast
+    /// exactly this one, never the strongest the level unlocks.
+    pub spell: Option<String>,
+    /// Uniform the guild door checks (`--wear`, repeatable): worn before
+    /// the run walks to its site (`kit::uniform`).
+    pub wear: Vec<String>,
 }
 
 impl TaskSpec {
@@ -98,6 +104,8 @@ impl TaskSpec {
             no_bank: false,
             allow_paid: false,
             allow_wild: false,
+            spell: None,
+            wear: Vec::new(),
         }
     }
 }
@@ -116,8 +124,8 @@ pub fn split_resource(args: &[String]) -> (Option<String>, Vec<String>) {
 
 /// Scripts whose resource positional is split off before `parse_cli`
 /// (gatherers, cook and the combat styles take it inside `parse_cli`).
-pub const SPLIT_RESOURCE_SCRIPTS: [&str; 18] = [
-    "alchemy", "bury_loot", "cut_gems", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
+pub const SPLIT_RESOURCE_SCRIPTS: [&str; 19] = [
+    "alchemy", "bury_loot", "cook_meals", "cut_gems", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
     "picking", "pottery", "runecraft", "smelt", "smelt_jewelry", "smith", "spin", "stringing", "superheat",
 ];
 
@@ -139,7 +147,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--spell SPELL] [--wear ITEM]... [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -248,6 +256,14 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
             "--node" => {
                 let node = args.get(index + 1).cloned().filter(|node| !node.is_empty()).ok_or_else(usage)?;
                 spec.node_id = node;
+                index += 2;
+            }
+            "--spell" => {
+                spec.spell = Some(args.get(index + 1).cloned().filter(|spell| !spell.is_empty() && !spell.starts_with("--")).ok_or_else(usage)?);
+                index += 2;
+            }
+            "--wear" => {
+                spec.wear.push(args.get(index + 1).cloned().filter(|item| !item.is_empty() && !item.starts_with("--")).ok_or_else(usage)?);
                 index += 2;
             }
             other if other.starts_with("--") => return Err(usage()),
@@ -457,6 +473,8 @@ pub fn blocked_access(area: &str) -> ScriptError {
 /// every other error propagates (blocked included).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
+    // A guild site: the uniform goes on before any step walks to the door.
+    crate::kit::uniform::wear_uniform(bot, &spec.wear)?;
     let mut state = CycleState::start(bot);
     state.note_want_base(bot, spec);
     loop {

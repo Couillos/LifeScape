@@ -63,8 +63,7 @@ pub fn meal_for(name: &str) -> Option<&'static Meal> {
 /// Bake banked loads in the open session: `cook_meals [meal] [count]`
 /// (redberry pie when omitted, 0 = forever).
 pub fn run_cook_meals(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let meal_name = args.first().filter(|first| first.parse::<u32>().is_err() && !first.starts_with("--") && *first != "toll" && *first != "wild").cloned();
-    let rest: Vec<String> = if meal_name.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (meal_name, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("cook_meals", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

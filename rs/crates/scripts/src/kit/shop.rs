@@ -36,15 +36,25 @@ pub fn reachable_keeper(spawn: (i64, i64, i64), bot_x: i32, fence: Option<i32>) 
 
 /// `shop_stock_keeper` with the toll fence line (`None` = unfenced).
 pub fn keeper_within(bot: &Bot, obj_name: &str, fence: Option<i32>) -> Option<(String, (i32, i32, i32))> {
+    keeper_where(bot, obj_name, fence, None)
+}
+
+/// Nearest keeper of a stocking shop, or of the named shop only (the
+/// planner's `--shop`: its quest gate was judged by the brain, so a
+/// gated shop the bot opened counts; a dump stock of 0 restocks live).
+fn keeper_where(bot: &Bot, obj_name: &str, fence: Option<i32>, named: Option<&str>) -> Option<(String, (i32, i32, i32))> {
     let mut best: Option<(i64, (String, (i32, i32, i32)))> = None;
     // Only shops an NPC opens on an F2P world without a quest gate
     // (`f2p_shop_access`): Zaff's staffs count, Shantay's pass never.
     for shop in knowledge::f2p::f2p_shops() {
-        if !knowledge::f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == obj_name && stock.count > 0) {
+        if named.is_some_and(|key| key != shop.name) {
+            continue;
+        }
+        if !knowledge::f2p::f2p_stock(&shop).iter().any(|stock| stock.obj == obj_name && (stock.count > 0 || named.is_some())) {
             continue;
         }
         let Some(access) = knowledge::f2p::f2p_shop_access(&shop.name) else { continue };
-        if access.quest.is_some() {
+        if access.quest.is_some() && named.is_none() {
             continue;
         }
         for npc_id in access.npcs {
@@ -329,6 +339,19 @@ fn require_trade_gain(gained: u32, what: &str, bot: &Bot) -> Result<u32, ScriptE
 
 /// Buy `count` of an object from its nearest stocking shop. Returns bought.
 pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, ScriptError> {
+    buy_stock_at(bot, obj_name, count, None)
+}
+
+/// `buy_stock` at the named shop only (`gamedata::shops` key, the
+/// planner's `--shop`): never another shop. A key no F2P shop carries, or
+/// whose stock lacks the object, is a contract bug (`Usage`).
+pub fn buy_stock_at(bot: &mut Bot, obj_name: &str, count: u32, shop: Option<&str>) -> Result<u32, ScriptError> {
+    if let Some(key) = shop {
+        let stocked = knowledge::f2p::f2p_shops().into_iter().find(|entry| entry.name == key).is_some_and(|entry| knowledge::f2p::f2p_stock(&entry).iter().any(|stock| stock.obj == obj_name));
+        if !stocked {
+            return Err(ScriptError::Usage(format!("no F2P shop {key:?} stocks {obj_name}")));
+        }
+    }
     if count == 0 {
         return Ok(0);
     }
@@ -348,8 +371,8 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     // Never past the toll fence, into the Wilderness or underground on
     // the buy's own initiative: the brain passes `toll` when it funds it.
     let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(bot) };
-    let Some((keeper, spawn)) = keeper_within(bot, obj_name, fence) else {
-        bot.log(&format!("no reachable shop stocks {obj_name} (no wilderness, underground or toll)"));
+    let Some((keeper, spawn)) = keeper_where(bot, obj_name, fence, shop) else {
+        bot.log(&format!("no reachable keeper of {} stocks {obj_name} (no wilderness, underground or toll)", shop.unwrap_or("any shop")));
         return Ok(0);
     };
     if !trade_to_keeper(bot, &keeper, spawn)? {

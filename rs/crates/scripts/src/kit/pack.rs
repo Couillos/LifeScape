@@ -83,6 +83,12 @@ pub fn banked_usable(bot: &Bot, obj: u16) -> u32 {
     bot.withdrawable(obj, banked)
 }
 
+/// True when `obj` sits in the worn inventory (`wornitems:wear`).
+pub fn is_worn(bot: &Bot, obj: u16) -> bool {
+    let Some(worn_com) = (bot.tables.com_id)(crate::kit::gear::WORN_COM_NAME) else { return false };
+    bot.world.inv.get(&worn_com).is_some_and(|slots| slots.values().any(|(held, _)| *held == obj))
+}
+
 /// Object ids with a usable unit in the last known bank (open or closed).
 pub fn banked_ids(bot: &Bot) -> Vec<u16> {
     let Some(com) = (bot.tables.com_id)("bank_main:inv") else { return Vec::new() };

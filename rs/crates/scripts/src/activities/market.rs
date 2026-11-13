@@ -51,18 +51,28 @@ pub(crate) fn opening_price(buying: bool, reference: i64, bid: Option<i64>, ask:
     }
 }
 
-fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
+/// One `market sell|buy` order as parsed: item, quantity, optional
+/// price, buyer ceiling, seller floor.
+#[derive(Debug)]
+pub struct SideOrder {
+    pub item: u16,
+    pub qty: i64,
+    pub price: Option<i64>,
+    pub ceiling: Option<i64>,
+    pub floor: Option<i64>,
+}
+
+/// Parse `market sell|buy <item> <qty> [price] [--ceiling N] [--floor N]`
+/// (no world access). Brain flags (`--node`, `--budget-*`) ride along for
+/// the session report and never parse as a price.
+pub fn parse_side(args: &[String]) -> Result<SideOrder, ScriptError> {
     const USAGE: &str = "market sell|buy <item> <qty> [price] [--ceiling N] [--floor N]";
     if args.len() < 3 {
         return Err(ScriptError::Usage(USAGE.to_string()));
     }
     let item = tradeable_id(&args[1])?;
     let qty: i64 = args[2].parse().map_err(|_| ScriptError::Usage("qty must be a number".to_string()))?;
-    // Positional price only: brain flags (--node, --budget-*) ride
-    // along for the session report and must not parse as a price.
-    let mut price: Option<i64> = None;
-    let mut ceiling: Option<i64> = None;
-    let mut floor: Option<i64> = None;
+    let mut order = SideOrder { item, qty, price: None, ceiling: None, floor: None };
     let mut index = 3;
     while index < args.len() {
         match args[index].as_str() {
@@ -75,9 +85,9 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
                     .and_then(|text| text.parse().ok())
                     .ok_or_else(|| ScriptError::Usage(USAGE.to_string()))?;
                 if args[index] == "--ceiling" {
-                    ceiling = Some(value.max(1));
+                    order.ceiling = Some(value.max(1));
                 } else {
-                    floor = Some(value.max(1));
+                    order.floor = Some(value.max(1));
                 }
                 index += 2;
             }
@@ -85,11 +95,29 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
                 return Err(ScriptError::Usage(USAGE.to_string()));
             }
             text => {
-                price = Some(text.parse().map_err(|_| ScriptError::Usage("price must be a number".to_string()))?);
+                order.price = Some(text.parse().map_err(|_| ScriptError::Usage("price must be a number".to_string()))?);
                 index += 1;
             }
         }
     }
+    Ok(order)
+}
+
+/// Contract check of a `market` launch (no world access): the
+/// subcommand's own parser.
+pub fn parse_order(args: &[String]) -> Result<(), ScriptError> {
+    match args.first().map(String::as_str) {
+        Some("sell") | Some("buy") => parse_side(args).map(drop),
+        Some("flip") => super::market_flip::parse_flip(args).map(drop),
+        Some("cleanup") => super::market_cleanup::parse_args(args).map(drop),
+        Some("shopbuy") => super::market_shop::parse_shopbuy(args).map(drop),
+        Some("deliver") => crate::market_handover::parse_deliver_args(args).map(drop),
+        _ => Err(ScriptError::Usage("market <sell|buy|flip|shopbuy|deliver|cleanup> ...".to_string())),
+    }
+}
+
+fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
+    let SideOrder { item, qty, price, ceiling, mut floor } = parse_side(args)?;
     let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
     let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
     let price = price.unwrap_or_else(|| opening_price(buying, reference, quote.get("bid").as_i64(), quote.get("ask").as_i64(), ceiling));

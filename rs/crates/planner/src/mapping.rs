@@ -188,9 +188,14 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     }
     // The brain picked the site (`pick_site_gated`): every gatherer,
     // station, fight and shop works there (args contract 2026-11-13). A
-    // guild site names the uniform the door checks on the body.
+    // guild site names the uniform the door checks on the body. Market
+    // orders (buy, sell, flip, cleanup) trade through the daemon: no site,
+    // no toll; only `shopbuy` walks to its keeper.
+    let sited = !matches!(script.as_str(), "walkto" | "equip")
+        && !script.starts_with("quest_")
+        && (script != "market" || head.first().is_some_and(|sub| sub == "shopbuy"));
     if let Some((x, z, level)) = node.site {
-        if !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
+        if sited {
             head.push("--site".to_string());
             head.push(format!("{x},{z},{level}"));
             for gate in lifescape_gamedata::access::gates_at(x, z, level) {
@@ -213,7 +218,7 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     }
     // The site lies across the Al Kharid toll fence and the brain
     // budgeted the fare (`place_on_site`): the run may pay the gate.
-    if node.toll && !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
+    if node.toll && sited {
         head.push("toll".to_string());
     }
     head.extend(tail);
