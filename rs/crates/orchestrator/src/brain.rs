@@ -272,6 +272,15 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 /// blocking brain step (life files, market/store reads, worker RPC).
 /// A wedged worker or store stalls the brain, never the supervision or
 /// the CLI dispatch. A full queue drops loudly (the next pass re-queues).
+/// Inbox room: every account's pending tick plus a burst of reports.
+const INBOX_CAPACITY: usize = 128;
+
+/// Accounts with a plain tick already queued (deduplication).
+fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static QUEUED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    QUEUED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
 fn inbox() -> &'static std::sync::Mutex<
     Option<std::sync::mpsc::SyncSender<(String, Option<Value>)>>,
 > {
@@ -288,7 +297,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
             return;
         }
     }
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Option<Value>)>(16);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Option<Value>)>(INBOX_CAPACITY);
     {
         let mut slot = inbox().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(sender);
@@ -298,6 +307,9 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
         .name("brain-tick".to_string())
         .spawn(move || {
             while let Ok((account, report)) = receiver.recv() {
+                if report.is_none() {
+                    queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
+                }
                 let job = orch.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&account).cloned();
                 let Some(job) = job else {
                     continue;
@@ -324,12 +336,25 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
 pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Value>) {
     ensure_brain(orch);
     let had_report = report.is_some();
+    // One plain tick per account in flight: the supervisor passes every
+    // 500 ms over ~26 jobs (~52 ticks/s) and a capacity-16 inbox was
+    // always full — 2 340 "inbox full" lines in 36 min, every decision
+    // delayed for nothing. A report always goes through.
+    if !had_report {
+        let mut waiting = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !waiting.insert(job.account.clone()) {
+            return;
+        }
+    }
     let queued = inbox()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
         .map(|sender| sender.try_send((job.account.clone(), report)))
         .is_some_and(|sent| sent.is_ok());
+    if !queued && !had_report {
+        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
+    }
     if !queued {
         // The drained report goes back to pending (`last_report` still
         // holds it): dropped here, its node read "no report" later.
