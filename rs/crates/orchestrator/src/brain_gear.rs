@@ -104,12 +104,24 @@ pub(crate) fn committed_from(rows: &[lifescape_store::Order], except: Option<i64
         .sum()
 }
 
-/// Coins this account's resting buys commit, except on `except` (0 while
-/// the market service is down: nothing rests then).
+/// Coins the account's in-flight buyer deals promise: matched, not yet
+/// handed over, still in its bank (live 2026-11-13, bd23dqpq 1643-1652,
+/// bct5rxpg 1772: a bid swept the book, the next one sized itself on the
+/// same purse, the handover came `short`). Every item counts, `except`
+/// included: those coins are spent whatever the next bid.
+pub(crate) fn deal_coins_from(account: &str, deals: &[lifescape_store::Deal]) -> i64 {
+    deals.iter().filter(|deal| deal.buyer == account).map(|deal| deal.price.max(0).saturating_mul(deal.quantity.max(0))).sum()
+}
+
+/// Coins this account's resting buys commit, except on `except`, plus
+/// what its in-flight buyer deals promise (0 while the market service is
+/// down: nothing rests then).
 pub(crate) fn committed_coins(account: &str, except: Option<i64>) -> i64 {
     let Some(service) = crate::market_service::shared() else { return 0 };
-    let rows = service.lock_store().account_orders(account).unwrap_or_default();
-    committed_from(&rows, except)
+    let store = service.lock_store();
+    let rows = store.account_orders(account).unwrap_or_default();
+    let deals = store.open_deals_for_account(account).unwrap_or_default();
+    committed_from(&rows, except) + deal_coins_from(account, &deals)
 }
 
 /// The wallet a new ceiling may share (review 2026-11-13, finding 6):
@@ -321,5 +333,31 @@ mod tests {
         assert_eq!(committed_from(&rows, Some(1)), 20, "a bid never counts against its own ceiling");
         let resting: Vec<i64> = rows.iter().filter(|row| cancellable(row)).map(|row| row.item_id).collect();
         assert_eq!(resting, vec![1, 2], "open and partly matched buys");
+    }
+
+    /// bd23dqpq 2026-11-13: 98 runes matched at 1 coin are spent until
+    /// the handover, whatever item the next bid is on; its sales are not.
+    #[test]
+    fn in_flight_buyer_deals_commit_their_coins() {
+        use super::deal_coins_from;
+        let deal = |buyer: &str, seller: &str, quantity: i64, price: i64| lifescape_store::Deal {
+            deal_id: 1,
+            buyer: buyer.to_string(),
+            seller: seller.to_string(),
+            item_id: 556,
+            quantity,
+            price,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            status: lifescape_store::DealStatus::Convened,
+            fail_reason: String::new(),
+            deadline_tick: 0,
+            created_clock: 0,
+            updated_clock: 0,
+            taker_side: None,
+        };
+        let deals = vec![deal("bd23dqpq", "george_97", 24, 1), deal("bd23dqpq", "lara_lane", 24, 2), deal("t01", "bd23dqpq", 6, 5)];
+        assert_eq!(deal_coins_from("bd23dqpq", &deals), 72, "24 + 48 promised, its own sale adds nothing");
     }
 }

@@ -69,6 +69,12 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
     if !service.resting_rows(&job.account, id, lifescape_store::OrderSide::Buy).is_empty() {
         return;
     }
+    // A bid swept whole into deals leaves no resting row, its lots still
+    // on their way: it stands until the handover.
+    let deals = service.lock_store().open_deals_for_account(&job.account).unwrap_or_default();
+    if buying_in_flight(&job.account, id, &deals) {
+        return;
+    }
     // What is still missing, capped by the wallet; at the best ask when
     // it is fair (the bid crosses at once: market first), else at the
     // reference walking up to the ceiling.
@@ -92,6 +98,15 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
         job.account,
         if reply.get("ok").as_bool() == Some(true) { "placed".to_string() } else { format!("refused {:?}", reply.get("error").as_str()) }
     );
+}
+
+/// True while `account` has a buyer deal on `item` in flight (live
+/// 2026-11-13, bd23dqpq: "standing bid 98/98 airrune" swept five sellers
+/// at once, 15 s later "97/98" went up for the same need on the same
+/// purse; the mind runes before it, 71 then 70 then 40 of 98, ended in
+/// six `short` handovers).
+pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal]) -> bool {
+    deals.iter().any(|deal| deal.item_id == item && deal.buyer == account)
 }
 
 /// A `market:buy` leg, placed daemon-side (no worker round-trip: the
@@ -154,6 +169,34 @@ pub fn cancel_open_buys(account: &str, item: &str) -> usize {
 mod tests {
     use super::live_levels;
     use lifescape_json::{object, Value};
+
+    /// bd23dqpq: a standing bid matched whole is still buying until the
+    /// handover; another item or a sale is not.
+    #[test]
+    fn a_swept_bid_still_stands() {
+        use super::buying_in_flight;
+        let deal = |buyer: &str, item: i64| lifescape_store::Deal {
+            deal_id: 1685,
+            buyer: buyer.to_string(),
+            seller: "george_97".to_string(),
+            item_id: item,
+            quantity: 24,
+            price: 1,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            status: lifescape_store::DealStatus::Matched,
+            fail_reason: String::new(),
+            deadline_tick: 0,
+            created_clock: 0,
+            updated_clock: 0,
+            taker_side: None,
+        };
+        assert!(buying_in_flight("bd23dqpq", 556, &[deal("bd23dqpq", 556)]));
+        assert!(!buying_in_flight("bd23dqpq", 558, &[deal("bd23dqpq", 556)]), "another rune");
+        assert!(!buying_in_flight("george_97", 556, &[deal("bd23dqpq", 556)]), "the seller side");
+        assert!(!buying_in_flight("bd23dqpq", 556, &[]));
+    }
 
     #[test]
     fn levels_come_from_xp_not_the_boosted_byte() {

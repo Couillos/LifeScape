@@ -162,10 +162,14 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                 // Matched deals with an offline party: open it (admission
                 // respected, one at a time) or fail the deal past the grace.
                 crate::market_absent::absent_round(&mut absent, &orch, &service, &parties, wall, tick_ms);
+                // Resend only what still matters: the newest pose per
+                // account, and only while one of its deals is open.
+                unposed = prune_unposed(std::mem::take(&mut unposed), &|deal| service.deal_open(deal));
                 unposed.retain(|pose| {
                     if orch.pose_market_script(&pose.account, &pose.args) {
                         false
                     } else {
+                        eprintln!("market-convene: pose {} not acked, kept for the next round", pose.account);
                         true
                     }
                 });
@@ -175,4 +179,54 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
             }
         })
         .expect("market convene thread spawns");
+}
+
+/// Deal ids of a `deliver <depart> <deadline> <id>=<x>,<z> ...` pose.
+pub fn pose_deals(args: &[String]) -> Vec<u64> {
+    args.iter().skip(3).filter_map(|token| token.split_once('=')?.0.parse().ok()).collect()
+}
+
+/// Poses worth resending (live 2026-11-13, t01): a worker that did not
+/// ack in time (its serve thread was busy delivering) got the SAME stale
+/// convocation every round for minutes, each one overwriting the fresh
+/// pose and re-running a delivery of closed deals. One convocation at a
+/// time per bot: only the newest pose of an account is kept, and only
+/// while one of its deals is still open.
+pub fn prune_unposed(unposed: Vec<ConvocationPose>, open: &dyn Fn(u64) -> bool) -> Vec<ConvocationPose> {
+    let mut kept: Vec<ConvocationPose> = Vec::new();
+    for pose in unposed.into_iter().rev() {
+        if kept.iter().any(|newer| newer.account == pose.account) {
+            continue;
+        }
+        if pose_deals(&pose.args).into_iter().any(open) {
+            kept.push(pose);
+        }
+    }
+    kept.reverse();
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prune_unposed, ConvocationPose};
+
+    fn pose(account: &str, deals: &[&str]) -> ConvocationPose {
+        let mut args = vec!["deliver".to_string(), "+30".to_string(), "+1692".to_string()];
+        args.extend(deals.iter().map(|deal| format!("{deal}=3210,3426")));
+        ConvocationPose { account: account.to_string(), args }
+    }
+
+    /// t01: the 1664 pose (deal failed no_show) kept coming back over the
+    /// fresh 1671/1672/1684 one; a closed pose and an older pose of the
+    /// same bot are never resent.
+    #[test]
+    fn stale_and_superseded_poses_are_dropped() {
+        let open = |deal: u64| deal != 1664;
+        let unposed = vec![pose("t01", &["1664"]), pose("bdr53jee", &["1671", "1672"]), pose("t01", &["1671", "1672", "1684"]), pose("will_field", &["1664"])];
+        let kept = prune_unposed(unposed, &open);
+        let accounts: Vec<(&str, usize)> = kept.iter().map(|pose| (pose.account.as_str(), pose.args.len())).collect();
+        assert_eq!(accounts, vec![("bdr53jee", 5), ("t01", 6)], "newest t01 pose only, closed will_field pose gone");
+        let lone = prune_unposed(vec![pose("t01", &["1664"])], &open);
+        assert!(lone.is_empty(), "a pose whose deals all closed is never resent");
+    }
 }

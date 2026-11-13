@@ -110,6 +110,47 @@ pub fn uncovered(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promi
     cancel
 }
 
+/// What a new order may still commit (live 2026-11-13, deals 1716/1722,
+/// 1721, 1692/1720, 1772, 1643-1652): `coins`/`stock` are the ledger
+/// (pack + bank minus in-flight deals, see `net_of_deals`), and the
+/// account's resting orders of the same side already claim their share.
+/// Before, a fully matched sell (remaining 0, goods still in the bank
+/// until the handover) left the stock looking free: the brain listed it
+/// again, the relist matched at once, and the seller came `short`.
+/// Returns `(free units of the order's base object, free coins)`.
+pub fn uncommitted(side: OrderSide, item: i64, coins: i64, stock: &[(i64, i64)], resting: &[Order]) -> (i64, i64) {
+    let base = base_of(item);
+    let held: i64 = stock.iter().filter(|(id, _)| base_of(*id) == base).map(|(_, qty)| *qty).sum();
+    let mut claimed_units = 0i64;
+    let mut claimed_coins = 0i64;
+    for order in resting.iter().filter(|order| order.side == side && order.remaining > 0) {
+        if side == OrderSide::Sell && base_of(order.item_id) == base {
+            claimed_units += order.remaining;
+        } else if side == OrderSide::Buy {
+            claimed_coins += order.remaining * order.price.max(0);
+        }
+    }
+    ((held - claimed_units).max(0), (coins - claimed_coins).max(0))
+}
+
+/// Ledger mirror of one live snapshot net of the account's in-flight
+/// deals: the goods a seller promised and the coins a buyer promised are
+/// still physically held until the handover, but no longer free. Pure:
+/// the match-time ledger move (`record_fill`) keeps the same meaning
+/// between two syncs.
+pub fn net_of_deals(account: &str, coins: i64, stock: &[(i64, i64)], deals: &[lifescape_store::Deal]) -> (i64, Vec<(i64, i64)>) {
+    let mut purse = coins;
+    let mut left: BTreeMap<i64, i64> = stock.iter().copied().collect();
+    for deal in deals {
+        if deal.buyer == account {
+            purse -= deal.quantity * deal.price.max(0);
+        } else if deal.seller == account {
+            *left.entry(deal.item_id).or_insert(0) -= deal.quantity;
+        }
+    }
+    (purse.max(0), left.into_iter().collect())
+}
+
 fn rows_of(live: &Value, key: &str) -> Vec<(i64, i64)> {
     live.get(key)
         .as_arr()
@@ -252,8 +293,10 @@ impl MarketService {
     /// convene round mirrors inv+bank+worn item counts (numeric ids from
     /// the snapshot) into the ledger; match-time settlement still moves
     /// it between rounds. Stale (>30 s) or missing snapshots skip: no
-    /// funding without a live witness. SET semantics over-commit window
-    /// documented on `sync_account`.
+    /// funding without a live witness. The mirror is net of the
+    /// account's in-flight deals (`net_of_deals`): the SET used to hand
+    /// promised goods and coins back as free every round (deals 1716,
+    /// 1721, 1772: relisted stock, re-spent coins, `short` at the bank).
     pub(crate) fn sync_ledger_from_jobs(&self, jobs: &[std::sync::Arc<Job>]) {
         let coins_id = lifescape_gamedata::objs_by_name("Coins")
             .into_iter()
@@ -270,8 +313,32 @@ impl MarketService {
                 continue;
             }
             let (coins, stock) = ledger_holdings(&live, coins_id);
-            self.lock_engine().ledger.sync_account(&job.account, coins, &stock);
+            self.sync_holdings(&job.account, coins, &stock);
         }
+    }
+
+    /// Mirrors one witnessed holding into the ledger, net of the
+    /// account's in-flight deals.
+    pub(crate) fn sync_holdings(&self, account: &str, coins: i64, stock: &[(i64, i64)]) {
+        let deals = self.lock_store().open_deals_for_account(account).unwrap_or_default();
+        let (coins, stock) = net_of_deals(account, coins, stock, &deals);
+        self.lock_engine().ledger.sync_account(account, coins, &stock);
+    }
+
+    /// Free coverage of a new order: the ledger net of the account's
+    /// resting orders of the same side (`uncommitted`).
+    pub(crate) fn free_coverage(&self, account: &str, side: OrderSide, item: i64) -> (i64, i64) {
+        let resting: Vec<Order> = self
+            .lock_store()
+            .account_orders(account)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|order| order.remaining > 0 && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched))
+            .collect();
+        let engine = self.lock_engine();
+        let stock = engine.ledger.stock_rows(account);
+        let (units, coins) = uncommitted(side, item, engine.ledger.coins_of(account), &stock, &resting);
+        (units, coins)
     }
 }
 
@@ -343,5 +410,48 @@ mod tests {
         assert_eq!(uncovered(&orders, 35, &BTreeMap::new(), 0, &BTreeMap::new()), Vec::<i64>::new(), "35 covers both");
         assert_eq!(uncovered(&orders, 35, &BTreeMap::new(), 17, &BTreeMap::new()), vec![1], "18 left: the 20-coin bid goes, the 15-coin one fits");
         let _ = COINS_ID;
+    }
+
+    /// Deals 1716/1722 (bct5rxpg) and 1721 (fiona_park): the stock of a
+    /// resting sell is claimed, a second listing only gets what is left;
+    /// bids claim their coins the same way (bd23dqpq, 1643-1652).
+    #[test]
+    fn resting_orders_claim_their_share() {
+        use super::uncommitted;
+        let resting = vec![order(1, OrderSide::Sell, 882, 7, 2, 10), order(2, OrderSide::Buy, 558, 70, 1, 11), order(3, OrderSide::Buy, 1511, 5, 3, 12)];
+        let stock = [(882i64, 12i64), (558, 3)];
+        assert_eq!(uncommitted(OrderSide::Sell, 882, 100, &stock, &resting).0, 5, "12 arrows, 7 listed: 5 free");
+        assert_eq!(uncommitted(OrderSide::Sell, 558, 100, &stock, &resting).0, 3, "bids never claim stock");
+        assert_eq!(uncommitted(OrderSide::Buy, 558, 100, &stock, &resting).1, 15, "100 coins, 70 + 15 bid: 15 free");
+        assert_eq!(uncommitted(OrderSide::Buy, 558, 50, &stock, &resting).1, 0, "over-committed purse is empty, never negative");
+    }
+
+    /// The ledger mirror is net of in-flight deals: the 25 arrows fiona
+    /// sold (deal 1698, still in her bank until the handover) and the
+    /// coins a buyer promised are not free.
+    #[test]
+    fn ledger_mirror_is_net_of_in_flight_deals() {
+        use super::net_of_deals;
+        let deal = |buyer: &str, seller: &str, item: i64, quantity: i64, price: i64| lifescape_store::Deal {
+            deal_id: 1,
+            buyer: buyer.to_string(),
+            seller: seller.to_string(),
+            item_id: item,
+            quantity,
+            price,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            status: lifescape_store::DealStatus::Matched,
+            fail_reason: String::new(),
+            deadline_tick: 0,
+            created_clock: 0,
+            updated_clock: 0,
+            taker_side: None,
+        };
+        let deals = vec![deal("b5xntyz6", "fiona_park", 882, 25, 1), deal("fiona_park", "bdr53jee", 558, 15, 2)];
+        let (coins, stock) = net_of_deals("fiona_park", 100, &[(882, 127), (556, 1)], &deals);
+        assert_eq!(coins, 70, "15 x 2 promised to bdr53jee");
+        assert_eq!(stock, vec![(556, 1), (882, 102)], "25 arrows promised to b5xntyz6");
     }
 }

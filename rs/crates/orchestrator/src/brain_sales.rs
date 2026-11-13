@@ -117,6 +117,20 @@ pub fn surplus(stacks: &[(String, i64)], keep: &[String], worn: &[String], liste
     out
 }
 
+/// Live stacks net of what the bot's resting sells and in-flight seller
+/// deals lock (`brain_locks`). Live 2026-11-13: fiona_park sold 25
+/// arrows (deal 1698, still banked until the handover, no resting row
+/// left), the next pass listed all 102 held again and the relist matched
+/// at once (deal 1721, `short` by 25); same for her one air rune (1692,
+/// 1720) and bct5rxpg's 7 arrows (1716, 1722).
+pub fn free_stacks(stacks: &[(String, i64)], locked: &dyn Fn(&str) -> i64) -> Vec<(String, i64)> {
+    stacks
+        .iter()
+        .map(|(name, qty)| (name.clone(), crate::brain_locks::free_count(*qty, locked(name))))
+        .filter(|(_, qty)| *qty > 0)
+        .collect()
+}
+
 /// Spare copies of kept work tools (one unit stays): `(name, id, qty)`.
 fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &HashSet<i64>) -> Vec<(String, i64, i64)> {
     crate::brain_tools::spare_tool_units(life, stacks, kept)
@@ -243,8 +257,12 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         adopt_listings(&service, &job.account, &selling);
     }
     let mut placed = 0;
-    let mut offers = surplus(&stacks, &keep, &worn, &listed);
-    offers.extend(spare_tools(life, &stacks, &tools, &listed));
+    // Only what no listing or deal already promises (the market refuses
+    // the rest anyway, `market_audit::uncommitted`).
+    let locks = crate::brain_locks::locked_items(&job.account);
+    let free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    let mut offers = surplus(&free, &keep, &worn, &listed);
+    offers.extend(spare_tools(life, &free, &tools, &listed));
     for (name, item, qty) in offers {
         let reference = service.reference(item);
         let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
@@ -293,6 +311,25 @@ mod tests {
         let with_net = vec!["raw_shrimp".to_string(), "net".to_string()];
         let names: Vec<String> = surplus(&stacks, &with_net, &worn, &listed).into_iter().map(|(name, _, _)| name).collect();
         assert_eq!(names, vec!["bronze_bar".to_string(), "logs".to_string()], "a kept work tool stays");
+    }
+
+    /// Deal 1721: 127 arrows held, 25 promised to an in-flight deal with
+    /// no resting row: only 102 are free; a stack fully promised (her
+    /// one air rune, deal 1692) is not offered at all.
+    #[test]
+    fn promised_stock_is_not_surplus() {
+        use super::free_stacks;
+        let stacks = vec![("bronze_arrow".to_string(), 127), ("airrune".to_string(), 1), ("logs".to_string(), 5)];
+        let locked = |name: &str| match name {
+            "bronze_arrow" => 25,
+            "airrune" => 1,
+            _ => 0,
+        };
+        let free = free_stacks(&stacks, &locked);
+        assert_eq!(free, vec![("bronze_arrow".to_string(), 102), ("logs".to_string(), 5)]);
+        let offered: Vec<(String, i64)> = surplus(&free, &[], &[], &HashSet::new()).into_iter().map(|(name, _, qty)| (name, qty)).collect();
+        assert!(offered.contains(&("bronze_arrow".to_string(), 102)), "{offered:?}");
+        assert!(!offered.iter().any(|(name, _)| name == "airrune"), "{offered:?}");
     }
 
     fn life_training(methods: &[(&str, &str)]) -> lifescape_planner::Life {

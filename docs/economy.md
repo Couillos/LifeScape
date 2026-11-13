@@ -127,6 +127,62 @@ zone de départ, `market_eta`).
   banque refusée par une porte/un loc, nav) et paires adjacentes qui ne
   se voient jamais (`cannot see`, liste joueurs SDK ; la ligne journalise
   désormais `debug_players`).
+Échecs de remise (revue 2026-11-13 soir, deals 1643–1799, après le
+déploiement de 21:19 CET) :
+- `short` = lot promis deux fois. Un ordre entièrement apparié ne
+  laisse aucune ligne au repos, mais ses biens (ou ses pièces) restent en
+  banque jusqu'à la remise ; le registre les ré-miroitait depuis le
+  snapshot à chaque tour, le cerveau les relistait et la relance
+  s'appariait aussitôt (bct5rxpg 1716 + 1722 pour 12 flèches,
+  fiona_park 1698 + 1721, 1692 + 1720) ; même chose côté pièces avec les
+  offres permanentes reposées après un balayage complet (bd23dqpq « 98/98 »
+  puis « 97/98 », 1643–1652 ; bct5rxpg 1772, 1789). Corrigé : le miroir
+  du registre est net des deals en vol (`market_audit::net_of_deals`),
+  `op_place` ne couvre que le non-engagé (registre moins les ordres au
+  repos du même côté, `market_audit::uncommitted`) ; côté cerveau, le
+  surplus est net des verrous (`brain_sales::free_stacks`), les pièces
+  engagées comptent les deals acheteurs en vol (`brain_gear::deal_coins_from`)
+  et l'offre permanente attend la remise d'un achat en vol
+  (`brain_market::buying_in_flight`). Ni piles ni billets en cause : les
+  quantités retirées en banque étaient exactes, la banque avait moins.
+- `no_show` will_field (×7) : `spin` bloqué depuis 20:19 UTC. Le
+  level-up a cassé la chaîne make-X avec de la laine restante ;
+  `produce::drain_chained` (cible `u32::MAX` pour `want` 0) attendait
+  sans fin, modale de chat ouverte, donc jamais de point sûr pour la
+  pause market. Une chaîne qui ne consomme rien pendant `ITEM_TICKS`
+  s'arrête (`produce::chain_stalled`).
+- `no_show` t01 (1671/1672/1684) et cascade (1687 `timeout`, 1689
+  `no_show` contre bd23dqpq pourtant présent) : un worker inactif pompe
+  sur le thread de service (`idle_pump`) et la porte de pause y lançait
+  la livraison en ligne, bloquant l'accept du socket pendant tout le
+  trajet ; chaque pose du daemon expirait, la liste `unposed` renvoyait
+  la convocation périmée (1664, déjà close) à chaque tour, qui écrasait
+  la nouvelle et relançait 500 ticks de banque Falador ↔ Varrock.
+  Corrigé : la porte ne s'ouvre qu'en présence d'un thread de script
+  (`gate_tick`, sinon `drain_idle_market`) ; le daemon ne renvoie que la
+  pose la plus récente par compte et seulement si un de ses deals est
+  ouvert (`market_daemon::prune_unposed`) ; une livraison sans deal
+  ouvert rend la main sans aller en banque.
+- Cascade de groupes : un bot à plusieurs partenaires attendait un absent
+  sur sa case pendant qu'un autre partenaire l'attendait, immobile, à
+  quelques cases (bd23dqpq/nina_rhodes, 1689). Un partenaire hors de vue
+  depuis `SERVE_FIRST_AFTER_TICKS` (100) cède le tour au premier groupe
+  suivant dont le partenaire attend sur son point (`market_handover::
+  serve_first`, au plus 2 détours par groupe, jamais une fois la fenêtre
+  ouverte).
+- `trade gave no harpoon` (bdr53jee) : la pause market dépose tout sauf
+  les outils ; l'achat en magasin interrompu reprenait sans ses pièces
+  (« You don't have enough coins »). La livraison rend désormais le sac
+  d'avant la pause après les échanges (`market_lots::carried_before`,
+  `redeposit`), formes billets comprises, sans jamais retirer deux fois
+  ni sortir le verrouillé.
+- Trajet coupé par une pause (bct5rxpg, bdr53jee, b5xntyz6 : « step
+  refused »/porte jamais ouverte avec « last game: Accepted trade. ») :
+  la livraison tourne dans le pump d'un segment en cours ; au retour la
+  jambe périmée échouait, avec dossier et arête bannie. Une pause finie
+  pendant le plan (`Bot::pauses_done`) explique l'échec : replan depuis
+  la position, sans ban ni dossier, échéance recalculée
+  (`travel::paused_mid_trip`).
 Les holdings live ne sont pas encore branchées au registre.
 
 ## Simulateur
