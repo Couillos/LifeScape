@@ -186,3 +186,29 @@ Rejeté : bannissement à vie (bots inactifs sans recours), relance
 immédiate sans délai (même échec en boucle), bannir sur un manque
 d'outil/intrant/pièces (sous-tâches existantes), repartir du niveau 1 en
 comptant sur le script pour s'arrêter (budget de 18 000 ticks brûlé).
+
+## 2026-11-13 — Page Erreurs : journal centralisé persistant (table `error_events`)
+
+Besoin : toutes les erreurs au même endroit, identifiables (compte, tâche,
+nœud, coordonnées, zone), agrégées par type et par signature, avec KPIs.
+Décision : migration 3 de `lifescape-store`, table `error_events` alimentée
+par un seul thread du daemon (`errors_ingest.rs`) :
+- poussées (canal borné, jamais bloquant, pertes comptées et loguées) :
+  événements `script_error` (`ingest_push`), rapports de tâche `failed` /
+  `blocked` (repliés sur la ligne de l'événement de la même panne : une
+  panne = une ligne), lignes `brain …` du journal du daemon (abandon de
+  nœud, graphe/but bloqué, ban de skill, plafond de relance) captées dans
+  `logln!` même, sans relire le fichier ;
+- tirées toutes les 30 s : dossiers `run/failures/*.json` (par mtime) et
+  deals `failed` (table `deals`), clé unique `source_ref` ⇒ rescans et
+  redémarrages sans doublon, rattrapage des 72 h au premier passage.
+Signature = message sans nombres/coordonnées/listes `[…]`/nom du compte/
+chat `; last game:`. Rétention 72 h (purge horaire) : les dossiers nav
+seuls font 500–1400 lignes/h (~650 o). Mesuré sur les données réelles :
+36 700 dossiers + 790 deals rattrapés en ~15 s, résumé 24 h en ~0,25 s.
+Taux d'échec par tâche lus de `task_reports` (échecs / runs), taux d'échec
+des deals de `deals`. Rejeté : agrégation à la requête sur les sources
+brutes (52 000 dossiers, 445 Mo, journal sans date) ; anneau mémoire +
+instantané JSON (filtres et fenêtres à recoder, perdu entre deux
+instantanés) ; analyse du fichier `orchestrator.log` (heures sans date,
+rotation).

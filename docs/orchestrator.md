@@ -71,3 +71,14 @@ après ~0,8 s, jamais en parallèle (~40 s pour 25 comptes). Les envois des
 workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
 leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
 (`.cargo/config.toml`).
+
+Erreurs (2026-11-13) : page `/errors` (`orchestration/static/errors.html`,
+`errors.js`), API `web_errors.rs` : `/api/errors/summary?hours=1..72&source=
+&type=&account=&script=&zone=&signature=` (KPIs, tendance vs fenêtre
+précédente, erreurs/heure, groupes par signature, taux d'échec par tâche et
+des deals, options de filtres), `/api/errors/list?…&limit=` (lignes : heure
+UTC, compte, tâche/nœud/méthode, type, message, signature, x/z/niveau,
+zone, détail, dossier), `/api/errors/dossier/<fichier>`. Collecteur
+`errors_ingest.rs` (table `error_events`, sources task/nav/deal/brain,
+voir `docs/decisions.md`), lignes construites dans `errors_model.rs`,
+maths dans `errors_aggregate.rs`. Le spectateur suit `/#<compte>`.
