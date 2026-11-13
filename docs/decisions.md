@@ -156,3 +156,33 @@ Décisions (règles utilisateur) :
   compte (sauvegarde hors ligne) moins ses deals en cours ; les non couverts
   sont annulés (`market_audit.rs`). Premier passage : 222 ordres annulés.
 - Un ordre partiellement rempli (`matched`) reste annulable.
+
+## 2026-11-13 — Cœur du planner : montée depuis le niveau live, bannissements temporaires
+
+Constat (audit lecture seule de la flotte) : 40 % des ticks de montée
+mêlée (2,74 M sur 6,90 M) rejouaient des tranches déjà atteintes
+(`expand_goal` partait toujours du niveau 1 ; b8jxrdd2 « attack 10 » à
+attaque 45 : 18 015 ticks sur des poulets) ; 12 bots sur 25 avaient toutes
+leurs compétences bannies à vie (`stuck:<compétences>` lu sur tout
+l'historique) et restaient inactifs (`graph: final`) ; un graphe fini sans
+but à tirer ré-écrivait `done:` à chaque passe.
+Décisions (règles utilisateur) :
+- Les buts se déplient depuis le niveau live (`expand_goal_from`,
+  `append_goal`, `record_block_from`) ; un nœud de montée que le niveau
+  live atteint déjà est clos sans lancement ; toute tranche part avec
+  `--level` (récolte et combat).
+- Un but bloqué bannit ses compétences 6000 ticks seulement, cause typée
+  écrite et loggée (`stuck:<s>@6000:<classe> (node <id>, <erreur>)`),
+  expiration loggée une fois (`unban:<s>`). Anciennes entrées sans tick =
+  expirées : les bots inactifs retrouvent un but au premier passage du
+  nouveau binaire. Le tirage est retenté à chaque passe, `final` compris.
+- Discipline de cycle de vie : plus aucun statut écrit hors
+  `lifecycle.rs` côté daemon (`complete_node`, `retry_uncounted`,
+  `end_engagement`, `insert_ready`, `reached_live`). `brain.rs` découpé
+  (`brain_launch.rs`). Dette connue : le planner écrit encore `Blocked`
+  au résolveur (`expand`, `resolve_obtain`) et `replan_node` change des
+  statuts (appelé via `lifecycle`).
+Rejeté : bannissement à vie (bots inactifs sans recours), relance
+immédiate sans délai (même échec en boucle), bannir sur un manque
+d'outil/intrant/pièces (sous-tâches existantes), repartir du niveau 1 en
+comptant sur le script pour s'arrêter (budget de 18 000 ticks brûlé).
