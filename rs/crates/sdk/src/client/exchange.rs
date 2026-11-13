@@ -3,7 +3,9 @@
 //! `trade_exchange` offers our lots, requires the partner's main-screen
 //! offer to match exactly, then requires the confirm screen to show the
 //! same lots before the final accept. Any deviation closes the window
-//! instead of accepting. `trade_swap` is a thin caller over this.
+//! instead of accepting. Settled only on the server's "Accepted trade.";
+//! a confirm window that closes without it is `Declined`. `trade_swap`
+//! is a thin caller over this.
 
 #![forbid(unsafe_code)]
 
@@ -28,6 +30,10 @@ pub enum ExchangeOutcome {
     PartnerMismatch,
     /// The confirm screen differs from the agreed lots.
     ConfirmMismatch,
+    /// The confirm window closed without the server's "Accepted trade.":
+    /// the partner declined, timed out or logged out. Nothing moved
+    /// (`[if_close,tradeconfirm]` returns both offers to their owners).
+    Declined,
 }
 
 impl Bot {
@@ -122,6 +128,26 @@ impl Bot {
     /// the timeout.
     pub(crate) fn trade_refused(messages: &[String], seen: usize) -> bool {
         messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("can't trade"))
+    }
+
+    /// True when the server confirmed a completed trade at or after
+    /// `since` (server tick). Rev-274 `trade.rs2`: both parties get
+    /// "Accepted trade." exactly when `both_moveinv` ran; a decline,
+    /// timeout or logout closes the same window with "Other player
+    /// declined trade." instead. Tick-scoped (not index-scoped) so the
+    /// log trim past `MESSAGE_CAP` never hides the confirmation.
+    pub fn trade_accepted_in(messages: &[String], message_ticks: &[u64], since: u64) -> bool {
+        messages
+            .iter()
+            .zip(message_ticks.iter())
+            .rev()
+            .take_while(|(_, tick)| **tick >= since)
+            .any(|(message, _)| message.to_lowercase().contains("accepted trade."))
+    }
+
+    /// Live form of `trade_accepted_in` on this bot's message log.
+    pub fn trade_accepted_since(&self, since: u64) -> bool {
+        Self::trade_accepted_in(&self.world.messages, &self.world.message_ticks, since)
     }
 
     /// Physical exchange with a double-screen check: offer our give lots
@@ -227,6 +253,11 @@ impl Bot {
             let _ = self.trade_close();
             return Ok(ExchangeOutcome::ConfirmMismatch);
         }
+        // The window closing is NOT the proof: the partner declining,
+        // timing out or logging out closes it too. Only the server's
+        // "Accepted trade." settles (live 2026-11-13: declined trades
+        // were recorded as executions).
+        let confirm_tick = self.world.ticks;
         while self.world.ticks < deadline && self.trade_modal().is_some() {
             let left = deadline.saturating_sub(self.world.ticks).max(1);
             self.trade_accept(left.min(300))?;
@@ -235,6 +266,15 @@ impl Bot {
         if self.trade_modal().is_some() {
             let _ = self.trade_close();
             return Ok(ExchangeOutcome::ConfirmMismatch);
+        }
+        // The message rides the same server tick as the close; give the
+        // frame a few ticks to land before judging.
+        let settle_by = self.world.ticks + 10;
+        while !self.trade_accepted_since(confirm_tick) && self.world.ticks < settle_by {
+            self.pump(2)?;
+        }
+        if !self.trade_accepted_since(confirm_tick) {
+            return Ok(ExchangeOutcome::Declined);
         }
         Ok(ExchangeOutcome::Settled)
     }
@@ -268,5 +308,21 @@ fn trade_refused_only_matches_fresh_refusal() {
     assert!(Bot::trade_refused(&messages, 1), "fresh refusal fails fast");
     let other = vec!["A trade request.".to_string()];
     assert!(!Bot::trade_refused(&other, 0), "unrelated text passes");
+}
+
+/// Finding 1 (2026-11-13): a closed confirm window is not a trade. Only
+/// the server's "Accepted trade." since the confirm click settles; a
+/// decline (or an older acceptance) never does.
+#[test]
+fn only_a_fresh_acceptance_settles() {
+    let text = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect::<Vec<String>>();
+    let declined = text(&["Sending trade offer...", "Other player declined trade."]);
+    assert!(!Bot::trade_accepted_in(&declined, &[100, 140], 120), "decline never settles");
+    let accepted = text(&["Sending trade offer...", "Accepted trade."]);
+    assert!(Bot::trade_accepted_in(&accepted, &[100, 141], 120), "acceptance settles");
+    assert!(!Bot::trade_accepted_in(&accepted, &[100, 110], 120), "an older acceptance is another trade");
+    let waiting = text(&["Other player has accepted."]);
+    assert!(!Bot::trade_accepted_in(&waiting, &[130], 120), "partner-side status is not a trade");
+    assert!(!Bot::trade_accepted_in(&[], &[], 0), "empty log never settles");
 }
 }

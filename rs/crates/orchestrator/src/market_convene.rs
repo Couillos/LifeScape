@@ -23,6 +23,7 @@ use lifescape_nav::plan::Tile;
 use crate::daemon::Orchestrator;
 use crate::jobs::Job;
 use crate::market_eta::EtaCache;
+use crate::market_convene_sweep::arrival_score;
 use crate::market_service::MarketService;
 
 /// Matched deals wait this long (server ticks) before a convocation, so
@@ -155,7 +156,7 @@ pub fn grouping_secs(tick_ms: u64) -> f64 {
 /// poses at the next safe point).
 pub fn sweep_after_secs(span_ticks: u64, tick_ms: u64) -> f64 {
     // Pose latency (safe point) plus the worker's wait past its own
-    // deadline (`WAIT_PAST_DEADLINE_TICKS` in market_deliver): the sweep
+    // deadline (`WAIT_PAST_DEADLINE_TICKS` in market_handover): the sweep
     // never closes a deal a party is still allowed to wait for.
     const POSE_SLACK_TICKS: u64 = 1200 + 3000;
     (span_ticks + POSE_SLACK_TICKS) as f64 * tick_ms as f64 / 1000.0
@@ -601,24 +602,6 @@ impl MarketService {
         }
     }
 
-    /// Frees convene state (tiles, deadline, account holds) at a terminal
-    /// deal, whatever the outcome.
-    pub(crate) fn release_convene(&self, deal_id: u64) {
-        let mut engine = self.lock_engine();
-        if let Some(tiles) = engine.deal_tiles.remove(&deal_id) {
-            engine.ring_busy.remove(&tiles.0);
-            engine.ring_busy.remove(&tiles.1);
-        }
-        engine.deal_sweep_wall.remove(&deal_id);
-        engine.pending_since_wall.remove(&deal_id);
-        engine.arrived.remove(&deal_id);
-        let parties = engine.deals.get(&deal_id).map(|deal| (deal.buyer.clone(), deal.seller.clone()));
-        if let Some((buyer, seller)) = parties {
-            engine.convened_accounts.remove(&buyer);
-            engine.convened_accounts.remove(&seller);
-        }
-    }
-
     /// Matched deals awaiting convocation, with the grouping verdict and
     /// the square destination for ETA plans. Marks first sightings: a
     /// matched deal convenes once it waited out the grouping window.
@@ -743,82 +726,6 @@ impl MarketService {
         }
         object(vec![("ok", Value::Bool(true)), ("poses", Value::Arr(out))])
     }
-
-    /// Expires convened deals past their deadline. Arrival-gated like the
-    /// live reports: the party that showed up relists with priority and
-    /// keeps reliability, the absent loses both. Without nav every
-    /// expiry is `nav_down`, neutral, both relist: nobody travels blind.
-    pub(crate) fn op_sweep(&self, request: &Value) -> Value {
-        let now_wall = request.get("now_wall").as_f64().unwrap_or(0.0);
-        let nav_up = request.get("nav_up").as_bool().unwrap_or(true);
-        let expired: Vec<u64> = {
-            let engine = self.lock_engine();
-            let mut expired: Vec<u64> = engine
-                .deal_sweep_wall
-                .iter()
-                .filter(|(id, wall)| {
-                    **wall < now_wall
-                        && engine.deals.get(*id).is_some_and(|deal| {
-                            deal.status == DealStatus::Convened || deal.status == DealStatus::BothArrived
-                        })
-                })
-                .map(|(id, _)| *id)
-                .collect();
-            expired.sort_unstable();
-            expired
-        };
-        let mut failed = Vec::new();
-        for deal_id in expired {
-            let (buyer, seller, item, qty, price, status, marks) = {
-                let engine = self.lock_engine();
-                let Some(deal) = engine.deals.get(&deal_id) else {
-                    continue;
-                };
-                (
-                    deal.buyer.clone(),
-                    deal.seller.clone(),
-                    deal.item,
-                    deal.quantity,
-                    deal.price,
-                    deal.status,
-                    engine.arrived.get(&deal_id).cloned().unwrap_or((false, false)),
-                )
-            };
-            let reason = if !nav_up {
-                FailReason::NavDown
-            } else if status == DealStatus::BothArrived {
-                FailReason::Timeout
-            } else {
-                FailReason::NoShow
-            };
-            {
-                let mut engine = self.lock_engine();
-                let Some(deal) = engine.deals.get_mut(&deal_id) else {
-                    continue;
-                };
-                if deal.transition(DealStatus::Failed, Some(reason)).is_err() {
-                    continue;
-                }
-            }
-            self.lock_store()
-                .set_deal_status(deal_id as i64, lifescape_store::DealStatus::Failed, reason.as_str(), Self::now_clock())
-                .ok();
-            let (relist_buyer, relist_seller, reliability) = match reason {
-                FailReason::NoShow => (marks.0, marks.1, (arrival_score(marks.0), arrival_score(marks.1))),
-                FailReason::Timeout => (true, true, (None, None)),
-                _ => (true, true, (None, None)),
-            };
-            self.refund_and_relist(deal_id, &buyer, &seller, item, qty, price, relist_buyer, relist_seller, reliability);
-            failed.push(Value::Int(deal_id as i64));
-        }
-        object(vec![("ok", Value::Bool(true)), ("failed", Value::Arr(failed))])
-    }
-}
-
-/// Reliability verdict for one side of a no-show: showing up counts,
-/// standing the partner up does not.
-fn arrival_score(arrived: bool) -> Option<bool> {
-    Some(arrived)
 }
 
 // -- convene loop (daemon-side) -----------------------------------------------
@@ -924,6 +831,10 @@ pub use crate::market_daemon::start_convene_loop;
 #[cfg(test)]
 #[path = "market_convene_tests.rs"]
 mod convene_tests;
+
+#[cfg(test)]
+#[path = "market_convene_life_tests.rs"]
+mod convene_life_tests;
 
 /// Daemon hook for the convene loop: live positions, worker pose,
 /// loop starter. Lives here (not `daemon.rs`) so the supervisor file

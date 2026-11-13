@@ -52,6 +52,19 @@ touche la fiabilité qu'en cas de faute (absent, refuseur ; mort,
 timeout, nav_down : neutre). Sans nav : aucune convocation,
 appariements conservés, expirations en `nav_down` sans pénalité.
 
+Tout deal se termine (2026-11-13) : `settled` seulement sur le message
+serveur « Accepted trade. » (fenêtre fermée sans lui = refus/départ du
+partenaire, `ExchangeOutcome::Declined`) ; un worker qui meurt après
+`trading` rapporte quand même (acceptation vue → settled, sinon
+`timeout`) et le balayage expire aussi `trading` ; un compte reste
+convoqué tant qu'un deal de sa convocation est en vol ; chaque côté
+interroge le daemon toutes les 100 ticks (un partenaire `short` libère
+l'autre aussitôt). Partie absente d'un deal `matched` (aucune session) :
+le daemon l'ouvre (`open_job`, admission et cadence respectées, une à la
+fois, `market_absent.rs`) ; compte staff/privé, ouverture refusée ou
+absence > 3000 ticks → `no_show`, ordres de l'absent annulés, côté
+honnête replacé avec sa priorité.
+
 ## Place de Varrock (échange physique)
 
 Centre : fontaine (3213, 3429, niveau 0), bassin x 3211-3215 / z 3427-3431.
