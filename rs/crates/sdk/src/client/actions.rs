@@ -650,9 +650,12 @@ impl Bot {
 
     /// Open the bank at booth `loc_id` (x, z) on the bot's level. Only the
     /// stands the server accepts the op from are tried (side tile, no wall
-    /// on the shared edge: `loc_stands`), nearest first: walk onto the
-    /// stand exactly, click. Ok(false) once every stand refused (teller
-    /// side disconnected, click ignored): the caller tries another booth.
+    /// on the shared edge: `loc_stands`) AND listed on the client side of
+    /// the counter by the bank table (`Tables::bank_client_stands`: the
+    /// bankers' side is a sealed pocket, one exhaustive NoRoute per try),
+    /// nearest first: walk onto the stand exactly, click. An untabled
+    /// booth fails typed. Ok(false) once every client stand refused
+    /// (click ignored, walk refused): the caller tries another booth.
     /// The old blind fan clicked from diagonals and wall-separated sides
     /// (Varrock east: 2303 "I can't reach that!" from (3251,3420)).
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
@@ -665,8 +668,10 @@ impl Bot {
             )));
         }
         let from = (self.world.x, self.world.z);
+        let client = (self.tables.bank_client_stands)(x, z, level);
+        let ordered = super::loc_stands::bank_client_stands_nearest_first(&stands, client.as_deref(), from, (x, z, level))?;
         let mut refused: Vec<String> = Vec::new();
-        for stand in super::loc_stands::nearest_first(&stands, from) {
+        for stand in ordered {
             if (self.world.x, self.world.z) != stand || self.world.level != level {
                 let budget = Self::bank_stand_walk_ticks((self.world.x, self.world.z), stand);
                 match self.walk_to(stand.0, stand.1, level, budget) {

@@ -83,6 +83,34 @@ pub fn nearest_first(stands: &[(i32, i32)], from: (i32, i32)) -> Vec<(i32, i32)>
     ordered
 }
 
+/// Booth stands `open_bank` may walk to, nearest the bot first: the live
+/// reach stands that the bank table (`Tables::bank_client_stands`, from
+/// gamedata) lists on the client side of the counter. The bankers' side
+/// is a sealed pocket: planning to it is an exhaustive NoRoute on the
+/// plan service (3-11 s under load), so it is never aimed. An untabled
+/// booth, or one whose tabled stands are all missing live, fails typed
+/// instead of falling back to the blind order.
+pub fn bank_client_stands_nearest_first(
+    stands: &[(i32, i32)],
+    client: Option<&[(i32, i32)]>,
+    from: (i32, i32),
+    booth: (i32, i32, i32),
+) -> Result<Vec<(i32, i32)>> {
+    let (booth_x, booth_z, level) = booth;
+    let Some(client) = client else {
+        return Err(Error::Unreachable(format!(
+            "booth ({booth_x},{booth_z},{level}) not in the bank stand table (gamedata bank_stands.json): client side unknown"
+        )));
+    };
+    let usable: Vec<(i32, i32)> = stands.iter().copied().filter(|stand| client.contains(stand)).collect();
+    if usable.is_empty() {
+        return Err(Error::Unreachable(format!(
+            "booth ({booth_x},{booth_z},{level}): no client stand among the live reach stands {stands:?} (table {client:?})"
+        )));
+    }
+    Ok(nearest_first(&usable, from))
+}
+
 impl Bot {
     /// Stand tiles of the bank booth `loc_id` at (x, z, level) under the
     /// server reach rule, from the plan service's static reads (mapless
@@ -183,6 +211,32 @@ mod tests {
         assert_eq!(nearest_first(&stands, (3251, 3420)), vec![(3252, 3420), (3252, 3418)]);
         let tie = vec![(3185, 3436), (3187, 3436), (3186, 3437)];
         assert_eq!(nearest_first(&tie, (3186, 3436)), vec![(3185, 3436), (3186, 3437), (3187, 3436)], "ties break by tile");
+    }
+
+    /// Varrock west booth (3186,3436): reach stands west (3185,3436),
+    /// counter gap (3186,3437) and east (3187,3436). From the square
+    /// (3213,3425) (dossier lara_lane-11257) Manhattan put the bankers'
+    /// east stand first: exhaustive NoRoute, 859 dossiers. Only the
+    /// tabled client stand is ever aimed; an untabled booth or a booth
+    /// whose tabled stands are all gone live fails typed, never the
+    /// blind order.
+    #[test]
+    fn bank_stands_never_aim_the_teller_side() {
+        let stands = vec![(3185, 3436), (3186, 3437), (3187, 3436)];
+        let from = (3213, 3425);
+        let booth = (3186, 3436, 0);
+        assert_eq!(nearest_first(&stands, from)[0], (3187, 3436), "the old pick: teller side");
+        let client = [(3185, 3436)];
+        let ordered = bank_client_stands_nearest_first(&stands, Some(&client), from, booth).expect("client stand");
+        assert_eq!(ordered, vec![(3185, 3436)]);
+        let untabled = bank_client_stands_nearest_first(&stands, None, from, booth);
+        assert!(matches!(untabled, Err(Error::Unreachable(_))), "untabled booth: {untabled:?}");
+        let gone = bank_client_stands_nearest_first(&[(3187, 3436)], Some(&client), from, booth);
+        assert!(matches!(gone, Err(Error::Unreachable(_))), "no tabled stand live: {gone:?}");
+        let two = [(3256, 3420), (3257, 3419)];
+        let ordered = bank_client_stands_nearest_first(&[(3256, 3418), (3256, 3420), (3257, 3419)], Some(&two), (3260, 3419), (3256, 3419, 0))
+            .expect("varrock east end booth");
+        assert_eq!(ordered, vec![(3257, 3419), (3256, 3420)], "client stands keep the nearest-first order");
     }
 
     /// Footprint ring follows rotation: a 2x1 loc at an odd angle spans
