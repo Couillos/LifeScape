@@ -73,6 +73,16 @@ de worker orphelin). La pause `hold` est portée par le worker et relue à
 la reprise. `run/orchestrator.log` (sortie du daemon) est horodaté ; les
 erreurs de script y figurent avec leur type et leur message.
 
+Rotation des journaux (2026-11-13, « rotation zippée ») : `log_rotate.rs`.
+Un journal de bot (`run/logs/<compte>.log`) qui atteint 100 Mo devient
+`<compte>.log.<secondes unix>` puis est compressé en arrière-plan par le
+`gzip` du système (`.gz`) ; les 5 archives les plus récentes de chaque
+journal sont gardées. `run/orchestrator.log` (stdout du daemon, ouvert en
+ajout) est vérifié chaque minute : copie puis troncature sous le verrou
+stdout (aucune ligne `logln!` perdue), même compression et même rétention.
+Les anciens `*.log.1` sont compressés une fois au démarrage du daemon.
+Lire une archive : `zcat run/logs/<compte>.log.<ts>.gz | less`.
+
 Déploiement (2026-11-13) : `restore_jobs` tourne en arrière-plan, après le
 hub d'envoi, les chemins, le marché et l'écoute : `status` répond en ~1 s,
 la reprise des ~25 workers finit en ~30–60 s (ligne `restore_jobs done in

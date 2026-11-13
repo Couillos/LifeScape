@@ -119,6 +119,7 @@ pub mod rates_price;
 pub mod rates_service;
 pub mod heartbeat_flows;
 pub mod session_log;
+pub mod log_rotate;
 pub mod store_queue;
 pub mod daemon_pool;
 pub mod bench_offline;

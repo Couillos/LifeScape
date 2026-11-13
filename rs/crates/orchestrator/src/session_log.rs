@@ -5,9 +5,10 @@
 //! (one `open+write+close` per line, ~10 lines/s/bot at 300 bots = 3000
 //! syscalls/s plus unbuffered writes). Now each path owns one `LogSink`:
 //! lines buffer to 8 KiB or 200 lines, consecutive duplicates collapse to
-//! `… répété ×N`, and a 100 Mo file rotates to `.1` (D34: 100 Mo/bot).
-//! Nothing is dropped: rotation keeps the old generation, dedup counts
-//! are written out, and `close`/panic paths flush.
+//! `… répété ×N`, and a 100 Mo file rotates to a gzipped generation
+//! (`log_rotate`, D34: 100 Mo/bot, 5 archives kept). Nothing is dropped
+//! from the live run: dedup counts are written out, and `close`/panic
+//! paths flush.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,8 +17,8 @@ use std::sync::{Mutex, OnceLock};
 /// Flush threshold: bytes or lines, whichever fills first.
 const FLUSH_BYTES: usize = 8192;
 const FLUSH_LINES: usize = 200;
-/// Rotation size (D34): one bot keeps at most current + `.1`.
-pub const LOG_ROTATE_BYTES: u64 = 100 * 1024 * 1024;
+/// Rotation size (D34), shared with `log_rotate`.
+pub const LOG_ROTATE_BYTES: u64 = crate::log_rotate::ROTATE_BYTES;
 
 struct LogSink {
     path: PathBuf,
@@ -67,9 +68,9 @@ impl LogSink {
         let size = std::fs::metadata(&self.path).map(|meta| meta.len()).unwrap_or(0);
         if size >= LOG_ROTATE_BYTES {
             self.flush_buffer();
-            let rotated = self.path.with_extension("log.1");
-            let _ = std::fs::remove_file(&rotated);
-            let _ = std::fs::rename(&self.path, &rotated);
+            if let Err(error) = crate::log_rotate::rotate_renamed(&self.path) {
+                crate::logln!("{error}");
+            }
         }
     }
 

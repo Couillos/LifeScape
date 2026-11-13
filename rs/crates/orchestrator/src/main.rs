@@ -164,6 +164,9 @@ fn daemon_main() -> i32 {
             })
             .expect("restore thread spawns");
     }
+    // Compressed log rotation (session logs rotate in their sink; the
+    // daemon log is checked every minute; legacy `.1` files are gzipped).
+    lifescape_orchestrator::log_rotate::start(paths::logs_dir(), paths::daemon_log());
     println!("orchestrator listening on {}", paths::socket_path().display());
     {
         let serve: Arc<dyn Fn(UnixStream) + Send + Sync> = {
