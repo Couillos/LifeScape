@@ -33,8 +33,11 @@ pub(super) fn tradeable_id(name: &str) -> Result<u16, ScriptError> {
 
 /// Opening price of an unpriced order (PRD3 lot 2). A buyer takes the
 /// best ask when its ceiling covers it, else opens at the reference
-/// (never above the ceiling); a seller asks 10% over the reference, or
-/// the best bid when a buyer already pays more.
+/// (never above the ceiling); a seller asks the reference, or the best
+/// bid when a buyer already pays more (2026-11-13: no margin on top, the
+/// daemon walks a listing up while it sells). Mirrors
+/// `lifescape_market::{opening_bid, opening_ask}` (no market dependency
+/// in the scripts crate).
 pub(crate) fn opening_price(buying: bool, reference: i64, bid: Option<i64>, ask: Option<i64>, ceiling: Option<i64>) -> i64 {
     let reference = reference.max(1);
     if buying {
@@ -44,8 +47,7 @@ pub(crate) fn opening_price(buying: bool, reference: i64, bid: Option<i64>, ask:
             _ => reference.min(cap),
         }
     } else {
-        let asking = reference + (reference / 10).max(if reference > 1 { 1 } else { 0 });
-        asking.max(bid.unwrap_or(0)).max(1)
+        reference.max(bid.unwrap_or(0))
     }
 }
 
@@ -149,7 +151,7 @@ mod tests {
         assert_eq!(opening_price(true, 1, None, Some(12), Some(20)), 12, "covered ask: take it");
         assert_eq!(opening_price(true, 10, None, Some(30), Some(20)), 10, "ask above the ceiling: rest at the reference");
         assert_eq!(opening_price(true, 50, None, None, Some(20)), 20, "never above the ceiling");
-        assert_eq!(opening_price(false, 100, None, None, None), 110, "ask 10% over");
+        assert_eq!(opening_price(false, 100, None, None, None), 100, "ask at the reference");
         assert_eq!(opening_price(false, 100, Some(130), None, None), 130, "a richer bid wins");
         assert_eq!(opening_price(false, 1, None, None, None), 1, "untraded seller asks 1");
     }

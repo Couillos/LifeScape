@@ -146,6 +146,19 @@ function pick(account) {
   try { history.replaceState(null, '', '#' + account); } catch (e) { /* file:// */ }
   renderIndex();
   loadDetail();
+  if (BrainView) BrainView.select(account);
+}
+
+// Detail / brain tabs share the selected bot; the brain polls only
+// while its tab is shown. The chosen tab is a per-viewer convenience.
+function showTab(name) {
+  const brain = name === 'brain';
+  document.getElementById('detail').hidden = brain;
+  document.getElementById('brainpane').hidden = !brain;
+  document.getElementById('tab-detail').classList.toggle('cur', !brain);
+  document.getElementById('tab-brain').classList.toggle('cur', brain);
+  try { localStorage.setItem('life-tab', name); } catch (e) { /* storage off */ }
+  if (BrainView) BrainView.setActive(brain);
 }
 
 function altText(alternatives) {
@@ -201,6 +214,12 @@ async function loadDetail() {
     (hrows.join('') || '<tr><td class="left muted" colspan="3">no history yet</td></tr>');
 }
 
-loadLives().then(loadDetail);
+loadLives().then(() => {
+  loadDetail();
+  if (BrainView && selected !== null) BrainView.select(selected);
+  let tab = 'detail';
+  try { tab = localStorage.getItem('life-tab') || 'detail'; } catch (e) { tab = 'detail'; }
+  showTab(tab === 'brain' ? 'brain' : 'detail');
+});
 setInterval(loadLives, 60000);
 setInterval(loadDetail, 30000);

@@ -77,9 +77,13 @@ pub fn next_id(life: &Life) -> String {
 }
 
 fn max_id_number(life: &Life) -> usize {
+    // History ids count too: a withdrawn ladder step leaves the graph,
+    // never its number (`withdraw_gear_step`, logged by the brain).
     life.nodes
         .iter()
-        .filter_map(|node| node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()))
+        .map(|node| node.id.as_str())
+        .chain(life.history.iter().map(|entry| entry.node.as_str()))
+        .filter_map(|id| id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()))
         .max()
         .unwrap_or(0)
         .max(life.nodes.len())
@@ -373,6 +377,58 @@ pub fn insert_ready(life: &mut Life, mut node: Node) -> usize {
     node.status = NodeStatus::Ready;
     life.nodes.push(node);
     life.nodes.len() - 1
+}
+
+/// File an equipment ladder step (`gear_ladder`): with `item`, an
+/// `obtain_items` of one piece bought on the market only (never a shop:
+/// every ladder piece is producible, D-A), ready, then the `equip_best`
+/// that wears it; without, the `equip_best` alone (a piece already owned).
+/// Returns the new ids. The caller files one step at a time
+/// (`gear_ladder::step_open`).
+pub fn insert_gear_step(life: &mut Life, item: Option<&str>, style: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut deps = Vec::new();
+    if let Some(item) = item {
+        let id = next_id(life);
+        let mut obtain = Node::new(&id, NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
+        obtain.alternatives.push(crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 });
+        obtain.status = NodeStatus::Ready;
+        life.nodes.push(obtain);
+        deps.push(id.clone());
+        ids.push(id);
+    }
+    let id = next_id(life);
+    let mut equip = Node::new(&id, NodeKind::EquipBest { style: style.to_string() }, deps.clone(), 1);
+    equip.alternatives.push(crate::model::Alternative { method: format!("equip:{style}"), est_ticks: 400, est_coins: 0 });
+    equip.alternatives.push(crate::model::Alternative { method: crate::gear_ladder::LADDER_MARKER.to_string(), est_ticks: 0, est_coins: 0 });
+    equip.status = if deps.is_empty() { NodeStatus::Ready } else { NodeStatus::Pending };
+    life.nodes.push(equip);
+    ids.push(id);
+    ids
+}
+
+/// Withdraw the ladder step whose chain holds node `index`: its open
+/// nodes leave the graph (done ones stay as the record), unless a node
+/// outside the step still depends on them. Used when the seller left
+/// before the purchase (the standing bid takes over) or when the step
+/// died (abandoned): an equipment step never strands the goal's graph.
+/// Returns the removed ids.
+pub fn withdraw_gear_step(life: &mut Life, index: usize) -> Vec<String> {
+    let id = life.nodes[index].id.clone();
+    let equip = (0..life.nodes.len())
+        .find(|&at| crate::gear_ladder::is_ladder_equip(&life.nodes[at]) && crate::gear_ladder::step_chain(life, at).contains(&id));
+    let Some(equip) = equip else { return Vec::new() };
+    let chain = crate::gear_ladder::step_chain(life, equip);
+    let removable: Vec<String> = chain
+        .iter()
+        .filter(|member| {
+            life.nodes.iter().any(|node| &node.id == *member && !matches!(node.status, NodeStatus::Done | NodeStatus::Active))
+                && !life.nodes.iter().any(|node| !chain.contains(&node.id) && node.deps.contains(member))
+        })
+        .cloned()
+        .collect();
+    life.nodes.retain(|node| !removable.contains(&node.id));
+    removable
 }
 
 /// A runtime failure (`Failed`, `Sdk`, bad exit): counted, retried with a

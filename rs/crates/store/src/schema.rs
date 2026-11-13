@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -130,6 +130,39 @@ CREATE TABLE IF NOT EXISTS holdings_daily(
 CREATE INDEX IF NOT EXISTS idx_holdings_hourly_time ON holdings_hourly(taken_at);
 ";
 
+/// Migration 3 (errors page): one centralised error log fed by the
+/// daemon at ingest time (task errors, nav dossiers, failed deals, brain
+/// abandons). Pulled rows carry a unique `source_ref` (rescan-safe),
+/// pushed rows leave it NULL. Retention is the collector's job.
+const MIGRATION_V3: &str = "
+CREATE TABLE IF NOT EXISTS error_events(
+    error_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clock INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    account TEXT NOT NULL DEFAULT '',
+    peer TEXT NOT NULL DEFAULT '',
+    script TEXT NOT NULL DEFAULT '',
+    args TEXT NOT NULL DEFAULT '',
+    node_id TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT '',
+    stop TEXT NOT NULL DEFAULT '',
+    signature TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    has_pos INTEGER NOT NULL DEFAULT 0,
+    pos_x INTEGER NOT NULL DEFAULT 0,
+    pos_z INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 0,
+    zone TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    dossier TEXT NOT NULL DEFAULT '',
+    source_ref TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_error_events_clock ON error_events(clock);
+CREATE INDEX IF NOT EXISTS idx_error_events_account ON error_events(account, clock);
+CREATE INDEX IF NOT EXISTS idx_error_events_source ON error_events(source, clock);
+";
+
 /// Reads the `user_version` pragma of an open connection.
 pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> {
     let found: i64 = connection
@@ -163,6 +196,14 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
             .execute_batch("PRAGMA user_version = 2")
             .map_err(|source| Error::Sql(source.to_string()))?;
     }
+    if found < 3 {
+        connection
+            .execute_batch(MIGRATION_V3)
+            .map_err(|source| Error::Sql(source.to_string()))?;
+        connection
+            .execute_batch("PRAGMA user_version = 3")
+            .map_err(|source| Error::Sql(source.to_string()))?;
+    }
     Ok(())
 }
 
@@ -181,11 +222,12 @@ mod schema_tests {
             let table_count: i64 = store.connection.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
                  ('items','orders','deals','executions','candles','task_reports',\
-                 'task_yields','accounts_econ','trends','holdings_hourly','holdings_daily')",
+                 'task_yields','accounts_econ','trends','holdings_hourly','holdings_daily',\
+                 'error_events')",
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(table_count, 11);
+            assert_eq!(table_count, 12);
         }
         // Reopen keeps the version: migrations are idempotent.
         let reopened = Store::open(&path)?;

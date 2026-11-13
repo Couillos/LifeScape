@@ -49,6 +49,10 @@ pub struct ReadyCtx {
     /// Units of the node's object the bot already holds (pack, bank,
     /// worn): an obtain buys or makes only what is still missing.
     pub held: i64,
+    /// Share of the wallet (percent) a purchase may spend, when the
+    /// brain caps it (equipment steps: `gear_ladder::GEAR_SHARE_PCT`).
+    /// `None`: the whole wallet, capped at the fair unit price.
+    pub coin_share_pct: Option<i64>,
 }
 
 impl ReadyCtx {
@@ -72,6 +76,7 @@ impl ReadyCtx {
             levels: Vec::new(),
             method_profit: Vec::new(),
             held: 0,
+            coin_share_pct: None,
         }
     }
 }

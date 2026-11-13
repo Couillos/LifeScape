@@ -187,6 +187,76 @@ immédiate sans délai (même échec en boucle), bannir sur un manque
 d'outil/intrant/pièces (sous-tâches existantes), repartir du niveau 1 en
 comptant sur le script pour s'arrêter (budget de 18 000 ticks brûlé).
 
+## 2026-11-13 — Page Erreurs : journal centralisé persistant (table `error_events`)
+
+Besoin : toutes les erreurs au même endroit, identifiables (compte, tâche,
+nœud, coordonnées, zone), agrégées par type et par signature, avec KPIs.
+Décision : migration 3 de `lifescape-store`, table `error_events` alimentée
+par un seul thread du daemon (`errors_ingest.rs`) :
+- poussées (canal borné, jamais bloquant, pertes comptées et loguées) :
+  événements `script_error` (`ingest_push`), rapports de tâche `failed` /
+  `blocked` (repliés sur la ligne de l'événement de la même panne : une
+  panne = une ligne), lignes `brain …` du journal du daemon (abandon de
+  nœud, graphe/but bloqué, ban de skill, plafond de relance) captées dans
+  `logln!` même, sans relire le fichier ;
+- tirées toutes les 30 s : dossiers `run/failures/*.json` (par mtime) et
+  deals `failed` (table `deals`), clé unique `source_ref` ⇒ rescans et
+  redémarrages sans doublon, rattrapage des 72 h au premier passage.
+Signature = message sans nombres/coordonnées/listes `[…]`/nom du compte/
+chat `; last game:`. Rétention 72 h (purge horaire) : les dossiers nav
+seuls font 500–1400 lignes/h (~650 o). Mesuré sur les données réelles :
+36 700 dossiers + 790 deals rattrapés en ~15 s, résumé 24 h en ~0,25 s.
+Taux d'échec par tâche lus de `task_reports` (échecs / runs), taux d'échec
+des deals de `deals`. Rejeté : agrégation à la requête sur les sources
+brutes (52 000 dossiers, 445 Mo, journal sans date) ; anneau mémoire +
+instantané JSON (filtres et fenêtres à recoder, perdu entre deux
+instantanés) ; analyse du fichier `orchestrator.log` (heures sans date,
+rotation).
+
+## 2026-11-13 — Équipement par paliers, prix par l'offre et la demande
+
+Constat (audit 2026-11-13) : envies d'équipement sur la meilleure pièce
+absolue (plastron noir/mithril, amulette de puissance), plafonds 7–105
+pièces ouverts à 1 et jamais servis (l'offre était annulée et reposée
+toutes les 600 s : sa marche repartait de la référence), jamais
+transformées en nœuds ; personne ne forge ; 564 asks presque tous au
+plancher 1 (17k bûches de saule, 11k plumes) ; masse ≈ 2 340 pièces,
+entrée ≈ 1 660/24 h par les seuls drops mêlée.
+Décisions (règles utilisateur) :
+- Équipement = sous-but réel, palier suivant seulement (bronze → fer →
+  acier → mithril → adamant → rune, F2P, niveaux du bot : attaque pour
+  l'arme, défense pour l'armure), arme d'abord puis corps, jambes,
+  casque, bouclier (`planner::gear_ladder`, `brain_gear`). Achat au
+  marché seulement (D-A, aucune exception pour l'armure), plafond 50 % du
+  portefeuille (choisi : un palier à la fois porte tout le budget
+  d'équipement, l'autre moitié reste aux intrants et outils ; il monte
+  avec les pièces) ; vendeur présent → nœuds obtain + equip_best lancés
+  en priorité, ask trop cher → `have_coins` (2× l'ask) ; pas de vendeur →
+  offre D-B permanente qui attend un producteur sans bloquer le bot. Un
+  palier sans vendeur à la résolution ou abandonné est retiré du graphe
+  (`lifecycle::withdraw_gear_step`) ; les ids retirés restent réservés
+  (l'historique compte dans `next_id`).
+- Prix : 1 pièce = amorçage seulement. Pas de 5 % par fenêtre de 200
+  ticks dirigé par les exécutions (vente servie ↑, vente au repos ↓,
+  achat au repos ↑ jusqu'au plafond, achat servi ↓) ; ouverture des
+  ventes à la référence (fin de la marge +10 %) ; aucun plancher lié au
+  coût des intrants (réserve = moitié d'une référence échangée, 1 sinon).
+  Les ordres partiellement servis continuent de marcher ; une annonce
+  sans bornes est réadoptée par la passe de ventes (hors marchands) ;
+  une offre permanente garde sa marche, seul son plafond suit le
+  portefeuille (`keep_bid`).
+- Producteurs : leurs produits (barres, forgé, artisanat, cuisine) sont
+  vendus, sauf ceux qu'une autre méthode ouverte consomme.
+- Crochet de production pour les ambitions : `planner::profit::chain_profit`
+  (recettes gamedata, prix marché, rendement mesuré), erreurs typées.
+- Un `obtain_items` déjà couvert par les avoirs (sac, banque, porté) est
+  clos sans lancement (`already_held`).
+Rejeté : plafond lié au coût des intrants (contraire à la règle), viser
+la meilleure pièce d'un coup (jamais servie), palier en attente active
+d'un vendeur (bloquait le worker jusqu'à 6000 ticks par essai), achat
+magasin pour l'armure, plafond = portefeuille entier (plus rien pour les
+intrants).
+
 ## 2026-11-13 — Ambitions par bot, couverture de flotte, demande du marché
 
 Constat : la succession tirait toujours la compétence la plus basse ; tous
