@@ -229,6 +229,11 @@ impl Job {
             ("flora", arr_or_empty(bot.get("flora"))),
             ("objs", arr_or_empty(bot.get("objs"))),
             ("players", arr_or_empty(bot.get("players"))),
+            // Light-flow entity positions (1 Hz, `merge_light`): spectate
+            // moves the dots from these between full frames. Null after a
+            // full frame (never `[]`: the front would wipe the scene).
+            ("npcs_at", bot.get("npcs_at").clone()),
+            ("players_at", bot.get("players_at").clone()),
             ("inv", arr_or_empty(bot.get("inv"))),
             ("bank", arr_or_empty(bot.get("bank"))),
             ("chat", arr_or_empty(bot.get("chat"))),
@@ -502,7 +507,7 @@ mod tests {
             "account", "script", "script_args", "args", "phase", "paused", "held", "status", "session_pid",
             "started", "intention", "position", "zone", "hitpoints", "ticks", "updated", "combat",
             "energy", "modal", "hint", "hint_type", "flash", "route", "route_target", "skills",
-            "worn", "npcs", "locs", "flora", "objs", "players", "inv", "bank", "chat", "messages",
+            "worn", "npcs", "npcs_at", "locs", "flora", "objs", "players", "players_at", "inv", "bank", "chat", "messages",
             "message_ticks", "texts", "log", "last_event", "requirements", "last_error",
             "last_code", "trail",
         ] {

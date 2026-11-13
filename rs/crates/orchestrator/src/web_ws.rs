@@ -541,6 +541,57 @@ mod tests {
         assert!(!frame.get("loc_fields").as_arr().unwrap().is_empty());
     }
 
+    /// Live 2026-11-13 (user): spectate still froze the NPC/player dots
+    /// between full frames although the workers pushed `npcs_at` at 1 Hz
+    /// (~0.9 light/s/session measured) and `merge_light` cached them: the
+    /// `live` state is `Job::describe`, a key whitelist that dropped both,
+    /// so not one WS diff carried them. Whole daemon path: pushed light
+    /// merged into the job cache, read back by `live`, diffed per tick.
+    #[test]
+    fn light_entity_positions_reach_the_ws_diff() {
+        fn light(tick: i64, npc_x: i64, player_x: i64) -> Value {
+            crate::heartbeat_flows::light_value(
+                "bob", "melee", "running", (0, 3228, 3298), tick as u64, "Lumbridge", "fight", tick as f64,
+                Value::Arr(vec![Value::Arr(vec![Value::Int(837), Value::Int(npc_x), Value::Int(3301)])]),
+                Value::Arr(vec![Value::Arr(vec![str_value("will_field"), Value::Int(player_x), Value::Int(3301)])]),
+            )
+        }
+        let job = Arc::new(crate::jobs::Job::new("bob"));
+        job.inner.lock().unwrap().live = Some(object(vec![
+            ("account", str_value("bob")),
+            ("npcs", Value::Arr(vec![object(vec![
+                ("nid", Value::Int(837)),
+                ("name", str_value("cow")),
+                ("x", Value::Int(3230)),
+                ("z", Value::Int(3301)),
+            ])])),
+        ]));
+        let dispatch: Dispatch = {
+            let job = job.clone();
+            Arc::new(move |request: Value| match request.get("cmd").as_str().unwrap_or("") {
+                "status" => object(vec![("jobs", Value::Arr(Vec::new()))]),
+                _ => object(vec![("state", job.describe())]),
+            })
+        };
+        let ingest = |frame: &Value| {
+            let mut inner = job.inner.lock().unwrap();
+            crate::heartbeat_flows::merge_light(inner.live.as_mut().expect("full cached"), frame);
+        };
+        ingest(&light(100, 3231, 3229));
+        let (first, full) = state_payload(&dispatch, "bob", None);
+        let row = first.get("state").get("npcs_at").as_arr().cloned().unwrap_or_default();
+        assert_eq!(row.len(), 1, "light npc positions ride the spectate state");
+        assert_eq!(first.get("state").get("players_at").as_arr().map(Vec::len), Some(1));
+        // One second later the cow and the player moved: the diff says so.
+        ingest(&light(102, 3232, 3230));
+        let (moved, _) = state_payload(&dispatch, "bob", full.as_ref());
+        let frame = moved.get("state");
+        let npc = frame.get("npcs_at").as_arr().and_then(|rows| rows.first().cloned()).unwrap_or(Value::Null);
+        assert_eq!(npc.as_arr().and_then(|cells| cells.get(1).and_then(Value::as_i64)), Some(3232), "npc x moved");
+        let player = frame.get("players_at").as_arr().and_then(|rows| rows.first().cloned()).unwrap_or(Value::Null);
+        assert_eq!(player.as_arr().and_then(|cells| cells.get(1).and_then(Value::as_i64)), Some(3230), "player x moved");
+    }
+
     #[test]
     fn log_tail_goes_incremental() {
         let old = vec!["a".to_string(), "b".to_string()];
