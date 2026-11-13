@@ -4,9 +4,11 @@
 //! then `append_goal` adds its nodes, climbing from the live levels.
 //! Pure: live levels, elapsed ticks and the history come in as arguments.
 //!
-//! Extension point (per-bot ambitions): `draw_goal` is the single place
-//! that picks the next goal; an ambition layer replaces its skill choice
-//! (`next_goal`) and must keep honouring the active bans.
+//! Per-bot ambitions (2026-11-13): `draw_goal_origin` reads the next
+//! milestone of `life.ambition` whose skills are not banned; the plain
+//! lowest-skill draw (`next_goal`) serves ONLY the explicit `generalist`
+//! ambition. A life without ambition draws nothing (typed `NoGoal`): the
+//! brain assigns one first, never a silent fallback.
 
 use crate::expand::expand_goal_from;
 use crate::model::{GoalKind, HistoryEntry, Life, Node, Profile};
@@ -21,11 +23,41 @@ pub const STUCK_TAG: &str = "stuck:";
 /// History tag of a goal that ended done.
 pub const DONE_TAG: &str = "done:";
 
-/// Skills named by a goal (empty for non-skill goals).
+/// Skills named by a goal (empty for non-skill goals). A production
+/// quota names the skill of its first production leg (its ban unit).
 pub fn goal_skills(goal: &GoalKind) -> Vec<String> {
     match goal {
         GoalKind::MaxSkills { skills, .. } => skills.clone(),
+        GoalKind::Produce { item, .. } => crate::obtain_legs::production_legs(item)
+            .into_iter()
+            .find_map(|leg| leg.skill.map(|(skill, _)| skill))
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Why no goal is drawable now (typed, logged by the brain).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoGoal {
+    /// No ambition yet: the brain assigns one before drawing.
+    NoAmbition,
+    /// Every open milestone trains a banned skill (retried as bans expire).
+    MilestonesBanned(Vec<String>),
+    /// Nothing left open: the ambition is achieved (the brain redraws it).
+    Achieved,
+    /// Generalist: every trainable skill banned or maxed.
+    NothingTrainable,
+}
+
+impl NoGoal {
+    pub fn describe(&self) -> String {
+        match self {
+            NoGoal::NoAmbition => "no ambition assigned".to_string(),
+            NoGoal::MilestonesBanned(skills) => format!("every open milestone trains a banned skill ({})", skills.join(",")),
+            NoGoal::Achieved => "ambition achieved, nothing left to draw".to_string(),
+            NoGoal::NothingTrainable => "every skill banned or maxed".to_string(),
+        }
     }
 }
 
@@ -41,13 +73,35 @@ pub fn goal_closed(history: &[HistoryEntry]) -> bool {
         .is_some_and(|entry| entry.node == "goal" && (entry.outcome.starts_with(DONE_TAG) || entry.outcome.starts_with(STUCK_TAG)))
 }
 
-/// THE goal-drawing entry point, called once the current goal is closed.
-/// Money goals are open-ended (closed done, the same goal goes on);
-/// otherwise the lowest trainable skill not banned now (`next_goal`).
+/// THE goal-drawing entry point, called once the current goal is closed:
+/// the ambition's next milestone not banned now (generalist: money goes
+/// on after a done close, else the lowest trainable skill not banned).
 /// `ticks_since` maps a history stamp to elapsed ticks (bans expire).
-/// `None`: every skill is banned or maxed — retried every pass, so a ban
-/// expiry alone brings the bot back.
+/// `None`: nothing drawable (see `draw_goal_origin` for the typed
+/// reason) — retried every pass, so a ban expiry alone brings the bot back.
 pub fn draw_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64) -> Option<GoalKind> {
+    draw_goal_origin(life, level_of, ticks_since).ok().map(|(goal, _)| goal)
+}
+
+/// `draw_goal` with the milestone the goal comes from (`None` for the
+/// generalist) or the typed reason nothing is drawable. Call
+/// `ambition::refresh` first (met levels and coins close their milestones).
+pub fn draw_goal_origin(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64) -> Result<(GoalKind, Option<String>), NoGoal> {
+    let avoid = crate::bans::banned_skills(&life.history, ticks_since);
+    let ambition = life.ambition.as_ref().ok_or(NoGoal::NoAmbition)?;
+    if ambition.kind != crate::ambition::GENERALIST {
+        if let Some(stone) = crate::ambition::next_milestone(ambition, &avoid) {
+            return Ok((crate::ambition::goal_for_milestone(stone), Some(stone.id.clone())));
+        }
+        let open = ambition.milestones.iter().any(|stone| stone.status != crate::ambition::MilestoneStatus::Done);
+        return Err(if open { NoGoal::MilestonesBanned(avoid) } else { NoGoal::Achieved });
+    }
+    generalist_goal(life, level_of, &avoid).map(|goal| (goal, None)).ok_or(NoGoal::NothingTrainable)
+}
+
+/// The explicit generalist: money goals go on after a done close, else
+/// the lowest trainable skill not banned.
+fn generalist_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, avoid: &[String]) -> Option<GoalKind> {
     let closed_done = life
         .history
         .iter()
@@ -57,8 +111,7 @@ pub fn draw_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn F
     if closed_done && matches!(life.goal, GoalKind::MakeMoney | GoalKind::GetRich { .. }) {
         return Some(life.goal.clone());
     }
-    let avoid = crate::bans::banned_skills(&life.history, ticks_since);
-    next_goal(level_of, &avoid, life.seed, life.history.len() as u64)
+    next_goal(level_of, avoid, life.seed, life.history.len() as u64)
 }
 
 /// Next goal: the lowest trainable skill not stuck before, trained to the
@@ -155,6 +208,8 @@ mod tests {
             engagement: None,
             active: None,
             history,
+            ambition: crate::ambition::new_ambition(crate::ambition::GENERALIST, "operator", &|_| 1, 0, &[], crate::ambition::Stamp { tick: 0, secs: 0 }),
+            goal_origin: None,
         }
     }
 
@@ -209,6 +264,8 @@ mod tests {
             engagement: None,
             active: None,
             history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
         };
         for node in &mut life.nodes {
             node.status = NodeStatus::Done;

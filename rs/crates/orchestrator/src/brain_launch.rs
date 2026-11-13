@@ -66,6 +66,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     let Some(live) = live else { return };
     let mut dirty = false;
+    // Every life holds an ambition (2026-11-13): the first pass that
+    // meets one without assigns the whole fleet (coverage first).
+    if crate::brain_ambition::ensure(orch, &mut life, &live) {
+        dirty = true;
+    }
     // Space pressure (L8) precedes the terminal check: a full bank needs
     // its janitor even when the graph is done.
     if maybe_insert_cleanup(&mut life, bank_types(job)) {
@@ -195,7 +200,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         GraphState::Finished => {
             let closing = !lifescape_planner::goal_closed(&life.history);
             if closing {
-                crate::brain_succession::close_goal(&mut life, false);
+                crate::brain_succession::close_goal(&mut life, &live, false);
             }
             let (drawn, changed) = crate::brain_succession::redraw(&mut life, &live);
             match drawn {
@@ -204,7 +209,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
                     lifescape_planner::normalize(&mut life);
                 }
                 None if closing => crate::logln!(
-                    "brain {}: no goal left to draw (every skill banned or maxed), retrying as bans expire",
+                    "brain {}: no goal left to draw (see the reason above), retrying every pass",
                     job.account
                 ),
                 None => {}

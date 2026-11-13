@@ -253,6 +253,16 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 1200, est_coins: 0 });
             nodes.push(node);
         }
+        GoalKind::Produce { item, count } => {
+            // A production quota (ambition milestone): production legs
+            // only, the product is never bought (inputs may be, through
+            // the `obtain` sub-tasks a missing input files). The default
+            // selling lists the result once the node is done.
+            let id = next_id(&mut counter);
+            let mut node = Node::new(&id, NodeKind::ObtainItems { item: item.clone(), count: *count }, Vec::new(), *count);
+            node.alternatives = crate::obtain_legs::produce_alternatives(item);
+            nodes.push(node);
+        }
         GoalKind::GetRich { merchant } => {
             let is_merchant = merchant.unwrap_or(profile.archetype == crate::model::Archetype::Merchant);
             let id = next_id(&mut counter);

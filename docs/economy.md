@@ -181,6 +181,10 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   27 intrants, 13+13 pour le bronze ; un outil = 1), résolue marché
   d'abord ; la progression de niveau remet le compteur de blocages à zéro
   (une charge par blocage est le rythme normal).
+- Demande (2026-11-13) : `market_demand::signals()` (offres d'achat au
+  repos par objet : nombre, acheteurs, quantité non servie, meilleure
+  offre, âge, poids) et `chain_profits()`/`kind_profits()` nourrissent les
+  ambitions (voir `docs/planner.md` § Ambitions) ; lecture seule.
 - Couverture : pièces et stock en banque comptent (banque connue gardée
   par le SDK après fermeture, voir `docs/protocol.md`) côté cerveau
   (`holdings_count`) et registre (`market_service::ledger_holdings`).

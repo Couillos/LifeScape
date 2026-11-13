@@ -104,7 +104,7 @@ pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> b
                     lifescape_planner::normalize(life);
                 }
                 None => crate::logln!(
-                    "brain {}: no goal left to draw (every skill banned or maxed); the draw retries as bans expire, abandoned nodes retry after {REVIVE_COOLDOWN_TICKS} ticks (at most {MAX_REVIVES} times)",
+                    "brain {}: no goal left to draw (see the reason above); the draw retries as bans expire, abandoned nodes retry after {REVIVE_COOLDOWN_TICKS} ticks (at most {MAX_REVIVES} times)",
                     life.account
                 ),
             }

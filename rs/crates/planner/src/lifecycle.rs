@@ -100,6 +100,7 @@ fn abandon(node: &mut Node, why: String, changes: &mut Vec<String>) {
 /// index: the legs are game data, never a choice to preserve.
 fn rederive_dead_legs(life: &mut Life, changes: &mut Vec<String>) {
     let ironman = life.profile.ironman;
+    let produce = produce_item(life);
     for node in &mut life.nodes {
         if is_terminal(&node.status) || node.status == NodeStatus::Active {
             continue;
@@ -109,11 +110,20 @@ fn rederive_dead_legs(life: &mut Life, changes: &mut Vec<String>) {
             continue;
         }
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
-            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            node.alternatives = crate::obtain_legs::legs_for(item, ironman, produce.as_deref());
             node.method = None;
             let fresh: Vec<&str> = node.alternatives.iter().map(|alt| alt.method.as_str()).collect();
             changes.push(format!("{} legs re-derived ({} name no script) -> {}", node.id, dead.join(", "), fresh.join(", ")));
         }
+    }
+}
+
+/// Item of the current production quota: its obtain node keeps
+/// production legs only when re-derived (never bought back in).
+fn produce_item(life: &Life) -> Option<String> {
+    match &life.goal {
+        crate::model::GoalKind::Produce { item, .. } => Some(item.clone()),
+        _ => None,
     }
 }
 
@@ -261,6 +271,7 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
         return Vec::new();
     }
     let ironman = life.profile.ironman;
+    let produce = produce_item(life);
     let style = crate::combat::goal_combat_style(&life.goal).to_string();
     let mut changes = Vec::new();
     for node in &mut life.nodes {
@@ -274,7 +285,7 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
         node.method = None;
         node.site = None;
         node.spent_ticks = 0;
-        rederive_legs(node, ironman, &style);
+        rederive_legs(node, ironman, &style, produce.as_deref());
         changes.push(format!("{} revived ({}/{MAX_REVIVES}) after {stuck_ticks} stuck ticks; was: {}", node.id, node.revives, node.last_error));
     }
     if !changes.is_empty() {
@@ -287,10 +298,10 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
 /// from the obtain index (a travel ban is forgotten with the rest), a
 /// tranche or combat training whose legs were all banned gets its
 /// creation method back.
-fn rederive_legs(node: &mut Node, ironman: bool, style: &str) {
+fn rederive_legs(node: &mut Node, ironman: bool, style: &str, produce: Option<&str>) {
     let method = match &node.kind {
         NodeKind::ObtainItems { item, .. } => {
-            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            node.alternatives = crate::obtain_legs::legs_for(item, ironman, produce);
             return;
         }
         NodeKind::ReachLevel { skill, level } if node.alternatives.is_empty() => {

@@ -237,6 +237,10 @@ fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
     if resource.ends_with("_ore") || resource == "coal" || resource == "clay" {
         return Some(("mining".to_string(), Vec::new()));
     }
+    // Rune essence is mined only through Aubury's teleport (`essence:`).
+    if resource == "blankrune" {
+        return Some(("essence_run".to_string(), Vec::new()));
+    }
     spot_for_drop(resource).map(|spot| ("melee".to_string(), vec![spot]))
 }
 

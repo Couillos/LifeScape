@@ -86,6 +86,8 @@ fn life_of(nodes: Vec<Node>, history: Vec<HistoryEntry>) -> Life {
         engagement: None,
         active: None,
         history,
+        ambition: None,
+        goal_origin: None,
     }
 }
 

@@ -186,3 +186,40 @@ Rejeté : bannissement à vie (bots inactifs sans recours), relance
 immédiate sans délai (même échec en boucle), bannir sur un manque
 d'outil/intrant/pièces (sous-tâches existantes), repartir du niveau 1 en
 comptant sur le script pour s'arrêter (budget de 18 000 ticks brûlé).
+
+## 2026-11-13 — Ambitions par bot, couverture de flotte, demande du marché
+
+Constat : la succession tirait toujours la compétence la plus basse ; tous
+les bots finissaient sur les mêmes activités (poulets, crevettes, bûches),
+le marché n'offrait qu'une poignée d'objets et aucune offre d'achat ne
+déclenchait de production.
+Décisions (règles utilisateur) :
+- Chaque bot a une ambition long terme (catalogue de 12 groupes F2P, la
+  mêlée comptant pour UN groupe, + marchand) qui tire ses buts par jalons
+  (niveaux, quotas de production listés, équipement, pièces).
+- Couverture : au moins un bot par groupe et un marchand (groupe
+  primaire), affectés aux bots dont les niveaux s'y prêtent le mieux ;
+  au-delà, un compte existant spécialisé (une compétence ≥ 15 niveaux
+  au-dessus de sa moyenne) est lu depuis ses niveaux (`levels:<groupe>`),
+  les autres tirent au hasard, pondéré par la demande et les niveaux. Les
+  comptes existants reçoivent leur ambition au premier passage, loggée.
+- Changement facultatif au plus une fois toutes les 72 000 ticks ; un
+  jalon bloqué 3 fois ⇒ nouveau tirage immédiat (politique approuvée,
+  loggée), comme une échelle épuisée : ces deux-là ne sont pas des
+  changements facultatifs et ne sont pas bridés.
+- Bannissements (6000 ticks) respectés : les jalons d'une compétence
+  bannie sont sautés, jamais forcés.
+- Offres d'achat ⇒ production : une offre ouverte qu'une ambition sait
+  servir devient un jalon `produce` (entraînement et achat d'intrants
+  compris) ; le poids des tirages suit la demande (offres × âge) et les
+  profits (chaînes D58 aux prix marché, profits mesurés).
+- `GoalKind::Produce` : production seulement, jamais d'achat du produit
+  (sinon le quota serait « rempli » au marché).
+- Plus-bas-skill réservé à l'ambition explicite `generalist` ; sans
+  ambition, aucun but (erreur typée), jamais de repli silencieux.
+- `farm:blankrune` → `essence_run` (l'essence n'avait aucune jambe de
+  production : un runier ne pouvait que l'acheter).
+Rejeté : une ambition par stat de mêlée (12 groupes, pas 15) ; changement
+libre à chaque jalon (bots instables, marché erratique) ; garder le
+plus-bas-skill en repli (masque une ambition manquante) ; remplir un quota
+par achat.

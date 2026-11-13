@@ -7,15 +7,18 @@
 //! tick and count as expired. With every skill banned the bot waits; each
 //! pass retries the draw, so a ban expiry alone brings it back.
 //!
-//! The pure decisions live in the planner (`goals::draw_goal`, the single
-//! goal-drawing entry point, and `bans`); this file only stamps, logs and
-//! appends.
+//! The pure decisions live in the planner (`goals::draw_goal_origin`, the
+//! single goal-drawing entry point, `bans` and `ambition`); this file only
+//! stamps, logs and appends. Goals come from the life's ambition
+//! (`brain_ambition`): each drawn goal records `goal: next:<label>` and
+//! `life.goal_origin` (its milestone); the plain lowest-skill draw serves
+//! only the explicit `generalist` ambition.
 
 #![forbid(unsafe_code)]
 
 use lifescape_json::Value;
 use lifescape_planner::{
-    append_goal, ban_entry, ban_states, draw_goal, goal_closed, goal_skills, stuck_cause, unban_entry, BanState, GoalKind, Life,
+    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind, Life,
     StuckCause, DONE_TAG, SKILL_BAN_TICKS,
 };
 
@@ -37,6 +40,9 @@ pub(crate) fn live_level(live: &Value, skill: &str) -> u8 {
 fn goal_label(goal: &GoalKind) -> String {
     match goal {
         GoalKind::MaxSkills { skills, level } => format!("{} {level}", skills.join(",")),
+        GoalKind::Produce { item, count } => format!("produce {item} {count}"),
+        GoalKind::EquipBest { style } => format!("equip {style}"),
+        GoalKind::GetRich { merchant: Some(true) } => "rich merchant".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -49,8 +55,14 @@ fn ticks_since(stamp: i64) -> u64 {
 }
 
 /// Close the current goal once: `done:<skills>`, or one ban per trained
-/// skill (stuck), each logged with its cause.
-pub(crate) fn close_goal(life: &mut Life, stuck: bool) {
+/// skill (stuck), each logged with its cause; then fold the close into
+/// the goal's milestone (`brain_ambition::after_close`).
+pub(crate) fn close_goal(life: &mut Life, live: &Value, stuck: bool) {
+    close_goal_history(life, stuck);
+    crate::brain_ambition::after_close(life, live, stuck);
+}
+
+fn close_goal_history(life: &mut Life, stuck: bool) {
     let skills = goal_skills(&life.goal);
     if !stuck {
         push_history(life, "goal", &format!("{DONE_TAG}{}", skills.join(",")));
@@ -90,16 +102,40 @@ pub(crate) fn note_expired_bans(life: &mut Life) -> bool {
     changed
 }
 
-/// Draw and append the next goal for a closed one (expired bans noted
-/// first). Returns the new goal's label, or `None` while nothing is
-/// drawable (every skill banned or maxed).
+/// Last "nothing drawable" reason logged per account (one line per
+/// change, not one per pass).
+fn last_wait() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Draw and append the next goal for a closed one (expired bans noted,
+/// milestones refreshed first). Returns the new goal's label, or `None`
+/// while nothing is drawable (typed reason logged once per change).
 pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     note_expired_bans(life);
+    crate::brain_ambition::before_draw(life, live);
     let level_of = |skill: &str| live_level(live, skill);
-    let next = draw_goal(life, &level_of, &ticks_since)?;
+    let (next, origin) = match draw_goal_origin(life, &level_of, &ticks_since) {
+        Ok(drawn) => drawn,
+        Err(reason) => {
+            let text = reason.describe();
+            let mut table = last_wait().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if table.get(&life.account) != Some(&text) {
+                crate::logln!("brain {}: no goal drawn: {text}", life.account);
+                table.insert(life.account.clone(), text);
+            }
+            return None;
+        }
+    };
+    last_wait().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account);
     let label = goal_label(&next);
     let profile = life.profile.clone();
     append_goal(life, next, &profile, &level_of);
+    mark_drawn(life, origin.as_deref());
+    if let Some(id) = &origin {
+        crate::logln!("brain {}: goal {label} from milestone {id}", life.account);
+    }
     // Opens the new goal in the history (`goal_closed` reads false), so
     // a goal met at once is closed before the next draw.
     push_history(life, "goal", &format!("{NEXT_TAG}{label}"));
@@ -109,7 +145,7 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
 /// Close the current goal (done or stuck) and append the next one.
 /// Returns the new goal's label, or `None` when nothing is left.
 pub(crate) fn succeed_goal(life: &mut Life, live: &Value, stuck: bool) -> Option<String> {
-    close_goal(life, stuck);
+    close_goal(life, live, stuck);
     draw_next(life, live)
 }
 
@@ -120,8 +156,9 @@ pub(crate) fn redraw(life: &mut Life, live: &Value) -> (Option<String>, bool) {
         return (None, false);
     }
     let before = life.history.len();
+    let ambition_before = life.ambition.clone();
     let drawn = draw_next(life, live);
-    let changed = drawn.is_some() || life.history.len() != before;
+    let changed = drawn.is_some() || life.history.len() != before || life.ambition != ambition_before;
     (drawn, changed)
 }
 
@@ -129,7 +166,9 @@ pub(crate) fn redraw(life: &mut Life, live: &Value) -> (Option<String>, bool) {
 mod tests {
     use super::{live_level, redraw, succeed_goal};
     use lifescape_json::{object, Value};
-    use lifescape_planner::{Archetype, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus, Profile, STUCK_TAG};
+    use lifescape_planner::{
+        new_ambition, Archetype, GoalKind, HistoryEntry, Life, MilestoneStatus, Node, NodeKind, NodeStatus, Profile, Stamp, GENERALIST, STUCK_TAG,
+    };
 
     fn live(levels: &[(i64, i64)]) -> Value {
         object(vec![(
@@ -150,7 +189,42 @@ mod tests {
             engagement: None,
             active: None,
             history: Vec::new(),
+            // The explicit generalist keeps the plain lowest-skill draw.
+            ambition: new_ambition(GENERALIST, "operator", &|_| 1, 0, &[], Stamp { tick: 0, secs: 0 }),
+            goal_origin: None,
         }
+    }
+
+    /// An ambitious bot draws its next milestone, linked by
+    /// `goal_origin`; a done quota closes its milestone; no ambition
+    /// draws nothing (never a silent lowest-skill fallback).
+    #[test]
+    fn goals_follow_the_ambition_milestones() {
+        let mut smith = life_with(GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 5 });
+        // Drawn now: the optional change stays throttled (no fleet read).
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+        smith.ambition = new_ambition("smith", "coverage:smithing", &|_| 1, 3, &[], Stamp { tick: 0, secs: now });
+        // Mining 12, smithing 1: the mining 10 milestone is met at refresh.
+        let snapshot = live(&[(14, 12)]);
+        let label = succeed_goal(&mut smith, &snapshot, false).expect("a goal");
+        assert_eq!(label, "smithing 10", "next open milestone after the met mining 10");
+        let origin = smith.goal_origin.clone().expect("linked");
+        let ambition = smith.ambition.as_ref().expect("smith");
+        assert_eq!(ambition.milestones.iter().find(|stone| stone.id == origin).map(|stone| stone.status), Some(MilestoneStatus::Active));
+        assert!(smith.history.iter().any(|entry| entry.outcome == "next:smithing 10"));
+        let mining = ambition.milestones.iter().find(|stone| stone.label == "mining 10").expect("mining milestone");
+        assert_eq!((mining.status, mining.progress), (MilestoneStatus::Done, (10, 10)));
+        // Skip to the quota: smithing 10 met, the bronze quota is drawn.
+        let label = succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("the quota");
+        assert!(label.starts_with("produce bronze_"), "got {label}");
+        assert!(matches!(smith.goal, GoalKind::Produce { count: 20, .. }));
+        let quota = smith.goal_origin.clone().expect("quota link");
+        succeed_goal(&mut smith, &live(&[(14, 12), (13, 10)]), false).expect("next");
+        let done = smith.ambition.as_ref().and_then(|ambition| ambition.milestones.iter().find(|stone| stone.id == quota).cloned()).expect("quota");
+        assert_eq!(done.status, MilestoneStatus::Done);
+        let mut bare = life_with(GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 5 });
+        bare.ambition = None;
+        assert_eq!(succeed_goal(&mut bare, &snapshot, false), None, "no ambition, no goal");
     }
 
     #[test]

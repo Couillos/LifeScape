@@ -51,6 +51,7 @@ pub fn save_life(life: &Life) -> Result<(), String> {
 }
 
 /// Accepted `--goal` shapes: `max:a,b:40`, `obtain:feather:2000`,
+/// `produce:bronze_platebody:20` (made, never bought),
 /// `money`, `quest:cook`, `equip:melee`, `area:karamja`, `rich[:merchant
 /// |:producer]`. Bare `rich` draws the archetype (10% merchant).
 pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
@@ -75,6 +76,14 @@ pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
         let count: i64 = count.parse().map_err(|_| "goal count must be a number".to_string())?;
         return Ok(GoalKind::Obtain { item: item.to_string(), count: count.max(1) });
     }
+    if let Some(rest) = text.strip_prefix("produce:") {
+        let (item, count) = rest.rsplit_once(':').ok_or_else(|| "goal produce:<item>:<count>".to_string())?;
+        let count: i64 = count.parse().map_err(|_| "goal count must be a number".to_string())?;
+        if item.is_empty() {
+            return Err("goal produce:<item>:<count>".to_string());
+        }
+        return Ok(GoalKind::Produce { item: item.to_string(), count: count.max(1) });
+    }
     if let Some(quest) = text.strip_prefix("quest:") {
         if quest.is_empty() {
             return Err("goal quest:<key>".to_string());
@@ -97,7 +106,7 @@ pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
             _ => Err("goal rich[:merchant|:producer]".to_string()),
         };
     }
-    Err(format!("unknown goal {text:?} (max:|obtain:|money|quest:|equip:|area:|rich)"))
+    Err(format!("unknown goal {text:?} (max:|obtain:|produce:|money|quest:|equip:|area:|rich)"))
 }
 
 fn xorshift(seed: u64, stream: u64) -> u64 {
@@ -187,6 +196,8 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         engagement: None,
         active: None,
         history: Vec::new(),
+        ambition: None,
+        goal_origin: None,
     };
     save_life(&life)?;
     Ok(life)
@@ -356,6 +367,7 @@ mod tests {
         assert!(matches!(max, GoalKind::MaxSkills { level: 40, .. }));
         assert!(parse_goal("max:fishing").is_err(), "level required");
         assert!(matches!(parse_goal("quest:cook"), Ok(GoalKind::CompleteQuest { .. })));
+        assert!(matches!(parse_goal("produce:bronze_platebody:20"), Ok(GoalKind::Produce { count: 20, .. })));
         assert!(matches!(parse_goal("rich:merchant"), Ok(GoalKind::GetRich { merchant: Some(true) })));
         assert!(parse_goal("rich:ever").is_err(), "archetype closed");
         assert!(parse_goal("nope").is_err(), "unknown goals fail loud");
@@ -422,6 +434,8 @@ mod tests {
             engagement: None,
             active: None,
             history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
         };
         let keep = cleanup_keep(&life);
         assert!(keep.contains(&"feather".to_string()), "graph obtain survives, got {keep:?}");
@@ -444,6 +458,8 @@ mod tests {
             engagement: None,
             active: None,
             history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
         }
     }
 

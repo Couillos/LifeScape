@@ -123,6 +123,8 @@ mod tests {
             engagement: None,
             active: None,
             history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
         }
     }
 

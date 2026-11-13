@@ -68,6 +68,8 @@ fn life_for(index: usize, goal: GoalKind) -> Life {
         engagement: None,
         active: None,
         history: Vec::new(),
+        ambition: None,
+        goal_origin: None,
     }
 }
 

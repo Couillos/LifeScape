@@ -25,6 +25,7 @@ pub(crate) fn goal_text(goal: &GoalKind) -> String {
     match goal {
         GoalKind::MaxSkills { skills, level } => format!("{} {level}", skills.join(",")),
         GoalKind::Obtain { item, count } => format!("obtain {item} {count}"),
+        GoalKind::Produce { item, count } => format!("produce {item} {count}"),
         GoalKind::MakeMoney => "money".to_string(),
         GoalKind::CompleteQuest { quest } => format!("quest {quest}"),
         GoalKind::EquipBest { style } => format!("equip {style}"),
