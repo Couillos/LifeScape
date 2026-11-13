@@ -74,18 +74,19 @@ pub fn sellable(inv: &[(i64, i64)], bank: &[(i64, i64)]) -> (i64, BTreeMap<i64, 
     (coins, stock)
 }
 
-/// Orders one account cannot honour. `coins`/`stock` are what it holds;
-/// `promised_coins`/`promised` what its in-flight deals already take.
-/// Oldest orders keep their claim (they were placed first); an order
-/// only partly covered goes whole: a book never shows lots it cannot
-/// hand over.
+/// Orders one account cannot honour. `coins`/`stock` are what it holds
+/// (base objects, see `sellable`); `promised_coins`/`promised` what its
+/// in-flight deals already take. Orders and promises on a banknote count
+/// against its base object (the bank holds base objects). Oldest orders
+/// keep their claim (they were placed first); an order only partly
+/// covered goes whole: a book never shows lots it cannot hand over.
 pub fn uncovered(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promised_coins: i64, promised: &BTreeMap<i64, i64>) -> Vec<i64> {
     let mut sorted: Vec<&Order> = orders.iter().collect();
     sorted.sort_by_key(|order| (order.created_clock, order.order_id));
     let mut purse = coins - promised_coins;
     let mut left: BTreeMap<i64, i64> = stock.clone();
     for (item, qty) in promised {
-        *left.entry(*item).or_insert(0) -= qty;
+        *left.entry(base_of(*item)).or_insert(0) -= qty;
     }
     let mut cancel = Vec::new();
     for order in sorted {
@@ -98,7 +99,7 @@ pub fn uncovered(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promi
                 cancel.push(order.order_id);
             }
         } else {
-            let have = left.entry(order.item_id).or_insert(0);
+            let have = left.entry(base_of(order.item_id)).or_insert(0);
             if *have >= remaining {
                 *have -= remaining;
             } else {
@@ -192,7 +193,8 @@ impl MarketService {
 
     /// What each live account's open orders and in-flight deals promise:
     /// coins for bids and buyer deals, base objects for sells and seller
-    /// deals. Pushed to the workers (`set_locks`) so no script spends them
+    /// deals (a banknote order locks its base stack: the bank, where the
+    /// lock bites, holds base objects). Pushed to the workers (`set_locks`) so no script spends them
     /// outside the trade procedure (user rule 2026-11-13).
     pub(crate) fn locks_for(&self, accounts: &[String]) -> BTreeMap<String, (i64, BTreeMap<i64, i64>)> {
         let open: Vec<Order> = self
@@ -211,14 +213,14 @@ impl MarketService {
                 if order.side == OrderSide::Buy {
                     coins += order.remaining.max(0) * order.price.max(0);
                 } else {
-                    *items.entry(order.item_id).or_insert(0) += order.remaining.max(0);
+                    *items.entry(base_of(order.item_id)).or_insert(0) += order.remaining.max(0);
                 }
             }
             for deal in self.lock_store().open_deals_for_account(account).unwrap_or_default() {
                 if &deal.buyer == account {
                     coins += deal.quantity * deal.price;
                 } else {
-                    *items.entry(deal.item_id).or_insert(0) += deal.quantity;
+                    *items.entry(base_of(deal.item_id)).or_insert(0) += deal.quantity;
                 }
             }
             out.insert(account.clone(), (coins, items));

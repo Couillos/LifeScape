@@ -210,14 +210,22 @@ impl MarketService {
     /// stranded without their deals) orders rest again under their store
     /// ids, ranked by creation clock so price-time priority replays the
     /// pre-shutdown queue. Stranded non-final deals fail loudly (both
-    /// parties disconnected with the daemon). Without this a restart
-    /// orphans every order: visible in `my_orders`, invisible to
-    /// matching, and the market silently dies (seen live, L11).
+    /// parties disconnected with the daemon) and give their lots back to
+    /// both sides as open orders at the deal price (neutral outcome, like
+    /// a runtime `nav_down`: the in-memory relist rows died with the
+    /// daemon, the carnet rows behind the match were already settled).
+    /// Without this a restart orphans every order: visible in
+    /// `my_orders`, invisible to matching, and the market silently dies
+    /// (seen live, L11).
     pub(crate) fn reload_books(&self) {
         let clock = Self::now_clock();
-        let stale_deals = self.lock_store().fail_stale_deals("daemon restart", clock).unwrap_or(0);
-        if stale_deals > 0 {
-            crate::logln!("market reload: failed {stale_deals} stale in-flight deals (daemon restart)");
+        match self.lock_store().fail_stale_deals_relisting("daemon restart", clock) {
+            Ok(failed) if !failed.is_empty() => {
+                let ids: Vec<i64> = failed.iter().map(|deal| deal.deal_id).collect();
+                crate::logln!("market reload: failed {} stale in-flight deal(s) (daemon restart), lots relisted both sides: {ids:?}", failed.len());
+            }
+            Ok(_) => {}
+            Err(error) => crate::logln!("market reload: stale deals left as they were, store refused: {error}"),
         }
         let rows = match self.lock_store().resting_orders() {
             Ok(rows) => rows,
@@ -301,7 +309,7 @@ impl MarketService {
     }
 
     /// The guard anchor: only a traded reference caps an order.
-    fn guard_anchor(&self, item: i64) -> Option<i64> {
+    pub(crate) fn guard_anchor(&self, item: i64) -> Option<i64> {
         let reference = self.reference(item);
         reference.traded.then_some(reference.price)
     }
@@ -733,146 +741,6 @@ impl MarketService {
                 )),
             ("deals", Value::Arr(deal_ids)),
         ])
-    }
-
-
-
-    fn op_amend(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("").to_string();
-        let order_id = request.get("order").as_i64().unwrap_or(-1);
-        let price = request.get("price").as_i64().unwrap_or(0);
-        if order_id < 1 {
-            return Self::err(format!("bad order {order_id}"));
-        }
-        let item = match self.lock_engine().order_item.get(&(order_id as u64)).cloned() {
-            Some(item) => item,
-            None => return Self::err(format!("unknown order {order_id}")),
-        };
-        let stored = self.lock_store().get_order(order_id).unwrap_or(None);
-        let Some(row) = stored else {
-            return Self::err(format!("unknown order {order_id}"));
-        };
-        if row.account != account {
-            return Self::err("order belongs to another account".to_string());
-        }
-        if row.status != lifescape_store::OrderStatus::Open && row.status != lifescape_store::OrderStatus::Matched {
-            return Self::err(format!("order {order_id} is closed"));
-        }
-        let side = if row.side == OrderSide::Buy { Side::Buy } else { Side::Sell };
-        if let Err(error) = check_price(side, price, self.guard_anchor(item)) {
-            return Self::err(error.to_string());
-        }
-        let clock = Self::now_clock();
-        // Lock order: engine and store are never held together (live
-        // 2026-11-12: this amend held the store while taking the engine,
-        // `op_deal_arrived` the reverse — the whole market froze). The
-        // remaining quantity is read under the engine alone.
-        let remaining = {
-            let mut engine = self.lock_engine();
-            let Some(book) = engine.books.get_mut(&item) else {
-                return Self::err(format!("unknown order {order_id}"));
-            };
-            match book.remaining(order_id as u64) {
-                Some(left) => left,
-                None => return Self::err(format!("order {order_id} already filled")),
-            }
-        };
-        let store = self.lock_store();
-        if store.cancel_order(order_id, clock).is_err() {
-            return Self::err(format!("order {order_id} is closed"));
-        }
-        let replacement = match store.place_order(&NewOrder {
-            account: account.clone(),
-            side: row.side,
-            item_id: item,
-            quantity: remaining,
-            price,
-            dormant: false,
-            clock,
-        }) {
-            Ok(id) => id,
-            Err(error) => return Self::err(error.to_string()),
-        };
-        drop(store);
-        let amend_outcome = {
-            let mut engine = self.lock_engine();
-            let Some(book) = engine.books.get_mut(&item) else {
-                return Self::err(format!("unknown order {order_id}"));
-            };
-            // Same pre-match snapshot as `op_place`: the amended order is
-            // the taker here, with its amended price.
-            let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
-            let taker_seq = book.next_seq();
-            match book.amend(order_id as u64, price, replacement as u64) {
-                Ok((_, fills)) => fills
-                    .into_iter()
-                    .map(|fill| {
-                        let rows =
-                            crate::market_convene::relist_for_fill(&pre, taker_seq, side, &account, price, &fill);
-                        (fill, rows)
-                    })
-                    .collect::<Vec<(lifescape_market::Fill, Vec<Order>)>>(),
-                Err(error) => return Self::err(error.to_string()),
-            }
-        };
-        let fills: Vec<lifescape_market::Fill> = amend_outcome.iter().map(|(fill, _)| fill.clone()).collect();
-        let amend_outcome = crate::market_merge::merge_fills(amend_outcome);
-        self.lock_engine().order_item.insert(replacement as u64, item);
-        let mut deal_ids = Vec::new();
-        for (fill, rows) in &amend_outcome {
-            match self.record_fill(fill, rows.clone(), clock) {
-                Ok(deal_id) => deal_ids.push(Value::Int(deal_id)),
-                Err(error) => return Self::err(error),
-            }
-        }
-        self.refresh_order_rows(replacement as u64, &fills, clock);
-        object(vec![
-            ("ok", Value::Bool(true)),
-            ("order", Value::Int(replacement)),
-            ("cancelled", Value::Int(order_id)),
-            ("deals", Value::Arr(deal_ids)),
-        ])
-    }
-
-    fn op_cancel(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("").to_string();
-        let order_id = request.get("order").as_i64().unwrap_or(-1);
-        let stored = self.lock_store().get_order(order_id).unwrap_or(None);
-        let Some(row) = stored else {
-            return Self::err(format!("unknown order {order_id}"));
-        };
-        if row.account != account {
-            return Self::err("order belongs to another account".to_string());
-        }
-        let clock = Self::now_clock();
-        if self.lock_store().cancel_order(order_id, clock).is_err() {
-            return Self::err(format!("order {order_id} is closed"));
-        }
-        // Named binding first: an `if let` scrutinee temporary would keep
-        // the engine guard alive across the body and deadlock the book.
-        let item = self.lock_engine().order_item.get(&(order_id as u64)).cloned();
-        if let Some(item) = item {
-            if let Some(book) = self.lock_engine().books.get_mut(&item) {
-                let _ = book.cancel(order_id as u64);
-            }
-        }
-        object(vec![("ok", Value::Bool(true)), ("cancelled", Value::Int(order_id))])
-    }
-
-    /// Cancels every open order of `account` on `item` and `side`
-    /// (daemon-side, no socket): the brain calls it when a fill wait
-    /// expires, so a retry never stacks a second resting order beside
-    /// the stale one. Returns how many orders it closed.
-    pub(crate) fn cancel_open_for(&self, account: &str, item: i64, side: OrderSide) -> usize {
-        let rows = self.lock_store().account_orders(account).unwrap_or_default();
-        let mut closed = 0;
-        for row in rows.iter().filter(|row| row.item_id == item && row.side == side && row.status == OrderStatus::Open) {
-            let reply = self.op_cancel(&object(vec![("account", str_value(account)), ("order", Value::Int(row.order_id))]));
-            if reply.get("ok").as_bool() == Some(true) {
-                closed += 1;
-            }
-        }
-        closed
     }
 
     fn op_my_orders(&self, request: &Value) -> Value {
