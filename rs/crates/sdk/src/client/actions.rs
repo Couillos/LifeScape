@@ -320,6 +320,10 @@ impl Bot {
         self.act(format!("trade_request {name}"));
         let target = self.world.ticks + timeout;
         while self.world.ticks < target {
+            // Read what the server already sent before any click: a
+            // window the partner opened meanwhile closes on our next walk
+            // or knock ("Other player declined trade.", deals 1116/1124).
+            self.catch_up()?;
             if self.trade_modal().is_some() {
                 return Ok(true);
             }
@@ -333,6 +337,10 @@ impl Bot {
             if far {
                 let (px, pz) = self.world.players.get(&pid).map(|player| (player.x, player.z)).unwrap_or((self.world.x, self.world.z));
                 let _ = self.approach(px, pz, self.world.level, 1, 750);
+                self.catch_up()?;
+                if self.trade_modal().is_some() {
+                    return Ok(true);
+                }
             }
             let _ = self.op_player(4, pid);
             for _ in 0..30 {

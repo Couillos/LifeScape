@@ -17,6 +17,10 @@ use crate::ScriptError;
 /// How long the buyer watches a partial offer grow before refusing it.
 pub const OFFER_WAIT_TICKS: u64 = 120;
 
+/// How long the buyer waits for a first lot in a window opened past the
+/// deadline (the seller clicks within a few ticks).
+pub const OFFER_OPEN_TICKS: u64 = 300;
+
 /// Past its tick deadline a party keeps waiting for a late partner while
 /// the daemon keeps the deal open, at most this many ticks more.
 pub const WAIT_PAST_DEADLINE_TICKS: u64 = 3000;
@@ -118,10 +122,36 @@ impl DeliverReports {
     }
 }
 
+/// Anchors a convocation on the worker's own clock at reception: the
+/// daemon sends `deliver +<depart_in> +<deadline_in> ...` (ticks from
+/// now), the worker turns them into ticks of its login epoch. Live
+/// 2026-11-13 (deal 1276): the daemon stamped absolute ticks from the
+/// snapshot of the PREVIOUS login (61826) on a worker reopened at tick 1,
+/// which then waited 61 800 ticks for its departure while the buyer
+/// stood at the square. Absolute ticks (operator) pass through.
+pub fn anchor_deliver_args(args: &[String], now: u64) -> Vec<String> {
+    let mut out = args.to_vec();
+    if out.first().map(String::as_str) != Some("deliver") {
+        return out;
+    }
+    for slot in out.iter_mut().skip(1).take(2) {
+        if let Some(offset) = slot.strip_prefix('+').and_then(|text| text.parse::<u64>().ok()) {
+            *slot = now.saturating_add(offset).to_string();
+        }
+    }
+    out
+}
+
 /// Parses `deliver <depart> <deadline> <deal>=<x>,<y> ...`.
 pub fn parse_deliver_args(args: &[String]) -> Result<(u64, u64, Vec<(i64, i32, i32)>), ScriptError> {
     if args.len() < 4 {
         return Err(ScriptError::Usage("market deliver <depart> <deadline> <deal>=<x>,<y> ...".to_string()));
+    }
+    // `+N` offsets are anchored at pose time (`anchor_deliver_args`);
+    // one reaching the run was never anchored, and `u64::parse` would
+    // read it as an absolute tick of this login.
+    if args[1].starts_with('+') || args[2].starts_with('+') {
+        return Err(ScriptError::Usage(format!("unanchored convocation offsets {:?} {:?}", args[1], args[2])));
     }
     let depart: u64 = args[1].parse().map_err(|_| ScriptError::Usage("depart must be a tick".to_string()))?;
     let deadline: u64 = args[2].parse().map_err(|_| ScriptError::Usage("deadline must be a tick".to_string()))?;
@@ -153,6 +183,10 @@ pub fn wait_departure(bot: &mut Bot, ids: &[i64], depart: u64, deadline: u64) ->
     Ok(if watch == DealWatch::Alive { deal_watch(bot, ids, deadline) } else { watch })
 }
 
+/// Times a pair meets again after a window closed before the lots
+/// (re-knock race): bounded, the deal watch still releases earlier.
+pub const MEET_RETRIES: u32 = 3;
+
 /// Mutual knocks open the window (one-sided requests sit as "Sending..."
 /// until the other side knocks back). Waits for a late partner while the
 /// deal lives, checked every `DEAL_WATCH_TICKS` whatever the deadline,
@@ -173,11 +207,15 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<D
         }
         let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).min(DEAL_WATCH_TICKS).max(1);
         if bot.find_player(&group.partner).is_none() && knocks % 20 == 0 {
+            // Slot, position and name of every tracked player: tells an
+            // empty view from a nameless one (deals 1248/1267/1268: both
+            // parties adjacent on their tiles, neither ever found).
             bot.log(&format!(
-                "deals {:?}: cannot see {} ({} players tracked)",
+                "deals {:?}: cannot see {} ({} players tracked: {:?})",
                 group.ids,
                 group.partner,
-                bot.world.players.len()
+                bot.world.players.len(),
+                bot.debug_players()
             ));
         }
         knocks += 1;
@@ -188,10 +226,35 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<D
     Ok(if bot.trade_modal().is_some() { DealWatch::Alive } else { DealWatch::GaveUp })
 }
 
+/// What the buyer read from the seller's side of the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SellerOffer {
+    /// The exact deal lots, in the forms the seller put up.
+    Complete(Vec<(u16, u32)>),
+    /// Another object, coins, or more than the deal: a real mismatch.
+    Wrong,
+    /// The window closed before the offer was complete: nothing moved,
+    /// nobody is wrong, the parties may meet again (deal 1116).
+    Closed,
+}
+
+/// Pure verdict once the wait ended: a window that closed under a
+/// partial (or empty) offer is no mismatch.
+pub fn offer_verdict(state: OfferState, window_open: bool) -> SellerOffer {
+    match state {
+        OfferState::Complete(lots) => SellerOffer::Complete(lots),
+        OfferState::Partial if !window_open => SellerOffer::Closed,
+        _ => SellerOffer::Wrong,
+    }
+}
+
 /// Buyer side: the seller clicks its lots in by steps; wait for the whole
-/// offer (bounded), `None` on a wrong one.
-pub fn seller_offer(bot: &mut Bot, group: &DealGroup, trade: u16, deadline: u64) -> Result<Option<Vec<(u16, u32)>>, ScriptError> {
-    while bot.world.ticks < deadline && bot.trade_modal() == Some("main") && bot.trade_partner_offer().is_empty() {
+/// offer (bounded: the deadline, or `OFFER_OPEN_TICKS` for a window that
+/// opened past it — a late pair still trades while the daemon keeps the
+/// deal open).
+pub fn seller_offer(bot: &mut Bot, group: &DealGroup, trade: u16, deadline: u64) -> Result<SellerOffer, ScriptError> {
+    let until = deadline.max(bot.world.ticks + OFFER_OPEN_TICKS);
+    while bot.world.ticks < until && bot.trade_modal() == Some("main") && bot.trade_partner_offer().is_empty() {
         bot.pump(5)?;
     }
     let settle_by = bot.world.ticks + OFFER_WAIT_TICKS;
@@ -202,11 +265,16 @@ pub fn seller_offer(bot: &mut Bot, group: &DealGroup, trade: u16, deadline: u64)
         observed = bot.trade_partner_offer();
         state = offer_state(&observed, group.item, trade, group.qty);
     }
-    if let OfferState::Complete(lots) = state {
-        return Ok(Some(lots));
+    let verdict = offer_verdict(state, bot.trade_modal().is_some());
+    match &verdict {
+        SellerOffer::Complete(_) => {}
+        SellerOffer::Closed => bot.log(&format!("deals {:?}: window closed before the offer ({observed:?})", group.ids)),
+        SellerOffer::Wrong => bot.log(&format!(
+            "deals {:?}: offer mismatch ({observed:?} for {} x{}), refused",
+            group.ids, group.item, group.qty
+        )),
     }
-    bot.log(&format!("deals {:?}: offer mismatch ({observed:?} for {} x{}), refused", group.ids, group.item, group.qty));
-    Ok(None)
+    Ok(verdict)
 }
 
 /// Pack ids to redeposit: everything carried except the untouched.
@@ -239,7 +307,37 @@ pub fn redeposit(bot: &mut Bot, touched: &[u16]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_verdict, redeposit_keep, watch_verdict, DealWatch, WAIT_PAST_DEADLINE_TICKS};
+    use super::{anchor_deliver_args, error_verdict, offer_verdict, SellerOffer, redeposit_keep, watch_verdict, DealWatch, WAIT_PAST_DEADLINE_TICKS};
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    /// Deal 1116: ryan_park's window closed under an empty offer when
+    /// frank_lane re-knocked; that is a closed window, not a mismatch.
+    #[test]
+    fn closed_window_is_not_a_mismatch() {
+        use crate::market_client::OfferState;
+        assert_eq!(offer_verdict(OfferState::Partial, false), SellerOffer::Closed, "empty offer, window gone");
+        assert_eq!(offer_verdict(OfferState::Partial, true), SellerOffer::Wrong, "window open, offer never completed");
+        assert_eq!(offer_verdict(OfferState::Wrong, false), SellerOffer::Wrong, "a wrong lot stays wrong");
+        assert_eq!(offer_verdict(OfferState::Complete(vec![(841, 1)]), true), SellerOffer::Complete(vec![(841, 1)]));
+    }
+
+    /// Deal 1276: the convocation lands on a worker reopened at tick 1.
+    /// Relative ticks anchor on the worker's clock whatever epoch the
+    /// daemon's snapshot came from; absolute ones pass through.
+    #[test]
+    fn convocation_anchors_on_the_worker_clock() {
+        let posed = strings(&["deliver", "+30", "+1652", "1276=3209,3425"]);
+        assert_eq!(anchor_deliver_args(&posed, 1), strings(&["deliver", "31", "1653", "1276=3209,3425"]));
+        assert_eq!(anchor_deliver_args(&posed, 59_000), strings(&["deliver", "59030", "60652", "1276=3209,3425"]));
+        let absolute = strings(&["deliver", "61826", "63478", "1276=3209,3425"]);
+        assert_eq!(anchor_deliver_args(&absolute, 1), absolute, "operator ticks untouched");
+        let other = strings(&["flip", "+30"]);
+        assert_eq!(anchor_deliver_args(&other, 1), other, "only deliver convocations");
+        assert!(super::parse_deliver_args(&posed).is_err(), "an unanchored offset never reads as a tick");
+    }
 
     /// Deal 24 regression: the seller delivered base willow (1519) while
     /// the trade id is the note (1520) — both forms must redeposit.

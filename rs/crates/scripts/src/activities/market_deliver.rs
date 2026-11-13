@@ -11,11 +11,11 @@ use lifescape_sdk::Bot;
 use crate::kit::pack::{obj_id, pack_total};
 use crate::market_client::{market_call, my_deals, trade_id};
 use crate::market_handover::{
-    meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports,
-    WAIT_PAST_DEADLINE_TICKS,
+    meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports, SellerOffer,
+    MEET_RETRIES, WAIT_PAST_DEADLINE_TICKS,
 };
-use crate::market_lots::{group_deals, secure_lots};
-use crate::ScriptResult;
+use crate::market_lots::{group_deals, secure_lots, DealGroup};
+use crate::{ScriptError, ScriptResult};
 
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
 /// short, wait for the staggered departure, walk to the tile, trade with
@@ -107,73 +107,102 @@ fn deliver_groups(
         for id in ids {
             let _ = market_call("deal_arrived", vec![("account", str_value(&bot.username)), ("deal", Value::Int(*id))]);
         }
-        match meet_partner(bot, group, deadline)? {
-            DealWatch::Alive => {}
-            DealWatch::Closed => {
-                bot.log(&format!("deals {ids:?}: closed by the market while waiting"));
-                reports.skip(ids);
-                ok = false;
-                continue;
-            }
-            DealWatch::GaveUp => {
-                bot.log(&format!("deals {ids:?}: partner absent"));
-                reports.report(bot, group, "failed", "no_show");
-                ok = false;
-                continue;
-            }
-        }
-        reports.report(bot, group, "trading", "");
-        let trade = trade_id(group.item);
-        // Seller lots: the carried form. Buyer lots: whatever the seller
-        // put up, validated as the deal item at the exact summed quantity.
-        let (give, want) = if group.buying {
-            let Some(lots) = seller_offer(bot, group, trade, deadline)? else {
-                let _ = bot.trade_close();
-                reports.report(bot, group, "failed", "mismatch");
-                ok = false;
-                continue;
-            };
-            (vec![(coins, group.coins)], lots)
-        } else {
-            let form = if pack_total(bot, group.item) >= group.qty { group.item } else { trade };
-            if pack_total(bot, form) < group.qty {
-                bot.log(&format!("deals {ids:?}: lots gone"));
-                let _ = bot.trade_close();
-                reports.report(bot, group, "failed", "short");
-                ok = false;
-                continue;
-            }
-            (vec![(form, group.qty)], vec![(coins, group.coins)])
-        };
-        let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).max(1);
-        match bot.trade_exchange(&group.partner, &give, 0, &want, 0, left.max(600).min(3000))? {
-            ExchangeOutcome::Settled => {
-                bot.log(&format!("deals {ids:?} settled ({} x{} for {} coins)", group.item, group.qty, group.coins));
-                reports.report(bot, group, "settled", "");
-            }
-            ExchangeOutcome::PartnerMismatch | ExchangeOutcome::ConfirmMismatch => {
-                bot.log(&format!("deals {ids:?}: offer mismatch, refused"));
-                reports.report(bot, group, "failed", "mismatch");
-                ok = false;
-            }
-            ExchangeOutcome::Declined => {
-                // Window closed without "Accepted trade.": nothing moved,
-                // never a settlement (finding 1).
-                bot.log(&format!("deals {ids:?}: partner declined or left the confirm screen"));
-                reports.report(bot, group, "failed", "timeout");
-                ok = false;
-            }
-            other => {
-                bot.log(&format!("deals {ids:?} ended: {other:?}"));
-                reports.report(bot, group, "failed", "timeout");
-                ok = false;
-            }
+        if !meet_and_trade(bot, group, deadline, coins, reports)? {
+            ok = false;
         }
     }
     redeposit(bot, &touched);
     let (level, x, z) = start;
     let _ = bot.travel_to(lifescape_sdk::plan::Tile { x, z, level });
     Ok(if ok { 0 } else { 1 })
+}
+
+/// Meets the partner on the tile and trades one group. A window that
+/// closes before the lots were verified (re-knock or walk click across
+/// a fresh window, deals 1116/1124) is nobody's fault: the pair meets
+/// again, at most `MEET_RETRIES` times, while the daemon keeps the deal
+/// open. True when the group settled.
+fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, reports: &mut DeliverReports) -> Result<bool, ScriptError> {
+    let ids = &group.ids;
+    let trade = trade_id(group.item);
+    let mut trading = false;
+    let mut retries = 0u32;
+    loop {
+        match meet_partner(bot, group, deadline)? {
+            DealWatch::Alive => {}
+            DealWatch::Closed => {
+                bot.log(&format!("deals {ids:?}: closed by the market while waiting"));
+                reports.skip(ids);
+                return Ok(false);
+            }
+            DealWatch::GaveUp => {
+                bot.log(&format!("deals {ids:?}: partner absent"));
+                reports.report(bot, group, "failed", if trading { "timeout" } else { "no_show" });
+                return Ok(false);
+            }
+        }
+        if !trading {
+            reports.report(bot, group, "trading", "");
+            trading = true;
+        }
+        // Seller lots: the carried form. Buyer lots: whatever the seller
+        // put up, validated as the deal item at the exact summed quantity.
+        let (give, want) = if group.buying {
+            match seller_offer(bot, group, trade, deadline)? {
+                SellerOffer::Complete(lots) => (vec![(coins, group.coins)], lots),
+                SellerOffer::Closed if retries < MEET_RETRIES => {
+                    retries += 1;
+                    continue;
+                }
+                SellerOffer::Closed => {
+                    reports.report(bot, group, "failed", "timeout");
+                    return Ok(false);
+                }
+                SellerOffer::Wrong => {
+                    let _ = bot.trade_close();
+                    reports.report(bot, group, "failed", "mismatch");
+                    return Ok(false);
+                }
+            }
+        } else {
+            let form = if pack_total(bot, group.item) >= group.qty { group.item } else { trade };
+            if pack_total(bot, form) < group.qty {
+                bot.log(&format!("deals {ids:?}: lots gone"));
+                let _ = bot.trade_close();
+                reports.report(bot, group, "failed", "short");
+                return Ok(false);
+            }
+            (vec![(form, group.qty)], vec![(coins, group.coins)])
+        };
+        let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).max(1);
+        let (outcome, reason) = match bot.trade_exchange(&group.partner, &give, 0, &want, 0, left.max(600).min(3000))? {
+            ExchangeOutcome::Settled => {
+                bot.log(&format!("deals {ids:?} settled ({} x{} for {} coins)", group.item, group.qty, group.coins));
+                ("settled", "")
+            }
+            ExchangeOutcome::WindowClosed if retries < MEET_RETRIES => {
+                bot.log(&format!("deals {ids:?}: window closed before the lots, meeting again"));
+                retries += 1;
+                continue;
+            }
+            ExchangeOutcome::PartnerMismatch | ExchangeOutcome::ConfirmMismatch => {
+                bot.log(&format!("deals {ids:?}: offer mismatch, refused"));
+                ("failed", "mismatch")
+            }
+            ExchangeOutcome::Declined => {
+                // Window closed without "Accepted trade.": nothing moved,
+                // never a settlement (finding 1).
+                bot.log(&format!("deals {ids:?}: partner declined or left the confirm screen"));
+                ("failed", "timeout")
+            }
+            other => {
+                bot.log(&format!("deals {ids:?} ended: {other:?}"));
+                ("failed", "timeout")
+            }
+        };
+        reports.report(bot, group, outcome, reason);
+        return Ok(outcome == "settled");
+    }
 }
 
 /// Usage errors surface before any report: nothing was posed to us.
