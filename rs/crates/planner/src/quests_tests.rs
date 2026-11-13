@@ -1,7 +1,7 @@
 //! Tests of `quests.rs`: quest prerequisites are dependencies, never a
 //! launch through a missing quest (user decision 2026-11-13).
 
-use super::{method_quest, missing_quest, quests_done_from, quests_done_in_graph};
+use super::{method_quest, missing_quest, quest_point_ladder, quests_done_from, quests_done_in_graph};
 use crate::expand::{resolve_ready, ReadyCtx};
 use crate::model::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
 
@@ -112,4 +112,38 @@ fn completion_reads_varps_and_the_graph() {
     let mut quest = Node::new("n2", NodeKind::CompleteQuest { quest: "prince".to_string() }, Vec::new(), 1);
     quest.status = NodeStatus::Done;
     assert_eq!(quests_done_in_graph(&life_of(vec![quest])), vec!["prince".to_string()]);
+}
+
+/// The quest-point ladder (replaces the Cook's Assistant collapse): Dragon
+/// Slayer's 32 points come from real rungs, cheapest points first, a
+/// points-gated rung only after its gate, never a quest no bot runs solo.
+#[test]
+fn quest_points_climb_a_real_ladder() {
+    let points = |keys: &[String]| -> i64 {
+        keys.iter().map(|key| lifescape_gamedata::quest_requirements::by_key(key).map(|quest| quest.reward_points).unwrap_or(0)).sum()
+    };
+    let ladder = quest_point_ladder(32, "dragon", &[]);
+    assert!(points(&ladder) >= 32, "{ladder:?}");
+    assert!(!ladder.iter().any(|key| key == "dragon" || key == "blackarmgang" || key == "hunt"), "{ladder:?}");
+    if let Some(at) = ladder.iter().position(|key| key == "blackknight") {
+        assert!(points(&ladder[..at].to_vec()) >= 12, "Black Knights' Fortress after 12 points: {ladder:?}");
+    }
+    // Done quests count: a bot holding Romeo and Goblin Diplomacy (10)
+    // needs two more for the fortress gate.
+    let done = vec!["romeojuliet".to_string(), "gobdip".to_string()];
+    let rest = quest_point_ladder(12, "blackknight", &done);
+    assert!(points(&rest) >= 2 && !rest.contains(&"romeojuliet".to_string()), "{rest:?}");
+    assert!(quest_point_ladder(5, "dragon", &["romeojuliet".to_string()]).is_empty(), "already held");
+    // The expansion files the rungs before the quest node.
+    let nodes = crate::expand::expand_goal(&GoalKind::CompleteQuest { quest: "dragon".to_string() }, &Profile::new(false, 0.5, 0.5, 7, Archetype::Producer));
+    let quests: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            NodeKind::CompleteQuest { quest } => Some(quest.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(quests.last().map(String::as_str), Some("dragon"));
+    assert!(points(&quests) - 2 >= 32, "rungs worth 32 points: {quests:?}");
+    assert!(!quests[..quests.len() - 1].contains(&"dragon".to_string()));
 }

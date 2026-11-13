@@ -96,9 +96,10 @@ pub fn min_combat_for_method(method: &str) -> u8 {
     if let Some(known) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
         return *known;
     }
-    let computed = match method_sites(method) {
-        Some((kind, resource)) => lifescape_gamedata::danger::method_requirement(kind, &resource).unwrap_or(3),
-        None if method.starts_with("smith:") => 5,
+    let computed = match method_site_table(method) {
+        // The least demanding site no gate makes impassable (Karamja water
+        // without a boat edge, dungeons, the Wilderness: never).
+        Some(table) => table.iter().filter(|row| row.open_ever).map(|row| row.required).min().unwrap_or(lifescape_gamedata::danger::NEVER),
         None => 3,
     };
     cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), computed);
@@ -169,21 +170,90 @@ pub enum SitePick {
     /// No site is safe at this combat level: train to this level first
     /// (`NEVER`: no level ever makes one safe, the method is unworkable).
     Needs(u8),
+    /// The only safe sites sit behind a gate the bot does not pass yet:
+    /// the dependency that opens it (`access:crafting_guild` — skill and
+    /// uniform —, or the key object to obtain).
+    Access(&'static str, Option<&'static str>),
 }
 
-/// (site, requirement) list of one method, computed once from the data.
-fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<((i64, i64, i64), u8)>>> {
-    type Table = std::collections::HashMap<String, Option<std::sync::Arc<Vec<((i64, i64, i64), u8)>>>>;
+/// Station families whose server way places them (furnace, anvil, range,
+/// wheel, altar...): the brain picks the site, the script works there.
+const STATION_FAMILIES: [&str; 14] =
+    ["smelt:", "smith:", "cook/", "cook:", "bake:", "spin:", "pottery:", "jewelry:", "runecraft:", "ground:", "telegrab:", "dye:", "tan:", "mill:"];
+
+/// One site of a method: where, the combat level its site and bank need,
+/// its gates, and whether some bot can ever pass them.
+#[derive(Debug, Clone)]
+pub struct SiteRow {
+    pub site: (i64, i64, i64),
+    pub required: u8,
+    pub gates: Vec<lifescape_gamedata::access::Gate>,
+    pub open_ever: bool,
+}
+
+/// What gated sites the bot passes (user rule 2026-11-13, guilds and
+/// keys): its live levels and the objects it holds (pack, bank, worn).
+/// `Pass::default()` passes no gate (offline checks, side goals).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pass {
+    pub levels: Vec<(String, u8)>,
+    pub held: Vec<String>,
+}
+
+impl Pass {
+    /// The ready context's levels and held objects.
+    pub fn of(ctx: &crate::expand::ReadyCtx) -> Pass {
+        Pass { levels: ctx.levels.clone(), held: ctx.tools.clone() }
+    }
+
+    /// True when the bot passes `gate` now (guild level and uniform held,
+    /// key held); impassable gates never open.
+    pub fn opens(&self, gate: &lifescape_gamedata::access::Gate) -> bool {
+        use lifescape_gamedata::access::Gate;
+        match gate {
+            Gate::Guild { skill, level, uniform, .. } => {
+                self.levels.iter().any(|(name, have)| name == skill && i64::from(*have) >= *level)
+                    && uniform.is_none_or(|worn| self.held.iter().any(|item| item == worn))
+            }
+            Gate::Key { item, .. } => self.held.iter().any(|held| held == item),
+            _ => false,
+        }
+    }
+}
+
+/// Sites of a method: its gather, fight or station sites (`None`: the
+/// method works anywhere — quests, purchases, item-on-item recipes).
+fn method_site_list(method: &str) -> Option<Vec<(i64, i64, i64)>> {
+    if let Some((kind, resource)) = method_sites(method) {
+        return Some(lifescape_gamedata::danger::sites(kind, &resource));
+    }
+    if STATION_FAMILIES.iter().any(|family| method.starts_with(family)) {
+        let (_, way) = crate::method_way::method_way(method)?;
+        return (!way.sites.is_empty()).then_some(way.sites);
+    }
+    None
+}
+
+/// Rows of one method, computed once from the data: each site's combat
+/// requirement (read at its surface tile for an underground guild) and
+/// its gates.
+pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
+    type Table = std::collections::HashMap<String, Option<std::sync::Arc<Vec<SiteRow>>>>;
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Table>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Some(known) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
         return known.clone();
     }
-    let table = method_sites(method).map(|(kind, resource)| {
+    let table = method_site_list(method).map(|sites| {
         std::sync::Arc::new(
-            lifescape_gamedata::danger::sites(kind, &resource)
+            sites
                 .into_iter()
-                .map(|(x, z, level)| ((x, z, level), lifescape_gamedata::danger::site_requirement(x, z, level)))
+                .map(|(x, z, level)| {
+                    let (surface_x, surface_z, surface_level) = lifescape_gamedata::access::surface_of(x, z, level);
+                    let gates = lifescape_gamedata::access::gates_at(x, z, level);
+                    let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
+                    SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::site_requirement(surface_x, surface_z, surface_level), gates, open_ever }
+                })
                 .collect::<Vec<_>>(),
         )
     });
@@ -224,28 +294,51 @@ pub fn pick_site(method: &str, combat: u8, position: Option<(i64, i64, i64)>) ->
 /// (`Tolled`), else the fare as the need (`Fare`); with no safe site at
 /// all, the level the least demanding site needs.
 pub fn pick_site_paid(method: &str, combat: u8, position: Option<(i64, i64, i64)>, fare: Fare) -> SitePick {
+    pick_site_gated(method, combat, position, fare, &Pass::default())
+}
+
+/// `pick_site_paid` with the site gates (`gamedata::access`): a gated
+/// site counts only when the bot passes its gate (`Pass::opens`); an
+/// impassable one never (Karamja without a boat edge, dungeons, the
+/// Wilderness). When only closed gates stand between the bot and every
+/// safe site, the gate's dependency is the need (`Access`).
+pub fn pick_site_gated(method: &str, combat: u8, position: Option<(i64, i64, i64)>, fare: Fare, pass: &Pass) -> SitePick {
     let Some(table) = method_site_table(method) else {
         return SitePick::Anywhere;
     };
+    let rows: Vec<&SiteRow> = table.iter().filter(|row| row.open_ever).collect();
     let distance = |site: &(i64, i64, i64)| match position {
         Some((x, z, level)) => (site.0 - x).abs() + (site.1 - z).abs() + if site.2 == level { 0 } else { 1000 },
         None => 0,
     };
     let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
-    let safe: Vec<(i64, i64, i64)> = table.iter().filter(|(_, required)| *required <= combat).map(|(site, _)| *site).collect();
-    if let Some(site) = safe.iter().filter(|site| !across(site)).min_by_key(|site| distance(site)) {
+    let safe: Vec<&SiteRow> = rows.iter().copied().filter(|row| row.required <= combat).collect();
+    let open: Vec<(i64, i64, i64)> = safe.iter().filter(|row| row.gates.iter().all(|gate| pass.opens(gate))).map(|row| row.site).collect();
+    if let Some(site) = open.iter().filter(|site| !across(site)).min_by_key(|site| distance(site)) {
         return SitePick::At(*site);
     }
-    match safe.iter().min_by_key(|site| distance(site)) {
-        Some(site) if fare.covered() => SitePick::Tolled(*site),
-        Some(_) => SitePick::Fare(lifescape_gamedata::toll::FARE),
-        None => SitePick::Needs(table.iter().map(|(_, required)| *required).min().unwrap_or(lifescape_gamedata::danger::NEVER)),
+    if let Some(site) = open.iter().min_by_key(|site| distance(site)) {
+        return if fare.covered() { SitePick::Tolled(*site) } else { SitePick::Fare(lifescape_gamedata::toll::FARE) };
     }
+    // Only gated safe sites left: the nearest one's closed gate.
+    let gated = safe.iter().filter(|row| !row.gates.is_empty()).min_by_key(|row| distance(&row.site));
+    if let Some(gate) = gated.and_then(|row| row.gates.iter().find(|gate| !pass.opens(gate))) {
+        use lifescape_gamedata::access::Gate;
+        return match gate {
+            Gate::Key { area, item } => SitePick::Access(area, Some(*item)),
+            other => SitePick::Access(other.area(), None),
+        };
+    }
+    SitePick::Needs(rows.iter().map(|row| row.required).min().unwrap_or(lifescape_gamedata::danger::NEVER))
 }
 
 #[cfg(test)]
 #[path = "combat_toll_tests.rs"]
 mod toll_tests;
+
+#[cfg(test)]
+#[path = "combat_access_tests.rs"]
+mod access_tests;
 
 #[cfg(test)]
 mod tests {
@@ -282,7 +375,9 @@ mod tests {
         assert_eq!(min_combat_for_method("gather:woodcut/willow_logs"), 3, "some willows sit outside every hunter");
         assert_eq!(min_combat_for_method("fight:melee/chickens"), 3);
         assert_eq!(min_combat_for_method("gather:fishing/raw_lobster"), lifescape_gamedata::danger::NEVER, "no bank within reach of Karamja water");
-        assert_eq!(min_combat_for_method("smith:steel_platebody"), 5);
+        // Anvils are station sites now (args contract 2026-11-13): the
+        // least demanding anvil with its bank, no longer a pinned 5.
+        assert_eq!(min_combat_for_method("smith:steel_platebody"), 3);
         assert_eq!(min_combat_for_method("quest:cook"), 3);
     }
 

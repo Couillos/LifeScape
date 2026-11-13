@@ -64,8 +64,8 @@ pub fn tool_skills(item: &str) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for method in GEARED {
         let Some(need) = crate::tools::required_tool(method) else { continue };
-        let names: Vec<&str> = crate::tools::tool_family(need.tool).iter().chain(need.bait.map(crate::tools::tool_family).unwrap_or(&[]).iter()).copied().collect();
-        if names.contains(&item) {
+        let names: Vec<String> = need.names().iter().flat_map(|name| crate::tools::tool_family(name)).collect();
+        if names.iter().any(|name| name == item) {
             if let Some(skill) = method_skill(method) {
                 out.insert(skill);
             }

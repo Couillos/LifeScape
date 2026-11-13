@@ -18,8 +18,11 @@ fn max_skills_expands_tranches_in_order() {
         })
         .collect();
     assert_eq!(levels, vec![5, 10, 20, 25, 35, 40], "D21 tranches up to the goal");
-    for pair in nodes.windows(2) {
-        assert_eq!(pair[1].deps, vec![pair[0].id.clone()], "linear chain");
+    // Tranches chain linearly; the skeleton files each tranche's tackle
+    // and bait in front of it (`skeleton_deps`).
+    let reach: Vec<&Node> = nodes.iter().filter(|node| matches!(node.kind, NodeKind::ReachLevel { .. })).collect();
+    for pair in reach.windows(2) {
+        assert_eq!(pair[1].deps.first(), Some(&pair[0].id), "linear chain");
     }
     assert!(nodes.iter().all(|node| node.method.is_none()), "methods resolve at ready, not at creation");
 }
@@ -64,24 +67,26 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(tranches("smithing", 1, 99), vec![15, 20, 30, 40, 50, 70, 85, 99]);
     assert_eq!(tranches("crafting", 1, 99), vec![5, 7, 8, 16, 20, 27, 34, 43, 70, 99]);
     assert_eq!(tranches("runecraft", 1, 99), vec![2, 5, 9, 14, 20, 99]);
-    assert_eq!(tranches("prayer", 1, 99), vec![99], "one tranche, burial in-loop");
+    assert_eq!(tranches("prayer", 1, 99), vec![10, 20, 30, 40, 99], "banked bones, then big bones");
     assert_eq!(tranches("magic", 1, 99), vec![10, 20, 30, 40, 99]);
     assert_eq!(reach_method("firemaking", 30), "fire:willow_logs");
     assert_eq!(reach_method("smithing", 30), "smelt:steel_bar");
     assert_eq!(reach_method("smithing", 1), "smelt:bronze_bar");
     assert_eq!(reach_method("crafting", 1), "spin:ball_of_wool");
-    assert_eq!(reach_method("crafting", 7), "pottery:pie_dish");
+    assert_eq!(reach_method("crafting", 7), "pottery:piedish", "the object name (fire_piedish)");
     assert_eq!(reach_method("crafting", 8), "jewelry:unstrung_gold_amulet", "object names, the furnace casts unstrung");
     assert_eq!(reach_method("crafting", 70), "jewelry:unstrung_diamond_amulet");
     assert_eq!(reach_method("crafting", 16), "jewelry:nostringstar");
     assert_eq!(reach_method("cooking", 30), "cook/raw_salmon", "lobster needs cooking 40");
-    assert_eq!(reach_method("cooking", 40), "cook/raw_lobster");
+    assert_eq!(reach_method("cooking", 40), "cook/raw_salmon", "raw lobster is Karamja water: no boat edge");
     assert_eq!(reach_method("fishing", 35), "gather:fishing/raw_salmon", "no Karamja water: never safe");
     assert_eq!(reach_method("woodcutting", 45), "gather:woodcut/willow_logs", "maples have no F2P site");
     assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");
-    assert_eq!(reach_method("prayer", 99), "fight:melee/cows");
+    assert_eq!(reach_method("prayer", 1), "bury:bones");
+    assert_eq!(reach_method("prayer", 20), "bury:big_bones");
     assert_eq!(reach_method("ranged", 20), "fight:ranged/cows");
-    assert_eq!(reach_method("magic", 20), "fight:magic/cows");
+    assert_eq!(reach_method("magic", 20), "fight:magic/wind_bolt/cows", "the best spell open at the start");
+    assert_eq!(reach_method("magic", 1), "fight:magic/wind_strike/chickens");
 }
 
 #[test]
@@ -121,7 +126,7 @@ fn access_area_derives_guild_deps() {
     let leaf = mining.last().expect("access leaf");
     assert!(!leaf.deps.is_empty(), "level gate leaves no depless node");
     assert!(mining.iter().any(|node| matches!(&node.kind, NodeKind::ReachLevel { skill, level } if skill == "mining" && *level == 60)));
-    assert!(!mining.iter().any(|node| matches!(node.kind, NodeKind::ObtainItems { .. })), "no uniform on the mining guild");
+    assert_eq!(leaf.deps.len(), 1, "the mining guild asks the level only, no uniform: {:?}", leaf.deps);
     let champions = expand_goal(&GoalKind::AccessArea { area: "champions_guild".to_string() }, &profile());
     let leaf = champions.last().expect("access leaf");
     assert!(!leaf.deps.is_empty(), "qp gate leaves no depless node");
@@ -263,14 +268,16 @@ fn tool_gate_drops_unworkable_tranches() {
     }
     // The table names rod plus bait for sardines, net alone for shrimp.
     let need = required_tool("gather:fishing/raw_sardine").expect("sardines need gear");
-    assert_eq!((need.tool, need.bait), ("fishing_rod", Some("fishing_bait")));
-    assert_eq!(required_tool("gather:fishing/raw_shrimp").expect("shrimp needs gear").tool, "net");
+    assert_eq!((need.tools, need.consumables), (vec!["fishing_rod".to_string()], vec!["fishing_bait".to_string()]));
+    assert_eq!(required_tool("gather:fishing/raw_shrimp").expect("shrimp needs gear").first(), "net");
     assert!(required_tool("fight:melee/cows").is_none(), "melee needs no gear");
     let bow = required_tool("fight:ranged/cows").expect("ranged needs a bow");
-    assert_eq!((bow.tool, bow.bait), ("shortbow", Some("bronze_arrow")));
+    assert_eq!((bow.tools, bow.consumables), (vec!["shortbow".to_string()], vec!["bronze_arrow".to_string()]));
     let runes = required_tool("fight:magic/cows").expect("magic needs runes");
-    assert_eq!((runes.tool, runes.bait), ("mindrune", Some("airrune")));
-    assert_eq!(required_tool("gather:sheep/wool").expect("shears").tool, "shears");
+    let mut consumed = runes.consumables.clone();
+    consumed.sort();
+    assert_eq!(consumed, vec!["airrune".to_string(), "mindrune".to_string()]);
+    assert_eq!(required_tool("gather:sheep/wool").expect("shears").first(), "shears");
 
     // Rod-less and broke: sardines unworkable. No substitute method
     // (rule 7): the node blocks typed on the rod, the brain files the

@@ -31,7 +31,10 @@ dans la tranche fixée (pas de positionnel ressource : `woodcut`/`mining`/
 `fishing` la liraient comme un compte).
 
 Paliers : pêche [5,10,20,25,35,40], bûcheronnage [15,30,45,60,75], minage
-[10,15,20,30,40,55], cuisine [10,20,30,45], mêlée [10,20,30,40]. Chaque
+[10,15,20,30,40,55], cuisine [10,20,30,45], mêlée [10,20,30,40], prière
+[10,20,30,40] (enterrer en banque : `bury:bones` puis `bury:big_bones` à
+20), magie [10,20,30,40] (le meilleur sort de combat ouvert au départ :
+`fight:magic/<sort>/<spot>`). Chaque
 tranche porte la méthode du palier ouvert à son niveau de DÉPART (1→5
 crevettes, 5→10 sardines ; jamais le homard pour 35→40) : le contrôle
 d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
@@ -39,27 +42,44 @@ méthode de substitution : outil manquant ⇒ `Blocked{missing}` ⇒
 sous-tâche. Ressources par palier (2026-11-13, contenu serveur) : pêche
 au-delà de 30 = saumon (thon et homard sont à Karamja : bateau, aucune
 banque à portée, jamais sûrs), bûcheronnage 45 = saules (l'érable n'a
-aucun site F2P), cuisine homard à 40 seulement (saumon dès 25),
+aucun site F2P), cuisine saumon dès 25 et au-delà (homard, thon, espadon
+crus = eau de Karamja, injoignable),
 artisanat aux noms d'objets (`unstrung_gold_amulet`, `nostringstar`,
 `unstrung_diamond_amulet`).
 
-Outillage (`tools::required_tool`) : récolte (pioche, hache, filet/canne
-+ appât, y compris les jambes `farm:`), forge ⇒ marteau, allumage ⇒
-briquet, bijouterie ⇒ moule du produit, runes ⇒ talisman de l'autel,
-cuir ⇒ aiguille + fil. Un outil ni porté ni achetable (règle magasin) ⇒
-`Blocked{missing:<outil>}` ⇒ obtention.
+Outillage (`tools::required_tool`, 2026-11-13) : dérivé des voies serveur
+(`method_way::method_way` → `Way.tools`, plus aucune liste à la main) :
+`ToolNeed { tools, consumables }`. Récolte : pioche, hache, filet/canne +
+appât (y compris `farm:`) ; forge ⇒ marteau ; allumage ⇒ briquet ;
+bijouterie ⇒ moule (outil porté, jamais un intrant) ; runes ⇒ talisman ;
+gemmes ⇒ ciseau ; cuir ⇒ aiguille + fil (consommé) ; traite ⇒ seau
+(consommé) ; distance ⇒ arc + flèches ; magie ⇒ runes du sort de la
+méthode (un bâton élémentaire vaut sa rune). Un outil ni porté ni
+achetable (règle magasin) ⇒ `Blocked{missing:<outil>}` ⇒ obtention.
 
-Contrat d'arguments (2026-11-13, côté scripts : l'agent scripts) :
-récolteurs ressource en premier positionnel (`fishing raw_trout`,
-`mining gold_ore`, `woodcut willow_logs`, jambes `gather:` et `farm:`) ;
-une obtention porte `--want <objet> N` (N = quantité − détenu, détenu
-noté en `progress_current` au lancement) ; `shop:buy`/`market:sell`
-déplacent le manquant ; `--site x,z,niveau` pour les récolteurs ; `toll`
-quand le péage est budgété ; une quête inconnue ne mappe aucun script
-(plus de repli Cook's Assistant). Blocages compris par
-`record_block_from` : objet, `coins:N`, `combat:N`, `level:<comp>:<N>`,
-`quest:<clé>` (quête dépliée), `access:<zone>` (portes de guilde
-dépliées, `expand::expand_access`).
+Dimensionnement (`sizing.rs`, 2026-11-13) : une tranche coûte
+`ceil((XP(cible) − XP(départ)) / XP par action)` actions (tables serveur,
+dixièmes) ; ses consommations = intrants de la voie par action ÷ chances
+de réussite (fer : 2 minerais par barre), appât et plumes par prise, une
+flèche par tir (4 XP par point de dégât, modèle : 60 % de touches à la
+moitié du coup max ; le script ne ramasse pas ses flèches), runes du sort
+par lancer (XP du sort + 2 par point de dégât), un fil pour 5 coutures.
+`need_count_from` dimensionne un blocage de tranche sur le reste de la
+tranche depuis le niveau live (jamais 1 ni 27).
+
+Dépendances au squelette (`skeleton_deps.rs`) : `expand_goal_from`,
+`expand_access`, `expand_quest_from` et le blocage `level:` passent par
+`reach_chain_planned` : chaque tranche dépose devant elle un `obtain` par
+outil (une fois par chaîne), un `obtain` par objet consommé (taille ci-
+dessus), la quête de sa méthode et la guilde quand TOUS ses sites sont
+derrière une porte de guilde ; les obtains de la tranche k attendent la
+tranche k−1 (juste à temps). Test : la recette de chaque tranche s'ouvre à
+son niveau de DÉPART pour toutes les compétences 1..98.
+
+Le contrat d'arguments (table complète ci-dessous, section « Contrat
+d'arguments ») est la seule interface brain → scripts : la méthode fixe
+script, ressource, site, sort, magasin, quantité et niveau ; le script
+exécute, ne choisit rien.
 
 Montée depuis le niveau LIVE (2026-11-13) : `expand_goal_from(goal,
 profile, level_of)` part du niveau live (1 s'il est inconnu) et ne génère
@@ -243,6 +263,45 @@ budgété (bourse ≥ 10 ou quête faite) ⇒ `node.toll`, lancement avec
 `Blocked missing:coins:10` ⇒ dépendance `have_coins`. Côté script,
 `kit::toll::arm` va chercher les 10 pièces en banque avant le premier
 passage et `bank_trip` les garde dans le sac pendant une course payante.
+
+Portes d'accès des sites (2026-11-13, `gamedata::access`) : guilde
+d'artisanat (40 + tablier brun porté), des cuisiniers (32 + toque portée),
+des mineurs (60), clé de laiton (Edgeville), Karamja (bateau 30 po,
+`sailors.rs2`), Crandor, souterrain, Wilderness. `combat::pick_site_gated`
++ `Pass` (niveaux live, objets détenus) : un site gardé compte seulement si
+la porte s'ouvre ; sinon `SitePick::Access` ⇒ `missing:access:<guilde>`
+(déplié : montée + uniforme) ou `missing:<clé>`. Banque et danger d'un site
+de guilde se lisent à sa porte ; un poste d'étage sans banque à son étage
+se lit au rez-de-chaussée. Les postes (fourneau, enclume, fourneau de
+cuisine, rouet, tour, autel, trémie, tanneur, Aggie, apparitions au sol)
+sont des sites choisis comme les récoltes ; le magasin d'un `shop:buy` est
+choisi par `shop_site::pick_shop` (quête, porte, danger, péage).
+Karamja : la navigation n'a AUCUNE arête pour les marins
+(`gamedata/data/nav_overrides.json` `custom_edges` vide ; hors ligne
+`orchestrator route 3029 3217 0 2915 3150 0` ⇒ `BudgetExhausted
+closest=(2955,3192,0)`, la côte de Rimmington) : `access::BOAT_ROUTED` =
+false, homard, thon, espadon et l'or de Karamja restent non planifiables
+(et hors catalogue d'ambitions) jusqu'à ce que nav/SDK sachent embarquer
+(dialogue `~set_sail` : téléport sur le navire, passerelle, retour par
+l'officier des douanes, 30 po chaque sens).
+
+Familles de production (2026-11-13) : `cut:` (gemmes, ciseau), `bake:`
+(pain, tartes, ragoût, pizza, gâteau ; intrants aplatis jusqu'aux
+composants de base que `cook_meals` assemble), `dye:` (Aggie : 2 oignons /
+3 baies / 2 guède + 5 po), `ground:` (apparitions libres, sans porte,
+banque à portée), `telegrab:wine_of_zamorak` (magie 33), `superheat:`
+(magie 43, intrants de fonte + runes, jamais d'échec), `bury:` (prière en
+banque). Les voies de sort brûlent leurs runes. Achats en dialogue : pas
+de script, pas de jambe.
+
+Échelle de points de quête (`quests::quest_point_ladder`) : points les
+moins chers d'abord (récompense ÷ effort : objets, compétences, combat
+recommandé), une quête à seuil seulement une fois son seuil atteint par
+les marches d'avant, jamais Shield of Arrav (deux joueurs) ni Pirate's
+Treasure (bateau) ; les quêtes faites comptent. Dragon Slayer, Black
+Knights' Fortress et la Champions' Guild (32) en dépendent (fini le repli
+Cook's Assistant). Objets de quête lus dans les scripts serveur
+(`gamedata::quest_requirements`, 39 points en F2P).
 
 Quêtes (décision utilisateur 2026-11-13, `planner/src/quests.rs`) : une
 méthode dont la quête manque ne part jamais (`method_feasible`) ; le
@@ -483,3 +542,78 @@ profit publié. Le repli de site (`place_on_site`) ne ressuscite jamais
 une jambe d'achat refusée. `equip_best` se déplie depuis
 `gamedata::gear::best_gear` ; distance et magie exigent arc + flèches /
 runes (`required_tool`).
+
+## Contrat d'arguments (2026-11-13)
+
+Source : `rs/crates/planner/src/mapping.rs` (tests :
+`mapping_contract_tests.rs`). Copie de travail pour l'agent scripts :
+scratchpad `args_contract.md`.
+
+Ordre d'une ligne de lancement : `<script> <positionnels> [--level <comp> <N>] [--spell <sort>] [--site x,z,niveau] [--wear <uniforme>]… [--want <objet> <N>] [toll] --node <id> [--budget-min <t> --budget-max <t>]`.
+
+Drapeaux communs :
+
+| Drapeau | Quand | Sens pour le script |
+|---|---|---|
+| `--node <id>` | toujours | corrélation du `task_report` |
+| `--budget-min/--budget-max <ticks>` | engagements `make_money` | fenêtre d'engagement |
+| `--level <comp> <N>` | nœud `reach_level` (N ≥ 2) | s'arrêter au niveau N de `<comp>` (récolteurs : leur compétence ; combat : la compétence du nœud) |
+| `--want <objet> <N>` | nœud `obtain` (sauf `market`, `walkto`, `equip`, quêtes) | s'arrêter quand N unités de plus sont détenues (N = quantité − détenu au lancement) |
+| `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
+| `--wear <objet>` | le site est dans une guilde à uniforme (artisanat : `brown_apron`, cuisiniers : `chefs_hat`) | porter l'objet avant la porte (le planner l'a fait obtenir) |
+| `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm`) |
+| `--spell <sort>` | magie | lancer CE sort (le planner a dimensionné ses runes) |
+| `--shop <clé>` | `market shopbuy` | acheter dans CE magasin (clé `gamedata::shops`) |
+
+Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_from`) : `<objet>`, `coins:N`, `combat:N`, `level:<comp>:<N>`, `quest:<clé>`, `access:<zone>` (`crafting_guild`, `cooks_guild`, `mining_guild`, `champions_guild`, `lumbridge`).
+
+| Méthode planner | Script | Positionnels (dans l'ordre) | Drapeaux propres |
+|---|---|---|---|
+| `gather:fishing/<poisson>` | `fishing` | `<poisson>` (ex. `raw_trout`) | `--level fishing N`, `--site`, `toll` |
+| `gather:mining/<minerai>` | `mining` | `<minerai>` | `--level mining N`, `--site`, `--wear` (guilde), `toll` |
+| `gather:woodcut/<bûches>` | `woodcut` | `<bûches>` | `--level woodcutting N`, `--site`, `toll` |
+| `farm:<poisson>` | `fishing` | `<poisson>` | `--want`, `--site`, `toll` |
+| `farm:<minerai>` / `farm:coal` / `farm:clay` | `mining` | `<minerai>` | `--want`, `--site`, `toll` |
+| `farm:<bûches>` | `woodcut` | `<bûches>` | `--want`, `--site`, `toll` |
+| `farm:blankrune` | `essence_run` | — | `--want blankrune N` |
+| `farm:<drop>` | `melee` | `<spot>` (spot non gardé le plus faible qui lâche l'objet) | `--want`, `--site`, `toll` |
+| `fight:melee/<spot>` | `melee` | `<spot>` ou `ladder` | `--level <comp> N`, `--site`, `toll` |
+| `fight:ranged/<spot>` | `ranged` | `<spot>` | `--level ranged N`, `--site`, `toll` |
+| `fight:magic/<sort>/<spot>` (ancien `fight:magic/<spot>` = `wind_strike`) | `magic` | `<spot>` | `--spell <sort>` juste après le spot, `--level magic N`, `--site`, `toll` |
+| `cook/<cru>` | `cook` | `<cru>` | `--level cooking N`, `--site` (fourneau), `--wear chefs_hat` en guilde |
+| `cook:<produit>` | `cook` | `<cru>` (résolu depuis la recette) | `--want`, `--site`, `--wear` |
+| `bake:bread` | `bake_bread` | — | `--want`, `--site` |
+| `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
+| `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
+| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
+| `superheat:<barre>` | `superheat` | `<barre>` | `--want` (minerais + runes de feu + nature) |
+| `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
+| `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
+| `spin:<produit>` | `spin` | `<intrant>` (`wool`) | `--level crafting N`, `--want`, `--site` (rouet) |
+| `pottery:<produit>` | `pottery` | `<produit>` (`pot_empty`, `piedish`, `bowl_empty`) | `--level crafting N`, `--want`, `--site` ; **à faire côté script : accepter le produit en positionnel (aujourd'hui : pots seulement)** |
+| `cut:<gemme>` | `cut_gems` | `<brut>` (`uncut_sapphire`) | `--want` ; ciseau = outil porté |
+| `craft:<cuir>` | `leatherwork` | `<produit>` | `--want` ; aiguille portée, fil consommé |
+| `tan:<peau>` | `leatherwork` | `<peau>` | `--want`, `--site` (tanneur), `toll`, `--wear` |
+| `runecraft:<rune>` | `runecraft` | `<rune>` | `--level runecraft N`, `--want`, `--site` (autel), `toll` ; talisman = outil porté |
+| `essence:<…>` | `essence_run` | — | `--want` |
+| `fire:<bûches>` | `firemaking` | `<bûches>` | `--level firemaking N` ; briquet porté |
+| `bury:<os>` | `bury_loot` | `<os>` (`bones`, `big_bones`) | `--level prayer N` ; **à faire côté script : enregistrer `bury_loot` (retirer les os en banque, enterrer, recommencer)** |
+| `dye:<teinture>` | `dye` | `<teinture>` (`yellowdye`…) | `--want`, `--site` (Aggie) |
+| `ground:<objet>` | `ground_pickup` | `<objet>` | `--want`, `--site` (apparition choisie) ; **à faire : accepter l'objet en positionnel** |
+| `telegrab:wine_of_zamorak` | `telegrab_wine` | — | `--want`, `--site` |
+| `pick:<champ>` / `gather:wheat/<r>` | `picking` | `<champ>` | `--want` |
+| `mill:<produit>` | `mill_grain` | — | `--want`, `--site` (trémie ; `--wear chefs_hat` si guilde) |
+| `milk:<produit>` | `milk` | — | `--want` ; seau consommé |
+| `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
+| `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
+| `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` |
+| `alch:<objet>` | `alchemy` | `<objet>` | — |
+| `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
+| `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `toll` |
+| `market:flip` | `market` | `flip` | budget |
+| `space:cleanup` | `market` | `cleanup` | — |
+| `quest:<clé>` | `quest_<nom>` (table `quest_script`) | — | clé inconnue = aucun script (abandon typé) |
+| `access:<zone>` | `walkto` | `<x> <z>` | — |
+| `equip:<style>` | `equip` | `<style>` | — |
+
+Non mappé (pas de script) : achats en dialogue (`WayKind::Dialogue`, ex. kébab de Karim) — il faudrait un script `dialogue_buy <objet> --npc <pnj> --site …` ; tant qu'il manque, le planner ne crée pas de jambe.

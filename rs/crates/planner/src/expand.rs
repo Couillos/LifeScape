@@ -113,6 +113,10 @@ pub(crate) fn source_flags(item: &str) -> (bool, bool) {
 }
 
 
+/// Nested quest/guild expansions a skeleton files (a quest's climb may
+/// need a guild, whose climb may need a quest: bounded).
+pub const NESTED_DEPTH: u8 = 2;
+
 fn next_id(counter: &mut usize) -> String {
     *counter += 1;
     format!("n{}", *counter)
@@ -188,7 +192,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
         GoalKind::MaxSkills { skills, level } => {
             for skill in skills {
                 let mut after = String::new();
-                nodes.extend(reach_chain(skill, level_of(skill), *level, &mut counter, &mut after));
+                nodes.extend(crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), *level, &mut counter, &mut after, NESTED_DEPTH));
             }
         }
         GoalKind::Obtain { item, count } => {
@@ -197,7 +201,8 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
         GoalKind::MakeMoney => {
             let id = next_id(&mut counter);
             let mut node = Node::new(&id, NodeKind::MakeMoney, Vec::new(), 0);
-            node.alternatives.push(Alternative { method: "gather:fishing/raw_lobster".to_string(), est_ticks: 0, est_coins: 0 });
+            // Salmon: the best mainland catch (Karamja lobsters: no boat edge).
+            node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
             node.alternatives.push(Alternative { method: "gather:woodcut/yew_logs".to_string(), est_ticks: 0, est_coins: 0 });
             if !profile.ironman {
                 node.alternatives.push(Alternative { method: "market:flip".to_string(), est_ticks: 0, est_coins: 0 });
@@ -257,7 +262,8 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             if is_merchant && !profile.ironman {
                 node.alternatives.push(Alternative { method: "market:flip".to_string(), est_ticks: 0, est_coins: 0 });
             } else {
-                node.alternatives.push(Alternative { method: "gather:fishing/raw_lobster".to_string(), est_ticks: 0, est_coins: 0 });
+                // Salmon: the best mainland catch (Karamja lobsters: no boat edge).
+                node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
                 node.alternatives.push(Alternative { method: "gather:mining/coal".to_string(), est_ticks: 0, est_coins: 0 });
             }
             nodes.push(node);
@@ -271,12 +277,18 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
 /// its quest rung; the `access` node depends on all of them. Shared by
 /// `access` goals and `access:<area>` blocks (`record_block_from`).
 pub fn expand_access(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    expand_access_planned(area, profile, counter, level_of, NESTED_DEPTH)
+}
+
+/// `expand_access` whose climbs file their skeleton dependencies down to
+/// `depth` nested quest/guild expansions.
+pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
         if let Some(skill) = guild_skill(area) {
             let mut after = String::new();
-            let chain = reach_chain(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after);
+            let chain = crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after, depth);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }
@@ -288,15 +300,11 @@ pub fn expand_access(area: &str, profile: &Profile, counter: &mut usize, level_o
             nodes.push(node);
         }
     } else if area == "champions_guild" {
-        // shortcut: qp:32 needs the 32-QP ladder, but quest rewards
-        // are not in the dumps, so no minimal quest set derives — the
-        // cheapest QP rung (Cook's Assistant) gates the node until the
-        // ladder lands.
-        let quest_nodes = expand_quest_from("cook", profile, counter, level_of);
-        if let Some(last) = quest_nodes.last() {
-            deps.push(last.id.clone());
-        }
-        nodes.extend(quest_nodes);
+        // The door turns away anyone under 32 quest points
+        // (`champions_guild.rs2`): the quest-point ladder.
+        let (rungs, last) = quest_point_rungs(32, "", profile, counter, level_of, depth);
+        nodes.extend(rungs);
+        deps.extend(last);
     }
     let id = next_id(counter);
     let mut node = Node::new(&id, NodeKind::AccessArea { area: area.to_string() }, deps, 1);
@@ -314,12 +322,39 @@ pub fn expand_quest(quest: &str, profile: &Profile, counter: &mut usize) -> Vec<
 
 /// `expand_quest` with skill gates climbing from the live levels.
 pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    expand_quest_planned(quest, profile, counter, level_of, NESTED_DEPTH)
+}
+
+/// `expand_quest_from` whose climbs file their skeleton dependencies down
+/// to `depth` nested quest/guild expansions.
+pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
+    expand_quest_inner(quest, profile, counter, level_of, depth, true)
+}
+
+/// Quest-point rungs (`quests::quest_point_ladder`) chained in order, each
+/// rung's own requirements expanded (never its own ladder: the order
+/// already reaches its gate). Returns the nodes and the last rung's id.
+fn quest_point_rungs(points: i64, target: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> (Vec<Node>, Option<String>) {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut previous: Option<String> = None;
+    for rung in crate::quests::quest_point_ladder(points, target, &[]) {
+        let mut chain = expand_quest_inner(&rung, profile, counter, level_of, depth.saturating_sub(1), false);
+        if let (Some(before), Some(last)) = (previous.as_ref(), chain.last_mut()) {
+            last.deps.push(before.clone());
+        }
+        previous = chain.last().map(|node| node.id.clone());
+        nodes.extend(chain);
+    }
+    (nodes, previous)
+}
+
+fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, with_ladder: bool) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
         for gate in &required.skills {
             let mut after = String::new();
-            let chain = reach_chain(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after);
+            let chain = crate::skeleton_deps::reach_chain_planned(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after, depth);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }
@@ -332,15 +367,12 @@ pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, le
             deps.push(node.id.clone());
             nodes.push(node);
         }
-        // shortcut: quest-point gates collapse onto Cook's Assistant (1
-        // QP, no requirements): the cheapest QP in F2P. A full QP ladder
-        // (ordering all 18 quests by gate) is deferred; L7 goals run one
-        // low-QP quest, where this never triggers.
-        if required.quest_points > 0 && quest != "cook" {
-            let id = next_id(counter);
-            let dep = Node::new(&id, NodeKind::CompleteQuest { quest: "cook".to_string() }, Vec::new(), 1);
-            deps.push(dep.id.clone());
-            nodes.push(dep);
+        // Quest-point gate (Black Knights' Fortress 12, Dragon Slayer 32):
+        // the real ladder, cheapest points first, each rung expanded.
+        if required.quest_points > 0 && with_ladder {
+            let (rungs, last) = quest_point_rungs(required.quest_points, quest, profile, counter, level_of, depth);
+            nodes.extend(rungs);
+            deps.extend(last);
         }
     }
     let id = next_id(counter);
@@ -384,9 +416,19 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     );
     let mut needed: Option<u8> = None;
     let mut fare_short: Option<i64> = None;
+    let mut gate_need: Option<String> = None;
     let fare = crate::combat::Fare::of(ctx);
+    let pass = crate::combat::Pass::of(ctx);
+    // A shop purchase walks to the nearest shop that stocks the object
+    // (the planner's shop, `--shop`), never a gated or Wilderness one.
+    if locked == "shop:buy" {
+        if let NodeKind::ObtainItems { item, .. } = &node.kind {
+            node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
+        }
+        return;
+    }
     for method in &candidates {
-        match crate::combat::pick_site_paid(method, ctx.combat, ctx.position, fare) {
+        match crate::combat::pick_site_gated(method, ctx.combat, ctx.position, fare, &pass) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;
@@ -405,6 +447,12 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
                 return;
             }
             crate::combat::SitePick::Fare(coins) => fare_short = Some(coins),
+            // A guild door (skill + uniform) or a key: the dependency that
+            // opens it, filed by `record_block_from` (`access:<guild>`
+            // expands the climb and the uniform, a key is an obtain).
+            crate::combat::SitePick::Access(area, key) => {
+                gate_need.get_or_insert_with(|| key.map(str::to_string).unwrap_or_else(|| format!("access:{area}")));
+            }
             crate::combat::SitePick::Needs(level) => needed = Some(needed.map_or(level, |known| known.min(level))),
         }
     }
@@ -413,6 +461,7 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         // The fare is the cheapest unlock: a `have_coins` dependency
         // earns it, then the node relaunches with `toll`.
         (Some(coins), _) => NodeStatus::Blocked { reason: format!("missing:coins:{coins}") },
+        (None, _) if gate_need.is_some() => NodeStatus::Blocked { reason: format!("missing:{}", gate_need.unwrap_or_default()) },
         (None, Some(level)) if level < lifescape_gamedata::danger::NEVER => NodeStatus::Blocked { reason: format!("missing:combat:{level}") },
         _ => NodeStatus::Blocked { reason: format!("unworkable:{locked} (no site safe at any level with a bank in reach)") },
     };
@@ -446,9 +495,7 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
                     Some(method) => node.method = Some(method),
                     None => {
                         if let Some(first) = node.alternatives.first() {
-                            let missing = required_tool(&first.method).map(|need| {
-                                if gear_ok(need.tool, ctx) { need.bait.unwrap_or(need.tool) } else { need.tool }
-                            });
+                            let missing = required_tool(&first.method).map(|need| need.missing(ctx).unwrap_or_else(|| need.first().to_string()));
                             node.method = None;
                             node.status = match missing {
                                 Some(tool) => NodeStatus::Blocked { reason: format!("missing:{tool}") },

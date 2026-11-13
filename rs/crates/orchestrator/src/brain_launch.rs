@@ -306,7 +306,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // what this bot's other resting buys (gear step, tool wishes) commit.
     let mut committed = 0;
     if let NodeKind::ObtainItems { item, .. } = &life.nodes[position].kind {
-        ctx.held = holdings_count(job, item);
+        // The whole family counts (a steel pickaxe meets `bronze_pickaxe`,
+        // a staff of air any number of air runes), except for the goal's
+        // own production quota (air runes to craft are runes, not a staff).
+        let quota = matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
+        ctx.held = if quota { holdings_count(job, item) } else { lifescape_planner::tools::family_held(item, i64::MAX / 4, &|name| holdings_count(job, name)) };
         committed = crate::brain_gear::committed_coins(&job.account, crate::brain_gear::obj_id(item));
         ctx.coins = (ctx.coins - committed).max(0);
     }

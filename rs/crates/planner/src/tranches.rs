@@ -22,9 +22,8 @@ pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
         "runecraft" => &[2, 5, 9, 14, 20],
         "attack" | "strength" | "defence" | "hitpoints" => &[10, 20, 30, 40],
         "magic" | "ranged" => &[10, 20, 30, 40],
-        // Prayer buries where it fights (no standalone bury script):
-        // one tranche, burial in the combat loop.
-        "prayer" => &[],
+        // Prayer buries banked bones (`bury_loot`), bones then big bones.
+        "prayer" => &[10, 20, 30, 40],
         _ => &[10, 20, 30],
     };
     let mut out: Vec<u8> = cuts.iter().copied().filter(|cut| *cut > from && *cut < to).collect();
@@ -80,12 +79,11 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
-        // Each tier at its server level: lobster 40, salmon 25, trout 15
-        // (a 30→45 tranche cooked lobster at 30 before).
+        // Each tier at its server level: salmon 25, trout 15. Raw lobster,
+        // tuna and swordfish come only from Karamja water, which no bot
+        // reaches (`access::BOAT_ROUTED`): salmon stays the top tier.
         "cooking" => {
-            if level >= 40 {
-                "raw_lobster"
-            } else if level >= 25 {
+            if level >= 25 {
                 "raw_salmon"
             } else if level >= 15 {
                 "raw_trout"
@@ -108,7 +106,7 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
         }
         "smithing" => {
             if level >= 85 {
-                "rune_bar"
+                "runite_bar"
             } else if level >= 70 {
                 "adamantite_bar"
             } else if level >= 50 {
@@ -142,7 +140,7 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             } else if level >= 8 {
                 "unstrung_gold_amulet"
             } else if level >= 7 {
-                "pie_dish"
+                "piedish"
             } else if level >= 5 {
                 "gold_ring"
             } else {
@@ -166,7 +164,9 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
-        "prayer" => "bones".to_string(),
+        // Bones (4.5 XP, every chicken and cow) to 20, big bones (15 XP)
+        // after: the market or a giant spot feeds the climb.
+        "prayer" => if level >= 20 { "big_bones" } else { "bones" }.to_string(),
         // Melee from 10 trains on the ladder (`melee ladder`: the script
         // picks the F2P spot from the live levels, gear, hitpoints and
         // food; audit 2026-11-13: combat 50-59 bots still on cows). The
@@ -203,18 +203,20 @@ pub fn reach_method(skill: &str, level: u8) -> String {
             let resource = tranche_resource(skill, level);
             if resource == "ball_of_wool" {
                 format!("spin:{resource}")
-            } else if resource == "pie_dish" || resource == "pot" || resource == "bowl" {
+            } else if resource == "piedish" || resource == "pot_empty" || resource == "bowl_empty" {
                 format!("pottery:{resource}")
             } else {
                 format!("jewelry:{resource}")
             }
         }
         "runecraft" => format!("runecraft:{}", tranche_resource(skill, level)),
-        // No standalone bury script (in-loop helper only): prayer fights
-        // where the bones drop and buries each kill.
-        "prayer" => "fight:melee/cows".to_string(),
+        // Prayer buries banked bones (`bury_loot <bones>`): the bones are
+        // the tranche's consumption, sized by its XP.
+        "prayer" => format!("bury:{}", tranche_resource(skill, level)),
         "ranged" => format!("fight:ranged/{}", tranche_resource(skill, level)),
-        "magic" => format!("fight:magic/{}", tranche_resource(skill, level)),
+        // The best combat spell open at the tranche's start: its runes are
+        // sized per cast (`sizing`) and the script casts it (`--spell`).
+        "magic" => format!("fight:magic/{}/{}", crate::method_way::best_combat_spell(level), tranche_resource(skill, level)),
         "attack" | "strength" | "defence" | "hitpoints" => {
             format!("fight:melee/{}", tranche_resource(skill, level))
         }

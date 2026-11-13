@@ -640,7 +640,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
                     let mut after = String::new();
-                    let chain = crate::expand::reach_chain(&skill, level_of(&skill), level, &mut counter, &mut after);
+                    let chain = crate::skeleton_deps::reach_chain_planned(&skill, level_of(&skill), level, &mut counter, &mut after, crate::expand::NESTED_DEPTH);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -661,7 +661,11 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
     }
     life.nodes.extend(fresh_nodes);
     let mut counter = max_id_number(life);
-    let fresh = replan_node(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter);
+    let live = match &life.nodes[index].kind {
+        NodeKind::ReachLevel { skill, .. } => Some(level_of(skill)),
+        _ => None,
+    };
+    let fresh = crate::replan::replan_node_from(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter, live);
     let node = &mut life.nodes[index];
     node.method = None;
     for id in reused {

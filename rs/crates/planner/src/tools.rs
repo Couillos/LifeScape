@@ -1,164 +1,128 @@
-//! Gather-method gear gate: which carried tool (and bait) a method
-//! needs, which names satisfy it, and whether the pack holds or can fund
-//! it now. Split out of `expand` (rule 4); API re-exported there.
+//! Method gear gate: which carried tools (and consumables) a method
+//! needs — derived from the server data for every production and gather
+//! (`method_way`) —, which names satisfy them, and whether the pack holds
+//! or can fund them now. Split out of `expand` (rule 4); API re-exported
+//! there.
 
 use crate::expand::ReadyCtx;
 
-/// One carried tool a gather method needs: the cheapest canonical
-/// buyable of its family (as `kit::tools::blocked_tool` names it),
-/// plus the consumable bait when the tier burns one (the script funds
-/// bait from the catch, so shop coverage gates it like the tool).
+/// Gear one method needs, from the server data (`Way.tools` of the way
+/// the method works, `method_way`): the carried tools (pickaxe, hammer,
+/// mould, talisman, needle...) and the consumables each action burns
+/// (bait, feathers, thread, a milking bucket, a fight's arrows or runes).
+/// Fights have no way: ranged takes a bow and arrows, magic the runes of
+/// the spell it casts (`fight:magic/<spell>/<spot>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolNeed {
-    pub tool: &'static str,
-    pub bait: Option<&'static str>,
+    pub tools: Vec<String>,
+    pub consumables: Vec<String>,
 }
 
-/// Required carried gear per gather method. Mirrors the `kit::tools`
-/// ranks (best-first orders) and the fishing tiers (tool + bait per
-/// product); the minimum duplicated planner-side, names only.
-pub fn required_tool(method: &str) -> Option<ToolNeed> {
-    // An obtain's `farm:` leg works the same gatherer: same gear (a trout
-    // quota needs the fly rod AND feathers, b8jxrdd2 live 2026-11-13).
-    if let Some(item) = method.strip_prefix("farm:") {
-        if crate::mapping::is_fish(item) {
-            return required_tool(&format!("gather:fishing/{item}"));
-        }
-        if item.ends_with("_ore") || item == "coal" || item == "clay" || item == "blankrune" {
-            return required_tool(&format!("gather:mining/{item}"));
-        }
-        if item.ends_with("logs") {
-            return required_tool(&format!("gather:woodcut/{item}"));
-        }
-        return None;
+impl ToolNeed {
+    /// Every name, tools first.
+    pub fn names(&self) -> Vec<String> {
+        self.tools.iter().chain(self.consumables.iter()).cloned().collect()
     }
-    if let Some(product) = method.strip_prefix("gather:fishing/") {
-        let need = match product {
-            "raw_shrimp" | "raw_anchovies" => ToolNeed { tool: "net", bait: None },
-            "raw_sardine" | "raw_herring" | "raw_pike" => {
-                ToolNeed { tool: "fishing_rod", bait: Some("fishing_bait") }
-            }
-            "raw_trout" | "raw_salmon" => ToolNeed { tool: "fly_fishing_rod", bait: Some("feather") },
-            "raw_lobster" => ToolNeed { tool: "lobster_pot", bait: None },
-            "raw_tuna" | "raw_swordfish" => ToolNeed { tool: "harpoon", bait: None },
-            _ => return None,
-        };
-        Some(need)
-    } else if method.starts_with("gather:mining/") {
-        Some(ToolNeed { tool: "bronze_pickaxe", bait: None })
-    } else if method.starts_with("gather:woodcut/") {
-        Some(ToolNeed { tool: "bronze_axe", bait: None })
-    } else if method.starts_with("gather:sheep/") {
-        // shear_sheep.rs2: shears used on the sheep (PRD3 lot 7).
-        Some(ToolNeed { tool: "shears", bait: None })
-    } else if method.starts_with("milk:") {
-        Some(ToolNeed { tool: "bucket_empty", bait: None })
-    } else if method.starts_with("fight:ranged/") {
+
+    /// The first name, tools first (the block a broke bot raises).
+    pub fn first(&self) -> &str {
+        self.tools.first().or_else(|| self.consumables.first()).map(String::as_str).unwrap_or("")
+    }
+
+    /// First item the pack neither holds nor can fund: a tool first, then
+    /// a consumable (feathers once the fly rod is in hand).
+    pub fn missing(&self, ctx: &ReadyCtx) -> Option<String> {
+        self.tools.iter().chain(self.consumables.iter()).find(|item| !gear_ok(item, ctx)).cloned()
+    }
+}
+
+/// Carried objects the data lists as tools but each action wears out
+/// (`leather.rs2`: one thread per five sewings).
+fn worn_out(tool: &str) -> bool {
+    tool == "thread"
+}
+
+/// Required gear of one method (`None`: none). Derived from the method's
+/// way for every production and gather (user rule 2026-11-13: no hand
+/// list), fights from their style.
+pub fn required_tool(method: &str) -> Option<ToolNeed> {
+    if method.starts_with("fight:ranged/") {
         // PRD3 lot 5: ranged trains with a bow and arrows, never by
         // punching (the old script melee-attacked).
-        Some(ToolNeed { tool: "shortbow", bait: Some("bronze_arrow") })
-    } else if method.starts_with("fight:magic/") {
-        // Wind strike: one mind rune and one air rune per cast.
-        Some(ToolNeed { tool: "mindrune", bait: Some("airrune") })
-    } else if method.starts_with("smith:") {
-        // Every anvil recipe carries a hammer (obtain way tools).
-        Some(ToolNeed { tool: "hammer", bait: None })
-    } else if method.starts_with("fire:") {
-        // Lighting logs takes a tinderbox in the pack.
-        Some(ToolNeed { tool: "tinderbox", bait: None })
-    } else if let Some(product) = method.strip_prefix("jewelry:") {
-        // The furnace casts gold in the product's mould (kept, never used up).
-        jewelry_mould(product).map(|mould| ToolNeed { tool: mould, bait: None })
-    } else if let Some(rune) = method.strip_prefix("runecraft:") {
-        // The altar ruins open to the rune's talisman.
-        rune_talisman(rune).map(|talisman| ToolNeed { tool: talisman, bait: None })
-    } else if let Some(product) = method.strip_prefix("craft:") {
-        // Leather is sewn with a needle and thread (thread wears out).
-        crate::mapping::is_leather_recipe(product).then_some(ToolNeed { tool: "needle", bait: Some("thread") })
-    } else {
-        None
+        return Some(ToolNeed { tools: vec!["shortbow".to_string()], consumables: vec!["bronze_arrow".to_string()] });
     }
+    if let Some(spell) = crate::method_way::magic_spell(method) {
+        // The runes of the spell the tranche casts (wind strike: one mind,
+        // one air), sized per cast by `sizing`.
+        let runes: Vec<String> = crate::method_way::spell_runes(&spell).into_iter().map(|(rune, _)| rune).collect();
+        return (!runes.is_empty()).then_some(ToolNeed { tools: Vec::new(), consumables: runes });
+    }
+    let (_, way) = crate::method_way::method_way(method)?;
+    let mut need = ToolNeed { tools: Vec::new(), consumables: Vec::new() };
+    for tool in &way.tools {
+        if worn_out(tool) {
+            need.consumables.push(tool.clone());
+        } else {
+            need.tools.push(tool.clone());
+        }
+    }
+    // A gather's inputs are its bait (one per catch); milking fills the
+    // bucket it carries in. Recipe inputs are the work itself (sized by
+    // `need_count`), never gear.
+    let consumed_gear = way.kind == lifescape_gamedata::obtain::WayKind::Gather || way.detail.starts_with("milk");
+    if consumed_gear {
+        need.consumables.extend(way.inputs.iter().map(|(name, _)| name.clone()));
+    }
+    (!need.tools.is_empty() || !need.consumables.is_empty()).then_some(need)
 }
 
-/// Mould a jewellery product is cast in (gold and gem rings, necklaces,
-/// amulets; the unstrung holy symbol `nostringstar`).
-pub fn jewelry_mould(product: &str) -> Option<&'static str> {
-    if product == "nostringstar" {
-        Some("holy_symbol_mould")
-    } else if product.contains("necklace") {
-        Some("necklace_mould")
-    } else if product.contains("amulet") {
-        Some("amulet_mould")
-    } else if product.contains("ring") {
-        Some("ring_mould")
-    } else {
-        None
-    }
+/// Mould a jewellery product is cast in (from its recipe's carried tools).
+pub fn jewelry_mould(product: &str) -> Option<String> {
+    required_tool(&format!("jewelry:{product}")).and_then(|need| need.tools.into_iter().find(|tool| tool.ends_with("_mould")))
 }
 
-/// Talisman whose altar crafts `rune` (F2P altars).
-pub fn rune_talisman(rune: &str) -> Option<&'static str> {
-    Some(match rune {
-        "airrune" => "air_talisman",
-        "mindrune" => "mind_talisman",
-        "waterrune" => "water_talisman",
-        "earthrune" => "earth_talisman",
-        "firerune" => "fire_talisman",
-        "bodyrune" => "body_talisman",
-        _ => return None,
-    })
+/// Talisman whose altar crafts `rune` (from its recipe's carried tools).
+pub fn rune_talisman(rune: &str) -> Option<String> {
+    required_tool(&format!("runecraft:{rune}")).and_then(|need| need.tools.into_iter().find(|tool| tool.ends_with("_talisman")))
 }
 
 /// Every name that satisfies `tool`: the whole `kit::tools` family
-/// (any carried pickaxe mines, any carried axe chops), the single
-/// name otherwise (a harpoon never catches sardines).
-pub fn tool_family(tool: &str) -> &'static [&'static str] {
-    match tool {
-        "bronze_pickaxe" => &[
-            "rune_pickaxe",
-            "adamant_pickaxe",
-            "mithril_pickaxe",
-            "steel_pickaxe",
-            "iron_pickaxe",
-            "bronze_pickaxe",
-        ],
-        "bronze_axe" => &[
-            "rune_axe",
-            "adamant_axe",
-            "mithril_axe",
-            "black_axe",
-            "steel_axe",
-            "iron_axe",
-            "bronze_axe",
-        ],
+/// (any carried pickaxe mines, any carried axe chops, any bow shoots),
+/// an elemental staff for its rune (the staff casts unlimited runes of
+/// its element), the single name otherwise (a harpoon never catches
+/// sardines).
+pub fn tool_family(tool: &str) -> Vec<String> {
+    let family: &[&str] = match tool {
+        "bronze_pickaxe" => &["rune_pickaxe", "adamant_pickaxe", "mithril_pickaxe", "steel_pickaxe", "iron_pickaxe", "bronze_pickaxe"],
+        "bronze_axe" => &["rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe"],
         "shortbow" => &["oak_longbow", "oak_shortbow", "longbow", "shortbow"],
         "bronze_arrow" => &["rune_arrow", "adamant_arrow", "mithril_arrow", "steel_arrow", "iron_arrow", "bronze_arrow"],
-        "mindrune" => &["mindrune"],
-        "airrune" => &["airrune"],
-        "shears" => &["shears"],
-        "bucket_empty" => &["bucket_empty"],
-        "net" => &["net"],
-        "fishing_rod" => &["fishing_rod"],
-        "fly_fishing_rod" => &["fly_fishing_rod"],
-        "lobster_pot" => &["lobster_pot"],
-        "harpoon" => &["harpoon"],
-        "fishing_bait" => &["fishing_bait"],
-        "feather" => &["feather"],
-        "hammer" => &["hammer"],
-        "tinderbox" => &["tinderbox"],
-        "needle" => &["needle"],
-        "thread" => &["thread"],
-        "ring_mould" => &["ring_mould"],
-        "necklace_mould" => &["necklace_mould"],
-        "amulet_mould" => &["amulet_mould"],
-        "holy_symbol_mould" => &["holy_symbol_mould"],
-        "air_talisman" => &["air_talisman"],
-        "mind_talisman" => &["mind_talisman"],
-        "water_talisman" => &["water_talisman"],
-        "earth_talisman" => &["earth_talisman"],
-        "fire_talisman" => &["fire_talisman"],
-        "body_talisman" => &["body_talisman"],
-        _ => &[],
+        "airrune" => &["airrune", "staff_of_air"],
+        "waterrune" => &["waterrune", "staff_of_water"],
+        "earthrune" => &["earthrune", "staff_of_earth"],
+        "firerune" => &["firerune", "staff_of_fire"],
+        _ => return vec![tool.to_string()],
+    };
+    family.iter().map(|name| name.to_string()).collect()
+}
+
+/// Units of `item` a bot holds for its work, counting its whole family
+/// (`count_of`: pack + bank + worn per name): a steel pickaxe meets a
+/// skeleton's `obtain bronze_pickaxe`, iron arrows meet bronze ones, and
+/// an elemental staff meets any number of its runes.
+pub fn family_held(item: &str, wanted: i64, count_of: &dyn Fn(&str) -> i64) -> i64 {
+    let mut held: i64 = 0;
+    for name in tool_family(item) {
+        let units = count_of(&name);
+        if units <= 0 {
+            continue;
+        }
+        if name.starts_with("staff_of_") && name != item {
+            return wanted.max(held);
+        }
+        held = held.saturating_add(units);
     }
+    held
 }
 
 pub fn tool_price(item: &str) -> i64 {
@@ -193,10 +157,7 @@ pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
     if crate::quests::missing_quest(method, None, ctx).is_some() {
         return false;
     }
-    match required_tool(method) {
-        None => true,
-        Some(need) => gear_ok(need.tool, ctx) && need.bait.is_none_or(|bait| gear_ok(bait, ctx)),
-    }
+    required_tool(method).is_none_or(|need| need.missing(ctx).is_none())
 }
 
 #[cfg(test)]
