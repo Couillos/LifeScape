@@ -661,7 +661,11 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
     }
     life.nodes.extend(fresh_nodes);
     let mut counter = max_id_number(life);
-    let fresh = replan_node(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter);
+    let live = match &life.nodes[index].kind {
+        NodeKind::ReachLevel { skill, .. } => Some(level_of(skill)),
+        _ => None,
+    };
+    let fresh = crate::replan::replan_node_from(&mut life.nodes[index], &ReplanCause::Blocked, &fresh_needs, &mut counter, live);
     let node = &mut life.nodes[index];
     node.method = None;
     for id in reused {

@@ -31,10 +31,8 @@ fn skill_tools(skill: &str) -> &'static [&'static str] {
 /// fight methods through the planner gate, productions through gamedata.
 fn method_needs(method: &str, tools: &mut Vec<String>, consumables: &mut Vec<String>) {
     if let Some(need) = lifescape_planner::required_tool(method) {
-        tools.push(need.tool.to_string());
-        if let Some(bait) = need.bait {
-            consumables.push(bait.to_string());
-        }
+        tools.extend(need.tools.iter().cloned());
+        consumables.extend(need.consumables.iter().cloned());
         return;
     }
     let Some((_, tail)) = method.split_once(['/', ':']) else { return };
@@ -49,12 +47,7 @@ fn method_needs(method: &str, tools: &mut Vec<String>, consumables: &mut Vec<Str
 /// Members satisfying a canonical tool, best first (the family itself,
 /// or the single name).
 fn family_of(tool: &str) -> Vec<String> {
-    let family = lifescape_planner::tools::tool_family(tool);
-    if family.is_empty() {
-        vec![tool.to_string()]
-    } else {
-        family.iter().map(|member| member.to_string()).collect()
-    }
+    lifescape_planner::tools::tool_family(tool)
 }
 
 /// Canonical tools and consumables the bot's work needs.

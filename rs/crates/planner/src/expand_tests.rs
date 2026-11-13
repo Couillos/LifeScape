@@ -263,14 +263,16 @@ fn tool_gate_drops_unworkable_tranches() {
     }
     // The table names rod plus bait for sardines, net alone for shrimp.
     let need = required_tool("gather:fishing/raw_sardine").expect("sardines need gear");
-    assert_eq!((need.tool, need.bait), ("fishing_rod", Some("fishing_bait")));
-    assert_eq!(required_tool("gather:fishing/raw_shrimp").expect("shrimp needs gear").tool, "net");
+    assert_eq!((need.tools, need.consumables), (vec!["fishing_rod".to_string()], vec!["fishing_bait".to_string()]));
+    assert_eq!(required_tool("gather:fishing/raw_shrimp").expect("shrimp needs gear").first(), "net");
     assert!(required_tool("fight:melee/cows").is_none(), "melee needs no gear");
     let bow = required_tool("fight:ranged/cows").expect("ranged needs a bow");
-    assert_eq!((bow.tool, bow.bait), ("shortbow", Some("bronze_arrow")));
+    assert_eq!((bow.tools, bow.consumables), (vec!["shortbow".to_string()], vec!["bronze_arrow".to_string()]));
     let runes = required_tool("fight:magic/cows").expect("magic needs runes");
-    assert_eq!((runes.tool, runes.bait), ("mindrune", Some("airrune")));
-    assert_eq!(required_tool("gather:sheep/wool").expect("shears").tool, "shears");
+    let mut consumed = runes.consumables.clone();
+    consumed.sort();
+    assert_eq!(consumed, vec!["airrune".to_string(), "mindrune".to_string()]);
+    assert_eq!(required_tool("gather:sheep/wool").expect("shears").first(), "shears");
 
     // Rod-less and broke: sardines unworkable. No substitute method
     // (rule 7): the node blocks typed on the rod, the brain files the

@@ -82,6 +82,31 @@ fn method_subject(method: &str) -> Option<&str> {
 /// node). An obtain node's input scales with its count (5 bronze bars =
 /// 5 copper + 5 tin). Tools and anything else come one at a time.
 pub fn need_count(node: &Node, need: &str) -> i64 {
+    need_count_from(node, need, None)
+}
+
+/// Level a reach tranche starts from: the live level when known, else
+/// the cut below its target (`tranches`).
+fn tranche_start(skill: &str, target: u8, live: Option<u8>) -> u8 {
+    if let Some(level) = live.filter(|level| *level >= 1) {
+        return level.min(target);
+    }
+    crate::tranches::tranches(skill, 1, target).into_iter().filter(|cut| *cut < target).max().unwrap_or(1)
+}
+
+/// `need_count` for a node whose skill stands at `live` (the brain's live
+/// level): a reach tranche asks what the rest of the tranche burns — XP
+/// still to earn divided by the XP one action pays, times the units each
+/// action consumes (`sizing`: 180 feathers for trout 20→30, every shot an
+/// arrow, the spell's runes per cast) —, never one unit nor one load.
+pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
+    if let NodeKind::ReachLevel { skill, level } = &node.kind {
+        let method = node.method.clone().or_else(|| node.alternatives.first().map(|alt| alt.method.clone())).unwrap_or_default();
+        let from = tranche_start(skill, *level, live);
+        if let Some(units) = crate::sizing::tranche_need(&method, from, *level, need) {
+            return units.max(1);
+        }
+    }
     let (product, units) = match &node.kind {
         NodeKind::ObtainItems { item, count } => (item.clone(), Some((*count).max(1))),
         _ => {
@@ -133,12 +158,17 @@ pub fn need_count(node: &Node, need: &str) -> i64 {
 /// `ready` (retry with a new method) or stays `blocked` until its deps
 /// land; `failed` with no alternative abandons it.
 pub fn replan_node(node: &mut Node, cause: &ReplanCause, missing: &[String], counter: &mut usize) -> Vec<Node> {
+    replan_node_from(node, cause, missing, counter, None)
+}
+
+/// `replan_node` with the node's skill at its live level (`need_count_from`).
+pub fn replan_node_from(node: &mut Node, cause: &ReplanCause, missing: &[String], counter: &mut usize, live: Option<u8>) -> Vec<Node> {
     match cause {
         ReplanCause::Blocked => {
             let mut fresh = Vec::new();
             for need in missing {
                 *counter += 1;
-                let count = need_count(node, need);
+                let count = need_count_from(node, need, live);
                 let mut sub = Node::new(
                     &format!("n{}", *counter),
                     NodeKind::ObtainItems { item: need.clone(), count },
@@ -266,10 +296,15 @@ mod tests {
             node.method = Some(method.to_string());
             node
         };
-        assert_eq!(super::need_count(&reach("cook/raw_shrimp"), "raw_shrimp"), super::INPUT_BATCH, "the cook's own input");
-        assert_eq!(super::need_count(&reach("fire:logs"), "logs"), super::INPUT_BATCH);
+        // Audit 2026-11-13 (A9): a reach tranche asks what the rest of the
+        // tranche burns (cooking 10→20 shrimps: 30 XP each), never a load.
+        let shrimps = crate::sizing::tranche_need("cook/raw_shrimp", 10, 20, "raw_shrimp").expect("shrimp xp");
+        assert_eq!(super::need_count(&reach("cook/raw_shrimp"), "raw_shrimp"), shrimps, "the cook's own input, tranche-sized");
+        assert_eq!(super::need_count_from(&reach("cook/raw_shrimp"), "raw_shrimp", Some(15)), crate::sizing::tranche_need("cook/raw_shrimp", 15, 20, "raw_shrimp").expect("xp"), "from the live level");
+        assert!(super::need_count(&reach("fire:logs"), "logs") > super::INPUT_BATCH);
         assert_eq!(super::need_count(&reach("fire:logs"), "tinderbox"), 1, "a tool comes alone");
-        assert_eq!(super::need_count(&reach("smelt:bronze_bar"), "copper_ore"), 13, "copper + tin share the pack");
+        let copper = super::need_count(&reach("smelt:bronze_bar"), "copper_ore");
+        assert_eq!(copper, super::need_count(&reach("smelt:bronze_bar"), "tin_ore"), "copper and tin pair up");
         let bars = Node::new("n8", NodeKind::ObtainItems { item: "bronze_bar".to_string(), count: 5 }, Vec::new(), 5);
         assert_eq!(super::need_count(&bars, "tin_ore"), 5, "an obtain scales its inputs");
         // The melee ladder blocks on food: a full load, never one shrimp.
@@ -278,7 +313,7 @@ mod tests {
         assert_eq!(super::need_count(&reach("fight:melee/ladder"), "bronze_sword"), 1, "gear still comes alone");
         let mut cook = reach("cook/raw_shrimp");
         let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);
-        assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == 27), "{:?}", fresh[0].kind);
+        assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == shrimps), "{:?}", fresh[0].kind);
     }
 
     #[test]

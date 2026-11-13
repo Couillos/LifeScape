@@ -446,9 +446,7 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
                     Some(method) => node.method = Some(method),
                     None => {
                         if let Some(first) = node.alternatives.first() {
-                            let missing = required_tool(&first.method).map(|need| {
-                                if gear_ok(need.tool, ctx) { need.bait.unwrap_or(need.tool) } else { need.tool }
-                            });
+                            let missing = required_tool(&first.method).map(|need| need.missing(ctx).unwrap_or_else(|| need.first().to_string()));
                             node.method = None;
                             node.status = match missing {
                                 Some(tool) => NodeStatus::Blocked { reason: format!("missing:{tool}") },

@@ -216,14 +216,29 @@ fn recipe_frame(kind: &str) -> (Option<&'static str>, &'static [&'static str], &
     }
 }
 
+/// Recipe inputs that are carried, never consumed: jewellery moulds and
+/// runecraft talismans (server `jewellery.rs2`, `runecraft.rs2`).
+fn carried_tool(name: &str) -> bool {
+    name.ends_with("_mould") || name.ends_with("_talisman")
+}
+
 fn make_way(kind: &str, row: &str, level: i64, inputs: Vec<(String, i64)>, station: Option<String>) -> Way {
     let (default_station, tools, skill) = recipe_frame(kind);
     let mut way = Way::new(WayKind::Make, format!("{kind} {row}"));
     way.skill = Some((skill.to_string(), level.max(1)));
-    // Tools ride the input list in `extra_recipes` (tinderbox): keep
-    // consumed inputs and carried tools apart.
-    way.inputs = inputs.into_iter().filter(|(name, _)| !tools.contains(&name.as_str())).collect();
+    // Tools ride the input list in `extra_recipes` (tinderbox, the
+    // jewellery mould, the altar's talisman): keep consumed inputs and
+    // carried tools apart. A mould casts again and again; a talisman opens
+    // the ruins and stays in the pack (`runecraft.rs2` never deletes it).
+    let (kept, consumed): (Vec<(String, i64)>, Vec<(String, i64)>) =
+        inputs.into_iter().partition(|(name, _)| tools.contains(&name.as_str()) || carried_tool(name));
+    way.inputs = consumed;
     way.tools = tools.iter().map(|tool| tool.to_string()).collect();
+    for (name, _) in kept {
+        if !way.tools.contains(&name) {
+            way.tools.push(name);
+        }
+    }
     way.success = crate::recipes::success_odds(row);
     if let Some(station) = station.as_deref().or(default_station) {
         way.sites = station_sites(station);

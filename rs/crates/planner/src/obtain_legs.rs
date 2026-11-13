@@ -9,13 +9,21 @@ use lifescape_gamedata::obtain::{ways, WayKind};
 
 use crate::model::{Alternative, Node, NodeKind};
 
-/// One production leg: the method and the skill level it needs.
+/// One production leg: the method, the skill level it needs and what the
+/// way carries from the server data (tools, quest, sites): the brain plans
+/// every dependency from it, the script only executes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductionLeg {
     pub method: String,
     pub skill: Option<(String, i64)>,
     /// Objects the leg consumes per unit (recursive obtains when absent).
     pub inputs: Vec<(String, i64)>,
+    /// Objects carried, never consumed (hammer, mould, talisman, rod).
+    pub tools: Vec<String>,
+    /// F2P quest the way needs (planner key, `runemysteries`).
+    pub quest: Option<String>,
+    /// F2P sites (x, z, level) where the way happens; empty = anywhere.
+    pub sites: Vec<(i64, i64, i64)>,
 }
 
 /// Method string for one production way of `item`, when a script runs it.
@@ -84,7 +92,8 @@ pub fn production_legs(item: &str) -> Vec<ProductionLeg> {
             continue;
         }
         let inputs = if farmable_drop { Vec::new() } else { way.inputs.clone() };
-        out.push(ProductionLeg { method, skill: way.skill.clone(), inputs });
+        let quest = way.quest.as_deref().map(|quest| quest.strip_prefix("quest_").unwrap_or(quest).to_string());
+        out.push(ProductionLeg { method, skill: way.skill.clone(), inputs, tools: way.tools.clone(), quest, sites: way.sites.clone() });
     }
     out
 }

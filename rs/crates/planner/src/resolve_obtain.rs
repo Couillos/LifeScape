@@ -27,7 +27,7 @@ use crate::expand::ReadyCtx;
 use crate::model::{Alternative, Node, NodeStatus};
 use crate::obtain_legs::{production_legs, tradeable_f2p};
 use crate::quests::missing_quest;
-use crate::tools::{gear_ok, method_feasible, required_tool};
+use crate::tools::{method_feasible, required_tool};
 
 /// Live level of `skill` (unknown = not gated: offline contexts).
 fn level_of(ctx: &ReadyCtx, skill: &str) -> Option<u8> {
@@ -118,9 +118,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             if tool_gap.is_none() {
                 // The tool first; with the tool at hand, the bait it burns
                 // (feathers for trout, fishing bait for pike).
-                tool_gap = required_tool(method).map(|need| {
-                    if gear_ok(need.tool, ctx) { need.bait.unwrap_or(need.tool).to_string() } else { need.tool.to_string() }
-                });
+                tool_gap = required_tool(method).map(|need| need.missing(ctx).unwrap_or_else(|| need.first().to_string()));
             }
             continue;
         }
@@ -298,7 +296,7 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
     node.method = ranked.iter().find(|alt| method_feasible(&alt.method, ctx)).map(|alt| alt.method.clone());
     if node.method.is_none() {
         if let Some(need) = ranked.first().and_then(|first| required_tool(&first.method)) {
-            node.status = NodeStatus::Blocked { reason: format!("missing:{}", need.tool) };
+            node.status = NodeStatus::Blocked { reason: format!("missing:{}", need.missing(ctx).unwrap_or_else(|| need.first().to_string())) };
         }
     }
     node.alternatives = ranked;

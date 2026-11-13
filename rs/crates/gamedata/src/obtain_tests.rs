@@ -181,3 +181,18 @@ fn fishing_bait_and_essence_quest_are_way_requirements() {
     let essence = ways("blankrune").into_iter().find(|way| way.kind == WayKind::Gather).expect("essence is mined");
     assert_eq!(essence.quest.as_deref(), Some("quest_runemysteries"));
 }
+
+/// Moulds and talismans are carried, never consumed (`jewellery.rs2`,
+/// `runecraft.rs2`): the way lists them as tools, the inputs keep only
+/// what one action burns (audit 2026-11-13: moulds sized as inputs).
+#[test]
+fn moulds_and_talismans_are_tools() {
+    let ring = ways("gold_ring").into_iter().find(|way| way.kind == WayKind::Make).expect("gold ring recipe");
+    assert_eq!(ring.inputs, vec![("gold_bar".to_string(), 1)]);
+    assert!(ring.tools.contains(&"ring_mould".to_string()), "{:?}", ring.tools);
+    let air = ways("airrune").into_iter().find(|way| way.kind == WayKind::Make).expect("air rune recipe");
+    assert_eq!(air.inputs, vec![("blankrune".to_string(), 1)]);
+    assert_eq!(air.tools, vec!["air_talisman".to_string()]);
+    let sapphire = ways("sapphire").into_iter().find(|way| way.kind == WayKind::Make).expect("gem cutting");
+    assert_eq!(sapphire.tools, vec!["chisel".to_string()]);
+}

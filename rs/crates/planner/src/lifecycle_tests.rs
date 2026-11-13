@@ -269,7 +269,9 @@ fn progress_clears_the_block_count() {
         NodeKind::ObtainItems { item, count } if item == "raw_shrimp" => Some(*count),
         _ => None,
     });
-    assert_eq!(batch, Some(crate::replan::INPUT_BATCH), "the block sized its batch from the cook method");
+    // Audit 2026-11-13 (A9): the rest of the tranche (live level 1 → 30
+    // at 30 XP a shrimp), never one inventory load.
+    assert_eq!(batch, crate::sizing::tranche_need("cook/raw_shrimp", 1, 30, "raw_shrimp"), "the block sized its batch from the cook method");
     assert_eq!(life.nodes[0].blocks, 1);
     assert_eq!(life.nodes[0].method, None, "the method clears once the sub-task is filed");
     super::record_progress(&mut life, 0, 5);
