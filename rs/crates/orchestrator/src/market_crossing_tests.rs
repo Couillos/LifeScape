@@ -12,7 +12,8 @@
 use lifescape_json::{object, str_value, Value};
 
 use crate::market_seed::CatalogueItem;
-use crate::market_service::{ledger_holdings, MarketService};
+use crate::market_audit::ledger_holdings;
+use crate::market_service::MarketService;
 
 const RAW_SHRIMP: i64 = 317;
 const LOGS: i64 = 1511;

@@ -111,6 +111,11 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
             let mut eta = EtaCache::new();
             let mut meter = TickMeter::new();
             let mut unposed: Vec<ConvocationPose> = Vec::new();
+            // Audit every AUDIT_EVERY rounds (~60 s), first round included:
+            // the books only ever show lots the account can hand over.
+            const AUDIT_EVERY: u64 = 6;
+            let mut round: u64 = 0;
+            let save_dir = lifescape_sdk::save::default_save_dir();
             loop {
                 std::thread::sleep(Duration::from_secs(CONVENE_EVERY_SECS));
                 let parties = orch.market_live_positions();
@@ -128,6 +133,13 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                 // discipline as `market_live_positions`).
                 let jobs: Vec<Arc<Job>> = orch.jobs.lock().unwrap().values().cloned().collect();
                 service.sync_ledger_from_jobs(&jobs);
+                if round % AUDIT_EVERY == 0 {
+                    let cancelled = service.audit_round(&jobs, &save_dir);
+                    if cancelled > 0 {
+                        eprintln!("market-audit: {cancelled} uncovered order(s) cancelled");
+                    }
+                }
+                round += 1;
                 crate::market_reprice::reprice_round(&service, wall, tick_ms as f64);
                 for pose in convene_round(&service, nav_up, &parties, &mut eta, tick_ms) {
                     eprintln!("market-convene: pose {} {:?}", pose.account, pose.args);

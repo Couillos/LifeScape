@@ -34,6 +34,7 @@ pub mod market_eta;
 pub mod market_daemon;
 pub mod market_reprice;
 pub mod market_service;
+pub mod market_audit;
 pub mod market_seed;
 #[cfg(test)]
 #[path = "market_service_tests.rs"]

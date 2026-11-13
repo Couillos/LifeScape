@@ -20,7 +20,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{check_coverage, check_price, reference_price, Order};
-use crate::jobs::Job;
 use crate::market_seed::CatalogueItem;
 use lifescape_market::{Book, Deal, Side};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
@@ -88,34 +87,6 @@ impl Ledger {
             }
         }
     }
-}
-
-/// Coins and per-object stock of one live snapshot (pack, bank, worn:
-/// numeric ids). The bank row is the last known bank (the heartbeat keeps
-/// it once closed): banked coins fund bids, banked stock covers asks.
-pub(crate) fn ledger_holdings(live: &Value, coins_id: i64) -> (i64, Vec<(i64, i64)>) {
-    let mut coins = 0i64;
-    let mut stock: HashMap<i64, i64> = HashMap::new();
-    for key in ["inv", "bank", "worn"] {
-        for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
-            if !matches!(entry, Value::Obj(_)) {
-                continue;
-            }
-            let id = entry.get("id").as_i64().unwrap_or(-1);
-            let count = entry.get("count").as_i64().unwrap_or(1).max(0);
-            if id < 0 {
-                continue;
-            }
-            if id == coins_id {
-                coins += count;
-            } else {
-                *stock.entry(id).or_insert(0) += count;
-            }
-        }
-    }
-    let mut stock: Vec<(i64, i64)> = stock.into_iter().collect();
-    stock.sort();
-    (coins, stock)
 }
 
 /// Recent print kept for the WS live tail (no cross-item store query).
@@ -287,34 +258,6 @@ impl MarketService {
             rows.len(),
             self.lock_engine().books.len()
         );
-    }
-
-    /// Funds the ledger from the last pushed holdings (L11): the
-    /// coverage check in `op_place` runs against the ledger, but nothing
-    /// ever credited live bots, so every live order failed coverage. Each
-    /// convene round mirrors inv+bank+worn item counts (numeric ids from
-    /// the snapshot) into the ledger; match-time settlement still moves
-    /// it between rounds. Stale (>30 s) or missing snapshots skip: no
-    /// funding without a live witness. SET semantics over-commit window
-    /// documented on `sync_account`.
-    pub(crate) fn sync_ledger_from_jobs(&self, jobs: &[std::sync::Arc<Job>]) {
-        let coins_id = lifescape_gamedata::objs_by_name("Coins")
-            .into_iter()
-            .next()
-            .map(|entry| entry.obj_id as i64)
-            .unwrap_or(995);
-        let now = crate::jobs::now_secs();
-        for job in jobs {
-            let live = match job.inner.try_lock().map(|inner| inner.live.clone()) {
-                Ok(Some(live)) => live,
-                _ => continue,
-            };
-            if !live.get("updated").as_f64().is_some_and(|at| now - at < 30.0) {
-                continue;
-            }
-            let (coins, stock) = ledger_holdings(&live, coins_id);
-            self.lock_engine().ledger.sync_account(&job.account, coins, &stock);
-        }
     }
 
     pub(crate) fn lock_store(&self) -> std::sync::MutexGuard<'_, Store> {
