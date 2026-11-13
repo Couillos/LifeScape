@@ -327,6 +327,14 @@ impl CycleState {
         self.units
     }
 
+    /// `start` plus the `--want` baseline: the entry for loops that poll
+    /// `poll_stop` themselves (combat styles).
+    pub fn begin(bot: &Bot, spec: &TaskSpec) -> CycleState {
+        let mut state = CycleState::start(bot);
+        state.note_want_base(bot, spec);
+        state
+    }
+
     /// Record the `--want` baseline (call once at run start).
     pub fn note_want_base(&mut self, bot: &Bot, spec: &TaskSpec) {
         self.want_base = spec.targets.want_item.as_deref().map(|item| held_total(bot, item));

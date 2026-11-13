@@ -144,3 +144,14 @@ d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
 (`fly_fishing_rod`, `feather`, pack + banque connue comptés). Aucun
 achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
 hache, cisailles) : c'est la jambe d'obtention du brain.
+
+Postes et combat : niveau manquant = `blocked{level:...}` (plus de
+Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
+brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat
+à tarte, bol), `ground_pickup <objet>` au site, `bury_loot [os]` depuis la
+banque. Un spot de combat nommé n'est jamais remplacé après une mort
+(banque puis erreur de danger) et un spot derrière le péage sans `toll`
+donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
+accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
+terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
+combat (`CycleState::begin`).

@@ -24,7 +24,7 @@ fn run_ladder(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, no_bank: bool) 
         crate::kit::gear::prepare_at_bank(bot)?;
     }
     let mut tally = crate::kit::survival::DeathTally::fresh();
-    let mut state = CycleState::start(bot);
+    let mut state = CycleState::begin(bot, &spec);
     loop {
         if let Some(stop) = poll_stop(bot, &state, spec) {
             return exit_code(stop);
@@ -106,7 +106,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // order. Unpaid and across the toll fence, it re-picks walkable
     // instead of ending the run idle; explicit picks keep the Usage.
     let auto = spots.is_empty();
-    let mut state = CycleState::start(bot);
+    let mut state = CycleState::begin(bot, &spec);
     while !queue.is_empty() {
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);

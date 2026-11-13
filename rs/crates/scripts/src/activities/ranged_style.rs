@@ -117,7 +117,7 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut queue = picked;
     let mut tally = crate::kit::survival::DeathTally::fresh();
     let auto = spots.is_empty();
-    let mut state = CycleState::start(bot);
+    let mut state = CycleState::begin(bot, &spec);
     while !queue.is_empty() {
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);
