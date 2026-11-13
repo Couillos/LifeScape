@@ -42,16 +42,17 @@ pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, ra
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle::{complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_progress, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 pub use bans::{ban_entry, ban_states, banned_skills, stuck_cause, unban_entry, BanState, StuckCause, SKILL_BAN_TICKS, UNBAN_TAG};
-pub use gear_ladder::{gear_move, next_gear_step, next_ready, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
+pub use gear_ladder::{gear_move, next_gear_step, next_ready, withdraw_dead_steps, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
 pub use profit::{chain_profit, ChainProfit, ProfitError};
 pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_skills, next_goal, NoGoal, DONE_TAG, STUCK_TAG, TRAINABLE};
 pub use ambition::{
-    achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, goal_for_milestone, mark_drawn, may_change, new_ambition, next_milestone,
+    achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
+    new_ambition_extended, next_milestone, open_count, AmbitionError, BotNow,
     on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
     AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS, MERCHANT};
-pub use ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, optional_change, Assignment, FleetBot};
+pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, optional_change, Assignment, FleetBot};
 pub use mapping::map_method;
 pub use model::{
     Alternative, Archetype, Engagement, GoalKind, HistoryEntry, Life, Node, NodeKind, NodeStatus,

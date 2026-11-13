@@ -216,7 +216,13 @@ combattant).
   porté) dans le premier emplacement que ses niveaux ouvrent (attaque
   pour l'arme, défense pour l'armure, verrou de quête → famille
   suivante) ; jamais la meilleure pièce absolue.
-- Plafond = `GEAR_SHARE_PCT` = 50 % du portefeuille (sac + banque) :
+- Plafond = `GEAR_SHARE_PCT` = 50 % du portefeuille LIBRE (sac + banque
+  moins ce qu'engagent les autres achats au repos du bot, prix × reste,
+  ouverts ou partiellement appariés : `brain_gear::free_coins`) ; même
+  règle pour les envies (25 % par outil) et les achats du graphe (le
+  `have_coins` qu'ils déposent rajoute l'engagé à la cible) : chaque plafond
+  se prend sur ce que les autres laissent, plus jamais sur tout le
+  portefeuille à chaque fois (revue 2026-11-13) ;
   un seul palier à la fois, il monte avec les pièces ; l'autre moitié
   reste aux intrants, outils et achats du graphe.
 - Décision (`gear_move`) : pièce possédée non portée → nœud
@@ -229,6 +235,11 @@ combattant).
   de sites) ; aucun vendeur → offre permanente D-B (`keep_bid`) à la
   référence, qui monte jusqu'au plafond pendant que le bot continue son
   but.
+- Un palier mort (un nœud de sa chaîne abandonné) est retiré à CHAQUE
+  passe de lancement, avant `graph_state`, quel que soit le style du but
+  (`gear_ladder::withdraw_dead_steps`) : jamais un but clos `stuck` ni une
+  compétence bannie pour une cause d'équipement. Un but qui quitte la
+  mêlée annule ses offres d'échelle (ses envies distance/magie restent).
 - Un palier dont le vendeur a disparu au moment de résoudre (et
   portefeuille suffisant), ou abandonné, est retiré du graphe
   (`lifecycle::withdraw_gear_step`, historique `gear_withdrawn`, ids

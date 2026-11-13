@@ -201,6 +201,11 @@ pub struct DemandItem {
     /// Bid value weighted by age (`market_demand`): relative only.
     pub weight: f64,
     pub unmet: i64,
+    /// Per-unit margin of making it at the best bid against its inputs at
+    /// their market reference (`profit::chain_profit`); `None` when no
+    /// production way makes it or no price is known. Only a positive
+    /// margin makes a demand milestone.
+    pub margin: Option<f64>,
 }
 
 /// Demand weight of one kind, with the product that drives it.

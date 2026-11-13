@@ -159,6 +159,21 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
     (kind.to_string(), top.map(|item| format!("demand:{item}")).unwrap_or_else(|| "random".to_string()))
 }
 
+/// Coverage repair (review 2026-11-13): an open gap (a group no fleet
+/// ambition holds, e.g. its holder was closed or left the role) is filled
+/// by a bot whose own group another bot also holds (`redundant`) and whose
+/// last change is `AMBITION_CHANGE_TICKS` old (the user's rule: one change
+/// per 72 000 ticks). Checked by the brain on every pass, not only after
+/// a milestone. `None`: no gap, sole holder, throttled, or no gap this bot
+/// may hold (Iron and the merchant).
+pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
+    if gaps.is_empty() || ambition.kind == GENERALIST || !redundant || !may_change(ambition, ticks_since) {
+        return None;
+    }
+    let (kind, why) = draw_kind(bot, gaps, demand, &[ambition.kind.as_str()]);
+    why.starts_with("coverage:").then_some((kind, why))
+}
+
 /// Optional change after a completed milestone (never mandatory): only
 /// when `AMBITION_CHANGE_TICKS` passed since the last change. A bot whose
 /// primary group another bot also covers (`redundant`) fills an open gap
@@ -169,13 +184,10 @@ pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], red
     if ambition.kind == GENERALIST || !may_change(ambition, ticks_since) || !redundant {
         return None;
     }
-    let current = ambition.kind.as_str();
-    if !gaps.is_empty() {
-        let (kind, why) = draw_kind(bot, gaps, demand, &[current]);
-        if why.starts_with("coverage:") {
-            return Some((kind, why));
-        }
+    if let Some(filled) = coverage_repair(ambition, bot, gaps, redundant, demand, ticks_since) {
+        return Some(filled);
     }
+    let current = ambition.kind.as_str();
     let done = ambition.milestones.iter().filter(|stone| stone.status == crate::ambition::MilestoneStatus::Done).count();
     if mix(bot.seed, &format!("change{done}")) % 4 != 0 {
         return None;

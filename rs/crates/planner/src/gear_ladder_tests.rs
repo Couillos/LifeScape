@@ -161,3 +161,24 @@ fn owned_pieces_kept_and_worn() {
     assert_eq!(unworn_upgrade(&levels, &have, &owned(&["bronze_scimitar"])).as_deref(), Some("iron_scimitar"));
     assert_eq!(unworn_upgrade(&levels, &have, &owned(&["iron_scimitar", "bronze_platebody"])), None);
 }
+
+/// Review 2026-11-13 (finding 2): an abandoned ladder step kept a done
+/// goal's graph Stuck (the brain withdrew it once a minute only), so the
+/// goal closed stuck and its skill was banned for a gear cause. The
+/// withdrawal is pure and runs before every `graph_state`.
+#[test]
+fn a_dead_gear_step_never_strands_the_goal() {
+    let mut tranche = Node::new("n1", NodeKind::ReachLevel { skill: "woodcutting".to_string(), level: 20 }, Vec::new(), 20);
+    tranche.status = NodeStatus::Done;
+    let mut life = life_with(vec![tranche]);
+    let ids = insert_gear_step(&mut life, Some("iron_scimitar"), "melee");
+    normalize(&mut life);
+    let obtain = life.nodes.iter().position(|node| node.id == ids[0]).expect("obtain");
+    crate::lifecycle::record_contract_error(&mut life, obtain, "market bid refused");
+    normalize(&mut life);
+    assert!(matches!(crate::lifecycle::graph_state(&life), crate::lifecycle::GraphState::Stuck { .. }), "a dead step strands a done goal");
+    let removed = withdraw_dead_steps(&mut life);
+    assert_eq!(removed.len(), 2, "{removed:?}");
+    assert_eq!(crate::lifecycle::graph_state(&life), crate::lifecycle::GraphState::Finished, "the goal closes done");
+    assert!(withdraw_dead_steps(&mut life).is_empty(), "idempotent");
+}

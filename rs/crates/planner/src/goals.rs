@@ -11,7 +11,7 @@
 //! brain assigns one first, never a silent fallback.
 
 use crate::expand::expand_goal_from;
-use crate::model::{GoalKind, HistoryEntry, Life, Node, Profile};
+use crate::model::{GoalKind, HistoryEntry, Life, Node, NodeKind, Profile};
 
 /// Skills the socle trains end to end (gather, fight, cook, fire). The
 /// order breaks ties before the seed does.
@@ -142,7 +142,10 @@ pub fn next_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, cou
 /// Replace the life's goal and append the new goal's nodes, renumbered
 /// past every existing id (old nodes stay as the record of past goals).
 /// Climbs start at the live level (`level_of`): no tranche already held.
-pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8) {
+/// A production quota counts from the stock held now (`held_of`: pack,
+/// bank, worn): its obtain node asks `held + count`, so stock the bot
+/// already had never closes it without producing (review 2026-11-13).
+pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8, held_of: &dyn Fn(&str) -> i64) {
     let offset = life
         .nodes
         .iter()
@@ -161,6 +164,14 @@ pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of:
         .map(|mut node| {
             node.id = renumber(&node.id);
             node.deps = node.deps.iter().map(|dep| renumber(dep)).collect();
+            if let (GoalKind::Produce { item: quota_item, .. }, NodeKind::ObtainItems { item, count }) = (&goal, &mut node.kind) {
+                let baseline = held_of(item).max(0);
+                if item == quota_item && baseline > 0 {
+                    *count = count.saturating_add(baseline);
+                    node.progress_target = *count;
+                    node.progress_current = baseline;
+                }
+            }
             node
         })
         .collect();
@@ -173,7 +184,7 @@ pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of:
 mod tests {
     use super::{append_goal, draw_goal, goal_closed, next_goal, DONE_TAG, STUCK_TAG};
     use crate::lifecycle::{graph_state, normalize, GraphState};
-    use crate::model::{Archetype, GoalKind, HistoryEntry, Life, NodeStatus, Profile};
+    use crate::model::{Archetype, GoalKind, HistoryEntry, Life, NodeKind, NodeStatus, Profile};
 
     fn levels<'pairs>(pairs: &'pairs [(&'pairs str, u8)]) -> impl Fn(&str) -> u8 + 'pairs {
         move |skill| pairs.iter().find(|(name, _)| *name == skill).map(|(_, level)| *level).unwrap_or(1)
@@ -208,7 +219,15 @@ mod tests {
             engagement: None,
             active: None,
             history,
-            ambition: crate::ambition::new_ambition(crate::ambition::GENERALIST, "operator", &|_| 1, 0, &[], crate::ambition::Stamp { tick: 0, secs: 0 }),
+            ambition: crate::ambition::new_ambition(
+                crate::ambition::GENERALIST,
+                "operator",
+                &crate::ambition::BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 },
+                0,
+                &[],
+                crate::ambition::Stamp { tick: 0, secs: 0 },
+            )
+            .ok(),
             goal_origin: None,
         }
     }
@@ -271,12 +290,29 @@ mod tests {
             node.status = NodeStatus::Done;
         }
         assert_eq!(graph_state(&life), GraphState::Finished);
-        append_goal(&mut life, GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 10 }, &profile, &|_| 1);
+        append_goal(&mut life, GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 10 }, &profile, &|_| 1, &|_| 0);
         normalize(&mut life);
         assert_eq!(graph_state(&life), GraphState::Launchable);
         let mut ids: Vec<&str> = life.nodes.iter().map(|node| node.id.as_str()).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), life.nodes.len(), "ids stay unique");
+    }
+
+    /// Review 2026-11-13 (finding 1): a production quota counts what the
+    /// bot makes from the draw on, never the stock it already holds (a
+    /// cook holding 100 shrimp closed a 50-shrimp quota without cooking).
+    #[test]
+    fn a_produce_quota_counts_from_the_stock_held_at_draw() {
+        let profile = Profile::new(false, 0.5, 0.5, 3, Archetype::Producer);
+        let mut life = life_with(GoalKind::MakeMoney, Vec::new());
+        let quota = GoalKind::Produce { item: "shrimp".to_string(), count: 50 };
+        append_goal(&mut life, quota.clone(), &profile, &|_| 1, &|item| if item == "shrimp" { 100 } else { 0 });
+        let node = life.nodes.last().expect("the quota node");
+        assert!(matches!(&node.kind, NodeKind::ObtainItems { item, count: 150 } if item == "shrimp"), "{:?}", node.kind);
+        assert_eq!((node.progress_current, node.progress_target), (100, 150));
+        assert_eq!(life.goal, quota, "the goal keeps its quota");
+        append_goal(&mut life, GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 10 }, &profile, &|_| 1, &|_| 500);
+        assert!(life.nodes.iter().all(|node| !matches!(node.kind, NodeKind::ReachLevel { level, .. } if level != 10)), "other goals untouched");
     }
 }

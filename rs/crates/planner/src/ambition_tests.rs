@@ -3,7 +3,7 @@
 
 use super::{
     achieved, goal_for_milestone, mark_drawn, may_change, new_ambition, next_milestone, on_goal_closed, refresh, revise,
-    CloseOutcome, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
+    BotNow, CloseOutcome, MilestoneStatus, Stamp, Target, AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };
 use crate::ambition_catalog::{fit, kind_weights, products, spec, DemandItem, Then, GROUPS, MERCHANT, SPECS};
 use crate::ambition_fleet::{assign_fleet, coverage_gaps, draw_kind, optional_change, FleetBot};
@@ -39,7 +39,7 @@ fn life_with(kind: &str) -> Life {
         engagement: None,
         active: None,
         history: Vec::new(),
-        ambition: new_ambition(kind, "random", &|_| 1, 7, &[], ZERO),
+        ambition: new_ambition(kind, "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], ZERO).ok(),
         goal_origin: None,
     }
 }
@@ -71,7 +71,7 @@ fn beyond_coverage_draws_vary_and_follow_demand() {
         seen.insert(draw_kind(&bot("x", seed * 104_729 + 3, &[]), &[], &[], &[]).0);
     }
     assert!(seen.len() >= 10, "random spread over the catalogue, got {seen:?}");
-    let demand = kind_weights(&[DemandItem { item: "bronze_platebody".to_string(), weight: 5000.0, unmet: 20 }], &[]);
+    let demand = kind_weights(&[DemandItem { item: "bronze_platebody".to_string(), weight: 5000.0, unmet: 20, margin: Some(10.0) }], &[]);
     let smith = demand.iter().find(|row| row.kind == "smith").expect("smith weight");
     assert!(smith.weight >= 2.0 && smith.top_item.as_deref() == Some("bronze_platebody"), "{smith:?}");
     let smiths = (0..400u64).filter(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &demand, &[]).0 == "smith").count();
@@ -127,7 +127,7 @@ fn existing_levels_tilt_but_never_fix_the_draw() {
     assert_eq!(assigned_to("frank_lane"), Some(("woodcutter".to_string(), "coverage:woodcutting".to_string())));
     assert_eq!(assigned_to("smithy").map(|(kind, _)| kind), Some("smith".to_string()));
     // Milestones skip the rungs a high-level bot is far past.
-    let ambition = new_ambition("woodcutter", "coverage:woodcutting", &|skill| frank.level(skill), 11, &[], ZERO).expect("woodcutter");
+    let ambition = new_ambition("woodcutter", "coverage:woodcutting", &BotNow { level_of: &|skill| frank.level(skill), coins: 0, held: &|_| 0 }, 11, &[], ZERO).expect("woodcutter");
     let first = &ambition.milestones[0];
     assert!(matches!(&first.target, Target::Produce { item, .. } if item == "maple_logs" || item == "willow_logs"), "{first:?}");
 }
@@ -172,7 +172,7 @@ fn change_throttle_holds_72000_ticks() {
     assert_eq!(optional_change(&ambition, &myself, &gaps, false, &[], &late), None, "sole holder keeps its group");
     let (kind, why) = optional_change(&ambition, &myself, &gaps, true, &[], &late).expect("a redundant fisher fills the gap");
     assert_eq!((kind.as_str(), why.as_str()), ("smith", "coverage:smithing"));
-    let next = new_ambition(&kind, &why, &|_| 1, 7, &[], Stamp { tick: 80_000, secs: 5_000 }).expect("smith");
+    let next = new_ambition(&kind, &why, &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], Stamp { tick: 80_000, secs: 5_000 }).expect("smith");
     revise(&mut life, next, "change:coverage:smithing", Stamp { tick: 80_000, secs: 5_000 });
     let revised = life.ambition.as_ref().expect("revised");
     assert_eq!(revised.revisions.len(), 1);
@@ -225,7 +225,7 @@ fn banned_skills_are_skipped_and_goals_follow_milestones() {
 /// run to its end is achieved; merchants chase coins.
 #[test]
 fn refresh_materializes_and_achieves() {
-    let mut ambition = new_ambition("miner", "random", &|_| 1, 3, &[], ZERO).expect("miner");
+    let mut ambition = new_ambition("miner", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("miner");
     // Whole rungs materialize (level + quota): at least three open.
     assert!(ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done).count() >= 3);
     let maxed = |_: &str| 99u8;
@@ -233,16 +233,16 @@ fn refresh_materializes_and_achieves() {
         stone.status = MilestoneStatus::Done;
     }
     for _ in 0..20 {
-        refresh(&mut ambition, &maxed, 0, 3, &[]);
+        refresh(&mut ambition, &BotNow { level_of: &maxed, coins: 0, held: &|_| 0 }, 3, &[]);
         for stone in &mut ambition.milestones {
             stone.status = MilestoneStatus::Done;
         }
     }
     assert!(achieved(&ambition));
-    let mut merchant = new_ambition(MERCHANT, "coverage:merchant", &|_| 1, 1, &[], ZERO).expect("merchant");
+    let mut merchant = new_ambition(MERCHANT, "coverage:merchant", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 1, &[], ZERO).expect("merchant");
     assert!(matches!(merchant.milestones[0].target, Target::Coins { amount: 5_000 }));
     assert!(matches!(goal_for_milestone(&merchant.milestones[0]), GoalKind::GetRich { merchant: Some(true) }));
-    refresh(&mut merchant, &|_| 1, 30_000, 1, &[]);
+    refresh(&mut merchant, &BotNow { level_of: &|_| 1, coins: 30_000, held: &|_| 0 }, 1, &[]);
     assert_eq!(merchant.milestones[0].status, MilestoneStatus::Done);
     assert_eq!(merchant.milestones[1].progress, (20_000, 20_000));
 }
@@ -252,13 +252,13 @@ fn refresh_materializes_and_achieves() {
 /// quantity, even when the bot must train first.
 #[test]
 fn open_bids_become_demand_milestones() {
-    let demand = vec![DemandItem { item: "bronze_platebody".to_string(), weight: 900.0, unmet: 12 }];
-    let mut ambition = new_ambition("smith", "random", &|_| 1, 5, &[], ZERO).expect("smith");
-    refresh(&mut ambition, &levels(&[("smithing", 9)]), 0, 5, &demand);
+    let demand = vec![DemandItem { item: "bronze_platebody".to_string(), weight: 900.0, unmet: 12, margin: Some(10.0) }];
+    let mut ambition = new_ambition("smith", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 5, &[], ZERO).expect("smith");
+    refresh(&mut ambition, &BotNow { level_of: &levels(&[("smithing", 9)]), coins: 0, held: &|_| 0 }, 5, &demand);
     let next = next_milestone(&ambition, &[]).expect("open");
     assert_eq!(next.origin, "demand:bronze_platebody");
     assert!(matches!(&next.target, Target::Produce { item, count: 12, skill } if item == "bronze_platebody" && skill == "smithing"));
-    refresh(&mut ambition, &levels(&[("smithing", 9)]), 0, 5, &demand);
+    refresh(&mut ambition, &BotNow { level_of: &levels(&[("smithing", 9)]), coins: 0, held: &|_| 0 }, 5, &demand);
     let demanded = ambition.milestones.iter().filter(|stone| stone.origin.starts_with("demand:")).count();
     assert_eq!(demanded, 1, "one open demand milestone at a time");
 }

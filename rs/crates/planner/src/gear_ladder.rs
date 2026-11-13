@@ -244,6 +244,33 @@ pub fn gear_subtree(life: &Life) -> Vec<String> {
     ids
 }
 
+/// Withdraw every dead ladder step (its `equip_best` abandoned, or any
+/// node of its chain abandoned) from the graph; returns the removed ids.
+/// The brain calls it on every pass before `graph_state` (review
+/// 2026-11-13: a dead step kept a done goal Stuck, the goal closed stuck
+/// and its skill was banned for a gear cause). Normalizes first, so an
+/// abandoned obtain has cascaded to its `equip_best`.
+pub fn withdraw_dead_steps(life: &mut Life) -> Vec<String> {
+    crate::lifecycle::normalize(life);
+    let mut removed = Vec::new();
+    loop {
+        let dead = (0..life.nodes.len()).find(|&index| {
+            is_ladder_equip(&life.nodes[index])
+                && step_chain(life, index)
+                    .iter()
+                    .any(|member| life.nodes.iter().any(|node| &node.id == member && node.status == NodeStatus::Abandoned))
+        });
+        let Some(dead) = dead else { break };
+        let gone = crate::lifecycle::withdraw_gear_step(life, dead);
+        if gone.is_empty() {
+            break;
+        }
+        removed.extend(gone);
+        crate::lifecycle::normalize(life);
+    }
+    removed
+}
+
 /// True while a ladder step is open: one step at a time.
 pub fn step_open(life: &Life) -> bool {
     life.nodes.iter().any(|node| is_ladder_equip(node) && open(node))
