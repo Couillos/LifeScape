@@ -366,6 +366,10 @@ pub(crate) fn plan_costs_with(
         }
         if let Some(edges) = customs.get(&here.key()) {
             for edge in edges {
+                // A fare edge (the Karamja boat) is a paid path, like a toll.
+                if search.tables.customs[edge.index].fare > 0 && !options.allow_paid {
+                    continue;
+                }
                 if !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag)) {
                     continue;
                 }

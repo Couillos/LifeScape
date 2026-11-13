@@ -256,12 +256,14 @@ fn perfect_world_finishes_every_goal() {
     }
 }
 
-/// Known gap, stated: tuna (fishing 35+) only exists at Karamja in F2P,
-/// whose water has no bank within the trek limit (the boat is not in the
-/// site model). The brain blocks it as unworkable, typed, instead of
-/// sending bots there blind.
+/// Tuna (fishing 35+) only exists at Karamja in F2P: the boat is in the
+/// site model now (2026-11-13), the round trip (60 coins) budgeted like
+/// the toll. Broke, the fare is the need; funded, the site is taken with
+/// `boat`.
 #[test]
-fn karamja_tuna_is_unworkable_until_boats() {
-    assert_eq!(lifescape_planner::min_combat_for_method("gather:fishing/raw_tuna"), lifescape_gamedata::danger::NEVER);
-    assert_eq!(lifescape_planner::pick_site("gather:fishing/raw_tuna", 126, None), lifescape_planner::SitePick::Needs(lifescape_gamedata::danger::NEVER));
+fn karamja_tuna_sails_with_its_fare() {
+    assert!(lifescape_planner::min_combat_for_method("gather:fishing/raw_tuna") < lifescape_gamedata::danger::NEVER);
+    assert_eq!(lifescape_planner::pick_site("gather:fishing/raw_tuna", 126, None), lifescape_planner::SitePick::Fare(60));
+    let funded = lifescape_planner::combat::Fare { wallet: 100, free_pass: false };
+    assert!(matches!(lifescape_planner::combat::pick_site_paid("gather:fishing/raw_tuna", 126, None, funded), lifescape_planner::SitePick::Boat { toll: false, .. }));
 }
