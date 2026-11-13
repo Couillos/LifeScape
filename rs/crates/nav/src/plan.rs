@@ -13,6 +13,8 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
 use crate::bfs::can_step;
+use crate::collision::leaf_step_extra;
+use crate::fallback::touches_side;
 use crate::collision::{tile_walkable, CollisionMap, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
 use crate::static_world::StaticWorld;
@@ -90,11 +92,13 @@ impl Tile {
 
     /// Rank for the closest-reachable fallback (blocked destination,
     /// no-route diagnosis): level first, so a same-level neighbour
-    /// always beats the tile straight above a booth or counter.
-    /// Exact-destination search is untouched (dijkstra still settles by
-    /// cost); only the fallback/adjust choice changes.
-    pub(crate) fn fallback_rank(self, other: Tile, cost: u32) -> (i32, i32, u32) {
-        ((self.level - other.level).abs(), self.chebyshev(other), cost)
+    /// always beats the tile straight above a booth or counter; at equal
+    /// Chebyshev a tile touching the target by a wall-free side wins
+    /// over any diagonal (`fallback::touches_side`). Exact-destination
+    /// search is untouched (dijkstra still settles by cost); only the
+    /// fallback/adjust choice changes.
+    pub(crate) fn fallback_rank(self, other: Tile, cost: u32, touching: bool) -> (i32, i32, bool, u32) {
+        ((self.level - other.level).abs(), self.chebyshev(other), !touching, cost)
     }
 }
 
@@ -784,8 +788,7 @@ fn dijkstra(
     dist.insert(from.key(), 0);
     heap.push((Reverse(0), Reverse(from.key())));
     let mut best = from;
-    let mut best_rank = from.fallback_rank(dest, 0);
-    let mut visits = 0usize;
+    let mut best_rank = from.fallback_rank(dest, 0, touches_side(&mut |tile| search.open(tile), from, dest));    let mut visits = 0usize;
     // Wall-clock yield: a huge search (live doors, toll detours) can run
     // seconds without hitting the visit-count yield below, and the live
     // caller only emits its keepalive from the yield callback — a quiet
@@ -820,7 +823,8 @@ fn dijkstra(
         }
         let here = unkey(key);
         let fresh = key & FRESH != 0;
-        let rank = here.fallback_rank(dest, cost);
+        let touching = touches_side(&mut |tile| search.open(tile), here, dest);
+        let rank = here.fallback_rank(dest, cost, touching);
         if rank < best_rank {
             best_rank = rank;
             best = here;
@@ -852,7 +856,7 @@ fn dijkstra(
             // walks when the shut view allows it: the opening (if any)
             // already rode the step onto the tile.
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
+                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
                 continue;
             }
             // Stop onto a usable door tile from a side the table lets
@@ -865,7 +869,7 @@ fn dijkstra(
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
+                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
                     }
                 }
             }
@@ -1387,9 +1391,8 @@ mod tests {
         let dest = Tile { x: 3186, z: 3446, level: 0 };
         let upstairs = Tile { x: 3186, z: 3446, level: 1 };
         let beside = Tile { x: 3185, z: 3446, level: 0 };
-        assert!(beside.fallback_rank(dest, 3) < upstairs.fallback_rank(dest, 23), "bank booth stays on its level");
-    }
-    #[test]
+        assert!(beside.fallback_rank(dest, 3, true) < upstairs.fallback_rank(dest, 23, false), "bank booth stays on its level");
+    }    #[test]
     fn describe_blockers_names_door_tile_op_and_stand() {
         let door = super::Blocker {
             loc: 1530,

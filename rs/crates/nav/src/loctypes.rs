@@ -155,5 +155,8 @@ mod tests {
         assert_eq!(defs[1553].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Outer));
         assert_eq!(defs[1552].as_ref().and_then(|def| def.gate_leaf), None);
         assert_eq!(defs[3].as_ref().and_then(|def| def.gate_leaf), None);
+        // Single doors: category door_closed (Port Sarim cook house 1530).
+        assert_eq!(defs[1530].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Door));
+        assert_eq!(defs[1531].as_ref().and_then(|def| def.gate_leaf), None);
     }
 }

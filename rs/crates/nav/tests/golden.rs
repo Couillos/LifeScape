@@ -120,6 +120,23 @@ fn touches(plan: &Plan, x: i32, z: i32) -> bool {
     false
 }
 
+/// True when the plan's tile chain (start, walked tiles, door stand and
+/// crossing) steps between the two tiles, either way.
+fn steps_between(plan: &Plan, from: Tile, first: (i32, i32), second: (i32, i32)) -> bool {
+    let mut chain = vec![from];
+    for seg in &plan.segments {
+        match seg {
+            Segment::Walk { tiles } => chain.extend(tiles.iter().copied()),
+            Segment::OpenDoor { stand, cross_to, .. } => chain.extend([*stand, *cross_to]),
+            Segment::Ride { stand, expect, .. } | Segment::Custom { stand, expect, .. } => chain.extend([*stand, *expect]),
+        }
+    }
+    chain.windows(2).any(|pair| {
+        let (start, end) = ((pair[0].x, pair[0].z), (pair[1].x, pair[1].z));
+        pair[0].level == pair[1].level && ((start, end) == (first, second) || (start, end) == (second, first))
+    })
+}
+
 fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let cols: Vec<&str> = line.split('|').map(str::trim).collect();
     assert_eq!(cols.len(), 5, "route needs 5 | columns, got {line:?}");
     let (name, from, dest, options_raw, assertions_raw) = (cols[0], parse_tile(cols[1]), parse_tile(cols[2]), cols[3], cols[4]);
@@ -233,6 +250,24 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
         } else if assertion == "adjusted_dest" {
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
             assert!(plan.adjusted_dest.is_some(), "route {name}: expected an adjusted destination");
+        } else if let Some(adjusted) = assertion.strip_prefix("adjusted=") {
+            let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
+            let pair: Vec<i32> = adjusted.split(',').map(|part| part.trim().parse().expect("adjusted pair")).collect();
+            assert!(pair.len() == 2, "route {name}: adjusted needs x,z");
+            let landed = plan.adjusted_dest.map(|tile| (tile.x, tile.z));
+            assert_eq!(landed, Some((pair[0], pair[1])), "route {name}: wrong adjusted destination");
+        } else if let Some(edge) = assertion.strip_prefix("never_steps=") {
+            let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
+            let nums: Vec<i32> = edge.split(',').map(|part| part.trim().parse().expect("never_steps numbers")).collect();
+            assert!(nums.len() == 4, "route {name}: never_steps needs x1,z1,x2,z2");
+            assert!(
+                !steps_between(plan, from, (nums[0], nums[1]), (nums[2], nums[3])),
+                "route {name}: plan steps ({},{})<->({},{})",
+                nums[0],
+                nums[1],
+                nums[2],
+                nums[3],
+            );
         } else if let Some(stand) = assertion.strip_prefix("stand=") {
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
             let pair: Vec<i32> = stand.split(',').map(|part| part.trim().parse().expect("stand pair")).collect();
