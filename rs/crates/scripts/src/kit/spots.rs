@@ -161,15 +161,21 @@ pub(crate) fn pick_rock_tier(tiers: &[knowledge::rocks::RockTier], level: i64) -
     best.cloned()
 }
 
-/// Rock spawns for the tier's loc names within range of the bank.
-fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank) -> Vec<(i32, i32)> {
+/// Rock spawns for the tier's loc names around the anchor: the brain's
+/// site when it fixed one (any distance from the bank: the site IS the
+/// order), else within range of the bank.
+fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::Bank, site: Option<(i32, i32, i32)>) -> Vec<(i32, i32)> {
+    let (anchor_x, anchor_z, anchor_level, reach) = match site {
+        Some((x, z, level)) => (i64::from(x), i64::from(z), i64::from(level), i64::from(SITE_RADIUS) * 2),
+        None => (bank.x, bank.z, bank.level, NEAR_BANK_TILES),
+    };
     let mut found = Vec::new();
     for entry in knowledge::all_locs() {
         let name = entry.name.clone().unwrap_or_default().to_lowercase();
         if tier.rocks.iter().any(|rock| *rock == name) {
             for spawn in entry.spawns {
-                if spawn.level == bank.level
-                    && (spawn.x - bank.x).abs() + (spawn.z - bank.z).abs() <= NEAR_BANK_TILES
+                if spawn.level == anchor_level
+                    && (spawn.x - anchor_x).abs() + (spawn.z - anchor_z).abs() <= reach
                 {
                     found.push((spawn.x as i32, spawn.z as i32));
                 }
@@ -193,7 +199,7 @@ pub(crate) fn pick_rock_spot(
     let threats = crate::kit::danger::threats(bot);
     for tier in affordable {
         let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
-        for (spot_x, spot_z) in rock_tier_spawns(tier, bank) {
+        for (spot_x, spot_z) in rock_tier_spawns(tier, bank, bot.assigned_site) {
             if banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
                 continue;
             }
@@ -609,6 +615,29 @@ mod tests {
         let threats = crate::kit::danger::threats(&bot);
         assert!(crate::kit::danger::covering(&threats, spot_x, spot_z).is_none(), "picked a covered spot ({spot_x},{spot_z})");
     }
+    /// sara_miller (live 2026-11-13): `mining --site 3294,3287,0` for gold
+    /// at Al Kharid mine, standing at Lumbridge with the Draynor bank
+    /// pinned (246 tiles from the mine, the pool was bank-anchored at 150)
+    /// — 16 rounds of "no rock spot". The site anchors the pool.
+    #[test]
+    fn assigned_site_anchors_the_rock_pool() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 0;
+        bot.world.x = 3232;
+        bot.world.z = 3203;
+        bot.assigned_site = Some((3294, 3287, 0));
+        // Scorpions ring the mine: the danger map is a separate concern.
+        bot.allow_wild = true;
+        let draynor = super::nearest_bank_at(3092, 3243, 0).expect("Draynor bank");
+        let gold: Vec<knowledge::rocks::RockTier> = super::usable_rock_tiers().into_iter().filter(|tier| tier.product == "gold_ore").collect();
+        assert!(!gold.is_empty(), "gold tier in the dumps");
+        let banned = crate::kit::bans::BanSet::new();
+        let (tier, x, z) = super::pick_rock_spot(&mut bot, &gold, &draynor, 40, &banned, 0).expect("gold rocks at the assigned mine");
+        assert_eq!(tier.product, "gold_ore");
+        assert!(crate::kit::spots::in_assigned_site(&bot, x, z), "picked inside the site: ({x},{z})");
+    }
+
     /// Mapless worker against a real nav service (repo dumps): no painted
     /// world, only the plan handle — the same shape as a live worker.
     fn served_mining_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {

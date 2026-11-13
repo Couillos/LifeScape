@@ -499,9 +499,8 @@ mod tests {
         bot.world.x = spot_x;
         bot.world.z = spot_z;
         bot.allow_wild = true;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let (root, data) = crate::test_roots();
         let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-        let data = root.join("LifeScape/gamedata/data");
         let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
         let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
         let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");

@@ -128,3 +128,19 @@ une rangée de N cases légales vers l'ouest (N = bûches portées, au moins
 4) dans un rayon de 14, s'y rend, allume, vérifie chaque feu en live
 (« The fire catches », poussée ouest) et replanifie au premier refus
 (« You can't light a fire here. », départ banni) ou rangée cassée.
+
+## Exécutant mince : récolte (2026-11-13)
+
+Contrat brain → récolteurs : la ressource visée en premier positionnel
+(`fishing raw_trout`, `mining gold_ore`, `woodcut willow_logs`), `--site
+x,z,level`, `--want <objet> N` (fin quand N de plus sont détenus, sac +
+banque connue), `toll`. Le script ne pêche/mine/coupe QUE la cible (plus
+de repli de palier ni de changement de méthode), la banque est celle du
+site (`kit/site.rs`), et un pick vide marche jusqu'au site au lieu
+d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
+`toll` = `blocked{access:al_kharid_toll}`). Les écarts sont typés :
+`blocked{level:<skill>:<N>}`, `blocked{quest:<clé>}`,
+`blocked{access:<zone>}`, outils/appâts par nom exact
+(`fly_fishing_rod`, `feather`, pack + banque connue comptés). Aucun
+achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
+hache, cisailles) : c'est la jambe d'obtention du brain.

@@ -22,6 +22,22 @@ use crate::ScriptResult;
 /// files an obtain task from `missing`, no hunting here.
 const AXELESS_LIMIT: u32 = 3;
 
+/// Tree tiers the run may cut: the brain's log alone (`woodcut
+/// willow_logs`), or every F2P tier on a manual run. Unknown logs are a
+/// Usage error, a level gap `blocked{level:woodcutting:N}`.
+pub fn ordered_tree_tiers(resource: Option<&str>, level: i64) -> Result<Vec<knowledge::trees::TreeTier>, crate::ScriptError> {
+    let tiers = knowledge::trees::all_tiers();
+    let Some(log) = resource else { return Ok(tiers) };
+    let ordered: Vec<knowledge::trees::TreeTier> = tiers.into_iter().filter(|tier| tier.product.eq_ignore_ascii_case(log) && tier.product_members != Some(true)).collect();
+    let Some(need) = ordered.iter().map(|tier| tier.level).min() else {
+        return Err(crate::ScriptError::Usage(format!("no F2P tree yields {log:?}")));
+    };
+    if level < need {
+        return Err(crate::kit::cycle::blocked_level("woodcutting", need));
+    }
+    Ok(ordered)
+}
+
 /// Cut banked loads in the open session (0 = forever).
 pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("woodcut", args)?;
@@ -38,9 +54,13 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
     let coins = obj_id(bot, "coins")?;
-    let tiers = knowledge::trees::all_tiers();
     let mut level = learn_level(bot, crate::kit::woodcut::WC_STAT, 1);
-    let mut bank = nearest_bank(bot)?;
+    let tiers = ordered_tree_tiers(spec.resource.first().map(String::as_str), level)?;
+    bot.assigned_site = spec.site;
+    let mut bank = match crate::kit::site::site_bank(bot) {
+        Some(bank) => bank,
+        None => nearest_bank(bot)?,
+    };
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let log_ids: HashSet<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     // Free axes only (pack reattach, banked restore): the shop cannot
@@ -59,7 +79,10 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     run(bot, &spec, |step_bot, state| {
         // Death may have moved us across the map: re-sync the bank cheaply
         // (no walking) so spots and treks start from the real position.
-        bank = nearest_bank(step_bot)?;
+        bank = match crate::kit::site::site_bank(step_bot) {
+            Some(site_bank) => site_bank,
+            None => nearest_bank(step_bot)?,
+        };
         check_events(step_bot)?;
         if crate::kit::tools::AXE_SPEC.best_held(step_bot).is_none() {
             // A lost axe can still come back free (pack reattach, banked
@@ -109,5 +132,17 @@ mod tests {
     #[test]
     fn axeless_blocks_fast() {
         assert!(AXELESS_LIMIT <= 5, "no axe-hunting loops: {AXELESS_LIMIT} retries then blocked");
+    }
+
+    /// The brain's log is the only tier cut; above the level it blocks.
+    #[test]
+    fn ordered_log_only_and_level_gap_blocks() {
+        let willow = super::ordered_tree_tiers(Some("willow_logs"), 40).expect("willow at 40");
+        assert!(!willow.is_empty() && willow.iter().all(|tier| tier.product == "willow_logs"));
+        match super::ordered_tree_tiers(Some("yew_logs"), 40) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["level:woodcutting:60".to_string()]),
+            other => panic!("yew at 40 must block on level, got {other:?}"),
+        }
+        assert!(matches!(super::ordered_tree_tiers(Some("pebble"), 99), Err(crate::ScriptError::Usage(_))));
     }
 }

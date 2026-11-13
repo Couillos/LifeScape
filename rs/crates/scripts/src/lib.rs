@@ -85,15 +85,28 @@ pub fn is_blocked(error: &ScriptError) -> bool {
     matches!(error, ScriptError::Blocked { .. })
 }
 
+/// Test data roots: the directory holding the `lostcity` checkout (first
+/// ancestor that has the map pack: works from the main checkout and from
+/// `.claude/worktrees/*`) and this checkout's own `gamedata/data`.
+#[cfg(test)]
+pub(crate) fn test_roots() -> (std::path::PathBuf, std::path::PathBuf) {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest
+        .ancestors()
+        .find(|dir| dir.join("lostcity/engine/data/pack/.cache/maps-server.zip").is_file())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| manifest.join("../../../.."));
+    (root, manifest.join("../../../gamedata/data"))
+}
+
 /// Real planner context for offline tests: static world plus tables from
 /// the repo dumps (same layout as the nav golden tests). The keepalive is
 /// primed as just-sent so plans run pure and fail at the dead socket,
 /// like live walks with no connection would.
 #[cfg(test)]
 pub(crate) fn wire_nav(bot: &mut Bot) {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let (root, data) = test_roots();
     let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-    let data = root.join("LifeScape/gamedata/data");
     let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
     let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
     let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
@@ -116,9 +129,8 @@ pub(crate) fn served_nav_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape
     let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
     crate::tables_live::attach_live_tables(&mut bot);
     bot.world.level = 0;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let (root, data) = test_roots();
     let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-    let data = root.join("LifeScape/gamedata/data");
     let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
     let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
     let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
