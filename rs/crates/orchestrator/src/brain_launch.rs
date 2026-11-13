@@ -190,15 +190,28 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             }
             return;
         }
+        // Closed once (live: `done:` was re-pushed every pass), then the
+        // draw is retried every pass: a ban expiry alone brings the bot back.
         GraphState::Finished => {
-            match crate::brain_succession::succeed_goal(&mut life, &live, false) {
+            let closing = !lifescape_planner::goal_closed(&life.history);
+            if closing {
+                crate::brain_succession::close_goal(&mut life, false);
+            }
+            let (drawn, changed) = crate::brain_succession::redraw(&mut life, &live);
+            match drawn {
                 Some(label) => {
                     crate::logln!("brain {}: goal done -> next goal {label}", job.account);
                     lifescape_planner::normalize(&mut life);
                 }
-                None => crate::logln!("brain {}: no goal left to draw, standing by (operator decides)", job.account),
+                None if closing => crate::logln!(
+                    "brain {}: no goal left to draw (every skill banned or maxed), retrying as bans expire",
+                    job.account
+                ),
+                None => {}
             }
-            save_or_log(&life);
+            if closing || changed || dirty {
+                save_or_log(&life);
+            }
             return;
         }
     }
