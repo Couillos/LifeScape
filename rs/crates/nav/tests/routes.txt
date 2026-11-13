@@ -141,3 +141,14 @@ banque_varrock_ouest | 3182,3428,0 | 3185,3436,0 | f2p | reachable ; walk_tiles<
 # depuis la place de Varrock (dossier lara_lane-11257) : l'ancien premier
 # choix etait le stand est (3187,3436), cote banquier.
 banque_varrock_ouest_place | 3213,3425,0 | 3185,3436,0 | f2p | reachable ; walk_tiles<=40
+# 35-40. bateau de Karamja (sailors.rs2 : 30 pieces prises dans le SAC,
+# ~set_sail sur le pont (2956,3143,1) ; customs_officer.rs2 : fouille,
+# 30 pieces, pont de Port Sarim (3032,3217,1) ; gangplank.rs2 : la
+# passerelle de debarquement telejump sur le quai). Aretes custom_edges
+# de nav_overrides.json : chemin paye (allow_paid) et `coins:30` en sac.
+bateau_sans_droit | 3029,3217,0 | 2915,3150,0 | f2p | unreachable=PaidOnly ; blocked_custom=boat_port_sarim_to_karamja
+bateau_sans_piece | 3029,3217,0 | 2915,3150,0 | paid,f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
+bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218
+bateau_retour | 2915,3150,0 | 3029,3217,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim ; uses_custom=gangplank_port_sarim_dock ; levels=0>1>0 ; stand=2954,3147
+bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_port_sarim_to_karamja
+bateau_ile_libre | 2956,3146,0 | 2924,3178,0 | f2p | reachable ; doors<=0

@@ -17,6 +17,7 @@ pub mod service_wait;
 pub mod snapshot_view;
 pub mod social;
 pub mod travel;
+pub mod travel_custom;
 pub mod travel_dossier;
 pub mod travel_hook;
 
@@ -112,6 +113,10 @@ pub struct Bot {
     /// Opt-in to paid paths (toll gates). Default false: routing and bank
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
+    /// Coins a paid run keeps in the pack (the fares are taken from the
+    /// inventory): 10 for the Al Kharid toll, 60 for a Karamja round trip
+    /// (30 each way). 0 outside paid runs; bank trips refill to it.
+    pub fare_reserve: u32,
     /// Opt-in to NPC shop purchases. Default true; a constrained task
     /// (`TaskSpec.allow_shop`) clears it and the buy paths refuse loud
     /// instead of spending, so the run reports blocked, never broke.
@@ -202,6 +207,7 @@ impl Bot {
             locks: std::sync::Arc::new(std::sync::Mutex::new(locks::Locks::default())),
             approach_depth: 0,
             allow_paid: false,
+            fare_reserve: 0,
             allow_shop: true,
             combat_style: "melee".to_string(),
             allow_wild: false,

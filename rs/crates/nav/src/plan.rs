@@ -187,11 +187,7 @@ pub struct TransitionRef {
     pub needs_choice: bool,
 }
 
-/// Which hand-added edge a step takes.
-#[derive(Clone, Debug)]
-pub struct CustomEdgeRef {
-    pub name: String,
-}
+pub use crate::custom_edge::CustomEdgeRef;
 
 /// Opening click before the climb (trapdoor lid, manhole cover...):
 /// `loc`/`op` to click, `open_to` the loc id the click must reveal.
@@ -406,6 +402,16 @@ pub(crate) fn plan_budgeted(
                         }
                     }
                 }
+                // A hand-added edge with unmet tags (the boat fare not in
+                // the pack): the lifted search crossed it, the bot cannot.
+                if let PrevEdge::Custom { index, .. } = edge {
+                    let custom = &tables.customs[*index];
+                    let missing: Vec<String> = custom.requires.iter().filter(|tag| !options.satisfied.contains(*tag)).cloned().collect();
+                    let blocked_edge = EdgeId::Custom(custom.name.clone());
+                    if !missing.is_empty() && !blocked.iter().any(|(known, _)| *known == blocked_edge) {
+                        blocked.push((blocked_edge, missing));
+                    }
+                }
             }
             if blocked.is_empty() {
                 let mut plan = assemble(tables, from, dest, chain, cost);
@@ -444,6 +450,14 @@ pub(crate) fn plan_budgeted(
                             if !tolls.iter().any(|(known, _)| *known == toll_edge) {
                                 tolls.push((toll_edge, vec!["coins:10".to_string()]));
                             }
+                        }
+                    }
+                    // A fare edge (the Port Sarim boat): coins open it too.
+                    if let PrevEdge::Custom { index, .. } = edge {
+                        let custom = &tables.customs[*index];
+                        let fare_edge = EdgeId::Custom(custom.name.clone());
+                        if custom.fare > 0 && !tolls.iter().any(|(known, _)| *known == fare_edge) {
+                            tolls.push((fare_edge, vec![format!("coins:{}", custom.fare)]));
                         }
                     }
                 }
@@ -975,6 +989,11 @@ fn dijkstra(
         }
         if let Some(edges) = customs.get(&l2_key) {
             for edge in edges {
+                // A fare edge is a paid path, like a toll gate; its landing
+                // obeys the search bounds, like a ride's.
+                if (search.tables.customs[edge.index].fare > 0 && !search.allow_paid) || !search.in_bounds(edge.dest) {
+                    continue;
+                }
                 if !search.ignore_requires
                     && !search.tables.customs[edge.index].requires.iter().all(|tag| search.options.satisfied.contains(tag))
                 {
@@ -1304,7 +1323,7 @@ fn assemble(tables: &Tables, from: Tile, dest: Tile, chain: Vec<(Tile, PrevEdge)
                 }
                 let edge = &tables.customs[index];
                 segments.push(Segment::Custom {
-                    edge: CustomEdgeRef { name: edge.name.clone() },
+                    edge: CustomEdgeRef::of(edge),
                     stand: cursor,
                     expect: dest,
                 });

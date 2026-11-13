@@ -1,6 +1,11 @@
 {
   "blocked_locs": [],
-  "custom_edges": [],
+  "custom_edges": [
+    {"name": "boat_port_sarim_to_karamja", "kind": "npc_fare", "npcs": ["captain_tobias", "seaman_lorris", "seaman_thresnor"], "op": 1, "choices": ["Yes please."], "fare": 30, "stand": [3027, 3218, 0], "to": [2956, 3143, 1], "reason": "sailors.rs2 [opnpc1,_sailor]: p_choice2 'Yes please.' takes 30 coins from the inventory (inv_total(inv, coins) < 30 refuses) then ~set_sail onto the ship deck 1_46_49_12_7; sailors spawn (3026..3028, 3216..3221) on the Port Sarim dock", "verified": "2026-11-13"},
+    {"name": "gangplank_karamja_dock", "kind": "loc", "loc": 2082, "op": 1, "at": [2956, 3144, 1], "stand": [2956, 3143, 1], "to": [2956, 3146, 0], "reason": "sarimshipplank_off (m46_49 '1 12 8: 2082 10 1', angle north): gangplank.rs2 _gangplank_disembark telejumps movecoord(coord, 0, -1, 2) onto the Karamja dock", "verified": "2026-11-13"},
+    {"name": "boat_karamja_to_port_sarim", "kind": "npc_fare", "npcs": ["customs_officer"], "op": 1, "choices": ["Can I journey on this ship?", "Search away, I have nothing to hide.", "Ok."], "fare": 30, "stand": [2954, 3147, 0], "to": [3032, 3217, 1], "reason": "customs_officer.rs2: journey, search (karamja_rum is confiscated and the trip refused), p_choice2 'Ok.' takes 30 coins from the inventory then ~set_sail to 1_47_50_24_17; officers spawn (2953,3147) and (2955,3146)", "verified": "2026-11-13"},
+    {"name": "gangplank_port_sarim_dock", "kind": "loc", "loc": 2084, "op": 1, "at": [3031, 3217, 1], "stand": [3032, 3217, 1], "to": [3029, 3217, 0], "reason": "karamjashipplank_off (m47_50 '1 23 17: 2084 10', angle west): gangplank.rs2 _gangplank_disembark telejumps movecoord(coord, -2, -1, 0) onto the Port Sarim dock", "verified": "2026-11-13"}
+  ],
   "maze_locs": [
     {
       "name_prefix": "macro_maze_wall",

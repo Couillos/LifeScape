@@ -831,9 +831,7 @@ impl Bot {
                 Segment::Ride { transition, stand, pre_open, expect, .. } => {
                     self.exec_ride(transition, *stand, pre_open.clone(), *expect, deadline)
                 }
-                Segment::Custom { edge, .. } => {
-                    Err(Error::Travel(format!("custom edge {} has no live executor", edge.name)))
-                }
+                Segment::Custom { edge, stand, expect } => self.exec_custom(edge, *stand, *expect, deadline),
             };
             match outcome {
                 Ok(()) => self.log(&format!(
@@ -878,7 +876,7 @@ impl Bot {
 
     /// Walk legs of STEP_CAP steps; postcondition is the last tile. A
     /// stalled leg (no progress, budget left) is a refused step.
-    fn exec_walk(&mut self, tiles: &[Tile], deadline: u64) -> Result<()> {
+    pub(crate) fn exec_walk(&mut self, tiles: &[Tile], deadline: u64) -> Result<()> {
         if tiles.is_empty() {
             return Ok(());
         }

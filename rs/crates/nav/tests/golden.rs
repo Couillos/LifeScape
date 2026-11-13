@@ -200,6 +200,19 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
             let id: u16 = id.parse().expect("uses_loc id");
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan for uses_loc"));
             assert!(uses_loc(plan, tables, id), "route {name}: no segment uses loc {id}");
+        } else if let Some(edge_name) = assertion.strip_prefix("uses_custom=") {
+            let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan for uses_custom"));
+            assert!(
+                plan.segments.iter().any(|seg| matches!(seg, Segment::Custom { edge, .. } if edge.name == edge_name)),
+                "route {name}: no segment takes custom edge {edge_name}",
+            );
+        } else if let Some(edge_name) = assertion.strip_prefix("blocked_custom=") {
+            let no = result.as_ref().err().unwrap_or_else(|| panic!("route {name}: expected NoRoute for blocked_custom"));
+            assert!(
+                no.blocked_by_requirements.iter().any(|(edge, _)| *edge == plan::EdgeId::Custom(edge_name.to_string())),
+                "route {name}: {edge_name} not among {:?}",
+                no.blocked_by_requirements,
+            );
         } else if let Some(bound) = assertion.strip_prefix("rides<=") {
             let bound: usize = bound.parse().expect("rides bound");
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));

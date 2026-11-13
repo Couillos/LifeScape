@@ -138,6 +138,35 @@ run au démarrage au lieu de diverger. Référence moteur : goldens
 `rs/crates/nav/tests/` (`routes.txt`, `golden.rs`, `paid_only`,
 `one_way`, `abort`, `probe`) — le planificateur `plan` n'a pas changé.
 
+## Arêtes ajoutées à la main : bateau de Karamja (2026-11-13)
+
+`gamedata/data/nav_overrides.json` `custom_edges` porte des arêtes que
+les dumps ne voient pas (`tables::CustomEdge`, deux genres) :
+- `npc_fare` : parler à l'un des `npcs`, répondre `choices` (dans
+  l'ordre des pages), payer `fare` pièces prises dans le SAC ; le
+  serveur affiche l'interface de traversée puis téléporte sur `to`.
+  Marins de Port Sarim (`sailors.rs2`, « Yes please. », pont
+  (2956,3143,1)) et officier des douanes de Karamja
+  (`customs_officer.rs2`, voyage, fouille, « Ok. », pont (3032,3217,1)) ;
+- `loc` : cliquer `loc` op `op` en `at` (passerelles `_off` de
+  `gangplank.rs2` : téléport puis telejump sur le quai (2956,3146,0) ou
+  (3029,3217,0)).
+
+Une arête à `fare` est un chemin payant comme le péage : seulement avec
+`allow_paid`, et elle exige `coins:<fare>` en sac (ajouté au chargement).
+Diagnostic : sans `allow_paid`, `PaidOnly` bloqué par
+`Custom(<nom>) missing coins:30` ; payant sans pièces,
+`NeedsRequirement`. Le plan porte tout ce que l'exécuteur doit savoir
+(`custom_edge::CustomEdgeRef` : genre, loc, tuile, PNJ, réponses,
+tarif ; sérialisé dans le segment `custom`). Exécuteur SDK
+`client/travel_custom.rs` : `npc_fare` vérifie le tarif en sac, parle au
+PNJ visible le plus proche, choisit les réponses (`fare_pick`), continue
+les pages, attend l'interface puis l'arrivée (rhum confisqué : un second
+dialogue) ; `loc` clique et attend le saut. Hors ligne :
+`orchestrator route 3029 3217 0 2915 3150 0 --paid` (`--paid` compte
+aussi les tarifs comme portés). Goldens `bateau_*` (`uses_custom=`,
+`blocked_custom=`).
+
 ## Danger et destinations substituées (2026-11-12)
 
 - `NavOptions::danger` : carrés `(x, z, niveau, rayon)` où un PNJ agressif

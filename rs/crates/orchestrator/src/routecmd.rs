@@ -112,6 +112,11 @@ pub fn route_cmd(args: &[String]) -> i32 {
     };
     let mut options = NavOptions::default();
     options.allow_paid = paid;
+    // `--paid` reads as "the bot carries its fares": the boat edges'
+    // pack coins count as held, like the toll gate's.
+    if paid {
+        options.satisfied.extend(tables.customs.iter().filter(|edge| edge.fare > 0).map(|edge| format!("coins:{}", edge.fare)));
+    }
     match plan::plan(&world, &tables, from, dest, &options) {
         Ok(plan) => {
             println!(
@@ -169,9 +174,10 @@ pub fn route_cmd(args: &[String]) -> i32 {
                         println!("{line}");
                     }
                     Segment::Custom { edge, stand, expect } => {
+                        let fare = if edge.fare > 0 { format!(" fare={}", edge.fare) } else { String::new() };
                         println!(
-                            "{tag} Custom {} stand=({},{}) expect=({},{},{})",
-                            edge.name, stand.x, stand.z, expect.x, expect.z, expect.level,
+                            "{tag} Custom {} ({}) stand=({},{},{}) expect=({},{},{}){fare}",
+                            edge.name, edge.kind, stand.x, stand.z, stand.level, expect.x, expect.z, expect.level,
                         );
                     }
                 }

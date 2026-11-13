@@ -877,12 +877,16 @@ fn segment_value(segment: &Segment) -> Value {
             edge,
             stand,
             expect,
-        } => object(vec![
-            ("kind", str_value("custom")),
-            ("name", str_value(&edge.name)),
-            ("stand", tile_value(*stand)),
-            ("expect", tile_value(*expect)),
-        ]),
+        } => {
+            let mut fields = vec![
+                ("kind", str_value("custom")),
+                ("name", str_value(&edge.name)),
+                ("stand", tile_value(*stand)),
+                ("expect", tile_value(*expect)),
+            ];
+            fields.extend(edge.fields());
+            object(fields)
+        }
     }
 }
 
@@ -942,9 +946,7 @@ fn parse_segment(value: &Value) -> Result<Segment, String> {
             })
         }
         "custom" => Ok(Segment::Custom {
-            edge: crate::plan::CustomEdgeRef {
-                name: value.get("name").as_str().ok_or("custom.name")?.to_string(),
-            },
+            edge: crate::plan::CustomEdgeRef::parse(value)?,
             stand: parse_tile(value.get("stand"))?,
             expect: parse_tile(value.get("expect"))?,
         }),

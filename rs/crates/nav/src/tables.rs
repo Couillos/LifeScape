@@ -119,12 +119,27 @@ pub struct BlockedDoor {
     pub reason: String,
 }
 
-/// A hand-added edge (pushed secret wall...). None ship yet.
+/// A hand-added edge the dumps never see: a loc op that teleports
+/// (`kind` "loc": ship gangplanks) or an NPC dialogue that carries the
+/// bot for a fare (`kind` "npc_fare": the Port Sarim sailors, the
+/// Karamja customs officer). A fare edge is a paid path (only with
+/// `allow_paid`) and requires `coins:<fare>` in the pack.
 #[derive(Clone, Debug)]
 pub struct CustomEdge {
     pub name: String,
+    /// "loc" (click `loc` op `op` at `at`) or "npc_fare" (talk to one of
+    /// `npcs`, answer `choices`, pay `fare` coins).
+    pub kind: String,
     pub loc: u16,
     pub op: u8,
+    /// Tile of the loc a "loc" edge clicks (`None` for NPC edges).
+    pub at: Option<Tile>,
+    /// NPC debugnames a "npc_fare" edge talks to (any one answers).
+    pub npcs: Vec<String>,
+    /// Dialogue options to pick, in any order the dialogue asks them.
+    pub choices: Vec<String>,
+    /// Coins the edge takes from the pack (0: free).
+    pub fare: u32,
     pub stand: Tile,
     pub to: Tile,
     pub requires: Vec<String>,
@@ -393,15 +408,42 @@ fn load_overrides(path: &Path) -> Result<(Vec<Requirement>, Vec<OneWay>, Vec<Cus
         if name.is_empty() || reason.is_empty() {
             return Err(format!("nav_overrides custom_edges[{index}] needs name and reason"));
         }
-        let tags: Vec<String> = row
+        let mut tags: Vec<String> = row
             .get("requires")
             .as_arr()
             .map(|items| items.iter().filter_map(|tag| tag.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        let strings = |key: &str| -> Vec<String> {
+            row.get(key).as_arr().map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()).unwrap_or_default()
+        };
+        let kind = row.get("kind").as_str().unwrap_or("loc").to_string();
+        let fare = row.get("fare").as_i64().unwrap_or(0).max(0) as u32;
+        let at = parse_tile(row.get("at"));
+        let npcs = strings("npcs");
+        let choices = strings("choices");
+        match kind.as_str() {
+            "loc" if at.is_none() || row.get("loc").as_i64().is_none() => {
+                return Err(format!("nav_overrides custom_edges[{index}] kind loc needs loc and at"));
+            }
+            "npc_fare" if npcs.is_empty() || choices.is_empty() || fare == 0 => {
+                return Err(format!("nav_overrides custom_edges[{index}] kind npc_fare needs npcs, choices and fare"));
+            }
+            "loc" | "npc_fare" => {}
+            other => return Err(format!("nav_overrides custom_edges[{index}] has unknown kind {other:?}")),
+        }
+        // The fare comes from the pack: the edge needs it carried.
+        if fare > 0 && !tags.iter().any(|tag| *tag == format!("coins:{fare}")) {
+            tags.push(format!("coins:{fare}"));
+        }
         customs.push(CustomEdge {
             name: name.to_string(),
+            kind,
             loc: row.get("loc").as_i64().unwrap_or(0) as u16,
             op: row.get("op").as_i64().unwrap_or(1) as u8,
+            at,
+            npcs,
+            choices,
+            fare,
             stand,
             to,
             requires: tags,

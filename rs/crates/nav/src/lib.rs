@@ -6,6 +6,7 @@ pub mod bfs;
 pub mod buffer;
 pub mod collision;
 pub mod costs;
+pub mod custom_edge;
 pub mod f2p;
 mod fallback;
 pub mod loctypes;
