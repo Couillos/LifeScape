@@ -178,9 +178,9 @@ pub struct TransitionRef {
     pub op: u8,
     pub from: Tile,
     pub to: Tile,
-    /// Every tile the loc covers: only one of them answers the climb op,
-    /// and the table `from` is not always that one. The executor clicks
-    /// the footprint tile nearest its stand.
+    /// Every tile the loc covers. Only the origin `from` answers the
+    /// climb op (the server finds a loc on its origin tile alone): the
+    /// executor and the prober click `from`, never another footprint tile.
     pub footprint: Vec<(i32, i32)>,
     /// Prober verdict carried for the executor message (`NeedsChoice`
     /// names the no-recorded-pick suffix). Absent on old plans: false.

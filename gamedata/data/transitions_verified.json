@@ -1909,30 +1909,30 @@
   },
   {
     "arrived": [
-      0,
-      3206,
-      3208
+      1,
+      3205,
+      3209
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-13",
     "from": [
       0,
       3204,
       3207
     ],
     "loc": 1738,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
+    "message": "",
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [
-      0,
+      1,
       3205,
       3228
     ],
     "choice": "",
-    "date": "2026-11-10",
+    "date": "2026-11-13",
     "from": [
       0,
       3204,
@@ -1940,8 +1940,8 @@
     ],
     "loc": 1738,
     "message": "",
-    "result": "no_move",
-    "ticks": 41
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [
@@ -2179,39 +2179,39 @@
   },
   {
     "arrived": [
-      1,
-      3206,
-      3208
+      2,
+      3205,
+      3209
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-13",
     "from": [
       1,
       3204,
       3207
     ],
     "loc": 1739,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
+    "message": "",
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [
-      1,
-      3205,
-      3228
+      2,
+      3206,
+      3229
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-13",
     "from": [
       1,
       3204,
       3229
     ],
     "loc": 1739,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
+    "message": "",
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [
@@ -2611,39 +2611,39 @@
   },
   {
     "arrived": [
-      2,
-      3204,
-      3208
+      1,
+      3205,
+      3209
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-13",
     "from": [
       2,
       3205,
       3208
     ],
     "loc": 1740,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
+    "message": "",
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [
-      2,
-      3204,
-      3229
+      1,
+      3205,
+      3228
     ],
     "choice": "",
-    "date": "2026-11-06",
+    "date": "2026-11-13",
     "from": [
       2,
       3205,
       3229
     ],
     "loc": 1740,
-    "message": "I can't reach that!",
-    "result": "no_move",
-    "ticks": 41
+    "message": "",
+    "result": "ok",
+    "ticks": 1
   },
   {
     "arrived": [

@@ -7,6 +7,7 @@ pub mod actions;
 pub mod approach;
 pub mod cost_cache;
 pub mod design;
+pub mod door_leaf;
 pub mod doors;
 pub mod exchange;
 pub mod loc_stands;

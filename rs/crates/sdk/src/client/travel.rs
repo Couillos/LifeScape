@@ -912,7 +912,17 @@ impl Bot {
             if self.world.ticks > deadline {
                 return Err(Error::Timeout(format!("walk timed out at {:?}", self.position())));
             }
-            let end = pending.len().min(STEP_CAP);
+            let mut end = pending.len().min(STEP_CAP);
+            // An open door leaf across a marked edge (`door_leaf`): close
+            // it from the step's source tile, walking there first.
+            match self.leaf_ahead(&pending[..end])? {
+                Some((0, leaf)) => {
+                    self.close_leaf(leaf, deadline)?;
+                    continue;
+                }
+                Some((index, _)) => end = index,
+                None => {}
+            }
             let leg: Vec<(i32, i32)> = pending[..end].to_vec();
             leg_no += 1;
             if let Err(err) = self.send_and_await(&leg, run, deadline, false) {
@@ -1339,17 +1349,10 @@ impl Bot {
         if self.world.ticks > deadline {
             return Err(Error::Timeout(format!("ride {} timed out at {:?}", ride.name, self.position())));
         }
-        // Click the loc's answering tile: the footprint tile nearest
-        // the stand (the table `from` is not always that tile on
-        // multi-tile stairs). The engine may walk a step or two into
-        // reach first, so only a real jump (level change or far tile)
-        // ends the watch.
-        let (click_x, click_z) = ride
-            .footprint
-            .iter()
-            .min_by_key(|(tile_x, tile_z)| (tile_x - stand.x).abs() + (tile_z - stand.z).abs())
-            .copied()
-            .unwrap_or((ride.from.x, ride.from.z));
+        // Click the loc origin (`ride_click`). The engine may walk a
+        // step or two into reach first, so only a real jump (level
+        // change or far tile) ends the watch.
+        let (click_x, click_z) = ride_click(ride);
         self.op_loc(ride.op, click_x, click_z, ride.climb_loc)?;
         let start = (self.world.x, self.world.z, self.world.level);
         let watched = self.world.ticks + RIDE_WAIT;
@@ -1432,6 +1435,18 @@ pub(crate) fn seg_summary(seg: &Segment) -> String {
     }
 }
 
+/// Tile an OPLOC for this ride must name: the loc origin, which the
+/// dump records as the table `from` (all 367 rows anchor their loc
+/// there). The server looks the loc up on that exact tile only
+/// (`OpLocHandler` → `Zone.getLoc(x, z, id)`): any other footprint tile
+/// is dropped without a message. Clicking the footprint tile nearest
+/// the stand made the Lumbridge castle spiral stairs (stand east or
+/// north of the 2x2, origin at its SW corner) never move, live
+/// 2026-11-13.
+pub(crate) fn ride_click(ride: &lifescape_nav::plan::TransitionRef) -> (i32, i32) {
+    (ride.from.x, ride.from.z)
+}
+
 /// Only these four replan once with the faulty edge banned; everything
 /// else (interrupt, io, timeout, choice, travel) goes to the caller.
 /// A segment failure that a market pause explains (live 2026-11-13,
@@ -1468,7 +1483,7 @@ fn ban_for(seg: &Segment, _bot: &Bot) -> Option<EdgeId> {
 }
 
 /// Last server game message, for failure context.
-fn last_message(bot: &Bot) -> String {
+pub(crate) fn last_message(bot: &Bot) -> String {
     bot.world.messages.last().cloned().unwrap_or_else(|| "no game message".to_string())
 }
 
@@ -1583,6 +1598,25 @@ mod tests {
         assert!(!paused_mid_trip(4, 4, &refused), "no pause: the usual ban and dossier");
         assert!(!paused_mid_trip(3, 4, &Error::Interrupted("stop".to_string())), "operator stop stays a stop");
         assert!(!paused_mid_trip(3, 4, &Error::Io("closed".to_string())), "transport stays transport");
+    }
+
+    /// Lumbridge castle south spiral stair: a 2x2 at (3204..3205,
+    /// 3207..3208), stand (3206,3208) east of it. Live 2026-11-13: a click
+    /// on (3205,3208), the footprint tile nearest the stand, never moved;
+    /// the origin (3204,3207) climbed to (3205,3209,1).
+    #[test]
+    fn ride_clicks_the_loc_origin_not_the_nearest_footprint_tile() {
+        let ride = lifescape_nav::plan::TransitionRef {
+            name: "spiralstairs_264".to_string(),
+            loc: 1738,
+            climb_loc: 1738,
+            op: 1,
+            from: Tile { x: 3204, z: 3207, level: 0 },
+            to: Tile { x: 3205, z: 3209, level: 1 },
+            footprint: vec![(3204, 3207), (3205, 3207), (3204, 3208), (3205, 3208)],
+            needs_choice: false,
+        };
+        assert_eq!(ride_click(&ride), (3204, 3207));
     }
 
     fn offline_bot(x: i32, z: i32) -> Bot {
