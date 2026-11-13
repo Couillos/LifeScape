@@ -127,6 +127,10 @@ pub(crate) struct Engine {
     pub(crate) next_seq: u64,
     pub(crate) placed: u64,
     pub(crate) matched: u64,
+    /// Repricing bounds per resting order of THIS market (it was a
+    /// process-wide table keyed by order id: two markets — parallel tests
+    /// on fresh databases — overwrote each other's bounds).
+    pub(crate) quote_bounds: HashMap<i64, crate::market_reprice::QuoteBounds>,
 }
 
 impl Engine {
@@ -149,6 +153,7 @@ impl Engine {
             next_seq: 1,
             placed: 0,
             matched: 0,
+            quote_bounds: HashMap::new(),
         }
     }
 
@@ -692,7 +697,7 @@ impl MarketService {
         self.lock_engine().order_item.insert(order_key, item);
         if rests {
             if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price) {
-                crate::market_reprice::register(store_id, bounds);
+                crate::market_reprice::register(self, store_id, bounds);
             }
         }
         self.lock_engine().placed += 1;

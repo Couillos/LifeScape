@@ -13,8 +13,7 @@
 //! Bounds live in memory only: after a daemon restart resting orders
 //! keep their last price (no walk), which never breaks a deal.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+
 
 use lifescape_json::{object, str_value, Value};
 
@@ -35,23 +34,18 @@ pub struct QuoteBounds {
     pub last_change_wall: f64,
 }
 
-fn table() -> &'static Mutex<HashMap<i64, QuoteBounds>> {
-    static TABLE: OnceLock<Mutex<HashMap<i64, QuoteBounds>>> = OnceLock::new();
-    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
 }
 
 /// Registers bounds for a resting order (called by `place`).
-pub fn register(order: i64, bounds: QuoteBounds) {
-    table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(order, bounds);
+pub fn register(service: &MarketService, order: i64, bounds: QuoteBounds) {
+    service.lock_engine().quote_bounds.insert(order, bounds);
 }
 
 /// Bounds of a resting order, if it reprices.
-pub fn bounds_of(order: i64) -> Option<QuoteBounds> {
-    table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&order).cloned()
+pub fn bounds_of(service: &MarketService, order: i64) -> Option<QuoteBounds> {
+    service.lock_engine().quote_bounds.get(&order).cloned()
 }
 
 /// Bounds parsed from a `place` request: `ceiling` (buy) or `floor`
@@ -77,12 +71,12 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
 /// length. Returns the number of orders moved.
 pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize {
     let entries: Vec<(i64, QuoteBounds)> =
-        table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().map(|(order, bounds)| (*order, bounds.clone())).collect();
+        service.lock_engine().quote_bounds.iter().map(|(order, bounds)| (*order, bounds.clone())).collect();
     let mut moved = 0;
     for (order, bounds) in entries {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(|row| row.status == lifescape_store::OrderStatus::Open && row.remaining > 0) else {
-            table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&order);
+            service.lock_engine().quote_bounds.remove(&order);
             continue;
         };
         let patience_secs = bounds.patience_ticks as f64 * tick_ms.max(1.0) / 1000.0;
@@ -99,7 +93,8 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             ("order", Value::Int(order)),
             ("price", Value::Int(next)),
         ]));
-        let mut guard = table().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut engine = service.lock_engine();
+        let guard = &mut engine.quote_bounds;
         guard.remove(&order);
         if reply.get("ok").as_bool() == Some(true) {
             if let Some(replacement) = reply.get("order").as_i64() {
@@ -115,6 +110,6 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
 }
 
 /// Registered order count (dashboard and tests).
-pub fn tracked() -> usize {
-    table().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
+pub fn tracked(service: &MarketService) -> usize {
+    service.lock_engine().quote_bounds.len()
 }

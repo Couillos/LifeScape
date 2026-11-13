@@ -79,7 +79,7 @@ impl MarketService {
             }
             rows.sort_by_key(|row| (row.created_clock, row.order_id));
             let total: i64 = rows.iter().map(|row| row.remaining).sum();
-            let bounds = crate::market_reprice::bounds_of(rows[0].order_id);
+            let bounds = crate::market_reprice::bounds_of(self, rows[0].order_id);
             let mut cancelled = 0usize;
             for row in &rows {
                 let reply = self.handle(&object(vec![
