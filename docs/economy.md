@@ -7,7 +7,12 @@ en continu, visibles au dashboard et dans une base interrogeable.
 
 Double enchère continue, un carnet par objet échangeable F2P : priorité prix
 puis ancienneté, exécutions partielles au prix de l'ordre au carnet, modifier
-= annuler + replacer (perte d'ancienneté). Code pur dans
+= annuler + replacer (perte d'ancienneté). Carnet jamais croisé (sauf
+un compte contre lui-même, et la paire d'un deal échoué pendant son
+refroidissement de 3000 ticks) : tout ordre qui (ré)entre — placement,
+amend, relist après échec, réinsertion au boot — est TAKER et paie le
+prix de l'ordre déjà au repos ; `market_uncross` guérit le reste (boot,
+puis chaque tour de convocation). Code pur dans
 `rs/crates/market/` : `book` (carnet + appariement), `guards` (bandes +
 couverture), `deals` (machine à états), `price` (VWAP → mid → magasin,
 bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds

@@ -131,6 +131,9 @@ pub(crate) struct Engine {
     /// process-wide table keyed by order id: two markets — parallel tests
     /// on fresh databases — overwrote each other's bounds).
     pub(crate) quote_bounds: HashMap<i64, crate::market_reprice::QuoteBounds>,
+    /// Failed-deal pairs kept apart until a daemon wall instant
+    /// (`market_uncross`, sorted account pair).
+    pub(crate) pair_cooldowns: HashMap<(String, String), f64>,
 }
 
 impl Engine {
@@ -154,6 +157,7 @@ impl Engine {
             placed: 0,
             matched: 0,
             quote_bounds: HashMap::new(),
+            pair_cooldowns: HashMap::new(),
         }
     }
 
@@ -239,8 +243,13 @@ impl MarketService {
         }
         let mut reopened = 0usize;
         {
+            // Queue rank = creation order; arrival = last (re)entry, so a
+            // carnet left crossed heals with the latest one as the taker
+            // (`market_uncross`, below).
+            let mut arrivals: Vec<(usize, &lifescape_store::Order)> = rows.iter().enumerate().collect();
+            arrivals.sort_by_key(|(seq, row)| (row.updated_clock, *seq));
             let mut engine = self.lock_engine();
-            for (seq, row) in rows.iter().enumerate() {
+            for (seq, row) in arrivals {
                 let side = match row.side {
                     lifescape_store::OrderSide::Buy => Side::Buy,
                     lifescape_store::OrderSide::Sell => Side::Sell,
@@ -277,6 +286,13 @@ impl MarketService {
             rows.len(),
             self.lock_engine().books.len()
         );
+        // Recent failed pairs stay apart, then whatever still crosses
+        // (old raw relists, restart relists) matches like any taker.
+        self.restore_pair_cooldowns();
+        let healed = self.uncross_books(crate::market_convene::wall_now());
+        if !healed.is_empty() {
+            crate::logln!("market reload: crossed books healed, deals {healed:?}");
+        }
     }
 
     pub(crate) fn lock_store(&self) -> std::sync::MutexGuard<'_, Store> {
@@ -674,13 +690,16 @@ impl MarketService {
         };
         let order_key = store_id as u64;
         let placed = {
-            let mut engine = self.lock_engine();
+            let mut guard = self.lock_engine();
+            let engine: &mut Engine = &mut guard;
+            // Failed-deal pairs stay apart (`market_uncross`).
+            let kept_apart = crate::market_uncross::kept_apart(&engine.pair_cooldowns, crate::market_convene::wall_now());
             let book = engine.books.entry(item).or_insert_with(Book::new);
             // Pre-match snapshot for the priority-preserving relist: the
             // resting rows keep their `seq`, the taker its arrival rank.
             let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
             let taker_seq = book.next_seq();
-            match book.place(order_key, &account, item, side, qty, price) {
+            match book.place_guarded(order_key, &account, item, side, qty, price, &kept_apart) {
                 Ok((fills, rests)) => {
                     let matched: Vec<(lifescape_market::Fill, Vec<Order>)> = fills
                         .into_iter()

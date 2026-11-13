@@ -48,6 +48,7 @@ pub mod market_reprice;
 pub mod market_service;
 pub mod market_audit;
 pub mod market_merge;
+pub mod market_uncross;
 pub mod market_orders;
 #[cfg(test)]
 pub(crate) mod market_test_support;
@@ -64,6 +65,9 @@ mod economy_sim_tests;
 #[cfg(test)]
 #[path = "market_integrity_tests.rs"]
 mod market_integrity_tests;
+#[cfg(test)]
+#[path = "market_uncross_tests.rs"]
+mod market_uncross_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;

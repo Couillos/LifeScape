@@ -118,11 +118,13 @@ impl MarketService {
         // 3. Book: the replacement places like a fresh order and may
         // cross (same pre-match snapshot as `op_place`).
         let placed = {
-            let mut engine = self.lock_engine();
+            let mut guard = self.lock_engine();
+            let engine: &mut crate::market_service::Engine = &mut guard;
+            let kept_apart = crate::market_uncross::kept_apart(&engine.pair_cooldowns, crate::market_convene::wall_now());
             let book = engine.books.entry(item).or_default();
             let pre: HashMap<u64, Order> = book.orders().into_iter().map(|order| (order.id, order)).collect();
             let taker_seq = book.next_seq();
-            book.place(replacement as u64, &account, item, side, old.remaining, price).map(|(fills, _rests)| {
+            book.place_guarded(replacement as u64, &account, item, side, old.remaining, price, &kept_apart).map(|(fills, _rests)| {
                 fills
                     .into_iter()
                     .map(|fill| {

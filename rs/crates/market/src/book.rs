@@ -2,6 +2,10 @@
 //! One limit order book per item. Price priority, then arrival order
 //! (`seq`); partial fills; the trade price is the resting order's price.
 //! Amend is cancel + replace (the new order loses its queue position).
+//! Never crossed: an incoming or relisted order skips its own resting
+//! orders (no self-trade) and the pairs the caller keeps apart, and
+//! matches everything else it crosses; `uncross` heals what a raw
+//! `relist` (boot reload) or an expired pair guard leaves crossed.
 
 use crate::error::Error;
 
@@ -44,12 +48,22 @@ pub struct Book {
     buys: Vec<Order>,
     sells: Vec<Order>,
     next_seq: u64,
+    /// Arrival stamp per resting order id: bumped at every (re)entry
+    /// (place, relist, fold, boot reload), unlike `seq`, which a relist
+    /// keeps for queue rank. `uncross` makes the later arrival the taker.
+    arrivals: std::collections::HashMap<u64, u64>,
+    next_arrival: u64,
+}
+
+/// Pair guard that keeps nobody apart (plain `place`).
+fn never_kept_apart(_buyer: &str, _seller: &str) -> bool {
+    false
 }
 
 impl Book {
     /// Empty book.
     pub fn new() -> Self {
-        Book { buys: Vec::new(), sells: Vec::new(), next_seq: 0 }
+        Book::default()
     }
 
     /// Resting depth for one side: (price, total qty), best first.
@@ -114,6 +128,7 @@ impl Book {
     }
 
     fn take(&mut self, id: u64) -> Option<Order> {
+        self.arrivals.remove(&id);
         if let Some(position) = self.buys.iter().position(|order| order.id == id) {
             return Some(self.buys.remove(position));
         }
@@ -134,6 +149,24 @@ impl Book {
         side: Side,
         quantity: i64,
         price: i64,
+    ) -> Result<(Vec<Fill>, bool), Error> {
+        self.place_guarded(id, account, item, side, quantity, price, &never_kept_apart)
+    }
+
+    /// `place` with a pair guard: resting orders of the same account, or
+    /// of a counterparty `kept_apart(buyer, seller)` refuses, are skipped
+    /// (never a wall: the next eligible resting order still matches), so
+    /// the remainder only ever rests crossed against those.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_guarded(
+        &mut self,
+        id: u64,
+        account: &str,
+        item: i64,
+        side: Side,
+        quantity: i64,
+        price: i64,
+        kept_apart: &dyn Fn(&str, &str) -> bool,
     ) -> Result<(Vec<Fill>, bool), Error> {
         if account.is_empty() {
             return Err(Error::Invalid("empty account".to_string()));
@@ -156,71 +189,70 @@ impl Book {
             price,
             seq,
         };
-        let mut fills = Vec::new();
-        loop {
-            let crosses = match side {
-                Side::Buy => self.sells.first().is_some_and(|ask| ask.price <= incoming.price),
-                Side::Sell => self.buys.first().is_some_and(|bid| bid.price >= incoming.price),
-            };
-            if !crosses {
-                break;
-            }
-            let (resting_price, resting_qty, resting_id, resting_owner) = match side {
-                Side::Buy => {
-                    let ask = self.sells.first().expect("ask checked");
-                    (ask.price, ask.remaining, ask.id, ask.account.clone())
-                }
-                Side::Sell => {
-                    let bid = self.buys.first().expect("bid checked");
-                    (bid.price, bid.remaining, bid.id, bid.account.clone())
-                }
-            };
-            if resting_owner == incoming.account {
-                break;
-            }
-            let take = incoming.remaining.min(resting_qty);
-            let (buy_id, sell_id, buyer, seller) = match side {
-                Side::Buy => (incoming.id, resting_id, incoming.account.clone(), resting_owner),
-                Side::Sell => (resting_id, incoming.id, resting_owner, incoming.account.clone()),
-            };
-            fills.push(Fill {
-                buy_id,
-                sell_id,
-                buyer,
-                seller,
-                item,
-                quantity: take,
-                price: resting_price,
-            });
-            incoming.remaining -= take;
-            match side {
-                Side::Buy => {
-                    let ask = self.sells.first_mut().expect("ask checked");
-                    ask.remaining -= take;
-                    if ask.remaining == 0 {
-                        self.sells.remove(0);
-                    }
-                }
-                Side::Sell => {
-                    let bid = self.buys.first_mut().expect("bid checked");
-                    bid.remaining -= take;
-                    if bid.remaining == 0 {
-                        self.buys.remove(0);
-                    }
-                }
-            }
-            if incoming.remaining == 0 {
-                break;
-            }
-        }
+        let fills = self.take_as_taker(&mut incoming, kept_apart);
         let rests = incoming.remaining > 0;
         if rests {
-            match side {
-                Side::Buy => Self::insert_sorted(&mut self.buys, incoming, true),
-                Side::Sell => Self::insert_sorted(&mut self.sells, incoming, false),
-            }
+            self.rest(incoming);
         }
         Ok((fills, rests))
+    }
+
+    fn rest(&mut self, order: Order) {
+        self.arrivals.insert(order.id, self.next_arrival);
+        self.next_arrival += 1;
+        match order.side {
+            Side::Buy => Self::insert_sorted(&mut self.buys, order, true),
+            Side::Sell => Self::insert_sorted(&mut self.sells, order, false),
+        }
+    }
+
+    /// Matches `incoming` against the opposite side in priority order, at
+    /// each resting order's price, skipping its own orders and the
+    /// counterparties `kept_apart` refuses. `incoming.remaining` drops.
+    fn take_as_taker(&mut self, incoming: &mut Order, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        let mut fills = Vec::new();
+        while incoming.remaining > 0 {
+            let opposite = match incoming.side {
+                Side::Buy => &self.sells,
+                Side::Sell => &self.buys,
+            };
+            let found = opposite
+                .iter()
+                .take_while(|resting| match incoming.side {
+                    Side::Buy => resting.price <= incoming.price,
+                    Side::Sell => resting.price >= incoming.price,
+                })
+                .position(|resting| {
+                    resting.account != incoming.account && {
+                        let (buyer, seller) = match incoming.side {
+                            Side::Buy => (incoming.account.as_str(), resting.account.as_str()),
+                            Side::Sell => (resting.account.as_str(), incoming.account.as_str()),
+                        };
+                        !kept_apart(buyer, seller)
+                    }
+                });
+            let Some(position) = found else {
+                break;
+            };
+            let opposite = match incoming.side {
+                Side::Buy => &mut self.sells,
+                Side::Sell => &mut self.buys,
+            };
+            let resting = &mut opposite[position];
+            let take = incoming.remaining.min(resting.remaining);
+            let (buy_id, sell_id, buyer, seller) = match incoming.side {
+                Side::Buy => (incoming.id, resting.id, incoming.account.clone(), resting.account.clone()),
+                Side::Sell => (resting.id, incoming.id, resting.account.clone(), incoming.account.clone()),
+            };
+            fills.push(Fill { buy_id, sell_id, buyer, seller, item: incoming.item, quantity: take, price: resting.price });
+            incoming.remaining -= take;
+            resting.remaining -= take;
+            if resting.remaining == 0 {
+                let gone = opposite.remove(position);
+                self.arrivals.remove(&gone.id);
+            }
+        }
+        fills
     }
 
     /// Remaining quantity of one resting order, `None` when gone.
@@ -247,14 +279,86 @@ impl Book {
         self.next_seq
     }
 
-    /// Re-lists a fully consumed order after a failed handover, keeping
-    /// its original queue position (price-time priority preserved for
-    /// the party that showed up). New ids ride the old `seq`.
+    /// Puts an order back at its original queue rank WITHOUT matching
+    /// (it counts as the latest arrival for `uncross`). Only for orders
+    /// that rested uncrossed at that very rank a moment ago (rollback of
+    /// a withdrawal, fold of same-price fragments) or a boot reload
+    /// followed by `uncross`, in last-update order: anything else uses
+    /// `relist_matching`, or the book stays crossed (live 2026-11-13,
+    /// bronze axe: a relisted bid at 20 above asks at 16).
     pub fn relist(&mut self, order: Order) {
         self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
-        match order.side {
-            Side::Buy => Self::insert_sorted(&mut self.buys, order, true),
-            Side::Sell => Self::insert_sorted(&mut self.sells, order, false),
+        self.rest(order);
+    }
+
+    /// Re-lists an order after a failed handover: it re-enters as a taker
+    /// (fills at the resting orders' prices, own orders and pairs
+    /// `kept_apart` refuses skipped), and its remainder rests at its
+    /// original `seq` (queue rank among its own side kept).
+    pub fn relist_matching(&mut self, order: Order, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        self.next_seq = self.next_seq.max(order.seq.saturating_add(1));
+        let mut incoming = order;
+        let fills = self.take_as_taker(&mut incoming, kept_apart);
+        if incoming.remaining > 0 {
+            self.rest(incoming);
+        }
+        fills
+    }
+
+    /// Matches every crossed pair of resting orders (boot reload, a pair
+    /// cooldown that expired, any leftover): best bid first, then the
+    /// best eligible ask under it (own orders and pairs `kept_apart`
+    /// refuses skipped). The order that (re)entered the book last is the
+    /// taker: it trades at the price of the one already resting (user
+    /// rule 2026-11-13: a bid relisted at 20 pays the 16 ask, never 20),
+    /// whatever `seq` rank it kept. After it, only own or kept-apart
+    /// pairs rest crossed.
+    pub fn uncross(&mut self, kept_apart: &dyn Fn(&str, &str) -> bool) -> Vec<Fill> {
+        let mut fills = Vec::new();
+        loop {
+            let mut pair: Option<(usize, usize)> = None;
+            'bids: for (bid_index, bid) in self.buys.iter().enumerate() {
+                // Bids run best first: once one sits under the best ask,
+                // no later one crosses.
+                if self.sells.first().map_or(true, |ask| ask.price > bid.price) {
+                    break;
+                }
+                for (ask_index, ask) in self.sells.iter().enumerate() {
+                    if ask.price > bid.price {
+                        break;
+                    }
+                    if ask.account != bid.account && !kept_apart(&bid.account, &ask.account) {
+                        pair = Some((bid_index, ask_index));
+                        break 'bids;
+                    }
+                }
+            }
+            let Some((bid_index, ask_index)) = pair else {
+                return fills;
+            };
+            let take = self.buys[bid_index].remaining.min(self.sells[ask_index].remaining);
+            let (bid, ask) = (&self.buys[bid_index], &self.sells[ask_index]);
+            let arrival = |order: &Order| self.arrivals.get(&order.id).copied().unwrap_or(0);
+            let price = if arrival(bid) < arrival(ask) { bid.price } else { ask.price };
+            fills.push(Fill {
+                buy_id: bid.id,
+                sell_id: ask.id,
+                buyer: bid.account.clone(),
+                seller: ask.account.clone(),
+                item: bid.item,
+                quantity: take,
+                price,
+            });
+            self.buys[bid_index].remaining -= take;
+            self.sells[ask_index].remaining -= take;
+            if self.buys[bid_index].remaining == 0 {
+                let gone = self.buys.remove(bid_index);
+                self.arrivals.remove(&gone.id);
+            }
+            if self.sells[ask_index].remaining == 0 {
+                let gone = self.sells.remove(ask_index);
+                self.arrivals.remove(&gone.id);
+            }
         }
     }
 
@@ -329,6 +433,99 @@ mod tests {
         assert!(fills.is_empty());
         assert!(rests);
         assert_eq!(book.orders_of("t01").len(), 2);
+    }
+
+    #[test]
+    fn own_resting_order_is_skipped_not_a_wall() {
+        let mut book = Book::new();
+        place(&mut book, 1, "t01", Side::Sell, 1, 15);
+        place(&mut book, 2, "t02", Side::Sell, 1, 16);
+        let (fills, rests) = place(&mut book, 3, "t01", Side::Buy, 1, 20);
+        assert!(!rests);
+        assert_eq!((fills[0].seller.as_str(), fills[0].price), ("t02", 16));
+        assert_eq!(book.best(), (None, Some(15)), "only the own ask rests");
+    }
+
+    #[test]
+    fn relist_matching_takes_at_the_resting_price_and_keeps_its_rank() {
+        let mut book = Book::new();
+        place(&mut book, 1, "early", Side::Buy, 1, 10);
+        place(&mut book, 2, "third", Side::Sell, 1, 16);
+        let kept_apart = |buyer: &str, seller: &str| buyer == "lara" && seller == "partner";
+        place(&mut book, 3, "partner", Side::Sell, 1, 15);
+        let relisted = Order { id: 9, account: "lara".to_string(), item: 314, side: Side::Buy, quantity: 2, remaining: 2, price: 20, seq: 0 };
+        let fills = book.relist_matching(relisted, &kept_apart);
+        assert_eq!(fills.len(), 1, "partner kept apart, third matched once");
+        assert_eq!((fills[0].seller.as_str(), fills[0].price, fills[0].quantity), ("third", 16, 1));
+        let buyers: Vec<String> = book.buys.iter().map(|order| order.account.clone()).collect();
+        assert_eq!(buyers, vec!["lara".to_string(), "early".to_string()], "remainder rests at its old rank");
+        assert_eq!(book.best(), (Some(20), Some(15)), "crossed only against the kept-apart partner");
+    }
+
+    #[test]
+    fn uncross_matches_at_the_older_price_and_respects_guards() {
+        let mut book = Book::new();
+        let order = |id: u64, account: &str, side: Side, price: i64, seq: u64| Order {
+            id,
+            account: account.to_string(),
+            item: 314,
+            side,
+            quantity: 1,
+            remaining: 1,
+            price,
+            seq,
+        };
+        book.relist(order(1, "seller", Side::Sell, 16, 1));
+        book.relist(order(2, "partner", Side::Sell, 15, 3));
+        book.relist(order(3, "buyer", Side::Buy, 20, 2));
+        book.relist(order(4, "buyer", Side::Sell, 14, 4));
+        let kept_apart = |buyer: &str, seller: &str| buyer == "buyer" && seller == "partner";
+        let fills = book.uncross(&kept_apart);
+        assert_eq!(fills.len(), 1);
+        assert_eq!((fills[0].seller.as_str(), fills[0].price), ("seller", 16), "older ask is the maker");
+        assert!(book.uncross(&kept_apart).is_empty(), "no double match");
+        // Guard lifted: the partner now matches; the own ask never does.
+        assert!(book.uncross(&|_: &str, _: &str| false).is_empty(), "buyer bid consumed");
+        book.relist(order(5, "buyer", Side::Buy, 20, 5));
+        let fills = book.uncross(&|_: &str, _: &str| false);
+        assert_eq!(fills.len(), 1);
+        assert_eq!((fills[0].seller.as_str(), fills[0].price), ("partner", 15), "older ask sets the price");
+        assert_eq!(book.best(), (None, Some(14)), "own ask untouched");
+        book.relist(order(6, "buyer", Side::Buy, 20, 6));
+        assert!(book.uncross(&|_: &str, _: &str| false).is_empty(), "self never matches");
+        assert_eq!(book.best(), (Some(20), Some(14)), "own pair may rest crossed");
+    }
+
+    /// User rule 2026-11-13 (lara_lane, bronze axe): a bid back at 20
+    /// with its old rank pays the resting asks, 15 then 16, never 20 —
+    /// as a relist and as a boot heal alike.
+    #[test]
+    fn late_arrival_pays_the_resting_asks_whatever_its_rank() {
+        let lara = |id: u64| Order { id, account: "lara".to_string(), item: 314, side: Side::Buy, quantity: 2, remaining: 2, price: 20, seq: 0 };
+        let mut relisted = Book::new();
+        place(&mut relisted, 1, "third-a", Side::Sell, 1, 16);
+        place(&mut relisted, 2, "third-b", Side::Sell, 1, 15);
+        let fills = relisted.relist_matching(lara(9), &|_: &str, _: &str| false);
+        let prices: Vec<i64> = fills.iter().map(|fill| fill.price).collect();
+        assert_eq!(prices, vec![15, 16], "relist: best ask first, at the asks");
+        let mut healed = Book::new();
+        let ask = |id: u64, account: &str, price: i64, seq: u64| Order {
+            id,
+            account: account.to_string(),
+            item: 314,
+            side: Side::Sell,
+            quantity: 1,
+            remaining: 1,
+            price,
+            seq,
+        };
+        healed.relist(ask(1, "third-a", 16, 5));
+        healed.relist(ask(2, "third-b", 15, 6));
+        healed.relist(lara(9));
+        let fills = healed.uncross(&|_: &str, _: &str| false);
+        let prices: Vec<i64> = fills.iter().map(|fill| fill.price).collect();
+        assert_eq!(prices, vec![15, 16], "boot heal: the latest arrival is the taker despite seq 0");
+        assert_eq!(healed.best(), (None, None));
     }
 
     #[test]

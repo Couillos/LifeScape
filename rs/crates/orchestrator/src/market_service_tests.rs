@@ -448,14 +448,22 @@ fn nav_down_fails_neutral_and_ten_deals_convene() {
         ("nav_up", Value::Bool(false)),
     ]));
     assert_eq!(swept.get("failed").as_arr().map(|rows| rows.len()), Some(10), "all expire nav_down");
-    for index in 0..10 {
-        for account in [format!("maker-{index}"), format!("taker-{index}")] {
-            let orders = service.handle(&request(vec![("op", str_value("my_orders")), ("account", str_value(&account))]));
-            let rows = orders.get("orders").as_arr().cloned().unwrap_or_default();
-            let open = rows.iter().filter(|row| row.get("status").as_str() == Some("open")).count();
-            assert_eq!(open, 1, "{account} relisted neutrally");
-        }
+    // Both sides relist neutrally and re-enter as takers: each lot
+    // crosses another failed pair's lot at once (never its own partner,
+    // kept apart by the cooldown), so nothing rests crossed (2026-11-13).
+    let rematched: Vec<(String, String)> = service
+        .lock_engine()
+        .deals
+        .values()
+        .filter(|deal| deal.status == lifescape_market::DealStatus::Matched)
+        .map(|deal| (deal.buyer.clone(), deal.seller.clone()))
+        .collect();
+    assert_eq!(rematched.len(), 10, "every relisted lot matched again: {rematched:?}");
+    for (buyer, seller) in &rematched {
+        assert_ne!(buyer.trim_start_matches("taker-"), seller.trim_start_matches("maker-"), "failed pair never rematched");
     }
+    let book = service.lock_engine().books.get(&314).map(|book| book.best()).unwrap_or((None, None));
+    assert_eq!(book, (None, None), "no lot left resting, nothing crossed");
     cleanup(&path);
 }
 
