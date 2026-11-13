@@ -6,16 +6,23 @@
 //! combat style plus the best pickaxe and axe of its gathering tiers.
 //! Whatever the bot does not own yet, and that beats what it owns in the
 //! same slot, is a wish. Wishes never block the current goal: the brain
-//! keeps a market bid for the top wishes (ceiling = what the wallet
-//! spares, re-evaluated every pass as sales bring coins in), and the
-//! sales pass never lists a wished object. Once owned, the kit's gear
-//! pass wears it at the next bank stop.
+//! keeps a standing market bid for the top wishes and the sales pass
+//! never lists a wished object. Once owned, the kit's gear pass wears it
+//! at the next bank stop.
+//!
+//! Since 2026-11-13 melee (and non-combat) goals climb the equipment
+//! ladder instead (`brain_gear`: one tier at a time, as graph steps):
+//! their wishes are the tools only. Ceilings are wallet shares that rise
+//! as coins come in: `TOOL_SHARE_PCT` (25 %) per tool, `GEAR_SHARE_PCT`
+//! (50 %) split across ranged/magic gear wishes. A resting wish bid keeps
+//! its walk (`market_reprice::keep_bid`): only its ceiling moves.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use lifescape_gamedata::gear::{best_gear, best_tool, score, Style};
-use lifescape_json::{object, str_value, Value};
+use lifescape_planner::gear_ladder::{wallet_ceiling, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
+use lifescape_json::Value;
 use lifescape_planner::{Life, NodeKind, NodeStatus};
 
 use crate::jobs::Job;
@@ -100,7 +107,9 @@ fn live_of(job: &Job) -> Value {
     job.inner.try_lock().ok().and_then(|inner| inner.live.clone()).unwrap_or(Value::Null)
 }
 
-/// The bot's current wishes (empty without a live snapshot).
+/// The bot's current wishes (empty without a live snapshot). Melee and
+/// non-combat goals wish tools only: their gear climbs the ladder
+/// (`brain_gear`).
 pub fn wishlist(job: &Job, life: &Life) -> Vec<Wish> {
     let live = live_of(job);
     let levels_owned = crate::brain_market::live_levels(&live);
@@ -110,7 +119,26 @@ pub fn wishlist(job: &Job, life: &Life) -> Vec<Wish> {
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
     let mut owned: Vec<String> = crate::brain_plan::live_stacks(job).into_iter().map(|(name, _)| name).collect();
     owned.extend(crate::brain_plan::worn_names(job));
-    wishes(style_of(life), &levels, &owned, &["pickaxe", "axe"])
+    let mut list = wishes(style_of(life), &levels, &owned, &["pickaxe", "axe"]);
+    if crate::brain_gear::ladder_goal(life) {
+        list.retain(is_tool_wish);
+    }
+    list
+}
+
+fn is_tool_wish(wish: &Wish) -> bool {
+    wish.slot == "pickaxe" || wish.slot == "axe"
+}
+
+/// Per-unit ceiling of one wish bid: a tool takes `TOOL_SHARE_PCT` of the
+/// wallet, gear wishes split `GEAR_SHARE_PCT` between them. Rises with
+/// the wallet.
+pub fn wish_ceiling(wish: &Wish, coins: i64, gear_wishes: usize) -> i64 {
+    if is_tool_wish(wish) {
+        wallet_ceiling(coins, TOOL_SHARE_PCT)
+    } else {
+        wallet_ceiling(coins, GEAR_SHARE_PCT) / gear_wishes.max(1) as i64
+    }
 }
 
 fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
@@ -118,9 +146,9 @@ fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// One wishlist pass for an idle, non-Iron bot: re-places a bid for each
-/// top wish with a ceiling the current wallet supports (the spare coins
-/// split across the wishes). Returns the bids placed.
+/// One wishlist pass for an idle, non-Iron bot: keeps a standing bid for
+/// each top wish, its ceiling the wallet share of the moment (a resting
+/// bid keeps its price walk). Returns the bids placed or kept.
 pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     if life.profile.ironman {
         return 0;
@@ -137,34 +165,21 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     let wishes = wishlist(job, life);
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let top: Vec<Wish> = wishes.into_iter().filter(|wish| crate::brain_sales::tradeable(&wish.item)).take(WISH_BIDS).collect();
-    if top.is_empty() || coins < 1 {
-        return 0;
-    }
-    let share = (coins / top.len() as i64).max(1);
+    let gear_wishes = top.iter().filter(|wish| !is_tool_wish(wish)).count();
     let mut placed = 0;
-    for wish in top {
+    for wish in &top {
         let Some(id) = lifescape_gamedata::objs_by_name(&wish.item).into_iter().next().map(|obj| obj.obj_id as i64) else { continue };
-        // Fresh ceiling every pass: cancel the old bid, place the new one.
-        service.cancel_open_for(&job.account, id, lifescape_store::OrderSide::Buy);
-        let reference = service.reference(id);
-        let (_, ask) = service.lock_engine().books.get(&id).map(|book| book.best()).unwrap_or((None, None));
-        let ceiling = share;
-        let price = match ask {
-            Some(best) if best <= ceiling => best,
-            _ => reference.price.min(ceiling).max(1),
-        };
-        let reply = service.handle(&object(vec![
-            ("op", str_value("place")),
-            ("account", str_value(&job.account)),
-            ("side", str_value("buy")),
-            ("item", Value::Int(id)),
-            ("qty", Value::Int(1)),
-            ("price", Value::Int(price)),
-            ("ceiling", Value::Int(ceiling.max(price))),
-        ]));
-        if reply.get("ok").as_bool() == Some(true) {
-            placed += 1;
-            crate::logln!("brain {}: wish {} ({}) bid @ {price} ceiling {ceiling}", job.account, wish.item, wish.slot);
+        let ceiling = wish_ceiling(wish, coins, gear_wishes);
+        if ceiling < 1 {
+            continue;
+        }
+        match crate::market_reprice::keep_bid(&service, &job.account, id, 1, ceiling) {
+            Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
+                placed += 1;
+                crate::logln!("brain {}: wish {} ({}) bid @ {price} ceiling {ceiling}", job.account, wish.item, wish.slot);
+            }
+            Ok(crate::market_reprice::StandingBid::Kept { .. }) => placed += 1,
+            Err(error) => crate::logln!("brain {}: wish {} bid refused: {error}", job.account, wish.item),
         }
     }
     placed
@@ -186,5 +201,17 @@ mod tests {
         assert!(!names.iter().any(|name| name.ends_with("_axe") && !name.contains("battle")), "no axe owned: no axe wish");
         let geared: Vec<String> = list.iter().map(|wish| wish.item.clone()).chain(owned.clone()).collect();
         assert!(wishes(Style::Melee, &levels, &geared, &["pickaxe", "axe"]).is_empty(), "owning the set ends the wishes");
+    }
+
+    /// Wish ceilings are wallet shares: they rise as coins come in.
+    #[test]
+    fn wish_ceilings_are_wallet_shares() {
+        use super::{wish_ceiling, Wish};
+        let tool = Wish { item: "rune_pickaxe".to_string(), slot: "pickaxe".to_string(), gain: 10 };
+        let bow = Wish { item: "oak_shortbow".to_string(), slot: "slot3".to_string(), gain: 10 };
+        assert_eq!(wish_ceiling(&tool, 200, 0), 50, "a tool: 25 % of the wallet");
+        assert_eq!(wish_ceiling(&tool, 800, 0), 200, "more coins, higher ceiling");
+        assert_eq!(wish_ceiling(&bow, 200, 2), 50, "gear wishes split half the wallet");
+        assert_eq!(wish_ceiling(&bow, 3, 1), 1);
     }
 }

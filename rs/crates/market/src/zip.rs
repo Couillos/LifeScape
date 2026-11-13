@@ -62,6 +62,41 @@ pub fn step_toward(current: i64, sell: bool, floor: i64, ceiling: i64) -> i64 {
     clamp_quote(moved, floor.max(1), ceiling.max(floor.max(1)))
 }
 
+/// Demand-driven step (2026-11-13, user rule: prices follow supply and
+/// demand, 1 coin is only the bootstrap). One step of 5% (at least one
+/// coin) per patience window, its direction read from the window:
+/// - a sell that filled (even partly) walks UP: buyers take it at this
+///   price, so it was cheap; a sell that rested unfilled walks down;
+/// - a buy that rested unfilled walks up; a buy that filled walks DOWN:
+///   sellers come to it, so it pays too much.
+///
+/// Always inside `[floor, ceiling]` (a seller's reserve, a buyer's
+/// wallet cap) and never under 1. `step_toward` is the unfilled case.
+pub fn demand_step(current: i64, sell: bool, filled: bool, floor: i64, ceiling: i64) -> i64 {
+    let step = (current / 20).max(1);
+    let up = sell == filled;
+    let moved = if up { current + step } else { current - step };
+    clamp_quote(moved, floor.max(1), ceiling.max(floor.max(1)))
+}
+
+/// Opening ask of a new listing (2026-11-13): the reference (24 h VWAP,
+/// else last print, else mid, else 1 coin), or the best resting bid when
+/// a buyer already pays more (the listing crosses it at once). No margin
+/// on top: the fills of the listing walk it up (`demand_step`).
+pub fn opening_ask(reference: i64, best_bid: Option<i64>) -> i64 {
+    reference.max(1).max(best_bid.unwrap_or(0))
+}
+
+/// Opening bid of a new buy order: the best ask when the ceiling covers
+/// it (take it), else the reference, never above the ceiling.
+pub fn opening_bid(reference: i64, best_ask: Option<i64>, ceiling: i64) -> i64 {
+    let cap = ceiling.max(1);
+    match best_ask {
+        Some(ask) if ask >= 1 && ask <= cap => ask,
+        _ => reference.max(1).min(cap),
+    }
+}
+
 fn clamp_quote(price: i64, floor: i64, ceiling: i64) -> i64 {
     price.max(floor).min(ceiling).max(1)
 }
@@ -141,6 +176,35 @@ mod step_tests {
         assert_eq!(step_toward(100, true, 60, 1000), 95, "5% down");
         assert_eq!(step_toward(61, true, 60, 1000), 60, "held at the floor");
         assert_eq!(step_toward(1, true, 1, 1), 1, "never under 1");
+    }
+
+    #[test]
+    fn demand_steps_follow_fills() {
+        use super::demand_step;
+        let cap = i64::MAX / 4;
+        assert_eq!(demand_step(1, true, true, 1, cap), 2, "a 1-coin ask that sells climbs");
+        assert_eq!(demand_step(100, true, true, 1, cap), 105, "a filled ask walks up 5%");
+        assert_eq!(demand_step(100, true, true, 1, 102), 102, "never past its cap");
+        assert_eq!(demand_step(100, true, false, 60, cap), 95, "an idle ask walks down");
+        assert_eq!(demand_step(61, true, false, 60, cap), 60, "held at the reserve");
+        assert_eq!(demand_step(10, false, false, 1, 50), 11, "an idle bid walks up");
+        assert_eq!(demand_step(50, false, false, 1, 50), 50, "held at the wallet cap");
+        assert_eq!(demand_step(40, false, true, 30, 50), 38, "a filled bid walks down");
+        assert_eq!(demand_step(30, false, true, 30, 50), 30, "never under its opening");
+        assert_eq!(demand_step(1, false, true, 1, 1), 1, "never under 1");
+    }
+
+    #[test]
+    fn openings_start_at_the_reference() {
+        use super::{opening_ask, opening_bid};
+        assert_eq!(opening_ask(1, None), 1, "bootstrap: 1 coin");
+        assert_eq!(opening_ask(40, None), 40, "no margin over the reference");
+        assert_eq!(opening_ask(40, Some(55)), 55, "a richer bid is taken");
+        assert_eq!(opening_ask(40, Some(20)), 40);
+        assert_eq!(opening_bid(10, Some(12), 20), 12, "covered ask taken");
+        assert_eq!(opening_bid(10, Some(30), 20), 10, "ask above the cap: rest at the reference");
+        assert_eq!(opening_bid(50, None, 20), 20, "never above the cap");
+        assert_eq!(opening_bid(1, None, 0), 1, "never under 1");
     }
 }
 

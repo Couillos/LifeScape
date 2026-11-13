@@ -25,6 +25,7 @@ pub mod brain;
 pub mod brain_await;
 pub mod economy_guard;
 pub mod brain_fold;
+pub mod brain_gear;
 pub mod brain_grace;
 pub mod brain_launch;
 pub mod brain_market;
@@ -50,6 +51,9 @@ mod market_service_tests;
 #[cfg(test)]
 #[path = "market_crossing_tests.rs"]
 mod market_crossing_tests;
+#[cfg(test)]
+#[path = "economy_sim_tests.rs"]
+mod economy_sim_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;
