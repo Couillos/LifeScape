@@ -106,6 +106,25 @@ pub fn tool_family(tool: &str) -> Vec<String> {
     family.iter().map(|name| name.to_string()).collect()
 }
 
+/// Units of `item` a bot holds for its work, counting its whole family
+/// (`count_of`: pack + bank + worn per name): a steel pickaxe meets a
+/// skeleton's `obtain bronze_pickaxe`, iron arrows meet bronze ones, and
+/// an elemental staff meets any number of its runes.
+pub fn family_held(item: &str, wanted: i64, count_of: &dyn Fn(&str) -> i64) -> i64 {
+    let mut held: i64 = 0;
+    for name in tool_family(item) {
+        let units = count_of(&name);
+        if units <= 0 {
+            continue;
+        }
+        if name.starts_with("staff_of_") && name != item {
+            return wanted.max(held);
+        }
+        held = held.saturating_add(units);
+    }
+    held
+}
+
 pub fn tool_price(item: &str) -> i64 {
     lifescape_gamedata::objs_by_name(item).into_iter().next().map(|entry| entry.price.max(1)).unwrap_or(i64::MAX)
 }

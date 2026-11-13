@@ -59,6 +59,23 @@ fn gear_derives_from_the_ways_for_every_family() {
     assert!(fire.1.contains(&"firerune") && fire.1.contains(&"mindrune"), "{fire:?}");
 }
 
+/// A skeleton's canonical tool is met by any family member: a steel
+/// pickaxe for `bronze_pickaxe`, iron arrows for bronze ones, a staff of
+/// air for any number of air runes.
+#[test]
+fn the_family_meets_the_canonical_tool() {
+    let count_of = |name: &str| match name {
+        "steel_pickaxe" => 1,
+        "iron_arrow" => 300,
+        "staff_of_air" => 1,
+        _ => 0,
+    };
+    assert_eq!(super::family_held("bronze_pickaxe", 1, &count_of), 1);
+    assert_eq!(super::family_held("bronze_arrow", 500, &count_of), 300);
+    assert_eq!(super::family_held("airrune", 900, &count_of), 900);
+    assert_eq!(super::family_held("hammer", 1, &count_of), 0);
+}
+
 /// An elemental staff casts unlimited runes of its element.
 #[test]
 fn a_staff_stands_for_its_rune() {

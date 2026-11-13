@@ -53,10 +53,10 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         // The wheel script eats the INPUT (wool only, flax members):
         // resolve it from the dump, like `cook:` resolves raw.
         ("spin".to_string(), vec![spin_input(&product)])
-    } else if let Some(_product) = method.strip_prefix("pottery:") {
-        // Pot only (P3.4): clay and water ride the same load, no
-        // positional — the suffix documents the chain product.
-        ("pottery".to_string(), Vec::new())
+    } else if let Some(product) = method.strip_prefix("pottery:") {
+        // The product rides first (args contract 2026-11-13: pot, pie dish
+        // or bowl; audit: pie-dish and bowl tranches made pots).
+        ("pottery".to_string(), vec![product.to_string()])
     } else if let Some(product) = method.strip_prefix("jewelry:") {
         ("smelt_jewelry".to_string(), vec![product.to_string()])
     } else if let Some(rune) = method.strip_prefix("runecraft:") {
@@ -456,7 +456,7 @@ mod tests {
             ("tan:cow_hide", "leatherwork", "cow_hide"),
             ("fire:willow_logs", "firemaking", "willow_logs"),
             ("spin:ball_of_wool", "spin", "wool"),
-            ("pottery:pot", "pottery", ""),
+            ("pottery:pot_empty", "pottery", "pot_empty"),
             ("jewelry:gold_ring", "smelt_jewelry", "gold_ring"),
             ("runecraft:airrune", "runecraft", "airrune"),
             ("pick:grain", "picking", "grain"),

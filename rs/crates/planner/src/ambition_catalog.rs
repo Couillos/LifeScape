@@ -253,9 +253,10 @@ pub fn method_skill(method: &str) -> Option<&'static str> {
         "smith" | "smelt" => "smithing",
         "cook" | "bake" => "cooking",
         "fire" => "firemaking",
-        "spin" | "jewelry" | "string" | "pottery" | "craft" | "tan" => "crafting",
+        "spin" | "jewelry" | "string" | "pottery" | "craft" | "tan" | "cut" => "crafting",
         "runecraft" | "essence" => "runecraft",
-        "enchant" | "alch" | "superheat" => "magic",
+        "enchant" | "alch" | "superheat" | "telegrab" => "magic",
+        "bury" => "prayer",
         "fight" => match tail.split('/').next().unwrap_or("") {
             "ranged" => "ranged",
             "magic" => "magic",

@@ -161,7 +161,8 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             None => (true, false),
         },
         NodeKind::ObtainItems { item, count } => {
-            let held = holdings_count(job, item);
+            let quota = matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
+            let held = if quota { holdings_count(job, item) } else { lifescape_planner::tools::family_held(item, *count, &|name| holdings_count(job, name)) };
             life.nodes[index].progress_current = held;
             (held >= *count, method == "market:buy")
         }

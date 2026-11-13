@@ -590,7 +590,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
 | `spin:<produit>` | `spin` | `<intrant>` (`wool`) | `--level crafting N`, `--want`, `--site` (rouet) |
-| `pottery:<produit>` | `pottery` | — (le suffixe nomme le produit : `pot_empty`, `piedish`, `bowl_empty`) | `--level crafting N`, `--want`, `--site` ; **à faire côté script : accepter le produit en positionnel** |
+| `pottery:<produit>` | `pottery` | `<produit>` (`pot_empty`, `piedish`, `bowl_empty`) | `--level crafting N`, `--want`, `--site` ; **à faire côté script : accepter le produit en positionnel (aujourd'hui : pots seulement)** |
 | `cut:<gemme>` | `cut_gems` | `<brut>` (`uncut_sapphire`) | `--want` ; ciseau = outil porté |
 | `craft:<cuir>` | `leatherwork` | `<produit>` | `--want` ; aiguille portée, fil consommé |
 | `tan:<peau>` | `leatherwork` | `<peau>` | `--want`, `--site` (tanneur), `toll`, `--wear` |
