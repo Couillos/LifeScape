@@ -387,6 +387,17 @@ pub(crate) fn plan_budgeted(
     yield_: &mut dyn FnMut() -> bool,
     budget: Duration,
 ) -> Result<Plan, NoRoute> {
+    // Sealed pocket (walkable, walled in, no edge lands in it): the
+    // searches below would sweep the whole world to say Disconnected.
+    if crate::pocket::sealed(world, tables, shared, from, dest) {
+        return Err(NoRoute {
+            closest_reachable: from,
+            blocked_by_requirements: Vec::new(),
+            disabled_transitions_nearby: disabled_nearby(tables, dest),
+            reason: NoRouteReason::Disconnected,
+            blockers: seal_nearby(world, tables, dest),
+        });
+    }
     let deadline = std::time::Instant::now() + budget;
     let verdict_cut = match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),

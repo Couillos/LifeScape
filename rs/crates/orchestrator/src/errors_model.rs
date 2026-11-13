@@ -237,6 +237,12 @@ fn tile_of(value: &Value) -> Option<(i64, i64, i64)> {
 pub fn from_dossier(file_name: &str, mtime: i64, dossier: &Value, zone_of: ZoneOf<'_>) -> Option<ErrorRecord> {
     let error = dossier.get("error");
     let kind = error.get("kind").as_str().filter(|kind| !kind.is_empty())?.to_string();
+    // A stop (budget end, operator unload, brain stop) that lands mid-walk
+    // still writes its dossier for replay, but it is no failure: the run
+    // report already says `budget_exhausted` / `stopped`.
+    if kind == "Interrupted" {
+        return None;
+    }
     let account = dossier.get("account").as_str().unwrap_or("").to_string();
     let observed = error.get("observed").as_str().unwrap_or("");
     let message = if observed.is_empty() { error.get("expected").as_str().unwrap_or("") } else { observed };

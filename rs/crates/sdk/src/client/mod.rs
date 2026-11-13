@@ -20,6 +20,7 @@ pub mod travel;
 pub mod travel_custom;
 pub mod travel_dossier;
 pub mod travel_hook;
+pub mod travel_pause;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

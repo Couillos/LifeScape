@@ -94,6 +94,55 @@ Mobilier qui « s'ouvre » (catégories `chest_closed` 33, `cupboard_closed`
 porte (`loctypes.rs`) : avant, le plan « ouvrait » les tiroirs 350 de
 Varrock pour marcher dessus (DoorDidNotOpen). Golden `nav/tests/furniture.rs`.
 
+Pause marché pendant un trajet (2026-11-13, `client/travel_pause.rs`) :
+la porte de pause de session (`session_rescue::gate_market`) joue la
+livraison inline à la fin d'un pump, souvent celui d'une jambe en vol,
+puis ramène le bot à la tuile de départ de la pause et la clôt
+(`Bot::note_pause`, compteur `pause_ticks`). Le trajet interrompu
+reprenait sur un état périmé (échéance consommée par 400-4900 ticks de
+pause, file de marche serveur remplacée, registre de portes vidé par le
+trajet imbriqué) : en 40 min, 28 `walk timed out`/`door loc timed out`,
+~30 `step refused` et 5 `door did not open` (dont les portes du château
+1516/1519 et les `Timeout` de b5xntyz6 vers (3208,3237)) étaient des
+pauses. Désormais : `await_leg` s'arrête dès qu'une pause s'est close
+(marqueur `paused-mid-trip`), et un échec de segment avec une pause close
+pendant le plan replanifie depuis la position, sans arête bannie, sans
+dossier, échéance repoussée de la durée de la pause
+(`run_plan_through_pauses`, au plus `PAUSE_REPLANS` = 2 par trajet,
+hors du replan normal). Un segment porte dont le bot est déjà sur
+`cross_to` tient (plan demandé pendant le dernier pas d'une traversée :
+3 « off stand »). `suspect_tile` ne lit plus un « pas » nul ou long
+(jambe renvoyée après pause) comme un mur fermé.
+
+Péage sans pièces : `allow_paid` d'un script n'ouvre les chemins payants
+que si le sac porte le péage (`travel_custom::paid_allowed`, 10 pièces,
+`border_gate.rs2` refuse sans message sous 10) ; sinon le plan contourne
+la clôture (golden `peage_detour`) ou répond `PaidOnly coins:10`.
+Avant : bct5rxpg (ground_pickup, 0 pièce) cliquait la porte 2882 puis
+2883, « Yes, ok. », rien, deux `DoorDidNotOpen`.
+
+Poches scellées (`nav/src/pocket.rs`) : une destination marchable mais
+emmurée (coin entre table, tabouret et murs, bande derrière une
+clôture) faisait balayer tout le monde F2P à la recherche avant
+`Disconnected` (4-6 s par plan live, 21 dossiers melee/40 min, visées par
+`approach_npc`). Un flood arrière depuis la destination, sur la vue la
+plus permissive (toutes portes à op d'ouverture ouvertes, péages,
+exigences et F2P ignorés, règle de pas serveur), plafonné à 512 tuiles :
+s'il se ferme sans toucher le départ et qu'aucune montée/arête custom n'y
+atterrit, le plan répond `Disconnected` tout de suite (closest = départ)
+et `walk_costs` laisse la cible à `None` sans épuiser la recherche
+(lève en partie la « limite connue » ci-dessous pour ces cibles).
+Goldens `poche_*` (4-5 ms), test `pocket::tests`.
+
+Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
+`locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden
+`porte_verrouillee_varrock`.
+
+Arrêts (`Interrupted`) : fin de budget (`budget_exhausted`), unload ou
+stop du cerveau tombant en pleine marche écrivent encore leur dossier
+(rejouable) mais `errors_model::from_dossier` ne les ingère plus comme
+erreurs (26 lignes « run stopped » melee en 40 min, toutes légitimes).
+
 Veille de blocage d'une jambe (`await_leg`, SDK) : une tuile plus loin
 sur la jambe compte comme progrès, pas seulement un rapprochement de sa
 dernière tuile (une jambe qui contourne une clôture s'éloigne de sa fin
