@@ -12,30 +12,44 @@
 //! open most of the time, so the planner reads the open leaves as
 //! walls for good: a shut gate only costs a tile or two of detour,
 //! an open one no longer refuses the step.
+//!
+//! Single doors follow the same rule. Content `doors/scripts/doors.rs2`
+//! (`[oploc1,_door_closed]`): a closed straight door is deleted and
+//! re-added for 500 ticks one tile towards its angle (`door_open`, the
+//! same offset as `gate_set_close(angle, 1)`), rotated `angle + 1`.
+//! That leaf walls an edge of the tile past the doorway: Port Sarim cook
+//! house 1530 (3014,3237) angle east opens to 1531 (3015,3237) angle
+//! south, and the plan stepping north onto the stand from (3015,3236)
+//! was refused live, replanned identical (~75 refusals/hour, 2026-11-13).
 
 use super::flags::{ANGLE_EAST, ANGLE_NORTH, ANGLE_SOUTH, ANGLE_WEST, WALL_STRAIGHT};
 use super::loc_collision::CollisionMap;
 
-/// Role of a closed double gate leaf (content categories
-/// `gate_main_closed` / `gate_outer_closed`, `content/pack/category.pack`
-/// ids 28 / 29): the click on either opens both, the main leaf decides
-/// where they swing.
+/// Role of a closed swinging leaf: a double gate leaf (content
+/// categories `gate_main_closed` / `gate_outer_closed`,
+/// `content/pack/category.pack` ids 28 / 29: the click on either opens
+/// both, the main leaf decides where they swing) or a single door
+/// (`door_closed`, id 19).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateLeaf {
     Main,
     Outer,
+    Door,
 }
 
 /// Category id of `gate_main_closed` in the engine pack.
 pub const GATE_MAIN_CLOSED_CATEGORY: i64 = 28;
 /// Category id of `gate_outer_closed` in the engine pack.
 pub const GATE_OUTER_CLOSED_CATEGORY: i64 = 29;
+/// Category id of `door_closed` in the engine pack.
+pub const DOOR_CLOSED_CATEGORY: i64 = 19;
 
-/// Gate role from a loctype category id, `None` for every other loc.
+/// Leaf role from a loctype category id, `None` for every other loc.
 pub fn gate_leaf_of_category(category: i64) -> Option<GateLeaf> {
     match category {
         GATE_MAIN_CLOSED_CATEGORY => Some(GateLeaf::Main),
         GATE_OUTER_CLOSED_CATEGORY => Some(GateLeaf::Outer),
+        DOOR_CLOSED_CATEGORY => Some(GateLeaf::Door),
         _ => None,
     }
 }
@@ -91,6 +105,17 @@ pub fn paint_gate_swings(collision: &mut CollisionMap, leaves: &[ClosedLeaf]) {
             collision.change_wall(leaf_x, leaf_z, main.level, leaf_angle, WALL_STRAIGHT, false, true);
         }
     }
+    for door in leaves.iter().filter(|leaf| leaf.leaf == GateLeaf::Door && leaf.shape == WALL_STRAIGHT) {
+        let (leaf_x, leaf_z, leaf_angle) = open_door_leaf(door.x, door.z, door.angle);
+        collision.change_wall(leaf_x, leaf_z, door.level, leaf_angle, WALL_STRAIGHT, false, true);
+    }
+}
+
+/// Where a closed straight single door lands once open: one tile towards
+/// its angle (`door_open`), rotated `angle + 1` (`doors.rs2`).
+pub fn open_door_leaf(door_x: i32, door_z: i32, angle: u8) -> (i32, i32, u8) {
+    let (step_x, step_z) = swing_offset(angle);
+    (door_x + step_x, door_z + step_z, (angle + 1) % 4)
 }
 
 #[cfg(test)]
@@ -113,8 +138,26 @@ mod tests {
         assert_eq!(open_leaves(2924, 3292, ANGLE_SOUTH, false), vec![(2924, 3291, ANGLE_EAST)]);
     }
 
+    /// Live 2026-11-13 (dossiers will_field-19701/19717/19732): 1530
+    /// (3014,3237) angle east -> 1531 (3015,3237) angle south.
+    #[test]
+    fn open_door_leaf_matches_live_position() {
+        assert_eq!(open_door_leaf(3014, 3237, ANGLE_EAST), (3015, 3237, ANGLE_SOUTH));
+        let mut map = CollisionMap::new();
+        for x in 3012..3020 {
+            for z in 3234..3240 {
+                map.set(x, z, 0, 0);
+            }
+        }
+        let door = ClosedLeaf { x: 3014, z: 3237, level: 0, leaf: GateLeaf::Door, shape: WALL_STRAIGHT, angle: ANGLE_EAST };
+        paint_gate_swings(&mut map, &[door]);
+        assert!(!step_open(&map, 3015, 3236, 0, 0, 1), "refused live step onto the stand stays shut");
+        assert!(step_open(&map, 3016, 3237, 0, -1, 0), "stand still reachable from the east");
+    }
+
     #[test]
     fn categories_name_the_two_closed_leaves() {
+        assert_eq!(gate_leaf_of_category(19), Some(GateLeaf::Door));
         assert_eq!(gate_leaf_of_category(28), Some(GateLeaf::Main));
         assert_eq!(gate_leaf_of_category(29), Some(GateLeaf::Outer));
         assert_eq!(gate_leaf_of_category(41), None);
