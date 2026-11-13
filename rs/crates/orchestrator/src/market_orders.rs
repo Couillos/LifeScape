@@ -188,6 +188,14 @@ impl MarketService {
         object(vec![("ok", Value::Bool(true)), ("cancelled", Value::Int(order_id))])
     }
 
+    /// True while `deal` is in flight (neither settled nor failed).
+    pub(crate) fn deal_open(&self, deal: u64) -> bool {
+        self.lock_engine()
+            .deals
+            .get(&deal)
+            .is_some_and(|row| !matches!(row.status, lifescape_market::DealStatus::Settled | lifescape_market::DealStatus::Failed))
+    }
+
     /// Resting carnet rows of `account` on `item` and `side`: open ones
     /// and the resting remainder of partly filled (`matched`) ones.
     pub(crate) fn resting_rows(&self, account: &str, item: i64, side: OrderSide) -> Vec<lifescape_store::Order> {

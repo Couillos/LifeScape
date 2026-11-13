@@ -750,6 +750,10 @@ impl Bot {
         ));
         self.publish_plan(&plan, dest);
         let start = Tile { x: self.world.x, z: self.world.z, level: self.world.level };
+        // Pauses counted from the trip's start: a failure the in-plan
+        // pause replans could not absorb still replans without a dossier
+        // when a market pause ran during the trip.
+        let pauses_before = self.pauses_done;
         let outcome = match self.run_plan_through_pauses(&mut plan, dest, &options, &mut deadline, &mut pause_budget) {
             TripRun::Done => Ok(()),
             TripRun::Failed(failed, err) => Err((failed, err)),
@@ -762,18 +766,29 @@ impl Bot {
                 self.route_target = None;
                 Ok(())
             }
-            Err((failed, err)) if is_replanable(&err) => {
-                // Fled (hook marker): the bot moved, nothing failed — replan
-                // from the new position with no edge banned.
+            Err((failed, err)) if is_replanable(&err) || paused_mid_trip(pauses_before, self.pauses_done, &err) => {
+                // Fled (hook marker) or a market pause ran inside the
+                // trip: the bot moved, nothing failed — replan from the
+                // new position with no edge banned and no dossier.
                 let fled = matches!(&err, Error::StepRefused(detail) if detail.starts_with(FLED_MARK));
-                let edge = if fled {
+                let paused = paused_mid_trip(pauses_before, self.pauses_done, &err);
+                let edge = if fled || paused {
                     None
                 } else {
                     ban_for(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))], self)
                 };
                 let expected = seg_summary(&plan.segments[failed.min(plan.segments.len().saturating_sub(1))]);
-                let first = self.fail(start, dest, &options, Some(&plan), Some(failed), &expected, &err);
-                self.log(&format!("nav fail seg {}/{segments} at {:?}: {err} (dossier: {})", failed + 1, self.position(), dossier_text(&first)));
+                let first = if paused {
+                    // The pause billed its own ticks: the trip gets a fresh
+                    // budget from here.
+                    deadline = self.walk_deadline(timeout)?;
+                    self.log(&format!("nav seg {}/{segments} cut by a market pause at {:?} ({err}), replanning from here", failed + 1, self.position()));
+                    err
+                } else {
+                    let first = self.fail(start, dest, &options, Some(&plan), Some(failed), &expected, &err);
+                    self.log(&format!("nav fail seg {}/{segments} at {:?}: {err} (dossier: {})", failed + 1, self.position(), dossier_text(&first)));
+                    first
+                };
                 if let Some(edge) = edge {
                     options.excluded_edges.insert(edge);
                 }
@@ -1419,6 +1434,16 @@ pub(crate) fn seg_summary(seg: &Segment) -> String {
 
 /// Only these four replan once with the faulty edge banned; everything
 /// else (interrupt, io, timeout, choice, travel) goes to the caller.
+/// A segment failure that a market pause explains (live 2026-11-13,
+/// bct5rxpg/bdr53jee/b5xntyz6, "last game: Accepted trade."): the
+/// session gate ran a delivery inside the trip's pump, the bot came back
+/// to (or near) the pause tile, and the stale leg read as a step refusal,
+/// a stall or a door that never swung. Any failure after a finished
+/// pause replans from here, except the operator and transport stops.
+pub(crate) fn paused_mid_trip(pauses_before: u64, pauses_now: u64, err: &Error) -> bool {
+    pauses_now != pauses_before && !matches!(err, Error::Interrupted(_) | Error::Io(_) | Error::Login(_))
+}
+
 fn is_replanable(err: &Error) -> bool {
     matches!(
         err,
@@ -1544,6 +1569,20 @@ mod tests {
 
     fn empty_plan() -> Plan {
         Plan { segments: Vec::new(), cost: 0, adjusted_dest: None, dest_blocker: None }
+    }
+
+    /// bct5rxpg 2026-11-13: a delivery paused the trip mid-leg; the stale
+    /// leg read "step refused" with "last game: Accepted trade.". A
+    /// finished pause explains any failure but the operator/transport
+    /// stops; without a pause nothing changes.
+    #[test]
+    fn a_market_pause_explains_a_cut_trip() {
+        let refused = Error::StepRefused("step 0 shut".to_string());
+        assert!(paused_mid_trip(3, 4, &refused));
+        assert!(paused_mid_trip(3, 4, &Error::Timeout("leg stalled".to_string())), "a stall after the pause too");
+        assert!(!paused_mid_trip(4, 4, &refused), "no pause: the usual ban and dossier");
+        assert!(!paused_mid_trip(3, 4, &Error::Interrupted("stop".to_string())), "operator stop stays a stop");
+        assert!(!paused_mid_trip(3, 4, &Error::Io("closed".to_string())), "transport stays transport");
     }
 
     fn offline_bot(x: i32, z: i32) -> Bot {

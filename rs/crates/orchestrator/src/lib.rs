@@ -62,6 +62,9 @@ mod market_service_tests;
 #[path = "market_crossing_tests.rs"]
 mod market_crossing_tests;
 #[cfg(test)]
+#[path = "market_commit_tests.rs"]
+mod market_commit_tests;
+#[cfg(test)]
 #[path = "market_history_tests.rs"]
 mod market_history_tests;
 #[cfg(test)]

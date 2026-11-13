@@ -225,6 +225,16 @@ pub(crate) fn pose_market(shared: &Shared, script: &str, args: &[String], tick: 
 /// operator stopped the run.
 pub(crate) fn gate_tick(shared: &Shared, bot: &mut Bot) -> bool {
     let stopped = || shared.stop_requested.load(Ordering::SeqCst);
+    // Inline pauses belong to a script thread only (live 2026-11-13, t01
+    // deals 1671/1672/1684): an idle worker's serve thread pumps too
+    // (`idle_pump`), and a delivery run there blocked the socket accept
+    // for the whole trip. Every daemon pose timed out, the daemon resent
+    // the stale convocation, each resend re-ran it (a 500-tick bank trip
+    // for closed deals) and overwrote the fresh one. Idle poses run on
+    // their own thread (`drain_idle`, `drain_idle_market`).
+    if !shared.inner.lock().unwrap().script_alive {
+        return !stopped();
+    }
     if shared.inner.lock().unwrap().held || shared.rescue_gate.swap(true, Ordering::SeqCst) {
         return !stopped();
     }
@@ -560,6 +570,19 @@ mod tests {
         }
     }
 
+    /// A worker whose script thread holds the bot: the only place the
+    /// gate pauses inline.
+    fn script_shared(bot: Bot) -> Shared {
+        let shared = test_shared(bot);
+        {
+            let mut inner = shared.inner.lock().unwrap();
+            inner.script_alive = true;
+            inner.phase = "running".to_string();
+            inner.status = "running".to_string();
+        }
+        shared
+    }
+
     #[test]
     fn live_geography_detects_maze_and_tower() {
         assert_eq!(detect_live(&idle_bot_at(0, 2900, 4560)), Some(EventKind::Maze));
@@ -636,7 +659,7 @@ mod tests {
     /// climbing on the same bot, pending consumed once).
     #[test]
     fn gate_runs_posed_rescue_inline_and_resumes() {
-        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let shared = script_shared(idle_bot_at(0, 3220, 3220));
         let mut bot = idle_bot_at(0, 3220, 3220);
         lifescape_scripts::attach_live_tables(&mut bot);
         // Cube rescue with an empty pack clears without touching the net:
@@ -672,7 +695,7 @@ mod tests {
     /// offline-safe, still exercises pose -> inline run -> resume.
     #[test]
     fn gate_runs_posed_market_inline_and_resumes() {
-        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let shared = script_shared(idle_bot_at(0, 3220, 3220));
         let mut bot = idle_bot_at(0, 3220, 3220);
         lifescape_scripts::attach_live_tables(&mut bot);
         super::pose_market(&shared, "rescue_cube", &[], 7);
@@ -685,11 +708,29 @@ mod tests {
         assert!(shared.pending_market.lock().unwrap().is_none(), "pending consumed once");
     }
 
+    /// Live 2026-11-13 (t01, deals 1664 then 1671/1672/1684): the idle
+    /// serve thread pumps too; a pose run inline there blocked the socket
+    /// for the whole delivery and the daemon resent the stale convocation
+    /// forever. Without a script thread the gate leaves the pose to
+    /// `drain_idle_market` (own thread), the serve loop stays free.
+    #[test]
+    fn idle_serve_thread_never_runs_a_pose_inline() {
+        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let mut bot = idle_bot_at(0, 3220, 3220);
+        lifescape_scripts::attach_live_tables(&mut bot);
+        super::pose_market(&shared, "rescue_cube", &[], 7);
+        pose(&shared, EventKind::Cube, (0, 3220, 3220), 7);
+        assert!(super::gate_tick(&shared, &mut bot), "serve loop alive");
+        assert!(shared.pending_market.lock().unwrap().is_some(), "market pose kept for its own thread");
+        assert!(shared.pending_rescue.lock().unwrap().is_some(), "rescue pose kept for its own thread");
+        assert!(!shared.rescue_gate.load(std::sync::atomic::Ordering::SeqCst), "gate never taken");
+    }
+
     /// Off the safe point (modal open) the market pose waits: pending
     /// kept, loop alive. At the safe point it runs and clears.
     #[test]
     fn market_pose_defers_off_the_safe_point() {
-        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let shared = script_shared(idle_bot_at(0, 3220, 3220));
         let mut bot = idle_bot_at(0, 3220, 3220);
         lifescape_scripts::attach_live_tables(&mut bot);
         bot.world.modal = Some(lifescape_sdk::world::Modal { layer: "chat".to_string(), interface_id: 1 });
@@ -734,7 +775,7 @@ mod tests {
     /// before the market pose, which waits its turn.
     #[test]
     fn rescue_runs_before_market_on_one_level() {
-        let shared = test_shared(idle_bot_at(0, 3220, 3220));
+        let shared = script_shared(idle_bot_at(0, 3220, 3220));
         let mut bot = idle_bot_at(0, 3220, 3220);
         lifescape_scripts::attach_live_tables(&mut bot);
         pose(&shared, EventKind::Cube, (0, 3220, 3220), 7);

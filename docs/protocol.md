@@ -43,6 +43,9 @@ s'était retrouvé à 16-28 cases, hors vue. Règle de rendez-vous
 (`market_handover::meet_step`) : frapper seulement un partenaire immobile
 depuis 3 ticks à 3 cases au plus de sa propre case, sinon attendre sur
 (ou revenir à) sa case. La ligne d'attente journalise `debug_players()`.
+Plusieurs groupes : un partenaire hors de vue depuis 100 ticks cède le
+tour à un groupe suivant dont le partenaire attend déjà, immobile, sur
+son point (`market_handover::serve_first`, voir `economy.md`).
 
 Actions via les méthodes `Bot` (`src/client/actions.rs`, `src/client/movement.rs`,
 `src/client/approach.rs`, `src/client/doors.rs`) : `op_loc`, `op_npc_t`,

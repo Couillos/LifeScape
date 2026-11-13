@@ -57,8 +57,14 @@ impl Ledger {
         self.coins.get(account).cloned().unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub(crate) fn stock_of(&self, account: &str, item: i64) -> i64 {
         self.stock.get(&(account.to_string(), item)).cloned().unwrap_or(0)
+    }
+
+    /// Every `(object, units)` the ledger holds for `account`.
+    pub(crate) fn stock_rows(&self, account: &str) -> Vec<(i64, i64)> {
+        self.stock.iter().filter(|((owner, _), _)| owner == account).map(|((_, item), qty)| (*item, *qty)).collect()
     }
 
     pub(crate) fn credit_coins(&mut self, account: &str, amount: i64) {
@@ -656,9 +662,10 @@ impl MarketService {
             return Self::err(error.to_string());
         }
         {
-            let engine = self.lock_engine();
-            let have_item = engine.ledger.stock_of(&account, item);
-            let have_coins = engine.ledger.coins_of(&account);
+            // Net of the account's resting orders and in-flight deals
+            // (`market_audit::uncommitted`): promised lots are never
+            // offered twice (deals 1716/1721/1772, 2026-11-13).
+            let (have_item, have_coins) = self.free_coverage(&account, Self::order_side(side), item);
             if let Err(error) = check_coverage(side, qty, price, have_item, have_coins) {
                 return Self::err(error.to_string());
             }

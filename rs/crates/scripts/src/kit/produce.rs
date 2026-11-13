@@ -412,12 +412,31 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
 fn drain_chained(bot: &mut Bot, job: &ProduceJob<'_>, target: u32, consumed: &mut u32, seen_death: &mut usize) {
     let total = pack_total(bot, job.input) + *consumed;
     let drain_target = bot.world.ticks + ITEM_TICKS * u64::from(target.saturating_sub(*consumed)) + UI_TICKS;
-    while bot.world.ticks < drain_target && *consumed < target && pack_total(bot, job.input) > 0 {
+    let mut left = pack_total(bot, job.input);
+    let mut last_progress = bot.world.ticks;
+    while bot.world.ticks < drain_target && *consumed < target && left > 0 {
         if bot.pump(2).is_err() || died(bot, seen_death) {
+            break;
+        }
+        let now_left = pack_total(bot, job.input);
+        if now_left < left {
+            left = now_left;
+            last_progress = bot.world.ticks;
+        }
+        if chain_stalled(bot.world.ticks, last_progress) {
             break;
         }
     }
     *consumed = total.saturating_sub(pack_total(bot, job.input));
+}
+
+/// True once the server's make-X chain consumed nothing for a whole item
+/// window. Live 2026-11-13 (will_field, spin with `want` 0): the level-up
+/// dialog broke the chain at ball 17 with wool left, and the drain (sized
+/// `ITEM_TICKS` × `u32::MAX`) waited forever with the chat modal open, so
+/// the market gate never found a safe point: seven deals `no_show`.
+pub fn chain_stalled(now: u64, last_progress: u64) -> bool {
+    now.saturating_sub(last_progress) >= ITEM_TICKS
 }
 
 enum SiteDone {
@@ -549,6 +568,18 @@ mod tests {
         assert_eq!(match_option(&options, "TAN"), Some(3), "case-insensitive");
         assert_eq!(match_option(&options, "make 10"), None, "no guess on mismatch");
         assert_eq!(match_option(&[], "tan"), None, "empty options never match");
+    }
+
+    /// will_field 2026-11-13: a chained make-X that stops consuming (the
+    /// level-up dialog broke it, wool left) ends after one item window,
+    /// whatever the `want` (0 = all made the drain endless).
+    #[test]
+    fn a_broken_chain_stops_the_drain() {
+        use super::{chain_stalled, ITEM_TICKS};
+        assert!(!chain_stalled(720, 720), "the ball just landed");
+        assert!(!chain_stalled(720 + ITEM_TICKS - 1, 720), "still inside one item window");
+        assert!(chain_stalled(720 + ITEM_TICKS, 720), "a whole window without a ball: the chain broke");
+        assert!(!chain_stalled(5, 720), "tick reset saturates");
     }
 
     /// Counter answers: all carried when wanted is 0, capped at carried.

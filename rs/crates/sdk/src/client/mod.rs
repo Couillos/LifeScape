@@ -179,6 +179,9 @@ pub struct Bot {
     /// never as work (live 2026-11-13: a 1500-tick fill run killed its
     /// own inline delivery at the square, deal `timeout`).
     pub pause_since: Option<u64>,
+    /// Market pauses finished so far (`note_pause`): a trip whose plan
+    /// spans one replans from where the pause left the bot.
+    pub pauses_done: u64,
     /// Zone label for log stamps (`zones::zone_name`), refreshed by the
     /// pump hook; "?" when unknown. Never a silent fallback: the "?" shows.
     pub zone_label: String,
@@ -231,6 +234,7 @@ impl Bot {
             pause_gate: None,
             pause_ticks: 0,
             pause_since: None,
+            pauses_done: 0,
             zone_label: "?".to_string(),
             run_latch: false,
         }
@@ -354,6 +358,7 @@ impl Bot {
     pub fn note_pause(&mut self, ticks: u64) {
         self.pause_ticks = self.pause_ticks.saturating_add(ticks);
         self.pause_since = None;
+        self.pauses_done = self.pauses_done.saturating_add(1);
     }
 
     /// Open one market pause at the current tick (session gate only);

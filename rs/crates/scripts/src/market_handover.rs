@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use lifescape_sdk::Bot;
 
 use crate::kit::bank::nearest_bank;
-use crate::market_client::{deal_report, my_deals, offer_state, OfferState};
-use crate::market_lots::DealGroup;
+use crate::market_client::{deal_report, my_deals, offer_state, trade_id, OfferState};
+use crate::market_lots::{Carried, DealGroup};
 use crate::ScriptError;
 
 /// How long the buyer watches a partial offer grow before refusing it.
@@ -205,6 +205,42 @@ pub const RETURN_TICKS: u64 = 120;
 /// Cadence of the "cannot see" diagnostic while waiting on the tile.
 pub const SEE_LOG_TICKS: u64 = 200;
 
+/// Ticks without any sight of the partner before a later group whose
+/// partner already waits at its point is served first.
+pub const SERVE_FIRST_AFTER_TICKS: u64 = 100;
+
+/// How one group's turn ended (`market deliver`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Served {
+    /// Terminal for this group: settled (`true`) or failed/closed.
+    Done(bool),
+    /// Index (in the `later` list) of a group whose partner waits at its
+    /// point: served first, this group comes back after it.
+    ServeFirst(usize),
+}
+
+/// Outcome of one meeting wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Meet {
+    /// The daemon verdict (`Alive`: the window is open).
+    Watch(DealWatch),
+    /// Index (in `later`) of a group to serve before this one.
+    ServeFirst(usize),
+}
+
+/// Pure queue rule (live 2026-11-13, deals 1684/1687/1689): bd23dqpq
+/// waited on its own tile for an absent bcm9kxn4 (deal 1687) while
+/// nina_rhodes stood still at the 1689 point six tiles away; she waited
+/// out the hard cap and reported the present, busy bd23dqpq `no_show`.
+/// A partner out of sight for `SERVE_FIRST_AFTER_TICKS` yields to the
+/// first later group whose partner is ready.
+pub fn serve_first(unseen_for: u64, ready: &[bool]) -> Option<usize> {
+    if unseen_for < SERVE_FIRST_AFTER_TICKS {
+        return None;
+    }
+    ready.iter().position(|ready| *ready)
+}
+
 /// What the waiting side does next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeetStep {
@@ -271,24 +307,47 @@ fn partner_tile(bot: &Bot, partner: &str) -> Option<(i32, i32)> {
 /// until the other side knocks back). Waits on the own tile for a late
 /// partner while the deal lives, checked every `DEAL_WATCH_TICKS`
 /// whatever the deadline, never past the hard cap; knocks only a partner
-/// holding still at the meeting point (`meet_step`). `Alive` means the
-/// window is open.
-pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<DealWatch, ScriptError> {
+/// holding still at the meeting point (`meet_step`). `Watch(Alive)` means
+/// the window is open. While this partner stays out of sight, a partner
+/// of a `later` group already waiting at its own point is served first
+/// (`serve_first`).
+pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64, later: &[&DealGroup]) -> Result<Meet, ScriptError> {
     let mut last_check = bot.world.ticks;
     let mut last_log: Option<u64> = None;
     let mut still = PartnerStill::default();
+    let mut later_still: Vec<PartnerStill> = later.iter().map(|_| PartnerStill::default()).collect();
+    let mut last_seen = bot.world.ticks;
     while bot.trade_modal().is_none() {
         if bot.world.ticks.saturating_sub(last_check) >= DEAL_WATCH_TICKS {
             last_check = bot.world.ticks;
             let watch = deal_watch(bot, &group.ids, deadline);
             if watch != DealWatch::Alive {
-                return Ok(watch);
+                return Ok(Meet::Watch(watch));
             }
         }
         if bot.world.ticks >= deadline + WAIT_PAST_DEADLINE_TICKS {
-            return Ok(DealWatch::GaveUp);
+            return Ok(Meet::Watch(DealWatch::GaveUp));
         }
         let seen = partner_tile(bot, &group.partner);
+        if seen.is_some() {
+            last_seen = bot.world.ticks;
+        }
+        let ready: Vec<bool> = later
+            .iter()
+            .zip(later_still.iter_mut())
+            .map(|(other, watch)| {
+                let spot = partner_tile(bot, &other.partner);
+                let held = watch.observe(spot, bot.world.ticks);
+                spot.is_some_and(|tile| chebyshev(tile, other.tile) <= MEET_RADIUS) && held >= PARTNER_STILL_TICKS
+            })
+            .collect();
+        if let Some(index) = serve_first(bot.world.ticks.saturating_sub(last_seen), &ready) {
+            bot.log(&format!(
+                "deals {:?}: {} out of sight, serving {} first (deals {:?}, waiting at its point)",
+                group.ids, group.partner, later[index].partner, later[index].ids
+            ));
+            return Ok(Meet::ServeFirst(index));
+        }
         let held = still.observe(seen, bot.world.ticks);
         let (_, my_x, my_z) = bot.position();
         let step = meet_step(group.tile, (my_x, my_z), seen, held);
@@ -329,7 +388,7 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<D
             }
         }
     }
-    Ok(if bot.trade_modal().is_some() { DealWatch::Alive } else { DealWatch::GaveUp })
+    Ok(Meet::Watch(if bot.trade_modal().is_some() { DealWatch::Alive } else { DealWatch::GaveUp }))
 }
 
 /// What the buyer read from the seller's side of the window.
@@ -392,9 +451,12 @@ pub fn redeposit_keep(carried: &[u16], touched: &[u16]) -> Vec<u16> {
 }
 
 /// Best-effort redeposit of the traded stacks (notes land back as base
-/// stock). Loud when it fails: a silent drop here loses the lots with
-/// no trace.
-pub fn redeposit(bot: &mut Bot, touched: &[u16]) {
+/// stock), then the paused script's own pack comes back out (`restore`,
+/// `market_lots::carried_before`): coins a shop buy was carrying, the
+/// load a woodcutter was walking to the bank. Locked units stay banked
+/// (outside the trade procedure). Loud when it fails: a silent drop here
+/// loses the lots with no trace.
+pub fn redeposit(bot: &mut Bot, touched: &[u16], restore: &[Carried]) {
     let Ok(bank) = nearest_bank(bot) else { return };
     if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300).unwrap_or(false) {
         bot.log("redeposit skipped: bank did not open");
@@ -406,6 +468,26 @@ pub fn redeposit(bot: &mut Bot, touched: &[u16]) {
         match bot.bank_deposit_all(side_com, &keep, 300) {
             Ok(true) => {}
             other => bot.log(&format!("redeposit outcome: {other:?}")),
+        }
+    }
+    for stack in restore {
+        let note = trade_id(stack.base);
+        let form = if stack.noted && note != stack.base { note } else { stack.base };
+        // Only the missing part: a trip that never banked (nearest bank
+        // shut) still carries its pack, never withdraw it twice.
+        let missing = stack.units.saturating_sub(crate::kit::pack::pack_total(bot, form));
+        if missing == 0 {
+            continue;
+        }
+        let outcome = if form != stack.base {
+            bot.bank_withdraw_noted(stack.base, note, missing, 300)
+        } else {
+            bot.bank_withdraw(stack.base, missing, 300)
+        };
+        let outcome = outcome.map(|_| crate::kit::pack::pack_total(bot, form));
+        match outcome {
+            Ok(held) if held >= stack.units => {}
+            other => bot.log(&format!("restore of the paused pack: obj {} x{} ({}) came back as {other:?}", stack.base, stack.units, if stack.noted { "noted" } else { "base" })),
         }
     }
     let _ = bot.close_modal();
@@ -485,6 +567,19 @@ mod tests {
         assert_eq!(meet_step(own, (3188, 3429), Some((3200, 3430)), still), MeetStep::Return, "partner idle far from the point");
         assert_eq!(meet_step(own, (3217, 3426), Some((3216, 3426)), still), MeetStep::Knock, "knock drift around the point");
         assert_eq!(meet_step(own, own, None, 0), MeetStep::Wait, "partner not there yet");
+    }
+
+    /// Deal 1689: nina_rhodes waited still at her point while bd23dqpq
+    /// waited for an absent partner: past the unseen window, the ready
+    /// later group goes first; a partner merely late, or no ready group,
+    /// keeps the order.
+    #[test]
+    fn an_absent_partner_yields_to_a_ready_one() {
+        use super::{serve_first, SERVE_FIRST_AFTER_TICKS};
+        assert_eq!(serve_first(SERVE_FIRST_AFTER_TICKS, &[false, true]), Some(1));
+        assert_eq!(serve_first(SERVE_FIRST_AFTER_TICKS - 1, &[true]), None, "partner seen recently");
+        assert_eq!(serve_first(5000, &[false, false]), None, "nobody else ready");
+        assert_eq!(serve_first(5000, &[]), None, "last group");
     }
 
     /// Stillness counts from the first sighting at the same tile; a move

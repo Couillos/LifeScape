@@ -11,10 +11,10 @@ use lifescape_sdk::Bot;
 use crate::kit::pack::{obj_id, pack_total};
 use crate::market_client::{market_call, my_deals, trade_id};
 use crate::market_handover::{
-    meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports, SellerOffer,
+    meet_partner, parse_deliver_args, redeposit, seller_offer, wait_departure, DealWatch, DeliverReports, Meet, SellerOffer, Served,
     MEET_RETRIES, WAIT_PAST_DEADLINE_TICKS,
 };
-use crate::market_lots::{group_deals, secure_lots, DealGroup};
+use crate::market_lots::{carried_before, group_deals, secure_lots, touched_ids, DealGroup};
 use crate::{ScriptError, ScriptResult};
 
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
@@ -51,34 +51,46 @@ fn deliver_groups(
         bot.log(&format!("deal {id} is not mine, skipping"));
         reports.skip(&[id]);
     }
-    let mut touched = vec![coins];
-    for group in &groups {
-        let trade = trade_id(group.item);
-        touched.push(trade);
-        if group.item != trade {
-            touched.push(group.item);
-        }
+    // Every deal already closed (a stale convocation, t01 2026-11-13):
+    // no bank trip, the paused work resumes at once.
+    if groups.is_empty() {
+        bot.log("deliver: no open deal left in this convocation, nothing to do");
+        return Ok(0);
     }
+    let touched = touched_ids(&groups, coins);
     let mut ok = true;
+    // What the paused script carried comes back after the trades.
+    let restore = carried_before(bot);
     // Nearest bank in, Varrock west out: the lots of every group at once.
     let secured = secure_lots(bot, &groups, coins)?;
     let Some(flags) = secured else {
         for group in &groups {
             reports.report(bot, group, "failed", "timeout");
         }
+        redeposit(bot, &touched, &restore);
         return Ok(1);
     };
-    for (group, covered) in groups.iter().zip(flags) {
-        let ids = &group.ids;
+    let mut queue: Vec<usize> = Vec::new();
+    for (index, (group, covered)) in groups.iter().zip(flags).enumerate() {
         if !covered {
             // `short`, not `no_show`: the goods (or the coins) are not
             // there at all. The daemon cancels this side's orders instead
             // of relisting phantom stock that would fail forever.
-            bot.log(&format!("deals {ids:?}: lots short, reporting short"));
+            bot.log(&format!("deals {:?}: lots short, reporting short", group.ids));
             reports.report(bot, group, "failed", "short");
             ok = false;
             continue;
         }
+        queue.push(index);
+    }
+    // Groups go in deal order, except that a partner already waiting at
+    // its point is served while an absent one is awaited (`serve_first`),
+    // a bounded number of times.
+    let mut detours = 0usize;
+    let max_detours = 2 * groups.len();
+    while let Some(&index) = queue.first() {
+        let group = &groups[index];
+        let ids = &group.ids;
         // A late pose arrives with its tick deadline half burnt: past it,
         // the deal still goes as long as the daemon keeps it open (it is
         // the arbiter), up to a hard cap. A partner failure closes it
@@ -89,11 +101,13 @@ fn deliver_groups(
                 bot.log(&format!("deals {ids:?}: closed by the market before the walk"));
                 reports.skip(ids);
                 ok = false;
+                queue.remove(0);
                 continue;
             }
             DealWatch::GaveUp => {
                 reports.report(bot, group, "failed", "timeout");
                 ok = false;
+                queue.remove(0);
                 continue;
             }
         }
@@ -102,16 +116,26 @@ fn deliver_groups(
             bot.log(&format!("deals {ids:?}: square unreachable"));
             reports.report(bot, group, "failed", "timeout");
             ok = false;
+            queue.remove(0);
             continue;
         }
         for id in ids {
             let _ = market_call("deal_arrived", vec![("account", str_value(&bot.username)), ("deal", Value::Int(*id))]);
         }
-        if !meet_and_trade(bot, group, deadline, coins, reports)? {
-            ok = false;
+        let later: Vec<&DealGroup> = if detours < max_detours { queue[1..].iter().map(|later| &groups[*later]).collect() } else { Vec::new() };
+        match meet_and_trade(bot, group, deadline, coins, reports, &later)? {
+            Served::Done(settled) => {
+                ok &= settled;
+                queue.remove(0);
+            }
+            Served::ServeFirst(position) => {
+                detours += 1;
+                let target = queue.remove(position + 1);
+                queue.insert(0, target);
+            }
         }
     }
-    redeposit(bot, &touched);
+    redeposit(bot, &touched, &restore);
     let (level, x, z) = start;
     let _ = bot.travel_to(lifescape_sdk::plan::Tile { x, z, level });
     Ok(if ok { 0 } else { 1 })
@@ -121,24 +145,27 @@ fn deliver_groups(
 /// closes before the lots were verified (re-knock or walk click across
 /// a fresh window, deals 1116/1124) is nobody's fault: the pair meets
 /// again, at most `MEET_RETRIES` times, while the daemon keeps the deal
-/// open. True when the group settled.
-fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, reports: &mut DeliverReports) -> Result<bool, ScriptError> {
+/// open. `Done(true)` when the group settled; `ServeFirst(i)` hands the
+/// turn to `later[i]` before the window ever opened.
+fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, reports: &mut DeliverReports, later: &[&DealGroup]) -> Result<Served, ScriptError> {
     let ids = &group.ids;
     let trade = trade_id(group.item);
     let mut trading = false;
     let mut retries = 0u32;
     loop {
-        match meet_partner(bot, group, deadline)? {
-            DealWatch::Alive => {}
-            DealWatch::Closed => {
+        let others: &[&DealGroup] = if trading { &[] } else { later };
+        match meet_partner(bot, group, deadline, others)? {
+            Meet::ServeFirst(position) => return Ok(Served::ServeFirst(position)),
+            Meet::Watch(DealWatch::Alive) => {}
+            Meet::Watch(DealWatch::Closed) => {
                 bot.log(&format!("deals {ids:?}: closed by the market while waiting"));
                 reports.skip(ids);
-                return Ok(false);
+                return Ok(Served::Done(false));
             }
-            DealWatch::GaveUp => {
+            Meet::Watch(DealWatch::GaveUp) => {
                 bot.log(&format!("deals {ids:?}: partner absent"));
                 reports.report(bot, group, "failed", if trading { "timeout" } else { "no_show" });
-                return Ok(false);
+                return Ok(Served::Done(false));
             }
         }
         if !trading {
@@ -156,12 +183,12 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
                 }
                 SellerOffer::Closed => {
                     reports.report(bot, group, "failed", "timeout");
-                    return Ok(false);
+                    return Ok(Served::Done(false));
                 }
                 SellerOffer::Wrong => {
                     let _ = bot.trade_close();
                     reports.report(bot, group, "failed", "mismatch");
-                    return Ok(false);
+                    return Ok(Served::Done(false));
                 }
             }
         } else {
@@ -170,7 +197,7 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
                 bot.log(&format!("deals {ids:?}: lots gone"));
                 let _ = bot.trade_close();
                 reports.report(bot, group, "failed", "short");
-                return Ok(false);
+                return Ok(Served::Done(false));
             }
             (vec![(form, group.qty)], vec![(coins, group.coins)])
         };
@@ -201,7 +228,7 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
             }
         };
         reports.report(bot, group, outcome, reason);
-        return Ok(outcome == "settled");
+        return Ok(Served::Done(outcome == "settled"));
     }
 }
 

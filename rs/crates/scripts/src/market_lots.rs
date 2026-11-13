@@ -73,6 +73,20 @@ pub fn group_deals(jobs: &[(i64, i32, i32)], rows: &[DealRow]) -> (Vec<DealGroup
     (groups, unknown)
 }
 
+/// Pack ids a delivery handles (coins, every dealt form, base and
+/// note): what the redeposit takes back to the bank.
+pub fn touched_ids(groups: &[DealGroup], coins: u16) -> Vec<u16> {
+    let mut touched = vec![coins];
+    for group in groups {
+        let trade = trade_id(group.item);
+        touched.push(trade);
+        if group.item != trade {
+            touched.push(group.item);
+        }
+    }
+    touched
+}
+
 /// Carried units of an object in either form (base or banknote).
 pub fn carried(bot: &Bot, item: u16) -> u32 {
     let note = trade_id(item);
@@ -120,9 +134,55 @@ fn open_bank_here(bot: &mut Bot) -> Result<bool, ScriptError> {
     Ok(true)
 }
 
+/// Base object of a banknote id (`cert_<name>`), `None` for a base id.
+pub fn note_base(id: u16) -> Option<u16> {
+    let name = lifescape_gamedata::obj_by_id(usize::from(id)).and_then(|entry| entry.name)?;
+    let base = name.strip_prefix("cert_")?;
+    lifescape_gamedata::objs_by_name(base).into_iter().next().map(|entry| entry.obj_id as u16)
+}
+
+/// One stack the paused script carried: base object, units, and whether
+/// it rode as banknotes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Carried {
+    pub base: u16,
+    pub units: u32,
+    pub noted: bool,
+}
+
+/// What the delivery hands back to the paused script once the trades
+/// are done (live 2026-11-13, bdr53jee: a shop buy had withdrawn its
+/// coins and was walking to Gerrant when a delivery paused it; the trip
+/// banked everything but the tools and the shop answered "You don't
+/// have enough coins", `trade gave no harpoon` twice). Every carried
+/// stack but the tools (they never leave the pack), merged per form.
+pub fn pack_to_restore(carried: &[(u16, u32)], tools: &[u16], note_of: &dyn Fn(u16) -> Option<u16>) -> Vec<Carried> {
+    let mut out: Vec<Carried> = Vec::new();
+    for (id, units) in carried {
+        if tools.contains(id) || *units == 0 {
+            continue;
+        }
+        let (base, noted) = match note_of(*id) {
+            Some(base) => (base, true),
+            None => (*id, false),
+        };
+        match out.iter_mut().find(|stack| stack.base == base && stack.noted == noted) {
+            Some(stack) => stack.units += units,
+            None => out.push(Carried { base, units: *units, noted }),
+        }
+    }
+    out
+}
+
+/// Live form of `pack_to_restore` on the current pack.
+pub fn carried_before(bot: &Bot) -> Vec<Carried> {
+    let carried: Vec<(u16, u32)> = bot.backpack().1.into_iter().map(|(_, held)| held).collect();
+    pack_to_restore(&carried, &tool_ids(bot), &note_base)
+}
+
 /// Tools stay in the pack across the trip: the paused activity resumes
 /// with its axe, pickaxe or net.
-fn tool_ids(bot: &Bot) -> Vec<u16> {
+pub fn tool_ids(bot: &Bot) -> Vec<u16> {
     let mut keep: Vec<u16> = Vec::new();
     for spec in [&crate::kit::tools::AXE_SPEC, &crate::kit::tools::PICK_SPEC, &crate::kit::tools::FISH_SPEC] {
         keep.extend(spec.known_ids(bot));
@@ -249,6 +309,26 @@ mod tests {
         assert_eq!(seller_groups[0].ids, groups[0].ids);
         assert_eq!(seller_groups[0].qty, groups[0].qty);
         assert_eq!(seller_groups[0].coins, groups[0].coins);
+    }
+
+    /// bdr53jee 2026-11-13: the shop buy carried its coins (and a pot of
+    /// noted logs) into the pause; the delivery hands them back, tools
+    /// never left, notes keep their form, split stacks merge.
+    #[test]
+    fn the_paused_pack_is_handed_back() {
+        use super::{pack_to_restore, Carried};
+        let (coins, harpoon_net, logs, logs_note) = (995u16, 303u16, 1511u16, 1512u16);
+        let carried = [(coins, 40), (harpoon_net, 1), (logs, 3), (logs_note, 50), (logs, 2)];
+        let note_of = |id: u16| (id == logs_note).then_some(logs);
+        let restore = pack_to_restore(&carried, &[harpoon_net], &note_of);
+        assert_eq!(
+            restore,
+            vec![
+                Carried { base: coins, units: 40, noted: false },
+                Carried { base: logs, units: 5, noted: false },
+                Carried { base: logs, units: 50, noted: true },
+            ]
+        );
     }
 
     #[test]

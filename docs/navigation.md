@@ -28,7 +28,9 @@ refus, timeout, version biaisée après 1 resubmit. Jamais de plan local.
 Sans tables locales, les options sont celles par défaut (`f2p_only`, sans
 `satisfaits`) ; sans `plan_client`, `walk_costs` rend `None` (ordre
 Manhattan conservé). Le replan après échec replanifiable repasse par le
-service avec l'arête bannie. `nav-down` ne déclenche ni reconnect ni
+service avec l'arête bannie ; un échec après une pause market finie
+pendant le plan (`Bot::pauses_done`) replanifie sans ban ni dossier
+(`travel::paused_mid_trip`). `nav-down` ne déclenche ni reconnect ni
 rescue : la session reste vivante, les scripts réessaient par leurs
 boucles.
 
