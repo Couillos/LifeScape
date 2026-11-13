@@ -36,11 +36,12 @@ pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
 /// worked during the tranche).
 pub fn tranche_resource(skill: &str, level: u8) -> String {
     match skill {
+        // Lobster (40) and tuna (35) are Karamja water (boat, no bank in
+        // reach: `min_combat_for_method` NEVER): salmon (30, fly rod and
+        // feathers) is the best mainland catch past 30.
         "fishing" => {
-            if level >= 40 {
-                "raw_lobster"
-            } else if level >= 35 {
-                "raw_tuna"
+            if level >= 30 {
+                "raw_salmon"
             } else if level >= 25 {
                 "raw_pike"
             } else if level >= 20 {
@@ -55,9 +56,8 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
         "woodcutting" => {
             if level >= 60 {
                 "yew_logs"
-            } else if level >= 45 {
-                "maple_logs"
             } else if level >= 30 {
+                // Maples have no F2P site: willows until yews.
                 "willow_logs"
             } else if level >= 15 {
                 "oak_logs"
@@ -80,9 +80,13 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
+        // Each tier at its server level: lobster 40, salmon 25, trout 15
+        // (a 30→45 tranche cooked lobster at 30 before).
         "cooking" => {
-            if level >= 30 {
+            if level >= 40 {
                 "raw_lobster"
+            } else if level >= 25 {
+                "raw_salmon"
             } else if level >= 15 {
                 "raw_trout"
             } else {
@@ -124,7 +128,7 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
         }
         "crafting" => {
             if level >= 70 {
-                "diamond_amulet"
+                "unstrung_diamond_amulet"
             } else if level >= 43 {
                 "diamond_ring"
             } else if level >= 34 {
@@ -134,9 +138,9 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             } else if level >= 20 {
                 "sapphire_ring"
             } else if level >= 16 {
-                "holy_symbol"
+                "nostringstar"
             } else if level >= 8 {
-                "gold_amulet"
+                "unstrung_gold_amulet"
             } else if level >= 7 {
                 "pie_dish"
             } else if level >= 5 {

@@ -53,6 +53,11 @@ pub struct ReadyCtx {
     /// brain caps it (equipment steps: `gear_ladder::GEAR_SHARE_PCT`).
     /// `None`: the whole wallet, capped at the fair unit price.
     pub coin_share_pct: Option<i64>,
+    /// F2P quests the bot finished (keys: `runemysteries`, `prince`):
+    /// engine save varps plus the life's done quest nodes. A method whose
+    /// quest is missing never launches (`quests::method_quest`); Prince
+    /// Ali Rescue makes the toll free.
+    pub quests_done: Vec<String>,
 }
 
 impl ReadyCtx {
@@ -77,6 +82,7 @@ impl ReadyCtx {
             method_profit: Vec::new(),
             held: 0,
             coin_share_pct: None,
+            quests_done: Vec::new(),
         }
     }
 }
@@ -232,39 +238,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             nodes.push(node);
         }
         GoalKind::AccessArea { area } => {
-            // Guild gates (services GUILDS, from the 274 scripts): the
-            // skill chain first, then the uniform to obtain — the access
-            // node never stands depless when a requirement exists.
-            let mut deps = Vec::new();
-            if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
-                if let Some(skill) = guild_skill(area) {
-                    let mut after = String::new();
-                    let chain = reach_chain(skill, level_of(skill), (*level).min(99) as u8, &mut counter, &mut after);
-                    if let Some(last) = chain.last() {
-                        deps.push(last.id.clone());
-                    }
-                    nodes.extend(chain);
-                }
-                if !uniform.is_empty() {
-                    let node = obtain_node(uniform, 1, Vec::new(), &mut counter, profile.ironman);
-                    deps.push(node.id.clone());
-                    nodes.push(node);
-                }
-            } else if area == "champions_guild" {
-                // shortcut: qp:32 needs the 32-QP ladder, but quest rewards
-                // are not in the dumps, so no minimal quest set derives —
-                // the cheapest QP rung (Cook's Assistant) gates the node
-                // until the ladder lands.
-                let quest_nodes = expand_quest_from("cook", profile, &mut counter, level_of);
-                if let Some(last) = quest_nodes.last() {
-                    deps.push(last.id.clone());
-                }
-                nodes.extend(quest_nodes);
-            }
-            let id = next_id(&mut counter);
-            let mut node = Node::new(&id, NodeKind::AccessArea { area: area.clone() }, deps, 1);
-            node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 1200, est_coins: 0 });
-            nodes.push(node);
+            nodes.extend(expand_access(area, profile, &mut counter, level_of));
         }
         GoalKind::Produce { item, count } => {
             // A production quota (ambition milestone): production legs
@@ -289,6 +263,45 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             nodes.push(node);
         }
     }
+    nodes
+}
+
+/// Area access: guild gates (services GUILDS, from the 274 scripts) climb
+/// the skill and obtain the uniform first, the Champions' Guild waits on
+/// its quest rung; the `access` node depends on all of them. Shared by
+/// `access` goals and `access:<area>` blocks (`record_block_from`).
+pub fn expand_access(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    let mut nodes = Vec::new();
+    let mut deps = Vec::new();
+    if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
+        if let Some(skill) = guild_skill(area) {
+            let mut after = String::new();
+            let chain = reach_chain(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after);
+            if let Some(last) = chain.last() {
+                deps.push(last.id.clone());
+            }
+            nodes.extend(chain);
+        }
+        if !uniform.is_empty() {
+            let node = obtain_node(uniform, 1, Vec::new(), counter, profile.ironman);
+            deps.push(node.id.clone());
+            nodes.push(node);
+        }
+    } else if area == "champions_guild" {
+        // shortcut: qp:32 needs the 32-QP ladder, but quest rewards
+        // are not in the dumps, so no minimal quest set derives — the
+        // cheapest QP rung (Cook's Assistant) gates the node until the
+        // ladder lands.
+        let quest_nodes = expand_quest_from("cook", profile, counter, level_of);
+        if let Some(last) = quest_nodes.last() {
+            deps.push(last.id.clone());
+        }
+        nodes.extend(quest_nodes);
+    }
+    let id = next_id(counter);
+    let mut node = Node::new(&id, NodeKind::AccessArea { area: area.to_string() }, deps, 1);
+    node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 1200, est_coins: 0 });
+    nodes.push(node);
     nodes
 }
 
@@ -351,6 +364,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
 /// a method no level makes safe blocks as unworkable.
 fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     node.site = None;
+    node.toll = false;
     if matches!(node.status, NodeStatus::Blocked { .. }) {
         return;
     }
@@ -369,8 +383,10 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
             .filter(|method| *method != locked && !method.starts_with("market:") && !method.starts_with("shop:") && method_feasible(method, ctx)),
     );
     let mut needed: Option<u8> = None;
+    let mut fare_short: Option<i64> = None;
+    let fare = crate::combat::Fare::of(ctx);
     for method in &candidates {
-        match crate::combat::pick_site(method, ctx.combat, ctx.position) {
+        match crate::combat::pick_site_paid(method, ctx.combat, ctx.position, fare) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;
@@ -380,12 +396,24 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
                 node.site = Some(site);
                 return;
             }
+            // Across the Al Kharid fence with the fare budgeted: the
+            // launch carries `toll` (user decision 2026-11-13).
+            crate::combat::SitePick::Tolled(site) => {
+                node.method = Some(method.clone());
+                node.site = Some(site);
+                node.toll = true;
+                return;
+            }
+            crate::combat::SitePick::Fare(coins) => fare_short = Some(coins),
             crate::combat::SitePick::Needs(level) => needed = Some(needed.map_or(level, |known| known.min(level))),
         }
     }
     node.method = None;
-    node.status = match needed {
-        Some(level) if level < lifescape_gamedata::danger::NEVER => NodeStatus::Blocked { reason: format!("missing:combat:{level}") },
+    node.status = match (fare_short, needed) {
+        // The fare is the cheapest unlock: a `have_coins` dependency
+        // earns it, then the node relaunches with `toll`.
+        (Some(coins), _) => NodeStatus::Blocked { reason: format!("missing:coins:{coins}") },
+        (None, Some(level)) if level < lifescape_gamedata::danger::NEVER => NodeStatus::Blocked { reason: format!("missing:combat:{level}") },
         _ => NodeStatus::Blocked { reason: format!("unworkable:{locked} (no site safe at any level with a bank in reach)") },
     };
 }
@@ -438,6 +466,10 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "expand_fish_tests.rs"]
+mod fish_tests;
 
 #[cfg(test)]
 #[path = "expand_tests.rs"]

@@ -16,7 +16,7 @@ fn nature_rune_only_drops_in_f2p() {
     assert!(wizard.rate.is_some_and(|rate| rate > 0.0) && !wizard.sites.is_empty(), "rated, with F2P sites");
     assert!(found.iter().any(|way| way.combat.is_some()), "monster level known");
     assert!(!producible_f2p("naturerune"));
-    assert!(merchant_buy_allowed("naturerune"), "not producible: a merchant may sell it");
+    assert!(!merchant_buy_allowed("naturerune"), "a combat spot drops it: market or farm, never a merchant");
 }
 
 #[test]
@@ -49,7 +49,13 @@ fn merchant_rule_follows_d_a() {
         assert!(producible_f2p(producible), "{producible} is made or gathered in F2P");
         assert!(!merchant_buy_allowed(producible), "{producible}: no merchant purchase");
     }
-    for bought in ["shears", "feather", "naturerune", "net", "chisel", "needle", "bucket_empty", "air_talisman"] {
+    // Farmable drops left the merchant list (user rule 2026-11-13).
+    for farmed in ["feather", "naturerune", "air_talisman"] {
+        assert!(!producible_f2p(farmed), "{farmed} has no F2P production");
+        assert!(!merchant_buy_allowed(farmed), "{farmed}: a combat spot drops it, never a merchant");
+        assert!(obtainable_f2p(farmed), "{farmed} obtainable");
+    }
+    for bought in ["shears", "net", "chisel", "needle", "bucket_empty"] {
         assert!(!producible_f2p(bought), "{bought} has no F2P production");
         assert!(merchant_buy_allowed(bought), "{bought}: merchant purchase allowed");
         assert!(obtainable_f2p(bought), "{bought} obtainable");
@@ -145,4 +151,33 @@ fn smelt_ways_carry_every_input_and_the_iron_odds() {
     let smith = ways("bronze_platebody").into_iter().find(|way| way.detail.starts_with("smith ")).expect("platebody smiths");
     assert_eq!(smith.inputs, vec![("bronze_bar".to_string(), 5)], "5 bars per platebody: {}", smith.describe());
     assert_eq!(smith.tools, vec!["hammer".to_string()], "hammer carried, not consumed");
+}
+
+/// User rule 2026-11-13: an NPC shop sells a bot only what F2P offers no
+/// other way to get. Feathers drop from chickens, fishing bait from men
+/// (farmable spots): market or farm, never the shop. Nets, rods, shears
+/// and harpoons have no farmable F2P source: the shop stays.
+#[test]
+fn farmable_drops_never_come_from_a_merchant() {
+    assert!(!merchant_buy_allowed("feather"), "chickens drop feathers");
+    assert!(!merchant_buy_allowed("fishing_bait"), "men drop fishing bait");
+    assert!(!merchant_buy_allowed("bronze_arrow"), "goblins and men drop bronze arrows");
+    for shop_only in ["net", "fishing_rod", "fly_fishing_rod", "harpoon", "lobster_pot", "shears", "tinderbox", "chisel"] {
+        assert!(merchant_buy_allowed(shop_only), "{shop_only} has no farmable F2P source");
+    }
+}
+
+/// Bait is a consumed input of the fishing way (one per catch), and rune
+/// essence is mined only after Rune Mysteries (`essence_mine.rs2`).
+#[test]
+fn fishing_bait_and_essence_quest_are_way_requirements() {
+    let trout = ways("raw_trout").into_iter().find(|way| way.kind == WayKind::Gather).expect("trout is fished");
+    assert_eq!(trout.inputs, vec![("feather".to_string(), 1)], "{}", trout.describe());
+    assert!(trout.tools.contains(&"fly_fishing_rod".to_string()));
+    let pike = ways("raw_pike").into_iter().find(|way| way.kind == WayKind::Gather).expect("pike is fished");
+    assert_eq!(pike.inputs, vec![("fishing_bait".to_string(), 1)]);
+    let shrimp = ways("raw_shrimp").into_iter().find(|way| way.kind == WayKind::Gather).expect("shrimp is fished");
+    assert!(shrimp.inputs.is_empty(), "nets burn no bait");
+    let essence = ways("blankrune").into_iter().find(|way| way.kind == WayKind::Gather).expect("essence is mined");
+    assert_eq!(essence.quest.as_deref(), Some("quest_runemysteries"));
 }

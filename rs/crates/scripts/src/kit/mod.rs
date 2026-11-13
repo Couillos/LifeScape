@@ -44,6 +44,7 @@ pub mod strike;
 pub mod style;
 pub mod survival;
 pub mod tan;
+pub mod toll;
 pub mod tools;
 pub mod trees;
 pub mod woodcut;
