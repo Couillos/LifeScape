@@ -43,27 +43,63 @@ test('niceTicks graduates a volume range from zero', () => {
   assert.ok(ticks.length <= 4, `got ${ticks}`);
 });
 
-test('candleTooltip shows period, O/H/L/C, volume and trade count', () => {
+test('candleTooltip shows period, O/H/L/C, volume, buy/sell volume and trade count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 4, h: 9, l: 3, c: 8, v: 120, n: 11 });
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 6);
   assert.match(lines[0], /\d\d\/\d\d \d\d:\d\d–\d\d:\d\d/);
   assert.equal(lines[1], 'O 4 H 9 L 3 C 8');
   assert.equal(lines[2], 'Volume 120');
-  assert.equal(lines[3], 'Trades 11');
+  assert.deepEqual(lines.slice(3), ['Buy vol 0', 'Sell vol 0', 'Trades 11'], 'no split in the row: 0/0');
 });
 
 test('candleTooltip tolerates rows without an execution count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 86400, { o: 4, h: 4, l: 4, c: 4, v: 5 });
   assert.match(lines[0], /^\d\d\/\d\d$/);
-  assert.equal(lines[3], 'Trades —');
+  assert.equal(lines[5], 'Trades —');
 });
 
 test('carryFlat draws one flat candle per empty slot at the last close', () => {
   const traded = { o: 2, h: 5, l: 2, c: 4, v: 10, n: 2 };
   const rows = LifeChart.carryFlat([null, traded, null, null], 3);
-  assert.deepEqual(rows[0], { o: 3, h: 3, l: 3, c: 3, v: 0, n: 0 }, 'leading slot carries the previous close');
+  assert.deepEqual(rows[0], { o: 3, h: 3, l: 3, c: 3, v: 0, vb: 0, vs: 0, n: 0 }, 'leading slot carries the previous close');
   assert.equal(rows[1], traded);
-  assert.deepEqual(rows[2], { o: 4, h: 4, l: 4, c: 4, v: 0, n: 0 }, 'empty slot carries the last close');
+  assert.deepEqual(rows[2], { o: 4, h: 4, l: 4, c: 4, v: 0, vb: 0, vs: 0, n: 0 }, 'empty slot carries the last close');
   assert.deepEqual(rows[3], rows[2]);
   assert.deepEqual(LifeChart.carryFlat([null, null], null), [null, null], 'no known price: nothing to carry');
+});
+
+test('carryFlat flat candles carry a zero buy/sell split', () => {
+  const rows = LifeChart.carryFlat([null], 5);
+  assert.deepEqual(rows[0], { o: 5, h: 5, l: 5, c: 5, v: 0, vb: 0, vs: 0, n: 0 });
+});
+
+test('candleTooltip lists buy and sell volume', () => {
+  const lines = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 4, h: 9, l: 3, c: 8, v: 120, vb: 70, vs: 40, n: 11 });
+  assert.ok(lines.includes('Buy vol 70'), `got ${lines}`);
+  assert.ok(lines.includes('Sell vol 40'), `got ${lines}`);
+  assert.equal(lines[lines.length - 1], 'Trades 11');
+});
+
+test('volumeSplit keeps the unknown side apart, never guessed', () => {
+  assert.deepEqual(LifeChart.volumeSplit({ v: 120, vb: 70, vs: 40 }), { buy: 70, sell: 40, unknown: 10 });
+  assert.deepEqual(LifeChart.volumeSplit({ v: 9 }), { buy: 0, sell: 0, unknown: 9 }, 'old payload: all unknown');
+  assert.deepEqual(LifeChart.volumeSplit({ v: 0, vb: 0, vs: 0 }), { buy: 0, sell: 0, unknown: 0 });
+});
+
+test('volumeScaleMax: one scale for both sides, grey stacked on the buy side', () => {
+  const rows = [null, { v: 10, vb: 3, vs: 2 }, { v: 12, vb: 0, vs: 12 }];
+  assert.equal(LifeChart.volumeScaleMax(rows), 12, 'sell 12 outgrows buy 3 + unknown 5');
+  assert.equal(LifeChart.volumeScaleMax([{ v: 9, vb: 4, vs: 1 }]), 8, 'buy 4 + unknown 4 above the baseline');
+  assert.equal(LifeChart.volumeScaleMax([null]), 0);
+});
+
+test('foldPrint splits the live tail by taker side', () => {
+  const tail = { o: 5, h: 5, l: 5, c: 5, v: 0, vb: 0, vs: 0, n: 0 };
+  LifeChart.foldPrint(tail, { q: 4, p: 7, s: 'buy' });
+  LifeChart.foldPrint(tail, { q: 2, p: 3, s: 'sell' });
+  LifeChart.foldPrint(tail, { q: 1, p: 6, s: null });
+  assert.deepEqual(tail, { o: 5, h: 7, l: 3, c: 6, v: 7, vb: 4, vs: 2, n: 3 });
+  const old = { o: 2, h: 2, l: 2, c: 2, v: 3, n: 1 };
+  LifeChart.foldPrint(old, { q: 1, p: 2, s: 'buy' });
+  assert.deepEqual(old, { o: 2, h: 2, l: 2, c: 2, v: 4, vb: 1, vs: 0, n: 2 }, 'rows without a split start at zero');
 });

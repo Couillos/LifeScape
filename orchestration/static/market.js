@@ -13,6 +13,9 @@ let candles = [];
 // trade-less hours carry (one flat candle per empty hour).
 let prevClose = null;
 let trades = [];
+// `to` of the loaded history: its candles already hold every print
+// before it, so only prints at or after it fold into the live tail.
+let historyTo = 0;
 let pageIndex = 0;
 let query = "";
 let liveClock = 0;
@@ -51,6 +54,7 @@ async function loadDetail() {
       candles = payload.candles;
       prevClose = payload.prev_close === undefined ? null : payload.prev_close;
       trades = payload.trades;
+      historyTo = to;
     }
   } catch (e) { /* keep the last frame */ }
   try {
@@ -270,21 +274,18 @@ function draw() {
   // Oldest first so the close ends on the freshest print; a print past
   // the last stored candle opens the live slot with its own OHLC.
   const fresh = trades
-    .filter(trade => slots.length && trade.t >= slots[slots.length - 1] - width && trade.t < slots[slots.length - 1] + width)
+    .filter(trade => slots.length && trade.t >= historyTo && trade.t >= slots[slots.length - 1] - width && trade.t < slots[slots.length - 1] + width)
     .slice()
     .sort((a, b) => a.t - b.t);
   for (const trade of fresh) {
     const start = Math.floor(trade.t / width) * width;
     let tail = byTime.get(start);
     if (!tail) {
-      tail = { t: start, o: trade.p, h: trade.p, l: trade.p, c: trade.p, v: 0, n: 0 };
+      tail = { t: start, o: trade.p, h: trade.p, l: trade.p, c: trade.p, v: 0, vb: 0, vs: 0, n: 0 };
       byTime.set(start, tail);
     }
-    tail.h = Math.max(tail.h, trade.p);
-    tail.l = Math.min(tail.l, trade.p);
-    tail.c = trade.p;
-    tail.v += trade.q;
-    tail.n = (tail.n || 0) + 1;
+    // Split by the print's taker side (`s`: buy, sell, null = unknown).
+    LifeChart.foldPrint(tail, trade);
   }
 
   const rows = LifeChart.carryFlat(LifeChart.fillSlots(slots, [...byTime.values()]), prevClose);
@@ -296,9 +297,13 @@ function draw() {
     live: true,
     leftTitle: 'price',
     rightTitle: 'volume',
+    // Volume pane: buy volume (a buyer took the asks) green above the
+    // baseline, sell volume (a seller hit the bids) red below; volume
+    // settled before the side was recorded stacks grey above the green.
     legend: [
       { swatch: 'up', color: LifeChart.UP, label: 'candle' },
-      { swatch: 'bar', color: '#4a90d9', label: 'volume' },
+      { swatch: 'bar', color: LifeChart.UP, label: 'buy volume' },
+      { swatch: 'bar', color: LifeChart.DOWN, label: 'sell volume' },
     ],
     emptyText: 'No history yet for this item.',
     tooltipFor: (slot, row) => LifeChart.candleTooltip(slot, width, row),

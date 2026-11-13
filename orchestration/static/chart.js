@@ -4,7 +4,8 @@
 // hover and touch tooltip with crosshair, live end.
 // Series: `candles` (market OHLCV) and `line` (holdings curve).
 //
-// Pure helpers (slotStarts, fillSlots, niceTicks, candleTooltip) touch no
+// Pure helpers (slotStarts, fillSlots, niceTicks, candleTooltip,
+// volumeSplit, volumeScaleMax, foldPrint) touch no
 // DOM, so `node --test chart.test.js` covers them; draw() needs a canvas.
 const LifeChart = (() => {
   'use strict';
@@ -64,12 +65,51 @@ const LifeChart = (() => {
   // Tooltip lines for one candle: period, O/H/L/C, volume, trade count
   // (PRD2 §6.2). Tolerates rows without `n` (old payloads).
   function candleTooltip(slotStart, width, row) {
+    const split = volumeSplit(row);
     return [
       periodLabel(slotStart, width),
       'O ' + row.o + ' H ' + row.h + ' L ' + row.l + ' C ' + row.c,
       'Volume ' + row.v,
+      'Buy vol ' + split.buy,
+      'Sell vol ' + split.sell,
       'Trades ' + (row.n === undefined || row.n === null ? '—' : row.n),
     ];
+  }
+
+  // Volume of one candle by taker side: `vb` (a buyer took the asks),
+  // `vs` (a seller hit the bids). What is left of `v` was settled before
+  // the server recorded the side: unknown, drawn grey, never guessed.
+  // Rows without `vb`/`vs` (old payloads) are all unknown.
+  function volumeSplit(row) {
+    const buy = row.vb > 0 ? row.vb : 0;
+    const sell = row.vs > 0 ? row.vs : 0;
+    const total = row.v > 0 ? row.v : 0;
+    return { buy, sell, unknown: Math.max(0, total - buy - sell) };
+  }
+
+  // Shared scale of the mirrored volume pane: the taller of the upper
+  // stack (buy + unknown) and the lower bar (sell), over present rows.
+  function volumeScaleMax(rows) {
+    let most = 0;
+    for (const row of rows || []) {
+      if (!row) continue;
+      const split = volumeSplit(row);
+      most = Math.max(most, split.buy + split.unknown, split.sell);
+    }
+    return most;
+  }
+
+  // Folds one live print (`{q, p, s}`, `s` = taker side or null) into a
+  // candle in place: OHLC, total volume, buy or sell share, count.
+  function foldPrint(candle, trade) {
+    candle.h = Math.max(candle.h, trade.p);
+    candle.l = Math.min(candle.l, trade.p);
+    candle.c = trade.p;
+    candle.v = (candle.v || 0) + trade.q;
+    candle.vb = (candle.vb || 0) + (trade.s === 'buy' ? trade.q : 0);
+    candle.vs = (candle.vs || 0) + (trade.s === 'sell' ? trade.q : 0);
+    candle.n = (candle.n || 0) + 1;
+    return candle;
   }
 
   function lineTooltip(slotStart, width, value) {
@@ -85,7 +125,7 @@ const LifeChart = (() => {
     return rows.map((row) => {
       if (row) { close = row.c; return row; }
       if (close === null) return null;
-      return { o: close, h: close, l: close, c: close, v: 0, n: 0 };
+      return { o: close, h: close, l: close, c: close, v: 0, vb: 0, vs: 0, n: 0 };
     });
   }
 
@@ -93,10 +133,12 @@ const LifeChart = (() => {
   // bright green vs deep red stay distinct even when hues merge).
   const UP = '#00e676';
   const DOWN = '#ff1744';
-  // Volume bars: one blue, in their own pane under the candles.
-  const VOLUME = '#4a90d9';
+  // Volume pane (under the candles): buy volume UP above a mid baseline,
+  // sell volume DOWN below it, mirrored on one scale.
 
-  // Flat trade-less candle (`carryFlat`): neutral grey, neither up nor down.
+  // Flat trade-less candle (`carryFlat`): neutral grey, neither up nor
+  // down. Also the volume of unknown taker side (`volumeSplit`), stacked
+  // above the green bar.
   const FLAT = '#888';
 
   function candleColor(row) {
@@ -151,12 +193,12 @@ const LifeChart = (() => {
       if (!row) continue;
       if (model.kind === 'candles') {
         lo = Math.min(lo, row.l); hi = Math.max(hi, row.h);
-        volMax = Math.max(volMax, row.v);
       } else {
         lo = Math.min(lo, row); hi = Math.max(hi, row);
       }
     }
     if (!(hi > lo)) { lo -= 1; hi += 1; }
+    if (model.kind === 'candles') volMax = volumeScaleMax(rows);
     if (volMax <= 0) volMax = 1;
     // Graduated ticks first: the scales stretch to their extremes so
     // gridlines never land outside the plot.
@@ -170,21 +212,40 @@ const LifeChart = (() => {
     }
 
     const yOf = (price) => plotY + priceH - ((price - lo) / (hi - lo)) * priceH;
-    const volOf = (vol) => plotY + plotH - (vol / volMax) * (plotY + plotH - volTop);
+    // Mirrored volume pane: baseline in the middle, one scale both ways.
+    const volBase = (volTop + plotY + plotH) / 2;
+    const volHalf = Math.max(2, (plotY + plotH - volTop) / 2 - 2);
+    const volUp = (vol) => volBase - (vol / volMax) * volHalf;
+    const volDown = (vol) => volBase + (vol / volMax) * volHalf;
     const slotW = slots.length ? plotW / slots.length : plotW;
     const xOf = (i) => plotX + slotW * (i + 0.5);
     const barW = Math.max(1, Math.min(12, slotW * 0.55));
 
-    // Volume bars in their own pane (bottom third, blue, right scale).
+    // Volume bars in their own pane (bottom third, right scale): buy
+    // volume green above the baseline, unknown side grey stacked on it,
+    // sell volume red below.
     if (model.kind === 'candles') {
       ctx.strokeStyle = '#333';
       ctx.beginPath(); ctx.moveTo(plotX, volTop); ctx.lineTo(plotX + plotW, volTop); ctx.stroke();
-      ctx.fillStyle = VOLUME;
+      ctx.strokeStyle = '#555';
+      ctx.beginPath(); ctx.moveTo(plotX, volBase); ctx.lineTo(plotX + plotW, volBase); ctx.stroke();
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         if (!row || !(row.v > 0)) continue;
-        const top = Math.max(volTop, volOf(row.v));
-        ctx.fillRect(xOf(i) - barW / 2, top, barW, plotY + plotH - top);
+        const split = volumeSplit(row);
+        const left = xOf(i) - barW / 2;
+        if (split.buy > 0) {
+          ctx.fillStyle = UP;
+          ctx.fillRect(left, volUp(split.buy), barW, volBase - volUp(split.buy));
+        }
+        if (split.unknown > 0) {
+          ctx.fillStyle = FLAT;
+          ctx.fillRect(left, volUp(split.buy + split.unknown), barW, volUp(split.buy) - volUp(split.buy + split.unknown));
+        }
+        if (split.sell > 0) {
+          ctx.fillStyle = DOWN;
+          ctx.fillRect(left, volBase, barW, volDown(split.sell) - volBase);
+        }
       }
     }
 
@@ -200,9 +261,11 @@ const LifeChart = (() => {
     }
     if (model.kind === 'candles') {
       ctx.fillStyle = '#888';
+      // Graduated both ways from the baseline (0 once, on it).
       for (const tick of volTicks) {
-        const y = Math.max(volTop, volOf(tick));
-        ctx.fillText(String(Math.round(tick * 100) / 100), plotX + plotW + 6, y + 3);
+        const label = String(Math.round(tick * 100) / 100);
+        const marks = tick > 0 ? [volUp(tick), volDown(tick)] : [volBase];
+        for (const y of marks) ctx.fillText(label, plotX + plotW + 6, y + 3);
       }
     }
 
@@ -402,7 +465,10 @@ const LifeChart = (() => {
     canvas._lifeGeometry = geometry;
   }
 
-  return { slotStarts, fillSlots, carryFlat, niceTicks, periodLabel, candleTooltip, lineTooltip, draw, UP, DOWN };
+  return {
+    slotStarts, fillSlots, carryFlat, niceTicks, periodLabel, candleTooltip, lineTooltip,
+    volumeSplit, volumeScaleMax, foldPrint, draw, UP, DOWN, FLAT,
+  };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = LifeChart;
