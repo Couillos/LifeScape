@@ -56,6 +56,11 @@ fn com_id(dotted: &str) -> Option<u16> {
     lifescape_gamedata::com_id(dotted)
 }
 
+fn bank_client_stands(x: i32, z: i32, level: i32) -> Option<Vec<(i32, i32)>> {
+    lifescape_gamedata::bank_stands::client_stands(i64::from(x), i64::from(z), i64::from(level))
+        .map(|stands| stands.iter().map(|(stand_x, stand_z)| (*stand_x as i32, *stand_z as i32)).collect())
+}
+
 /// Live tables backed by the generated dumps.
 pub const LIVETABLES: Tables = Tables {
     npc_size,
@@ -66,6 +71,7 @@ pub const LIVETABLES: Tables = Tables {
     obj_drop_op,
     find_obj_by_name,
     com_id,
+    bank_client_stands,
 };
 
 /// Attach the live dumps to a bot. Call once after `Bot::new`.
@@ -81,6 +87,16 @@ mod tests {
     fn live_resolves_bank_com_and_coins() {
         assert!((LIVETABLES.com_id)("bank_main:inv").is_some());
         assert_eq!((LIVETABLES.find_obj_by_name)("coins"), Some(995));
+    }
+
+    /// open_bank reads the client side of each booth from gamedata: the
+    /// Varrock west east stand (3187,3436) is the bankers' side, never
+    /// listed; a members booth is untabled (open_bank fails typed).
+    #[test]
+    fn live_resolves_bank_client_stands() {
+        assert_eq!((LIVETABLES.bank_client_stands)(3186, 3436, 0), Some(vec![(3185, 3436)]));
+        assert_eq!((LIVETABLES.bank_client_stands)(3256, 3419, 0), Some(vec![(3256, 3420), (3257, 3419)]));
+        assert!((LIVETABLES.bank_client_stands)(2721, 3494, 0).is_none());
     }
 
     /// Live callers pass display names ("Shrimps"), never internal keys:

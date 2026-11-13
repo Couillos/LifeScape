@@ -26,6 +26,10 @@ pub struct Tables {
     pub find_obj_by_name: fn(needle: &str) -> Option<u16>,
     /// Component id by dotted name, if known.
     pub com_id: fn(dotted: &str) -> Option<u16>,
+    /// Client-side stands of the bank booth at (x, z, level): the stands
+    /// planned in from outside the bank (gamedata `bank_stands`), never
+    /// the bankers' sealed side. None when the booth is not tabled.
+    pub bank_client_stands: fn(x: i32, z: i32, level: i32) -> Option<Vec<(i32, i32)>>,
 }
 
 fn unknown_size(_npc_type: u16) -> u8 {
@@ -60,6 +64,10 @@ fn unknown_com_id(_dotted: &str) -> Option<u16> {
     None
 }
 
+fn unknown_bank_stands(_x: i32, _z: i32, _level: i32) -> Option<Vec<(i32, i32)>> {
+    None
+}
+
 /// Default tables: every lookup misses, NPC size falls back to 1.
 pub const NOTABLES: Tables = Tables {
     npc_size: unknown_size,
@@ -70,6 +78,7 @@ pub const NOTABLES: Tables = Tables {
     obj_drop_op: unknown_drop_op,
     find_obj_by_name: unknown_find_obj,
     com_id: unknown_com_id,
+    bank_client_stands: unknown_bank_stands,
 };
 
 #[cfg(test)]
@@ -86,5 +95,6 @@ mod tests {
         assert!((NOTABLES.obj_drop_op)(0).is_none());
         assert!((NOTABLES.find_obj_by_name)("coins").is_none());
         assert!((NOTABLES.com_id)("bank_main:inv").is_none());
+        assert!((NOTABLES.bank_client_stands)(3186, 3436, 0).is_none());
     }
 }

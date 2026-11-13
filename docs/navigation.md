@@ -95,6 +95,19 @@ derrière le mur, gagnait au coût ; `open_bank` y tentait d'abord le stand
 guichetier (poche fermée, NoRoute exhaustif). Goldens `guichet_falador_*`
 (assertion `adjusted=`), `rive_deja_la`.
 
+Guichets de banque (2026-11-13) : chaque guichet F2P a des stands des
+deux côtés du comptoir ; le côté banquier est une poche fermée (planifié
+vers elle : NoRoute épuisant 3-11 s sous charge, ~1000 dossiers/jour à
+Varrock ouest (3187,3436), Varrock est (3252,3418), Falador ouest
+(2945,3366)). `open_bank` ne marche que vers les stands `client` de
+`gamedata/data/bank_stands.json` (via `Tables::bank_client_stands`,
+intersectés avec les stands live de la règle de portée), au plus proche
+d'abord ; guichet absent de la table ou sans stand client live : erreur
+typée `Unreachable`, jamais l'ordre aveugle. Table recalculée par
+`nav/tests/bank_stands.rs` (stand banquier : plan sortant `Disconnected`
+en quelques ms ; stand client : plan entrant exact), goldens
+`banque_*` dans `routes.txt`.
+
 Versions et reload : chaque réponse porte la version snapshot ;
 `reload-nav` rebâtit le snapshot à côté et l'échange atomiquement
 (l'in-flight finit sur l'ancien `Arc`, le bump de version rend les

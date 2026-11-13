@@ -65,4 +65,15 @@ par nom de compte ; le test `tables_match_the_server_content` relit
 `../lostcity/content`. Envoi : `Bot::save_player_design` (SDK), appelé
 par l'écran de design du tutoriel (`scripts/src/tutorial_design.rs`).
 
+Stands clients des guichets (`lifescape-gamedata::bank_stands`,
+`gamedata/data/bank_stands.json`, 2026-11-13) : par banque F2P (7 en
+rev 274 : Al Kharid, Draynor, Edgeville, Falador est/ouest, Varrock
+est/ouest ; aucun guichet au château de Lumbridge), une case extérieure
+publique ; par guichet (32), les stands de la règle de portée serveur
+séparés en `client` (planifiés depuis l'extérieur) et `teller` (côté
+banquier, poche fermée). Seule table de ce dossier écrite à la main :
+`rs/crates/nav/tests/bank_stands.rs` la recalcule depuis la carte
+(< 1 s) et imprime la table à recoller en cas d'écart. Branchée au SDK
+par `Tables::bank_client_stands` (`scripts/src/tables_live.rs`).
+
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
