@@ -110,3 +110,39 @@ const NO_F2P_SOURCE: &[&str] = &[
     "rock",
     "warhammer",
 ];
+
+/// Every F2P bar's smelt way carries the server recipe (smelting.struct):
+/// bronze eats copper AND tin, steel iron + 2 coal, mithril/adamantite/
+/// runite 4/6/8 coal; a furnace site, no tool. Iron is the only uncertain
+/// one: half its ores make nothing, so a bar costs two ores.
+#[test]
+fn smelt_ways_carry_every_input_and_the_iron_odds() {
+    let cases: [(&str, &[(&str, i64)], f64); 8] = [
+        ("bronze_bar", &[("copper_ore", 1), ("tin_ore", 1)], 1.0),
+        ("iron_bar", &[("iron_ore", 1)], 0.5),
+        ("silver_bar", &[("silver_ore", 1)], 1.0),
+        ("steel_bar", &[("coal", 2), ("iron_ore", 1)], 1.0),
+        ("gold_bar", &[("gold_ore", 1)], 1.0),
+        ("mithril_bar", &[("coal", 4), ("mithril_ore", 1)], 1.0),
+        ("adamantite_bar", &[("adamantite_ore", 1), ("coal", 6)], 1.0),
+        ("runite_bar", &[("coal", 8), ("runite_ore", 1)], 1.0),
+    ];
+    for (bar, inputs, odds) in cases {
+        let found = ways(bar);
+        let smelt = found
+            .iter()
+            .find(|way| way.kind == WayKind::Make && way.detail.starts_with("smelt "))
+            .unwrap_or_else(|| panic!("{bar} smelts"));
+        let mut got = smelt.inputs.clone();
+        got.sort();
+        let want: Vec<(String, i64)> = inputs.iter().map(|(name, count)| (name.to_string(), *count)).collect();
+        assert_eq!(got, want, "{bar}: {}", smelt.describe());
+        assert!(smelt.tools.is_empty(), "{bar} needs no tool");
+        assert!(!smelt.sites.is_empty(), "{bar} has furnace sites");
+        assert_eq!(smelt.success, odds, "{bar} odds");
+        assert_eq!(smelt.expected_out(), odds, "{bar} bars per action");
+    }
+    let smith = ways("bronze_platebody").into_iter().find(|way| way.detail.starts_with("smith ")).expect("platebody smiths");
+    assert_eq!(smith.inputs, vec![("bronze_bar".to_string(), 5)], "5 bars per platebody: {}", smith.describe());
+    assert_eq!(smith.tools, vec!["hammer".to_string()], "hammer carried, not consumed");
+}

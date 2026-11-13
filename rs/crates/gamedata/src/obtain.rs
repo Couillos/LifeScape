@@ -74,6 +74,9 @@ pub struct Way {
     pub sites: Vec<(i64, i64, i64)>,
     /// Server script file (scripted grants and dialogue sales).
     pub file: String,
+    /// Odds that one action yields (`recipes::success_odds`: smelting
+    /// iron 0.5, the ore lost on a miss); 1.0 for every certain way.
+    pub success: f64,
 }
 
 impl Way {
@@ -102,7 +105,16 @@ impl Way {
             quest: None,
             sites: Vec::new(),
             file: String::new(),
+            success: 1.0,
         }
+    }
+
+    /// Units one action yields on average: the quantity range's middle
+    /// (1 when unknown) times the success odds. Inputs per unit made are
+    /// `per action / expected_out` (2 iron ore per iron bar).
+    pub fn expected_out(&self) -> f64 {
+        let per_action = self.qty.map(|(low, high)| (low + high) as f64 / 2.0).filter(|qty| *qty > 0.0).unwrap_or(1.0);
+        per_action * self.success
     }
 
     /// True for ways that produce the object from work (D-A families).
@@ -137,6 +149,9 @@ impl Way {
         }
         if let Some((low, high)) = self.qty {
             parts.push(if low == high { format!("x{low}") } else { format!("x{low}-{high}") });
+        }
+        if self.success < 1.0 {
+            parts.push(format!("{:.0}% success", self.success * 100.0));
         }
         if !self.inputs.is_empty() {
             let inputs: Vec<String> = self.inputs.iter().map(|(name, count)| format!("{count} {name}")).collect();
@@ -209,6 +224,7 @@ fn make_way(kind: &str, row: &str, level: i64, inputs: Vec<(String, i64)>, stati
     // consumed inputs and carried tools apart.
     way.inputs = inputs.into_iter().filter(|(name, _)| !tools.contains(&name.as_str())).collect();
     way.tools = tools.iter().map(|tool| tool.to_string()).collect();
+    way.success = crate::recipes::success_odds(row);
     if let Some(station) = station.as_deref().or(default_station) {
         way.sites = station_sites(station);
     }

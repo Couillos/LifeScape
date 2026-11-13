@@ -67,6 +67,22 @@ Adaptateurs (un par famille d'interface, jamais par activité) :
   (nom com complet, ex. `smelting:com_19`), répond au compteur éventuel.
   La table produit → bouton reste côté appelant.
 
+Postes : le site est cherché autour du point `near` de la tâche (rayon
+150) ; les stands sont les tuiles de côté de toute l'emprise du loc
+(largeur × longueur du dump, tournée par l'angle live : `furnace1` 3×3,
+cuisinière 1×2), jamais un coin ni une tuile sous le poste ; un refus
+serveur (« I can't reach that! », forceapproach) passe au stand suivant.
+
+Fonte (`activities/smelt.rs`) : poste = four F2P le plus proche du bot
+(Wilderness seulement avec `wild`), `near` = ce four (pas la banque).
+Une charge = des jeux complets de la recette serveur (bronze = 1 cuivre
++ 1 étain, acier = 1 fer + 2 charbon, mithril/adamant/rune 4/6/8
+charbon) ; un intrant sous un jeu ⇒ `blocked{missing}` qui nomme chaque
+intrant manquant (cuivre en banque sans étain ⇒ `tin_ore`), jamais un
+clic de minerai seul (le serveur répond par sa boîte « need tin » et la
+charge ne consomme rien). Forge (`smith.rs`) : un marteau en banque est
+retiré avant tout `blocked{missing: hammer}`.
+
 Particularités cuisine : cuisinières d'abord (brûlent moins), puis
 cheminées, puis feux ; brûlés suivis comme produits (`Recipe.burnt`) ;
 pas d'intrant manquant = `blocked{missing: [cru]}` ; poste introuvable

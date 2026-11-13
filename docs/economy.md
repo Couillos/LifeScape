@@ -223,7 +223,10 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 - Intrants des skills de transformation : un `blocked{missing}` (cuisinier
   sans poisson cru, allumeur sans bûches, fondeur sans minerai) crée une
   obtention dimensionnée à la charge d'inventaire (`planner::need_count` :
-  27 intrants, 13+13 pour le bronze ; un outil = 1), résolue marché
+  27 intrants, 13+13 pour le bronze ; un outil = 1 ; une obtention de N
+  barres demande N × l'intrant de la recette ÷ les chances de succès :
+  2 minerais de fer par barre de fer, `Way::success` 0,5 lu dans
+  `smelting.rs2`), résolue marché
   d'abord ; la progression de niveau remet le compteur de blocages à zéro
   (une charge par blocage est le rythme normal).
 - Demande (2026-11-13) : `market_demand::signals()` (offres d'achat au

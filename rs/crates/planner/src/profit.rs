@@ -85,7 +85,12 @@ pub fn chain_profit(item: &str, prices: &[(String, f64)], units_per_6000: f64) -
     let mut produced = false;
     for way in ways(item).into_iter().filter(|way| way.is_production()) {
         produced = true;
-        let out = way.qty.map(|(low, high)| (low + high) as f64 / 2.0).filter(|qty| *qty > 0.0).unwrap_or(1.0);
+        // Units per action: the quantity range times the success odds (an
+        // iron smelt yields half a bar on average, the ore always goes).
+        let out = way.expected_out();
+        if out <= 0.0 {
+            continue;
+        }
         let mut inputs = Vec::new();
         let mut cost = way.coins.max(0) as f64 / out;
         let mut priced = true;
@@ -143,6 +148,22 @@ mod tests {
         let bid = cheap.input_cost + 10.0;
         let paid = chain_profit("iron_scimitar", &prices(&[("iron_scimitar", bid), ("iron_bar", 15.0)]), 100.0).expect("smithable");
         assert!((paid.margin - 10.0).abs() < 1e-9 && (paid.profit_per_6000 - 1000.0).abs() < 1e-6, "{paid:?}");
+    }
+
+    /// Bars cost every ore of the server recipe: bronze is copper + tin,
+    /// steel iron + 2 coal, and an iron bar two ores (half the smelts
+    /// fail, the ore lost).
+    #[test]
+    fn smelted_bars_cost_every_ore_and_the_failed_smelts() {
+        let ore_prices = [("copper_ore", 10.0), ("tin_ore", 12.0), ("iron_ore", 30.0), ("coal", 40.0)];
+        let with = |bar: &str| {
+            let mut rows = prices(&ore_prices);
+            rows.push((bar.to_string(), 500.0));
+            chain_profit(bar, &rows, 100.0).expect("smeltable")
+        };
+        assert!((with("bronze_bar").input_cost - 22.0).abs() < 1e-9, "{:?}", with("bronze_bar"));
+        assert!((with("steel_bar").input_cost - 110.0).abs() < 1e-9, "{:?}", with("steel_bar"));
+        assert!((with("iron_bar").input_cost - 60.0).abs() < 1e-9, "two ores per iron bar: {:?}", with("iron_bar"));
     }
 
     /// Gathered objects consume nothing: the sale price is the margin.
