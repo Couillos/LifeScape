@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -163,6 +163,20 @@ CREATE INDEX IF NOT EXISTS idx_error_events_account ON error_events(account, clo
 CREATE INDEX IF NOT EXISTS idx_error_events_source ON error_events(source, clock);
 ";
 
+/// Migration 4 (market chart, buy/sell volume split): the side of the
+/// order that consumed the book (taker, "buy"|"sell") rides each deal and
+/// its settled execution; candles cache buy and sell volume. Rows written
+/// before keep NULL (unknown side) and a 0/0 split: counted in `volume`
+/// only, never guessed. Columns only, nothing dropped or rewritten; the
+/// whole step is one transaction with its `user_version` bump.
+const MIGRATION_V4: &str = "
+ALTER TABLE deals ADD COLUMN taker_side TEXT;
+ALTER TABLE executions ADD COLUMN taker_side TEXT;
+ALTER TABLE candles ADD COLUMN buy_volume INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE candles ADD COLUMN sell_volume INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 4;
+";
+
 /// Reads the `user_version` pragma of an open connection.
 pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> {
     let found: i64 = connection
@@ -204,7 +218,25 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
             .execute_batch("PRAGMA user_version = 3")
             .map_err(|source| Error::Sql(source.to_string()))?;
     }
+    if found < 4 {
+        apply_in_transaction(connection, MIGRATION_V4, 4)?;
+    }
     Ok(())
+}
+
+/// Runs one migration step and its version bump atomically: a failed
+/// ALTER leaves the file at the previous version, never half-migrated.
+fn apply_in_transaction(connection: &rusqlite::Connection, step: &str, version: u32) -> Result<(), Error> {
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|source| Error::Sql(format!("migration {version} begin: {source}")))?;
+    if let Err(source) = connection.execute_batch(step) {
+        let _ignored = connection.execute_batch("ROLLBACK");
+        return Err(Error::Sql(format!("migration {version}: {source}")));
+    }
+    connection
+        .execute_batch("COMMIT")
+        .map_err(|source| Error::Sql(format!("migration {version} commit: {source}")))
 }
 
 #[cfg(test)]
@@ -259,6 +291,49 @@ mod schema_tests {
         );
         store.record_holdings(1_762_675_200, &[(995, 7)])?;
         assert_eq!(store.hourly_points(Some(995))?, vec![(1_762_675_200, 7)]);
+        Ok(())
+    }
+
+    /// A v3 file (live base before the volume split) gains the taker
+    /// columns without losing a row: old deals and executions read an
+    /// unknown side, old candles a zero buy/sell split.
+    #[test]
+    fn v3_file_gains_taker_columns_without_loss() -> Result<(), Error> {
+        use rusqlite::Connection;
+        let path = temp_database_path("migrate-v3");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(super::MIGRATION_V1)?;
+            connection.execute_batch(super::MIGRATION_V2)?;
+            connection.execute_batch(super::MIGRATION_V3)?;
+            connection.execute_batch("PRAGMA user_version = 3")?;
+            connection.execute_batch(
+                "INSERT INTO items(item_id, name, shop_price, alch_value) VALUES (314, 'Feather', 2, 1);
+                 INSERT INTO deals(buyer, seller, item_id, quantity, price, meeting_x, meeting_y, meeting_level,
+                     status, fail_reason, deadline_tick, created_clock, updated_clock)
+                     VALUES ('b', 's', 314, 5, 3, 0, 0, 0, 'settled', '', 0, 36000, 36100);
+                 INSERT INTO executions(item_id, quantity, price, clock, server_tick) VALUES (314, 5, 3, 36100, 36100);
+                 INSERT INTO candles(item_id, resolution, window_start, open_price, high_price, low_price, close_price, volume)
+                     VALUES (314, '1h', 36000, 3, 3, 3, 3, 5);",
+            )?;
+        }
+        let mut store = Store::open(&path)?;
+        assert_eq!(store.schema_version()?, SCHEMA_VERSION);
+        let deal = store.get_deal(1)?.expect("old deal kept");
+        assert_eq!((deal.quantity, deal.taker_side), (5, None));
+        let fills = store.executions_for_item(314, 0, i64::MAX)?;
+        assert_eq!(fills.iter().map(|fill| (fill.quantity, fill.taker_side)).collect::<Vec<_>>(), vec![(5, None)]);
+        let cached = store.candles_for(314, crate::YieldCandleResolution::Hour1, 0, i64::MAX)?;
+        assert_eq!(
+            cached.iter().map(|candle| (candle.volume, candle.buy_volume, candle.sell_volume)).collect::<Vec<_>>(),
+            vec![(5, 0, 0)]
+        );
+        let rebuilt = store.rebuild_candles(314, crate::YieldCandleResolution::Hour1)?;
+        assert_eq!(rebuilt, cached, "the cache already agrees with the unknown side");
+        drop(store);
+        let reopened = Store::open(&path)?;
+        assert_eq!(reopened.schema_version()?, SCHEMA_VERSION, "idempotent reopen");
         Ok(())
     }
 

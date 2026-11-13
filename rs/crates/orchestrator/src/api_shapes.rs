@@ -47,9 +47,11 @@ impl CandleRes {
     }
 }
 
-/// One OHLCV candle: `{t,o,h,l,c,v,n}`. `n` is the execution count in the
-/// window (tooltip §6.2). DELTA (P1.3): current rows carry no `n`; the
-/// store counts it from the executions of the window.
+/// One OHLCV candle: `{t,o,h,l,c,v,vb,vs,n}`. `n` is the execution count
+/// in the window (tooltip §6.2). DELTA (P1.3): current rows carry no `n`;
+/// the store counts it from the executions of the window. `vb`/`vs`: buy
+/// and sell volume by taker side; `v - vb - vs` = unknown side (settled
+/// before the split).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candle {
     pub t: i64,
@@ -58,6 +60,8 @@ pub struct Candle {
     pub l: i64,
     pub c: i64,
     pub v: i64,
+    pub vb: i64,
+    pub vs: i64,
     pub n: i64,
 }
 
@@ -70,17 +74,21 @@ impl Candle {
             ("l", Value::Int(self.l)),
             ("c", Value::Int(self.c)),
             ("v", Value::Int(self.v)),
+            ("vb", Value::Int(self.vb)),
+            ("vs", Value::Int(self.vs)),
             ("n", Value::Int(self.n)),
         ])
     }
 }
 
-/// One settled execution under the graph: `{q,p,t}` (matches `op_trades`).
+/// One settled execution under the graph: `{q,p,t,s}` (matches
+/// `op_trades`); `s` is the taker side, `"buy"`, `"sell"` or null.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Exec {
     pub q: i64,
     pub p: i64,
     pub t: i64,
+    pub s: Option<String>,
 }
 
 impl Exec {
@@ -89,6 +97,7 @@ impl Exec {
             ("q", Value::Int(self.q)),
             ("p", Value::Int(self.p)),
             ("t", Value::Int(self.t)),
+            ("s", self.s.as_deref().map(str_value).unwrap_or(Value::Null)),
         ])
     }
 }
@@ -414,13 +423,13 @@ mod tests {
         let history = MarketHistory {
             item: 7,
             res: CandleRes::Hour1,
-            candles: vec![Candle { t: 1000, o: 5, h: 9, l: 4, c: 8, v: 120, n: 11 }],
-            trades: vec![Exec { q: 10, p: 8, t: 1999 }],
+            candles: vec![Candle { t: 1000, o: 5, h: 9, l: 4, c: 8, v: 120, vb: 70, vs: 40, n: 11 }],
+            trades: vec![Exec { q: 10, p: 8, t: 1999, s: Some("buy".to_string()) }],
         };
         let value = history.to_value();
         assert_eq!(value.get("res").as_str(), Some("1h"));
-        assert_eq!(keys(&value.get("candles").as_arr().expect("candles")[0]), ["c", "h", "l", "n", "o", "t", "v"]);
-        assert_eq!(keys(&value.get("trades").as_arr().expect("trades")[0]), ["p", "q", "t"]);
+        assert_eq!(keys(&value.get("candles").as_arr().expect("candles")[0]), ["c", "h", "l", "n", "o", "t", "v", "vb", "vs"]);
+        assert_eq!(keys(&value.get("trades").as_arr().expect("trades")[0]), ["p", "q", "s", "t"]);
         assert_eq!(CandleRes::parse("1d"), CandleRes::Day1);
         assert_eq!(CandleRes::parse("unknown"), CandleRes::Hour1, "unknown reads hourly, like op_history");
     }

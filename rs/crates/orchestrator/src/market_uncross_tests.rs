@@ -178,6 +178,7 @@ fn boot_reload_heals_a_crossed_carnet_once() {
                 meeting_level: 0,
                 deadline_tick: now + 3600,
                 clock: now - 120,
+                taker_side: lifescape_store::OrderSide::Buy,
             })
             .expect("deal");
         store.set_deal_status(failed, lifescape_store::DealStatus::Failed, "timeout", now - 60).expect("fails");

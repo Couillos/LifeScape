@@ -250,6 +250,7 @@ impl MarketService {
                     meeting_level: 0,
                     deadline_tick: clock + 3600,
                     clock,
+                    taker_side: crate::market_prints::store_side(fill.taker),
                 })
                 .map_err(|error| error.to_string())?
         };
@@ -275,31 +276,6 @@ impl MarketService {
             engine.relist_rows.insert(deal_id as u64, relist);
         }
         Ok(deal_id)
-    }
-
-    /// A settled handover becomes public: execution row, candle repaint
-    /// (`history` reads the candles cache, never executions) and the
-    /// live-tail print. Live 2026-11-13: prints and candles were written
-    /// at match time, so the 90 % of handovers that failed still showed
-    /// as trades ("Last trades", volumes, candles).
-    pub(crate) fn settle_print(&self, item: i64, qty: i64, price: i64, clock: i64) {
-        {
-            let mut store = self.lock_store();
-            let recorded = store.record_execution(&lifescape_store::NewExecution {
-                item_id: item,
-                quantity: qty,
-                price,
-                clock,
-                server_tick: clock,
-            });
-            if let Err(error) = recorded {
-                crate::logln!("market: settled execution not recorded ({error})");
-                return;
-            }
-            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Hour1);
-            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Day1);
-        }
-        self.lock_engine().remember(crate::market_service::Print { item, quantity: qty, price, clock });
     }
 
     /// Writes post-match remaining quantities back to the store rows.
@@ -522,7 +498,7 @@ impl MarketService {
             }
         }
         if next == DealStatus::Settled {
-            self.settle_print(item, qty, price, clock);
+            self.settle_print(deal_id, item, qty, price, clock);
             self.release_convene(deal_id as u64);
             let store = self.lock_store();
             let _ = store.record_deal_outcome(&buyer, true);

@@ -4,7 +4,7 @@
 //! Clocks are unix seconds; each execution also carries the server tick so
 //! price history can be crossed with tick-based yield measurements.
 
-use crate::{Error, Store};
+use crate::{Error, OrderSide, Store};
 
 /// Candle resolution. Buckets align on multiples of the width since epoch.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +39,9 @@ pub struct NewExecution {
     pub price: i64,
     pub clock: i64,
     pub server_tick: i64,
+    /// Side of the order that consumed the book (the deal's taker);
+    /// `None` only when the deal predates the split (unknown).
+    pub taker_side: Option<OrderSide>,
 }
 
 /// Stored execution row.
@@ -50,9 +53,13 @@ pub struct Execution {
     pub price: i64,
     pub clock: i64,
     pub server_tick: i64,
+    /// `None`: settled before migration 4, side unknown.
+    pub taker_side: Option<OrderSide>,
 }
 
-/// One OHLCV bucket.
+/// One OHLCV bucket. `volume` is the total; `buy_volume` (buyer took the
+/// asks) and `sell_volume` (seller hit the bids) split the executions
+/// whose taker side is known, so they may sum below `volume`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candle {
     pub item_id: i64,
@@ -63,6 +70,8 @@ pub struct Candle {
     pub low_price: i64,
     pub close_price: i64,
     pub volume: i64,
+    pub buy_volume: i64,
+    pub sell_volume: i64,
 }
 
 fn map_candle(row: &rusqlite::Row<'_>) -> Result<Candle, rusqlite::Error> {
@@ -75,6 +84,8 @@ fn map_candle(row: &rusqlite::Row<'_>) -> Result<Candle, rusqlite::Error> {
         low_price: row.get(5)?,
         close_price: row.get(6)?,
         volume: row.get(7)?,
+        buy_volume: row.get(8)?,
+        sell_volume: row.get(9)?,
     })
 }
 
@@ -94,14 +105,15 @@ impl Store {
             )));
         }
         self.connection.execute(
-            "INSERT INTO executions(item_id, quantity, price, clock, server_tick) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO executions(item_id, quantity, price, clock, server_tick, taker_side) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 new_execution.item_id,
                 new_execution.quantity,
                 new_execution.price,
                 new_execution.clock,
                 new_execution.server_tick,
+                new_execution.taker_side.map(OrderSide::as_str),
             ],
         )?;
         Ok(self.connection.last_insert_rowid())
@@ -129,26 +141,22 @@ impl Store {
         to_clock: i64,
     ) -> Result<Vec<Execution>, Error> {
         let mut statement = self.connection.prepare(
-            "SELECT exec_id, item_id, quantity, price, clock, server_tick \
+            "SELECT exec_id, item_id, quantity, price, clock, server_tick, taker_side \
              FROM executions WHERE item_id = ?1 AND clock >= ?2 AND clock < ?3 \
              ORDER BY clock, exec_id",
         )?;
-        let mapped = statement.query_map(
-            rusqlite::params![item_id, from_clock, to_clock],
-            |row| {
-                Ok(Execution {
-                    exec_id: row.get(0)?,
-                    item_id: row.get(1)?,
-                    quantity: row.get(2)?,
-                    price: row.get(3)?,
-                    clock: row.get(4)?,
-                    server_tick: row.get(5)?,
-                })
-            },
-        )?;
+        let mut found_rows = statement.query(rusqlite::params![item_id, from_clock, to_clock])?;
         let mut fills = Vec::new();
-        for mapped_row in mapped {
-            fills.push(mapped_row?);
+        while let Some(row) = found_rows.next()? {
+            fills.push(Execution {
+                exec_id: row.get(0)?,
+                item_id: row.get(1)?,
+                quantity: row.get(2)?,
+                price: row.get(3)?,
+                clock: row.get(4)?,
+                server_tick: row.get(5)?,
+                taker_side: OrderSide::parse_taker(row.get(6)?)?,
+            });
         }
         Ok(fills)
     }
@@ -178,7 +186,7 @@ impl Store {
     ) -> Result<Vec<Candle>, Error> {
         let mut statement = self.connection.prepare(
             "SELECT item_id, resolution, window_start, open_price, high_price, \
-             low_price, close_price, volume FROM candles \
+             low_price, close_price, volume, buy_volume, sell_volume FROM candles \
              WHERE item_id = ?1 AND resolution = ?2 \
              AND window_start >= ?3 AND window_start < ?4 ORDER BY window_start",
         )?;
@@ -234,8 +242,8 @@ impl Store {
         let mut touched = self.items_with_executions()?;
         self.connection.execute_batch(
             "DELETE FROM executions; \
-             INSERT INTO executions(item_id, quantity, price, clock, server_tick) \
-             SELECT item_id, quantity, price, updated_clock, updated_clock FROM deals \
+             INSERT INTO executions(item_id, quantity, price, clock, server_tick, taker_side) \
+             SELECT item_id, quantity, price, updated_clock, updated_clock, taker_side FROM deals \
              WHERE status = 'settled' ORDER BY updated_clock, deal_id;",
         )?;
         touched.extend(self.items_with_executions()?);
@@ -269,8 +277,8 @@ impl Store {
         for bucket in &rebuilt {
             transaction.execute(
                 "INSERT INTO candles(item_id, resolution, window_start, open_price, \
-                 high_price, low_price, close_price, volume) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 high_price, low_price, close_price, volume, buy_volume, sell_volume) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     bucket.item_id,
                     bucket.resolution,
@@ -280,6 +288,8 @@ impl Store {
                     bucket.low_price,
                     bucket.close_price,
                     bucket.volume,
+                    bucket.buy_volume,
+                    bucket.sell_volume,
                 ],
             )?;
         }
@@ -287,6 +297,16 @@ impl Store {
             .commit()
             .map_err(|source| Error::Sql(source.to_string()))?;
         Ok(rebuilt)
+    }
+}
+
+/// Buy and sell share of one fill by its taker side; unknown counts in
+/// neither (it stays in the total volume only).
+fn sided_volume(fill: &Execution) -> (i64, i64) {
+    match fill.taker_side {
+        Some(OrderSide::Buy) => (fill.quantity, 0),
+        Some(OrderSide::Sell) => (0, fill.quantity),
+        None => (0, 0),
     }
 }
 
@@ -300,6 +320,7 @@ fn aggregate_fills(
     let mut buckets: Vec<Candle> = Vec::new();
     for fill in fills {
         let window_start = (fill.clock / width) * width;
+        let (bought, sold) = sided_volume(fill);
         match buckets.last_mut() {
             Some(current) if current.window_start == window_start => {
                 if fill.price > current.high_price {
@@ -310,6 +331,8 @@ fn aggregate_fills(
                 }
                 current.close_price = fill.price;
                 current.volume += fill.quantity;
+                current.buy_volume += bought;
+                current.sell_volume += sold;
             }
             _ => buckets.push(Candle {
                 item_id,
@@ -320,6 +343,8 @@ fn aggregate_fills(
                 low_price: fill.price,
                 close_price: fill.price,
                 volume: fill.quantity,
+                buy_volume: bought,
+                sell_volume: sold,
             }),
         }
     }
@@ -337,7 +362,35 @@ mod candles_tests {
             price,
             clock,
             server_tick: clock * 10,
+            taker_side: None,
         }
+    }
+
+    /// Buy volume = units a buyer took off the asks, sell volume = units
+    /// a seller hit on the bids; an unknown side (pre-split rows) stays
+    /// in the total only.
+    #[test]
+    fn candles_split_volume_by_taker_side() -> Result<(), Error> {
+        let mut store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let sided = |clock: i64, quantity: i64, side: Option<crate::OrderSide>| NewExecution {
+            taker_side: side,
+            ..sample_fill(clock, 4, quantity)
+        };
+        store.record_execution(&sided(10 * 3600 + 1, 7, Some(crate::OrderSide::Buy)))?;
+        store.record_execution(&sided(10 * 3600 + 2, 3, Some(crate::OrderSide::Sell)))?;
+        store.record_execution(&sided(10 * 3600 + 3, 2, None))?;
+        store.record_execution(&sided(10 * 3600 + 4, 1, Some(crate::OrderSide::Buy)))?;
+        store.record_execution(&sided(11 * 3600, 6, Some(crate::OrderSide::Sell)))?;
+        let fills = store.executions_for_item(314, 0, i64::MAX)?;
+        assert_eq!(fills[1].taker_side, Some(crate::OrderSide::Sell), "execution keeps its side");
+        assert_eq!(fills[2].taker_side, None);
+        let rebuilt = store.rebuild_candles(314, YieldCandleResolution::Hour1)?;
+        let split: Vec<(i64, i64, i64)> =
+            rebuilt.iter().map(|candle| (candle.volume, candle.buy_volume, candle.sell_volume)).collect();
+        assert_eq!(split, vec![(13, 8, 3), (6, 0, 6)]);
+        assert_eq!(store.candles_for(314, YieldCandleResolution::Hour1, 0, i64::MAX)?, rebuilt, "stored split matches");
+        Ok(())
     }
 
     #[test]
@@ -371,6 +424,7 @@ mod candles_tests {
                 meeting_level: 0,
                 deadline_tick: 0,
                 clock,
+                taker_side: crate::OrderSide::Sell,
             })
         };
         let settled = deal(&store, 5, 10 * 3600)?;
@@ -385,6 +439,7 @@ mod candles_tests {
         let fills = store.executions_for_item(314, 0, i64::MAX)?;
         assert_eq!(fills.len(), 1, "only the settled handover: {fills:?}");
         assert_eq!((fills[0].quantity, fills[0].clock), (5, 10 * 3600 + 600));
+        assert_eq!(fills[0].taker_side, Some(crate::OrderSide::Sell), "the deal's taker side carries over");
         let candles = store.candles_for(314, YieldCandleResolution::Hour1, 0, i64::MAX)?;
         assert_eq!(candles.iter().map(|candle| candle.volume).sum::<i64>(), 5, "candles repainted");
         assert_eq!(store.resync_executions_from_deals()?, 1, "idempotent");
@@ -414,6 +469,8 @@ mod candles_tests {
                 low_price: 3,
                 close_price: 4,
                 volume: 175,
+                buy_volume: 0,
+                sell_volume: 0,
             }
         );
         assert_eq!(rebuilt[1].open_price, 7);

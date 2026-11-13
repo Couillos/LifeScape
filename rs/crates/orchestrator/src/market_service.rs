@@ -96,6 +96,8 @@ pub(crate) struct Print {
     pub(crate) quantity: i64,
     pub(crate) price: i64,
     pub(crate) clock: i64,
+    /// Taker side of the settled deal (`None`: unknown, pre-split).
+    pub(crate) taker: Option<OrderSide>,
 }
 
 pub(crate) struct Engine {
@@ -460,6 +462,8 @@ impl MarketService {
                     ("l", Value::Int(candle.low_price)),
                     ("c", Value::Int(candle.close_price)),
                     ("v", Value::Int(candle.volume)),
+                    ("vb", Value::Int(candle.buy_volume)),
+                    ("vs", Value::Int(candle.sell_volume)),
                     ("n", Value::Int(count)),
                 ])
             })
@@ -473,6 +477,7 @@ impl MarketService {
                     ("q", Value::Int(exec.quantity)),
                     ("p", Value::Int(exec.price)),
                     ("t", Value::Int(exec.clock)),
+                    ("s", crate::market_prints::side_value(exec.taker_side)),
                 ])
             })
             .collect();
@@ -493,17 +498,7 @@ impl MarketService {
         let mut prints: Vec<&Print> = engine.recent.iter().filter(|print| item < 0 || print.item == item).collect();
         let total = prints.len();
         prints = prints.into_iter().skip(total.saturating_sub(limit)).collect();
-        let values: Vec<Value> = prints
-            .iter()
-            .map(|print| {
-                object(vec![
-                    ("item", Value::Int(print.item)),
-                    ("q", Value::Int(print.quantity)),
-                    ("p", Value::Int(print.price)),
-                    ("t", Value::Int(print.clock)),
-                ])
-            })
-            .collect();
+        let values: Vec<Value> = prints.iter().map(|print| crate::market_prints::print_value(print)).collect();
         object(vec![("ok", Value::Bool(true)), ("trades", Value::Arr(values)), ("seq", Value::Int(engine.next_seq as i64))])
     }
 
@@ -818,19 +813,8 @@ impl MarketService {
     fn op_tick(&self, request: &Value) -> Value {
         let since = request.get("since").as_i64().unwrap_or(0);
         let engine = self.lock_engine();
-        let fresh: Vec<Value> = engine
-            .recent
-            .iter()
-            .filter(|print| print.clock > since)
-            .map(|print| {
-                object(vec![
-                    ("item", Value::Int(print.item)),
-                    ("q", Value::Int(print.quantity)),
-                    ("p", Value::Int(print.price)),
-                    ("t", Value::Int(print.clock)),
-                ])
-            })
-            .collect();
+        let fresh: Vec<Value> =
+            engine.recent.iter().filter(|print| print.clock > since).map(crate::market_prints::print_value).collect();
         object(vec![("ok", Value::Bool(true)), ("seq", Value::Int(engine.next_seq as i64)), ("trades", Value::Arr(fresh))])
     }
 

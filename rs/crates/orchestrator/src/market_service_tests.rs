@@ -580,6 +580,7 @@ fn list_merges_same_name_forms_and_sorts_by_volume() {
                 price,
                 clock: at,
                 server_tick: at,
+                taker_side: None,
             })
             .expect("prints");
     };
@@ -612,6 +613,7 @@ fn print_at(service: &MarketService, clock: i64, price: i64, qty: i64) {
             price,
             clock,
             server_tick: clock,
+            taker_side: None,
         })
         .expect("prints");
 }

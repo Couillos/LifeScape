@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Physical delivery deals: creation, status moves, per-account reads.
 
-use crate::{Error, Store};
+use crate::{Error, OrderSide, Store};
 
 /// Deal lifecycle from match to settlement or typed failure.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,6 +52,8 @@ pub struct NewDeal {
     pub meeting_level: i64,
     pub deadline_tick: i64,
     pub clock: i64,
+    /// Side of the order that consumed the book (initiator of the match).
+    pub taker_side: OrderSide,
 }
 
 /// Stored deal row.
@@ -71,6 +73,8 @@ pub struct Deal {
     pub deadline_tick: i64,
     pub created_clock: i64,
     pub updated_clock: i64,
+    /// `None`: deal written before migration 4 (side unknown).
+    pub taker_side: Option<OrderSide>,
 }
 
 fn map_deal(row: &rusqlite::Row<'_>) -> Result<Deal, Error> {
@@ -90,12 +94,13 @@ fn map_deal(row: &rusqlite::Row<'_>) -> Result<Deal, Error> {
         deadline_tick: row.get(11)?,
         created_clock: row.get(12)?,
         updated_clock: row.get(13)?,
+        taker_side: OrderSide::parse_taker(row.get(14)?)?,
     })
 }
 
 const DEAL_COLUMNS: &str = "deal_id, buyer, seller, item_id, quantity, price, \
      meeting_x, meeting_y, meeting_level, status, fail_reason, deadline_tick, \
-     created_clock, updated_clock";
+     created_clock, updated_clock, taker_side";
 
 impl Store {
     /// Records a fresh match between two orders, returns the deal id.
@@ -115,8 +120,8 @@ impl Store {
         self.connection.execute(
             "INSERT INTO deals(buyer, seller, item_id, quantity, price, meeting_x, \
              meeting_y, meeting_level, status, fail_reason, deadline_tick, \
-             created_clock, updated_clock) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'matched', '', ?9, ?10, ?10)",
+             created_clock, updated_clock, taker_side) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'matched', '', ?9, ?10, ?10, ?11)",
             rusqlite::params![
                 new_deal.buyer,
                 new_deal.seller,
@@ -128,6 +133,7 @@ impl Store {
                 new_deal.meeting_level,
                 new_deal.deadline_tick,
                 new_deal.clock,
+                new_deal.taker_side.as_str(),
             ],
         )?;
         Ok(self.connection.last_insert_rowid())
@@ -302,8 +308,14 @@ mod deals_tests {
             meeting_level: 0,
             deadline_tick: 9999,
             clock: 1_700_000_000,
+            taker_side: crate::OrderSide::Sell,
         })?;
         assert_eq!(store.open_deals_for_account("t01")?.len(), 1);
+        assert_eq!(
+            store.get_deal(deal_id)?.and_then(|found| found.taker_side),
+            Some(crate::OrderSide::Sell),
+            "taker side kept"
+        );
         store.set_deal_status(deal_id, DealStatus::Convened, "", 1_700_000_010)?;
         store.set_deal_status(deal_id, DealStatus::Settled, "", 1_700_000_020)?;
         assert!(store.open_deals_for_account("t01")?.is_empty());
@@ -330,6 +342,7 @@ mod deals_tests {
                 meeting_level: 0,
                 deadline_tick: 9999,
                 clock: 1_700_000_000,
+                taker_side: crate::OrderSide::Buy,
             })?;
             store.set_deal_status(deal_id, status, "", 1_700_000_005)?;
             Ok(deal_id)

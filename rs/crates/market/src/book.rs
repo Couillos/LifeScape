@@ -39,6 +39,9 @@ pub struct Fill {
     pub item: i64,
     pub quantity: i64,
     pub price: i64,
+    /// Side of the initiator: the order that (re)entered and consumed
+    /// the book (buy = buy volume, sell = sell volume on the chart).
+    pub taker: Side,
 }
 
 /// Order book for a single item. Orders live here until filled, amended
@@ -244,7 +247,16 @@ impl Book {
                 Side::Buy => (incoming.id, resting.id, incoming.account.clone(), resting.account.clone()),
                 Side::Sell => (resting.id, incoming.id, resting.account.clone(), incoming.account.clone()),
             };
-            fills.push(Fill { buy_id, sell_id, buyer, seller, item: incoming.item, quantity: take, price: resting.price });
+            fills.push(Fill {
+                buy_id,
+                sell_id,
+                buyer,
+                seller,
+                item: incoming.item,
+                quantity: take,
+                price: resting.price,
+                taker: incoming.side,
+            });
             incoming.remaining -= take;
             resting.remaining -= take;
             if resting.remaining == 0 {
@@ -339,7 +351,8 @@ impl Book {
             let take = self.buys[bid_index].remaining.min(self.sells[ask_index].remaining);
             let (bid, ask) = (&self.buys[bid_index], &self.sells[ask_index]);
             let arrival = |order: &Order| self.arrivals.get(&order.id).copied().unwrap_or(0);
-            let price = if arrival(bid) < arrival(ask) { bid.price } else { ask.price };
+            // The later arrival takes at the earlier one's price.
+            let (price, taker) = if arrival(bid) < arrival(ask) { (bid.price, Side::Sell) } else { (ask.price, Side::Buy) };
             fills.push(Fill {
                 buy_id: bid.id,
                 sell_id: ask.id,
@@ -348,6 +361,7 @@ impl Book {
                 item: bid.item,
                 quantity: take,
                 price,
+                taker,
             });
             self.buys[bid_index].remaining -= take;
             self.sells[ask_index].remaining -= take;
@@ -526,6 +540,54 @@ mod tests {
         let prices: Vec<i64> = fills.iter().map(|fill| fill.price).collect();
         assert_eq!(prices, vec![15, 16], "boot heal: the latest arrival is the taker despite seq 0");
         assert_eq!(healed.best(), (None, None));
+    }
+
+    /// Volume split (user 2026-11-13): the order that consumes the book
+    /// is the taker; a buyer taking asks prints buy volume, a seller
+    /// hitting bids prints sell volume.
+    #[test]
+    fn incoming_order_is_the_taker() {
+        let mut book = Book::new();
+        place(&mut book, 1, "seller", Side::Sell, 5, 4);
+        let (bought, _) = place(&mut book, 2, "buyer", Side::Buy, 2, 6);
+        assert_eq!(bought.iter().map(|fill| fill.taker).collect::<Vec<_>>(), vec![Side::Buy]);
+        place(&mut book, 3, "bidder", Side::Buy, 5, 3);
+        let (sold, _) = place(&mut book, 4, "dumper", Side::Sell, 2, 3);
+        assert_eq!(sold.iter().map(|fill| fill.taker).collect::<Vec<_>>(), vec![Side::Sell]);
+    }
+
+    #[test]
+    fn relisted_order_is_the_taker() {
+        let mut book = Book::new();
+        place(&mut book, 1, "bidder", Side::Buy, 3, 10);
+        let relisted = Order { id: 9, account: "lara".to_string(), item: 314, side: Side::Sell, quantity: 2, remaining: 2, price: 8, seq: 0 };
+        let fills = book.relist_matching(relisted, &|_: &str, _: &str| false);
+        assert_eq!(fills.len(), 1);
+        assert_eq!((fills[0].taker, fills[0].price), (Side::Sell, 10), "relisted ask hits the resting bid");
+    }
+
+    #[test]
+    fn uncross_taker_is_the_latest_arrival() {
+        let order = |id: u64, account: &str, side: Side, price: i64| Order {
+            id,
+            account: account.to_string(),
+            item: 314,
+            side,
+            quantity: 1,
+            remaining: 1,
+            price,
+            seq: id,
+        };
+        let mut late_bid = Book::new();
+        late_bid.relist(order(1, "seller", Side::Sell, 16));
+        late_bid.relist(order(2, "buyer", Side::Buy, 20));
+        let fills = late_bid.uncross(&|_: &str, _: &str| false);
+        assert_eq!((fills[0].taker, fills[0].price), (Side::Buy, 16));
+        let mut late_ask = Book::new();
+        late_ask.relist(order(1, "buyer", Side::Buy, 20));
+        late_ask.relist(order(2, "seller", Side::Sell, 16));
+        let fills = late_ask.uncross(&|_: &str, _: &str| false);
+        assert_eq!((fills[0].taker, fills[0].price), (Side::Sell, 20));
     }
 
     #[test]

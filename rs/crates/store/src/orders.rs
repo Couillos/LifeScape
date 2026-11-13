@@ -11,19 +11,25 @@ pub enum OrderSide {
 }
 
 impl OrderSide {
-    fn as_str(self) -> &'static str {
+    /// Stored text: "buy" or "sell" (orders, deal and execution taker side).
+    pub fn as_str(self) -> &'static str {
         match self {
             OrderSide::Buy => "buy",
             OrderSide::Sell => "sell",
         }
     }
 
-    fn parse(text: &str) -> Result<Self, Error> {
+    pub(crate) fn parse(text: &str) -> Result<Self, Error> {
         match text {
             "buy" => Ok(OrderSide::Buy),
             "sell" => Ok(OrderSide::Sell),
             other => Err(Error::Invalid(format!("bad order side {other}"))),
         }
+    }
+
+    /// Nullable taker column: NULL = side unknown (rows before migration 4).
+    pub(crate) fn parse_taker(text: Option<String>) -> Result<Option<Self>, Error> {
+        text.as_deref().map(Self::parse).transpose()
     }
 }
 

@@ -409,3 +409,22 @@ moteur puis store, jamais imbriqués.
 Rejeté : relist sans appariement (carnet croisé à vie) ; prix du `seq`
 le plus ancien (lara aurait payé 20 avec une hache à 16) ; interdire tout
 rappariement des comptes d'un deal échoué (bloquerait des tiers).
+
+## 2026-11-13 — Volume d'achat / volume de vente (graphique /market)
+
+Demande utilisateur : deux volumes par bougie, « quand un mec achète il
+consomme des ordres de vente, et inversement pour les vendeurs ». Volume
+d'ACHAT = quantité dont le taker (ordre qui entre ou ré-entre et consomme
+le carnet, règle du carnet jamais croisé ci-dessus) est un acheteur ;
+volume de VENTE = taker vendeur. `Fill::taker` porte ce côté ; il suit le
+deal (`deals.taker_side`), puis l'exécution écrite au règlement
+(`executions.taker_side`, seuls les deals réglés impriment), les bougies
+(`candles.buy_volume`/`sell_volume`, reconstruites depuis les exécutions)
+et les prints live (`s`). Migration 4 du store : colonnes ajoutées
+seulement (une transaction), anciennes lignes = côté inconnu NULL, compté
+dans le volume total `v` seulement. API `history` : bougies `vb`/`vs`,
+trades `s` ("buy"|"sell"|null). Front : vert (achat) au-dessus d'une ligne
+de base au milieu du panneau volume, rouge (vente) en dessous, même
+échelle ; l'inconnu s'empile en gris au-dessus du vert. Rejeté : deviner
+le côté des anciennes exécutions (prix vs bougie précédente) ;
+recalculer `vb`/`vs` à chaque requête au lieu du cache de bougies.

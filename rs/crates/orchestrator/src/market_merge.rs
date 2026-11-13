@@ -25,7 +25,13 @@ pub fn merge_fills(matched: Vec<(Fill, Vec<Order>)>) -> Vec<(Fill, Vec<Order>)> 
     for (fill, rows) in matched {
         if let Some((kept, kept_rows)) = merged
             .iter_mut()
-            .find(|(kept, _)| kept.buyer == fill.buyer && kept.seller == fill.seller && kept.price == fill.price && kept.item == fill.item)
+            .find(|(kept, _)| {
+                kept.buyer == fill.buyer
+                    && kept.seller == fill.seller
+                    && kept.price == fill.price
+                    && kept.item == fill.item
+                    && kept.taker == fill.taker
+            })
         {
             kept.quantity += fill.quantity;
             kept_rows.extend(rows);
@@ -176,7 +182,16 @@ mod tests {
     use lifescape_market::{Fill, Order, Side};
 
     fn fill(sell_id: u64, seller: &str, qty: i64, price: i64) -> Fill {
-        Fill { buy_id: 1, sell_id, buyer: "bbkjz2vk".to_string(), seller: seller.to_string(), item: 317, quantity: qty, price }
+        Fill {
+            buy_id: 1,
+            sell_id,
+            buyer: "bbkjz2vk".to_string(),
+            seller: seller.to_string(),
+            item: 317,
+            quantity: qty,
+            price,
+            taker: lifescape_market::Side::Buy,
+        }
     }
 
     fn row(account: &str, side: Side, qty: i64, price: i64, seq: u64) -> Order {

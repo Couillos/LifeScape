@@ -435,6 +435,7 @@ mod errors_tests {
             meeting_level: 0,
             deadline_tick: 99,
             clock: 100,
+            taker_side: crate::OrderSide::Buy,
         })?;
         store.set_deal_status(deal_id, crate::DealStatus::Failed, "no_show", 200)?;
         assert_eq!(store.deal_outcome_counts(150, 0)?, (0, 1));
