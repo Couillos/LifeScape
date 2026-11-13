@@ -208,8 +208,8 @@ pub(crate) fn plan_costs_with(
         } else if let Some(known) = blocked.iter_mut().find(|known| known.dest == *dest) {
             known.indices.push(index);
         } else {
-            let touching = crate::fallback::touches_side(&mut |tile| search.open(tile), from, *dest);
-            let rank = from.fallback_rank(*dest, 0, touching);
+            let walled = crate::fallback::walled_off(&mut |tile| search.open(tile), from, *dest);
+            let rank = from.fallback_rank(*dest, 0, walled);
             blocked.push(Blocked { dest: *dest, indices: vec![index], best: from, rank });
         }
     }
@@ -243,8 +243,8 @@ pub(crate) fn plan_costs_with(
         }
         let here = tile_of(found);
         for target in blocked.iter_mut() {
-            let touching = crate::fallback::touches_side(&mut |tile| search.open(tile), here, target.dest);
-            let rank = here.fallback_rank(target.dest, cost, touching);
+            let walled = crate::fallback::walled_off(&mut |tile| search.open(tile), here, target.dest);
+            let rank = here.fallback_rank(target.dest, cost, walled);
             if rank < target.rank {
                 target.rank = rank;
                 target.best = here;

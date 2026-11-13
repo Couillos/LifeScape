@@ -100,11 +100,17 @@ peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doo
 # (niveau, Chebyshev, cout) prenait la diagonale exterieure (2944,3366),
 # derriere le mur ouest ; de la, le stand le plus proche est cote
 # guichetier (2945,3366, poche fermee) : NoRoute epuisant (~5-7 s) a
-# chaque passage en banque (cows, live 2026-11-13). Le repli prefere
-# desormais une tuile qui touche la cible par un cote sans mur : le
-# stand client (2945,3368), meme depuis l'exterieur du mur.
+# chaque passage en banque (cows, live 2026-11-13). Le repli declasse
+# desormais une tuile separee de la cible par un mur (cote ou diagonale) :
+# le stand client (2945,3368) gagne, meme depuis l'exterieur du mur.
 guichet_falador_sud | 2925,3279,0 | 2945,3367,0 | f2p | reachable ; adjusted=2945,3368
 guichet_falador_mur | 2944,3366,0 | 2945,3367,0 | f2p | reachable ; adjusted=2945,3368
+# 22b. garde-fou du rang : une diagonale OUVERTE reste un repli valide. Sur
+# la rive (3087,3228), la cible eau (3086,3227) est deja atteinte : plan
+# vide, jamais un pas vers le cote (3087,3227) (sdk
+# mainland_water_still_plans_to_shore, regression du premier rang
+# « cote touchant avant diagonale »).
+rive_deja_la | 3087,3228,0 | 3086,3227,0 | - | reachable ; walk_tiles<=0
 # 24-25. porte 1530 de la maison du cuisinier de Port Sarim (3014,3237,
 # mur droit angle EST, categorie door_closed). Ouverte (500 ticks, par
 # n'importe quel bot) elle devient 1531 en (3015,3237) angle SUD

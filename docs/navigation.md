@@ -55,6 +55,32 @@ ouvert ne fait plus refuser le pas suivant (avant : ~5000 refus/jour
 aux portails Falador/Lumbridge, replan identique, aller-retour par le
 portail). Goldens : `rs/crates/nav/tests/gate_swing.rs`.
 
+Portes simples (catégorie `door_closed`, id 19, mur droit) : ouverte
+(500 ticks, `doors.rs2`), la porte réapparaît une tuile vers son angle
+(`door_open`), tournée `angle+1` : un battant sur un bord de la tuile
+derrière l'embrasure (Port Sarim 1530 (3014,3237) → 1531 (3015,3237)
+angle sud). Le peintre ne le peint **pas** en mur (peint, il coupait 22
+pièces F2P en deux, ex. Lumbridge 1536) : il pose des marques
+planificateur `DOOR_LEAF_WEST/NORTH/EAST/SOUTH` (bits 0x1000000 à
+0x8000000, jamais serveur, jamais bloquants ; `tiles_flags` les renvoie,
+les lecteurs masquent) et un pas qui traverse l'arête marquée (diagonale
+qui l'effleure comprise) coûte `DOOR_LEAF_STEP_COST` (10) de plus, dans
+`plan` comme dans `walk_costs` (`collision::leaf_step_extra`). Le plan
+contourne quand un détour court existe, traverse sinon. Goldens
+`porte_port_sarim_*`, `porte_lumbridge_sud` (assertion `never_steps=`).
+
+Destination bloquée (guichet, comptoir, arbre, eau) : le plan finit sur
+la tuile de repli de meilleur rang (`Tile::fallback_rank`) : niveau,
+puis Chebyshev, puis `fallback::walled_off` (voisin séparé de la cible
+par un mur : bord partagé pour un côté, les quatre bords du coin pour
+une diagonale), puis coût. Seul un voisin muré est déclassé : une
+diagonale ouverte reste valide et la tuile où le bot se trouve (coût 0)
+garde l'avantage (rive (3087,3228) pour l'eau (3086,3227) : plan vide).
+Avant : la diagonale extérieure (2944,3366) du guichet ouest de Falador,
+derrière le mur, gagnait au coût ; `open_bank` y tentait d'abord le stand
+guichetier (poche fermée, NoRoute exhaustif). Goldens `guichet_falador_*`
+(assertion `adjusted=`), `rive_deja_la`.
+
 Versions et reload : chaque réponse porte la version snapshot ;
 `reload-nav` rebâtit le snapshot à côté et l'échange atomiquement
 (l'in-flight finit sur l'ancien `Arc`, le bump de version rend les
