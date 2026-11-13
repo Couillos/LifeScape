@@ -233,6 +233,12 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
         } else if assertion == "adjusted_dest" {
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
             assert!(plan.adjusted_dest.is_some(), "route {name}: expected an adjusted destination");
+        } else if let Some(adjusted) = assertion.strip_prefix("adjusted=") {
+            let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
+            let pair: Vec<i32> = adjusted.split(',').map(|part| part.trim().parse().expect("adjusted pair")).collect();
+            assert!(pair.len() == 2, "route {name}: adjusted needs x,z");
+            let landed = plan.adjusted_dest.map(|tile| (tile.x, tile.z));
+            assert_eq!(landed, Some((pair[0], pair[1])), "route {name}: wrong adjusted destination");
         } else if let Some(stand) = assertion.strip_prefix("stand=") {
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
             let pair: Vec<i32> = stand.split(',').map(|part| part.trim().parse().expect("stand pair")).collect();
