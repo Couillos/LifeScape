@@ -13,14 +13,19 @@ couverture), `deals` (machine à états), `price` (VWAP → mid → magasin,
 bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
 
-Stratégie de cotation inspirée de ZIP (PRD3) : un ordre posé avec un
-`ceiling` (acheteur) ou un `floor` (vendeur) marche d'un pas de 5 % (≥ 1
-pièce) par fenêtre de patience (200 ticks) tant qu'il reste au carnet
-(`market_reprice`, piloté par la boucle de convocation). Acheteur :
-ouvre à l'ask s'il le couvre, sinon à la référence, monte jusqu'à ce
-qu'il peut payer. Vendeur : ouvre à référence + 10 % (ou au meilleur bid
-s'il est plus riche), descend jusqu'à son plancher (moitié de la
-référence échangée, 1 sinon). Les PNJ n'ancrent plus rien : aucun bot ne
+Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
+ordre posé avec un `ceiling` (acheteur) ou un `floor` (vendeur) fait un
+pas de 5 % (≥ 1 pièce) par fenêtre de patience (200 ticks) tant qu'il
+reste au carnet (`market_reprice`, `lifescape_market::demand_step`), sa
+direction lue dans la fenêtre : vente servie (même en partie) → monte,
+vente au repos → descend jusqu'à son plancher, achat au repos → monte
+jusqu'à son plafond, achat servi → redescend vers son prix d'ouverture.
+Acheteur : ouvre à l'ask s'il le couvre, sinon à la référence
+(`opening_bid`). Vendeur : ouvre à la référence, ou au meilleur bid s'il
+est plus riche (`opening_ask`, plus de marge de 10 %), plancher moitié
+de la référence échangée, 1 sinon (jamais un coût d'intrant). Une vente
+monte sans plafond propre (la bande 5× d'une référence échangée la
+borne). Voir § Prix par l'offre et la demande. Les PNJ n'ancrent plus rien : aucun bot ne
 vend à un marchand, et l'achat marchand est réservé aux objets non
 productibles en F2P (D-A, voir `decisions.md`). Marchands (`market:flip`, ~10 %) :
 sélection sur écart/volume, plafonds `max_capital_share` (10 %),
@@ -159,16 +164,23 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 ## PRD3 : économie centrale
 
 - Ventes par défaut : le cerveau liste le surplus échangeable des bots
-  inactifs (`brain_sales`, toutes les 600 s) ; protégés : pièces,
-  nourriture ≤ 100, keep-list du graphe, intrants du skill entraîné,
-  outils, porté, envies.
+  inactifs (`brain_sales`, toutes les 600 s) à la référence, prix qui
+  marche ensuite avec la demande ; protégés : pièces, nourriture ≤ 100,
+  keep-list du graphe, intrants du skill entraîné (et un produit qu'une
+  autre méthode ouverte consomme), outils, porté, pièces de l'échelle
+  d'équipement et palier suivant, envies. Les produits fabriqués
+  (barres, forgé, artisanat, cuisine) sont vendus. Les annonces sans
+  bornes (posées avant un redémarrage) sont réadoptées à chaque passe
+  (hors marchands, qui fixent leurs prix).
 - Achats : `market:buy` posé par le cerveau (offre avec plafond, attente
   de la livraison) ; à côté d'une production, offre permanente (D-B)
   annulée quand le nœud aboutit.
-- Envies (`brain_wishlist`) : meilleur équipement du style du but et
-  meilleurs outils (gamedata `gear`), enchères non bloquantes sur les
-  deux premières, plafond = pièces disponibles, réévaluées toutes les
-  600 s ; jamais vendues.
+- Équipement : échelle par paliers (§ Équipement par paliers) ; les
+  envies (`brain_wishlist`) ne portent plus que les outils pour les buts
+  mêlée/non combattants (plafond 25 % du portefeuille par outil), et
+  l'équipement des buts distance/magie (50 % partagés) ; une offre au
+  repos garde sa marche (`market_reprice::keep_bid`), seul son plafond
+  suit le portefeuille ; jamais vendues.
 - Pièces comme objectif : un achat non couvert crée `have_coins`, résolu
   d'abord par les PNJ qui lâchent des pièces (hommes ~8,2/kill, gobelins
   ~2,2, tables de drop F2P : seule entrée de pièces sans acheteur, les
@@ -184,3 +196,79 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 - Couverture : pièces et stock en banque comptent (banque connue gardée
   par le SDK après fermeture, voir `docs/protocol.md`) côté cerveau
   (`holdings_count`) et registre (`market_service::ledger_holdings`).
+
+## Équipement par paliers (2026-11-13)
+
+Règles pures dans `planner/src/gear_ladder.rs`, câblage `brain_gear.rs`
+(une passe par compte toutes les 60 s, bots non Iron, but mêlée ou non
+combattant).
+- Paliers bronze → fer → acier → mithril → adamant → rune (F2P,
+  forgeables) ; le noir compte comme l'acier s'il est possédé mais n'est
+  jamais un palier (pas de recette : objet marchand D-A).
+- Emplacements dans l'ordre : arme (cimeterre, sinon épée longue), corps
+  (plastron, sinon cotte), jambes (jambières, sinon jupe), casque
+  (heaume, sinon casque moyen), bouclier (kite, sinon carré).
+- Le palier visé est le SUIVANT de ce que le bot possède (sac, banque,
+  porté) dans le premier emplacement que ses niveaux ouvrent (attaque
+  pour l'arme, défense pour l'armure, verrou de quête → famille
+  suivante) ; jamais la meilleure pièce absolue.
+- Plafond = `GEAR_SHARE_PCT` = 50 % du portefeuille (sac + banque) :
+  un seul palier à la fois, il monte avec les pièces ; l'autre moitié
+  reste aux intrants, outils et achats du graphe.
+- Décision (`gear_move`) : pièce possédée non portée → nœud
+  `equip_best` seul (une fois par heure et par pièce) ; vendeur au
+  carnet ou portefeuille trop mince pour enchérir → nœuds
+  `obtain_items` (marché seul, jamais `shop:buy`) + `equip_best`
+  (marqueur `gear:ladder`), lancés avant le nœud suivant du but
+  (`next_ready`) : un ask ≤ plafond est pris, un ask plus cher bloque en
+  `missing:coins:<2×ask>` → `have_coins` (hommes, gobelins, puis la liste
+  de sites) ; aucun vendeur → offre permanente D-B (`keep_bid`) à la
+  référence, qui monte jusqu'au plafond pendant que le bot continue son
+  but.
+- Un palier dont le vendeur a disparu au moment de résoudre (et
+  portefeuille suffisant), ou abandonné, est retiré du graphe
+  (`lifecycle::withdraw_gear_step`, historique `gear_withdrawn`, ids
+  jamais réutilisés) : un palier ne bloque jamais le but.
+- Les offres sur d'autres pièces portables (ancien palier, anciennes
+  envies « meilleur équipement ») sont annulées ; les pièces gardées
+  (meilleure portable par emplacement et paliers supérieurs, palier
+  visé) ne sont jamais vendues, les paliers inférieurs le sont.
+- Limites connues : distance/magie gardent les envies ; les Iron n'ont
+  pas d'échelle (achat au marché uniquement).
+
+## Prix par l'offre et la demande (2026-11-13)
+
+1 pièce n'est que le prix d'amorçage. Règles (`lifescape_market::zip`,
+`market_reprice`) : ouverture à la référence (VWAP 24 h → dernier print
+→ milieu → 1), puis un pas de 5 % (≥ 1) par fenêtre de 200 ticks selon
+les exécutions de la fenêtre (voir § Market). Aucun plancher lié au coût
+des intrants : un vendeur qui ne vend pas descend, un vendeur qui vend
+monte ; un acheteur qui n'est pas servi monte jusqu'à sa part de
+portefeuille. Le prix suit donc la masse monétaire : plus de pièces →
+plafonds plus hauts → prix plus hauts.
+
+Simulations hors ligne (`market/src/sim_demand.rs`,
+`orchestrator/src/economy_sim_tests.rs`) : un acheteur (plafond 60)
+fait monter son offre depuis 1 ; le producteur (intrants 20) démarre
+dès que l'offre couvre ses intrants et vend avec marge ; un ask servi à
+chaque fenêtre monte de 1 à ~10 (ce que paient les acheteurs), servi une
+fenêtre sur trois il reste plus bas ; une surabondance reste à ~1. Bout
+en bout : cimeterre de fer (2 barres à 15), combattant à 200 pièces
+(plafond 100) → le forgeron vend à 31, marge positive ; à 40 pièces
+(plafond 20 < 30) aucune production tant que `have_coins` ne porte pas
+le portefeuille à 62.
+
+Crochet de production (`planner/src/profit.rs`, pour les ambitions et
+les producteurs) : `chain_profit(objet, prix, unités_par_6000)` →
+`ChainProfit { way, sale_price, inputs, input_cost, margin,
+units_per_6000, profit_per_6000 }` ou une erreur typée
+(`NotProduced`, `MissingSalePrice`, `MissingInputPrice`, `BadYield`).
+`prix` = prix marché par nom debug : celui de l'objet (meilleur bid au
+repos si un acheteur attend, sinon la référence) et de chaque intrant
+(référence, ou meilleur ask s'il faut l'acheter) ; jamais un prix de
+magasin. Rendement = rates mesurés (`task_yields`) ou estimation de
+démarrage. La meilleure recette dont tous les intrants ont un prix est
+retenue ; les intrants récoltés soi-même sont comptés au prix de marché
+(coût d'opportunité). `profit_per_6000 > 0` avec une offre au-dessus de
+`input_cost` = signal de produire (entraîner le skill, acheter les
+intrants).

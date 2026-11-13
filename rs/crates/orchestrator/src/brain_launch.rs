@@ -173,6 +173,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::brain_sales::maybe_list_surplus(job, &life);
     // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
     crate::brain_wishlist::maybe_bid_wishes(job, &life);
+    // Equipment ladder (2026-11-13): the next tier as a graph step, or a
+    // standing bid that waits for a producer.
+    if crate::brain_gear::gear_pass(job, &mut life, &live) {
+        dirty = true;
+    }
     match lifescape_planner::graph_state(&life) {
         GraphState::Launchable => {}
         GraphState::Running(_) => {
@@ -215,12 +220,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             return;
         }
     }
-    let ready = life.nodes.iter().position(|node| {
-        node.status == NodeStatus::Ready
-            // The tutorial only ever starts through its gate.
-            && !matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
-    });
-    let Some(position) = ready else {
+    // The gear sub-goal first, then the goal's next node; the tutorial
+    // only ever starts through its gate.
+    let Some(position) = lifescape_planner::next_ready(&life) else {
         if dirty {
             save_or_log(&life);
         }
@@ -259,6 +261,36 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         Some((part(1)?, part(2)?, part(0)?))
     });
     crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live);
+    // An obtain the holdings already meet closes without a launch
+    // (positive proof: pack, bank, worn), like a met coin target below.
+    if let NodeKind::ObtainItems { item, count } = &life.nodes[position].kind {
+        if ctx.held >= *count {
+            let (id, item) = (life.nodes[position].id.clone(), item.clone());
+            crate::brain_market::cancel_open_buys(&job.account, &item);
+            lifescape_planner::complete_node(&mut life, position, ctx.held);
+            push_history(&mut life, &id, "already_held");
+            crate::logln!("brain {}: {id} holds {} {item}, done without launch", job.account, ctx.held);
+            lifescape_planner::normalize(&mut life);
+            save_or_log(&life);
+            return;
+        }
+    }
+    // A ladder purchase spends its wallet share only; with no seller
+    // left and a wallet that can bid, the step withdraws and the standing
+    // bid waits for a producer (never a worker held on an empty book).
+    if lifescape_planner::gear_ladder::is_gear_obtain(&life, position) {
+        ctx.coin_share_pct = Some(lifescape_planner::GEAR_SHARE_PCT);
+        if lifescape_planner::gear_ladder::withdraw_due(&ctx) {
+            let removed = lifescape_planner::withdraw_gear_step(&mut life, position);
+            crate::logln!("brain {}: gear step {} withdrawn: no seller, the standing bid waits", job.account, removed.join(", "));
+            for id in &removed {
+                push_history(&mut life, id, "gear_withdrawn");
+            }
+            lifescape_planner::normalize(&mut life);
+            save_or_log(&life);
+            return;
+        }
+    }
     // A coin target already met closes without a launch (PRD3 lot 4).
     if let NodeKind::HaveCoins { amount } = life.nodes[position].kind {
         if ctx.coins >= amount {
