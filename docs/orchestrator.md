@@ -14,7 +14,7 @@ servi sur `run/pathfinding.sock`. Les workers ne portent que le handle
 (`plan_client`) et la version épinglée — aucune carte en worker.
 
 CLI (`src/cli.rs`, `src/main.rs`, le daemon démarre seul) :
-`open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|shutdown|daemon|direct|map|route|replay-nav|dump-transitions|reload-nav|nav-stats`.
+`open|run|call|shell|status|show|see|logs|unload|pause|resume|hold|close|redeploy|shutdown|daemon|direct|map|route|replay-nav|dump-transitions|reload-nav|nav-stats`.
 
 `verify` (W2) : runner de scénarios déclaratifs (`scenarios/*.json`, lus avec
 `lifescape-json`). Setup série via `admin` (cheats + `bank_all`, effets
@@ -88,10 +88,40 @@ hub d'envoi, les chemins, le marché et l'écoute : `status` répond en ~1 s,
 la reprise des ~25 workers finit en ~30–60 s (ligne `restore_jobs done in
 Ns` du journal). Seul le daemon a changé → ne pas redéployer les workers.
 Code worker changé (sdk, scripts, envois) → après `restore_jobs done`,
-`close` puis `open` par compte de la flotte (liste lue dans `status` une
-fois la reprise finie, jamais `run/lives` qui garde d'anciens comptes) ;
-l'admission limite les ouvertures (`admission:open-rate wait`) : relancer
-après ~0,8 s, jamais en parallèle (~40 s pour 25 comptes). Les envois des
+`redeploy <compte>` par compte de la flotte (liste lue dans `status` une
+fois la reprise finie, jamais `run/lives` qui garde d'anciens comptes),
+un compte à la fois, jamais en parallèle. `redeploy` = `close` puis `open`
+sous un seul verrou de compte (aucun `open` market-absent/brain ne s'y
+glisse) ; il attend lui-même le pas d'admission (`admission:open-rate
+wait`) et le serveur qui garde encore le joueur (`already logged in`,
+relogin retenté 2 s jusqu'à 120 ticks, `TIMEOUT_NO_RESPONSE` = 100).
+Code ≠ 0 → lire l'erreur, ne pas boucler.
+
+Propriété des workers (2026-11-13, `worker_owner.rs`, `daemon_close.rs`) :
+un seul worker vivant par compte, jamais deux. Bug corrigé : un `open`
+opérateur et un `open` market-absent simultanés (ryan_park, 20:17) ont
+lancé deux workers ; le second a effacé le socket du premier et écrasé
+son entrée `procs` (le `Child` lâché sans être tué) : worker orphelin
+connecté, `close` ne tuait que le suivi, tout `open` suivant refusé
+`login refused: 5 (already logged in)`. Désormais :
+- open/close/redeploy/relance watchdog d'un compte sont exclusifs
+  (`LifecycleLocks`) ; le second reçoit `already open <compte>: another
+  open/close is in flight` (open) ou `busy <compte>: ...` (close) ;
+- la vérité sur les workers vient de `/proc` (`<exe> session <compte>`,
+  cwd = racine du dépôt), suivis ou non : `open` répond `already open`
+  si le worker répond au ping (adoption `restore_jobs` en cours), sinon
+  refuse `live worker pid N for <compte> is not owned by this daemon
+  (close <compte> reaps it)` ; `spawn` refuse aussi, jamais d'écrasement
+  de `procs` ni de suppression du socket d'un worker vivant ;
+- côté worker, `claim_socket` refuse de délier un socket servi ;
+- `close` : demande de logout acquittée tout de suite par le worker
+  (arrêt du script au prochain pump, déchargement borné, bouton logout,
+  fin du processus), attente bornée 20 s, puis SIGTERM / 8 s / SIGKILL du
+  worker suivi **et** de tout worker non suivi du compte ; réponse
+  `graceful` (déconnexion propre ou terminé), `workers`, `untracked` ;
+  `ok` seulement quand plus aucun worker du compte ne vit (`close` sur
+  un compte sans job mais avec un orphelin le tue aussi) ;
+- `shutdown` ferme les sessions en parallèle. Les envois des
 workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
 leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
 (`.cargo/config.toml`).

@@ -44,14 +44,19 @@ impl WorkerProc {
         }
     }
 
-    fn pid(&mut self) -> Option<u32> {
+    pub(crate) fn pid(&mut self) -> Option<u32> {
+        // Pid 0 (a restored worker that reported none) is never signalled:
+        // `kill -TERM 0` would hit the daemon's whole process group.
         match self {
-            WorkerProc::Owned(child) => child.id().into(),
-            WorkerProc::Attached(pid) => Some(*pid),
+            WorkerProc::Owned(child) => Some(child.id()).filter(|pid| *pid != 0),
+            WorkerProc::Attached(pid) => Some(*pid).filter(|pid| *pid != 0),
         }
     }
 
     fn terminate_gracefully(&mut self) {
+        if !self.alive() {
+            return;
+        }
         let pid = self.pid();
         // std has no SIGTERM: ask politely via /bin/kill, then SIGKILL
         // after a grace delay (STOP_GRACE).
@@ -68,9 +73,12 @@ impl WorkerProc {
         match self {
             WorkerProc::Owned(child) => {
                 let _ = child.kill();
+                let _ = child.wait();
             }
             WorkerProc::Attached(pid) => {
-                let _ = Command::new("kill").arg("-KILL").arg(pid.to_string()).output();
+                if *pid != 0 {
+                    let _ = Command::new("kill").arg("-KILL").arg(pid.to_string()).output();
+                }
             }
         }
     }
@@ -79,6 +87,8 @@ impl WorkerProc {
 pub struct Orchestrator {
     pub(crate) jobs: Mutex<HashMap<String, Arc<Job>>>,
     pub(crate) procs: Mutex<HashMap<String, WorkerProc>>,
+    /// One open/close/redeploy/respawn per account (`worker_owner`).
+    pub(crate) lifecycle: crate::worker_owner::LifecycleLocks,
     pub running: AtomicBool,
 }
 
@@ -89,6 +99,7 @@ impl Orchestrator {
         Orchestrator {
             jobs: Mutex::new(HashMap::new()),
             procs: Mutex::new(HashMap::new()),
+            lifecycle: crate::worker_owner::LifecycleLocks::default(),
             running: AtomicBool::new(true),
         }
     }
@@ -123,7 +134,16 @@ impl Orchestrator {
     }
 
     /// Start the session worker and wait for its login (or typed error).
+    /// Callers hold the account's lifecycle claim. Never beside a live
+    /// worker: its socket, ready file and `procs` entry stay untouched.
     pub(crate) fn spawn(&self, job: &Arc<Job>, no_login: bool) -> Result<(), String> {
+        if self.proc_alive(&job.account) {
+            let pid = self.procs.lock().unwrap().get_mut(&job.account).and_then(WorkerProc::pid).unwrap_or(0);
+            return Err(format!("worker pid {pid} for {} is still alive, refusing a second one", job.account));
+        }
+        if let Some(pid) = crate::worker_owner::live_workers(&job.account).first() {
+            return Err(crate::worker_owner::foreign_worker_error(&job.account, *pid));
+        }
         let (sock_path, ready_path) = paths::session_paths(&job.account);
         for stale in [&sock_path, &ready_path] {
             let _ = std::fs::remove_file(stale);
@@ -202,6 +222,20 @@ impl Orchestrator {
         if account.is_empty() {
             return object(vec![("ok", Value::Bool(false)), ("error", str_value("account is required"))]);
         }
+        // One lifecycle operation per account: the 20:17 race (operator
+        // open + market-absent open) spawned two workers for ryan_park.
+        // "already open" keeps market-absent waiting, never failing.
+        let Some(_claim) = self.lifecycle.try_claim(account) else {
+            return object(vec![
+                ("ok", Value::Bool(false)),
+                ("error", str_value(&format!("already open {account}: another open/close is in flight"))),
+            ]);
+        };
+        self.open_claimed(account, no_login)
+    }
+
+    /// `open_job` body, lifecycle claim held by the caller (open, redeploy).
+    pub(crate) fn open_claimed(self: &Arc<Self>, account: &str, no_login: bool) -> Value {
         // E1 admission + E10 pace: refuse loudly past the envelope or
         // inside the open interval, never degrade the running bots.
         if let Some(wait) = crate::admission::open_rate_due() {
@@ -233,30 +267,32 @@ impl Orchestrator {
                 crate::logln!("open {account}: {warning}");
             }
         }
-        {
-            let jobs = self.jobs.lock().unwrap();
-            if jobs.contains_key(account) && self.proc_alive(account) {
+        // The worker processes are the truth, tracked or not: a live one
+        // is either ours (already open), being adopted by restore_jobs
+        // (answers its socket) or foreign (typed refusal naming its pid).
+        // Its socket is never removed here.
+        let tracked_alive = self.jobs.lock().unwrap().contains_key(account) && self.proc_alive(account);
+        let live = crate::worker_owner::live_workers(account);
+        let answers = !tracked_alive
+            && !live.is_empty()
+            && self.send_worker(account, &object(vec![("cmd", str_value("ping"))]), Duration::from_secs(2)).is_ok();
+        match crate::worker_owner::open_verdict(tracked_alive, &live, answers) {
+            crate::worker_owner::OpenVerdict::Spawn => {}
+            crate::worker_owner::OpenVerdict::AlreadyOpen => {
                 return object(vec![
                     ("ok", Value::Bool(false)),
                     ("error", str_value(&format!("already open {account}"))),
                 ]);
             }
-        }
-        self.jobs.lock().unwrap().remove(account);
-        let (sock_path, _ready) = paths::session_paths(account);
-        if sock_path.exists() {
-            match self.send_worker(account, &object(vec![("cmd", str_value("ping"))]), Duration::from_secs(2)) {
-                Ok(_) => {
-                    return object(vec![
-                        ("ok", Value::Bool(false)),
-                        ("error", str_value(&format!("already open {account}"))),
-                    ]);
-                }
-                Err(_) => {
-                    let _ = std::fs::remove_file(&sock_path);
-                }
+            crate::worker_owner::OpenVerdict::Foreign(pid) => {
+                crate::logln!("open {account}: refused, untracked live worker pid {pid}");
+                return object(vec![
+                    ("ok", Value::Bool(false)),
+                    ("error", str_value(&crate::worker_owner::foreign_worker_error(account, pid))),
+                ]);
             }
         }
+        self.jobs.lock().unwrap().remove(account);
         // An `open` replaces whatever worker ran here (operator redeploy,
         // reopen after a kill): the node it was running ends without a
         // report, which is a stop, never a crash (live 16:48: a fleet
@@ -446,54 +482,6 @@ impl Orchestrator {
             Duration::from_secs(WORKER_TIMEOUT),
         )
         .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]))
-    }
-
-    fn close_job(&self, account: &str) -> Value {
-        let job = match self.jobs.lock().unwrap().get(account).cloned() {
-            Some(job) => job,
-            None => {
-                return object(vec![
-                    ("ok", Value::Bool(false)),
-                    ("error", str_value(&format!("no session for {account}"))),
-                ]);
-            }
-        };
-        if let Ok(mut inner) = job.inner.try_lock() {
-            inner.supervise = false;
-        }
-        let mut session = Value::Null;
-        // Best-effort graceful logout only: a wedged worker cannot ack (it
-        // reads commands at safe-points), and kill_process below always
-        // follows. Waiting the full worker timeout per session is what made
-        // multi-session shutdowns outlive every timeout above them.
-        match self.send_worker(
-            account,
-            &object(vec![("cmd", str_value("close"))]),
-            Duration::from_secs(5),
-        ) {
-            Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
-                session = reply.get("session").clone();
-            }
-            Ok(_) => {}
-            Err(error) => crate::logln!("close {account}: worker unreachable: {error}"),
-        }
-        self.kill_process(account);
-        let (sock, _ready) = paths::session_paths(account);
-        let _ = std::fs::remove_file(sock);
-        {
-            let mut inner = job.inner.lock().unwrap();
-            inner.status = "stopped".to_string();
-            inner.phase = "idle".to_string();
-            inner.script = None;
-            inner.paused = false;
-            inner.supervise = false;
-            if !session.get("last_error").is_null() {
-                inner.last_error = Some(session.get("last_error").clone());
-            }
-        }
-        self.write_state(&job);
-        self.jobs.lock().unwrap().remove(account);
-        object(vec![("ok", Value::Bool(true)), ("job", job.describe())])
     }
 
     /// Drop a job whose worker is gone and say so plainly, instead of
@@ -843,10 +831,7 @@ impl Orchestrator {
                 ]);
             }
             "shutdown" => {
-                let accounts: Vec<String> = self.jobs.lock().unwrap().keys().cloned().collect();
-                for name in accounts {
-                    let _ = self.close_job(&name);
-                }
+                self.close_all();
                 self.running.store(false, std::sync::atomic::Ordering::SeqCst);
                 let _ = UnixStream::connect(paths::socket_path());
                 return object(vec![("ok", Value::Bool(true))]);

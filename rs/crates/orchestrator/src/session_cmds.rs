@@ -287,26 +287,49 @@ fn cmd_pose_market(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value 
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }
 
+/// Bounded wait (wall seconds) for the bot lock before the logout: a
+/// script that survived its unload still holds it.
+const CLOSE_LOCK_BACKSTOP: f64 = 10.0;
+
+/// Graceful close, acked at once (a busy worker used to blow the daemon's
+/// 5 s timeout here): the stop is posted for the script's next pump, then
+/// a background thread unloads (bounded), logs out and ends the serve
+/// loop, so the process exits. The daemon waits that exit (bounded),
+/// then terminates whatever is left.
 fn cmd_close(shared: &Arc<Shared>) -> Value {
-    let _ = cmd_unload(shared);
     shared.log(&format!("=== session close {} ===", shared.account));
-    {
-        let mut inner = shared.inner.lock().unwrap();
-        inner.closing = true;
-        inner.status = "stopped".to_string();
-    }
-    shared.bot.lock().unwrap().close();
+    shared.stop_requested.store(true, Ordering::SeqCst);
     let session = shared.describe();
     let worker = Arc::clone(shared);
     let thread_name = format!("session-close-{}", worker.account);
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            std::thread::sleep(Duration::from_millis(500));
+            let _ = cmd_unload(&worker);
+            // No idle pump (hence no relogin) between the logout and the
+            // end of the serve loop: unload cleared the stop flag.
+            worker.stop_requested.store(true, Ordering::SeqCst);
+            {
+                let mut inner = worker.inner.lock().unwrap();
+                inner.status = "stopped".to_string();
+                inner.connected = false;
+            }
+            let start_wall = now_secs();
+            loop {
+                if let Ok(mut bot) = worker.bot.try_lock() {
+                    bot.close();
+                    break;
+                }
+                if now_secs() - start_wall > CLOSE_LOCK_BACKSTOP {
+                    worker_out(&worker, "close: bot still busy, exiting without the logout button");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             worker.inner.lock().unwrap().closing = true;
         })
         .expect("session close thread spawns");
-    object(vec![("ok", Value::Bool(true)), ("session", session)])
+    object(vec![("ok", Value::Bool(true)), ("session", session), ("closing", Value::Bool(true))])
 }
 
 pub(crate) fn dispatch(shared: &Arc<Shared>, request: &Value) -> Value {

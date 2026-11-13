@@ -94,6 +94,10 @@ impl Orchestrator {
             }
             return;
         }
+        // Never race an operator open/close/redeploy of the same account.
+        let Some(_claim) = self.lifecycle.try_claim(&job.account) else {
+            return;
+        };
         state.restarts.push(now);
         crate::logln!("watchdog {}: no heartbeat for {:.0}s, restarting worker", job.account, now - at);
         self.kill_process(&job.account);
