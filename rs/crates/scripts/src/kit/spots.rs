@@ -457,6 +457,9 @@ pub(crate) fn pick_fish_spot(
 }
 
 pub(crate) fn nearest_bank_at(x: i32, z: i32, level: i32) -> Option<knowledge::banks::Bank> {
+    // A Karamja site banks from the Port Sarim dock its boat lands on.
+    let (x, z, level) = knowledge::access::mainland_anchor(i64::from(x), i64::from(z), i64::from(level));
+    let (x, z, level) = (x as i32, z as i32, level as i32);
     knowledge::banks::all_banks()
         .into_iter()
         .filter(|bank| !bank.members && bank.level == i64::from(level))

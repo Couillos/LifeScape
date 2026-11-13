@@ -15,12 +15,12 @@
 //!   (`edgevilledungeonkey`, nav requirement `item:983`);
 //! - Karamja: `sailors.rs2` (Port Sarim) takes 30 coins from the pack and
 //!   sails (`~set_sail`, a teleport onto the ship); the customs officer
-//!   sails back for 30. The navigation has NO edge for that teleport
-//!   (`nav_overrides.json` `custom_edges` empty; offline 2026-11-13:
-//!   `orchestrator route 3029 3217 0 2915 3150 0` → `BudgetExhausted
-//!   closest=(2955,3192,0)`, the Rimmington coast), so `BOAT_ROUTED` is
-//!   false: Karamja sites (tuna, lobster, swordfish, Karamja gold) stay
-//!   unplannable until the SDK/nav sails;
+//!   sails back for 30. The navigation rides both (`nav_overrides.json`
+//!   `custom_edges` "npc_fare" + the disembark gangplanks; offline
+//!   `orchestrator route 3029 3217 0 2915 3150 0 --paid` sails), so
+//!   `BOAT_ROUTED` is true: a Karamja site (tuna, lobster, swordfish,
+//!   Karamja gold) is a paid site, its round trip budgeted like the Al
+//!   Kharid toll (planner `combat::pick_site_gated`, launch flag `boat`);
 //! - Wilderness (`danger::in_wilderness`): no combat level makes it safe;
 //! - underground (level 0, z ≥ 6400) outside the Mining Guild: dungeons
 //!   reached by trapdoors and ladders the scripts never take for a gather
@@ -30,7 +30,27 @@
 //! `toll::crossing`.
 
 /// The nav can follow the Port Sarim ↔ Karamja sailors (see module doc).
-pub const BOAT_ROUTED: bool = false;
+pub const BOAT_ROUTED: bool = true;
+
+/// Port Sarim dock tile the Karamja boat lands on coming back (the
+/// disembark gangplank's telejump): a Karamja site's mainland anchor.
+pub const KARAMJA_DOCK: (i64, i64, i64) = (3029, 3217, 0);
+
+/// True when the site sits behind the Port Sarim ↔ Karamja boat.
+pub fn behind_boat(x: i64, z: i64, level: i64) -> bool {
+    gates_at(x, z, level).iter().any(|gate| matches!(gate, Gate::Boat { area: "karamja", .. }))
+}
+
+/// Where a site's banking and mainland distances read: the Port Sarim
+/// dock for a Karamja site (no F2P bank on the island, every trip sails
+/// back there), the site itself elsewhere.
+pub fn mainland_anchor(x: i64, z: i64, level: i64) -> (i64, i64, i64) {
+    if behind_boat(x, z, level) {
+        KARAMJA_DOCK
+    } else {
+        (x, z, level)
+    }
+}
 
 /// One gate a site sits behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +167,10 @@ pub fn surface_of(x: i64, z: i64, level: i64) -> (i64, i64, i64) {
 /// True when no bot can ever pass the gate today (no nav edge, no model).
 pub fn impassable(gate: &Gate) -> bool {
     match gate {
-        Gate::Boat { .. } => !BOAT_ROUTED,
+        // Only the Port Sarim boat has nav edges; Crandor (Ned's ship,
+        // Dragon Slayer) stays out.
+        Gate::Boat { area: "karamja", .. } => !BOAT_ROUTED,
+        Gate::Boat { .. } => true,
         Gate::Underground | Gate::Wilderness => true,
         Gate::Guild { .. } | Gate::Key { .. } => false,
     }
@@ -155,7 +178,7 @@ pub fn impassable(gate: &Gate) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{gates_at, impassable, surface_of, Gate};
+    use super::{behind_boat, gates_at, impassable, mainland_anchor, surface_of, Gate, KARAMJA_DOCK};
 
     /// Doors from the server map: the guild gates cover their interiors,
     /// the rest of the world stays open.
@@ -172,14 +195,18 @@ mod tests {
         assert!(gates_at(2955, 3192, 0).is_empty(), "the Rimmington coast is mainland");
         let karamja = gates_at(2924, 3178, 0);
         assert!(matches!(karamja.as_slice(), [Gate::Boat { area: "karamja", fare: 30 }]), "{karamja:?}");
-        assert!(impassable(&karamja[0]), "no nav edge for the sailors yet");
+        assert!(!impassable(&karamja[0]), "the sailors have nav edges");
+        assert!(impassable(&Gate::Boat { area: "crandor", fare: 0 }), "Ned's ship stays out");
+        assert!(behind_boat(2924, 3178, 0) && !behind_boat(2955, 3192, 0));
+        assert_eq!(mainland_anchor(2924, 3178, 0), KARAMJA_DOCK, "Karamja reads at the Port Sarim dock");
+        assert_eq!(mainland_anchor(2975, 3234, 0), (2975, 3234, 0));
         assert_eq!(gates_at(3050, 3704, 0), vec![Gate::Wilderness]);
         assert_eq!(gates_at(3100, 9900, 0), vec![Gate::Underground]);
         assert_eq!(gates_at(3232, 3203, 0), Vec::new(), "Lumbridge is open");
     }
 
-    /// Every F2P lobster, tuna and swordfish spot is on Karamja: none is
-    /// plannable while the boat has no nav edge.
+    /// Every F2P lobster, tuna and swordfish spot is on Karamja: each is
+    /// a boat site (paid, budgeted).
     #[test]
     fn karamja_water_is_behind_the_boat() {
         for fish in ["raw_lobster", "raw_tuna", "raw_swordfish"] {

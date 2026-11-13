@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod chains;
 pub mod combat;
 pub mod cost;
+pub mod dialogue_site;
 pub mod expand;
 pub mod gear_ladder;
 pub mod goals;

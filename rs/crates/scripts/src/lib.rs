@@ -231,7 +231,7 @@ pub fn names() -> Vec<&'static str> {
         "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
         "equip", "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
         "milk", "telegrab_wine", "runecraft", "smelt", "smith", "picking", "fill_water",
-        "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "bury_loot", "market", "tutorial",
+        "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "bury_loot", "dialogue_buy", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -289,6 +289,7 @@ fn runner(name: &str) -> Option<Runner> {
         "smelt_jewelry" => Some(|bot, args| activities::smelt_jewelry::run_smelt_jewelry(bot, args)),
         "dye" => Some(|bot, args| activities::dye::run_dye(bot, args)),
         "bury_loot" => Some(|bot, args| activities::bury_loot::run_bury_loot(bot, args)),
+        "dialogue_buy" => Some(|bot, args| activities::dialogue_buy::run_dialogue_buy(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -382,6 +383,27 @@ mod tests {
         assert_eq!((spec.targets.want_item.as_deref(), spec.allow_paid, spec.site), (Some("feather"), true, Some((3294, 3287, 0))));
     }
 
+    /// The boat and dialogue orders (Karamja, user goal 2026-11-13): a
+    /// `boat` site order and a `dialogue:buy` leg parse in their scripts.
+    #[test]
+    fn boat_and_dialogue_orders_parse_in_their_scripts() {
+        use lifescape_planner::model::{Node, NodeKind};
+        let mut lobster = Node::new("n7", NodeKind::ObtainItems { item: "raw_lobster".to_string(), count: 100 }, Vec::new(), 100);
+        lobster.site = Some((2924, 3178, 0));
+        lobster.boat = true;
+        let (script, args) = lifescape_planner::mapping::map_method("farm:raw_lobster", &lobster, None).expect("farm maps");
+        assert!(args.contains(&"boat".to_string()), "{args:?}");
+        let spec = crate::kit::cycle::parse_order(names().into_iter().find(|name| *name == script).expect("registered"), &args).expect("parses");
+        assert!(spec.allow_boat && !spec.allow_paid, "{args:?}");
+        let mut kebab = Node::new("n8", NodeKind::ObtainItems { item: "kebab".to_string(), count: 5 }, Vec::new(), 5);
+        kebab.site = Some((3272, 3182, 0));
+        kebab.toll = true;
+        let (script, args) = lifescape_planner::mapping::map_method("dialogue:buy", &kebab, None).expect("dialogue maps");
+        assert_eq!(script, "dialogue_buy");
+        let spec = crate::kit::cycle::parse_order("dialogue_buy", &args).expect("dialogue_buy parses");
+        assert_eq!((spec.resource.first().map(String::as_str), spec.targets.want_count, spec.allow_paid), (Some("kebab"), Some(5), true), "{args:?}");
+    }
+
     #[test]
     fn registry_covers_legacy_scripts() {
         // all supervised entry points, checked against names().
@@ -396,7 +418,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 74, "bury_loot joined the registry");
+        assert_eq!(names().len(), 75, "dialogue_buy joined the registry");
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn effort(quest: &lifescape_gamedata::quest_requirements::QuestRequirements) -> 
 /// quest points, `target` excluded: the cheapest points first (reward per
 /// effort), a quest gated on points only once the rungs before it reach
 /// its gate (Black Knights' Fortress after 12), never a quest no bot runs
-/// solo (`blocker`: Shield of Arrav, Pirate's Treasure). Rungs come in
+/// solo (`blocker`: Shield of Arrav). Rungs come in
 /// order; empty when `done` already holds the points. Replaces the old
 /// collapse onto Cook's Assistant (1 point for a 32-point gate).
 pub fn quest_point_ladder(points: i64, target: &str, done: &[String]) -> Vec<String> {

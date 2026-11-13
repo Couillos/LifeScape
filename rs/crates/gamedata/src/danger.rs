@@ -98,7 +98,10 @@ pub fn required_combat_at(x: i64, z: i64, level: i64) -> u8 {
 }
 
 /// Nearest non-members bank on the same level, if within the trek limit.
+/// A Karamja site (no F2P bank on the island) reads from the Port Sarim
+/// dock its boat lands on (`access::mainland_anchor`).
 pub fn site_bank(x: i64, z: i64, level: i64) -> Option<crate::banks::Bank> {
+    let (x, z, level) = crate::access::mainland_anchor(x, z, level);
     static BANKS: OnceLock<Vec<crate::banks::Bank>> = OnceLock::new();
     BANKS
         .get_or_init(crate::banks::all_banks)

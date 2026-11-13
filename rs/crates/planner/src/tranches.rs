@@ -35,9 +35,9 @@ pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
 /// worked during the tranche).
 pub fn tranche_resource(skill: &str, level: u8) -> String {
     match skill {
-        // Lobster (40) and tuna (35) are Karamja water (boat, no bank in
-        // reach: `min_combat_for_method` NEVER): salmon (30, fly rod and
-        // feathers) is the best mainland catch past 30.
+        // Lobster (40) and tuna (35) are Karamja water (paid boat, 60
+        // coins a round trip): the tiers stay on the mainland, salmon (30,
+        // fly rod and feathers) the best catch past 30.
         "fishing" => {
             if level >= 30 {
                 "raw_salmon"
@@ -80,8 +80,8 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             .to_string()
         }
         // Each tier at its server level: salmon 25, trout 15. Raw lobster,
-        // tuna and swordfish come only from Karamja water, which no bot
-        // reaches (`access::BOAT_ROUTED`): salmon stays the top tier.
+        // tuna and swordfish come only from Karamja water (paid boat):
+        // salmon stays the top mainland tier.
         "cooking" => {
             if level >= 25 {
                 "raw_salmon"

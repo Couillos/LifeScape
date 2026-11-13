@@ -19,7 +19,7 @@ use crate::{ScriptError, ScriptResult};
 /// Fish banked loads in the open session (0 = forever).
 pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("fishing", args)?;
-    crate::kit::toll::arm(bot, spec.allow_paid)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     bot.allow_shop = spec.allow_shop;
     bot.assigned_site = spec.site;
     let task_keep = resolve_keep(bot, &spec)?;

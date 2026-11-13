@@ -92,7 +92,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let mut tool_gap: Option<String> = None;
     let mut quest_gap: Option<String> = None;
     for method in &candidates {
-        if method == "market:buy" || method == "shop:buy" || method == "market:bid" {
+        if method == "market:buy" || method == "shop:buy" || method == "market:bid" || method == "dialogue:buy" {
             continue;
         }
         let Some(leg) = legs.iter().find(|leg| &leg.method == method) else { continue };
@@ -146,6 +146,20 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             est_coins: shop_cover,
         });
     }
+    // Dialogue sale (merchant rule, `gamedata::dialogue_shops`): priced
+    // at the seller's own coins per unit.
+    let dialogue_cover = candidates
+        .iter()
+        .any(|method| method == "dialogue:buy")
+        .then(|| crate::dialogue_site::purchase_cost(item, need))
+        .flatten();
+    if let Some(cover) = dialogue_cover {
+        priced.push(Alternative {
+            method: "dialogue:buy".to_string(),
+            est_ticks: cost_market_buy(ctx.trip_ticks, cover / need.max(1), need, ctx.coins_per_tick.max(0.01)),
+            est_coins: cover,
+        });
+    }
     // 1. A covered ask: take it, whole or the part the wallet covers
     // (a fair ask only: at most the bid ceiling of one unit).
     let budget = market_coins(ctx);
@@ -172,6 +186,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     } else if shop_listed && shop_cover <= ctx.coins {
         // 3. Merchant, D-A allowed.
         Some("shop:buy".to_string())
+    } else if dialogue_cover.is_some_and(|cover| cover <= ctx.coins) {
+        // 3b. A dialogue seller, same rule (the seller's site may add the
+        // toll: `place_on_site` budgets it).
+        Some("dialogue:buy".to_string())
     } else if market_ok && budget >= unit {
         // 4. Resting bid for what the wallet covers, the brain waits for
         // the fill.
@@ -196,6 +214,8 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             Some(format!("missing:level:{skill}:{level}"))
         } else if let Some(tool) = tool_gap {
             Some(format!("missing:{tool}"))
+        } else if let (Some(cover), false, false) = (dialogue_cover, market_ok, shop_listed) {
+            Some(format!("missing:coins:{}", wallet_for(ctx, cover)))
         } else if market_ok || shop_listed {
             let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
             Some(format!("missing:coins:{}", wallet_for(ctx, price * need)))

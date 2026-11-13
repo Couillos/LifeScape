@@ -156,6 +156,10 @@ pub struct Node {
     /// budgeted (or Prince Ali Rescue makes it free) and the launch
     /// carries `toll` (`place_on_site`, `gamedata::toll`).
     pub toll: bool,
+    /// The chosen site is on Karamja: the boat's round trip (30 coins each
+    /// way) is budgeted and the launch carries `boat` (`place_on_site`,
+    /// `gamedata::access::behind_boat`).
+    pub boat: bool,
 }
 
 impl Node {
@@ -176,6 +180,7 @@ impl Node {
             last_error: String::new(),
             site: None,
             toll: false,
+            boat: false,
         }
     }
 
@@ -417,6 +422,7 @@ fn node_to_value(node: &Node) -> Value {
             },
         ),
         ("toll", Value::Bool(node.toll)),
+        ("boat", Value::Bool(node.boat)),
     ])
 }
 
@@ -462,6 +468,7 @@ fn node_from_value(value: &Value) -> Option<Node> {
             Some((part(0)?, part(1)?, part(2)?))
         }),
         toll: value.get("toll").as_bool() == Some(true),
+        boat: value.get("boat").as_bool() == Some(true),
     })
 }
 

@@ -315,6 +315,7 @@ pub fn retarget_market(life: &mut Life, index: usize) -> Vec<String> {
     node.method = None;
     node.site = None;
     node.toll = false;
+    node.boat = false;
     node.failures = 0;
     node.blocks = 0;
     node.spent_ticks = 0;

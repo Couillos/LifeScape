@@ -133,6 +133,11 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
             head.push(shop);
         }
         ("market".to_string(), head)
+    } else if method == "dialogue:buy" {
+        // An NPC selling through its dialogue (Karim's kebabs): the item
+        // rides first, the quantity in `--want`, the seller in `--site`.
+        let (item, _) = obtain_pair(node)?;
+        ("dialogue_buy".to_string(), vec![item])
     } else if method == "market:flip" {
         ("market".to_string(), vec!["flip".to_string()])
     } else if method == "space:cleanup" {
@@ -215,6 +220,11 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     // budgeted the fare (`place_on_site`): the run may pay the gate.
     if node.toll && !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
         head.push("toll".to_string());
+    }
+    // The site is on Karamja and the brain budgeted the round trip: the
+    // run may sail (`kit::toll::arm_fares`, 30 coins each way).
+    if node.boat && !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
+        head.push("boat".to_string());
     }
     head.extend(tail);
     Some((script, head))

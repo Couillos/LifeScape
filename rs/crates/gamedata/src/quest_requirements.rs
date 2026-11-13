@@ -236,12 +236,17 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("hunt", 4)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![item("banana", 10, false), item("spade", 1, false)],
+            // The 10 bananas are picked on Karamja by the solver itself
+            // (`quests::b::solve_hunt`, banana trees beside Luthas); the
+            // coins pay the boat both ways (30 + 30) and Zambo's rum
+            // (27): the solver refuses under 90 (`sailors.rs2`,
+            // `customs_officer.rs2`, `zambo.rs2`).
+            items: vec![item("coins", 90, false), item("spade", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
             reward_points: 2,
-            blocker: Some("Karamja rum and bananas: the Port Sarim boat has no nav edge (access::BOAT_ROUTED)"),
+            blocker: None,
         },
         QuestRequirements {
             key: "prince".into(),

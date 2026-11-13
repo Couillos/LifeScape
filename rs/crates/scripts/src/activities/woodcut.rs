@@ -41,7 +41,7 @@ pub fn ordered_tree_tiers(resource: Option<&str>, level: i64) -> Result<Vec<know
 /// Cut banked loads in the open session (0 = forever).
 pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("woodcut", args)?;
-    crate::kit::toll::arm(bot, spec.allow_paid)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     if spec.allow_wild {
         bot.allow_wild = true;
         bot.log("hunter zones allowed for this run");

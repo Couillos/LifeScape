@@ -27,16 +27,40 @@ fn guild_rocks_need_the_level_and_the_uniform() {
     assert!(inside(pick_site_gated("gather:mining/gold_ore", 60, Some(FALADOR), broke(), &crafter(40, &["brown_apron"]))), "guild open");
 }
 
-/// Karamja water has no nav edge (`access::BOAT_ROUTED`): lobster, tuna
-/// and swordfish stay unworkable at every level; a gated-only method
-/// names its gate as the need.
+/// Karamja water is a boat site (`access::BOAT_ROUTED`, user goal
+/// 2026-11-13): lobster, tuna and swordfish are workable, the round trip
+/// (30 coins each way, from the pack) budgeted like the Al Kharid toll:
+/// covered, the site is taken with `boat`; short, the round trip is the
+/// coin need.
 #[test]
-fn the_boat_and_dungeons_never_open() {
+fn the_boat_opens_karamja_with_its_fare() {
     for fish in ["raw_lobster", "raw_tuna", "raw_swordfish"] {
         let method = format!("gather:fishing/{fish}");
-        assert_eq!(pick_site_gated(&method, 126, Some(FALADOR), Fare { wallet: 1_000, free_pass: true }, &Pass::default()), SitePick::Needs(lifescape_gamedata::danger::NEVER), "{fish}");
-        assert_eq!(min_combat_for_method(&method), lifescape_gamedata::danger::NEVER);
+        match pick_site_gated(&method, 126, Some(FALADOR), Fare { wallet: 1_000, free_pass: false }, &Pass::default()) {
+            SitePick::Boat { site, toll: false } => assert!(lifescape_gamedata::access::behind_boat(site.0, site.1, site.2), "{fish} at {site:?}"),
+            other => panic!("{fish}: the fare is covered, got {other:?}"),
+        }
+        assert_eq!(pick_site_gated(&method, 126, Some(FALADOR), Fare { wallet: 59, free_pass: true }, &Pass::default()), SitePick::Fare(60), "{fish}: a round trip");
+        assert!(min_combat_for_method(&method) < lifescape_gamedata::danger::NEVER, "{fish} is workable");
     }
+    // East of the Al Kharid gate the trip pays the toll too.
+    let al_kharid = (3290, 3180, 0);
+    assert_eq!(pick_site_gated("gather:fishing/raw_lobster", 126, Some(al_kharid), broke(), &Pass::default()), SitePick::Fare(70));
+    assert!(matches!(pick_site_gated("gather:fishing/raw_lobster", 126, Some(al_kharid), Fare { wallet: 70, free_pass: false }, &Pass::default()), SitePick::Boat { toll: true, .. }));
+    // Mainland water always wins when it yields the fish.
+    assert!(matches!(pick_site_gated("gather:fishing/raw_shrimp", 126, Some(FALADOR), Fare { wallet: 1_000, free_pass: false }, &Pass::default()), SitePick::At(_)));
+}
+
+/// Only the boat-armed scripts (gatherers, fights) take a Karamja site:
+/// a station there stays out, and Crandor never opens.
+#[test]
+fn stations_never_sail() {
+    for method in ["smelt:bronze_bar", "cook/raw_shrimp", "spin:ball_of_wool"] {
+        if let SitePick::At(site) | SitePick::Boat { site, .. } = pick_site_gated(method, 126, Some(FALADOR), Fare { wallet: 1_000, free_pass: false }, &Pass::default()) {
+            assert!(!lifescape_gamedata::access::behind_boat(site.0, site.1, site.2), "{method} sails to {site:?}");
+        }
+    }
+    assert!(lifescape_gamedata::access::impassable(&lifescape_gamedata::access::Gate::Boat { area: "crandor", fare: 0 }));
 }
 
 /// Stations are sites too (args contract 2026-11-13): a smelter, smith,

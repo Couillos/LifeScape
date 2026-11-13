@@ -77,6 +77,9 @@ pub struct TaskSpec {
     pub no_bank: bool,
     /// Paid crossings allowed (`toll`).
     pub allow_paid: bool,
+    /// The Karamja boat allowed (`boat`): 30 coins each way from the
+    /// pack, a round trip kept (`kit::toll::arm_fares`).
+    pub allow_boat: bool,
     /// Hunter zones allowed (`wild`, woodcut only today).
     pub allow_wild: bool,
 }
@@ -97,6 +100,7 @@ impl TaskSpec {
             chain: None,
             no_bank: false,
             allow_paid: false,
+            allow_boat: false,
             allow_wild: false,
         }
     }
@@ -108,7 +112,7 @@ impl TaskSpec {
 pub fn split_resource(args: &[String]) -> (Option<String>, Vec<String>) {
     let resource = args
         .first()
-        .filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--"))
+        .filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "boat" && first.as_str() != "wild" && !first.starts_with("--"))
         .cloned();
     let rest = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
     (resource, rest)
@@ -116,8 +120,8 @@ pub fn split_resource(args: &[String]) -> (Option<String>, Vec<String>) {
 
 /// Scripts whose resource positional is split off before `parse_cli`
 /// (gatherers, cook and the combat styles take it inside `parse_cli`).
-pub const SPLIT_RESOURCE_SCRIPTS: [&str; 18] = [
-    "alchemy", "bury_loot", "cut_gems", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
+pub const SPLIT_RESOURCE_SCRIPTS: [&str; 19] = [
+    "alchemy", "bury_loot", "cut_gems", "dialogue_buy", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
     "picking", "pottery", "runecraft", "smelt", "smelt_jewelry", "smith", "spin", "stringing", "superheat",
 ];
 
@@ -139,7 +143,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -150,6 +154,10 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
         match args[index].as_str() {
             "toll" => {
                 spec.allow_paid = true;
+                index += 1;
+            }
+            "boat" => {
+                spec.allow_boat = true;
                 index += 1;
             }
             "wild" => {

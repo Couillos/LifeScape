@@ -78,7 +78,7 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("crafting", 70), "jewelry:unstrung_diamond_amulet");
     assert_eq!(reach_method("crafting", 16), "jewelry:nostringstar");
     assert_eq!(reach_method("cooking", 30), "cook/raw_salmon", "lobster needs cooking 40");
-    assert_eq!(reach_method("cooking", 40), "cook/raw_salmon", "raw lobster is Karamja water: no boat edge");
+    assert_eq!(reach_method("cooking", 40), "cook/raw_salmon", "raw lobster is Karamja water: the tier stays on the mainland");
     assert_eq!(reach_method("fishing", 35), "gather:fishing/raw_salmon", "no Karamja water: never safe");
     assert_eq!(reach_method("woodcutting", 45), "gather:woodcut/willow_logs", "maples have no F2P site");
     assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");

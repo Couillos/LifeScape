@@ -99,18 +99,28 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
                 node.method = Some(method);
                 node.site = None;
                 node.toll = false;
+                node.boat = false;
                 return Ok(true);
             }
             SitePick::At(site) => {
                 node.method = Some(method);
                 node.site = Some(site);
                 node.toll = false;
+                node.boat = false;
                 return Ok(true);
             }
             SitePick::Tolled(site) => {
                 node.method = Some(method);
                 node.site = Some(site);
                 node.toll = true;
+                node.boat = false;
+                return Ok(true);
+            }
+            SitePick::Boat { site, toll } => {
+                node.method = Some(method);
+                node.site = Some(site);
+                node.toll = toll;
+                node.boat = true;
                 return Ok(true);
             }
             SitePick::Fare(_) | SitePick::Needs(_) | SitePick::Access(..) => continue,

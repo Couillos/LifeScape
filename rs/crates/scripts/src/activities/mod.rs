@@ -10,6 +10,7 @@ pub mod bury_loot;
 pub mod cook;
 pub mod cook_meals;
 pub mod cut_gems;
+pub mod dialogue_buy;
 pub mod dye;
 pub mod enchant_teleport;
 pub mod equip;

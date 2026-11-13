@@ -11,6 +11,7 @@ pub mod bank_stands;
 pub mod banks;
 pub mod combat_spots;
 pub mod danger;
+pub mod dialogue_shops;
 pub mod drops;
 pub mod equipment;
 pub mod extra_recipes;

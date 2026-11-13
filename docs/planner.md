@@ -40,10 +40,11 @@ crevettes, 5→10 sardines ; jamais le homard pour 35→40) : le contrôle
 d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
 méthode de substitution : outil manquant ⇒ `Blocked{missing}` ⇒
 sous-tâche. Ressources par palier (2026-11-13, contenu serveur) : pêche
-au-delà de 30 = saumon (thon et homard sont à Karamja : bateau, aucune
-banque à portée, jamais sûrs), bûcheronnage 45 = saules (l'érable n'a
+au-delà de 30 = saumon (thon et homard sont à Karamja : bateau payant,
+voir « Karamja » ; les paliers restent sur le continent, une obtention
+`farm:raw_lobster` part en bateau), bûcheronnage 45 = saules (l'érable n'a
 aucun site F2P), cuisine saumon dès 25 et au-delà (homard, thon, espadon
-crus = eau de Karamja, injoignable),
+crus = eau de Karamja, par obtention seulement),
 artisanat aux noms d'objets (`unstrung_gold_amulet`, `nostringstar`,
 `unstrung_diamond_amulet`).
 
@@ -276,14 +277,23 @@ se lit au rez-de-chaussée. Les postes (fourneau, enclume, fourneau de
 cuisine, rouet, tour, autel, trémie, tanneur, Aggie, apparitions au sol)
 sont des sites choisis comme les récoltes ; le magasin d'un `shop:buy` est
 choisi par `shop_site::pick_shop` (quête, porte, danger, péage).
-Karamja : la navigation n'a AUCUNE arête pour les marins
-(`gamedata/data/nav_overrides.json` `custom_edges` vide ; hors ligne
-`orchestrator route 3029 3217 0 2915 3150 0` ⇒ `BudgetExhausted
-closest=(2955,3192,0)`, la côte de Rimmington) : `access::BOAT_ROUTED` =
-false, homard, thon, espadon et l'or de Karamja restent non planifiables
-(et hors catalogue d'ambitions) jusqu'à ce que nav/SDK sachent embarquer
-(dialogue `~set_sail` : téléport sur le navire, passerelle, retour par
-l'officier des douanes, 30 po chaque sens).
+Karamja (2026-11-13) : la navigation embarque (arêtes `custom_edges`
+« npc_fare » des marins de Port Sarim et de l'officier des douanes,
+passerelles de débarquement, voir `docs/navigation.md`) :
+`access::BOAT_ROUTED` = true. Un site de Karamja (homard, thon, espadon,
+or de Karamja) est un site payant budgété comme le péage
+(`combat::pick_site_gated`, `fare_need`) : l'aller-retour coûte 60 po
+(30 chaque sens, pris dans le SAC), plus 10 si le trajet franchit le
+péage d'Al Kharid. Un site continental gratuit gagne toujours ; sinon le
+site payant le moins cher puis le plus proche, budgété (bourse ≥ coût) ⇒
+`SitePick::Boat` ⇒ `node.boat` (et `node.toll` si péage), lancement avec
+`boat` ; sinon `Blocked missing:coins:60` (ou 70) ⇒ `have_coins`. Seuls
+les scripts qui arment la traversée prennent un site de Karamja
+(`combat::boat_capable` : pêche, minage, bûcheronnage, combats,
+`farm:`) ; les postes y restent fermés, Crandor (bateau de Ned) aussi.
+La banque d'un site de Karamja se lit au quai de Port Sarim
+(`access::mainland_anchor`, `danger::site_bank`) : Draynor, d'où un
+combat 15 pour le homard (les mages de Draynor).
 
 Familles de production (2026-11-13) : `cut:` (gemmes, ciseau), `bake:`
 (pain, tartes, ragoût, pizza, gâteau ; intrants aplatis jusqu'aux
@@ -291,14 +301,28 @@ composants de base que `cook_meals` assemble), `dye:` (Aggie : 2 oignons /
 3 baies / 2 guède + 5 po), `ground:` (apparitions libres, sans porte,
 banque à portée), `telegrab:wine_of_zamorak` (magie 33), `superheat:`
 (magie 43, intrants de fonte + runes, jamais d'échec), `bury:` (prière en
-banque). Les voies de sort brûlent leurs runes. Achats en dialogue : pas
-de script, pas de jambe.
+banque). Les voies de sort brûlent leurs runes. Achats en dialogue : jambe
+`dialogue:buy` (voir « Achats en dialogue »).
+
+Achats en dialogue (2026-11-13, `gamedata::dialogue_shops`) : PNJ qui
+vendent par leur dialogue, réponses lues dans les scripts serveur (Karim
+et ses kébabs, le marchand de soie, Baraek et ses fourrures, la serveuse
+du Rising Sun, Ned et sa corde, les tenanciers). Même règle marchande que
+`shop:buy` (`allowed` = `merchant_buy_allowed` + vendeur F2P) : kebab,
+silk, fur, asgarnian_ale, wizards_mind_bomb, dwarven_stout, rope (la bière
+n'y passe pas). `obtain_alternatives` ajoute `dialogue:buy`,
+`resolve_obtain` la prend après le marchand (`coût × manquant` couvert
+par la bourse, sinon `missing:coins:N`), `place_on_site` choisit le
+vendeur (`dialogue_site::pick_seller` : sûr au combat du bot, hors
+porte, le moins cher puis le plus proche ; péage ajouté au coût quand le
+trajet franchit la clôture ⇒ `toll`).
 
 Échelle de points de quête (`quests::quest_point_ladder`) : points les
 moins chers d'abord (récompense ÷ effort : objets, compétences, combat
 recommandé), une quête à seuil seulement une fois son seuil atteint par
-les marches d'avant, jamais Shield of Arrav (deux joueurs) ni Pirate's
-Treasure (bateau) ; les quêtes faites comptent. Dragon Slayer, Black
+les marches d'avant, jamais Shield of Arrav (deux joueurs) ; Pirate's
+Treasure en est (bateau planifiable : 90 pièces, une bêche, les bananes
+cueillies par le solveur) ; les quêtes faites comptent. Dragon Slayer, Black
 Knights' Fortress et la Champions' Guild (32) en dépendent (fini le repli
 Cook's Assistant). Objets de quête lus dans les scripts serveur
 (`gamedata::quest_requirements`, 39 points en F2P).
@@ -549,7 +573,7 @@ Source : `rs/crates/planner/src/mapping.rs` (tests :
 `mapping_contract_tests.rs`). Copie de travail pour l'agent scripts :
 scratchpad `args_contract.md`.
 
-Ordre d'une ligne de lancement : `<script> <positionnels> [--level <comp> <N>] [--spell <sort>] [--site x,z,niveau] [--wear <uniforme>]… [--want <objet> <N>] [toll] --node <id> [--budget-min <t> --budget-max <t>]`.
+Ordre d'une ligne de lancement : `<script> <positionnels> [--level <comp> <N>] [--spell <sort>] [--site x,z,niveau] [--wear <uniforme>]… [--want <objet> <N>] [toll] [boat] --node <id> [--budget-min <t> --budget-max <t>]`.
 
 Drapeaux communs :
 
@@ -561,7 +585,8 @@ Drapeaux communs :
 | `--want <objet> <N>` | nœud `obtain` (sauf `market`, `walkto`, `equip`, quêtes) | s'arrêter quand N unités de plus sont détenues (N = quantité − détenu au lancement) |
 | `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
 | `--wear <objet>` | le site est dans une guilde à uniforme (artisanat : `brown_apron`, cuisiniers : `chefs_hat`) | porter l'objet avant la porte (le planner l'a fait obtenir) |
-| `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm`) |
+| `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm_fares`) |
+| `boat` | site à Karamja (`node.boat`), aller-retour budgété (60 po) ; seulement pêche, minage, bûcheronnage, combats | le script garde 60 po dans le sac et peut prendre le bateau (`kit::toll::arm_fares`, `bot.fare_reserve`) |
 | `--spell <sort>` | magie | lancer CE sort (le planner a dimensionné ses runes) |
 | `--shop <clé>` | `market shopbuy` | acheter dans CE magasin (clé `gamedata::shops`) |
 
@@ -569,12 +594,12 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 
 | Méthode planner | Script | Positionnels (dans l'ordre) | Drapeaux propres |
 |---|---|---|---|
-| `gather:fishing/<poisson>` | `fishing` | `<poisson>` (ex. `raw_trout`) | `--level fishing N`, `--site`, `toll` |
-| `gather:mining/<minerai>` | `mining` | `<minerai>` | `--level mining N`, `--site`, `--wear` (guilde), `toll` |
-| `gather:woodcut/<bûches>` | `woodcut` | `<bûches>` | `--level woodcutting N`, `--site`, `toll` |
-| `farm:<poisson>` | `fishing` | `<poisson>` | `--want`, `--site`, `toll` |
-| `farm:<minerai>` / `farm:coal` / `farm:clay` | `mining` | `<minerai>` | `--want`, `--site`, `toll` |
-| `farm:<bûches>` | `woodcut` | `<bûches>` | `--want`, `--site`, `toll` |
+| `gather:fishing/<poisson>` | `fishing` | `<poisson>` (ex. `raw_trout`) | `--level fishing N`, `--site`, `toll`, `boat` |
+| `gather:mining/<minerai>` | `mining` | `<minerai>` | `--level mining N`, `--site`, `--wear` (guilde), `toll`, `boat` |
+| `gather:woodcut/<bûches>` | `woodcut` | `<bûches>` | `--level woodcutting N`, `--site`, `toll`, `boat` |
+| `farm:<poisson>` | `fishing` | `<poisson>` | `--want`, `--site`, `toll`, `boat` |
+| `farm:<minerai>` / `farm:coal` / `farm:clay` | `mining` | `<minerai>` | `--want`, `--site`, `toll`, `boat` |
+| `farm:<bûches>` | `woodcut` | `<bûches>` | `--want`, `--site`, `toll`, `boat` |
 | `farm:blankrune` | `essence_run` | — | `--want blankrune N` |
 | `farm:<drop>` | `melee` | `<spot>` (spot non gardé le plus faible qui lâche l'objet) | `--want`, `--site`, `toll` |
 | `fight:melee/<spot>` | `melee` | `<spot>` ou `ladder` | `--level <comp> N`, `--site`, `toll` |
@@ -610,10 +635,11 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `alch:<objet>` | `alchemy` | `<objet>` | — |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `toll` |
+| `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |
 | `market:flip` | `market` | `flip` | budget |
 | `space:cleanup` | `market` | `cleanup` | — |
 | `quest:<clé>` | `quest_<nom>` (table `quest_script`) | — | clé inconnue = aucun script (abandon typé) |
 | `access:<zone>` | `walkto` | `<x> <z>` | — |
 | `equip:<style>` | `equip` | `<style>` | — |
 
-Non mappé (pas de script) : achats en dialogue (`WayKind::Dialogue`, ex. kébab de Karim) — il faudrait un script `dialogue_buy <objet> --npc <pnj> --site …` ; tant qu'il manque, le planner ne crée pas de jambe.
+Achats en dialogue : `dialogue:buy` ⇒ `dialogue_buy <objet> --want <objet> N --site <vendeur> [toll]` (une unité par conversation, réponses lues dans `gamedata::dialogue_shops`, pièces tirées de la banque d'abord, sac plein ⇒ banque).

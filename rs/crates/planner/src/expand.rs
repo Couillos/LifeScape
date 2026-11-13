@@ -201,7 +201,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
         GoalKind::MakeMoney => {
             let id = next_id(&mut counter);
             let mut node = Node::new(&id, NodeKind::MakeMoney, Vec::new(), 0);
-            // Salmon: the best mainland catch (Karamja lobsters: no boat edge).
+            // Salmon: the best mainland catch (Karamja lobsters: paid boat).
             node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
             node.alternatives.push(Alternative { method: "gather:woodcut/yew_logs".to_string(), est_ticks: 0, est_coins: 0 });
             if !profile.ironman {
@@ -262,7 +262,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             if is_merchant && !profile.ironman {
                 node.alternatives.push(Alternative { method: "market:flip".to_string(), est_ticks: 0, est_coins: 0 });
             } else {
-                // Salmon: the best mainland catch (Karamja lobsters: no boat edge).
+                // Salmon: the best mainland catch (Karamja lobsters: paid boat).
                 node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
                 node.alternatives.push(Alternative { method: "gather:mining/coal".to_string(), est_ticks: 0, est_coins: 0 });
             }
@@ -397,6 +397,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
 fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     node.site = None;
     node.toll = false;
+    node.boat = false;
     if matches!(node.status, NodeStatus::Blocked { .. }) {
         return;
     }
@@ -412,7 +413,7 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         node.alternatives
             .iter()
             .map(|alt| alt.method.clone())
-            .filter(|method| *method != locked && !method.starts_with("market:") && !method.starts_with("shop:") && method_feasible(method, ctx)),
+            .filter(|method| *method != locked && !method.starts_with("market:") && !method.starts_with("shop:") && !method.starts_with("dialogue:") && method_feasible(method, ctx)),
     );
     let mut needed: Option<u8> = None;
     let mut fare_short: Option<i64> = None;
@@ -424,6 +425,28 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     if locked == "shop:buy" {
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
             node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
+        }
+        return;
+    }
+    // A dialogue seller (Karim): its spawn, the toll budgeted on top of
+    // the purchase when the walk crosses the fence.
+    if locked == "dialogue:buy" {
+        if let NodeKind::ObtainItems { item, count } = &node.kind {
+            let units = (*count - ctx.held).max(1);
+            match crate::dialogue_site::pick_seller(item, units, ctx) {
+                crate::dialogue_site::DialoguePick::At { site, toll } => {
+                    node.site = Some(site);
+                    node.toll = toll;
+                }
+                crate::dialogue_site::DialoguePick::Coins(coins) => {
+                    node.method = None;
+                    node.status = NodeStatus::Blocked { reason: format!("missing:coins:{coins}") };
+                }
+                crate::dialogue_site::DialoguePick::None => {
+                    node.method = None;
+                    node.status = NodeStatus::Blocked { reason: format!("unworkable:dialogue:buy (no safe F2P seller of {item})") };
+                }
+            }
         }
         return;
     }
@@ -444,6 +467,15 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
                 node.method = Some(method.clone());
                 node.site = Some(site);
                 node.toll = true;
+                return;
+            }
+            // Karamja with the round trip budgeted: the launch carries
+            // `boat` (and `toll` when the trip crosses the fence too).
+            crate::combat::SitePick::Boat { site, toll } => {
+                node.method = Some(method.clone());
+                node.site = Some(site);
+                node.toll = toll;
+                node.boat = true;
                 return;
             }
             crate::combat::SitePick::Fare(coins) => fare_short = Some(coins),

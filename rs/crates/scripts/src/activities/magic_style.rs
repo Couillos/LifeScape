@@ -122,7 +122,7 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("magic", args)?;
     let spots = spec.resource.clone();
     let no_bank = spec.no_bank;
-    crate::kit::toll::arm(bot, spec.allow_paid)?;
+    crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     bot.allow_shop = spec.allow_shop;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;

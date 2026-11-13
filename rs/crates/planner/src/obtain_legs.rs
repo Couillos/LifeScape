@@ -148,6 +148,11 @@ pub fn obtain_alternatives(item: &str, ironman: bool) -> Vec<Alternative> {
     if shopable {
         out.push(Alternative { method: "shop:buy".to_string(), est_ticks: 0, est_coins: 0 });
     }
+    // An NPC that sells through its dialogue (Karim's kebabs), under the
+    // same merchant rule (`gamedata::dialogue_shops::allowed`).
+    if !lifescape_gamedata::dialogue_shops::allowed(item).is_empty() {
+        out.push(Alternative { method: "dialogue:buy".to_string(), est_ticks: 0, est_coins: 0 });
+    }
     out
 }
 

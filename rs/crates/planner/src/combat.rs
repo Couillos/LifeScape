@@ -164,8 +164,12 @@ pub enum SitePick {
     /// Only across the Al Kharid toll fence: the fare is budgeted (or
     /// free), the launch carries `toll`.
     Tolled((i64, i64, i64)),
-    /// Only across the toll fence and the wallet lacks the fare: these
-    /// coins are the need (`missing:coins:N`).
+    /// Only behind the Karamja boat (and, `toll`, across the Al Kharid
+    /// fence on the way): the round trip is budgeted, the launch carries
+    /// `boat` (and `toll`).
+    Boat { site: (i64, i64, i64), toll: bool },
+    /// Only across the toll fence or behind the boat and the wallet lacks
+    /// the fares: these coins are the need (`missing:coins:N`).
     Fare(i64),
     /// No site is safe at this combat level: train to this level first
     /// (`NEVER`: no level ever makes one safe, the method is unworkable).
@@ -251,7 +255,9 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
                 .map(|(x, z, level)| {
                     let (surface_x, surface_z, surface_level) = lifescape_gamedata::access::surface_of(x, z, level);
                     let gates = lifescape_gamedata::access::gates_at(x, z, level);
-                    let open_ever = !gates.iter().any(lifescape_gamedata::access::impassable);
+                    // A Karamja site only for the scripts that sail.
+                    let sails = boat_capable(method) || !lifescape_gamedata::access::behind_boat(x, z, level);
+                    let open_ever = sails && !gates.iter().any(lifescape_gamedata::access::impassable);
                     SiteRow { site: (x, z, level), required: lifescape_gamedata::danger::site_requirement(surface_x, surface_z, surface_level), gates, open_ever }
                 })
                 .collect::<Vec<_>>(),
@@ -260,6 +266,23 @@ pub fn method_site_table(method: &str) -> Option<std::sync::Arc<Vec<SiteRow>>> {
     let table = table.filter(|rows| !rows.is_empty());
     cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), table.clone());
     table
+}
+
+/// Methods whose scripts arm the boat fare (`kit::toll::arm_fares`):
+/// the gatherers and the fights. Any other method never takes a Karamja
+/// site (its script would not sail).
+pub fn boat_capable(method: &str) -> bool {
+    ["gather:fishing/", "gather:mining/", "gather:woodcut/", "fight:", "farm:"].iter().any(|family| method.starts_with(family))
+}
+
+/// Coins a trip to `site` takes from the pack: the Al Kharid toll when
+/// it crosses the fence (free after Prince Ali Rescue), the boat's round
+/// trip when the site is on Karamja.
+fn fare_need(site: (i64, i64, i64), position: Option<(i64, i64, i64)>, fare: Fare) -> i64 {
+    let across = position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, site));
+    let toll = if across && !fare.free_pass { lifescape_gamedata::toll::FARE } else { 0 };
+    let boat = if lifescape_gamedata::access::behind_boat(site.0, site.1, site.2) { 2 * lifescape_gamedata::services::BOAT_FARE_GP } else { 0 };
+    toll + boat
 }
 
 /// What the bot can spend on the Al Kharid toll: its wallet (pack and
@@ -275,10 +298,6 @@ impl Fare {
     /// when the bot finished Prince Ali Rescue.
     pub fn of(ctx: &crate::expand::ReadyCtx) -> Fare {
         Fare { wallet: ctx.coins, free_pass: ctx.quests_done.iter().any(|quest| quest == lifescape_gamedata::toll::FREE_PASS_QUEST) }
-    }
-
-    fn covered(&self) -> bool {
-        self.free_pass || self.wallet >= lifescape_gamedata::toll::FARE
     }
 }
 
@@ -313,12 +332,20 @@ pub fn pick_site_gated(method: &str, combat: u8, position: Option<(i64, i64, i64
     };
     let across = |site: &(i64, i64, i64)| position.is_some_and(|from| lifescape_gamedata::toll::crossing(from, *site));
     let safe: Vec<&SiteRow> = rows.iter().copied().filter(|row| row.required <= combat).collect();
-    let open: Vec<(i64, i64, i64)> = safe.iter().filter(|row| row.gates.iter().all(|gate| pass.opens(gate))).map(|row| row.site).collect();
-    if let Some(site) = open.iter().filter(|site| !across(site)).min_by_key(|site| distance(site)) {
+    // The Karamja boat opens with its fare (budgeted below, like the toll).
+    let passes = |gate: &lifescape_gamedata::access::Gate| pass.opens(gate) || matches!(gate, lifescape_gamedata::access::Gate::Boat { area: "karamja", .. });
+    let open: Vec<(i64, i64, i64)> = safe.iter().filter(|row| row.gates.iter().all(passes)).map(|row| row.site).collect();
+    let boat = |site: &(i64, i64, i64)| lifescape_gamedata::access::behind_boat(site.0, site.1, site.2);
+    if let Some(site) = open.iter().filter(|site| !across(site) && !boat(site)).min_by_key(|site| distance(site)) {
         return SitePick::At(*site);
     }
-    if let Some(site) = open.iter().min_by_key(|site| distance(site)) {
-        return if fare.covered() { SitePick::Tolled(*site) } else { SitePick::Fare(lifescape_gamedata::toll::FARE) };
+    // Paid sites: the cheapest fares first, then the nearest.
+    if let Some(site) = open.iter().min_by_key(|site| (fare_need(**site, position, fare), distance(site))) {
+        let need = fare_need(*site, position, fare);
+        if fare.wallet < need {
+            return SitePick::Fare(need);
+        }
+        return if boat(site) { SitePick::Boat { site: *site, toll: across(site) } } else { SitePick::Tolled(*site) };
     }
     // Only gated safe sites left: the nearest one's closed gate.
     let gated = safe.iter().filter(|row| !row.gates.is_empty()).min_by_key(|row| distance(&row.site));
@@ -374,7 +401,9 @@ mod tests {
         assert_eq!(min_combat_for_method("farm:raw_shrimp"), 15, "the obtain leg fishes the same water");
         assert_eq!(min_combat_for_method("gather:woodcut/willow_logs"), 3, "some willows sit outside every hunter");
         assert_eq!(min_combat_for_method("fight:melee/chickens"), 3);
-        assert_eq!(min_combat_for_method("gather:fishing/raw_lobster"), lifescape_gamedata::danger::NEVER, "no bank within reach of Karamja water");
+        // Karamja water banks from the Port Sarim dock its boat lands on:
+        // Draynor's bank, under the same wizards as its shrimp.
+        assert_eq!(min_combat_for_method("gather:fishing/raw_lobster"), 15, "Karamja water banks at Draynor via the boat");
         // Anvils are station sites now (args contract 2026-11-13): the
         // least demanding anvil with its bank, no longer a pinned 5.
         assert_eq!(min_combat_for_method("smith:steel_platebody"), 3);

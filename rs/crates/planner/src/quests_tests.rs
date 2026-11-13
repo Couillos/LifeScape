@@ -124,7 +124,9 @@ fn quest_points_climb_a_real_ladder() {
     };
     let ladder = quest_point_ladder(32, "dragon", &[]);
     assert!(points(&ladder) >= 32, "{ladder:?}");
-    assert!(!ladder.iter().any(|key| key == "dragon" || key == "blackarmgang" || key == "hunt"), "{ladder:?}");
+    assert!(!ladder.iter().any(|key| key == "dragon" || key == "blackarmgang"), "{ladder:?}");
+    // Pirate's Treasure sails (the Karamja boat has nav edges): a rung.
+    assert!(quest_point_ladder(1_000, "dragon", &[]).contains(&"hunt".to_string()), "the boat opens Pirate's Treasure");
     if let Some(at) = ladder.iter().position(|key| key == "blackknight") {
         assert!(points(&ladder[..at].to_vec()) >= 12, "Black Knights' Fortress after 12 points: {ladder:?}");
     }

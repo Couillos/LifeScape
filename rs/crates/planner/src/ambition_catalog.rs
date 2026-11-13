@@ -72,9 +72,9 @@ const PRIEST: &[Rung] = &[
     Rung { skill: "prayer", level: 10, then: Then::Produce(&["bones"], 100, "attack") }, level_rung("attack", 20),
     gear("prayer", 20, "melee"), level_rung("defence", 30), level_rung("prayer", 30), gear("prayer", 40, "melee"), level_rung("prayer", 43), level_rung("prayer", 50),
 ];
-// Lobster, tuna and swordfish are Karamja water (`access::BOAT_ROUTED`:
-// no nav edge for the sailors) and maples have no F2P tree: no quota names
-// them until they are plannable (audit 2026-11-13). Composite food
+// Lobster, tuna and swordfish are Karamja water (paid boat, 60 coins a
+// round trip: obtainable, never a quota tier) and maples have no F2P tree
+// (audit 2026-11-13). Composite food
 // (`bake:`: pies, pizza, cake) carries the cook past salmon.
 const COOK: &[Rung] = &[
     make("cooking", 10, &["shrimp", "anchovies", "sardine", "cooked_chicken", "cooked_meat"], 50),

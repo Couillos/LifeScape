@@ -33,6 +33,10 @@ const TRANSIT_HEAL_TICKS: u64 = 200;
 /// transitions itself, instead of a script-side ladder scan.
 pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError> {
     let (here_x, here_z) = (bot.world.x, bot.world.z);
+    // On Karamja (no F2P bank) every bank is across the boat: rank them
+    // from the Port Sarim dock it lands on.
+    let (anchor_x, anchor_z, _) = knowledge::access::mainland_anchor(i64::from(here_x), i64::from(here_z), i64::from(bot.world.level));
+    let (here_x, here_z) = (anchor_x as i32, anchor_z as i32);
     // Same discipline as `toll_gate_x`: a down service leaves the pick
     // unfenced (logged) instead of aborting the run; the walk itself
     // still fails loud with `nav-down`.
@@ -363,7 +367,7 @@ pub fn bank_trip(
             if !keep.contains(&coins) {
                 keep.push(coins);
             }
-            withdraw_coins = withdraw_coins.max(crate::kit::toll::fare_short(pack_total(bot, coins)));
+            withdraw_coins = withdraw_coins.max(crate::kit::toll::reserve_short(bot, pack_total(bot, coins)));
         }
     }
     let bank_x = bank.x as i32;

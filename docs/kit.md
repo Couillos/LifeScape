@@ -29,6 +29,14 @@ la suite. Reste rangé sans changement de comportement : `pack_*`,
 `kit/` (briques), `activities/` (une par fichier), `quests/`, `legacy/`
 (transition). Plafonds vérifiés par test (< 200 activité, < 500 brique).
 `run woodcut 3 toll wild` reste valable via parseur commun vers `TaskSpec`.
+Tarifs (`kit::toll::arm_fares`, 2026-11-13) : `toll` (porte d'Al Kharid,
+10 po) et `boat` (bateau de Karamja, 30 po chaque sens) se paient depuis
+le SAC ; le run arme `bot.allow_paid` et une réserve
+`bot.fare_reserve` (10, 60 aller-retour, 70 les deux) que `bank_trip`
+garde et recomplète. Pêche, minage, bûcheronnage, mêlée, distance et
+magie l'arment ; la banque d'un site de Karamja se choisit depuis le
+quai de Port Sarim (`access::mainland_anchor`). `dialogue_buy <objet>
+--want <objet> N --site …` achète par dialogue (`gamedata::dialogue_shops`).
 Décisions de vie dans `legacy/bootstrap.rs` jusqu'au brain, puis
 supprimées. Chaque étape validée en live par les rendements avant/après.
 
