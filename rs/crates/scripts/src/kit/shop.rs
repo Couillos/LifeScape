@@ -23,6 +23,19 @@ const TREK_LIMIT: i64 = 400;
 // shortcut: keeper NPC op for Trade is assumed to be op 2 (talk/trade op
 // order is pack data, not in the gamedata dump); fails loudly otherwise.
 pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32, i32))> {
+    keeper_within(bot, obj_name, None)
+}
+
+/// Keepers a buy may walk to on its own: never in the Wilderness nor
+/// underground (z ≥ 6400), never across the toll fence `fence` (the
+/// brain passes `toll` when it funded the gate).
+pub fn reachable_keeper(spawn: (i64, i64, i64), bot_x: i32, fence: Option<i32>) -> bool {
+    let (x, z, level) = spawn;
+    !crate::kit::danger::in_wilderness(x, z, level) && z < 6400 && !crate::kit::bans::across_toll(bot_x, x as i32, fence)
+}
+
+/// `shop_stock_keeper` with the toll fence line (`None` = unfenced).
+pub fn keeper_within(bot: &Bot, obj_name: &str, fence: Option<i32>) -> Option<(String, (i32, i32, i32))> {
     let mut best: Option<(i64, (String, (i32, i32, i32)))> = None;
     // Only shops an NPC opens on an F2P world without a quest gate
     // (`f2p_shop_access`): Zaff's staffs count, Shantay's pass never.
@@ -38,7 +51,7 @@ pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32
             let Some(entry) = knowledge::npc_by_id(npc_id) else { continue };
             let Some(keeper_name) = entry.name else { continue };
             for spawn in entry.spawns {
-                if spawn.level != i64::from(bot.world.level) {
+                if spawn.level != i64::from(bot.world.level) || !reachable_keeper((spawn.x, spawn.z, spawn.level), bot.world.x, fence) {
                     continue;
                 }
                 let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
@@ -332,8 +345,11 @@ pub fn buy_stock(bot: &mut Bot, obj_name: &str, count: u32) -> Result<u32, Scrip
     }
     let main_com = (bot.tables.com_id)("shop_template:inv")
         .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
-    let Some((keeper, spawn)) = shop_stock_keeper(bot, obj_name) else {
-        bot.log(&format!("no shop stocks {obj_name} nearby"));
+    // Never past the toll fence, into the Wilderness or underground on
+    // the buy's own initiative: the brain passes `toll` when it funds it.
+    let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(bot) };
+    let Some((keeper, spawn)) = keeper_within(bot, obj_name, fence) else {
+        bot.log(&format!("no reachable shop stocks {obj_name} (no wilderness, underground or toll)"));
         return Ok(0);
     };
     if !trade_to_keeper(bot, &keeper, spawn)? {
@@ -439,6 +455,17 @@ mod tests {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
         assert_eq!(buy_stock(&mut bot, "bronze_axe", 0).expect("count 0 stays Ok(0)"), 0);
+    }
+
+    /// A buy never walks into the Wilderness, underground or across the
+    /// toll fence on its own (audit C10); `toll` lifts only the fence.
+    #[test]
+    fn keepers_stay_on_reachable_ground() {
+        assert!(super::reachable_keeper((3212, 3246, 0), 3222, Some(3268)), "Lumbridge store");
+        assert!(!super::reachable_keeper((3315, 3180, 0), 3222, Some(3268)), "Al Kharid across the fence");
+        assert!(super::reachable_keeper((3315, 3180, 0), 3222, None), "toll paid: fence lifted");
+        assert!(!super::reachable_keeper((3080, 3930, 0), 3222, None), "Wilderness never");
+        assert!(!super::reachable_keeper((3110, 9850, 0), 3222, None), "underground never");
     }
 
     /// PRD3 D-A: a producible object (smithed bronze axe) is never bought

@@ -150,6 +150,23 @@ pub fn danger_error(spot_key: &str, deaths: u32) -> ScriptError {
     )))
 }
 
+/// An ordered combat spot (the brain named it) killed the bot: bank the
+/// run's loot unless `--no-bank`, then the typed danger error. Never a
+/// swap to a "safer" spot: a drop farm must stay on its dropper.
+pub fn ordered_spot_lost(bot: &mut Bot, spot_key: &str, deaths: u32, no_bank: bool) -> Result<ScriptError, ScriptError> {
+    if !no_bank {
+        crate::kit::gear::prepare_at_bank(bot)?;
+    }
+    Ok(danger_error(spot_key, deaths))
+}
+
+/// An ordered combat spot sits across the toll fence and the brain sent
+/// no `toll`: the typed access gap (`access:al_kharid_toll`), never Usage.
+pub fn ordered_spot_tolled(bot: &mut Bot, spot_key: &str, detail: &str) -> ScriptError {
+    bot.log(&format!("{spot_key} across the toll fence: {detail}"));
+    crate::kit::cycle::blocked_access(crate::kit::site::TOLL_AREA)
+}
+
 /// Death resume: bounded wait for the respawn, then resync the loop
 /// watches (hp flatlined, message index consumed). Never billed to a
 /// stall budget by the caller. This is the `death_resume` the pause and

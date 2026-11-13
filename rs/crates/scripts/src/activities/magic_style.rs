@@ -156,6 +156,9 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.intend(&format!("magic at {}", spot.key));
         let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
         let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &crate::kit::fight::HuntPlan::plain().until(&spec), remaining, spec.budget_max_ticks, no_bank) {
+            // An ordered spot behind the toll without `toll`: a typed access
+            // gap the brain funds or routes, never a Usage.
+            Err(crate::ScriptError::Usage(detail)) if !auto && detail.contains("toll fence") => return Err(crate::kit::survival::ordered_spot_tolled(bot, spot.key, &detail)),
             Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
                 if !tally.excludes(spot.key) {
                     tally.exclude(spot.key);
@@ -189,6 +192,11 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if queue.iter().any(|queued| !tally.excludes(queued.key)) {
             bot.log(&format!("{} killed us, re-picking without it", spot.key));
             continue;
+        }
+        // The brain's spot is an order: never swap it for a "safer" one
+        // (a drop farm must stay on the dropper). Bank, report typed.
+        if !auto {
+            return Err(crate::kit::survival::ordered_spot_lost(bot, spot.key, tally.deaths(), no_bank)?);
         }
         match crate::kit::fight::fallback_spot(bot, &spot, tally.excluded()) {
             Some(fallback) => {
