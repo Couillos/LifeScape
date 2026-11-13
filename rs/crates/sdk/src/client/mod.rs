@@ -10,6 +10,7 @@ pub mod design;
 pub mod doors;
 pub mod exchange;
 pub mod loc_stands;
+pub mod locks;
 pub mod movement;
 pub mod nav_remote;
 pub mod snapshot_view;
@@ -104,6 +105,9 @@ pub struct Bot {
     /// 2026-11-12: an egg past the Port Sarim pen fence, ~340 refused
     /// clicks in 10 min). Memory only, gone with the session.
     pub unreachable_objs: HashSet<(u16, i32, i32, i32)>,
+    /// Market locks pushed by the daemon (see `locks`): bank withdrawals
+    /// never take the part promised to open orders, outside a trade.
+    pub locks: locks::SharedLocks,
     /// Opt-in to paid paths (toll gates). Default false: routing and bank
     /// choice stay on the free side of every fence.
     pub allow_paid: bool,
@@ -189,6 +193,7 @@ impl Bot {
             toll_gates: HashSet::new(),
             approach_opened: HashSet::new(),
             unreachable_objs: HashSet::new(),
+            locks: std::sync::Arc::new(std::sync::Mutex::new(locks::Locks::default())),
             approach_depth: 0,
             allow_paid: false,
             allow_shop: true,

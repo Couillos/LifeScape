@@ -140,6 +140,10 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     }
                 }
                 round += 1;
+                // Locks every round: what open orders and deals promise
+                // never leaves a bank outside the trade procedure.
+                let accounts: Vec<String> = jobs.iter().map(|job| job.account.clone()).collect();
+                orch.push_locks(&service, &accounts);
                 crate::market_reprice::reprice_round(&service, wall, tick_ms as f64);
                 for pose in convene_round(&service, nav_up, &parties, &mut eta, tick_ms) {
                     eprintln!("market-convene: pose {} {:?}", pose.account, pose.args);

@@ -738,17 +738,44 @@ impl Bot {
     /// Withdraw at least `count`, using the 10/5/1 buttons (all for coins).
     pub fn bank_withdraw(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<u32> {
         self.act(format!("bank_withdraw {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
+        self.withdraw_as(obj_id, obj_id, count, timeout)
+    }
+
+    /// Withdraw from the bank stack of `bank_obj` and watch `pack_obj`
+    /// land in the pack: the same object, or its banknote when the note
+    /// mode is on (the bank only ever holds the base object — searching it
+    /// for the note id found nothing, so noted withdrawals never worked).
+    /// A full pack ends the withdrawal quietly with what fits.
+    pub(crate) fn withdraw_as(&mut self, bank_obj: u16, pack_obj: u16, count: u32, timeout: u64) -> Result<u32> {
         let main_com = (self.tables.com_id)("bank_main:inv")
             .ok_or_else(|| Error::State("bank_main:inv missing from component table".to_string()))?;
+        // Market locks: the part promised to open orders stays banked
+        // outside the trade procedure (user rule 2026-11-13).
+        let banked: u32 = self
+            .world
+            .inv
+            .get(&main_com)
+            .map(|slots| slots.values().filter(|(held, _)| *held == bank_obj).map(|(_, n)| *n).sum())
+            .unwrap_or(0);
+        let locked = self.locked(bank_obj);
+        let count = count.min(self.withdrawable(bank_obj, banked));
+        if count == 0 {
+            if locked > 0 {
+                self.log(&format!("bank_withdraw {bank_obj}: {locked} locked by open market orders, nothing usable"));
+            }
+            return Ok(self.inventory().get(&pack_obj).copied().unwrap_or(0));
+        }
         let mut remaining = count;
         while remaining > 0 {
             let slot = self
                 .world
                 .inv
                 .get(&main_com)
-                .and_then(|slots| slots.iter().find(|(_, (held, _))| *held == obj_id).map(|(slot, _)| *slot));
+                .and_then(|slots| slots.iter().find(|(_, (held, _))| *held == bank_obj).map(|(slot, _)| *slot));
             let Some(slot) = slot else { break };
-            let (op, step) = if obj_id == 995 || remaining >= 1000 {
+            // Withdraw-all only when nothing is locked: it would take the
+            // promised part too.
+            let (op, step) = if locked == 0 && (bank_obj == 995 || remaining >= 1000) {
                 (4, remaining)
             } else if remaining >= 10 {
                 (3, 10)
@@ -757,23 +784,27 @@ impl Bot {
             } else {
                 (1, 1)
             };
-            let before = self.inventory().get(&obj_id).copied().unwrap_or(0);
-            self.inv_button(op, obj_id, slot, main_com)?;
+            let before = self.inventory().get(&pack_obj).copied().unwrap_or(0);
+            self.inv_button(op, bank_obj, slot, main_com)?;
             let deadline = self.world.ticks + timeout;
             let mut grew = false;
             while self.world.ticks < deadline {
                 self.pump(2)?;
-                if self.inventory().get(&obj_id).copied().unwrap_or(0) > before {
+                if self.inventory().get(&pack_obj).copied().unwrap_or(0) > before {
                     grew = true;
                     break;
                 }
             }
             if !grew {
-                return Err(Error::Timeout(format!("withdraw of {obj_id} timed out at {:?} ({} ticks)", self.position(), timeout)));
+                if self.backpack().1.len() >= 28 {
+                    self.log(&format!("bank_withdraw {bank_obj}: pack full, {remaining} left in the bank"));
+                    break;
+                }
+                return Err(Error::Timeout(format!("withdraw of {bank_obj} timed out at {:?} ({} ticks)", self.position(), timeout)));
             }
             remaining = remaining.saturating_sub(step);
         }
-        Ok(self.inventory().get(&obj_id).copied().unwrap_or(0))
+        Ok(self.inventory().get(&pack_obj).copied().unwrap_or(0))
     }
 
     pub fn cheat(&mut self, text: &str) -> Result<()> {

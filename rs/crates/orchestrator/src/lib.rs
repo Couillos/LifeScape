@@ -70,6 +70,7 @@ pub mod daemon_conn;
 pub mod supervise;
 pub mod session;
 pub mod session_cmds;
+pub mod session_locks;
 pub mod dump_npc_ranges;
 pub mod dump_transitions;
 pub mod names;

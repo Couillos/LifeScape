@@ -267,16 +267,18 @@ pub fn bank_withdraw_items(
     let mut remaining = count;
     while remaining > 0 {
         let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
-        let Some((slot, held)) = slots
+        // Market locks: only the unpromised part of a stack is usable
+        // (user rule 2026-11-13); a fully locked stack is skipped.
+        let Some((slot, held, usable)) = slots
             .iter()
             .filter(|(_, (held, n))| ids.contains(held) && *n > 0)
-            .map(|(slot, (held, _))| (*slot, *held))
-            .next()
+            .map(|(slot, (held, n))| (*slot, *held, bot.withdrawable(*held, *n)))
+            .find(|(_, _, usable)| *usable > 0)
         else {
             break;
         };
         // Bank buttons: 1 = one, 2 = five (all for coins, handled elsewhere).
-        let (op, step) = if remaining >= 5 { (2u8, 5u32) } else { (1u8, 1u32) };
+        let (op, step) = if remaining >= 5 && usable >= 5 { (2u8, 5u32) } else { (1u8, 1u32) };
         bot.inv_button(op, held, slot, main_com)?;
         bot.pump(5)?;
         remaining = remaining.saturating_sub(step);

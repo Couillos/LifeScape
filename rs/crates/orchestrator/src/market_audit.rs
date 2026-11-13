@@ -159,7 +159,8 @@ impl MarketService {
             .resting_orders()
             .unwrap_or_default()
             .into_iter()
-            .filter(|order| order.status == lifescape_store::OrderStatus::Open)
+            // Open rows and the resting remainder of partly filled ones.
+            .filter(|order| order.remaining > 0 && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched))
             .collect();
         let mut by_account: BTreeMap<String, Vec<Order>> = BTreeMap::new();
         for order in open {
@@ -187,6 +188,42 @@ impl MarketService {
             }
         }
         cancelled
+    }
+
+    /// What each live account's open orders and in-flight deals promise:
+    /// coins for bids and buyer deals, base objects for sells and seller
+    /// deals. Pushed to the workers (`set_locks`) so no script spends them
+    /// outside the trade procedure (user rule 2026-11-13).
+    pub(crate) fn locks_for(&self, accounts: &[String]) -> BTreeMap<String, (i64, BTreeMap<i64, i64>)> {
+        let open: Vec<Order> = self
+            .lock_store()
+            .resting_orders()
+            .unwrap_or_default()
+            .into_iter()
+            // Open rows and the resting remainder of partly filled ones.
+            .filter(|order| order.remaining > 0 && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched))
+            .collect();
+        let mut out: BTreeMap<String, (i64, BTreeMap<i64, i64>)> = BTreeMap::new();
+        for account in accounts {
+            let mut coins = 0i64;
+            let mut items: BTreeMap<i64, i64> = BTreeMap::new();
+            for order in open.iter().filter(|order| &order.account == account) {
+                if order.side == OrderSide::Buy {
+                    coins += order.remaining.max(0) * order.price.max(0);
+                } else {
+                    *items.entry(order.item_id).or_insert(0) += order.remaining.max(0);
+                }
+            }
+            for deal in self.lock_store().open_deals_for_account(account).unwrap_or_default() {
+                if &deal.buyer == account {
+                    coins += deal.quantity * deal.price;
+                } else {
+                    *items.entry(deal.item_id).or_insert(0) += deal.quantity;
+                }
+            }
+            out.insert(account.clone(), (coins, items));
+        }
+        out
     }
 
     fn cancel_rows(&self, account: &str, ids: &[i64], why: &str) -> usize {
@@ -232,6 +269,24 @@ impl MarketService {
             }
             let (coins, stock) = ledger_holdings(&live, coins_id);
             self.lock_engine().ledger.sync_account(&job.account, coins, &stock);
+        }
+    }
+}
+
+/// Daemon side of the locks: one `set_locks` per live worker each round.
+impl crate::daemon::Orchestrator {
+    pub(crate) fn push_locks(&self, service: &MarketService, accounts: &[String]) {
+        for (account, (coins, items)) in service.locks_for(accounts) {
+            let rows: Vec<Value> = items
+                .iter()
+                .map(|(id, qty)| Value::Arr(vec![Value::Int(*id), Value::Int(*qty)]))
+                .collect();
+            let request = lifescape_json::object(vec![
+                ("cmd", lifescape_json::str_value("set_locks")),
+                ("coins", Value::Int(coins)),
+                ("items", Value::Arr(rows)),
+            ]);
+            let _ = self.send_worker(&account, &request, std::time::Duration::from_secs(2));
         }
     }
 }

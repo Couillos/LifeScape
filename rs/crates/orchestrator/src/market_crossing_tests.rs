@@ -155,3 +155,31 @@ fn surplus_listings_cross_the_inputs_buyers_need() {
     }
     cleanup(&path);
 }
+
+/// User rule 2026-11-13: what open orders and in-flight deals promise is
+/// locked per account — base objects for the seller, coins for the
+/// buyer — so no script spends it outside the trade procedure.
+#[test]
+fn open_orders_and_deals_lock_their_lots() {
+    let (service, path) = service("locks");
+    sync(&service, "seller", &snapshot(Vec::new(), vec![row(RAW_SHRIMP, 40), row(LOGS, 10)]));
+    sync(&service, "buyer", &snapshot(Vec::new(), vec![row(COINS, 100)]));
+    assert_eq!(place(&service, "seller", "sell", RAW_SHRIMP, 30, 2, ("floor", 1)).get("ok").as_bool(), Some(true));
+    assert_eq!(place(&service, "seller", "sell", LOGS, 10, 1, ("floor", 1)).get("ok").as_bool(), Some(true));
+    // 12 shrimps cross at 2: a deal now promises them, 18 rest open.
+    let bought = place(&service, "buyer", "buy", RAW_SHRIMP, 12, 2, ("ceiling", 2));
+    assert_eq!(bought.get("ok").as_bool(), Some(true), "{bought:?}");
+    // A resting bid under the ask (1 < 2): it waits, its coins locked.
+    let resting = place(&service, "buyer", "buy", RAW_SHRIMP, 5, 1, ("ceiling", 1));
+    assert_eq!(resting.get("status").as_str(), Some("open"), "{resting:?}");
+    let locks = service.locks_for(&["seller".to_string(), "buyer".to_string(), "idle".to_string()]);
+    let (seller_coins, seller_items) = &locks["seller"];
+    assert_eq!(*seller_coins, 0);
+    assert_eq!(seller_items.get(&RAW_SHRIMP), Some(&30), "18 resting + 12 in the deal");
+    assert_eq!(seller_items.get(&LOGS), Some(&10));
+    let (buyer_coins, buyer_items) = &locks["buyer"];
+    assert_eq!(*buyer_coins, 12 * 2 + 5, "the deal's coins plus the resting bid");
+    assert!(buyer_items.is_empty());
+    assert_eq!(locks["idle"], (0, Default::default()), "no order, no lock");
+    cleanup(&path);
+}

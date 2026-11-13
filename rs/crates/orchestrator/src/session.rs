@@ -779,6 +779,7 @@ pub fn run_session(account: &str) -> i32 {
     let engine = engine_dir();
     let mut bot = Bot::new(&server_host(), server_port(), &format!("{engine}/data/pack"), &format!("{engine}/data/config/private.pem"));
     lifescape_scripts::tables_live::attach_live_tables(&mut bot);
+    crate::session_locks::install(bot.locks.clone());
     let shared = Arc::new(Shared {
         account: account.to_string(),
         log_path: log_path.clone(),

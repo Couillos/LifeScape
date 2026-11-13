@@ -43,15 +43,17 @@ impl Bot {
         Ok(())
     }
 
-    /// Withdraw `obj_id` as banknotes (caller resolves the `cert_` id via
-    /// gamedata; coins never need this). Restores item mode after, so a
-    /// later plain withdrawal never surprises the caller.
-    pub fn bank_withdraw_noted(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<u32> {
-        self.act(format!("bank_withdraw_noted {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
+    /// Withdraw the bank stack of `base` as its banknote `note` (caller
+    /// resolves the `cert_` id via gamedata; coins never need this). The
+    /// bank holds the base object only: the slot is the base, the pack
+    /// receives the note. Restores item mode after, so a later plain
+    /// withdrawal never surprises the caller. Returns the notes carried.
+    pub fn bank_withdraw_noted(&mut self, base: u16, note: u16, count: u32, timeout: u64) -> Result<u32> {
+        self.act(format!("bank_withdraw_noted {} x{count}", (self.tables.obj_name)(base).unwrap_or_default()));
         self.bank_set_noted(true)?;
-        let carried = self.bank_withdraw(obj_id, count, timeout)?;
+        let carried = self.withdraw_as(base, note, count, timeout);
         self.bank_set_noted(false)?;
-        Ok(carried)
+        carried
     }
 
     /// Exact multiset match of an offer window against expected lots

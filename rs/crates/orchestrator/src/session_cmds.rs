@@ -324,6 +324,7 @@ pub(crate) fn dispatch(shared: &Arc<Shared>, request: &Value) -> Value {
         "pause" => cmd_pause(shared),
         "hold" => cmd_hold(shared),
         "resume" => cmd_resume(shared),
+        "set_locks" => crate::session_locks::cmd_set_locks(request),
         "pose_market" => cmd_pose_market(
             shared,
             request.get("script").as_str().unwrap_or(""),

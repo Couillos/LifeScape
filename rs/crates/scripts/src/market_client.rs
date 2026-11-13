@@ -152,7 +152,7 @@ pub fn ensure_goods(bot: &mut Bot, row: &DealRow, trade: u16, coins: u16) -> Res
         if banked.get(&row.item).copied().unwrap_or(0) >= row.qty {
             bot.bank_withdraw(row.item, row.qty, 300)?;
         } else {
-            bot.bank_withdraw_noted(trade, row.qty, 300)?;
+            bot.bank_withdraw_noted(row.item, trade, row.qty, 300)?;
         }
     } else {
         bot.bank_withdraw(row.item, row.qty, 300)?;

@@ -131,3 +131,28 @@ de t01/t05, clé de b9htjtfz ; t40 : 278 crevettes cuites et 74 brûlées
 (dérivées des 588 crevettes crues trichées) et 2 cisailles. Ordre 5926 de
 t08 (filet triché en vente) annulé. Connexions de contrôle t01/t40 OK.
 Reste inexpliquée : la bosse +375 pièces du 11/11 08:00.
+
+## 2026-11-13 — Échanges fiables : protocole de remise, verrous, audit des carnets
+
+Constat (nuit du 12 au 13) : 620 deals, 63 conclus. Causes mesurées dans les
+journaux des deux parties : sac plein au retrait (refus serveur ignoré),
+stock fantôme vendu sur plusieurs deals, paires à 6–7 deals traités chacun
+dans son ordre (`mismatch` puis `timeout`), convocation tardive (point sûr)
+avec une échéance déjà consommée, retraits en billets cassés (la banque était
+cherchée avec l'id du billet).
+Décisions (règles utilisateur) :
+- Remise : tout déposer à la banque la plus proche (outils gardés), retirer
+  les lots exacts à Varrock ouest (billets dès qu'ils existent), puis la
+  fontaine. Un seul échange par partenaire et objet (`market_lots.rs`),
+  deals pris dans l'ordre croissant des deux côtés.
+- Un côté qui ne peut produire ses lots rapporte `short` : ses ordres sur
+  l'objet sont annulés, le côté honnête garde sa priorité.
+- Passé son échéance, un bot attend tant que le daemon garde le deal ouvert
+  (plafond 3000 ticks) ; le balayage couvre cette attente.
+- Verrous : ce que les ordres ouverts et deals promettent (objets du vendeur,
+  pièces de l'acheteur) est poussé au worker toutes les 10 s ; tout retrait
+  bancaire est plafonné hors de la procédure d'échange (`client/locks.rs`).
+- Audit : toutes les ~60 s, chaque ordre est pesé contre sac + banque du
+  compte (sauvegarde hors ligne) moins ses deals en cours ; les non couverts
+  sont annulés (`market_audit.rs`). Premier passage : 222 ordres annulés.
+- Un ordre partiellement rempli (`matched`) reste annulable.

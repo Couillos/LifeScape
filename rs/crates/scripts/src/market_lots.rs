@@ -165,18 +165,11 @@ pub fn secure_lots(bot: &mut Bot, groups: &[DealGroup], coins: u16) -> Result<Op
         bot.log("handover: Varrock west bank did not open");
         return Ok(None);
     }
-    if coins_needed > 0 {
-        let _ = bot.bank_withdraw(coins, coins_needed, 300)?;
-    }
-    for (item, qty) in &items {
-        let note = trade_id(*item);
-        let banked = bot.bank_items();
-        if banked.get(item).copied().unwrap_or(0) >= *qty || note == *item {
-            let _ = bot.bank_withdraw(*item, *qty, 300)?;
-        } else {
-            let _ = bot.bank_withdraw_noted(note, *qty, 300)?;
-        }
-    }
+    // The trade procedure is the only one that takes the locked lots out.
+    bot.set_trading(true);
+    let withdrawn = withdraw_lots(bot, coins, coins_needed, &items);
+    bot.set_trading(false);
+    withdrawn?;
     let _ = bot.close_modal();
     bot.pump(3)?;
     let stock: BTreeMap<u16, u32> = items.keys().map(|item| (*item, carried(bot, *item))).collect();
@@ -194,6 +187,25 @@ pub fn secure_lots(bot: &mut Bot, groups: &[DealGroup], coins: u16) -> Result<Op
         }
     }
     Ok(Some(flags))
+}
+
+/// Withdraws the purse and every object's lots (notes when they exist).
+fn withdraw_lots(bot: &mut Bot, coins: u16, coins_needed: u32, items: &BTreeMap<u16, u32>) -> Result<(), ScriptError> {
+    if coins_needed > 0 {
+        let _ = bot.bank_withdraw(coins, coins_needed, 300)?;
+    }
+    for (item, qty) in items {
+        // Banknotes whenever the object has one: any quantity rides one
+        // slot (27+ raw shrimps never fit as base objects), and the buyer
+        // accepts either form at the window.
+        let note = trade_id(*item);
+        if note == *item {
+            let _ = bot.bank_withdraw(*item, *qty, 300)?;
+        } else {
+            let _ = bot.bank_withdraw_noted(*item, note, *qty, 300)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

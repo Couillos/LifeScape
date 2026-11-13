@@ -164,8 +164,11 @@ impl Store {
     /// Marks an order cancelled. Fills stay recorded in deals/executions.
     pub fn cancel_order(&self, order_id: i64, clock: i64) -> Result<(), Error> {
         let touched = self.connection.execute(
+            // A partly filled order (`matched`) still rests its remainder
+            // on the book: it must stay cancellable, or the remainder can
+            // never be withdrawn (audit, brain, operator).
             "UPDATE orders SET status = 'cancelled', updated_clock = ?1 \
-             WHERE order_id = ?2 AND status = 'open'",
+             WHERE order_id = ?2 AND status IN ('open','matched')",
             rusqlite::params![clock, order_id],
         )?;
         if touched == 0 {
