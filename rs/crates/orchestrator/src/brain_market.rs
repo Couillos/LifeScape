@@ -70,19 +70,26 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
     if open {
         return;
     }
-    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, *count);
-    let price = ctx.price.max(1).min(ceiling);
+    // What is still missing, capped by the wallet; at the best ask when
+    // it is fair (the bid crosses at once: market first), else at the
+    // reference walking up to the ceiling.
+    let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
+    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
+    let price = match ctx.best_ask {
+        Some(ask) if ask <= ceiling => ask,
+        _ => ctx.price.max(1).min(ceiling),
+    };
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),
         ("side", str_value("buy")),
         ("item", Value::Int(id)),
-        ("qty", Value::Int((*count).max(1))),
+        ("qty", Value::Int(quantity)),
         ("price", Value::Int(price)),
-        ("ceiling", Value::Int(ceiling)),
+        ("ceiling", Value::Int(ceiling.max(price))),
     ]));
     crate::logln!(
-        "brain {}: standing bid {count} {item} @ {price} (ceiling {ceiling}) beside production: {}",
+        "brain {}: standing bid {quantity}/{count} {item} @ {price} (ceiling {ceiling}) beside production: {}",
         job.account,
         if reply.get("ok").as_bool() == Some(true) { "placed".to_string() } else { format!("refused {:?}", reply.get("error").as_str()) }
     );

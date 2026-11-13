@@ -133,8 +133,10 @@ fn space_cleanup_locks_its_method() {
 
 #[test]
 fn ready_resolution_prices_and_picks() {
-    // PRD3 lot 4: a covered ask is taken; without one the bot produces
-    // and keeps a standing bid beside it (D-B); broke, it still produces.
+    // PRD3 lot 4: a covered ask is taken — by a bid at the ask while the
+    // bot produces (2026-11-13: never idle on a handover); without one the
+    // bot produces with a standing bid beside it (D-B); broke, it still
+    // produces; an object it cannot make is bought and waited for.
     let mut nodes = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 200 }, &profile());
     let mut ctx = ReadyCtx::blind(0.72);
     ctx.coins_per_tick = 2.0;
@@ -144,7 +146,8 @@ fn ready_resolution_prices_and_picks() {
     ctx.coins = 100000;
     ctx.best_ask = Some(3);
     resolve_ready(&mut nodes[0], &ctx);
-    assert_eq!(nodes[0].method.as_deref(), Some("market:buy"), "covered ask: buy it");
+    assert_eq!(nodes[0].method.as_deref(), Some("farm:feather"), "covered ask: produce meanwhile");
+    assert!(nodes[0].alternatives.iter().any(|alt| alt.method == "market:bid"), "the bid takes the ask beside it");
     assert!(nodes[0].alternatives.iter().any(|alt| alt.est_ticks > 0), "estimates fill au plus tard");
 
     let mut no_ask = nodes[0].clone();
@@ -173,7 +176,8 @@ fn ready_resolution_prices_and_picks() {
     let mut partial = nodes[0].clone();
     partial.method = None;
     resolve_ready(&mut partial, &thin);
-    assert_eq!(partial.method.as_deref(), Some("market:buy"), "a covered part of the need is bought");
+    assert_eq!(partial.method.as_deref(), Some("farm:feather"), "the bot produces the rest meanwhile");
+    assert!(partial.alternatives.iter().any(|alt| alt.method == "market:bid"), "the covered part is bid at the ask");
     assert_eq!(crate::resolve_obtain::buy_quantity(&thin, 200), 25, "the wallet caps the order");
     let mut stocked = thin.clone();
     stocked.held = 190;
@@ -405,4 +409,17 @@ fn site_fallback_never_revives_a_refused_purchase() {
     assert_ne!(nodes[0].method.as_deref(), Some("market:buy"), "no coins: never a purchase, got {:?}", nodes[0].status);
     assert_ne!(nodes[0].method.as_deref(), Some("market:bid"), "the bid marker is no method");
     assert!(matches!(&nodes[0].status, NodeStatus::Blocked { reason } if reason.starts_with("missing:combat:")), "got {:?}", nodes[0].status);
+}
+
+/// 2026-11-13: an object the bot cannot make (no workable production)
+/// with a covered ask is a pure buy: the brain places it and waits.
+#[test]
+fn unmakeable_covered_ask_is_a_pure_buy() {
+    let mut nodes = expand_goal(&GoalKind::Obtain { item: "net".to_string(), count: 1 }, &profile());
+    let mut ctx = ReadyCtx::blind(0.72);
+    ctx.coins = 500;
+    ctx.price = 5;
+    ctx.best_ask = Some(5);
+    resolve_ready(&mut nodes[0], &ctx);
+    assert_eq!(nodes[0].method.as_deref(), Some("market:buy"), "{:?}", nodes[0].alternatives);
 }

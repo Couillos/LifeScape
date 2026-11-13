@@ -58,7 +58,7 @@ fn now_secs() -> i64 {
 
 /// Wall seconds to D1 ticks (60 ms dev, 600 ms prod).
 pub fn seconds_to_ticks(seconds: i64) -> u64 {
-    (seconds.max(0) as u64).saturating_mul(1000) / lifescape_sdk::waits::tick_ms().max(1)
+    (seconds.max(0) as u64).saturating_mul(1000) / crate::market_eta::live_tick_ms().max(1)
 }
 
 /// One stuck pass. Returns true when the life changed (save it).

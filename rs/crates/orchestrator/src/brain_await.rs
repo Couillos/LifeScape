@@ -26,7 +26,7 @@ pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &st
     let held = holdings_count(job, item);
     // Holdings at the placement (set at launch).
     let baseline = life.nodes[position].progress_current;
-    let deadline = (AWAIT_FILL_TICKS * lifescape_sdk::waits::tick_ms() / 1000) as i64;
+    let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
     if held >= count {
         life.nodes[position].progress_current = held;
         crate::brain_market::cancel_open_buys(&job.account, item);

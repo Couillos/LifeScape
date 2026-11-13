@@ -21,6 +21,26 @@ pub fn zone_of(x: i32, z: i32) -> (i32, i32) {
 /// session ticks advance one per server tick, so wall-per-tick between
 /// two sightings is the rate — no env, no dev/prod switch. Starts
 /// prod-safe (600 ms), converges in a couple of rounds.
+/// Last measured server tick length (ms), 0 before the first sample.
+static LIVE_TICK_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Publishes the convene loop's measured tick length for the daemon.
+pub fn publish_tick_ms(ms: u64) {
+    LIVE_TICK_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Server tick length as the daemon sees it live: the convene loop's
+/// measurement, else the configured rate. The daemon runs without
+/// `NODE_TICK_RATE`, so the configured fallback (600 ms) made every brain
+/// wait in ticks last 10x too long against the 60 ms dev server (a market
+/// fill wait of 6000 ticks = 1 hour instead of 6 minutes, 2026-11-13).
+pub fn live_tick_ms() -> u64 {
+    match LIVE_TICK_MS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => lifescape_sdk::waits::tick_ms(),
+        measured => measured,
+    }
+}
+
 pub struct TickMeter {
     last: Option<(f64, u64)>,
     ms: f64,

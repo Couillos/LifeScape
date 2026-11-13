@@ -3,7 +3,8 @@
 //! Obtain order:
 //! 1. market buy when an ask exists the wallet covers (take it), or
 //!    covers in part (take what it covers: the rest is produced or
-//!    bought on the next resolve);
+//!    bought on the next resolve); when the bot can also produce it, the
+//!    bid takes the ask while the bot produces (never idle on a handover);
 //! 2. the cheapest production the bot can work now (skill level, tool),
 //!    with a standing market bid beside it when the bot has coins (D-B:
 //!    the first of the two to land closes the node, the brain cancels
@@ -106,9 +107,18 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     // (a fair ask only: at most the bid ceiling of one unit).
     let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= ctx.coins);
     let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= ctx.coins && ask <= fair_unit(ctx));
-    let pick: Option<String> = if ask_covered || ask_partial {
+    let producible = workable.iter().min_by_key(|alt| alt.est_ticks).cloned();
+    let pick: Option<String> = if (ask_covered || ask_partial) && producible.is_some() {
+        // 1a. The bid takes the ask at once (`market:bid` at the ask, the
+        // market first) and the bot produces meanwhile: whichever lands
+        // first closes the node (D-B). Live 2026-11-13: a pure buy left
+        // the worker idle 36–95 minutes waiting for its handover.
+        priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, need) * need });
+        producible.map(|best| best.method)
+    } else if ask_covered || ask_partial {
+        // 1b. Nothing the bot can make: buy and wait for the handover.
         Some("market:buy".to_string())
-    } else if let Some(best) = workable.iter().min_by_key(|alt| alt.est_ticks) {
+    } else if let Some(best) = producible {
         // 2. Produce it, with a standing bid beside it (D-B).
         if market_ok && ctx.coins >= need {
             priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, need) * need });

@@ -128,6 +128,7 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     continue;
                 };
                 let tick_ms = meter.observe(wall, truth);
+                crate::market_eta::publish_tick_ms(tick_ms);
                 let nav_up = crate::plan_service::stats_json().is_some();
                 // Never hold the jobs map while locking a job (same
                 // discipline as `market_live_positions`).
