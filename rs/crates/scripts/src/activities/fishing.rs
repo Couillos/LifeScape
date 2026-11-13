@@ -49,6 +49,9 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
             crate::kit::fish_gear::select_fish_tier(bot, level)?;
         }
     }
+    // The brain's site first (Karamja by boat, far rivers): water is
+    // judged where the bot was sent, never around the departure dock.
+    crate::kit::site::reach_site(bot)?;
     // Picker guard: no water in range is structural (spots don't respawn
     // like fish), so fail fast with the reason instead of burning dead
     // repicks in a dry pit while the brain re-assigns fishing in a loop.
