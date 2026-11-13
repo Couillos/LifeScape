@@ -4,3 +4,21 @@ resolver = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Optimized dev builds (user decision 2026-11-13): the daemon and the
+# workers run the dev binary, and unoptimized nav planning was ~5x slower
+# (cold route 2.5 s vs 0.45 s in release). Debug info and assertions stay.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package.lifescape-nav]
+opt-level = 3
+
+[profile.dev.package.lifescape-sdk]
+opt-level = 3
+
+[profile.dev.package.lifescape-gamedata]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2

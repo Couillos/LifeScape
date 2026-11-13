@@ -1,0 +1,5 @@
+# Compilation limited to 6 CPU cores (user decision 2026-11-13). Cargo
+# reads this from the working directory upward: every build run from the
+# repository root (and the agent worktrees under .claude/) picks it up.
+[build]
+jobs = 6

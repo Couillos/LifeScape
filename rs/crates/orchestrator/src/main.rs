@@ -94,7 +94,6 @@ fn daemon_main() -> i32 {
         Err(error) => eprintln!("static map unavailable: {error}"),
     }
     web::start_web(dispatch, port);
-    orch.restore_jobs();
     // Pathfinding service: one snapshot for every worker. Any load
     // error leaves it down (every plan then fails `nav-down`, never a
     // local plan); the daemon itself never depends on it.
@@ -143,6 +142,24 @@ fn daemon_main() -> i32 {
         if let Err(error) = lifescape_orchestrator::push_hub::start_push_hub(dispatch) {
             eprintln!("push hub unavailable ({error}); workers fall back to one-shot pushes");
         }
+    }
+    // Worker re-adoption runs beside the services, never before them: the
+    // restored workers push their state and plan routes at once, so the
+    // push hub, the pathfinding service and the market must already
+    // listen, and the CLI socket must answer while it runs. Serial
+    // adoption first (2026-11-13: ~3–4 min with nothing listening) froze
+    // every worker's pump on blocked pushes, cost server disconnects,
+    // `nav-down` and `market unreachable` on each restart.
+    {
+        let restoring = orch.clone();
+        std::thread::Builder::new()
+            .name("restore-jobs".to_string())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                restoring.restore_jobs();
+                println!("restore_jobs done in {:.1}s", started.elapsed().as_secs_f64());
+            })
+            .expect("restore thread spawns");
     }
     println!("orchestrator listening on {}", paths::socket_path().display());
     {
