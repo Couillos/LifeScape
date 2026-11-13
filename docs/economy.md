@@ -215,6 +215,18 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 - Couverture : pièces et stock en banque comptent (banque connue gardée
   par le SDK après fermeture, voir `docs/protocol.md`) côté cerveau
   (`holdings_count`) et registre (`market_service::ledger_holdings`).
+  Côté cerveau, le stock verrouillé par les propres ventes/deals vendeur
+  du bot (`locks_for`, les verrous poussés aux workers) n'est PAS détenu :
+  `holdings_count`, outils portés (`carried_tools`), base des quotas
+  (`brain_locks`, 2026-11-13 : b3gybcev, marteau en vente lu « détenu »,
+  forge bannie). Les outils de travail (haches, pioches, filets, cannes,
+  appât, tinderbox, marteau, burin, aiguille, cisailles, couteau) ne sont
+  jamais mis en vente et leurs annonces existantes sont annulées par la
+  passe de ventes (jamais réadoptées).
+- Demande vue par un bot (jalons demande, buts d'appoint, tirages) : les
+  offres de TOUS les autres comptes, jamais les siennes
+  (`market_demand::signals_for`) ; l'affectation de flotte lit la demande
+  globale.
 
 ## Équipement par paliers (2026-11-13)
 
