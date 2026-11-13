@@ -22,6 +22,7 @@ pub mod brain_await;
 pub mod economy_guard;
 pub mod brain_fold;
 pub mod brain_grace;
+pub mod brain_launch;
 pub mod brain_market;
 pub mod brain_plan;
 pub mod brain_sales;
