@@ -640,7 +640,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
                     let mut after = String::new();
-                    let chain = crate::expand::reach_chain(&skill, level_of(&skill), level, &mut counter, &mut after);
+                    let chain = crate::skeleton_deps::reach_chain_planned(&skill, level_of(&skill), level, &mut counter, &mut after, crate::expand::NESTED_DEPTH);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }

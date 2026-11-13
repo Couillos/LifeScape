@@ -113,6 +113,10 @@ pub(crate) fn source_flags(item: &str) -> (bool, bool) {
 }
 
 
+/// Nested quest/guild expansions a skeleton files (a quest's climb may
+/// need a guild, whose climb may need a quest: bounded).
+pub const NESTED_DEPTH: u8 = 2;
+
 fn next_id(counter: &mut usize) -> String {
     *counter += 1;
     format!("n{}", *counter)
@@ -188,7 +192,7 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
         GoalKind::MaxSkills { skills, level } => {
             for skill in skills {
                 let mut after = String::new();
-                nodes.extend(reach_chain(skill, level_of(skill), *level, &mut counter, &mut after));
+                nodes.extend(crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), *level, &mut counter, &mut after, NESTED_DEPTH));
             }
         }
         GoalKind::Obtain { item, count } => {
@@ -271,12 +275,18 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
 /// its quest rung; the `access` node depends on all of them. Shared by
 /// `access` goals and `access:<area>` blocks (`record_block_from`).
 pub fn expand_access(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    expand_access_planned(area, profile, counter, level_of, NESTED_DEPTH)
+}
+
+/// `expand_access` whose climbs file their skeleton dependencies down to
+/// `depth` nested quest/guild expansions.
+pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
         if let Some(skill) = guild_skill(area) {
             let mut after = String::new();
-            let chain = reach_chain(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after);
+            let chain = crate::skeleton_deps::reach_chain_planned(skill, level_of(skill), (*level).min(99) as u8, counter, &mut after, depth);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }
@@ -314,12 +324,18 @@ pub fn expand_quest(quest: &str, profile: &Profile, counter: &mut usize) -> Vec<
 
 /// `expand_quest` with skill gates climbing from the live levels.
 pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
+    expand_quest_planned(quest, profile, counter, level_of, NESTED_DEPTH)
+}
+
+/// `expand_quest_from` whose climbs file their skeleton dependencies down
+/// to `depth` nested quest/guild expansions.
+pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
         for gate in &required.skills {
             let mut after = String::new();
-            let chain = reach_chain(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after);
+            let chain = crate::skeleton_deps::reach_chain_planned(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after, depth);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }

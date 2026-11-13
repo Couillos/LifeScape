@@ -50,14 +50,21 @@ fn no_work_no_kept_tool() {
     assert!(kept_tools(&idle, &stacks(&[("hammer", 1), ("bronze_pickaxe", 1)])).is_empty());
 }
 
-/// Spare copies sell: one bucket kept for milking, 23 listed.
+/// Spare copies sell: one hammer kept for smithing, 3 listed. A milker's
+/// buckets are consumed (each becomes a bucket of milk, the way's input
+/// from the server data): the whole stack stays.
 #[test]
 fn spare_copies_of_a_kept_tool_sell() {
-    let life = life_with(&["milk:bucket_milk"]);
-    let held = stacks(&[("bucket_empty", 24)]);
+    let life = life_with(&["smith:bronze_sword"]);
+    let held = stacks(&[("hammer", 4)]);
     let kept = kept_tools(&life, &held);
+    assert_eq!(kept, vec!["hammer".to_string()]);
+    assert_eq!(spare_tool_units(&life, &held, &kept), vec![("hammer".to_string(), 3)]);
+    let milker = life_with(&["milk:bucket_milk"]);
+    let buckets = stacks(&[("bucket_empty", 24)]);
+    let kept = kept_tools(&milker, &buckets);
     assert_eq!(kept, vec!["bucket_empty".to_string()]);
-    assert_eq!(spare_tool_units(&life, &held, &kept), vec![("bucket_empty".to_string(), 23)]);
+    assert!(spare_tool_units(&milker, &buckets, &kept).is_empty(), "consumed: never sold by the unit rule");
 }
 
 /// Bait is consumed: the whole stack of the method's bait stays.

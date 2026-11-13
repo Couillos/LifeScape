@@ -29,6 +29,7 @@ pub mod replan;
 pub mod resolve_obtain;
 pub mod shop_site;
 pub mod side_goal;
+pub mod skeleton_deps;
 pub mod sizing;
 pub mod space;
 pub mod tools;

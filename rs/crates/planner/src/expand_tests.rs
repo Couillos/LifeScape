@@ -18,8 +18,11 @@ fn max_skills_expands_tranches_in_order() {
         })
         .collect();
     assert_eq!(levels, vec![5, 10, 20, 25, 35, 40], "D21 tranches up to the goal");
-    for pair in nodes.windows(2) {
-        assert_eq!(pair[1].deps, vec![pair[0].id.clone()], "linear chain");
+    // Tranches chain linearly; the skeleton files each tranche's tackle
+    // and bait in front of it (`skeleton_deps`).
+    let reach: Vec<&Node> = nodes.iter().filter(|node| matches!(node.kind, NodeKind::ReachLevel { .. })).collect();
+    for pair in reach.windows(2) {
+        assert_eq!(pair[1].deps.first(), Some(&pair[0].id), "linear chain");
     }
     assert!(nodes.iter().all(|node| node.method.is_none()), "methods resolve at ready, not at creation");
 }
@@ -70,7 +73,7 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("smithing", 30), "smelt:steel_bar");
     assert_eq!(reach_method("smithing", 1), "smelt:bronze_bar");
     assert_eq!(reach_method("crafting", 1), "spin:ball_of_wool");
-    assert_eq!(reach_method("crafting", 7), "pottery:pie_dish");
+    assert_eq!(reach_method("crafting", 7), "pottery:piedish", "the object name (fire_piedish)");
     assert_eq!(reach_method("crafting", 8), "jewelry:unstrung_gold_amulet", "object names, the furnace casts unstrung");
     assert_eq!(reach_method("crafting", 70), "jewelry:unstrung_diamond_amulet");
     assert_eq!(reach_method("crafting", 16), "jewelry:nostringstar");
@@ -121,7 +124,7 @@ fn access_area_derives_guild_deps() {
     let leaf = mining.last().expect("access leaf");
     assert!(!leaf.deps.is_empty(), "level gate leaves no depless node");
     assert!(mining.iter().any(|node| matches!(&node.kind, NodeKind::ReachLevel { skill, level } if skill == "mining" && *level == 60)));
-    assert!(!mining.iter().any(|node| matches!(node.kind, NodeKind::ObtainItems { .. })), "no uniform on the mining guild");
+    assert_eq!(leaf.deps.len(), 1, "the mining guild asks the level only, no uniform: {:?}", leaf.deps);
     let champions = expand_goal(&GoalKind::AccessArea { area: "champions_guild".to_string() }, &profile());
     let leaf = champions.last().expect("access leaf");
     assert!(!leaf.deps.is_empty(), "qp gate leaves no depless node");

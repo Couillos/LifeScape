@@ -108,7 +108,7 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
         }
         "smithing" => {
             if level >= 85 {
-                "rune_bar"
+                "runite_bar"
             } else if level >= 70 {
                 "adamantite_bar"
             } else if level >= 50 {
@@ -142,7 +142,7 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             } else if level >= 8 {
                 "unstrung_gold_amulet"
             } else if level >= 7 {
-                "pie_dish"
+                "piedish"
             } else if level >= 5 {
                 "gold_ring"
             } else {
@@ -203,7 +203,7 @@ pub fn reach_method(skill: &str, level: u8) -> String {
             let resource = tranche_resource(skill, level);
             if resource == "ball_of_wool" {
                 format!("spin:{resource}")
-            } else if resource == "pie_dish" || resource == "pot" || resource == "bowl" {
+            } else if resource == "piedish" || resource == "pot_empty" || resource == "bowl_empty" {
                 format!("pottery:{resource}")
             } else {
                 format!("jewelry:{resource}")
