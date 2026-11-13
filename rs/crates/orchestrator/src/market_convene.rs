@@ -33,6 +33,9 @@ pub const PREP_MARGIN_TICKS: u64 = 30;
 /// Slack past the last expected arrival before the deal expires: covers
 /// the bank dance plus both trade screens with room to spare.
 pub const DEADLINE_MARGIN_TICKS: u64 = 600;
+/// The handover banks twice before the square (nearest bank in, Varrock
+/// west out): both parties' schedules carry the detour.
+pub const BANK_DETOUR_TICKS: u64 = 600;
 /// Convene loop cadence (wall clock): poses and sweeps, never plans past
 /// one per unknown zone.
 pub const CONVENE_EVERY_SECS: u64 = 10;
@@ -151,7 +154,10 @@ pub fn grouping_secs(tick_ms: u64) -> f64 {
 /// the live rate plus pose latency for an engaged bot (its gate only
 /// poses at the next safe point).
 pub fn sweep_after_secs(span_ticks: u64, tick_ms: u64) -> f64 {
-    const POSE_SLACK_TICKS: u64 = 1200;
+    // Pose latency (safe point) plus the worker's wait past its own
+    // deadline (`WAIT_PAST_DEADLINE_TICKS` in market_deliver): the sweep
+    // never closes a deal a party is still allowed to wait for.
+    const POSE_SLACK_TICKS: u64 = 1200 + 3000;
     (span_ticks + POSE_SLACK_TICKS) as f64 * tick_ms as f64 / 1000.0
 }
 
@@ -167,7 +173,7 @@ pub fn wall_now() -> f64 {
 /// the sweep is computed caller-side from the same spans.
 pub fn stagger(tick_a: u64, eta_a: u64, tick_b: u64, eta_b: u64) -> (u64, u64, u64, u64) {
     let longest = eta_a.max(eta_b);
-    let span = PREP_MARGIN_TICKS + longest.saturating_mul(2) + DEADLINE_MARGIN_TICKS;
+    let span = PREP_MARGIN_TICKS + BANK_DETOUR_TICKS + longest.saturating_mul(2) + DEADLINE_MARGIN_TICKS;
     let depart_a = tick_a + PREP_MARGIN_TICKS + longest.saturating_sub(eta_a);
     let depart_b = tick_b + PREP_MARGIN_TICKS + longest.saturating_sub(eta_b);
     (depart_a, tick_a + span, depart_b, tick_b + span)
@@ -871,7 +877,7 @@ pub fn convene_round(
         };
         let (depart_buyer, deadline_buyer, depart_seller, deadline_seller) =
             stagger(buyer_party.0, eta_buyer, seller_party.0, eta_seller);
-        let span = PREP_MARGIN_TICKS + eta_buyer.max(eta_seller).saturating_mul(2) + DEADLINE_MARGIN_TICKS;
+        let span = PREP_MARGIN_TICKS + BANK_DETOUR_TICKS + eta_buyer.max(eta_seller).saturating_mul(2) + DEADLINE_MARGIN_TICKS;
         want.push(object(vec![
             ("deal", entry.get("deal").clone()),
             ("depart_buyer", Value::Int(depart_buyer as i64)),

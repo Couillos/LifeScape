@@ -73,8 +73,8 @@ fn stagger_lands_together_before_deadline() {
     let (depart_near, end_near, depart_far, end_far) = stagger(1000, 50, 5000, 200);
     assert!(depart_far - 5000 < depart_near - 1000, "farther leaves first in wall terms");
     assert_eq!(depart_far + 200 - 5000, depart_near + 50 - 1000, "simultaneous arrival");
-    assert_eq!(end_near, 1000 + super::PREP_MARGIN_TICKS + 400 + super::DEADLINE_MARGIN_TICKS);
-    assert_eq!(end_far, 5000 + super::PREP_MARGIN_TICKS + 400 + super::DEADLINE_MARGIN_TICKS);
+    assert_eq!(end_near, 1000 + super::PREP_MARGIN_TICKS + super::BANK_DETOUR_TICKS + 400 + super::DEADLINE_MARGIN_TICKS);
+    assert_eq!(end_far, 5000 + super::PREP_MARGIN_TICKS + super::BANK_DETOUR_TICKS + 400 + super::DEADLINE_MARGIN_TICKS);
     let (same_a, same_end_a, same_b, same_end_b) = stagger(1000, 80, 1000, 80);
     assert_eq!(same_a, same_b, "equal legs leave together");
     assert!(same_end_a > same_a + 80, "deadline past arrival");

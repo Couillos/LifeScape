@@ -10,6 +10,7 @@ pub mod devtools_probe;
 pub mod kit;
 pub mod legacy;
 pub mod market_client;
+pub mod market_lots;
 pub mod maze;
 pub mod maze_doors;
 pub mod quests;

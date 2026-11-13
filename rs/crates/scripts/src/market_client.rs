@@ -15,6 +15,7 @@ use crate::kit::bank::nearest_bank;
 use crate::ScriptError;
 
 /// One open deal row for this account (counterparty, terms).
+#[derive(Debug, Clone, PartialEq)]
 pub struct DealRow {
     pub id: i64,
     pub partner: String,

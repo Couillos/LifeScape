@@ -6,7 +6,9 @@
 use lifescape_json::{str_value, Value};
 use lifescape_sdk::Bot;
 
-use crate::market_client::{buyer_want, deal_report, ensure_goods, market_call, my_deals, seller_form, trade_id};
+use crate::market_client::{buyer_want, deal_report, market_call, my_deals, trade_id};
+use crate::market_lots::{group_deals, secure_lots, DealGroup};
+use crate::kit::pack::pack_total;
 use crate::kit::bank::nearest_bank;
 use crate::kit::pack::obj_id;
 use crate::{ScriptError, ScriptResult};
@@ -18,6 +20,22 @@ use crate::{ScriptError, ScriptResult};
 pub fn redeposit_keep(carried: &[u16], touched: &[u16]) -> Vec<u16> {
     carried.iter().copied().filter(|held| !touched.contains(held)).collect()
 }
+/// Past its tick deadline a party keeps waiting for a late partner while
+/// the daemon keeps the deal open, at most this many ticks more.
+pub const WAIT_PAST_DEADLINE_TICKS: u64 = 3000;
+
+/// True while the daemon still lists one of `ids` open for this bot and
+/// the hard cap past `deadline` is not reached.
+fn deal_alive(bot: &Bot, ids: &[i64], deadline: u64) -> bool {
+    if bot.world.ticks >= deadline + WAIT_PAST_DEADLINE_TICKS {
+        return false;
+    }
+    match my_deals(&bot.username) {
+        Ok(rows) => rows.iter().any(|row| ids.contains(&row.id)),
+        Err(_) => false,
+    }
+}
+
 /// `market deliver <depart> <deadline> <deal>=<x>,<y> ...`: bank when
 /// short, wait for the staggered departure, walk to the tile, trade with
 /// a double-screen check, redeposit, walk back to the start tile.
@@ -37,73 +55,107 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let start = bot.position();
     let rows = my_deals(&bot.username)?;
     let coins = obj_id(bot, "coins")?;
+    // One exchange per partner and object, in ascending deal order on both
+    // sides (user protocol 2026-11-13, see `market_lots`).
+    let (groups, unknown) = group_deals(&jobs, &rows);
+    for id in unknown {
+        bot.log(&format!("deal {id} is not mine, skipping"));
+    }
     let mut touched = vec![coins];
-    let mut ok = true;
-    for (id, x, z) in jobs {
-        let Some(row) = rows.iter().find(|row| row.id == id) else {
-            bot.log(&format!("deal {id} is not mine, skipping"));
-            ok = false;
-            continue;
-        };
-        let trade = trade_id(row.item);
+    for group in &groups {
+        let trade = trade_id(group.item);
         touched.push(trade);
-        // Redeposit both forms: the seller's window form (base preferred)
-        // may differ from the trade id (note).
-        if row.item != trade {
-            touched.push(row.item);
+        if group.item != trade {
+            touched.push(group.item);
         }
-        if !ensure_goods(bot, row, trade, coins)? {
+    }
+    let report_all = |bot: &Bot, group: &DealGroup, outcome: &str, reason: &str| {
+        for id in &group.ids {
+            deal_report(&bot.username, *id, outcome, reason);
+        }
+    };
+    let mut ok = true;
+    // Nearest bank in, Varrock west out: the lots of every group at once.
+    let secured = secure_lots(bot, &groups, coins)?;
+    let Some(flags) = secured else {
+        for group in &groups {
+            report_all(bot, group, "failed", "timeout");
+        }
+        return Ok(1);
+    };
+    for (group, covered) in groups.iter().zip(flags) {
+        let ids = &group.ids;
+        if !covered {
             // `short`, not `no_show`: the goods (or the coins) are not
             // there at all. The daemon cancels this side's orders instead
             // of relisting phantom stock that would fail forever.
-            bot.log(&format!("deal {id}: lots short, reporting short"));
-            deal_report(&bot.username, id, "failed", "short");
+            bot.log(&format!("deals {ids:?}: lots short, reporting short"));
+            report_all(bot, group, "failed", "short");
             ok = false;
             continue;
         }
         while bot.world.ticks < depart && bot.world.ticks < deadline {
             bot.pump(5)?;
         }
-        if bot.world.ticks >= deadline {
-            deal_report(&bot.username, id, "failed", "timeout");
+        // A late pose (the gate waits for the safe point) arrives with its
+        // tick deadline half burnt: past it, the deal still goes as long
+        // as the daemon keeps it open (it is the arbiter: partner failure
+        // or sweep close it), up to a hard cap.
+        if bot.world.ticks >= deadline && !deal_alive(bot, &group.ids, deadline) {
+            report_all(bot, group, "failed", "timeout");
             ok = false;
             continue;
         }
+        let (x, z) = group.tile;
         if bot.travel_to(lifescape_sdk::plan::Tile { x, z, level: 0 }).is_err() {
-            bot.log(&format!("deal {id}: square unreachable"));
-            deal_report(&bot.username, id, "failed", "timeout");
+            bot.log(&format!("deals {ids:?}: square unreachable"));
+            report_all(bot, group, "failed", "timeout");
             ok = false;
             continue;
         }
-        let _ = market_call("deal_arrived", vec![("account", str_value(&bot.username)), ("deal", Value::Int(id))]);
+        for id in ids {
+            let _ = market_call("deal_arrived", vec![("account", str_value(&bot.username)), ("deal", Value::Int(*id))]);
+        }
         // Mutual knocks open the window (one-sided requests sit as
         // "Sending..." until the other side knocks back).
         let mut knocks = 0u32;
-        while bot.world.ticks < deadline && bot.trade_modal().is_none() {
-            let left = deadline.saturating_sub(bot.world.ticks).min(600).max(1);
-            if bot.find_player(&row.partner).is_none() && knocks % 20 == 0 {
+        let mut last_check = bot.world.ticks;
+        while bot.trade_modal().is_none() {
+            // Wait for a late partner while the deal lives (checked every
+            // ~100 ticks against the daemon), never past the hard cap.
+            if bot.world.ticks >= deadline && bot.world.ticks.saturating_sub(last_check) >= 100 {
+                last_check = bot.world.ticks;
+                if !deal_alive(bot, &group.ids, deadline) {
+                    break;
+                }
+            }
+            if bot.world.ticks >= deadline + WAIT_PAST_DEADLINE_TICKS {
+                break;
+            }
+            let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).min(600).max(1);
+            if bot.find_player(&group.partner).is_none() && knocks % 20 == 0 {
                 bot.log(&format!(
-                    "deal {id}: cannot see {} ({} players tracked)",
-                    row.partner,
+                    "deals {ids:?}: cannot see {} ({} players tracked)",
+                    group.partner,
                     bot.world.players.len()
                 ));
             }
             knocks += 1;
-            if bot.trade_request(&row.partner, left)? {
+            if bot.trade_request(&group.partner, left)? {
                 break;
             }
         }
         if bot.trade_modal().is_none() {
-            bot.log(&format!("deal {id}: partner absent"));
-            deal_report(&bot.username, id, "failed", "no_show");
+            bot.log(&format!("deals {ids:?}: partner absent"));
+            report_all(bot, group, "failed", "no_show");
             ok = false;
             continue;
         }
-        deal_report(&bot.username, id, "trading", "");
-        let coins_n = (i64::from(row.qty) * row.price) as u32;
+        report_all(bot, group, "trading", "");
+        let trade = trade_id(group.item);
         // Seller lots: the carried form. Buyer lots: whatever the seller
-        // put up, validated as the deal item at the exact quantity.
-        let (give, want) = if row.buying {
+        // put up, validated as the deal item at the exact summed quantity.
+        let (give, want) = if group.buying {
             while bot.world.ticks < deadline
                 && bot.trade_modal() == Some("main")
                 && bot.trade_partner_offer().is_empty()
@@ -111,37 +163,38 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 bot.pump(5)?;
             }
             let observed = bot.trade_partner_offer();
-            let Some(lots) = buyer_want(&observed, row.item, trade, row.qty) else {
-                bot.log(&format!("deal {id}: offer mismatch, refused"));
-                deal_report(&bot.username, id, "failed", "mismatch");
+            let Some(lots) = buyer_want(&observed, group.item, trade, group.qty) else {
+                bot.log(&format!("deals {ids:?}: offer mismatch ({observed:?} for {} x{}), refused", group.item, group.qty));
+                report_all(bot, group, "failed", "mismatch");
                 ok = false;
                 continue;
             };
-            (vec![(coins, coins_n)], lots)
+            (vec![(coins, group.coins)], lots)
         } else {
-            let Some(form) = seller_form(bot, row, trade) else {
-                bot.log(&format!("deal {id}: lots gone"));
-                deal_report(&bot.username, id, "failed", "timeout");
+            let form = if pack_total(bot, group.item) >= group.qty { group.item } else { trade };
+            if pack_total(bot, form) < group.qty {
+                bot.log(&format!("deals {ids:?}: lots gone"));
+                report_all(bot, group, "failed", "short");
                 ok = false;
                 continue;
-            };
-            (vec![form], vec![(coins, coins_n)])
+            }
+            (vec![(form, group.qty)], vec![(coins, group.coins)])
         };
-        let left = deadline.saturating_sub(bot.world.ticks).max(1);
-        match bot.trade_exchange(&row.partner, &give, 0, &want, 0, left.min(3000))? {
+        let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).max(1);
+        match bot.trade_exchange(&group.partner, &give, 0, &want, 0, left.max(600).min(3000))? {
             lifescape_sdk::client::actions::ExchangeOutcome::Settled => {
-                bot.log(&format!("deal {id} settled"));
-                deal_report(&bot.username, id, "settled", "");
+                bot.log(&format!("deals {ids:?} settled ({} x{} for {} coins)", group.item, group.qty, group.coins));
+                report_all(bot, group, "settled", "");
             }
             lifescape_sdk::client::actions::ExchangeOutcome::PartnerMismatch
             | lifescape_sdk::client::actions::ExchangeOutcome::ConfirmMismatch => {
-                bot.log(&format!("deal {id}: offer mismatch, refused"));
-                deal_report(&bot.username, id, "failed", "mismatch");
+                bot.log(&format!("deals {ids:?}: offer mismatch, refused"));
+                report_all(bot, group, "failed", "mismatch");
                 ok = false;
             }
             other => {
-                bot.log(&format!("deal {id} ended: {other:?}"));
-                deal_report(&bot.username, id, "failed", "timeout");
+                bot.log(&format!("deals {ids:?} ended: {other:?}"));
+                report_all(bot, group, "failed", "timeout");
                 ok = false;
             }
         }
