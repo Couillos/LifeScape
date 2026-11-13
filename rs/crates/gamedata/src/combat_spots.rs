@@ -179,6 +179,34 @@ pub fn by_key(key: &str) -> Option<CombatSpot> {
     CATALOGUE_SPOTS.iter().find(|spot| spot.key == key).copied()
 }
 
+/// True when the spot needs the Al Kharid toll (`access` names it).
+pub fn toll_gated(spot: &CombatSpot) -> bool {
+    spot.access.is_some_and(|access| access.starts_with("toll"))
+}
+
+/// Legacy spots whose NPCs drop `item` (debug-name prefix match: the
+/// `goblin_greenarmour` drop row meets the `goblins` spot hunting plain
+/// `goblin`s), the spots a bot can farm: ungated ones first, then the
+/// toll-gated ones (legal once the brain budgets the fare), weakest first
+/// in each group. Never underground (a bare key never walks down), never
+/// behind a key or a boat.
+pub fn drop_spots(item: &str) -> Vec<CombatSpot> {
+    let Some(obj) = crate::objs_by_name(item).into_iter().next() else { return Vec::new() };
+    let npcs: Vec<String> = crate::drops::drops_for_obj(obj.obj_id)
+        .into_iter()
+        .filter(|drop| drop.npc_id >= 0)
+        .map(|drop| drop.npc)
+        .collect();
+    let mut out: Vec<CombatSpot> = SPOTS
+        .iter()
+        .filter(|spot| spot.entrance.is_none() && (spot.access.is_none() || toll_gated(spot)))
+        .filter(|spot| npcs.iter().any(|npc| spot.npc_names.iter().any(|hunted| npc.starts_with(hunted))))
+        .copied()
+        .collect();
+    out.sort_by_key(|spot| toll_gated(spot));
+    out
+}
+
 /// Highest legacy spot whose minimum level is reached; the first otherwise.
 pub fn best_spot(melee_level: i64) -> CombatSpot {
     let mut chosen = SPOTS[0];

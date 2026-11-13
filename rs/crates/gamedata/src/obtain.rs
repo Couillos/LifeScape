@@ -327,8 +327,20 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
             way
         }
         ItemSource::Woodcut { level } => gather_way("woodcutting", "woodcut", item, level, vec!["bronze_axe".to_string()]),
-        ItemSource::Mine { level } => gather_way("mining", "mining", item, level, vec!["bronze_pickaxe".to_string()]),
-        ItemSource::Fish { level, tool } => gather_way("fishing", "fishing", item, level, vec![tool]),
+        ItemSource::Mine { level } => {
+            let mut way = gather_way("mining", "mining", item, level, vec!["bronze_pickaxe".to_string()]);
+            way.quest = gather_quest(item).map(str::to_string);
+            way
+        }
+        ItemSource::Fish { level, tool } => {
+            // The tier's bait (feathers for trout and salmon, fishing bait
+            // for sardines, herring and pike) is consumed one per catch
+            // (`fishing.rs2` `inv_del(inv, $bait, 1)`): a real input, sized
+            // with the quota like any other.
+            let mut way = gather_way("fishing", "fishing", item, level, vec![tool]);
+            way.inputs = fish_bait(item, level).map(|bait| vec![(bait.to_string(), 1)]).unwrap_or_default();
+            way
+        }
         ItemSource::Shear => {
             let mut way = Way::new(WayKind::Harvest, "shear sheep");
             way.tools = vec!["shears".to_string()];
@@ -424,6 +436,25 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
     Some(way)
 }
 
+/// Bait one catch of `item` burns at the tier opening at `level`.
+fn fish_bait(item: &str, level: i64) -> Option<&'static str> {
+    crate::fishing::all_fish_tiers()
+        .into_iter()
+        .find(|tier| tier.level == level && tier.products.contains(&item))
+        .and_then(|tier| tier.bait)
+}
+
+/// F2P quest a gather way needs (server content, rev 274): rune
+/// essence is mined only past Aubury's teleport, which
+/// `skill_runecraft/scripts/essence_mine.rs2` refuses while
+/// `%runemysteries < ^runemysteries_complete` (Rune Mysteries).
+pub fn gather_quest(item: &str) -> Option<&'static str> {
+    match item {
+        "blankrune" => Some("quest_runemysteries"),
+        _ => None,
+    }
+}
+
 fn gather_way(skill: &str, site_kind: &str, item: &str, level: i64, tools: Vec<String>) -> Way {
     let mut way = Way::new(WayKind::Gather, format!("{skill} {item}"));
     way.skill = Some((skill.to_string(), level.max(1)));
@@ -447,11 +478,14 @@ pub fn producible_f2p(item: &str) -> bool {
     })
 }
 
-/// D-A: NPC-shop purchases are reserved for F2P objects nobody can make
-/// or gather in F2P (shears, feathers, runes…). Producible objects come
-/// from players: the market, or the bot's own work.
+/// D-A: NPC-shop purchases are reserved for F2P objects nobody can make,
+/// gather or farm in F2P (shears, nets, rods…). Producible objects and
+/// drops a bot can farm (feathers from chickens, bait from men: user
+/// rule 2026-11-13) come from players: the market, or the bot's own work.
 pub fn merchant_buy_allowed(item: &str) -> bool {
-    crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false)) && !producible_f2p(item)
+    crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
+        && !producible_f2p(item)
+        && crate::combat_spots::drop_spots(item).is_empty()
 }
 
 /// Why an F2P tradeable object has no F2P way at all (rev 274 truth):

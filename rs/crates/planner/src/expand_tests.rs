@@ -71,8 +71,13 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("smithing", 1), "smelt:bronze_bar");
     assert_eq!(reach_method("crafting", 1), "spin:ball_of_wool");
     assert_eq!(reach_method("crafting", 7), "pottery:pie_dish");
-    assert_eq!(reach_method("crafting", 8), "jewelry:gold_amulet");
-    assert_eq!(reach_method("crafting", 70), "jewelry:diamond_amulet");
+    assert_eq!(reach_method("crafting", 8), "jewelry:unstrung_gold_amulet", "object names, the furnace casts unstrung");
+    assert_eq!(reach_method("crafting", 70), "jewelry:unstrung_diamond_amulet");
+    assert_eq!(reach_method("crafting", 16), "jewelry:nostringstar");
+    assert_eq!(reach_method("cooking", 30), "cook/raw_salmon", "lobster needs cooking 40");
+    assert_eq!(reach_method("cooking", 40), "cook/raw_lobster");
+    assert_eq!(reach_method("fishing", 35), "gather:fishing/raw_salmon", "no Karamja water: never safe");
+    assert_eq!(reach_method("woodcutting", 45), "gather:woodcut/willow_logs", "maples have no F2P site");
     assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");
     assert_eq!(reach_method("prayer", 99), "fight:melee/cows");
     assert_eq!(reach_method("ranged", 20), "fight:ranged/cows");
@@ -215,6 +220,7 @@ fn obtain_blocks_on_level_then_coins() {
     );
     let mut ready_sword = expand_goal(&GoalKind::Obtain { item: "bronze_sword".to_string(), count: 1 }, &profile());
     ctx.levels = vec![("smithing".to_string(), 4)];
+    ctx.tools = vec!["hammer".to_string()];
     resolve_ready(&mut ready_sword[0], &ctx);
     assert_eq!(ready_sword[0].method.as_deref(), Some("smith:bronze_sword"), "at 4 it smiths: {:?}", ready_sword[0].status);
 
@@ -287,14 +293,20 @@ fn tool_gate_drops_unworkable_tranches() {
     resolve_ready(&mut with_rod, &ctx);
     assert!(matches!(&with_rod.status, NodeStatus::Blocked { reason } if reason == "missing:fishing_bait"), "got {:?}", with_rod.status);
 
-    // Same empty pack but funded: the rod and the bait are shop
-    // stock, so the tranche stays (the script bootstraps the buy).
+    // Same empty pack but funded: the rod is shop stock (no other F2P
+    // source), the bait is not (men drop it: user rule 2026-11-13, a
+    // farmable drop never comes from a merchant) — the bait blocks, the
+    // obtain chain buys it on the market or farms it.
     let mut funded = sardine_node();
     let mut rich = ReadyCtx::blind(0.5);
     rich.coins = 100;
-    assert!(method_feasible("gather:fishing/raw_sardine", &rich), "rod plus bait fundable");
+    assert!(!method_feasible("gather:fishing/raw_sardine", &rich), "the bait is never a shop buy");
     resolve_ready(&mut funded, &rich);
-    assert_eq!(funded.method.as_deref(), Some("gather:fishing/raw_sardine"), "buyable gear keeps the tranche");
+    assert!(matches!(&funded.status, NodeStatus::Blocked { reason } if reason == "missing:fishing_bait"), "got {:?}", funded.status);
+    rich.tools = vec!["fishing_bait".to_string()];
+    let mut baited = sardine_node();
+    resolve_ready(&mut baited, &rich);
+    assert_eq!(baited.method.as_deref(), Some("gather:fishing/raw_sardine"), "a buyable rod keeps the tranche");
 
     // Nothing carried, nothing funded, no shop: typed block naming
     // the missing tool (the obtain chain funds it), never Usage,
@@ -363,7 +375,7 @@ fn reach_tranches_work_the_tier_open_at_their_start() {
         (20, "raw_sardine"),
         (25, "raw_trout"),
         (35, "raw_pike"),
-        (40, "raw_tuna"),
+        (40, "raw_salmon"),
     ]
     .iter()
     .map(|(level, fish)| (*level, format!("gather:fishing/{fish}")))

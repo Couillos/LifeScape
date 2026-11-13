@@ -25,10 +25,7 @@ const AXELESS_LIMIT: u32 = 3;
 /// Cut banked loads in the open session (0 = forever).
 pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("woodcut", args)?;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     if spec.allow_wild {
         bot.allow_wild = true;
         bot.log("hunter zones allowed for this run");

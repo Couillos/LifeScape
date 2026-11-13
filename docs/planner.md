@@ -36,7 +36,30 @@ tranche porte la méthode du palier ouvert à son niveau de DÉPART (1→5
 crevettes, 5→10 sardines ; jamais le homard pour 35→40) : le contrôle
 d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
 méthode de substitution : outil manquant ⇒ `Blocked{missing}` ⇒
-sous-tâche.
+sous-tâche. Ressources par palier (2026-11-13, contenu serveur) : pêche
+au-delà de 30 = saumon (thon et homard sont à Karamja : bateau, aucune
+banque à portée, jamais sûrs), bûcheronnage 45 = saules (l'érable n'a
+aucun site F2P), cuisine homard à 40 seulement (saumon dès 25),
+artisanat aux noms d'objets (`unstrung_gold_amulet`, `nostringstar`,
+`unstrung_diamond_amulet`).
+
+Outillage (`tools::required_tool`) : récolte (pioche, hache, filet/canne
++ appât, y compris les jambes `farm:`), forge ⇒ marteau, allumage ⇒
+briquet, bijouterie ⇒ moule du produit, runes ⇒ talisman de l'autel,
+cuir ⇒ aiguille + fil. Un outil ni porté ni achetable (règle magasin) ⇒
+`Blocked{missing:<outil>}` ⇒ obtention.
+
+Contrat d'arguments (2026-11-13, côté scripts : l'agent scripts) :
+récolteurs ressource en premier positionnel (`fishing raw_trout`,
+`mining gold_ore`, `woodcut willow_logs`, jambes `gather:` et `farm:`) ;
+une obtention porte `--want <objet> N` (N = quantité − détenu, détenu
+noté en `progress_current` au lancement) ; `shop:buy`/`market:sell`
+déplacent le manquant ; `--site x,z,niveau` pour les récolteurs ; `toll`
+quand le péage est budgété ; une quête inconnue ne mappe aucun script
+(plus de repli Cook's Assistant). Blocages compris par
+`record_block_from` : objet, `coins:N`, `combat:N`, `level:<comp>:<N>`,
+`quest:<clé>` (quête dépliée), `access:<zone>` (portes de guilde
+dépliées, `expand::expand_access`).
 
 Montée depuis le niveau LIVE (2026-11-13) : `expand_goal_from(goal,
 profile, level_of)` part du niveau live (1 s'il est inconnu) et ne génère
@@ -153,6 +176,19 @@ but (nouvel engagement), sinon compétence entraînable la plus basse non
 bannie, jusqu'au prochain multiple de 5 au moins 5 niveaux plus haut,
 nœuds dépliés depuis le niveau live ; historique `goal: next:<libellé>`.
 
+Rachat avant bannissement et portée du bannissement (décision utilisateur
+2026-11-13, `planner/src/bans_scope.rs`, `brain_rescue.rs`) : à la
+première passe d'un graphe bloqué, chaque obtention abandonnée du chemin
+en échec (la racine d'abord, puis ce qui l'attendait) est testée au
+marché (échangeable, pas Iron, bourse libre ≥ quantité × meilleure offre
+de vente, sinon × prix de référence) ; la première qui passe repart en
+`market:buy` seul (`lifecycle::retarget_market`, compteurs neufs, ses
+dépendants en cascade reviennent, une seule fois par nœud) et rien n'est
+banni. Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
+(`banned_scope`) : compétences de la racine et de chaque nœud qui
+l'attend, plus celles dont l'objet est l'outil (barres de bronze ratées
+⇒ forge, bûcheronnage — la hache —, allumage s'il brûlait ces bûches).
+
 Bannissements temporaires et typés (décision utilisateur 2026-11-13) : un
 but clos bloqué (graphe bloqué, but non atteint en live) bannit chaque
 compétence qu'il entraîne pendant `SKILL_BAN_TICKS` = 6000 ticks (1 h en
@@ -188,11 +224,48 @@ combat 14 ⇒ `min_combat_for_method` = 15, le verrou de combat entraîne
 d'abord (poulets), puis le bot pêche et dépose tout en banque.
 Combat : clés de spot réelles (`chickens`, `cows`) ; un spot inconnu est
 une erreur `Usage` (avant : repli silencieux sur l'auto-pick). Ferme
-par drop (`farm:<objet>`, `mapping::spot_for_drop`) : le spot NON GARDÉ le
-plus faible dont un PNJ lâche l'objet (os ⇒ poulets) ; jamais un spot à
-péage ou souterrain (le cerveau ne passe jamais `toll`, une clé nue ne
-descend jamais) ; un objet que seuls des spots gardés lâchent (bâton de
-magie : moss giants) n'a pas de jambe `farm:` (marché/magasin à la place).
+par drop (`farm:<objet>`, `mapping::spot_for_drop` →
+`gamedata::combat_spots::drop_spots`) : le spot NON GARDÉ le plus faible
+dont un PNJ lâche l'objet (os ⇒ poulets), un spot à péage seulement s'il
+est le seul (péage budgété, voir ci-dessous) ; jamais souterrain, clé ou
+bateau (bâton de magie : moss giants ⇒ pas de jambe `farm:`). Les spots
+du drop sont ses sites (`combat::method_sites`), comme une récolte.
+
+Péage d'Al Kharid (décision utilisateur 2026-11-13, `gamedata::toll`,
+serveur `border_gate.rs2` : 10 pièces prises dans le SAC, dans les deux
+sens, gratuit après Prince Ali Rescue). Le choix de site
+(`combat::pick_site_paid`) suit la règle des scripts (bot à ≤ 150 cases de
+la porte (3268,3227), cible de l'autre côté de x = 3268) : un site du
+même côté d'abord (or de Rimmington, pas d'Al Kharid, depuis Lumbridge —
+sara_miller) ; sinon un site de l'autre côté seulement si le péage est
+budgété (bourse ≥ 10 ou quête faite) ⇒ `node.toll`, lancement avec
+`toll` (pêche, minage, bûcheronnage, mêlée, distance, magie) ; sinon
+`Blocked missing:coins:10` ⇒ dépendance `have_coins`. Côté script,
+`kit::toll::arm` va chercher les 10 pièces en banque avant le premier
+passage et `bank_trip` les garde dans le sac pendant une course payante.
+
+Quêtes (décision utilisateur 2026-11-13, `planner/src/quests.rs`) : une
+méthode dont la quête manque ne part jamais (`method_feasible`) ; le
+résolveur prend une autre voie, sinon bloque `missing:quest:<clé>` et
+`record_block_from` déplie la quête (`expand_quest_from` : niveaux,
+objets, nœud quête). Sources serveur : essence ⇒ Rune Mysteries
+(`essence_mine.rs2`, `Way::quest` de la récolte `blankrune`), magasin dont
+toutes les boutiques sont gardées ⇒ leur quête (plastron rune : Dragon
+Slayer), port d'équipement gardé (`gamedata::gear`), péage gratuit
+(Prince Ali). Quêtes faites = varps de la sauvegarde moteur (jamais
+transmises au client) ∪ nœuds quête faits de la vie
+(`brain_rescue::quests_done`) ; un nœud quête déjà faite se clôt sans
+lancement.
+
+Magasins (règle utilisateur 2026-11-13, `obtain::merchant_buy_allowed`) :
+un PNJ ne vend au bot que ce que F2P ne donne d'aucune autre façon —
+ni production ni drop qu'un spot farme. Plumes (poulets), appât (hommes),
+flèches bronze : marché ou ferme, jamais magasin ; filets, cannes,
+cisailles, harpon : magasin. Pêche : l'appât est un INTRANT consommé (une
+plume par truite, un appât par brochet, dimensionné par `need_count`),
+la jambe `farm:raw_<poisson>` porte le contrôle d'outil/appât de la
+récolte et part avec le poisson en premier positionnel (b8jxrdd2 : quota truite pêché au
+brochet) ; la viande crue (`raw_beef`) est un drop, jamais une pêche.
 
 Buts : `max:a,b:40` | `obtain:item:n` | `produce:item:n` | `money` | `quest:clé` |
 `equip:style` | `area:zone` | `rich[:merchant|:producer]`.

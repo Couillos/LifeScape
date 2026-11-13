@@ -16,10 +16,7 @@ use crate::{ScriptError, ScriptResult};
 /// Mine banked loads in the open session (0 = forever).
 pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("mining", args)?;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
     crate::kit::survival::wait_pack_streamed(bot)?;

@@ -298,6 +298,46 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
     changes
 }
 
+/// Market rescue (`bans_scope`, user decision 2026-11-13): an abandoned
+/// obtain whose item the wallet can buy goes back to work as a purchase
+/// only (`market:buy`), fresh counters, and every node its abandonment
+/// cascaded to (`dependency <id> abandoned`, transitively) waits on it
+/// again. Returns one line per change; empty when `index` is no
+/// abandoned obtain.
+pub fn retarget_market(life: &mut Life, index: usize) -> Vec<String> {
+    let node = &mut life.nodes[index];
+    if node.status != NodeStatus::Abandoned || !matches!(node.kind, NodeKind::ObtainItems { .. }) {
+        return Vec::new();
+    }
+    let mut changes = vec![format!("{} rescued on the market (was: {})", node.id, node.last_error)];
+    node.alternatives = vec![crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }];
+    node.status = NodeStatus::Pending;
+    node.method = None;
+    node.site = None;
+    node.toll = false;
+    node.failures = 0;
+    node.blocks = 0;
+    node.spent_ticks = 0;
+    node.last_error = format!("market rescue after: {}", node.last_error);
+    let mut revived = vec![node.id.clone()];
+    let mut cursor = 0;
+    while cursor < revived.len() {
+        let cause = format!("dependency {} abandoned", revived[cursor]);
+        for node in &mut life.nodes {
+            if node.status == NodeStatus::Abandoned && node.last_error == cause {
+                node.status = NodeStatus::Pending;
+                node.method = None;
+                node.last_error = String::new();
+                changes.push(format!("{} back with its dependency", node.id));
+                revived.push(node.id.clone());
+            }
+        }
+        cursor += 1;
+    }
+    changes.extend(normalize(life));
+    changes
+}
+
 /// A revived node starts from the planner's current legs: obtain legs
 /// from the obtain index (a travel ban is forgotten with the rest), a
 /// tranche or combat training whose legs were all banned gets its
@@ -545,6 +585,46 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                     earn.alternatives.push(crate::model::Alternative { method: "gather:sheep/wool".to_string(), est_ticks: 0, est_coins: 0 });
                     reused.push(id);
                     fresh_nodes.push(earn);
+                }
+            }
+            continue;
+        }
+        // A quest the only workable ways need (Rune Mysteries before
+        // essence): the quest's own expansion (skill gates, item checks,
+        // the quest node), reused when an open quest node exists.
+        if let Some(quest) = need.strip_prefix("quest:") {
+            let open = life.nodes.iter().find(|node| {
+                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::CompleteQuest { quest: aimed } if aimed == quest)
+            });
+            match open {
+                Some(node) => reused.push(node.id.clone()),
+                None if lifescape_gamedata::quest_requirements::by_key(quest).is_some() => {
+                    let mut counter = max_id_number(life) + fresh_nodes.len();
+                    let chain = crate::expand::expand_quest_from(quest, &life.profile, &mut counter, level_of);
+                    if let Some(last) = chain.last() {
+                        reused.push(last.id.clone());
+                    }
+                    fresh_nodes.extend(chain);
+                }
+                None => {}
+            }
+            continue;
+        }
+        // An area the work needs (`access:<area>`: a guild, ...): its
+        // gates expanded (skill climb, uniform), reused when open.
+        if let Some(area) = need.strip_prefix("access:") {
+            let open = life.nodes.iter().find(|node| {
+                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::AccessArea { area: aimed } if aimed == area)
+            });
+            match open {
+                Some(node) => reused.push(node.id.clone()),
+                None => {
+                    let mut counter = max_id_number(life) + fresh_nodes.len();
+                    let chain = crate::expand::expand_access(area, &life.profile, &mut counter, level_of);
+                    if let Some(last) = chain.last() {
+                        reused.push(last.id.clone());
+                    }
+                    fresh_nodes.extend(chain);
                 }
             }
             continue;
