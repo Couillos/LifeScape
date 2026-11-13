@@ -116,3 +116,6 @@ guichet_falador_mur | 2944,3366,0 | 2945,3367,0 | f2p | reachable ; adjusted=294
 # (3016,3237).
 porte_port_sarim_coin | 3015,3236,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237
 porte_port_sarim_range | 3018,3237,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237
+# 26. meme motif au sud-est de Lumbridge (melee dark_wizards, ~50 refus/h) :
+# 1530 (3234,3207) angle OUEST s'ouvre en 1531 (3233,3207) angle NORD.
+porte_lumbridge_sud | 3233,3208,0 | 3245,3206,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3233,3208,3233,3207
