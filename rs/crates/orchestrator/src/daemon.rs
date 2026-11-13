@@ -883,6 +883,11 @@ impl Orchestrator {
                 // connections, each with its per-second average.
                 return crate::res_stats::snapshot_json();
             }
+            "brain_wishes" => {
+                // Brain tab of the Lives page: the brain's own wishlist.
+                let job = self.jobs.lock().unwrap().get(account).cloned();
+                return crate::web_brain::wishes_reply(job.as_deref(), account);
+            }
             "market" => {
                 // Market socket API over HTTP: {cmd:"market", op, ...}.
                 return crate::market_service::handle(request);
