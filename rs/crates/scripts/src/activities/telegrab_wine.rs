@@ -7,10 +7,10 @@
 
 use lifescape_sdk::Bot;
 
-use crate::kit::bank::nearest_bank;
 use crate::kit::cycle::{parse_cli, resolve_keep};
-use crate::kit::magic::cast_on_ground;
-use crate::kit::pack::{obj_id, pack_total};
+use crate::kit::magic::{cast_on_ground, wield_staff_for};
+use crate::kit::pack::obj_id;
+use crate::kit::spell_load::{stock_for, SpellLoad};
 use crate::kit::survival::{check_events, is_walk_abort, learn_level, wait_pack_streamed};
 use crate::skill_walk::walk_checked;
 use crate::{ScriptError, ScriptResult};
@@ -21,6 +21,8 @@ pub const NEED_LEVEL: u8 = 33;
 /// One cast eats one air and one law rune (dump dbrow).
 pub const RUNE_AIR: &str = "airrune";
 pub const RUNE_LAW: &str = "lawrune";
+/// Spell debugname (`magic:telekinetic_grab` button).
+pub const SPELL: &str = "telekinetic_grab";
 /// Product and its altar tile (dump spawn, Wilderness temple).
 pub const PRODUCT: &str = "wine_of_zamorak";
 pub const WINE_SPAWN: (i32, i32, i32) = (2930, 3515, 0);
@@ -33,16 +35,11 @@ pub const WINE_EMPTY_LIMIT: u32 = 3;
 /// Approach budget for the altar stand.
 pub const ALTAR_WALK_TICKS: u64 = 6000;
 
-/// Runes missing from the pack (names the brain files as obtain tasks).
-fn missing_runes(have_air: u32, have_law: u32) -> Vec<String> {
-    let mut missing = Vec::new();
-    if have_air == 0 {
-        missing.push(RUNE_AIR.to_string());
-    }
-    if have_law == 0 {
-        missing.push(RUNE_LAW.to_string());
-    }
-    missing
+/// One telegrab's runes (air + law, dump row): stocked from the pack,
+/// then the known bank (`kit::spell_load`), a staff of air paying the air.
+pub fn telegrab_load() -> SpellLoad {
+    let runes = lifescape_gamedata::spells::by_name(SPELL).into_iter().flat_map(|entry| entry.runes).collect();
+    SpellLoad::new(SPELL, runes, Vec::new())
 }
 
 /// Cast on the nearest visible wine, then pump until it leaves the
@@ -53,7 +50,7 @@ fn cast_telegrab(bot: &mut Bot, wine: u16) -> Result<(), ScriptError> {
         .iter()
         .min_by_key(|((tile, _), _)| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs())
         .ok_or_else(|| ScriptError::Failed(format!("wine gone at {WINE_SPAWN:?} from {:?}", bot.position())))?;
-    cast_on_ground(bot, "telekinetic_grab", tile.0, tile.1, wine)?;
+    cast_on_ground(bot, SPELL, tile.0, tile.1, wine)?;
     for _ in 0..CAST_TICKS {
         bot.pump(1)?;
         if !wine_on_floor(bot, wine) {
@@ -98,26 +95,17 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
-    let _keep = resolve_keep(bot, &spec)?;
+    let keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
     if level < i64::from(NEED_LEVEL) {
         return Err(crate::kit::cycle::blocked_level("magic", i64::from(i64::from(NEED_LEVEL))));
     }
-    let air = obj_id(bot, RUNE_AIR)?;
-    let law = obj_id(bot, RUNE_LAW)?;
     let wine = obj_id(bot, PRODUCT)?;
-    if !missing_runes(pack_total(bot, air), pack_total(bot, law)).is_empty() {
-        let bank = nearest_bank(bot)?;
-        crate::kit::bank::bank_trip(bot, &bank, &[], 0)?;
-        crate::kit::bank::bank_withdraw_items(bot, &bank, &[air], 1)?;
-        crate::kit::bank::bank_withdraw_items(bot, &bank, &[law], 1)?;
-    }
-    let missing = missing_runes(pack_total(bot, air), pack_total(bot, law));
-    if !missing.is_empty() {
-        return Err(ScriptError::Blocked { missing });
-    }
+    let load = telegrab_load();
+    wield_staff_for(bot, &load.runes)?;
+    stock_for(bot, &load, &keep, 1)?;
     walk_to_stand(bot)?;
     for _ in 0..WINE_EMPTY_LIMIT {
         if wine_on_floor(bot, wine) {
@@ -139,7 +127,7 @@ pub fn run_telegrab_wine(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{missing_runes, CAST_TICKS, MAGIC_STAT, NEED_LEVEL, PRODUCT, RUNE_AIR, RUNE_LAW, WINE_EMPTY_LIMIT, WINE_SPAWN, XP_PER_CAST};
+    use super::{CAST_TICKS, MAGIC_STAT, NEED_LEVEL, PRODUCT, RUNE_AIR, RUNE_LAW, WINE_EMPTY_LIMIT, WINE_SPAWN, XP_PER_CAST};
     use crate::kit::pack::obj_id;
     use crate::kit::survival::learn_level;
     use crate::tables_live::attach_live_tables;
@@ -190,14 +178,23 @@ mod tests {
         assert!(learn_level(&bot, MAGIC_STAT, 1) >= i64::from(NEED_LEVEL), "33 passes");
     }
 
-    /// Rune shortfall names exactly what is missing (the brain's obtain
-    /// task), nothing when both are held.
+    /// Rune shortfall names exactly what pack + bank lack (the brain's
+    /// obtain task): air banked counts, a worn staff of air pays it, law
+    /// nowhere is named alone; the pack funds no cast until the refill.
     #[test]
-    fn shortfall_names_missing_runes() {
-        assert!(missing_runes(1, 1).is_empty(), "both held");
-        assert_eq!(missing_runes(0, 1), vec![RUNE_AIR.to_string()], "air missing");
-        assert_eq!(missing_runes(1, 0), vec![RUNE_LAW.to_string()], "law missing");
-        assert_eq!(missing_runes(0, 0).len(), 2, "both missing");
+    fn shortfall_counts_bank_and_staff() {
+        let load = super::telegrab_load();
+        let bot = crate::kit::spell_load::tests::stocked_bot(&[], &[(RUNE_AIR, 5), (RUNE_LAW, 5)]);
+        assert!(load.shortfall(&bot).is_empty(), "the bank funds the cast");
+        assert_eq!(load.pack_casts(&bot), 0, "a bank trip first");
+        let bot = crate::kit::spell_load::tests::stocked_bot(&[(RUNE_AIR, 1)], &[]);
+        assert_eq!(load.shortfall(&bot), vec![RUNE_LAW.to_string()], "law missing");
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[(RUNE_LAW, 1)], &[]);
+        let staff = obj_id(&bot, "staff_of_air").expect("air staff");
+        let worn_com = (bot.tables.com_id)(crate::kit::gear::WORN_COM_NAME).expect("worn com");
+        bot.world.inv.insert(worn_com, [(3u8, (staff, 1u32))].into_iter().collect());
+        assert!(load.shortfall(&bot).is_empty(), "the staff pays the air");
+        assert_eq!(load.pack_casts(&bot), 1, "law alone funds the cast");
     }
 
     /// Cast reaches the send brick: a visible wine on a dead socket

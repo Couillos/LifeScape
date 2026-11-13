@@ -15,7 +15,8 @@
 //! empty quiver, wrong ammo),
 //! `observe` (per-run memory, regrow prediction), `produce`
 //! (A-on-B transformation), `withdraw` (bank withdrawals, walking to a
-//! far bank for known banked items), `fireline` (legal fire lines),
+//! far bank for known banked items), `spell_load` (spell casts stocked
+//! from pack + known bank, staff counted), `fireline` (legal fire lines),
 //! `uniform` (guild uniform worn before the door, `--wear`).
 
 #![forbid(unsafe_code)]
@@ -44,6 +45,7 @@ pub mod pack;
 pub mod produce;
 pub mod shop;
 pub mod site;
+pub mod spell_load;
 pub mod spots;
 pub mod strike;
 pub mod style;

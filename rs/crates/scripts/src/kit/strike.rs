@@ -45,11 +45,20 @@ pub(crate) fn foe_refusal(line: &str) -> Option<FoeRefusal> {
 pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool, ScriptError> {
     if bot.combat_style == "magic" {
         // The planner's spell (`--spell`) and nothing else: its runes run
-        // short, the run blocks on exactly those (staff element excluded).
+        // short in the pack, the known bank refills them (a bank trip,
+        // like an empty quiver); short there too (or `--no-bank`), the run
+        // blocks on exactly those (worn staff element excluded).
         let spell = match bot.combat_spell.clone() {
             Some(ordered) => {
-                let missing = crate::kit::magic::spell_shortfall(bot, &crate::activities::magic_style::spell_runes(&ordered));
+                let runes = crate::activities::magic_style::spell_runes(&ordered);
+                let missing = crate::kit::magic::spell_shortfall(bot, &runes);
                 if !missing.is_empty() {
+                    let unbanked = crate::kit::magic::bank_shortfall(bot, &runes);
+                    if !no_bank && unbanked.is_empty() {
+                        bot.log(&format!("out of runes for {ordered} in the pack ({}), banked: bank trip", missing.join(", ")));
+                        return Ok(false);
+                    }
+                    let missing = if no_bank { missing } else { unbanked };
                     bot.log(&format!("out of runes for {ordered}: {}", missing.join(", ")));
                     return Err(ScriptError::Blocked { missing });
                 }
@@ -57,6 +66,10 @@ pub(crate) fn attack_npc(bot: &mut Bot, slot: u16, no_bank: bool) -> Result<bool
             }
             None => match crate::activities::magic_style::castable_spell(bot) {
                 Some(best) => best.to_string(),
+                None if !no_bank && crate::kit::magic::bank_shortfall(bot, &crate::activities::magic_style::spell_runes("wind_strike")).is_empty() => {
+                    bot.log("out of runes in the pack, wind strike's banked: bank trip");
+                    return Ok(false);
+                }
                 None => {
                     bot.log("out of runes for any damage spell");
                     return Err(ScriptError::Blocked { missing: vec!["mindrune".to_string(), "airrune".to_string()] });
@@ -98,5 +111,31 @@ mod tests {
         assert_eq!(foe_refusal("It's not after you."), Some(FoeRefusal::Taken));
         assert_eq!(foe_refusal("I can't reach that!"), Some(FoeRefusal::Unreachable));
         assert_eq!(foe_refusal("You bury the bones."), None);
+    }
+
+    /// Magic run out of the ordered spell's runes in the pack while the
+    /// known bank holds them: a bank trip (`Ok(false)`, the hunt re-banks
+    /// through `prepare_at_bank`), never `blocked` on banked runes. With
+    /// `--no-bank`, or nothing banked, blocked by exact names.
+    #[test]
+    fn banked_runes_send_a_magic_run_to_the_bank() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("mindrune", 3)], &[("firerune", 30), ("airrune", 30)]);
+        bot.combat_style = "magic".to_string();
+        bot.combat_spell = Some("fire_strike".to_string());
+        assert!(matches!(super::attack_npc(&mut bot, 1, false), Ok(false)), "bank trip for the banked runes");
+        match super::attack_npc(&mut bot, 1, true) {
+            Err(crate::ScriptError::Blocked { mut missing }) => {
+                missing.sort();
+                assert_eq!(missing, vec!["airrune".to_string(), "firerune".to_string()]);
+            }
+            other => panic!("no-bank run blocks, got {other:?}"),
+        }
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("mindrune", 3)], &[("firerune", 30)]);
+        bot.combat_style = "magic".to_string();
+        bot.combat_spell = Some("fire_strike".to_string());
+        match super::attack_npc(&mut bot, 1, false) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["airrune".to_string()], "only the air is nowhere"),
+            other => panic!("air nowhere blocks, got {other:?}"),
+        }
     }
 }

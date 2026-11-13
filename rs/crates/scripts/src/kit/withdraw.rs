@@ -63,6 +63,50 @@ pub fn reach_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16])
     Ok(!bank_far(bank, bot.world.x, bot.world.z))
 }
 
+/// Reach the bank (walking when far with one of `ids` known banked) and
+/// open a live booth. False, logged, when any step falls short: the
+/// caller withdraws nothing and reports from what the pack holds.
+fn open_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16]) -> Result<bool, ScriptError> {
+    if !reach_bank_for(bot, bank, ids)? {
+        bot.log(&format!("bank withdraw: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
+        return Ok(false);
+    }
+    let Some((booth_x, booth_z, booth_loc)) = live_bank_booth(bot, bank.x as i32, bank.z as i32) else {
+        bot.log(&format!("bank withdraw: no live bankbooth near ({},{})", bank.x, bank.z));
+        return Ok(false);
+    };
+    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
+        bot.log(&format!("bank withdraw: bank did not open at {:?}", bot.position()));
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Withdraw exact counts of several items in one booth visit (spell loads:
+/// runes and targets). `bot.bank_withdraw` presses 1/5/10/all, honours
+/// market locks and ends quietly on a full pack. Connection and operator
+/// stops abort typed; any other refusal is logged and the caller judges
+/// the pack. Returns the units that came out.
+pub fn bank_withdraw_counts(bot: &mut Bot, bank: &knowledge::banks::Bank, wants: &[(u16, u32)]) -> Result<u32, ScriptError> {
+    let wants: Vec<(u16, u32)> = wants.iter().copied().filter(|(_, count)| *count > 0).collect();
+    let ids: Vec<u16> = wants.iter().map(|(id, _)| *id).collect();
+    if ids.is_empty() || !open_bank_for(bot, bank, &ids)? {
+        return Ok(0);
+    }
+    let before: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
+    for (id, count) in wants {
+        match bot.bank_withdraw(id, count, 50) {
+            Ok(_) => {}
+            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => return Err(ScriptError::Sdk(error)),
+            Err(other) => bot.log(&format!("bank withdraw of {} x{count}: {other}", crate::kit::pack::obj_label(bot, id))),
+        }
+    }
+    bot.close_modal()?;
+    bot.pump(5)?;
+    let after: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
+    Ok(after.saturating_sub(before))
+}
+
 /// Withdraw up to `count` items total, across `ids`, from the bank at
 /// `bank`. Returns how many came out of the bank. Walks to the bank first
 /// when it is out of reach and the known view holds one of `ids`; with
@@ -76,16 +120,7 @@ pub fn bank_withdraw_items(
     if count == 0 || ids.is_empty() {
         return Ok(0);
     }
-    if !reach_bank_for(bot, bank, ids)? {
-        bot.log(&format!("bank withdraw: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
-        return Ok(0);
-    }
-    let Some((booth_x, booth_z, booth_loc)) = live_bank_booth(bot, bank.x as i32, bank.z as i32) else {
-        bot.log(&format!("bank withdraw: no live bankbooth near ({},{})", bank.x, bank.z));
-        return Ok(0);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-        bot.log(&format!("bank withdraw: bank did not open at {:?}", bot.position()));
+    if !open_bank_for(bot, bank, ids)? {
         return Ok(0);
     }
     let Some(main_com) = (bot.tables.com_id)("bank_main:inv") else {

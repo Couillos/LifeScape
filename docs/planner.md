@@ -643,7 +643,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
 | `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
-| `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais + runes de feu + nature dans le sac ; bâton de feu porté accepté) |
+| `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais, charbon, runes de feu + nature retirés du sac puis de la banque ; bâton de feu porté, au sac ou en banque accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
 | `spin:<produit>` | `spin` | `<intrant>` (`wool`) | `--level crafting N`, `--want`, `--site` (rouet) |
@@ -663,7 +663,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `milk:<produit>` | `milk` | — | `--want` ; seau consommé |
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
-| `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` |
+| `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
 | `alch:<objet>` | `alchemy` | `<objet>` | — |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |

@@ -1,8 +1,7 @@
 //! Alchemy: low (21) and high (55) alchemy on stackable loot
 //! (catalogue §5.10). Declarations (levels, runes, alch values) come
-//! from the dumps and are unit-tested; casting itself is a dette: the
-//! SDK has no spell-cast op outside combat (`op_npc_t`), so the run
-//! resolves everything and fails loud with the exact missing piece.
+//! from the dumps and are unit-tested; runes and items are stocked from
+//! the pack and the known bank (`kit::spell_load`).
 //!
 //! Process: poste aucun (sort) · action alchimie · interface sort ·
 //! intrants objet + nature + feu · produits pièces.
@@ -12,8 +11,9 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, missing_runes};
+use crate::kit::magic::{cast_on_held, wield_staff_for};
 use crate::kit::pack::{obj_id, pack_total};
+use crate::kit::spell_load::{run_casts, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -34,15 +34,16 @@ pub fn alch_value(name: &str) -> Option<(i64, i64)> {
 }
 
 /// Alch a banked item in the open session: `alchemy <item> [count]`
-/// (low below 55, high from 55; count omitted or 0 = the pack). Missing
-/// runes or items fail `Blocked` (the brain files obtain tasks); one
-/// cast consumes the item and pays ~60% of its value in coins.
+/// (low below 55, high from 55; count omitted or 0 = all held). Runes
+/// and items short in pack + bank fail `Blocked` by name (the brain
+/// files obtain tasks); one cast consumes the item and pays ~60% of its
+/// value in coins.
 pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("alchemy", &rest)?;
     crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
-    let _ = crate::kit::cycle::resolve_keep(bot, &spec)?;
+    let keep = crate::kit::cycle::resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
@@ -61,32 +62,13 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     let (worth_high, worth_low) = alch_value(item_name).ok_or_else(|| ScriptError::Usage(format!("{item_name} never alchs at {:?}", bot.position())))?;
     let worth = if high { worth_high } else { worth_low };
-    let missing = missing_runes(bot, &runes);
-    if !missing.is_empty() {
-        return Err(ScriptError::Blocked { missing });
-    }
-    if pack_total(bot, item) == 0 {
-        return Err(ScriptError::Blocked { missing: vec![item_name.to_string()] });
-    }
-    let want = spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX);
-    // The order's other stops (`--level magic N`, budget) end it too.
-    let mut spec = spec;
-    spec.targets.count = None;
-    let state = crate::kit::cycle::CycleState::begin(bot, &spec);
-    let mut done = 0u32;
-    while done < want {
-        if let Some(stop) = crate::kit::cycle::poll_stop(bot, &state, &spec) {
-            bot.log(&format!("ok {spell} x{done} on {item_name}, order met"));
-            return crate::kit::cycle::exit_code(stop);
-        }
-        if pack_total(bot, item) == 0 || !missing_runes(bot, &runes).is_empty() {
-            break;
-        }
-        alch_one(bot, spell, item, coins)?;
-        done += 1;
-    }
+    // Pack, then the known bank (`kit::spell_load`): a fire staff pays the
+    // fire runes, the coins are banked between loads.
+    let load = SpellLoad::new(spell, runes, vec![(item_name.to_string(), 1)]);
+    wield_staff_for(bot, &load.runes)?;
+    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| alch_one(cast_bot, spell, item, coins))?;
     bot.log(&format!("ok {spell} x{done} on {item_name} (~{worth} coins each)"));
-    Ok(0)
+    stop.map_or(Ok(0), crate::kit::cycle::exit_code)
 }
 
 /// One cast: the item leaves (or the coins grow) within the budget.
@@ -138,6 +120,37 @@ mod tests {
         let error = run_alchemy(&mut bot, &["yew_logs".to_string()]).expect_err("no runes, no cast");
         assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got {error}");
         assert!(format!("{error}").contains("naturerune"), "names the rune, got {error}");
+    }
+
+    /// Runes and the item banked, nothing carried: the run goes to the
+    /// bank (offline: the walk fails typed), never `blocked` on what the
+    /// bank holds; a worn fire staff pays the fire runes.
+    #[test]
+    fn banked_runes_send_the_run_to_the_bank() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[], &[("naturerune", 5), ("firerune", 15), ("yew_logs", 5)]);
+        bot.world.stats.insert(MAGIC_STAT, (21, 0));
+        bot.world.x = 3222;
+        bot.world.z = 3218;
+        let error = run_alchemy(&mut bot, &["yew_logs".to_string()]).expect_err("offline bank walk fails");
+        assert!(!matches!(error, crate::ScriptError::Blocked { .. }), "the bank holds the runes, got {error}");
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("yew_logs", 1)], &[("naturerune", 5)]);
+        bot.world.stats.insert(MAGIC_STAT, (21, 0));
+        let staff = obj_id(&bot, "staff_of_fire").expect("fire staff");
+        let worn_com = (bot.tables.com_id)(crate::kit::gear::WORN_COM_NAME).expect("worn com");
+        bot.world.inv.insert(worn_com, [(3u8, (staff, 1u32))].into_iter().collect());
+        let error = run_alchemy(&mut bot, &["yew_logs".to_string()]).expect_err("offline");
+        assert!(!matches!(error, crate::ScriptError::Blocked { .. }), "staff pays the fire, got {error}");
+    }
+
+    /// Pack and bank both short: blocked with exact names only.
+    #[test]
+    fn short_pack_and_bank_block_with_exact_names() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("naturerune", 5), ("firerune", 15)], &[]);
+        bot.world.stats.insert(MAGIC_STAT, (21, 0));
+        match run_alchemy(&mut bot, &["yew_logs".to_string()]) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["yew_logs".to_string()]),
+            other => panic!("blocked on the item only, got {other:?}"),
+        }
     }
 
     /// A funded cast reaches the send brick: dead socket fails `Sdk`,
