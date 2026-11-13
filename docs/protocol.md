@@ -30,6 +30,20 @@ dégâts (0x1/0x10) remplissent `NpcInfo.face_entity` / `hit_tick`.
 un coup depuis < 8 ticks sans cibler de joueur (miroir de « Someone else is
 fighting that. », `player_combat.rs2`) : la chasse l'écarte avant la marche.
 
+Joueurs visibles (`PLAYER_INFO`, `World::player_info`) : le serveur ne
+suit un autre joueur qu'à 15 cases au plus (Chebyshev, `withinDistanceSw`,
+`rsbuf/info.ts`) et n'envoie son bloc d'apparence (donc son nom) qu'une
+fois par observateur et version d'apparence (`BuildArea.appearances`) ;
+`world.player_names` garde le nom par slot pour les ré-entrées. Un
+partenaire « invisible » alors que les cases convoquées sont adjacentes
+n'est pas un défaut de décodage (2026-11-13, deals 1201/1248/1267/1268,
+positions finales relevées) : l'un des deux avait frappé (`op_player4`,
+le serveur suit la cible) un partenaire de passage vers sa banque et
+s'était retrouvé à 16-28 cases, hors vue. Règle de rendez-vous
+(`market_handover::meet_step`) : frapper seulement un partenaire immobile
+depuis 3 ticks à 3 cases au plus de sa propre case, sinon attendre sur
+(ou revenir à) sa case. La ligne d'attente journalise `debug_players()`.
+
 Actions via les méthodes `Bot` (`src/client/actions.rs`, `src/client/movement.rs`,
 `src/client/approach.rs`, `src/client/doors.rs`) : `op_loc`, `op_npc_t`,
 `if_button`, `close`, `walk_to`, `take`, `approach`. Attentes :

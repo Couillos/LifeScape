@@ -187,13 +187,96 @@ pub fn wait_departure(bot: &mut Bot, ids: &[i64], depart: u64, deadline: u64) ->
 /// (re-knock race): bounded, the deal watch still releases earlier.
 pub const MEET_RETRIES: u32 = 3;
 
+/// The partner is "at the meeting point" within this many tiles
+/// (Chebyshev) of our own assigned tile: the convened tiles are
+/// adjacent, a nav-adjusted arrival lands a tile or two off.
+pub const MEET_RADIUS: i32 = 3;
+
+/// Ticks the partner must hold the same tile before a knock: a partner
+/// walking past (to its bank) moves every tick and is never knocked.
+pub const PARTNER_STILL_TICKS: u64 = 3;
+
+/// Beyond this many tiles from our own tile, walk back before waiting.
+pub const HOME_RADIUS: i32 = 1;
+
+/// Budget of one walk back to the own tile.
+pub const RETURN_TICKS: u64 = 120;
+
+/// Cadence of the "cannot see" diagnostic while waiting on the tile.
+pub const SEE_LOG_TICKS: u64 = 200;
+
+/// What the waiting side does next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeetStep {
+    /// The partner holds still at the meeting point: one knock.
+    Knock,
+    /// Drifted off the own tile (a knock's approach or server follow):
+    /// walk back, the partner looks for us there.
+    Return,
+    /// Stay put: the partner is absent, passing by, or elsewhere.
+    Wait,
+}
+
+fn chebyshev(from: (i32, i32), to: (i32, i32)) -> i32 {
+    (from.0 - to.0).abs().max((from.1 - to.1).abs())
+}
+
+/// Pure meeting rule: never leave the assigned tile for a partner seen
+/// anywhere but at the meeting point (deals 1201/1248/1267/1268: a
+/// partner knocked in transit was followed 16-28 tiles away, past the
+/// 15-tile view, and the pair never saw each other again).
+pub fn meet_step(own_tile: (i32, i32), me: (i32, i32), partner: Option<(i32, i32)>, partner_still: u64) -> MeetStep {
+    if let Some(seen) = partner {
+        if chebyshev(seen, own_tile) <= MEET_RADIUS && partner_still >= PARTNER_STILL_TICKS {
+            return MeetStep::Knock;
+        }
+    }
+    if chebyshev(me, own_tile) > HOME_RADIUS {
+        return MeetStep::Return;
+    }
+    MeetStep::Wait
+}
+
+/// How long the partner has held the same tile, from the first sighting
+/// there; a move or a disappearance restarts the count.
+#[derive(Debug, Default)]
+pub struct PartnerStill {
+    last: Option<((i32, i32), u64)>,
+}
+
+impl PartnerStill {
+    pub fn observe(&mut self, seen: Option<(i32, i32)>, now: u64) -> u64 {
+        match (seen, self.last) {
+            (Some(tile), Some((known, since))) if tile == known => now.saturating_sub(since),
+            (Some(tile), _) => {
+                self.last = Some((tile, now));
+                0
+            }
+            (None, _) => {
+                self.last = None;
+                0
+            }
+        }
+    }
+}
+
+/// The partner's tile when it is in view on our level.
+fn partner_tile(bot: &Bot, partner: &str) -> Option<(i32, i32)> {
+    let pid = bot.find_player(partner)?;
+    let player = bot.world.players.get(&pid)?;
+    (player.level == bot.world.level).then_some((player.x, player.z))
+}
+
 /// Mutual knocks open the window (one-sided requests sit as "Sending..."
-/// until the other side knocks back). Waits for a late partner while the
-/// deal lives, checked every `DEAL_WATCH_TICKS` whatever the deadline,
-/// never past the hard cap. `Alive` means the window is open.
+/// until the other side knocks back). Waits on the own tile for a late
+/// partner while the deal lives, checked every `DEAL_WATCH_TICKS`
+/// whatever the deadline, never past the hard cap; knocks only a partner
+/// holding still at the meeting point (`meet_step`). `Alive` means the
+/// window is open.
 pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<DealWatch, ScriptError> {
-    let mut knocks = 0u32;
     let mut last_check = bot.world.ticks;
+    let mut last_log: Option<u64> = None;
+    let mut still = PartnerStill::default();
     while bot.trade_modal().is_none() {
         if bot.world.ticks.saturating_sub(last_check) >= DEAL_WATCH_TICKS {
             last_check = bot.world.ticks;
@@ -205,22 +288,45 @@ pub fn meet_partner(bot: &mut Bot, group: &DealGroup, deadline: u64) -> Result<D
         if bot.world.ticks >= deadline + WAIT_PAST_DEADLINE_TICKS {
             return Ok(DealWatch::GaveUp);
         }
-        let left = (deadline + WAIT_PAST_DEADLINE_TICKS).saturating_sub(bot.world.ticks).min(DEAL_WATCH_TICKS).max(1);
-        if bot.find_player(&group.partner).is_none() && knocks % 20 == 0 {
+        let seen = partner_tile(bot, &group.partner);
+        let held = still.observe(seen, bot.world.ticks);
+        let (_, my_x, my_z) = bot.position();
+        let step = meet_step(group.tile, (my_x, my_z), seen, held);
+        if step != MeetStep::Knock && last_log.is_none_or(|tick| bot.world.ticks.saturating_sub(tick) >= SEE_LOG_TICKS) {
+            last_log = Some(bot.world.ticks);
             // Slot, position and name of every tracked player: tells an
-            // empty view from a nameless one (deals 1248/1267/1268: both
-            // parties adjacent on their tiles, neither ever found).
+            // empty view from a nameless one or a partner seen elsewhere.
             bot.log(&format!(
-                "deals {:?}: cannot see {} ({} players tracked: {:?})",
+                "deals {:?}: waiting for {} at {:?} from ({my_x},{my_z}), seen {seen:?} ({} players tracked: {:?})",
                 group.ids,
                 group.partner,
+                group.tile,
                 bot.world.players.len(),
                 bot.debug_players()
             ));
         }
-        knocks += 1;
-        if bot.trade_request(&group.partner, left)? {
-            break;
+        match step {
+            MeetStep::Knock => {
+                // One knock (one quiet wait): the partner is at the point,
+                // the knock's approach stays within a few tiles of it.
+                if bot.trade_request(&group.partner, 1)? {
+                    break;
+                }
+            }
+            MeetStep::Return => {
+                let (x, z) = group.tile;
+                match bot.walk_to(x, z, 0, RETURN_TICKS) {
+                    Ok(()) => {}
+                    Err(error) if lifescape_sdk::error::is_interrupted(&error) => return Err(error.into()),
+                    Err(error) => {
+                        bot.log(&format!("deals {:?}: walk back to {:?} failed: {error}", group.ids, group.tile));
+                        bot.pump(5)?;
+                    }
+                }
+            }
+            MeetStep::Wait => {
+                bot.pump(5)?;
+            }
         }
     }
     Ok(if bot.trade_modal().is_some() { DealWatch::Alive } else { DealWatch::GaveUp })
@@ -358,6 +464,41 @@ mod tests {
         assert_eq!(watch_verdict(6000, 5000, Some(true)), DealWatch::Alive, "late partner, deal still open");
         assert_eq!(watch_verdict(5000 + WAIT_PAST_DEADLINE_TICKS, 5000, Some(true)), DealWatch::GaveUp, "hard cap");
         assert_eq!(watch_verdict(100, 5000, None), DealWatch::GaveUp, "market silent");
+    }
+
+    /// Deals 1201/1248/1267/1268: the pair stood on adjacent assigned
+    /// tiles, but one side had knocked a partner it saw walking past (to
+    /// its bank) and followed it 16 to 28 tiles away (server follow of
+    /// op_player + approach), then never came back: out of the 15-tile
+    /// view, both waited 4 minutes for an invisible partner. Knock only
+    /// a partner holding still at the meeting point; otherwise wait on
+    /// (or walk back to) the own tile.
+    #[test]
+    fn meeting_stays_on_the_assigned_tile() {
+        use super::{meet_step, MeetStep, PARTNER_STILL_TICKS};
+        let own = (3215, 3425);
+        let still = PARTNER_STILL_TICKS;
+        assert_eq!(meet_step(own, own, Some((3230, 3428)), still), MeetStep::Wait, "1268: partner 15 tiles off, never chased");
+        assert_eq!(meet_step(own, own, Some((3214, 3425)), 0), MeetStep::Wait, "partner passing by the tile, still moving");
+        assert_eq!(meet_step(own, own, Some((3216, 3426)), still), MeetStep::Knock, "partner on its adjacent tile");
+        assert_eq!(meet_step(own, (3188, 3429), None, 0), MeetStep::Return, "1268: drifted to the bank, partner out of view");
+        assert_eq!(meet_step(own, (3188, 3429), Some((3200, 3430)), still), MeetStep::Return, "partner idle far from the point");
+        assert_eq!(meet_step(own, (3217, 3426), Some((3216, 3426)), still), MeetStep::Knock, "knock drift around the point");
+        assert_eq!(meet_step(own, own, None, 0), MeetStep::Wait, "partner not there yet");
+    }
+
+    /// Stillness counts from the first sighting at the same tile; a move
+    /// or a disappearance restarts it.
+    #[test]
+    fn partner_stillness_restarts_on_move() {
+        use super::PartnerStill;
+        let mut watch = PartnerStill::default();
+        assert_eq!(watch.observe(Some((3216, 3426)), 100), 0, "first sighting");
+        assert_eq!(watch.observe(Some((3216, 3426)), 105), 5);
+        assert_eq!(watch.observe(Some((3216, 3427)), 106), 0, "moved");
+        assert_eq!(watch.observe(None, 110), 0, "out of view");
+        assert_eq!(watch.observe(Some((3216, 3427)), 111), 0, "back in view, counts again");
+        assert_eq!(watch.observe(Some((3216, 3427)), 120), 9);
     }
 
     /// Finding 2: an aborted run still ends every deal. A deal in
