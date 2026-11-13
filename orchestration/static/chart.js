@@ -78,6 +78,8 @@ const LifeChart = (() => {
 
   const UP = '#4caf50';
   const DOWN = '#e05252';
+  // Volume bars: one blue, in their own pane under the candles.
+  const VOLUME = '#4a90d9';
 
   function candleColor(row) {
     return row.c >= row.o ? UP : DOWN;
@@ -119,7 +121,10 @@ const LifeChart = (() => {
     const padTop = 8 + legendLines * 14 + 6;
     const plotX = padLeft, plotW = Math.max(10, width - padLeft - padRight);
     const plotY = padTop, plotH = Math.max(10, height - padTop - padBottom);
+    // Candles: price pane on top (2/3), volume pane below (1/3), a gap
+    // between them so bars never cover a candle. Lines use the full plot.
     const volTop = plotY + plotH * (2 / 3);
+    const priceH = model.kind === 'candles' ? Math.max(10, volTop - plotY - 8) : plotH;
 
     // Ranges over present rows only; empty slots never flatten the scale.
     let lo = Infinity, hi = -Infinity, volMax = 0;
@@ -145,23 +150,23 @@ const LifeChart = (() => {
       volMax = Math.max(volMax, volTicks[volTicks.length - 1]);
     }
 
-    const yOf = (price) => plotY + plotH - ((price - lo) / (hi - lo)) * plotH;
-    const volOf = (vol) => plotY + plotH - (vol / volMax) * (plotH / 3);
+    const yOf = (price) => plotY + priceH - ((price - lo) / (hi - lo)) * priceH;
+    const volOf = (vol) => plotY + plotH - (vol / volMax) * (plotY + plotH - volTop);
     const slotW = slots.length ? plotW / slots.length : plotW;
     const xOf = (i) => plotX + slotW * (i + 0.5);
     const barW = Math.max(1, Math.min(12, slotW * 0.55));
 
-    // Volume bars first (bottom third, semi-transparent, right scale).
+    // Volume bars in their own pane (bottom third, blue, right scale).
     if (model.kind === 'candles') {
-      ctx.globalAlpha = 0.45;
+      ctx.strokeStyle = '#333';
+      ctx.beginPath(); ctx.moveTo(plotX, volTop); ctx.lineTo(plotX + plotW, volTop); ctx.stroke();
+      ctx.fillStyle = VOLUME;
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         if (!row || !(row.v > 0)) continue;
-        ctx.fillStyle = candleColor(row);
         const top = Math.max(volTop, volOf(row.v));
         ctx.fillRect(xOf(i) - barW / 2, top, barW, plotY + plotH - top);
       }
-      ctx.globalAlpha = 1;
     }
 
     // Graduated gridlines, left price scale and right volume scale.
@@ -245,7 +250,7 @@ const LifeChart = (() => {
     ctx.save();
     ctx.fillStyle = '#888';
     ctx.font = '11px monospace';
-    ctx.translate(12, plotY + plotH / 2);
+    ctx.translate(12, plotY + priceH / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
     ctx.fillText(model.leftTitle || '', 0, 0);
@@ -254,7 +259,7 @@ const LifeChart = (() => {
       ctx.save();
       ctx.fillStyle = '#888';
       ctx.font = '11px monospace';
-      ctx.translate(width - 12, plotY + plotH / 2);
+      ctx.translate(width - 12, (volTop + plotY + plotH) / 2);
       ctx.rotate(Math.PI / 2);
       ctx.textAlign = 'center';
       ctx.fillText(model.rightTitle || '', 0, 0);
@@ -275,10 +280,6 @@ const LifeChart = (() => {
       ctx.fillStyle = entry.color || '#888';
       if (entry.swatch === 'tick' || entry.swatch === 'line') {
         ctx.fillRect(legendX, legendY - 8, swatchW, 2);
-      } else if (entry.swatch === 'bar') {
-        ctx.globalAlpha = 0.45;
-        ctx.fillRect(legendX, legendY - 11, swatchW, 7);
-        ctx.globalAlpha = 1;
       } else {
         ctx.fillRect(legendX, legendY - 11, swatchW, 7);
       }
@@ -295,7 +296,7 @@ const LifeChart = (() => {
     }
 
     // Hover and touch: nearest-slot crosshair plus tooltip box.
-    const geometry = { plotX, plotW, plotY, plotH, slotW, count: slots.length };
+    const geometry = { plotX, plotW, plotY, plotH, priceH, slotW, count: slots.length };
     canvas._lifeModel = model;
     canvas._lifeGeometry = geometry;
     if (!canvas._lifeBound) {
@@ -331,7 +332,7 @@ const LifeChart = (() => {
     const lo = Math.min(base.lo, ticks[0]);
     const hi = Math.max(base.hi, ticks[ticks.length - 1]);
     const y = model.kind === 'candles'
-      ? geometry.plotY + geometry.plotH - ((row.c - lo) / (hi - lo)) * geometry.plotH
+      ? geometry.plotY + (geometry.priceH || geometry.plotH) - ((row.c - lo) / (hi - lo)) * (geometry.priceH || geometry.plotH)
       : 0;
     ctx.strokeStyle = '#777';
     ctx.setLineDash([4, 3]);
