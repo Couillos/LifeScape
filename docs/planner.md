@@ -99,6 +99,14 @@ persistés par nœud : `failures` (max 3), `blocks` (max 3), `revives`
 un ancien planner, ex. `farm:ball_of_wool`) re-dérive ses jambes de
 l'index d'obtention à `normalize`.
 
+But atteint malgré d'anciens abandons (2026-11-13, `brain_stuck::effective_state`) :
+un graphe `Stuck` dont le but courant est atteint — niveaux live, ou nœud
+racine du but (`goals::goal_root_done` : le plus récent nœud equip/obtain/
+argent/quête/zone du but) `done` — est traité `Finished` (clos `done`, but
+suivant), jamais une période de blocage (live : 540 `graph stuck`/h ;
+bb4v5d9m bouclait « equip melee » fait toutes les 4 s, clos `stuck`, jalon
+bloqué ×3, ambition guerrier ↔ prêtre toutes les 30 s).
+
 Graphe bloqué (`brain_stuck.rs`) : une période de blocage = une ligne de
 log + `history: graph stuck`, une seule fois. Le but courant est clos
 une fois : `done` si les niveaux live l'atteignent (des nœuds abandonnés
@@ -179,7 +187,12 @@ sans péage ni bateau = Draynor, chassée par les mages (niveau 7) jusqu'au
 combat 14 ⇒ `min_combat_for_method` = 15, le verrou de combat entraîne
 d'abord (poulets), puis le bot pêche et dépose tout en banque.
 Combat : clés de spot réelles (`chickens`, `cows`) ; un spot inconnu est
-une erreur `Usage` (avant : repli silencieux sur l'auto-pick).
+une erreur `Usage` (avant : repli silencieux sur l'auto-pick). Ferme
+par drop (`farm:<objet>`, `mapping::spot_for_drop`) : le spot NON GARDÉ le
+plus faible dont un PNJ lâche l'objet (os ⇒ poulets) ; jamais un spot à
+péage ou souterrain (le cerveau ne passe jamais `toll`, une clé nue ne
+descend jamais) ; un objet que seuls des spots gardés lâchent (bâton de
+magie : moss giants) n'a pas de jambe `farm:` (marché/magasin à la place).
 
 Buts : `max:a,b:40` | `obtain:item:n` | `produce:item:n` | `money` | `quest:clé` |
 `equip:style` | `area:zone` | `rich[:merchant|:producer]`.

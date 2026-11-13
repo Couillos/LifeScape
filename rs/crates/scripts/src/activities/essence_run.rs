@@ -122,7 +122,9 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
     if !live_locs(bot, ESSENCE_ROCK, 60).is_empty() {
         return Ok(());
     }
-    let slot = bot.find_npc("aubury").ok_or_else(|| ScriptError::Failed(format!("no Aubury near {:?}", bot.position())))?;
+    // Out of view (live 2026-11-13: runs started in Lumbridge, Draynor or
+    // Al Kharid failed "no Aubury near" at once), walk to his shop first.
+    let slot = crate::kit::shop::npc_at_spawn(bot, "aubury", (AUBURY.0, AUBURY.1), ESSENCE_WALK_TICKS)?;
     bot.approach_npc(slot, ESSENCE_WALK_TICKS)?;
     bot.log("asking Aubury for the essence mine");
     bot.intend("teleporting to the rune essence mine");
@@ -309,6 +311,25 @@ mod tests {
         let mut banned = BanSet::new();
         banned.ban_for((2901, 4831), 0, 10_000);
         assert!(nearest_essence(&mut bot, &banned, 0).is_none(), "banned rock skipped, gap waits");
+    }
+
+    /// Live 2026-11-13 (62 "no Aubury near" over 10 bots, mining and
+    /// runecraft banned): the run looked for Aubury from Lumbridge, Draynor
+    /// or Al Kharid and failed at once. Out of view, the run walks to his
+    /// shop (spawn `m50_53` 53 10 = 3253,3402,0, aubury id 553) first; in
+    /// view, it talks to him where he stands.
+    #[test]
+    fn aubury_out_of_view_walks_to_his_shop() {
+        let mut bot = offline_bot();
+        bot.world.level = 0;
+        bot.world.x = 3232;
+        bot.world.z = 3203;
+        assert_eq!(crate::kit::shop::spawn_walk(&bot, "aubury", (AUBURY.0, AUBURY.1)), Some((AUBURY.0, AUBURY.1)), "Lumbridge: walk to Varrock first");
+        let aubury = (0u16..4000).find(|id| (bot.tables.npc_name)(*id).unwrap_or_default() == "aubury").expect("aubury npc id");
+        bot.world.x = 3250;
+        bot.world.z = 3400;
+        bot.world.npcs.insert(7u16, lifescape_sdk::world::NpcInfo { npc_type: aubury, x: 3253, z: 3402, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        assert_eq!(crate::kit::shop::spawn_walk(&bot, "aubury", (AUBURY.0, AUBURY.1)), None, "streamed: no walk");
     }
 
     /// Bounds: the mine never depletes (the rock pays without `loc_change`),

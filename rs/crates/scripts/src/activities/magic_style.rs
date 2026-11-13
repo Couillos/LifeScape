@@ -102,13 +102,14 @@ pub fn castable_spell(bot: &Bot) -> Option<&'static str> {
     })
 }
 
-/// Wind-strike runes somewhere in the pack or the bank; else blocked on
-/// them (the brain files the obtain: market or runecraft).
+/// Wind-strike runes somewhere in the pack or the bank (last known view:
+/// the bank is usually closed here); else blocked on them (the brain
+/// files the obtain: market or runecraft).
 fn require_combat_gear(bot: &Bot) -> Result<(), crate::ScriptError> {
     let mut missing = Vec::new();
     for rune in ["mindrune", "airrune"] {
         let Ok(id) = crate::kit::pack::obj_id(bot, rune) else { continue };
-        let held = crate::kit::pack::pack_total(bot, id) + bot.bank_items().get(&id).copied().unwrap_or(0);
+        let held = crate::kit::pack::pack_total(bot, id) + crate::kit::pack::banked_usable(bot, id);
         if held == 0 {
             missing.push(rune.to_string());
         }
@@ -223,6 +224,24 @@ mod tests {
         assert_eq!(best_damage_spell(99), "fire_blast", "ceiling holds");
         assert_eq!(spell_maxhit("fire_blast"), Some(16));
         assert_eq!(spell_maxhit("bind"), None, "utility has no max hit");
+    }
+
+    /// Live 2026-11-13 (bdr53jee, leo_king, nina_rhodes: 16 blocks, magic
+    /// banned): runes banked, the bank closed (its last contents kept in
+    /// `inv_closed`, what the brain reads as held), `bank_items()` empty
+    /// (live interface only): "missing mindrune, airrune" at every launch
+    /// while the brain's rune obtains closed `already_held`.
+    #[test]
+    fn banked_runes_pass_the_gear_gate_with_the_bank_closed() {
+        use std::collections::HashMap;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert!(matches!(super::require_combat_gear(&bot), Err(crate::ScriptError::Blocked { .. })), "nothing anywhere");
+        let main = (bot.tables.com_id)("bank_main:inv").expect("bank component");
+        let mind = crate::kit::pack::obj_id(&bot, "mindrune").expect("mind rune");
+        let air = crate::kit::pack::obj_id(&bot, "airrune").expect("air rune");
+        bot.world.inv_closed.insert(main, HashMap::from([(0u8, (mind, 15u32)), (1, (air, 25))]));
+        assert!(super::require_combat_gear(&bot).is_ok(), "banked runes are held, bank closed or not");
     }
 
     #[test]

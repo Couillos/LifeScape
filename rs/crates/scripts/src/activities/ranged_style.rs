@@ -74,8 +74,12 @@ fn shelter_or_best(bot: &Bot) -> knowledge::combat_spots::CombatSpot {
 /// on the cheapest of each (the brain files the obtain).
 fn require_combat_gear(bot: &Bot) -> Result<(), crate::ScriptError> {
     // Debug names (`oak_shortbow`): the table speaks display names.
-    let owned: Vec<String> = crate::kit::gear::available_gear(bot)
-        .into_keys()
+    // The last known bank counts (closed most of the time here; live
+    // 2026-11-13, ryan_park blocked with a banked bow and arrows).
+    let mut ids: Vec<u16> = crate::kit::gear::available_gear(bot).into_keys().collect();
+    ids.extend(crate::kit::pack::banked_ids(bot));
+    let owned: Vec<String> = ids
+        .into_iter()
         .filter_map(|id| knowledge::obj_by_id(usize::from(id)).and_then(|obj| obj.name).map(str::to_string))
         .collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
@@ -184,6 +188,22 @@ mod tests {
     use super::{arrow_tier, best_arrows, best_bow, is_arrow, ranged_level, ARROW_TIERS, BOWS};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
+
+    /// Live 2026-11-13 (ryan_park: 2 shortbows and 114 bronze arrows in
+    /// the bank, "missing shortbow, bronze_arrow" at every launch): the
+    /// gate read the open bank interface only. The last known bank counts.
+    #[test]
+    fn banked_bow_and_arrows_pass_the_gear_gate_with_the_bank_closed() {
+        use std::collections::HashMap;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert!(matches!(super::require_combat_gear(&bot), Err(crate::ScriptError::Blocked { .. })), "nothing anywhere");
+        let main = (bot.tables.com_id)("bank_main:inv").expect("bank component");
+        let bow = crate::kit::pack::obj_id(&bot, "shortbow").expect("shortbow");
+        let arrows = crate::kit::pack::obj_id(&bot, "bronze_arrow").expect("bronze arrows");
+        bot.world.inv_closed.insert(main, HashMap::from([(0u8, (bow, 2u32)), (1, (arrows, 114))]));
+        assert!(super::require_combat_gear(&bot).is_ok(), "banked kit is owned, bank closed or not");
+    }
 
     fn ranged_bot(ranged: u8) -> Bot {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");

@@ -210,7 +210,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if settled {
         dirty = true;
     }
-    match lifescape_planner::graph_state(&life) {
+    // A reached goal over older goals' abandoned nodes is Finished, never
+    // a stuck spell (`brain_stuck::effective_state`).
+    match crate::brain_stuck::effective_state(&life, &live) {
         GraphState::Launchable => {}
         GraphState::Running(_) => {
             if dirty {

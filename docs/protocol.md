@@ -16,6 +16,12 @@ Inventaires : `world.inv` = inventaires transmis (interface ouverte) ;
 au login depuis la sauvegarde du compte (`save.rs`). Le heartbeat publie
 la banque connue (`bank_streamed` = connue) : pièces et stock bancaires
 restent visibles au cerveau et au registre du market entre deux visites.
+`bot.bank_items()` ne lit que l'interface ouverte ; un contrôle « détenu »
+de script (runes de la magie, arc/flèches du tir, outil en banque) lit la
+banque connue (`kit::pack::banked_usable`/`banked_ids`, verrous market
+déduits) comme le cerveau (2026-11-13 : bloqués en boucle alors que le
+cerveau clôturait `already_held`). Un outil en banque lointaine : la
+restauration marche jusqu'à la banque (`kit::tools::restore_banked_tool`).
 
 Combat des PNJ (`src/engagement.rs`) : `UPDATE_PID` donne `world.self_slot` ;
 les masques NPC_INFO FACE_ENTITY (0x4, `>= 32768` = joueur + 32768) et

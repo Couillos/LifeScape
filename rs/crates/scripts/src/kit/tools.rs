@@ -47,6 +47,16 @@ pub fn reclaim_free(
     Ok(spec.best_held(bot).is_some())
 }
 
+/// Walk budget to fetch a banked tool from across the map (one bank
+/// trip transit slice x 2).
+pub const TOOL_BANK_WALK_TICKS: u64 = 3000;
+
+/// True when the last known bank view (open or closed) holds a usable
+/// (unlocked) tool of `spec`.
+pub fn banked_tool_held(bot: &Bot, spec: &ToolSpec) -> bool {
+    spec.known_ids(bot).into_iter().any(|id| crate::kit::pack::banked_usable(bot, id) > 0)
+}
+
 /// Withdraw the best banked tool of a spec, no handle/head reassembly:
 /// for single-item tools (fishing nets) there is nothing to reattach.
 /// Returns true when a tool is held afterwards.
@@ -58,7 +68,22 @@ pub fn restore_banked_tool(
     if spec.best_held(bot).is_some() {
         return Ok(true);
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    let far = |bot: &Bot| (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12;
+    if far(bot) && banked_tool_held(bot, spec) {
+        // A clean pack skips the bank trip (true no-op): the restore walks
+        // itself when the bank view shows a usable tool (live 2026-11-13,
+        // bdr53jee: banked shears, blocked x4 from across the map).
+        bot.log(&format!("tool restore: walking to the bank at ({},{}) for a banked tool", bank.x, bank.z));
+        bot.intend(&format!("walking to the bank at ({},{}) for a tool", bank.x, bank.z));
+        match bot.approach(bank.x as i32, bank.z as i32, bank.level as i32, 6, TOOL_BANK_WALK_TICKS) {
+            Ok(()) => {}
+            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
+                return Err(ScriptError::Sdk(error));
+            }
+            Err(other) => bot.log(&format!("tool restore: walk to the bank failed: {other}")),
+        }
+    }
+    if far(bot) {
         bot.log(&format!("tool restore: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
         return Ok(false);
     }
@@ -435,6 +460,27 @@ mod tests {
         let slots: HashMap<u8, (u16, u32)> = [(3u8, (bronze, 1u32)), (7, (steel, 1))].into_iter().collect();
         assert_eq!(best_banked_by_rank(&slots, &axes, rank), Some((7, steel)), "best banked axe wins");
         assert_eq!(best_banked_by_rank(&HashMap::new(), &axes, rank), None, "empty bank restores nothing");
+    }
+
+    /// Live 2026-11-13 (bdr53jee: shears in bank slot 48, "tool restore:
+    /// bank at (3091,3245) too far from (3193,3262)", blocked x4 in 30 s
+    /// while the brain's obtain closed `already_held` each time): a clean
+    /// pack skips the bank trip, so the restore must know a usable tool
+    /// rests in the bank to walk there itself.
+    #[test]
+    fn a_banked_tool_is_known_from_the_bank_view() {
+        use super::{banked_tool_held, FISH_SPEC};
+        use std::collections::HashMap;
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        assert!(!banked_tool_held(&bot, &FISH_SPEC), "no bank view, nothing known");
+        let main = (bot.tables.com_id)("bank_main:inv").expect("bank component");
+        let net = crate::kit::pack::obj_id(&bot, "net").expect("net in tables");
+        let coins = crate::kit::pack::obj_id(&bot, "coins").expect("coins in tables");
+        bot.world.inv.insert(main, HashMap::from([(0u8, (coins, 100u32))]));
+        assert!(!banked_tool_held(&bot, &FISH_SPEC), "coins are no net");
+        bot.world.inv.insert(main, HashMap::from([(0u8, (coins, 100u32)), (48, (net, 1))]));
+        assert!(banked_tool_held(&bot, &FISH_SPEC), "the banked net is known");
     }
 
     /// Missing-tool error carries the buyable name: the brain funds an
