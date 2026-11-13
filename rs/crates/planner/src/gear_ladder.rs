@@ -293,14 +293,80 @@ pub fn withdraw_due(ctx: &ReadyCtx) -> bool {
 /// (equipment precedes the goal's next tranche), else the first ready
 /// node. The tutorial never starts here (it has its own gate).
 pub fn next_ready(life: &Life) -> Option<usize> {
+    next_ready_except(life, &[])
+}
+
+/// `next_ready` skipping the nodes in `waiting` (market buys parked on
+/// the book, `lifecycle::park_for_fill`): the bot works on meanwhile.
+pub fn next_ready_except(life: &Life, waiting: &[String]) -> Option<usize> {
     let launchable = |node: &Node| {
-        node.status == NodeStatus::Ready && !matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
+        node.status == NodeStatus::Ready
+            && !waiting.contains(&node.id)
+            && !matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "tutorial")
     };
     let gear = gear_subtree(life);
     life.nodes
         .iter()
         .position(|node| launchable(node) && gear.contains(&node.id))
         .or_else(|| life.nodes.iter().position(launchable))
+}
+
+/// Old melee equip goals (an `equip_best` goal node, not a ladder step)
+/// carried one market obtain per piece of the level-1 set (live
+/// 2026-11-13: amulet_of_power, iron_platebody/legs on 1-coin bids).
+/// Melee equipment is the ladder's now: their open obtains (not running,
+/// not done, wanted by nothing else) and the sub-tasks only they need
+/// leave the graph; the equip node keeps its other deps. Returns the
+/// removed `(id, item)` obtains (the brain cancels their bids).
+pub fn withdraw_melee_set(life: &mut Life) -> Vec<(String, String)> {
+    let removable = |life: &Life, member_id: &str, owners: &[String]| {
+        life.nodes.iter().any(|node| node.id == member_id && !matches!(node.status, NodeStatus::Done | NodeStatus::Active))
+            && !life.nodes.iter().any(|node| !owners.contains(&node.id) && node.deps.iter().any(|dep| dep == member_id))
+    };
+    let mut removed = Vec::new();
+    let equips: Vec<String> = life
+        .nodes
+        .iter()
+        .filter(|node| matches!(&node.kind, NodeKind::EquipBest { style } if style == "melee") && !is_ladder_equip(node) && open(node))
+        .map(|node| node.id.clone())
+        .collect();
+    for equip_id in equips {
+        let Some(equip) = life.nodes.iter().position(|node| node.id == equip_id) else { continue };
+        let chain = step_chain(life, equip);
+        let mut gone: Vec<String> = Vec::new();
+        for member in chain.iter().skip(1) {
+            let is_obtain = life.nodes.iter().any(|node| &node.id == member && matches!(node.kind, NodeKind::ObtainItems { .. }));
+            if is_obtain && removable(life, member, &chain) {
+                gone.push(member.clone());
+            }
+        }
+        // Sub-tasks (have_coins, inputs) only the removed obtains need.
+        let mut cursor = 0;
+        while cursor < gone.len() {
+            let deps = life.nodes.iter().find(|node| node.id == gone[cursor]).map(|node| node.deps.clone()).unwrap_or_default();
+            for dep in deps {
+                if !gone.contains(&dep) && removable(life, &dep, &chain) {
+                    gone.push(dep);
+                }
+            }
+            cursor += 1;
+        }
+        if gone.is_empty() {
+            continue;
+        }
+        for node in &life.nodes {
+            if let (true, NodeKind::ObtainItems { item, .. }) = (gone.contains(&node.id), &node.kind) {
+                if life.nodes[equip].deps.contains(&node.id) {
+                    removed.push((node.id.clone(), item.clone()));
+                }
+            }
+        }
+        life.nodes.retain(|node| !gone.contains(&node.id));
+        if let Some(node) = life.nodes.iter_mut().find(|node| node.id == equip_id) {
+            node.deps.retain(|dep| !gone.contains(dep));
+        }
+    }
+    removed
 }
 
 #[cfg(test)]

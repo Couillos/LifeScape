@@ -18,8 +18,8 @@
 
 use lifescape_json::Value;
 use lifescape_planner::{
-    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, stuck_cause, unban_entry, BanState, GoalKind, Life,
-    StuckCause, DONE_TAG, SKILL_BAN_TICKS,
+    append_goal, ban_entry, ban_states, draw_goal_origin, goal_closed, mark_drawn, goal_skills, side_goal, stuck_cause, unban_entry, BanState, GoalKind,
+    Life, NoGoal, StuckCause, DONE_TAG, SIDE_PREFIX, SKILL_BAN_TICKS,
 };
 
 use crate::brain::push_history;
@@ -116,7 +116,20 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     note_expired_bans(life);
     crate::brain_ambition::before_draw(life, live);
     let level_of = |skill: &str| live_level(live, skill);
-    let (next, origin) = match draw_goal_origin(life, &level_of, &ticks_since) {
+    let drawn = match draw_goal_origin(life, &level_of, &ticks_since) {
+        // No idle bot (D-SIDE): every open milestone banned draws a
+        // temporary side goal, the ambition and its milestones untouched;
+        // the next draw returns to the ambition once a milestone is free.
+        Err(NoGoal::MilestonesBanned(skills)) => match side_goal_for(life, live, &skills) {
+            Some((goal, origin)) => {
+                crate::logln!("brain {}: side goal {} while {} banned", life.account, goal_label(&goal), skills.join(","));
+                Ok((goal, Some(origin)))
+            }
+            None => Err(NoGoal::MilestonesBanned(skills)),
+        },
+        other => other,
+    };
+    let (next, origin) = match drawn {
         Ok(drawn) => drawn,
         Err(reason) => {
             let text = reason.describe();
@@ -136,13 +149,27 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
     append_goal(life, next, &profile, &level_of, &held_of);
     mark_drawn(life, origin.as_deref());
-    if let Some(id) = &origin {
-        crate::logln!("brain {}: goal {label} from milestone {id}", life.account);
-    }
+    let label = match origin.as_deref() {
+        Some(side) if side.starts_with(SIDE_PREFIX) => format!("{label} ({side})"),
+        Some(milestone_id) => {
+            crate::logln!("brain {}: goal {label} from milestone {milestone_id}", life.account);
+            label
+        }
+        None => label,
+    };
     // Opens the new goal in the history (`goal_closed` reads false), so
     // a goal met at once is closed before the next draw.
     push_history(life, "goal", &format!("{NEXT_TAG}{label}"));
     Some(label)
+}
+
+/// The side goal of a bot whose open milestones are all banned (D-SIDE):
+/// the best paying demand it makes with a free skill, else money.
+fn side_goal_for(life: &Life, live: &Value, banned: &[String]) -> Option<(GoalKind, String)> {
+    let level_of = |skill: &str| live_level(live, skill);
+    let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
+    let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals()) };
+    side_goal(&level_of, banned, &demand, &held_of, life.profile.ironman)
 }
 
 /// Close the current goal (done or stuck) and append the next one.
@@ -261,6 +288,28 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(climbs, vec![55], "one tranche 45 -> 55");
+    }
+
+    /// Live 2026-11-13: "every open milestone trains a banned skill
+    /// (cooking,woodcutting)" left the bot idle until the bans ran out. A
+    /// side goal keeps it working (money here: no market in tests), the
+    /// ambition and its milestones untouched, origin `side:`.
+    #[test]
+    fn banned_milestones_draw_a_side_goal() {
+        let mut cook = life_with(GoalKind::MaxSkills { skills: vec!["cooking".to_string()], level: 5 });
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+        cook.ambition = new_ambition("cook", "coverage:cooking", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: now }).ok();
+        let cause = lifescape_planner::StuckCause { node: "n1".to_string(), class: "3 failures".to_string(), last_error: "x".to_string() };
+        for skill in ["cooking", "fishing"] {
+            cook.history.push(HistoryEntry { node: "goal".to_string(), started: now, ended: now, outcome: lifescape_planner::ban_entry(skill, 6000, &cause) });
+        }
+        let before = cook.ambition.clone();
+        let label = super::draw_next(&mut cook, &live(&[])).expect("a side goal, never idle");
+        assert_eq!(cook.goal, GoalKind::MakeMoney, "{label}");
+        assert_eq!(cook.goal_origin.as_deref(), Some("side:money"));
+        let stones = |life: &Life| life.ambition.as_ref().map(|ambition| ambition.milestones.iter().map(|stone| (stone.id.clone(), stone.status)).collect::<Vec<_>>());
+        assert_eq!(stones(&cook), before.as_ref().map(|ambition| ambition.milestones.iter().map(|stone| (stone.id.clone(), stone.status)).collect::<Vec<_>>()), "milestones untouched");
+        assert!(cook.history.iter().any(|entry| entry.outcome.starts_with("next:") && entry.outcome.contains("side")), "{:?}", cook.history);
     }
 
     #[test]

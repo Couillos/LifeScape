@@ -303,3 +303,51 @@ Rejeté : une ambition par stat de mêlée (12 groupes, pas 15) ; changement
 libre à chaque jalon (bots instables, marché erratique) ; garder le
 plus-bas-skill en repli (masque une ambition manquante) ; remplir un quota
 par achat.
+
+## 2026-11-13 — Aucun bot inactif : but d'appoint, attente de fill parquée (D-SIDE)
+
+Contexte : 5 min après le déploiement des ambitions, 12 bots sur 25
+inactifs. Deux causes : (A) tous les jalons ouverts tombaient sur des
+compétences bannies (`every open milestone trains a banned skill
+(cooking,woodcutting)`) et le bot attendait l'expiration du ban (6000
+ticks) ; (B) un nœud `market:buy` gardait le verrou pendant l'attente du
+fill (jusqu'à 6000 ticks), worker inactif (offres à 1 pièce, plafonds
+6–13 sur amulet_of_power, iron_platebody/legs, amulet_of_magic, raw_pike).
+
+Décision (application de la règle utilisateur « aucun bot inactif ») :
+- (A) But d'appoint temporaire (`planner::side_goal`) quand tous les
+  jalons ouverts sont bannis, sans toucher l'ambition ni ses jalons :
+  1. la plus lourde demande du marché à marge > 0
+     (`market_demand::demand_items_with`, `chain_profit`) que le bot
+     produit avec une compétence NON bannie, niveau atteint, quantité pas
+     déjà détenue → `GoalKind::Produce`, origine `side:demand:<objet>` ;
+  2. sinon une méthode d'argent (`GoalKind::MakeMoney`, origine
+     `side:money`) ; toute résolution argent/pièces est détournée des
+     compétences bannies (`steer_off_bans`, mêlée = un groupe).
+  Log `brain X: side goal <but> while <skills> banned`. L'origine ne
+  nomme aucun jalon : la clôture ne touche rien, le tirage suivant revient
+  à l'ambition dès qu'un jalon redevient tirable. Rien de possible (Iron
+  aux compétences d'argent toutes bannies) : log typé comme avant, jamais
+  de repli silencieux.
+- (B) Un `market:buy` posé est PARQUÉ (`lifecycle::park_for_fill`) : prêt,
+  méthode gardée, sans verrou, historique `awaiting_fill`. L'offre reste
+  au carnet (la livraison se fait aux points sûrs du worker, boucle de
+  convocation). Chaque passe règle les attentes (`brain_filler::
+  settle_parked` : rempli, partiel, échéance — mêmes règles qu'avant) ;
+  le worker lance le nœud prêt suivant hors attentes
+  (`next_ready_except`), sinon un REMPLISSAGE : une fenêtre d'argent de
+  1500 ticks (spots à pièces d'abord, hors compétences bannies), nœud
+  `fill-<id>` hors graphe (rapport ignoré, rien compté). Une attente
+  verrouillée par un ancien daemon est parquée au premier passage.
+- Équipement mêlée : un but `EquipBest{melee}` (jalon `equip` des
+  ambitions guerrier/prêtre) ne développe plus le set niveau 1 en
+  obtentions marché (source des amulet_of_power / iron_platebody à 1
+  pièce) : l'échelle (`brain_gear`) achète la mêlée hors graphe, le but ne
+  fait que porter le meilleur possédé. Les vieux fichiers perdent leurs
+  obtentions ouvertes de ce set (`gear_ladder::withdraw_melee_set`, offres
+  annulées). Distance/magie gardent leur set (amulet_of_magic : jalon
+  `equip magic` du mage).
+Rejeté : laisser le bot attendre l'expiration du ban (contraire à la
+règle) ; changer l'ambition pour un ban temporaire (l'ambition ne change
+qu'aux règles 72 000 ticks / 3 blocages) ; annuler l'offre pour libérer
+le worker (perte de priorité, demande jamais servie).

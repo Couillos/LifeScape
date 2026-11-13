@@ -185,8 +185,10 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   (barres, forgé, artisanat, cuisine) sont vendus. Les annonces sans
   bornes (posées avant un redémarrage) sont réadoptées à chaque passe
   (hors marchands, qui fixent leurs prix).
-- Achats : `market:buy` posé par le cerveau (offre avec plafond, attente
-  de la livraison) ; à côté d'une production, offre permanente (D-B)
+- Achats : `market:buy` posé par le cerveau (offre avec plafond) puis
+  PARQUÉ (`park_for_fill`, D-SIDE) : l'offre attend au carnet pendant que
+  le worker lance le nœud prêt suivant, sinon une fenêtre d'argent de
+  1500 ticks (`brain_filler`) ; jamais un worker inactif ; à côté d'une production, offre permanente (D-B)
   annulée quand le nœud aboutit.
 - Équipement : échelle par paliers (§ Équipement par paliers) ; les
   envies (`brain_wishlist`) ne portent plus que les outils pour les buts

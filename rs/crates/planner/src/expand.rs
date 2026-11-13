@@ -206,7 +206,15 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             // quests unknown at creation: the level-1 set), one obtain
             // per piece, then the equip step. Upgrades ride the brain's
             // wishlist as levels rise.
-            let picks = lifescape_gamedata::gear::best_gear(lifescape_gamedata::gear::Style::parse(style), &[], &[]);
+            // Melee (2026-11-13): the equipment ladder (`brain_gear`) buys
+            // one tier at a time off the graph; the goal only wears the
+            // best piece owned (live: level-1 set obtains sat on 1-coin
+            // bids, amulet_of_power, iron_platebody).
+            let picks = if style == "melee" {
+                Vec::new()
+            } else {
+                lifescape_gamedata::gear::best_gear(lifescape_gamedata::gear::Style::parse(style), &[], &[])
+            };
             let mut deps = Vec::new();
             for pick in picks {
                 // Only pieces some executable leg yields for this profile

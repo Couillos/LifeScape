@@ -160,6 +160,22 @@ fn cancel_stale_bids(job: &Job, life: &Life, step: Option<&str>, ladder_only: bo
 /// an abandoned step never leaves the goal Stuck (closed stuck, its skill
 /// banned for a gear cause). Returns true when the life changed.
 pub(crate) fn withdraw_dead(job: &Job, life: &mut Life) -> bool {
+    // Old melee equip goals carried the level-1 set as market obtains
+    // (live 2026-11-13: amulet_of_power, iron_platebody on 1-coin bids):
+    // the ladder owns melee pieces now, those obtains and bids go.
+    let set = lifescape_planner::withdraw_melee_set(life);
+    for (node_id, item) in &set {
+        let closed = crate::brain_market::cancel_open_buys(&job.account, item);
+        crate::logln!("brain {}: {node_id} ({item}) left the melee equip goal: the ladder buys melee pieces ({closed} bid cancelled)", job.account);
+        push_history(life, node_id, "gear_withdrawn");
+    }
+    if !set.is_empty() {
+        lifescape_planner::normalize(life);
+    }
+    withdraw_dead_steps_logged(job, life) || !set.is_empty()
+}
+
+fn withdraw_dead_steps_logged(job: &Job, life: &mut Life) -> bool {
     let causes: Vec<String> = life
         .nodes
         .iter()

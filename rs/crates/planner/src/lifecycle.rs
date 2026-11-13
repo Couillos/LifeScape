@@ -351,6 +351,16 @@ pub fn retry_uncounted(life: &mut Life, index: usize) {
     node.method = None;
 }
 
+/// A market buy placed daemon-side rests on the book while the bot works
+/// on (user rule 2026-11-13: no idle bot). The node leaves the lock and
+/// stays ready, its `market:buy` method kept; the brain skips it while
+/// its history says `awaiting_fill` and settles it every pass (filled,
+/// partial, deadline) with the moves above.
+pub fn park_for_fill(life: &mut Life, index: usize) {
+    release_active(life, index);
+    life.nodes[index].status = NodeStatus::Ready;
+}
+
 /// An engagement window ended (`budget_exhausted` short of the goal):
 /// money closes (one engagement is the task), every other node retries.
 pub fn end_engagement(life: &mut Life, index: usize) {

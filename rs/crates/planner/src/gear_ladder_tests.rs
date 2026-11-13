@@ -182,3 +182,49 @@ fn a_dead_gear_step_never_strands_the_goal() {
     assert_eq!(crate::lifecycle::graph_state(&life), crate::lifecycle::GraphState::Finished, "the goal closes done");
     assert!(withdraw_dead_steps(&mut life).is_empty(), "idempotent");
 }
+
+/// The launch pick skips the nodes waiting on a market fill: the goal's
+/// next node runs meanwhile.
+#[test]
+fn the_next_ready_node_skips_market_waits() {
+    let mut tranche = Node::new("n1", NodeKind::ReachLevel { skill: "woodcutting".to_string(), level: 20 }, Vec::new(), 20);
+    tranche.status = NodeStatus::Ready;
+    let mut life = life_with(vec![tranche]);
+    let ids = insert_gear_step(&mut life, Some("iron_scimitar"), "melee");
+    normalize(&mut life);
+    assert_eq!(life.nodes[next_ready(&life).expect("ready")].id, ids[0], "gear first");
+    let waiting = vec![ids[0].clone()];
+    assert_eq!(next_ready_except(&life, &waiting).map(|index| life.nodes[index].id.clone()), Some("n1".to_string()));
+    let both = vec![ids[0].clone(), "n1".to_string()];
+    assert_eq!(next_ready_except(&life, &both), None);
+}
+
+/// Live 2026-11-13: amulet_of_power, iron_platebody/legs obtains of an
+/// `equip melee` goal (the level-1 full set) sat on 1-coin bids. Melee
+/// equipment is the ladder's (`brain_gear`): the goal is a lone equip
+/// node, and old files lose their open set obtains.
+#[test]
+fn melee_equip_goals_leave_the_set_to_the_ladder() {
+    let profile = Profile::new(false, 0.5, 0.5, 7, Archetype::Producer);
+    let melee = crate::expand::expand_goal(&GoalKind::EquipBest { style: "melee".to_string() }, &profile);
+    assert_eq!(melee.len(), 1, "{melee:?}");
+    assert!(matches!(melee[0].kind, NodeKind::EquipBest { .. }) && melee[0].deps.is_empty());
+    let ranged = crate::expand::expand_goal(&GoalKind::EquipBest { style: "ranged".to_string() }, &profile);
+    assert!(ranged.len() >= 2, "ranged keeps its set");
+    // An old file: obtains then the goal's equip node.
+    let mut amulet = Node::new("n1", NodeKind::ObtainItems { item: "amulet_of_power".to_string(), count: 1 }, Vec::new(), 1);
+    amulet.status = NodeStatus::Ready;
+    amulet.method = Some("market:buy".to_string());
+    let mut body = Node::new("n2", NodeKind::ObtainItems { item: "iron_platebody".to_string(), count: 1 }, Vec::new(), 1);
+    body.status = NodeStatus::Active;
+    let mut sword = Node::new("n3", NodeKind::ObtainItems { item: "iron_scimitar".to_string(), count: 1 }, Vec::new(), 1);
+    sword.status = NodeStatus::Done;
+    let equip = Node::new("n4", NodeKind::EquipBest { style: "melee".to_string() }, vec!["n1".to_string(), "n2".to_string(), "n3".to_string()], 1);
+    let mut life = life_with(vec![amulet, body, sword, equip]);
+    life.active = Some("n2".to_string());
+    let removed = withdraw_melee_set(&mut life);
+    assert_eq!(removed, vec![("n1".to_string(), "amulet_of_power".to_string())], "open, not running");
+    let equip = life.nodes.iter().find(|node| node.id == "n4").expect("equip stays");
+    assert_eq!(equip.deps, vec!["n2".to_string(), "n3".to_string()]);
+    assert!(withdraw_melee_set(&mut life).is_empty(), "idempotent");
+}

@@ -234,8 +234,11 @@ partent, ids jamais réutilisés).
 Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
 premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
 respecté), but + `life.goal_origin = "mN"` + historique `goal:
-next:<libellé>`. Sans ambition : AUCUN but (`NoGoal::NoAmbition`, typé et
-loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
+next:<libellé>`. Tous les jalons ouverts bannis : but d'APPOINT temporaire
+(`side_goal`, D-SIDE : demande à marge > 0 faisable hors bans, sinon
+argent hors compétences bannies ; origine `side:…`, ambition intacte,
+retour à l'ambition au tirage suivant). Sans ambition : AUCUN but
+(`NoGoal::NoAmbition`, typé et loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
 (`brain_succession::close_goal` → `brain_ambition::after_close`) : quota
 ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
 `blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage

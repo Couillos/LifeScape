@@ -53,6 +53,10 @@ pub(crate) fn lift_coin_need(need: &str, committed: i64) -> String {
     }
 }
 
+fn now_unix() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
 fn save_or_log(life: &Life) {
     if let Err(error) = save_life(life) {
         crate::logln!("{error}");
@@ -111,12 +115,14 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         if let Some(position) = life.nodes.iter().position(|node| node.id == active_id) {
             let awaiting = seconds_since_history(&life, &active_id, "awaiting_fill");
             match (&life.nodes[position].kind.clone(), awaiting) {
+                // A wait locked by an older daemon (or a worker-side buy)
+                // parks: the bid rests, the worker works on (no idle bot).
                 (NodeKind::ObtainItems { item, count }, Some(waited)) => {
                     if crate::brain_await::settle_fill(job, &mut life, position, item, *count, waited) {
-                        if dirty {
-                            save_or_log(&life);
-                        }
-                        return;
+                        crate::logln!("brain {}: {active_id} parked on the book, the worker works on", job.account);
+                        // Its last entry stays `awaiting_fill`: the deadline
+                        // keeps counting from the placement.
+                        lifescape_planner::park_for_fill(&mut life, position);
                     }
                 }
                 // Right after a daemon restart the restored workers read
@@ -198,6 +204,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if crate::brain_gear::gear_pass(job, &mut life, &live) {
         dirty = true;
     }
+    // Market buys parked on the book settle every pass; the worker never
+    // waits for them (no idle bot, 2026-11-13).
+    let (settled, waiting) = crate::brain_filler::settle_parked(job, &mut life);
+    if settled {
+        dirty = true;
+    }
     match lifescape_planner::graph_state(&life) {
         GraphState::Launchable => {}
         GraphState::Running(_) => {
@@ -241,8 +253,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
     }
     // The gear sub-goal first, then the goal's next node; the tutorial
-    // only ever starts through its gate.
-    let Some(position) = lifescape_planner::next_ready(&life) else {
+    // only ever starts through its gate. Parked market waits are skipped:
+    // with nothing else ready, a short money window fills the wait.
+    let Some(position) = lifescape_planner::next_ready_except(&life, &waiting) else {
+        if !waiting.is_empty() && crate::brain_filler::launch_filler(orch, job, &mut life, &live, &waiting) {
+            return;
+        }
         if dirty {
             save_or_log(&life);
         }
@@ -333,6 +349,22 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         resolve_ready(node, &ctx);
         crate::logln!("brain {}: resolve {} -> {:?} (ctx coins={})", job.account, node.id, node.method, ctx.coins);
     }
+    // A money or coin node never works a banned skill (D-SIDE: a side
+    // money goal, a coin target): the next ranked method off the bans.
+    if matches!(life.nodes[position].kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
+        let banned = lifescape_planner::banned_skills(&life.history, &|stamp: i64| crate::brain_stuck::seconds_to_ticks(now_unix() - stamp));
+        let money_id = life.nodes[position].id.clone();
+        match lifescape_planner::steer_off_bans(&mut life.nodes[position], &ctx, &banned) {
+            Ok(true) => crate::logln!("brain {}: {money_id} steered off banned {} -> {:?}", job.account, banned.join(","), life.nodes[position].method),
+            Ok(false) => {}
+            Err(reason) => {
+                crate::logln!("brain {}: {money_id} waits: {reason}", job.account);
+                lifescape_planner::retry_uncounted(&mut life, position);
+                save_or_log(&life);
+                return;
+            }
+        }
+    }
     // The planner blocks typed when no method is workable (tool to
     // fund): the block becomes an obtain sub-task now, never a node that
     // flips Ready/Blocked forever without launching.
@@ -412,8 +444,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let id = node_snapshot.id.clone();
         match crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx) {
             Ok(_) => {
+                // Parked, not locked (no idle bot, 2026-11-13): the bid
+                // rests while the worker runs the next node or a filler.
                 life.nodes[launch].progress_current = ctx.held;
-                lifescape_planner::mark_launched(&mut life, launch);
+                lifescape_planner::park_for_fill(&mut life, launch);
                 push_history(&mut life, &id, "awaiting_fill");
             }
             Err(error) => {
@@ -499,7 +533,7 @@ fn launch_marks() -> &'static std::sync::Mutex<std::collections::HashMap<String,
     LAUNCHED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-fn recent_launch(account: &str) -> bool {
+pub(crate) fn recent_launch(account: &str) -> bool {
     launch_marks()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -507,7 +541,7 @@ fn recent_launch(account: &str) -> bool {
         .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30))
 }
 
-fn note_launch(account: &str) {
+pub(crate) fn note_launch(account: &str) {
     // A stop noted before this launch (reopen of an idle bot) covered an
     // earlier run: it never excuses this one.
     crate::brain_grace::take_operator_stop(account);

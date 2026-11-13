@@ -113,3 +113,21 @@ fn live_levels_prove_stale_climbs_done() {
     let obtain = Node::new("n3", NodeKind::ObtainItems { item: "feather".to_string(), count: 1 }, Vec::new(), 1);
     assert_eq!(reached_live(&obtain, &|_| 99, 126), None, "only climbs");
 }
+
+/// User rule 2026-11-13 (no idle bot): a placed market buy rests on the
+/// book while the bot works on. The node leaves the lock, stays ready
+/// with its `market:buy` method (the brain skips it while it waits) and
+/// survives `normalize` unchanged.
+#[test]
+fn a_market_wait_parks_without_the_lock() {
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "amulet_of_power".to_string(), count: 1 }, Vec::new(), 1);
+    node.status = NodeStatus::Ready;
+    node.method = Some("market:buy".to_string());
+    let mut life = life_of(vec![node]);
+    mark_launched(&mut life, 0);
+    super::park_for_fill(&mut life, 0);
+    assert_eq!(life.active, None, "the worker is free");
+    assert_eq!((life.nodes[0].status.clone(), life.nodes[0].method.as_deref()), (NodeStatus::Ready, Some("market:buy")));
+    assert!(normalize(&mut life).is_empty(), "a parked wait is a valid state");
+    assert_eq!(life.nodes[0].method.as_deref(), Some("market:buy"));
+}

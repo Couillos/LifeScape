@@ -37,12 +37,13 @@ fn three_goals_expand() {
     assert_eq!(rich.len(), 1);
     assert!(rich[0].alternatives.iter().any(|alt| alt.method == "market:flip"), "merchant flips");
 
+    // Melee equipment is the ladder's (brain_gear): the goal only wears.
     let equip = expand_goal(&GoalKind::EquipBest { style: "melee".to_string() }, &profile());
-    assert!(equip.len() >= 2, "obtains then equip");
-    let leaf = equip.last().expect("equip leaf");
-    assert!(matches!(leaf.kind, NodeKind::EquipBest { .. }));
-    assert_eq!(leaf.deps.len(), equip.len() - 1, "equip waits on every piece");
+    assert_eq!(equip.len(), 1, "the ladder buys melee pieces off the graph");
+    assert!(matches!(equip[0].kind, NodeKind::EquipBest { .. }));
     let ranged = expand_goal(&GoalKind::EquipBest { style: "ranged".to_string() }, &profile());
+    let leaf = ranged.last().expect("equip leaf");
+    assert_eq!(leaf.deps.len(), ranged.len() - 1, "equip waits on every piece");
     assert!(ranged.iter().any(|node| matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item.contains("bow"))), "a bow");
     assert!(ranged.iter().any(|node| matches!(&node.kind, NodeKind::ObtainItems { item, count } if item.contains("arrow") && *count == 100)), "arrows");
 }
