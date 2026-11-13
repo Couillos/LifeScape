@@ -162,7 +162,7 @@ fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], 
 /// counts, each input is withdrawn up to `sets × each` (nothing when the
 /// booth is far: the caller reports `blocked`).
 fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[SetInput]) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &inputs.iter().map(|input| input.id).collect::<Vec<u16>>())? {
         return Ok(());
     }
     let per_bar: i64 = inputs.iter().map(|input| input.each).sum();

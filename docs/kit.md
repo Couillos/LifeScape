@@ -107,3 +107,24 @@ Mesure R6 (2026-11-09, `admin`, stock initial par cheat `give raw_shrimp 28`
 ticks 6194→6484 (290), cooking XP 0→420 (niveau 1→5, 14×30 XP, 14 brûlés sur
 28 à niveau 1), 28 crus consommés, 28 plats banqués, sortie 0. A priori
 (400 plats / 12000 XP) gardé jusqu'à 3 mesures (n=1).
+
+## Banque lointaine, feux (2026-11-13)
+
+`kit/withdraw.rs` : `bank_withdraw_items` marche jusqu'à la banque quand
+elle est hors de portée (> 12 cases) et que la vue banque connue
+(`inv_closed`, semée depuis la sauvegarde) contient l'objet ; rien de
+connu en banque = pas de trek, 0 retiré. `ensure_tool` (pack puis banque,
+sinon `blocked{outil}`) sert tinderbox, ciseau, aiguille, moule ; les
+`fill_*` des postes passent par `reach_bank_for` (fini le `blocked`
+d'un intrant rangé dans une banque à 20 cases).
+
+Feux (`kit/fireline.rs`, règles de `firemaking.rs2`) : case légale =
+non `WALK_BLOCKED`, aucune emprise de loc `active=1` (feu existant
+compris, statique + live), F2P, hors des boîtes `bank_zones`
+(`gamedata::fire_zones`, recopiées du dbrow et revérifiées par test).
+Après chaque feu le serveur pousse le joueur d'une case à l'OUEST si le
+pas est marchable (sinon est, sud, nord, sinon reste). Une charge cherche
+une rangée de N cases légales vers l'ouest (N = bûches portées, au moins
+4) dans un rayon de 14, s'y rend, allume, vérifie chaque feu en live
+(« The fire catches », poussée ouest) et replanifie au premier refus
+(« You can't light a fire here. », départ banni) ou rangée cassée.

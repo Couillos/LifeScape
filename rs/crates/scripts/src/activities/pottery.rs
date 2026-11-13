@@ -132,7 +132,7 @@ fn mix_all(bot: &mut Bot, clay: u16, water: u16, soft: u16) -> Result<(), Script
 /// Top the pack up with clay and water, half and half (nothing when the
 /// booth is far: the caller reports `blocked`).
 fn fill_clay(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, clay: u16, water: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[clay, water])? {
         return Ok(());
     }
     if free_slots(bot) > 1 {

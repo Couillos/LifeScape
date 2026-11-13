@@ -109,7 +109,7 @@ fn fill_raw(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, raw: u16) -> 
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[raw])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[raw], free)?;

@@ -311,10 +311,12 @@ pub fn build_report(
                     // unexplained gap (D45), never a yield.
                     lifescape_sdk::provenance::Provenance::Unattributed.as_str()
                 }
+            } else if skill.is_some_and(|stat| products.contains(&id) && xp_gain(before, after, stat) > 0) {
+                // The skill's own product with its XP stays produced even
+                // when the run also bought something (bait, a tool).
+                lifescape_sdk::provenance::Provenance::Produced.as_str()
             } else if coins_delta < 0 {
                 lifescape_sdk::provenance::Provenance::ShopBought.as_str()
-            } else if skill.is_some_and(|stat| products.contains(&id) && xp_gain(before, after, stat) > 0) {
-                lifescape_sdk::provenance::Provenance::Produced.as_str()
             } else if ctx.activity == "melee" {
                 lifescape_sdk::provenance::Provenance::Loot.as_str()
             } else {
@@ -517,6 +519,26 @@ mod tests {
         let axe_name = (bot.tables.obj_name)(axe).expect("axe display");
         assert_eq!(by_name[logs_name.as_str()].0, "shop_sold");
         assert_eq!(by_name[axe_name.as_str()].0, "shop_bought");
+    }
+
+    /// A shop visit in the run never relabels the skill's own catch: fish
+    /// caught with fishing XP stay `produced`, only the bought feathers
+    /// are `shop_bought` (live b3gybcev 2026-11-13: "Raw trout,
+    /// shop_bought" next to 24 bought feathers).
+    #[test]
+    fn caught_products_stay_produced_beside_a_buy() {
+        let bot = live_bot();
+        let trout = (bot.tables.find_obj_by_name)("raw_trout").expect("raw_trout in dumps");
+        let feather = (bot.tables.find_obj_by_name)("feather").expect("feather in dumps");
+        let coins = (bot.tables.find_obj_by_name)("coins").expect("coins in dumps");
+        let before = holdings(&[(coins, 100)], &[(10, (30, 13400))], 100);
+        let after = holdings(&[(coins, 49), (feather, 24), (trout, 12)], &[(10, (31, 14000))], 900);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("fishing", "failed"));
+        let by_name: HashMap<&str, &str> = report.items.iter().map(|flow| (flow.name.as_str(), flow.provenance)).collect();
+        let trout_name = (bot.tables.obj_name)(trout).expect("trout display");
+        let feather_name = (bot.tables.obj_name)(feather).expect("feather display");
+        assert_eq!(by_name[trout_name.as_str()], "produced", "the catch is the skill's product");
+        assert_eq!(by_name[feather_name.as_str()], "shop_bought");
     }
 
     /// Unexplained losses are lost; a lone coin drain with no counterpart

@@ -47,7 +47,7 @@ pub fn ruin_tile(prefix: &str) -> Option<(i64, i64, i64)> {
 /// Top the pack up with the banked talisman (kept, never consumed) then
 /// essence (nothing when the booth is far: the caller reports `blocked`).
 fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: u16, talisman: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[essence, talisman])? {
         return Ok(());
     }
     if pack_total(bot, talisman) == 0 {

@@ -66,6 +66,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_cut: Vec<u16> = vec![chisel, uncut];
     keep_cut.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_cut, 0)?;
+    crate::kit::withdraw::ensure_tool(bot, &bank, chisel, CHISEL)?;
     fill_uncut(bot, &bank, uncut)?;
     if pack_total(bot, uncut) == 0 {
         return Err(ScriptError::Blocked { missing: vec![uncut_name.to_string()] });
@@ -106,7 +107,7 @@ fn fill_uncut(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, uncut: u16)
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[uncut])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[uncut], free)?;

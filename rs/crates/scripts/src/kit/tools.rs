@@ -73,15 +73,7 @@ pub fn restore_banked_tool(
         // A clean pack skips the bank trip (true no-op): the restore walks
         // itself when the bank view shows a usable tool (live 2026-11-13,
         // bdr53jee: banked shears, blocked x4 from across the map).
-        bot.log(&format!("tool restore: walking to the bank at ({},{}) for a banked tool", bank.x, bank.z));
-        bot.intend(&format!("walking to the bank at ({},{}) for a tool", bank.x, bank.z));
-        match bot.approach(bank.x as i32, bank.z as i32, bank.level as i32, 6, TOOL_BANK_WALK_TICKS) {
-            Ok(()) => {}
-            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
-                return Err(ScriptError::Sdk(error));
-            }
-            Err(other) => bot.log(&format!("tool restore: walk to the bank failed: {other}")),
-        }
+        crate::kit::withdraw::walk_to_bank_for(bot, bank, "a tool")?;
     }
     if far(bot) {
         bot.log(&format!("tool restore: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));

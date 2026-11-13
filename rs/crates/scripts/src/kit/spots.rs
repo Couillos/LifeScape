@@ -612,30 +612,7 @@ mod tests {
     /// Mapless worker against a real nav service (repo dumps): no painted
     /// world, only the plan handle — the same shape as a live worker.
     fn served_mining_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
-        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
-        crate::tables_live::attach_live_tables(&mut bot);
-        bot.world.level = 0;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
-        let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-        let data = root.join("LifeScape/gamedata/data");
-        let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
-        let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
-        let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
-        let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
-        let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
-        world.set_f2p(zones);
-        let tables = std::sync::Arc::new(lifescape_nav::tables::Tables::load(&data).expect("tables"));
-        let version = format!("test-mine-{socket_tag}");
-        let service = lifescape_nav::service::Service::start(
-            lifescape_nav::service::Snapshot::new(world, tables, version.clone()),
-            &lifescape_nav::service::test_socket(socket_tag),
-            1,
-        )
-        .expect("service starts");
-        bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), socket_tag));
-        bot.plan_data_version = Some(version);
-        bot.last_keepalive = Some(std::time::Instant::now());
-        (bot, service)
+        crate::served_nav_bot(socket_tag)
     }
 
     /// First dump rock spawn the service has a template for, with its loc:

@@ -76,6 +76,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_cast: Vec<u16> = vec![mould];
     keep_cast.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_cast, 0)?;
+    crate::kit::withdraw::ensure_tool(bot, &bank, mould, mould_name)?;
     fill_cast(bot, &bank, bar, gem, mould)?;
     if pack_total(bot, bar) == 0 { return Err(ScriptError::Blocked { missing: vec![if silver { SILVER_BAR } else { GOLD_BAR }.to_string()] }); }
     run(bot, &spec, |step_bot, state| {
@@ -140,7 +141,7 @@ fn jewel_one(bot: &mut Bot, furnace_x: i32, furnace_z: i32, furnace: u16, bar: u
 /// Top the pack up: mould first (kept across loads), then bars and gems
 /// half and half (nothing when the booth is far).
 fn fill_cast(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, bar: u16, gem: Option<u16>, mould: u16) -> Result<(), ScriptError> {
-    let far = (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12;
+    let far = !crate::kit::withdraw::reach_bank_for(bot, bank, &[bar, mould])?;
     if far { return Ok(()); }
     if pack_total(bot, mould) == 0 { bank_withdraw_items(bot, bank, &[mould], 1)?; }
     if free_slots(bot) > 1 {

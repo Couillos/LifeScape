@@ -14,7 +14,8 @@
 //! `strike` (one attack click + its refusals) + `ammo` (weapon refusals:
 //! empty quiver, wrong ammo),
 //! `observe` (per-run memory, regrow prediction), `produce`
-//! (A-on-B transformation).
+//! (A-on-B transformation), `withdraw` (bank withdrawals, walking to a
+//! far bank for known banked items), `fireline` (legal fire lines).
 
 #![forbid(unsafe_code)]
 
@@ -25,6 +26,7 @@ pub mod chain_spec;
 pub mod cycle;
 pub mod danger;
 pub mod fight;
+pub mod fireline;
 pub mod fish;
 pub mod foes;
 pub mod gear;
@@ -46,4 +48,5 @@ pub mod survival;
 pub mod tan;
 pub mod tools;
 pub mod trees;
+pub mod withdraw;
 pub mod woodcut;

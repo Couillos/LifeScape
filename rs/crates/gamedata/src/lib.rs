@@ -17,6 +17,7 @@ pub mod fishing;
 pub mod food;
 pub mod gear;
 pub mod f2p;
+pub mod fire_zones;
 pub mod free_zones;
 pub mod item_sources;
 pub mod obtain;

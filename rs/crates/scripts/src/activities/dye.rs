@@ -125,7 +125,7 @@ fn buy_woad(bot: &mut Bot, coins: u16) -> Result<(), ScriptError> {
 /// Top the pack up with the ingredient, topping coins up to 100 first
 /// (nothing when the booth is far: the caller reports `blocked`).
 fn fill_dye(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, ingredient: u16, coins: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[ingredient, coins])? {
         return Ok(());
     }
     if pack_total(bot, coins) < 25 {
