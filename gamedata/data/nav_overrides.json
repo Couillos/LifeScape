@@ -137,6 +137,76 @@
       "at": [3053, 3229, 1],
       "reason": "ship_laddertop_229 stand: ship deck the pack leaves OPEN, prober rode ship_laddertop_229 live ok (transitions_verified 2026-11-06)",
       "verified": "2026-11-07"
+    },
+    {
+      "at": [2968, 3348, 1],
+      "reason": "loc_1736_198 stand and outdoorstairs_wooden_bottom_210 landing: upper floor the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3034, 3214, 1],
+      "reason": "ship_ladder_218 landing / ship_laddertop_226 stand: ship deck the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3034, 3218, 1],
+      "reason": "ship_ladder_219 landing / ship_laddertop_227 stand: ship deck the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3034, 3222, 1],
+      "reason": "ship_ladder_220 landing / ship_laddertop_228 stand: ship deck the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3048, 3208, 1],
+      "reason": "ship_ladder_221 landing: ship deck the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [2956, 3339, 3],
+      "reason": "spiralstairstop_289 stand (forceapproach side): L3 top the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3010, 3515, 3],
+      "reason": "spiralstairstop_296 stand (forceapproach side): L3 top the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3028, 3507, 3],
+      "reason": "spiralstairstop_297 stand (forceapproach side): L3 top the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3205, 3209, 2],
+      "reason": "spiralstairstop_303 stand (forceapproach side, Lumbridge castle south tower top): L2 the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3223, 3472, 3],
+      "reason": "spiralstairstop_309 stand (forceapproach side): L3 top the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3258, 3486, 3],
+      "reason": "spiralstairstop_310 stand (forceapproach side): L3 top the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3175, 3419, 1],
+      "reason": "stairs_327 landing: upper floor the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3176, 3401, 1],
+      "reason": "stairs_328 landing / stairstop_348 stand (forceapproach side): upper floor the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
+    },
+    {
+      "at": [3176, 3402, 1],
+      "reason": "stairstop_348 stand (forceapproach side): upper floor the pack leaves OPEN, admin rode it live ok from the engine approach side (transitions_verified 2026-11-13)",
+      "verified": "2026-11-13"
     }
   ]
 }

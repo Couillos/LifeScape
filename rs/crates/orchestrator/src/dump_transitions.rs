@@ -38,6 +38,8 @@ struct Row {
     delta: Option<(i32, i32, i32)>,
     footprint: Vec<(i32, i32)>,
     disabled: Option<&'static str>,
+    /// Engine `forceapproach` of the clicked loc (0: any side).
+    force_approach: i64,
 }
 
 /// Engine checkout next to the project root (same layout `run_direct` uses).
@@ -212,7 +214,7 @@ fn parse_header(header: &str) -> Option<(u8, String)> {
     Some((op - b'0', name.to_string()))
 }
 
-fn collect_rs2(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_files(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let mut entries: Vec<PathBuf> = Vec::new();
     let listing = std::fs::read_dir(dir).map_err(|err| format!("read {}: {err}", dir.display()))?;
     for entry in listing {
@@ -222,8 +224,8 @@ fn collect_rs2(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            collect_rs2(&path, out)?;
-        } else if path.extension().is_some_and(|ext| ext == "rs2") {
+            collect_files(&path, extension, out)?;
+        } else if path.extension().is_some_and(|ext| ext == extension) {
             out.push(path);
         }
     }
@@ -234,12 +236,41 @@ fn collect_rs2(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 fn handlers(content: &Path) -> Result<BTreeMap<(String, u8), Vec<String>>, String> {
     let mut found: BTreeMap<(String, u8), Vec<String>> = BTreeMap::new();
     let mut files = Vec::new();
-    collect_rs2(&content.join("scripts"), &mut files)?;
+    collect_files(&content.join("scripts"), "rs2", &mut files)?;
     for path in files {
         let text = std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
         for (header, body) in script_blocks(&text) {
             if let Some((op, name)) = parse_header(&header) {
                 found.entry((name, op)).or_default().push(body);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// `{loc name: forceapproach flags}` from every `.loc` config, packed
+/// like the engine (`tools/pack/config/LocConfig.ts`): all four sides
+/// blocked (north 1, east 2, south 4, west 8), the named side cleared.
+/// The server reaches such a loc only from that side, rotated by the
+/// placement angle; a stand on any other side answers "I can't reach
+/// that!" (91 `no_move` verdicts of 2026-11-06, Lumbridge castle top).
+fn force_approaches(content: &Path) -> Result<HashMap<String, i64>, String> {
+    let mut files = Vec::new();
+    collect_files(&content.join("scripts"), "loc", &mut files)?;
+    let mut found = HashMap::new();
+    for path in files {
+        let text = std::fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
+        for (header, body) in script_blocks(&text) {
+            for line in body.lines() {
+                let Some(side) = line.trim().strip_prefix("forceapproach=") else { continue };
+                let cleared = match side.trim() {
+                    "north" => 0b0001,
+                    "east" => 0b0010,
+                    "south" => 0b0100,
+                    "west" => 0b1000,
+                    other => return Err(format!("{}: [{header}] unknown forceapproach={other}", path.display())),
+                };
+                found.insert(header.to_lowercase(), 0b1111 & !cleared);
             }
         }
     }
@@ -677,6 +708,7 @@ pub fn dump_transitions(output: &Path) -> Result<(usize, usize), String> {
     let names = loc_names(&gametypes)?;
     let zones = f2p_zones(&content)?;
     let handled = handlers(&content)?;
+    let approaches = force_approaches(&content)?;
     let spots = placements(&pack_dir, &zones)?;
 
     let mut by_name: BTreeMap<String, Vec<Spot>> = BTreeMap::new();
@@ -753,6 +785,7 @@ pub fn dump_transitions(output: &Path) -> Result<(usize, usize), String> {
                     delta,
                     footprint: footprint_tiles(&defs, spot.level, spot.tile_x, spot.tile_z, spot.loc_id, spot.shape, spot.angle),
                     disabled: disabled_reason(from_tile, target),
+                    force_approach: approaches.get(name).copied().unwrap_or(0),
                 });
             }
         }
@@ -780,6 +813,7 @@ pub fn dump_transitions(output: &Path) -> Result<(usize, usize), String> {
                     row.disabled.map(|reason| Value::Str(reason.to_string())).unwrap_or(Value::Null),
                 ),
                 ("footprint".to_string(), Value::Arr(footprint)),
+                ("force_approach".to_string(), Value::Int(row.force_approach)),
                 (
                     "from".to_string(),
                     Value::Arr(vec![
@@ -873,7 +907,7 @@ mod tests {
             assert!(seen_keys.insert(sort_key(row)), "duplicate row {row:?}");
         }
         for (index, (want, got)) in reference.iter().zip(produced.iter()).enumerate() {
-            for key in ["kind", "from", "to", "loc", "climb_loc", "climb_op", "open_to", "delta", "disabled"] {
+            for key in ["kind", "from", "to", "loc", "climb_loc", "climb_op", "open_to", "delta", "disabled", "force_approach"] {
                 assert_eq!(got.get(key), want.get(key), "row {index} field {key} drifted: {got:?} vs {want:?}");
             }
             assert_eq!(norm_footprint(got), norm_footprint(want), "row {index} footprint drifted");

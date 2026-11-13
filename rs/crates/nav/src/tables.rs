@@ -29,6 +29,9 @@ pub struct Transition {
     pub delta: Option<(i32, i32, i32)>,
     pub open_to: Option<u16>,
     pub disabled: bool,
+    /// Engine `forceapproach` block-access flags of the loc (north 1,
+    /// east 2, south 4, west 8 set = side refused; 0 = any side).
+    pub force_approach: u32,
 }
 
 /// What the prober saw when it rode this transition live.
@@ -300,6 +303,7 @@ fn load_transitions(path: &Path) -> Result<Vec<Transition>, String> {
             delta: row.get("delta").as_arr().and_then(|items| triple(items)),
             open_to: row.get("open_to").as_i64().map(|num| num as u16),
             disabled,
+            force_approach: row.get("force_approach").as_i64().unwrap_or(0) as u32 & 0xF,
         });
     }
     Ok(out)

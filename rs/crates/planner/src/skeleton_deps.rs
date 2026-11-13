@@ -38,7 +38,7 @@ fn neutral_profile() -> Profile {
 
 /// Guild every workable site of `method` sits behind (all gated, one
 /// guild), if any.
-fn guild_only(method: &str) -> Option<&'static str> {
+pub(crate) fn guild_only(method: &str) -> Option<&'static str> {
     let table = crate::combat::method_site_table(method)?;
     let workable: Vec<&crate::combat::SiteRow> = table.iter().filter(|row| row.open_ever).collect();
     let mut guild: Option<&'static str> = None;

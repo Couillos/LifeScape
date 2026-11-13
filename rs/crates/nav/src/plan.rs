@@ -1188,9 +1188,13 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
         }
     }
     let (mut width, mut height) = (1, 1);
+    // Engine order (`reachedLoc(.., type.width, type.length, ..)`):
+    // width spans x unrotated. Swapped, a 2x3 stair at angle 3 read
+    // as 2 wide and 3 deep, and a tile beside it "overlapped" the
+    // loc (stairs_326 stand north: no_move live 2026-11-13).
     if let Some(def) = search.world.loc_def(row.loc as usize) {
-        width = def.length;
-        height = def.width;
+        width = def.width;
+        height = def.length;
     }
     let mut candidates: Vec<(i32, i32)> = Vec::new();
     for (x, z) in &anchor_tiles {
@@ -1225,7 +1229,7 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
             height,
             angle,
             shape,
-            0,
+            row.force_approach,
         ) {
             // A ride landing inside a wall never executes (the server
             // climbs onto a walkable tile): drop the stand here so the

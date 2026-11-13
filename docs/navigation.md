@@ -168,13 +168,34 @@ Les 6 verdicts du château (1738/1739/1740) étaient des `no_move` faux :
 l'étage 1 (le duc, Rune Mysteries) était injoignable. Les deux cliquent
 désormais `from` (l'origine, vrai pour les 367 lignes du dump). Verdicts
 du château reroulés en live (admin, clic origine) : 8 trajets ok. Le haut
-de la tour sud (niveau 2) est du ciel pour la carte : niveau 2 par la
-tour nord seulement. Goldens `chateau_escalier_*`, `chateau_duc_retour`,
-`chateau_toit_*`. Limites connues : les autres `no_move` du fichier de
-verdicts (1738/1740 ailleurs) viennent du même clic et attendent un
-`probe_transitions` relancé après déploiement ; `forceapproach` (loc
-config, ex. `spiralstairstop=east`, `stairs`, `stairstop`) n'est pas dans
-`gametypes.json`, les stands de montée l'ignorent.
+de la tour sud (niveau 2) est du ciel pour la carte (stand ajouté à
+`sky_floors` depuis, voir plus bas). Goldens `chateau_escalier_*`, `chateau_duc_retour`,
+`chateau_toit_*`.
+
+Côté d'approche des montées (2026-11-13) : les 91 `no_move` du
+2026-11-06 portaient tous « I can't reach that! » (le serveur trouvait
+le loc ; seuls les 8 `spiralstairs`/`spiralstairsmiddle` 2×2 hors
+château venaient du clic d'emprise). Deux causes dans `plan::stands` :
+`forceapproach` ignoré (`stairs` sud, `stairstop` nord, `spiralstairstop`
+est, échelles `*_directional`, échelles de navire, `woodenstairs*`,
+`spookystairs*`… : `LocConfig.ts` bloque les quatre côtés sauf le nommé,
+tourné par l'angle, `reach::rotate_flags`) et largeur/longueur passées
+à l'envers à `reach` (un escalier 2×3 à angle impair lu 2 de large : une
+tuile voisine « chevauchait » le loc). `dump-transitions` écrit
+désormais `force_approach` (drapeaux moteur, 0 = tout côté) par ligne
+de `transitions.json`, lu par `Tables` ; `stands` le passe à `reach` et
+suit l'ordre moteur (`reachedLoc(.., type.width, type.length, ..)`).
+Vérifié en live (admin, `call` cheat tele + `op_loc` depuis le premier
+stand calculé, 2026-11-13) : 87 `no_move` → ok ; 14 tuiles d'arrivée ou
+de stand non peintes ajoutées à `sky_floors` (hauts de tours niveau 3,
+haut de la tour sud du château, ponts du navire de Karamja, étage
+(3175..3176,3401..3419)). Restent `no_move` : `miningguildladder` (Mining
+60). Non verdictés (barrières de contenu) : `monasteryladder` (ordre de
+la Guilde de prière), `newbieladder*` (tutoriel), `shantay_pass` (monde
+membre), `laddertop_directional_188` (admin tué par les chevaliers noirs
+à l'arrivée). Test `nav/tests/force_approach.rs`, goldens 55-61
+(`chateau_tour_sud_toit_descente`, `tour_sorciers_*`, `manoir_draynor_etage`,
+`palais_varrock_etage`, `falador_chateau_etage`, `varrock_ouest_escalier`).
 
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden

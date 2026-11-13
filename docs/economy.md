@@ -498,3 +498,81 @@ retenue ; les intrants récoltés soi-même sont comptés au prix de marché
 (coût d'opportunité). `profit_per_6000 > 0` avec une offre au-dessus de
 `input_cost` = signal de produire (entraîner le skill, acheter les
 intrants).
+
+## Producteurs qui répondent aux offres (point 7, 2026-11-14)
+
+À CHAQUE tirage de but (`brain_succession::draw_next`, avant le jalon
+de l'ambition, pas seulement quand les compétences sont bannies), le
+cerveau lit le carnet PUBLIC (`brain_bids` : ordres au repos du moteur,
+ses propres offres exclues, volume 24 h des exécutions) et demande au
+planner (`planner/src/bid_response.rs`, pur) s'il existe une offre
+d'achat que ce bot sait fabriquer avec profit :
+- Coût unitaire (`unit_cost`, récursif sur la recette, 3 niveaux) : le
+  moins cher de ACHETER (asks au repos qui couvrent la quantité) et
+  FABRIQUER (jambe de production praticable MAINTENANT : niveau atteint
+  et compétence non bannie, quête faite, outils détenus ou achetables —
+  ask au repos, ou magasin PNJ si D-A l'autorise —, site hors guilde ;
+  ses ticks = 6000 / unités par 6000, mesurées sinon a priori, sinon 600
+  fabrication / 200 récolte ; chaque intrant à SON coût unitaire). Un
+  stock détenu coûte ce que sa vente rapporterait (meilleur bid public)
+  et aucun temps. Total = pièces + ticks × taux du bot.
+- Taux du bot (`market_fit::coin_rate`) : meilleur profit publié (page
+  rates) parmi les scripts que ses niveaux ouvrent (bande ≤ niveau),
+  plancher 0,1 pièce/tick (le temps n'est jamais gratuit) ; les flips
+  ne comptent pas.
+- Profondeur : bids qui paient plus que le coût total ; moins les asks au
+  repos à ≤ 125 % du meilleur bid (offre déjà en route : ces vendeurs
+  descendent vers les bids) ; moins le stock libre du bot (il le vend
+  sans fabriquer) ; le bot en prend la MOITIÉ (`PRODUCER_SPLIT`, arrondi
+  haut, ≤ 100). Revendre l'objet acheté n'est pas produire (marchands).
+- Règle de score : taux brut = (revenu des bids pris − pièces dépensées)
+  / (ticks de production + 800 ticks d'aller-retour Varrock). L'offre
+  passe DEVANT l'ambition seulement si ce taux ≥ 2 × le taux du bot
+  (`BID_PREEMPT`) et si le net après le temps ≥ 50 pièces
+  (`BID_MIN_PROFIT`). Entre plusieurs, le meilleur taux, incliné de
+  ±15 % par un mot propre au bot et à l'objet.
+- Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
+  dans une fenêtre de 6000 ticks sur deux choisie par son mot
+  (`answers_now`, rotation par fenêtre) ; avec la moitié de la
+  profondeur par producteur, les bots capables ne se ruent pas tous sur
+  le même carnet.
+- But : `GoalKind::Produce{objet, N}` (jambes de production seules,
+  intrants par les sous-tâches, marché d'abord), origine `bid:<objet>` :
+  aucun jalon, ambition intacte, le tirage suivant la repèse. Log
+  `brain <compte>: answers bids: produce N <objet> (best bid …, unit …
+  coins + … ticks, … coins/tick vs own …, net …; plan)`. Le produit fini
+  sort de la keep-list et part par la vente par défaut (`brain_sales`,
+  ouverture au meilleur bid, pas de 5 % ensuite).
+- Iron : jamais.
+
+## Saturation et usage propre (« les bots jouent comme des joueurs », 2026-11-14)
+
+`planner/src/market_fit.rs` (pur, carnet public + état du bot) :
+- `saturation_factor(vue, lot)` = (profondeur des bids + volume 24 h) /
+  (asks au repos + lot), borné [0, 1] ; 1 sans ask (le premier vendeur
+  fixe le prix) ou sans donnée. Les méthodes d'argent récoltées
+  (`gather:<…>/<objet>`) valent leur profit publié × ce facteur
+  (`brain_market::fill_ctx` → `saturated_profit`) : 33 364 bûches de
+  saule à 1 pièce pour 4 319 échangées par jour ⇒ ×0,13, une méthode
+  dont le produit se vend passe devant. Les combats (butin mêlé) gardent
+  leur profit.
+- `own_use_items(ambition)` : ce que les jalons ouverts du bot
+  consommeront (chaque tranche d'un jalon de niveau, de son niveau live à
+  la cible, `sizing::tranche_consumption` : bûches de l'allumeur, poisson
+  cru du cuisinier, minerais de la fonte, os du prêtre, runes, flèches ;
+  intrants d'un quota et les leurs : barres puis minerais). Ajouté à
+  `brain::cleanup_keep` ⇒ ni vendu (`brain_sales::working_keep`) ni
+  jeté au rangement : un allumeur coupe ses bûches pour les brûler.
+- `sale_lot(stock, vue)` = ce que les acheteurs prennent (bids + volume
+  24 h), au moins un inventaire (28), jamais plus que le stock : taille
+  d'une annonce de joueur. À brancher dans `brain_sales::surplus` (fichier
+  tenu par la refonte des prix vendeur), pas encore câblé.
+- Origine des volumes absurdes (revue 2026-11-14, `task_yields`) :
+  plumes ≈ 115 000 en montées de combat sur les poulets (butin, jamais
+  lâché) ; saule ≈ 8 900 en tranches de bûcheronnage, 6 500 en `make_money`
+  et ≈ 11 500 en obtentions : b8jxrdd2 n93/n109 = `obtain willow_logs
+  2359` d'une tranche d'allumage 30→45 (`tranche_consumption`), chaîne
+  abandonnée puis 2 035 bûches listées à 1 (corrigé par l'usage propre) ;
+  paul_rhodes n60 `obtain oak_logs 308` a coupé 3 187 saules en 106 839
+  ticks (le script coupe un autre arbre que la ressource du nœud : bug
+  script hors de ce lot). Les quotas des échelles (100–200) sont sains.

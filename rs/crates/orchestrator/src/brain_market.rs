@@ -45,14 +45,45 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
         let snapshot = crate::rates_service::live_snapshot();
         let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) else { return };
         let rows = crate::rates_service::profit_rows(&store, &snapshot);
+        drop(store);
+        // Saturation (user rule 2026-11-14): a product under a wall of
+        // asks is worth the share the market absorbs (public book only).
+        // Every bid counts as absorption here (own ones too: a buyer is
+        // a buyer); no account is left out.
+        let reader = crate::brain_bids::MarketReader::live("");
         for method in lifescape_planner::resolve_obtain::money_methods(ctx) {
             let Some(script) = crate::brain_plan::rate_key(&method, node) else { continue };
             let best = rows.iter().filter(|row| row.method == script).map(|row| row.profit).fold(f64::MIN, f64::max);
             if best > f64::MIN {
-                ctx.method_profit.push((method, best));
+                ctx.method_profit.push((method.clone(), saturated_profit(&method, best, &|item| reader.view(item), &|item| crate::brain_bids::units_per_6000(&snapshot, &method, item))));
             }
         }
     }
+}
+
+/// Object a money method sells (`gather:woodcut/willow_logs` →
+/// `willow_logs`, `gather:sheep/wool` → `wool`); fights loot a mix and
+/// name none.
+pub fn money_product(method: &str) -> Option<&str> {
+    let rest = method.strip_prefix("gather:")?;
+    rest.rsplit('/').next().filter(|item| !item.is_empty())
+}
+
+/// A money method's published profit weighed by the saturation of its
+/// product (`market_fit::saturation_factor`: bids + a day of volume over
+/// resting asks + one window's batch). A loss stays a loss; a method
+/// naming no product keeps its profit.
+pub fn saturated_profit(
+    method: &str,
+    profit: f64,
+    view: &dyn Fn(&str) -> Option<lifescape_planner::market_fit::BookView>,
+    units: &dyn Fn(&str) -> f64,
+) -> f64 {
+    let Some(item) = money_product(method) else { return profit };
+    if profit <= 0.0 {
+        return profit;
+    }
+    profit * lifescape_planner::market_fit::saturation_factor(view(item).as_ref(), units(item))
 }
 
 /// D-B: a production leg launched for a tradeable object keeps a bid on
