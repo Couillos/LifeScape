@@ -764,11 +764,11 @@ pub fn run_session(account: &str) -> i32 {
     let (_merged, partial, log_path) = paths::user_paths(account);
     let state_path = std::env::var("LIFESCAPE_STATE").ok().filter(|path| !path.is_empty()).map(PathBuf::from).unwrap_or(partial);
     let (sock_path, ready_path) = paths::session_paths(account);
-    let _ = std::fs::remove_file(&sock_path);
-    let listener = match UnixListener::bind(&sock_path) {
+    // Never unlink a socket a live worker serves (20:17 ryan_park orphan).
+    let listener = match crate::worker_owner::claim_socket(&sock_path) {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("bind failed: {error}");
+            eprintln!("session {account}: {error}");
             return 1;
         }
     };

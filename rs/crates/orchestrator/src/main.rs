@@ -45,12 +45,14 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
     let _ = (&stream).write_all(buf.as_bytes());
 }
 
-// "open" spawns supervisors, so it needs the Arc; every other command
+// "open"/"redeploy" spawn supervisors, so they need the Arc; every other command
 // runs on &Orchestrator.
 fn dispatch_open(orch: &Arc<Orchestrator>, request: &Value) -> Value {
-    if request.get("cmd").as_str() == Some("open") {
-        let account = request.get("account").as_str().unwrap_or("").to_string();
-        return orch.open_job(&account, false);
+    let account = request.get("account").as_str().unwrap_or("").to_string();
+    match request.get("cmd").as_str() {
+        Some("open") => return orch.open_job(&account, false),
+        Some("redeploy") => return orch.redeploy_job(&account),
+        _ => {}
     }
     orch.dispatch(request)
 }

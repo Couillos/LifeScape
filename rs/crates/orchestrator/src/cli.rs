@@ -688,7 +688,7 @@ fn run_direct(args: &[String]) -> i32 {
 
 pub fn cli(argv: &[String]) -> i32 {
     if argv.len() < 2 {
-        println!("usage: orchestrator open|run|await|verify|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N])");
+        println!("usage: orchestrator open|run|await|verify|call|shell|status|show|see|logs|create-user|unload|pause|resume|hold|close|redeploy|shutdown|reload-nav|nav-stats|res-stats|bench-l2r|daemon|direct|map|route|replay-nav|dump-transitions ... (run ... --wait [--timeout-s N] [--json]; await <compte> [--timeout-s N] [--json]; verify [ids|--all] [--parallel N])");
         return 2;
     }
     if argv[1].as_str() == "dump-npc-ranges" {
@@ -789,13 +789,12 @@ pub fn cli(argv: &[String]) -> i32 {
                 1
             }
         }
-        "open" => {
-            let reply = send(object(vec![("cmd", str_value("open")), ("account", str_value(&account))]));
-            println!("{}", json::stringify_pretty(&reply));
-            if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
-        }
-        "close" => {
-            let reply = send(object(vec![("cmd", str_value("close")), ("account", str_value(&account))]));
+        "open" | "close" | "redeploy" => {
+            // close waits the worker out (20 s logout + 8 s TERM grace);
+            // redeploy adds the reopen and its relogin window.
+            let request = object(vec![("cmd", str_value(command)), ("account", str_value(&account))]);
+            let reply = send_command(&request, Duration::from_secs(if command == "open" { WORKER_TIMEOUT } else { 240 }))
+                .unwrap_or_else(|error| object(vec![("ok", Value::Bool(false)), ("error", str_value(&error))]));
             println!("{}", json::stringify_pretty(&reply));
             if reply.get("ok").as_bool() == Some(true) { 0 } else { 1 }
         }
