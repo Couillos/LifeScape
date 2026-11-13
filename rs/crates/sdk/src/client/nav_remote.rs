@@ -21,6 +21,11 @@ use lifescape_nav::service_queries::{self, DebugAnswer, DoorDef, StaticLoc, Tile
 
 pub use lifescape_nav::service_queries::{ProbeTarget, TransitionView};
 
+use std::time::Instant;
+
+use lifescape_nav::service::SERVICE_WAIT_MAX;
+
+use super::service_wait::service_stalled;
 use super::travel::stale_reply;
 use crate::client::Bot;
 use crate::error::{Error, Result};
@@ -244,16 +249,39 @@ impl Bot {
 
     /// One direct read with the pinned version: skew adopts the served
     /// version and retries once, then `nav-down`. No ticket, no queue.
+    /// The game session stays fed during the round trip (`serve_fed`); a
+    /// stalled round trip (no answer in time) is retried until the
+    /// service guard, then `nav-down` naming the stalls.
     fn query_remote(&mut self, op: &str, body: Vec<(&str, Value)>) -> Result<Value> {
         let client = self.service_handle()?;
+        let started = Instant::now();
         let mut resubmits = 0u32;
+        let mut stalls = 0u32;
         loop {
             let version = self.plan_data_version.clone().unwrap_or_default();
             let mut fields = vec![("op", str_value(op)), ("version", str_value(&version))];
             fields.extend(body.clone());
-            let reply = client
-                .request(&object(fields))
-                .map_err(|error| Error::Travel(format!("nav-down: {error}")))?;
+            let request = object(fields);
+            let caller = client.clone();
+            let reply = match self.serve_fed(move || caller.request(&request))? {
+                Ok(reply) => reply,
+                Err(error) if service_stalled(&error) && started.elapsed() < SERVICE_WAIT_MAX => {
+                    stalls += 1;
+                    self.log(&format!("{op}: service stalled ({error}), retry {stalls}"));
+                    if !self.plan_yield() {
+                        return Err(Error::Interrupted(format!("{op} aborted at {:?}", self.position())));
+                    }
+                    continue;
+                }
+                Err(error) if service_stalled(&error) => {
+                    return Err(Error::Travel(format!(
+                        "nav-down: {op} stalled {} times over {}s: {error}",
+                        stalls + 1,
+                        started.elapsed().as_secs()
+                    )));
+                }
+                Err(error) => return Err(Error::Travel(format!("nav-down: {error}"))),
+            };
             if reply.get("ok").as_bool() != Some(true) {
                 let reason = reply.get("error").as_str().unwrap_or("refused").to_string();
                 let served = reply.get("version").as_str().unwrap_or("").to_string();

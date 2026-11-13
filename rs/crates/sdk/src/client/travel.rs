@@ -95,6 +95,9 @@ enum RemoteOutcome {
     NoRoute(NoRoute),
     NavDown(String),
     Interrupted(String),
+    /// The game session failed while the service answered (Io/Login):
+    /// propagated as is so the session reconnects.
+    Session(Error),
 }
 
 /// A terminal reply off a draining snapshot: ours is set and the served
@@ -190,6 +193,7 @@ impl Bot {
             RemoteOutcome::NoRoute(no) => return Err(self.fail_no_route(from, dest, &options, no)),
             RemoteOutcome::Interrupted(message) => return Err(Error::Interrupted(message)),
             RemoteOutcome::NavDown(reason) => return Err(Error::Travel(format!("nav-down: {reason}"))),
+            RemoteOutcome::Session(error) => return Err(error),
         };
         // A zero-step plan adjusted on place while the destination is far
         // is a disconnected region the planner reports as Found (blocked
@@ -279,12 +283,24 @@ impl Bot {
             ));
         }
         let mut resubmits = 0u32;
+        let mut stalls = 0u32;
         loop {
             if std::time::Instant::now() >= deadline {
-                return RemoteOutcome::NavDown("service-timeout".to_string());
+                return RemoteOutcome::NavDown(if stalls > 0 {
+                    format!("service-timeout after {stalls} stalled round trips")
+                } else {
+                    "service-timeout".to_string()
+                });
             }
             let version = self.plan_data_version.clone().unwrap_or_default();
-            match client.plan_once(from, dest, options, &version, PLAN_SLICE_WAIT_MS) {
+            // The round trip runs beside the game session, which stays
+            // fed: a loaded service no longer gets the bot reaped.
+            let (caller, wanted) = (client.clone(), options.clone());
+            let answer = match self.serve_fed(move || caller.plan_once(from, dest, &wanted, &version, PLAN_SLICE_WAIT_MS)) {
+                Ok(answer) => answer,
+                Err(error) => return RemoteOutcome::Session(error),
+            };
+            match answer {
                 Ok((ServicePoll::Ready(plan), served)) => {
                     if stale_reply(&self.plan_data_version, &served) {
                         self.plan_data_version = Some(served.clone());
@@ -347,6 +363,16 @@ impl Bot {
                     return RemoteOutcome::NavDown(reason);
                 }
                 Err(PlanOnceError::Transport(error)) => {
+                    // No answer in time (EAGAIN, live 14:14:25 deal
+                    // 1071): a stall, retried inside the service guard.
+                    if super::service_wait::service_stalled(&error) {
+                        stalls += 1;
+                        self.log(&format!("plan: service stalled ({error}), retry {stalls}"));
+                        if !self.plan_yield() {
+                            return RemoteOutcome::Interrupted(format!("plan aborted at {:?}", self.position()));
+                        }
+                        continue;
+                    }
                     return RemoteOutcome::NavDown(error);
                 }
             }
@@ -423,7 +449,7 @@ impl Bot {
     /// caller maps it to `Interrupted`, never a dossier. Both failures log
     /// their source: a silent abort here ends the run, so the run must
     /// say whether the socket or the operator stopped it.
-    fn plan_yield(&mut self) -> bool {
+    pub(crate) fn plan_yield(&mut self) -> bool {
         if let Err(err) = self.keepalive_if_due() {
             self.log(&format!("plan yield: no keepalive ({err}), aborting"));
             return false;
@@ -644,7 +670,11 @@ impl Bot {
         let mut resubmits = 0u32;
         loop {
             let version = self.plan_data_version.clone().unwrap_or_default();
-            match client.walk_costs(from, dests, options, &version) {
+            let (caller, wanted, targets) = (client.clone(), options.clone(), dests.to_vec());
+            // A game-socket failure during the wait reads as no costs here;
+            // the next pump surfaces it as the Io error it is.
+            let answer = self.serve_fed(move || caller.walk_costs(from, &targets, &wanted, &version)).ok()?;
+            match answer {
                 Ok((costs, served)) => {
                     if stale_reply(&self.plan_data_version, &served) {
                         self.plan_data_version = Some(served.clone());
@@ -757,6 +787,7 @@ impl Bot {
                     RemoteOutcome::NavDown(reason) => {
                         return Err(Error::Travel(format!("nav-down: {reason}")));
                     }
+                    RemoteOutcome::Session(error) => return Err(error),
                 };
                 self.log(&format!(
                     "nav replan {} segments cost {} in {}ms",

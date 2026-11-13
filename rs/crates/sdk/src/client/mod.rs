@@ -13,6 +13,7 @@ pub mod loc_stands;
 pub mod locks;
 pub mod movement;
 pub mod nav_remote;
+pub mod service_wait;
 pub mod snapshot_view;
 pub mod social;
 pub mod travel;
