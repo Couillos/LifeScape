@@ -3,8 +3,7 @@
 # Jamais inventees. Format: nom | depart x,z,niv | arrivee x,z,niv |
 # options (paid, f2p, has=<tag>) | assertions (reachable,
 # unreachable=<raison>, uses_loc=<id>, rides<=N, rides>=N, doors<=N,
-# walk_tiles<=N, walk_tiles>=N, levels=a>b>c, adjusted_dest, adjusted=<x>,<z>,
-# never_steps=<x1>,<z1>,<x2>,<z2>,
+# walk_tiles<=N, walk_tiles>=N, levels=a>b>c, adjusted_dest,
 # stand=<x>,<z>, avoids=<x>,<z>).
 # 1. longue marche meme niveau en exterieur (Lumbridge -> Varrock est).
 longue_marche | 3222,3222,0 | 3250,3420,0 | - | reachable ; walk_tiles<=400
@@ -95,27 +94,3 @@ traversee_sud | 3174,3410,0 | 3225,3218,0 | - | reachable ; walk_tiles<=260
 # stand atteignable reste scellee.
 peksa_entree | 3076,3424,0 | 3075,3429,0 | - | reachable ; uses_loc=1530 ; doors<=1
 peksa_sortie | 3077,3429,0 | 3081,3428,0 | f2p | reachable ; uses_loc=1530 ; doors<=2 ; stand=3077,3427
-# 22-23. guichet de la banque ouest de Falador (booth 2945,3367, angle 2) :
-# la cible est le guichet (tuile bloquee). L'ancien rang de repli
-# (niveau, Chebyshev, cout) prenait la diagonale exterieure (2944,3366),
-# derriere le mur ouest ; de la, le stand le plus proche est cote
-# guichetier (2945,3366, poche fermee) : NoRoute epuisant (~5-7 s) a
-# chaque passage en banque (cows, live 2026-11-13). Le repli prefere
-# desormais une tuile qui touche la cible par un cote sans mur : le
-# stand client (2945,3368), meme depuis l'exterieur du mur.
-guichet_falador_sud | 2925,3279,0 | 2945,3367,0 | f2p | reachable ; adjusted=2945,3368
-guichet_falador_mur | 2944,3366,0 | 2945,3367,0 | f2p | reachable ; adjusted=2945,3368
-# 24-25. porte 1530 de la maison du cuisinier de Port Sarim (3014,3237,
-# mur droit angle EST, categorie door_closed). Ouverte (500 ticks, par
-# n'importe quel bot) elle devient 1531 en (3015,3237) angle SUD
-# (`door_open` +1,0, angle+1) : un mur sur le bord sud du stand. Le plan
-# montait de (3015,3236) droit sur le stand, refuse en live, replan
-# identique (cook raw_shrimp, ~75 refus/h, 2026-11-13). L'arete du
-# battant ouvert coute DOOR_LEAF_STEP_COST (marque, jamais un mur : peinte
-# en mur elle coupait 22 pieces F2P en deux) : le plan contourne par
-# (3016,3237).
-porte_port_sarim_coin | 3015,3236,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237
-porte_port_sarim_range | 3018,3237,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237
-# 26. meme motif au sud-est de Lumbridge (melee dark_wizards, ~50 refus/h) :
-# 1530 (3234,3207) angle OUEST s'ouvre en 1531 (3233,3207) angle NORD.
-porte_lumbridge_sud | 3233,3208,0 | 3245,3206,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3233,3208,3233,3207
