@@ -369,3 +369,17 @@ outil de travail (cas b3gybcev : son seul marteau en vente).
 Rejeté : interdire la vente de tout outil (prive le marché d'une classe
 entière d'objets) ; garder toute la pile d'un outil de travail (24 seaux
 pour une traite).
+
+## 2026-11-13 — Château de Lumbridge : ouvert par sa porte
+
+Décision utilisateur : le château a une vraie porte (doubles portes
+1516/1519 en (3217,3218)/(3217,3219), mur droit angle OUEST) ; le portail
+des remparts est toujours ouvert, cosmétique, pas une loc. Les overrides
+`one_way_doors` 1516/1519 (`passable_from: west`, posés le 2026-11-11 sans
+appui serveur) sont retirés : `doubledoors.rs2` n'a aucun contrôle de côté
+et reachWall1 angle OUEST accepte le stand nord sans BLOCK_NORTH, soit la
+tuile du battant voisin, marchable depuis l'est. La golden `chateau_scell`
+devient `chateau_entree` (+ `chateau_sud_interieur`, `chateau_draynor_men`).
+L'exemption de budget NoRoute (2026-11-06) reste, sa mesure de référence
+`chateau_scell` est historique. Rejeté : garder le château scellé (NoRoute
+exhaustif 3-9 s, ~50/h pour men/dark_wizards).
