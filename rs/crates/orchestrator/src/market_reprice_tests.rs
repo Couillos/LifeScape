@@ -121,6 +121,7 @@ fn adopted_listings_walk() {
         patience_ticks: 1,
         last_change_wall: 0.0,
         last_remaining: 50,
+        listed_wall: 0.0,
     };
     assert!(adopt(&service, order, bounds.clone()));
     assert!(!adopt(&service, order, bounds), "adopted once");

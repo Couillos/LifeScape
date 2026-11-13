@@ -46,6 +46,72 @@ fn method_product(method: &str) -> Option<&str> {
 /// raw fish, a firemaker's logs, an unstrung amulet, a filled container.
 const INPUT_NAMED: [&str; 7] = ["cook/", "cook:", "fire:", "string:", "enchant:", "fill:", "tan:"];
 
+/// Every method the bot's own plan will work (2026-11-14, anti-dumping
+/// (c): what it will burn, cook, smith or cast is not surplus): the
+/// chosen method and alternatives of each open level or money node, the
+/// tranche method of an open level node not resolved yet, and the
+/// tranche of every unfinished level milestone and the production of
+/// every unfinished produce milestone of its ambition.
+pub fn planned_methods(life: &Life) -> Vec<String> {
+    use lifescape_planner::ambition::{MilestoneStatus, Target};
+    let mut methods: Vec<String> = Vec::new();
+    for node in &life.nodes {
+        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
+            continue;
+        }
+        if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::MakeMoney) {
+            continue;
+        }
+        methods.extend(node.method.iter().cloned().chain(node.alternatives.iter().map(|alt| alt.method.clone())));
+        if let NodeKind::ReachLevel { skill, level } = &node.kind {
+            if node.method.is_none() && node.alternatives.is_empty() {
+                methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1)));
+            }
+        }
+    }
+    for milestone in life.ambition.iter().flat_map(|ambition| ambition.milestones.iter()) {
+        if milestone.status == MilestoneStatus::Done {
+            continue;
+        }
+        match &milestone.target {
+            Target::Level { skill, level } => methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1))),
+            Target::Produce { item, .. } => methods.push(format!("make:{item}")),
+            _ => {}
+        }
+    }
+    methods.sort();
+    methods.dedup();
+    methods
+}
+
+/// Pushes into `keep` what one planned method consumes (inputs and
+/// tools of a transformation, the runes of a combat spell); returns the
+/// product a transformation makes (sold unless another method eats it).
+/// Gatherers and melee/ranged fighters consume nothing kept.
+fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
+    if let Some(spell) = method.strip_prefix("fight:magic/").and_then(|rest| rest.split('/').next()) {
+        keep.extend(lifescape_planner::method_way::spell_runes(spell).into_iter().map(|(rune, _)| rune));
+        return None;
+    }
+    if method.starts_with("gather:") || method.starts_with("fight:") || method.starts_with("market:") {
+        return None;
+    }
+    let named = method_product(method)?;
+    let product = if INPUT_NAMED.iter().any(|prefix| method.starts_with(prefix)) {
+        keep.push(named.to_string());
+        None
+    } else {
+        Some(named.to_string())
+    };
+    for way in lifescape_gamedata::obtain::ways(named) {
+        if way.is_production() {
+            keep.extend(way.inputs.iter().map(|(input, _)| input.clone()));
+            keep.extend(way.tools.iter().cloned());
+        }
+    }
+    product
+}
+
 /// What the unfinished graph still needs on hand, beyond the cleanup
 /// keep-list: the inputs (and tools) of every transformation it trains
 /// (a cook keeps raw fish, a smelter keeps ore). A transformation's
@@ -54,31 +120,9 @@ const INPUT_NAMED: [&str; 7] = ["cook/", "cook:", "fire:", "string:", "enchant:"
 pub fn working_keep(life: &Life, wished: &[String]) -> Vec<String> {
     let mut keep = crate::brain::cleanup_keep(life);
     let mut products: Vec<String> = Vec::new();
-    for node in &life.nodes {
-        if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
-            continue;
-        }
-        if !matches!(node.kind, NodeKind::ReachLevel { .. } | NodeKind::MakeMoney) {
-            continue;
-        }
-        let methods = node.method.iter().cloned().chain(node.alternatives.iter().map(|alt| alt.method.clone()));
-        for method in methods {
-            // Gatherers sell their catch: only transformers keep inputs.
-            if method.starts_with("gather:") || method.starts_with("fight:") || method.starts_with("market:") {
-                continue;
-            }
-            let Some(named) = method_product(&method) else { continue };
-            if INPUT_NAMED.iter().any(|prefix| method.starts_with(prefix)) {
-                keep.push(named.to_string());
-            } else {
-                products.push(named.to_string());
-            }
-            for way in lifescape_gamedata::obtain::ways(named) {
-                if way.is_production() {
-                    keep.extend(way.inputs.iter().map(|(input, _)| input.clone()));
-                    keep.extend(way.tools.iter().cloned());
-                }
-            }
+    for method in planned_methods(life) {
+        if let Some(product) = method_inputs(&method, &mut keep) {
+            products.push(product);
         }
     }
     let consumed: Vec<String> = keep.clone();
@@ -143,39 +187,55 @@ fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &
         .collect()
 }
 
-/// Opening price and reserve floor of a listing (2026-11-13): it opens
-/// at the reference (or the best bid when a buyer pays more) and walks
-/// with demand (`market_reprice`: up while it sells, down while it
-/// rests). The reserve is half a traded reference (one listing never
-/// dumps under half the market), 1 coin for an untraded object; never
-/// an input cost.
-pub fn listing_quote(reference: lifescape_market::Reference, best_bid: Option<i64>) -> (i64, i64) {
-    let price = lifescape_market::opening_ask(reference.price, best_bid);
-    let floor = if reference.traded { (reference.price / 2).max(1) } else { 1 };
-    (price, floor.min(price))
-}
-
 /// Re-adopts the account's resting listings that walk no more (placed
-/// before a daemon restart, or before demand pricing): from now on they
-/// follow demand like a fresh listing, their reserve from today's
-/// reference.
-fn adopt_listings(service: &crate::market_service::MarketService, account: &str, selling: &[lifescape_store::Order]) {
+/// before a daemon restart, or before these rules), merchants included
+/// (2026-11-14: no dumping flip stock either): a listing under the
+/// bot's own reserve is amended up to it, one over the demand lot or
+/// without a known own cost is withdrawn (its stock back in the bank,
+/// the next pass lists a lot), the rest walks down to the reserve.
+fn adopt_listings(service: &crate::market_service::MarketService, account: &str, selling: &[lifescape_store::Order], costs: &crate::brain_reserve::OwnCosts, life: &Life) {
+    use crate::market_seller::Adoption;
     for row in selling {
         if crate::market_reprice::bounds_of(service, row.order_id).is_some() {
             continue;
         }
-        let (_, floor) = listing_quote(service.reference(row.item_id), None);
+        let Some(name) = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).unwrap_or(0)).and_then(|obj| obj.name) else { continue };
+        let reserve = {
+            let store = service.lock_store();
+            costs.reserve(&store, name, row.item_id, Some(life)).map(|reserve| reserve.coins)
+        };
+        let (volume, depth) = service.public_demand(account, row.item_id);
+        let lot = lifescape_market::lot_size(row.remaining, volume, depth);
+        let (order, floor) = match crate::market_seller::adoption(row.price, row.remaining, reserve, lot) {
+            Adoption::Withdraw(why) => {
+                let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+                let outcome = if reply.get("ok").as_bool() == Some(true) { "ok".to_string() } else { format!("{:?}", reply.get("error").as_str()) };
+                crate::logln!("brain {account}: listing {} ({} {name} @ {}) withdrawn ({why}): {outcome}", row.order_id, row.remaining, row.price);
+                continue;
+            }
+            Adoption::Raise { price, floor } => {
+                let reply = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("price", Value::Int(price))]));
+                let Some(order) = reply.get("order").as_i64().filter(|_| reply.get("ok").as_bool() == Some(true)) else {
+                    crate::logln!("brain {account}: listing {} of {name} not raised to its reserve {price}: {:?}", row.order_id, reply.get("error").as_str());
+                    continue;
+                };
+                crate::logln!("brain {account}: listing {} of {name} raised {} -> {price} (its own reserve)", row.order_id, row.price);
+                (order, floor)
+            }
+            Adoption::Walk { floor } => (row.order_id, floor),
+        };
         let bounds = crate::market_reprice::QuoteBounds {
             account: account.to_string(),
             sell: true,
-            floor: floor.min(row.price),
+            floor,
             ceiling: crate::market_reprice::SELL_CAP,
             patience_ticks: crate::market_reprice::PATIENCE_TICKS,
             last_change_wall: wall_now(),
             last_remaining: row.remaining,
+            listed_wall: wall_now(),
         };
-        if crate::market_reprice::adopt(service, row.order_id, bounds) {
-            crate::logln!("brain {account}: listing {} ({} left @ {}) adopted by demand pricing", row.order_id, row.remaining, row.price);
+        if crate::market_reprice::adopt(service, order, bounds) {
+            crate::logln!("brain {account}: listing {order} ({} {name} left) adopted by demand pricing, reserve {floor}", row.remaining);
         }
     }
 }
@@ -251,11 +311,19 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         let still = withdraw_tool_listings(&service, &job.account, &locking);
         selling.retain(|row| !locking.iter().any(|(order, _)| *order == row.order_id) || still.contains(&row.order_id));
     }
+    // Withdrawn lots stay out this pass (still in `selling`): their stock
+    // is banked again and the next pass lists a demand lot.
     let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
-    // Merchants price their flips themselves (fixed asks over their buy).
-    if life.profile.archetype != lifescape_planner::Archetype::Merchant {
-        adopt_listings(&service, &job.account, &selling);
-    }
+    let costs = crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account);
+    adopt_listings(&service, &job.account, &selling, &costs, life);
+    // A merchant's flip stock (what it bought) is priced by its flips
+    // only (`flip_quote`), never relisted here (ryan_park held 81 % of
+    // the sell side at 1 coin, 2026-11-14).
+    let flip_stock: HashSet<i64> = if life.profile.archetype == lifescape_planner::Archetype::Merchant {
+        service.lock_store().items_bought_by(&job.account).unwrap_or_default().into_iter().collect()
+    } else {
+        HashSet::new()
+    };
     let mut placed = 0;
     // Only what no listing or deal already promises (the market refuses
     // the rest anyway, `market_audit::uncommitted`).
@@ -264,30 +332,39 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let mut offers = surplus(&free, &keep, &worn, &listed);
     offers.extend(spare_tools(life, &free, &tools, &listed));
     for (name, item, qty) in offers {
-        let reference = service.reference(item);
-        let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-        let (price, floor) = listing_quote(reference, bid);
+        if flip_stock.contains(&item) {
+            continue;
+        }
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life));
+        let (lot, price, floor) = match decision {
+            crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),
+            crate::market_seller::SaleDecision::Hold(why) => {
+                crate::logln!("brain {}: holding {qty} {name} ({why})", job.account);
+                continue;
+            }
+        };
         let reply = service.handle(&object(vec![
             ("op", str_value("place")),
             ("account", str_value(&job.account)),
             ("side", str_value("sell")),
             ("item", Value::Int(item)),
-            ("qty", Value::Int(qty)),
+            ("qty", Value::Int(lot)),
             ("price", Value::Int(price)),
             ("floor", Value::Int(floor.min(price))),
         ]));
+        let source = reserve.map(|known| format!("{:?}", known.source).to_lowercase()).unwrap_or_default();
         if reply.get("ok").as_bool() == Some(true) {
             placed += 1;
-            crate::logln!("brain {}: listed {qty} {name} @ {price} (floor {floor})", job.account);
+            crate::logln!("brain {}: listed {lot}/{qty} {name} @ {price} (reserve {floor}, {source})", job.account);
         } else {
-            crate::logln!("brain {}: listing {qty} {name} refused: {:?}", job.account, reply.get("error").as_str());
+            crate::logln!("brain {}: listing {lot} {name} refused, holding: {:?}", job.account, reply.get("error").as_str());
         }
     }
     placed
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{method_product, surplus};
     use std::collections::HashSet;
 
@@ -332,7 +409,7 @@ mod tests {
         assert!(!offered.iter().any(|(name, _)| name == "airrune"), "{offered:?}");
     }
 
-    fn life_training(methods: &[(&str, &str)]) -> lifescape_planner::Life {
+    pub(crate) fn life_training(methods: &[(&str, &str)]) -> lifescape_planner::Life {
         use lifescape_planner::{Archetype, GoalKind, Life, Node, NodeKind, NodeStatus, Profile};
         let nodes = methods
             .iter()
@@ -374,13 +451,48 @@ mod tests {
         assert!(!chain.contains(&"gold_ring".to_string()), "rings are sold: {chain:?}");
     }
 
+    /// Anti-dumping (c), 2026-11-14: what the bot's own plan will burn,
+    /// cook or cast is not surplus, even before the node is resolved: a
+    /// pending firemaking tranche keeps its logs, a magic tranche its
+    /// runes, an unfinished cooking milestone its raw fish.
     #[test]
-    fn listings_open_at_the_reference() {
-        use lifescape_market::Reference;
-        assert_eq!(super::listing_quote(Reference { price: 1, traded: false }, None), (1, 1), "bootstrap: 1 coin");
-        assert_eq!(super::listing_quote(Reference { price: 40, traded: true }, None), (40, 20), "no margin, reserve half the market");
-        assert_eq!(super::listing_quote(Reference { price: 40, traded: true }, Some(55)), (55, 20), "a richer bid is taken");
-        assert_eq!(super::listing_quote(Reference { price: 9, traded: false }, None), (9, 1), "untraded: reserve 1 coin");
+    fn planned_inputs_are_not_surplus() {
+        use lifescape_planner::ambition::{Ambition, Milestone, MilestoneStatus, Target};
+        use lifescape_planner::{Node, NodeKind, NodeStatus};
+        let mut life = life_training(&[]);
+        let mut fire = Node::new("n1", NodeKind::ReachLevel { skill: "firemaking".to_string(), level: 10 }, Vec::new(), 10);
+        fire.status = NodeStatus::Pending;
+        life.nodes.push(fire);
+        let mut magic = Node::new("n2", NodeKind::ReachLevel { skill: "magic".to_string(), level: 10 }, Vec::new(), 10);
+        magic.status = NodeStatus::Ready;
+        magic.method = Some("fight:magic/wind_strike/chickens".to_string());
+        life.nodes.push(magic);
+        life.ambition = Some(Ambition {
+            kind: "skiller".to_string(),
+            label: String::new(),
+            groups: Vec::new(),
+            why: "random".to_string(),
+            milestones: vec![Milestone {
+                id: "m1".to_string(),
+                label: String::new(),
+                target: Target::Level { skill: "cooking".to_string(), level: 5 },
+                status: MilestoneStatus::Pending,
+                progress: (1, 5),
+                blocked_count: 0,
+                origin: "ladder".to_string(),
+            }],
+            drawn_at_tick: 0,
+            drawn_at: 0,
+            rung: 0,
+            revisions: Vec::new(),
+        });
+        let keep = super::working_keep(&life, &[]);
+        assert!(keep.contains(&"logs".to_string()), "a firemaker keeps its logs: {keep:?}");
+        assert!(keep.contains(&"airrune".to_string()) && keep.contains(&"mindrune".to_string()), "a caster keeps its runes: {keep:?}");
+        assert!(keep.contains(&"raw_shrimp".to_string()), "a future cook keeps raw fish: {keep:?}");
+        let stacks = vec![("logs".to_string(), 300), ("airrune".to_string(), 50), ("willow_logs".to_string(), 20)];
+        let names: Vec<String> = surplus(&stacks, &keep, &[], &HashSet::new()).into_iter().map(|(name, _, _)| name).collect();
+        assert_eq!(names, vec!["willow_logs".to_string()], "only what no plan burns is sold");
     }
 
     /// Live 2026-11-13 (b3gybcev): an old listing of its only hammer

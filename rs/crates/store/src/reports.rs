@@ -138,6 +138,39 @@ impl Store {
         Ok(lines)
     }
 
+    /// The account's own newest `limit` reports with their yield lines,
+    /// newest first: its measured ticks per unit and coins per tick
+    /// (seller reserve, 2026-11-14). Never another account's rows.
+    pub fn account_reports(&self, account: &str, limit: i64) -> Result<Vec<(TaskReport, Vec<TaskYield>)>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT report_id, account, node_id, method, script, ticks, stop, context_level, created_clock \
+             FROM task_reports WHERE account = ?1 ORDER BY report_id DESC LIMIT ?2",
+        )?;
+        let mapped = statement.query_map(rusqlite::params![account, limit.max(1)], |row| {
+            Ok(TaskReport {
+                report_id: row.get(0)?,
+                account: row.get(1)?,
+                node_id: row.get(2)?,
+                method: row.get(3)?,
+                script: row.get(4)?,
+                ticks: row.get(5)?,
+                stop: row.get(6)?,
+                context_level: row.get(7)?,
+                created_clock: row.get(8)?,
+            })
+        })?;
+        let mut reports = Vec::new();
+        for mapped_row in mapped {
+            reports.push(mapped_row?);
+        }
+        let mut out = Vec::with_capacity(reports.len());
+        for report in reports {
+            let lines = self.yields_for_report(report.report_id)?;
+            out.push((report, lines));
+        }
+        Ok(out)
+    }
+
     /// Recomputes summed quantities per (method, item, provenance) join.
     /// Reports are counted distinct so multi-line reports count once.
     pub fn aggregate_yields(&self) -> Result<Vec<YieldAggregate>, Error> {
@@ -201,6 +234,10 @@ mod reports_tests {
             xp: 9000,
         })?;
         assert_eq!(store.yields_for_report(report_id)?.len(), 2);
+        let own = store.account_reports("t01", 10)?;
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].1.len(), 2, "lines ride with their report");
+        assert!(store.account_reports("t02", 10)?.is_empty(), "never another account's rows");
         let aggregates = store.aggregate_yields()?;
         assert_eq!(aggregates.len(), 2);
         let shrimp_line = aggregates

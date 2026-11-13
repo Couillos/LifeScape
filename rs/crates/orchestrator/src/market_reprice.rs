@@ -6,7 +6,8 @@
 //! may cross the book), its direction read from the window's fills:
 //! - an ask that sold (even partly) walks UP, toward its cap (none of
 //!   its own: the 5x band of a traded reference bounds it);
-//! - an ask that rested unfilled walks down to its reserve floor;
+//! - an ask that rested unfilled walks down to its reserve floor (the
+//!   seller's own cost, `brain_reserve`, never under it);
 //! - a bid that rested unfilled walks up to its ceiling (the wallet
 //!   share it may spend);
 //! - a bid that filled walks down to its opening price.
@@ -42,6 +43,9 @@ pub struct QuoteBounds {
     pub last_change_wall: f64,
     /// Units still open when the window started: fewer now = it filled.
     pub last_remaining: i64,
+    /// Daemon wall seconds the listing went up (kept across its walk
+    /// steps): how fast a fill came (`market_seller::remember_fill`).
+    pub listed_wall: f64,
 }
 
 fn wall_now() -> f64 {
@@ -81,6 +85,7 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
         patience_ticks: request.get("patience").as_i64().map(|ticks| ticks.max(1) as u64).unwrap_or(PATIENCE_TICKS),
         last_change_wall: wall_now(),
         last_remaining: request.get("qty").as_i64().unwrap_or(0),
+        listed_wall: wall_now(),
     })
 }
 
@@ -182,7 +187,8 @@ pub enum StandingBid {
 /// reference: live 2026-11-13, wishes never climbed past a few coins);
 /// only its ceiling follows the wallet, and a price over a shrunk
 /// ceiling is amended down to it. Otherwise a bid opens at the covered
-/// ask or the reference (`opening_bid`).
+/// ask, else at the bot's own last fill on the item, else the reference
+/// (`remembered_bid`, 2026-11-14).
 pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, ceiling: i64) -> Result<StandingBid, String> {
     let ceiling = ceiling.max(1);
     let open = service.lock_store().account_orders(account).unwrap_or_default().into_iter().find(|row| {
@@ -214,6 +220,7 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
             patience_ticks: PATIENCE_TICKS,
             last_change_wall: wall_now(),
             last_remaining: row.remaining,
+            listed_wall: wall_now(),
         });
         bounds.floor = bounds.floor.min(ceiling);
         bounds.ceiling = ceiling;
@@ -221,7 +228,7 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
     }
     let reference = service.reference(item);
     let (_, ask) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-    let price = lifescape_market::opening_bid(reference.price, ask, ceiling);
+    let price = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price(account, item));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(account)),

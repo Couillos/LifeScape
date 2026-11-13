@@ -101,6 +101,107 @@ fn clamp_quote(price: i64, floor: i64, ceiling: i64) -> i64 {
     price.max(floor).min(ceiling).max(1)
 }
 
+/// A listing that filled within this many ticks of being listed sold
+/// FAST: it was cheap, so the seller's next lot of that item opens at
+/// least `FILL_MEMORY_PCT` % of that fill (2026-11-14, user rule 5). One
+/// patience window: the fill landed before any walk-down step.
+pub const FAST_FILL_TICKS: u64 = 200;
+/// Next opening after a fast fill, in percent of that fill's price.
+pub const FILL_MEMORY_PCT: i64 = 105;
+/// Opening ask of an object nobody traded: this many times the seller's
+/// own reserve (2026-11-14, user rule 4), then 5 % steps down to it.
+pub const UNTRADED_OPEN_RESERVES: i64 = 2;
+/// Anti-dumping lot (2026-11-14): one listing carries at most
+/// `1 / LOT_DEMAND_DIVISOR` (k = 1/4, the merchants' 25 % book share)
+/// of the public demand (24 h traded volume, or the resting bid depth
+/// when larger), never under `MIN_LOT` units.
+pub const LOT_DEMAND_DIVISOR: i64 = 4;
+/// Smallest lot a seller lists (an object with no public demand yet).
+pub const MIN_LOT: i64 = 10;
+
+/// One of the bot's OWN past fills on an item (its own data only).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OwnFill {
+    pub price: i64,
+    /// Ticks the listing rested before this fill (from its listing to
+    /// the fill, walk steps included); `None` when unknown (a fill read
+    /// back from the store after a daemon restart).
+    pub rested_ticks: Option<u64>,
+}
+
+impl OwnFill {
+    /// Sold within `FAST_FILL_TICKS` of its listing.
+    pub fn fast(&self) -> bool {
+        self.rested_ticks.is_some_and(|ticks| ticks <= FAST_FILL_TICKS)
+    }
+}
+
+/// Opening ask and reserve floor of a listing (2026-11-14, user rules
+/// 1, 4 and 5). `reserve` is the seller's OWN cost of one unit (never a
+/// 1-coin default). A traded object opens at its reference (or the best
+/// bid when richer); an object nobody traded (reference quoted from the
+/// book, or the 1-coin default) opens at `max(best bid, 2 x reserve)`,
+/// never from that fallback. Never under the reserve; after a fast own
+/// fill, at least 105 % of that fill. Returns `(price, floor)` with
+/// `floor = reserve`: the walk-down (`demand_step`) stops there.
+pub fn seller_open(reference: crate::price::Reference, best_bid: Option<i64>, reserve: i64, last_sell: Option<OwnFill>) -> (i64, i64) {
+    let reserve = reserve.max(1);
+    let bid = best_bid.unwrap_or(0);
+    let base = if reference.traded { reference.price.max(bid) } else { bid.max(reserve.saturating_mul(UNTRADED_OPEN_RESERVES)) };
+    let remembered = last_sell.filter(OwnFill::fast).map(|fill| ceil_pct(fill.price, FILL_MEMORY_PCT)).unwrap_or(0);
+    (base.max(remembered).max(reserve), reserve)
+}
+
+/// Opening bid that remembers the buyer's OWN last fill on the item
+/// (2026-11-14, user rule 5): a covered ask is taken, else the bid rests
+/// at its own last fill price (the reference only when it never bought
+/// the item), never above the ceiling.
+pub fn remembered_bid(reference: i64, best_ask: Option<i64>, ceiling: i64, last_buy: Option<i64>) -> i64 {
+    opening_bid(last_buy.filter(|price| *price >= 1).unwrap_or(reference), best_ask, ceiling)
+}
+
+/// Units of one listing (anti-dumping, 2026-11-14): at most a quarter of
+/// the public demand (`max(24 h volume, resting bid depth)`), at least
+/// `MIN_LOT`, never more than the free stock. The rest stays banked
+/// until this lot sold.
+pub fn lot_size(free: i64, volume_24h: i64, bid_depth: i64) -> i64 {
+    let demand = volume_24h.max(bid_depth).max(0);
+    (demand / LOT_DEMAND_DIVISOR).max(MIN_LOT).min(free.max(0))
+}
+
+/// Merchant quotes off the book (2026-11-14, user rule 6): buy at the
+/// best bid + 1, sell at the best ask - 1, never at reference +/- 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlipQuote {
+    /// Buy leg; `None` when the spread does not pay the merchant's time.
+    pub buy: Option<i64>,
+    /// Sell leg of held stock: never under its floor.
+    pub sell: i64,
+}
+
+/// `min_margin`: coins per unit the merchant's time costs (its own
+/// reserve logic). The buy leg opens only when both sides rest and the
+/// spread left between `bid + 1` and `ask - 1` covers that margin; the
+/// sell leg rests at `ask - 1`, never under `sell_floor` (what the stock
+/// cost it plus the margin, or its own reserve) nor on the best bid, and
+/// with no ask at `2 x sell_floor` (the untraded rule).
+pub fn flip_quotes(best_bid: Option<i64>, best_ask: Option<i64>, min_margin: i64, sell_floor: i64) -> FlipQuote {
+    let floor = sell_floor.max(1);
+    let buy = match (best_bid, best_ask) {
+        (Some(bid), Some(ask)) if bid >= 1 && (ask - 1) - (bid + 1) >= min_margin.max(1) => Some(bid + 1),
+        _ => None,
+    };
+    let sell = match best_ask {
+        Some(ask) if ask >= 2 => (ask - 1).max(floor),
+        _ => floor.saturating_mul(UNTRADED_OPEN_RESERVES),
+    };
+    FlipQuote { buy, sell: sell.max(best_bid.map(|bid| bid + 1).unwrap_or(0)) }
+}
+
+fn ceil_pct(price: i64, pct: i64) -> i64 {
+    (price.max(0).saturating_mul(pct) + 99) / 100
+}
+
 /// Risk caps for merchant bots (fractions of capital/book, item counts).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MerchantCaps {
@@ -205,6 +306,71 @@ mod step_tests {
         assert_eq!(opening_bid(10, Some(30), 20), 10, "ask above the cap: rest at the reference");
         assert_eq!(opening_bid(50, None, 20), 20, "never above the cap");
         assert_eq!(opening_bid(1, None, 0), 1, "never under 1");
+    }
+}
+
+#[cfg(test)]
+mod seller_tests {
+    use super::{flip_quotes, lot_size, remembered_bid, seller_open, FlipQuote, OwnFill};
+    use crate::price::Reference;
+
+    const UNTRADED: Reference = Reference { price: 1, traded: false };
+
+    #[test]
+    fn untraded_objects_open_at_twice_the_reserve_never_at_one() {
+        assert_eq!(seller_open(UNTRADED, None, 6, None), (12, 6), "2 x reserve, walks down to it");
+        assert_eq!(seller_open(UNTRADED, Some(20), 6, None), (20, 6), "a richer bid is taken");
+        assert_eq!(seller_open(Reference { price: 3, traded: false }, None, 4, None), (8, 4), "a quoted mid never anchors a sale");
+        assert_ne!(seller_open(UNTRADED, None, 1, None).0, 1, "never opens at 1");
+    }
+
+    #[test]
+    fn traded_objects_open_at_the_reference_never_under_the_reserve() {
+        let traded = |price| Reference { price, traded: true };
+        assert_eq!(seller_open(traded(40), None, 10, None), (40, 10));
+        assert_eq!(seller_open(traded(40), Some(55), 10, None), (55, 10));
+        // Willow 13 -> 6 -> 2 -> 1: a dumped reference no longer drags
+        // the seller under its own cost.
+        assert_eq!(seller_open(traded(1), None, 7, None), (7, 7), "held at the reserve");
+    }
+
+    #[test]
+    fn a_fast_own_fill_lifts_the_next_lot() {
+        let traded = Reference { price: 10, traded: true };
+        let fast = OwnFill { price: 20, rested_ticks: Some(120) };
+        let slow = OwnFill { price: 20, rested_ticks: Some(2000) };
+        let unknown = OwnFill { price: 20, rested_ticks: None };
+        assert!(fast.fast() && !slow.fast() && !unknown.fast());
+        assert_eq!(seller_open(traded, None, 5, Some(fast)), (21, 5), "20 x 1.05");
+        assert_eq!(seller_open(traded, None, 5, Some(slow)), (10, 5), "a slow fill says nothing");
+        assert_eq!(seller_open(traded, None, 5, Some(unknown)), (10, 5));
+        assert_eq!(seller_open(traded, Some(30), 5, Some(fast)), (30, 5), "a richer bid still wins");
+    }
+
+    #[test]
+    fn bids_open_at_their_own_last_fill() {
+        assert_eq!(remembered_bid(1, None, 50, Some(12)), 12, "its own last fill, not the 1-coin reference");
+        assert_eq!(remembered_bid(1, None, 10, Some(12)), 10, "never above the ceiling");
+        assert_eq!(remembered_bid(4, None, 50, None), 4, "never bought: the reference");
+        assert_eq!(remembered_bid(1, Some(9), 50, Some(12)), 9, "a covered ask is taken");
+    }
+
+    #[test]
+    fn lots_follow_public_demand() {
+        assert_eq!(lot_size(33_364, 4319, 0), 1079, "a quarter of the day's volume");
+        assert_eq!(lot_size(33_364, 100, 800), 200, "or of the resting bid depth");
+        assert_eq!(lot_size(49_443, 0, 0), 10, "no demand: the minimum lot");
+        assert_eq!(lot_size(4, 4319, 0), 4, "never more than held");
+    }
+
+    #[test]
+    fn flips_price_off_the_book_with_a_paid_margin() {
+        assert_eq!(flip_quotes(Some(10), Some(20), 3, 12), FlipQuote { buy: Some(11), sell: 19 });
+        assert_eq!(flip_quotes(Some(10), Some(14), 3, 12), FlipQuote { buy: None, sell: 13 }, "spread 11..13 pays 2 < 3");
+        assert_eq!(flip_quotes(Some(10), Some(12), 1, 15), FlipQuote { buy: None, sell: 15 }, "never under its floor");
+        assert_eq!(flip_quotes(None, Some(20), 1, 5), FlipQuote { buy: None, sell: 19 }, "no bid: no buy leg");
+        assert_eq!(flip_quotes(Some(3), None, 1, 5), FlipQuote { buy: None, sell: 10 }, "no ask: 2 x floor");
+        assert_eq!(flip_quotes(Some(1), Some(2), 1, 1), FlipQuote { buy: None, sell: 2 }, "never ref - 1 / ref + 1 at one coin");
     }
 }
 

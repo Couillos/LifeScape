@@ -142,6 +142,11 @@ pub(crate) struct Engine {
     /// Failed-deal pairs kept apart until a daemon wall instant
     /// (`market_uncross`, sorted account pair).
     pub(crate) pair_cooldowns: HashMap<(String, String), f64>,
+    /// Each seller's own last fill per item with how long its listing
+    /// rested (`market_seller::remember_fill`): the next lot opens over a
+    /// fast fill. The bot's own data only; the store's deals give the
+    /// price back after a restart (speed then unknown).
+    pub(crate) own_sells: HashMap<(String, i64), lifescape_market::OwnFill>,
 }
 
 impl Engine {
@@ -166,6 +171,7 @@ impl Engine {
             matched: 0,
             quote_bounds: HashMap::new(),
             pair_cooldowns: HashMap::new(),
+            own_sells: HashMap::new(),
         }
     }
 
@@ -362,6 +368,8 @@ impl MarketService {
             "fund" => self.op_fund(request),
             "tick" => self.op_tick(request),
             "stats" => self.op_stats(),
+            "seller_quote" => self.op_seller_quote(request),
+            "flip_quote" => self.op_flip_quote(request),
             other => object(vec![
                 ("ok", Value::Bool(false)),
                 ("error", str_value(&format!("unknown market op '{other}'"))),

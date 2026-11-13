@@ -230,14 +230,16 @@ pub fn buyer_want(offered: &std::collections::HashMap<u16, u32>, base: u16, trad
     None
 }
 
-/// Surplus sell leg (PRD3 lot 3): one order opening at the market (10%
-/// over the reference, or the best bid when richer) that walks down to
-/// `floor` while it rests. Returns whether the carnet took it. A refusal
-/// logs and passes: the next pass re-lists.
+/// Surplus sell leg (PRD3 lot 3): one demand-sized lot priced by the
+/// daemon from the bot's own reserve (`seller_quote`, 2026-11-14), that
+/// walks down to that reserve (or `floor` when higher) while it rests.
+/// No known own cost: held, nothing listed. Returns whether the carnet
+/// took it. A refusal logs and passes: the next pass re-lists.
 pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, floor: i64) -> Result<bool, ScriptError> {
-    let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
-    let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
-    let price = crate::activities::market::opening_price(false, reference, quote.get("bid").as_i64(), quote.get("ask").as_i64(), None).max(floor.max(1));
+    let Some(quoted) = crate::activities::market::seller_quote(bot, item, qty)? else { return Ok(false) };
+    let floor = quoted.floor.max(floor);
+    let qty = quoted.qty;
+    let price = quoted.price.max(floor);
     let reply = market_call(
         "place",
         vec![
