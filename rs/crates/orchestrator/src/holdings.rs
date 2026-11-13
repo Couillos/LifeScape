@@ -446,9 +446,31 @@ fn read_sqlite_history(path: &Path) -> Result<History, String> {
 
 // -- snapshot + sampling --------------------------------------------------------
 
-fn snapshot_in(described: &[Value], _items: &Path, save_dir: &str) -> Value {
+/// Count change against the 24 h baseline, in thousandths (`+125` =
+/// +12.5 %); `None` without a baseline or from zero (no percentage).
+pub fn count_change_thousandths(now: i64, before: Option<i64>) -> Option<i64> {
+    let base = before.filter(|count| *count > 0)?;
+    Some((((now - base) as f64 / base as f64) * 1000.0).round() as i64)
+}
+
+/// Item counts of the hourly point taken 24 h ago (or just before), and
+/// its total; empty when the history is younger than a day or unreadable.
+fn baseline_24h(items: &Path, now: i64) -> Option<(HashMap<i64, i64>, i64)> {
+    let store = lifescape_store::Store::open(&store_path(items)).ok()?;
+    let (_, counts) = store.holdings_at_or_before(now - 86_400).ok()??;
+    let total = counts.iter().map(|(_, count)| *count).sum();
+    Some((counts.into_iter().collect(), total))
+}
+
+fn snapshot_in(described: &[Value], items: &Path, save_dir: &str) -> Value {
     let live = current_holdings(described, save_dir);
     let live_total: i64 = live.values().sum();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    let baseline = baseline_24h(items, now);
+    let change_of = |now_count: i64, before: Option<i64>| match count_change_thousandths(now_count, before) {
+        Some(change) => Value::Int(change),
+        None => Value::Null,
+    };
     let mut ids: Vec<i64> = live.keys().copied().collect();
     ids.push(COINS);
     ids.sort();
@@ -461,14 +483,18 @@ fn snapshot_in(described: &[Value], _items: &Path, save_dir: &str) -> Value {
     let items_list: Vec<Value> = ranked
         .iter()
         .map(|obj_id| {
+            let count = live.get(obj_id).copied().unwrap_or(0);
+            let before = baseline.as_ref().map(|(counts, _)| counts.get(obj_id).copied().unwrap_or(0));
             object(vec![
                 ("id", Value::Int(*obj_id)),
                 ("name", str_value(&item_name(*obj_id))),
-                ("count", Value::Int(live.get(obj_id).copied().unwrap_or(0))),
+                ("count", Value::Int(count)),
+                ("change24h", change_of(count, before)),
             ])
         })
         .collect();
-    object(vec![("liveTotal", Value::Int(live_total)), ("items", Value::Arr(items_list))])
+    let total_change = change_of(live_total, baseline.as_ref().map(|(_, total)| *total));
+    object(vec![("liveTotal", Value::Int(live_total)), ("totalChange24h", total_change), ("items", Value::Arr(items_list))])
 }
 
 /// The dashboard payload: live totals plus the ranked item list.
@@ -545,6 +571,19 @@ pub fn start_sampler(orch: Arc<crate::daemon::Orchestrator>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// User rule 2026-11-13: the list shows the 24 h change of each count
+    /// (now vs the hourly point 24 h ago), none without a baseline.
+    #[test]
+    fn count_change_compares_with_the_24h_baseline() {
+        use super::count_change_thousandths;
+        assert_eq!(count_change_thousandths(150, Some(100)), Some(500), "+50 %");
+        assert_eq!(count_change_thousandths(80, Some(100)), Some(-200), "-20 %");
+        assert_eq!(count_change_thousandths(25530, Some(8304)), Some(2074));
+        assert_eq!(count_change_thousandths(10, Some(0)), None, "new item: no percentage");
+        assert_eq!(count_change_thousandths(10, None), None, "history younger than a day");
+    }
+
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {

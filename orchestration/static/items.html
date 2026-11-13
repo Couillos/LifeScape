@@ -16,11 +16,20 @@
   h1 { font-size: 18px; margin: 0 0 4px; }
   h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  #list { min-width: 260px; max-width: 340px; flex: 1 1 260px; }
-  #list ul { list-style: none; padding: 0; margin: 8px 0; max-height: 56vh; overflow-y: auto; }
-  #list li { margin: 2px 0; cursor: pointer; }
-  #list li.cur { font-weight: bold; color: #ff0; }
-  #list li .qty { color: #888; }
+  #list { min-width: 280px; max-width: 400px; flex: 1 1 280px; }
+  #total { margin: 8px 0 4px; cursor: pointer; }
+  #total.cur { font-weight: bold; color: #ff0; }
+  #total .qty { color: #888; }
+  #itemswrap { margin: 4px 0 8px; max-height: 56vh; overflow: auto; }
+  #items { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #items td, #items th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; }
+  #items th { color: #888; font-weight: normal; cursor: pointer; }
+  #items td.left, #items th.left { text-align: left; }
+  #items tr[data-id] { cursor: pointer; }
+  #items tr[data-id]:hover { background: #1a1a1a; }
+  #items tr.cur { font-weight: bold; color: #ff0; }
+  .up { color: #00e676; }
+  .down { color: #ff1744; }
   #search { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
   #pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 4px; }
   #pager button { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; }
@@ -44,7 +53,8 @@
   <div id="list">
     <h2>Items held</h2>
     <input id="search" placeholder="Search an item…" autocomplete="off" oninput="onSearch()">
-    <ul id="items"></ul>
+    <div id="total" onclick="pick(null)"></div>
+    <div id="itemswrap"><table id="items"></table></div>
     <div id="pager">
       <button onclick="page(-1)">‹</button>
       <span id="pageinfo"></span>
@@ -62,6 +72,7 @@
   </div>
 </div>
 <script src="/chart.js"></script>
+<script src="/table.js"></script>
 <script src="/items.js"></script>
 </body>
 </html>

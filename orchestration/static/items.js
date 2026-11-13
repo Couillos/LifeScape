@@ -54,22 +54,50 @@ function liveCount() {
   return found ? found.count : 0;
 }
 
-function renderList() {
-  const matches = filtered();
-  const pages = Math.max(1, Math.ceil((matches.length + 1) / PAGE_SIZE));
-  pageIndex = Math.min(Math.max(pageIndex, 0), pages - 1);
-  const start = pageIndex * PAGE_SIZE;
-  const slice = matches.slice(start, start + PAGE_SIZE);
+// Item table (shared TableSort, table.js): raw values sort, fmt only
+// changes the display. `change` is the 24 h change of the held count in
+// thousandths (now vs the hourly point 24 h ago); null = no baseline.
+const ITEM_COLUMNS = [
+  { key: 'name', label: 'Item', kind: 'str' },
+  { key: 'count', label: 'Qty', kind: 'num' },
+  { key: 'change', label: '24 h', kind: 'num', fmt: (value) => changeCell(value) },
+];
 
-  const rows = [];
-  if (selected === null) rows.push(`<li class="cur" onclick="pick(null)">Total <span class="qty">(${(list.liveTotal || 0)})</span></li>`);
-  else rows.push(`<li onclick="pick(null)">Total <span class="qty">(${(list.liveTotal || 0)})</span></li>`);
-  for (const item of slice) {
-    rows.push(`<li class="${selected === item.id ? 'cur' : ''}" data-id="${item.id}" onclick="pick(${item.id})">${item.name} <span class="qty">(${item.count})</span></li>`);
+function changeCell(promille) {
+  if (promille === null || promille === undefined) return '<span class="muted">—</span>';
+  const cls = promille > 0 ? 'up' : (promille < 0 ? 'down' : '');
+  const sign = promille > 0 ? '+' : '';
+  return '<span class="' + cls + '">' + sign + (promille / 10).toFixed(1) + '%</span>';
+}
+
+function itemRow(item) {
+  return { id: item.id, name: item.name, count: item.count, change: item.change24h === undefined ? null : item.change24h };
+}
+
+function renderList() {
+  const matches = TableSort.sortedRows('items', ITEM_COLUMNS, filtered().map(itemRow));
+  const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
+  pageIndex = Math.min(Math.max(pageIndex, 0), pages - 1);
+  const slice = matches.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
+  const total = document.getElementById('total');
+  total.className = selected === null ? 'cur' : '';
+  total.innerHTML = 'Total <span class="qty">' + (list.liveTotal || 0) + '</span> ' + changeCell(list.totalChange24h);
+  if (slice.length) {
+    TableSort.render('items', ITEM_COLUMNS, slice, {
+      rowAttrs: (row) => ({ 'data-id': row.id, class: selected === row.id ? 'cur' : '' }),
+      onSort: () => { pageIndex = 0; renderList(); },
+    });
+  } else {
+    document.getElementById('items').innerHTML = '<tr><td class="left muted">no match</td></tr>';
   }
-  document.getElementById('items').innerHTML = rows.join('') || '<li class="muted">no match</li>';
   document.getElementById('pageinfo').textContent = `page ${pageIndex + 1}/${pages} · ${matches.length} item(s)`;
 }
+
+// One listener on the stable <table>: rows are rebuilt on every render.
+document.getElementById('items').addEventListener('click', (event) => {
+  const row = event.target.closest('tr[data-id]');
+  if (row) pick(Number(row.getAttribute('data-id')));
+});
 
 function page(delta) {
   pageIndex += delta;
@@ -112,7 +140,7 @@ function draw() {
   LifeChart.draw(canvas, {
     slots, width, kind: 'line', rows,
     leftTitle: 'Nombre d’objets',
-    legend: [{ swatch: 'line', color: '#4caf50', label: title() + ' — en direct : ' + live }],
+    legend: [{ swatch: 'line', color: LifeChart.UP, label: title() + ' — en direct : ' + live }],
     live: true,
     emptyText: 'No point yet (the sampler records hourly).',
   });

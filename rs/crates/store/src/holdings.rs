@@ -88,6 +88,21 @@ impl Store {
         Ok(found.flatten())
     }
 
+    /// Every item count of the last hourly point taken at or before
+    /// `clock` (`(taken_at, [(item, count)])`), `None` when no point is
+    /// that old: the 24 h baseline of the item holdings list.
+    pub fn holdings_at_or_before(&self, clock: i64) -> Result<Option<(i64, Vec<(i64, i64)>)>, Error> {
+        let mut latest = self.connection.prepare("SELECT MAX(taken_at) FROM holdings_hourly WHERE taken_at <= ?1")?;
+        let taken: Option<i64> = latest.query_map(rusqlite::params![clock], |row| row.get(0))?.next().transpose()?.flatten();
+        let Some(taken_at) = taken else { return Ok(None) };
+        let mut rows = self.connection.prepare("SELECT item_id, count FROM holdings_hourly WHERE taken_at = ?1 ORDER BY item_id")?;
+        let mut counts = Vec::new();
+        for mapped in rows.query_map(rusqlite::params![taken_at], |row| Ok((row.get(0)?, row.get(1)?)))? {
+            counts.push(mapped?);
+        }
+        Ok(Some((taken_at, counts)))
+    }
+
     fn holdings_points_in(
         &self,
         table: &str,
@@ -153,6 +168,18 @@ mod holdings_tests {
         assert_eq!(store.daily_points(Some(995))?.last(), Some(&((morning / DAY_SECONDS) * DAY_SECONDS, 11)));
         // Hourly keeps every hour of the day.
         assert_eq!(store.hourly_points(Some(995))?.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn baseline_is_the_last_point_at_or_before() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        let hour = 1_762_675_200;
+        assert_eq!(store.holdings_at_or_before(hour)?, None, "no point that old");
+        store.record_holdings(hour, &[(995, 7), (1511, 3)])?;
+        store.record_holdings(hour + HOUR_SECONDS, &[(995, 9)])?;
+        assert_eq!(store.holdings_at_or_before(hour + HOUR_SECONDS - 1)?, Some((hour, vec![(995, 7), (1511, 3)])));
+        assert_eq!(store.holdings_at_or_before(hour + 2 * HOUR_SECONDS)?.map(|(taken, _)| taken), Some(hour + HOUR_SECONDS));
         Ok(())
     }
 
