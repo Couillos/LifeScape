@@ -2,11 +2,15 @@
 /// Daemon log line on stdout (redirected to `run/daemon.log`), prefixed
 /// with the UTC wall clock so a lot can be read as a timeline. CLI
 /// commands keep plain `println!` (their stdout is the operator's).
+/// Each line is also offered to the errors collector (brain abandons,
+/// stuck graphs, bans: a no-op until the daemon starts it).
 #[macro_export]
 macro_rules! logln {
-    ($($arg:tt)*) => {
-        println!("[{}] {}", $crate::daemon_clock(), format_args!($($arg)*))
-    };
+    ($($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        $crate::errors_ingest::observe_log_line(&line);
+        println!("[{}] {}", $crate::daemon_clock(), line)
+    }};
 }
 
 /// UTC `HH:MM:SS` for daemon log lines (same clock as session logs).
@@ -18,10 +22,13 @@ pub fn daemon_clock() -> String {
 
 pub mod paths;
 pub mod brain;
+pub mod brain_ambition;
 pub mod brain_await;
 pub mod economy_guard;
 pub mod brain_fold;
+pub mod brain_gear;
 pub mod brain_grace;
+pub mod brain_launch;
 pub mod brain_market;
 pub mod brain_plan;
 pub mod brain_sales;
@@ -32,6 +39,7 @@ pub mod brain_tutorial;
 pub mod market_convene;
 pub mod market_eta;
 pub mod market_daemon;
+pub mod market_demand;
 pub mod market_reprice;
 pub mod market_service;
 pub mod market_audit;
@@ -45,6 +53,9 @@ mod market_service_tests;
 #[cfg(test)]
 #[path = "market_crossing_tests.rs"]
 mod market_crossing_tests;
+#[cfg(test)]
+#[path = "economy_sim_tests.rs"]
+mod economy_sim_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;
@@ -59,7 +70,12 @@ pub mod web_items;
 pub mod web_job_lives;
 pub mod web_ws;
 pub mod web_lives;
+pub mod web_brain;
 pub mod web_market;
+pub mod web_errors;
+pub mod errors_aggregate;
+pub mod errors_ingest;
+pub mod errors_model;
 pub mod zones;
 pub mod cli;
 pub mod await_cmd;
@@ -74,6 +90,7 @@ pub mod supervise;
 pub mod session;
 pub mod session_cmds;
 pub mod session_locks;
+pub mod dump_npc_combat;
 pub mod dump_npc_ranges;
 pub mod dump_transitions;
 pub mod names;

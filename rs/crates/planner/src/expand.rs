@@ -49,6 +49,10 @@ pub struct ReadyCtx {
     /// Units of the node's object the bot already holds (pack, bank,
     /// worn): an obtain buys or makes only what is still missing.
     pub held: i64,
+    /// Share of the wallet (percent) a purchase may spend, when the
+    /// brain caps it (equipment steps: `gear_ladder::GEAR_SHARE_PCT`).
+    /// `None`: the whole wallet, capped at the fair unit price.
+    pub coin_share_pct: Option<i64>,
 }
 
 impl ReadyCtx {
@@ -72,6 +76,7 @@ impl ReadyCtx {
             levels: Vec::new(),
             method_profit: Vec::new(),
             held: 0,
+            coin_share_pct: None,
         }
     }
 }
@@ -107,8 +112,14 @@ fn next_id(counter: &mut usize) -> String {
     format!("n{}", *counter)
 }
 
+/// Reach tranches from the live level `from` (1 when unknown) to `to`:
+/// never a tranche at or below `from` (a level already held is never
+/// replayed), empty when the bot already holds `to`.
 pub(crate) fn reach_chain(skill: &str, from: u8, to: u8, counter: &mut usize, after: &mut String) -> Vec<Node> {
     let mut out = Vec::new();
+    if to <= from.max(1) {
+        return out;
+    }
     // Each tranche works the tier open at its START level (1→5 fishes
     // shrimp, 5→10 sardines): the tier unlocked at the target is out of
     // reach for the whole tranche (lobster needs 40 to train 35→40).
@@ -152,16 +163,26 @@ fn guild_skill(guild: &str) -> Option<&'static str> {
     }
 }
 
-/// Full skeleton at creation: every step present, leaf methods resolved
-/// later (alternatives carry est 0 until `resolve_ready` prices them).
+/// `expand_goal_from` for a fresh bot (every level 1): creation, where
+/// no live snapshot exists yet, and offline tests. A goal drawn for a
+/// running bot always goes through `expand_goal_from`.
 pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
+    expand_goal_from(goal, profile, &|_| 1)
+}
+
+/// Full skeleton: every step present, leaf methods resolved later
+/// (alternatives carry est 0 until `resolve_ready` prices them). Climbs
+/// start at the live level (`level_of`, 1 when unknown): a tranche at or
+/// below what the bot holds is never generated (live 2026-11-13: 40 % of
+/// melee climb ticks replayed reached tranches).
+pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
     let mut counter = 0usize;
     let mut nodes = Vec::new();
     match goal {
         GoalKind::MaxSkills { skills, level } => {
             for skill in skills {
                 let mut after = String::new();
-                nodes.extend(reach_chain(skill, 1, *level, &mut counter, &mut after));
+                nodes.extend(reach_chain(skill, level_of(skill), *level, &mut counter, &mut after));
             }
         }
         GoalKind::Obtain { item, count } => {
@@ -178,7 +199,7 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
             nodes.push(node);
         }
         GoalKind::CompleteQuest { quest } => {
-            nodes.extend(expand_quest(quest, profile, &mut counter));
+            nodes.extend(expand_quest_from(quest, profile, &mut counter, level_of));
         }
         GoalKind::EquipBest { style } => {
             // PRD3 lot 5: the resolver's set for a fresh bot (levels and
@@ -210,7 +231,7 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
             if let Some((_, level, uniform)) = lifescape_gamedata::services::GUILDS.iter().find(|entry| entry.0 == area) {
                 if let Some(skill) = guild_skill(area) {
                     let mut after = String::new();
-                    let chain = reach_chain(skill, 1, (*level).min(99) as u8, &mut counter, &mut after);
+                    let chain = reach_chain(skill, level_of(skill), (*level).min(99) as u8, &mut counter, &mut after);
                     if let Some(last) = chain.last() {
                         deps.push(last.id.clone());
                     }
@@ -226,7 +247,7 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
                 // are not in the dumps, so no minimal quest set derives —
                 // the cheapest QP rung (Cook's Assistant) gates the node
                 // until the ladder lands.
-                let quest_nodes = expand_quest("cook", profile, &mut counter);
+                let quest_nodes = expand_quest_from("cook", profile, &mut counter, level_of);
                 if let Some(last) = quest_nodes.last() {
                     deps.push(last.id.clone());
                 }
@@ -235,6 +256,16 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
             let id = next_id(&mut counter);
             let mut node = Node::new(&id, NodeKind::AccessArea { area: area.clone() }, deps, 1);
             node.alternatives.push(Alternative { method: format!("access:{area}"), est_ticks: 1200, est_coins: 0 });
+            nodes.push(node);
+        }
+        GoalKind::Produce { item, count } => {
+            // A production quota (ambition milestone): production legs
+            // only, the product is never bought (inputs may be, through
+            // the `obtain` sub-tasks a missing input files). The default
+            // selling lists the result once the node is done.
+            let id = next_id(&mut counter);
+            let mut node = Node::new(&id, NodeKind::ObtainItems { item: item.clone(), count: *count }, Vec::new(), *count);
+            node.alternatives = crate::obtain_legs::produce_alternatives(item);
             nodes.push(node);
         }
         GoalKind::GetRich { merchant } => {
@@ -257,12 +288,17 @@ pub fn expand_goal(goal: &GoalKind, profile: &Profile) -> Vec<Node> {
 /// `reach_level` chains, item checks become `obtain_items`; the quest
 /// node itself depends on all of them.
 pub fn expand_quest(quest: &str, profile: &Profile, counter: &mut usize) -> Vec<Node> {
+    expand_quest_from(quest, profile, counter, &|_| 1)
+}
+
+/// `expand_quest` with skill gates climbing from the live levels.
+pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
         for gate in &required.skills {
             let mut after = String::new();
-            let chain = reach_chain(&gate.skill, 1, gate.level.min(99) as u8, counter, &mut after);
+            let chain = reach_chain(&gate.skill, level_of(&gate.skill), gate.level.min(99) as u8, counter, &mut after);
             if let Some(last) = chain.last() {
                 deps.push(last.id.clone());
             }

@@ -3,9 +3,11 @@
 //! spell is the run of passes where nothing is launchable: it opens with
 //! one log line and one `graph: stuck` history entry (causes kept in the
 //! file), closes the goal once (done when the live levels meet it, stuck
-//! otherwise) and draws the next one. With no goal left, the spell waits
-//! for the lifecycle's cooldown revive (`revive_stuck`); past its cap the
-//! spell ends `graph: final` and the operator decides (rule 7).
+//! otherwise: its skills banned for `SKILL_BAN_TICKS`, cause logged) and
+//! draws the next one. With no goal drawable, every pass retries the draw
+//! (a ban expiry brings the bot back, `graph: final` included); meanwhile
+//! the spell waits for the lifecycle's cooldown revive (`revive_stuck`),
+//! and past its cap the abandoned nodes stay down (rule 7).
 //!
 //! Live 2026-11-12 (bh99tw2f, bbkjz2vk): the spell was re-noted on every
 //! pass (the goal entry hid the stuck one: one log line and two history
@@ -62,9 +64,23 @@ pub fn seconds_to_ticks(seconds: i64) -> u64 {
 }
 
 /// One stuck pass. Returns true when the life changed (save it).
+/// Retry the goal draw of a closed goal (bans may have expired). Returns
+/// (a goal was drawn, the life changed).
+fn retry_draw(life: &mut Life, live: &Value) -> (bool, bool) {
+    let (drawn, changed) = crate::brain_succession::redraw(life, live);
+    match drawn {
+        Some(label) => {
+            crate::logln!("brain {}: stuck spell over, next goal {label}", life.account);
+            lifescape_planner::normalize(life);
+            (true, true)
+        }
+        None => (false, changed),
+    }
+}
+
 pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> bool {
     match spell(&life.history) {
-        Spell::Final => false,
+        Spell::Final => retry_draw(life, live).1,
         Spell::Fresh => {
             let causes: Vec<String> = life
                 .nodes
@@ -77,22 +93,31 @@ pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> b
             // A goal the bot already meets is done, whatever older
             // abandoned nodes linger in the graph.
             let stuck = !goal_met(&life.goal, live);
-            match crate::brain_succession::succeed_goal(life, live, stuck) {
+            let drawn = if lifescape_planner::goal_closed(&life.history) {
+                crate::brain_succession::redraw(life, live).0
+            } else {
+                crate::brain_succession::succeed_goal(life, live, stuck)
+            };
+            match drawn {
                 Some(label) => {
                     crate::logln!("brain {}: goal {} -> next goal {label}", life.account, if stuck { "stuck" } else { "done" });
                     lifescape_planner::normalize(life);
                 }
                 None => crate::logln!(
-                    "brain {}: no goal left to draw; abandoned nodes retry after {REVIVE_COOLDOWN_TICKS} ticks (at most {MAX_REVIVES} times), then the operator decides",
+                    "brain {}: no goal left to draw (see the reason above); the draw retries as bans expire, abandoned nodes retry after {REVIVE_COOLDOWN_TICKS} ticks (at most {MAX_REVIVES} times)",
                     life.account
                 ),
             }
             true
         }
         Spell::Waiting(since) => {
+            let (drawn, changed) = retry_draw(life, live);
+            if drawn {
+                return true;
+            }
             let waited = seconds_to_ticks(now_secs() - since);
             if waited < REVIVE_COOLDOWN_TICKS {
-                return false;
+                return changed;
             }
             let changes = lifescape_planner::revive_stuck(life, waited);
             if changes.is_empty() {

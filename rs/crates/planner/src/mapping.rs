@@ -16,43 +16,16 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         tail.push(max_ticks.to_string());
     }
     let (script, mut head): (String, Vec<String>) = if method.starts_with("gather:fishing/") {
-        let level = match &node.kind {
-            NodeKind::ReachLevel { level, .. } => *level,
-            _ => 0,
-        };
-        let mut head = Vec::new();
-        if level >= 2 {
-            head.push("--level".to_string());
-            head.push("fishing".to_string());
-            head.push(level.to_string());
-        }
+        let head = level_flag(node, Some("fishing"));
         // No resource positional: the gatherer works the best tier at or
         // below its live level inside the brain-fixed palier (D21: the
         // palier, not the exact tier, is the brain's order).
         ("fishing".to_string(), head)
     } else if method.starts_with("gather:woodcut/") {
-        let level = match &node.kind {
-            NodeKind::ReachLevel { level, .. } => *level,
-            _ => 0,
-        };
-        let mut head = Vec::new();
-        if level >= 2 {
-            head.push("--level".to_string());
-            head.push("woodcutting".to_string());
-            head.push(level.to_string());
-        }
+        let head = level_flag(node, Some("woodcutting"));
         ("woodcut".to_string(), head)
     } else if method.starts_with("gather:mining/") {
-        let level = match &node.kind {
-            NodeKind::ReachLevel { level, .. } => *level,
-            _ => 0,
-        };
-        let mut head = Vec::new();
-        if level >= 2 {
-            head.push("--level".to_string());
-            head.push("mining".to_string());
-            head.push(level.to_string());
-        }
+        let head = level_flag(node, Some("mining"));
         ("mining".to_string(), head)
     } else if let Some(raw) = method.strip_prefix("cook/") {
         ("cook".to_string(), vec![raw.to_string()])
@@ -117,15 +90,15 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         // strung amulet (`enchant_for`): `enchant:strung_sapphire_amulet`.
         ("enchant_teleport".to_string(), vec![amulet.to_string()])
     } else if let Some(spot) = method.strip_prefix("fight:ranged/") {
-        ("ranged".to_string(), vec![spot.to_string()])
+        ("ranged".to_string(), fight_head(spot, node))
     } else if let Some(spot) = method.strip_prefix("fight:magic/") {
-        ("magic".to_string(), vec![spot.to_string()])
+        ("magic".to_string(), fight_head(spot, node))
     } else if method.starts_with("gather:sheep/") {
         ("shear".to_string(), Vec::new())
     } else if let Some(resource) = method.strip_prefix("gather:wheat/") {
         ("picking".to_string(), vec![resource.to_string()])
     } else if let Some(spot) = method.strip_prefix("fight:melee/") {
-        ("melee".to_string(), vec![spot.to_string()])
+        ("melee".to_string(), fight_head(spot, node))
     } else if let Some(resource) = method.strip_prefix("farm:") {
         farm_args(resource)?
     } else if method == "market:buy" || method == "market:sell" {
@@ -191,6 +164,26 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     Some((script, head))
 }
 
+/// `--level <skill> <N>` for a reach tranche: the script stops at the
+/// target instead of spending its whole budget (gatherers name their own
+/// skill; fights take the node's: attack, strength, defence, ranged...).
+/// Nothing for other nodes (obtain, combat training) or a level below 2.
+fn level_flag(node: &Node, skill: Option<&str>) -> Vec<String> {
+    match &node.kind {
+        NodeKind::ReachLevel { skill: aimed, level } if *level >= 2 => {
+            vec!["--level".to_string(), skill.unwrap_or(aimed).to_string(), level.to_string()]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Fight scripts: the spot first (positional), then the level target.
+fn fight_head(spot: &str, node: &Node) -> Vec<String> {
+    let mut head = vec![spot.to_string()];
+    head.extend(level_flag(node, None));
+    head
+}
+
 fn obtain_pair(node: &Node) -> Option<(String, String)> {
     match &node.kind {
         NodeKind::ObtainItems { item, count } => Some((item.clone(), count.to_string())),
@@ -243,6 +236,10 @@ fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
     }
     if resource.ends_with("_ore") || resource == "coal" || resource == "clay" {
         return Some(("mining".to_string(), Vec::new()));
+    }
+    // Rune essence is mined only through Aubury's teleport (`essence:`).
+    if resource == "blankrune" {
+        return Some(("essence_run".to_string(), Vec::new()));
     }
     spot_for_drop(resource).map(|spot| ("melee".to_string(), vec![spot]))
 }
@@ -388,6 +385,27 @@ mod tests {
         // `cook:` names the product but the script eats the raw input.
         let (_, args) = map_method("cook:trout", &obtain(), None).expect("cook maps");
         assert_eq!(args.first().map(String::as_str), Some("raw_trout"), "product resolves to raw, got {args:?}");
+    }
+
+    /// Melee, ranged and magic climbs stop at the target level like the
+    /// gatherers (a tranche never overshoots by a whole budget); a combat
+    /// training or a drop farm carries no level.
+    #[test]
+    fn fight_climbs_carry_their_level_target() {
+        let climb = Node::new("n4", NodeKind::ReachLevel { skill: "attack".to_string(), level: 55 }, Vec::new(), 55);
+        let (script, args) = map_method("fight:melee/cows", &climb, Some((0, 18000))).expect("melee maps");
+        assert_eq!(script, "melee");
+        let at = args.iter().position(|arg| arg == "--level").expect("level flag");
+        assert_eq!(&args[at + 1..at + 3], &["attack".to_string(), "55".to_string()]);
+        assert_eq!(args[0], "cows", "the spot stays the first positional");
+        let ranged = Node::new("n5", NodeKind::ReachLevel { skill: "ranged".to_string(), level: 20 }, Vec::new(), 20);
+        let (_, args) = map_method("fight:ranged/cows", &ranged, None).expect("ranged maps");
+        assert!(args.windows(3).any(|window| window == ["--level", "ranged", "20"]), "got {args:?}");
+        let combat = Node::new("n6", NodeKind::ReachCombat { level: 15 }, Vec::new(), 15);
+        let (_, args) = map_method("fight:melee/chickens", &combat, None).expect("training maps");
+        assert!(!args.contains(&"--level".to_string()), "combat level is no skill, got {args:?}");
+        let (_, args) = map_method("fight:melee/chickens", &obtain(), None).expect("farm maps");
+        assert!(!args.contains(&"--level".to_string()));
     }
 
     #[test]

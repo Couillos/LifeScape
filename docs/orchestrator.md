@@ -42,6 +42,20 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 (heartbeat SDK), `run/logs/<compte>.log`, `run/orchestrator.sock`,
 `run/pathfinding.sock`. Dashboard `http://localhost:8765/` (`src/web.rs`,
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
+Onglet « Cerveau » de la page Lives (`/life`, `brain.js`, 2026-11-13) :
+`GET /api/brain/<compte>` (`src/web_brain.rs`, lecture seule) agrège le
+fichier de vie (ambition passée telle quelle si présente, but + jalon
+d'origine `goal_origin`, nœuds avec deps, sous-tâches déposées sur
+blocage `filed`, méthode et alternatives chiffrées, compteurs), les
+souhaits (commande daemon `brain_wishes` = `brain_wishlist::wishlist`),
+ordres ouverts (plafond de reprix en mémoire) et deals, le live (niveaux,
+combat, pièces, porté), l'historique des buts et les bannissements.
+Source en échec ⇒ ligne dans `errors`, jamais une liste vide muette.
+`version` = mtime du fichier de vie + empreinte du contenu affiché (hors
+comptes à rebours) : le front relit toutes les 5 s et ne redessine le
+graphe SVG (colonnes ambition → jalons → but → tâches par plus long
+chemin de dépendance) que si elle change. Tests :
+`web_brain_tests.rs`, `node orchestration/static/brain.test.js`.
 Serveur de jeu via `LIFESCAPE_SERVER_HOST` / `LIFESCAPE_SERVER_PORT`
 (défaut `127.0.0.1:43594`), données engine via `LIFESCAPE_ENGINE_DIR`
 (défaut `../lostcity/engine`).
@@ -71,3 +85,14 @@ après ~0,8 s, jamais en parallèle (~40 s pour 25 comptes). Les envois des
 workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
 leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
 (`.cargo/config.toml`).
+
+Erreurs (2026-11-13) : page `/errors` (`orchestration/static/errors.html`,
+`errors.js`), API `web_errors.rs` : `/api/errors/summary?hours=1..72&source=
+&type=&account=&script=&zone=&signature=` (KPIs, tendance vs fenêtre
+précédente, erreurs/heure, groupes par signature, taux d'échec par tâche et
+des deals, options de filtres), `/api/errors/list?…&limit=` (lignes : heure
+UTC, compte, tâche/nœud/méthode, type, message, signature, x/z/niveau,
+zone, détail, dossier), `/api/errors/dossier/<fichier>`. Collecteur
+`errors_ingest.rs` (table `error_events`, sources task/nav/deal/brain,
+voir `docs/decisions.md`), lignes construites dans `errors_model.rs`,
+maths dans `errors_aggregate.rs`. Le spectateur suit `/#<compte>`.

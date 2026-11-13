@@ -77,9 +77,13 @@ pub fn next_id(life: &Life) -> String {
 }
 
 fn max_id_number(life: &Life) -> usize {
+    // History ids count too: a withdrawn ladder step leaves the graph,
+    // never its number (`withdraw_gear_step`, logged by the brain).
     life.nodes
         .iter()
-        .filter_map(|node| node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()))
+        .map(|node| node.id.as_str())
+        .chain(life.history.iter().map(|entry| entry.node.as_str()))
+        .filter_map(|id| id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()))
         .max()
         .unwrap_or(0)
         .max(life.nodes.len())
@@ -100,6 +104,7 @@ fn abandon(node: &mut Node, why: String, changes: &mut Vec<String>) {
 /// index: the legs are game data, never a choice to preserve.
 fn rederive_dead_legs(life: &mut Life, changes: &mut Vec<String>) {
     let ironman = life.profile.ironman;
+    let produce = produce_item(life);
     for node in &mut life.nodes {
         if is_terminal(&node.status) || node.status == NodeStatus::Active {
             continue;
@@ -109,11 +114,20 @@ fn rederive_dead_legs(life: &mut Life, changes: &mut Vec<String>) {
             continue;
         }
         if let NodeKind::ObtainItems { item, .. } = &node.kind {
-            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            node.alternatives = crate::obtain_legs::legs_for(item, ironman, produce.as_deref());
             node.method = None;
             let fresh: Vec<&str> = node.alternatives.iter().map(|alt| alt.method.as_str()).collect();
             changes.push(format!("{} legs re-derived ({} name no script) -> {}", node.id, dead.join(", "), fresh.join(", ")));
         }
+    }
+}
+
+/// Item of the current production quota: its obtain node keeps
+/// production legs only when re-derived (never bought back in).
+fn produce_item(life: &Life) -> Option<String> {
+    match &life.goal {
+        crate::model::GoalKind::Produce { item, .. } => Some(item.clone()),
+        _ => None,
     }
 }
 
@@ -261,6 +275,7 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
         return Vec::new();
     }
     let ironman = life.profile.ironman;
+    let produce = produce_item(life);
     let style = crate::combat::goal_combat_style(&life.goal).to_string();
     let mut changes = Vec::new();
     for node in &mut life.nodes {
@@ -274,7 +289,7 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
         node.method = None;
         node.site = None;
         node.spent_ticks = 0;
-        rederive_legs(node, ironman, &style);
+        rederive_legs(node, ironman, &style, produce.as_deref());
         changes.push(format!("{} revived ({}/{MAX_REVIVES}) after {stuck_ticks} stuck ticks; was: {}", node.id, node.revives, node.last_error));
     }
     if !changes.is_empty() {
@@ -287,10 +302,10 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
 /// from the obtain index (a travel ban is forgotten with the rest), a
 /// tranche or combat training whose legs were all banned gets its
 /// creation method back.
-fn rederive_legs(node: &mut Node, ironman: bool, style: &str) {
+fn rederive_legs(node: &mut Node, ironman: bool, style: &str, produce: Option<&str>) {
     let method = match &node.kind {
         NodeKind::ObtainItems { item, .. } => {
-            node.alternatives = crate::obtain_legs::obtain_alternatives(item, ironman);
+            node.alternatives = crate::obtain_legs::legs_for(item, ironman, produce);
             return;
         }
         NodeKind::ReachLevel { skill, level } if node.alternatives.is_empty() => {
@@ -310,6 +325,110 @@ fn rederive_legs(node: &mut Node, ironman: bool, style: &str) {
 pub fn mark_launched(life: &mut Life, index: usize) {
     life.nodes[index].status = NodeStatus::Active;
     life.active = Some(life.nodes[index].id.clone());
+}
+
+/// A node whose target is met on positive proof (its report, the
+/// holdings after a market fill, the wallet, the live level, the bot
+/// seen off the island): done, lock released, its engagement over.
+/// `progress` is the caller's proof (level, held count, coins).
+pub fn complete_node(life: &mut Life, index: usize, progress: i64) {
+    release_active(life, index);
+    if life.engagement.as_ref().is_some_and(|engaged| engaged.node == life.nodes[index].id) {
+        life.engagement = None;
+    }
+    let node = &mut life.nodes[index];
+    node.status = NodeStatus::Done;
+    node.progress_current = progress;
+}
+
+/// Back to ready without spending any budget: operator stop, daemon
+/// restart, a partial market fill, a stale lock refused at launch. The
+/// method drops so the next pass resolves afresh.
+pub fn retry_uncounted(life: &mut Life, index: usize) {
+    release_active(life, index);
+    let node = &mut life.nodes[index];
+    node.status = NodeStatus::Ready;
+    node.method = None;
+}
+
+/// An engagement window ended (`budget_exhausted` short of the goal):
+/// money closes (one engagement is the task), every other node retries.
+pub fn end_engagement(life: &mut Life, index: usize) {
+    release_active(life, index);
+    let mut counter = 0;
+    replan_node(&mut life.nodes[index], &ReplanCause::EngagementEnd, &[], &mut counter);
+}
+
+/// Live proof that a climb is already over: `Some(level)` when the live
+/// level (`level_of`, 1 when unknown) or combat level meets the target of
+/// a `reach_level` / `reach_combat` node. Pure decision; the brain closes
+/// the node with `complete_node`, never launching a replayed tranche.
+pub fn reached_live(node: &Node, level_of: &dyn Fn(&str) -> u8, combat: u8) -> Option<u8> {
+    match &node.kind {
+        NodeKind::ReachLevel { skill, level } => Some(level_of(skill)).filter(|live| live >= level),
+        NodeKind::ReachCombat { level } => Some(combat).filter(|live| live >= level),
+        _ => None,
+    }
+}
+
+/// File a node that runs at once (space janitor, tutorial): ready on
+/// arrival, no dependency. Returns its index.
+pub fn insert_ready(life: &mut Life, mut node: Node) -> usize {
+    node.status = NodeStatus::Ready;
+    life.nodes.push(node);
+    life.nodes.len() - 1
+}
+
+/// File an equipment ladder step (`gear_ladder`): with `item`, an
+/// `obtain_items` of one piece bought on the market only (never a shop:
+/// every ladder piece is producible, D-A), ready, then the `equip_best`
+/// that wears it; without, the `equip_best` alone (a piece already owned).
+/// Returns the new ids. The caller files one step at a time
+/// (`gear_ladder::step_open`).
+pub fn insert_gear_step(life: &mut Life, item: Option<&str>, style: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut deps = Vec::new();
+    if let Some(item) = item {
+        let id = next_id(life);
+        let mut obtain = Node::new(&id, NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
+        obtain.alternatives.push(crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 });
+        obtain.status = NodeStatus::Ready;
+        life.nodes.push(obtain);
+        deps.push(id.clone());
+        ids.push(id);
+    }
+    let id = next_id(life);
+    let mut equip = Node::new(&id, NodeKind::EquipBest { style: style.to_string() }, deps.clone(), 1);
+    equip.alternatives.push(crate::model::Alternative { method: format!("equip:{style}"), est_ticks: 400, est_coins: 0 });
+    equip.alternatives.push(crate::model::Alternative { method: crate::gear_ladder::LADDER_MARKER.to_string(), est_ticks: 0, est_coins: 0 });
+    equip.status = if deps.is_empty() { NodeStatus::Ready } else { NodeStatus::Pending };
+    life.nodes.push(equip);
+    ids.push(id);
+    ids
+}
+
+/// Withdraw the ladder step whose chain holds node `index`: its open
+/// nodes leave the graph (done ones stay as the record), unless a node
+/// outside the step still depends on them. Used when the seller left
+/// before the purchase (the standing bid takes over) or when the step
+/// died (abandoned): an equipment step never strands the goal's graph.
+/// Returns the removed ids.
+pub fn withdraw_gear_step(life: &mut Life, index: usize) -> Vec<String> {
+    let id = life.nodes[index].id.clone();
+    let equip = (0..life.nodes.len())
+        .find(|&at| crate::gear_ladder::is_ladder_equip(&life.nodes[at]) && crate::gear_ladder::step_chain(life, at).contains(&id));
+    let Some(equip) = equip else { return Vec::new() };
+    let chain = crate::gear_ladder::step_chain(life, equip);
+    let removable: Vec<String> = chain
+        .iter()
+        .filter(|member| {
+            life.nodes.iter().any(|node| &node.id == *member && !matches!(node.status, NodeStatus::Done | NodeStatus::Active))
+                && !life.nodes.iter().any(|node| !chain.contains(&node.id) && node.deps.contains(member))
+        })
+        .cloned()
+        .collect();
+    life.nodes.retain(|node| !removable.contains(&node.id));
+    removable
 }
 
 /// A runtime failure (`Failed`, `Sdk`, bad exit): counted, retried with a
@@ -352,10 +471,18 @@ pub fn record_progress(life: &mut Life, index: usize, current: i64) {
     node.progress_current = current;
 }
 
+/// `record_block_from` with every live level unknown (level 1): offline
+/// replays and tests. The brain passes the live levels.
+pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
+    record_block_from(life, index, missing, &|_| 1)
+}
+
 /// A blocked stop: the node waits on one `obtain_items` per missing
 /// item, reusing an open obtain for the same item instead of stacking
-/// duplicates. Past `MAX_BLOCKS` the node is abandoned.
-pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
+/// duplicates. A missing skill level climbs from `level_of` (the live
+/// level): never a tranche the bot already holds. Past `MAX_BLOCKS` the
+/// node is abandoned.
+pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], level_of: &dyn Fn(&str) -> u8) -> FailureFold {
     release_active(life, index);
     let blocks = life.nodes[index].blocks.saturating_add(1);
     life.nodes[index].blocks = blocks;
@@ -423,7 +550,7 @@ pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> Failur
                 None => {
                     let mut counter = max_id_number(life) + fresh_nodes.len();
                     let mut after = String::new();
-                    let chain = crate::expand::reach_chain(&skill, 1, level, &mut counter, &mut after);
+                    let chain = crate::expand::reach_chain(&skill, level_of(&skill), level, &mut counter, &mut after);
                     if let Some(last) = chain.last() {
                         reused.push(last.id.clone());
                     }
@@ -464,3 +591,7 @@ mod tests;
 #[cfg(test)]
 #[path = "lifecycle_revive_tests.rs"]
 mod revive_tests;
+
+#[cfg(test)]
+#[path = "lifecycle_moves_tests.rs"]
+mod moves_tests;

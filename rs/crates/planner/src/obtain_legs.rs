@@ -128,6 +128,22 @@ pub fn obtain_alternatives(item: &str, ironman: bool) -> Vec<Alternative> {
     out
 }
 
+/// Legs of a production quota (`GoalKind::Produce`): every production
+/// way, never the market nor a shop (the product must be made).
+pub fn produce_alternatives(item: &str) -> Vec<Alternative> {
+    production_legs(item).into_iter().map(|leg| Alternative { method: leg.method, est_ticks: 0, est_coins: 0 }).collect()
+}
+
+/// Legs of an obtain node: production only for the goal's quota item
+/// (`produce`), else every way (`obtain_alternatives`).
+pub fn legs_for(item: &str, ironman: bool, produce: Option<&str>) -> Vec<Alternative> {
+    if produce == Some(item) {
+        produce_alternatives(item)
+    } else {
+        obtain_alternatives(item, ironman)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{obtain_alternatives, production_legs};

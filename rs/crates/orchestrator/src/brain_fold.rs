@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use lifescape_json::Value;
-use lifescape_planner::{normalize, record_block, record_contract_error, record_failure, replan_node, FailureFold, NodeKind, NodeStatus, ReplanCause};
+use lifescape_planner::{complete_node, end_engagement, normalize, record_block_from, record_contract_error, record_failure, retry_uncounted, FailureFold, NodeKind, NodeStatus};
 
 use crate::brain::{load_life, push_history, save_life};
 use crate::brain_plan::{fold_travel_failure, holdings_count, is_travel_failure, rescue_replan_cause, TravelFold};
@@ -190,12 +190,8 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             if let NodeKind::ObtainItems { item, .. } = &kind {
                 crate::brain_market::cancel_open_buys(&account, item);
             }
-            life.nodes[index].status = NodeStatus::Done;
-            life.nodes[index].progress_current = life.nodes[index].progress_target.max(life.nodes[index].progress_current);
-            life.active = None;
-            if life.engagement.as_ref().is_some_and(|engaged| engaged.node == id) {
-                life.engagement = None;
-            }
+            let proof = life.nodes[index].progress_target.max(life.nodes[index].progress_current);
+            complete_node(&mut life, index, proof);
             push_history(&mut life, &id, "goal_reached");
         }
         Verdict::AwaitFill => {
@@ -204,19 +200,17 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             push_history(&mut life, &id, "awaiting_fill");
         }
         Verdict::EngagementEnd => {
-            let mut counter = 0;
-            replan_node(&mut life.nodes[index], &ReplanCause::EngagementEnd, &[], &mut counter);
-            life.active = None;
+            end_engagement(&mut life, index);
             push_history(&mut life, &id, "engagement_end");
         }
         Verdict::Stopped => {
-            life.nodes[index].status = NodeStatus::Ready;
-            life.nodes[index].method = None;
-            life.active = None;
+            retry_uncounted(&mut life, index);
             push_history(&mut life, &id, "stopped");
         }
         Verdict::Blocked(needs) => {
-            let fold = record_block(&mut life, index, needs);
+            // A missing level climbs from the reported live level.
+            let level_of = |skill: &str| reach_level(report, skill).unwrap_or(1);
+            let fold = record_block_from(&mut life, index, needs, &level_of);
             push_history(&mut life, &id, if fold == FailureFold::Abandoned { "abandoned" } else { "blocked" });
         }
         Verdict::Contract(text) => {

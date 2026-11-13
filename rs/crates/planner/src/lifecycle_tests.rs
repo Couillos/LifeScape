@@ -27,6 +27,8 @@ fn life_of(nodes: Vec<Node>, active: Option<&str>) -> Life {
         engagement: None,
         active: active.map(str::to_string),
         history: Vec::new(),
+        ambition: None,
+        goal_origin: None,
     }
 }
 

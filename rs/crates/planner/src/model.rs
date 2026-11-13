@@ -16,6 +16,10 @@ pub enum GoalKind {
     EquipBest { style: String },
     AccessArea { area: String },
     GetRich { merchant: Option<bool> },
+    /// Make `count` of `item` by production only (an ambition milestone:
+    /// the product is never bought; inputs may be). Once the obtain node
+    /// is done, the brain's default selling lists the surplus.
+    Produce { item: String, count: i64 },
 }
 
 /// Producer or merchant for the `get_rich` goal (D18). Drawn once at
@@ -208,6 +212,11 @@ pub struct Life {
     pub engagement: Option<Engagement>,
     pub active: Option<String>,
     pub history: Vec<HistoryEntry>,
+    /// Long-term ambition driving the goal draws (`ambition.rs`); `None`
+    /// only in files written before ambitions (the brain assigns one).
+    pub ambition: Option<crate::ambition::Ambition>,
+    /// Milestone id the current goal was drawn from (`m3`), if any.
+    pub goal_origin: Option<String>,
 }
 
 pub const LIFE_SCHEMA: i64 = 1;
@@ -248,6 +257,11 @@ fn goal_to_value(goal: &GoalKind) -> Value {
                 },
             ),
         ]),
+        GoalKind::Produce { item, count } => object(vec![
+            ("kind", str_value("produce")),
+            ("item", str_value(item)),
+            ("count", Value::Int(*count)),
+        ]),
     }
 }
 
@@ -275,6 +289,10 @@ fn goal_from_value(value: &Value) -> Option<GoalKind> {
         }),
         "access_area" => Some(GoalKind::AccessArea {
             area: value.get("area").as_str().unwrap_or("").to_string(),
+        }),
+        "produce" => Some(GoalKind::Produce {
+            item: value.get("item").as_str().unwrap_or("").to_string(),
+            count: value.get("count").as_i64().unwrap_or(1).max(1),
         }),
         "get_rich" => Some(GoalKind::GetRich {
             merchant: match &value.get("merchant") {
@@ -494,6 +512,8 @@ pub fn life_to_value(life: &Life) -> Value {
                     .collect(),
             ),
         ),
+        ("ambition", life.ambition.as_ref().map(crate::ambition::ambition_to_value).unwrap_or(Value::Null)),
+        ("goal_origin", life.goal_origin.as_deref().map(str_value).unwrap_or(Value::Null)),
     ])
 }
 
@@ -548,6 +568,9 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default(),
+        // Absent before ambitions: loads fine, the brain assigns one.
+        ambition: crate::ambition::ambition_from_value(&value.get("ambition")),
+        goal_origin: value.get("goal_origin").as_str().map(str::to_string),
     })
 }
 
@@ -575,6 +598,8 @@ mod tests {
                 ended: 1762690000,
                 outcome: "goal_reached".to_string(),
             }],
+            ambition: None,
+            goal_origin: None,
         }
     }
 

@@ -17,6 +17,7 @@
 pub mod candles;
 pub mod deals;
 pub mod economy;
+pub mod errors;
 pub mod holdings;
 pub mod items;
 pub mod orders;
@@ -26,6 +27,7 @@ pub mod schema;
 pub use candles::{Candle, Execution, NewExecution, YieldCandleResolution};
 pub use deals::{Deal, DealStatus, NewDeal};
 pub use economy::{AccountEcon, Trend};
+pub use errors::{ErrorFilter, ErrorRecord, FailedDeal, TaskOutcome};
 pub use items::Item;
 pub use orders::{NewOrder, Order, OrderSide, OrderStatus};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};

@@ -336,7 +336,8 @@ fn combat_tranches_name_real_spots() {
         for level in [1u8, 9, 10, 20, 30, 40] {
             let method = reach_method(skill, level);
             let spot = method.rsplit('/').next().expect("spot part");
-            assert!(lifescape_gamedata::combat_spots::by_key(spot).is_some(), "{skill} {level}: {method} names no spot");
+            let ladder = spot == crate::tranches::MELEE_LADDER && level >= 10 && !matches!(skill, "ranged" | "magic");
+            assert!(ladder || lifescape_gamedata::combat_spots::by_key(spot).is_some(), "{skill} {level}: {method} names no spot");
         }
     }
 }
@@ -422,4 +423,28 @@ fn unmakeable_covered_ask_is_a_pure_buy() {
     ctx.best_ask = Some(5);
     resolve_ready(&mut nodes[0], &ctx);
     assert_eq!(nodes[0].method.as_deref(), Some("market:buy"), "{:?}", nodes[0].alternatives);
+}
+
+/// Live 2026-11-13: 40 % of melee climb ticks replayed tranches already
+/// held (every goal expanded from level 1). A goal climbs from the live
+/// level: attack 55 at live attack 45 is one tranche 45 -> 55, worked
+/// with the tier open at 45.
+#[test]
+fn goals_climb_from_the_live_level() {
+    let live = |skill: &str| if skill == "attack" { 45 } else { 1 };
+    let goal = GoalKind::MaxSkills { skills: vec!["attack".to_string()], level: 55 };
+    let nodes = super::expand_goal_from(&goal, &profile(), &live);
+    assert_eq!(nodes.len(), 1, "one tranche 45 -> 55, got {nodes:?}");
+    assert!(matches!(&nodes[0].kind, NodeKind::ReachLevel { skill, level: 55 } if skill == "attack"));
+    assert_eq!(nodes[0].alternatives[0].method, reach_method("attack", 45), "the tier open at the live level");
+    assert!(nodes[0].deps.is_empty());
+    let held = super::expand_goal_from(&GoalKind::MaxSkills { skills: vec!["attack".to_string()], level: 40 }, &profile(), &live);
+    assert!(held.is_empty(), "a level already held expands to nothing, got {held:?}");
+    let fresh = super::expand_goal_from(&goal, &profile(), &|_| 1);
+    assert_eq!(fresh.len(), expand_goal(&goal, &profile()).len(), "unknown levels (1) keep the full ladder");
+    let guild = super::expand_goal_from(&GoalKind::AccessArea { area: "cooks_guild".to_string() }, &profile(), &|skill| if skill == "cooking" { 40 } else { 1 });
+    assert!(
+        guild.iter().all(|node| !matches!(&node.kind, NodeKind::ReachLevel { level, .. } if *level <= 40)),
+        "guild gates climb from the live level too, got {guild:?}"
+    );
 }
