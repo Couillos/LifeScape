@@ -2,8 +2,9 @@
 //! Offline check of the PRD3 price formation (lot 2), on the real book:
 //! every object starts at 1 coin (never traded), buyers open at the
 //! reference (or take a covered ask) and walk up to their ceiling, sellers
-//! ask 10% over the reference (or hit a richer bid) and walk down to
-//! their floor, one `step_toward` per round. Deterministic on the seed.
+//! ask the reference (or hit a richer bid) and walk down to their floor,
+//! one `step_toward` per round. Deterministic on the seed. Fill-driven
+//! steps (`demand_step`) are exercised by `sim_demand`.
 //!
 //! Questions it answers (see the tests): does a wanted, scarce object get
 //! bid up from 1? Does an abundant one stay cheap? Does anything run
@@ -44,8 +45,7 @@ fn opening(buying: bool, reference: i64, bid: Option<i64>, ask: Option<i64>, bou
             _ => reference.min(bound).max(1),
         }
     } else {
-        let asking = reference + (reference / 10).max(if reference > 1 { 1 } else { 0 });
-        asking.max(bid.unwrap_or(0)).max(bound).max(1)
+        crate::zip::opening_ask(reference, bid).max(bound)
     }
 }
 
