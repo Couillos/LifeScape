@@ -13,7 +13,7 @@ use lifescape_sdk::client::travel::{install_between_legs, remove_between_legs};
 use lifescape_sdk::client::travel_hook::{BetweenLegsHook, LegInfo, LegVerdict};
 use lifescape_sdk::{Bot, Error};
 
-use crate::kit::survival::{check_events, hitpoints};
+use crate::kit::survival::{check_events, hitpoints, max_hitpoints, should_eat, EAT_FRACTION};
 use crate::ScriptError;
 
 /// Remote walking-cost refinement, shared by the foe/spot pickers (network
@@ -114,12 +114,22 @@ pub fn rescue_then_retry(bot: &mut Bot, error: Error) -> Result<bool, ScriptErro
     Ok(true)
 }
 
+/// True when a hit taken during a walk ends it: hp fell since the walk
+/// began AND sits on the eat line. A scratch at healthy hp walks on —
+/// walking away is the flee, and aborting handed every pass by an
+/// aggressive guard to the caller as a failed trip (jail guards on the
+/// Draynor road, live 2026-11-13).
+pub fn hurt_aborts(hp_now: u8, hp_before: u8, max_hp: u8) -> bool {
+    hp_now < hp_before && should_eat(hp_now, max_hp, EAT_FRACTION)
+}
+
 /// One trip to the target (D65): a single `walk_to` (one plan, executed
 /// leg by leg) with the between-legs control installed. Random events,
 /// injury and death ride the hook between two sent legs — the executor
 /// aborts the trip on the verdict, this function maps it: death is a typed
 /// abort (the job re-gears), a limp with no event pending ends the walk
-/// with Ok(false) so the caller flees, a first `Unreachable` runs the
+/// with Ok(false) so the caller flees (a scratch at healthy hp walks on,
+/// `hurt_aborts`), a first `Unreachable` runs the
 /// cooperative rescue and retries the trip, a second one errors loudly.
 /// A final-leg Ok on a blocked décor tile (the router settles on the
 /// adjacent tile) ends the walk with Ok(true): the caller clicks from there.
@@ -166,7 +176,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             if crate::randomevent::event_at(hook_bot).is_some() {
                 return LegVerdict::RandomEvent;
             }
-            if hitpoints(hook_bot) < hitpoints_before {
+            if hurt_aborts(hitpoints(hook_bot), hitpoints_before, max_hitpoints(hook_bot)) {
                 return LegVerdict::RandomEvent;
             }
             LegVerdict::Continue
@@ -193,7 +203,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
                 }
                 // A limp with no event pending: the caller flees, never a
                 // rescue (the hook aborted the trip on the limp itself).
-                if hitpoints(bot) < hitpoints_before && crate::randomevent::event_at(bot).is_none() {
+                if hurt_aborts(hitpoints(bot), hitpoints_before, max_hitpoints(bot)) && crate::randomevent::event_at(bot).is_none() {
                     bot.log("hurt walking, fleeing");
                     return Ok(false);
                 }
@@ -211,7 +221,23 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{rescue_then_retry, walk_checked};
+    use super::{hurt_aborts, rescue_then_retry, walk_checked};
+
+    /// Live 2026-11-13 (bct5rxpg, bd23dqpq, bxkchh6x, harry_page): the
+    /// Draynor ↔ Lumbridge road passes the jail guards (aggressive,
+    /// huntrange 5, (3121,3249)/(3127,3248)); one scratch aborted the trip
+    /// as "random event between legs", the caller fled and the task
+    /// failed ("spawn site not reached", melee/woodcut legs). A scratch at
+    /// healthy hitpoints walks on (walking away IS the flee); only a hit
+    /// that brings hp to the eat line ends the walk.
+    #[test]
+    fn scratch_walks_on_wound_aborts() {
+        assert!(!hurt_aborts(28, 30, 40), "2 damage at 28/40 walks on");
+        assert!(!hurt_aborts(30, 30, 40), "no damage never aborts");
+        assert!(hurt_aborts(22, 30, 40), "22/40 sits on the eat line: abort, the caller flees");
+        assert!(hurt_aborts(5, 6, 10), "already low and hit again: abort");
+        assert!(!hurt_aborts(30, 28, 40), "healed walks on");
+    }
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::{Bot, Error};

@@ -301,6 +301,14 @@ fn fish_candidates(bot: &Bot, category: &str) -> Vec<(i32, i32, i32)> {
     cands
 }
 
+/// Bank trek gate of a fish spot: within `BANK_TREK_LIMIT` of its bank,
+/// unless the brain assigned the site (the pickers already keep only its
+/// spots). A Karamja site banks across the boat at Draynor, 230 tiles
+/// away: the order is the proof the trip is worth it, never the limit.
+fn bank_trek_ok(bot: &Bot, spot_x: i32, spot_z: i32, bank: &knowledge::banks::Bank) -> bool {
+    bot.assigned_site.is_some() || (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs() <= BANK_TREK_LIMIT
+}
+
 /// Near-bank pool for one tier: the woodcut shape (local filters, one
 /// F2P batch, occupation dodge inside the surviving pool, walk-cost
 /// refinement). Occupation applies AFTER the pin — dodging the global
@@ -331,8 +339,7 @@ pub(crate) fn pick_near_fish_spot(
         if (i64::from(bank.x) - pinned.x).abs() + (i64::from(bank.z) - pinned.z).abs() > 12 {
             continue;
         }
-        let dist = (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs();
-        if dist > BANK_TREK_LIMIT {
+        if !bank_trek_ok(bot, spot_x, spot_z, &bank) {
             continue;
         }
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {
@@ -390,8 +397,7 @@ pub(crate) fn pick_hop_fish_spot(
             Some(bank) => bank,
             None => continue,
         };
-        let trek = (i64::from(spot_x) - bank.x).abs() + (i64::from(spot_z) - bank.z).abs();
-        if trek > BANK_TREK_LIMIT {
+        if !bank_trek_ok(bot, spot_x, spot_z, &bank) {
             continue;
         }
         if (spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs() > 400 {

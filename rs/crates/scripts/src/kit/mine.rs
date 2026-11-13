@@ -92,14 +92,51 @@ fn work_spot(
             Err(_) => return Ok((WorkOutcome::Unreachable, 0)),
         }
     }
-    if (bot.world.x - rock_x).abs() + (bot.world.z - rock_z).abs() > 1 {
-        if !crate::skill_walk::step_adjacent(bot, rock_x, rock_z)? {
+    // A side of the rock, never a corner: the client routes, so the server
+    // never walks a diagonal stand to the rock ("I can't reach that!").
+    let (width, length) = crate::kit::harvest::spot_footprint(bot, rock_x, rock_z);
+    let stands = rock_stands(bot.world.x, bot.world.z, rock_x, rock_z, width, length);
+    if !stands.is_empty() {
+        let mut stood = false;
+        for (stand_x, stand_z) in stands {
+            match bot.walk_to(stand_x, stand_z, bot.world.level, 100) {
+                Ok(()) if crate::kit::harvest::operable_stand(bot.world.x, bot.world.z, rock_x, rock_z, width, length) => {
+                    stood = true;
+                    break;
+                }
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error,
+                        lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_)
+                    ) =>
+                {
+                    return Err(error.into())
+                }
+                Err(_) => {}
+            }
+        }
+        if !stood {
             return Ok((WorkOutcome::Unreachable, 0));
         }
     }
     let rock_loc = rock_live_loc_id(bot, rock_x, rock_z)?;
     let mut source = RockSource { loc: rock_loc, x: rock_x, z: rock_z };
     crate::kit::harvest::watch_stand(bot, &mut source, rock_x, rock_z, ore_ids, had_ore)
+}
+
+/// Stands to try for a rock, nearest first: the side middles of its
+/// footprint (four orthogonal tiles for a 1x1 rock). Empty when the bot
+/// already stands on a side. The server reaches a centrepiece loc
+/// orthogonally only and, client routefinder on, never paths a player
+/// to a loc: a corner stand is "I can't reach that!" on every click.
+pub(crate) fn rock_stands(bot_x: i32, bot_z: i32, rock_x: i32, rock_z: i32, width: i64, length: i64) -> Vec<(i32, i32)> {
+    if crate::kit::harvest::operable_stand(bot_x, bot_z, rock_x, rock_z, width, length) {
+        return Vec::new();
+    }
+    let mut ring = crate::kit::harvest::operable_ring(rock_x, rock_z, width, length);
+    ring.sort_by_key(|tile| ((tile.0 - bot_x).abs() + (tile.1 - bot_z).abs(), *tile));
+    ring
 }
 
 /// Mining policy on the shared driver: full pack ends the load, a lost
@@ -207,5 +244,29 @@ pub fn mine_load(
             continue;
         }
         return Ok((false, learn_level(bot, MINING_STAT, ops.level)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rock_stands;
+    use crate::kit::harvest::operable_stand;
+
+    /// Live 2026-11-13 (frank_lane Varrock SW iron, fiona_park Rimmington
+    /// gold, bbkjz2vk Barbarian coal): the walk settled diagonal to the
+    /// rock, `step_adjacent` kept that tile (any of the 8 neighbours) and
+    /// every click answered "I can't reach that!" (client routefinder:
+    /// the server never paths to a loc, and a centrepiece loc is reached
+    /// orthogonally only). The rock stands are the four sides, nearest
+    /// first; none when the bot already stands on a side.
+    #[test]
+    fn diagonal_stand_rotates_to_a_side() {
+        let stands = rock_stands(3176, 3367, 3175, 3368, 1, 1);
+        assert_eq!(stands.len(), 4, "four sides, got {stands:?}");
+        assert!(stands.iter().all(|(x, z)| operable_stand(*x, *z, 3175, 3368, 1, 1)), "sides only, got {stands:?}");
+        let first_two: Vec<(i32, i32)> = stands[..2].to_vec();
+        assert!(first_two.contains(&(3175, 3367)) && first_two.contains(&(3176, 3368)), "nearest sides first, got {stands:?}");
+        assert!(rock_stands(3176, 3368, 3175, 3368, 1, 1).is_empty(), "east side already operable");
+        assert!(rock_stands(3175, 3367, 3175, 3368, 1, 1).is_empty(), "south side already operable");
     }
 }

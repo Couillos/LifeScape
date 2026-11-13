@@ -164,6 +164,26 @@ accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
 terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
 combat (`CycleState::begin`).
 
+Site, stands et trajets (2026-11-13, erreurs du lot de 21h19) :
+
+- Pêche : un `--site` assigné lève la limite de trek banque des pickers
+  (`spots::bank_trek_ok`) ; seuls ses spots sont candidats. Un site de
+  Karamja (Musa Point, `0_45_49_saltfish` filet/appât et
+  `0_45_49_rarefish` casier/harpon) banque à Draynor via le bateau
+  (ancre du quai), 230 cases plus loin : l'ordre fait foi, plus de
+  « no fishing water in range » une fois débarqué.
+- Minage : client routefinder, le serveur ne marche jamais un joueur vers
+  un loc et un rocher (centrepiece) ne s'atteint que par un côté. Le stand
+  est un côté du rocher (`mine::rock_stands`, plus proche d'abord), jamais
+  le coin diagonal où la marche s'arrête (« I can't reach that! » sur
+  chaque clic, rochers bannis puis « mine failed »).
+- Trajets : `walk_checked` ne coupe plus le voyage sur une égratignure ;
+  un coup reçu ne l'arrête (Ok(false), l'appelant fuit) que si les PV
+  tombent sous la ligne de repas (`skill_walk::hurt_aborts`,
+  `EAT_FRACTION`). Les « random event between legs » du lot étaient tous
+  des coups des gardes de la prison de Draynor sur la route de Lumbridge
+  (aucun vrai événement aléatoire).
+
 Lecture des ordres : `contract::check_order` lit une ligne de lancement
 avec le parseur PROPRE du script (`cycle::parse_order` pour les
 activités, `market::parse_order` → `parse_side`/`parse_shopbuy`/flip/

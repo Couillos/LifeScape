@@ -387,4 +387,27 @@ mod dry_tests {
         assert!(error.to_string().contains("3092"), "names where, got: {error}");
         assert!(!error.to_string().contains("toll"), "no fence proof offline, no hint, got: {error}");
     }
+
+    /// Live admin (2026-11-13): `fishing raw_shrimp --site 2924,3178,0
+    /// boat` sailed to Musa Point, then "no fishing water in range": the
+    /// site's bank is the Draynor one (mainland anchor), 230 tiles from
+    /// the island water, and the pickers dropped every spot past the bank
+    /// trek limit. Musa Point holds both saltfish (net/bait) and rarefish
+    /// (cage/harpoon) spots (server map 0_45_49): the brain's site wins.
+    #[test]
+    fn karamja_site_fishes_around_the_site() {
+        let (mut bot, _service) = crate::served_nav_bot("fish-karamja-site");
+        bot.world.x = 2924;
+        bot.world.z = 3178;
+        bot.allow_paid = true;
+        bot.assigned_site = Some((2925, 3181, 0));
+        let bank = crate::kit::site::site_bank(&bot).expect("a mainland bank serves Karamja");
+        for fish in ["raw_shrimp", "raw_tuna"] {
+            let tier = crate::kit::fish_gear::ordered_tier(fish, 40).expect("tier at level 40");
+            assert!(!structurally_dry(&mut bot, 40, &bank, Some(&tier)), "{fish}: Musa Point water is in range");
+            let banned = crate::kit::bans::BanSet::new();
+            let (spot_x, spot_z) = crate::kit::spots::pick_near_fish_spot(&mut bot, &tier, None, &banned, 0, &bank).expect("near pick at the site");
+            assert!(crate::kit::spots::in_assigned_site(&bot, spot_x, spot_z), "{fish}: picked inside the site ({spot_x},{spot_z})");
+        }
+    }
 }
