@@ -585,10 +585,29 @@ impl World {
         let mut fresh: Vec<u16> = Vec::new();
         self.read_own(&mut stream, &mut pending)?;
         let known = stream.bits(8)? as usize;
-        let order = self.player_order.clone();
-        for index in 0..known {
-            let pid = order.get(index).copied();
-            self.read_known_player(&mut stream, pid, &mut pending)?;
+        // Rebuild the list from the previous one, like Client-TS
+        // `getPlayerPosOldVis` (and `npc_info` here): entry `index` of the
+        // packet updates entry `index` of the old list, survivors are
+        // re-appended in order and the tail past `known` left the view.
+        // Live 2026-11-13: the server empties its list on a build-area
+        // rebuild and sends a shorter count; keeping the tail shifted every
+        // later update onto the wrong player, and two bots 12 tiles apart
+        // at the Varrock square never saw each other (deals 807–810).
+        let previous = std::mem::take(&mut self.player_order);
+        if known > previous.len() {
+            return Err(Error::Protocol(format!("player_info: {known} known players but only {} tracked", previous.len())));
+        }
+        for gone in &previous[known..] {
+            if let Some(left) = self.players.remove(gone) {
+                if let Some(name) = left.name {
+                    self.player_names.insert(*gone, name);
+                }
+            }
+        }
+        for pid in &previous[..known] {
+            if self.read_known_player(&mut stream, Some(*pid), &mut pending)? {
+                self.player_order.push(*pid);
+            }
         }
         while stream.remaining_bits() > 10 {
             let pid = stream.bits(11)? as u16;
@@ -641,13 +660,10 @@ impl World {
                 let x = self.base_x + stream.bits(7)? as i32;
                 let z = self.base_z + stream.bits(7)? as i32;
                 stream.bits(1)?;
-                if level != self.level || (x - self.x).abs() > 15 || (z - self.z).abs() > 15 {
-                    self.players.clear();
-                    self.player_order.clear();
-                    // NPCs are not cleared here: the server keeps its own
-                    // list and removes them in the next NPC_INFO (op 3 or
-                    // a shorter count), as Client-TS expects.
-                }
+                // Neither players nor NPCs are cleared here: the server
+                // keeps its own lists and drops them in the same packet
+                // (a shorter known count right below), as Client-TS
+                // expects. Clearing locally desynced the known order.
                 self.level = level;
                 self.x = x;
                 self.z = z;
@@ -659,9 +675,10 @@ impl World {
         Ok(())
     }
 
-    fn read_known_player(&mut self, stream: &mut BitReader, pid: Option<u16>, pending: &mut Vec<Option<u16>>) -> Result<()> {
+    /// One known player's update; false when it left the view (op 3).
+    fn read_known_player(&mut self, stream: &mut BitReader, pid: Option<u16>, pending: &mut Vec<Option<u16>>) -> Result<bool> {
         if stream.bits(1)? == 0 {
-            return Ok(());
+            return Ok(true);
         }
         match stream.bits(2)? {
             3 => {
@@ -671,8 +688,8 @@ impl World {
                             self.player_names.insert(pid, name);
                         }
                     }
-                    self.player_order.retain(|known| *known != pid);
                 }
+                return Ok(false);
             }
             0 => {
                 if pid.is_some() {
@@ -711,7 +728,7 @@ impl World {
                 }
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     // -- npc info ----------------------------------------------------------

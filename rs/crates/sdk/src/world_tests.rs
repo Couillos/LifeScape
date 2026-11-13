@@ -77,6 +77,77 @@ fn npc_known_count_shorter_than_list_drops_tail() {
     assert!(!world.npcs.contains_key(&12), "tail npc 12 dropped");
 }
 
+fn world_with_players(ids: &[u16]) -> World {
+    let mut world = World::new();
+    world.x = 3210;
+    world.z = 3425;
+    for (offset, pid) in ids.iter().enumerate() {
+        world.players.insert(*pid, super::PlayerInfo { x: 3200 + offset as i32, z: 3425, level: 0, jump: false, name: Some(format!("p{pid}")) });
+        world.player_order.push(*pid);
+    }
+    world
+}
+
+/// Own player: no update (1 bit 0).
+fn idle_self(packet: &mut BitPacker) {
+    packet.put(1, 0);
+}
+
+/// Live 2026-11-13 (deals 807–810): b3gybcev and fiona_park stood 12
+/// tiles apart at the Varrock square, each with "1 players tracked",
+/// and the trade never opened. The server rebuilds its known-player list
+/// (`rebuildPlayers` empties it) and sends a shorter count; like
+/// Client-TS `getPlayerPosOldVis`, the tail past `count` leaves the view.
+/// The SDK kept it, so the next ticks updated the wrong players.
+#[test]
+fn player_known_count_shorter_than_list_drops_tail() {
+    let mut world = world_with_players(&[5, 6, 7]);
+    let mut packet = BitPacker::new();
+    idle_self(&mut packet);
+    packet.put(8, 1);
+    packet.put(1, 0); // player 5 unchanged
+    packet.put(11, 2047);
+    world.feed("PLAYER_INFO", &packet.bytes).unwrap();
+    assert_eq!(world.player_order, vec![5]);
+    assert!(world.players.contains_key(&5));
+    assert!(!world.players.contains_key(&6), "tail player 6 dropped");
+    assert_eq!(world.player_names.get(&7).map(String::as_str), Some("p7"), "tail name kept for re-entry");
+}
+
+/// After a rebuild (count 0) the server re-adds everyone in its new
+/// order; the next tick's updates follow that order, never the stale one.
+#[test]
+fn players_re_added_after_rebuild_follow_the_server_order() {
+    let mut world = world_with_players(&[5, 6]);
+    // Tick 1: rebuild, nothing known, 6 then 5 re-added.
+    let mut packet = BitPacker::new();
+    idle_self(&mut packet);
+    packet.put(8, 0);
+    for (pid, dx) in [(6u32, 1u32), (5u32, 2u32)] {
+        packet.put(11, pid);
+        packet.put(5, dx);
+        packet.put(5, 0);
+        packet.put(1, 0);
+        packet.put(1, 0);
+    }
+    packet.put(11, 2047);
+    world.feed("PLAYER_INFO", &packet.bytes).unwrap();
+    assert_eq!(world.player_order, vec![6, 5], "server order");
+    // Tick 2: entry 0 (player 6) walks east, entry 1 (player 5) idle.
+    let mut packet = BitPacker::new();
+    idle_self(&mut packet);
+    packet.put(8, 2);
+    packet.put(1, 1);
+    packet.put(2, 1);
+    packet.put(3, 4);
+    packet.put(1, 0);
+    packet.put(1, 0);
+    packet.put(11, 2047);
+    world.feed("PLAYER_INFO", &packet.bytes).unwrap();
+    assert_eq!(world.players[&6].x, 3210 + 1 + 1, "the walk lands on player 6");
+    assert_eq!(world.players[&5].x, 3210 + 2, "player 5 untouched");
+}
+
 /// Names survive a view flicker: removal stashes the display name,
 /// re-entry without an appearance block restores it (bank trips must
 /// not blind a rendezvous), and the next appearance still overwrites.
