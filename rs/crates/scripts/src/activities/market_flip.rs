@@ -19,32 +19,9 @@ use super::market::tradeable_id;
 /// budget so the session reports `budget_exhausted`. Engagement sans
 /// objet: no item target, the clock ends it.
 pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let mut budget_max = 6000u64;
-    let mut item = "feather".to_string();
+    let (budget_max, positionals) = parse_flip(args)?;
+    let mut item = positionals.first().cloned().unwrap_or_else(|| "feather".to_string());
     let mut qty = 100i64;
-    let mut positionals: Vec<String> = Vec::new();
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--budget-max" => {
-                budget_max = args.get(index + 1).and_then(|raw| raw.parse().ok()).ok_or_else(|| ScriptError::Usage("flip --budget-max N".to_string()))?;
-                index += 2;
-            }
-            "--node" | "--budget-min" => {
-                // Node id and floor ride along for the session report;
-                // the engagement is time-boxed by --budget-max alone.
-                index += 2;
-            }
-            other if other.starts_with("--") => return Err(ScriptError::Usage("market flip [--budget-max N] [--node ID] [item] [qty]".to_string())),
-            _ => {
-                positionals.push(args[index].clone());
-                index += 1;
-            }
-        }
-    }
-    if let Some(name) = positionals.first() {
-        item = name.clone();
-    }
     if let Some(raw) = positionals.get(1) {
         let parsed: i64 = raw.parse().map_err(|_| ScriptError::Usage("qty must be a number".to_string()))?;
         qty = parsed.max(1);
@@ -196,3 +173,27 @@ fn cancel_open(bot: &mut Bot) -> ScriptResult {
     Ok(0)
 }
 
+
+/// `market flip` arguments: the engagement window (`--budget-max`, 6000
+/// by default) and the optional `[item] [qty]` positionals. Node id and
+/// floor ride along for the session report.
+pub(crate) fn parse_flip(args: &[String]) -> Result<(u64, Vec<String>), ScriptError> {
+    let mut budget_max = 6000u64;
+    let mut positionals: Vec<String> = Vec::new();
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--budget-max" => {
+                budget_max = args.get(index + 1).and_then(|raw| raw.parse().ok()).ok_or_else(|| ScriptError::Usage("flip --budget-max N".to_string()))?;
+                index += 2;
+            }
+            "--node" | "--budget-min" => index += 2,
+            other if other.starts_with("--") => return Err(ScriptError::Usage("market flip [--budget-max N] [--node ID] [item] [qty]".to_string())),
+            _ => {
+                positionals.push(args[index].clone());
+                index += 1;
+            }
+        }
+    }
+    Ok((budget_max, positionals))
+}

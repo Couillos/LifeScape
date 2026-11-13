@@ -48,6 +48,11 @@ pub fn best_damage_spell(level: i64) -> &'static str {
     pick
 }
 
+/// Damage spell row (debugname, level, max hit) by name.
+pub fn damage_spell(name: &str) -> Option<(&'static str, i64, i64)> {
+    DAMAGE_SPELLS.iter().find(|(spell, _, _)| *spell == name).copied()
+}
+
 /// Max hit of a damage spell, or None for utility spells.
 pub fn spell_maxhit(spell: &str) -> Option<i64> {
     DAMAGE_SPELLS.iter().find(|(name, _, _)| *name == spell).map(|(_, _, hit)| *hit)
@@ -92,29 +97,44 @@ pub fn required_runes(spell: &str) -> &'static [(&'static str, i64)] {
     }
 }
 
-/// Strongest damage spell the level unlocks whose runes the pack holds
-/// (PRD3 lot 6: the fight loop casts it on the target).
+/// Runes of one cast as owned names (the kit's rune checks take these).
+pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
+    required_runes(spell).iter().map(|(name, count)| (name.to_string(), *count)).collect()
+}
+
+/// Strongest damage spell the level unlocks whose runes the pack (or a
+/// worn staff) funds (PRD3 lot 6: the fight loop casts it on the target).
 pub fn castable_spell(bot: &Bot) -> Option<&'static str> {
     let level = magic_level(bot);
     DAMAGE_SPELLS.iter().rev().filter(|(_, need, _)| level >= *need).map(|(spell, _, _)| *spell).find(|spell| {
-        let runes: Vec<(String, i64)> = required_runes(spell).iter().map(|(name, count)| (name.to_string(), *count)).collect();
-        crate::kit::magic::missing_runes(bot, &runes).is_empty()
+        crate::kit::magic::spell_shortfall(bot, &spell_runes(spell)).is_empty()
     })
 }
 
-/// Wind-strike runes somewhere in the pack or the bank (last known view:
-/// the bank is usually closed here); else blocked on them (the brain
-/// files the obtain: market or runecraft).
-fn require_combat_gear(bot: &Bot) -> Result<(), crate::ScriptError> {
+/// The cast's runes somewhere in the pack or the bank (last known view:
+/// the bank is usually closed here), a worn staff's element excluded;
+/// else blocked on them by name (the brain files the obtain).
+fn require_combat_gear(bot: &Bot, spell: &str) -> Result<(), crate::ScriptError> {
     let mut missing = Vec::new();
-    for rune in ["mindrune", "airrune"] {
+    for (rune, _) in required_runes(spell) {
         let Ok(id) = crate::kit::pack::obj_id(bot, rune) else { continue };
         let held = crate::kit::pack::pack_total(bot, id) + crate::kit::pack::banked_usable(bot, id);
-        if held == 0 {
+        if held == 0 && !crate::kit::magic::staff_pays(bot, rune) {
             missing.push(rune.to_string());
         }
     }
     if missing.is_empty() { Ok(()) } else { Err(crate::ScriptError::Blocked { missing }) }
+}
+
+/// The ordered spell (`--spell`): a known F2P damage spell the level
+/// casts, else `Usage` (contract bug) or `Blocked{level:magic:N}`.
+fn ordered_spell(bot: &Bot, spell: Option<&str>) -> Result<Option<String>, crate::ScriptError> {
+    let Some(name) = spell else { return Ok(None) };
+    let (_, need, _) = damage_spell(name).ok_or_else(|| crate::ScriptError::Usage(format!("no F2P damage spell {name:?}")))?;
+    if magic_level(bot) < need {
+        return Err(crate::kit::cycle::blocked_level("magic", need));
+    }
+    Ok(Some(name.to_string()))
 }
 
 /// Magic farmer: `magic [spot ...] [--kills N] [--ticks N] [--no-bank]`.
@@ -128,13 +148,18 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     // PRD3 lot 6: the run fights magic for real (gear scored for it,
     // spells cast); missing gear blocks typed for the brain to obtain.
+    // The planner's spell is cast exactly (`--spell`), a carried staff of
+    // its element wielded first.
     bot.combat_style = "magic".to_string();
-    require_combat_gear(bot)?;
+    bot.combat_spell = ordered_spell(bot, spec.spell.as_deref())?;
+    let cast = bot.combat_spell.clone().unwrap_or_else(|| DAMAGE_SPELLS[0].0.to_string());
+    crate::kit::magic::wield_staff_for(bot, &spell_runes(&cast))?;
+    require_combat_gear(bot, &cast)?;
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
         let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() { vec![knowledge::combat_spots::best_spot(magic_level(bot))] } else { named }
     };
-    bot.log(&format!("magic={} spell={} spots={}", magic_level(bot), best_damage_spell(magic_level(bot)), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));
+    bot.log(&format!("magic={} spell={} spots={}", magic_level(bot), bot.combat_spell.as_deref().unwrap_or(best_damage_spell(magic_level(bot))), picked.iter().map(|spot| spot.key).collect::<Vec<_>>().join(",")));
     let mut queue = picked;
     let mut tally = crate::kit::survival::DeathTally::fresh();
     let auto = spots.is_empty();
@@ -241,12 +266,12 @@ mod tests {
         use std::collections::HashMap;
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        assert!(matches!(super::require_combat_gear(&bot), Err(crate::ScriptError::Blocked { .. })), "nothing anywhere");
+        assert!(matches!(super::require_combat_gear(&bot, "wind_strike"), Err(crate::ScriptError::Blocked { .. })), "nothing anywhere");
         let main = (bot.tables.com_id)("bank_main:inv").expect("bank component");
         let mind = crate::kit::pack::obj_id(&bot, "mindrune").expect("mind rune");
         let air = crate::kit::pack::obj_id(&bot, "airrune").expect("air rune");
         bot.world.inv_closed.insert(main, HashMap::from([(0u8, (mind, 15u32)), (1, (air, 25))]));
-        assert!(super::require_combat_gear(&bot).is_ok(), "banked runes are held, bank closed or not");
+        assert!(super::require_combat_gear(&bot, "wind_strike").is_ok(), "banked runes are held, bank closed or not");
     }
 
     #[test]

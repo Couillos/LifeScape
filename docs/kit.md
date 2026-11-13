@@ -164,9 +164,32 @@ accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
 terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
 combat (`CycleState::begin`).
 
-Lecture des ordres : `cycle::parse_order` (positionnel ressource des
-scripts de production via `split_resource`, puis `parse_cli`). Le test
-`every_mapped_order_parses_in_its_script` traduit chaque méthode de
-`planner::mapping` (obtention avec `--want`/`--site`/`toll`, montée de
-niveau) et vérifie que le script nommé est enregistré et accepte ses
-arguments. Pièces manquantes : `blocked{coins:N}`.
+Lecture des ordres : `contract::check_order` lit une ligne de lancement
+avec le parseur PROPRE du script (`cycle::parse_order` pour les
+activités, `market::parse_order` → `parse_side`/`parse_shopbuy`/flip/
+cleanup/deliver, `parse_style` pour `equip`, coordonnées pour `walkto`,
+quêtes sans argument). `contract_tests.rs` traduit chaque famille de
+`planner::mapping` (récolte, ferme, cuisson, `bake:` pain/repas, postes,
+`cut:`, `dye:`, `ground:`, `telegrab:`, `superheat:`, `bury:`,
+`fight:magic/<sort>/<spot>`, achats, 18 quêtes, 13 zones `access:`,
+`equip:`) en ordre d'obtention (`--site`, `toll`, `--want`), en montée
+(`--level`) et sur site de guilde (`--wear`), puis vérifie que chaque
+positionnel se résout dans la table du script (repas, pièce de poterie,
+os, teinture, gemme brute, barre de superheat, sort). Pièces manquantes :
+`blocked{coins:N}`.
+
+Drapeaux du contrat (2026-11-13, phase 2) : `--spell <sort>` (magie :
+`bot.combat_spell`, `kit::strike` lance CE sort et bloque sur SES runes ;
+un bâton élémentaire porté paie son élément, un bâton porté au sac est
+manié d'abord, `kit::magic::{staff_pays, spell_shortfall,
+wield_staff_for}` ; sort inconnu = Usage, niveau trop bas =
+`blocked{level:magic:N}`), `--wear <uniforme>` (`kit::uniform` :
+porté avant tout pas de `cycle::run` et avant la marche de `shopbuy` ;
+sac, sinon banque du site, sinon `blocked{<objet>}`), `--shop <clé>`
+(`market shopbuy` n'achète qu'à ce magasin, `kit::shop::buy_stock_at` ;
+clé inconnue ou sans ce stock = Usage). `superheat <barre>` vise le
+minerai de la barre (`ore_for` : `steel_bar` → `iron_ore`, charbon porté)
+et s'arrête sur `--want`/`--level`/budget comme `alchemy` et
+`enchant_teleport` (`poll_stop`). `mill_grain` prend la trémie la plus
+proche du `--site`. Les ordres `market buy|sell|flip|cleanup` ne portent
+plus `--site` ni `toll` (seul `shopbuy` marche vers un marchand).

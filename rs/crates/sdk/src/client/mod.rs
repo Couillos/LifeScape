@@ -126,6 +126,10 @@ pub struct Bot {
     /// fight loop casts instead of clicking attack. Script state, never
     /// sent anywhere.
     pub combat_style: String,
+    /// Spell a magic run casts (`--spell`, the planner sized its runes):
+    /// `None` = the strongest damage spell the pack funds. Script state,
+    /// set by every magic run, never sent anywhere.
+    pub combat_spell: Option<String>,
     /// Opt-in to hunter zones (tree spots near aggressive NPCs). Default
     /// false: spots within range of something that would attack us are
     /// skipped.
@@ -210,6 +214,7 @@ impl Bot {
             fare_reserve: 0,
             allow_shop: true,
             combat_style: "melee".to_string(),
+            combat_spell: None,
             allow_wild: false,
             maps: None,
             nav_world: None,

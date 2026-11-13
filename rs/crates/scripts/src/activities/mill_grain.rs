@@ -30,8 +30,13 @@ pub const MILL_PASSES: u32 = 30;
 /// Nearest hopper (the guild mill costs +10 000 tiles without 32 Cooking
 /// and the hat, so Lumbridge serves instead — never a block on entry).
 pub fn pick_hopper(bot: &Bot) -> Option<lifescape_gamedata::stations::Station> {
+    // The brain's site (`--site`, the guild entry judged and the hat worn
+    // by `--wear`): the hopper nearest it, never another mill.
+    if let Some((x, z, _)) = bot.assigned_site {
+        return lifescape_gamedata::stations::stations_of("hopper").into_iter().min_by_key(|hopper| (hopper.x - i64::from(x)).abs() + (hopper.z - i64::from(z)).abs());
+    }
     let level = learn_level(bot, COOKING_STAT, 1);
-    let hat = obj_id(bot, GUILD_HAT).ok().is_some_and(|id| pack_total(bot, id) > 0);
+    let hat = obj_id(bot, GUILD_HAT).ok().is_some_and(|id| pack_total(bot, id) > 0 || crate::kit::pack::is_worn(bot, id));
     lifescape_gamedata::stations::stations_of("hopper").into_iter().min_by_key(|hopper| (hopper.x - i64::from(bot.world.x)).abs() + (hopper.z - i64::from(bot.world.z)).abs() + if hopper.loc == GUILD_HOPPER && (level < GUILD_COOKING || !hat) { 10_000 } else { 0 })
 }
 

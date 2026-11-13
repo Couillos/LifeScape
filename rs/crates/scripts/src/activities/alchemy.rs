@@ -72,8 +72,16 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(ScriptError::Blocked { missing: vec![item_name.to_string()] });
     }
     let want = spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX);
+    // The order's other stops (`--level magic N`, budget) end it too.
+    let mut spec = spec;
+    spec.targets.count = None;
+    let state = crate::kit::cycle::CycleState::begin(bot, &spec);
     let mut done = 0u32;
     while done < want {
+        if let Some(stop) = crate::kit::cycle::poll_stop(bot, &state, &spec) {
+            bot.log(&format!("ok {spell} x{done} on {item_name}, order met"));
+            return crate::kit::cycle::exit_code(stop);
+        }
         if pack_total(bot, item) == 0 || !missing_runes(bot, &runes).is_empty() {
             break;
         }

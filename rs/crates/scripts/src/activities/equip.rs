@@ -19,10 +19,9 @@ use crate::{ScriptError, ScriptResult};
 /// brain bug and fails loud, never a silent melee.
 pub const STYLES: [&str; 3] = ["melee", "ranged", "magic"];
 
-/// Wear the best carried kit: `equip [style]` (melee when omitted).
-/// Exit `Ok(0)` like every supervised script (the session maps any other
-/// code to `failed`; the slot count rides in the log, never the code).
-pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
+/// Style the order names (`equip [style] [--node ID] ...`, melee when
+/// omitted). Anything else is a brain bug and fails loud.
+pub fn parse_style(args: &[String]) -> Result<String, ScriptError> {
     let style = args
         .first()
         .filter(|first| {
@@ -34,8 +33,16 @@ pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
         .cloned()
         .unwrap_or_else(|| "melee".to_string());
     if !STYLES.contains(&style.as_str()) {
-        return Err(ScriptError::Usage(format!("equip melee|ranged|magic, not {style:?} at {:?}", bot.position())));
+        return Err(ScriptError::Usage(format!("equip melee|ranged|magic, not {style:?}")));
     }
+    Ok(style)
+}
+
+/// Wear the best carried kit: `equip [style]` (melee when omitted).
+/// Exit `Ok(0)` like every supervised script (the session maps any other
+/// code to `failed`; the slot count rides in the log, never the code).
+pub fn run_equip(bot: &mut Bot, args: &[String]) -> ScriptResult {
+    let style = parse_style(args)?;
     // The kit scores for the asked style (bows + arrows, staves, robes).
     bot.combat_style = style.clone();
     let available = available_gear(bot);

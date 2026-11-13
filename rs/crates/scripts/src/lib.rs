@@ -4,6 +4,7 @@
 //! real through the SDK; unknown names report errors, never silent stubs.
 
 pub mod activities;
+pub mod contract;
 pub mod devtools;
 pub mod devtools_check;
 pub mod devtools_probe;
@@ -173,7 +174,7 @@ impl Script for Hello {
     }
 }
 
-fn parse_target(args: &[String]) -> Result<(i32, i32, i32), ScriptError> {
+pub(crate) fn parse_target(args: &[String]) -> Result<(i32, i32, i32), ScriptError> {
     if args.len() < 2 {
         return Err(ScriptError::Usage("goto|walkto <x> <z> [level]".to_string()));
     }
@@ -343,45 +344,6 @@ pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
 #[cfg(test)]
 mod tests {
     use super::names;
-
-    /// The brain's args contract (planner `mapping.rs`), end to end: every
-    /// method the planner maps, as a quantity order (`--want`, `--site`,
-    /// `toll`) and as a level climb, names a registered script whose own
-    /// parser accepts the args — main was undeployable while gatherers
-    /// refused `fishing raw_trout --want raw_trout 100`.
-    #[test]
-    fn every_mapped_order_parses_in_its_script() {
-        use lifescape_planner::model::{Node, NodeKind};
-        let methods = [
-            "gather:fishing/raw_trout", "gather:mining/gold_ore", "gather:woodcut/willow_logs", "farm:raw_trout", "farm:gold_ore",
-            "farm:willow_logs", "farm:feather", "farm:blankrune", "smelt:iron_bar", "smith:steel_platebody", "cook:trout", "cook/raw_shrimp",
-            "bake:bread", "tan:cow_hide", "craft:leather_gloves", "fire:willow_logs", "spin:ball_of_wool", "pottery:pot", "jewelry:gold_ring",
-            "runecraft:airrune", "pick:grain", "mill:pot_flour", "fill:jug_water", "essence:blankrune", "string:unstrung_gold_amulet",
-            "alch:gold_ring", "superheat:iron_bar", "enchant:strung_sapphire_amulet", "fight:melee/cows", "fight:ranged/cows",
-            "fight:magic/cows", "gather:sheep/wool", "gather:wheat/grain",
-        ];
-        let mut order = Node::new("n9", NodeKind::ObtainItems { item: "feather".to_string(), count: 2000 }, Vec::new(), 2000);
-        order.site = Some((3294, 3287, 0));
-        order.toll = true;
-        let climb = Node::new("n4", NodeKind::ReachLevel { skill: "fishing".to_string(), level: 20 }, Vec::new(), 20);
-        for method in methods {
-            for node in [&order, &climb] {
-                let Some((script, args)) = lifescape_planner::mapping::map_method(method, node, Some((6000, 9000))) else {
-                    panic!("{method} maps");
-                };
-                let Some(known) = names().into_iter().find(|name| *name == script) else {
-                    panic!("{method} names unregistered {script}");
-                };
-                if let Err(error) = crate::kit::cycle::parse_order(known, &args) {
-                    panic!("{script} refuses {args:?} for {method}: {error}");
-                }
-            }
-        }
-        let gather = lifescape_planner::mapping::map_method("farm:raw_trout", &order, None).expect("farm maps").1;
-        let spec = crate::kit::cycle::parse_order("fishing", &gather).expect("fishing parses");
-        assert_eq!(spec.resource, vec!["raw_trout".to_string()], "the fish rides first: {gather:?}");
-        assert_eq!((spec.targets.want_item.as_deref(), spec.allow_paid, spec.site), (Some("feather"), true, Some((3294, 3287, 0))));
-    }
 
     /// The boat and dialogue orders (Karamja, user goal 2026-11-13): a
     /// `boat` site order and a `dialogue:buy` leg parse in their scripts.

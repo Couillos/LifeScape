@@ -17,13 +17,13 @@ use crate::kit::{bank::nearest_bank, pack::{free_slots, obj_id}, tools::cleanup_
 use crate::market_client::{cancel_for, open_sell_items, place_sell};
 use crate::{ScriptError, ScriptResult};
 
-struct CleanupArgs {
+pub(crate) struct CleanupArgs {
     keep: Vec<String>,
     iron: bool,
     budget_max: u64,
 }
 
-fn parse_args(args: &[String]) -> Result<CleanupArgs, ScriptError> {
+pub(crate) fn parse_args(args: &[String]) -> Result<CleanupArgs, ScriptError> {
     let usage = || ScriptError::Usage("market cleanup [--keep NAME]... [--iron] [--node ID] [--budget-max N]".to_string());
     let mut keep = Vec::new();
     let mut iron = false;

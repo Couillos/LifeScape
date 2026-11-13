@@ -87,3 +87,32 @@ fn shopbuy_names_the_planners_shop() {
     assert!(args.windows(2).any(|pair| pair[0] == "--shop" && pair[1] == shop), "{args:?}");
     assert!(args.contains(&"--site".to_string()), "{args:?}");
 }
+
+/// A shop the planner picks across the Al Kharid fence (fare covered)
+/// launches with `toll`, or `shopbuy` would refuse the keeper it was sent
+/// to; on the same side, never.
+#[test]
+fn shop_across_the_fence_carries_toll() {
+    let mut ctx = crate::expand::ReadyCtx::blind(0.5);
+    ctx.combat = 30;
+    ctx.coins = 1000;
+    ctx.position = Some((3222, 3218, 0));
+    let items: Vec<String> = lifescape_gamedata::shops::all_shops().into_iter().flat_map(|shop| shop.stocks.into_iter().map(|stock| stock.obj)).collect();
+    let mut seen = (false, false);
+    for item in items {
+        let Some((_, site)) = crate::shop_site::pick_shop(&item, &ctx) else { continue };
+        let mut node = obtain(&item, 1);
+        node.method = Some("shop:buy".to_string());
+        crate::expand::place_on_site(&mut node, &ctx);
+        let across = lifescape_gamedata::toll::crossing((3222, 3218, 0), site);
+        assert_eq!((node.site, node.toll), (Some(site), across), "{item}");
+        let (_, args) = map_method("shop:buy", &node, None).expect("shop maps");
+        assert_eq!(args.contains(&"toll".to_string()), across, "{item}: {args:?}");
+        if across {
+            seen.0 = true;
+        } else {
+            seen.1 = true;
+        }
+    }
+    assert_eq!(seen, (true, true), "both sides of the fence exercised");
+}

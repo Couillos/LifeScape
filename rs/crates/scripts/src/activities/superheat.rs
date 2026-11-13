@@ -12,7 +12,8 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, missing_runes};
+use crate::kit::cycle::{exit_code, poll_stop, CycleState};
+use crate::kit::magic::{cast_on_held, spell_shortfall, wield_staff_for};
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
@@ -28,18 +29,35 @@ pub fn bar_for_ore(ore: &str) -> Option<knowledge::recipes::Recipe> {
     knowledge::recipes::using(ore, Some("smelt")).into_iter().find(|entry| entry.members == Some(false))
 }
 
+/// Ore the cast targets and the bar it lands, from the planner's bar
+/// (`superheat:<bar>`: `iron_bar`, `steel_bar` → iron ore with the coal
+/// carried) or from an ore name (manual runs). Coal is never the target.
+pub fn ore_for(name: &str) -> Option<(String, String)> {
+    let made = knowledge::recipes::making(name, Some("smelt")).into_iter().find(|entry| entry.members == Some(false));
+    if let Some(recipe) = made {
+        let ore = recipe.inputs.iter().map(|(input, _)| input.clone()).find(|input| input != "coal")?;
+        return Some((ore, name.to_string()));
+    }
+    let recipe = bar_for_ore(name)?;
+    let bar = recipe.outputs.first().map(|(output, _)| output.clone())?;
+    Some((name.to_string(), bar))
+}
+
 /// Runes of superheat from the dump.
 pub fn superheat_runes() -> Vec<(String, i64)> {
     knowledge::spells::by_name(SUPERHEAT_SPELL).into_iter().flat_map(|entry| entry.runes).collect()
 }
 
-/// Superheat banked ores in the open session: `superheat <ore> [count]`
-/// (count omitted or 0 = the pack). Missing runes or ore fail `Blocked`
-/// (the brain files obtain tasks); each cast consumes the ore and pays
-/// a bar plus the spell XP.
+/// Superheat carried ores in the open session: `superheat <bar|ore>
+/// [count] [--want ITEM N] [--level magic N]` (count omitted or 0 = the
+/// pack). Missing runes or ore fail `Blocked` (the brain files obtain
+/// tasks); a worn (or carried) fire staff pays the fire runes. Each cast
+/// consumes the ore and pays a bar plus the spell XP.
 pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
-    let spec = crate::kit::cycle::parse_cli("superheat", &rest)?;
+    let mut spec = crate::kit::cycle::parse_cli("superheat", &rest)?;
+    // Count 0 = the whole pack: no unit target.
+    spec.targets.count = spec.targets.count.filter(|count| *count > 0);
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
@@ -52,32 +70,37 @@ pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if level < SUPERHEAT_LEVEL {
         return Err(crate::kit::cycle::blocked_level("magic", i64::from(SUPERHEAT_LEVEL)));
     }
-    let ore_name = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("superheat <ore> [count], no ore at {:?}", bot.position())))?;
-    let recipe = bar_for_ore(ore_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smelt recipe eats {ore_name:?} at {:?}", bot.position())))?;
-    let bar_name = recipe.outputs.first().map(|(name, _)| name.clone()).unwrap_or_default();
-    let ore = obj_id(bot, ore_name)?;
+    let ordered = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("superheat <bar|ore> [count], nothing named at {:?}", bot.position())))?;
+    let (ore_name, bar_name) = ore_for(ordered).ok_or_else(|| ScriptError::Usage(format!("no F2P smelt recipe makes or eats {ordered:?} at {:?}", bot.position())))?;
+    let ore = obj_id(bot, &ore_name)?;
     let bar = obj_id(bot, &bar_name)?;
     let runes = superheat_runes();
     if runes.is_empty() {
         return Err(ScriptError::Usage(format!("{SUPERHEAT_SPELL} has no runes in the dump at {:?}", bot.position())));
     }
-    let missing = missing_runes(bot, &runes);
+    wield_staff_for(bot, &runes)?;
+    let missing = spell_shortfall(bot, &runes);
     if !missing.is_empty() {
         return Err(ScriptError::Blocked { missing });
     }
     if pack_total(bot, ore) == 0 {
         return Err(ScriptError::Blocked { missing: vec![ore_name.to_string()] });
     }
-    let want = spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX);
-    let mut done = 0u32;
-    while done < want {
-        if pack_total(bot, ore) == 0 || !missing_runes(bot, &runes).is_empty() {
+    // The order's stops (`--want`, `--level`, budget, count) end the run;
+    // an empty pack ends it with what it made.
+    let mut state = CycleState::begin(bot, &spec);
+    loop {
+        if let Some(stop) = poll_stop(bot, &state, &spec) {
+            bot.log(&format!("ok {SUPERHEAT_SPELL} x{} on {ore_name} for {bar_name}", state.units()));
+            return exit_code(stop);
+        }
+        if pack_total(bot, ore) == 0 || !spell_shortfall(bot, &runes).is_empty() {
             break;
         }
         superheat_one(bot, ore, bar)?;
-        done += 1;
+        state.note_unit();
     }
-    bot.log(&format!("ok {SUPERHEAT_SPELL} x{done} on {ore_name} for {bar_name}"));
+    bot.log(&format!("ok {SUPERHEAT_SPELL} x{} on {ore_name} for {bar_name}", state.units()));
     Ok(0)
 }
 
@@ -166,5 +189,12 @@ mod tests {
         assert!(bar_for_ore("gold_ore").is_some(), "gold resolves F2P");
         assert!(bar_for_ore("GOLD_ORE").is_some(), "case-insensitive");
         assert!(bar_for_ore("logs").is_none(), "logs never smelt");
+        // The planner orders the BAR (`superheat:<bar>`): the cast eats its
+        // ore, coal rides along, never the target.
+        let pair = |ore: &str, bar: &str| Some((ore.to_string(), bar.to_string()));
+        assert_eq!(super::ore_for("iron_bar"), pair("iron_ore", "iron_bar"));
+        assert_eq!(super::ore_for("steel_bar"), pair("iron_ore", "steel_bar"));
+        assert_eq!(super::ore_for("iron_ore"), pair("iron_ore", "iron_bar"), "manual ore runs keep working");
+        assert_eq!(super::ore_for("logs"), None);
     }
 }

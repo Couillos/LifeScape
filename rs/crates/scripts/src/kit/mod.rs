@@ -15,7 +15,8 @@
 //! empty quiver, wrong ammo),
 //! `observe` (per-run memory, regrow prediction), `produce`
 //! (A-on-B transformation), `withdraw` (bank withdrawals, walking to a
-//! far bank for known banked items), `fireline` (legal fire lines).
+//! far bank for known banked items), `fireline` (legal fire lines),
+//! `uniform` (guild uniform worn before the door, `--wear`).
 
 #![forbid(unsafe_code)]
 
@@ -51,5 +52,6 @@ pub mod tan;
 pub mod toll;
 pub mod tools;
 pub mod trees;
+pub mod uniform;
 pub mod withdraw;
 pub mod woodcut;
