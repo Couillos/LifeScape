@@ -111,6 +111,7 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
             let mut eta = EtaCache::new();
             let mut meter = TickMeter::new();
             let mut unposed: Vec<ConvocationPose> = Vec::new();
+            let mut absent = crate::market_absent::AbsentTracker::new();
             // Audit every AUDIT_EVERY rounds (~60 s), first round included:
             // the books only ever show lots the account can hand over.
             const AUDIT_EVERY: u64 = 6;
@@ -155,6 +156,9 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     eprintln!("market-convene: pose {} {:?}", pose.account, pose.args);
                     unposed.push(pose);
                 }
+                // Matched deals with an offline party: open it (admission
+                // respected, one at a time) or fail the deal past the grace.
+                crate::market_absent::absent_round(&mut absent, &orch, &service, &parties, wall, tick_ms);
                 unposed.retain(|pose| {
                     if orch.pose_market_script(&pose.account, &pose.args) {
                         false
