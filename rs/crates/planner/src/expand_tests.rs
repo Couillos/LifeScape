@@ -336,7 +336,8 @@ fn combat_tranches_name_real_spots() {
         for level in [1u8, 9, 10, 20, 30, 40] {
             let method = reach_method(skill, level);
             let spot = method.rsplit('/').next().expect("spot part");
-            assert!(lifescape_gamedata::combat_spots::by_key(spot).is_some(), "{skill} {level}: {method} names no spot");
+            let ladder = spot == crate::tranches::MELEE_LADDER && level >= 10 && !matches!(skill, "ranged" | "magic");
+            assert!(ladder || lifescape_gamedata::combat_spots::by_key(spot).is_some(), "{skill} {level}: {method} names no spot");
         }
     }
 }

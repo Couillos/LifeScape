@@ -154,7 +154,7 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log(&format!("=== {} ===", spot.key));
         bot.intend(&format!("magic at {}", spot.key));
         let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
-        let (total, died, banked) = match crate::kit::fight::run_spot(bot, &spot, remaining, spec.budget_max_ticks, no_bank) {
+        let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &crate::kit::fight::HuntPlan::plain().until(&spec), remaining, spec.budget_max_ticks, no_bank) {
             Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
                 if !tally.excludes(spot.key) {
                     tally.exclude(spot.key);
