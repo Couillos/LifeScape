@@ -165,7 +165,11 @@ les pages, attend l'interface puis l'arrivée (rhum confisqué : un second
 dialogue) ; `loc` clique et attend le saut. Hors ligne :
 `orchestrator route 3029 3217 0 2915 3150 0 --paid` (`--paid` compte
 aussi les tarifs comme portés). Goldens `bateau_*` (`uses_custom=`,
-`blocked_custom=`).
+`blocked_custom=`). Vérifié en live le 2026-11-13 (admin, pas à pas via
+`call`) : Captain Tobias → (2956,3143,1), passerelle 2082 → (2956,3146,0),
+officier des douanes (voyage, fouille, « Ok. ») → (3032,3217,1),
+passerelle 2084 → (3029,3217,0), 30 pièces prises à chaque traversée ;
+l'exécuteur SDK lui-même attend un déploiement pour son essai live.
 
 ## Danger et destinations substituées (2026-11-12)
 
