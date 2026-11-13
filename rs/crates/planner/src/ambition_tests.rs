@@ -129,7 +129,7 @@ fn existing_levels_tilt_but_never_fix_the_draw() {
     // Milestones skip the rungs a high-level bot is far past.
     let ambition = new_ambition("woodcutter", "coverage:woodcutting", &BotNow { level_of: &|skill| frank.level(skill), coins: 0, held: &|_| 0 }, 11, &[], ZERO).expect("woodcutter");
     let first = &ambition.milestones[0];
-    assert!(matches!(&first.target, Target::Produce { item, .. } if item == "maple_logs" || item == "willow_logs"), "{first:?}");
+    assert!(matches!(&first.target, Target::Produce { item, .. } if item == "yew_logs" || item == "willow_logs"), "{first:?}");
 }
 
 /// Held ambitions count as coverage; Iron never merchants.
@@ -285,6 +285,25 @@ fn catalogue_products_are_producible() {
         }
     }
     assert!(products("crafter").len() >= 8, "varied crafting products");
+}
+
+/// Audit 2026-11-13: every quota is plannable — one production leg works
+/// a site some combat level makes safe and no gate makes impassable (no
+/// Karamja fish, no maple).
+#[test]
+fn catalogue_products_are_plannable() {
+    for entry in SPECS {
+        for rung in entry.ladder {
+            if let Then::Produce(items, _, _) = rung.then {
+                for item in items {
+                    let plannable = crate::obtain_legs::production_legs(item)
+                        .iter()
+                        .any(|leg| crate::combat::min_combat_for_method(&leg.method) < lifescape_gamedata::danger::NEVER);
+                    assert!(plannable, "{}: no workable leg for {item}", entry.kind);
+                }
+            }
+        }
+    }
 }
 
 /// The produce goal expands to production legs only.

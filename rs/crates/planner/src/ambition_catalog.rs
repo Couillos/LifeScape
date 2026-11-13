@@ -72,20 +72,24 @@ const PRIEST: &[Rung] = &[
     Rung { skill: "prayer", level: 10, then: Then::Produce(&["bones"], 100, "attack") }, level_rung("attack", 20),
     gear("prayer", 20, "melee"), level_rung("defence", 30), level_rung("prayer", 30), gear("prayer", 40, "melee"), level_rung("prayer", 43), level_rung("prayer", 50),
 ];
+// Lobster, tuna and swordfish are Karamja water (`access::BOAT_ROUTED`:
+// no nav edge for the sailors) and maples have no F2P tree: no quota names
+// them until they are plannable (audit 2026-11-13). Composite food
+// (`bake:`: pies, pizza, cake) carries the cook past salmon.
 const COOK: &[Rung] = &[
     make("cooking", 10, &["shrimp", "anchovies", "sardine", "cooked_chicken", "cooked_meat"], 50),
-    make("cooking", 20, &["trout", "herring", "pike"], 50), level_rung("fishing", 20),
-    make("cooking", 30, &["salmon", "tuna", "pike"], 50), make("cooking", 40, &["lobster", "tuna"], 50),
-    make("cooking", 50, &["swordfish", "lobster"], 50), make("cooking", 60, &["swordfish"], 100),
+    make("cooking", 20, &["trout", "herring", "pike", "bread", "redberry_pie"], 50), level_rung("fishing", 20),
+    make("cooking", 30, &["salmon", "pike", "meat_pie", "stew"], 50), make("cooking", 40, &["cake", "plain_pizza", "apple_pie", "salmon"], 50),
+    make("cooking", 50, &["cake", "salmon"], 50), make("cooking", 60, &["cake", "salmon"], 100),
 ];
 const FISHER: &[Rung] = &[
     make("fishing", 10, &["raw_shrimp", "raw_anchovies"], 100), make("fishing", 20, &["raw_sardine", "raw_herring", "raw_trout"], 100),
-    make("fishing", 30, &["raw_trout", "raw_salmon", "raw_pike"], 100), make("fishing", 40, &["raw_tuna", "raw_lobster"], 100),
-    make("fishing", 50, &["raw_lobster", "raw_swordfish"], 100), make("fishing", 60, &["raw_swordfish", "raw_lobster"], 150), level_rung("fishing", 70),
+    make("fishing", 30, &["raw_trout", "raw_salmon", "raw_pike"], 100), make("fishing", 40, &["raw_salmon", "raw_pike"], 150),
+    make("fishing", 50, &["raw_salmon"], 150), make("fishing", 60, &["raw_salmon", "raw_trout"], 200), level_rung("fishing", 70),
 ];
 const WOODCUTTER: &[Rung] = &[
     make("woodcutting", 15, &["logs"], 100), make("woodcutting", 30, &["oak_logs"], 100), make("woodcutting", 45, &["willow_logs"], 150),
-    make("woodcutting", 60, &["maple_logs", "willow_logs"], 150), make("woodcutting", 75, &["yew_logs"], 100), make("woodcutting", 90, &["yew_logs"], 200),
+    make("woodcutting", 60, &["yew_logs", "willow_logs"], 150), make("woodcutting", 75, &["yew_logs"], 100), make("woodcutting", 90, &["yew_logs"], 200),
 ];
 const FIREMAKER: &[Rung] = &[
     level_rung("woodcutting", 15), level_rung("firemaking", 15), Rung { skill: "firemaking", level: 30, then: Then::Produce(&["oak_logs", "logs"], 100, "woodcutting") },
