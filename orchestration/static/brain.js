@@ -269,6 +269,18 @@ var BrainView = (function () {
     return STATUS[status] || STATUS.pending;
   }
 
+  // Milestone targets are objects ({skill, level} | {item, count, skill} |
+  // {style} | {amount}), see planner/src/ambition.rs.
+  function targetText(target) {
+    if (target === null || target === undefined) return '?';
+    if (typeof target !== 'object') return String(target);
+    if (target.level !== undefined) return (target.skill || '?') + ' ' + target.level;
+    if (target.item !== undefined) return target.count + ' × ' + target.item;
+    if (target.style !== undefined) return 'équipement ' + target.style;
+    if (target.amount !== undefined) return target.amount + ' pièces';
+    return JSON.stringify(target);
+  }
+
   function progressText(progress) {
     if (!progress || progress.length < 2 || !progress[1]) return '';
     return progress[0] + '/' + progress[1];
@@ -286,7 +298,7 @@ var BrainView = (function () {
       });
     } else if (box.type === 'milestone') {
       lines.push('Jalon ' + data.id + ': ' + (data.label || ''));
-      lines.push('Statut: ' + (data.status || '?') + ' · ' + (data.kind || '') + ' → ' + data.target);
+      lines.push('Statut: ' + (data.status || '?') + ' · ' + (data.kind || '') + ' → ' + targetText(data.target));
       if (progressText(data.progress)) lines.push('Progrès: ' + progressText(data.progress));
       if (data.blocked_count) lines.push('Blocages: ' + data.blocked_count);
     } else if (box.type === 'goal') {
