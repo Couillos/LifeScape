@@ -335,6 +335,14 @@ pub fn current_weapon_category(bot: &Bot) -> String {
 
 /// Deposit loot, withdraw the best gear and food for the current levels.
 pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
+    prepare_at_bank_for(bot, crate::kit::survival::FOOD_TARGET as u32, &[])
+}
+
+/// `prepare_at_bank` with the hunt's food load (`food_target` units)
+/// and items that ride every trip (`keep_items` as (name, units): the
+/// brass key of the Edgeville dungeon giants, the toll coins), kept
+/// through the deposit and topped up from the bank.
+pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(String, u32)]) -> Result<bool, ScriptError> {
     let bank = match nearest_bank(bot) {
         // No service means no fence line and no walk: typed `nav-down`
         // stays loud instead of degrading into an equip-and-continue.
@@ -425,9 +433,24 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             (bot.tables.obj_name)(*held).is_some_and(|name| lifescape_gamedata::food::heal(&name) > 0)
         }).map(|(held, _)| *held));
     }
+    keep.extend(
+        carried
+            .iter()
+            .filter(|(held, _)| keep_items.iter().any(|(name, _)| obj_id(bot, name).is_ok_and(|kept| kept == *held)))
+            .map(|(held, _)| *held),
+    );
     keep.sort();
     keep.dedup();
     bot.bank_deposit_all(side_bank, &keep, 25)?;
+    for (name, units) in keep_items {
+        let Ok(obj) = obj_id(bot, name) else { continue };
+        let carried: u32 = bot.backpack().1.iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).sum();
+        let short = units.saturating_sub(carried);
+        if short > 0 && bot.bank_items().contains_key(&obj) && (carried > 0 || free_slots(bot) > 0) {
+            let _ = bot.bank_withdraw(obj, short, 25);
+        }
+    }
+    let food_room = food_target as usize;
     let available = available_gear(bot);
     let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
     for slot in [3, 0, 4, 7, 5, 2, 9, 10, 12, 1] {
@@ -435,12 +458,12 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             let Ok(obj) = obj_id(bot, &entry.name) else {
                 continue;
             };
-            if bot.inventory().contains_key(&obj) || free_slots(bot) <= crate::kit::survival::FOOD_TARGET {
+            if bot.inventory().contains_key(&obj) || free_slots(bot) <= food_room {
                 continue;
             }
             let _ = bot.bank_withdraw(obj, 1, 25);
         }
-        if free_slots(bot) <= crate::kit::survival::FOOD_TARGET {
+        if free_slots(bot) <= food_room {
             break;
         }
     }
@@ -458,7 +481,7 @@ pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
             let _ = bot.bank_withdraw(obj, stock, 25);
         }
     }
-    crate::kit::survival::withdraw_food(bot)?;
+    crate::kit::survival::withdraw_food_to(bot, food_target)?;
     bot.close_modal()?;
     bot.pump(5)?;
     for (slot, name) in equip_plan(bot, &plan)?.iter() {

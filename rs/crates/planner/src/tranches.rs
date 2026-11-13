@@ -2,6 +2,10 @@
 //! each tranche and the script-side method. Split out of `expand`
 //! (rule 4); API re-exported there.
 
+/// Spot keyword of the melee script's training ladder (`melee ladder`,
+/// `scripts::kit::ladder::LADDER_KEY`): no fixed spot.
+pub const MELEE_LADDER: &str = "ladder";
+
 /// D21 level tranches per skill: the brain fixes one resource per
 /// tranche, the script never changes tier mid-task. P1 tiers prefer the
 /// classic method (§8); one tier per 10 levels where the dump offers no
@@ -159,6 +163,11 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             .to_string()
         }
         "prayer" => "bones".to_string(),
+        // Melee from 10 trains on the ladder (`melee ladder`: the script
+        // picks the F2P spot from the live levels, gear, hitpoints and
+        // food; audit 2026-11-13: combat 50-59 bots still on cows). The
+        // fresh tranche stays on chickens.
+        "attack" | "strength" | "defence" | "hitpoints" if level >= 10 => MELEE_LADDER.to_string(),
         // Real `combat_spots` keys (the old `chicken_lumbridge` named no
         // spot: melee silently auto-picked goblins and cows and died).
         "attack" | "strength" | "defence" | "hitpoints" | "ranged" | "magic" => {

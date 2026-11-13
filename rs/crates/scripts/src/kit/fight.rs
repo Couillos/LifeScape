@@ -10,17 +10,19 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::waits::wait_ticks;
 use lifescape_sdk::Bot;
 
-use crate::kit::gear::{current_weapon_category, equip_plan, gear_plan, melee_level, prepare_at_bank, rewear};
-use crate::kit::style::{combat_xp, controlled_button, current_skill, fight_weapon_style, melee_stat, next_style, set_style, style_damage_key, weakest_melee};
+use crate::kit::gear::{current_weapon_category, melee_level, rewear};
+use crate::kit::style::{combat_xp, controlled_button, current_skill, melee_stat, next_style, set_style, weakest_melee};
 use crate::kit::survival::{bank_stocks_food, eat, food_count, should_eat, EAT_FRACTION};
 use crate::kit::spots::{attack_nearest, BLOCKED_BAN_TICKS, DOOR_BAN_TICKS};
 use crate::kit::pack::free_slots;
 use crate::kit::survival::{check_events, hitpoints};
-use crate::skill_walk::walk_checked;
-use crate::kit::bans::{same_side, BanSet};
+use crate::kit::bans::BanSet;
 use crate::kit::ammo::{resolve as resolve_weapon_refusal, weapon_refusal, AmmoFix};
 use crate::kit::strike::{attack_npc, foe_refusal, reattack_ticks, FoeRefusal};
 use crate::ScriptError;
+
+// The hunt (clusters, bank trips, budgets) lives in `kit::hunt` (rule 4).
+pub use crate::kit::hunt::{budget_left, level_reached, run_spot, run_spot_with, HuntPlan};
 
 /// True when the fight started since the click: xp flowing, hp taken,
 /// or the target animating (its attack anim streams — ours never does,
@@ -81,7 +83,9 @@ const KILL_CAP_TICKS: u64 = 900;
 
 /// Deaths make the fight return instead of resuming the killer spot: the
 /// caller re-picks excluding it (one death) or fails typed (two in a row).
-/// Returns (kills, bank trip wanted, death seen).
+/// Returns (kills, bank trip wanted, death seen). `food_required`
+/// (ladder spots that bite): out of food means back to the bank, at
+/// once when the eat line is reached with nothing to eat.
 pub fn fight(
     bot: &mut Bot,
     spot: &knowledge::combat_spots::CombatSpot,
@@ -89,6 +93,8 @@ pub fn fight(
     kills_limit: u32,
     ticks_limit: u64,
     no_bank: bool,
+    food_required: bool,
+    stop_level: Option<(u8, u8)>,
 ) -> Result<(u32, bool, bool), ScriptError> {
     let mut kills = 0u32;
     let started = bot.world.ticks;
@@ -139,6 +145,13 @@ pub fn fight(
         if kills_limit > 0 && kills >= kills_limit {
             break;
         }
+        // `--level` goal met: stop between foes (never walking away from
+        // one that is hitting us), at most one kill past the level-up
+        // instead of the rest of the budget (up to 18 000 ticks).
+        if target_npc.is_none() && level_reached(&bot.world.stats, stop_level) {
+            bot.log(&format!("level target {stop_level:?} reached after {kills} kills, stopping the fight"));
+            break;
+        }
         bot.pump(2)?;
         if bot.world.ticks.saturating_sub(last_event_check) >= 25 {
             last_event_check = bot.world.ticks;
@@ -161,8 +174,11 @@ pub fn fight(
             return Ok((kills, false, true));
         }
         max_hp = max_hp.max(hp);
-        if should_eat(hp, max_hp, EAT_FRACTION) {
-            eat(bot)?;
+        if should_eat(hp, max_hp, EAT_FRACTION) && !eat(bot)? && food_required {
+            // Eat line, nothing left, a spot that bites: leave the foe
+            // for the bank (the hunt blocks typed if the bank is dry).
+            bot.log(&format!("out of food at hp {hp}/{max_hp} on {}, back to the bank", spot.key));
+            return Ok((kills, true, false));
         }
         if let Some(slot) = target_npc {
             if let Some(foe) = bot.world.npcs.get(&slot) {
@@ -410,7 +426,7 @@ pub fn fight(
                     ));
                 }
             }
-            if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0 && bank_stocks_food(bot)) {
+            if free_slots(bot) <= 1 || (!no_bank && food_count(bot) == 0 && (food_required || bank_stocks_food(bot))) {
                 return Ok((kills, true, false));
             }
             continue;
@@ -449,162 +465,6 @@ pub fn fight(
     }
     Ok((kills, false, false))
 }
-
-
-
-
-/// Clusters on the bot's toll-fence flank (see kit::bans::same_side): the
-/// crossing is never paid in melee, so an eastern cluster from a western
-/// hunt is a ~220-tile detour per visit, never a shortcut. When every
-/// cluster is across and the run did not opt into `toll`, the list stays
-/// empty and the caller fails named instead of burning NoRoute dossiers.
-/// Falls back to every cluster only when paid (an all-across spot still
-/// hunts instead of idling once the gate is crossable).
-fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)], allow_paid: bool) -> Vec<(i32, i32, usize)> {
-    let kept: Vec<(i32, i32, usize)> =
-        targets.iter().filter(|(center_x, _, _)| same_side(line, *center_x, home)).copied().collect();
-    if kept.is_empty() && allow_paid {
-        targets.to_vec()
-    } else {
-        kept
-    }
-}
-
-/// Kills still wanted: 0 means unlimited, so a plain subtraction panics
-/// on the second cluster once anything died (t02 live).
-fn remaining_kills(kills_limit: u32, total: u32) -> u32 {
-    if kills_limit == 0 {
-        return 0;
-    }
-    kills_limit.saturating_sub(total)
-}
-
-/// Portion of a run budget still unspent (ticks left, saturated).
-/// Pure so the budget arithmetic stays testable without a game.
-pub fn budget_left(ticks_limit: u64, started: u64, now: u64) -> u64 {
-    if ticks_limit == 0 {
-        return 0;
-    }
-    ticks_limit.saturating_sub(now.saturating_sub(started))
-}
-
-pub fn run_spot(
-    bot: &mut Bot,
-    spot: &knowledge::combat_spots::CombatSpot,
-    kills_limit: u32,
-    ticks_limit: u64,
-    no_bank: bool,
-) -> Result<(u32, bool, bool), ScriptError> {
-    if spot.entrance.is_some() {
-        // shortcut: trapdoors/ladders to underground areas are not traversed
-        // (single-level router); surface spots only.
-        return Err(ScriptError::Usage(format!(
-            "spot {} is underground, not traversable from {:?}",
-            spot.key,
-            bot.position()
-        )));
-    }
-    let targets = crate::kit::spots::ranked_clusters(bot, spot);
-    if targets.is_empty() {
-        bot.log(&format!("no spawn for {}", spot.key));
-        return Ok((0, false, false));
-    }
-    // One flank per hunt: cluster centers across the toll fence would
-    // each cost the ~220-tile foot detour (paid doors stay off all
-    // hunt). The per-pick filter in attack_nearest stops the same
-    // oscillation inside the fight; this stops it between clusters.
-    let mut targets = targets;
-    if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
-        let kept = same_flank_clusters(line, bot.world.x, &targets, bot.allow_paid);
-        if kept.len() != targets.len() {
-            bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
-        }
-        // Unpaid and nothing on this flank: the router refuses the paid
-        // gate, so every cluster would burn a NoRoute dossier and end
-        // "ok killed 0" (t02 live). Fail named instead.
-        if kept.is_empty() {
-            return Err(ScriptError::Usage(format!(
-                "spot {} is across the toll fence (line {line}) from {:?}: re-run with `toll` once the bot carries coins",
-                spot.key,
-                bot.position()
-            )));
-        }
-        targets = kept;
-    }
-    let mut total = 0u32;
-    let mut banked_trip = false;
-    // Run-level deadline: `fight` below budgets each call from its own
-    // start, so passing it the full limit every cluster multiplies the
-    // overshoot by the cluster count (~2.5x seen live, L7 debt). The
-    // remainder shrinks as the run spends ticks anywhere (bank trips,
-    // walks, fights alike).
-    let run_started = bot.world.ticks;
-    for (center_x, center_z, count) in targets {
-        // Pace retries: instant walk failures consume no ticks, so an
-        // unpaced loop machine-guns the server into kicking us.
-        bot.pump(2)?;
-        if ticks_limit > 0 && bot.world.ticks.saturating_sub(run_started) >= ticks_limit {
-            bot.log(&format!("run budget {ticks_limit}t spent across clusters, stopping"));
-            break;
-        }
-        bot.log(&format!("spot {} target ({center_x},{center_z}) spawns={count}", spot.key));
-        let mut walk_fails = 0u32;
-        while kills_limit == 0 || total < kills_limit {
-            if ticks_limit > 0 && bot.world.ticks.saturating_sub(run_started) >= ticks_limit {
-                bot.log(&format!("run budget {ticks_limit}t spent inside the hunt, stopping"));
-                break;
-            }
-            // Hunt entry: the one full evaluation (pack + bank when near
-            // one, pack only with --no-bank). Inside the hunt only a loot
-            // that was picked up re-evaluates; a death ends the fight and
-            // returns to the run for the re-pick (see fight()).
-            if !no_bank {
-                if prepare_at_bank(bot)? {
-                    banked_trip = true;
-                }
-            } else {
-                let available = crate::kit::gear::available_gear(bot);
-                equip_plan(bot, &gear_plan(bot, &available, fight_weapon_style, style_damage_key))?;
-            }
-            // A dead socket must reconnect, not limp to the next cluster:
-            // propagate connection failures, swallow the rest as before.
-            match walk_checked(bot, center_x, center_z, 15000) {
-                Err(error) if crate::kit::survival::is_conn_abort(&error) => return Err(error),
-                Err(_) | Ok(false) => {
-                    // A sticking door (or a step refused for a tick) must
-                    // not exile the hunt across the map: re-bank and retry
-                    // the same cluster, move on only on the third failure
-                    // in a row (t02 live: Lumbridge pen doors).
-                    walk_fails += 1;
-                    if walk_fails >= 3 {
-                        break;
-                    }
-                    wait_ticks(bot, 25)?;
-                    continue;
-                }
-                Ok(true) => {
-                    walk_fails = 0;
-                }
-            }
-            // The status line reads the last intent: without this the
-            // whole hunt showed "banking at (x,z)" from prepare_at_bank.
-            bot.intend(&format!("hunting {} near ({center_x},{center_z})", spot.key));
-            {
-                let (kills, bank_wanted, died) =
-                    crate::kit::fight::fight(bot, spot, (center_x, center_z), remaining_kills(kills_limit, total), budget_left(ticks_limit, run_started, bot.world.ticks), no_bank)?;
-                total += kills;
-                if died {
-                    return Ok((total, true, banked_trip));
-                }
-                if !bank_wanted || (kills_limit > 0 && total >= kills_limit) {
-                    return Ok((total, false, banked_trip));
-                }
-            }
-        }
-    }
-    Ok((total, false, banked_trip))
-}
-
 /// Auto spot: broke beginners (no food carried, none banked) cannot
 /// trade hits, so chickens until the account can afford to bleed.
 /// Stocked accounts keep best_spot() exactly (t02 live: foodless at
@@ -652,7 +512,8 @@ pub fn fallback_spot(
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_spot, fallback_spot, remaining_kills};
+    use super::{auto_spot, fallback_spot};
+    use crate::kit::hunt::remaining_kills;
     use crate::kit::survival::{danger_error, DeathTally};
     use crate::tables_live::attach_live_tables;
     use lifescape_gamedata as knowledge;
@@ -716,11 +577,11 @@ mod tests {
     #[test]
     fn clusters_stay_on_the_hunting_flank() {
         let mixed = vec![(3252, 3243, 16), (3274, 3213, 4)];
-        assert_eq!(super::same_flank_clusters(3268, 3260, &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
-        assert_eq!(super::same_flank_clusters(3268, 3270, &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
+        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3260, &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
+        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3270, &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
         let east_only = vec![(3274, 3213, 4)];
-        assert_eq!(super::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
-        assert!(super::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
+        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
+        assert!(crate::kit::hunt::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
     }
 
     /// Auto re-pick from the west never idles on an across-toll pick: the
@@ -741,7 +602,7 @@ mod tests {
         assert!(fallback.min_level <= killer.min_level, "no harder than the across pick, got: {}", fallback.key);
         let targets = crate::kit::spots::ranked_clusters(&bot, &fallback);
         assert!(!targets.is_empty(), "fallback has same-level spawns");
-        let kept = super::same_flank_clusters(3268, bot.world.x, &targets, false);
+        let kept = crate::kit::hunt::same_flank_clusters(3268, bot.world.x, &targets, false);
         assert!(!kept.is_empty(), "{} has no west-flank cluster to hunt", fallback.key);
     }
 

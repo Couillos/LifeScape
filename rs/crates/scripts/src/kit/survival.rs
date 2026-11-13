@@ -54,15 +54,25 @@ pub fn food_count(bot: &Bot) -> u32 {
 
 /// Withdraw the best banked food up to the target. Returns food carried.
 pub fn withdraw_food(bot: &mut Bot) -> Result<u32, ScriptError> {
-    let banked: Vec<String> =
-        bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
-    let refs: Vec<&str> = banked.iter().map(String::as_str).collect();
-    let Some((chosen, _)) = lifescape_gamedata::food::best_food(&refs) else {
-        return Ok(food_count(bot));
-    };
-    let food_id = crate::kit::pack::obj_id(bot, &chosen)?;
-    let need = (FOOD_TARGET as u32).saturating_sub(food_count(bot));
-    if need > 0 {
+    withdraw_food_to(bot, FOOD_TARGET as u32)
+}
+
+/// Withdraw banked food up to `target` units (the hunt's sized load),
+/// best heal first, the next food when the best runs short. Returns
+/// food carried.
+pub fn withdraw_food_to(bot: &mut Bot, target: u32) -> Result<u32, ScriptError> {
+    let mut banked: Vec<(i64, u16)> = bot
+        .bank_items()
+        .keys()
+        .filter_map(|id| (bot.tables.obj_name)(*id).map(|name| (lifescape_gamedata::food::heal(&name), *id)))
+        .filter(|(heal, _)| *heal > 0)
+        .collect();
+    banked.sort_by(|left, right| right.cmp(left));
+    for (_, food_id) in banked {
+        let need = target.saturating_sub(food_count(bot));
+        if need == 0 || crate::kit::pack::free_slots(bot) == 0 {
+            break;
+        }
         let _ = bot.bank_withdraw(food_id, need, 50);
     }
     Ok(food_count(bot))

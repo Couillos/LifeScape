@@ -87,6 +87,8 @@ pub fn dump_npc_ranges(output: &Path) -> Result<usize, String> {
     ]);
     std::fs::write(output, lifescape_json::stringify_pretty(&doc) + "\n").map_err(|error| format!("{}: {error}", output.display()))?;
     println!("dump-npc-ranges: {count} NPCs from {} files -> {}", files.len(), output.display());
+    // Same configs, second table: the combat block the melee ladder reads.
+    crate::dump_npc_combat::dump_npc_combat(&files, &output.with_file_name("npc_combat.json"))?;
     Ok(count)
 }
 
