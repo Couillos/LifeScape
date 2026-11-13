@@ -2,11 +2,15 @@
 /// Daemon log line on stdout (redirected to `run/daemon.log`), prefixed
 /// with the UTC wall clock so a lot can be read as a timeline. CLI
 /// commands keep plain `println!` (their stdout is the operator's).
+/// Each line is also offered to the errors collector (brain abandons,
+/// stuck graphs, bans: a no-op until the daemon starts it).
 #[macro_export]
 macro_rules! logln {
-    ($($arg:tt)*) => {
-        println!("[{}] {}", $crate::daemon_clock(), format_args!($($arg)*))
-    };
+    ($($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        $crate::errors_ingest::observe_log_line(&line);
+        println!("[{}] {}", $crate::daemon_clock(), line)
+    }};
 }
 
 /// UTC `HH:MM:SS` for daemon log lines (same clock as session logs).
@@ -60,6 +64,10 @@ pub mod web_job_lives;
 pub mod web_ws;
 pub mod web_lives;
 pub mod web_market;
+pub mod web_errors;
+pub mod errors_aggregate;
+pub mod errors_ingest;
+pub mod errors_model;
 pub mod zones;
 pub mod cli;
 pub mod await_cmd;

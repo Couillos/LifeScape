@@ -114,6 +114,9 @@ fn daemon_main() -> i32 {
         }
     };
     lifescape_orchestrator::holdings::start_sampler(orch.clone());
+    // Errors page: one collector thread feeds `error_events` (pushed
+    // task errors, brain log lines, rescanned dossiers and deals).
+    lifescape_orchestrator::errors_ingest::start(&orch);
     // Market: catalogue from the dumps, store opened here alone, demo
     // history seeded when empty, socket beside the session sockets.
     match lifescape_orchestrator::market_service::start() {

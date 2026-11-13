@@ -564,6 +564,7 @@ impl Orchestrator {
                 } else {
                     crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push): {message}");
                 }
+                crate::errors_ingest::observe_event(&account, frame);
                 {
                     let Ok(mut inner) = job.inner.try_lock() else {
                         return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
@@ -599,6 +600,7 @@ impl Orchestrator {
                 if let Err(error) = crate::store_queue::stage_report(&report) {
                     crate::logln!("job {account}: staging failed: {error}");
                 }
+                crate::errors_ingest::observe_report(&account, &report, &job);
                 let Ok(mut inner) = job.inner.try_lock() else {
                     return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
                 };

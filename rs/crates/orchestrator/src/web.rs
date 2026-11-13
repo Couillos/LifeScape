@@ -2,6 +2,7 @@
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
 //! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /economy /economy.js
+//! /errors /errors.js /api/errors/summary|list|dossier/<file> (web_errors)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history
 //! /api/rates/table /api/lives /api/life/<account> /api/economy
@@ -161,6 +162,9 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
                 }),
                 None => Ok(not_found()),
             };
+        }
+        if let Some(reply) = crate::web_errors::route(&parts, query) {
+            return Ok(reply);
         }
         if parts == ["api", "status"] {
             return Ok(ok_json(dispatch(object(vec![("cmd", str_value("status"))]))));
