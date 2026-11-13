@@ -7,6 +7,7 @@ pub mod buffer;
 pub mod collision;
 pub mod costs;
 pub mod f2p;
+mod fallback;
 pub mod loctypes;
 pub mod nav;
 pub mod no_route;

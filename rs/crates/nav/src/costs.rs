@@ -26,7 +26,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
 use crate::bfs::can_step;
-use crate::collision::{self, CollisionMap};
+use crate::collision::{self, leaf_step_extra, CollisionMap};
 use crate::plan::{EdgeId, NavOptions, SharedEdges, Tile, DOOR_COST};
 use crate::reach;
 use crate::static_world::StaticWorld;
@@ -199,7 +199,7 @@ pub(crate) fn plan_costs_with(
         dest: Tile,
         indices: Vec<usize>,
         best: Tile,
-        rank: (i32, i32, u32),
+        rank: (i32, i32, bool, u32),
     }
     let mut blocked: Vec<Blocked> = Vec::new();
     for (index, dest) in dests.iter().enumerate() {
@@ -208,7 +208,8 @@ pub(crate) fn plan_costs_with(
         } else if let Some(known) = blocked.iter_mut().find(|known| known.dest == *dest) {
             known.indices.push(index);
         } else {
-            let rank = from.fallback_rank(*dest, 0);
+            let touching = crate::fallback::touches_side(&mut |tile| search.open(tile), from, *dest);
+            let rank = from.fallback_rank(*dest, 0, touching);
             blocked.push(Blocked { dest: *dest, indices: vec![index], best: from, rank });
         }
     }
@@ -242,7 +243,8 @@ pub(crate) fn plan_costs_with(
         }
         let here = tile_of(found);
         for target in blocked.iter_mut() {
-            let rank = here.fallback_rank(target.dest, cost);
+            let touching = crate::fallback::touches_side(&mut |tile| search.open(tile), here, target.dest);
+            let rank = here.fallback_rank(target.dest, cost, touching);
             if rank < target.rank {
                 target.rank = rank;
                 target.best = here;
@@ -269,7 +271,7 @@ pub(crate) fn plan_costs_with(
             // A step off a door tile, or anywhere no usable door stands,
             // walks when the shut view allows it (same rule as `dijkstra`).
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1 + danger.extra(next), false);
+                relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), false);
                 continue;
             }
             // Stop onto a usable door tile from a table-allowed side,
@@ -278,7 +280,7 @@ pub(crate) fn plan_costs_with(
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1 + danger.extra(next), false);
+                        relax(&mut dist, &mut dist_open, &mut heap, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), false);
                     }
                 }
             }
