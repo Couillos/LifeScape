@@ -262,7 +262,7 @@ impl Store {
                 rusqlite::params![reason, clock, deal.deal_id],
             )?;
             for (account, side) in [(&deal.buyer, crate::OrderSide::Buy), (&deal.seller, crate::OrderSide::Sell)] {
-                self.place_order(&crate::NewOrder {
+                let relisted = self.place_order(&crate::NewOrder {
                     account: account.clone(),
                     side,
                     item_id: deal.item_id,
@@ -271,6 +271,12 @@ impl Store {
                     dormant: false,
                     clock: deal.created_clock,
                 })?;
+                // Rank of the deal's clock, but re-entered now: a crossed
+                // reload makes the latest (re)entry the taker.
+                self.connection.execute(
+                    "UPDATE orders SET updated_clock = ?1 WHERE order_id = ?2",
+                    rusqlite::params![clock, relisted],
+                )?;
             }
         }
         Ok(stale)
@@ -337,6 +343,10 @@ mod deals_tests {
         };
         assert_eq!(rows("t01")?, vec![(crate::OrderSide::Buy, 7, 3, 1_700_000_000)]);
         assert_eq!(rows("t02")?, vec![(crate::OrderSide::Sell, 7, 3, 1_700_000_000)]);
+        assert_eq!(store.account_orders("t01")?[0].updated_clock, 1_700_000_100, "re-entered at the boot clock");
+        let recent: Vec<i64> = store.failed_deals_since(1_700_000_100)?.iter().map(|deal| deal.deal_id).collect();
+        assert_eq!(recent, vec![live], "the restart failure is recent");
+        assert!(store.failed_deals_since(1_700_000_101)?.is_empty());
         assert!(store.fail_stale_deals_relisting("daemon restart", 1_700_000_200)?.is_empty(), "idempotent");
         assert_eq!(store.account_orders("t01")?.len(), 1);
         Ok(())

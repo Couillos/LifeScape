@@ -147,6 +147,9 @@ pub fn start_convene_loop(orch: Arc<Orchestrator>) {
                     }
                 }
                 round += 1;
+                // Never a crossed book: expired pair cooldowns and any
+                // leftover cross match like a taker (`market_uncross`).
+                service.uncross_books(wall);
                 // Locks every round: what open orders and deals promise
                 // never leaves a bank outside the trade procedure.
                 let accounts: Vec<String> = jobs.iter().map(|job| job.account.clone()).collect();

@@ -558,6 +558,10 @@ impl MarketService {
             engine.ledger.credit_coins(seller, -cost);
         }
         self.release_convene(deal_id);
+        // The pair would meet and fail again at once: kept apart for the
+        // cooldown, free to match anybody else (`market_uncross`).
+        let until = wall_now() + crate::market_uncross::cooldown_secs();
+        self.hold_pair_apart(buyer, seller, until);
         let rows = self.lock_engine().relist_rows.remove(&deal_id).unwrap_or_default();
         let clock = Self::now_clock();
         for row in rows {
@@ -584,14 +588,15 @@ impl MarketService {
                     .ok()
             };
             let Some(store_id) = store_id else { continue };
-            let mut engine = self.lock_engine();
             let mut relisted = row;
             relisted.id = store_id as u64;
             relisted.quantity = relisted.remaining;
-            if let Some(book) = engine.books.get_mut(&item) {
-                book.relist(relisted);
+            // Re-enters as a taker at its old rank: whatever it crosses
+            // (not the failed partner) fills now, never rests crossed.
+            let deals = self.relist_order(relisted);
+            if !deals.is_empty() {
+                crate::logln!("market: deal {deal_id} relist of order {store_id} matched at once, deals {deals:?}");
             }
-            engine.order_item.insert(store_id as u64, item);
         }
         let store = self.lock_store();
         if let Some(score) = reliability.0 {

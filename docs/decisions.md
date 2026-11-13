@@ -383,3 +383,29 @@ devient `chateau_entree` (+ `chateau_sud_interieur`, `chateau_draynor_men`).
 L'exemption de budget NoRoute (2026-11-06) reste, sa mesure de référence
 `chateau_scell` est historique. Rejeté : garder le château scellé (NoRoute
 exhaustif 3-9 s, ~50/h pour men/dark_wizards).
+
+## 2026-11-13 — Carnet jamais croisé (bronze axe 1351)
+
+Constat live : `Book::relist` réinsérait sans apparier ; après le deal
+1068 échoué (lara_lane × bmzvbp5u à 20), le bid de lara_lane revenait à
+20 au-dessus d'asks tiers à 16 et le carnet restait croisé (buys
+[20,12,4], sells [15,16,16,18,19]) ; un vendeur entrant servait ensuite
+le bid à 20. Second défaut : `place` s'arrêtait sur son propre ordre au
+lieu de le sauter, laissant le reste croisé contre des tiers.
+Règle (utilisateur) : tout ordre qui (ré)entre — placement, amend,
+relist après échec, fusion, réinsertion au boot — est TAKER et s'exécute
+au prix de l'ordre opposé déjà au repos (un acheteur paie le meilleur
+ask), quel que soit le `seq` conservé pour le rang. Guérison d'un carnet
+déjà croisé (`Book::uncross`) : le taker est la dernière (ré)entrée
+(estampille d'arrivée du livre ; au boot, ordre de `updated_clock`, les
+relists de deals morts au redémarrage datés du boot). Exceptions : un
+compte ne s'apparie jamais avec lui-même ; les deux comptes d'un deal
+échoué (toute raison) ne s'apparient plus ENTRE EUX pendant
+`PAIR_COOLDOWN_TICKS` = 3000 ticks (`live_tick_ms`, restauré au boot
+depuis `failed_deals_since`), libres avec tout autre. `uncross_books`
+tourne au boot et à chaque tour de convocation. Chaque appariement passe
+par le chemin normal (`merge_fills`, `record_fill`, `refresh_order_rows`) ;
+moteur puis store, jamais imbriqués.
+Rejeté : relist sans appariement (carnet croisé à vie) ; prix du `seq`
+le plus ancien (lara aurait payé 20 avec une hache à 16) ; interdire tout
+rappariement des comptes d'un deal échoué (bloquerait des tiers).
