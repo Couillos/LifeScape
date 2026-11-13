@@ -14,8 +14,10 @@
 //! ladder instead (`brain_gear`: one tier at a time, as graph steps):
 //! their wishes are the tools only. Ceilings are wallet shares that rise
 //! as coins come in: `TOOL_SHARE_PCT` (25 %) per tool, `GEAR_SHARE_PCT`
-//! (50 %) split across ranged/magic gear wishes. A resting wish bid keeps
-//! its walk (`market_reprice::keep_bid`): only its ceiling moves.
+//! (50 %) split across ranged/magic gear wishes, each of the FREE wallet
+//! (`brain_gear::free_coins`: coins minus the bot's other resting buys).
+//! A resting wish bid keeps its walk (`market_reprice::keep_bid`): only
+//! its ceiling moves.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -163,12 +165,15 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     }
     let Some(service) = crate::market_service::shared() else { return 0 };
     let wishes = wishlist(job, life);
-    let coins = crate::brain_plan::holdings_count(job, "coins");
     let top: Vec<Wish> = wishes.into_iter().filter(|wish| crate::brain_sales::tradeable(&wish.item)).take(WISH_BIDS).collect();
     let gear_wishes = top.iter().filter(|wish| !is_tool_wish(wish)).count();
     let mut placed = 0;
     for wish in &top {
         let Some(id) = lifescape_gamedata::objs_by_name(&wish.item).into_iter().next().map(|obj| obj.obj_id as i64) else { continue };
+        // The free wallet (review 2026-11-13): coins minus what the bot's
+        // other resting buys (gear step, the other tool, graph buys)
+        // already commit, never the whole wallet again.
+        let coins = crate::brain_gear::free_coins(job, Some(id));
         let ceiling = wish_ceiling(wish, coins, gear_wishes);
         if ceiling < 1 {
             continue;

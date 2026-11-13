@@ -131,7 +131,10 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     last_wait().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account);
     let label = goal_label(&next);
     let profile = life.profile.clone();
-    append_goal(life, next, &profile, &level_of);
+    // A production quota counts from the stock held now (never credited
+    // with what the bot already had).
+    let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
+    append_goal(life, next, &profile, &level_of, &held_of);
     mark_drawn(life, origin.as_deref());
     if let Some(id) = &origin {
         crate::logln!("brain {}: goal {label} from milestone {id}", life.account);
@@ -167,7 +170,7 @@ mod tests {
     use super::{live_level, redraw, succeed_goal};
     use lifescape_json::{object, Value};
     use lifescape_planner::{
-        new_ambition, Archetype, GoalKind, HistoryEntry, Life, MilestoneStatus, Node, NodeKind, NodeStatus, Profile, Stamp, GENERALIST, STUCK_TAG,
+        new_ambition, Archetype, BotNow, GoalKind, HistoryEntry, Life, MilestoneStatus, Node, NodeKind, NodeStatus, Profile, Stamp, GENERALIST, STUCK_TAG,
     };
 
     fn live(levels: &[(i64, i64)]) -> Value {
@@ -190,7 +193,7 @@ mod tests {
             active: None,
             history: Vec::new(),
             // The explicit generalist keeps the plain lowest-skill draw.
-            ambition: new_ambition(GENERALIST, "operator", &|_| 1, 0, &[], Stamp { tick: 0, secs: 0 }),
+            ambition: new_ambition(GENERALIST, "operator", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 0, &[], Stamp { tick: 0, secs: 0 }).ok(),
             goal_origin: None,
         }
     }
@@ -203,7 +206,7 @@ mod tests {
         let mut smith = life_with(GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 5 });
         // Drawn now: the optional change stays throttled (no fleet read).
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
-        smith.ambition = new_ambition("smith", "coverage:smithing", &|_| 1, 3, &[], Stamp { tick: 0, secs: now });
+        smith.ambition = new_ambition("smith", "coverage:smithing", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], Stamp { tick: 0, secs: now }).ok();
         // Mining 12, smithing 1: the mining 10 milestone is met at refresh.
         let snapshot = live(&[(14, 12)]);
         let label = succeed_goal(&mut smith, &snapshot, false).expect("a goal");

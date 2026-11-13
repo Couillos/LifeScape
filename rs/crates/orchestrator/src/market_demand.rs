@@ -16,7 +16,12 @@
 //!   with the ambition kind it serves.
 //! - `kind_profits()`: best profit per ambition kind from the chains and
 //!   the measured method profits (`rates_service::profit_rows`).
-//! - `demand_items()` / `kind_demand()`: the planner inputs.
+//! - `demand_items()` / `kind_demand()`: the planner inputs; each item
+//!   carries its per-unit `margin` at the best bid against its inputs at
+//!   their market reference (`planner::chain_profit`; an unpriced input
+//!   falls to the reference, which ends at 1 coin): only a positive margin
+//!   makes a demand milestone (review 2026-11-13: a 1-coin bid made a
+//!   smith forge steel platebodies at a loss).
 
 use std::collections::BTreeMap;
 
@@ -98,9 +103,46 @@ pub fn signals() -> Vec<DemandSignal> {
     signals_from(&orders, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
 }
 
-/// Planner input: one `DemandItem` per signal.
+/// Planner input: one `DemandItem` per signal, its margin priced at the
+/// market reference of every input (one store read for the whole list).
+/// Store down: no margin, so no demand milestone (no data, no decision).
 pub fn demand_items(signals: &[DemandSignal]) -> Vec<DemandItem> {
-    signals.iter().map(|signal| DemandItem { item: signal.item.clone(), weight: signal.weight, unmet: signal.unmet_qty }).collect()
+    if signals.is_empty() {
+        return Vec::new();
+    }
+    match lifescape_store::Store::open(&crate::market_service::db_path()) {
+        Ok(store) => demand_items_with(signals, &|item: &str| crate::rates_service::price_estimate(&store, &display_of(item)).0),
+        Err(error) => {
+            crate::logln!("market_demand: store unreadable, bids carry no margin: {error}");
+            demand_items_with(signals, &|_| f64::NAN)
+        }
+    }
+}
+
+/// Pure `demand_items`: margin = best bid minus the inputs of the best
+/// production way at `reference` (debug name → market reference: 24 h
+/// VWAP, last print, mid, else 1 coin; never a shop price), per unit
+/// (`planner::chain_profit`). An input with no reference (NaN) or an
+/// object no production way makes leaves the margin `None`. Inputs are
+/// costed at the reference even when the producer gathers them (the
+/// opportunity cost), not at the best ask.
+pub fn demand_items_with(signals: &[DemandSignal], reference: &dyn Fn(&str) -> f64) -> Vec<DemandItem> {
+    signals
+        .iter()
+        .map(|signal| DemandItem { item: signal.item.clone(), weight: signal.weight, unmet: signal.unmet_qty, margin: bid_margin(signal, reference) })
+        .collect()
+}
+
+fn bid_margin(signal: &DemandSignal, reference: &dyn Fn(&str) -> f64) -> Option<f64> {
+    let mut prices = vec![(signal.item.clone(), signal.best_bid.max(0) as f64)];
+    for way in lifescape_gamedata::obtain::ways(&signal.item).into_iter().filter(|way| way.is_production()) {
+        for (input, _) in &way.inputs {
+            if !prices.iter().any(|(known, _)| known == input) {
+                prices.push((input.clone(), reference(input)));
+            }
+        }
+    }
+    lifescape_planner::chain_profit(&signal.item, &prices, 1.0).ok().map(|verdict| verdict.margin)
 }
 
 fn display_of(item: &str) -> String {
@@ -181,5 +223,35 @@ mod tests {
         assert_eq!((first.oldest_age_secs, first.oldest_age_ticks), (1000, 10_000));
         assert!((first.weight - 60.0 * 15.0 * (1.0 + 10_000.0 / 6000.0)).abs() < 1e-6);
         assert_eq!(demand_items(&found)[0].unmet, 15);
+    }
+
+    /// Review 2026-11-13 (finding 5): a bid only motivates production when
+    /// it pays the inputs at their market reference: a steel platebody at
+    /// 1 coin (5 bars) never does, a bronze one at 200 does, a gathered
+    /// fish pays its whole bid, an object nobody makes has no margin.
+    #[test]
+    fn margins_price_the_best_bid_against_input_references() {
+        let signal = |item: &str, best_bid: i64| super::DemandSignal {
+            item: item.to_string(),
+            item_id: 0,
+            open_bids: 1,
+            bidders: 1,
+            unmet_qty: 5,
+            best_bid,
+            oldest_age_secs: 0,
+            oldest_age_ticks: 0,
+            weight: 1.0,
+        };
+        let reference = |item: &str| match item {
+            "bronze_bar" => 10.0,
+            _ => 1.0,
+        };
+        let rows = [signal("steel_platebody", 1), signal("bronze_platebody", 200), signal("raw_shrimp", 3), signal("shears", 50)];
+        let items = super::demand_items_with(&rows, &reference);
+        let margin = |item: &str| items.iter().find(|row| row.item == item).and_then(|row| row.margin);
+        assert!(margin("steel_platebody").is_some_and(|value| value < 0.0), "{items:?}");
+        assert!(margin("bronze_platebody").is_some_and(|value| (value - 150.0).abs() < 1e-6), "{items:?}");
+        assert!(margin("raw_shrimp").is_some_and(|value| value > 0.0), "{items:?}");
+        assert_eq!(margin("shears"), None, "bought from shops only: no production margin");
     }
 }

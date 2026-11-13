@@ -43,6 +43,16 @@ fn seconds_since_history(life: &Life, node: &str, outcome: &str) -> Option<i64> 
     life.history.iter().rev().find(|entry| entry.node == node && entry.outcome == outcome).map(|entry| now - entry.ended)
 }
 
+/// A `coins:N` need computed on the free wallet: the wallet to earn adds
+/// back the coins the bot's other resting buys commit, so the
+/// `have_coins` target it files really frees `N` (other needs unchanged).
+pub(crate) fn lift_coin_need(need: &str, committed: i64) -> String {
+    match need.strip_prefix("coins:").and_then(|amount| amount.parse::<i64>().ok()) {
+        Some(amount) => format!("coins:{}", amount.saturating_add(committed.max(0))),
+        None => need.to_string(),
+    }
+}
+
 fn save_or_log(life: &Life) {
     if let Err(error) = save_life(life) {
         crate::logln!("{error}");
@@ -69,6 +79,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Every life holds an ambition (2026-11-13): the first pass that
     // meets one without assigns the whole fleet (coverage first).
     if crate::brain_ambition::ensure(orch, &mut life, &live) {
+        dirty = true;
+    }
+    // Coverage repair (review 2026-11-13): an uncovered group is logged
+    // and a redundant bot past the change throttle takes it.
+    if crate::brain_ambition::coverage_pass(&mut life, &live) {
         dirty = true;
     }
     // Space pressure (L8) precedes the terminal check: a full bank needs
@@ -254,8 +269,13 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Carried tools gate the gather legs the same way (t04: rod-less
     // sardines never dispatch).
     ctx.coins = holdings_count(job, "coins");
+    // A purchase bids on the FREE wallet (review 2026-11-13): coins minus
+    // what this bot's other resting buys (gear step, tool wishes) commit.
+    let mut committed = 0;
     if let NodeKind::ObtainItems { item, .. } = &life.nodes[position].kind {
         ctx.held = holdings_count(job, item);
+        committed = crate::brain_gear::committed_coins(&job.account, crate::brain_gear::obj_id(item));
+        ctx.coins = (ctx.coins - committed).max(0);
     }
     ctx.tools = carried_tools(job);
     ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);
@@ -317,7 +337,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // fund): the block becomes an obtain sub-task now, never a node that
     // flips Ready/Blocked forever without launching.
     if let NodeStatus::Blocked { reason } = life.nodes[position].status.clone() {
-        let missing: Vec<String> = reason.strip_prefix("missing:").map(|need| vec![need.to_string()]).unwrap_or_default();
+        let missing: Vec<String> = reason.strip_prefix("missing:").map(|need| vec![lift_coin_need(need, committed)]).unwrap_or_default();
         let id = life.nodes[position].id.clone();
         if missing.is_empty() {
             lifescape_planner::record_contract_error(&mut life, position, &format!("resolve blocked: {reason}"));
@@ -495,4 +515,21 @@ fn note_launch(account: &str) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(account.to_string(), std::time::Instant::now());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lift_coin_need;
+
+    /// Review 2026-11-13 (finding 6): a graph buy bids on the coins the
+    /// bot's standing bids leave free; the wallet it must earn adds those
+    /// commitments back, or the `have_coins` target is met while the
+    /// purchase still cannot be afforded.
+    #[test]
+    fn a_coin_need_adds_the_committed_coins() {
+        assert_eq!(lift_coin_need("coins:120", 40), "coins:160");
+        assert_eq!(lift_coin_need("coins:120", 0), "coins:120");
+        assert_eq!(lift_coin_need("tool:pickaxe", 40), "tool:pickaxe");
+        assert_eq!(lift_coin_need("coins:many", 40), "coins:many");
+    }
 }

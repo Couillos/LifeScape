@@ -219,7 +219,17 @@ liste le résultat une fois le nœud fini), `equip`, `coins` (merchant :
 `GetRich{merchant}` jusqu'au montant détenu, pack + banque). Demande :
 une offre d'achat ouverte qu'une ambition sait servir (à ≤ 10 niveaux,
 entraînement d'abord) devient un jalon `produce` en tête (`origin:
-demand:<objet>`, quantité = non servie, 5..100), un seul à la fois.
+demand:<objet>`, quantité = non servie, 5..100), un seul à la fois,
+seulement si elle PAIE (`DemandItem::margin` > 0 : meilleure offre moins
+les intrants de la meilleure recette à leur référence marché,
+`profit::chain_profit` ; sans marge connue, rien) et si le bot ne détient
+pas déjà la quantité (sac + banque + porté ; le stock annoncé reste sur
+le bot jusqu'à la livraison). Un quota `produce` compte depuis le stock
+détenu au tirage (`append_goal(…, held_of)` : le nœud `obtain` demande
+`détenu + quota`), jamais crédité du stock existant (revue 2026-11-13 :
+un cuisinier à 100 crevettes protégées bouclait jalon/fait/réinsertion).
+Les jalons faits sont bornés à `MAX_DONE_KEPT` = 40 (les plus anciens
+partent, ids jamais réutilisés).
 
 Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
 premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
@@ -230,12 +240,29 @@ loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
 ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
 `blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage
 immédiat de l'ambition (politique approuvée, log `milestone mN blocked 3
-times, redrawing ambition`), jamais vers le même type. Échelle épuisée ⇒
-nouveau tirage (`achieved`). Changement facultatif (après un jalon fait) :
-au plus une fois toutes les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps
-mur converti par la durée de tick mesurée) ; un bot redondant comble
-d'abord un trou de couverture, sinon une chance sur quatre d'un nouveau
-tirage ; le seul détenteur d'un groupe ne le quitte jamais.
+times, redrawing ambition`), jamais vers le même type. Échelle épuisée
+(`achieved`) : nouveau tirage seulement si un autre bot tient le groupe
+ET que 72 000 ticks sont passés depuis le dernier changement ; sinon
+l'échelle se prolonge (`ambition::extend`, origine `extend` : les 3
+derniers paliers tournent, niveau live + 5 plafonné à 99, quotas et
+équipement répétés, cible de pièces doublée) ; rien à prolonger ⇒ nouveau
+tirage (loggé). Un tirage qui ne donne aucun jalon ouvert est refusé
+(`AmbitionError::NoMilestone`, loggé) et retiré (jamais une ambition
+atteinte à la naissance, retirée à chaque passe) ; une ambition de
+couverture se prolonge à la place (`new_ambition_extended`). Une nouvelle
+ambition lit les pièces détenues (un marchand riche ne repart pas à 5 000).
+Changement facultatif (après un jalon fait, à la clôture d'un but OU
+quand `refresh` clôt un jalon niveau/pièces) : au plus une fois toutes
+les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps mur converti par la
+durée de tick mesurée) ; un bot redondant comble d'abord un trou de
+couverture, sinon une chance sur quatre d'un nouveau tirage ; le seul
+détenteur d'un groupe ne le quitte jamais. Réparation de couverture
+(`brain_ambition::coverage_pass`, toutes les 300 s par compte au passage
+de lancement) : les trous de la flotte sont loggés à chaque changement
+(`fleet coverage gap: …` ; un bot fermé laisse son groupe) et un bot
+redondant dont le dernier changement a 72 000 ticks prend le trou tout de
+suite (`coverage_repair`, révision `repair:coverage:<groupe>` ; son but en
+cours continue, délié).
 
 Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
 rencontre une vie sans ambition, toute la flotte est assignée (fichiers
@@ -258,11 +285,13 @@ Contrat du fichier (rendu par la page `life`, lu par les ventes) :
 `ambition = {kind, label, groups, why: coverage:<groupe>|
 random|demand:<objet>, milestones: [{id, label, kind: level|produce|equip|coins,
 target, status: pending|active|done|blocked, progress: [cur, target],
-blocked_count, origin}], drawn_at_tick, drawn_at, rung, revisions:
-[{tick, at, from, to, why}]}` et `goal_origin`. `drawn_at_tick`/`tick` =
-horloge daemon (ms murales / tick mesuré) ; les durées se mesurent sur
-`drawn_at`/`at` (secondes unix). Anciens fichiers sans `ambition` :
-chargés tels quels, ambition assignée au passage suivant.
+blocked_count, origin: ladder|demand:<objet>|extend}], drawn_at_tick,
+drawn_at, rung, revisions: [{tick, at_secs, from, to, why}]}` et
+`goal_origin`. `drawn_at_tick`/`tick` = horloge daemon (ms murales / tick
+mesuré) ; les durées se mesurent sur `drawn_at`/`at_secs` (secondes unix ;
+les fichiers d'avant le 2026-11-13 écrivaient `at`, toujours lu). Anciens
+fichiers sans `ambition` : chargés tels quels, ambition assignée au
+passage suivant.
 
 Signaux de demande (`market_demand.rs`, lecture seule, données publiques) :
 `signals()` → `DemandSignal {item, item_id, open_bids, bidders,

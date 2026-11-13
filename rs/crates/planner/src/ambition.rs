@@ -24,6 +24,15 @@ pub const AMBITION_CHANGE_TICKS: u64 = 72_000;
 pub const MILESTONE_MAX_BLOCKS: u32 = 3;
 /// Open (not done) milestones kept materialized ahead.
 pub const OPEN_MILESTONES: usize = 3;
+/// Done milestones kept in the file (the oldest go first; ids are never
+/// reused): a bot serving the market for months never grows its life.
+pub const MAX_DONE_KEPT: usize = 40;
+/// Levels an extension rung climbs past the live level (or its rung).
+pub const EXTEND_LEVELS: u8 = 5;
+/// Last catalogue rungs an extension cycles through.
+pub const EXTEND_LAP: usize = 3;
+/// Origin of the milestones materialized past the catalogue ladder.
+pub const EXTEND_ORIGIN: &str = "extend";
 /// Explicit ambition that keeps the plain lowest-skill draw; never drawn
 /// by the fleet, only set by an operator.
 pub const GENERALIST: &str = "generalist";
@@ -133,7 +142,8 @@ pub struct Milestone {
 pub struct Revision {
     pub tick: u64,
     /// Unix seconds of the change (elapsed ticks are measured from it).
-    pub at: i64,
+    /// File key `at_secs` (files before 2026-11-13 wrote `at`).
+    pub at_secs: i64,
     pub from: String,
     pub to: String,
     pub why: String,
@@ -162,11 +172,62 @@ pub struct Stamp {
     pub secs: i64,
 }
 
-/// A fresh ambition of `kind` for a bot at these levels: its first
-/// milestones materialized from the catalogue (rungs the bot is far past
-/// are skipped). Unknown kinds give `None` (typed by the caller).
-pub fn new_ambition(kind: &str, why: &str, level_of: &dyn Fn(&str) -> u8, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Option<Ambition> {
-    let found = spec(kind)?;
+/// What an ambition reads of its bot now (live snapshot).
+pub struct BotNow<'view> {
+    pub level_of: &'view dyn Fn(&str) -> u8,
+    /// Coins held (pack + bank + worn).
+    pub coins: i64,
+    /// Units of an object held (pack, bank, worn): listed stock stays on
+    /// the bot until its deal is delivered, so it counts here too.
+    pub held: &'view dyn Fn(&str) -> i64,
+}
+
+/// Why no ambition of a kind could be made (typed, logged by the brain).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AmbitionError {
+    UnknownKind(String),
+    /// The ladder gives this bot no open milestone (it is far past every
+    /// rung): never an ambition achieved at birth, redrawn every pass.
+    NoMilestone(String),
+}
+
+impl std::fmt::Display for AmbitionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AmbitionError::UnknownKind(kind) => write!(formatter, "ambition {kind} unknown to the catalogue"),
+            AmbitionError::NoMilestone(kind) => write!(formatter, "ambition {kind} gives no open milestone at these levels"),
+        }
+    }
+}
+
+/// A fresh ambition of `kind` for a bot at these levels and coins: its
+/// first milestones materialized from the catalogue (rungs the bot is far
+/// past are skipped, coin targets it holds too). A ladder that leaves no
+/// open milestone is refused (`NoMilestone`), except the generalist's.
+pub fn new_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
+    if ambition.kind != GENERALIST && open_count(&ambition) == 0 {
+        return Err(AmbitionError::NoMilestone(kind.to_string()));
+    }
+    Ok(ambition)
+}
+
+/// `new_ambition` for the sole holder of a group (coverage): a ladder the
+/// bot is past extends beyond the catalogue (`extend`) instead of being
+/// refused; `NoMilestone` only when even the extension is empty.
+pub fn new_ambition_extended(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let mut ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
+    if ambition.kind != GENERALIST && open_count(&ambition) == 0 {
+        extend(&mut ambition, now, seed);
+        if open_count(&ambition) == 0 {
+            return Err(AmbitionError::NoMilestone(kind.to_string()));
+        }
+    }
+    Ok(ambition)
+}
+
+fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let found = spec(kind).ok_or_else(|| AmbitionError::UnknownKind(kind.to_string()))?;
     let mut ambition = Ambition {
         kind: found.kind.to_string(),
         label: found.label.to_string(),
@@ -178,8 +239,8 @@ pub fn new_ambition(kind: &str, why: &str, level_of: &dyn Fn(&str) -> u8, seed: 
         rung: 0,
         revisions: Vec::new(),
     };
-    refresh(&mut ambition, level_of, 0, seed, demand);
-    Some(ambition)
+    refresh(&mut ambition, now, seed, demand);
+    Ok(ambition)
 }
 
 fn next_milestone_id(ambition: &Ambition) -> String {
@@ -206,18 +267,50 @@ fn push_milestone(ambition: &mut Ambition, target: Target, origin: &str) {
     });
 }
 
-fn open_count(ambition: &Ambition) -> usize {
+/// Open (not done) milestones of an ambition.
+pub fn open_count(ambition: &Ambition) -> usize {
     ambition.milestones.iter().filter(|stone| stone.status != MilestoneStatus::Done).count()
+}
+
+fn milestone_number(stone: &Milestone) -> usize {
+    stone.id.strip_prefix('m').and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(0)
+}
+
+/// Drop the oldest done milestones past `MAX_DONE_KEPT`. The highest id
+/// always stays, so `next_milestone_id` never hands an id out twice.
+fn prune_done(ambition: &mut Ambition) {
+    let top = ambition.milestones.iter().map(milestone_number).max().unwrap_or(0);
+    let done = ambition.milestones.iter().filter(|stone| stone.status == MilestoneStatus::Done).count();
+    let excess = done.saturating_sub(MAX_DONE_KEPT);
+    if excess == 0 {
+        return;
+    }
+    let mut oldest: Vec<usize> = ambition
+        .milestones
+        .iter()
+        .filter(|stone| stone.status == MilestoneStatus::Done)
+        .map(milestone_number)
+        .filter(|number| *number != top)
+        .collect();
+    oldest.sort_unstable();
+    oldest.truncate(excess);
+    ambition.milestones.retain(|stone| stone.status != MilestoneStatus::Done || !oldest.contains(&milestone_number(stone)));
 }
 
 /// Bring the ambition up to date: level and coin milestones the bot
 /// meets are done (progress written), at most one demand milestone is
 /// inserted for an open bid the ambition can serve, and catalogue rungs
 /// are materialized until `OPEN_MILESTONES` are open (rungs the bot is
-/// 10+ levels past are skipped). Generalists hold no milestones.
-pub fn refresh(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8, coins: i64, seed: u64, demand: &[DemandItem]) {
-    let Some(found) = spec(&ambition.kind) else { return };
+/// 10+ levels past are skipped). Generalists hold no milestones. Returns
+/// the ids of the milestones this call closed (the brain weighs an
+/// optional change on them, as on a closed goal).
+pub fn refresh(ambition: &mut Ambition, now: &BotNow, seed: u64, demand: &[DemandItem]) -> Vec<String> {
+    let Some(found) = spec(&ambition.kind) else { return Vec::new() };
+    let level_of = now.level_of;
+    let coins = now.coins;
+    let mut closed = Vec::new();
     for stone in &mut ambition.milestones {
+        let was_open = stone.status != MilestoneStatus::Done;
         match &stone.target {
             Target::Level { skill, level } => {
                 let have = i64::from(level_of(skill).max(1));
@@ -234,8 +327,11 @@ pub fn refresh(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8, coins: i6
             }
             _ => {}
         }
+        if was_open && stone.status == MilestoneStatus::Done {
+            closed.push(stone.id.clone());
+        }
     }
-    insert_demand_milestone(ambition, level_of, demand);
+    insert_demand_milestone(ambition, now, demand);
     while open_count(ambition) < OPEN_MILESTONES && ambition.rung < found.ladder.len() {
         let index = ambition.rung;
         let rung = &found.ladder[index];
@@ -261,13 +357,76 @@ pub fn refresh(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8, coins: i6
             }
         }
     }
+    prune_done(ambition);
+    closed
+}
+
+/// Materialize milestones past the catalogue ladder (the sole holder of
+/// a group at the end of its ladder, or an achieved ambition the 72 000
+/// tick throttle keeps): the last `EXTEND_LAP` rungs cycle, each level
+/// climbing `EXTEND_LEVELS` past the live level (capped at 99), each
+/// quota and equipment tier repeated, each coin target doubling past the
+/// coins held. Fills up to `OPEN_MILESTONES` open; returns how many were
+/// added (0: nothing left to climb, the caller redraws).
+pub fn extend(ambition: &mut Ambition, now: &BotNow, seed: u64) -> usize {
+    let Some(found) = spec(&ambition.kind) else { return 0 };
+    let ladder_len = found.ladder.len();
+    if ladder_len == 0 {
+        return 0;
+    }
+    let lap = EXTEND_LAP.min(ladder_len);
+    ambition.rung = ambition.rung.max(ladder_len);
+    let before = ambition.milestones.len();
+    let mut idle = 0;
+    while open_count(ambition) < OPEN_MILESTONES && idle < lap {
+        let step = ambition.rung - ladder_len;
+        ambition.rung += 1;
+        let rung = found.ladder[ladder_len - lap + step % lap];
+        let pushed = ambition.milestones.len();
+        if rung.level > 0 && !rung.skill.is_empty() {
+            let live = (now.level_of)(rung.skill).max(1);
+            let target = rung.level.max(live).saturating_add(EXTEND_LEVELS).min(99);
+            if target > live {
+                push_milestone(ambition, Target::Level { skill: rung.skill.to_string(), level: target }, EXTEND_ORIGIN);
+            }
+        }
+        match rung.then {
+            Then::Nothing => {}
+            Then::Produce(items, count, skill) => {
+                let item = pick_product(items, seed ^ (step as u64).wrapping_mul(0x9E37_79B9), &[]);
+                push_milestone(ambition, Target::Produce { item: item.to_string(), count, skill: skill.to_string() }, EXTEND_ORIGIN);
+            }
+            Then::Equip(style) => push_milestone(ambition, Target::Equip { style: style.to_string() }, EXTEND_ORIGIN),
+            Then::Coins(amount) => {
+                let highest = ambition
+                    .milestones
+                    .iter()
+                    .filter_map(|stone| match stone.target {
+                        Target::Coins { amount } => Some(amount),
+                        _ => None,
+                    })
+                    .chain([amount, now.coins])
+                    .max()
+                    .unwrap_or(amount)
+                    .max(1);
+                push_milestone(ambition, Target::Coins { amount: highest.saturating_mul(2) }, EXTEND_ORIGIN);
+            }
+        }
+        idle = if ambition.milestones.len() > pushed { 0 } else { idle + 1 };
+    }
+    ambition.milestones.len() - before
 }
 
 /// Buy orders motivate production: the heaviest open demand for a product
 /// of this ambition the bot can reach within 10 levels (training first,
 /// inputs bought) becomes a produce milestone, one at a time, ahead of the
-/// ladder.
-fn insert_demand_milestone(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8, demand: &[DemandItem]) {
+/// ladder. Only a bid that pays its inputs (`DemandItem::margin` > 0, see
+/// `market_demand`), and only when the bot does not already hold the
+/// quantity (stock held or listed answers the bid without producing: a
+/// cook holding 100 shrimp looped done/reinsert forever, review
+/// 2026-11-13).
+fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[DemandItem]) {
+    let level_of = now.level_of;
     let open_demand = ambition.milestones.iter().any(|stone| stone.status != MilestoneStatus::Done && stone.origin.starts_with("demand:"));
     if open_demand {
         return;
@@ -277,7 +436,14 @@ fn insert_demand_milestone(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u
     for rung in found.ladder {
         let Then::Produce(items, _, skill) = rung.then else { continue };
         for item in items {
-            let Some(wanted) = demand.iter().find(|entry| entry.item == *item && entry.unmet > 0 && entry.weight > 0.0) else { continue };
+            let Some(wanted) = demand.iter().find(|entry| {
+                entry.item == *item && entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)
+            }) else {
+                continue;
+            };
+            if (now.held)(item) >= demand_quota(wanted.unmet) {
+                continue;
+            }
             if rung.level > level_of(skill).max(1).saturating_add(10) {
                 continue;
             }
@@ -287,7 +453,7 @@ fn insert_demand_milestone(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u
         }
     }
     let Some((wanted, skill, _)) = best else { return };
-    let count = wanted.unmet.clamp(5, 100);
+    let count = demand_quota(wanted.unmet);
     let target = Target::Produce { item: wanted.item.clone(), count, skill: skill.to_string() };
     let origin = format!("demand:{}", wanted.item);
     push_milestone(ambition, target, &origin);
@@ -296,6 +462,11 @@ fn insert_demand_milestone(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u
         let position = ambition.milestones.iter().position(|stone| stone.status != MilestoneStatus::Done).unwrap_or(ambition.milestones.len());
         ambition.milestones.insert(position, last);
     }
+}
+
+/// Quantity a demand milestone asks for an unmet bid quantity.
+fn demand_quota(unmet: i64) -> i64 {
+    unmet.clamp(5, 100)
 }
 
 /// First open milestone whose skills are not banned now (`avoid`).
@@ -385,7 +556,7 @@ pub fn achieved(ambition: &Ambition) -> bool {
 
 /// Unix seconds of the last change (the draw, else the last revision).
 pub fn last_change_secs(ambition: &Ambition) -> i64 {
-    ambition.revisions.last().map(|revision| revision.at).unwrap_or(ambition.drawn_at)
+    ambition.revisions.last().map(|revision| revision.at_secs).unwrap_or(ambition.drawn_at)
 }
 
 /// Optional changes are throttled: `AMBITION_CHANGE_TICKS` since the last
@@ -401,7 +572,7 @@ pub fn revise(life: &mut Life, mut next: Ambition, why: &str, stamp: Stamp) {
         Some(old) => (old.kind, old.revisions),
         None => (String::new(), Vec::new()),
     };
-    revisions.push(Revision { tick: stamp.tick, at: stamp.secs, from, to: next.kind.clone(), why: why.to_string() });
+    revisions.push(Revision { tick: stamp.tick, at_secs: stamp.secs, from, to: next.kind.clone(), why: why.to_string() });
     next.revisions = revisions;
     life.ambition = Some(next);
     life.goal_origin = None;
@@ -436,7 +607,7 @@ pub fn ambition_to_value(ambition: &Ambition) -> Value {
         .map(|revision| {
             object(vec![
                 ("tick", Value::Int(revision.tick as i64)),
-                ("at", Value::Int(revision.at)),
+                ("at_secs", Value::Int(revision.at_secs)),
                 ("from", str_value(&revision.from)),
                 ("to", str_value(&revision.to)),
                 ("why", str_value(&revision.why)),
@@ -489,7 +660,7 @@ pub fn ambition_from_value(value: &Value) -> Option<Ambition> {
             rows.iter()
                 .map(|row| Revision {
                     tick: row.get("tick").as_i64().unwrap_or(0).max(0) as u64,
-                    at: row.get("at").as_i64().unwrap_or(0),
+                    at_secs: row.get("at_secs").as_i64().or_else(|| row.get("at").as_i64()).unwrap_or(0),
                     from: text(row, "from"),
                     to: text(row, "to"),
                     why: text(row, "why"),
@@ -513,3 +684,7 @@ pub fn ambition_from_value(value: &Value) -> Option<Ambition> {
 #[cfg(test)]
 #[path = "ambition_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ambition_repair_tests.rs"]
+mod repair_tests;
