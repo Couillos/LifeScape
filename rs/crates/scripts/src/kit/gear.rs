@@ -94,10 +94,17 @@ pub fn gear_plan(
         if entry.wearpos == AMMO_SLOT && bot.combat_style != "ranged" {
             continue;
         }
-        for slot in [WEAPON_SLOT].into_iter().chain(ARMOUR_SLOTS) {
-            if knowledge::equipment::covers_slot(&entry, slot) {
-                plan.entry(slot).or_default().push(entry.clone());
-            }
+        // The weapon matches the run: a melee run never plans a bow,
+        // crossbow, throwable or staff (will_field live: shortbow wielded,
+        // "There is no ammo left in your quiver." on every click).
+        if !weapon_fits_style(&entry, &bot.combat_style) {
+            continue;
+        }
+        // Primary slot only: a two-handed weapon also covers the shield
+        // slot (wearpos2 5), and listing it there made equip_plan wield
+        // the shortbow "as a shield" over the planned pickaxe.
+        if entry.wearpos == WEAPON_SLOT || ARMOUR_SLOTS.contains(&entry.wearpos) {
+            plan.entry(entry.wearpos).or_default().push(entry.clone());
         }
     }
     for (slot, cands) in plan.iter_mut() {
@@ -124,6 +131,47 @@ pub fn gear_plan(
         }
     }
     plan
+}
+
+/// True unless `entry` is a weapon the run's style never fights with
+/// (gamedata gear score < 0: no bow or staff in melee, only bows in
+/// ranged, only staves in magic). Armour always fits.
+pub fn weapon_fits_style(entry: &knowledge::equipment::Wearable, style: &str) -> bool {
+    entry.wearpos != WEAPON_SLOT || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
+}
+
+/// Name of the wielded weapon when a melee run must not swing it (bow,
+/// crossbow, throwable, staff), else None.
+pub fn off_style_weapon(bot: &Bot) -> Option<String> {
+    if bot.combat_style != "melee" {
+        return None;
+    }
+    let name = worn_obj(bot, WEAPON_SLOT).and_then(|obj| knowledge::obj_by_id(usize::from(obj)).and_then(|row| row.name))?;
+    let entry = knowledge::equipment::by_name(name)?;
+    (!weapon_fits_style(&entry, &bot.combat_style)).then(|| name.to_string())
+}
+
+/// Take the wielded weapon off (worn tab "Remove": equip.rs2
+/// `[inv_button1,wornitems:wear]` -> `~unequip`, refused with "You don't
+/// have enough free space to do that." on a full pack). Typed failure
+/// when it stays wielded: a melee run never swings a bow.
+fn unwield_weapon(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
+    let Some(obj) = worn_obj(bot, WEAPON_SLOT) else { return Ok(()) };
+    if free_slots(bot) == 0 {
+        return Err(ScriptError::Failed(format!("melee run wields {name} and the pack is full: cannot unwield it")));
+    }
+    let worn_com = (bot.tables.com_id)(WORN_COM_NAME)
+        .ok_or_else(|| ScriptError::Usage(format!("{WORN_COM_NAME} missing from component table")))?;
+    bot.inv_button(1, obj, WEAPON_SLOT as u8, worn_com)?;
+    let target = bot.world.ticks + 10;
+    while bot.world.ticks < target {
+        bot.pump(2)?;
+        if worn_obj(bot, WEAPON_SLOT).is_none() {
+            bot.log(&format!("unwielded {name}: no melee weapon owned, fighting unarmed"));
+            return Ok(());
+        }
+    }
+    Err(ScriptError::Failed(format!("melee run still wields {name} after Remove")))
 }
 
 /// Gear score, slot by slot. Weapon: the style's own attack bonus plus
@@ -265,6 +313,11 @@ pub fn equip_plan(bot: &mut Bot, plan: &HashMap<i64, Vec<knowledge::equipment::W
                 break;
             }
         }
+    }
+    // No melee weapon owned (or none wearable): a leftover bow or staff
+    // comes off, bare fists beat a refused click.
+    if let Some(name) = off_style_weapon(bot) {
+        unwield_weapon(bot, &name)?;
     }
     Ok(equipped)
 }
@@ -512,6 +565,50 @@ mod tests {
                 > super::gear_score(&bot, &slashy, WEAPON_SLOT, fight_weapon_style, style_damage_key),
             "controlled trains stab: the stab blade must win"
         );
+    }
+
+    fn plan_names(plan: &std::collections::HashMap<i64, Vec<lifescape_gamedata::equipment::Wearable>>, slot: i64) -> Vec<String> {
+        plan.get(&slot).map(|cands| cands.iter().map(|entry| entry.name.clone()).collect()).unwrap_or_default()
+    }
+
+    /// will_field live: melee run owning a shortbow and a bronze pickaxe
+    /// logged "equipped bronze_pickaxe (slot 3)" then "equipped shortbow
+    /// (slot 5)": the two-handed bow sat in the shield candidates and was
+    /// wielded over the pickaxe. Melee plans the pickaxe only, never the
+    /// bow in any slot; alone, the bow plans nothing; ranged plans the bow.
+    #[test]
+    fn melee_plan_never_holds_a_bow() {
+        let mut bot = stat_bot(1, 1, 1);
+        bot.combat_style = "melee".to_string();
+        let bow = crate::kit::pack::obj_id(&bot, "shortbow").expect("shortbow id");
+        let pickaxe = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("pickaxe id");
+        let both = std::collections::HashMap::from([(bow, "Shortbow".to_string()), (pickaxe, "Bronze pickaxe".to_string())]);
+        let plan = super::gear_plan(&bot, &both, fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT), vec!["bronze_pickaxe".to_string()]);
+        assert!(plan.values().flatten().all(|entry| entry.name != "shortbow"), "no slot holds the bow: {plan:?}");
+        let bow_only = std::collections::HashMap::from([(bow, "Shortbow".to_string())]);
+        assert!(super::gear_plan(&bot, &bow_only, fight_weapon_style, style_damage_key).is_empty(), "bow alone: unarmed");
+        bot.combat_style = "ranged".to_string();
+        let plan = super::gear_plan(&bot, &both, fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT), vec!["shortbow".to_string()], "ranged wields the bow only");
+        assert!(plan_names(&plan, 5).is_empty(), "the bow is no shield candidate");
+    }
+
+    /// A wielded bow is off-style for melee only (the unwield trigger).
+    #[test]
+    fn wielded_bow_is_off_style_in_melee() {
+        let mut bot = stat_bot(1, 1, 1);
+        let bow = crate::kit::pack::obj_id(&bot, "shortbow").expect("shortbow id");
+        let worn_com = (bot.tables.com_id)(super::WORN_COM_NAME).expect("worn com");
+        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(WEAPON_SLOT as u8, (bow, 1))]));
+        bot.combat_style = "melee".to_string();
+        assert_eq!(super::off_style_weapon(&bot).as_deref(), Some("shortbow"));
+        bot.combat_style = "ranged".to_string();
+        assert_eq!(super::off_style_weapon(&bot), None);
+        bot.combat_style = "melee".to_string();
+        let pickaxe = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("pickaxe id");
+        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(WEAPON_SLOT as u8, (pickaxe, 1))]));
+        assert_eq!(super::off_style_weapon(&bot), None, "a pickaxe swings");
     }
 
     /// Equal scores keep the cheaper kit: bronze before steel (dump shop

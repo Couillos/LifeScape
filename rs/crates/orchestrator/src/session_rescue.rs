@@ -582,7 +582,7 @@ mod tests {
             .expect("macro_dwarf in the npc dump") as u16;
         bot.world.npcs.insert(
             7,
-            NpcInfo { npc_type: dwarf, x: 3222, z: 3220, level: 0, name: None, anim: None },
+            NpcInfo { npc_type: dwarf, x: 3222, z: 3220, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         assert_eq!(detect_live(&bot), Some(EventKind::Host));
         assert_eq!(randomevent::rescue_for(EventKind::Host), "rescue_greet");

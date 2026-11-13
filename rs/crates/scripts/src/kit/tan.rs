@@ -242,7 +242,7 @@ mod tests {
         bot.world.z = 3193;
         bot.world.npcs.insert(
             7,
-            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None },
+            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         bot.approach_npc(7, 60).expect("adjacent tile needs no walk");
         let err = bot.op_npc(TANNER_TRADE_OP, 7).expect_err("dead socket fails loud");
@@ -262,7 +262,7 @@ mod tests {
         );
         bot.world.npcs.insert(
             7,
-            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None },
+            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         assert!(tanner_slot(&mut bot).is_ok(), "present tanner resolves");
     }
@@ -279,7 +279,7 @@ mod tests {
         bot.world.z = 3193;
         bot.world.npcs.insert(
             7,
-            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None },
+            lifescape_sdk::world::NpcInfo { npc_type: 804, x: 3276, z: 3193, level: 0, name: None, anim: None, face_entity: None, hit_tick: None },
         );
         let err = open_trade_direct(&mut bot, 7).expect_err("dead socket fails at the Trade send");
         assert!(format!("{err}").contains("not logged in"), "Trade tried first, got: {err}");

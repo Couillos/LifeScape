@@ -241,6 +241,8 @@ pub fn attack_nearest(
     let names: Vec<&str> = spot.npc_names.to_vec();
     let mut cands = bot.npcs_named(&names);
     cands.retain(|(_, x, z)| !avoid.is_banned((*x, *z), bot.world.ticks));
+    // Another player's foe: skipped before the walk, not after the refusal.
+    cands.retain(|(slot, _, _)| !bot.npc_engaged_by_other(*slot));
     // Shop staff are never foes, by op category (Trade/Bank), not name:
     // a keeper next to the hunt (Bob by the axe shop, the Lumbridge
     // general store pair) is never a valid click.
@@ -286,6 +288,11 @@ pub fn attack_nearest(
                 avoid.ban_for((x, z), bot.world.ticks, BLOCKED_BAN_TICKS);
                 continue;
             }
+        }
+        // Taken while we walked up: next foe, no refused click.
+        if bot.npc_engaged_by_other(slot) {
+            bot.log(&format!("npc {slot} at ({x},{z}) engaged by another player on arrival, next"));
+            continue;
         }
         bot.op_npc(2, slot)?;
         return Ok(Some(slot));

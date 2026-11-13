@@ -17,6 +17,13 @@ au login depuis la sauvegarde du compte (`save.rs`). Le heartbeat publie
 la banque connue (`bank_streamed` = connue) : pièces et stock bancaires
 restent visibles au cerveau et au registre du market entre deux visites.
 
+Combat des PNJ (`src/engagement.rs`) : `UPDATE_PID` donne `world.self_slot` ;
+les masques NPC_INFO FACE_ENTITY (0x4, `>= 32768` = joueur + 32768) et
+dégâts (0x1/0x10) remplissent `NpcInfo.face_entity` / `hit_tick`.
+`Bot::npc_engaged_by_other(slot)` = le PNJ cible un autre joueur, ou a pris
+un coup depuis < 8 ticks sans cibler de joueur (miroir de « Someone else is
+fighting that. », `player_combat.rs2`) : la chasse l'écarte avant la marche.
+
 Actions via les méthodes `Bot` (`src/client/actions.rs`, `src/client/movement.rs`,
 `src/client/approach.rs`, `src/client/doors.rs`) : `op_loc`, `op_npc_t`,
 `if_button`, `close`, `walk_to`, `take`, `approach`. Attentes :
