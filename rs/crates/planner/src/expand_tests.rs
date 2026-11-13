@@ -300,20 +300,19 @@ fn tool_gate_drops_unworkable_tranches() {
     resolve_ready(&mut with_rod, &ctx);
     assert!(matches!(&with_rod.status, NodeStatus::Blocked { reason } if reason == "missing:fishing_bait"), "got {:?}", with_rod.status);
 
-    // Same empty pack but funded: the rod is shop stock (no other F2P
-    // source), the bait is not (men drop it: user rule 2026-11-13, a
-    // farmable drop never comes from a merchant) — the bait blocks, the
-    // obtain chain buys it on the market or farms it.
+    // Same empty pack but funded: the rod is shop stock, yet no executor
+    // buys its own gear (commit 44bde31): the rod still blocks, its
+    // obtain leg buys it before the launch; rod and bait held, it runs.
     let mut funded = sardine_node();
     let mut rich = ReadyCtx::blind(0.5);
     rich.coins = 100;
-    assert!(!method_feasible("gather:fishing/raw_sardine", &rich), "the bait is never a shop buy");
+    assert!(!method_feasible("gather:fishing/raw_sardine", &rich), "nothing held");
     resolve_ready(&mut funded, &rich);
-    assert!(matches!(&funded.status, NodeStatus::Blocked { reason } if reason == "missing:fishing_bait"), "got {:?}", funded.status);
-    rich.tools = vec!["fishing_bait".to_string()];
+    assert!(matches!(&funded.status, NodeStatus::Blocked { reason } if reason == "missing:fishing_rod"), "got {:?}", funded.status);
+    rich.tools = vec!["fishing_bait".to_string(), "fishing_rod".to_string()];
     let mut baited = sardine_node();
     resolve_ready(&mut baited, &rich);
-    assert_eq!(baited.method.as_deref(), Some("gather:fishing/raw_sardine"), "a buyable rod keeps the tranche");
+    assert_eq!(baited.method.as_deref(), Some("gather:fishing/raw_sardine"), "held gear keeps the tranche");
 
     // Nothing carried, nothing funded, no shop: typed block naming
     // the missing tool (the obtain chain funds it), never Usage,
@@ -406,11 +405,14 @@ fn merchant_legs_follow_d_a() {
     }
     let shears = expand_goal(&GoalKind::Obtain { item: "shears".to_string(), count: 1 }, &profile());
     assert!(shears[0].alternatives.iter().any(|alt| alt.method == "shop:buy"), "shears stay buyable");
-    // The tool gate never funds a producible tool from a shop.
+    // The tool gate counts held gear only, merchant goods included (the
+    // obtain leg buys them before the launch).
     let mut ctx = ReadyCtx::blind(0.5);
     ctx.coins = 1000;
     assert!(!super::gear_ok("bronze_axe", &ctx), "bronze axe is smithed: no merchant funding");
-    assert!(super::gear_ok("net", &ctx), "nets are merchant goods");
+    assert!(!super::gear_ok("net", &ctx), "a fundable net is not a held net");
+    ctx.tools = vec!["net".to_string()];
+    assert!(super::gear_ok("net", &ctx));
 }
 
 /// Live bct5rxpg (2026-11-12): shrimp fishing needs combat 15 (Draynor

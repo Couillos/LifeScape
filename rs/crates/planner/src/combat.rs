@@ -359,6 +359,38 @@ pub fn pick_site_gated(method: &str, combat: u8, position: Option<(i64, i64, i64
     SitePick::Needs(rows.iter().map(|row| row.required).min().unwrap_or(lifescape_gamedata::danger::NEVER))
 }
 
+/// True when the bot's live melee stats survive the melee ladder rung
+/// `spot` (`gamedata::melee_ladder::rate`, naked: the planner does not
+/// read the worn bonuses, so the gate errs on the safe side; food and
+/// gates assumed obtained — they are dependencies, not dangers). No live
+/// levels (offline replays, tests): no stat gate. A spot the ladder does
+/// not rate (dark wizards cast: no melee exchange) never fits.
+pub fn rung_fit(spot: &str, ctx: &crate::expand::ReadyCtx) -> bool {
+    use lifescape_gamedata::melee_ladder::{rate, rung_by_key, Holdings, DEFAULT_HEAL, MAX_FOOD};
+    if rung_by_key(spot).is_none() {
+        return false;
+    }
+    let level = |skill: &str| ctx.levels.iter().find(|(name, _)| name == skill).map(|(_, level)| i64::from(*level));
+    let (Some(attack), Some(strength), Some(defence)) = (level("attack"), level("strength"), level("defence")) else { return true };
+    let fighter = lifescape_gamedata::melee_math::Fighter::naked(attack, strength, defence, level("hitpoints").unwrap_or(10).max(10), i64::from(ctx.combat));
+    let holdings = Holdings { food_count: MAX_FOOD, best_heal: DEFAULT_HEAL, coins: u32::MAX, brass_key: true, east_of_toll: true };
+    rate(&fighter, &holdings).into_iter().find(|rated| rated.rung.key == spot).is_some_and(|rated| rated.refused.is_none())
+}
+
+/// A `farm:<drop>` leg hunts a spot the bot survives (`rung_fit` of
+/// `mapping::spot_for_drop`); every other method passes. Live 2026-11-13
+/// (bd23dqpq, `melee dark_wizards --want cosmicrune 1`): a drop farm the
+/// bot cannot survive dies on the first trip, the market serves instead.
+pub fn drop_farm_fit(method: &str, ctx: &crate::expand::ReadyCtx) -> bool {
+    let Some(item) = method.strip_prefix("farm:") else { return true };
+    match method_sites(method) {
+        Some(("fight", spot)) => rung_fit(&spot, ctx),
+        Some(_) => true,
+        // Dropped only where the melee executor never hunts (dark wizards).
+        None => lifescape_gamedata::combat_spots::drop_spots(item).is_empty(),
+    }
+}
+
 #[cfg(test)]
 #[path = "combat_toll_tests.rs"]
 mod toll_tests;

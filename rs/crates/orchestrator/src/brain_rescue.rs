@@ -37,7 +37,7 @@ pub(crate) fn close_done_quest(life: &mut Life, position: usize, done: &[String]
         return false;
     }
     let id = life.nodes[position].id.clone();
-    crate::logln!("brain {}: {id} quest {quest} already complete (engine save), done without launch", life.account);
+    crate::logln!("brain {}: {id} quest {quest} already complete (engine save or an undisproved done quest node), done without launch", life.account);
     lifescape_planner::complete_node(life, position, 1);
     push_history(life, &id, "already_done");
     lifescape_planner::normalize(life);

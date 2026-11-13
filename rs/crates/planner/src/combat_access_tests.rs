@@ -82,3 +82,27 @@ fn stations_are_picked_sites() {
     }
 }
 
+/// Live 2026-11-13 (bd23dqpq, 53/53/53/53): `melee dark_wizards --want
+/// cosmicrune 1` died at once (dark wizards cast: no melee exchange the
+/// ladder can rate, `melee_ladder::RUNGS` leaves them out). A drop farm
+/// hunts only a spot the melee executor rates, and only when the bot's
+/// live stats survive it; otherwise the market (or another way) serves.
+#[test]
+fn drop_farms_hunt_only_rated_survivable_spots() {
+    assert_eq!(crate::mapping::spot_for_drop("blackwizhat"), None, "only dark wizards drop it");
+    assert_ne!(crate::mapping::spot_for_drop("cosmicrune").as_deref(), Some("dark_wizards"));
+    assert_eq!(crate::mapping::spot_for_drop("bones").as_deref(), Some("chickens"));
+    let mut fresh = crate::expand::ReadyCtx::blind(0.5);
+    fresh.levels = ["attack", "strength", "defence"].iter().map(|skill| (skill.to_string(), 1)).chain([("hitpoints".to_string(), 10)]).collect();
+    fresh.combat = 3;
+    assert!(super::drop_farm_fit("farm:bones", &fresh), "chickens fit a fresh bot");
+    assert!(!super::rung_fit("guards", &fresh), "guards kill a fresh bot");
+    let mut strong = crate::expand::ReadyCtx::blind(0.5);
+    strong.levels = ["attack", "strength", "defence", "hitpoints"].iter().map(|skill| (skill.to_string(), 53)).collect();
+    strong.combat = 66;
+    assert!(super::rung_fit("guards", &strong));
+    assert!(super::rung_fit("guards", &crate::expand::ReadyCtx::blind(0.5)), "offline (no live levels): no stat gate");
+    assert!(!crate::tools::method_feasible("farm:blackwizhat", &strong), "no rated spot drops it");
+    assert!(crate::tools::method_feasible("farm:bones", &fresh));
+}
+

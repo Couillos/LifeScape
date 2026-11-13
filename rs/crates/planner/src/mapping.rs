@@ -349,9 +349,15 @@ pub(crate) fn is_fish(item: &str) -> bool {
 /// boat (`kit::hunt::run_spot_with` refuses a bare key underground).
 /// Live 2026-11-13: the first dropper by name sent "produce bones" to
 /// al_kharid_warriors across the fence and magic staffs to the moss
-/// giants. None when no such F2P spot hunts a dropper.
+/// giants. Only a spot the melee executor rates (`melee_ladder::RUNGS`):
+/// dark wizards cast, no melee exchange (bd23dqpq died there farming one
+/// cosmic rune, live 2026-11-13). None when no such F2P spot hunts a
+/// dropper (the market or another way serves).
 pub(crate) fn spot_for_drop(item: &str) -> Option<String> {
-    lifescape_gamedata::combat_spots::drop_spots(item).first().map(|spot| spot.key.to_string())
+    lifescape_gamedata::combat_spots::drop_spots(item)
+        .into_iter()
+        .find(|spot| lifescape_gamedata::melee_ladder::rung_by_key(spot.key).is_some())
+        .map(|spot| spot.key.to_string())
 }
 
 fn quest_script(quest: &str) -> Option<&'static str> {

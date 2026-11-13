@@ -89,13 +89,35 @@ pub(crate) enum Verdict {
     Failure(String),
 }
 
+/// XP a report credits toward `kind`: the climbed skill of a
+/// `reach_level`, every combat skill of a `reach_combat`, 0 otherwise.
+pub(crate) fn xp_toward(report: &Value, kind: &NodeKind) -> i64 {
+    const COMBAT: [&str; 6] = ["attack", "strength", "defence", "hitpoints", "ranged", "magic"];
+    let counts = |skill: &str| match kind {
+        NodeKind::ReachLevel { skill: climbed, .. } => climbed.eq_ignore_ascii_case(skill),
+        NodeKind::ReachCombat { .. } => COMBAT.contains(&skill.to_lowercase().as_str()),
+        _ => false,
+    };
+    report
+        .get("xp")
+        .as_arr()
+        .map(|rows| rows.iter().filter(|row| row.get("skill").as_str().is_some_and(counts)).filter_map(|row| row.get("xp").as_i64()).filter(|gain| *gain > 0).sum())
+        .unwrap_or(0)
+}
+
 /// Decide from the stop, the typed error, missing items, and what the
-/// goal check says (`goal_met`, `market_pending`).
-pub(crate) fn verdict(stop: &str, error: Option<(String, String)>, missing: &[String], goal_met: bool, market_pending: bool) -> Verdict {
+/// goal check says (`goal_met`, `market_pending`, `progressed`: the run
+/// earned XP toward the climb or items toward the obtain).
+pub(crate) fn verdict(stop: &str, error: Option<(String, String)>, missing: &[String], goal_met: bool, market_pending: bool, progressed: bool) -> Verdict {
     let text = error.as_ref().map(|(kind, message)| format!("{kind}: {message}")).unwrap_or_default();
     match stop {
         "goal_reached" if goal_met => Verdict::Done,
         "goal_reached" if market_pending => Verdict::AwaitFill,
+        // A run that ended on its own budget short of the goal but with
+        // progress (prayer at cows: +652 XP a window) continues
+        // uncounted, like a spent engagement window (live 2026-11-13:
+        // three such windows banned prayer on frank_lane and leo_king).
+        "goal_reached" if progressed => Verdict::EngagementEnd,
         "goal_reached" => Verdict::Failure("goal_reached but the goal check is short (method ended without the items/level)".to_string()),
         // A window can end exactly when the goal lands (level reached,
         // stock farmed): that is a success, not one more window.
@@ -150,6 +172,12 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     }
     let kind = life.nodes[index].kind.clone();
     let method = life.nodes[index].method.clone().unwrap_or_default();
+    // XP the run earned toward a climb is progress even short of a level
+    // (a food refill is not a dead block; a slow prayer window is no
+    // failure).
+    let xp = xp_toward(report, &kind);
+    lifescape_planner::record_xp(&mut life, index, xp);
+    let held_before = life.nodes[index].progress_current;
     let (goal_met, market_pending) = match &kind {
         NodeKind::ReachLevel { skill, level } => match reach_level(report, skill) {
             Some(reached) => {
@@ -183,7 +211,8 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         },
         _ => (true, false),
     };
-    let decision = verdict(&stop, error, &missing, goal_met, market_pending);
+    let progressed = xp > 0 || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before);
+    let decision = verdict(&stop, error, &missing, goal_met, market_pending, progressed);
     let id = life.nodes[index].id.clone();
     match &decision {
         Verdict::Done => {
@@ -265,25 +294,51 @@ mod tests {
     #[test]
     fn runtime_failures_count_and_usage_abandons() {
         assert_eq!(
-            verdict("failed", typed("Failed", "fish failed at (0, 3086, 3227)"), &[], false, false),
+            verdict("failed", typed("Failed", "fish failed at (0, 3086, 3227)"), &[], false, false, false),
             Verdict::Failure("Failed: fish failed at (0, 3086, 3227)".to_string())
         );
-        assert!(matches!(verdict("failed", typed("Usage", "fishing [count|spot...]"), &[], false, false), Verdict::Contract(_)));
-        assert!(matches!(verdict("failed", typed("Sdk", "sdk: travel failure NoRoute seg=None"), &[], false, false), Verdict::Travel(_)));
-        assert!(matches!(verdict("failed", None, &["died at (0,1,2)".to_string()], false, false), Verdict::Failure(text) if text == "died"));
-        assert!(matches!(verdict("failed", None, &[], false, false), Verdict::Failure(_)), "an untyped failure still counts");
+        assert!(matches!(verdict("failed", typed("Usage", "fishing [count|spot...]"), &[], false, false, false), Verdict::Contract(_)));
+        assert!(matches!(verdict("failed", typed("Sdk", "sdk: travel failure NoRoute seg=None"), &[], false, false, false), Verdict::Travel(_)));
+        assert!(matches!(verdict("failed", None, &["died at (0,1,2)".to_string()], false, false, false), Verdict::Failure(text) if text == "died"));
+        assert!(matches!(verdict("failed", None, &[], false, false, false), Verdict::Failure(_)), "an untyped failure still counts");
     }
 
     #[test]
     fn success_waits_and_stops() {
-        assert_eq!(verdict("goal_reached", None, &[], true, false), Verdict::Done);
-        assert_eq!(verdict("goal_reached", None, &[], false, true), Verdict::AwaitFill, "placed market order");
-        assert!(matches!(verdict("goal_reached", None, &[], false, false), Verdict::Failure(_)), "short instant leg");
-        assert_eq!(verdict("budget_exhausted", None, &[], false, false), Verdict::EngagementEnd);
-        assert_eq!(verdict("budget_exhausted", None, &[], true, false), Verdict::Done, "goal landed with the window");
-        assert_eq!(verdict("stopped", None, &[], false, false), Verdict::Stopped);
-        assert_eq!(verdict("blocked", typed("Blocked", "x"), &["small_fishing_net".to_string()], false, false), Verdict::Blocked(vec!["small_fishing_net".to_string()]));
-        assert!(matches!(verdict("blocked", None, &[], false, false), Verdict::Failure(_)), "blocked without missing counts");
+        assert_eq!(verdict("goal_reached", None, &[], true, false, false), Verdict::Done);
+        assert_eq!(verdict("goal_reached", None, &[], false, true, false), Verdict::AwaitFill, "placed market order");
+        assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "short instant leg");
+        assert_eq!(verdict("budget_exhausted", None, &[], false, false, false), Verdict::EngagementEnd);
+        assert_eq!(verdict("budget_exhausted", None, &[], true, false, false), Verdict::Done, "goal landed with the window");
+        assert_eq!(verdict("stopped", None, &[], false, false, false), Verdict::Stopped);
+        assert_eq!(verdict("blocked", typed("Blocked", "x"), &["small_fishing_net".to_string()], false, false, false), Verdict::Blocked(vec!["small_fishing_net".to_string()]));
+        assert!(matches!(verdict("blocked", None, &[], false, false, false), Verdict::Failure(_)), "blocked without missing counts");
+    }
+
+    /// Live 2026-11-13 (frank_lane, leo_king): `melee cows --level prayer
+    /// 40` buried every bone (+652 prayer XP a window) and ended on its
+    /// own budget with `goal_reached` short of 40: three such windows
+    /// counted three failures and banned prayer. A window that earned
+    /// XP toward the node continues (levels keep climbing), uncounted.
+    #[test]
+    fn a_short_window_with_progress_continues() {
+        assert_eq!(verdict("goal_reached", None, &[], false, false, true), Verdict::EngagementEnd);
+        assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "no progress still counts");
+        assert_eq!(verdict("goal_reached", None, &[], true, false, true), Verdict::Done);
+    }
+
+    /// XP the report credits to the node's skill (or any combat skill for
+    /// a combat level), read from the report's `xp` rows.
+    #[test]
+    fn xp_toward_reads_the_report_rows() {
+        let report = lifescape_json::parse(
+            r#"{"xp":[{"skill":"attack","stat":0,"xp":3492},{"skill":"prayer","stat":5,"xp":652},{"skill":"hitpoints","stat":3,"xp":1545}]}"#,
+        )
+        .expect("json");
+        assert_eq!(super::xp_toward(&report, &lifescape_planner::NodeKind::ReachLevel { skill: "prayer".to_string(), level: 40 }), 652);
+        assert_eq!(super::xp_toward(&report, &lifescape_planner::NodeKind::ReachLevel { skill: "magic".to_string(), level: 40 }), 0);
+        assert_eq!(super::xp_toward(&report, &lifescape_planner::NodeKind::ReachCombat { level: 15 }), 3492 + 1545, "combat skills only");
+        assert_eq!(super::xp_toward(&report, &lifescape_planner::NodeKind::MakeMoney), 0);
     }
 }
 

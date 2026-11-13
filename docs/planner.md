@@ -55,8 +55,12 @@ appât (y compris `farm:`) ; forge ⇒ marteau ; allumage ⇒ briquet ;
 bijouterie ⇒ moule (outil porté, jamais un intrant) ; runes ⇒ talisman ;
 gemmes ⇒ ciseau ; cuir ⇒ aiguille + fil (consommé) ; traite ⇒ seau
 (consommé) ; distance ⇒ arc + flèches ; magie ⇒ runes du sort de la
-méthode (un bâton élémentaire vaut sa rune). Un outil ni porté ni
-achetable (règle magasin) ⇒ `Blocked{missing:<outil>}` ⇒ obtention.
+méthode (un bâton élémentaire vaut sa rune). Un outil non DÉTENU (sac,
+banque, porté, hors annonce de vente du bot) ⇒ `Blocked{missing:<outil>}`
+au résolveur ⇒ obtention (magasin, marché) AVANT le lancement : aucun
+exécutant n'achète son équipement (commit 44bde31), un outil « finançable »
+n'est plus compté comme tenu (`tools::gear_ok`, 2026-11-13 : `fishing
+raw_tuna` partait sans harpon avec 500 po et bloquait aussitôt).
 
 Dimensionnement (`sizing.rs`, 2026-11-13) : une tranche coûte
 `ceil((XP(cible) − XP(départ)) / XP par action)` actions (tables serveur,
@@ -170,7 +174,19 @@ Rapports (contrat v2) : tout lancement `--node` produit un `task_report`
 mort ⇒ échec compté puis relance ; échec de voyage ⇒ méthode bannie +
 échec compté ; `blocked` ⇒ sous-tâche `obtain` par objet manquant
 (réutilisée si déjà ouverte) ; `stopped` (unload, redémarrage) ⇒ prêt,
-non compté ; fenêtre finie avec but atteint ⇒ `done`. Un nœud actif sans
+non compté ; fenêtre finie avec but atteint ⇒ `done`. Progrès
+(2026-11-13, `brain_fold::xp_toward`, `lifecycle::record_xp`) : l'XP que
+le rapport crédite à la montée (sa compétence ; toute compétence de combat
+pour `reach_combat`) remet à zéro le compteur de blocages comme un niveau
+(t01, eric_smith, bb4v5d9m : chaque recharge de 20 crevettes d'une
+montée de mêlée comptait un blocage, la 4e bannissait la compétence) ;
+`goal_reached` court mais avec progrès (XP, ou objets gagnés pour un
+`obtain`) ⇒ fin de fenêtre non comptée, la montée continue (frank_lane,
+leo_king : prière aux vaches, +652 XP par fenêtre, bannie après trois).
+Une quête n'est `goal_reached` que sur l'achèvement vu (« Quest complete »)
+: `quests::common::quest_outcome` rend l'erreur typée du solveur, un échec
+sans message de fin, ou `Blocked` sur les niveaux/objets manquants (avant :
+toujours 0). Un nœud actif sans
 rapport (worker repassé idle, crash) compte un échec après 30 s, sauf
 s'il suit un redémarrage du daemon ou un `unload`/`close`/`open`
 opérateur (`brain_grace.rs`, une excuse par arrêt, effacée au lancement
@@ -251,6 +267,13 @@ dont un PNJ lâche l'objet (os ⇒ poulets), un spot à péage seulement s'il
 est le seul (péage budgété, voir ci-dessous) ; jamais souterrain, clé ou
 bateau (bâton de magie : moss giants ⇒ pas de jambe `farm:`). Les spots
 du drop sont ses sites (`combat::method_sites`), comme une récolte.
+Seulement un spot que l'exécutant de mêlée sait coter
+(`melee_ladder::RUNGS` : jamais les mages noirs, qui lancent des sorts) et
+que les stats live du bot survivent (`combat::rung_fit` : `rate` à nu,
+nourriture et portes supposées obtenues ; sans niveaux live, pas de
+filtre) ; sinon la jambe `farm:` n'est pas faisable (`method_feasible`) et
+le marché ou une autre voie sert (live 2026-11-13 : bd23dqpq, 53 partout,
+mort aux mages noirs pour une rune cosmique).
 
 Péage d'Al Kharid (décision utilisateur 2026-11-13, `gamedata::toll`,
 serveur `border_gate.rs2` : 10 pièces prises dans le SAC, dans les deux
@@ -338,7 +361,16 @@ Slayer), port d'équipement gardé (`gamedata::gear`), péage gratuit
 (Prince Ali). Quêtes faites = varps de la sauvegarde moteur (jamais
 transmises au client) ∪ nœuds quête faits de la vie
 (`brain_rescue::quests_done`) ; un nœud quête déjà faite se clôt sans
-lancement.
+lancement. Un blocage `missing:quest:<clé>` est une preuve live que la
+quête N'EST PAS faite : `record_block_from` marque chaque nœud quête fait
+de cette clé `last_error = "disproved: …"` (statut inchangé, historique)
+et `quests_done_in_graph` l'ignore ; le nœud quête neuf part pour de bon
+(live 2026-11-13, bxkchh6x/leo_king/nina_rhodes/sara_miller : le script
+de quête rendait 0 sans finir, le nœud fait fermait ensuite chaque nœud
+quête « déjà fait » pendant que l'essence bloquait 4 fois ⇒ minage banni).
+Un nœud bloqué ne se réutilise jamais lui-même ni ce qui l'attend comme
+dépendance (t01 : cuisine 10→20 bloquée sur un niveau de cuisine,
+cycle n8↔n9 abandonné).
 
 Magasins (règle utilisateur 2026-11-13, `obtain::merchant_buy_allowed`) :
 un PNJ ne vend au bot que ce que F2P ne donne d'aucune autre façon —

@@ -128,13 +128,13 @@ fn step(life: &mut Life, dice: &mut Dice) -> bool {
     let roll = dice.roll(100);
     let typed = |kind: &str, message: &str| Some((kind.to_string(), message.to_string()));
     let decision = match roll {
-        0..=44 => verdict("goal_reached", None, &[], true, false),
-        45..=54 => verdict("budget_exhausted", None, &[], false, false),
-        55..=74 => verdict("failed", typed("Failed", "fish failed at (0, 3086, 3227)"), &[], false, false),
-        75..=77 => verdict("failed", typed("Usage", "bad cli"), &[], false, false),
-        78..=84 => verdict("blocked", typed("Blocked", "missing"), &["small_fishing_net".to_string()], false, false),
-        85..=89 => verdict("stopped", None, &[], false, false),
-        90..=94 => verdict("failed", typed("Sdk", "travel failure NoRoute seg=None"), &[], false, false),
+        0..=44 => verdict("goal_reached", None, &[], true, false, false),
+        45..=54 => verdict("budget_exhausted", None, &[], false, false, false),
+        55..=74 => verdict("failed", typed("Failed", "fish failed at (0, 3086, 3227)"), &[], false, false, false),
+        75..=77 => verdict("failed", typed("Usage", "bad cli"), &[], false, false, false),
+        78..=84 => verdict("blocked", typed("Blocked", "missing"), &["small_fishing_net".to_string()], false, false, false),
+        85..=89 => verdict("stopped", None, &[], false, false, false),
+        90..=94 => verdict("failed", typed("Sdk", "travel failure NoRoute seg=None"), &[], false, false, false),
         _ => Verdict::Failure("no report: worker went idle without reporting (crash or restart)".to_string()),
     };
     match decision {
@@ -211,6 +211,13 @@ fn perfect_world_finishes_every_goal() {
     for (index, goal) in goals().into_iter().enumerate() {
         let mut life = life_for(index, goal);
         let mut launches = 0;
+        // Gear the bot starts with; every obtain the graph completes is
+        // held from then on (no executor buys its own gear: a missing
+        // tool blocks at resolve and files its obtain, as in the brain).
+        let mut held: Vec<String> = ["net", "fishing_rod", "fishing_bait", "fly_fishing_rod", "feather", "harpoon", "lobster_pot", "bronze_axe", "bronze_pickaxe", "shortbow", "bronze_arrow", "mindrune", "airrune", "shears", "bucket_empty"]
+            .iter()
+            .map(|tool| tool.to_string())
+            .collect();
         loop {
             normalize(&mut life);
             assert_live(&life, launches);
@@ -232,11 +239,14 @@ fn perfect_world_finishes_every_goal() {
             let mut ctx = ReadyCtx::blind(0.6);
             ctx.ironman = life.profile.ironman;
             ctx.coins = 100_000;
-            ctx.tools = ["net", "fishing_rod", "fishing_bait", "fly_fishing_rod", "feather", "harpoon", "lobster_pot", "bronze_axe", "bronze_pickaxe", "shortbow", "bronze_arrow", "mindrune", "airrune", "shears", "bucket_empty"]
-                .iter()
-                .map(|tool| tool.to_string())
-                .collect();
+            ctx.tools = held.clone();
             resolve_ready(&mut life.nodes[position], &ctx);
+            if let NodeStatus::Blocked { reason } = life.nodes[position].status.clone() {
+                let need = reason.strip_prefix("missing:").unwrap_or(&reason).to_string();
+                record_block(&mut life, position, &[need]);
+                launches += 1;
+                continue;
+            }
             let method = life.nodes[position].method.clone();
             match method.as_deref().and_then(|method| map_method(method, &life.nodes[position], None)) {
                 Some((script, _)) => {
@@ -244,6 +254,9 @@ fn perfect_world_finishes_every_goal() {
                     mark_launched(&mut life, position);
                     life.nodes[position].status = NodeStatus::Done;
                     life.active = None;
+                    if let NodeKind::ObtainItems { item, .. } = &life.nodes[position].kind {
+                        held.push(item.clone());
+                    }
                 }
                 None => {
                     let text = format!("perfect world: {:?} resolved {method:?} with no script", life.nodes[position].kind);

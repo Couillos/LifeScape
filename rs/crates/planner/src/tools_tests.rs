@@ -86,17 +86,29 @@ fn a_staff_stands_for_its_rune() {
     assert!(!method_feasible("fight:magic/wind_strike/cows", &ctx), "air runes missing");
 }
 
-/// A talisman drops from goblins (a farmable drop): never a shop buy, so
-/// without one in hand the runecraft leg is not workable; a hammer is
-/// shop stock the wallet funds.
+/// The gear gate counts only what the bot holds: no executor buys its own
+/// gear (commit 44bde31, "aucun achat interne"), so a shop tool the wallet
+/// could fund is still missing and becomes an obtain sub-task BEFORE the
+/// launch. Live 2026-11-13: fiona_park, bdr53jee and nina_rhodes launched
+/// `fishing raw_tuna` with 500+ coins and no harpoon (blocked at once),
+/// t01 `fishing raw_shrimp` without its net.
 #[test]
-fn gear_feasibility_follows_the_merchant_rule() {
+fn gear_feasibility_counts_held_gear_only() {
     let mut ctx = ReadyCtx::blind(0.5);
-    ctx.coins = 100;
+    ctx.coins = 1000;
     assert!(!method_feasible("runecraft:airrune", &ctx), "talisman: market or goblins");
     ctx.tools = vec!["air_talisman".to_string()];
     assert!(method_feasible("runecraft:airrune", &ctx));
-    assert!(method_feasible("smith:bronze_sword", &ctx), "the hammer is shop stock");
-    ctx.coins = 0;
-    assert!(!method_feasible("smith:bronze_sword", &ctx), "broke and no hammer");
+    assert!(!method_feasible("smith:bronze_sword", &ctx), "a fundable hammer is not a held hammer");
+    assert!(!method_feasible("farm:raw_tuna", &ctx), "a fundable harpoon is not a held harpoon");
+    assert!(!super::gear_ok("net", &ctx), "nets are merchant goods, still bought by the obtain leg");
+    ctx.tools.push("harpoon".to_string());
+    assert!(method_feasible("farm:raw_tuna", &ctx));
+    // A produce quota of tuna without a harpoon blocks typed at resolve.
+    let mut node = crate::model::Node::new("n1", crate::model::NodeKind::ObtainItems { item: "raw_tuna".to_string(), count: 100 }, Vec::new(), 100);
+    node.alternatives = crate::obtain_legs::produce_alternatives("raw_tuna");
+    ctx.tools.clear();
+    ctx.levels = vec![("fishing".to_string(), 40)];
+    crate::expand::resolve_ready(&mut node, &ctx);
+    assert_eq!(node.status, crate::model::NodeStatus::Blocked { reason: "missing:harpoon".to_string() }, "method {:?}", node.method);
 }
