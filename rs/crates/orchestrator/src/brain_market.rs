@@ -12,12 +12,15 @@ use crate::jobs::Job;
 
 /// Base levels by skill name from the live XP rows (the level byte of
 /// a heartbeat row may be boosted or drained; XP is the base truth).
+/// Heartbeat XP is display XP (UPDATE_STAT, the SDK's unit): read it with
+/// the SDK table, never `gamedata::xp` (server units, ×10).
 pub fn live_levels(live: &Value) -> Vec<(String, u8)> {
     let mut out = Vec::new();
     for row in live.get("skills").as_arr().cloned().unwrap_or_default() {
         let (Some(id), Some(xp)) = (row.get("id").as_i64(), row.get("xp").as_i64()) else { continue };
         let Ok(stat) = u8::try_from(id) else { continue };
-        let level = lifescape_gamedata::xp::level_for_xp(xp).clamp(1, 99) as u8;
+        let Ok(display_xp) = i32::try_from(xp) else { continue };
+        let level = lifescape_sdk::snapshot::level_for_xp(display_xp).clamp(1, 99);
         out.push((lifescape_sdk::provenance::skill_name(stat).to_string(), level));
     }
     out
@@ -155,11 +158,15 @@ mod tests {
     #[test]
     fn levels_come_from_xp_not_the_boosted_byte() {
         let row = |id: i64, level: i64, xp: i64| object(vec![("id", Value::Int(id)), ("level", Value::Int(level)), ("xp", Value::Int(xp))]);
-        // Smithing (13) shows a drained 1 but holds level-15 XP.
-        let xp15 = lifescape_gamedata::xp::xp_for_level(15).expect("xp table");
-        let live = object(vec![("skills", Value::Arr(vec![row(13, 1, xp15), row(10, 5, 0)]))]);
+        // Heartbeat XP is display XP (the SDK's unit), not the ×10 server
+        // table: ryan_park live 2026-11-13, attack 35 = 22428, fishing 11
+        // = 1370 (read as fishing 2 → "missing:level:fishing:5" bans).
+        // Smithing (13) shows a drained 1 but holds level-15 XP (2411).
+        let live = object(vec![("skills", Value::Arr(vec![row(0, 35, 22428), row(10, 11, 1370), row(13, 1, 2411), row(12, 1, 0)]))]);
         let levels = live_levels(&live);
+        assert!(levels.contains(&("attack".to_string(), 35)), "{levels:?}");
+        assert!(levels.contains(&("fishing".to_string(), 11)), "{levels:?}");
         assert!(levels.contains(&("smithing".to_string(), 15)), "{levels:?}");
-        assert!(levels.contains(&("fishing".to_string(), 1)), "{levels:?}");
+        assert!(levels.contains(&("crafting".to_string(), 1)), "{levels:?}");
     }
 }

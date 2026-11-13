@@ -76,7 +76,7 @@ fn sources() -> BrainSources {
     let pickaxe = obj_id("iron_pickaxe");
     BrainSources {
         live: object(vec![
-            ("skills", Value::Arr(vec![object(vec![("id", Value::Int(10)), ("xp", Value::Int(11_540)), ("level", Value::Int(10))])])),
+            ("skills", Value::Arr(vec![object(vec![("id", Value::Int(10)), ("xp", Value::Int(1_154)), ("level", Value::Int(10))])])),
             ("combat", Value::Int(7)),
             ("ticks", Value::Int(50_000)),
             ("inv", Value::Arr(vec![object(vec![("id", Value::Int(obj_id("coins"))), ("name", str_value("Coins")), ("count", Value::Int(250))])])),
