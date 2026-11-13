@@ -103,8 +103,15 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         let side = if method == "market:buy" { "buy" } else { "sell" };
         ("market".to_string(), vec![side.to_string(), item, count])
     } else if method == "shop:buy" {
+        // The planner's shop (`shop_site::pick_shop`), named from the
+        // keeper's site: the script never picks a shop itself.
         let (item, count) = obtain_pair(node)?;
-        ("market".to_string(), vec!["shopbuy".to_string(), item, count])
+        let mut head = vec!["shopbuy".to_string(), item.clone(), count];
+        if let Some(shop) = node.site.and_then(|site| crate::shop_site::shop_at(&item, site)) {
+            head.push("--shop".to_string());
+            head.push(shop);
+        }
+        ("market".to_string(), head)
     } else if method == "market:flip" {
         ("market".to_string(), vec!["flip".to_string()])
     } else if method == "space:cleanup" {
@@ -152,11 +159,19 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else {
         return None;
     };
-    // The brain picked the site (`pick_site`): gatherers work there.
+    // The brain picked the site (`pick_site_gated`): every gatherer,
+    // station, fight and shop works there (args contract 2026-11-13). A
+    // guild site names the uniform the door checks on the body.
     if let Some((x, z, level)) = node.site {
-        if matches!(script.as_str(), "fishing" | "mining" | "woodcut") {
+        if !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
             head.push("--site".to_string());
             head.push(format!("{x},{z},{level}"));
+            for gate in lifescape_gamedata::access::gates_at(x, z, level) {
+                if let lifescape_gamedata::access::Gate::Guild { uniform: Some(uniform), .. } = gate {
+                    head.push("--wear".to_string());
+                    head.push(uniform.to_string());
+                }
+            }
         }
     }
     // Quantity target of an obtain's production leg (`--want <item> N`,
@@ -171,7 +186,7 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     }
     // The site lies across the Al Kharid toll fence and the brain
     // budgeted the fare (`place_on_site`): the run may pay the gate.
-    if node.toll && matches!(script.as_str(), "fishing" | "mining" | "woodcut" | "melee" | "ranged" | "magic") {
+    if node.toll && !matches!(script.as_str(), "walkto" | "equip") && !script.starts_with("quest_") {
         head.push("toll".to_string());
     }
     head.extend(tail);
@@ -320,6 +335,10 @@ fn quest_script(quest: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+#[path = "mapping_contract_tests.rs"]
+mod contract_tests;
 
 #[cfg(test)]
 mod tests {

@@ -27,6 +27,7 @@ pub mod profit;
 pub mod quests;
 pub mod replan;
 pub mod resolve_obtain;
+pub mod shop_site;
 pub mod side_goal;
 pub mod sizing;
 pub mod space;
@@ -42,7 +43,7 @@ pub use chains::{
     quests_for_goal, synergies, usable_chains, xp_per_tick, BootStep, Chain, ChainEval, ChainPrices, ChainStep,
     QuestShortcut, Source, SourceCtx, CHAINS, WILDERNESS_TAX_TICKS,
 };
-pub use combat::{combat_level, goal_combat_style, min_combat_for_method, pick_site, pick_site_paid, training_method, BaseLevels, CombatError, Fare, SitePick};
+pub use combat::{combat_level, goal_combat_style, min_combat_for_method, pick_site, pick_site_gated, pick_site_paid, training_method, BaseLevels, CombatError, Fare, Pass, SitePick};
 pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, rank_money_method};
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle::{complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_progress, retarget_market, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};

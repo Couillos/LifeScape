@@ -384,9 +384,19 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
     );
     let mut needed: Option<u8> = None;
     let mut fare_short: Option<i64> = None;
+    let mut gate_need: Option<String> = None;
     let fare = crate::combat::Fare::of(ctx);
+    let pass = crate::combat::Pass::of(ctx);
+    // A shop purchase walks to the nearest shop that stocks the object
+    // (the planner's shop, `--shop`), never a gated or Wilderness one.
+    if locked == "shop:buy" {
+        if let NodeKind::ObtainItems { item, .. } = &node.kind {
+            node.site = crate::shop_site::pick_shop(item, ctx).map(|(_, site)| site);
+        }
+        return;
+    }
     for method in &candidates {
-        match crate::combat::pick_site_paid(method, ctx.combat, ctx.position, fare) {
+        match crate::combat::pick_site_gated(method, ctx.combat, ctx.position, fare, &pass) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;
@@ -405,6 +415,12 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
                 return;
             }
             crate::combat::SitePick::Fare(coins) => fare_short = Some(coins),
+            // A guild door (skill + uniform) or a key: the dependency that
+            // opens it, filed by `record_block_from` (`access:<guild>`
+            // expands the climb and the uniform, a key is an obtain).
+            crate::combat::SitePick::Access(area, key) => {
+                gate_need.get_or_insert_with(|| key.map(str::to_string).unwrap_or_else(|| format!("access:{area}")));
+            }
             crate::combat::SitePick::Needs(level) => needed = Some(needed.map_or(level, |known| known.min(level))),
         }
     }
@@ -413,6 +429,7 @@ fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         // The fare is the cheapest unlock: a `have_coins` dependency
         // earns it, then the node relaunches with `toll`.
         (Some(coins), _) => NodeStatus::Blocked { reason: format!("missing:coins:{coins}") },
+        (None, _) if gate_need.is_some() => NodeStatus::Blocked { reason: format!("missing:{}", gate_need.unwrap_or_default()) },
         (None, Some(level)) if level < lifescape_gamedata::danger::NEVER => NodeStatus::Blocked { reason: format!("missing:combat:{level}") },
         _ => NodeStatus::Blocked { reason: format!("unworkable:{locked} (no site safe at any level with a bank in reach)") },
     };
