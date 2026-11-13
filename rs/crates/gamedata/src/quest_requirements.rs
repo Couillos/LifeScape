@@ -1,4 +1,5 @@
-//! Typed requirements for the free-to-play quests. Item names resolve
+//! Typed requirements for the free-to-play quests (items read from the
+//! rev 274 content scripts, quest points from `^<key>_questpoints`). Item names resolve
 //! against the object
 //! table, completion varps against the varp table; unknown names fail
 //! loudly, never silently.
@@ -43,6 +44,10 @@ pub struct QuestRequirements {
     pub dependencies: Vec<QuestDependency>,
     pub combat_level: i64,
     pub recommended_combat: i64,
+    /// Quest points the completion grants (`^<key>_questpoints`).
+    pub reward_points: i64,
+    /// Why no bot can run it solo today (`None`: plannable).
+    pub blocker: Option<&'static str>,
 }
 
 fn skill(skill: &str, level: i64) -> SkillRequirement {
@@ -80,10 +85,14 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("spy", 4)]),
             skills: vec![],
             quest_points: 12,
-            items: vec![item("iron_chainbody", 1, true), item("bronze_med_helm", 1, true)],
+            // `sir_amik`/fortress scripts: the guard uniform worn, the
+            // cabbage dropped down the chimney hole.
+            items: vec![item("iron_chainbody", 1, true), item("bronze_med_helm", 1, true), item("cabbage", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 3,
+            blocker: None,
         },
         QuestRequirements {
             key: "cook".into(),
@@ -96,6 +105,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "demon".into(),
@@ -104,10 +115,14 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("demonstart", 30)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![item("coins", 1, false)],
+            // Gypsy Aris takes a coin; Traiborn asks 25 bones
+            // (`traiborn.rs2`); a bucket of water clears the drain key.
+            items: vec![item("coins", 1, false), item("bones", 25, false), item("bucket_water", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 3,
+            blocker: None,
         },
         QuestRequirements {
             key: "doric".into(),
@@ -120,6 +135,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "dragon".into(),
@@ -141,6 +158,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 2,
+            blocker: None,
         },
         QuestRequirements {
             key: "haunted".into(),
@@ -149,17 +168,14 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("haunted", 3)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![
-                item("spade", 1, false),
-                item("fish_food", 1, false),
-                item("poison", 1, false),
-                item("oil_can", 1, false),
-                item("pressure_gauge", 1, false),
-                item("rubber_tube", 1, false),
-            ],
+            // Every part (fish food, poison, gauge, tube, oil can) is
+            // found inside the manor during the quest: nothing to bring.
+            items: vec![],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 4,
+            blocker: None,
         },
         QuestRequirements {
             key: "gobdip".into(),
@@ -168,14 +184,15 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("goblinquest", 6)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![
-                item("goblin_armour_orange", 1, false),
-                item("goblin_armour_darkblue", 1, false),
-                item("goblin_armour", 1, false),
-            ],
+            // Three goblin mails (goblin drops) and Aggie's dyes: red +
+            // yellow mix orange, blue dyes the dark blue mail (the quest
+            // script mixes and dyes).
+            items: vec![item("goblin_armour", 3, false), item("reddye", 1, false), item("yellowdye", 1, false), item("bluedye", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 5,
+            blocker: None,
         },
         QuestRequirements {
             key: "squire".into(),
@@ -184,10 +201,14 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("squire", 7)]),
             skills: vec![skill("mining", 10)],
             quest_points: 0,
-            items: vec![],
+            // The Squire's cousin wants a redberry pie, Thurgo two iron bars
+            // (`thurgo.rs2`: `iron_bar >= 2`); the blurite is mined in-quest.
+            items: vec![item("redberry_pie", 1, false), item("iron_bar", 2, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 20,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "imp".into(),
@@ -205,6 +226,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "hunt".into(),
@@ -213,10 +236,12 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("hunt", 4)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![item("banana", 10, false)],
+            items: vec![item("banana", 10, false), item("spade", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 2,
+            blocker: Some("Karamja rum and bananas: the Port Sarim boat has no nav edge (access::BOAT_ROUTED)"),
         },
         QuestRequirements {
             key: "prince".into(),
@@ -225,10 +250,28 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("princequest", 110)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![],
+            // Ned: wig from 3 balls of wool, rope for 4 more (`ned.rs2`),
+            // Aggie dyes it yellow and mixes the paste (ashes, flour,
+            // water, redberries, `aggie.rs2`), soft clay for the key print
+            // and a bronze bar for Osman's key (`osman.rs2`), the pink
+            // skirt, three beers for Joe (`joe_guard.rs2`).
+            items: vec![
+                item("ball_of_wool", 7, false),
+                item("yellowdye", 1, false),
+                item("ashes", 1, false),
+                item("pot_flour", 1, false),
+                item("bucket_water", 1, false),
+                item("redberries", 1, false),
+                item("softclay", 1, false),
+                item("bronze_bar", 1, false),
+                item("pink_skirt", 1, false),
+                item("beer", 3, false),
+            ],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 3,
+            blocker: None,
         },
         QuestRequirements {
             key: "priest".into(),
@@ -241,6 +284,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "romeojuliet".into(),
@@ -253,6 +298,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 5,
+            blocker: None,
         },
         QuestRequirements {
             key: "runemysteries".into(),
@@ -265,6 +312,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "sheep".into(),
@@ -277,6 +326,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
         QuestRequirements {
             key: "blackarmgang".into(),
@@ -289,6 +340,8 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: Some("two players: one Phoenix and one Black Arm member trade the shield halves"),
         },
         QuestRequirements {
             key: "vampire".into(),
@@ -297,10 +350,13 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("vampire", 3)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![item("stake", 1, false), item("garlic", 1, false), item("hammer", 1, false)],
+            // Dr Harlow trades the stake for a beer (`harlow.rs2`).
+            items: vec![item("beer", 1, false), item("garlic", 1, false), item("hammer", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 3,
+            blocker: None,
         },
         QuestRequirements {
             key: "hetty".into(),
@@ -309,15 +365,13 @@ fn build_f2p_quests() -> Vec<QuestRequirements> {
             completion_varps: completion(&[("hetty", 3)]),
             skills: vec![],
             quest_points: 0,
-            items: vec![
-                item("onion", 1, false),
-                item("rats_tail", 1, false),
-                item("burnt_meat", 1, false),
-                item("eye_of_newt", 1, false),
-            ],
+            // The rat's tail drops only once the quest started: in-quest.
+            items: vec![item("onion", 1, false), item("burnt_meat", 1, false), item("eye_of_newt", 1, false)],
             dependencies: vec![],
             combat_level: 0,
             recommended_combat: 0,
+            reward_points: 1,
+            blocker: None,
         },
     ]
 }
@@ -358,8 +412,11 @@ mod tests {
         let knight = by_key("blackknight").expect("blackknight");
         assert_eq!(knight.quest_points, 12);
         assert_eq!(knight.items[0].obj_id, 1101);
-        assert!(knight.items.iter().all(|item| item.worn_only));
+        assert!(knight.items.iter().filter(|item| item.item != "cabbage").all(|item| item.worn_only), "the uniform is worn, the cabbage carried");
         let dragon = by_key("dragon").expect("dragon");
+        // 39 quest points in F2P (`^<key>_questpoints`).
+        assert_eq!(all_f2p_quests().iter().map(|quest| quest.reward_points).sum::<i64>(), 39);
+        assert!(by_key("blackarmgang").expect("arrav").blocker.is_some(), "two players");
         assert_eq!((dragon.items[0].count, dragon.items[0].obj_id), (12000, 995));
         assert_eq!(by_key("blackarmgang").expect("arrav").completion_varps, vec![(145, 4), (146, 10)]);
         assert!(by_key("nope").is_none());

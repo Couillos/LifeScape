@@ -298,15 +298,11 @@ pub fn expand_access_planned(area: &str, profile: &Profile, counter: &mut usize,
             nodes.push(node);
         }
     } else if area == "champions_guild" {
-        // shortcut: qp:32 needs the 32-QP ladder, but quest rewards
-        // are not in the dumps, so no minimal quest set derives — the
-        // cheapest QP rung (Cook's Assistant) gates the node until the
-        // ladder lands.
-        let quest_nodes = expand_quest_from("cook", profile, counter, level_of);
-        if let Some(last) = quest_nodes.last() {
-            deps.push(last.id.clone());
-        }
-        nodes.extend(quest_nodes);
+        // The door turns away anyone under 32 quest points
+        // (`champions_guild.rs2`): the quest-point ladder.
+        let (rungs, last) = quest_point_rungs(32, "", profile, counter, level_of, depth);
+        nodes.extend(rungs);
+        deps.extend(last);
     }
     let id = next_id(counter);
     let mut node = Node::new(&id, NodeKind::AccessArea { area: area.to_string() }, deps, 1);
@@ -330,6 +326,27 @@ pub fn expand_quest_from(quest: &str, profile: &Profile, counter: &mut usize, le
 /// `expand_quest_from` whose climbs file their skeleton dependencies down
 /// to `depth` nested quest/guild expansions.
 pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> Vec<Node> {
+    expand_quest_inner(quest, profile, counter, level_of, depth, true)
+}
+
+/// Quest-point rungs (`quests::quest_point_ladder`) chained in order, each
+/// rung's own requirements expanded (never its own ladder: the order
+/// already reaches its gate). Returns the nodes and the last rung's id.
+fn quest_point_rungs(points: i64, target: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8) -> (Vec<Node>, Option<String>) {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut previous: Option<String> = None;
+    for rung in crate::quests::quest_point_ladder(points, target, &[]) {
+        let mut chain = expand_quest_inner(&rung, profile, counter, level_of, depth.saturating_sub(1), false);
+        if let (Some(before), Some(last)) = (previous.as_ref(), chain.last_mut()) {
+            last.deps.push(before.clone());
+        }
+        previous = chain.last().map(|node| node.id.clone());
+        nodes.extend(chain);
+    }
+    (nodes, previous)
+}
+
+fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level_of: &dyn Fn(&str) -> u8, depth: u8, with_ladder: bool) -> Vec<Node> {
     let mut nodes = Vec::new();
     let mut deps = Vec::new();
     if let Some(required) = lifescape_gamedata::quest_requirements::by_key(quest) {
@@ -348,15 +365,12 @@ pub fn expand_quest_planned(quest: &str, profile: &Profile, counter: &mut usize,
             deps.push(node.id.clone());
             nodes.push(node);
         }
-        // shortcut: quest-point gates collapse onto Cook's Assistant (1
-        // QP, no requirements): the cheapest QP in F2P. A full QP ladder
-        // (ordering all 18 quests by gate) is deferred; L7 goals run one
-        // low-QP quest, where this never triggers.
-        if required.quest_points > 0 && quest != "cook" {
-            let id = next_id(counter);
-            let dep = Node::new(&id, NodeKind::CompleteQuest { quest: "cook".to_string() }, Vec::new(), 1);
-            deps.push(dep.id.clone());
-            nodes.push(dep);
+        // Quest-point gate (Black Knights' Fortress 12, Dragon Slayer 32):
+        // the real ladder, cheapest points first, each rung expanded.
+        if required.quest_points > 0 && with_ladder {
+            let (rungs, last) = quest_point_rungs(required.quest_points, quest, profile, counter, level_of, depth);
+            nodes.extend(rungs);
+            deps.extend(last);
         }
     }
     let id = next_id(counter);
