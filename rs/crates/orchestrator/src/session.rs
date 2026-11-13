@@ -343,9 +343,7 @@ fn write_last_breath(shared: &Arc<Shared>) {
     let _ = paths::write_json(&shared.state_path, &state);
 }
 
-
 // -- commands --------------------------------------------------------------
-
 
 /// Spawn a script run: the thread owns the bot for its whole life, the
 /// socket thread only reads the heartbeat snapshot meanwhile.
@@ -609,7 +607,6 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
     shared.stop_requested.store(false, Ordering::SeqCst);
     write_heartbeat(shared);
 }
-
 
 // -- network ---------------------------------------------------------------
 
