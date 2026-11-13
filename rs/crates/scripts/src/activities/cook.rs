@@ -35,10 +35,7 @@ pub const PRIOR_XP_PER_6000: u64 = 12_000;
 /// (`raw_shrimp` when omitted, 0 = forever).
 pub fn run_cook(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("cook", args)?;
-    if spec.allow_paid {
-        bot.allow_paid = true;
-        bot.log("toll gates allowed for this run");
-    }
+    crate::kit::toll::arm(bot, spec.allow_paid)?;
     bot.allow_shop = spec.allow_shop;
     let task_keep = resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;

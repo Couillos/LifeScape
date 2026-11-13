@@ -46,6 +46,20 @@ pub fn reserve_short(bot: &Bot, carried: u32) -> u32 {
     reserve.saturating_sub(carried)
 }
 
+/// Coins a deposit-everything restock must take back out so a paid run
+/// still carries the fare at the gate (frank_lane 2026-11-13: the combat
+/// restock banked the fare `arm` had just fetched, then "Yes, ok." at the
+/// gate with an empty pack, looped). Unpaid runs never withdraw.
+pub fn restock_fare(allow_paid: bool, carried_after_deposit: u32) -> u32 {
+    if allow_paid { fare_short(carried_after_deposit) } else { 0 }
+}
+
+/// `restock_fare` for a live run: the armed reserve (a boat run keeps
+/// its round trip), the toll fare for a bare `allow_paid` run.
+pub fn restock_reserve(bot: &Bot, carried_after_deposit: u32) -> u32 {
+    if bot.allow_paid { reserve_short(bot, carried_after_deposit) } else { 0 }
+}
+
 /// Opt the run into paid crossings (`toll`) and carry the fare. Unpaid
 /// runs are untouched.
 pub fn arm(bot: &mut Bot, allow_paid: bool) -> Result<(), ScriptError> {
@@ -98,7 +112,14 @@ pub fn carry_fare(bot: &mut Bot) -> Result<(), ScriptError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boat_round_trip, fare, fare_short, reserve, reserve_short};
+    use super::{boat_round_trip, fare, fare_short, reserve, reserve_short, restock_fare};
+
+    #[test]
+    fn a_paid_restock_takes_the_fare_back_out() {
+        assert_eq!(restock_fare(true, 0), 10, "deposit-all banked the fare");
+        assert_eq!(restock_fare(true, 25), 0);
+        assert_eq!(restock_fare(false, 0), 0, "unpaid runs carry nothing");
+    }
 
     #[test]
     fn the_fare_is_ten_coins_carried() {
