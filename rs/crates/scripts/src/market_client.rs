@@ -190,6 +190,34 @@ pub fn seller_form(bot: &Bot, row: &DealRow, trade: u16) -> Option<(u16, u32)> {
     None
 }
 
+/// Where the seller's offer stands, from the buyer's side.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OfferState {
+    /// The exact lots: accept these.
+    Complete(Vec<(u16, u32)>),
+    /// The right object, not all of it yet: the seller offers in steps
+    /// (10/5/1 per click), keep watching.
+    Partial,
+    /// Another object, coins, or more than the deal: refuse.
+    Wrong,
+}
+
+/// Reads the partner's offer against the deal. Live 2026-11-13 (deals
+/// 798/801): the buyer judged the first non-empty frame, saw 1 noted
+/// shrimp of 4 still being clicked in, and refused a correct trade.
+pub fn offer_state(offered: &std::collections::HashMap<u16, u32>, base: u16, trade: u16, qty: u32) -> OfferState {
+    if let Some(lots) = buyer_want(offered, base, trade, qty) {
+        return OfferState::Complete(lots);
+    }
+    let foreign = offered.keys().any(|id| *id != base && *id != trade);
+    let total: u32 = offered.get(&base).copied().unwrap_or(0) + if trade != base { offered.get(&trade).copied().unwrap_or(0) } else { 0 };
+    if foreign || total > qty {
+        OfferState::Wrong
+    } else {
+        OfferState::Partial
+    }
+}
+
 /// Acceptable seller lots from the buyer's side: the deal item in the
 /// carried form (base or its banknote) at the exact quantity, no coins
 /// mixed in. Anything else is a mismatch, never an accept.

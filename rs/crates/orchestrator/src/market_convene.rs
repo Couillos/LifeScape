@@ -216,30 +216,11 @@ pub(crate) fn relist_for_fill(
 }
 
 impl MarketService {
-    /// Persists one fill: execution row, candle repaint, ledger move,
-    /// live-tail print and an auto-convened deal (meeting tile +
-    /// deadline assigned now).
+    /// Persists one fill: ledger move and an auto-convened deal (meeting
+    /// tile + deadline assigned now). The execution, its candles and the
+    /// live-tail print wait for the settled handover (`settle_print`):
+    /// a match is a promise, not a trade.
     pub(crate) fn record_fill(&self, fill: &lifescape_market::Fill, relist: Vec<Order>, clock: i64) -> Result<i64, String> {
-        let mut store = self.lock_store();
-        store
-            .record_execution(&lifescape_store::NewExecution {
-                item_id: fill.item,
-                quantity: fill.quantity,
-                price: fill.price,
-                clock,
-                server_tick: clock,
-            })
-            .map_err(|error| error.to_string())?;
-        // `history` reads the `candles` cache, never executions: repaint
-        // both resolutions on the fill or every live trade stays
-        // invisible on the market page.
-        store
-            .rebuild_candles(fill.item, lifescape_store::YieldCandleResolution::Hour1)
-            .map_err(|error| error.to_string())?;
-        store
-            .rebuild_candles(fill.item, lifescape_store::YieldCandleResolution::Day1)
-            .map_err(|error| error.to_string())?;
-        drop(store);
         {
             let mut engine = self.lock_engine();
             let cost = fill.quantity * fill.price;
@@ -248,7 +229,6 @@ impl MarketService {
             engine.ledger.credit_stock(&fill.seller, fill.item, -fill.quantity);
             engine.ledger.credit_coins(&fill.seller, cost);
             engine.matched += 1;
-            engine.remember(crate::market_service::Print { item: fill.item, quantity: fill.quantity, price: fill.price, clock });
         }
         let (tile_x, tile_y) = {
             let engine = self.lock_engine();
@@ -294,6 +274,31 @@ impl MarketService {
             engine.relist_rows.insert(deal_id as u64, relist);
         }
         Ok(deal_id)
+    }
+
+    /// A settled handover becomes public: execution row, candle repaint
+    /// (`history` reads the candles cache, never executions) and the
+    /// live-tail print. Live 2026-11-13: prints and candles were written
+    /// at match time, so the 90 % of handovers that failed still showed
+    /// as trades ("Last trades", volumes, candles).
+    pub(crate) fn settle_print(&self, item: i64, qty: i64, price: i64, clock: i64) {
+        {
+            let mut store = self.lock_store();
+            let recorded = store.record_execution(&lifescape_store::NewExecution {
+                item_id: item,
+                quantity: qty,
+                price,
+                clock,
+                server_tick: clock,
+            });
+            if let Err(error) = recorded {
+                crate::logln!("market: settled execution not recorded ({error})");
+                return;
+            }
+            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Hour1);
+            let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Day1);
+        }
+        self.lock_engine().remember(crate::market_service::Print { item, quantity: qty, price, clock });
     }
 
     /// Writes post-match remaining quantities back to the store rows.
@@ -360,10 +365,14 @@ impl MarketService {
         let wanted = request.get("item").as_i64().unwrap_or(-1);
         let limit = request.get("limit").as_i64().unwrap_or(20).clamp(1, 100);
         let store = self.lock_store();
-        let mut rows = store.recent_deals(limit).unwrap_or_default();
+        // Failed handovers never happened: the feed lists settled and
+        // pending deals only (user rule 2026-11-13).
+        let mut rows = store.recent_deals(100).unwrap_or_default();
+        rows.retain(|row| row.status != lifescape_store::DealStatus::Failed);
         if wanted >= 0 {
             rows.retain(|row| row.item_id == wanted);
         }
+        rows.truncate(limit as usize);
         let values: Vec<Value> = rows.iter().map(|row| {
             object(vec![
                 ("deal", Value::Int(row.deal_id)),
@@ -512,6 +521,7 @@ impl MarketService {
             }
         }
         if next == DealStatus::Settled {
+            self.settle_print(item, qty, price, clock);
             self.release_convene(deal_id as u64);
             let store = self.lock_store();
             let _ = store.record_deal_outcome(&buyer, true);

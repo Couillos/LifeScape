@@ -198,6 +198,42 @@ impl Store {
         self.candles_for(item_id, resolution, from_window, to_window)
     }
 
+    /// Executions are settled handovers only (user rule 2026-11-13: the
+    /// market shows what happened in game). Rebuilds the execution log
+    /// from the settled deals (clock = settlement) and repaints every
+    /// candle of every item it touched, before or after. Skipped when the
+    /// log already matches the settled deals. Returns the rows kept.
+    pub fn resync_executions_from_deals(&mut self) -> Result<usize, Error> {
+        let settled: (i64, i64) = self.connection.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(quantity), 0) FROM deals WHERE status = 'settled'",
+            rusqlite::params![],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let logged: (i64, i64) = self.connection.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(quantity), 0) FROM executions",
+            rusqlite::params![],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if settled == logged {
+            return Ok(settled.0 as usize);
+        }
+        let mut touched = self.items_with_executions()?;
+        self.connection.execute_batch(
+            "DELETE FROM executions; \
+             INSERT INTO executions(item_id, quantity, price, clock, server_tick) \
+             SELECT item_id, quantity, price, updated_clock, updated_clock FROM deals \
+             WHERE status = 'settled' ORDER BY updated_clock, deal_id;",
+        )?;
+        touched.extend(self.items_with_executions()?);
+        touched.sort_unstable();
+        touched.dedup();
+        for item in touched {
+            self.rebuild_candles(item, YieldCandleResolution::Hour1)?;
+            self.rebuild_candles(item, YieldCandleResolution::Day1)?;
+        }
+        Ok(settled.0 as usize)
+    }
+
     /// Recomputes every candle of one item and resolution from executions.
     /// Needs `&mut` for the delete+insert transaction; everything else on
     /// this store takes `&self`.
@@ -288,6 +324,45 @@ mod candles_tests {
             clock,
             server_tick: clock * 10,
         }
+    }
+
+    /// User rule 2026-11-13: the execution log is settled handovers only.
+    /// Match-time rows of failed deals go; settled deals stay, at their
+    /// settlement clock; candles follow; a second pass changes nothing.
+    #[test]
+    fn executions_resync_to_settled_deals() -> Result<(), Error> {
+        let mut store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let deal = |store: &Store, qty: i64, clock: i64| -> Result<i64, Error> {
+            store.create_deal(&crate::NewDeal {
+                buyer: "b".to_string(),
+                seller: "s".to_string(),
+                item_id: 314,
+                quantity: qty,
+                price: 2,
+                meeting_x: 0,
+                meeting_y: 0,
+                meeting_level: 0,
+                deadline_tick: 0,
+                clock,
+            })
+        };
+        let settled = deal(&store, 5, 10 * 3600)?;
+        let failed = deal(&store, 7, 10 * 3600 + 30)?;
+        store.set_deal_status(settled, crate::DealStatus::Settled, "", 10 * 3600 + 600)?;
+        store.set_deal_status(failed, crate::DealStatus::Failed, "no_show", 10 * 3600 + 700)?;
+        // The old match-time log printed both.
+        store.record_execution(&sample_fill(10 * 3600, 2, 5))?;
+        store.record_execution(&sample_fill(10 * 3600 + 30, 2, 7))?;
+        store.rebuild_candles(314, YieldCandleResolution::Hour1)?;
+        assert_eq!(store.resync_executions_from_deals()?, 1);
+        let fills = store.executions_for_item(314, 0, i64::MAX)?;
+        assert_eq!(fills.len(), 1, "only the settled handover: {fills:?}");
+        assert_eq!((fills[0].quantity, fills[0].clock), (5, 10 * 3600 + 600));
+        let candles = store.candles_for(314, YieldCandleResolution::Hour1, 0, i64::MAX)?;
+        assert_eq!(candles.iter().map(|candle| candle.volume).sum::<i64>(), 5, "candles repainted");
+        assert_eq!(store.resync_executions_from_deals()?, 1, "idempotent");
+        Ok(())
     }
 
     #[test]

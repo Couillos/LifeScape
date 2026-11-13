@@ -190,6 +190,12 @@ impl MarketService {
                 .map_err(|error| error.to_string())?;
         }
         let service = MarketService { store: Mutex::new(store), engine: Mutex::new(Engine::new(catalogue)) };
+        // The public record is settled handovers only (match-time rows
+        // from before 2026-11-13 are replaced by the settled deals).
+        match service.lock_store().resync_executions_from_deals() {
+            Ok(kept) => crate::logln!("market: execution log = {kept} settled handover(s)"),
+            Err(error) => crate::logln!("market: execution resync failed: {error}"),
+        }
         service.reload_books();
         Ok(service)
     }

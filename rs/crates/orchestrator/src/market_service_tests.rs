@@ -301,6 +301,7 @@ fn quote_history_and_tick_serve_the_front() {
         ("qty", Value::Int(10)),
         ("price", Value::Int(5)),
     ]));
+    crate::market_test_support::settle_matched(&service);
     let history = service.handle(&request(vec![
         ("op", str_value("history")),
         ("item", Value::Int(314)),
@@ -674,7 +675,11 @@ fn live_fill_repaints_history_candles() {
     funded(&service, "seller-a");
     funded(&service, "buyer");
     match_one(&service, "seller-a", "buyer", 10, 4);
-    // No manual rebuild: the fill itself repaints both resolutions.
+    // A match alone paints nothing (a promise, not a trade)...
+    let before = service.handle(&request(vec![("op", str_value("history")), ("item", Value::Int(314)), ("res", str_value("1h"))]));
+    assert!(before.get("candles").as_arr().map_or(true, |rows| rows.is_empty()), "no candle before the handover");
+    // ...the settled handover repaints both resolutions, no manual rebuild.
+    assert_eq!(crate::market_test_support::settle_matched(&service), 1);
     for res in ["1h", "1d"] {
         let history = service.handle(&request(vec![
             ("op", str_value("history")),
@@ -750,6 +755,7 @@ fn list_traded_only_hides_untraded_goods() {
     let empty = service.handle(&request(vec![("op", str_value("list")), ("traded_only", Value::Int(1))]));
     assert_eq!(empty.get("items").as_arr().map(|rows| rows.len()), Some(0));
     match_one(&service, "seller-a", "buyer", 10, 4);
+    crate::market_test_support::settle_matched(&service);
     let reply = service.handle(&request(vec![("op", str_value("list")), ("traded_only", Value::Int(1))]));
     let rows = reply.get("items").as_arr().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1);
@@ -777,6 +783,7 @@ fn first_print_turns_the_band_on() {
     assert_eq!(place("maker", "sell", 2).get("ok").as_bool(), Some(true));
     let traded = place("taker", "buy", 2);
     assert_eq!(traded.get("fills").as_arr().map(|fills| fills.len()), Some(1), "crossed at 2: {traded:?}");
+    crate::market_test_support::settle_matched(&service);
     let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
     assert_eq!(quote.get("reference").as_i64(), Some(2));
     assert_eq!(quote.get("traded").as_bool(), Some(true));
@@ -817,6 +824,7 @@ fn bounded_bids_walk_up_and_cross() {
     for _ in 0..10 {
         wall += 10.0;
         crate::market_reprice::reprice_round(&service, wall, 600.0);
+        crate::market_test_support::settle_matched(&service);
         let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
         if quote.get("traded").as_bool() == Some(true) {
             assert_eq!(quote.get("reference").as_i64(), Some(5), "crossed at the resting ask");

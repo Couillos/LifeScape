@@ -371,10 +371,13 @@ impl Bot {
             let Some(slot) = slots.iter().find(|(_, (held, _))| *held == obj_id).map(|(slot, _)| *slot) else {
                 return Ok(false);
             };
-            // Offer in 10s, then 5s, then 1s (ops 3/2/1 on the trade
-            // side): one coin per click never reaches a big count.
+            // The whole stack at once (Offer-All, op 4) when it is exactly
+            // what is owed: one atomic click, the partner never sees a
+            // partial offer. Otherwise 10s, then 5s, then 1s (ops 3/2/1):
+            // one coin per click never reaches a big count.
             let need = count - offered;
-            let op = if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
+            let stack: u32 = slots.iter().filter(|(_, (held, _))| *held == obj_id).map(|(_, (_, n))| *n).sum();
+            let op = if stack == need { 4 } else if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
             self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
             self.pump(5)?;
             if Self::trade_refused(&self.world.messages, seen) {

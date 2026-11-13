@@ -108,18 +108,17 @@ fn surplus_listings_cross_the_inputs_buyers_need() {
     let logs = place(&service, "bct5rxpg-fire", "buy", LOGS, 22, 1, ("ceiling", 7));
     assert_eq!(logs.get("status").as_str(), Some("filled"), "{logs:?}");
 
-    // Executions print, candles paint (both resolutions), deals wait for
-    // their convocation, the ledger moved.
-    for (item, volume) in [(RAW_SHRIMP, 27), (LOGS, 22)] {
+    // A match is a promise: nothing prints, no candle, no anchor until
+    // the handover settles in game (user rule 2026-11-13); the deals wait
+    // for their convocation, the ledger moved.
+    for item in [RAW_SHRIMP, LOGS] {
         for res in ["1h", "1d"] {
             let history = service.handle(&object(vec![("op", str_value("history")), ("item", Value::Int(item)), ("res", str_value(res))]));
             let candles = history.get("candles").as_arr().cloned().unwrap_or_default();
-            assert_eq!(candles.len(), 1, "{item} {res}: {candles:?}");
-            assert_eq!(candles[0].get("v").as_i64(), Some(volume));
-            assert_eq!(candles[0].get("c").as_i64(), Some(1));
+            assert!(candles.is_empty(), "{item} {res}: no candle before the handover: {candles:?}");
         }
         let quote = service.handle(&object(vec![("op", str_value("quote")), ("item", Value::Int(item))]));
-        assert_eq!(quote.get("traded").as_bool(), Some(true), "a real print now anchors {item}");
+        assert_eq!(quote.get("traded").as_bool(), Some(false), "no settled print anchors {item} yet");
     }
     let pending = |wall: f64| {
         let reply = service.handle(&object(vec![("op", str_value("pending")), ("now_wall", Value::Float(wall)), ("tick_ms", Value::Int(600))]));

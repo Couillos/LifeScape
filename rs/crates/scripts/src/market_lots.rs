@@ -280,3 +280,23 @@ mod tests {
         assert_eq!(covered(&groups, 5, stock), vec![true, false, true], "14 of 20 shrimps taken, 11 more short");
     }
 }
+
+#[cfg(test)]
+mod offer_tests {
+    use crate::market_client::{offer_state, OfferState};
+    use std::collections::HashMap;
+
+    /// Deals 798/801: 1 noted shrimp of 4 on the window is a partial
+    /// offer, not a mismatch; the full stack completes it; anything else
+    /// (another object, coins, too many) is refused.
+    #[test]
+    fn partial_offers_are_waited_for() {
+        let (base, note) = (317u16, 318u16);
+        assert_eq!(offer_state(&HashMap::from([(note, 1)]), base, note, 4), OfferState::Partial);
+        assert_eq!(offer_state(&HashMap::new(), base, note, 4), OfferState::Partial);
+        assert_eq!(offer_state(&HashMap::from([(note, 4)]), base, note, 4), OfferState::Complete(vec![(note, 4)]));
+        assert_eq!(offer_state(&HashMap::from([(note, 5)]), base, note, 4), OfferState::Wrong, "more than the deal");
+        assert_eq!(offer_state(&HashMap::from([(995, 4)]), base, note, 4), OfferState::Wrong, "coins are not the lot");
+        assert_eq!(offer_state(&HashMap::from([(1511, 1)]), base, note, 4), OfferState::Wrong, "another object");
+    }
+}

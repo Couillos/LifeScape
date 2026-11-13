@@ -187,10 +187,10 @@ function renderTrades() {
 }
 
 function statusLabel(status) {
-  if (status === 'settled') return 'settled';
-  if (status === 'failed') return 'failed';
-  if (status === 'matched') return 'pending';
-  return '—';
+  // Failed handovers never reach the feed (backend filter, user rule
+  // 2026-11-13): the market shows trades that happened or are under way
+  // (matched, convened, both at the square, trading).
+  return status === 'settled' ? 'settled' : 'pending';
 }
 
 function renderRecent() {
@@ -198,10 +198,19 @@ function renderRecent() {
   for (const trade of recent.slice(0, 15)) {
     const date = new Date(trade.t * 1000);
     const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
-    rows.push('<tr><td>' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
+    // The item opens its market (chart, book, last trades) on click.
+    rows.push('<tr><td class="item-link" data-id="' + Number(trade.item) + '" title="open this item">' + itemName(trade.item) + '</td><td>' + trade.q + '</td><td>' + trade.p + '</td><td>' + trade.buyer + '</td><td>' + trade.seller + '</td><td>' + statusLabel(trade.status) + '</td><td>' + label + '</td></tr>');
   }
   document.getElementById('recent').innerHTML = rows.join('');
 }
+
+// One listener on the stable table: rows are rebuilt every 10 s.
+document.getElementById('recent').addEventListener('click', (event) => {
+  const cell = event.target.closest('td.item-link[data-id]');
+  if (!cell) return;
+  pick(Number(cell.getAttribute('data-id')));
+  document.getElementById('chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 
 function itemName(id) {
   const item = items.find(entry => entry.item === id);

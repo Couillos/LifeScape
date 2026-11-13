@@ -6,7 +6,7 @@
 use lifescape_json::{str_value, Value};
 use lifescape_sdk::Bot;
 
-use crate::market_client::{buyer_want, deal_report, market_call, my_deals, trade_id};
+use crate::market_client::{deal_report, market_call, my_deals, offer_state, trade_id, OfferState};
 use crate::market_lots::{group_deals, secure_lots, DealGroup};
 use crate::kit::pack::pack_total;
 use crate::kit::bank::nearest_bank;
@@ -20,6 +20,9 @@ use crate::{ScriptError, ScriptResult};
 pub fn redeposit_keep(carried: &[u16], touched: &[u16]) -> Vec<u16> {
     carried.iter().copied().filter(|held| !touched.contains(held)).collect()
 }
+/// How long the buyer watches a partial offer grow before refusing it.
+pub const OFFER_WAIT_TICKS: u64 = 120;
+
 /// Past its tick deadline a party keeps waiting for a late partner while
 /// the daemon keeps the deal open, at most this many ticks more.
 pub const WAIT_PAST_DEADLINE_TICKS: u64 = 3000;
@@ -162,8 +165,17 @@ pub fn run_deliver(bot: &mut Bot, args: &[String]) -> ScriptResult {
             {
                 bot.pump(5)?;
             }
-            let observed = bot.trade_partner_offer();
-            let Some(lots) = buyer_want(&observed, group.item, trade, group.qty) else {
+            // The seller clicks its lots in by steps: wait for the whole
+            // offer (bounded), refuse only a wrong one.
+            let settle_by = bot.world.ticks + OFFER_WAIT_TICKS;
+            let mut observed = bot.trade_partner_offer();
+            let mut state = offer_state(&observed, group.item, trade, group.qty);
+            while state == OfferState::Partial && bot.world.ticks < settle_by && bot.trade_modal() == Some("main") {
+                bot.pump(3)?;
+                observed = bot.trade_partner_offer();
+                state = offer_state(&observed, group.item, trade, group.qty);
+            }
+            let OfferState::Complete(lots) = state else {
                 bot.log(&format!("deals {ids:?}: offer mismatch ({observed:?} for {} x{}), refused", group.item, group.qty));
                 report_all(bot, group, "failed", "mismatch");
                 ok = false;
