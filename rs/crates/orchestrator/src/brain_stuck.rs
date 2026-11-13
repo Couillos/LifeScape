@@ -16,7 +16,7 @@
 //! and with every skill "stuck" the bots idled forever.
 
 use lifescape_json::Value;
-use lifescape_planner::{GoalKind, HistoryEntry, Life, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+use lifescape_planner::{GoalKind, GraphState, HistoryEntry, Life, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 
 use crate::brain::push_history;
 
@@ -51,6 +51,25 @@ pub fn goal_met(goal: &GoalKind, live: &Value) -> bool {
             !skills.is_empty() && skills.iter().all(|skill| crate::brain_succession::live_level(live, skill) >= *level)
         }
         _ => false,
+    }
+}
+
+/// True when the current goal is reached: the live levels meet a skill
+/// goal, or the goal's own root node is done (`goal_root_done`).
+pub fn goal_reached(life: &Life, live: &Value) -> bool {
+    goal_met(&life.goal, live) || lifescape_planner::goal_root_done(life)
+}
+
+/// The graph state the brain acts on: a Stuck graph whose current goal
+/// is reached is Finished (closed done, next goal drawn), never a stuck
+/// spell. Older goals' abandoned nodes linger in the graph for good; on
+/// their own they made every reached goal a "graph stuck" (live
+/// 2026-11-13: 540 lines/h over 20 bots; bb4v5d9m's "equip melee" closed
+/// stuck every 4 s and its ambition flipped every 30 s).
+pub fn effective_state(life: &Life, live: &Value) -> GraphState {
+    match lifescape_planner::graph_state(life) {
+        GraphState::Stuck { .. } if goal_reached(life, live) => GraphState::Finished,
+        state => state,
     }
 }
 
@@ -92,7 +111,7 @@ pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> b
             push_history(life, "graph", "stuck");
             // A goal the bot already meets is done, whatever older
             // abandoned nodes linger in the graph.
-            let stuck = !goal_met(&life.goal, live);
+            let stuck = !goal_reached(life, live);
             let drawn = if lifescape_planner::goal_closed(&life.history) {
                 crate::brain_succession::redraw(life, live).0
             } else {
@@ -172,5 +191,35 @@ mod tests {
         assert!(!goal_met(&GoalKind::MaxSkills { skills: vec!["fishing".to_string()], level: 20 }, &live));
         assert!(!goal_met(&GoalKind::MaxSkills { skills: vec!["woodcutting".to_string()], level: 15 }, &live), "unknown = level 1");
         assert!(!goal_met(&GoalKind::MakeMoney, &live), "non-skill goals answer from the graph");
+    }
+
+    /// bb4v5d9m (live 2026-11-13): an old abandoned obtain plus a done
+    /// "equip melee" step is a finished goal, not a stuck spell; with the
+    /// goal's own step abandoned the spell stands.
+    #[test]
+    fn a_reached_goal_over_old_abandons_is_finished_not_stuck() {
+        use lifescape_planner::{GraphState, Life, Node, NodeKind, NodeStatus};
+        let mut old = Node::new("n51", NodeKind::ObtainItems { item: "leather_boots".to_string(), count: 1 }, Vec::new(), 1);
+        old.status = NodeStatus::Abandoned;
+        let mut equip = Node::new("n457", NodeKind::EquipBest { style: "melee".to_string() }, Vec::new(), 1);
+        equip.status = NodeStatus::Done;
+        let mut life = Life {
+            schema: 1,
+            account: "b0".to_string(),
+            created_at: 0,
+            seed: 0,
+            profile: lifescape_planner::Profile::new(false, 0.5, 0.5, 0, lifescape_planner::Archetype::Producer),
+            goal: GoalKind::EquipBest { style: "melee".to_string() },
+            nodes: vec![old, equip],
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+        };
+        let live = object(vec![]);
+        assert_eq!(super::effective_state(&life, &live), GraphState::Finished);
+        life.nodes[1].status = NodeStatus::Abandoned;
+        assert!(matches!(super::effective_state(&life, &live), GraphState::Stuck { .. }), "the goal's own step failed");
     }
 }

@@ -73,6 +73,26 @@ pub fn pack_ids(bot: &Bot) -> HashSet<u16> {
     pack_slots(bot).iter().map(|(_, (held, _))| *held).collect()
 }
 
+/// Usable units of `obj` in the last known bank (open, or closed and kept
+/// in `inv_closed` — what the brain's heartbeat reports as held), minus
+/// what open market orders lock. `bot.bank_items()` reads the open
+/// interface only: empty whenever the bank is closed.
+pub fn banked_usable(bot: &Bot, obj: u16) -> u32 {
+    let Some(com) = (bot.tables.com_id)("bank_main:inv") else { return 0 };
+    let banked: u32 = bot.world.inv_known(com).map(|slots| slots.values().filter(|(held, _)| *held == obj).map(|(_, count)| *count).sum()).unwrap_or(0);
+    bot.withdrawable(obj, banked)
+}
+
+/// Object ids with a usable unit in the last known bank (open or closed).
+pub fn banked_ids(bot: &Bot) -> Vec<u16> {
+    let Some(com) = (bot.tables.com_id)("bank_main:inv") else { return Vec::new() };
+    let mut ids: Vec<u16> = bot.world.inv_known(com).map(|slots| slots.values().map(|(held, _)| *held).collect()).unwrap_or_default();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|id| banked_usable(bot, *id) > 0);
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     /// Purchase price from the dump (Gerrant sells at 100%, general

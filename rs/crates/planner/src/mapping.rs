@@ -246,25 +246,24 @@ fn farm_args(resource: &str) -> Option<(String, Vec<String>)> {
 
 /// Combat spot whose NPCs drop `item` (debug-name prefix match: the
 /// `goblin_greenarmour` drop row meets the `goblins` spot hunting plain
-/// `goblin`s). None when no F2P spot hunts the dropper.
+/// `goblin`s): the weakest UNGATED one (`all_spots` is weakest first).
+/// Gated spots never farm: the brain never passes `toll`, and a bare key
+/// never walks underground (`kit::hunt::run_spot_with` refuses both with
+/// a Usage). Live 2026-11-13: the first dropper by name sent "produce
+/// bones" to al_kharid_warriors across the toll fence, magic staffs to
+/// the moss giants. None when no ungated F2P spot hunts a dropper.
 fn spot_for_drop(item: &str) -> Option<String> {
     let obj = lifescape_gamedata::objs_by_name(item).into_iter().next()?;
-    let drops = lifescape_gamedata::drops::drops_for_obj(obj.obj_id);
-    let mut npcs: Vec<String> = drops
-        .iter()
+    let npcs: Vec<String> = lifescape_gamedata::drops::drops_for_obj(obj.obj_id)
+        .into_iter()
         .filter(|drop| drop.npc_id >= 0)
-        .map(|drop| drop.npc.clone())
+        .map(|drop| drop.npc)
         .collect();
-    npcs.sort();
-    npcs.dedup();
-    for npc in npcs {
-        for spot in lifescape_gamedata::combat_spots::all_spots() {
-            if spot.npc_names.iter().any(|hunted| npc.starts_with(hunted)) {
-                return Some(spot.key.to_string());
-            }
-        }
-    }
-    None
+    lifescape_gamedata::combat_spots::all_spots()
+        .into_iter()
+        .filter(|spot| spot.access.is_none() && spot.entrance.is_none())
+        .find(|spot| npcs.iter().any(|npc| spot.npc_names.iter().any(|hunted| npc.starts_with(hunted))))
+        .map(|spot| spot.key.to_string())
 }
 
 fn quest_script(quest: &str) -> &'static str {
@@ -310,6 +309,31 @@ mod tests {
         assert!(args.contains(&"chickens".to_string()), "feathers drop from chickens, got {args:?}");
         let egg = Node::new("n9", NodeKind::ObtainItems { item: "egg".to_string(), count: 1 }, Vec::new(), 1);
         assert_eq!(map_method("farm:egg", &egg, None), None, "no activity yields eggs: no chicken fallback");
+    }
+
+    /// Live 2026-11-13 (leo_king, bbkjz2vk, frank_lane, ryan_park: 125
+    /// Usage + 123 abandons + 120 stuck goals in an hour): "produce bones"
+    /// hunted al_kharid_warriors (first dropper by NAME) across the toll
+    /// fence the brain never pays, and magic staffs sent a bare key to the
+    /// moss giants underground (`run_spot_with` refuses both by design).
+    /// A drop farm hunts the weakest ungated spot; a drop only gated spots
+    /// yield is no farm leg (market/shop answer instead).
+    #[test]
+    fn drop_farms_never_target_gated_spots() {
+        let bones = Node::new("n9", NodeKind::ObtainItems { item: "bones".to_string(), count: 50 }, Vec::new(), 50);
+        let (script, args) = map_method("farm:bones", &bones, None).expect("chickens drop bones");
+        assert_eq!((script.as_str(), args.first().map(String::as_str)), ("melee", Some("chickens")), "got {args:?}");
+        let staff = Node::new("n9", NodeKind::ObtainItems { item: "magic_staff".to_string(), count: 1 }, Vec::new(), 1);
+        assert_eq!(map_method("farm:magic_staff", &staff, None), None, "only moss giants (underground) drop it");
+        for spot in lifescape_gamedata::combat_spots::all_spots() {
+            let gated = spot.access.is_some() || spot.entrance.is_some();
+            for item in ["bones", "big_bones", "magic_staff", "bronze_axe", "feather", "cowhide", "raw_beef"] {
+                let node = Node::new("n9", NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
+                if let Some((_, args)) = map_method(&format!("farm:{item}"), &node, None) {
+                    assert!(!(gated && args.first().map(String::as_str) == Some(spot.key)), "farm:{item} hunts gated {}", spot.key);
+                }
+            }
+        }
     }
 
     #[test]

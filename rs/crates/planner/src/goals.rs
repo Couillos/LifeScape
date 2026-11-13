@@ -139,6 +139,30 @@ pub fn next_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, cou
     Some(GoalKind::MaxSkills { skills: vec![skill.to_string()], level: target })
 }
 
+/// True when the current goal's own root node is done: the newest node
+/// (highest id: `append_goal` numbers past every older node) of the
+/// goal's kind — equip step, quota/obtain, money, quest, area. Older
+/// goals' abandoned nodes linger in the graph and keep `graph_state` at
+/// `Stuck`; they never make a reached goal a failure (live 2026-11-13,
+/// bb4v5d9m: "equip melee" done every 4 s, closed stuck each time). Skill
+/// goals answer from the live levels (the brain), never here: `false`.
+pub fn goal_root_done(life: &Life) -> bool {
+    let serves = |kind: &NodeKind| match (&life.goal, kind) {
+        (GoalKind::Obtain { item: goal_item, .. } | GoalKind::Produce { item: goal_item, .. }, NodeKind::ObtainItems { item, .. }) => item == goal_item,
+        (GoalKind::MakeMoney | GoalKind::GetRich { .. }, NodeKind::MakeMoney) => true,
+        (GoalKind::CompleteQuest { quest: goal_quest }, NodeKind::CompleteQuest { quest }) => quest == goal_quest,
+        (GoalKind::EquipBest { style: goal_style }, NodeKind::EquipBest { style }) => style == goal_style,
+        (GoalKind::AccessArea { area: goal_area }, NodeKind::AccessArea { area }) => area == goal_area,
+        _ => false,
+    };
+    let number = |node: &Node| node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(0);
+    life.nodes
+        .iter()
+        .filter(|node| serves(&node.kind))
+        .max_by_key(|node| number(node))
+        .is_some_and(|node| node.status == crate::model::NodeStatus::Done)
+}
+
 /// Replace the life's goal and append the new goal's nodes, renumbered
 /// past every existing id (old nodes stay as the record of past goals).
 /// Climbs start at the live level (`level_of`): no tranche already held.
@@ -314,5 +338,42 @@ mod tests {
         assert_eq!(life.goal, quota, "the goal keeps its quota");
         append_goal(&mut life, GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 10 }, &profile, &|_| 1, &|_| 500);
         assert!(life.nodes.iter().all(|node| !matches!(node.kind, NodeKind::ReachLevel { level, .. } if level != 10)), "other goals untouched");
+    }
+
+    /// Live 2026-11-13 (bb4v5d9m, 337 errors/h): "equip melee" ended
+    /// `goal_reached` every 4 s, yet an old abandoned obtain (n51, leather
+    /// boots, an earlier goal) left the graph Stuck, the goal closed stuck,
+    /// its milestone blocked x3 and the ambition flipped warrior <-> priest
+    /// every 30 s. The current goal's own root node decides, not old nodes.
+    #[test]
+    fn a_goal_whose_root_is_done_is_reached_whatever_old_nodes_linger() {
+        let profile = Profile::new(false, 0.5, 0.5, 3, Archetype::Producer);
+        let mut life = life_with(GoalKind::Obtain { item: "leather_boots".to_string(), count: 1 }, Vec::new());
+        append_goal(&mut life, GoalKind::Obtain { item: "leather_boots".to_string(), count: 1 }, &profile, &|_| 1, &|_| 0);
+        for node in &mut life.nodes {
+            node.status = NodeStatus::Abandoned;
+        }
+        append_goal(&mut life, GoalKind::EquipBest { style: "melee".to_string() }, &profile, &|_| 1, &|_| 0);
+        assert!(!super::goal_root_done(&life), "the equip step has not run yet");
+        let last = life.nodes.len() - 1;
+        life.nodes[last].status = NodeStatus::Done;
+        assert!(matches!(graph_state(&life), GraphState::Stuck { .. }), "the old abandon still marks the whole graph");
+        assert!(super::goal_root_done(&life), "the goal's own step is done");
+        // An older done root of the same kind never answers for a newer one.
+        append_goal(&mut life, GoalKind::EquipBest { style: "melee".to_string() }, &profile, &|_| 1, &|_| 0);
+        assert!(!super::goal_root_done(&life), "the newest equip step decides");
+        // A quota abandoned by cascade is not reached; done is.
+        append_goal(&mut life, GoalKind::Produce { item: "shrimp".to_string(), count: 5 }, &profile, &|_| 1, &|_| 0);
+        let last = life.nodes.len() - 1;
+        life.nodes[last].status = NodeStatus::Abandoned;
+        assert!(!super::goal_root_done(&life));
+        life.nodes[last].status = NodeStatus::Done;
+        assert!(super::goal_root_done(&life));
+        // Skill goals answer from the live levels, never from a node.
+        append_goal(&mut life, GoalKind::MaxSkills { skills: vec!["mining".to_string()], level: 10 }, &profile, &|_| 1, &|_| 0);
+        for node in &mut life.nodes {
+            node.status = NodeStatus::Done;
+        }
+        assert!(!super::goal_root_done(&life));
     }
 }

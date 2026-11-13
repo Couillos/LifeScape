@@ -193,6 +193,37 @@ fn trade_with(bot: &mut Bot, keeper: &str, spawn: (i32, i32, i32), main_com: u16
     trade_live_rounds(bot, keeper, main_com, deadline)
 }
 
+/// Ticks a service NPC gets to stream in once the bot stands at its spawn
+/// (NPCs pop in after the walk, not on arrival).
+pub const NPC_STREAM_TICKS: u64 = 20;
+
+/// Where to walk before talking to `name`: its spawn when it is not in
+/// view, nothing when it streams already.
+pub fn spawn_walk(bot: &Bot, name: &str, spawn: (i32, i32)) -> Option<(i32, i32)> {
+    match bot.find_npc(name) {
+        Some(_) => None,
+        None => Some(spawn),
+    }
+}
+
+/// Slot of a service NPC (Aubury...): walk to its spawn when out of view,
+/// then wait for it to stream. Fails typed when the spawn is unreachable
+/// or the NPC never shows (`no <name> near (x,z,level)`).
+pub fn npc_at_spawn(bot: &mut Bot, name: &str, spawn: (i32, i32), walk_ticks: u64) -> Result<u16, ScriptError> {
+    if let Some((x, z)) = spawn_walk(bot, name, spawn) {
+        bot.log(&format!("walking to {name} at ({x},{z})"));
+        bot.intend(&format!("walking to {name}"));
+        if !walk_checked(bot, x, z, walk_ticks)? {
+            return Err(ScriptError::Failed(format!("{name} spawn ({x},{z}) unreachable from {:?}", bot.position())));
+        }
+        let deadline = bot.world.ticks + NPC_STREAM_TICKS;
+        while bot.find_npc(name).is_none() && bot.world.ticks < deadline {
+            bot.pump(2)?;
+        }
+    }
+    bot.find_npc(name).ok_or_else(|| ScriptError::Failed(format!("no {name} near {:?}", bot.position())))
+}
+
 /// Click rounds against the streamed keeper: approach from every around
 /// tile, open trade, wait for the shop stock com. Waits for the keeper to
 /// stream first (NPCs pop in after the walk, not on arrival): without this
