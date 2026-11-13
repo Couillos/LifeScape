@@ -13,6 +13,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::time::Duration;
 
 use crate::bfs::can_step;
+use crate::collision::leaf_step_extra;
 use crate::fallback::touches_side;
 use crate::collision::{tile_walkable, CollisionMap, BLOCK_EAST, BLOCK_NORTH, BLOCK_SOUTH, BLOCK_WEST};
 use crate::reach;
@@ -855,7 +856,7 @@ fn dijkstra(
             // walks when the shut view allows it: the opening (if any)
             // already rode the step onto the tile.
             if search.usable_door(next).is_none() && search.step_closed(here, next) {
-                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
+                relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
                 continue;
             }
             // Stop onto a usable door tile from a side the table lets
@@ -868,7 +869,7 @@ fn dijkstra(
             if search.usable_door(here).is_none() {
                 if let Some((id, _, _)) = search.usable_door(next) {
                     if search.tables.side_ok(id, next, here) && search.step_closed(here, next) {
-                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next), PrevEdge::Walk);
+                        relax(&mut dist, &mut prev, &mut heap, key, next_key, cost + 1 + danger.extra(next) + leaf_step_extra(search.base(here), search.base(next), dx, dz), PrevEdge::Walk);
                     }
                 }
             }

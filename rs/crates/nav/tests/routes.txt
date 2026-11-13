@@ -110,8 +110,9 @@ guichet_falador_mur | 2944,3366,0 | 2945,3367,0 | f2p | reachable ; adjusted=294
 # n'importe quel bot) elle devient 1531 en (3015,3237) angle SUD
 # (`door_open` +1,0, angle+1) : un mur sur le bord sud du stand. Le plan
 # montait de (3015,3236) droit sur le stand, refuse en live, replan
-# identique (cook raw_shrimp, ~75 refus/h, 2026-11-13). Le battant ouvert
-# est peint en mur comme les portails doubles : le plan contourne par
+# identique (cook raw_shrimp, ~75 refus/h, 2026-11-13). L'arete du
+# battant ouvert coute DOOR_LEAF_STEP_COST (marque, jamais un mur : peinte
+# en mur elle coupait 22 pieces F2P en deux) : le plan contourne par
 # (3016,3237).
 porte_port_sarim_coin | 3015,3236,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237
 porte_port_sarim_range | 3018,3237,0 | 3013,3237,0 | f2p | reachable ; uses_loc=1530 ; never_steps=3015,3236,3015,3237 ; never_steps=3016,3236,3015,3237

@@ -25,6 +25,13 @@ pub const BLOCK_NPC_AND_PLAYERS: u32 = 0x100000;
 pub const FLOOR: u32 = 0x200000;
 pub const PLAYER_OCC: u32 = 0x400000;
 pub const ROOF: u32 = 0x80000000;
+/// Planner-only marks (never server bits, never blocking): the edge where
+/// a closed single door's open leaf lands (`gate_swing::paint_gate_swings`).
+/// A step across it costs `DOOR_LEAF_STEP_COST` more, never refused.
+pub const DOOR_LEAF_WEST: u32 = 0x1000000;
+pub const DOOR_LEAF_NORTH: u32 = 0x2000000;
+pub const DOOR_LEAF_EAST: u32 = 0x4000000;
+pub const DOOR_LEAF_SOUTH: u32 = 0x8000000;
 pub const FLOOR_BLOCKED: u32 = 0x240000;
 pub const WALK_BLOCKED: u32 = 0x240100;
 pub const BLOCK_WEST: u32 = 0x240108;
