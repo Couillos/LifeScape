@@ -38,6 +38,24 @@ pub fn ore_recipe(ore: &str) -> Option<knowledge::recipes::Recipe> {
     knowledge::recipes::using(ore, Some("smelt")).into_iter().find(|entry| entry.members == Some(false))
 }
 
+/// Inputs of `recipe_inputs` the pack holds less of than one bar needs,
+/// in recipe order. The server smelts only a full set (`smelting.rs2`
+/// `validate_first_smelt`: primary ore AND secondary count, else a
+/// failure box): copper alone makes nothing.
+pub fn short_inputs(recipe_inputs: &[(String, i64)], carried: &dyn Fn(&str) -> i64) -> Vec<String> {
+    recipe_inputs.iter().filter(|(name, each)| carried(name) < *each).map(|(name, _)| name.clone()).collect()
+}
+
+/// Furnace post for a run starting at (x, z, level): the nearest F2P
+/// furnace on that level (Manhattan), Wilderness furnaces only with
+/// `wild`. `None` when the level has none.
+pub fn furnace_post(x: i64, z: i64, level: i64, allow_wild: bool) -> Option<knowledge::stations::Station> {
+    knowledge::stations::stations_of("furnace")
+        .into_iter()
+        .filter(|post| post.level == level && (allow_wild || !knowledge::danger::in_wilderness(post.x, post.z, post.level)))
+        .min_by_key(|post| ((post.x - x).abs() + (post.z - z).abs(), post.x, post.z))
+}
+
 /// Highest F2P bar smeltable at `level` (steel from 30, P1 rentable).
 pub fn bar_for_level(level: i64) -> &'static str {
     BARS.iter().rev().find(|(_, need)| level >= *need).map(|(name, _)| *name).unwrap_or("bronze_bar")
@@ -66,39 +84,36 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if level < recipe.level {
         return Err(ScriptError::Usage(format!("smelting {bar_name} needs level {} at {:?}", recipe.level, bot.position())));
     }
-    let Some((primary_name, primary_each)) = recipe.inputs.iter().find(|(name, _)| *name != "coal") else {
+    // The ore used on the furnace: the server picks the bar from it
+    // (`smelt_ore_single`: copper → bronze, iron + 2 coal → steel), never
+    // from coal alone. Every other input rides in the same set.
+    let Some((primary_name, _)) = recipe.inputs.iter().find(|(name, _)| *name != "coal") else {
         return Err(ScriptError::Usage(format!("smelt {bar_name} has no ore input at {:?}", bot.position())));
     };
-    let secondary: Vec<(String, i64)> =
-        recipe.inputs.iter().filter(|(name, _)| name != primary_name).map(|(name, count)| (name.clone(), *count)).collect();
-    let per_bar: i64 = primary_each + secondary.iter().map(|(_, count)| *count).sum::<i64>();
-    let primary = obj_id(bot, primary_name)?;
-    let mut secondary_ids: Vec<(u16, u32)> = Vec::new();
-    for (name, count) in &secondary {
-        secondary_ids.push((obj_id(bot, name)?, *count as u32));
+    let mut inputs: Vec<SetInput> = Vec::new();
+    for (name, each) in &recipe.inputs {
+        inputs.push(SetInput { name: name.clone(), id: obj_id(bot, name)?, each: (*each).max(1) });
     }
+    let primary = obj_id(bot, primary_name)?;
     let bar = obj_id(bot, bar_name)?;
     let mut bank = nearest_bank(bot)?;
-    let post = knowledge::stations::nearest_station("furnace", bank.x, bank.z, bank.level).ok_or_else(|| ScriptError::Usage(format!("no furnace post near bank at {:?}", bot.position())))?;
+    let (here_x, here_z, here_level) = (i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level));
+    let post = furnace_post(here_x, here_z, here_level, spec.allow_wild)
+        .ok_or_else(|| ScriptError::Usage(format!("no furnace on level {here_level} (wild={}) from {:?}", spec.allow_wild, bot.position())))?;
     bot.log(&format!("furnace post at ({},{})", post.x, post.z));
-    let mut keep_smelt: Vec<u16> = vec![primary];
-    keep_smelt.extend(secondary_ids.iter().map(|(id, _)| *id));
-    keep_smelt.extend(task_keep.iter().copied());
-    bank_trip(bot, &bank, &keep_smelt, 0)?;
-    fill_ores(bot, &bank, primary, &secondary_ids, *primary_each, per_bar)?;
-    if pack_total(bot, primary) == 0 {
-        return Err(ScriptError::Blocked { missing: vec![primary_name.clone()] });
-    }
+    // Ores carried in are banked with the rest and come back out as
+    // balanced sets: a pack full of freshly mined copper would leave no
+    // slot for the tin.
+    restock(bot, &bank, &task_keep, &inputs, &recipe.inputs)?;
     let outcome = run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
-        if pack_total(step_bot, primary) == 0 {
-            bank_trip(step_bot, &bank, &keep_smelt, 0)?;
-            fill_ores(step_bot, &bank, primary, &secondary_ids, *primary_each, per_bar)?;
-            if pack_total(step_bot, primary) == 0 {
-                return Err(ScriptError::Blocked { missing: vec![primary_name.clone()] });
-            }
+        if full_sets(step_bot, &inputs) == 0 {
+            restock(step_bot, &bank, &task_keep, &inputs, &recipe.inputs)?;
         }
-        let job = ProduceJob { spec: &SMELT, input: primary, input_name: primary_name, want: 0, products: vec![bar], near: (bank.x as i32, bank.z as i32) };
+        // One use per full set: a stray ore past the last set would only
+        // raise the server's "need tin/coal" box.
+        let sets = full_sets(step_bot, &inputs) as u32;
+        let job = ProduceJob { spec: &SMELT, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died smelting, restocking to retry");
@@ -117,27 +132,98 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
     outcome
 }
 
-/// Top the pack up with balanced ore sets (nothing when the bank holds
-/// none or the booth is far: the caller reports `blocked`).
-fn fill_ores(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, primary: u16, secondary: &[(u16, u32)], primary_each: i64, per_bar: i64) -> Result<(), ScriptError> {
-    let free = free_slots(bot) as i64;
-    if free == 0 || (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+/// One recipe input: name, object id, count per bar.
+struct SetInput {
+    name: String,
+    id: u16,
+    each: i64,
+}
+
+/// Full recipe sets the pack holds (the scarcest input decides).
+fn full_sets(bot: &Bot, inputs: &[SetInput]) -> i64 {
+    inputs.iter().map(|input| i64::from(pack_total(bot, input.id)) / input.each).min().unwrap_or(0)
+}
+
+/// Bank, top the pack up, and stop `blocked` on every input short of one
+/// set (copper banked without tin names the tin; the brain files one
+/// obtain per name).
+fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], inputs: &[SetInput], recipe_inputs: &[(String, i64)]) -> Result<(), ScriptError> {
+    bank_trip(bot, bank, keep, 0)?;
+    fill_sets(bot, bank, inputs)?;
+    let carried = |name: &str| inputs.iter().find(|input| input.name == name).map(|input| i64::from(pack_total(bot, input.id))).unwrap_or(0);
+    let missing = short_inputs(recipe_inputs, &carried);
+    if !missing.is_empty() {
+        return Err(ScriptError::Blocked { missing });
+    }
+    Ok(())
+}
+
+/// Top the pack up to balanced sets: what the pack already carries
+/// counts, each input is withdrawn up to `sets × each` (nothing when the
+/// booth is far: the caller reports `blocked`).
+fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[SetInput]) -> Result<(), ScriptError> {
+    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
         return Ok(());
     }
-    let sets = free / per_bar;
-    if sets == 0 {
-        return Ok(());
-    }
-    bank_withdraw_items(bot, bank, &[primary], (sets * primary_each) as u32)?;
-    for (id, each) in secondary {
-        bank_withdraw_items(bot, bank, &[*id], (sets * *each as i64) as u32)?;
+    let per_bar: i64 = inputs.iter().map(|input| input.each).sum();
+    let carried: i64 = inputs.iter().map(|input| i64::from(pack_total(bot, input.id))).sum();
+    let sets = (free_slots(bot) as i64 + carried) / per_bar.max(1);
+    for input in inputs {
+        let lacking = sets * input.each - i64::from(pack_total(bot, input.id));
+        if lacking > 0 {
+            bank_withdraw_items(bot, bank, &[input.id], lacking as u32)?;
+        }
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_for_level, ore_recipe, smelt_recipe, BARS, FURNACES, SMITHING_STAT};
+    use super::{bar_for_level, furnace_post, ore_recipe, short_inputs, smelt_recipe, BARS, FURNACES, SMITHING_STAT};
+
+    /// Live 2026-11-13 (paul_rhodes, Falador; bh99tw2f, Al Kharid): 200
+    /// copper banked, no tin; the run withdrew copper alone and used it on
+    /// the furnace, the server answered its "need tin" box, and the job
+    /// failed "consumed nothing" three times. A set is every input of the
+    /// recipe; whatever falls short of one set is reported, so the brain
+    /// files the tin (and the copper too when both are gone).
+    #[test]
+    fn a_smelt_set_needs_every_input() {
+        let bronze = smelt_recipe("bronze_bar").expect("bronze").inputs;
+        let carried = |pairs: &'static [(&'static str, i64)]| move |name: &str| pairs.iter().find(|(held, _)| *held == name).map(|(_, count)| *count).unwrap_or(0);
+        assert_eq!(short_inputs(&bronze, &carried(&[("copper_ore", 14)])), vec!["tin_ore".to_string()], "copper alone smelts nothing");
+        assert_eq!(short_inputs(&bronze, &carried(&[])), vec!["copper_ore".to_string(), "tin_ore".to_string()], "both ores asked");
+        assert!(short_inputs(&bronze, &carried(&[("copper_ore", 1), ("tin_ore", 1)])).is_empty(), "one of each is a set");
+        let steel = smelt_recipe("steel_bar").expect("steel").inputs;
+        assert_eq!(short_inputs(&steel, &carried(&[("iron_ore", 9), ("coal", 1)])), vec!["coal".to_string()], "steel needs 2 coal per bar");
+        assert!(short_inputs(&steel, &carried(&[("iron_ore", 1), ("coal", 2)])).is_empty());
+        let iron = smelt_recipe("iron_bar").expect("iron").inputs;
+        assert_eq!(short_inputs(&iron, &carried(&[])), vec!["iron_ore".to_string()]);
+    }
+
+    /// Live 2026-11-13 (bct5rxpg, eric_smith, b3gybcev at Varrock east,
+    /// will_field at Edgeville): the post was picked near the bank but the
+    /// job searched 150 tiles around the BANK, so every bot banking far
+    /// from a furnace failed "no produce station". The post is the
+    /// furnace nearest the bot, Wilderness only when allowed.
+    #[test]
+    fn furnace_post_is_the_nearest_furnace_outside_the_wilderness() {
+        let near = |x: i64, z: i64| {
+            let post = furnace_post(x, z, 0, false).expect("a furnace");
+            (post.x, post.z)
+        };
+        let lumbridge = near(3253, 3420);
+        assert!((lumbridge.0 - 3226).abs() <= 1 && (lumbridge.1 - 3255).abs() <= 1, "Varrock east smelts at Lumbridge, got {lumbridge:?}");
+        let falador = near(2946, 3368);
+        assert_eq!(falador, (2975, 3368), "Falador west bank smelts at Falador");
+        let al_kharid = near(3269, 3167);
+        assert!((al_kharid.0 - 3272).abs() <= 1 && (al_kharid.1 - 3185).abs() <= 1, "Al Kharid smelts at home, got {al_kharid:?}");
+        assert_eq!(near(3096, 3493), (2975, 3368), "Edgeville goes to Falador, never the Wilderness furnace");
+        let north = near(3140, 3600);
+        assert!(north.1 < 3520, "deep north still avoids the Wilderness furnace, got {north:?}");
+        let wild = furnace_post(3140, 3600, 0, true).expect("wild furnace");
+        assert!(wild.z >= 3520, "wild allowed: the Wilderness furnace is nearest, got ({},{})", wild.x, wild.z);
+    }
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;

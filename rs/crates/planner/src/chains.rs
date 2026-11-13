@@ -42,7 +42,9 @@ pub struct Chain {
 // cook, leather and gem XP are server raw / 10, asserted in tests).
 const IRON_STEPS: &[ChainStep] = &[
     ChainStep { method: "gather:mining/iron_ore", skill: "mining", level: 15, ticks_each: 8.0, xp_each: 3.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "", takes_qty: 0.0, makes: "iron_ore", makes_qty: 1.0 },
-    ChainStep { method: "smelt:iron_bar", skill: "smithing", level: 15, ticks_each: 4.0, xp_each: 12.5, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 1.0 },
+    // Half the iron smelts fail (ore lost, no bar, no XP: `smelting.rs2`):
+    // per action 0.5 bar and 12.5 / 2 XP on average.
+    ChainStep { method: "smelt:iron_bar", skill: "smithing", level: 15, ticks_each: 4.0, xp_each: 6.25, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_ore", takes_qty: 1.0, makes: "iron_bar", makes_qty: 0.5 },
     ChainStep { method: "smith:iron_sword", skill: "smithing", level: 29, ticks_each: 4.0, xp_each: 25.0, coin_each: 0.0, epoch: Epoch::P1, wilderness: false, takes: "iron_bar", takes_qty: 1.0, makes: "iron_sword", makes_qty: 1.0 },
 ];
 const STEEL_STEPS: &[ChainStep] = &[
@@ -774,6 +776,15 @@ mod tests {
         assert!((smelt_xp("iron_bar") - 12.5).abs() < 1e-9, "iron smelt prior, dump {}", smelt_xp("iron_bar"));
         assert!((smelt_xp("steel_bar") - 17.5).abs() < 1e-9, "steel smelt prior");
         assert!((smelt_xp("gold_bar") - 22.5).abs() < 1e-9, "gold smelt prior");
+        // Every smelt step of the catalogue yields what the server yields
+        // per action: an iron smelt makes half a bar and its XP only on a
+        // success (`smelting.rs2`), the other bars are certain.
+        for step in CHAINS.iter().flat_map(|chain| chain.steps.iter()).filter(|step| step.method.starts_with("smelt:")) {
+            let row = lifescape_gamedata::recipes::making(step.makes, Some("smelt")).into_iter().find(|recipe| recipe.members == Some(false)).expect("F2P smelt row");
+            let odds = lifescape_gamedata::recipes::success_odds(&row.source);
+            assert!((step.makes_qty - odds).abs() < 1e-9, "{} makes {} per action, server {odds}", step.method, step.makes_qty);
+            assert!((step.xp_each - row.xp as f64 / 10.0 * odds).abs() < 1e-9, "{} xp per action {}", step.method, step.xp_each);
+        }
         let enchant_xp = lifescape_gamedata::spells::by_name("enchant_lvl1")
             .into_iter()
             .map(|spell| spell.xp as f64 / 10.0)

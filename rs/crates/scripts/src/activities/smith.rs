@@ -115,15 +115,30 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
     })
 }
 
-/// Restock bars with the hammer kept, never banked (loud `blocked`
-/// when the bank holds none of either, never an empty walk).
+/// What one restock takes out of the bank, for a pack with `free` slots:
+/// the hammer when the pack carries none (one, kept afterwards), then
+/// bars for the room left (two slots spare), whole items only.
+pub fn restock_order(hammer_carried: bool, free: u32, bars_each: u32) -> (u32, u32) {
+    let hammers = u32::from(!hammer_carried);
+    let room = free.saturating_sub(hammers).saturating_sub(2);
+    let each = bars_each.max(1);
+    (hammers, room / each * each)
+}
+
+/// Restock bars with the hammer kept, never banked: a banked hammer comes
+/// out first (live 2026-11-13: will_field had two in the bank and blocked
+/// "missing: hammer" on every run, the brain buying more each time).
+/// Loud `blocked` when neither pack nor bank holds one, or no bar set.
 fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], bar: u16, hammer: u16, bars_each: u32, bar_name: &str) -> Result<(), ScriptError> {
     bank_trip(bot, bank, keep, 0)?;
+    let (hammers, bars) = restock_order(pack_total(bot, hammer) > 0, free_slots(bot) as u32, bars_each);
+    if hammers > 0 && bank_withdraw_items(bot, bank, &[hammer], hammers)? > 0 {
+        bot.log("ok hammer restored from bank");
+    }
     if pack_total(bot, hammer) == 0 {
         return Err(ScriptError::Blocked { missing: vec![HAMMER.to_string()] });
     }
-    let room = (free_slots(bot) as u32).saturating_sub(2);
-    bank_withdraw_items(bot, bank, &[bar], room * bars_each)?;
+    bank_withdraw_items(bot, bank, &[bar], bars)?;
     if pack_total(bot, bar) < bars_each {
         return Err(ScriptError::Blocked { missing: vec![bar_name.to_string()] });
     }
@@ -160,7 +175,19 @@ fn smith_one(bot: &mut Bot, bar_name: &str, product: u16, column: u8, slot: u8) 
 
 #[cfg(test)]
 mod tests {
-    use super::{product_for_level, smith_recipe, smith_spot, ANVILS, BAR_PREFIX, COLUMNS, HAMMER, PLATEBODIES};
+    use super::{product_for_level, restock_order, smith_recipe, smith_spot, ANVILS, BAR_PREFIX, COLUMNS, HAMMER, PLATEBODIES};
+
+    /// A banked hammer is withdrawn (one, its slot taken from the bar
+    /// room); a carried one never doubles. Bars come by whole items: a
+    /// platebody eats 5, so 25 of 25 free slots, never 125.
+    #[test]
+    fn restock_takes_the_banked_hammer_then_whole_bar_sets() {
+        assert_eq!(restock_order(false, 28, 5), (1, 25), "hammer out, 25 bars for 5 platebodies");
+        assert_eq!(restock_order(true, 27, 5), (0, 25), "hammer carried: bars only");
+        assert_eq!(restock_order(true, 27, 3), (0, 24), "3-bar items: 8 whole sets");
+        assert_eq!(restock_order(true, 27, 1), (0, 25), "daggers: one bar each");
+        assert_eq!(restock_order(false, 2, 1), (1, 0), "no room left for bars");
+    }
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;

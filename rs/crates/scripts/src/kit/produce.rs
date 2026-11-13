@@ -298,12 +298,37 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
     }
 }
 
-/// Four orthogonal stands around a station tile, nearest first (ranges
-/// are 1x2: a corner stand never reaches, like the tree footprint).
-fn stands_for(x: i32, z: i32, from: (i32, i32)) -> Vec<(i32, i32)> {
-    let mut stands = vec![(x - 1, z), (x + 1, z), (x, z - 1), (x, z + 1)];
-    stands.sort_by_key(|stand| (stand.0 - from.0).abs() + (stand.1 - from.1).abs());
+/// Side stands around a station whose south-west tile is (x, z) and whose
+/// rotated footprint spans `span` tiles (1x1 anvil, 1x2 range, 3x3
+/// furnace1), nearest first: never a corner (a corner never reaches, like
+/// the tree footprint) nor a tile under the station. The server refuses
+/// the sides its forceapproach forbids ("I can't reach that!"): the
+/// caller moves on to the next stand.
+fn stands_for(x: i32, z: i32, span: (i32, i32), from: (i32, i32)) -> Vec<(i32, i32)> {
+    let (span_x, span_z) = (span.0.max(1), span.1.max(1));
+    let mut stands = Vec::new();
+    for along_z in z..z + span_z {
+        stands.push((x - 1, along_z));
+        stands.push((x + span_x, along_z));
+    }
+    for along_x in x..x + span_x {
+        stands.push((along_x, z - 1));
+        stands.push((along_x, z + span_z));
+    }
+    stands.sort_by_key(|stand| ((stand.0 - from.0).abs() + (stand.1 - from.1).abs(), stand.0, stand.1));
     stands
+}
+
+/// Footprint of the station loc on the map: the dump's width and length,
+/// swapped by an odd live angle (same rule as the engine's `rotate`).
+fn station_span(bot: &Bot, x: i32, z: i32, loc: u16) -> (i32, i32) {
+    let (width, length) = knowledge::loc_by_id(usize::from(loc)).map(|entry| (entry.width as i32, entry.length as i32)).unwrap_or((1, 1));
+    let angle = bot.world.loc_at(x, z, bot.world.level).filter(|(placed, _, _)| *placed == loc).map(|(_, _, angle)| angle).unwrap_or(0);
+    if angle % 2 == 1 {
+        (length, width)
+    } else {
+        (width, length)
+    }
 }
 
 /// True when the run died since `seen` (server line or flatlined hp).
@@ -406,7 +431,7 @@ fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Re
     let target = if job.want == 0 { u32::MAX } else { job.want };
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
     let from = (bot.world.x, bot.world.z);
-    for (stand_x, stand_z) in stands_for(x, z, from) {
+    for (stand_x, stand_z) in stands_for(x, z, station_span(bot, x, z, loc), from) {
         if pack_total(bot, job.input) == 0 {
             break;
         }
@@ -559,9 +584,34 @@ mod tests {
     /// Stands ring the station orthogonally, nearest first.
     #[test]
     fn stands_ring_orthogonally_nearest_first() {
-        let stands = stands_for(10, 10, (8, 10));
+        let stands = stands_for(10, 10, (1, 1), (8, 10));
         assert_eq!(stands[0], (9, 10), "nearest stand first, got: {stands:?}");
         assert_eq!(stands.len(), 4, "four orthogonal stands, got: {stands:?}");
         assert!(!stands.contains(&(9, 9)), "no diagonal stands");
+    }
+
+    /// Live 2026-11-13 (bh99tw2f, Al Kharid): `furnace1` is 3x3 (smelting.loc
+    /// width/length 3, forceapproach east) with its south-west tile at
+    /// (3272,3185). The old ring of that one tile offered the west tile
+    /// (refused, "I can't reach that!"), two tiles inside the furnace and a
+    /// torch, never the east side: "smelting consumed nothing" three times.
+    /// Stands now ring the whole footprint, sides only.
+    #[test]
+    fn stands_ring_the_whole_footprint_of_a_big_station() {
+        let stands = stands_for(3272, 3185, (3, 3), (3269, 3167));
+        assert_eq!(stands.len(), 12, "three per side, got: {stands:?}");
+        for east in [(3275, 3185), (3275, 3186), (3275, 3187)] {
+            assert!(stands.contains(&east), "east side {east:?} offered, got: {stands:?}");
+        }
+        for (stand_x, stand_z) in &stands {
+            let inside = (3272..=3274).contains(stand_x) && (3185..=3187).contains(stand_z);
+            assert!(!inside, "({stand_x},{stand_z}) is under the furnace");
+            let corner = (*stand_x == 3271 || *stand_x == 3275) && (*stand_z == 3184 || *stand_z == 3188);
+            assert!(!corner, "({stand_x},{stand_z}) is a corner");
+        }
+        assert_eq!(stands[..2], [(3271, 3185), (3272, 3184)], "nearest sides first from the bank (ties by tile), got: {stands:?}");
+        let range = stands_for(20, 20, (1, 2), (0, 0));
+        assert_eq!(range.len(), 6, "a 1x2 range has six side stands, got: {range:?}");
+        assert!(!range.contains(&(20, 21)), "the range's second tile is no stand");
     }
 }

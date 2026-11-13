@@ -113,7 +113,12 @@ pub fn need_count(node: &Node, need: &str) -> i64 {
         let Some((_, per_action)) = way.inputs.iter().find(|(input, _)| input == need) else { continue };
         let per_action = (*per_action).max(1);
         return match units {
-            Some(count) => count.saturating_mul(per_action),
+            // Inputs per unit made: an iron smelt fails half the time
+            // (`Way::expected_out` 0.5), so a bar costs two ores.
+            Some(count) => match way.expected_out() {
+                out if out > 0.0 => (count as f64 * per_action as f64 / out).ceil() as i64,
+                _ => count.saturating_mul(per_action),
+            },
             None => {
                 let load: i64 = way.inputs.iter().map(|(_, qty)| (*qty).max(1)).sum();
                 (INPUT_BATCH / load.max(1)).max(1) * per_action
@@ -223,6 +228,33 @@ mod tests {
         assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, .. } if item == "bronze_axe"));
         assert_eq!(node.status, NodeStatus::Pending, "waits on its new dep");
         assert_eq!(node.deps, vec!["n10".to_string()]);
+    }
+
+    /// Multi-input recipes (server `smelting.struct`, `smithing.dbrow`):
+    /// a smelter blocked on both ores files both obtains, each sized by
+    /// the recipe; iron fails half its smelts, so a bar asks two ores;
+    /// a smith asks five bars per platebody and one hammer.
+    #[test]
+    fn multi_input_recipes_file_every_input_at_recipe_size() {
+        let obtain = |item: &str, count: i64| Node::new("n9", NodeKind::ObtainItems { item: item.to_string(), count }, Vec::new(), count);
+        let mut bronze = obtain("bronze_bar", 14);
+        let fresh = replan_node(&mut bronze, &ReplanCause::Blocked, &["copper_ore".to_string(), "tin_ore".to_string()], &mut 20);
+        let asked: Vec<(String, i64)> = fresh
+            .iter()
+            .filter_map(|sub| match &sub.kind {
+                NodeKind::ObtainItems { item, count } => Some((item.clone(), *count)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, vec![("copper_ore".to_string(), 14), ("tin_ore".to_string(), 14)], "both ores, one each per bar");
+        assert_eq!(bronze.deps, vec!["n21".to_string(), "n22".to_string()], "the smelt waits on both");
+        assert_eq!(super::need_count(&obtain("iron_bar", 10), "iron_ore"), 20, "half the iron smelts fail");
+        assert_eq!(super::need_count(&obtain("iron_bar", 5), "iron_ore"), 10);
+        assert_eq!(super::need_count(&obtain("steel_bar", 10), "iron_ore"), 10, "steel never fails");
+        assert_eq!(super::need_count(&obtain("steel_bar", 10), "coal"), 20, "two coal per steel bar");
+        assert_eq!(super::need_count(&obtain("mithril_bar", 3), "coal"), 12);
+        assert_eq!(super::need_count(&obtain("bronze_platebody", 2), "bronze_bar"), 10, "five bars per platebody");
+        assert_eq!(super::need_count(&obtain("bronze_platebody", 2), "hammer"), 1, "the hammer is a tool");
     }
 
     /// Live 2026-11-12: a cook missing raw shrimps filed `obtain 1`: one
