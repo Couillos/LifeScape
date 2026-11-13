@@ -98,23 +98,26 @@ fn melee_is_one_group() {
     assert!(skills.contains("attack") && skills.contains("strength") && skills.contains("defence"), "{skills:?}");
 }
 
-/// Existing accounts map to a sensible ambition from their levels.
+/// Past coverage the draw is random (user decision 2026-11-13: "au-delà
+/// aléatoire"), tilted toward a bot's strong group but never fixed by it.
 #[test]
-fn existing_levels_map_to_a_sensible_ambition() {
+fn existing_levels_tilt_but_never_fix_the_draw() {
     let frank = bot("frank_lane", 11, &[("woodcutting", 64), ("fishing", 12), ("attack", 10), ("mining", 8)]);
     assert!(fit("woodcutter", &|skill| frank.level(skill)) > 50.0);
-    let (kind, why) = draw_kind(&frank, &[], &[], &[]);
-    assert_eq!((kind.as_str(), why.as_str()), ("woodcutter", "levels:woodcutting"), "frank_lane woodcutting 64 -> woodcutter, from his levels");
-    // Whatever the seed: a specialist is read from its levels, never drawn by lot.
-    for seed in 0..50u64 {
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for seed in 0..200u64 {
         let mut again = frank.clone();
         again.seed = seed;
-        assert_eq!(draw_kind(&again, &[], &[], &[]).0, "woodcutter");
+        let (kind, why) = draw_kind(&again, &[], &[], &[]);
+        assert!(!why.starts_with("levels:"), "no deterministic specialist branch: {why}");
+        *counts.entry(kind).or_default() += 1;
     }
+    let woodcutter = counts.get("woodcutter").copied().unwrap_or(0);
+    assert!(counts.values().all(|count| *count <= woodcutter), "strong group stays the most likely: {counts:?}");
+    assert!(woodcutter < 150, "but other kinds keep a real share: {counts:?}");
+    assert!(counts.len() >= 6, "variety across seeds: {counts:?}");
     // Excluded (blocked) kind: the next best fit or a random draw, never it.
     assert_ne!(draw_kind(&frank, &[], &[], &["woodcutter"]).0, "woodcutter");
-    let fighter = bot("f", 5, &[("attack", 45), ("strength", 40), ("defence", 30)]);
-    assert_eq!(draw_kind(&fighter, &[], &[], &[]).0, "warrior");
     // In a fleet pass, the best-fitting bot takes the matching gap.
     let mut fleet: Vec<FleetBot> = (0..14).map(|index| bot(&format!("b{index:02}"), index as u64 + 1, &[])).collect();
     fleet.push(frank.clone());

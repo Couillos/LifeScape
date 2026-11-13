@@ -98,9 +98,31 @@ fn fleet_bot(life: &Life, levels: Vec<(String, u8)>) -> FleetBot {
     }
 }
 
-/// Every other life on disk (unreadable files are skipped and logged).
+/// Accounts the daemon runs (a job each), minus the dev/personal ones.
+/// Refreshed on every launch (`ensure`): coverage counts the fleet, never
+/// the old lives `run/lives` keeps (2026-11-13: t01/t10/t18/t19 held 6
+/// coverage roles while not running).
+fn fleet_accounts() -> &'static Mutex<std::collections::BTreeSet<String>> {
+    static FLEET: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+    &FLEET
+}
+
+fn refresh_fleet(orch: &Orchestrator) {
+    let Ok(jobs) = orch.jobs.try_lock() else { return };
+    let excluded = crate::economy_guard::excluded_accounts();
+    let current: std::collections::BTreeSet<String> = jobs
+        .keys()
+        .filter(|name| !excluded.contains(&name.to_lowercase()))
+        .cloned()
+        .collect();
+    drop(jobs);
+    *fleet_accounts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
+}
+
+/// Every other fleet life on disk (unreadable files are skipped and logged).
 fn other_lives(account: &str) -> Vec<Life> {
     let mut out = Vec::new();
+    let fleet = fleet_accounts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let Ok(entries) = std::fs::read_dir(lives_dir()) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -108,7 +130,7 @@ fn other_lives(account: &str) -> Vec<Life> {
             continue;
         }
         let Some(name) = path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string) else { continue };
-        if name.eq_ignore_ascii_case(account) {
+        if name.eq_ignore_ascii_case(account) || !fleet.contains(&name) {
             continue;
         }
         match load_life(&name) {
@@ -139,6 +161,7 @@ fn fleet_view(life: &Life) -> (Vec<String>, bool) {
 /// First pass on a life without ambition: assign the whole fleet. Returns
 /// true when this life got one (save it).
 pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool {
+    refresh_fleet(orch);
     if life.ambition.is_some() {
         return false;
     }

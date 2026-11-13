@@ -144,8 +144,8 @@ pub struct Ambition {
     pub kind: String,
     pub label: String,
     pub groups: Vec<String>,
-    /// `coverage:<group>` | `levels:<group>` (read from an existing bot's
-    /// levels) | `random` | `demand:<item>` (or `operator`).
+    /// `coverage:<group>` | `random` | `demand:<item>` (or `operator`);
+    /// `levels:<group>` only in lives drawn before 2026-11-13.
     pub why: String,
     pub milestones: Vec<Milestone>,
     pub drawn_at_tick: u64,

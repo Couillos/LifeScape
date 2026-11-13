@@ -245,18 +245,17 @@ PRIMAIRE ; glouton global : la paire (bot, trou) de meilleur score part
 d'abord (score = adéquation `(1 + avance/5)²` de la meilleure compétence
 du groupe sur la moyenne du bot ; marchand : archétype marchand d'abord,
 puis affinité marché ; jamais un Iron ; PV exclus de l'adéquation : ils
-partent de 10). Au-delà : un bot spécialisé (adéquation ≥ 16, soit une
-compétence 15 niveaux au-dessus de sa moyenne) prend l'ambition de ce
-groupe (`why: levels:<groupe>`, frank_lane → `woodcutter`) ; sinon tirage
-aléatoire (graine, splitmix64) pondéré par demande × adéquation
-(archétype marchand ×5). Log par compte : `brain <acct>: ambition <kind>
-(<why>) — milestones …`. Essai à blanc sur les 57 vies actuelles (niveaux
-des sauvegardes moteur) : 13 couvertures, 15 guerriers et 11 bûcherons
-(niveaux hérités du tirage plus-bas-skill), le reste réparti sur les 11
-autres types.
+partent de 10). La flotte = les comptes ayant un job dans le daemon
+(hors `admin`/`bite`), relue à chaque lancement ; les vies de `run/lives`
+sans job ne comptent pas. Au-delà de la couverture : tirage aléatoire
+(graine, splitmix64) pondéré par demande × √adéquation (archétype marchand
+×5) ; les niveaux penchent le tirage sans le figer (décision utilisateur
+« au-delà aléatoire » ; l'ancienne règle `levels:<groupe>` faisait 9
+guerriers sur 12). Log par compte : `brain <acct>: ambition <kind>
+(<why>) — milestones …`.
 
 Contrat du fichier (rendu par la page `life`, lu par les ventes) :
-`ambition = {kind, label, groups, why: coverage:<groupe>|levels:<groupe>|
+`ambition = {kind, label, groups, why: coverage:<groupe>|
 random|demand:<objet>, milestones: [{id, label, kind: level|produce|equip|coins,
 target, status: pending|active|done|blocked, progress: [cur, target],
 blocked_count, origin}], drawn_at_tick, drawn_at, rung, revisions:

@@ -269,10 +269,12 @@ Décisions (règles utilisateur) :
   (niveaux, quotas de production listés, équipement, pièces).
 - Couverture : au moins un bot par groupe et un marchand (groupe
   primaire), affectés aux bots dont les niveaux s'y prêtent le mieux ;
-  au-delà, un compte existant spécialisé (une compétence ≥ 15 niveaux
-  au-dessus de sa moyenne) est lu depuis ses niveaux (`levels:<groupe>`),
-  les autres tirent au hasard, pondéré par la demande et les niveaux. Les
-  comptes existants reçoivent leur ambition au premier passage, loggée.
+  au-delà, tirage au hasard pondéré par la demande et √adéquation (la
+  règle `levels:<groupe>` qui figeait un spécialiste a été retirée le jour
+  même : 9 des 12 bots hors couverture devenaient guerriers). La
+  couverture ne compte que les comptes ayant un job dans le daemon (hors
+  `admin`/`bite`), jamais les vieilles vies de `run/lives`. Les comptes
+  existants reçoivent leur ambition au premier passage, loggée.
 - Changement facultatif au plus une fois toutes les 72 000 ticks ; un
   jalon bloqué 3 fois ⇒ nouveau tirage immédiat (politique approuvée,
   loggée), comme une échelle épuisée : ces deux-là ne sont pas des

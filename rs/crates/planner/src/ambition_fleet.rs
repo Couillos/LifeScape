@@ -27,7 +27,7 @@ impl FleetBot {
     }
 }
 
-/// One assignment: `why` is `coverage:<group>`, `levels:<group>`,
+/// One assignment: `why` is `coverage:<group>`,
 /// `random` or `demand:<item>`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assignment {
@@ -105,17 +105,13 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
     out
 }
 
-/// Fit from which a bot's levels choose its ambition (best skill of the
-/// group ≥ 15 levels above its mean): existing accounts are read from
-/// their levels, not drawn by lot (frank_lane woodcutting 64 → woodcutter).
-pub const SPECIALIST_FIT: f64 = 16.0;
-
 /// One bot's draw: an open coverage gap it can hold (best fit, seeded
-/// tie-break) wins; then a specialist's best-fitting kind (`levels:
-/// <group>`, fit ≥ `SPECIALIST_FIT`); otherwise a random kind weighted by
-/// demand × skill fit (merchant archetype ×5 on the merchant, never for
-/// Iron). `exclude` keeps kinds out (the one just blocked). `why`:
-/// coverage, levels, `demand:<item>` when open bids tilted the draw
+/// tie-break) wins; otherwise a random kind weighted by demand × √fit
+/// (merchant archetype ×5 on the merchant, never for Iron). Past coverage
+/// the draw stays random (user decision 2026-11-13): levels tilt it (√fit
+/// = 1 + lead/5) but never fix it, or the inherited melee levels turn the
+/// whole fleet into warriors. `exclude` keeps kinds out (the one just blocked). `why`:
+/// coverage, `demand:<item>` when open bids tilted the draw
 /// (weight ≥ 1.5 with a product), else `random`.
 pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude: &[&str]) -> (String, String) {
     let mut best_gap: Option<(f64, u64, &str)> = None;
@@ -134,15 +130,6 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         let kind = if gap == MERCHANT { MERCHANT } else { kind_for_group(gap).unwrap_or(GENERALIST) };
         return (kind.to_string(), format!("coverage:{gap}"));
     }
-    let specialist = SPECS
-        .iter()
-        .filter(|entry| entry.kind != GENERALIST && entry.kind != MERCHANT && !exclude.contains(&entry.kind))
-        .map(|entry| (entry, fit(entry.kind, &|skill| bot.level(skill))))
-        .filter(|(_, score)| *score >= SPECIALIST_FIT)
-        .max_by(|left, right| left.1.total_cmp(&right.1));
-    if let Some((entry, _)) = specialist {
-        return (entry.kind.to_string(), format!("levels:{}", entry.groups.first().copied().unwrap_or("")));
-    }
     let mut weighted: Vec<(&str, f64, Option<String>)> = Vec::new();
     for entry in SPECS.iter().filter(|entry| entry.kind != GENERALIST && !exclude.contains(&entry.kind)) {
         if entry.kind == MERCHANT && bot.ironman {
@@ -151,7 +138,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         let tilt = demand.iter().find(|known| known.kind == entry.kind);
         let demand_weight = tilt.map(|known| known.weight).unwrap_or(1.0).max(0.01);
         let archetype = if entry.kind == MERCHANT && bot.merchant_archetype { 5.0 } else { 1.0 };
-        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)) * archetype;
+        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt() * archetype;
         let top = tilt.filter(|known| known.weight >= 1.5).and_then(|known| known.top_item.clone());
         weighted.push((entry.kind, weight, top));
     }
