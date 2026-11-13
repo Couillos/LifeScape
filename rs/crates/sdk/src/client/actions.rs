@@ -345,10 +345,14 @@ impl Bot {
         Ok(self.trade_modal().is_some())
     }
 
-    /// Offer `count` of an object from the backpack (inv_button op 1).
-    /// A server "can't trade" refusal (untradeable, members in F2P) reads
-    /// as Ok(false) instead of burning the timeout: the caller maps it to
-    /// its typed refusal.
+    /// Offer exactly `count` of an object from the backpack. A server
+    /// "can't trade" refusal (untradeable, members in F2P) reads as
+    /// Ok(false) instead of burning the timeout: the caller maps it to
+    /// its typed refusal. Each click waits for its own answer before the
+    /// next one is chosen: live 2026-11-13 (deal 1066) a second 10-click
+    /// decided on the stale window put 20 coins up for 16 owed, and the
+    /// exact double-screen check then waited 3000 ticks on both sides.
+    /// Ok(true) only when the window holds exactly `count`.
     pub fn trade_offer(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<bool> {
         self.act(format!("trade_offer {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let seen = self.world.messages.len();
@@ -357,14 +361,9 @@ impl Bot {
             if self.world.modal.is_none() {
                 return Ok(false);
             }
-            let offered: u32 = self
-                .world
-                .inv
-                .get(&Self::TRADE_OFFER)
-                .map(|slots| slots.values().filter(|(held, _)| *held == obj_id).map(|(_, n)| *n).sum())
-                .unwrap_or(0);
+            let offered = self.offered_of(obj_id);
             if offered >= count {
-                return Ok(true);
+                break;
             }
             let (com, slots) = self.backpack();
             let Some(_com) = com else { return Ok(false) };
@@ -379,18 +378,14 @@ impl Bot {
             let stack: u32 = slots.iter().filter(|(_, (held, _))| *held == obj_id).map(|(_, (_, n))| *n).sum();
             let op = if stack == need { 4 } else if need >= 10 { 3 } else if need >= 5 { 2 } else { 1 };
             self.inv_button(op, obj_id, slot, Self::TRADE_PACK)?;
-            self.pump(5)?;
-            if Self::trade_refused(&self.world.messages, seen) {
-                return Ok(false);
+            while self.world.ticks < target && self.offered_of(obj_id) == offered {
+                self.pump(2)?;
+                if Self::trade_refused(&self.world.messages, seen) || self.world.modal.is_none() {
+                    return Ok(false);
+                }
             }
         }
-        let offered: u32 = self
-            .world
-            .inv
-            .get(&Self::TRADE_OFFER)
-            .map(|slots| slots.values().filter(|(held, _)| *held == obj_id).map(|(_, n)| *n).sum())
-            .unwrap_or(0);
-        Ok(offered >= count)
+        Ok(self.offered_of(obj_id) == count)
     }
 
     /// {obj_id: count} offered by the partner, {} when unknown.

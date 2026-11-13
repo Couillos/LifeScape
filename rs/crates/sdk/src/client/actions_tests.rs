@@ -233,3 +233,112 @@ fn withdraw_progress_never_reads_a_transient_overcount() {
     );
     assert_eq!(bot.pack_count(FEATHER), 20, "the pack alone");
 }
+
+/// Live 2026-11-13 14:11:28 (bmzvbp5u, deal 1066, 16 coins owed, the
+/// whole purse carried): two `inv_button3` one tick apart, the second
+/// decided before the first click's partials arrived — 20 coins on the
+/// window, both sides waited 3000 ticks for an exact match, `mismatch`.
+/// Fake server: 25 coins in the pack, each offer click answered 8 ticks
+/// later (pack, trade pack, offer partials). Every click waits for its
+/// own answer: the window ends at exactly 16.
+#[test]
+fn trade_offer_never_clicks_past_the_owed_count() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use crate::isaac::Isaac;
+    use crate::protocol::client_op;
+
+    const PACK: u16 = 3214;
+    const COINS: u16 = 995;
+    let (client_seed, server_seed) = ([3, 1, 4, 1], [5, 9, 2, 6]);
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = std::thread::spawn(move || -> u32 {
+        let (mut sock, _) = listener.accept().expect("accept");
+        sock.set_read_timeout(Some(Duration::from_millis(2))).expect("server read timeout");
+        let mut outgoing = Isaac::new(server_seed);
+        let mut incoming = Isaac::new(client_seed);
+        let mut frame = |op: u8, body: &[u8]| -> Vec<u8> {
+            let mut bytes = vec![op.wrapping_add(outgoing.next_int() as u8), (body.len() >> 8) as u8, body.len() as u8];
+            bytes.extend_from_slice(body);
+            bytes
+        };
+        let partial = |com: u16, count: u32| -> Vec<u8> {
+            let obj = if count == 0 { 0 } else { COINS + 1 };
+            vec![(com >> 8) as u8, com as u8, 0, (obj >> 8) as u8, obj as u8, count as u8]
+        };
+        let sizes: Vec<(u8, usize, u32)> = [("NO_TIMEOUT", 0), ("INV_BUTTON1", 1), ("INV_BUTTON2", 5), ("INV_BUTTON3", 10), ("INV_BUTTON4", u32::MAX)]
+            .iter()
+            .map(|(name, amount)| {
+                let (op, size) = client_op(name).expect("known op");
+                (op, size as usize, *amount)
+            })
+            .collect();
+        let (mut carried, mut offered) = (25u32, 0u32);
+        let mut pending: Vec<(u32, u32)> = Vec::new();
+        let mut inbox: Vec<u8> = Vec::new();
+        let started = Instant::now();
+        let mut tick = 0u32;
+        while started.elapsed() < Duration::from_secs(8) {
+            let mut chunk = [0u8; 256];
+            match sock.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(got) => inbox.extend_from_slice(&chunk[..got]),
+                Err(_) => {}
+            }
+            // Decode whole client packets: opcode then a fixed payload.
+            while let Some(&first) = inbox.first() {
+                let op = first.wrapping_sub(incoming.clone().next_int() as u8);
+                let Some(&(_, size, amount)) = sizes.iter().find(|(known, _, _)| *known == op) else {
+                    panic!("unexpected client op {op}");
+                };
+                if inbox.len() < 1 + size {
+                    break;
+                }
+                incoming.next_int();
+                inbox.drain(..1 + size);
+                if size > 0 {
+                    pending.push((tick + 8, amount));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(15));
+            tick += 1;
+            let mut out = frame(167, &[0x00, 0x00]);
+            for (due, amount) in pending.iter().filter(|(due, _)| *due == tick) {
+                let _ = due;
+                let moved = (*amount).min(carried);
+                carried -= moved;
+                offered += moved;
+                out.extend(frame(172, &partial(PACK, carried)));
+                out.extend(frame(172, &partial(Bot::TRADE_PACK, carried)));
+                out.extend(frame(172, &partial(Bot::TRADE_OFFER, offered)));
+            }
+            pending.retain(|(due, _)| *due > tick);
+            if sock.write_all(&out).is_err() {
+                break;
+            }
+        }
+        offered
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("loopback dial");
+    client.set_read_timeout(Some(Duration::from_millis(500))).expect("client read timeout");
+    let mut bot = Bot::new("127.0.0.1", port, ".", ".");
+    bot.conn.attach_for_test(client, client_seed, server_seed);
+    bot.last_keepalive = Some(Instant::now());
+    bot.last_send_tick = bot.world.ticks;
+    bot.tables.com_id = |name| match name {
+        "inventory:inv" => Some(3214),
+        _ => None,
+    };
+    bot.world.feed("UPDATE_INV_FULL", &[(PACK >> 8) as u8, PACK as u8, 1, ((COINS + 1) >> 8) as u8, (COINS + 1) as u8, 25]).expect("pack");
+    bot.world.modal = Some(crate::world::Modal { layer: "main_side".to_string(), interface_id: 3321 });
+    let offered_ok = bot.trade_offer(COINS, 16, 300).expect("socket alive");
+    let window: u32 = bot.world.inv.get(&Bot::TRADE_OFFER).map(|slots| slots.values().map(|(_, count)| *count).sum()).unwrap_or(0);
+    drop(bot);
+    let server_offered = server.join().expect("server thread");
+    assert_eq!(server_offered, 16, "the server holds exactly the owed coins on the window");
+    assert_eq!(window, 16);
+    assert!(offered_ok);
+}
