@@ -38,6 +38,10 @@ pub struct TaskTargets {
     pub count: Option<u32>,
     /// Quest key, completed when the step says so.
     pub quest: Option<String>,
+    /// Item quantity target (`--want <item> N`): the run ends once N more
+    /// of the item are held (pack plus known bank) than at its start.
+    pub want_item: Option<String>,
+    pub want_count: Option<u32>,
 }
 
 /// Full task specification: what the brain orders, the kit executes.
@@ -98,13 +102,44 @@ impl TaskSpec {
     }
 }
 
+/// Leading resource positional of a production script (`smelt
+/// iron_bar ...`): the first argument unless it is a count, a flag or a
+/// `toll`/`wild` word. Returns it and the rest for `parse_cli`.
+pub fn split_resource(args: &[String]) -> (Option<String>, Vec<String>) {
+    let resource = args
+        .first()
+        .filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--"))
+        .cloned();
+    let rest = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    (resource, rest)
+}
+
+/// Scripts whose resource positional is split off before `parse_cli`
+/// (gatherers, cook and the combat styles take it inside `parse_cli`).
+pub const SPLIT_RESOURCE_SCRIPTS: [&str; 18] = [
+    "alchemy", "bury_loot", "cut_gems", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
+    "picking", "pottery", "runecraft", "smelt", "smelt_jewelry", "smith", "spin", "stringing", "superheat",
+];
+
+/// The brain's order as a script reads it (contract check, no side
+/// effect): split resource for production scripts, then `parse_cli`.
+pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
+    if SPLIT_RESOURCE_SCRIPTS.contains(&script) {
+        let (resource, rest) = split_resource(args);
+        let mut spec = parse_cli(script, &rest)?;
+        spec.resource.extend(resource);
+        return Ok(spec);
+    }
+    parse_cli(script, args)
+}
+
 /// Parse the legacy CLI plus the task flags into a `TaskSpec`. Legacy
 /// positionals keep their meaning (`woodcut 3` = 3 loads, melee spots);
 /// `--kills N` is the quantity target, `--ticks N` the max budget.
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -203,6 +238,13 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 spec.site = Some((x, z, level));
                 index += 2;
             }
+            "--want" => {
+                let item = args.get(index + 1).cloned().filter(|item| !item.is_empty() && !item.starts_with("--")).ok_or_else(usage)?;
+                let count = args.get(index + 2).and_then(|arg| arg.parse::<u32>().ok()).ok_or_else(usage)?;
+                spec.targets.want_item = Some(item);
+                spec.targets.want_count = Some(count);
+                index += 3;
+            }
             "--node" => {
                 let node = args.get(index + 1).cloned().filter(|node| !node.is_empty()).ok_or_else(usage)?;
                 spec.node_id = node;
@@ -216,6 +258,9 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 if matches!(activity, "melee" | "ranged" | "magic") && other.parse::<u32>().is_err()
                     || activity == "melee"
                     || (activity == "cook" && spec.resource.is_empty() && other.parse::<u32>().is_err())
+                    // Gatherers: the brain's target resource rides first
+                    // (`fishing raw_trout`, `mining gold_ore`).
+                    || (matches!(activity, "fishing" | "mining" | "woodcut") && spec.resource.is_empty() && other.parse::<u32>().is_err())
                 {
                     spec.resource.push(other.to_string());
                 } else if spec.targets.count.is_none() {
@@ -286,6 +331,8 @@ pub struct CycleState {
     start_pause: u64,
     start_xp: HashMap<u8, (u8, i32)>,
     units: u32,
+    /// Held count of the `--want` item at start (pack + known bank).
+    want_base: Option<u32>,
 }
 
 impl CycleState {
@@ -295,6 +342,7 @@ impl CycleState {
             start_pause: bot.pause_ticks,
             start_xp: bot.world.stats.clone(),
             units: 0,
+            want_base: None,
         }
     }
 
@@ -308,6 +356,19 @@ impl CycleState {
 
     pub fn units(&self) -> u32 {
         self.units
+    }
+
+    /// `start` plus the `--want` baseline: the entry for loops that poll
+    /// `poll_stop` themselves (combat styles).
+    pub fn begin(bot: &Bot, spec: &TaskSpec) -> CycleState {
+        let mut state = CycleState::start(bot);
+        state.note_want_base(bot, spec);
+        state
+    }
+
+    /// Record the `--want` baseline (call once at run start).
+    pub fn note_want_base(&mut self, bot: &Bot, spec: &TaskSpec) {
+        self.want_base = spec.targets.want_item.as_deref().map(|item| held_total(bot, item));
     }
 
     /// Ticks of engagement so far: wall ticks minus market pauses.
@@ -338,6 +399,11 @@ impl CycleState {
 /// when inconsistent; `max == 0` means unbounded.
 pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopReason> {
     let elapsed = state.work_ticks(bot);
+    if let (Some(item), Some(want), Some(base)) = (spec.targets.want_item.as_deref(), spec.targets.want_count, state.want_base) {
+        if held_total(bot, item).saturating_sub(base) >= want {
+            return Some(StopReason::GoalReached);
+        }
+    }
     if let Some(want) = spec.targets.count {
         if state.units >= want {
             return Some(StopReason::GoalReached);
@@ -362,12 +428,37 @@ pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopR
     None
 }
 
+/// Units of `item` held: pack plus the last known bank view (unknown
+/// names hold nothing).
+pub fn held_total(bot: &Bot, item: &str) -> u32 {
+    let Some(id) = (bot.tables.find_obj_by_name)(item) else { return 0 };
+    crate::kit::pack::pack_total(bot, id).saturating_add(crate::kit::pack::banked_usable(bot, id))
+}
+
+/// Typed gap for a level the task needs (`level:<skill>:<N>`): the brain
+/// files a reach-level sub-task, never a Usage retry.
+pub fn blocked_level(skill: &str, level: i64) -> ScriptError {
+    ScriptError::Blocked { missing: vec![format!("level:{skill}:{level}")] }
+}
+
+/// Typed gap for a quest the task needs (`quest:<key>`).
+pub fn blocked_quest(key: &str) -> ScriptError {
+    ScriptError::Blocked { missing: vec![format!("quest:{key}")] }
+}
+
+/// Typed gap for an area the task cannot enter (`access:<area>`): a toll,
+/// a boat, a guild door. The brain funds or routes, never the script.
+pub fn blocked_access(area: &str) -> ScriptError {
+    ScriptError::Blocked { missing: vec![format!("access:{area}")] }
+}
+
 /// Drive one activity until its stop conditions: checks the spec, runs
 /// one unit, repeat. Goal and budget end the run with their exit codes;
 /// every other error propagates (blocked included).
 pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut CycleState) -> Result<StepControl, ScriptError>) -> crate::ScriptResult {
     bot.assigned_site = spec.site;
     let mut state = CycleState::start(bot);
+    state.note_want_base(bot, spec);
     loop {
         if let Some(stop) = poll_stop(bot, &state, spec) {
             return exit_code(stop);
@@ -440,7 +531,7 @@ mod tests {
         assert_eq!(melee.targets.count, Some(6));
         assert_eq!(melee.budget_max_ticks, 0);
         assert!(melee.no_bank, "no-bank kept");
-        assert!(parse_cli("woodcut", &["x".to_string()]).is_err(), "junk count fails loud");
+        assert!(parse_cli("woodcut", &["logs".to_string(), "x".to_string()]).is_err(), "junk count fails loud");
         assert!(parse_cli("melee", &["--kills".to_string()]).is_err(), "dangling flag fails loud");
     }
 
@@ -587,6 +678,54 @@ mod tests {
         assert!(poll_stop(&bot, &state, &spec).is_none());
         bot.world.stats.insert(14, (2, 900));
         assert_eq!(poll_stop(&bot, &state, &spec), Some(StopReason::GoalReached));
+    }
+
+    /// The brain's gather order: the target resource rides first
+    /// (`fishing raw_trout --site ...`), a count may follow; `--want`
+    /// sets an item quantity target.
+    #[test]
+    fn gatherers_take_the_target_resource_and_want() {
+        for (activity, target) in [("fishing", "raw_trout"), ("mining", "gold_ore"), ("woodcut", "willow_logs")] {
+            let spec = parse_cli(activity, &[target.to_string(), "--site".to_string(), "3104,3424,0".to_string()]).expect("target parses");
+            assert_eq!(spec.resource, vec![target.to_string()], "{activity}");
+            assert_eq!(spec.site, Some((3104, 3424, 0)));
+        }
+        let counted = parse_cli("fishing", &["raw_trout".to_string(), "2".to_string()]).expect("target then count");
+        assert_eq!((counted.resource.len(), counted.targets.count), (1, Some(2)));
+        let want = parse_cli("mining", &["gold_ore".to_string(), "--want".to_string(), "gold_ore".to_string(), "100".to_string()]).expect("want parses");
+        assert_eq!((want.targets.want_item.as_deref(), want.targets.want_count), (Some("gold_ore"), Some(100)));
+        assert!(parse_cli("mining", &["--want".to_string(), "gold_ore".to_string()]).is_err(), "want needs a count");
+    }
+
+    /// Typed gaps the brain files as sub-goals (never a Usage retry).
+    #[test]
+    fn gap_kinds_are_typed_blocks() {
+        let named = |error: crate::ScriptError| match error {
+            crate::ScriptError::Blocked { missing } => missing,
+            other => panic!("blocked expected, got {other:?}"),
+        };
+        assert_eq!(named(super::blocked_level("smithing", 30)), vec!["level:smithing:30".to_string()]);
+        assert_eq!(named(super::blocked_quest("runemysteries")), vec!["quest:runemysteries".to_string()]);
+        assert_eq!(named(super::blocked_access("al_kharid_toll")), vec!["access:al_kharid_toll".to_string()]);
+    }
+
+    /// `--want item N`: the run ends once N more are held (pack + known
+    /// bank) than at its start, whatever the loads count.
+    #[test]
+    fn want_target_counts_pack_and_bank_gains() {
+        let mut bot = offline_bot();
+        let ore = crate::kit::pack::obj_id(&bot, "gold_ore").expect("gold_ore");
+        let pack = (bot.tables.com_id)("inventory:inv").expect("inventory");
+        let bank = (bot.tables.com_id)("bank_main:inv").expect("bank");
+        bot.world.inv.insert(pack, [(0u8, (ore, 3u32))].into_iter().collect());
+        let spec = parse_cli("mining", &["gold_ore".to_string(), "--want".to_string(), "gold_ore".to_string(), "10".to_string()]).expect("want parses");
+        let mut state = CycleState::start(&bot);
+        state.note_want_base(&bot, &spec);
+        assert!(poll_stop(&bot, &state, &spec).is_none(), "nothing gained");
+        bot.world.inv.insert(bank, [(0u8, (ore, 9u32))].into_iter().collect());
+        assert!(poll_stop(&bot, &state, &spec).is_none(), "9 of 10 gained");
+        bot.world.inv.insert(pack, [(0u8, (ore, 4u32))].into_iter().collect());
+        assert_eq!(poll_stop(&bot, &state, &spec), Some(StopReason::GoalReached), "10 gained across pack and bank");
     }
 
     /// Pause ticks never burn the budget: 6000 work ticks with 2000 pause

@@ -138,7 +138,8 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
         }
     }
     if crate::quests::common::has_message(bot, "rune mysteries") {
-        return Err(ScriptError::Usage(format!("essence needs {NEED_QUEST} at {:?}", bot.position())));
+        bot.log(&format!("essence needs {NEED_QUEST} at {:?}", bot.position()));
+        return Err(crate::kit::cycle::blocked_quest("runemysteries"));
     }
     Err(ScriptError::Failed(format!("Aubury did not teleport at {:?}", bot.position())))
 }

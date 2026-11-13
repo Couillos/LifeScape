@@ -13,9 +13,8 @@ use std::collections::{HashMap, HashSet};
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::bank::{bank_trip, live_bank_booth};
+use crate::kit::bank::live_bank_booth;
 use crate::kit::pack::{obj_id, obj_price, pack_ids, pack_slot, pack_total};
-use crate::kit::shop::buy_stock;
 use crate::ScriptError;
 
 /// Typed missing-tool error: the brain files it as an obtain sub-task.
@@ -73,15 +72,7 @@ pub fn restore_banked_tool(
         // A clean pack skips the bank trip (true no-op): the restore walks
         // itself when the bank view shows a usable tool (live 2026-11-13,
         // bdr53jee: banked shears, blocked x4 from across the map).
-        bot.log(&format!("tool restore: walking to the bank at ({},{}) for a banked tool", bank.x, bank.z));
-        bot.intend(&format!("walking to the bank at ({},{}) for a tool", bank.x, bank.z));
-        match bot.approach(bank.x as i32, bank.z as i32, bank.level as i32, 6, TOOL_BANK_WALK_TICKS) {
-            Ok(()) => {}
-            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => {
-                return Err(ScriptError::Sdk(error));
-            }
-            Err(other) => bot.log(&format!("tool restore: walk to the bank failed: {other}")),
-        }
+        crate::kit::withdraw::walk_to_bank_for(bot, bank, "a tool")?;
     }
     if far(bot) {
         bot.log(&format!("tool restore: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
@@ -180,26 +171,12 @@ pub fn restore_from_bank(
     Ok(false)
 }
 
+/// Axe recovery, free sources only (pack reattach, bank restore): the
+/// brain obtains a missing axe (market, drop, craft), never the script
+/// from a shop. False when none came back.
 pub fn recover_axe(bot: &mut Bot, coins: u16, bank: &knowledge::banks::Bank) -> Result<bool, ScriptError> {
-    if AXE_SPEC.best_held(bot).is_some() {
-        return Ok(true);
-    }
-    if reattach_tool(bot, AXE_HANDLE, AXE_HEAD_SUFFIX, &AXE_SPEC)? {
-        return Ok(true);
-    }
-    if pack_total(bot, coins) >= 16 && buy_stock(bot, "bronze_axe", 1)? > 0 {
-        bot.log("ok replacement axe bought");
-        return Ok(true);
-    }
-    let keep = vec![coins];
-    if bank_trip(bot, bank, &keep, 16u32.saturating_sub(pack_total(bot, coins)))? == 0 {
-        return Ok(false);
-    }
-    if AXE_SPEC.best_held(bot).is_some() {
-        bot.log("ok replacement axe restored");
-        return Ok(true);
-    }
-    Ok(pack_total(bot, coins) >= 16 && buy_stock(bot, "bronze_axe", 1)? > 0)
+    let _ = coins;
+    reclaim_free(bot, bank, &AXE_SPEC, AXE_HANDLE, AXE_HEAD_SUFFIX)
 }
 
 /// Best banked tool per kit spec, plus tinderbox: the protected tool set
@@ -280,40 +257,13 @@ pub fn cheapest_fish_upgrade(bot: &Bot, level: i64) -> (Vec<String>, i64) {
     })
 }
 
-/// Pickaxe recovery: reattach from the pack, buy bronze when funded, else
-/// bank-trip and restore the best banked pickaxe. Used mid-load when the
-/// tool is gone; the run loop re-enters with the same bans.
+/// Pickaxe recovery, free sources only (pack reattach, bank restore at
+/// the run's bank): never a shop buy (brain-owned obtain). Used mid-load
+/// when the tool is gone; the run loop re-enters with the same bans.
 pub fn recover_pickaxe(bot: &mut Bot, coins: u16, bank: &lifescape_gamedata::banks::Bank) -> Result<bool, ScriptError> {
-    if PICK_SPEC.best_held(bot).is_some() {
-        return Ok(true);
-    }
-    if reattach_tool(bot, PICK_HANDLE, PICK_HEAD_SUFFIX, &PICK_SPEC)? {
-        return Ok(true);
-    }
-    let bronze_price = crate::kit::pack::obj_price("bronze_pickaxe") as u32;
-    if pack_total(bot, coins) >= bronze_price && crate::kit::shop::buy_stock(bot, "bronze_pickaxe", 1)? > 0 {
-        bot.log("ok replacement pickaxe bought");
-        return Ok(true);
-    }
-    let Some(home) = crate::kit::bank::nearest_bank(bot).ok() else {
-        return Ok(false);
-    };
-    let keep = vec![coins];
-    if bank_trip(bot, &home, &keep, bronze_price.saturating_sub(pack_total(bot, coins)))? == 0 {
-        let _ = bank;
-        return Ok(false);
-    }
-    if PICK_SPEC.best_held(bot).is_none() && restore_from_bank(bot, &home, &PICK_SPEC, PICK_HANDLE, PICK_HEAD_SUFFIX)? {
-        bot.log("ok replacement pickaxe restored from bank");
-        return Ok(true);
-    }
-    if PICK_SPEC.best_held(bot).is_some() {
-        bot.log("ok replacement pickaxe restored");
-        return Ok(true);
-    }
-    Ok(pack_total(bot, coins) >= bronze_price && crate::kit::shop::buy_stock(bot, "bronze_pickaxe", 1)? > 0)
+    let _ = coins;
+    reclaim_free(bot, bank, &PICK_SPEC, PICK_HANDLE, PICK_HEAD_SUFFIX)
 }
-
 
 /// Best-first tool order (`AXE_ORDER`, `PICK_ORDER`, fishing tools by max
 /// tier level): rank decides, shop stock gates, level gates pass through

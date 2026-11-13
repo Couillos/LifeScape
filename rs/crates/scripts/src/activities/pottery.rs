@@ -30,7 +30,18 @@ pub const PRODUCT: &str = "pot_empty";
 pub const WHEELS: [&str; 1] = ["potterywheel"];
 pub const OVENS: [&str; 1] = ["potteryoven"];
 
-const SHAPE: Produce<'static> = Produce { verb: "shaping", site: ProduceSite::Loc(&WHEELS), ui: ProduceUi::Grid { button: "skill_multi3:makex_a" } };
+/// Brain products: fired name, unfired name, wheel button (`pottery.rs2`
+/// `~skill_multi3` order: pot, pie dish, bowl).
+pub const SHAPES: [(&str, &str, &str); 3] = [
+    ("pot_empty", "pot_unfired", "skill_multi3:makex_a"),
+    ("piedish", "piedish_unfired", "skill_multi3:makex_b"),
+    ("bowl_empty", "bowl_unfired", "skill_multi3:makex_c"),
+];
+
+/// Shape row by fired or unfired product name.
+pub fn shape_row(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    SHAPES.iter().find(|(fired, unfired, _)| fired.eq_ignore_ascii_case(name) || unfired.eq_ignore_ascii_case(name)).copied()
+}
 const FIRE: Produce<'static> = Produce { verb: "firing", site: ProduceSite::Loc(&OVENS), ui: ProduceUi::Direct };
 
 /// Extra row whose outputs contain `name` for this `kind`.
@@ -50,10 +61,14 @@ fn work_job(bot: &mut Bot, job: &ProduceJob<'_>, what: &str) -> Result<bool, Scr
     }
 }
 
-/// Fire banked loads in the open session: `pottery [count]` (pot only,
-/// 0 = forever). Clay and water ride the same load; emptied jugs bank.
+/// Fire banked loads in the open session: `pottery [product] [count]`
+/// (pot when omitted; `piedish`, `bowl_empty`; 0 = forever). Clay and
+/// water ride the same load; emptied jugs bank.
 pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let spec = crate::kit::cycle::parse_cli("pottery", args)?;
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
+    let spec = crate::kit::cycle::parse_cli("pottery", &rest)?;
+    let (product_name, unfired_name, button) = shape_row(resource.as_deref().unwrap_or(PRODUCT)).ok_or_else(|| ScriptError::Usage(format!("no F2P pottery product {resource:?}")))?;
+    let shape_spec = Produce { verb: "shaping", site: ProduceSite::Loc(&WHEELS), ui: ProduceUi::Grid { button } };
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
@@ -63,12 +78,12 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let level = learn_level(bot, CRAFTING_STAT, 1);
-    let shape = extra_row("pottery_shape", UNFIRED).expect("shape row placed");
-    let fire = extra_row("pottery_fire", PRODUCT).expect("fire row placed");
+    let shape = extra_row("pottery_shape", unfired_name).expect("shape row placed");
+    let fire = extra_row("pottery_fire", product_name).expect("fire row placed");
     if level < shape.level || level < fire.level {
-        return Err(ScriptError::Usage(format!("pottery needs level {} at {:?}", shape.level.max(fire.level), bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(shape.level.max(fire.level))));
     }
-    let (clay, water, soft, unfired) = (obj_id(bot, CLAY)?, obj_id(bot, WATER)?, obj_id(bot, SOFT)?, obj_id(bot, UNFIRED)?);
+    let (clay, water, soft, unfired) = (obj_id(bot, CLAY)?, obj_id(bot, WATER)?, obj_id(bot, SOFT)?, obj_id(bot, unfired_name)?);
     let mut bank = nearest_bank(bot)?;
     bot.log(&format!("bank at ({},{})", bank.x, bank.z));
     let mut keep_clay: Vec<u16> = vec![clay, water];
@@ -90,16 +105,16 @@ pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
         mix_all(step_bot, clay, water, soft)?;
         let near = (bank.x as i32, bank.z as i32);
         if pack_total(step_bot, soft) > 0 {
-            let job = ProduceJob { spec: &SHAPE, input: soft, input_name: SOFT, want: 0, products: vec![unfired], near };
+            let job = ProduceJob { spec: &shape_spec, input: soft, input_name: SOFT, want: 0, products: vec![unfired], near };
             if work_job(step_bot, &job, "shaping")? { return Ok(StepControl::Continue); }
         }
         if pack_total(step_bot, unfired) > 0 {
-            let job = ProduceJob { spec: &FIRE, input: unfired, input_name: UNFIRED, want: 0, products: vec![obj_id(step_bot, PRODUCT)?], near };
+            let job = ProduceJob { spec: &FIRE, input: unfired, input_name: unfired_name, want: 0, products: vec![obj_id(step_bot, product_name)?], near };
             if work_job(step_bot, &job, "firing")? { return Ok(StepControl::Continue); }
         }
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} potted (crafting={level})", state.units() + 1));
+        step_bot.log(&format!("ok load {} potted {product_name} (crafting={level})", state.units() + 1));
         Ok(StepControl::UnitDone)
     })
 }
@@ -132,7 +147,7 @@ fn mix_all(bot: &mut Bot, clay: u16, water: u16, soft: u16) -> Result<(), Script
 /// Top the pack up with clay and water, half and half (nothing when the
 /// booth is far: the caller reports `blocked`).
 fn fill_clay(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, clay: u16, water: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[clay, water])? {
         return Ok(());
     }
     if free_slots(bot) > 1 {
@@ -171,6 +186,20 @@ mod tests {
         assert_eq!((fire.level, fire.xp), (1, 63), "fire pot");
         assert_eq!(fire.station.as_deref(), Some("potteryoven"));
         assert!(extra_row("pottery_shape", "bowl_unfired").is_some(), "bowls wait for later");
+    }
+
+    /// The brain's product picks its wheel button and rows (pot a, pie
+    /// dish b, bowl c in `pottery.rs2`); every row exists in the dumps.
+    #[test]
+    fn brain_products_map_to_rows_and_buttons() {
+        assert_eq!(super::shape_row("piedish"), Some(("piedish", "piedish_unfired", "skill_multi3:makex_b")));
+        assert_eq!(super::shape_row("bowl_empty").map(|row| row.2), Some("skill_multi3:makex_c"));
+        assert!(super::shape_row("vase").is_none(), "members pottery is no row");
+        let bot = offline_bot();
+        for (fired, unfired, button) in super::SHAPES {
+            assert!(extra_row("pottery_shape", unfired).is_some() && extra_row("pottery_fire", fired).is_some(), "{fired} rows");
+            assert!(grid_button(&bot, button).is_ok(), "{button} resolves");
+        }
     }
 
     /// Six wheels and two ovens stand free; the grid button and every

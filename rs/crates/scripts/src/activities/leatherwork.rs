@@ -41,8 +41,7 @@ pub fn leather_recipe(product: &str) -> Option<knowledge::recipes::Recipe> {
 /// first (verified `tanner` grid in `kit::tan`); the sew uses the verified
 /// `leather_crafting` x1 buttons, chat options only if they speak.
 pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("leatherwork", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -56,7 +55,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or(DEFAULT_PRODUCT);
     let recipe = leather_recipe(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P leather recipe makes {product_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("sewing {product_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let leather = obj_id(bot, LEATHER)?;
     let needle = obj_id(bot, NEEDLE)?;
@@ -67,6 +66,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_sew: Vec<u16> = vec![needle, thread, leather];
     keep_sew.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_sew, 0)?;
+    crate::kit::withdraw::ensure_tool(bot, &bank, needle, NEEDLE)?;
     fill_sew(bot, &bank, leather, thread)?;
     if pack_total(bot, leather) == 0 {
         // The withdraw inside names the real missing (hide or coins);
@@ -149,7 +149,7 @@ fn tan_from_bank(
 /// holds none or the booth is far: the caller reports `blocked`).
 fn fill_sew(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, leather: u16, thread: u16) -> Result<(), ScriptError> {
     let free = free_slots(bot) as u32;
-    if free <= 1 || (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if free <= 1 || !crate::kit::withdraw::reach_bank_for(bot, bank, &[leather, thread])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[leather], free - 1)?;

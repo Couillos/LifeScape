@@ -85,15 +85,28 @@ pub fn is_blocked(error: &ScriptError) -> bool {
     matches!(error, ScriptError::Blocked { .. })
 }
 
+/// Test data roots: the directory holding the `lostcity` checkout (first
+/// ancestor that has the map pack: works from the main checkout and from
+/// `.claude/worktrees/*`) and this checkout's own `gamedata/data`.
+#[cfg(test)]
+pub(crate) fn test_roots() -> (std::path::PathBuf, std::path::PathBuf) {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest
+        .ancestors()
+        .find(|dir| dir.join("lostcity/engine/data/pack/.cache/maps-server.zip").is_file())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| manifest.join("../../../.."));
+    (root, manifest.join("../../../gamedata/data"))
+}
+
 /// Real planner context for offline tests: static world plus tables from
 /// the repo dumps (same layout as the nav golden tests). The keepalive is
 /// primed as just-sent so plans run pure and fail at the dead socket,
 /// like live walks with no connection would.
 #[cfg(test)]
 pub(crate) fn wire_nav(bot: &mut Bot) {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let (root, data) = test_roots();
     let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-    let data = root.join("LifeScape/gamedata/data");
     let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
     let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
     let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
@@ -106,6 +119,36 @@ pub(crate) fn wire_nav(bot: &mut Bot) {
     bot.nav_tables = Some(std::sync::Arc::new(tables));
     bot.last_keepalive = Some(std::time::Instant::now());
     bot.last_send_tick = bot.world.ticks;
+}
+
+/// Mapless worker against a real nav service (repo dumps): no painted
+/// world, only the plan handle — the same shape as a live worker. Keep
+/// the service handle alive for the whole test.
+#[cfg(test)]
+pub(crate) fn served_nav_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+    let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+    crate::tables_live::attach_live_tables(&mut bot);
+    bot.world.level = 0;
+    let (root, data) = test_roots();
+    let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
+    let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
+    let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
+    let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");
+    let world = lifescape_nav::static_world::StaticWorld::open(&zip, defs).expect("static world");
+    let zones = lifescape_nav::f2p::load_zones(&root.join("lostcity/content/maps/free2play.csv")).expect("f2p");
+    world.set_f2p(zones);
+    let tables = std::sync::Arc::new(lifescape_nav::tables::Tables::load(&data).expect("tables"));
+    let version = format!("test-served-{socket_tag}");
+    let service = lifescape_nav::service::Service::start(
+        lifescape_nav::service::Snapshot::new(world, tables, version.clone()),
+        &lifescape_nav::service::test_socket(socket_tag),
+        1,
+    )
+    .expect("service starts");
+    bot.plan_client = Some(lifescape_nav::service::PlanClient::new(service.socket_path(), socket_tag));
+    bot.plan_data_version = Some(version);
+    bot.last_keepalive = Some(std::time::Instant::now());
+    (bot, service)
 }
 
 // -- real scripts --------------------------------------------------------
@@ -188,7 +231,7 @@ pub fn names() -> Vec<&'static str> {
         "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
         "equip", "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
         "milk", "telegrab_wine", "runecraft", "smelt", "smith", "picking", "fill_water",
-        "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "market", "tutorial",
+        "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "bury_loot", "market", "tutorial",
         "quest_black_knights_fortress", "quest_cooks_assistant", "quest_demon_slayer",
         "quest_dorics_quest", "quest_dragon_slayer", "quest_ernest_the_chicken",
         "quest_goblin_diplomacy", "quest_imp_catcher", "quest_knights_sword",
@@ -245,6 +288,7 @@ fn runner(name: &str) -> Option<Runner> {
         "pottery" => Some(|bot, args| activities::pottery::run_pottery(bot, args)),
         "smelt_jewelry" => Some(|bot, args| activities::smelt_jewelry::run_smelt_jewelry(bot, args)),
         "dye" => Some(|bot, args| activities::dye::run_dye(bot, args)),
+        "bury_loot" => Some(|bot, args| activities::bury_loot::run_bury_loot(bot, args)),
         "market" => Some(|bot, args| activities::market::run_market(bot, args)),
         "tutorial" => Some(|bot, args| tutorial::run_tutorial(bot, args)),
         "quest_black_knights_fortress" => Some(|bot, args| quests::b::run_quest("blackknight", bot, args)),
@@ -299,6 +343,45 @@ pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
 mod tests {
     use super::names;
 
+    /// The brain's args contract (planner `mapping.rs`), end to end: every
+    /// method the planner maps, as a quantity order (`--want`, `--site`,
+    /// `toll`) and as a level climb, names a registered script whose own
+    /// parser accepts the args — main was undeployable while gatherers
+    /// refused `fishing raw_trout --want raw_trout 100`.
+    #[test]
+    fn every_mapped_order_parses_in_its_script() {
+        use lifescape_planner::model::{Node, NodeKind};
+        let methods = [
+            "gather:fishing/raw_trout", "gather:mining/gold_ore", "gather:woodcut/willow_logs", "farm:raw_trout", "farm:gold_ore",
+            "farm:willow_logs", "farm:feather", "farm:blankrune", "smelt:iron_bar", "smith:steel_platebody", "cook:trout", "cook/raw_shrimp",
+            "bake:bread", "tan:cow_hide", "craft:leather_gloves", "fire:willow_logs", "spin:ball_of_wool", "pottery:pot", "jewelry:gold_ring",
+            "runecraft:airrune", "pick:grain", "mill:pot_flour", "fill:jug_water", "essence:blankrune", "string:unstrung_gold_amulet",
+            "alch:gold_ring", "superheat:iron_bar", "enchant:strung_sapphire_amulet", "fight:melee/cows", "fight:ranged/cows",
+            "fight:magic/cows", "gather:sheep/wool", "gather:wheat/grain",
+        ];
+        let mut order = Node::new("n9", NodeKind::ObtainItems { item: "feather".to_string(), count: 2000 }, Vec::new(), 2000);
+        order.site = Some((3294, 3287, 0));
+        order.toll = true;
+        let climb = Node::new("n4", NodeKind::ReachLevel { skill: "fishing".to_string(), level: 20 }, Vec::new(), 20);
+        for method in methods {
+            for node in [&order, &climb] {
+                let Some((script, args)) = lifescape_planner::mapping::map_method(method, node, Some((6000, 9000))) else {
+                    panic!("{method} maps");
+                };
+                let Some(known) = names().into_iter().find(|name| *name == script) else {
+                    panic!("{method} names unregistered {script}");
+                };
+                if let Err(error) = crate::kit::cycle::parse_order(known, &args) {
+                    panic!("{script} refuses {args:?} for {method}: {error}");
+                }
+            }
+        }
+        let gather = lifescape_planner::mapping::map_method("farm:raw_trout", &order, None).expect("farm maps").1;
+        let spec = crate::kit::cycle::parse_order("fishing", &gather).expect("fishing parses");
+        assert_eq!(spec.resource, vec!["raw_trout".to_string()], "the fish rides first: {gather:?}");
+        assert_eq!((spec.targets.want_item.as_deref(), spec.allow_paid, spec.site), (Some("feather"), true, Some((3294, 3287, 0))));
+    }
+
     #[test]
     fn registry_covers_legacy_scripts() {
         // all supervised entry points, checked against names().
@@ -313,7 +396,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 73);
+        assert_eq!(names().len(), 74, "bury_loot joined the registry");
     }
 
     #[test]

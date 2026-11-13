@@ -78,7 +78,7 @@ pub fn run_cook_meals(bot: &mut Bot, args: &[String]) -> ScriptResult {
         .ok_or_else(|| ScriptError::Usage(format!("no F2P composed meal named {meal_name:?} at {:?}", bot.position())))?;
     let level = learn_level(bot, COOK_STAT, 1);
     if level < meal.level {
-        return Err(ScriptError::Usage(format!("{} needs level {} at {:?}", meal.key, meal.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("cooking", i64::from(meal.level)));
     }
     let mut products: Vec<u16> = Vec::new();
     if !meal.wine {

@@ -51,8 +51,7 @@ pub fn water_stations(empty: &str) -> &'static [&'static str] {
 /// Fill banked loads in the open session: `fill_water [vessel] [count]`
 /// (buckets when omitted, 0 = forever).
 pub fn run_fill_water(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("fill_water", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -117,7 +116,7 @@ fn fill_empties(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, empty: u1
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[empty])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[empty], free)?;

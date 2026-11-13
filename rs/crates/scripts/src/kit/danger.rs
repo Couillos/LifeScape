@@ -34,7 +34,7 @@ fn threatens(our_combat: Option<u8>, vislevel: i64) -> bool {
 
 /// Wilderness surface (level 0, z 3520 and up in the F2P world): hunters
 /// there attack every combat level.
-fn in_wilderness(spawn_x: i64, spawn_z: i64, level: i64) -> bool {
+pub(crate) fn in_wilderness(spawn_x: i64, spawn_z: i64, level: i64) -> bool {
     level == 0 && (2944..=3392).contains(&spawn_x) && spawn_z >= 3520
 }
 

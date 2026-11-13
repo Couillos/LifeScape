@@ -64,8 +64,7 @@ pub fn bar_for_level(level: i64) -> &'static str {
 /// Smelt banked loads in the open session: `smelt [bar|ore] [count]`
 /// (best bar by level when omitted, 0 = forever; superheat excluded).
 pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smelt", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -82,7 +81,7 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(ScriptError::Usage(format!("smelt {wanted:?} makes nothing at {:?}", bot.position())));
     };
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("smelting {bar_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("smithing", i64::from(recipe.level)));
     }
     // The ore used on the furnace: the server picks the bar from it
     // (`smelt_ore_single`: copper → bronze, iron + 2 coal → steel), never
@@ -162,7 +161,7 @@ fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], 
 /// counts, each input is withdrawn up to `sets × each` (nothing when the
 /// booth is far: the caller reports `blocked`).
 fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[SetInput]) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &inputs.iter().map(|input| input.id).collect::<Vec<u16>>())? {
         return Ok(());
     }
     let per_bar: i64 = inputs.iter().map(|input| input.each).sum();

@@ -38,8 +38,7 @@ pub fn superheat_runes() -> Vec<(String, i64)> {
 /// (the brain files obtain tasks); each cast consumes the ore and pays
 /// a bar plus the spell XP.
 pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("superheat", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -51,7 +50,7 @@ pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
     if level < SUPERHEAT_LEVEL {
-        return Err(ScriptError::Usage(format!("{SUPERHEAT_SPELL} needs level {SUPERHEAT_LEVEL} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("magic", i64::from(SUPERHEAT_LEVEL)));
     }
     let ore_name = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("superheat <ore> [count], no ore at {:?}", bot.position())))?;
     let recipe = bar_for_ore(ore_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smelt recipe eats {ore_name:?} at {:?}", bot.position())))?;

@@ -234,60 +234,7 @@ pub fn live_bank_booths(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i3
     booths.into_iter().map(|(_, booth)| booth).collect()
 }
 
-/// Withdraw up to `count` items total, across `ids`, from the bank at
-/// `bank`. Used to pull banked produce back out for selling. Returns how many came
-/// out of the bank. Bounded in ticks, loud when the bank will not open.
-pub fn bank_withdraw_items(
-    bot: &mut Bot,
-    bank: &knowledge::banks::Bank,
-    ids: &[u16],
-    count: u32,
-) -> Result<u32, ScriptError> {
-    if count == 0 || ids.is_empty() {
-        return Ok(0);
-    }
-    // Booth business from across the map fails fast, like restore above.
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
-        bot.log(&format!("bank withdraw: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
-        return Ok(0);
-    }
-    let Some((booth_x, booth_z, booth_loc)) = live_bank_booth(bot, bank.x as i32, bank.z as i32) else {
-        bot.log(&format!("bank withdraw: no live bankbooth near ({},{})", bank.x, bank.z));
-        return Ok(0);
-    };
-    if !bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-        bot.log(&format!("bank withdraw: bank did not open at {:?}", bot.position()));
-        return Ok(0);
-    }
-    let Some(main_com) = (bot.tables.com_id)("bank_main:inv") else {
-        bot.close_modal()?;
-        return Ok(0);
-    };
-    let before: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
-    let mut remaining = count;
-    while remaining > 0 {
-        let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
-        // Market locks: only the unpromised part of a stack is usable
-        // (user rule 2026-11-13); a fully locked stack is skipped.
-        let Some((slot, held, usable)) = slots
-            .iter()
-            .filter(|(_, (held, n))| ids.contains(held) && *n > 0)
-            .map(|(slot, (held, n))| (*slot, *held, bot.withdrawable(*held, *n)))
-            .find(|(_, _, usable)| *usable > 0)
-        else {
-            break;
-        };
-        // Bank buttons: 1 = one, 2 = five (all for coins, handled elsewhere).
-        let (op, step) = if remaining >= 5 && usable >= 5 { (2u8, 5u32) } else { (1u8, 1u32) };
-        bot.inv_button(op, held, slot, main_com)?;
-        bot.pump(5)?;
-        remaining = remaining.saturating_sub(step);
-    }
-    bot.close_modal()?;
-    bot.pump(5)?;
-    let after: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
-    Ok(after.saturating_sub(before))
-}
+pub use crate::kit::withdraw::bank_withdraw_items;
 
 /// The deposit is verified, never assumed: leftovers are a loud error,
 /// not a silent carry to the spot.
@@ -641,9 +588,8 @@ mod tests {
     fn served_bot(socket_tag: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+        let (root, data) = crate::test_roots();
         let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
-        let data = root.join("LifeScape/gamedata/data");
         let gametypes = std::fs::read_to_string(data.join("gametypes.json")).expect("gametypes");
         let overrides = std::fs::read_to_string(data.join("nav_overrides.json")).expect("overrides");
         let defs = lifescape_nav::loctypes::parse_loctypes(&gametypes, &overrides).expect("loctypes");

@@ -47,7 +47,7 @@ pub fn ruin_tile(prefix: &str) -> Option<(i64, i64, i64)> {
 /// Top the pack up with the banked talisman (kept, never consumed) then
 /// essence (nothing when the booth is far: the caller reports `blocked`).
 fn fill_essence(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, essence: u16, talisman: u16) -> Result<(), ScriptError> {
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[essence, talisman])? {
         return Ok(());
     }
     if pack_total(bot, talisman) == 0 {
@@ -91,8 +91,7 @@ fn craft_load(
 /// (air when omitted, 0 = forever). Missing essence or talisman blocks
 /// with its name: the brain files the obtain task.
 pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("runecraft", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -106,7 +105,7 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (prefix, need, talisman_name, rune_name) = rune_for(wanted).ok_or_else(|| ScriptError::Usage(format!("no F2P runecraft rune named {wanted:?} at {:?}", bot.position())))?;
     let level = learn_level(bot, RUNECRAFT_STAT, 1);
     if level < need {
-        return Err(ScriptError::Usage(format!("{prefix} runes need runecraft {need}, bot is {level} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("runecraft", i64::from(need)));
     }
     let essence = obj_id(bot, ESSENCE)?;
     let talisman = obj_id(bot, talisman_name)?;

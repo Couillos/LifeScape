@@ -107,3 +107,58 @@ Mesure R6 (2026-11-09, `admin`, stock initial par cheat `give raw_shrimp 28`
 ticks 6194→6484 (290), cooking XP 0→420 (niveau 1→5, 14×30 XP, 14 brûlés sur
 28 à niveau 1), 28 crus consommés, 28 plats banqués, sortie 0. A priori
 (400 plats / 12000 XP) gardé jusqu'à 3 mesures (n=1).
+
+## Banque lointaine, feux (2026-11-13)
+
+`kit/withdraw.rs` : `bank_withdraw_items` marche jusqu'à la banque quand
+elle est hors de portée (> 12 cases) et que la vue banque connue
+(`inv_closed`, semée depuis la sauvegarde) contient l'objet ; rien de
+connu en banque = pas de trek, 0 retiré. `ensure_tool` (pack puis banque,
+sinon `blocked{outil}`) sert tinderbox, ciseau, aiguille, moule ; les
+`fill_*` des postes passent par `reach_bank_for` (fini le `blocked`
+d'un intrant rangé dans une banque à 20 cases).
+
+Feux (`kit/fireline.rs`, règles de `firemaking.rs2`) : case légale =
+non `WALK_BLOCKED`, aucune emprise de loc `active=1` (feu existant
+compris, statique + live), F2P, hors des boîtes `bank_zones`
+(`gamedata::fire_zones`, recopiées du dbrow et revérifiées par test).
+Après chaque feu le serveur pousse le joueur d'une case à l'OUEST si le
+pas est marchable (sinon est, sud, nord, sinon reste). Une charge cherche
+une rangée de N cases légales vers l'ouest (N = bûches portées, au moins
+4) dans un rayon de 14, s'y rend, allume, vérifie chaque feu en live
+(« The fire catches », poussée ouest) et replanifie au premier refus
+(« You can't light a fire here. », départ banni) ou rangée cassée.
+
+## Exécutant mince : récolte (2026-11-13)
+
+Contrat brain → récolteurs : la ressource visée en premier positionnel
+(`fishing raw_trout`, `mining gold_ore`, `woodcut willow_logs`), `--site
+x,z,level`, `--want <objet> N` (fin quand N de plus sont détenus, sac +
+banque connue), `toll`. Le script ne pêche/mine/coupe QUE la cible (plus
+de repli de palier ni de changement de méthode), la banque est celle du
+site (`kit/site.rs`), et un pick vide marche jusqu'au site au lieu
+d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
+`toll` = `blocked{access:al_kharid_toll}`). Les écarts sont typés :
+`blocked{level:<skill>:<N>}`, `blocked{quest:<clé>}`,
+`blocked{access:<zone>}`, outils/appâts par nom exact
+(`fly_fishing_rod`, `feather`, pack + banque connue comptés). Aucun
+achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
+hache, cisailles) : c'est la jambe d'obtention du brain.
+
+Postes et combat : niveau manquant = `blocked{level:...}` (plus de
+Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
+brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat
+à tarte, bol), `ground_pickup <objet>` au site, `bury_loot [os]` depuis la
+banque. Un spot de combat nommé n'est jamais remplacé après une mort
+(banque puis erreur de danger) et un spot derrière le péage sans `toll`
+donne `blocked{access:al_kharid_toll}`. Les achats (`market shopbuy`,
+accepte `toll` et `--site`) ne vont jamais seuls en Wilderness, sous
+terre ni au-delà du péage. `--want` vaut aussi pour les boucles de
+combat (`CycleState::begin`).
+
+Lecture des ordres : `cycle::parse_order` (positionnel ressource des
+scripts de production via `split_resource`, puis `parse_cli`). Le test
+`every_mapped_order_parses_in_its_script` traduit chaque méthode de
+`planner::mapping` (obtention avec `--want`/`--site`/`toll`, montée de
+niveau) et vérifie que le script nommé est enregistré et accepte ses
+arguments. Pièces manquantes : `blocked{coins:N}`.

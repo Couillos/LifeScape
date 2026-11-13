@@ -181,6 +181,11 @@ pub trait LoopOps {
     fn on_no_tool(&self) -> fn(&mut BanSet, (i32, i32), u64, &LoadCfg) {
         ban_none
     }
+    /// Typed reason a failed pick can never succeed by waiting (a bait
+    /// the run cannot get, say): returned at once instead of 16 repicks.
+    fn no_spot_error(&mut self, _bot: &mut Bot, _state: &LoopState) -> Option<ScriptError> {
+        None
+    }
     /// Keep the current spot: tier upgrade switches and liveness re-probes
     /// drop it (banning when the old loop banned); default never drops.
     fn keep_spot(&mut self, _bot: &mut Bot, _state: &mut LoopState, _spot: &Self::Spot, _at: (i32, i32)) -> bool {
@@ -306,10 +311,21 @@ pub fn run_load<Ops: LoopOps>(
         let stale = state.spot.is_none_or(|spot| state.banned.is_banned(spot, now));
         if stale {
             let mut picked = None;
-            for _ in 0..cfg.repick_tries {
+            for attempt in 0..cfg.repick_tries {
                 if let Some(found) = ops.pick(bot, state) {
                     picked = Some(found);
                     break;
+                }
+                // Nothing to pick: a typed gap first (bait the run cannot
+                // get), then the brain's site, never an idle wait where
+                // the bot happens to stand (a bank, a shop).
+                if attempt == 0 {
+                    if let Some(error) = ops.no_spot_error(bot, state) {
+                        return Err(error);
+                    }
+                    if crate::kit::site::reach_site(bot)? {
+                        continue;
+                    }
                 }
                 wait_ticks(bot, cfg.repick_wait)?;
             }
@@ -379,7 +395,7 @@ pub fn death_since(bot: &Bot, seen: usize) -> (bool, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_outcome, ban_gone, ban_none, ban_refusal, death_since, note_gain, on_hurt, register_hurt, stall_expired, stall_or_continue, LoadCfg, LoadExit, LoopOps, LoopState};
+    use super::{apply_outcome, ban_gone, ban_none, ban_refusal, death_since, note_gain, on_hurt, register_hurt, run_load, stall_expired, stall_or_continue, LoadCfg, LoadExit, LoopOps, LoopState};
     use crate::kit::bans::BanSet;
     use crate::kit::harvest::WorkOutcome;
     use crate::kit::survival::death_message_seen;
@@ -473,6 +489,56 @@ mod tests {
         }
     }
 
+
+    /// A dummy whose picks never succeed and that knows why.
+    struct GapOps;
+    impl LoopOps for GapOps {
+        type Spot = ();
+        fn is_full(&self, _bot: &Bot) -> bool {
+            false
+        }
+        fn has_tool(&self, _bot: &Bot) -> bool {
+            true
+        }
+        fn gain_of(&self, _bot: &Bot, _spot: &Self::Spot) -> u32 {
+            0
+        }
+        fn pick(&mut self, _bot: &mut Bot, _state: &mut LoopState) -> Option<(Self::Spot, i32, i32)> {
+            None
+        }
+        fn work(&mut self, _bot: &mut Bot, _state: &mut LoopState, _spot: &Self::Spot, _at: (i32, i32), _had: u32) -> Result<(WorkOutcome, u32), crate::ScriptError> {
+            Ok((WorkOutcome::Gone, 0))
+        }
+        fn no_spot_error(&mut self, _bot: &mut Bot, _state: &LoopState) -> Option<crate::ScriptError> {
+            Some(crate::ScriptError::Blocked { missing: vec!["feather".to_string()] })
+        }
+    }
+
+    /// No spot: a known gap returns typed at once (b3gybcev waited 16
+    /// rounds at the Varrock bank with no feathers); without one, an
+    /// assigned site the bot stands outside is walked to (sara_miller
+    /// waited at Lumbridge for Al Kharid mine) — offline the walk fails
+    /// typed, never a pump-wait in place.
+    #[test]
+    fn failed_pick_reports_the_gap_or_heads_for_the_site() {
+        let cfg = LoadCfg::gather();
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (10, 1154));
+        let mut state = LoopState::fresh(&bot);
+        match run_load(&mut bot, &cfg, &mut state, &mut GapOps) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["feather".to_string()]),
+            other => panic!("typed gap expected, got {other:?}"),
+        }
+        bot.world.x = 3232;
+        bot.world.z = 3203;
+        bot.assigned_site = Some((3294, 3287, 0));
+        let mut state = LoopState::fresh(&bot);
+        match run_load(&mut bot, &cfg, &mut state, &mut DummyOps) {
+            Err(crate::ScriptError::Failed(detail)) => assert!(detail.contains("assigned site (3294,3287)"), "walks for the site: {detail}"),
+            other => panic!("site walk expected, got {other:?}"),
+        }
+    }
 
     /// Default hooks: keep-all spots, drop-on-NoBait, default outcome map.
     #[test]

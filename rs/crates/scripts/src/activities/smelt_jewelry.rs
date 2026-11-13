@@ -52,8 +52,7 @@ pub fn jewel_row(product: &str) -> Option<(&'static str, u8, &'static str, &'sta
 /// Smelt banked loads in the open session: `smelt_jewelry [product]
 /// [count]` (gold ring when omitted, 0 = forever).
 pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smelt_jewelry", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -67,7 +66,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or(DEFAULT_PRODUCT);
     let silver = product_name.eq_ignore_ascii_case(SILVER_PRODUCT);
     let (inv_name, slot, gem_name, mould_name, need) = jewel_row(product_name).ok_or_else(|| ScriptError::Usage(format!("{product_name:?} is no F2P jewel at {:?}", bot.position())))?;
-    if level < need { return Err(ScriptError::Usage(format!("casting {product_name} needs level {need} at {:?}", bot.position()))); }
+    if level < need { return Err(crate::kit::cycle::blocked_level("crafting", i64::from(need))); }
     let bar = obj_id(bot, if silver { SILVER_BAR } else { GOLD_BAR })?;
     let mould = obj_id(bot, mould_name)?;
     let gem = if gem_name.is_empty() { None } else { Some(obj_id(bot, gem_name)?) };
@@ -76,14 +75,17 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_cast: Vec<u16> = vec![mould];
     keep_cast.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_cast, 0)?;
+    crate::kit::withdraw::ensure_tool(bot, &bank, mould, mould_name)?;
     fill_cast(bot, &bank, bar, gem, mould)?;
     if pack_total(bot, bar) == 0 { return Err(ScriptError::Blocked { missing: vec![if silver { SILVER_BAR } else { GOLD_BAR }.to_string()] }); }
+    if gem.is_some_and(|id| pack_total(bot, id) == 0) { return Err(ScriptError::Blocked { missing: vec![gem_name.to_string()] }); }
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, bar) == 0 || gem.is_some_and(|id| pack_total(step_bot, id) == 0) {
             bank_trip(step_bot, &bank, &keep_cast, 0)?;
             fill_cast(step_bot, &bank, bar, gem, mould)?;
             if pack_total(step_bot, bar) == 0 { return Err(ScriptError::Blocked { missing: vec![if silver { SILVER_BAR } else { GOLD_BAR }.to_string()] }); }
+            if gem.is_some_and(|id| pack_total(step_bot, id) == 0) { return Err(ScriptError::Blocked { missing: vec![gem_name.to_string()] }); }
         }
         if silver {
             let job = ProduceJob { spec: &SILVER, input: bar, input_name: SILVER_BAR, want: 0, products: vec![obj_id(step_bot, SILVER_PRODUCT)?], near: (bank.x as i32, bank.z as i32) };
@@ -96,7 +98,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         bank = nearest_bank(step_bot)?;
-        bank_trip(step_bot, &bank, &task_keep, 0)?;
+        bank_trip(step_bot, &bank, &keep_cast, 0)?;
         step_bot.log(&format!("ok load {} cast {product_name} (crafting={level})", state.units() + 1));
         Ok(StepControl::UnitDone)
     })
@@ -140,7 +142,7 @@ fn jewel_one(bot: &mut Bot, furnace_x: i32, furnace_z: i32, furnace: u16, bar: u
 /// Top the pack up: mould first (kept across loads), then bars and gems
 /// half and half (nothing when the booth is far).
 fn fill_cast(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, bar: u16, gem: Option<u16>, mould: u16) -> Result<(), ScriptError> {
-    let far = (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12;
+    let far = !crate::kit::withdraw::reach_bank_for(bot, bank, &[bar, mould])?;
     if far { return Ok(()); }
     if pack_total(bot, mould) == 0 { bank_withdraw_items(bot, bank, &[mould], 1)?; }
     if free_slots(bot) > 1 {

@@ -40,8 +40,7 @@ pub fn uncut_for_level(level: i64) -> &'static str {
 /// Cut banked loads in the open session: `cut_gems [uncut] [count]`
 /// (best tier by level when omitted, 0 = forever).
 pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("cut_gems", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -55,7 +54,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let uncut_name = resource.as_deref().unwrap_or_else(|| uncut_for_level(level));
     let recipe = gem_recipe(uncut_name).ok_or_else(|| ScriptError::Usage(format!("no F2P gem recipe eats {uncut_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("cutting {uncut_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let cut_name = recipe.outputs.first().map(|(name, _)| name.clone()).unwrap_or_default();
     let uncut = obj_id(bot, uncut_name)?;
@@ -66,6 +65,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_cut: Vec<u16> = vec![chisel, uncut];
     keep_cut.extend(task_keep.iter().copied());
     bank_trip(bot, &bank, &keep_cut, 0)?;
+    crate::kit::withdraw::ensure_tool(bot, &bank, chisel, CHISEL)?;
     fill_uncut(bot, &bank, uncut)?;
     if pack_total(bot, uncut) == 0 {
         return Err(ScriptError::Blocked { missing: vec![uncut_name.to_string()] });
@@ -106,7 +106,7 @@ fn fill_uncut(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, uncut: u16)
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[uncut])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[uncut], free)?;

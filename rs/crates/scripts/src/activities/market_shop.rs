@@ -20,9 +20,23 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut qty: u32 = 1;
     let mut index = 1;
     let mut positionals: Vec<String> = Vec::new();
+    let mut site: Option<(i32, i32, i32)> = None;
     while index < args.len() {
         match args[index].as_str() {
-            "--budget-max" | "--node" => {
+            "--budget-max" | "--budget-min" | "--node" => {
+                index += 2;
+            }
+            "toll" => {
+                bot.allow_paid = true;
+                index += 1;
+            }
+            // The planner's shop: walk there first, the keeper nearest it
+            // sells (never another shop picked from where the bot stands).
+            "--site" => {
+                let raw = args.get(index + 1).ok_or_else(|| ScriptError::Usage("--site x,z,level".to_string()))?;
+                let parts: Vec<i32> = raw.split(',').map(|part| part.trim().parse::<i32>()).collect::<Result<_, _>>().map_err(|_| ScriptError::Usage("--site x,z,level".to_string()))?;
+                let [x, z, level] = parts[..] else { return Err(ScriptError::Usage("--site x,z,level".to_string())) };
+                site = Some((x, z, level));
                 index += 2;
             }
             other if other.starts_with("--") => {
@@ -72,9 +86,18 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         held = bot.inventory().get(&coins).copied().unwrap_or(0);
     }
     bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
+    if let Some((x, z, _)) = site {
+        bot.assigned_site = site;
+        if !crate::kit::site::at_site(bot) && !crate::skill_walk::walk_checked(bot, x, z, crate::kit::site::SITE_WALK_TICKS)? {
+            return Err(ScriptError::Failed(format!("shopbuy {item}: shop site ({x},{z}) not reached from {:?}", bot.position())));
+        }
+    }
     let bought = crate::kit::shop::buy_stock(bot, &item, qty)?;
     let held = obj_id(bot, &item).map(|id| bot.inventory().get(&id).copied().unwrap_or(0)).unwrap_or(0);
     bot.log(&format!("shopbuy {item} x{qty}: bought {bought}, holding {held}"));
+    if bought == 0 && held < qty {
+        return Err(ScriptError::Failed(format!("shopbuy {item}: no reachable shop sold any at {:?}", bot.position())));
+    }
     Ok(if held >= qty { 0 } else { 1 })
 }
 

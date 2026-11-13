@@ -79,7 +79,7 @@ pub fn tan_carried(bot: &mut Bot, hide_name: &str, leather_name: &str, cost: u32
     let afford = pack_total(bot, coins) / cost.max(1);
     let count = have.min(afford);
     if count == 0 {
-        return Err(ScriptError::Blocked { missing: vec!["coins".to_string()] });
+        return Err(ScriptError::Blocked { missing: vec![format!("coins:{}", have.saturating_mul(cost.max(1)))] });
     }
     let slot = tanner_slot(bot)?;
     bot.approach_npc(slot, TANNER_APPROACH_TICKS)?;

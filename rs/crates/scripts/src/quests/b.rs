@@ -255,7 +255,10 @@ fn solve_hunt(bot: &mut Bot) -> Result<(), ScriptError> {
     let key = solver::obj_id("chest_key")?;
     let message = solver::obj_id("piratemessage")?;
     if solver::count(bot, solver::obj_id("coins")?) < 90 {
-        return Err(ScriptError::Sdk(Error::State(format!("need at least 90 coins for the boat fares at {:?}", bot.position()))));
+        // Boat fares (and Zambo's rum, which customs never lets off
+        // Karamja: bought in the same trip by design) need coins.
+        bot.log(&format!("need at least 90 coins for the boat fares at {:?}", bot.position()));
+        return Err(ScriptError::Blocked { missing: vec!["coins:90".to_string()] });
     }
     if solver::varp(bot, "hunt") < 2 && solver::count(bot, key) == 0 && solver::count(bot, message) == 0 {
         if solver::count(bot, rum) < 1 {

@@ -41,8 +41,7 @@ pub fn spin_recipe(name: &str) -> Option<ExtraRecipe> {
 /// Spin banked loads in the open session: `spin [input] [count]`
 /// (wool when omitted, 0 = forever).
 pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("spin", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -56,7 +55,7 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let input_name = resource.as_deref().unwrap_or(DEFAULT_INPUT);
     let recipe = spin_recipe(input_name).ok_or_else(|| ScriptError::Usage(format!("no F2P spin recipe eats {input_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("spinning {input_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("crafting", i64::from(recipe.level)));
     }
     let wool = obj_id(bot, input_name)?;
     let products: Vec<u16> = recipe.outputs.iter().filter_map(|(name, _)| obj_id(bot, name).ok()).collect();
@@ -123,7 +122,7 @@ fn fill_wool(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, wool: u16) -
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[wool])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[wool], free)?;

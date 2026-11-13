@@ -48,7 +48,7 @@ pub fn run_cook(bot: &mut Bot, args: &[String]) -> ScriptResult {
         .ok_or_else(|| ScriptError::Usage(format!("no F2P cook recipe eats {raw_name:?} at {:?}", bot.position())))?;
     let level = learn_level(bot, COOK_STAT, 1);
     if level < recipe.level {
-        return Err(ScriptError::Usage(format!("cooking {raw_name} needs level {} at {:?}", recipe.level, bot.position())));
+        return Err(crate::kit::cycle::blocked_level("cooking", i64::from(recipe.level)));
     }
     let raw = obj_id(bot, raw_name)?;
     let mut products: Vec<u16> = recipe.outputs.iter().filter_map(|(name, _)| obj_id(bot, name).ok()).collect();
@@ -109,7 +109,7 @@ fn fill_raw(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, raw: u16) -> 
     if free == 0 {
         return Ok(());
     }
-    if (bot.world.x - bank.x as i32).abs() + (bot.world.z - bank.z as i32).abs() > 12 {
+    if !crate::kit::withdraw::reach_bank_for(bot, bank, &[raw])? {
         return Ok(());
     }
     bank_withdraw_items(bot, bank, &[raw], free)?;

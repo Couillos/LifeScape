@@ -12,8 +12,7 @@ use crate::kit::bans::{BanSet, GONE_BAN_TICKS};
 use crate::kit::bank::{bank_trip_resilient, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::harvest::{watch_stand, HarvestSource, HarvestTarget, WorkOutcome};
-use crate::kit::pack::{free_slots, obj_id, obj_price, pack_total};
-use crate::kit::shop::buy_stock;
+use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::survival::{check_events, is_death_abort, is_walk_abort, wait_pack_streamed};
 use crate::kit::tools::{blocked_tool, ToolSpec};
 use crate::{ScriptError, ScriptResult};
@@ -87,7 +86,7 @@ impl HarvestSource for ShearSource {
     }
 }
 
-/// Free shears first (pack, banked), then the 1-coin shop buy; anything
+/// Free shears only (pack, banked); anything
 /// else blocks with the buyable name.
 fn ensure_shears(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, coins: u16) -> Result<bool, ScriptError> {
     if SHEAR_SPEC.best_held(bot).is_some() {
@@ -99,15 +98,8 @@ fn ensure_shears(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, coins: u
     if SHEAR_SPEC.best_held(bot).is_none() && crate::kit::tools::restore_banked_tool(bot, bank, &SHEAR_SPEC)? {
         bot.log("ok shears restored from bank");
     }
-    if SHEAR_SPEC.best_held(bot).is_some() {
-        return Ok(true);
-    }
-    let price = obj_price(TOOL) as u32;
-    if pack_total(bot, coins) >= price && buy_stock(bot, TOOL, 1)? > 0 {
-        bot.log("ok bootstrapped shears");
-        return Ok(true);
-    }
-    Ok(false)
+    // Never a shop buy: the brain obtains missing shears (blocked by name).
+    Ok(SHEAR_SPEC.best_held(bot).is_some())
 }
 
 /// Nearest unsheared sheep outside the ban set, occupation-dodged.

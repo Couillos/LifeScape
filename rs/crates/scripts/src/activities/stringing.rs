@@ -37,8 +37,7 @@ pub fn strung_for(unstrung: &str) -> Option<&'static str> {
 /// String banked loads in the open session: `stringing [unstrung] [count]`
 /// (gold when omitted, 0 = forever).
 pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("stringing", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -50,7 +49,7 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, CRAFTING_STAT, 1);
     if level < STRING_LEVEL {
-        return Err(ScriptError::Usage(format!("stringing needs level {STRING_LEVEL} at {:?}", bot.position())));
+        return Err(crate::kit::cycle::blocked_level("fletching", i64::from(STRING_LEVEL)));
     }
     let unstrung_name = resource.as_deref().unwrap_or("unstrung_gold_amulet");
     let strung_name = strung_for(unstrung_name).ok_or_else(|| ScriptError::Usage(format!("no F2P stringing amulet named {unstrung_name:?} at {:?}", bot.position())))?;
