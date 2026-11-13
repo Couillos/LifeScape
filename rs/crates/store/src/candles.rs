@@ -161,6 +161,30 @@ impl Store {
         Ok(fills)
     }
 
+    /// The newest `limit` fills across every item, oldest first (reloads
+    /// the daemon's live print ring after a restart).
+    pub fn latest_executions(&self, limit: i64) -> Result<Vec<Execution>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT exec_id, item_id, quantity, price, clock, server_tick, taker_side FROM \
+             (SELECT * FROM executions ORDER BY clock DESC, exec_id DESC LIMIT ?1) \
+             ORDER BY clock, exec_id",
+        )?;
+        let mut found_rows = statement.query(rusqlite::params![limit])?;
+        let mut fills = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            fills.push(Execution {
+                exec_id: row.get(0)?,
+                item_id: row.get(1)?,
+                quantity: row.get(2)?,
+                price: row.get(3)?,
+                clock: row.get(4)?,
+                server_tick: row.get(5)?,
+                taker_side: OrderSide::parse_taker(row.get(6)?)?,
+            });
+        }
+        Ok(fills)
+    }
+
     /// Every item id with at least one recorded execution, oldest
     /// source of truth for the "traded items only" list filter (24h
     /// volume hides goods whose last fill settled more than a day ago).

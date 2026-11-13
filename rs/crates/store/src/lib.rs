@@ -14,6 +14,7 @@
 //! Candles are a cache: `executions` is the source of truth and any candle
 //! set can be rebuilt with [`Store::rebuild_candles`].
 
+pub mod candle_chain;
 pub mod candles;
 pub mod deals;
 pub mod economy;
@@ -24,6 +25,7 @@ pub mod orders;
 pub mod reports;
 pub mod schema;
 
+pub use candle_chain::chain_candles;
 pub use candles::{Candle, Execution, NewExecution, YieldCandleResolution};
 pub use deals::{Deal, DealStatus, NewDeal};
 pub use economy::{AccountEcon, Trend};

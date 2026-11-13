@@ -4,7 +4,7 @@
 // hover and touch tooltip with crosshair, live end.
 // Series: `candles` (market OHLCV) and `line` (holdings curve).
 //
-// Pure helpers (slotStarts, fillSlots, niceTicks, candleTooltip,
+// Pure helpers (slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, candleTooltip,
 // volumeSplit, volumeScaleMax, foldPrint) touch no
 // DOM, so `node --test chart.test.js` covers them; draw() needs a canvas.
 const LifeChart = (() => {
@@ -15,6 +15,13 @@ const LifeChart = (() => {
     const slots = [];
     for (let i = 0; i < count; i++) slots.push(from + i * width);
     return slots;
+  }
+
+  // The `count` slots ending on the one holding `now` (the live candle):
+  // the last slot is the current window, never the previous one.
+  function liveSlots(now, width, count) {
+    const live = Math.floor(now / width) * width;
+    return slotStarts(live - (count - 1) * width, width, count);
   }
 
   // Aligns sparse rows (`{t, ...}`) onto fixed slots: row or null per
@@ -116,14 +123,25 @@ const LifeChart = (() => {
     return [periodLabel(slotStart, width), 'Value ' + value];
   }
 
-  // One candle per slot, always (user rule 2026-11-13): a slot without
-  // trades shows a flat candle at the last known close (volume 0); the
-  // close before the window (`previousClose`) carries the leading slots.
-  // Slots before any known price stay empty (nothing to carry).
+  // One candle per slot, always, never a gap (user rule 2026-11-13): a
+  // slot without trades shows a flat candle at the last known close
+  // (volume 0); every traded candle opens at the previous close (its
+  // high/low widen to include it), so a price move between two windows
+  // shows as that candle's colour, never as a jump. The close before the
+  // window (`previousClose`) carries the leading slots and opens the
+  // first candle. Slots before any known price stay empty. The server
+  // history is already chained; this keeps the live tail (WS prints
+  // folded in the browser) chained too. Rows are copied, never mutated.
   function carryFlat(rows, previousClose) {
     let close = previousClose === undefined ? null : previousClose;
     return rows.map((row) => {
-      if (row) { close = row.c; return row; }
+      if (row) {
+        const chained = close === null
+          ? row
+          : { ...row, o: close, h: Math.max(row.h, close), l: Math.min(row.l, close) };
+        close = row.c;
+        return chained;
+      }
       if (close === null) return null;
       return { o: close, h: close, l: close, c: close, v: 0, vb: 0, vs: 0, n: 0 };
     });
@@ -466,7 +484,7 @@ const LifeChart = (() => {
   }
 
   return {
-    slotStarts, fillSlots, carryFlat, niceTicks, periodLabel, candleTooltip, lineTooltip,
+    slotStarts, liveSlots, fillSlots, carryFlat, candleColor, niceTicks, periodLabel, candleTooltip, lineTooltip,
     volumeSplit, volumeScaleMax, foldPrint, draw, UP, DOWN, FLAT,
   };
 })();

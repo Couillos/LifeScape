@@ -61,6 +61,9 @@ mod market_service_tests;
 #[path = "market_crossing_tests.rs"]
 mod market_crossing_tests;
 #[cfg(test)]
+#[path = "market_history_tests.rs"]
+mod market_history_tests;
+#[cfg(test)]
 #[path = "economy_sim_tests.rs"]
 mod economy_sim_tests;
 #[cfg(test)]

@@ -1,9 +1,12 @@
 // Market front: item list, OHLC candles over volume bars, book and last
 // trades. Canvas maison via the shared LifeChart module (chart.js).
 // Two views: 24 h of hourly candles (default, D42), or 6 months of daily
-// candles. Fixed time slots (24 or 183): empty slots show a gap, never a
-// fake flat line. The newest candle stretches live with every WS tick
-// (the `market` field of the 1 Hz frame).
+// candles. Fixed time slots (24 or 183) ending on the live window; no gap
+// (user rule 2026-11-13): every candle opens at the previous close and a
+// trade-less slot is a flat grey candle at the last close (the server
+// history is already chained, `LifeChart.carryFlat` keeps the live tail
+// chained). The newest candle stretches live with every WS tick (the
+// `market` field of the 1 Hz frame).
 const PAGE_SIZE = 25;
 let items = [];
 let selected = null;
@@ -41,13 +44,11 @@ async function loadList() {
 
 async function loadDetail() {
   if (selected === null) return;
-  const hourly = view === 'hour';
-  const res = hourly ? '1h' : '1d';
-  const width = hourly ? 3600 : 86400;
-  const count = hourly ? 24 : 183;
-  const span = count * width;
+  const res = view === 'hour' ? '1h' : '1d';
+  // Same windows as the drawn slots: the server chains candles from the
+  // first slot (opened by `prev_close`) up to the live one.
   const to = Math.floor(Date.now() / 1000);
-  const from = to - span;
+  const from = currentSlots(to).slots[0];
   try {
     const payload = await getJson('/api/market/history?item=' + selected + '&res=' + res + '&from=' + from + '&to=' + to);
     if (payload.ok) {
@@ -250,14 +251,16 @@ async function loadRecent() {
 
 // Fixed slots for the current view: 24 hourly or 183 daily windows,
 // aligned on multiples of the width since epoch (same buckets as the
-// store candles). Sparse history maps on; empty slots stay null.
-function currentSlots() {
+// store candles), the last one holding `now`: the live candle. (It used
+// to end one window early, so the current hour never showed: live
+// 2026-11-13, Bronze axe's chart closed at 20 while its last trades read
+// 8, 8, 8, 6.)
+function currentSlots(now) {
   const hourly = view === 'hour';
   const width = hourly ? 3600 : 86400;
   const count = hourly ? 24 : 183;
-  const to = Math.floor(Date.now() / 1000);
-  const from = Math.floor((to - count * width) / width) * width;
-  return { slots: LifeChart.slotStarts(from, width, count), width };
+  const at = now === undefined ? Math.floor(Date.now() / 1000) : now;
+  return { slots: LifeChart.liveSlots(at, width, count), width };
 }
 
 function draw() {
@@ -272,7 +275,8 @@ function draw() {
 
   // Live tail: fold the newest WS prints into a copy of the candles.
   // Oldest first so the close ends on the freshest print; a print past
-  // the last stored candle opens the live slot with its own OHLC.
+  // the last stored candle opens the live slot, then `carryFlat` below
+  // opens it at the previous close like every other candle.
   const fresh = trades
     .filter(trade => slots.length && trade.t >= historyTo && trade.t >= slots[slots.length - 1] - width && trade.t < slots[slots.length - 1] + width)
     .slice()

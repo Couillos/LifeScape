@@ -162,7 +162,17 @@ Page `market` (prix au-dessus des bâtons de volume, 6 mois / jour et
 24 h / heure, dernier point temps réel par le WS, carnet + dernières
 exécutions ; canvas maison, zéro dépendance). La fenêtre demandée est
 recalée sur les bornes des bougies (`web::snap_range`) pour que la
-bougie en cours reste dedans. Page rendements : tableaux méthode ×
+bougie en cours reste dedans. Bougies continues, sans trou (règle
+utilisateur 2026-11-13) : chaque bougie ouvre à la clôture de la
+précédente (haut/bas élargis à cette ouverture), une fenêtre sans
+échange est une bougie plate grise à la dernière clôture (volume 0), de
+la première exécution connue jusqu'à la fenêtre en cours. Le chaînage est
+fait à la lecture côté serveur (`store::candle_chain`, op `history`,
+`prev_close` = dernier prix avant la fenêtre) ; la table `candles` garde
+les agrégats bruts par fenêtre. Le front rechaîne la queue live
+(`LifeChart.carryFlat`) et ses créneaux finissent sur la fenêtre en cours
+(`LifeChart.liveSlots`). L'anneau des prints (`trades`, `tick`, WS) est
+rechargé depuis `executions` au démarrage du daemon. Page rendements : tableaux méthode ×
 objet × tranche de niveau, rentabilité courante, nombre de bots engagés
 par script (information pour l'opérateur humain uniquement, jamais lue
 par les bots). Page `life` (`/api/lives`, `/api/life/<compte>`) : but,

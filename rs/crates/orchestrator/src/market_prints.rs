@@ -39,7 +39,34 @@ pub(crate) fn print_value(print: &Print) -> Value {
     ])
 }
 
+/// Prints the live ring holds (`Engine::remember` keeps 200).
+const RING_PRINTS: i64 = 200;
+
 impl MarketService {
+    /// Refills the live print ring (`trades`, `tick`, the WS live tail)
+    /// from the execution log at daemon start. Live 2026-11-13: the ring
+    /// lived in memory only, so after a restart `trades` listed the prints
+    /// settled since (Bronze axe: 1) while `history` listed them all (8).
+    pub(crate) fn reload_prints(&self) {
+        let fills = match self.lock_store().latest_executions(RING_PRINTS) {
+            Ok(fills) => fills,
+            Err(error) => {
+                crate::logln!("market: print ring not reloaded ({error})");
+                return;
+            }
+        };
+        let mut engine = self.lock_engine();
+        for fill in fills {
+            engine.remember(Print {
+                item: fill.item_id,
+                quantity: fill.quantity,
+                price: fill.price,
+                clock: fill.clock,
+                taker: fill.taker_side,
+            });
+        }
+    }
+
     /// A settled handover becomes public: execution row (with the deal's
     /// taker side), candle repaint (`history` reads the candles cache,
     /// never executions) and the live-tail print. Live 2026-11-13:

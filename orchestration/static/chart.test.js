@@ -62,10 +62,40 @@ test('carryFlat draws one flat candle per empty slot at the last close', () => {
   const traded = { o: 2, h: 5, l: 2, c: 4, v: 10, n: 2 };
   const rows = LifeChart.carryFlat([null, traded, null, null], 3);
   assert.deepEqual(rows[0], { o: 3, h: 3, l: 3, c: 3, v: 0, vb: 0, vs: 0, n: 0 }, 'leading slot carries the previous close');
-  assert.equal(rows[1], traded);
+  assert.deepEqual(rows[1], { o: 3, h: 5, l: 2, c: 4, v: 10, n: 2 }, 'opens at the previous close');
   assert.deepEqual(rows[2], { o: 4, h: 4, l: 4, c: 4, v: 0, vb: 0, vs: 0, n: 0 }, 'empty slot carries the last close');
   assert.deepEqual(rows[3], rows[2]);
   assert.deepEqual(LifeChart.carryFlat([null, null], null), [null, null], 'no known price: nothing to carry');
+});
+
+test('carryFlat opens every candle at the previous close (Wizards hat, Bronze axe)', () => {
+  // Wizards hat: 135, 101, empty hour, 59 -> 101 and 59 open red.
+  const hat = LifeChart.carryFlat([
+    { o: 135, h: 135, l: 135, c: 135, v: 1 },
+    { o: 101, h: 101, l: 101, c: 101, v: 1 },
+    null,
+    { o: 59, h: 59, l: 59, c: 59, v: 2 },
+  ], null);
+  assert.deepEqual(hat.map(row => [row.o, row.h, row.l, row.c]), [[135, 135, 135, 135], [135, 135, 101, 101], [101, 101, 101, 101], [101, 101, 59, 59]]);
+  assert.equal(LifeChart.candleColor(hat[1]), LifeChart.DOWN);
+  assert.equal(LifeChart.candleColor(hat[2]), LifeChart.FLAT);
+  assert.equal(LifeChart.candleColor(hat[3]), LifeChart.DOWN);
+  // Bronze axe: 16 16 12 20 then 8 8 8 6 -> the second hour opens at 20.
+  const axe = LifeChart.carryFlat([{ o: 16, h: 20, l: 12, c: 20, v: 4 }, { o: 8, h: 8, l: 6, c: 6, v: 4 }], null);
+  assert.deepEqual([axe[1].o, axe[1].h, axe[1].l, axe[1].c], [20, 20, 6, 6]);
+  const input = { o: 8, h: 8, l: 6, c: 6, v: 4 };
+  LifeChart.carryFlat([{ o: 1, h: 1, l: 1, c: 20, v: 1 }, input], null);
+  assert.equal(input.o, 8, 'never mutates the rows it reads');
+});
+
+test('liveSlots ends on the slot holding now (the live candle)', () => {
+  const hour = 3600;
+  const now = 1_000 * hour + 1_234;
+  const slots = LifeChart.liveSlots(now, hour, 24);
+  assert.equal(slots.length, 24);
+  assert.equal(slots[23], 1_000 * hour, 'the current hour is drawn');
+  assert.equal(slots[0], 977 * hour);
+  assert.equal(LifeChart.liveSlots(200 * 86400 + 5, 86400, 183)[182], 200 * 86400);
 });
 
 test('carryFlat flat candles carry a zero buy/sell split', () => {
