@@ -35,8 +35,7 @@ pub fn bury_now(bot: &mut Bot) -> ScriptResult {
 /// [--want ...] [--level prayer N]`. Each load withdraws a pack of the
 /// named bones and buries them; none banked or carried blocks by name.
 pub fn run_bury_loot(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("bury_loot", &rest)?;
     let bones_name = resource.unwrap_or_else(|| BURYABLE[0].to_string());
     if !is_bones(&bones_name) {

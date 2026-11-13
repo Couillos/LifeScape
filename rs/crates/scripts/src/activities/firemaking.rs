@@ -35,8 +35,7 @@ pub fn best_log(level: i64) -> &'static str {
 /// Burn banked loads in the open session: `firemaking [log] [count]`
 /// (best tier by level when omitted, 0 = forever).
 pub fn run_firemaking(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("firemaking", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

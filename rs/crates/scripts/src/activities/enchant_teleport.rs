@@ -58,8 +58,7 @@ pub fn teleport_level(name: &str) -> Option<i64> {
 /// teleports press the spellbook button (`IF_BUTTON`) and land the bot
 /// elsewhere. Missing runes or targets fail `Blocked`.
 pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("enchant_teleport", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

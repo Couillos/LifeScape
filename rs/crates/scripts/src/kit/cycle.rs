@@ -102,6 +102,37 @@ impl TaskSpec {
     }
 }
 
+/// Leading resource positional of a production script (`smelt
+/// iron_bar ...`): the first argument unless it is a count, a flag or a
+/// `toll`/`wild` word. Returns it and the rest for `parse_cli`.
+pub fn split_resource(args: &[String]) -> (Option<String>, Vec<String>) {
+    let resource = args
+        .first()
+        .filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--"))
+        .cloned();
+    let rest = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    (resource, rest)
+}
+
+/// Scripts whose resource positional is split off before `parse_cli`
+/// (gatherers, cook and the combat styles take it inside `parse_cli`).
+pub const SPLIT_RESOURCE_SCRIPTS: [&str; 18] = [
+    "alchemy", "bury_loot", "cut_gems", "dye", "enchant_teleport", "fill_water", "firemaking", "ground_pickup", "leatherwork",
+    "picking", "pottery", "runecraft", "smelt", "smelt_jewelry", "smith", "spin", "stringing", "superheat",
+];
+
+/// The brain's order as a script reads it (contract check, no side
+/// effect): split resource for production scripts, then `parse_cli`.
+pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
+    if SPLIT_RESOURCE_SCRIPTS.contains(&script) {
+        let (resource, rest) = split_resource(args);
+        let mut spec = parse_cli(script, &rest)?;
+        spec.resource.extend(resource);
+        return Ok(spec);
+    }
+    parse_cli(script, args)
+}
+
 /// Parse the legacy CLI plus the task flags into a `TaskSpec`. Legacy
 /// positionals keep their meaning (`woodcut 3` = 3 loads, melee spots);
 /// `--kills N` is the quantity target, `--ticks N` the max budget.

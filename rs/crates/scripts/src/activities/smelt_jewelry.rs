@@ -52,8 +52,7 @@ pub fn jewel_row(product: &str) -> Option<(&'static str, u8, &'static str, &'sta
 /// Smelt banked loads in the open session: `smelt_jewelry [product]
 /// [count]` (gold ring when omitted, 0 = forever).
 pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smelt_jewelry", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

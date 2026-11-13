@@ -38,8 +38,7 @@ pub fn alch_value(name: &str) -> Option<(i64, i64)> {
 /// runes or items fail `Blocked` (the brain files obtain tasks); one
 /// cast consumes the item and pays ~60% of its value in coins.
 pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("alchemy", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

@@ -64,8 +64,7 @@ pub fn bar_for_level(level: i64) -> &'static str {
 /// Smelt banked loads in the open session: `smelt [bar|ore] [count]`
 /// (best bar by level when omitted, 0 = forever; superheat excluded).
 pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smelt", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;

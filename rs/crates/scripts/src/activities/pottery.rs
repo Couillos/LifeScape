@@ -65,8 +65,7 @@ fn work_job(bot: &mut Bot, job: &ProduceJob<'_>, what: &str) -> Result<bool, Scr
 /// (pot when omitted; `piedish`, `bowl_empty`; 0 = forever). Clay and
 /// water ride the same load; emptied jugs bank.
 pub fn run_pottery(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("pottery", &rest)?;
     let (product_name, unfired_name, button) = shape_row(resource.as_deref().unwrap_or(PRODUCT)).ok_or_else(|| ScriptError::Usage(format!("no F2P pottery product {resource:?}")))?;
     let shape_spec = Produce { verb: "shaping", site: ProduceSite::Loc(&WHEELS), ui: ProduceUi::Grid { button } };

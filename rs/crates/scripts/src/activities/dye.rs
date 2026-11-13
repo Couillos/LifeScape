@@ -40,8 +40,7 @@ pub fn dye_row(name: &str) -> Option<(&'static str, u32, &'static str)> {
 /// (yellow when omitted, 0 = forever). A missing ingredient blocks by
 /// name (woad leaves: Wyson, through the brain's obtain leg).
 pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
-    let resource = args.first().filter(|first| first.parse::<u32>().is_err() && first.as_str() != "toll" && first.as_str() != "wild" && !first.starts_with("--")).cloned();
-    let rest: Vec<String> = if resource.is_some() { args[1..].to_vec() } else { args.to_vec() };
+    let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("dye", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
@@ -77,7 +76,7 @@ pub fn run_dye(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         if pack_total(step_bot, coins) < FEE_GP {
-            return Err(ScriptError::Blocked { missing: vec![COINS.to_string()] });
+            return Err(ScriptError::Blocked { missing: vec![format!("{COINS}:{FEE_GP}")] });
         }
         let job = ProduceJob { spec: &DYEING, input: ingredient, input_name: ingredient_name, want: 0, products: vec![obj_id(step_bot, product_name)?], near: (bank.x as i32, bank.z as i32) };
         match produce::run_job(step_bot, &job) {
