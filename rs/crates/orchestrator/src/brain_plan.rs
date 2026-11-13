@@ -172,32 +172,14 @@ pub(crate) fn bank_types(job: &Job) -> usize {
     types.len()
 }
 
-/* P1.6 D52: sale gate (worn, protected tools, graph items never list). */
-/// D52 protected tool debug names (kit orders + tinderbox): never sold by flip or
-/// cleanup, whether carried, worn or banked. Debug names, as the keep
-/// list and the live snapshots carry them.
-pub const PROTECTED_TOOLS: &[&str] = &[
-    "rune_axe", "adamant_axe", "mithril_axe", "black_axe", "steel_axe", "iron_axe", "bronze_axe",
-    "rune_pickaxe", "adamant_pickaxe", "mithril_pickaxe", "steel_pickaxe", "iron_pickaxe", "bronze_pickaxe",
-    "lobster_pot", "harpoon", "fishing_rod", "fly_fishing_rod", "net",
-    "tinderbox",
-    // Crafting/smithing/fishing kit (live 2026-11-13: a listed hammer
-    // locked b3gybcev out of smithing).
-    "hammer", "chisel", "needle", "shears", "knife", "fishing_bait",
-];
-
-/// D52 tool gate (case-insensitive): the flip auto-pick sold its own
-/// net because it only excluded worn ids, never carried tools.
-pub fn is_protected_tool(name: &str) -> bool {
-    PROTECTED_TOOLS.iter().any(|tool| tool.eq_ignore_ascii_case(name))
-}
-
-/// D52 sale gate: true when `name` must never list (worn, tools, graph keep, coins).
+/* P1.6 D52: sale gate (worn, kept work tools, graph items never list).
+ * The blanket tool list (every axe, pickaxe, net, … never sold by anyone)
+ * is gone (user rule 2026-11-13: tools sell): the tools a bot works with
+ * reach the gate through its keep list (`brain_tools::kept_tools`). */
+/// D52 sale gate: true when `name` must never list (worn, graph keep with
+/// the kept work tools, coins).
 pub fn sale_blocked(name: &str, keep: &[String], worn: &[String]) -> bool {
     if name.eq_ignore_ascii_case("coins") {
-        return true;
-    }
-    if is_protected_tool(name) {
         return true;
     }
     if worn.iter().any(|held| held.eq_ignore_ascii_case(name)) {
@@ -406,7 +388,7 @@ pub fn fold_travel_failure(node: &mut Node, method: &str) -> TravelFold {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_money, is_protected_tool, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
+    use super::{choose_money, live_combat, merge_keep, pick_flip_target, rank_money_diverse, rescue_replan_cause, sale_blocked};
     use lifescape_json::{object, str_value};
     use lifescape_planner::{Node, NodeKind, NodeStatus};
 
@@ -443,20 +425,21 @@ mod tests {
         assert_eq!(farm_yield(&empty, "farm:nothing_known", &node, "Nothing", 1), 200.0, "blind default only when nothing matches");
     }
 
-    /// D52: worn, tools and graph items never sell. The L11 flip sold
-    /// its own net (only worn ids were excluded, never carried tools).
+    /// D52: worn, graph items (kept work tools included) never sell; a
+    /// tool outside the keep list is ordinary surplus (user rule
+    /// 2026-11-13: tools sell). The L11 flip sold its own net: the net now
+    /// reaches the gate through the keep list (`brain_tools`).
     #[test]
-    fn sale_gate_blocks_worn_tools_and_graph() {
-        let keep = vec!["feather".to_string()];
+    fn sale_gate_blocks_worn_and_graph_but_tools_sell() {
+        let keep = vec!["feather".to_string(), "net".to_string()];
         let worn = vec!["iron_sword".to_string()];
-        assert!(sale_blocked("net", &[], &[]), "carried tool never lists");
-        assert!(sale_blocked("bronze_axe", &[], &[]), "axe never lists");
-        assert!(sale_blocked("tinderbox", &[], &[]), "tinderbox never lists");
+        assert!(sale_blocked("net", &keep, &[]), "kept work tool never lists");
+        assert!(!sale_blocked("bronze_axe", &keep, &[]), "a tool it does not work with sells");
+        assert!(!sale_blocked("tinderbox", &[], &[]), "tinderbox sells when unused");
         assert!(sale_blocked("iron_sword", &[], &worn), "worn never lists");
         assert!(sale_blocked("feather", &keep, &[]), "graph item never lists");
         assert!(sale_blocked("coins", &[], &[]), "wallet never lists");
         assert!(!sale_blocked("yew_logs", &keep, &worn), "plain surplus lists");
-        assert!(is_protected_tool("NET"), "gate is case-insensitive");
     }
 
     #[test]
@@ -475,10 +458,10 @@ mod tests {
             ("feather".to_string(), 2000),
             ("yew_logs".to_string(), 400),
         ];
-        let keep = vec!["feather".to_string()];
+        let keep = vec!["feather".to_string(), "net".to_string()];
         let picked = pick_flip_target(&stacks, &keep, &[]).expect("surplus lists");
-        assert_eq!(picked.0, "yew_logs", "tools, coins and graph items never win, got {picked:?}");
-        assert!(pick_flip_target(&[("net".to_string(), 1)], &[], &[]).is_none(), "tools alone mean no target");
+        assert_eq!(picked.0, "yew_logs", "kept tools, coins and graph items never win, got {picked:?}");
+        assert!(pick_flip_target(&[("net".to_string(), 1)], &keep, &[]).is_none(), "kept tool alone means no target");
         assert!(pick_flip_target(&[], &[], &[]).is_none(), "empty stock means engagement sans objet");
     }
 

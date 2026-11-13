@@ -351,3 +351,21 @@ Rejeté : laisser le bot attendre l'expiration du ban (contraire à la
 règle) ; changer l'ambition pour un ban temporaire (l'ambition ne change
 qu'aux règles 72 000 ticks / 3 blocages) ; annuler l'offre pour libérer
 le worker (perte de priorité, demande jamais servie).
+
+## 2026-11-13 — Les outils se vendent
+
+Règle utilisateur : les outils sont des marchandises comme les autres.
+L'ancienne porte D52 (toute hache, pioche, filet, canne, tinderbox… jamais
+vendue, par aucun bot) et son extension du jour (marteau, ciseau, aiguille,
+cisailles, couteau, appât + annulation de toutes les annonces d'outils)
+sont retirées. Un bot garde UNE unité du meilleur outil qu'il détient dans
+chaque famille dont son travail a besoin (méthodes des nœuds ouverts,
+récolte et combat compris, et compétences des jalons ouverts de son
+ambition), plus les piles entières des consommables de ces méthodes
+(appât, plumes, flèches, runes) ; tout le reste se vend (copies en trop,
+paliers inférieurs, outils d'autres métiers) — `brain_tools.rs`. Une
+annonce n'est retirée que si elle verrouille la dernière copie libre d'un
+outil de travail (cas b3gybcev : son seul marteau en vente).
+Rejeté : interdire la vente de tout outil (prive le marché d'une classe
+entière d'objets) ; garder toute la pile d'un outil de travail (24 seaux
+pour une traite).

@@ -470,14 +470,17 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
         crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx);
     }
-    // D52: flip and cleanup never sell worn, tools or graph items. The
-    // graph keep merges the live worn names here; tools ride in the same
-    // gate via `sale_blocked`, so the merchant no longer flips its net.
+    // D52: flip and cleanup never sell worn, work tools or graph items.
+    // The keep list carries the tools the bot works with
+    // (`brain_tools::kept_tools`), so the merchant never flips its net;
+    // other tools are surplus (tools sell, 2026-11-13).
     // The flip leaves auto-pick only with no safe target (sans objet).
     if method == "market:flip" {
-        let keep = cleanup_keep(&life);
+        let stacks = live_stacks(job);
+        let mut keep = cleanup_keep(&life);
+        keep.extend(crate::brain_tools::kept_tools(&life, &stacks));
         let worn = worn_names(job);
-        if let Some((item, qty)) = pick_flip_target(&live_stacks(job), &keep, &worn) {
+        if let Some((item, qty)) = pick_flip_target(&stacks, &keep, &worn) {
             crate::logln!("brain {}: flip D52 target {item} x{qty}", job.account);
             args.push(item);
             args.push(qty.min(100).max(1).to_string());

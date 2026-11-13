@@ -117,6 +117,18 @@ pub fn surplus(stacks: &[(String, i64)], keep: &[String], worn: &[String], liste
     out
 }
 
+/// Spare copies of kept work tools (one unit stays): `(name, id, qty)`.
+fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &HashSet<i64>) -> Vec<(String, i64, i64)> {
+    crate::brain_tools::spare_tool_units(life, stacks, kept)
+        .into_iter()
+        .filter(|(name, _)| tradeable(name))
+        .filter_map(|(name, qty)| {
+            let id = lifescape_gamedata::objs_by_name(&name).into_iter().next()?.obj_id as i64;
+            (!listed.contains(&id)).then_some((name, id, qty))
+        })
+        .collect()
+}
+
 /// Opening price and reserve floor of a listing (2026-11-13): it opens
 /// at the reference (or the best bid when a buyer pays more) and walks
 /// with demand (`market_reprice`: up while it sells, down while it
@@ -154,31 +166,31 @@ fn adopt_listings(service: &crate::market_service::MarketService, account: &str,
     }
 }
 
-/// Resting sells of tools a bot works with (`brain_plan::PROTECTED_TOOLS`):
-/// `(order id, debug name)`. Live 2026-11-13 (b3gybcev): an old listing
-/// of its only hammer locked it away from the smith script.
-pub fn tool_listings(selling: &[lifescape_store::Order]) -> Vec<(i64, String)> {
+/// Resting sells that lock the last free copy of a tool the bot works
+/// with (`brain_tools::kept_tools`): `(order id, debug name)`. Live
+/// 2026-11-13 (b3gybcev): an old listing of its only hammer locked it away
+/// from the smith script. Any other tool listing stays (tools sell).
+pub fn tool_listings(selling: &[lifescape_store::Order], stacks: &[(String, i64)], kept: &[String]) -> Vec<(i64, String)> {
     selling
         .iter()
         .filter(|row| row.side == lifescape_store::OrderSide::Sell && row.remaining > 0)
         .filter_map(|row| {
             let name = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).ok()?)?.name?.to_string();
-            crate::brain_plan::is_protected_tool(&name).then_some((row.order_id, name))
+            crate::brain_tools::listing_locks_needed_tool(&name, row.remaining, stacks, kept).then_some((row.order_id, name))
         })
         .collect()
 }
 
-/// Cancels the account's tool listings (they lock the tool away from its
-/// scripts); returns the order ids still resting.
-fn withdraw_tool_listings(service: &crate::market_service::MarketService, account: &str, selling: &[lifescape_store::Order]) -> Vec<i64> {
+/// Cancels those listings; returns the order ids still resting.
+fn withdraw_tool_listings(service: &crate::market_service::MarketService, account: &str, listings: &[(i64, String)]) -> Vec<i64> {
     let mut kept = Vec::new();
-    for (order, name) in tool_listings(selling) {
-        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(order))]));
+    for (order, name) in listings {
+        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(*order))]));
         if reply.get("ok").as_bool() == Some(true) {
-            crate::logln!("brain {account}: listing {order} of its tool {name} cancelled (a tool it works with never sells)");
+            crate::logln!("brain {account}: listing {order} of {name} cancelled (its last copy of a tool it works with)");
         } else {
-            crate::logln!("brain {account}: listing {order} of its tool {name} not cancelled: {:?}", reply.get("error").as_str());
-            kept.push(order);
+            crate::logln!("brain {account}: listing {order} of {name} not cancelled: {:?}", reply.get("error").as_str());
+            kept.push(*order);
         }
     }
     kept
@@ -203,6 +215,9 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let mut wished: Vec<String> = crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item).collect();
     let live = job.inner.try_lock().ok().and_then(|inner| inner.live.clone()).unwrap_or(Value::Null);
     wished.extend(crate::brain_gear::ladder_keep(job, life, &live));
+    let stacks = crate::brain_plan::live_stacks(job);
+    let tools = crate::brain_tools::kept_tools(life, &stacks);
+    wished.extend(tools.iter().cloned());
     let keep = crate::brain_plan::merge_keep(working_keep(life, &wished), worn.clone());
     let mut selling: Vec<lifescape_store::Order> = service
         .lock_store()
@@ -215,20 +230,22 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 && row.remaining > 0
         })
         .collect();
-    // Tools never stay listed (never re-adopted either).
-    let withdrawn: Vec<i64> = tool_listings(&selling).into_iter().map(|(order, _)| order).collect();
-    if !withdrawn.is_empty() {
-        let kept = withdraw_tool_listings(&service, &job.account, &selling);
-        selling.retain(|row| !withdrawn.contains(&row.order_id) || kept.contains(&row.order_id));
+    // A listing of the last free copy of a work tool is withdrawn; every
+    // other tool listing rests and reprices like any listing.
+    let locking = tool_listings(&selling, &stacks, &tools);
+    if !locking.is_empty() {
+        let still = withdraw_tool_listings(&service, &job.account, &locking);
+        selling.retain(|row| !locking.iter().any(|(order, _)| *order == row.order_id) || still.contains(&row.order_id));
     }
     let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
     // Merchants price their flips themselves (fixed asks over their buy).
     if life.profile.archetype != lifescape_planner::Archetype::Merchant {
         adopt_listings(&service, &job.account, &selling);
     }
-    let stacks = crate::brain_plan::live_stacks(job);
     let mut placed = 0;
-    for (name, item, qty) in surplus(&stacks, &keep, &worn, &listed) {
+    let mut offers = surplus(&stacks, &keep, &worn, &listed);
+    offers.extend(spare_tools(life, &stacks, &tools, &listed));
+    for (name, item, qty) in offers {
         let reference = service.reference(item);
         let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
         let (price, floor) = listing_quote(reference, bid);
@@ -257,7 +274,7 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn surplus_skips_needs_tools_food_and_listed() {
+    fn surplus_skips_needs_food_kept_tools_and_listed() {
         let stacks = vec![
             ("coins".to_string(), 500),
             ("logs".to_string(), 300),
@@ -272,7 +289,10 @@ mod tests {
         let copper = lifescape_gamedata::objs_by_name("copper_ore")[0].obj_id as i64;
         let listed: HashSet<i64> = [copper].into_iter().collect();
         let names: Vec<String> = surplus(&stacks, &keep, &worn, &listed).into_iter().map(|(name, _, _)| name).collect();
-        assert_eq!(names, vec!["bronze_bar".to_string(), "logs".to_string()], "coins, food under 100, keep, tools and listed stay");
+        assert_eq!(names, vec!["bronze_bar".to_string(), "logs".to_string(), "net".to_string()], "coins, food under 100, keep and listed stay; an unused tool sells");
+        let with_net = vec!["raw_shrimp".to_string(), "net".to_string()];
+        let names: Vec<String> = surplus(&stacks, &with_net, &worn, &listed).into_iter().map(|(name, _, _)| name).collect();
+        assert_eq!(names, vec!["bronze_bar".to_string(), "logs".to_string()], "a kept work tool stays");
     }
 
     fn life_training(methods: &[(&str, &str)]) -> lifescape_planner::Life {
@@ -327,10 +347,11 @@ mod tests {
     }
 
     /// Live 2026-11-13 (b3gybcev): an old listing of its only hammer
-    /// (order 56648, 1 @1) locked it away from the smith script. Tool
-    /// listings are cancelled, and tools never list again.
+    /// (order 56648, 1 @1) locked it away from the smith script. Only the
+    /// listing of the last free copy of a tool it works with is withdrawn;
+    /// the chisel and pickaxe it does not use keep selling (tools sell).
     #[test]
-    fn tool_listings_are_withdrawn() {
+    fn only_the_needed_tool_listing_is_withdrawn() {
         let order = |order_id: i64, item: &str| lifescape_store::Order {
             order_id,
             account: "b3gybcev".to_string(),
@@ -345,9 +366,11 @@ mod tests {
             updated_clock: 0,
         };
         let rows = vec![order(56648, "hammer"), order(2, "logs"), order(3, "chisel"), order(4, "bronze_pickaxe")];
-        assert_eq!(super::tool_listings(&rows), vec![(56648, "hammer".to_string()), (3, "chisel".to_string()), (4, "bronze_pickaxe".to_string())]);
-        for tool in ["hammer", "chisel", "needle", "shears", "knife", "fishing_bait", "net", "tinderbox"] {
-            assert!(crate::brain_plan::sale_blocked(tool, &[], &[]), "{tool} never lists");
+        let held: Vec<(String, i64)> = ["hammer", "logs", "chisel", "bronze_pickaxe"].iter().map(|name| (name.to_string(), 1)).collect();
+        let kept = vec!["hammer".to_string()];
+        assert_eq!(super::tool_listings(&rows, &held, &kept), vec![(56648, "hammer".to_string())]);
+        for tool in ["chisel", "needle", "shears", "knife", "fishing_bait", "net", "tinderbox"] {
+            assert!(!crate::brain_plan::sale_blocked(tool, &kept, &[]), "{tool} sells when unused");
         }
     }
 
