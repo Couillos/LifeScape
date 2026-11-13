@@ -107,6 +107,20 @@ impl Store {
         Ok(self.connection.last_insert_rowid())
     }
 
+    /// Price of the last fill of one item strictly before `clock` (the
+    /// close a flat, trade-less candle carries forward), `None` if none.
+    pub fn last_price_before(&self, item_id: i64, clock: i64) -> Result<Option<i64>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT price FROM executions WHERE item_id = ?1 AND clock < ?2 \
+             ORDER BY clock DESC, exec_id DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query(rusqlite::params![item_id, clock])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Fills for one item in a clock range, oldest first.
     pub fn executions_for_item(
         &self,
@@ -324,6 +338,18 @@ mod candles_tests {
             clock,
             server_tick: clock * 10,
         }
+    }
+
+    #[test]
+    fn last_price_before_reads_the_previous_close() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        assert_eq!(store.last_price_before(314, 100)?, None);
+        store.record_execution(&sample_fill(10, 3, 1))?;
+        store.record_execution(&sample_fill(20, 7, 1))?;
+        assert_eq!(store.last_price_before(314, 20)?, Some(3), "strictly before");
+        assert_eq!(store.last_price_before(314, 21)?, Some(7));
+        Ok(())
     }
 
     /// User rule 2026-11-13: the execution log is settled handovers only.

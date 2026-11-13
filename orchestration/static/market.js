@@ -9,6 +9,9 @@ let items = [];
 let selected = null;
 let view = 'hour';
 let candles = [];
+// Last trade price before the history window: the close the leading
+// trade-less hours carry (one flat candle per empty hour).
+let prevClose = null;
 let trades = [];
 let pageIndex = 0;
 let query = "";
@@ -46,6 +49,7 @@ async function loadDetail() {
     const payload = await getJson('/api/market/history?item=' + selected + '&res=' + res + '&from=' + from + '&to=' + to);
     if (payload.ok) {
       candles = payload.candles;
+      prevClose = payload.prev_close === undefined ? null : payload.prev_close;
       trades = payload.trades;
     }
   } catch (e) { /* keep the last frame */ }
@@ -283,7 +287,7 @@ function draw() {
     tail.n = (tail.n || 0) + 1;
   }
 
-  const rows = LifeChart.fillSlots(slots, [...byTime.values()]);
+  const rows = LifeChart.carryFlat(LifeChart.fillSlots(slots, [...byTime.values()]), prevClose);
   LifeChart.draw(canvas, {
     slots,
     width,
@@ -293,7 +297,7 @@ function draw() {
     leftTitle: 'price',
     rightTitle: 'volume',
     legend: [
-      { swatch: 'up', color: '#4caf50', label: 'candle' },
+      { swatch: 'up', color: LifeChart.UP, label: 'candle' },
       { swatch: 'bar', color: '#4a90d9', label: 'volume' },
     ],
     emptyText: 'No history yet for this item.',

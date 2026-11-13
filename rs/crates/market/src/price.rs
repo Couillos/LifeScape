@@ -67,6 +67,20 @@ pub fn reference_price(recent: &[PricedFill], last_print: Option<i64>, best_bid:
     Reference { price: 1, traded: false }
 }
 
+/// 24 h change of the displayed reference (thousandths): today's VWAP
+/// against the previous 24 h VWAP, or against today's first print when
+/// nothing traded the day before. Measured on the same VWAP the list shows
+/// as its price (2026-11-13: wool listed at 2 showed +800 % because the
+/// change compared the first print, 1, with a lone last print at 9).
+pub fn change_thousandths(today: &[PricedFill], previous_day: &[PricedFill]) -> i64 {
+    let Some(now) = vwap(today) else { return 0 };
+    let before = vwap(previous_day).or_else(|| today.iter().find(|fill| fill.quantity > 0 && fill.price >= 1).map(|fill| fill.price));
+    match before {
+        Some(base) if base >= 1 => (((now - base) as f64 / base as f64) * 1000.0).round() as i64,
+        _ => 0,
+    }
+}
+
 /// Groups ordered fills into OHLCV buckets of `width_seconds`.
 pub fn bucketize(fills: &[PricedFill], width_seconds: i64) -> Vec<Candle> {
     if width_seconds <= 0 {
@@ -108,6 +122,17 @@ mod tests {
 
     fn fill(qty: i64, price: i64, clock: i64) -> PricedFill {
         PricedFill { quantity: qty, price, clock }
+    }
+
+    #[test]
+    fn change_follows_the_displayed_vwap() {
+        // Wool 2026-11-13: listed at its VWAP 2, the old change compared
+        // the first print (1) with a lone last print (9): +800 %.
+        let day_before = [fill(100, 1, -5)];
+        assert_eq!(change_thousandths(&[fill(10, 1, 1), fill(10, 3, 2)], &day_before), 1000, "1 → 2 is +100 %");
+        assert_eq!(change_thousandths(&[fill(10, 1, 1), fill(10, 3, 2)], &[]), 1000, "no previous day: first print is the base");
+        assert_eq!(change_thousandths(&[], &day_before), 0, "nothing traded today: no change");
+        assert_eq!(change_thousandths(&[fill(5, 4, 1)], &[fill(5, 4, -1)]), 0);
     }
 
     #[test]

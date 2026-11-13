@@ -424,6 +424,9 @@ impl MarketService {
         let mut store = self.lock_store();
         let candles = store.candles_or_rebuild(item, resolution, from, to).unwrap_or_default();
         let executions = store.executions_for_item(item, from, to).unwrap_or_default();
+        // Close carried by the trade-less slots before the window's first
+        // candle (the front draws one flat candle per empty slot).
+        let previous_close = store.last_price_before(item, from).ok().flatten();
         // Execution count per candle window (tooltip §6.2, `n`): the
         // candles table carries OHLCV only, so count the window's fills.
         let width = resolution.width_seconds();
@@ -463,6 +466,7 @@ impl MarketService {
             ("res", str_value(resolution.as_str())),
             ("candles", Value::Arr(candle_values)),
             ("trades", Value::Arr(tail)),
+            ("prev_close", previous_close.map(Value::Int).unwrap_or(Value::Null)),
         ])
     }
 
@@ -539,8 +543,11 @@ impl MarketService {
             }
             let mut volume = 0i64;
             let mut fills: Vec<lifescape_market::PricedFill> = Vec::new();
+            let mut previous_day: Vec<lifescape_market::PricedFill> = Vec::new();
             let mut volumes: Vec<(i64, i64)> = Vec::new();
             for (id, _shop) in members {
+                let before = store.executions_for_item(*id, clock - 2 * 86400, clock - 86400).unwrap_or_default();
+                previous_day.extend(before.iter().map(|exec| lifescape_market::PricedFill { quantity: exec.quantity, price: exec.price, clock: exec.clock }));
                 let day = store.executions_for_item(*id, clock - 86400, clock + 1).unwrap_or_default();
                 let member_volume: i64 = day.iter().map(|exec| exec.quantity).sum();
                 volume += member_volume;
@@ -561,12 +568,10 @@ impl MarketService {
                 .unwrap_or(1);
             let _ = shop;
             let reference = reference_price(&fills, fills.last().map(|fill| fill.price), None, None).price;
-            let change = match (fills.first(), fills.last()) {
-                (Some(first), Some(last)) if first.price >= 1 => {
-                    (last.price - first.price) as f64 / first.price as f64
-                }
-                _ => 0.0,
-            };
+            previous_day.sort_by_key(|fill| fill.clock);
+            // Change of the displayed reference (today's VWAP), not of the
+            // first vs last print (a lone print at 9 read +800 %).
+            let change = lifescape_market::change_thousandths(&fills, &previous_day);
             items.push((name.clone(), canonical, reference, change, volume, order_count, open_qty));
         }
         // Descending 24h volume, then the largest open quantity, then the name.
@@ -583,7 +588,7 @@ impl MarketService {
                     ("item", Value::Int(id)),
                     ("name", str_value(&name)),
                     ("price", Value::Int(reference)),
-                    ("change24h", Value::Int((change * 1000.0).round() as i64)),
+                    ("change24h", Value::Int(change)),
                     ("volume24h", Value::Int(volume)),
                 ])
             })

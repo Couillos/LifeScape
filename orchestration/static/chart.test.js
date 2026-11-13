@@ -43,17 +43,27 @@ test('niceTicks graduates a volume range from zero', () => {
   assert.ok(ticks.length <= 4, `got ${ticks}`);
 });
 
-test('candleTooltip shows period, O/H/B/C, volume and execution count', () => {
+test('candleTooltip shows period, O/H/L/C, volume and trade count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 3600, { o: 4, h: 9, l: 3, c: 8, v: 120, n: 11 });
   assert.equal(lines.length, 4);
   assert.match(lines[0], /\d\d\/\d\d \d\d:\d\d–\d\d:\d\d/);
-  assert.equal(lines[1], 'O 4 H 9 B 3 C 8');
+  assert.equal(lines[1], 'O 4 H 9 L 3 C 8');
   assert.equal(lines[2], 'Volume 120');
-  assert.equal(lines[3], 'Exécutions 11');
+  assert.equal(lines[3], 'Trades 11');
 });
 
 test('candleTooltip tolerates rows without an execution count', () => {
   const lines = LifeChart.candleTooltip(1_700_000_000, 86400, { o: 4, h: 4, l: 4, c: 4, v: 5 });
   assert.match(lines[0], /^\d\d\/\d\d$/);
-  assert.equal(lines[3], 'Exécutions —');
+  assert.equal(lines[3], 'Trades —');
+});
+
+test('carryFlat draws one flat candle per empty slot at the last close', () => {
+  const traded = { o: 2, h: 5, l: 2, c: 4, v: 10, n: 2 };
+  const rows = LifeChart.carryFlat([null, traded, null, null], 3);
+  assert.deepEqual(rows[0], { o: 3, h: 3, l: 3, c: 3, v: 0, n: 0 }, 'leading slot carries the previous close');
+  assert.equal(rows[1], traded);
+  assert.deepEqual(rows[2], { o: 4, h: 4, l: 4, c: 4, v: 0, n: 0 }, 'empty slot carries the last close');
+  assert.deepEqual(rows[3], rows[2]);
+  assert.deepEqual(LifeChart.carryFlat([null, null], null), [null, null], 'no known price: nothing to carry');
 });

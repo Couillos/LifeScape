@@ -588,7 +588,9 @@ fn list_merges_same_name_forms_and_sorts_by_volume() {
     // Canonical id carries the volume; VWAP prices the merged fills.
     assert_eq!(rows[0].get("item").as_i64(), Some(101));
     assert_eq!(rows[0].get("price").as_i64(), Some(11));
-    assert_eq!(rows[0].get("change24h").as_i64(), Some(200));
+    // Change of the displayed VWAP (11) against the base (no previous
+    // day: today's first print, 10): +10 %, not first-vs-last print.
+    assert_eq!(rows[0].get("change24h").as_i64(), Some(100));
     assert_eq!(rows[1].get("name").as_str(), Some("Coal"));
     cleanup(&path);
 }

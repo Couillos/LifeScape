@@ -61,27 +61,46 @@ const LifeChart = (() => {
       pad2(close.getHours()) + ':' + pad2(close.getMinutes());
   }
 
-  // Tooltip lines for one candle: period, O/H/B/C, volume, execution
-  // count (PRD2 §6.2). Tolerates rows without `n` (old payloads).
+  // Tooltip lines for one candle: period, O/H/L/C, volume, trade count
+  // (PRD2 §6.2). Tolerates rows without `n` (old payloads).
   function candleTooltip(slotStart, width, row) {
     return [
       periodLabel(slotStart, width),
-      'O ' + row.o + ' H ' + row.h + ' B ' + row.l + ' C ' + row.c,
+      'O ' + row.o + ' H ' + row.h + ' L ' + row.l + ' C ' + row.c,
       'Volume ' + row.v,
-      'Exécutions ' + (row.n === undefined || row.n === null ? '—' : row.n),
+      'Trades ' + (row.n === undefined || row.n === null ? '—' : row.n),
     ];
   }
 
   function lineTooltip(slotStart, width, value) {
-    return [periodLabel(slotStart, width), 'Valeur ' + value];
+    return [periodLabel(slotStart, width), 'Value ' + value];
   }
 
-  const UP = '#4caf50';
-  const DOWN = '#e05252';
+  // One candle per slot, always (user rule 2026-11-13): a slot without
+  // trades shows a flat candle at the last known close (volume 0); the
+  // close before the window (`previousClose`) carries the leading slots.
+  // Slots before any known price stay empty (nothing to carry).
+  function carryFlat(rows, previousClose) {
+    let close = previousClose === undefined ? null : previousClose;
+    return rows.map((row) => {
+      if (row) { close = row.c; return row; }
+      if (close === null) return null;
+      return { o: close, h: close, l: close, c: close, v: 0, n: 0 };
+    });
+  }
+
+  // Vivid pair kept apart by luminance as well as hue (deuteranopia:
+  // bright green vs deep red stay distinct even when hues merge).
+  const UP = '#00e676';
+  const DOWN = '#ff1744';
   // Volume bars: one blue, in their own pane under the candles.
   const VOLUME = '#4a90d9';
 
+  // Flat trade-less candle (`carryFlat`): neutral grey, neither up nor down.
+  const FLAT = '#888';
+
   function candleColor(row) {
+    if (!(row.v > 0) && row.o === row.c && row.h === row.l) return FLAT;
     return row.c >= row.o ? UP : DOWN;
   }
 
@@ -383,7 +402,7 @@ const LifeChart = (() => {
     canvas._lifeGeometry = geometry;
   }
 
-  return { slotStarts, fillSlots, niceTicks, periodLabel, candleTooltip, lineTooltip, draw };
+  return { slotStarts, fillSlots, carryFlat, niceTicks, periodLabel, candleTooltip, lineTooltip, draw, UP, DOWN };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = LifeChart;
