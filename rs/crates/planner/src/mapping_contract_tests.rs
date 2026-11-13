@@ -32,6 +32,7 @@ fn stations_carry_the_picked_site() {
         assert_eq!(mapped, script);
         assert!(args.windows(2).any(|pair| pair == ["--site", "3109,3499,0"]), "{method}: {args:?}");
         assert!(!args.contains(&"--wear".to_string()), "{method}: open site, no uniform");
+        assert!(args.windows(3).any(|window| window == ["--level", "smithing", "20"]), "{method}: the tranche stops at its level: {args:?}");
     }
     let mut guild = climb("crafting", 50);
     guild.site = Some((2938, 3282, 0));

@@ -180,6 +180,12 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     } else {
         return None;
     };
+    // Every reach tranche stops at its target level (`--level`), station
+    // work included (cook, smelt, jewellery, runecraft, bury...).
+    let field = !matches!(script.as_str(), "market" | "walkto" | "equip") && !script.starts_with("quest_");
+    if field && !head.iter().any(|arg| arg == "--level") {
+        head.extend(level_flag(node, None));
+    }
     // The brain picked the site (`pick_site_gated`): every gatherer,
     // station, fight and shop works there (args contract 2026-11-13). A
     // guild site names the uniform the door checks on the body.

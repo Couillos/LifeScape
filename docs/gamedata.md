@@ -77,3 +77,19 @@ banquier, poche fermée). Seule table de ce dossier écrite à la main :
 par `Tables::bank_client_stands` (`scripts/src/tables_live.rs`).
 
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
+
+## Portes d'accès (`access.rs`, 2026-11-13)
+
+`gates_at(x, z, niveau)` : portes d'un site (guildes artisanat 40 + tablier
+brun, cuisiniers 32 + toque, mineurs 60 ; clé de laiton d'Edgeville ;
+bateau de Karamja 30 po ; Crandor ; souterrain ; Wilderness), portes lues
+dans `content/maps` (`crafting_guild_door` (2933,3289), `chefdoor`
+(3143,3444), `brasskeydoor` (3115,3450), échelle de la guilde des mineurs
+(3019,3339)). `surface_of` : tuile où se lisent banque et danger d'un site
+(porte de guilde, rez-de-chaussée d'un étage sans banque). `impassable` :
+bateau tant que `BOAT_ROUTED` est faux (la nav n'a pas d'arête pour les
+marins), souterrain, Wilderness. Les voies de recette rangent moules et
+talismans dans `Way.tools` (portés, jamais consommés), les voies de sort
+portent leurs runes, les teintures d'Aggie leurs intrants (`aggie.rs2`).
+`quest_requirements` porte `reward_points` (`^<clé>_questpoints`) et
+`blocker` (quête impossible en solo aujourd'hui).
