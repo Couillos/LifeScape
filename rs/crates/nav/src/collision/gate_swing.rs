@@ -23,6 +23,16 @@
 //! was refused live, replanned identical (~75 refusals/hour, 2026-11-13).
 //! The planner now pays `DOOR_LEAF_STEP_COST` to cross that edge and
 //! goes round by (3016,3237) instead (see `open_door_leaf`).
+//!
+//! Castle double doors are marked the same way. Content
+//! `doors/scripts/doubledoors.rs2` (`open_double_doors_left` / `_right`,
+//! categories `door_left_closed` / `door_right_closed`): each leaf moves
+//! one tile towards its angle for 500 ticks, the left leaf rotated
+//! `angle + 3`, the right leaf `angle + 1`. Lumbridge castle front door
+//! 1516/1519 (3217,3218)/(3217,3219) angle west opens to 1517 (3216,3218)
+//! south / 1520 (3216,3219) north: plans stepping (3216,3220)->(3216,3219)
+//! were refused live, replanned identical (~700 refusals/hour,
+//! 2026-11-13, see `open_double_door_leaf`).
 
 use super::flags::{
     ANGLE_EAST, ANGLE_NORTH, ANGLE_SOUTH, ANGLE_WEST, DOOR_LEAF_EAST, DOOR_LEAF_NORTH, DOOR_LEAF_SOUTH, DOOR_LEAF_WEST,
@@ -34,12 +44,15 @@ use super::loc_collision::CollisionMap;
 /// categories `gate_main_closed` / `gate_outer_closed`,
 /// `content/pack/category.pack` ids 28 / 29: the click on either opens
 /// both, the main leaf decides where they swing) or a single door
-/// (`door_closed`, id 19).
+/// (`door_closed`, id 19) or one leaf of a double door (`door_left_closed`
+/// / `door_right_closed`, ids 21 / 23: each leaf swings on its own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateLeaf {
     Main,
     Outer,
     Door,
+    DoorLeft,
+    DoorRight,
 }
 
 /// Category id of `gate_main_closed` in the engine pack.
@@ -48,6 +61,10 @@ pub const GATE_MAIN_CLOSED_CATEGORY: i64 = 28;
 pub const GATE_OUTER_CLOSED_CATEGORY: i64 = 29;
 /// Category id of `door_closed` in the engine pack.
 pub const DOOR_CLOSED_CATEGORY: i64 = 19;
+/// Category id of `door_left_closed` in the engine pack.
+pub const DOOR_LEFT_CLOSED_CATEGORY: i64 = 21;
+/// Category id of `door_right_closed` in the engine pack.
+pub const DOOR_RIGHT_CLOSED_CATEGORY: i64 = 23;
 
 /// Leaf role from a loctype category id, `None` for every other loc.
 pub fn gate_leaf_of_category(category: i64) -> Option<GateLeaf> {
@@ -55,6 +72,8 @@ pub fn gate_leaf_of_category(category: i64) -> Option<GateLeaf> {
         GATE_MAIN_CLOSED_CATEGORY => Some(GateLeaf::Main),
         GATE_OUTER_CLOSED_CATEGORY => Some(GateLeaf::Outer),
         DOOR_CLOSED_CATEGORY => Some(GateLeaf::Door),
+        DOOR_LEFT_CLOSED_CATEGORY => Some(GateLeaf::DoorLeft),
+        DOOR_RIGHT_CLOSED_CATEGORY => Some(GateLeaf::DoorRight),
         _ => None,
     }
 }
@@ -110,8 +129,14 @@ pub fn paint_gate_swings(collision: &mut CollisionMap, leaves: &[ClosedLeaf]) {
             collision.change_wall(leaf_x, leaf_z, main.level, leaf_angle, WALL_STRAIGHT, false, true);
         }
     }
-    for door in leaves.iter().filter(|leaf| leaf.leaf == GateLeaf::Door && leaf.shape == WALL_STRAIGHT) {
-        let (leaf_x, leaf_z, leaf_angle) = open_door_leaf(door.x, door.z, door.angle);
+    for door in leaves.iter().filter(|leaf| leaf.shape == WALL_STRAIGHT) {
+        let (leaf_x, leaf_z, leaf_angle) = match door.leaf {
+            GateLeaf::Door => open_door_leaf(door.x, door.z, door.angle),
+            GateLeaf::DoorLeft | GateLeaf::DoorRight => {
+                open_double_door_leaf(door.x, door.z, door.angle, door.leaf == GateLeaf::DoorLeft)
+            }
+            GateLeaf::Main | GateLeaf::Outer => continue,
+        };
         let (step_x, step_z) = swing_offset(leaf_angle);
         collision.add(leaf_x, leaf_z, door.level, leaf_mark(step_x, step_z));
         collision.add(leaf_x + step_x, leaf_z + step_z, door.level, leaf_mark(-step_x, -step_z));
@@ -132,6 +157,16 @@ pub const DOOR_LEAF_STEP_COST: u32 = 10;
 pub fn open_door_leaf(door_x: i32, door_z: i32, angle: u8) -> (i32, i32, u8) {
     let (step_x, step_z) = swing_offset(angle);
     (door_x + step_x, door_z + step_z, (angle + 1) % 4)
+}
+
+/// Where one closed straight double door leaf lands once open
+/// (`open_double_doors_left` / `_right`): one tile towards its angle,
+/// rotated `angle + 3` for the left leaf, `angle + 1` for the right one.
+/// Marked like single doors, never walled.
+pub fn open_double_door_leaf(door_x: i32, door_z: i32, angle: u8, left: bool) -> (i32, i32, u8) {
+    let (step_x, step_z) = swing_offset(angle);
+    let turn = if left { 3 } else { 1 };
+    (door_x + step_x, door_z + step_z, (angle + turn) % 4)
 }
 
 /// Leaf mark of the edge one unit step (`step_x`, `step_z`) away.
@@ -199,11 +234,44 @@ mod tests {
         assert_eq!(extra((3015, 3237), (3014, 3237)), 0, "the doorway crossing is free");
     }
 
+    /// Live 2026-11-13 (leo_king-8185): Lumbridge castle 1516 (3217,3218)
+    /// / 1519 (3217,3219) angle west open as 1517 (3216,3218) angle south
+    /// and 1520 (3216,3219) angle north. Marked: the refused step costs
+    /// extra, the doorway and the hall side stay free.
+    #[test]
+    fn open_double_door_leaves_match_live_positions() {
+        assert_eq!(open_double_door_leaf(3217, 3218, ANGLE_WEST, true), (3216, 3218, ANGLE_SOUTH));
+        assert_eq!(open_double_door_leaf(3217, 3219, ANGLE_WEST, false), (3216, 3219, ANGLE_NORTH));
+        let mut map = CollisionMap::new();
+        for x in 3213..3221 {
+            for z in 3214..3224 {
+                map.set(x, z, 0, 0);
+            }
+        }
+        let pair = [
+            ClosedLeaf { x: 3217, z: 3218, level: 0, leaf: GateLeaf::DoorLeft, shape: WALL_STRAIGHT, angle: ANGLE_WEST },
+            ClosedLeaf { x: 3217, z: 3219, level: 0, leaf: GateLeaf::DoorRight, shape: WALL_STRAIGHT, angle: ANGLE_WEST },
+        ];
+        paint_gate_swings(&mut map, &pair);
+        assert!(step_open(&map, 3216, 3220, 0, 0, -1), "marked, never walled");
+        let extra = |from: (i32, i32), to: (i32, i32)| {
+            leaf_step_extra(map.get(from.0, from.1, 0), map.get(to.0, to.1, 0), to.0 - from.0, to.1 - from.1)
+        };
+        assert_eq!(extra((3216, 3220), (3216, 3219)), DOOR_LEAF_STEP_COST, "refused live step costs extra");
+        assert_eq!(extra((3216, 3217), (3216, 3218)), DOOR_LEAF_STEP_COST, "left leaf from the south");
+        assert_eq!(extra((3215, 3219), (3216, 3219)), 0, "stand from the hall is free");
+        assert_eq!(extra((3216, 3219), (3217, 3219)), 0, "the doorway crossing is free");
+        assert_eq!(extra((3216, 3218), (3216, 3219)), 0, "between the two leaves is free");
+    }
+
     #[test]
     fn categories_name_the_two_closed_leaves() {
         assert_eq!(gate_leaf_of_category(19), Some(GateLeaf::Door));
         assert_eq!(gate_leaf_of_category(28), Some(GateLeaf::Main));
         assert_eq!(gate_leaf_of_category(29), Some(GateLeaf::Outer));
+        assert_eq!(gate_leaf_of_category(21), Some(GateLeaf::DoorLeft));
+        assert_eq!(gate_leaf_of_category(23), Some(GateLeaf::DoorRight));
+        assert_eq!(gate_leaf_of_category(22), None, "an open leaf is not a closed one");
         assert_eq!(gate_leaf_of_category(41), None);
         assert_eq!(gate_leaf_of_category(-1), None);
     }

@@ -195,6 +195,11 @@ impl Bot {
             return Ok(());
         };
         let mut best = (self.world.x - target.0).abs() + (self.world.z - target.1).abs();
+        // Furthest leg tile reached so far: a leg that detours around a
+        // fence walks away from its end for many ticks, yet each step
+        // lands further along the leg (live 2026-11-13: Varrock south
+        // fields legs cut "stalled" while moving one tile a tick).
+        let mut furthest: Option<usize> = None;
         let mut last_move = self.world.ticks;
         loop {
             let position = (self.world.x, self.world.z);
@@ -202,11 +207,16 @@ impl Bot {
                 return Ok(());
             }
             let distance = (position.0 - target.0).abs() + (position.1 - target.1).abs();
+            let along = leg.iter().position(|tile| *tile == position);
             // No early pass-through: a leg only ends on its target (the
             // postcondition §6.2 requires per leg). A transient detour
             // keeps walking until it lands; a truly lost leg trips the
             // stall or deadline watch below, never a silent Ok.
-            if distance < best {
+            if along.is_some_and(|index| furthest.is_none_or(|seen| index > seen)) {
+                furthest = along;
+                best = best.min(distance);
+                last_move = self.world.ticks;
+            } else if distance < best {
                 best = distance;
                 last_move = self.world.ticks;
             } else if self.world.ticks.saturating_sub(last_move) > STALL_TICKS {
@@ -412,9 +422,10 @@ mod tests {
 
     /// Loopback game server for one walk leg: queues `backlog` idle
     /// ticks before the send, then answers the MOVE with `after` ticks
-    /// (true = the bot steps one tile east). Returns the leg outcome and
-    /// where the bot ended, from (3200,3200,0).
-    fn fake_leg(backlog: usize, after: Vec<bool>) -> (Result<()>, (i32, i32)) {
+    /// (`Some(dir)` = the bot steps one tile that way, engine walk
+    /// direction 1 north / 3 west / 4 east; `None` = idle). Returns the
+    /// leg outcome and where the bot ended, from (3200,3200,0).
+    fn fake_leg(backlog: usize, leg: &[(i32, i32)], after: Vec<Option<u8>>) -> (Result<()>, (i32, i32)) {
         use std::io::{Read, Write};
         use std::net::{TcpListener, TcpStream};
         use std::sync::mpsc::channel;
@@ -438,8 +449,8 @@ mod tests {
             };
             // Idle tick: own player not updated, no known players.
             let idle = [0x00u8, 0x00];
-            // Walk tick: update=1, walk=1, dir=4 (east), no mask, no known.
-            let east = [0xB0u8, 0x00];
+            // Walk tick: update=1, walk=1, dir (3 bits), no mask, no known.
+            let walk = |dir: u8| [0xA0u8 | (dir << 2), 0x00];
             let mut queued = Vec::new();
             for _ in 0..backlog {
                 queued.extend(frame(&idle));
@@ -451,9 +462,10 @@ mod tests {
             if sock.read(&mut probe).is_err() {
                 return;
             }
-            for steps in after {
+            for step in after {
                 std::thread::sleep(Duration::from_millis(2));
-                if sock.write_all(&frame(if steps { &east } else { &idle })).is_err() {
+                let body = step.map(walk).unwrap_or(idle);
+                if sock.write_all(&frame(&body)).is_err() {
                     return;
                 }
             }
@@ -473,7 +485,7 @@ mod tests {
         // Let the backlog reach the client socket before the send.
         std::thread::sleep(Duration::from_millis(50));
         let deadline = bot.world.ticks + 100;
-        let outcome = bot.send_and_await(&[(3201, 3200), (3202, 3200)], false, deadline, false);
+        let outcome = bot.send_and_await(leg, false, deadline, false);
         let end = (bot.world.x, bot.world.z);
         drop(bot);
         server.join().expect("server thread");
@@ -526,7 +538,7 @@ mod tests {
 
     #[test]
     fn walk_leg_ignores_ticks_buffered_before_send() {
-        let (outcome, end) = fake_leg(20, vec![true, true]);
+        let (outcome, end) = fake_leg(20, &[(3201, 3200), (3202, 3200)], vec![Some(4), Some(4)]);
         assert!(outcome.is_ok(), "stale ticks are no refusal, got {outcome:?}");
         assert_eq!(end, (3202, 3200), "leg arrived");
     }
@@ -535,9 +547,49 @@ mod tests {
     /// server never moves the bot after the MOVE: stalled, typed.
     #[test]
     fn walk_leg_still_reports_a_real_stall() {
-        let (outcome, end) = fake_leg(20, vec![false; 20]);
+        let (outcome, end) = fake_leg(20, &[(3201, 3200), (3202, 3200)], vec![None; 20]);
         assert!(matches!(&outcome, Err(Error::Timeout(text)) if text.contains("stalled")), "real stall, got {outcome:?}");
         assert_eq!(end, (3200, 3200), "never moved");
+    }
+
+    /// A leg that detours around a fence walks away from its own end
+    /// tile for a while: every tick is a step along the leg, never a
+    /// stall (live 2026-11-13, Varrock south fields: b5xntyz6-24477 and
+    /// -22244 moved one leg tile per tick and were cut "stalled" after
+    /// 13 ticks without getting closer to the leg end as the crow
+    /// flies). Here: 8 east, 1 north, then 16 west to (3192,3201); the
+    /// end gets closer than the start only on the 18th step.
+    #[test]
+    fn walk_leg_detour_away_from_its_end_is_progress() {
+        let mut leg = Vec::new();
+        let mut after = Vec::new();
+        let (mut x, mut z) = (3200, 3200);
+        for _ in 0..8 {
+            x += 1;
+            leg.push((x, z));
+            after.push(Some(4));
+        }
+        z += 1;
+        leg.push((x, z));
+        after.push(Some(1));
+        for _ in 0..16 {
+            x -= 1;
+            leg.push((x, z));
+            after.push(Some(3));
+        }
+        let (outcome, end) = fake_leg(0, &leg, after);
+        assert!(outcome.is_ok(), "detour leg arrives, got {outcome:?}");
+        assert_eq!(end, (3192, 3201), "leg end reached");
+    }
+
+    /// Moving off the leg without getting closer is still a stall: the
+    /// progress mark is the leg, not any motion (east steps on a leg
+    /// that heads north never count).
+    #[test]
+    fn walk_leg_motion_off_the_leg_is_no_progress() {
+        let leg: Vec<(i32, i32)> = (1..=3).map(|step| (3200, 3200 + step)).collect();
+        let (outcome, _) = fake_leg(0, &leg, vec![Some(4); 20]);
+        assert!(matches!(&outcome, Err(Error::Timeout(text)) if text.contains("stalled")), "off-leg motion stalls, got {outcome:?}");
     }
 
     /// `debug_walk` plans through the service like `travel_to`: same

@@ -14,6 +14,11 @@ fn is_tile(value: &Value) -> bool {
     value.as_arr().is_some_and(|items| items.len() == 3 && items.iter().all(|item| item.as_i64().is_some()))
 }
 
+/// Loctype categories (`content/pack/category.pack`) of furniture that
+/// advertises Open but stays a wall once open: `chest_closed`,
+/// `cupboard_closed`, `drawer`.
+const FURNITURE_CATEGORIES: [i64; 3] = [33, 35, 37];
+
 /// Parse the loctype table and apply navigation overrides. Every
 /// override entry needs a `reason` and a `verified` date; an override
 /// pointing outside the loc table fails loud instead of inventing
@@ -99,6 +104,13 @@ pub fn parse_loctypes(gametypes_text: &str, overrides_text: &str) -> Result<Vec<
         if blocked.contains(&loc_id) {
             open_op = None;
         }
+        // Furniture that opens (chest_closed 33, cupboard_closed 35,
+        // drawer 37) swaps into an open variant that still blocks walk
+        // (34 / 36 / 38): never a passage. Read as a door, the planner
+        // stepped onto Varrock drawers (DoorDidNotOpen, 2026-11-13).
+        if FURNITURE_CATEGORIES.contains(&category) {
+            open_op = None;
+        }
         let toll = row
             .get("name")
             .as_str()
@@ -149,6 +161,10 @@ mod tests {
         assert!(defs[3635].as_ref().is_some_and(|def| def.open_op.is_none()));
         // Untouched doors keep their op.
         assert_eq!(defs[3].as_ref().and_then(|def| def.open_op), Some(1));
+        // Opening furniture is never a passage: drawers2 350, chestclosed
+        // 375 (chest_closed), cupboards keep no open op.
+        assert!(defs[350].as_ref().is_some_and(|def| def.open_op.is_none()));
+        assert!(defs[375].as_ref().is_some_and(|def| def.open_op.is_none()));
         // Double gates: categories gate_main_closed / gate_outer_closed.
         use crate::collision::GateLeaf;
         assert_eq!(defs[1551].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Main));
@@ -158,5 +174,8 @@ mod tests {
         // Single doors: category door_closed (Port Sarim cook house 1530).
         assert_eq!(defs[1530].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::Door));
         assert_eq!(defs[1531].as_ref().and_then(|def| def.gate_leaf), None);
+        // Castle double doors: door_left_closed / door_right_closed.
+        assert_eq!(defs[1516].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::DoorLeft));
+        assert_eq!(defs[1519].as_ref().and_then(|def| def.gate_leaf), Some(GateLeaf::DoorRight));
     }
 }

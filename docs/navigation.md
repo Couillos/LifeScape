@@ -81,7 +81,24 @@ depuis (3217,3219) puis traversée à l'ouest. Les anciens overrides
 le château : NoRoute exhaustif 3-9 s (men/dark_wizards, ~50/h). Un
 override `one_way_doors` exige une preuve contenu (refus scripté de côté,
 ex. `haunteddoorl`). Goldens `chateau_entree`, `chateau_sud_interieur`,
-`chateau_draynor_men`.
+`chateau_draynor_men`. Battants ouverts (`open_double_doors_left`/`_right`) :
+chacun recule d'une tuile vers son angle, tourné `angle+3` (gauche) ou
+`angle+1` (droit) — château : 1517 (3216,3218) sud, 1520 (3216,3219) nord.
+Mêmes marques `DOOR_LEAF_*` que les portes simples (avant : ~700 refus/h
+sur le pas (3216,3220)->(3216,3219), replan identique). Peints en murs ils
+ne coupaient aucune pièce (40 battants F2P analysés), la marque reste le
+choix commun. Golden `nav/tests/door_swing.rs`.
+
+Mobilier qui « s'ouvre » (catégories `chest_closed` 33, `cupboard_closed`
+35, `drawer` 37 : la variante ouverte bloque toujours) n'est jamais une
+porte (`loctypes.rs`) : avant, le plan « ouvrait » les tiroirs 350 de
+Varrock pour marcher dessus (DoorDidNotOpen). Golden `nav/tests/furniture.rs`.
+
+Veille de blocage d'une jambe (`await_leg`, SDK) : une tuile plus loin
+sur la jambe compte comme progrès, pas seulement un rapprochement de sa
+dernière tuile (une jambe qui contourne une clôture s'éloigne de sa fin
+plus de 13 ticks en avançant : ~80 faux « stalled »/h, champs au sud de
+Varrock).
 
 Destination bloquée (guichet, comptoir, arbre, eau) : le plan finit sur
 la tuile de repli de meilleur rang (`Tile::fallback_rank`) : niveau,
