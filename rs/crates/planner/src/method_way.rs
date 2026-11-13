@@ -42,6 +42,97 @@ pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
         .unwrap_or_default()
 }
 
+/// True for an uncooked stage the meals scripts assemble in the pack
+/// (bread dough, pie shells, uncooked pies, pizza, cake, stew, wine).
+pub fn prepared(input: &str) -> bool {
+    input.starts_with("uncooked_")
+        || input == "jug_unfermented_wine"
+        || ways(input).iter().any(|way| way.kind == WayKind::Make && way.detail.starts_with("cook_prep"))
+}
+
+/// Inputs with every prepared stage replaced by its own inputs (the
+/// base components a meals script banks: flour, water, pie dish,
+/// berries...). Bounded depth: the prep chain is three stages deep.
+pub fn flatten_prep(inputs: &[(String, i64)]) -> Vec<(String, i64)> {
+    fn expand(item: &str, count: i64, depth: u8, out: &mut Vec<(String, i64)>) {
+        let prep = ways(item).into_iter().find(|way| way.kind == WayKind::Make && way.detail.starts_with("cook_prep"));
+        match prep {
+            Some(way) if depth > 0 => {
+                for (input, per) in &way.inputs {
+                    expand(input, count * (*per).max(1), depth - 1, out);
+                }
+            }
+            _ => match out.iter_mut().find(|(name, _)| name == item) {
+                Some(known) => known.1 += count,
+                None => out.push((item.to_string(), count)),
+            },
+        }
+    }
+    let mut out = Vec::new();
+    for (input, count) in inputs {
+        expand(input, *count, 4, &mut out);
+    }
+    out
+}
+
+/// A spawn tile a bot may sweep: free, behind no gate, out of the
+/// Wilderness, with a bank in reach some combat level makes safe.
+fn spawn_workable(site: &(i64, i64, i64)) -> bool {
+    let (x, z, level) = *site;
+    lifescape_gamedata::free_zones::is_free(x, z)
+        && lifescape_gamedata::access::gates_at(x, z, level).is_empty()
+        && lifescape_gamedata::danger::site_requirement(x, z, level) < lifescape_gamedata::danger::NEVER
+}
+
+/// A ground spawn a bot may sweep (one of its tiles workable).
+pub fn ground_workable(way: &Way) -> bool {
+    way.kind == WayKind::Ground && way.sites.iter().any(spawn_workable)
+}
+
+/// Superheat (`superheat_item`, magic 43): the smelt inputs plus the
+/// spell's runes, at any spot, never failing (no iron loss).
+fn superheat_way(bar: &str) -> Option<Way> {
+    let smelt = make_way_of(bar, &["smelt"])?;
+    let spell = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == "superheat_item")?;
+    let mut way = smelt;
+    way.kind = WayKind::Spell;
+    way.detail = format!("superheat_item {bar}");
+    way.skill = Some(("magic".to_string(), spell.level));
+    way.inputs.extend(spell.runes.iter().map(|(rune, count)| (rune.to_string(), *count)));
+    way.sites = Vec::new();
+    way.success = 1.0;
+    Some(way)
+}
+
+/// Telekinetic grab of a ground spawn (wine of Zamorak: the monks attack
+/// a hand pickup): magic 33, one law and one air rune per grab.
+fn telegrab_way(item: &str) -> Option<Way> {
+    let mut way = ways(item).into_iter().filter(|way| way.kind == WayKind::Ground).reduce(|mut merged, next| {
+        merged.sites.extend(next.sites);
+        merged
+    })?;
+    let spell = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == "telekinetic_grab")?;
+    way.kind = WayKind::Spell;
+    way.detail = format!("telekinetic_grab {item}");
+    way.skill = Some(("magic".to_string(), spell.level));
+    way.inputs = spell.runes.iter().map(|(rune, count)| (rune.to_string(), *count)).collect();
+    way.sites.retain(spawn_workable);
+    Some(way)
+}
+
+/// Every way of `item` a planner leg can work: the obtain index plus the
+/// ways the index has no row for (superheat of a smeltable bar, the grab
+/// of the wine of Zamorak).
+pub fn production_ways(item: &str) -> Vec<Way> {
+    let mut out: Vec<Way> = ways(item);
+    if item == "wine_of_zamorak" {
+        out.retain(|way| way.kind != WayKind::Ground);
+        out.extend(telegrab_way(item));
+    }
+    out.extend(superheat_way(item));
+    out
+}
+
 fn make_way_of(product: &str, kinds: &[&str]) -> Option<Way> {
     ways(product)
         .into_iter()
@@ -90,7 +181,11 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
             (product, way)
         }
         "cook" => (tail.to_string(), make_way_of(tail, &["cook"])?),
-        "bake" => (tail.to_string(), make_way_of(tail, &["cook", "cook_prep"])?),
+        "bake" => {
+            let mut way = make_way_of(tail, &["cook", "cook_prep"])?;
+            way.inputs = flatten_prep(&way.inputs);
+            (tail.to_string(), way)
+        }
         "smith" => (tail.to_string(), make_way_of(tail, &["smith"])?),
         "smelt" => (tail.to_string(), make_way_of(tail, &["smelt"])?),
         "spin" => (tail.to_string(), make_way_of(tail, &["spin"])?),
@@ -123,6 +218,17 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
             (tail.to_string(), way)
         }
         "milk" => (tail.to_string(), ways(tail).into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("milk"))?),
+        "dye" => (tail.to_string(), ways(tail).into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("aggie"))?),
+        "superheat" => (tail.to_string(), superheat_way(tail)?),
+        "telegrab" => (tail.to_string(), telegrab_way(tail)?),
+        "ground" => {
+            let mut merged = ways(tail).into_iter().filter(ground_workable).reduce(|mut merged, next| {
+                merged.sites.extend(next.sites);
+                merged
+            })?;
+            merged.sites.retain(spawn_workable);
+            (tail.to_string(), merged)
+        }
         "tan" => {
             let leather = ways("leather").into_iter().find(|way| way.kind == WayKind::Harvest && way.detail.starts_with("tanner"))?;
             ("leather".to_string(), leather)
@@ -138,6 +244,11 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
 pub fn action_xp(method: &str) -> Option<f64> {
     let (product, way) = method_way(method)?;
     let (skill, _) = way.skill.as_ref()?;
+    if way.kind == WayKind::Spell || way.detail.starts_with("telekinetic_grab") {
+        let spell = way.detail.split_whitespace().next().unwrap_or("");
+        let xp = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == spell).map(|row| row.xp)?;
+        return (xp > 0).then_some(xp as f64 / 10.0);
+    }
     let tenths = match skill.as_str() {
         "fishing" => lifescape_gamedata::fishing::all_fish_tiers().into_iter().find_map(|tier| {
             let at = tier.products.iter().position(|name| *name == product)?;

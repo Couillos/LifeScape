@@ -132,9 +132,16 @@ pub fn gates_at(x: i64, z: i64, level: i64) -> Vec<Gate> {
 /// Ground tile a guild site is reached from (outside its door, the
 /// Mining Guild ladder top): its bank and danger read there (an upstairs
 /// range or an underground rock has no bank on its own level). The site
-/// itself elsewhere.
+/// itself elsewhere; an upstairs station with no bank on its own floor
+/// (the Lumbridge mill hopper, level 2) reads at the ground tile below.
 pub fn surface_of(x: i64, z: i64, level: i64) -> (i64, i64, i64) {
-    areas().into_iter().find(|area| inside(area, x, z, level)).and_then(|area| area.door).unwrap_or((x, z, level))
+    if let Some(door) = areas().into_iter().find(|area| inside(area, x, z, level)).and_then(|area| area.door) {
+        return door;
+    }
+    if level > 0 && crate::danger::site_bank(x, z, level).is_none() {
+        return (x, z, 0);
+    }
+    (x, z, level)
 }
 
 /// True when no bot can ever pass the gate today (no nav edge, no model).
@@ -160,6 +167,7 @@ mod tests {
         assert!(matches!(gates_at(3040, 9740, 0).as_slice(), [Gate::Guild { area: "mining_guild", level: 60, uniform: None, .. }]));
         assert_eq!(surface_of(3040, 9740, 0), (3019, 3339, 0), "the guild banks at Falador");
         assert_eq!(surface_of(3143, 3452, 1), (3143, 3443, 0), "the guild range reads at its door");
+        assert_eq!(surface_of(3166, 3307, 2), (3166, 3307, 0), "the Lumbridge mill hopper reads downstairs");
         assert!(gates_at(2975, 3234, 0).is_empty(), "Rimmington gold is open");
         assert!(gates_at(2955, 3192, 0).is_empty(), "the Rimmington coast is mainland");
         let karamja = gates_at(2924, 3178, 0);

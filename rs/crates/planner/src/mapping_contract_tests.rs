@@ -39,6 +39,38 @@ fn stations_carry_the_picked_site() {
     assert!(args.windows(2).any(|pair| pair == ["--wear", "brown_apron"]), "{args:?}");
 }
 
+/// New families (audit 2026-11-13 A12/B8/B9): each names its script and
+/// its resource first.
+#[test]
+fn new_families_name_their_scripts() {
+    let quota = obtain("sapphire", 10);
+    for (method, script, first) in [
+        ("cut:sapphire", "cut_gems", Some("uncut_sapphire")),
+        ("dye:yellowdye", "dye", Some("yellowdye")),
+        ("ground:hammer", "ground_pickup", Some("hammer")),
+        ("telegrab:wine_of_zamorak", "telegrab_wine", None),
+        ("bury:bones", "bury_loot", Some("bones")),
+        ("bake:bread", "bake_bread", None),
+        ("bake:redberry_pie", "cook_meals", Some("redberry_pie")),
+        ("superheat:iron_bar", "superheat", Some("iron_bar")),
+    ] {
+        let (mapped, args) = map_method(method, &quota, None).unwrap_or_else(|| panic!("{method} maps"));
+        assert_eq!(mapped, script, "{method}");
+        match first {
+            Some(resource) => assert_eq!(args.first().map(String::as_str), Some(resource), "{method}: {args:?}"),
+            None => assert_eq!(args.first().map(String::as_str), Some("--want"), "{method}: {args:?}"),
+        }
+    }
+    // Magic carries the spell the planner sized the runes for.
+    let climb = climb("magic", 30);
+    let (script, args) = map_method("fight:magic/fire_strike/cows", &climb, None).expect("magic maps");
+    assert_eq!(script, "magic");
+    assert_eq!(&args[..3], &["cows".to_string(), "--spell".to_string(), "fire_strike".to_string()]);
+    assert!(args.windows(3).any(|window| window == ["--level", "magic", "30"]), "{args:?}");
+    let (_, legacy) = map_method("fight:magic/cows", &climb, None).expect("legacy magic maps");
+    assert_eq!(&legacy[..3], &["cows".to_string(), "--spell".to_string(), "wind_strike".to_string()]);
+}
+
 /// A shop purchase names the planner's shop and keeper site.
 #[test]
 fn shopbuy_names_the_planners_shop() {

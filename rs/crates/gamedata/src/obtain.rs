@@ -396,7 +396,19 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
         }
         ItemSource::Service { service } => {
             let npc = if service.starts_with("aggie") { "aggie" } else { "wyson_the_gardener" };
+            // Aggie's dyes (`aggie.rs2`): 2 onions, 3 redberries or 2 woad
+            // leaves and 5 coins per dye.
+            let dye_input = match (service.as_str(), item) {
+                ("aggie_dye", "yellowdye" | "yellow_dye") => Some(("onion", 2)),
+                ("aggie_dye", "reddye" | "red_dye") => Some(("redberries", 3)),
+                ("aggie_dye", "bluedye" | "blue_dye") => Some(("woadleaf", 2)),
+                _ => None,
+            };
             let mut way = Way::new(WayKind::Harvest, service);
+            if let Some((input, count)) = dye_input {
+                way.inputs = vec![(input.to_string(), count)];
+                way.coins = 5;
+            }
             way.sites = npc_sites_by_name(npc);
             way
         }
@@ -432,9 +444,16 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
         }
         ItemSource::Spell { spell, input } => {
             let level = crate::spells::all_spells().into_iter().find(|row| row.spell == spell).map(|row| row.level).unwrap_or(1);
+            // The cast burns its runes (`spells` table) with the object.
+            let runes: Vec<(String, i64)> = crate::spells::all_spells()
+                .into_iter()
+                .find(|row| row.spell == spell)
+                .map(|row| row.runes.iter().map(|(rune, count)| (rune.to_string(), *count)).collect())
+                .unwrap_or_default();
             let mut way = Way::new(WayKind::Spell, spell);
             way.skill = Some(("magic".to_string(), level));
             way.inputs = vec![(input, 1)];
+            way.inputs.extend(runes);
             way
         }
         ItemSource::Mix { kind, inputs } => {

@@ -70,7 +70,7 @@ fn producers_file_their_inputs_and_tools() {
 /// level (a tranche never works a tier it unlocks only at its target).
 #[test]
 fn every_tranche_recipe_opens_at_its_start() {
-    for skill in ["fishing", "woodcutting", "mining", "cooking", "firemaking", "smithing", "crafting", "runecraft"] {
+    for skill in ["fishing", "woodcutting", "mining", "cooking", "firemaking", "smithing", "crafting", "runecraft", "prayer"] {
         for start in 1..=98u8 {
             let method = crate::tranches::reach_method(skill, start);
             let Some((_, way)) = crate::method_way::method_way(&method) else {

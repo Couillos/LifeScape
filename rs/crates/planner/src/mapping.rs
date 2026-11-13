@@ -88,8 +88,29 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         ("enchant_teleport".to_string(), vec![amulet.to_string()])
     } else if let Some(spot) = method.strip_prefix("fight:ranged/") {
         ("ranged".to_string(), fight_head(spot, node))
-    } else if let Some(spot) = method.strip_prefix("fight:magic/") {
-        ("magic".to_string(), fight_head(spot, node))
+    } else if let Some(tail) = method.strip_prefix("fight:magic/") {
+        // `fight:magic/<spell>/<spot>`: the spot first, then the spell the
+        // planner sized the runes for (legacy `fight:magic/<spot>`: wind
+        // strike).
+        let spot = tail.rsplit('/').next().unwrap_or(tail);
+        let spell = crate::method_way::magic_spell(method).unwrap_or_else(|| "wind_strike".to_string());
+        let mut head = fight_head(spot, node);
+        head.insert(1, "--spell".to_string());
+        head.insert(2, spell);
+        ("magic".to_string(), head)
+    } else if let Some(gem) = method.strip_prefix("cut:") {
+        // The script eats the uncut stone (`gem` recipe input).
+        let uncut = crate::method_way::method_way(method).and_then(|(_, way)| way.inputs.first().map(|(name, _)| name.clone())).unwrap_or_else(|| gem.to_string());
+        ("cut_gems".to_string(), vec![uncut])
+    } else if let Some(dye) = method.strip_prefix("dye:") {
+        ("dye".to_string(), vec![dye.to_string()])
+    } else if let Some(item) = method.strip_prefix("ground:") {
+        ("ground_pickup".to_string(), vec![item.to_string()])
+    } else if method.starts_with("telegrab:") {
+        ("telegrab_wine".to_string(), Vec::new())
+    } else if let Some(bones) = method.strip_prefix("bury:") {
+        // Prayer from the bank: withdraw the bones, bury, repeat.
+        ("bury_loot".to_string(), vec![bones.to_string()])
     } else if method.starts_with("gather:sheep/") {
         ("shear".to_string(), Vec::new())
     } else if let Some(resource) = method.strip_prefix("gather:wheat/") {

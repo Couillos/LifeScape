@@ -67,7 +67,7 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(tranches("smithing", 1, 99), vec![15, 20, 30, 40, 50, 70, 85, 99]);
     assert_eq!(tranches("crafting", 1, 99), vec![5, 7, 8, 16, 20, 27, 34, 43, 70, 99]);
     assert_eq!(tranches("runecraft", 1, 99), vec![2, 5, 9, 14, 20, 99]);
-    assert_eq!(tranches("prayer", 1, 99), vec![99], "one tranche, burial in-loop");
+    assert_eq!(tranches("prayer", 1, 99), vec![10, 20, 30, 40, 99], "banked bones, then big bones");
     assert_eq!(tranches("magic", 1, 99), vec![10, 20, 30, 40, 99]);
     assert_eq!(reach_method("firemaking", 30), "fire:willow_logs");
     assert_eq!(reach_method("smithing", 30), "smelt:steel_bar");
@@ -78,13 +78,15 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("crafting", 70), "jewelry:unstrung_diamond_amulet");
     assert_eq!(reach_method("crafting", 16), "jewelry:nostringstar");
     assert_eq!(reach_method("cooking", 30), "cook/raw_salmon", "lobster needs cooking 40");
-    assert_eq!(reach_method("cooking", 40), "cook/raw_lobster");
+    assert_eq!(reach_method("cooking", 40), "cook/raw_salmon", "raw lobster is Karamja water: no boat edge");
     assert_eq!(reach_method("fishing", 35), "gather:fishing/raw_salmon", "no Karamja water: never safe");
     assert_eq!(reach_method("woodcutting", 45), "gather:woodcut/willow_logs", "maples have no F2P site");
     assert_eq!(reach_method("runecraft", 9), "runecraft:earthrune");
-    assert_eq!(reach_method("prayer", 99), "fight:melee/cows");
+    assert_eq!(reach_method("prayer", 1), "bury:bones");
+    assert_eq!(reach_method("prayer", 20), "bury:big_bones");
     assert_eq!(reach_method("ranged", 20), "fight:ranged/cows");
-    assert_eq!(reach_method("magic", 20), "fight:magic/cows");
+    assert_eq!(reach_method("magic", 20), "fight:magic/wind_bolt/cows", "the best spell open at the start");
+    assert_eq!(reach_method("magic", 1), "fight:magic/wind_strike/chickens");
 }
 
 #[test]

@@ -178,7 +178,8 @@ pub enum SitePick {
 
 /// Station families whose server way places them (furnace, anvil, range,
 /// wheel, altar...): the brain picks the site, the script works there.
-const STATION_FAMILIES: [&str; 9] = ["smelt:", "smith:", "cook/", "cook:", "bake:", "spin:", "pottery:", "jewelry:", "runecraft:"];
+const STATION_FAMILIES: [&str; 14] =
+    ["smelt:", "smith:", "cook/", "cook:", "bake:", "spin:", "pottery:", "jewelry:", "runecraft:", "ground:", "telegrab:", "dye:", "tan:", "mill:"];
 
 /// One site of a method: where, the combat level its site and bank need,
 /// its gates, and whether some bot can ever pass them.

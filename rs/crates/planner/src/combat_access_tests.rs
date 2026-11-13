@@ -57,3 +57,4 @@ fn stations_are_picked_sites() {
         other => panic!("ranges exist, got {other:?}"),
     }
 }
+

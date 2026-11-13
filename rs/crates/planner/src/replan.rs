@@ -128,7 +128,10 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
     if units.is_none() && product == need {
         return INPUT_BATCH;
     }
-    for way in lifescape_gamedata::obtain::ways(&product) {
+    // The node's own method first (a baked meal eats its flattened base
+    // components, a superheat its runes), then every production way.
+    let locked = node.method.as_deref().and_then(crate::method_way::method_way).map(|(_, way)| way);
+    for way in locked.into_iter().chain(lifescape_gamedata::obtain::ways(&product)) {
         if !way.is_production() {
             continue;
         }
@@ -314,6 +317,16 @@ mod tests {
         let mut cook = reach("cook/raw_shrimp");
         let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);
         assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == shrimps), "{:?}", fresh[0].kind);
+    }
+
+    /// A baked meal blocks on its base components (`cook_meals` assembles
+    /// the pie in the pack): sized from the locked method's flattened way.
+    #[test]
+    fn meals_size_their_base_components() {
+        let mut pies = Node::new("n8", NodeKind::ObtainItems { item: "redberry_pie".to_string(), count: 10 }, Vec::new(), 10);
+        pies.method = Some("bake:redberry_pie".to_string());
+        assert_eq!(super::need_count(&pies, "redberries"), 10);
+        assert_eq!(super::need_count(&pies, "pot_flour"), 10);
     }
 
     #[test]

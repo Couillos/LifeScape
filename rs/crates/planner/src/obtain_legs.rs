@@ -5,7 +5,7 @@
 //! runecrafting, pottery, leather, shearing, picking, filling, tanning,
 //! milking, enchanting), and the NPC shop only when D-A allows it.
 
-use lifescape_gamedata::obtain::{ways, WayKind};
+use lifescape_gamedata::obtain::WayKind;
 
 use crate::model::{Alternative, Node, NodeKind};
 
@@ -34,7 +34,11 @@ fn method_for(item: &str, kind: WayKind, detail: &str, inputs: &[(String, i64)])
         WayKind::Make => match recipe_kind {
             "smith" => format!("smith:{item}"),
             "smelt" => format!("smelt:{item}"),
+            // Composite food (bread dough, uncooked pies, stew, pizza,
+            // cake) bakes through the meals scripts, never `cook`.
+            "cook" if inputs.iter().any(|(input, _)| crate::method_way::prepared(input)) => format!("bake:{item}"),
             "cook" => format!("cook:{item}"),
+            "gem" => format!("cut:{item}"),
             "spin" => format!("spin:{item}"),
             "jewellery" => format!("jewelry:{item}"),
             "string" => {
@@ -59,11 +63,18 @@ fn method_for(item: &str, kind: WayKind, detail: &str, inputs: &[(String, i64)])
                 format!("tan:{}", inputs.first().map(|(name, _)| name.as_str()).unwrap_or("cow_hide"))
             } else if detail.starts_with("milk") {
                 format!("milk:{item}")
+            } else if detail.starts_with("aggie") {
+                format!("dye:{item}")
             } else {
                 return None;
             }
         }
         WayKind::Spell if detail.starts_with("enchant") => format!("enchant:{}", inputs.first()?.0),
+        WayKind::Spell if detail.starts_with("superheat_item") => format!("superheat:{item}"),
+        // Wine of Zamorak: the monks attack a hand pickup, the grab spell
+        // takes it from across the altar (`telegrab_wine`).
+        WayKind::Spell if detail.starts_with("telekinetic_grab") => format!("telegrab:{item}"),
+        WayKind::Ground => format!("ground:{item}"),
         _ => return None,
     };
     Some(method)
@@ -73,9 +84,10 @@ fn method_for(item: &str, kind: WayKind, detail: &str, inputs: &[(String, i64)])
 pub fn production_legs(item: &str) -> Vec<ProductionLeg> {
     let probe = Node::new("probe", NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
     let mut out: Vec<ProductionLeg> = Vec::new();
-    for way in ways(item) {
+    for way in crate::method_way::production_ways(item) {
         let farmable_drop = way.kind == WayKind::Drop && way.rate.is_some_and(|rate| rate > 0.0);
-        if !way.is_production() && !farmable_drop {
+        let pickup = way.kind == WayKind::Ground && crate::method_way::ground_workable(&way);
+        if !way.is_production() && !farmable_drop && !pickup {
             continue;
         }
         let Some(method) = method_for(item, way.kind, &way.detail, &way.inputs) else { continue };
@@ -91,7 +103,9 @@ pub fn production_legs(item: &str) -> Vec<ProductionLeg> {
             }
             continue;
         }
-        let inputs = if farmable_drop { Vec::new() } else { way.inputs.clone() };
+        // A meal bakes from its base components (`cook_meals` assembles
+        // the uncooked stage in the pack): flatten the prep chain.
+        let inputs = if farmable_drop || pickup { Vec::new() } else { crate::method_way::flatten_prep(&way.inputs) };
         let quest = way.quest.as_deref().map(|quest| quest.strip_prefix("quest_").unwrap_or(quest).to_string());
         out.push(ProductionLeg { method, skill: way.skill.clone(), inputs, tools: way.tools.clone(), quest, sites: way.sites.clone() });
     }
@@ -176,6 +190,46 @@ mod tests {
         let smith = production_legs("bronze_sword").into_iter().find(|leg| leg.method == "smith:bronze_sword").expect("smith leg");
         assert_eq!(smith.skill.as_ref().map(|(skill, _)| skill.as_str()), Some("smithing"));
         assert!(smith.inputs.iter().any(|(input, _)| input == "bronze_bar"));
+    }
+
+    fn leg(item: &str, method: &str) -> super::ProductionLeg {
+        production_legs(item).into_iter().find(|leg| leg.method == method).unwrap_or_else(|| panic!("{item}: no {method} in {:?}", methods(item)))
+    }
+
+    /// Audit 2026-11-13 (A12): gem cutting, composite food, dyes, ground
+    /// spawns, the wine grab and superheat are production legs with their
+    /// server inputs, tools and levels.
+    #[test]
+    fn every_f2p_family_is_a_leg() {
+        let sapphire = leg("sapphire", "cut:sapphire");
+        assert_eq!(sapphire.tools, vec!["chisel".to_string()]);
+        assert_eq!(sapphire.inputs, vec![("uncut_sapphire".to_string(), 1)]);
+        let bread = leg("bread", "bake:bread");
+        assert!(bread.inputs.contains(&("pot_flour".to_string(), 1)) && bread.inputs.contains(&("jug_water".to_string(), 1)), "{:?}", bread.inputs);
+        let pie = leg("redberry_pie", "bake:redberry_pie");
+        for base in ["pot_flour", "jug_water", "piedish", "redberries"] {
+            assert!(pie.inputs.iter().any(|(input, _)| input == base), "pie bakes from {base}: {:?}", pie.inputs);
+        }
+        assert_eq!(leg("yellowdye", "dye:yellowdye").inputs, vec![("onion".to_string(), 2)], "Aggie: two onions");
+        let heat = leg("iron_bar", "superheat:iron_bar");
+        assert_eq!(heat.skill, Some(("magic".to_string(), 43)));
+        assert!(heat.inputs.iter().any(|(input, _)| input == "naturerune"), "{:?}", heat.inputs);
+        assert!(heat.inputs.iter().any(|(input, _)| input == "iron_ore"));
+        let wine = leg("wine_of_zamorak", "telegrab:wine_of_zamorak");
+        assert_eq!(wine.skill, Some(("magic".to_string(), 33)));
+        assert!(wine.inputs.iter().any(|(input, _)| input == "lawrune"));
+        // Ground spawns a bot may sweep: free, ungated, a bank in reach.
+        let swept: Vec<&str> = ["hammer", "tinderbox", "bucket_empty", "pot_empty", "jug_empty", "chisel", "bronze_pickaxe", "shears", "spade", "cabbage", "egg", "grain"]
+            .into_iter()
+            .filter(|item| methods(item).contains(&format!("ground:{item}")))
+            .collect();
+        assert!(!swept.is_empty(), "some tool or food spawn is sweepable");
+        for item in swept {
+            let (_, way) = crate::method_way::method_way(&format!("ground:{item}")).expect("ground way");
+            for (x, z, level) in way.sites {
+                assert!(lifescape_gamedata::access::gates_at(x, z, level).is_empty(), "{item} spawn ({x},{z},{level}) is gated");
+            }
+        }
     }
 
     #[test]
