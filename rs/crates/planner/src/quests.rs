@@ -106,12 +106,18 @@ pub fn quests_done_from(varp_of: &dyn Fn(i64) -> i64) -> Vec<String> {
         .collect()
 }
 
-/// Quests the life's own graph finished (a done `complete_quest` node):
-/// proof between two engine saves (autosave every 15 min).
+/// `last_error` prefix of a done quest node a later block proved false
+/// (`lifecycle::record_block_from` on `quest:<key>`): its status stays
+/// `done` (history), it proves nothing any more.
+pub const DISPROVED: &str = "disproved: ";
+
+/// Quests the life's own graph finished (a done `complete_quest` node
+/// no later `missing:quest:<key>` block disproved): proof between two
+/// engine saves (autosave every 15 min).
 pub fn quests_done_in_graph(life: &Life) -> Vec<String> {
     life.nodes
         .iter()
-        .filter(|node| node.status == NodeStatus::Done)
+        .filter(|node| node.status == NodeStatus::Done && !node.last_error.starts_with(DISPROVED))
         .filter_map(|node| match &node.kind {
             NodeKind::CompleteQuest { quest } => Some(quest.clone()),
             _ => None,

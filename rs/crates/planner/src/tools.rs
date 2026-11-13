@@ -125,36 +125,27 @@ pub fn family_held(item: &str, wanted: i64, count_of: &dyn Fn(&str) -> i64) -> i
     held
 }
 
-pub fn tool_price(item: &str) -> i64 {
-    lifescape_gamedata::objs_by_name(item).into_iter().next().map(|entry| entry.price.max(1)).unwrap_or(i64::MAX)
-}
-
-/// One item the pack holds or can fund: carried (any family rank)
-/// or a purchasable shop stock the wallet covers. Ground spawns do
-/// not count: no script path picks up a ground-spawned tool (the
-/// recoveries reattach, rebuy or restore from the bank). Bait rides
-/// the same gate as the tool.
+/// One item the bot holds for its work (pack, bank or worn, any family
+/// rank; `ctx.tools` already leaves out what its own listings lock).
+/// Never "fundable": no executor buys its own gear (commit 44bde31), so a
+/// shop tool the wallet covers is still missing and becomes an obtain
+/// sub-task (`shop:buy`, market) BEFORE the launch (live 2026-11-13:
+/// `fishing raw_tuna` launched harpoon-less with 500+ coins, blocked at
+/// once). Bait rides the same gate as the tool. Bank unseen: never
+/// concludes missing.
 pub fn gear_ok(item: &str, ctx: &ReadyCtx) -> bool {
-    if !ctx.bank_known {
-        return true;
-    }
-    if tool_family(item).iter().any(|name| ctx.tools.iter().any(|held| held.eq_ignore_ascii_case(name))) {
-        return true;
-    }
-    use lifescape_gamedata::item_sources::ItemSource;
-    let stocked = lifescape_gamedata::item_sources::sources_for_name(item)
-        .iter()
-        .any(|source| matches!(source, ItemSource::Shop { .. }));
-    // D-A: a producible tool (bronze axe: smithed) is never a merchant
-    // purchase, so it never counts as fundable here.
-    ctx.allow_shop && stocked && lifescape_gamedata::obtain::merchant_buy_allowed(item) && ctx.coins >= tool_price(item)
+    !ctx.bank_known || tool_family(item).iter().any(|name| ctx.tools.iter().any(|held| held.eq_ignore_ascii_case(name)))
 }
 
 /// True when the bot can work `method` now: its quest done, no gear
-/// needed or the tool (and bait) carried or fundable.
+/// needed or the tool (and bait) held.
 pub fn method_feasible(method: &str, ctx: &ReadyCtx) -> bool {
     // A method whose quest the bot has not finished never launches.
     if crate::quests::missing_quest(method, None, ctx).is_some() {
+        return false;
+    }
+    // A drop farm hunts only a spot the bot's live stats survive.
+    if !crate::combat::drop_farm_fit(method, ctx) {
         return false;
     }
     required_tool(method).is_none_or(|need| need.missing(ctx).is_none())

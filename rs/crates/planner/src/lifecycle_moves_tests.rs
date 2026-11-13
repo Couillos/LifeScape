@@ -131,3 +131,43 @@ fn a_market_wait_parks_without_the_lock() {
     assert!(normalize(&mut life).is_empty(), "a parked wait is a valid state");
     assert_eq!(life.nodes[0].method.as_deref(), Some("market:buy"));
 }
+
+/// Live 2026-11-13 (t01 defence 30, eric_smith attack 50, bb4v5d9m): the
+/// melee ladder eats its 20 shrimps in two minutes of guards, blocks on
+/// food, the brain cooks 20 more, and so on: every refill counted one
+/// block although each fight earned XP, so the 4th refill abandoned the
+/// climb and banned the skill. XP earned in the run is real progress: it
+/// clears the block count like a level does.
+#[test]
+fn xp_earned_clears_the_block_count() {
+    let mut life = running(NodeKind::ReachLevel { skill: "defence".to_string(), level: 30 });
+    for _ in 0..super::MAX_BLOCKS {
+        record_block_from(&mut life, 0, &["shrimp".to_string()], &|_| 29);
+        super::record_xp(&mut life, 0, 0);
+        life.nodes[0].status = NodeStatus::Ready;
+        mark_launched(&mut life, 0);
+    }
+    assert_eq!(life.nodes[0].blocks, super::MAX_BLOCKS, "blocks without XP still count");
+    super::record_xp(&mut life, 0, 1_520);
+    assert_eq!(life.nodes[0].blocks, 0, "a fight that earned XP is progress");
+    let fold = record_block_from(&mut life, 0, &["shrimp".to_string()], &|_| 29);
+    assert_eq!(fold, super::FailureFold::Retry, "the next refill is never the abandon");
+}
+
+/// t01 n8 (cook 10 -> 20 on trout) depended on itself: a level block of
+/// the node's own skill reused the blocked node as the open climb, a
+/// one-node cycle `normalize` abandoned. The blocked node is never its
+/// own dependency.
+#[test]
+fn a_level_block_never_reuses_the_blocked_node() {
+    let mut life = running(NodeKind::ReachLevel { skill: "cooking".to_string(), level: 20 });
+    life.nodes[0].method = Some("cook/raw_trout".to_string());
+    // The next tranche (cooking 30) waits on the blocked one: reusing it
+    // would close a two-node cycle (t01 n8 <-> n9).
+    life.nodes.push(Node::new("n2", NodeKind::ReachLevel { skill: "cooking".to_string(), level: 30 }, vec!["n1".to_string()], 30));
+    record_block_from(&mut life, 0, &["level:cooking:15".to_string()], &|_| 10);
+    assert!(!life.nodes[0].deps.iter().any(|dep| dep == "n1" || dep == "n2"), "cycle dependency: {:?}", life.nodes[0].deps);
+    assert!(!life.nodes[0].deps.is_empty(), "a fresh 10 -> 15 climb is filed");
+    assert!(normalize(&mut life).iter().all(|change| !change.contains("cycle")), "no cycle");
+    assert_ne!(life.nodes[0].status, NodeStatus::Abandoned);
+}

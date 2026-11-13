@@ -657,6 +657,24 @@ pub fn report_result(bot: &Bot, quest: &str, solved: bool, error: Option<&str>) 
     }
 }
 
+/// What a quest run returns (the worker maps it to the brain's report):
+/// success ONLY on a seen completion; a solver error keeps its type
+/// (travel, Sdk, Failed); a solver that ran without the completion
+/// message fails; requirement gaps block typed (`level:<skill>:<N>`,
+/// item names) so the brain files them. Live 2026-11-13: every outcome
+/// returned 0, the worker reported `goal_reached` and the brain closed
+/// Rune Mysteries done after 17 NoRoute to the Duke.
+pub fn quest_outcome(key: &str, solved: bool, error: Option<ScriptError>, gaps: &[String]) -> ScriptResult {
+    if !gaps.is_empty() {
+        return Err(ScriptError::Blocked { missing: gaps.to_vec() });
+    }
+    match (solved, error) {
+        (true, _) => Ok(0),
+        (false, Some(error)) => Err(error),
+        (false, None) => Err(ScriptError::Failed(format!("quest {key}: solver ran but no completion message"))),
+    }
+}
+
 /// Shared requirement gate + solver driver: relogin, junk-free pack, bank
 /// top-up, requirement check against live state, solve, completion wait.
 // shortcut: no save-file completion merge; the runner trusts live varps only.
@@ -664,15 +682,16 @@ pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: 
     bot.relogin()?;
     let _ = bot.pump(10)?;
     // Requirement check against live state: skills, carried items, bank.
-    if !requirements_met(bot, requirements)? {
-        bot.log(&format!("{}: requirements not met", requirements.name));
+    let gaps = requirements_gap(bot, requirements)?;
+    if !gaps.is_empty() {
+        bot.log(&format!("{}: requirements not met: {}", requirements.name, gaps.join(", ")));
         report_result(bot, &requirements.key, false, Some("requirements not met"));
-        return Ok(0);
+        return quest_outcome(&requirements.key, false, None, &gaps);
     }
     if quest_done(bot, requirements) {
         bot.log(&format!("{}: already complete", requirements.name));
         report_result(bot, &requirements.key, true, None);
-        return Ok(0);
+        return quest_outcome(&requirements.key, true, None, &[]);
     }
     withdraw_requirements(bot, requirements)?;
     bot.close_modal()?;
@@ -682,41 +701,46 @@ pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: 
             let solved = wait_complete(bot, 300)? || quest_done(bot, requirements);
             report_result(bot, &requirements.key, solved, None);
             bot.log(&format!("{}: {}", requirements.name, if solved { "completed" } else { "solver ran but no completion message" }));
-            Ok(0)
+            quest_outcome(&requirements.key, solved, None, &[])
         }
         Err(err) => {
             bot.log(&format!("quest solve failed: {err}"));
             report_result(bot, &requirements.key, false, Some(&err.to_string()));
-            Ok(0)
+            quest_outcome(&requirements.key, false, Some(err), &[])
         }
     }
 }
 
-fn requirements_met(bot: &mut Bot, requirements: &QuestRequirements) -> Result<bool, ScriptError> {
+/// Requirements the bot misses (skills live, items carried, worn or
+/// banked): `level:<skill>:<N>` and item names, empty when met.
+fn requirements_gap(bot: &mut Bot, requirements: &QuestRequirements) -> Result<Vec<String>, ScriptError> {
+    let mut gaps = Vec::new();
     for skill in &requirements.skills {
         let index = skill_index(&skill.skill).unwrap_or(99);
         let level = bot.world.stats.get(&index).map(|(level, _)| *level as i64).unwrap_or(0);
         if level < skill.level {
-            return Ok(false);
+            gaps.push(format!("level:{}:{}", skill.skill.to_lowercase(), skill.level));
         }
     }
     let mut carried = bot.inventory();
+    let mut banked: Option<std::collections::HashMap<u16, u32>> = None;
     for item in &requirements.items {
         let have = carried.get(&(item.obj_id as u16)).copied().unwrap_or(0) as i64 + worn_count(bot, item.obj_id as u16) as i64;
         if have >= item.count {
             continue;
         }
-        // Top up from the bank before failing the gate.
-        let banked = open_nearest_bank(bot)?;
-        carried = bot.inventory();
-        let total = carried.get(&(item.obj_id as u16)).copied().unwrap_or(0) as i64
-            + worn_count(bot, item.obj_id as u16) as i64
-            + banked.get(&(item.obj_id as u16)).copied().unwrap_or(0) as i64;
+        // Top up from the bank before failing the gate (one visit).
+        if banked.is_none() {
+            banked = Some(open_nearest_bank(bot)?);
+            carried = bot.inventory();
+        }
+        let in_bank = banked.as_ref().and_then(|bank| bank.get(&(item.obj_id as u16)).copied()).unwrap_or(0) as i64;
+        let total = carried.get(&(item.obj_id as u16)).copied().unwrap_or(0) as i64 + worn_count(bot, item.obj_id as u16) as i64 + in_bank;
         if total < item.count {
-            return Ok(false);
+            gaps.push(item.item.clone());
         }
     }
-    Ok(true)
+    Ok(gaps)
 }
 
 fn quest_done(bot: &Bot, requirements: &QuestRequirements) -> bool {
@@ -736,10 +760,26 @@ fn skill_index(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stale_modal_before_click, take_near};
+    use super::{quest_outcome, stale_modal_before_click, take_near};
     use crate::tables_live::attach_live_tables;
+    use crate::ScriptError;
     use lifescape_sdk::world::Modal;
     use lifescape_sdk::Bot;
+
+    /// Live 2026-11-13 (bxkchh6x, sara_miller): `quest_rune_mysteries` hit
+    /// 17 NoRoute to the Duke, logged `solved=false` and returned 0, so
+    /// the worker reported `goal_reached` and the brain closed the quest
+    /// node done. Only a seen completion is a success; a solver error
+    /// keeps its type, a silent solver fails, a gap blocks typed.
+    #[test]
+    fn only_a_completed_quest_reports_success() {
+        assert!(matches!(quest_outcome("runemysteries", true, None, &[]), Ok(0)));
+        let route = ScriptError::Sdk(lifescape_sdk::Error::Unreachable("no route to the duke".to_string()));
+        assert!(matches!(quest_outcome("runemysteries", false, Some(route), &[]), Err(ScriptError::Sdk(_))));
+        assert!(matches!(quest_outcome("runemysteries", false, None, &[]), Err(ScriptError::Failed(_))));
+        let gaps = vec!["level:crafting:31".to_string(), "soft_clay".to_string()];
+        assert!(matches!(quest_outcome("hetty", false, None, &gaps), Err(ScriptError::Blocked { missing }) if missing == gaps));
+    }
 
     /// nina_rhodes / frank_lane (Terrova, %tutorial 630): the tab click had
     /// already opened Terrova's dialogue, the talk click read it as its own

@@ -149,3 +149,29 @@ fn quest_points_climb_a_real_ladder() {
     assert!(points(&quests) - 2 >= 32, "rungs worth 32 points: {quests:?}");
     assert!(!quests[..quests.len() - 1].contains(&"dragon".to_string()));
 }
+
+/// Live 2026-11-13 (bxkchh6x, leo_king, nina_rhodes, sara_miller): the
+/// quest script reported `goal_reached` without finishing Rune Mysteries,
+/// the done quest node then closed every later quest node "already
+/// complete" while the essence run kept blocking on the quest (4 blocks,
+/// mining banned). A block on `quest:X` is live proof X is NOT done: it
+/// voids every done quest node of X, and the fresh quest node launches.
+#[test]
+fn a_quest_block_disproves_done_quest_nodes() {
+    let essence = Node::new("n1", NodeKind::ObtainItems { item: "blankrune".to_string(), count: 39 }, Vec::new(), 39);
+    let mut quest = Node::new("n2", NodeKind::CompleteQuest { quest: "runemysteries".to_string() }, Vec::new(), 1);
+    quest.status = NodeStatus::Done;
+    let mut prince = Node::new("n3", NodeKind::CompleteQuest { quest: "prince".to_string() }, Vec::new(), 1);
+    prince.status = NodeStatus::Done;
+    let mut life = life_of(vec![essence, quest, prince]);
+    assert!(quests_done_in_graph(&life).contains(&"runemysteries".to_string()));
+    crate::lifecycle::record_block(&mut life, 0, &["quest:runemysteries".to_string()]);
+    assert_eq!(quests_done_in_graph(&life), vec!["prince".to_string()], "the block voids the false proof, other quests stand");
+    let fresh = life
+        .nodes
+        .iter()
+        .find(|node| node.id != "n2" && matches!(&node.kind, NodeKind::CompleteQuest { quest } if quest == "runemysteries"))
+        .expect("a fresh quest node is filed");
+    assert!(life.nodes[0].deps.contains(&fresh.id), "the essence waits on the fresh quest node");
+    assert_eq!(life.nodes[1].status, NodeStatus::Done, "history stays: the status is never rewritten");
+}

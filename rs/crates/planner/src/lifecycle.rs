@@ -522,6 +522,17 @@ pub fn record_progress(life: &mut Life, index: usize, current: i64) {
     node.progress_current = current;
 }
 
+/// XP a run earned toward a climb (`gained`, from its report): progress
+/// even when no level landed. Live 2026-11-13 (t01, eric_smith,
+/// bb4v5d9m): each 20-shrimp refill of a melee climb counted one block
+/// while every fight earned XP, the 4th abandoned the climb and banned
+/// the skill. Earned XP clears the block count like a level does.
+pub fn record_xp(life: &mut Life, index: usize, gained: i64) {
+    if gained > 0 {
+        life.nodes[index].blocks = 0;
+    }
+}
+
 /// `record_block_from` with every live level unknown (level 1): offline
 /// replays and tests. The brain passes the live levels.
 pub fn record_block(life: &mut Life, index: usize, missing: &[String]) -> FailureFold {
@@ -548,13 +559,19 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
     let mut reused = Vec::new();
     let mut fresh_needs = Vec::new();
     let mut fresh_nodes: Vec<Node> = Vec::new();
+    // Neither the blocked node nor anything waiting on it is reused as
+    // its dependency (t01 n8-n10: a cooking 10->20 climb blocked on a
+    // cooking level reused itself and its own successors, a cycle
+    // `normalize` abandoned with the whole chain).
+    let me = life.nodes[index].id.clone();
+    let waiting: Vec<String> = crate::bans_scope::dependents(life, &me).into_iter().map(|position| life.nodes[position].id.clone()).collect();
     for need in missing {
         // A combat level is a dependency like an item: one `reach_combat`
         // node trains it (goal style, a site safe for fresh bots), reused
         // when an open one already aims at least that high.
         if let Some(level) = need.strip_prefix("combat:").and_then(|raw| raw.parse::<u8>().ok()) {
             let open = life.nodes.iter().find(|node| {
-                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::ReachCombat { level: aimed } if *aimed >= level)
+                !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::ReachCombat { level: aimed } if *aimed >= level)
             });
             match open {
                 Some(node) => reused.push(node.id.clone()),
@@ -576,7 +593,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
         // an open one already aims at least that high.
         if let Some(amount) = need.strip_prefix("coins:").and_then(|raw| raw.parse::<i64>().ok()) {
             let open = life.nodes.iter().find(|node| {
-                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::HaveCoins { amount: aimed } if *aimed >= amount)
+                !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::HaveCoins { amount: aimed } if *aimed >= amount)
             });
             match open {
                 Some(node) => reused.push(node.id.clone()),
@@ -594,8 +611,16 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
         // essence): the quest's own expansion (skill gates, item checks,
         // the quest node), reused when an open quest node exists.
         if let Some(quest) = need.strip_prefix("quest:") {
+            // The block is live proof the quest is NOT done: a done quest
+            // node of it (a quest script that reported success short of
+            // the completion, live 2026-11-13) proves nothing any more.
+            for node in life.nodes.iter_mut() {
+                if node.status == NodeStatus::Done && matches!(&node.kind, NodeKind::CompleteQuest { quest: done } if done == quest) && !node.last_error.starts_with(crate::quests::DISPROVED) {
+                    node.last_error = format!("{}{me} blocked on quest:{quest}", crate::quests::DISPROVED);
+                }
+            }
             let open = life.nodes.iter().find(|node| {
-                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::CompleteQuest { quest: aimed } if aimed == quest)
+                !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::CompleteQuest { quest: aimed } if aimed == quest)
             });
             match open {
                 Some(node) => reused.push(node.id.clone()),
@@ -615,7 +640,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
         // gates expanded (skill climb, uniform), reused when open.
         if let Some(area) = need.strip_prefix("access:") {
             let open = life.nodes.iter().find(|node| {
-                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::AccessArea { area: aimed } if aimed == area)
+                !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::AccessArea { area: aimed } if aimed == area)
             });
             match open {
                 Some(node) => reused.push(node.id.clone()),
@@ -634,7 +659,9 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
         // reused when an open reach node already aims at least that high.
         if let Some((skill, level)) = need.strip_prefix("level:").and_then(|rest| rest.rsplit_once(':')).and_then(|(skill, raw)| raw.parse::<u8>().ok().map(|level| (skill.to_string(), level))) {
             let open = life.nodes.iter().find(|node| {
-                !is_terminal(&node.status) && matches!(&node.kind, NodeKind::ReachLevel { skill: aimed_skill, level: aimed } if *aimed_skill == skill && *aimed >= level)
+                !waiting.contains(&node.id)
+                    && !is_terminal(&node.status)
+                    && matches!(&node.kind, NodeKind::ReachLevel { skill: aimed_skill, level: aimed } if *aimed_skill == skill && *aimed >= level)
             });
             match open {
                 Some(node) => reused.push(node.id.clone()),
@@ -651,9 +678,7 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
             continue;
         }
         let open = life.nodes.iter().find(|node| {
-            !is_terminal(&node.status)
-                && node.id != life.nodes[index].id
-                && matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item == need)
+            !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::ObtainItems { item, .. } if item == need)
         });
         match open {
             Some(node) => reused.push(node.id.clone()),

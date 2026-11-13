@@ -39,8 +39,8 @@ fn a_trout_quota_needs_the_fly_rod_and_its_feathers() {
     let mut life = quota("raw_trout", 100);
     let methods: Vec<&str> = life.nodes[0].alternatives.iter().map(|alt| alt.method.as_str()).collect();
     assert_eq!(methods, vec!["farm:raw_trout"], "a quota is produced, never bought");
-    // No rod and broke: the rod is the first need (shop stock, no other
-    // F2P way); with coins the rod is fundable and the feathers block.
+    // No rod: the rod is the first need, broke or rich (no executor buys
+    // its own gear: the obtain leg buys it at a shop before the launch).
     let mut node = life.nodes[0].clone();
     let mut broke = fisher(&[]);
     broke.coins = 0;
@@ -48,7 +48,7 @@ fn a_trout_quota_needs_the_fly_rod_and_its_feathers() {
     assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:fly_fishing_rod".to_string() });
     let mut node = life.nodes[0].clone();
     resolve_ready(&mut node, &fisher(&[]));
-    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:feather".to_string() }, "the rod is a shop buy, feathers never");
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:fly_fishing_rod".to_string() }, "a fundable rod is no held rod");
     // Rod carried: the feathers block (1000 coins never buy them at a shop).
     let mut node = life.nodes[0].clone();
     resolve_ready(&mut node, &fisher(&["fly_fishing_rod"]));
