@@ -39,6 +39,22 @@
   .st-failed { background: #5e1d1d; color: #ffb0b0; }
   .st-abandoned { background: #222; color: #777; text-decoration: line-through; }
   .alt { color: #888; font-size: 11px; }
+  #tabs { display: flex; gap: 6px; margin: 12px 0 0; border-bottom: 1px solid #333; }
+  .tab { background: #0a0a0a; color: #04A800; border: 1px solid #444; border-bottom: none; border-radius: 3px 3px 0 0; padding: 4px 12px; cursor: pointer; font: inherit; }
+  .tab.cur { color: #ff0; border-color: #ff0; background: #1b1b1b; }
+  #brain-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  #brain-bar h2 { margin: 0; }
+  #brain-bar button { background: #0a0a0a; color: #eee; border: 1px solid #444; border-radius: 3px; padding: 2px 8px; cursor: pointer; font: inherit; }
+  #brain-wrap { display: flex; gap: 10px; align-items: stretch; }
+  #brain-svg { flex: 1; min-width: 0; height: 72vh; background: #050505; border: 1px solid #333; cursor: grab; user-select: none; }
+  #brain-panel { width: 320px; flex: none; max-height: 72vh; overflow-y: auto; border: 1px solid #333; padding: 6px 8px; font-size: 12px; }
+  #brain-panel h3 { font-size: 12px; color: #ff0; margin: 8px 0 3px; }
+  #brain-panel h3:first-child { margin-top: 0; }
+  .brain-err { color: #ffb0b0; }
+  #brain-legend { font-size: 11px; color: #888; margin-bottom: 6px; }
+  #brain-legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin: 0 3px 0 8px; }
+  #brain-tip { position: fixed; display: none; z-index: 10; max-width: 460px; background: #111; border: 1px solid #555; padding: 6px 8px; font-size: 11px; line-height: 1.4; pointer-events: none; white-space: pre-wrap; }
+  @media (max-width: 800px) { #brain-wrap { flex-direction: column; } #brain-panel { width: auto; } }
 </style>
 </head>
 <body>
@@ -54,6 +70,24 @@
   <span id="count" class="muted"></span>
 </div>
 <div id="tablewrap"><table id="index"></table></div>
+<div id="tabs" role="tablist">
+  <button class="tab cur" id="tab-detail" role="tab" onclick="showTab('detail')">Détail</button>
+  <button class="tab" id="tab-brain" role="tab" onclick="showTab('brain')">Cerveau</button>
+</div>
+<div id="brainpane" hidden>
+  <div id="brain-bar">
+    <h2 id="brain-title">Choisir un bot</h2>
+    <button id="brain-fit" title="Recadrer tout le graphe">Ajuster</button>
+    <button id="brain-collapse" title="Replier chaque sous-arbre entièrement fait">Replier le fait</button>
+    <label><input type="checkbox" id="brain-hide-abandoned"> masquer les abandonnés</label>
+    <span id="brain-status" class="muted"></span>
+  </div>
+  <div id="brain-legend">ambition → jalons → but courant → tâches (à droite : ce qu'il faut d'abord)
+    <i style="background:#666"></i>dépendance<i style="background:#f90"></i>sous-tâche déposée sur blocage<i style="background:#ff0"></i>jalon d'origine
+    · clic sur une tâche faite : replier/déplier · molette : zoom · glisser : déplacer</div>
+  <div id="brain-wrap"><svg id="brain-svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="brain-panel"></div></div>
+  <div id="brain-tip"></div>
+</div>
 <div id="detail">
   <h2 id="title">Pick a bot</h2>
   <div id="goal" class="muted"></div>
@@ -66,6 +100,7 @@
   <table id="history" class="detail"></table>
 </div>
 <script src="/table.js"></script>
+<script src="/brain.js"></script>
 <script src="/life.js"></script>
 </body>
 </html>

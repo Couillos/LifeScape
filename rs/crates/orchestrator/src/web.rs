@@ -1,10 +1,10 @@
 //! Web view over the orchestrator: dashboard and HTTP/WS API.
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
-//! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /economy /economy.js
+//! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /brain.js /economy /economy.js
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history
-//! /api/rates/table /api/lives /api/life/<account> /api/economy
+//! /api/rates/table /api/lives /api/life/<account> /api/brain/<account> /api/economy
 //! /api/market/<op>?… /api/scripts /api/accounts /api/logs/<account> +
 //! POST /api/open|run|unload|pause|resume|close + /ws pushing every 1 s.
 //! Static files are re-read from orchestration/static/ on every request.
@@ -243,6 +243,18 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
         if parts.len() >= 2 && parts[..2] == ["api", "life"] {
             let name = if parts.len() > 2 { parts[2] } else { "" };
             return Ok(ok_json(crate::web_lives::life_response(name)));
+        }
+        if parts.len() >= 2 && parts[..2] == ["api", "brain"] {
+            let name = if parts.len() > 2 { parts[2] } else { "" };
+            return Ok(ok_json(crate::web_brain::brain_response(name, dispatch)));
+        }
+        if parts == ["brain.js"] {
+            return Ok(Response {
+                status: 200,
+                content_type: "application/javascript",
+                cache: "no-store",
+                body: asset("brain.js").map_err(|error| error.to_string())?,
+            });
         }
         if parts == ["api", "economy"] {
             return Ok(ok_json(crate::web_lives::economy_response(dispatch)));

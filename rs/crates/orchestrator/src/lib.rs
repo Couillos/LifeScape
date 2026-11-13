@@ -60,6 +60,7 @@ pub mod web_items;
 pub mod web_job_lives;
 pub mod web_ws;
 pub mod web_lives;
+pub mod web_brain;
 pub mod web_market;
 pub mod zones;
 pub mod cli;
