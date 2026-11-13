@@ -248,8 +248,11 @@ function connectSocket() {
     if (data.jobs) {
       renderList(data.jobs);
       if (!autoSelected && data.jobs.length) {
+        // `/#<account>` (links from the errors page) wins; otherwise
         // never auto-follow the staff account: it is only followed on click
-        const first = data.jobs.find(j => j.account !== "admin") || data.jobs[0];
+        const wanted = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+        const first = data.jobs.find(j => j.account === wanted) ||
+          data.jobs.find(j => j.account !== "admin") || data.jobs[0];
         select(first.account);
       }
     }

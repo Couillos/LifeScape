@@ -156,3 +156,142 @@ Décisions (règles utilisateur) :
   compte (sauvegarde hors ligne) moins ses deals en cours ; les non couverts
   sont annulés (`market_audit.rs`). Premier passage : 222 ordres annulés.
 - Un ordre partiellement rempli (`matched`) reste annulable.
+
+## 2026-11-13 — Cœur du planner : montée depuis le niveau live, bannissements temporaires
+
+Constat (audit lecture seule de la flotte) : 40 % des ticks de montée
+mêlée (2,74 M sur 6,90 M) rejouaient des tranches déjà atteintes
+(`expand_goal` partait toujours du niveau 1 ; b8jxrdd2 « attack 10 » à
+attaque 45 : 18 015 ticks sur des poulets) ; 12 bots sur 25 avaient toutes
+leurs compétences bannies à vie (`stuck:<compétences>` lu sur tout
+l'historique) et restaient inactifs (`graph: final`) ; un graphe fini sans
+but à tirer ré-écrivait `done:` à chaque passe.
+Décisions (règles utilisateur) :
+- Les buts se déplient depuis le niveau live (`expand_goal_from`,
+  `append_goal`, `record_block_from`) ; un nœud de montée que le niveau
+  live atteint déjà est clos sans lancement ; toute tranche part avec
+  `--level` (récolte et combat).
+- Un but bloqué bannit ses compétences 6000 ticks seulement, cause typée
+  écrite et loggée (`stuck:<s>@6000:<classe> (node <id>, <erreur>)`),
+  expiration loggée une fois (`unban:<s>`). Anciennes entrées sans tick =
+  expirées : les bots inactifs retrouvent un but au premier passage du
+  nouveau binaire. Le tirage est retenté à chaque passe, `final` compris.
+- Discipline de cycle de vie : plus aucun statut écrit hors
+  `lifecycle.rs` côté daemon (`complete_node`, `retry_uncounted`,
+  `end_engagement`, `insert_ready`, `reached_live`). `brain.rs` découpé
+  (`brain_launch.rs`). Dette connue : le planner écrit encore `Blocked`
+  au résolveur (`expand`, `resolve_obtain`) et `replan_node` change des
+  statuts (appelé via `lifecycle`).
+Rejeté : bannissement à vie (bots inactifs sans recours), relance
+immédiate sans délai (même échec en boucle), bannir sur un manque
+d'outil/intrant/pièces (sous-tâches existantes), repartir du niveau 1 en
+comptant sur le script pour s'arrêter (budget de 18 000 ticks brûlé).
+
+## 2026-11-13 — Page Erreurs : journal centralisé persistant (table `error_events`)
+
+Besoin : toutes les erreurs au même endroit, identifiables (compte, tâche,
+nœud, coordonnées, zone), agrégées par type et par signature, avec KPIs.
+Décision : migration 3 de `lifescape-store`, table `error_events` alimentée
+par un seul thread du daemon (`errors_ingest.rs`) :
+- poussées (canal borné, jamais bloquant, pertes comptées et loguées) :
+  événements `script_error` (`ingest_push`), rapports de tâche `failed` /
+  `blocked` (repliés sur la ligne de l'événement de la même panne : une
+  panne = une ligne), lignes `brain …` du journal du daemon (abandon de
+  nœud, graphe/but bloqué, ban de skill, plafond de relance) captées dans
+  `logln!` même, sans relire le fichier ;
+- tirées toutes les 30 s : dossiers `run/failures/*.json` (par mtime) et
+  deals `failed` (table `deals`), clé unique `source_ref` ⇒ rescans et
+  redémarrages sans doublon, rattrapage des 72 h au premier passage.
+Signature = message sans nombres/coordonnées/listes `[…]`/nom du compte/
+chat `; last game:`. Rétention 72 h (purge horaire) : les dossiers nav
+seuls font 500–1400 lignes/h (~650 o). Mesuré sur les données réelles :
+36 700 dossiers + 790 deals rattrapés en ~15 s, résumé 24 h en ~0,25 s.
+Taux d'échec par tâche lus de `task_reports` (échecs / runs), taux d'échec
+des deals de `deals`. Rejeté : agrégation à la requête sur les sources
+brutes (52 000 dossiers, 445 Mo, journal sans date) ; anneau mémoire +
+instantané JSON (filtres et fenêtres à recoder, perdu entre deux
+instantanés) ; analyse du fichier `orchestrator.log` (heures sans date,
+rotation).
+
+## 2026-11-13 — Équipement par paliers, prix par l'offre et la demande
+
+Constat (audit 2026-11-13) : envies d'équipement sur la meilleure pièce
+absolue (plastron noir/mithril, amulette de puissance), plafonds 7–105
+pièces ouverts à 1 et jamais servis (l'offre était annulée et reposée
+toutes les 600 s : sa marche repartait de la référence), jamais
+transformées en nœuds ; personne ne forge ; 564 asks presque tous au
+plancher 1 (17k bûches de saule, 11k plumes) ; masse ≈ 2 340 pièces,
+entrée ≈ 1 660/24 h par les seuls drops mêlée.
+Décisions (règles utilisateur) :
+- Équipement = sous-but réel, palier suivant seulement (bronze → fer →
+  acier → mithril → adamant → rune, F2P, niveaux du bot : attaque pour
+  l'arme, défense pour l'armure), arme d'abord puis corps, jambes,
+  casque, bouclier (`planner::gear_ladder`, `brain_gear`). Achat au
+  marché seulement (D-A, aucune exception pour l'armure), plafond 50 % du
+  portefeuille (choisi : un palier à la fois porte tout le budget
+  d'équipement, l'autre moitié reste aux intrants et outils ; il monte
+  avec les pièces) ; vendeur présent → nœuds obtain + equip_best lancés
+  en priorité, ask trop cher → `have_coins` (2× l'ask) ; pas de vendeur →
+  offre D-B permanente qui attend un producteur sans bloquer le bot. Un
+  palier sans vendeur à la résolution ou abandonné est retiré du graphe
+  (`lifecycle::withdraw_gear_step`) ; les ids retirés restent réservés
+  (l'historique compte dans `next_id`).
+- Prix : 1 pièce = amorçage seulement. Pas de 5 % par fenêtre de 200
+  ticks dirigé par les exécutions (vente servie ↑, vente au repos ↓,
+  achat au repos ↑ jusqu'au plafond, achat servi ↓) ; ouverture des
+  ventes à la référence (fin de la marge +10 %) ; aucun plancher lié au
+  coût des intrants (réserve = moitié d'une référence échangée, 1 sinon).
+  Les ordres partiellement servis continuent de marcher ; une annonce
+  sans bornes est réadoptée par la passe de ventes (hors marchands) ;
+  une offre permanente garde sa marche, seul son plafond suit le
+  portefeuille (`keep_bid`).
+- Producteurs : leurs produits (barres, forgé, artisanat, cuisine) sont
+  vendus, sauf ceux qu'une autre méthode ouverte consomme.
+- Crochet de production pour les ambitions : `planner::profit::chain_profit`
+  (recettes gamedata, prix marché, rendement mesuré), erreurs typées.
+- Un `obtain_items` déjà couvert par les avoirs (sac, banque, porté) est
+  clos sans lancement (`already_held`).
+Rejeté : plafond lié au coût des intrants (contraire à la règle), viser
+la meilleure pièce d'un coup (jamais servie), palier en attente active
+d'un vendeur (bloquait le worker jusqu'à 6000 ticks par essai), achat
+magasin pour l'armure, plafond = portefeuille entier (plus rien pour les
+intrants).
+
+## 2026-11-13 — Ambitions par bot, couverture de flotte, demande du marché
+
+Constat : la succession tirait toujours la compétence la plus basse ; tous
+les bots finissaient sur les mêmes activités (poulets, crevettes, bûches),
+le marché n'offrait qu'une poignée d'objets et aucune offre d'achat ne
+déclenchait de production.
+Décisions (règles utilisateur) :
+- Chaque bot a une ambition long terme (catalogue de 12 groupes F2P, la
+  mêlée comptant pour UN groupe, + marchand) qui tire ses buts par jalons
+  (niveaux, quotas de production listés, équipement, pièces).
+- Couverture : au moins un bot par groupe et un marchand (groupe
+  primaire), affectés aux bots dont les niveaux s'y prêtent le mieux ;
+  au-delà, tirage au hasard pondéré par la demande et √adéquation (la
+  règle `levels:<groupe>` qui figeait un spécialiste a été retirée le jour
+  même : 9 des 12 bots hors couverture devenaient guerriers). La
+  couverture ne compte que les comptes ayant un job dans le daemon (hors
+  `admin`/`bite`), jamais les vieilles vies de `run/lives`. Les comptes
+  existants reçoivent leur ambition au premier passage, loggée.
+- Changement facultatif au plus une fois toutes les 72 000 ticks ; un
+  jalon bloqué 3 fois ⇒ nouveau tirage immédiat (politique approuvée,
+  loggée), comme une échelle épuisée : ces deux-là ne sont pas des
+  changements facultatifs et ne sont pas bridés.
+- Bannissements (6000 ticks) respectés : les jalons d'une compétence
+  bannie sont sautés, jamais forcés.
+- Offres d'achat ⇒ production : une offre ouverte qu'une ambition sait
+  servir devient un jalon `produce` (entraînement et achat d'intrants
+  compris) ; le poids des tirages suit la demande (offres × âge) et les
+  profits (chaînes D58 aux prix marché, profits mesurés).
+- `GoalKind::Produce` : production seulement, jamais d'achat du produit
+  (sinon le quota serait « rempli » au marché).
+- Plus-bas-skill réservé à l'ambition explicite `generalist` ; sans
+  ambition, aucun but (erreur typée), jamais de repli silencieux.
+- `farm:blankrune` → `essence_run` (l'essence n'avait aucune jambe de
+  production : un runier ne pouvait que l'acheter).
+Rejeté : une ambition par stat de mêlée (12 groupes, pas 15) ; changement
+libre à chaque jalon (bots instables, marché erratique) ; garder le
+plus-bas-skill en repli (masque une ambition manquante) ; remplir un quota
+par achat.

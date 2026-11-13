@@ -1,0 +1,5326 @@
+{
+  "npcs": {
+    "0_45_48_seabird1": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "0_45_48_seabird2": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "0_45_48_seabird3": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "abbot_langley": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 15,
+      "strength": 2
+    },
+    "achietties": {
+      "attack": 35,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 42,
+      "strength": 38
+    },
+    "aggressive_black_knight": {
+      "attack": 25,
+      "attackbonus": 18,
+      "attackrate": 5,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 25,
+      "hitpoints": 42,
+      "slashdefence": 76,
+      "stabdefence": 73,
+      "strength": 25,
+      "strengthbonus": 16
+    },
+    "al_kharid_man": {
+      "damagetype": "crush",
+      "hitpoints": 7
+    },
+    "al_kharid_warrior": {
+      "attack": 7,
+      "attackbonus": 10,
+      "crushdefence": 10,
+      "damagetype": "slash",
+      "defence": 4,
+      "hitpoints": 19,
+      "slashdefence": 15,
+      "stabdefence": 12,
+      "strength": 5,
+      "strengthbonus": 9
+    },
+    "alfonse_the_waiter": {
+      "damagetype": "crush",
+      "hitpoints": 7
+    },
+    "alomone_hazeel_cultist": {
+      "attack": 10,
+      "crushdefence": 8,
+      "damagetype": "slash",
+      "defence": 4,
+      "hitpoints": 25,
+      "slashdefence": 6,
+      "stabdefence": 5,
+      "strength": 10
+    },
+    "ardougne_archer": {
+      "attack": 20,
+      "attackbonus": 19,
+      "attackrate": 6,
+      "crushdefence": 27,
+      "damagetype": "crush",
+      "defence": 20,
+      "hitpoints": 50,
+      "slashdefence": 23,
+      "stabdefence": 18,
+      "strength": 20,
+      "strengthbonus": 8
+    },
+    "ardougne_guard": {
+      "attack": 17,
+      "attackbonus": 9,
+      "attackrate": 5,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 13,
+      "hitpoints": 22,
+      "slashdefence": 14,
+      "stabdefence": 24,
+      "strength": 18,
+      "strengthbonus": 7
+    },
+    "ardougne_paladin2": {
+      "attack": 63,
+      "attackrate": 5,
+      "crushdefence": 42,
+      "damagetype": "crush",
+      "defence": 63,
+      "hitpoints": 13,
+      "slashdefence": 50,
+      "stabdefence": 60,
+      "strength": 63,
+      "strengthbonus": 10
+    },
+    "ardougnian_female1": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "ardougnian_male1": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "arena_bouncer": {
+      "attack": 120,
+      "damagetype": "stab",
+      "defence": 120,
+      "hitpoints": 116,
+      "strength": 120
+    },
+    "arena_guard1": {
+      "attack": 20,
+      "attackbonus": 10,
+      "crushdefence": 30,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 38,
+      "stabdefence": 44,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "arena_guard2": {
+      "attack": 20,
+      "attackbonus": 10,
+      "crushdefence": 30,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 38,
+      "stabdefence": 44,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "arena_guard3": {
+      "attack": 20,
+      "attackbonus": 10,
+      "crushdefence": 21,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 29,
+      "stabdefence": 35,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "arena_guard4": {
+      "attack": 20,
+      "attackbonus": 10,
+      "crushdefence": 21,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 29,
+      "stabdefence": 35,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "arena_leadguard": {
+      "attack": 20,
+      "attackbonus": 10,
+      "crushdefence": 30,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 38,
+      "stabdefence": 44,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "arena_ogre": {
+      "attack": 54,
+      "attackbonus": 22,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 53,
+      "hitpoints": 60,
+      "strength": 53,
+      "strengthbonus": 20
+    },
+    "arena_scorpion": {
+      "attack": 40,
+      "crushdefence": 15,
+      "damagetype": "stab",
+      "defence": 34,
+      "hitpoints": 40,
+      "slashdefence": 15,
+      "stabdefence": 5,
+      "strength": 39
+    },
+    "babybluedragon": {
+      "attack": 40,
+      "crushdefence": 50,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 30,
+      "strength": 40
+    },
+    "babydragon": {
+      "attack": 40,
+      "crushdefence": 50,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 30,
+      "strength": 40
+    },
+    "barbarian": {
+      "attack": 6,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 13,
+      "damagetype": "slash",
+      "defence": 2,
+      "hitpoints": 14,
+      "slashdefence": 15,
+      "stabdefence": 12,
+      "strength": 6,
+      "strengthbonus": 7
+    },
+    "barbarian_guard": {
+      "attack": 6,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "crushdefence": 15,
+      "damagetype": "slash",
+      "defence": 6,
+      "hitpoints": 14,
+      "slashdefence": 18,
+      "stabdefence": 14,
+      "strength": 6,
+      "strengthbonus": 13
+    },
+    "barbarian_woman": {
+      "attack": 6,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 5,
+      "hitpoints": 14,
+      "slashdefence": 1,
+      "stabdefence": 1,
+      "strength": 5,
+      "strengthbonus": 10
+    },
+    "bat": {
+      "attack": 22,
+      "crushdefence": 12,
+      "damagetype": "stab",
+      "defence": 22,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 10,
+      "strength": 22
+    },
+    "bearded_dark_wizard": {
+      "attack": 17,
+      "damagetype": "crush",
+      "defence": 14,
+      "hitpoints": 24,
+      "strength": 17
+    },
+    "bedabin_fighter": {
+      "attack": 40,
+      "attackbonus": 9,
+      "damagetype": "slash",
+      "defence": 60,
+      "hitpoints": 50,
+      "strength": 50,
+      "strengthbonus": 14
+    },
+    "bedabin_guard": {
+      "attack": 51,
+      "attackbonus": 9,
+      "damagetype": "slash",
+      "defence": 60,
+      "hitpoints": 70,
+      "strength": 47,
+      "strengthbonus": 14
+    },
+    "black_demon": {
+      "attack": 145,
+      "damagetype": "slash",
+      "defence": 152,
+      "hitpoints": 157,
+      "strength": 148
+    },
+    "black_dragon": {
+      "attack": 200,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 200,
+      "hitpoints": 190,
+      "slashdefence": 70,
+      "stabdefence": 50,
+      "strength": 200
+    },
+    "black_heather": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 10,
+      "damagetype": "slash",
+      "defence": 27,
+      "hitpoints": 37,
+      "slashdefence": 8,
+      "stabdefence": 9,
+      "strength": 26,
+      "strengthbonus": 9
+    },
+    "black_knight": {
+      "attack": 25,
+      "attackbonus": 18,
+      "attackrate": 5,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 25,
+      "hitpoints": 42,
+      "slashdefence": 76,
+      "stabdefence": 73,
+      "strength": 25,
+      "strengthbonus": 16
+    },
+    "black_knight_titan": {
+      "attack": 91,
+      "attackbonus": 27,
+      "attackrate": 7,
+      "crushdefence": 18,
+      "damagetype": "crush",
+      "defence": 91,
+      "hitpoints": 142,
+      "slashdefence": 27,
+      "stabdefence": 18,
+      "strength": 100,
+      "strengthbonus": 22
+    },
+    "black_unicorn": {
+      "attack": 21,
+      "damagetype": "stab",
+      "defence": 23,
+      "hitpoints": 29,
+      "strength": 23
+    },
+    "black_unicorn_foal": {
+      "attack": 18,
+      "damagetype": "stab",
+      "defence": 18,
+      "hitpoints": 25,
+      "strength": 18
+    },
+    "blessed_giantrat": {
+      "attack": 5,
+      "crushdefence": -24,
+      "damagetype": "stab",
+      "hitpoints": 30,
+      "slashdefence": -24,
+      "stabdefence": -24,
+      "strengthbonus": -24
+    },
+    "blessed_spider": {
+      "attack": 35,
+      "crushdefence": 7,
+      "damagetype": "crush",
+      "defence": 35,
+      "hitpoints": 32,
+      "slashdefence": 16,
+      "stabdefence": 15,
+      "strength": 35
+    },
+    "blue_dragon": {
+      "attack": 95,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 95,
+      "hitpoints": 105,
+      "slashdefence": 70,
+      "stabdefence": 50,
+      "strength": 95
+    },
+    "boot_the_dwarf": {
+      "attack": 8,
+      "attackrate": 5,
+      "damagetype": "stab",
+      "defence": 7,
+      "hitpoints": 16,
+      "strength": 8,
+      "strengthbonus": 5
+    },
+    "borderguard1": {
+      "attack": 18,
+      "crushdefence": 7,
+      "damagetype": "crush",
+      "defence": 17,
+      "hitpoints": 22,
+      "slashdefence": 7,
+      "stabdefence": 5,
+      "strength": 18,
+      "strengthbonus": 5
+    },
+    "borderguard2": {
+      "attack": 18,
+      "crushdefence": 7,
+      "damagetype": "crush",
+      "defence": 17,
+      "hitpoints": 22,
+      "slashdefence": 7,
+      "stabdefence": 5,
+      "strength": 18,
+      "strengthbonus": 5
+    },
+    "brawling_bandit": {
+      "attack": 17,
+      "attackbonus": 11,
+      "crushdefence": 2,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 27,
+      "slashdefence": 3,
+      "strength": 17,
+      "strengthbonus": 12
+    },
+    "brother_jered": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 15,
+      "strength": 2
+    },
+    "brother_noob": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 15,
+      "strength": 2
+    },
+    "browclothedgnome": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "brownbear": {
+      "attack": 17,
+      "damagetype": "slash",
+      "defence": 15,
+      "hitpoints": 27,
+      "strength": 18
+    },
+    "brownbear_cub_1": {
+      "attack": 10,
+      "damagetype": "slash",
+      "defence": 10,
+      "hitpoints": 20,
+      "strength": 15
+    },
+    "brownbear_cub_2": {
+      "attack": 10,
+      "damagetype": "slash",
+      "defence": 10,
+      "hitpoints": 20,
+      "strength": 15
+    },
+    "canafis_man1": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "canafis_man2": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "canafis_man3": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "canafis_werewolf_man1": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_werewolf_man2": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_werewolf_man3": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_werewolf_woman1": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_werewolf_woman2": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_werewolf_woman3": {
+      "attack": 70,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 100,
+      "strength": 70
+    },
+    "canafis_woman1": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "canafis_woman2": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "canafis_woman3": {
+      "attack": 10,
+      "crushdefence": -21,
+      "defence": 10,
+      "hitpoints": 60,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strength": 10
+    },
+    "chantergnome": {
+      "attack": 3,
+      "defence": 3,
+      "hitpoints": 3,
+      "strength": 3
+    },
+    "chaos_druid": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 20,
+      "strength": 8
+    },
+    "chaos_druid_warrior": {
+      "attack": 32,
+      "attackbonus": 9,
+      "attackrate": 5,
+      "crushdefence": 14,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 40,
+      "slashdefence": 17,
+      "stabdefence": 13,
+      "strength": 34,
+      "strengthbonus": 5
+    },
+    "chaosmonk1": {
+      "attack": 18,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 20,
+      "strength": 18
+    },
+    "chaosmonk2": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 10,
+      "strength": 8
+    },
+    "chaosmonk3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 42,
+      "hitpoints": 40,
+      "strength": 38
+    },
+    "charlie_the_cook": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 3,
+      "strength": 10
+    },
+    "chicken": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "chicken_brown": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "chompy_bird": {
+      "attack": 5,
+      "defence": 3,
+      "hitpoints": 10,
+      "strength": 5
+    },
+    "chronozon": {
+      "attack": 173,
+      "damagetype": "slash",
+      "defence": 173,
+      "hitpoints": 60,
+      "strength": 172
+    },
+    "city_guard": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "clivet_hazeel_cultist": {
+      "attack": 10,
+      "crushdefence": 8,
+      "defence": 4,
+      "hitpoints": 25,
+      "slashdefence": 6,
+      "stabdefence": 5,
+      "strength": 10
+    },
+    "clocktower_rat": {
+      "attack": 10,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 12,
+      "strength": 10
+    },
+    "colonel_radick": {
+      "attack": 25,
+      "attackbonus": 9,
+      "crushdefence": 34,
+      "damagetype": "slash",
+      "defence": 25,
+      "hitpoints": 65,
+      "slashdefence": 31,
+      "stabdefence": 39,
+      "strength": 25,
+      "strengthbonus": 13
+    },
+    "count_draynor": {
+      "attack": 30,
+      "crushdefence": 3,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 35,
+      "slashdefence": 1,
+      "stabdefence": 2,
+      "strength": 25
+    },
+    "cow": {
+      "attackbonus": -15,
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 8,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strengthbonus": -15
+    },
+    "cow2": {
+      "attackbonus": -15,
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 8,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strengthbonus": -15
+    },
+    "cow_beef": {
+      "attackbonus": -15,
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 8,
+      "slashdefence": -21,
+      "stabdefence": -21,
+      "strengthbonus": -15
+    },
+    "cyclops": {
+      "attack": 47,
+      "damagetype": "crush",
+      "defence": 46,
+      "hitpoints": 55,
+      "strength": 50
+    },
+    "d_skingnomeknight": {
+      "attackbonus": 2,
+      "crushdefence": 5,
+      "damagetype": "crush",
+      "hitpoints": 3,
+      "slashdefence": 4,
+      "stabdefence": 3,
+      "strengthbonus": 3
+    },
+    "dark_warrior": {
+      "attack": 5,
+      "attackbonus": 20,
+      "crushdefence": 59,
+      "damagetype": "slash",
+      "defence": 5,
+      "hitpoints": 17,
+      "slashdefence": 79,
+      "stabdefence": 96,
+      "strength": 5,
+      "strengthbonus": 16
+    },
+    "darkbear": {
+      "attack": 15,
+      "damagetype": "slash",
+      "defence": 13,
+      "hitpoints": 25,
+      "strength": 16
+    },
+    "darkskinned_gnome": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "deadly_red_spider": {
+      "attack": 30,
+      "crushdefence": 7,
+      "damagetype": "stab",
+      "defence": 30,
+      "hitpoints": 35,
+      "slashdefence": 16,
+      "stabdefence": 15,
+      "strength": 25
+    },
+    "death_archer1": {
+      "attack": 0,
+      "attackbonus": 34,
+      "attackrate": 6,
+      "crushdefence": 49,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 39,
+      "strength": 0
+    },
+    "death_archer2": {
+      "attack": 0,
+      "attackbonus": 34,
+      "attackrate": 6,
+      "crushdefence": 49,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 39,
+      "strength": 0
+    },
+    "death_archer_trapped": {
+      "attack": 0,
+      "attackbonus": 34,
+      "attackrate": 6,
+      "crushdefence": 49,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 39,
+      "strength": 0
+    },
+    "death_cook": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 2
+    },
+    "death_guard1": {
+      "attack": 30,
+      "attackbonus": 18,
+      "attackrate": 6,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 40,
+      "slashdefence": 48,
+      "stabdefence": 36,
+      "strength": 30,
+      "strengthbonus": 16
+    },
+    "death_guard2": {
+      "attack": 30,
+      "attackbonus": 18,
+      "attackrate": 6,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 40,
+      "slashdefence": 48,
+      "stabdefence": 36,
+      "strength": 30,
+      "strengthbonus": 16
+    },
+    "death_ig_solider_wander": {
+      "attack": 40,
+      "attackbonus": 11,
+      "crushdefence": 21,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 23,
+      "stabdefence": 15,
+      "strength": 40,
+      "strengthbonus": 12
+    },
+    "death_man_indoors1": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 8
+    },
+    "death_man_indoors2": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 3
+    },
+    "death_man_outdoors1": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 3
+    },
+    "death_man_outdoors2": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 3
+    },
+    "death_servant1": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 3
+    },
+    "death_troll_commander": {
+      "attack": 70,
+      "attackbonus": 60,
+      "crushdefence": 35,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 140,
+      "slashdefence": 60,
+      "stabdefence": 35,
+      "strength": 110,
+      "strengthbonus": 100
+    },
+    "death_troll_guard1": {
+      "attack": 50,
+      "attackbonus": 40,
+      "attackrate": 6,
+      "crushdefence": 40,
+      "damagetype": "crush",
+      "defence": 50,
+      "hitpoints": 120,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 100,
+      "strengthbonus": 70
+    },
+    "death_troll_guard2": {
+      "attack": 50,
+      "attackbonus": 40,
+      "attackrate": 6,
+      "crushdefence": 40,
+      "damagetype": "crush",
+      "defence": 50,
+      "hitpoints": 120,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 100,
+      "strengthbonus": 70
+    },
+    "death_troll_leuitanant": {
+      "attack": 60,
+      "attackbonus": 50,
+      "attackrate": 6,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 60,
+      "hitpoints": 135,
+      "slashdefence": 30,
+      "stabdefence": 30,
+      "strength": 110,
+      "strengthbonus": 80
+    },
+    "death_troll_melee1": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee2": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee3": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee4": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee5": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee6": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_melee7": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "death_troll_thrower1": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 95,
+      "strength": 80
+    },
+    "death_troll_thrower2": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 95,
+      "strength": 80
+    },
+    "death_troll_thrower3": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 95,
+      "strength": 80
+    },
+    "death_troll_thrower4": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 95,
+      "strength": 80
+    },
+    "death_troll_thrower5": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 95,
+      "strength": 80
+    },
+    "death_white_knight": {
+      "attack": 27,
+      "attackbonus": 30,
+      "attackrate": 7,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 52,
+      "slashdefence": 76,
+      "stabdefence": 83,
+      "strength": 29,
+      "strengthbonus": 31
+    },
+    "death_woman_indoors1": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 2
+    },
+    "death_woman_outdoors1": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 2
+    },
+    "death_woman_outdoors2": {
+      "attack": 3,
+      "crushdefence": -12,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 10,
+      "slashdefence": -12,
+      "stabdefence": -12,
+      "strength": 2
+    },
+    "deathwing": {
+      "attack": 70,
+      "damagetype": "stab",
+      "defence": 70,
+      "hitpoints": 80,
+      "strength": 70
+    },
+    "delrith": {
+      "attack": 32,
+      "damagetype": "crush",
+      "defence": 27,
+      "hitpoints": 7,
+      "strength": 25
+    },
+    "desert_wolf": {
+      "attack": 20,
+      "damagetype": "slash",
+      "defence": 22,
+      "hitpoints": 34,
+      "strength": 21
+    },
+    "desertminingcaptain": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 32,
+      "hitpoints": 80,
+      "slashdefence": 15,
+      "stabdefence": 17,
+      "strength": 29,
+      "strengthbonus": 14
+    },
+    "desertminingmercenary1": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 39,
+      "hitpoints": 60,
+      "slashdefence": 15,
+      "stabdefence": 17,
+      "strength": 32,
+      "strengthbonus": 14
+    },
+    "desertminingmercenary2": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 39,
+      "hitpoints": 60,
+      "slashdefence": 15,
+      "stabdefence": 17,
+      "strength": 32,
+      "strengthbonus": 14
+    },
+    "direwolf": {
+      "attack": 75,
+      "damagetype": "stab",
+      "defence": 75,
+      "hitpoints": 85,
+      "strength": 75
+    },
+    "donny_the_lad": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 10,
+      "damagetype": "slash",
+      "defence": 27,
+      "hitpoints": 37,
+      "slashdefence": 8,
+      "stabdefence": 9,
+      "strength": 26,
+      "strengthbonus": 9
+    },
+    "doomion": {
+      "attack": 76,
+      "damagetype": "slash",
+      "defence": 77,
+      "hitpoints": 87,
+      "strength": 78
+    },
+    "dragonslayer_demon": {
+      "attack": 68,
+      "damagetype": "slash",
+      "defence": 71,
+      "hitpoints": 79,
+      "strength": 70
+    },
+    "dragonslayer_ghost": {
+      "attack": 13,
+      "crushdefence": 5,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 25,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 13
+    },
+    "dragonslayer_giantrat": {
+      "attack": 6,
+      "damagetype": "stab",
+      "defence": 2,
+      "hitpoints": 10,
+      "strength": 5
+    },
+    "dragonslayer_skeleton": {
+      "attack": 15,
+      "attackbonus": 15,
+      "crushdefence": -2,
+      "damagetype": "slash",
+      "defence": 17,
+      "hitpoints": 29,
+      "slashdefence": 11,
+      "stabdefence": 9,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "dragonslayer_zombie": {
+      "attack": 19,
+      "attackbonus": 5,
+      "crushdefence": 12,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 30,
+      "slashdefence": 8,
+      "stabdefence": 10,
+      "strength": 21,
+      "strengthbonus": 7
+    },
+    "druid": {
+      "attack": 28,
+      "damagetype": "crush",
+      "defence": 32,
+      "hitpoints": 30,
+      "strength": 28
+    },
+    "dskin_w_ardoungecitizen1": {
+      "attack": 2,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "hitpoints": 13,
+      "slashdefence": 1,
+      "stabdefence": 1
+    },
+    "dskin_w_ardoungecitizen2": {
+      "attack": 2,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "hitpoints": 10,
+      "slashdefence": 1,
+      "stabdefence": 1
+    },
+    "dskin_w_ardoungecitizenlady1": {
+      "attack": 2,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "hitpoints": 10,
+      "slashdefence": 1,
+      "stabdefence": 1
+    },
+    "dskin_w_ardoungecitizenlady3": {
+      "attack": 2,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "hitpoints": 13,
+      "slashdefence": 1,
+      "stabdefence": 1
+    },
+    "dskin_w_ardoungecitizenlady4": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 13,
+      "strength": 10
+    },
+    "duck": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "duck_female": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "duckling": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "duel_crowdfemale1": {
+      "hitpoints": 7
+    },
+    "duel_crowdfemale2": {
+      "hitpoints": 7
+    },
+    "duel_crowdfemale3": {
+      "hitpoints": 7
+    },
+    "duel_crowdmale1": {
+      "hitpoints": 7
+    },
+    "duel_crowdmale2": {
+      "hitpoints": 7
+    },
+    "duel_crowdmale3": {
+      "hitpoints": 7
+    },
+    "dungeon_rat": {
+      "attack": 10,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 12,
+      "strength": 10
+    },
+    "dungeonspider": {
+      "attack": 28,
+      "crushdefence": 10,
+      "damagetype": "stab",
+      "defence": 28,
+      "hitpoints": 25,
+      "slashdefence": 17,
+      "stabdefence": 20,
+      "strength": 28
+    },
+    "dwarf_chaos": {
+      "attack": 38,
+      "attackbonus": 13,
+      "crushdefence": 25,
+      "damagetype": "crush",
+      "defence": 28,
+      "hitpoints": 61,
+      "slashdefence": 34,
+      "stabdefence": 40,
+      "strength": 42,
+      "strengthbonus": 9
+    },
+    "dwarf_mountain": {
+      "attack": 15,
+      "attackbonus": 11,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 16,
+      "hitpoints": 26,
+      "strength": 16,
+      "strengthbonus": 9
+    },
+    "dwarf_normal": {
+      "attack": 8,
+      "attackbonus": 5,
+      "attackrate": 5,
+      "damagetype": "stab",
+      "defence": 6,
+      "hitpoints": 16,
+      "strength": 8,
+      "strengthbonus": 7
+    },
+    "dwarf_tunnel": {
+      "attack": 8,
+      "attackbonus": 11,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 6,
+      "hitpoints": 16,
+      "strength": 8,
+      "strengthbonus": 9
+    },
+    "dwarfchildtw1": {
+      "hitpoints": 6
+    },
+    "earth_elemental_rock_version": {
+      "attack": 20,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 35,
+      "hitpoints": 35,
+      "strength": 35
+    },
+    "earthwarrior": {
+      "attack": 42,
+      "crushdefence": 20,
+      "damagetype": "crush",
+      "defence": 42,
+      "hitpoints": 54,
+      "slashdefence": 40,
+      "stabdefence": 30,
+      "strength": 42
+    },
+    "echned_zekin": {
+      "attack": 165,
+      "defence": 167,
+      "hitpoints": 150,
+      "strength": 168
+    },
+    "elemental_air": {
+      "attack": 40,
+      "damagetype": "stab",
+      "defence": 30,
+      "hitpoints": 30,
+      "strength": 20
+    },
+    "elemental_earth": {
+      "attack": 20,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 35,
+      "hitpoints": 35,
+      "strength": 35
+    },
+    "elemental_fire": {
+      "attack": 35,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 30,
+      "strength": 35
+    },
+    "elemental_water": {
+      "attack": 30,
+      "damagetype": "stab",
+      "defence": 30,
+      "hitpoints": 30,
+      "strength": 30
+    },
+    "elvarg": {
+      "attack": 70,
+      "crushdefence": 40,
+      "damagetype": "slash",
+      "defence": 70,
+      "hitpoints": 120,
+      "slashdefence": 40,
+      "stabdefence": 20,
+      "strength": 70
+    },
+    "enclave_guard": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "entrana_monk": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 15,
+      "strength": 2
+    },
+    "falador_gardener": {
+      "attack": 2,
+      "damagetype": "stab",
+      "defence": 5,
+      "hitpoints": 7
+    },
+    "falseogretrader": {
+      "attack": 62,
+      "damagetype": "crush",
+      "defence": 63,
+      "hitpoints": 60,
+      "strength": 60
+    },
+    "farmer1": {
+      "attack": 3,
+      "attackbonus": 5,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 8,
+      "hitpoints": 12,
+      "strength": 4,
+      "strengthbonus": 6
+    },
+    "fire_bird": {
+      "attackbonus": -31,
+      "crushdefence": -26,
+      "damagetype": "stab",
+      "hitpoints": 5,
+      "slashdefence": -26,
+      "stabdefence": -26,
+      "strengthbonus": -26
+    },
+    "firegiant": {
+      "attack": 65,
+      "attackbonus": 29,
+      "attackrate": 5,
+      "crushdefence": 2,
+      "damagetype": "slash",
+      "defence": 65,
+      "hitpoints": 111,
+      "slashdefence": 3,
+      "strength": 65,
+      "strengthbonus": 31
+    },
+    "flytrap": {
+      "attack": 15,
+      "crushdefence": 45,
+      "damagetype": "stab",
+      "defence": 30,
+      "hitpoints": 100,
+      "slashdefence": 8,
+      "stabdefence": 30,
+      "strength": 15
+    },
+    "forester": {
+      "attack": 14,
+      "attackrate": 4,
+      "crushdefence": 5,
+      "damagetype": "slash",
+      "defence": 8,
+      "hitpoints": 17,
+      "slashdefence": 3,
+      "stabdefence": 4,
+      "strength": 13
+    },
+    "fortressguard": {
+      "attack": 18,
+      "attackbonus": 5,
+      "attackrate": 6,
+      "crushdefence": 15,
+      "damagetype": "stab",
+      "defence": 15,
+      "hitpoints": 22,
+      "slashdefence": 18,
+      "stabdefence": 14,
+      "strength": 18,
+      "strengthbonus": 6
+    },
+    "garv": {
+      "attack": 95,
+      "damagetype": "crush",
+      "defence": 91,
+      "hitpoints": 104,
+      "strength": 94
+    },
+    "general_khazard": {
+      "attack": 75,
+      "damagetype": "slash",
+      "defence": 80,
+      "hitpoints": 170,
+      "strength": 78
+    },
+    "ghast_invis": {
+      "attack": 22,
+      "damagetype": "slash",
+      "defence": 18,
+      "hitpoints": 45,
+      "strength": 22
+    },
+    "ghast_vis": {
+      "attack": 22,
+      "damagetype": "slash",
+      "defence": 18,
+      "hitpoints": 45,
+      "strength": 22
+    },
+    "ghost": {
+      "attack": 13,
+      "crushdefence": 5,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 25,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 13
+    },
+    "ghoul": {
+      "attack": 30,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 50,
+      "strength": 40
+    },
+    "giant": {
+      "attack": 18,
+      "attackbonus": 18,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 26,
+      "hitpoints": 35,
+      "strength": 22,
+      "strengthbonus": 16
+    },
+    "giantrat": {
+      "attack": 2,
+      "damagetype": "stab",
+      "defence": 2,
+      "hitpoints": 5,
+      "strength": 3
+    },
+    "giantrat1": {
+      "attack": 6,
+      "damagetype": "stab",
+      "defence": 2,
+      "hitpoints": 10,
+      "strength": 5
+    },
+    "giantskeleton": {
+      "attack": 32,
+      "attackbonus": 15,
+      "crushdefence": -2,
+      "damagetype": "slash",
+      "defence": 36,
+      "hitpoints": 59,
+      "slashdefence": 11,
+      "stabdefence": 9,
+      "strength": 35,
+      "strengthbonus": 14
+    },
+    "giantspider1": {
+      "attackbonus": -10,
+      "crushdefence": -10,
+      "damagetype": "stab",
+      "hitpoints": 5,
+      "slashdefence": -10,
+      "stabdefence": -10,
+      "strengthbonus": -10
+    },
+    "giantspider2": {
+      "attack": 20,
+      "damagetype": "stab",
+      "defence": 21,
+      "hitpoints": 32,
+      "strength": 24
+    },
+    "gnome": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 3,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomechild": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomechildblue": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomechildgreen": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomefemale": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomefemale_dskinned": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "gnomekingsguard": {
+      "attack": 17,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "damagetype": "slash",
+      "defence": 17,
+      "hitpoints": 31,
+      "strength": 17,
+      "strengthbonus": 13
+    },
+    "gnomekingsguard2": {
+      "attack": 18,
+      "attackbonus": 6,
+      "crushdefence": 7,
+      "damagetype": "slash",
+      "defence": 18,
+      "hitpoints": 31,
+      "slashdefence": 9,
+      "stabdefence": 8,
+      "strength": 18,
+      "strengthbonus": 7
+    },
+    "gnomeknight": {
+      "attackbonus": 2,
+      "crushdefence": 5,
+      "damagetype": "crush",
+      "hitpoints": 3,
+      "slashdefence": 4,
+      "stabdefence": 3,
+      "strengthbonus": 3
+    },
+    "goblin": {
+      "attackbonus": -21,
+      "crushdefence": -15,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -15,
+      "stabdefence": -15,
+      "strengthbonus": -15
+    },
+    "goblin_armed": {
+      "attack": 3,
+      "attackbonus": 12,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 4,
+      "hitpoints": 12,
+      "strengthbonus": 12
+    },
+    "goblin_greenarmour": {
+      "attack": 3,
+      "attackbonus": 12,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 4,
+      "hitpoints": 12,
+      "strengthbonus": 12
+    },
+    "goblin_guard": {
+      "attack": 32,
+      "attackbonus": 8,
+      "crushdefence": 6,
+      "damagetype": "stab",
+      "defence": 37,
+      "hitpoints": 43,
+      "slashdefence": 6,
+      "stabdefence": 4,
+      "strength": 37,
+      "strengthbonus": 5
+    },
+    "goblin_helmet": {
+      "attack": 12,
+      "crushdefence": 8,
+      "damagetype": "crush",
+      "defence": 7,
+      "hitpoints": 16,
+      "slashdefence": 6,
+      "stabdefence": 4,
+      "strength": 13
+    },
+    "goblin_redarmour": {
+      "attack": 3,
+      "attackbonus": 12,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 4,
+      "hitpoints": 12,
+      "strengthbonus": 12
+    },
+    "golem": {
+      "attack": 35,
+      "crushdefence": 20,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 70,
+      "slashdefence": 40,
+      "stabdefence": 30,
+      "strength": 60
+    },
+    "gorad": {
+      "attack": 54,
+      "attackbonus": 8,
+      "crushdefence": 21,
+      "damagetype": "crush",
+      "defence": 54,
+      "hitpoints": 80,
+      "slashdefence": 27,
+      "stabdefence": 15,
+      "strength": 54,
+      "strengthbonus": 6
+    },
+    "grandtree_blackdemon": {
+      "attack": 145,
+      "damagetype": "slash",
+      "defence": 152,
+      "hitpoints": 157,
+      "strength": 148
+    },
+    "grandtree_foreman": {
+      "attack": 20,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "defence": 20,
+      "hitpoints": 20,
+      "slashdefence": 1,
+      "strength": 20
+    },
+    "grandtree_shipyardguard": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 10,
+      "strength": 10
+    },
+    "grave_scorpion": {
+      "attack": 11,
+      "crushdefence": 3,
+      "damagetype": "crush",
+      "defence": 14,
+      "hitpoints": 7,
+      "slashdefence": 3,
+      "strength": 12
+    },
+    "greater_demon": {
+      "attack": 76,
+      "damagetype": "slash",
+      "defence": 81,
+      "hitpoints": 87,
+      "strength": 78
+    },
+    "green_dragon": {
+      "attack": 68,
+      "crushdefence": 40,
+      "damagetype": "slash",
+      "defence": 68,
+      "hitpoints": 75,
+      "slashdefence": 40,
+      "stabdefence": 20,
+      "strength": 68
+    },
+    "grip": {
+      "attack": 18,
+      "attackbonus": 5,
+      "crushdefence": 22,
+      "damagetype": "slash",
+      "defence": 18,
+      "hitpoints": 25,
+      "slashdefence": 27,
+      "stabdefence": 16,
+      "strength": 17,
+      "strengthbonus": 7
+    },
+    "grubor": {
+      "attack": 5,
+      "damagetype": "crush",
+      "defence": 6,
+      "hitpoints": 12,
+      "strength": 8
+    },
+    "guard1": {
+      "attack": 19,
+      "attackbonus": 4,
+      "crushdefence": 19,
+      "damagetype": "stab",
+      "defence": 14,
+      "hitpoints": 22,
+      "slashdefence": 25,
+      "stabdefence": 18,
+      "strength": 18,
+      "strengthbonus": 5
+    },
+    "guard2": {
+      "attack": 15,
+      "attackbonus": 6,
+      "attackrate": 6,
+      "crushdefence": 14,
+      "damagetype": "ranged",
+      "defence": 16,
+      "hitpoints": 22,
+      "slashdefence": 17,
+      "stabdefence": 13,
+      "strength": 15,
+      "strengthbonus": 10
+    },
+    "guard_bandit": {
+      "attack": 17,
+      "attackbonus": 11,
+      "crushdefence": 5,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 27,
+      "slashdefence": 8,
+      "stabdefence": 4,
+      "strength": 17,
+      "strengthbonus": 12
+    },
+    "guarddog": {
+      "attack": 35,
+      "damagetype": "crush",
+      "defence": 37,
+      "hitpoints": 49,
+      "strength": 36
+    },
+    "guild_towerarcher1": {
+      "attack": 10,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 30,
+      "strength": 10
+    },
+    "guild_towerarcher2": {
+      "attack": 10,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 50,
+      "strength": 10
+    },
+    "guild_towerarcher3": {
+      "attack": 10,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 70,
+      "strength": 10
+    },
+    "guild_towerarcher4": {
+      "attack": 10,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 90,
+      "strength": 10
+    },
+    "gull1": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "gull2": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "gunthor_the_brave": {
+      "attack": 22,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "slash",
+      "defence": 25,
+      "hitpoints": 35,
+      "slashdefence": 14,
+      "stabdefence": 12,
+      "strength": 22,
+      "strengthbonus": 13
+    },
+    "guthix_mage": {
+      "damagetype": "crush",
+      "hitpoints": 120
+    },
+    "hazeel_cultist": {
+      "attack": 10,
+      "crushdefence": 8,
+      "defence": 4,
+      "hitpoints": 25,
+      "slashdefence": 6,
+      "stabdefence": 5,
+      "strength": 10
+    },
+    "headthief_blanket": {
+      "attack": 24,
+      "attackrate": 5,
+      "crushdefence": 15,
+      "damagetype": "slash",
+      "defence": 16,
+      "hitpoints": 37,
+      "slashdefence": 14,
+      "stabdefence": 8,
+      "strength": 18,
+      "strengthbonus": 10
+    },
+    "hellhound": {
+      "attack": 105,
+      "damagetype": "stab",
+      "defence": 102,
+      "hitpoints": 116,
+      "strength": 104
+    },
+    "hero": {
+      "attack": 54,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "slash",
+      "defence": 54,
+      "hitpoints": 82,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 55,
+      "strengthbonus": 22
+    },
+    "highwayman": {
+      "attack": 2,
+      "attackbonus": 6,
+      "crushdefence": 2,
+      "damagetype": "stab",
+      "defence": 2,
+      "hitpoints": 13,
+      "slashdefence": 3,
+      "strength": 2,
+      "strengthbonus": 7
+    },
+    "hobgoblin_armed": {
+      "attack": 33,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "damagetype": "stab",
+      "defence": 36,
+      "hitpoints": 49,
+      "slashdefence": 1,
+      "stabdefence": 1,
+      "strength": 31,
+      "strengthbonus": 10
+    },
+    "hobgoblin_unarmed": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 24,
+      "hitpoints": 29,
+      "strength": 24
+    },
+    "holthion": {
+      "attack": 76,
+      "damagetype": "slash",
+      "defence": 77,
+      "hitpoints": 87,
+      "strength": 78
+    },
+    "horror_dagannoth_jr1": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagannoth_jr2": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagannoth_jr3": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagannoth_jr4": {
+      "attack": 78,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "strength": 78
+    },
+    "horror_dagannoth_medium": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 71,
+      "hitpoints": 120,
+      "strength": 70
+    },
+    "horror_dagannoth_medium_darker": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 71,
+      "hitpoints": 120,
+      "strength": 70
+    },
+    "horror_dagannoth_medium_lighter": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 71,
+      "hitpoints": 120,
+      "strength": 70
+    },
+    "horror_dagganoth_air": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_aira": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_airb": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_airc": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_earth": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_fire": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_jr": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 50,
+      "hitpoints": 70,
+      "strength": 70
+    },
+    "horror_dagganoth_jr_darker": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 50,
+      "hitpoints": 70,
+      "strength": 70
+    },
+    "horror_dagganoth_jr_lighter": {
+      "attack": 68,
+      "damagetype": "stab",
+      "defence": 50,
+      "hitpoints": 70,
+      "strength": 70
+    },
+    "horror_dagganoth_melee": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_ranged": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_dagganoth_water": {
+      "attack": 78,
+      "crushdefence": 150,
+      "damagetype": "stab",
+      "defence": 81,
+      "hitpoints": 120,
+      "slashdefence": 150,
+      "stabdefence": 150,
+      "strength": 78
+    },
+    "horror_rockcrab": {
+      "damagetype": "crush",
+      "hitpoints": 50
+    },
+    "horror_rockcrab_inactive": {
+      "hitpoints": 50
+    },
+    "horror_rockcrab_small": {
+      "damagetype": "crush",
+      "hitpoints": 50
+    },
+    "horror_rockcrab_small_inactive": {
+      "hitpoints": 50
+    },
+    "house_ghost": {
+      "attack": 13,
+      "crushdefence": 5,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 25,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 13
+    },
+    "iban": {
+      "attack": 76,
+      "defence": 77,
+      "hitpoints": 87,
+      "strength": 78
+    },
+    "ibanmonk": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 20,
+      "strength": 8
+    },
+    "ice_queen": {
+      "attack": 95,
+      "crushdefence": 20,
+      "damagetype": "crush",
+      "defence": 95,
+      "hitpoints": 104,
+      "slashdefence": 40,
+      "stabdefence": 30,
+      "strength": 94
+    },
+    "ice_spider": {
+      "attack": 50,
+      "crushdefence": 12,
+      "damagetype": "crush",
+      "defence": 43,
+      "hitpoints": 65,
+      "slashdefence": 17,
+      "stabdefence": 20,
+      "strength": 55
+    },
+    "icegiant": {
+      "attack": 40,
+      "attackbonus": 29,
+      "attackrate": 5,
+      "crushdefence": 2,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 70,
+      "slashdefence": 3,
+      "strength": 40,
+      "strengthbonus": 31
+    },
+    "icewarrior": {
+      "attack": 47,
+      "crushdefence": 20,
+      "damagetype": "slash",
+      "defence": 47,
+      "hitpoints": 59,
+      "slashdefence": 40,
+      "stabdefence": 30,
+      "strength": 47
+    },
+    "icewarrior_queen": {
+      "attack": 47,
+      "crushdefence": 20,
+      "damagetype": "slash",
+      "defence": 47,
+      "hitpoints": 59,
+      "slashdefence": 40,
+      "stabdefence": 30,
+      "strength": 47
+    },
+    "ikov_firewarrior": {
+      "attack": 78,
+      "attackbonus": -12,
+      "crushdefence": 35,
+      "damagetype": "crush",
+      "defence": 78,
+      "hitpoints": 59,
+      "slashdefence": 37,
+      "stabdefence": 34,
+      "strength": 78
+    },
+    "ikov_guardianfemale": {
+      "attack": 37,
+      "attackbonus": 14,
+      "attackrate": 5,
+      "crushdefence": 50,
+      "damagetype": "slash",
+      "defence": 37,
+      "hitpoints": 40,
+      "slashdefence": 55,
+      "stabdefence": 43,
+      "strength": 37,
+      "strengthbonus": 16
+    },
+    "ikov_guardianmale": {
+      "attack": 37,
+      "attackbonus": 14,
+      "attackrate": 5,
+      "crushdefence": 50,
+      "damagetype": "slash",
+      "defence": 37,
+      "hitpoints": 50,
+      "slashdefence": 55,
+      "stabdefence": 43,
+      "strength": 37,
+      "strengthbonus": 16
+    },
+    "ikov_lucien2": {
+      "attack": 12,
+      "attackbonus": 5,
+      "crushdefence": 7,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 17,
+      "slashdefence": 8,
+      "stabdefence": 6,
+      "strength": 11,
+      "strengthbonus": 4
+    },
+    "imp": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 8,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -37
+    },
+    "invrigar_the_necromancer": {
+      "attack": 17,
+      "damagetype": "crush",
+      "defence": 14,
+      "hitpoints": 24,
+      "strength": 17
+    },
+    "irvig_senay": {
+      "attack": 76,
+      "attackbonus": 29,
+      "crushdefence": 29,
+      "damagetype": "slash",
+      "defence": 81,
+      "hitpoints": 125,
+      "slashdefence": 31,
+      "stabdefence": 27,
+      "strength": 74,
+      "strengthbonus": 31
+    },
+    "jailer": {
+      "attack": 40,
+      "crushdefence": 47,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 47,
+      "slashdefence": 63,
+      "stabdefence": 79,
+      "strength": 40
+    },
+    "jailguard": {
+      "attack": 19,
+      "attackbonus": 9,
+      "attackrate": 5,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 21,
+      "hitpoints": 32,
+      "slashdefence": 9,
+      "stabdefence": 8,
+      "strength": 23,
+      "strengthbonus": 5
+    },
+    "jogre": {
+      "attack": 43,
+      "attackbonus": 22,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 43,
+      "hitpoints": 60,
+      "strength": 43,
+      "strengthbonus": 20
+    },
+    "jonny_the_beard": {
+      "damagetype": "crush",
+      "hitpoints": 8
+    },
+    "jungle_savage": {
+      "attack": 76,
+      "attackbonus": 8,
+      "damagetype": "stab",
+      "defence": 76,
+      "hitpoints": 90,
+      "strength": 76,
+      "strengthbonus": 10
+    },
+    "jungle_spider": {
+      "attack": 35,
+      "crushdefence": 10,
+      "damagetype": "stab",
+      "defence": 35,
+      "hitpoints": 50,
+      "slashdefence": 20,
+      "stabdefence": 20,
+      "strength": 37
+    },
+    "jungle_wolf": {
+      "attack": 50,
+      "damagetype": "stab",
+      "defence": 52,
+      "hitpoints": 69,
+      "strength": 55
+    },
+    "justin_servil": {
+      "hitpoints": 20
+    },
+    "kalphite_flyingqueen": {
+      "attack": 300,
+      "crushdefence": 100,
+      "defence": 300,
+      "hitpoints": 255,
+      "slashdefence": 100,
+      "stabdefence": 100,
+      "strength": 300
+    },
+    "kalphite_lord": {
+      "attack": 110,
+      "crushdefence": 5,
+      "defence": 110,
+      "hitpoints": 170,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 110
+    },
+    "kalphite_lord_chamber": {
+      "attack": 110,
+      "crushdefence": 5,
+      "defence": 110,
+      "hitpoints": 170,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 110
+    },
+    "kalphite_queen": {
+      "attack": 300,
+      "crushdefence": 10,
+      "defence": 300,
+      "hitpoints": 255,
+      "slashdefence": 50,
+      "stabdefence": 50,
+      "strength": 300
+    },
+    "kalphite_soldier": {
+      "attack": 70,
+      "crushdefence": 5,
+      "defence": 70,
+      "hitpoints": 90,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 70
+    },
+    "kalphite_worker": {
+      "attack": 20,
+      "crushdefence": 1,
+      "defence": 20,
+      "hitpoints": 40,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 20
+    },
+    "kalphite_worker_chamber": {
+      "attack": 20,
+      "crushdefence": 1,
+      "defence": 20,
+      "hitpoints": 40,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 20
+    },
+    "kalrag": {
+      "attack": 78,
+      "crushdefence": 12,
+      "damagetype": "stab",
+      "defence": 78,
+      "hitpoints": 78,
+      "slashdefence": 17,
+      "stabdefence": 20,
+      "strength": 78
+    },
+    "khazard_commander": {
+      "attack": 50,
+      "damagetype": "stab",
+      "defence": 50,
+      "hitpoints": 22,
+      "strength": 45
+    },
+    "khazard_troop": {
+      "attack": 17,
+      "attackbonus": 9,
+      "attackrate": 5,
+      "crushdefence": 29,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 22,
+      "slashdefence": 34,
+      "stabdefence": 33,
+      "strength": 18,
+      "strengthbonus": 5
+    },
+    "khazard_troop_spearmen": {
+      "attack": 17,
+      "attackbonus": 8,
+      "attackrate": 6,
+      "crushdefence": 22,
+      "damagetype": "stab",
+      "defence": 13,
+      "hitpoints": 22,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 16,
+      "strengthbonus": 10
+    },
+    "khazard_warlord": {
+      "attack": 75,
+      "damagetype": "crush",
+      "defence": 80,
+      "hitpoints": 170,
+      "strength": 78
+    },
+    "king_dragon": {
+      "attack": 240,
+      "crushdefence": 90,
+      "damagetype": "stab",
+      "defence": 240,
+      "hitpoints": 240,
+      "slashdefence": 90,
+      "stabdefence": 70,
+      "strength": 240
+    },
+    "kingscorpion": {
+      "attack": 30,
+      "crushdefence": 15,
+      "damagetype": "stab",
+      "defence": 23,
+      "hitpoints": 30,
+      "slashdefence": 15,
+      "stabdefence": 5,
+      "strength": 29
+    },
+    "knight_of_ardougne": {
+      "attack": 38,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 36,
+      "damagetype": "slash",
+      "defence": 31,
+      "hitpoints": 52,
+      "slashdefence": 40,
+      "stabdefence": 39,
+      "strength": 40,
+      "strengthbonus": 10
+    },
+    "knight_of_ardougne2": {
+      "attack": 38,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 36,
+      "damagetype": "slash",
+      "defence": 31,
+      "hitpoints": 52,
+      "slashdefence": 40,
+      "stabdefence": 39,
+      "strength": 40,
+      "strengthbonus": 10
+    },
+    "koldemon": {
+      "attack": 85,
+      "damagetype": "slash",
+      "defence": 105,
+      "hitpoints": 107,
+      "strength": 98
+    },
+    "kolethereal": {
+      "attack": 28,
+      "defence": 58,
+      "hitpoints": 78,
+      "strength": 23
+    },
+    "kolhuman": {
+      "attack": 15,
+      "defence": 20,
+      "hitpoints": 3,
+      "strength": 10
+    },
+    "kologre": {
+      "attack": 55,
+      "defence": 72,
+      "hitpoints": 65,
+      "strength": 70
+    },
+    "kolspider": {
+      "attack": 69,
+      "defence": 47,
+      "hitpoints": 78,
+      "strength": 78
+    },
+    "lady_pirate": {
+      "attack": 20,
+      "attackbonus": 10,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 20,
+      "slashdefence": 1,
+      "strength": 20,
+      "strengthbonus": 9
+    },
+    "lathastrainingogre": {
+      "attack": 54,
+      "attackbonus": 8,
+      "crushdefence": 24,
+      "damagetype": "crush",
+      "defence": 54,
+      "hitpoints": 60,
+      "slashdefence": 23,
+      "stabdefence": 19,
+      "strength": 54,
+      "strengthbonus": 6
+    },
+    "lawgof2": {
+      "hitpoints": 16
+    },
+    "leprechaun": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 7,
+      "hitpoints": 16,
+      "strength": 10
+    },
+    "lesser_demon": {
+      "attack": 68,
+      "damagetype": "slash",
+      "defence": 71,
+      "hitpoints": 79,
+      "strength": 70
+    },
+    "localgnome": {
+      "attack": 3,
+      "defence": 3,
+      "hitpoints": 3,
+      "strength": 3
+    },
+    "lord_daquarius": {
+      "attack": 65,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 38,
+      "slashdefence": 64,
+      "stabdefence": 81,
+      "strength": 65
+    },
+    "lostgnome": {
+      "attack": 3,
+      "defence": 3,
+      "hitpoints": 3,
+      "strength": 3
+    },
+    "macro_dryhadguardian_1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 25,
+      "strength": 9
+    },
+    "macro_dryhadguardian_2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_dryhadguardian_3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_dryhadguardian_4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_dryhadguardian_5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_dryhadguardian_6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "macro_dwarf": {
+      "attack": 50,
+      "attackrate": 4,
+      "hitpoints": 255,
+      "strength": 1
+    },
+    "macro_golemguardian_1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 25,
+      "strength": 9
+    },
+    "macro_golemguardian_2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_golemguardian_3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_golemguardian_4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_golemguardian_5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_golemguardian_6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "macro_rivertrollguardian_1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 25,
+      "strength": 9
+    },
+    "macro_rivertrollguardian_2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_rivertrollguardian_3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_rivertrollguardian_4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_rivertrollguardian_5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_rivertrollguardian_6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "macro_shade1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 25,
+      "strength": 9
+    },
+    "macro_shade2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_shade3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_shade4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_shade5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_shade6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "macro_swarm": {
+      "attack": 50,
+      "attackrate": 7,
+      "damagetype": "stab",
+      "hitpoints": 255,
+      "strength": 10
+    },
+    "macro_triffidseed": {
+      "attack": 50,
+      "defence": 99,
+      "hitpoints": 200,
+      "strength": 10
+    },
+    "macro_triffidseed_angry": {
+      "attack": 50,
+      "defence": 99,
+      "hitpoints": 200,
+      "strength": 10
+    },
+    "macro_watchman1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 20,
+      "strength": 9
+    },
+    "macro_watchman2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_watchman3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_watchman4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_watchman5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_watchman6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "macro_zombie1": {
+      "attack": 9,
+      "damagetype": "crush",
+      "defence": 9,
+      "hitpoints": 20,
+      "strength": 9
+    },
+    "macro_zombie2": {
+      "attack": 22,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 40,
+      "strength": 22
+    },
+    "macro_zombie3": {
+      "attack": 38,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 60,
+      "strength": 38
+    },
+    "macro_zombie4": {
+      "attack": 65,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 85,
+      "strength": 65
+    },
+    "macro_zombie5": {
+      "attack": 100,
+      "damagetype": "crush",
+      "defence": 100,
+      "hitpoints": 120,
+      "strength": 100
+    },
+    "macro_zombie6": {
+      "attack": 130,
+      "damagetype": "crush",
+      "defence": 130,
+      "hitpoints": 170,
+      "strength": 130
+    },
+    "magic_store_owner": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 5,
+      "hitpoints": 14,
+      "strength": 8
+    },
+    "magicaxe": {
+      "attack": 38,
+      "crushdefence": 15,
+      "damagetype": "slash",
+      "defence": 29,
+      "hitpoints": 44,
+      "slashdefence": 5,
+      "stabdefence": 10,
+      "strength": 38
+    },
+    "man": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "man2": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "man3": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "mcannonguard": {
+      "attack": 8,
+      "attackbonus": 5,
+      "crushdefence": 4,
+      "damagetype": "stab",
+      "defence": 9,
+      "hitpoints": 16,
+      "slashdefence": 4,
+      "stabdefence": 3,
+      "strength": 6,
+      "strengthbonus": 7
+    },
+    "melzar_the_mad": {
+      "attack": 37,
+      "damagetype": "crush",
+      "defence": 34,
+      "hitpoints": 44,
+      "strength": 37
+    },
+    "mmsnailpoint_blue": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 27,
+      "hitpoints": 15,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailpoint_red+black": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 30,
+      "hitpoints": 10,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailpoint_swamp": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 12,
+      "hitpoints": 13,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailpoint_yellow": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 25,
+      "hitpoints": 20,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailround_blue": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 40,
+      "hitpoints": 12,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailround_orange": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 20,
+      "hitpoints": 22,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailround_red+black": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 45,
+      "hitpoints": 13,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailround_swamp": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 22,
+      "hitpoints": 8,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "mmsnailround_yellow": {
+      "attack": 0,
+      "attackbonus": 10,
+      "attackrate": 6,
+      "crushdefence": 30,
+      "damagetype": "stab",
+      "defence": 18,
+      "hitpoints": 10,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 0,
+      "strengthbonus": 10
+    },
+    "monk": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 15,
+      "strength": 2
+    },
+    "monk_ardougne": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 3,
+      "hitpoints": 5,
+      "strength": 2
+    },
+    "monkey": {
+      "attack": 2,
+      "damagetype": "crush",
+      "defence": 2,
+      "hitpoints": 6,
+      "strength": 3
+    },
+    "mort_afflicted_man": {
+      "attack": 30,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 30,
+      "strength": 30
+    },
+    "mort_afflicted_man2": {
+      "attack": 26,
+      "damagetype": "crush",
+      "defence": 36,
+      "hitpoints": 26,
+      "strength": 26
+    },
+    "mort_afflicted_woman": {
+      "attack": 28,
+      "damagetype": "crush",
+      "defence": 38,
+      "hitpoints": 28,
+      "strength": 28
+    },
+    "mort_afflicted_woman2": {
+      "attack": 24,
+      "damagetype": "crush",
+      "defence": 34,
+      "hitpoints": 24,
+      "strength": 24
+    },
+    "mossgiant": {
+      "attack": 30,
+      "attackbonus": 33,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 30,
+      "hitpoints": 60,
+      "strength": 30,
+      "strengthbonus": 31
+    },
+    "mourner2": {
+      "attack": 8,
+      "attackbonus": 6,
+      "crushdefence": 9,
+      "defence": 8,
+      "hitpoints": 19,
+      "slashdefence": 6,
+      "stabdefence": 6,
+      "strength": 8,
+      "strengthbonus": 2
+    },
+    "mourner3": {
+      "attack": 20,
+      "crushdefence": 4,
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 2,
+      "stabdefence": 3,
+      "strength": 20
+    },
+    "mourner_armed": {
+      "attack": 17,
+      "attackbonus": 5,
+      "crushdefence": 7,
+      "damagetype": "crush",
+      "defence": 17,
+      "hitpoints": 13,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 17,
+      "strengthbonus": 5
+    },
+    "mournerstew1": {
+      "attack": 10,
+      "crushdefence": 4,
+      "defence": 10,
+      "hitpoints": 13,
+      "slashdefence": 2,
+      "stabdefence": 3,
+      "strength": 10
+    },
+    "mournerstew2": {
+      "attack": 10,
+      "crushdefence": 4,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 19,
+      "slashdefence": 2,
+      "stabdefence": 3,
+      "strength": 10
+    },
+    "mournerstew3": {
+      "attack": 20,
+      "crushdefence": 3,
+      "defence": 20,
+      "hitpoints": 25,
+      "slashdefence": 1,
+      "stabdefence": 2,
+      "strength": 20
+    },
+    "mugger": {
+      "attack": 5,
+      "damagetype": "crush",
+      "defence": 5,
+      "hitpoints": 8,
+      "strength": 5,
+      "strengthbonus": -21
+    },
+    "nasty_tree": {
+      "attack": 20,
+      "crushdefence": 60,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 250,
+      "slashdefence": 10,
+      "stabdefence": 40,
+      "strength": 20
+    },
+    "nasty_tree_swamp": {
+      "attack": 20,
+      "crushdefence": 60,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 250,
+      "slashdefence": 10,
+      "stabdefence": 40,
+      "strength": 20
+    },
+    "necromancer": {
+      "attack": 18,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 40,
+      "strength": 18
+    },
+    "newbiechicken": {
+      "attack": 3,
+      "defence": 3,
+      "hitpoints": 3,
+      "strength": 3
+    },
+    "newbiegiantrat": {
+      "attack": 3,
+      "damagetype": "stab",
+      "defence": 3,
+      "hitpoints": 3,
+      "strength": 3
+    },
+    "nezikchened": {
+      "attack": 165,
+      "attackrate": 5,
+      "damagetype": "slash",
+      "defence": 167,
+      "hitpoints": 150,
+      "strength": 168
+    },
+    "ogre": {
+      "attack": 43,
+      "attackbonus": 22,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 43,
+      "hitpoints": 60,
+      "strength": 43,
+      "strengthbonus": 20
+    },
+    "ogre2": {
+      "attack": 43,
+      "attackbonus": 22,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 43,
+      "hitpoints": 60,
+      "strength": 43,
+      "strengthbonus": 20
+    },
+    "ogre_chieftan": {
+      "attack": 75,
+      "attackbonus": 5,
+      "crushdefence": 16,
+      "damagetype": "crush",
+      "defence": 75,
+      "hitpoints": 60,
+      "slashdefence": 21,
+      "stabdefence": 10,
+      "strength": 71,
+      "strengthbonus": 7
+    },
+    "ogre_guard": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "ogre_guard1": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "ogre_guard2": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "ogre_guard3": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "ogre_guard4": {
+      "attack": 70,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "slashdefence": 24,
+      "stabdefence": 13,
+      "strength": 70,
+      "strengthbonus": 13
+    },
+    "ogre_merchant": {
+      "attack": 62,
+      "damagetype": "crush",
+      "defence": 63,
+      "hitpoints": 60,
+      "strength": 60
+    },
+    "ogre_shaman": {
+      "attack": 99,
+      "damagetype": "crush",
+      "defence": 99,
+      "hitpoints": 99,
+      "strength": 99
+    },
+    "ogre_trader1": {
+      "attack": 62,
+      "damagetype": "crush",
+      "defence": 63,
+      "hitpoints": 60,
+      "strength": 60
+    },
+    "ogre_trader2": {
+      "attack": 62,
+      "damagetype": "crush",
+      "defence": 63,
+      "hitpoints": 60,
+      "strength": 60
+    },
+    "oomlie_bird": {
+      "attack": 40,
+      "damagetype": "stab",
+      "defence": 40,
+      "hitpoints": 40,
+      "strength": 40
+    },
+    "orc": {
+      "attack": 13,
+      "attackrate": 5,
+      "crushdefence": 13,
+      "damagetype": "crush",
+      "defence": 14,
+      "hitpoints": 29,
+      "slashdefence": 14,
+      "stabdefence": 12,
+      "strength": 16,
+      "strengthbonus": 5
+    },
+    "othainian": {
+      "attack": 76,
+      "damagetype": "slash",
+      "defence": 77,
+      "hitpoints": 87,
+      "strength": 78
+    },
+    "otherworldly_being": {
+      "attack": 56,
+      "crushdefence": 20,
+      "damagetype": "crush",
+      "defence": 46,
+      "hitpoints": 66,
+      "slashdefence": 10,
+      "stabdefence": 15,
+      "strength": 56
+    },
+    "pack_wolf": {
+      "attack": 20,
+      "damagetype": "stab",
+      "defence": 22,
+      "hitpoints": 34,
+      "strength": 16
+    },
+    "paladin": {
+      "attack": 54,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "slash",
+      "defence": 54,
+      "hitpoints": 57,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 54,
+      "strengthbonus": 22
+    },
+    "penguin": {
+      "damagetype": "stab",
+      "defence": 2,
+      "hitpoints": 4,
+      "strength": 2
+    },
+    "pirate1": {
+      "attack": 20,
+      "attackbonus": 10,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 20,
+      "slashdefence": 1,
+      "strength": 20,
+      "strengthbonus": 9
+    },
+    "pirate2": {
+      "attack": 21,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 20,
+      "slashdefence": 2,
+      "stabdefence": 3,
+      "strength": 21,
+      "strengthbonus": 10
+    },
+    "pirate_aggressive": {
+      "attack": 23,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "damagetype": "slash",
+      "defence": 23,
+      "hitpoints": 23,
+      "slashdefence": 2,
+      "stabdefence": 3,
+      "strength": 23,
+      "strengthbonus": 10
+    },
+    "pirate_guard": {
+      "attack": 18,
+      "attackbonus": 20,
+      "crushdefence": 30,
+      "damagetype": "slash",
+      "defence": 10,
+      "hitpoints": 25,
+      "slashdefence": 39,
+      "stabdefence": 30,
+      "strength": 16,
+      "strengthbonus": 16
+    },
+    "poison_scorpion": {
+      "attack": 16,
+      "crushdefence": 15,
+      "damagetype": "stab",
+      "defence": 15,
+      "hitpoints": 23,
+      "slashdefence": 15,
+      "stabdefence": 5,
+      "strength": 17
+    },
+    "poisonspider": {
+      "attack": 50,
+      "crushdefence": 10,
+      "damagetype": "stab",
+      "defence": 52,
+      "hitpoints": 64,
+      "slashdefence": 17,
+      "stabdefence": 20,
+      "strength": 58
+    },
+    "priestperilevilmonk1": {
+      "attack": 18,
+      "damagetype": "crush",
+      "defence": 22,
+      "hitpoints": 20,
+      "strength": 18
+    },
+    "priestperilevilmonk2": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 10,
+      "strength": 8
+    },
+    "priestperilevilmonk3": {
+      "attack": 25,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 25,
+      "strength": 25
+    },
+    "priestperilguarddog": {
+      "attack": 20,
+      "damagetype": "stab",
+      "defence": 20,
+      "hitpoints": 45,
+      "strength": 20
+    },
+    "ranalph_devere": {
+      "attack": 66,
+      "attackbonus": 45,
+      "crushdefence": 36,
+      "damagetype": "slash",
+      "defence": 66,
+      "hitpoints": 130,
+      "slashdefence": 40,
+      "stabdefence": 38,
+      "strength": 67,
+      "strengthbonus": 44
+    },
+    "ranging_guild_doorman": {
+      "attack": 20,
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 20
+    },
+    "ranging_guild_guard": {
+      "attack": 20,
+      "attackbonus": 19,
+      "attackrate": 6,
+      "crushdefence": 27,
+      "damagetype": "crush",
+      "defence": 20,
+      "hitpoints": 50,
+      "slashdefence": 23,
+      "stabdefence": 18,
+      "strength": 20,
+      "strengthbonus": 8
+    },
+    "rat": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 2,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -53
+    },
+    "red_dragon": {
+      "attack": 130,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 130,
+      "hitpoints": 140,
+      "slashdefence": 70,
+      "stabdefence": 50,
+      "strength": 130
+    },
+    "regicide_bunny1": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "regicide_bunny2": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "regicide_darkbear": {
+      "attack": 40,
+      "damagetype": "slash",
+      "defence": 35,
+      "hitpoints": 35,
+      "strength": 36
+    },
+    "regicide_darkbear_cub1": {
+      "attack": 30,
+      "damagetype": "slash",
+      "defence": 25,
+      "hitpoints": 35,
+      "strength": 26
+    },
+    "regicide_darkbear_cub2": {
+      "attack": 32,
+      "damagetype": "slash",
+      "defence": 28,
+      "hitpoints": 35,
+      "strength": 32
+    },
+    "regicide_darkelf": {
+      "attack": 10,
+      "crushdefence": 50,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 105,
+      "slashdefence": 50,
+      "stabdefence": 50,
+      "strength": 80
+    },
+    "regicide_darkelf2": {
+      "attack": 95,
+      "crushdefence": 70,
+      "damagetype": "stab",
+      "defence": 80,
+      "hitpoints": 105,
+      "slashdefence": 70,
+      "stabdefence": 50,
+      "strength": 95
+    },
+    "regicide_good_elf1": {
+      "hitpoints": 51
+    },
+    "regicide_old_camp_guard": {
+      "attack": 85,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "stab",
+      "defence": 100,
+      "hitpoints": 110,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 95,
+      "strengthbonus": 30
+    },
+    "regicide_rabbit": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "regicide_tyras_camp_guard": {
+      "attack": 85,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "stab",
+      "defence": 100,
+      "hitpoints": 110,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 95,
+      "strengthbonus": 30
+    },
+    "regicide_tyras_guard": {
+      "attack": 85,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "defence": 100,
+      "hitpoints": 110,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 95,
+      "strengthbonus": 30
+    },
+    "renegade_knight": {
+      "attack": 28,
+      "attackbonus": 20,
+      "crushdefence": 62,
+      "damagetype": "slash",
+      "defence": 28,
+      "hitpoints": 48,
+      "slashdefence": 82,
+      "stabdefence": 99,
+      "strength": 28,
+      "strengthbonus": 16
+    },
+    "rogue": {
+      "attack": 13,
+      "attackbonus": 5,
+      "crushdefence": 11,
+      "damagetype": "stab",
+      "defence": 13,
+      "hitpoints": 17,
+      "slashdefence": 9,
+      "stabdefence": 6,
+      "strength": 13,
+      "strengthbonus": 5
+    },
+    "rooster": {
+      "attack": 2,
+      "attackbonus": -20,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 7,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strength": 2,
+      "strengthbonus": -20
+    },
+    "rowdymineguard": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 32,
+      "hitpoints": 60,
+      "slashdefence": 15,
+      "stabdefence": 17,
+      "strength": 32,
+      "strengthbonus": 14
+    },
+    "salarin_the_twisted": {
+      "attack": 58,
+      "damagetype": "crush",
+      "defence": 62,
+      "hitpoints": 70,
+      "strength": 58
+    },
+    "san_tojalon": {
+      "attack": 86,
+      "attackbonus": 16,
+      "crushdefence": 20,
+      "damagetype": "stab",
+      "defence": 86,
+      "hitpoints": 120,
+      "slashdefence": 22,
+      "stabdefence": 18,
+      "strength": 84,
+      "strengthbonus": 17
+    },
+    "saradomin_mage": {
+      "damagetype": "crush",
+      "hitpoints": 120
+    },
+    "scorpion": {
+      "attack": 11,
+      "crushdefence": 15,
+      "damagetype": "stab",
+      "defence": 11,
+      "hitpoints": 17,
+      "slashdefence": 15,
+      "stabdefence": 5,
+      "strength": 12
+    },
+    "seabird1": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "seabird2": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "seabird3": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "shade_level1": {
+      "attack": 45,
+      "damagetype": "crush",
+      "defence": 26,
+      "hitpoints": 38,
+      "strength": 30
+    },
+    "shade_level2": {
+      "attack": 64,
+      "damagetype": "crush",
+      "defence": 42,
+      "hitpoints": 56,
+      "strength": 47
+    },
+    "shade_level3": {
+      "attack": 88,
+      "damagetype": "crush",
+      "defence": 60,
+      "hitpoints": 76,
+      "strength": 55
+    },
+    "shade_level4": {
+      "attack": 102,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 90,
+      "strength": 84
+    },
+    "shade_level5": {
+      "attack": 120,
+      "damagetype": "crush",
+      "defence": 85,
+      "hitpoints": 110,
+      "strength": 100
+    },
+    "shadeshadow_level1": {
+      "attack": 45,
+      "damagetype": "crush",
+      "defence": 26,
+      "hitpoints": 38,
+      "strength": 30
+    },
+    "shadeshadow_level2": {
+      "attack": 64,
+      "damagetype": "crush",
+      "defence": 42,
+      "hitpoints": 56,
+      "strength": 47
+    },
+    "shadeshadow_level3": {
+      "attack": 88,
+      "damagetype": "crush",
+      "defence": 60,
+      "hitpoints": 76,
+      "strength": 55
+    },
+    "shadeshadow_level4": {
+      "attack": 102,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 90,
+      "strength": 84
+    },
+    "shadeshadow_level5": {
+      "attack": 120,
+      "damagetype": "crush",
+      "defence": 85,
+      "hitpoints": 110,
+      "strength": 100
+    },
+    "shadow_spider": {
+      "attack": 44,
+      "crushdefence": 10,
+      "damagetype": "stab",
+      "defence": 44,
+      "hitpoints": 55,
+      "slashdefence": 15,
+      "stabdefence": 20,
+      "strength": 42
+    },
+    "shadow_warrior": {
+      "attack": 36,
+      "attackbonus": 20,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 36,
+      "hitpoints": 67,
+      "slashdefence": 31,
+      "stabdefence": 43,
+      "strength": 33,
+      "strengthbonus": 26
+    },
+    "shantay_guard": {
+      "attack": 17,
+      "attackbonus": 11,
+      "crushdefence": 18,
+      "damagetype": "stab",
+      "defence": 16,
+      "hitpoints": 32,
+      "slashdefence": 15,
+      "stabdefence": 12,
+      "strength": 16,
+      "strengthbonus": 12
+    },
+    "shantay_guard_still": {
+      "attack": 17,
+      "attackbonus": 11,
+      "crushdefence": 18,
+      "damagetype": "stab",
+      "defence": 16,
+      "hitpoints": 32,
+      "slashdefence": 15,
+      "stabdefence": 12,
+      "strength": 16,
+      "strengthbonus": 12
+    },
+    "shapeshifterbear": {
+      "attack": 38,
+      "damagetype": "slash",
+      "defence": 39,
+      "hitpoints": 41,
+      "strength": 30
+    },
+    "shapeshifterglob": {
+      "attack": 18,
+      "damagetype": "crush",
+      "defence": 19,
+      "hitpoints": 21,
+      "strength": 10
+    },
+    "shapeshifterspider": {
+      "attack": 28,
+      "damagetype": "crush",
+      "defence": 29,
+      "hitpoints": 31,
+      "strength": 20
+    },
+    "shapeshifterwolf": {
+      "attack": 48,
+      "damagetype": "stab",
+      "defence": 49,
+      "hitpoints": 51,
+      "strength": 40
+    },
+    "shipyardworker1": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 10,
+      "strength": 10
+    },
+    "shipyardworker2": {
+      "attack": 10,
+      "attackbonus": 6,
+      "attackrate": 6,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 10,
+      "strength": 10,
+      "strengthbonus": 6
+    },
+    "sir_mordred": {
+      "attack": 33,
+      "attackbonus": 20,
+      "crushdefence": 45,
+      "damagetype": "slash",
+      "defence": 33,
+      "hitpoints": 38,
+      "slashdefence": 82,
+      "stabdefence": 99,
+      "strength": 33,
+      "strengthbonus": 16
+    },
+    "skavid": {
+      "damagetype": "crush",
+      "hitpoints": 6
+    },
+    "skeleton_armed": {
+      "attack": 15,
+      "attackbonus": 15,
+      "crushdefence": -2,
+      "damagetype": "slash",
+      "defence": 17,
+      "hitpoints": 29,
+      "slashdefence": 11,
+      "stabdefence": 9,
+      "strength": 18,
+      "strengthbonus": 14
+    },
+    "skeleton_unagressive": {
+      "attack": 17,
+      "crushdefence": -5,
+      "damagetype": "crush",
+      "defence": 17,
+      "hitpoints": 24,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 17
+    },
+    "skeleton_unarmed": {
+      "attack": 24,
+      "crushdefence": -5,
+      "damagetype": "crush",
+      "defence": 24,
+      "hitpoints": 17,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 24
+    },
+    "skeletonmage": {
+      "attack": 14,
+      "damagetype": "crush",
+      "defence": 14,
+      "hitpoints": 17,
+      "strength": 14
+    },
+    "skull_skeleton": {
+      "attack": 10,
+      "crushdefence": -5,
+      "damagetype": "crush",
+      "defence": 7,
+      "hitpoints": 18,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 11
+    },
+    "slave_rowdy": {
+      "attack": 7,
+      "damagetype": "crush",
+      "defence": 7,
+      "hitpoints": 16,
+      "strength": 7
+    },
+    "small_bat": {
+      "attack": 5,
+      "crushdefence": 5,
+      "damagetype": "stab",
+      "defence": 5,
+      "hitpoints": 8,
+      "slashdefence": 2,
+      "stabdefence": 2,
+      "strength": 5
+    },
+    "smallscorpion": {
+      "attack": 23,
+      "crushdefence": 5,
+      "damagetype": "stab",
+      "defence": 23,
+      "hitpoints": 32,
+      "slashdefence": 5,
+      "strength": 23
+    },
+    "snake": {
+      "attack": 4,
+      "damagetype": "stab",
+      "defence": 3,
+      "hitpoints": 6,
+      "strength": 5
+    },
+    "souless": {
+      "attack": 13,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 24,
+      "strength": 13
+    },
+    "speedy_keith": {
+      "attack": 32,
+      "attackbonus": 9,
+      "crushdefence": 10,
+      "damagetype": "slash",
+      "defence": 27,
+      "hitpoints": 37,
+      "slashdefence": 8,
+      "stabdefence": 9,
+      "strength": 26,
+      "strengthbonus": 9
+    },
+    "spider": {
+      "attackbonus": -35,
+      "crushdefence": -53,
+      "damagetype": "stab",
+      "hitpoints": 2,
+      "slashdefence": -53,
+      "stabdefence": -53,
+      "strengthbonus": -58
+    },
+    "straven": {
+      "attack": 21,
+      "damagetype": "crush",
+      "defence": 21,
+      "hitpoints": 20,
+      "strength": 21
+    },
+    "suit_of_armour": {
+      "attack": 16,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 45,
+      "damagetype": "slash",
+      "defence": 9,
+      "hitpoints": 29,
+      "slashdefence": 50,
+      "stabdefence": 46,
+      "strength": 14,
+      "strengthbonus": 10
+    },
+    "summonedimp": {
+      "attackbonus": -42,
+      "crushdefence": -42,
+      "damagetype": "stab",
+      "hitpoints": 9,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -37
+    },
+    "summonedzombie": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 22,
+      "strength": 9
+    },
+    "tbwt_beast": {
+      "attack": 80,
+      "damagetype": "slash",
+      "defence": 80,
+      "hitpoints": 100,
+      "strength": 25
+    },
+    "tbwt_beast_cutscene": {
+      "attack": 80,
+      "damagetype": "slash",
+      "defence": 80,
+      "hitpoints": 100,
+      "strength": 25
+    },
+    "terrorbird": {
+      "attack": 23,
+      "damagetype": "stab",
+      "defence": 19,
+      "hitpoints": 34,
+      "strength": 23
+    },
+    "terrorbird2": {
+      "attack": 25,
+      "crushdefence": 18,
+      "damagetype": "stab",
+      "defence": 25,
+      "hitpoints": 36,
+      "slashdefence": 16,
+      "stabdefence": 16,
+      "strength": 25
+    },
+    "terrorbird3": {
+      "attack": 40,
+      "crushdefence": 18,
+      "damagetype": "stab",
+      "defence": 40,
+      "hitpoints": 55,
+      "slashdefence": 16,
+      "stabdefence": 16,
+      "strength": 40
+    },
+    "thief1": {
+      "attack": 14,
+      "damagetype": "crush",
+      "defence": 12,
+      "hitpoints": 17,
+      "strength": 13
+    },
+    "thief_blanket": {
+      "attack": 14,
+      "attackbonus": 6,
+      "crushdefence": 14,
+      "damagetype": "stab",
+      "defence": 9,
+      "hitpoints": 17,
+      "slashdefence": 13,
+      "stabdefence": 8,
+      "strength": 10,
+      "strengthbonus": 7
+    },
+    "thrantax": {
+      "attack": 80,
+      "damagetype": "crush",
+      "defence": 80,
+      "hitpoints": 80,
+      "strength": 80
+    },
+    "thug": {
+      "attack": 7,
+      "attackbonus": 5,
+      "crushdefence": 3,
+      "damagetype": "stab",
+      "defence": 9,
+      "hitpoints": 18,
+      "slashdefence": 3,
+      "stabdefence": 2,
+      "strength": 5,
+      "strengthbonus": 5
+    },
+    "tower_guard": {
+      "attack": 26,
+      "attackbonus": 8,
+      "crushdefence": 28,
+      "damagetype": "stab",
+      "defence": 26,
+      "hitpoints": 22,
+      "slashdefence": 35,
+      "stabdefence": 23,
+      "strength": 26,
+      "strengthbonus": 8
+    },
+    "trail_hard": {
+      "attack": 24,
+      "damagetype": "crush",
+      "defence": 24,
+      "hitpoints": 80,
+      "strength": 24
+    },
+    "trail_hard2": {
+      "attack": 100,
+      "attackbonus": 40,
+      "damagetype": "stab",
+      "defence": 80,
+      "hitpoints": 120,
+      "strength": 80,
+      "strengthbonus": 40
+    },
+    "tramp": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "tree_spirit": {
+      "attack": 90,
+      "damagetype": "crush",
+      "defence": 80,
+      "hitpoints": 85,
+      "strength": 95
+    },
+    "tribesman": {
+      "attack": 23,
+      "attackbonus": 8,
+      "crushdefence": 6,
+      "damagetype": "stab",
+      "defence": 26,
+      "hitpoints": 39,
+      "slashdefence": 6,
+      "stabdefence": 4,
+      "strength": 27,
+      "strengthbonus": 5
+    },
+    "trobert": {
+      "attack": 4,
+      "damagetype": "slash",
+      "defence": 5,
+      "hitpoints": 13,
+      "strength": 3
+    },
+    "troll": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 90,
+      "strength": 75,
+      "strengthbonus": 20
+    },
+    "troll_champion": {
+      "attack": 60,
+      "attackbonus": 40,
+      "attackrate": 8,
+      "crushdefence": 40,
+      "damagetype": "crush",
+      "defence": 50,
+      "hitpoints": 120,
+      "slashdefence": 25,
+      "stabdefence": 25,
+      "strength": 120,
+      "strengthbonus": 70
+    },
+    "troll_general": {
+      "attack": 70,
+      "attackbonus": 60,
+      "crushdefence": 35,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 140,
+      "slashdefence": 60,
+      "stabdefence": 35,
+      "strength": 140,
+      "strengthbonus": 100
+    },
+    "troll_general2": {
+      "attack": 70,
+      "attackbonus": 60,
+      "crushdefence": 35,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 140,
+      "slashdefence": 60,
+      "stabdefence": 35,
+      "strength": 140,
+      "strengthbonus": 100
+    },
+    "troll_general3": {
+      "attack": 70,
+      "attackbonus": 60,
+      "crushdefence": 35,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 140,
+      "slashdefence": 60,
+      "stabdefence": 35,
+      "strength": 140,
+      "strengthbonus": 100
+    },
+    "troll_melee1": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_prison_guard1": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_prison_guard1_awake": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_prison_guard2": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_prison_guard2_awake": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator1": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator2": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator3": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator4": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator5": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator6": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_spectator7": {
+      "attack": 40,
+      "attackbonus": 20,
+      "attackrate": 6,
+      "crushdefence": 10,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 90,
+      "strength": 90,
+      "strengthbonus": 20
+    },
+    "troll_thrower1": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 15,
+      "hitpoints": 95,
+      "strength": 95
+    },
+    "troll_thrower2": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 15,
+      "hitpoints": 95,
+      "strength": 95
+    },
+    "troll_thrower3": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 15,
+      "hitpoints": 95,
+      "strength": 95
+    },
+    "troll_thrower4": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 15,
+      "hitpoints": 95,
+      "strength": 95
+    },
+    "troll_thrower5": {
+      "attack": 30,
+      "attackrate": 7,
+      "damagetype": "crush",
+      "defence": 15,
+      "hitpoints": 95,
+      "strength": 95
+    },
+    "ugthanki": {
+      "attack": 35,
+      "damagetype": "stab",
+      "defence": 35,
+      "hitpoints": 45,
+      "strength": 35
+    },
+    "ungadulu_bad": {
+      "attack": 147,
+      "attackbonus": 7,
+      "damagetype": "crush",
+      "defence": 147,
+      "hitpoints": 150,
+      "strength": 147,
+      "strengthbonus": 3
+    },
+    "ungadulu_good": {
+      "attack": 57,
+      "attackbonus": 7,
+      "damagetype": "crush",
+      "defence": 65,
+      "hitpoints": 65,
+      "strength": 61,
+      "strengthbonus": 3
+    },
+    "unicorn": {
+      "attack": 11,
+      "damagetype": "stab",
+      "defence": 13,
+      "hitpoints": 19,
+      "strength": 13
+    },
+    "unicorn_foal_1": {
+      "attack": 10,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 15,
+      "strength": 10
+    },
+    "unicorn_upass": {
+      "attack": 11,
+      "damagetype": "stab",
+      "defence": 13,
+      "hitpoints": 19,
+      "strength": 13
+    },
+    "upass_little_spider": {
+      "attackbonus": -35,
+      "crushdefence": -53,
+      "damagetype": "stab",
+      "hitpoints": 2,
+      "slashdefence": -53,
+      "stabdefence": -53,
+      "strengthbonus": -58
+    },
+    "upass_paladin1": {
+      "attack": 54,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "slash",
+      "defence": 54,
+      "hitpoints": 57,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 54,
+      "strengthbonus": 22
+    },
+    "upass_paladin2": {
+      "attack": 54,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "slash",
+      "defence": 54,
+      "hitpoints": 57,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 54,
+      "strengthbonus": 22
+    },
+    "upass_paladin3": {
+      "attack": 54,
+      "attackbonus": 20,
+      "attackrate": 5,
+      "crushdefence": 76,
+      "damagetype": "slash",
+      "defence": 54,
+      "hitpoints": 57,
+      "slashdefence": 84,
+      "stabdefence": 87,
+      "strength": 54,
+      "strengthbonus": 22
+    },
+    "vampire_count": {
+      "damagetype": "slash",
+      "hitpoints": 100
+    },
+    "vampire_flyer": {
+      "attack": 65,
+      "damagetype": "stab",
+      "defence": 65,
+      "hitpoints": 50,
+      "strength": 70
+    },
+    "vampire_juve": {
+      "attack": 55,
+      "damagetype": "stab",
+      "defence": 55,
+      "hitpoints": 40,
+      "strength": 60
+    },
+    "vampire_leech": {
+      "attack": 80,
+      "damagetype": "stab",
+      "defence": 35,
+      "hitpoints": 45,
+      "strength": 20
+    },
+    "viking_bunny_1": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "viking_bunny_2": {
+      "attackbonus": -47,
+      "crushdefence": -42,
+      "damagetype": "crush",
+      "hitpoints": 5,
+      "slashdefence": -42,
+      "stabdefence": -42,
+      "strengthbonus": -42
+    },
+    "viking_draugen": {
+      "attack": 60,
+      "crushdefence": 100,
+      "damagetype": "crush",
+      "defence": 60,
+      "hitpoints": 60,
+      "slashdefence": 100,
+      "stabdefence": 100,
+      "strength": 60
+    },
+    "viking_enemy1": {
+      "attack": 20,
+      "crushdefence": 20,
+      "damagetype": "slash",
+      "defence": 20,
+      "hitpoints": 30,
+      "slashdefence": 20,
+      "stabdefence": 20,
+      "strength": 20
+    },
+    "viking_enemy2": {
+      "attack": 40,
+      "crushdefence": 40,
+      "damagetype": "slash",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 40,
+      "stabdefence": 40,
+      "strength": 40
+    },
+    "viking_enemy3": {
+      "attack": 60,
+      "crushdefence": 60,
+      "damagetype": "slash",
+      "defence": 60,
+      "hitpoints": 70,
+      "slashdefence": 60,
+      "stabdefence": 60,
+      "strength": 60
+    },
+    "viking_enemy4": {
+      "attack": 255,
+      "attackrate": 1,
+      "damagetype": "slash",
+      "defence": 255,
+      "hitpoints": 255,
+      "strength": 5
+    },
+    "viking_fox": {
+      "attackbonus": 30,
+      "crushdefence": 30,
+      "damagetype": "crush",
+      "defence": 20,
+      "hitpoints": 30,
+      "slashdefence": 30,
+      "stabdefence": 30,
+      "strength": 20,
+      "strengthbonus": 30
+    },
+    "viking_guard": {
+      "attack": 40,
+      "attackbonus": 40,
+      "attackrate": 3,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 50,
+      "strength": 40,
+      "strengthbonus": 40
+    },
+    "viking_guard2": {
+      "attack": 40,
+      "attackbonus": 40,
+      "attackrate": 3,
+      "crushdefence": 50,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "slashdefence": 50,
+      "stabdefence": 50,
+      "strength": 40,
+      "strengthbonus": 40
+    },
+    "viking_man": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_man2": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_man3": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_man4": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_man5": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_seagull": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "viking_seagull2": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "viking_seagull3": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "viking_seagull4": {
+      "attack": 22,
+      "crushdefence": 16,
+      "damagetype": "stab",
+      "defence": 17,
+      "hitpoints": 32,
+      "slashdefence": 10,
+      "stabdefence": 12,
+      "strength": 22
+    },
+    "viking_wolf": {
+      "attack": 50,
+      "damagetype": "stab",
+      "defence": 52,
+      "hitpoints": 69,
+      "strength": 55
+    },
+    "viking_woman": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_woman2": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_woman3": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_woman4": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viking_woman_indoors": {
+      "attack": 40,
+      "damagetype": "crush",
+      "defence": 40,
+      "hitpoints": 50,
+      "strength": 40,
+      "strengthbonus": 20
+    },
+    "viyeldi": {
+      "attack": 62,
+      "attackbonus": 7,
+      "damagetype": "crush",
+      "defence": 70,
+      "hitpoints": 80,
+      "strength": 66,
+      "strengthbonus": 3
+    },
+    "w_ardoungecitizenlady1": {
+      "attack": 2,
+      "crushdefence": 1,
+      "damagetype": "crush",
+      "hitpoints": 13,
+      "slashdefence": 1,
+      "stabdefence": 1
+    },
+    "w_ardoungecitizenlady2": {
+      "attack": 2,
+      "damagetype": "crush",
+      "hitpoints": 10
+    },
+    "w_ardoungecitizenlady4": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 23,
+      "strength": 10
+    },
+    "warrior_woman": {
+      "attack": 22,
+      "attackbonus": 6,
+      "crushdefence": 37,
+      "damagetype": "stab",
+      "defence": 22,
+      "hitpoints": 20,
+      "slashdefence": 41,
+      "stabdefence": 40,
+      "strength": 22,
+      "strengthbonus": 7
+    },
+    "weaponsmaster": {
+      "attack": 21,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 21,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 20,
+      "slashdefence": 23,
+      "stabdefence": 21,
+      "strength": 21,
+      "strengthbonus": 10
+    },
+    "white_knight": {
+      "attack": 27,
+      "attackbonus": 30,
+      "attackrate": 7,
+      "crushdefence": 70,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 52,
+      "slashdefence": 76,
+      "stabdefence": 83,
+      "strength": 29,
+      "strengthbonus": 31
+    },
+    "whitewolf": {
+      "attack": 30,
+      "damagetype": "stab",
+      "defence": 32,
+      "hitpoints": 44,
+      "strength": 31
+    },
+    "whitewolf_sentry": {
+      "attack": 20,
+      "damagetype": "stab",
+      "defence": 22,
+      "hitpoints": 34,
+      "strength": 16
+    },
+    "witch1": {
+      "attack": 25,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 10,
+      "strength": 25
+    },
+    "witch2": {
+      "attack": 25,
+      "damagetype": "crush",
+      "defence": 25,
+      "hitpoints": 10,
+      "strength": 25
+    },
+    "wizard": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 5,
+      "hitpoints": 14,
+      "strength": 8
+    },
+    "wizard_frumscone": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 5,
+      "hitpoints": 14,
+      "strength": 8
+    },
+    "wizard_grayzag": {
+      "attack": 37,
+      "damagetype": "crush",
+      "defence": 34,
+      "hitpoints": 34,
+      "strength": 37
+    },
+    "wizard_mizgog": {
+      "attack": 20,
+      "defence": 15,
+      "hitpoints": 3,
+      "strength": 10
+    },
+    "wolf": {
+      "attack": 50,
+      "damagetype": "stab",
+      "defence": 52,
+      "hitpoints": 69,
+      "strength": 55
+    },
+    "wolfpack_leader": {
+      "attack": 60,
+      "damagetype": "stab",
+      "defence": 62,
+      "hitpoints": 74,
+      "strength": 61
+    },
+    "woman": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "woman2": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "woman3": {
+      "crushdefence": -21,
+      "damagetype": "crush",
+      "hitpoints": 7,
+      "slashdefence": -21,
+      "stabdefence": -21
+    },
+    "wormbrain": {
+      "damagetype": "crush",
+      "hitpoints": 5
+    },
+    "wyson": {
+      "attack": 2,
+      "damagetype": "stab",
+      "defence": 5,
+      "hitpoints": 7
+    },
+    "yanille_soldier": {
+      "attack": 26,
+      "attackbonus": 8,
+      "attackrate": 5,
+      "crushdefence": 19,
+      "damagetype": "slash",
+      "defence": 26,
+      "hitpoints": 22,
+      "slashdefence": 14,
+      "stabdefence": 24,
+      "strength": 25,
+      "strengthbonus": 10
+    },
+    "yanille_watchman": {
+      "attack": 31,
+      "crushdefence": 19,
+      "damagetype": "crush",
+      "defence": 31,
+      "hitpoints": 22,
+      "slashdefence": 14,
+      "stabdefence": 24,
+      "strength": 31
+    },
+    "yeti": {
+      "attack": 48,
+      "damagetype": "crush",
+      "defence": 39,
+      "hitpoints": 55,
+      "strength": 60
+    },
+    "young_dark_wizard": {
+      "attack": 5,
+      "damagetype": "crush",
+      "defence": 5,
+      "hitpoints": 12,
+      "strength": 2
+    },
+    "zamorak_mage": {
+      "damagetype": "crush",
+      "hitpoints": 120
+    },
+    "zamorakghost": {
+      "attack": 23,
+      "damagetype": "crush",
+      "defence": 23,
+      "hitpoints": 20,
+      "strength": 20
+    },
+    "zanarisleprechaun": {
+      "attack": 10,
+      "damagetype": "crush",
+      "defence": 7,
+      "hitpoints": 16,
+      "strength": 10
+    },
+    "zombie2": {
+      "attack": 13,
+      "damagetype": "crush",
+      "defence": 18,
+      "hitpoints": 24,
+      "strength": 13
+    },
+    "zombie_armed": {
+      "attack": 19,
+      "attackbonus": 5,
+      "attackrate": 5,
+      "crushdefence": 12,
+      "damagetype": "slash",
+      "defence": 16,
+      "hitpoints": 30,
+      "slashdefence": 8,
+      "stabdefence": 9,
+      "strength": 21,
+      "strengthbonus": 7
+    },
+    "zombie_entranan": {
+      "attack": 19,
+      "attackbonus": 5,
+      "crushdefence": 12,
+      "damagetype": "slash",
+      "defence": 21,
+      "hitpoints": 30,
+      "slashdefence": 8,
+      "stabdefence": 10,
+      "strength": 21,
+      "strengthbonus": 7
+    },
+    "zombie_unarmed": {
+      "attack": 8,
+      "damagetype": "crush",
+      "defence": 10,
+      "hitpoints": 22,
+      "strength": 9
+    },
+    "zoo_keeper": {
+      "attack": 10,
+      "damagetype": "stab",
+      "defence": 10,
+      "hitpoints": 20,
+      "strength": 10
+    },
+    "zq_mainzombie1": {
+      "attack": 85,
+      "damagetype": "slash",
+      "defence": 80,
+      "hitpoints": 70,
+      "strength": 80
+    },
+    "zq_mainzombie2": {
+      "attack": 58,
+      "attackbonus": 15,
+      "crushdefence": 5,
+      "damagetype": "slash",
+      "defence": 58,
+      "hitpoints": 70,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 54,
+      "strengthbonus": 15
+    },
+    "zq_mainzombie3": {
+      "attack": 85,
+      "damagetype": "slash",
+      "defence": 80,
+      "hitpoints": 80,
+      "strength": 80
+    },
+    "zqskeleton_armed": {
+      "attack": 55,
+      "attackbonus": 7,
+      "crushdefence": 3,
+      "damagetype": "slash",
+      "defence": 55,
+      "hitpoints": 47,
+      "slashdefence": 5,
+      "stabdefence": 5,
+      "strength": 55,
+      "strengthbonus": 5
+    },
+    "zqskeleton_unarmed": {
+      "attack": 63,
+      "damagetype": "slash",
+      "defence": 63,
+      "hitpoints": 47,
+      "strength": 63
+    },
+    "zqzombie_armed": {
+      "attack": 65,
+      "attackbonus": 4,
+      "damagetype": "slash",
+      "defence": 65,
+      "hitpoints": 59,
+      "strength": 65,
+      "strengthbonus": 5
+    },
+    "zqzombie_unarmed": {
+      "attack": 63,
+      "damagetype": "slash",
+      "defence": 63,
+      "hitpoints": 47,
+      "strength": 63
+    }
+  },
+  "source": "lostcity/content/scripts/**/*.npc (orchestrator dump-npc-ranges)"
+}

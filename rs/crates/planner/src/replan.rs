@@ -65,6 +65,9 @@ pub fn needs_replan(stop: &str, missing: &[String], died: bool, stock_lost: bool
 /// tinderbox, hammer, knife).
 pub const INPUT_BATCH: i64 = 27;
 
+/// Food a fight blocked on food asks for (the ladder's `MAX_FOOD` load).
+pub const FOOD_BATCH: i64 = lifescape_gamedata::melee_ladder::MAX_FOOD as i64;
+
 /// Object a skill method works on: the tail of `cook/raw_shrimp`,
 /// `fire:logs`, `smelt:bronze_bar`, `spin:ball_of_wool`.
 fn method_subject(method: &str) -> Option<&str> {
@@ -83,6 +86,12 @@ pub fn need_count(node: &Node, need: &str) -> i64 {
         NodeKind::ObtainItems { item, count } => (item.clone(), Some((*count).max(1))),
         _ => {
             let method = node.method.clone().or_else(|| node.alternatives.first().map(|alt| alt.method.clone())).unwrap_or_default();
+            // A melee hunt blocked on food (`Blocked: shrimp`, the ladder
+            // never fights a biting spot foodless) asks a full load: one
+            // shrimp per block would block again after the first bite.
+            if method.starts_with("fight:") && lifescape_gamedata::food::heal(need) > 0 {
+                return FOOD_BATCH;
+            }
             match method_subject(&method) {
                 Some(subject) => (subject.to_string(), None),
                 None => return 1,
@@ -231,6 +240,10 @@ mod tests {
         assert_eq!(super::need_count(&reach("smelt:bronze_bar"), "copper_ore"), 13, "copper + tin share the pack");
         let bars = Node::new("n8", NodeKind::ObtainItems { item: "bronze_bar".to_string(), count: 5 }, Vec::new(), 5);
         assert_eq!(super::need_count(&bars, "tin_ore"), 5, "an obtain scales its inputs");
+        // The melee ladder blocks on food: a full load, never one shrimp.
+        assert_eq!(super::need_count(&reach("fight:melee/ladder"), "shrimp"), super::FOOD_BATCH);
+        assert_eq!(super::FOOD_BATCH, 20);
+        assert_eq!(super::need_count(&reach("fight:melee/ladder"), "bronze_sword"), 1, "gear still comes alone");
         let mut cook = reach("cook/raw_shrimp");
         let fresh = replan_node(&mut cook, &ReplanCause::Blocked, &["raw_shrimp".to_string()], &mut 7);
         assert!(matches!(&fresh[0].kind, NodeKind::ObtainItems { item, count } if item == "raw_shrimp" && *count == 27), "{:?}", fresh[0].kind);

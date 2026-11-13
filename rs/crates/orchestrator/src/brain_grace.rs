@@ -3,7 +3,7 @@
 //! whose worker reads idle without a report after a daemon restart or an
 //! operator `unload`/`close`/`open` (redeploy) is a stop, never a crash.
 //! A stop flag covers the run it interrupted only: the next launch clears
-//! it (`brain::note_launch`), so a later crash still counts.
+//! it (`brain_launch::note_launch`), so a later crash still counts.
 
 /// True the first time this daemon finds `account`'s active node with an
 /// idle worker and no report: after a daemon restart every restored

@@ -38,6 +38,20 @@ d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
 méthode de substitution : outil manquant ⇒ `Blocked{missing}` ⇒
 sous-tâche.
 
+Montée depuis le niveau LIVE (2026-11-13) : `expand_goal_from(goal,
+profile, level_of)` part du niveau live (1 s'il est inconnu) et ne génère
+jamais de tranche à ou sous ce niveau (attaque 55 à attaque 45 = une seule
+tranche 45→55, méthode du palier ouvert à 45 ; niveau déjà tenu = aucun
+nœud). `expand_goal` (niveaux 1) ne sert qu'à la création (pas encore de
+snapshot) et aux tests ; succession (`append_goal`) et niveau manquant
+(`record_block_from`) passent les niveaux live. Au lancement, un nœud
+`reach_level`/`reach_combat` que le niveau live atteint déjà est clos sans
+lancement (`lifecycle::reached_live` + `complete_node`, historique
+`already_reached`). Toute tranche (récolte ET combat : `melee`, `ranged`,
+`magic`) part avec `--level <compétence> <N>` : le script s'arrête au but
+(contrôle `poll_stop` entre deux spots pour le combat ; un arrêt au sein
+de `kit::fight::run_spot` reste à brancher).
+
 ## Coûts (ticks équivalents)
 
 `market:buy` = aller-retour place de Varrock + prix × quantité / taux de
@@ -67,7 +81,13 @@ nœud suivant (`brain.rs::maybe_launch`). Sans fichier de vie : aucune
 action (parité R1-R7 des bots manuels).
 
 Cycle de vie (`planner/src/lifecycle.rs`, seul endroit qui change un
-statut). `normalize` est appelé après chaque mutation et garantit :
+statut ; côté daemon aucun `status =` hors fixtures de test). Mouvements
+nommés : `mark_launched`, `record_failure`, `record_contract_error`,
+`record_block[_from]`, `record_progress`, `complete_node` (preuve positive :
+rapport, avoirs, bourse, niveau live, bot vu hors de l'île),
+`retry_uncounted` (arrêt opérateur, redémarrage, remplissage partiel,
+verrou Iron refusé), `end_engagement`, `insert_ready` (concierge, tuto),
+`revive_stuck`. `normalize` est appelé après chaque mutation et garantit :
 dépendance abandonnée, inexistante ou en cycle ⇒ abandon transitif ;
 `Ready` ⇔ toutes les dépendances `Done` ; un seul `Active`, égal à
 `life.active` ; vivacité (graphe non fini ⇒ un nœud actif ou prêt).
@@ -116,14 +136,36 @@ tuto abandonné sur l'île ⇒ aucun lancement, l'opérateur décide.
 tutoriel au premier passage, puis le but. `Iron` ne marchande jamais
 (ni `market:*` ni `flip`, même en `rich`).
 
-Succession (`planner/src/goals.rs`, `brain_succession.rs`) : un graphe
-fini tire le but suivant (compétence entraînable la plus basse, jusqu'au
-prochain multiple de 5 au moins 5 niveaux plus haut) ; un graphe bloqué
-écrit `goal: stuck:<compétences>` dans l'historique (sauf but atteint en
-live : `done:`), garde les causes des nœuds abandonnés, et passe à un but
-qui n'entraîne pas ces compétences ; les buts d'argent relancent un
-engagement. Plus rien à tirer ⇒ relance après refroidissement (ci-dessus),
-puis attente opérateur. Le libellé affiché est `fishing 10` (but `max:fishing:10`).
+Succession (`planner/src/goals.rs`, `planner/src/bans.rs`,
+`brain_succession.rs`) : un but est clos UNE fois (`goal_closed` : la
+dernière entrée hors `graph`/`unban:` est un `done:`/`stuck:`), puis
+`goals::draw_goal` — point d'entrée unique du tirage, où se brancheront
+les ambitions par bot — tire le suivant : buts d'argent clos `done` ⇒ même
+but (nouvel engagement), sinon compétence entraînable la plus basse non
+bannie, jusqu'au prochain multiple de 5 au moins 5 niveaux plus haut,
+nœuds dépliés depuis le niveau live ; historique `goal: next:<libellé>`.
+
+Bannissements temporaires et typés (décision utilisateur 2026-11-13) : un
+but clos bloqué (graphe bloqué, but non atteint en live) bannit chaque
+compétence qu'il entraîne pendant `SKILL_BAN_TICKS` = 6000 ticks (1 h en
+prod, 6 min en dev ; temps mur converti avec la durée de tick mesurée),
+jamais à vie. Entrée `goal: stuck:<compétence>@6000:<classe> (node <id>,
+<dernière erreur>)` ; la cause est la racine du dernier abandon
+(`bans::stuck_cause`, cascades `dependency nX abandoned` remontées),
+classe `N failures` | `N blocks` | `contract error`. Log :
+`brain <compte>: skill <s> banned 6000 ticks: <classe> (node <id>,
+<erreur>)`. À l'expiration : une ligne `skill <s> ban expired after 6000
+ticks (was: …)` et une entrée `goal: unban:<s>`, une seule fois. Les
+anciennes entrées `stuck:<a>,<b>` (sans tick) comptent comme expirées
+(log `ban lifted (old entry without tick …)`). Outil, intrant, pièces,
+niveau ou combat manquants ne bannissent pas : ils deviennent des
+sous-tâches (`record_block_from` ⇒ `obtain`/`have_coins`/`reach_*`) ; un
+bannissement ne vient que d'un abandon (échecs répétés, blocages qui ne
+guérissent pas, erreur de contrat). Plus rien à tirer ⇒ le tirage est
+retenté à chaque passe (graphe fini, période de blocage ou `graph final`) :
+l'expiration d'un bannissement suffit à relancer le bot ; en parallèle la
+relance des nœuds abandonnés (ci-dessus) reste bornée à 3. Le libellé
+affiché est `fishing 10` (but `max:fishing:10`).
 
 Données avant décision : rien ne part sans position live ni sac reçu
 (`inv_streamed`) ; tant que la banque n'a pas été vue (`bank_streamed`),
@@ -139,12 +181,98 @@ d'abord (poulets), puis le bot pêche et dépose tout en banque.
 Combat : clés de spot réelles (`chickens`, `cows`) ; un spot inconnu est
 une erreur `Usage` (avant : repli silencieux sur l'auto-pick).
 
-Buts : `max:a,b:40` | `obtain:item:n` | `money` | `quest:clé` |
+Buts : `max:a,b:40` | `obtain:item:n` | `produce:item:n` | `money` | `quest:clé` |
 `equip:style` | `area:zone` | `rich[:merchant|:producer]`.
 
 Banc hors ligne : `brain_sim_tests.rs` rejoue 30 comptes (graphes réels,
 issues aléatoires : succès, échec, Usage, blocage, arrêt, rapport perdu)
 et vérifie vivacité, terminaison et scripts enregistrés.
+
+## Ambitions par bot (2026-11-13)
+
+Chaque vie porte une AMBITION long terme (`life.ambition`) qui tire ses
+buts : `planner/src/ambition.rs` (modèle, jalons, seul endroit qui change
+un statut de jalon), `ambition_catalog.rs` (catalogue), `ambition_fleet.rs`
+(couverture de flotte), côté daemon `brain_ambition.rs` et
+`market_demand.rs`.
+
+Catalogue (un par groupe F2P rev 274, la mêlée = UN groupe : attaque,
+force, défense, PV ; la taille d'arc est membres) : `warrior` (mêlée),
+`ranger`, `priest`, `mage`, `cook`, `woodcutter`, `fisher`, `firemaker`,
+`crafter`, `smith`, `miner`, `runecrafter`, plus `merchant` et
+`generalist` (opérateur seulement, jamais tiré). Chaque entrée est une
+échelle de paliers : niveau à atteindre puis quota de production
+(plusieurs produits candidats par palier, choisis par la demande ouverte,
+sinon par la graine : les bots d'un même type ne fabriquent pas tous la
+même chose), tier d'équipement (`equip_best`) ou cible de pièces
+(marchand). Exemple forgeron : minage 10, forge 10 puis 20 dagues/épées/
+casques bronze, forge 18 puis 10 plastrons/jambières/boucliers bronze,
+fer, acier, mithril. Les paliers dépassés de 10 niveaux sont sautés
+(frank_lane, bûcheronnage 64, commence aux 150 bûches d'érable/saule).
+Tous les produits ont une jambe de production (testé).
+
+Jalons (`milestones`, 3 ouverts matérialisés d'avance) : `level` (clos
+quand le niveau live l'atteint), `produce` (but `GoalKind::Produce
+{item,count}` = un nœud `obtain` à jambes de PRODUCTION seulement, jamais
+acheté ; intrants achetables via les sous-tâches ; la vente par défaut
+liste le résultat une fois le nœud fini), `equip`, `coins` (merchant :
+`GetRich{merchant}` jusqu'au montant détenu, pack + banque). Demande :
+une offre d'achat ouverte qu'une ambition sait servir (à ≤ 10 niveaux,
+entraînement d'abord) devient un jalon `produce` en tête (`origin:
+demand:<objet>`, quantité = non servie, 5..100), un seul à la fois.
+
+Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
+premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
+respecté), but + `life.goal_origin = "mN"` + historique `goal:
+next:<libellé>`. Sans ambition : AUCUN but (`NoGoal::NoAmbition`, typé et
+loggé) ; le plus-bas-skill ne sert que le `generalist` explicite. Clôture
+(`brain_succession::close_goal` → `brain_ambition::after_close`) : quota
+ou équipement fait ⇒ jalon `done` ; but bloqué ⇒ `blocked`,
+`blocked_count + 1` ; à `MILESTONE_MAX_BLOCKS` = 3 ⇒ nouveau tirage
+immédiat de l'ambition (politique approuvée, log `milestone mN blocked 3
+times, redrawing ambition`), jamais vers le même type. Échelle épuisée ⇒
+nouveau tirage (`achieved`). Changement facultatif (après un jalon fait) :
+au plus une fois toutes les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps
+mur converti par la durée de tick mesurée) ; un bot redondant comble
+d'abord un trou de couverture, sinon une chance sur quatre d'un nouveau
+tirage ; le seul détenteur d'un groupe ne le quitte jamais.
+
+Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
+rencontre une vie sans ambition, toute la flotte est assignée (fichiers
+de vie ; niveaux du snapshot live, sinon de la sauvegarde moteur). Trous
+= groupes (et `merchant`) qu'aucune ambition ne couvre en groupe
+PRIMAIRE ; glouton global : la paire (bot, trou) de meilleur score part
+d'abord (score = adéquation `(1 + avance/5)²` de la meilleure compétence
+du groupe sur la moyenne du bot ; marchand : archétype marchand d'abord,
+puis affinité marché ; jamais un Iron ; PV exclus de l'adéquation : ils
+partent de 10). La flotte = les comptes ayant un job dans le daemon
+(hors `admin`/`bite`), relue à chaque lancement ; les vies de `run/lives`
+sans job ne comptent pas. Au-delà de la couverture : tirage aléatoire
+(graine, splitmix64) pondéré par demande × √adéquation (archétype marchand
+×5) ; les niveaux penchent le tirage sans le figer (décision utilisateur
+« au-delà aléatoire » ; l'ancienne règle `levels:<groupe>` faisait 9
+guerriers sur 12). Log par compte : `brain <acct>: ambition <kind>
+(<why>) — milestones …`.
+
+Contrat du fichier (rendu par la page `life`, lu par les ventes) :
+`ambition = {kind, label, groups, why: coverage:<groupe>|
+random|demand:<objet>, milestones: [{id, label, kind: level|produce|equip|coins,
+target, status: pending|active|done|blocked, progress: [cur, target],
+blocked_count, origin}], drawn_at_tick, drawn_at, rung, revisions:
+[{tick, at, from, to, why}]}` et `goal_origin`. `drawn_at_tick`/`tick` =
+horloge daemon (ms murales / tick mesuré) ; les durées se mesurent sur
+`drawn_at`/`at` (secondes unix). Anciens fichiers sans `ambition` :
+chargés tels quels, ambition assignée au passage suivant.
+
+Signaux de demande (`market_demand.rs`, lecture seule, données publiques) :
+`signals()` → `DemandSignal {item, item_id, open_bids, bidders,
+unmet_qty, best_bid, oldest_age_secs, oldest_age_ticks, weight}` (offres
+d'achat au repos ; poids = meilleure offre × quantité non servie × (1 +
+min(âge/6000 ticks, 5))), `chain_profits()` (chaînes D58 de `chains.rs`
+évaluées aux prix marché, jamais magasin), `kind_profits()` (chaînes +
+profits mesurés par méthode), `kind_demand()` (entrées du planner :
+`DemandItem`, `KindDemand` = 1 + part de la demande servie + part du
+meilleur profit).
 
 ## L7 : précisions d'implémentation
 

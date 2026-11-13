@@ -3,7 +3,7 @@
 //! a `market:buy` leg placed daemon-side keeps the node active, without
 //! a worker, until its holdings say how it ended.
 
-use lifescape_planner::{Life, NodeStatus};
+use lifescape_planner::Life;
 
 use crate::brain::push_history;
 use crate::brain_plan::holdings_count;
@@ -28,17 +28,13 @@ pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &st
     let baseline = life.nodes[position].progress_current;
     let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
     if held >= count {
-        life.nodes[position].progress_current = held;
         crate::brain_market::cancel_open_buys(&job.account, item);
-        life.nodes[position].status = NodeStatus::Done;
-        life.active = None;
+        lifescape_planner::complete_node(life, position, held);
         push_history(life, &active_id, "goal_reached");
     } else if held > baseline && crate::brain_market::buy_closed(&job.account, item) {
         crate::logln!("brain {}: {active_id} partial buy landed ({baseline} -> {held}/{count} {item}), re-resolving", job.account);
         life.nodes[position].progress_current = held;
-        life.nodes[position].status = NodeStatus::Ready;
-        life.nodes[position].method = None;
-        life.active = None;
+        lifescape_planner::retry_uncounted(life, position);
         push_history(life, &active_id, "partial_fill");
     } else if waited > deadline {
         // The stale resting order goes before the retry places a fresh

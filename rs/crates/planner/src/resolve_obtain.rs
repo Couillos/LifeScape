@@ -35,8 +35,32 @@ fn level_of(ctx: &ReadyCtx, skill: &str) -> Option<u8> {
 /// times the market value (never less than 20 coins: an untraded object
 /// must be biddable above its 1-coin default).
 pub fn bid_ceiling(ctx: &ReadyCtx, count: i64) -> i64 {
+    // A capped purchase (equipment step): its wallet share is the cap,
+    // and it rises with the wallet (no fair-price clamp: the market sets
+    // what the object is worth).
+    if let Some(share) = ctx.coin_share_pct {
+        return (crate::gear_ladder::wallet_ceiling(ctx.coins, share) / count.max(1)).max(1);
+    }
     let affordable = ctx.coins / count.max(1);
     affordable.min(fair_unit(ctx)).max(1)
+}
+
+/// Coins the market legs may spend: the wallet, or its share when the
+/// brain caps the purchase (`coin_share_pct`).
+fn market_coins(ctx: &ReadyCtx) -> i64 {
+    match ctx.coin_share_pct {
+        Some(share) => crate::gear_ladder::wallet_ceiling(ctx.coins, share),
+        None => ctx.coins,
+    }
+}
+
+/// Wallet a purchase of `cost` coins needs: the cost itself, or the
+/// wallet whose share covers it when the purchase is capped.
+fn wallet_for(ctx: &ReadyCtx, cost: i64) -> i64 {
+    match ctx.coin_share_pct {
+        Some(share) => crate::gear_ladder::coins_for(cost, share),
+        None => cost,
+    }
 }
 
 /// One unit's fair price: three times the market value, at least 20.
@@ -105,8 +129,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     }
     // 1. A covered ask: take it, whole or the part the wallet covers
     // (a fair ask only: at most the bid ceiling of one unit).
-    let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= ctx.coins);
-    let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= ctx.coins && ask <= fair_unit(ctx));
+    let budget = market_coins(ctx);
+    let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= budget);
+    let fair = if ctx.coin_share_pct.is_some() { budget } else { fair_unit(ctx) };
+    let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= budget && ask <= fair);
     let producible = workable.iter().min_by_key(|alt| alt.est_ticks).cloned();
     let pick: Option<String> = if (ask_covered || ask_partial) && producible.is_some() {
         // 1a. The bid takes the ask at once (`market:bid` at the ask, the
@@ -120,14 +146,14 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         Some("market:buy".to_string())
     } else if let Some(best) = producible {
         // 2. Produce it, with a standing bid beside it (D-B).
-        if market_ok && ctx.coins >= need {
+        if market_ok && budget >= need {
             priced.push(Alternative { method: "market:bid".to_string(), est_ticks: 0, est_coins: bid_ceiling(ctx, need) * need });
         }
         Some(best.method.clone())
     } else if shop_listed && shop_cover <= ctx.coins {
         // 3. Merchant, D-A allowed.
         Some("shop:buy".to_string())
-    } else if market_ok && ctx.coins >= unit {
+    } else if market_ok && budget >= unit {
         // 4. Resting bid for what the wallet covers, the brain waits for
         // the fill.
         Some("market:buy".to_string())
@@ -153,7 +179,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
             Some(format!("missing:{tool}"))
         } else if market_ok || shop_listed {
             let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
-            Some(format!("missing:coins:{}", price * need))
+            Some(format!("missing:coins:{}", wallet_for(ctx, price * need)))
         } else {
             None
         };

@@ -564,6 +564,7 @@ impl Orchestrator {
                 } else {
                     crate::logln!("job {account}: event {name} kind={kind} resolved={resolved} t={tick} (push): {message}");
                 }
+                crate::errors_ingest::observe_event(&account, frame);
                 {
                     let Ok(mut inner) = job.inner.try_lock() else {
                         return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
@@ -599,6 +600,7 @@ impl Orchestrator {
                 if let Err(error) = crate::store_queue::stage_report(&report) {
                     crate::logln!("job {account}: staging failed: {error}");
                 }
+                crate::errors_ingest::observe_report(&account, &report, &job);
                 let Ok(mut inner) = job.inner.try_lock() else {
                     return object(vec![("ok", Value::Bool(false)), ("error", str_value("contended"))]);
                 };
@@ -880,6 +882,11 @@ impl Orchestrator {
                 // Attribution gauge: pushes, bytes, plans, polls, files,
                 // connections, each with its per-second average.
                 return crate::res_stats::snapshot_json();
+            }
+            "brain_wishes" => {
+                // Brain tab of the Lives page: the brain's own wishlist.
+                let job = self.jobs.lock().unwrap().get(account).cloned();
+                return crate::web_brain::wishes_reply(job.as_deref(), account);
             }
             "market" => {
                 // Market socket API over HTTP: {cmd:"market", op, ...}.

@@ -13,7 +13,58 @@ use crate::kit::cycle::{exit_code, poll_stop, CycleState};
 use crate::kit::survival::check_events;
 use crate::ScriptResult;
 
-/// Melee farmer: `melee [spot ...] [--kills N] [--ticks N] [--no-bank]`.
+/// Ladder mode (`melee ladder`): the spot follows the live levels, gear,
+/// hitpoints and holdings (`kit::ladder`), re-asked after every hunt so
+/// a long run climbs. Killers and spots that yielded nothing are left
+/// out for the run; two deaths in a row fail typed, a biting spot with
+/// no food anywhere blocks typed (`Blocked: shrimp`).
+fn run_ladder(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec, no_bank: bool) -> ScriptResult {
+    // One bank visit first: the ladder reads banked food, coins and key.
+    if !no_bank {
+        crate::kit::gear::prepare_at_bank(bot)?;
+    }
+    let mut tally = crate::kit::survival::DeathTally::fresh();
+    let mut state = CycleState::start(bot);
+    loop {
+        if let Some(stop) = poll_stop(bot, &state, spec) {
+            return exit_code(stop);
+        }
+        let (spot, plan) = crate::kit::ladder::pick(bot, tally.excluded())?;
+        let plan = plan.until(spec);
+        bot.log(&format!("=== {} (ladder, food {} required={}) ===", spot.key, plan.food_target, plan.food_required));
+        bot.intend(&format!("melee at {} (ladder)", spot.key));
+        let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
+        let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &plan, remaining, spec.budget_max_ticks, no_bank) {
+            Err(crate::ScriptError::Usage(detail)) if detail.contains("toll fence") => {
+                bot.log(&format!("{} across the toll fence, re-picking without it: {detail}", spot.key));
+                tally.exclude(spot.key);
+                continue;
+            }
+            other => other?,
+        };
+        state.add_units(total);
+        if let Some(stop) = poll_stop(bot, &state, spec) {
+            return exit_code(stop);
+        }
+        if total > 0 || banked {
+            tally.note_progress();
+        }
+        bot.log(&format!("ok {} killed {total}", spot.key));
+        if died {
+            tally.note_death(spot.key);
+            if tally.fatal() {
+                return Err(crate::kit::survival::danger_error(spot.key, tally.deaths()));
+            }
+            bot.log(&format!("{} killed us, re-picking without it", spot.key));
+        } else if total == 0 {
+            // Every cluster failed its walk: never loop on it.
+            bot.log(&format!("{} yielded nothing, re-picking without it", spot.key));
+            tally.exclude(spot.key);
+        }
+    }
+}
+
+/// Melee farmer: `melee [spot ...|ladder] [--kills N] [--ticks N] [--no-bank]`.
 pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let spec = crate::kit::cycle::parse_cli("melee", args)?;
     let spots = spec.resource.clone();
@@ -33,6 +84,9 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.pump(5)?;
     }
     check_events(bot)?;
+    if spots.len() == 1 && spots[0] == crate::kit::ladder::LADDER_KEY {
+        return run_ladder(bot, &spec, no_bank);
+    }
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
         let named = crate::kit::fight::named_spots(&spots)?;
         if named.is_empty() {
@@ -68,7 +122,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // Remaining kills under the quantity target (0 = unlimited, as
         // the fight loop reads it); the budget poll above caps ticks.
         let remaining = spec.targets.count.map(|want| want.saturating_sub(state.units())).unwrap_or(0);
-        let (total, died, banked) = match crate::kit::fight::run_spot(bot, &spot, remaining, spec.budget_max_ticks, no_bank) {
+        let (total, died, banked) = match crate::kit::fight::run_spot_with(bot, &spot, &crate::kit::fight::HuntPlan::plain().until(&spec), remaining, spec.budget_max_ticks, no_bank) {
             Err(crate::ScriptError::Usage(detail)) if auto && detail.contains("toll fence") => {
                 if !tally.excludes(spot.key) {
                     tally.exclude(spot.key);
