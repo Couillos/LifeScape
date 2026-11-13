@@ -95,27 +95,14 @@ impl Bot {
     /// One lot onto the trade window: a single all-click when the carried
     /// stack equals the lot (coins, notes), paced clicks otherwise.
     fn offer_lot(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<bool> {
-        let carried: u32 = self.inventory().get(&obj_id).copied().unwrap_or(0);
-        if carried == count && count > 0 {
-            let (com, _) = self.backpack();
-            let Some(com) = com else { return Ok(false) };
-            let Some(slot) = self.backpack().1.iter().find(|(_, (held, _))| *held == obj_id).map(|(slot, _)| *slot) else {
-                return Ok(false);
-            };
-            self.inv_button(4, obj_id, slot, com)?;
-            let target = self.world.ticks + timeout.min(120);
-            while self.world.ticks < target {
-                self.pump(5)?;
-                if self.offered_of(obj_id) >= count {
-                    return Ok(true);
-                }
-            }
-            return Ok(self.offered_of(obj_id) >= count);
-        }
+        // `trade_offer` already clicks Offer-All on the trade pack when the
+        // carried stack equals the lot. The old shortcut here compared the
+        // lot with `inventory()` (pack plus its trade-side mirror, so never
+        // equal) and would have clicked the hidden `inventory:inv`.
         self.trade_offer(obj_id, count, timeout)
     }
 
-    fn offered_of(&self, obj_id: u16) -> u32 {
+    pub(crate) fn offered_of(&self, obj_id: u16) -> u32 {
         self.world
             .inv
             .get(&Self::TRADE_OFFER)
