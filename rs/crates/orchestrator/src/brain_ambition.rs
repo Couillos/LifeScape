@@ -282,7 +282,7 @@ pub(crate) fn ensure(orch: &Orchestrator, life: &mut Life, live: &Value) -> bool
 /// Redraw this life's ambition now (blocked, achieved past the throttle):
 /// the fleet's open gaps first, never back to `exclude`.
 fn redraw(life: &mut Life, live: &Value, exclude: &[&str], revision_why: &str) {
-    let (items, weights) = crate::market_demand::kind_demand();
+    let (items, weights) = crate::market_demand::kind_demand_for(&life.account);
     let (gaps, _) = fleet_view(life);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     let first = draw_kind(&bot, &gaps, &weights, exclude);
@@ -309,7 +309,7 @@ fn replace(life: &mut Life, live: &Value, bot: &FleetBot, first: (String, String
 /// another bot holds its group; otherwise its ladder extends (the sole
 /// holder never leaves its group, the throttle is the user's rule).
 pub(crate) fn before_draw(life: &mut Life, live: &Value) {
-    let items = crate::market_demand::demand_items(&crate::market_demand::signals());
+    let items = crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account));
     let seed = life.seed;
     let account = life.account.clone();
     let Some(ambition) = life.ambition.as_mut() else { return };
@@ -371,7 +371,7 @@ fn maybe_change(life: &mut Life, live: &Value) {
     if !lifescape_planner::may_change(&ambition, &ticks_since) {
         return;
     }
-    let (items, weights): (Vec<DemandItem>, Vec<KindDemand>) = crate::market_demand::kind_demand();
+    let (items, weights): (Vec<DemandItem>, Vec<KindDemand>) = crate::market_demand::kind_demand_for(&life.account);
     let (gaps, redundant) = fleet_view(life);
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     if let Some((kind, why)) = optional_change(&ambition, &bot, &gaps, redundant, &weights, &ticks_since) {
@@ -431,7 +431,7 @@ pub(crate) fn coverage_pass(life: &mut Life, live: &Value) -> bool {
     let bot = fleet_bot(life, account_levels(&life.account, Some(live)));
     // A gap draw never reads the demand weights (coverage wins first).
     let Some((kind, why)) = coverage_repair(&ambition, &bot, &gaps, redundant, &[], &ticks_since) else { return false };
-    let items = crate::market_demand::demand_items(&crate::market_demand::signals());
+    let items = crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account));
     let inputs = DrawInputs { items, weights: Vec::new(), gaps };
     let before = life.ambition.clone();
     let current = ambition.kind.clone();

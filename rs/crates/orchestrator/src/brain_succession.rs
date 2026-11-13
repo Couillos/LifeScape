@@ -145,8 +145,10 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     let label = goal_label(&next);
     let profile = life.profile.clone();
     // A production quota counts from the stock held now (never credited
-    // with what the bot already had).
-    let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
+    // with what the bot already had), its usable part: units locked by
+    // the bot's own listings are not checked by the fill (b3gybcev).
+    let locks = crate::brain_locks::locked_items(&life.account);
+    let held_of = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
     append_goal(life, next, &profile, &level_of, &held_of);
     mark_drawn(life, origin.as_deref());
     let label = match origin.as_deref() {
@@ -167,8 +169,9 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
 /// the best paying demand it makes with a free skill, else money.
 fn side_goal_for(life: &Life, live: &Value, banned: &[String]) -> Option<(GoalKind, String)> {
     let level_of = |skill: &str| live_level(live, skill);
+    // Held OR listed: stock on the market already answers a bid.
     let held_of = |item: &str| crate::brain_ambition::live_count(live, item);
-    let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals()) };
+    let demand = if life.profile.ironman { Vec::new() } else { crate::market_demand::demand_items(&crate::market_demand::signals_for(&life.account)) };
     side_goal(&level_of, banned, &demand, &held_of, life.profile.ironman)
 }
 

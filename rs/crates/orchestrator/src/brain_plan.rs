@@ -107,7 +107,21 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
     ctx
 }
 
+/// Units of `item_debug` the bot holds AND may use (pack, bank, worn):
+/// what its own sell orders and seller deals lock is not usable (live
+/// 2026-11-13, b3gybcev: a listed hammer read as held). Coins are the
+/// raw wallet (their commitments: `brain_gear::free_coins`).
 pub(crate) fn holdings_count(job: &Job, item_debug: &str) -> i64 {
+    let total = raw_holdings_count(job, item_debug);
+    if item_debug.eq_ignore_ascii_case("coins") {
+        return total;
+    }
+    let locks = crate::brain_locks::locked_items(&job.account);
+    crate::brain_locks::free_count(total, crate::brain_locks::locked_in(&locks, item_debug))
+}
+
+/// Every unit held, listed or not (pack, bank, worn).
+pub(crate) fn raw_holdings_count(job: &Job, item_debug: &str) -> i64 {
     let display = display_of(item_debug).to_lowercase();
     let debug = item_debug.to_lowercase();
     let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
@@ -167,6 +181,9 @@ pub const PROTECTED_TOOLS: &[&str] = &[
     "rune_pickaxe", "adamant_pickaxe", "mithril_pickaxe", "steel_pickaxe", "iron_pickaxe", "bronze_pickaxe",
     "lobster_pot", "harpoon", "fishing_rod", "fly_fishing_rod", "net",
     "tinderbox",
+    // Crafting/smithing/fishing kit (live 2026-11-13: a listed hammer
+    // locked b3gybcev out of smithing).
+    "hammer", "chisel", "needle", "shears", "knife", "fishing_bait",
 ];
 
 /// D52 tool gate (case-insensitive): the flip auto-pick sold its own
@@ -265,11 +282,29 @@ pub(crate) fn worn_names(job: &Job) -> Vec<String> {
 /// Carried debug names (live pack the brain already reads) for the
 /// planner tool gate: only positive counts ride along.
 pub(crate) fn carried_tools(job: &Job) -> Vec<String> {
-    let mut names = live_names(job, "inv");
-    names.extend(live_names(job, "bank"));
+    let mut entries = live_entries(job, "inv");
+    entries.extend(live_entries(job, "bank"));
     // A wielded pickaxe or axe works too (PRD3 lot 5).
-    names.extend(live_names(job, "worn"));
-    names
+    entries.extend(live_entries(job, "worn"));
+    // A tool locked by the bot's own listing is not carried (b3gybcev).
+    let locks = crate::brain_locks::locked_items(&job.account);
+    crate::brain_locks::free_tool_names(&entries, &|name: &str| crate::brain_locks::locked_in(&locks, name))
+}
+
+/// Live `(debug name, count)` entries of one container.
+fn live_entries(job: &Job, key: &str) -> Vec<(String, i64)> {
+    let live = job.inner.try_lock().map(|inner| inner.live.clone()).unwrap_or(None).unwrap_or(Value::Null);
+    let mut out = Vec::new();
+    for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
+        let count = entry.get("count").as_i64().unwrap_or(1);
+        if count <= 0 {
+            continue;
+        }
+        if let Some(name) = live_debug_name(&entry) {
+            out.push((name, count));
+        }
+    }
+    out
 }
 
 /// Live carried + banked stacks (debug name, summed quantity) for the flip pick.

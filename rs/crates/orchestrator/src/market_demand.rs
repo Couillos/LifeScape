@@ -89,8 +89,32 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
     out
 }
 
-/// Live demand signals from the daemon's market (heaviest first).
+/// Orders of every account but `account` (a bot never answers its own
+/// bids: live 2026-11-13, b3gybcev produced raw_trout for its own bid).
+pub fn others_orders(orders: Vec<Order>, account: &str) -> Vec<Order> {
+    orders.into_iter().filter(|order| !order.account.eq_ignore_ascii_case(account)).collect()
+}
+
+/// Live demand signals from the daemon's market (heaviest first), the
+/// whole fleet's (draw weights, fleet assignment).
 pub fn signals() -> Vec<DemandSignal> {
+    signals_seen_by(None)
+}
+
+/// Live demand signals one bot may answer: every resting bid but its own
+/// (its own wishes and graph buys included: they are its orders).
+pub fn signals_for(account: &str) -> Vec<DemandSignal> {
+    signals_seen_by(Some(account))
+}
+
+/// Both planner inputs as one bot sees them (own bids left out).
+pub fn kind_demand_for(account: &str) -> (Vec<DemandItem>, Vec<KindDemand>) {
+    let items = demand_items(&signals_for(account));
+    let weights = kind_weights(&items, &kind_profits());
+    (items, weights)
+}
+
+fn signals_seen_by(account: Option<&str>) -> Vec<DemandSignal> {
     let Some(service) = crate::market_service::shared() else { return Vec::new() };
     let orders = match service.lock_store().resting_orders() {
         Ok(rows) => rows,
@@ -98,6 +122,10 @@ pub fn signals() -> Vec<DemandSignal> {
             crate::logln!("market_demand: resting orders unreadable: {error}");
             return Vec::new();
         }
+    };
+    let orders = match account {
+        Some(account) => others_orders(orders, account),
+        None => orders,
     };
     let name_of = |item_id: i64| lifescape_gamedata::obj_by_id(item_id.max(0) as usize).and_then(|obj| obj.name).map(str::to_string);
     signals_from(&orders, crate::market_service::MarketService::now_clock(), &name_of, &crate::brain_stuck::seconds_to_ticks)
@@ -223,6 +251,20 @@ mod tests {
         assert_eq!((first.oldest_age_secs, first.oldest_age_ticks), (1000, 10_000));
         assert!((first.weight - 60.0 * 15.0 * (1.0 + 10_000.0 / 6000.0)).abs() < 1e-6);
         assert_eq!(demand_items(&found)[0].unmet, 15);
+    }
+
+    /// Live 2026-11-13 (b3gybcev): its own bid raw_trout 47 @1 became its
+    /// side goal "produce raw_trout 47", its own bronze_axe bid a quota.
+    /// The demand a bot reads leaves out its own orders.
+    #[test]
+    fn a_bot_never_reads_its_own_bids() {
+        let orders = vec![bid("b3gybcev", 1, 47, 1, 0), bid("other", 2, 5, 9, 0), bid("b3gybcev", 2, 3, 9, 0)];
+        let name = |id: i64| Some(format!("item{id}"));
+        let ticks = |secs: i64| secs as u64;
+        let seen = signals_from(&super::others_orders(orders.clone(), "b3gybcev"), 10, &name, &ticks);
+        let items: Vec<(&str, i64)> = seen.iter().map(|signal| (signal.item.as_str(), signal.unmet_qty)).collect();
+        assert_eq!(items, vec![("item2", 5)], "own bids gone, the other buyer's stays");
+        assert_eq!(signals_from(&orders, 10, &name, &ticks).len(), 2, "the fleet view keeps every bid");
     }
 
     /// Review 2026-11-13 (finding 5): a bid only motivates production when
