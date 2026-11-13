@@ -112,6 +112,11 @@ impl Bot {
     /// Stand on a tile touching an NPC's footprint by a side: the server
     /// only accepts NPC clicks from a side, never from a corner. A size-2
     /// cow has two such tiles per side, not just the SW anchor's four.
+    ///
+    /// Only side tiles the bot can walk to are aimed at (`npc_stands`):
+    /// a sealed pocket in the ring (corner between table, stool and
+    /// walls, strip behind a fence) used to be walked to, a NoRoute
+    /// dossier each time. None left: typed `Unreachable` naming the NPC.
     pub fn approach_npc(&mut self, slot: u16, timeout: u64) -> Result<()> {
         let deadline = self.world.ticks + timeout;
         while self.world.ticks < deadline {
@@ -125,16 +130,18 @@ impl Bot {
                 return Ok(());
             }
             let size = (self.tables.npc_size)(npc.npc_type).max(1) as i32;
-            let mut ring = Vec::new();
-            for dz in 0..size {
-                ring.push((npc.x - 1, npc.z + dz));
-                ring.push((npc.x + size, npc.z + dz));
+            let (anchor, npc_type) = ((npc.x, npc.z), npc.npc_type);
+            let ring = self.npc_stands(anchor, size)?;
+            if ring.is_empty() {
+                let name = (self.tables.npc_name)(npc_type).unwrap_or_else(|| format!("type {npc_type}"));
+                return Err(Error::Unreachable(format!(
+                    "NPC {name} (slot {slot}) at ({},{},{}): no side tile reachable from {:?}",
+                    anchor.0,
+                    anchor.1,
+                    self.world.level,
+                    self.position(),
+                )));
             }
-            for dx in 0..size {
-                ring.push((npc.x + dx, npc.z - 1));
-                ring.push((npc.x + dx, npc.z + size));
-            }
-            ring.sort_by_key(|tile| (tile.0 - self.world.x).abs() + (tile.1 - self.world.z).abs());
             let mut moved = false;
             for (cx, cz) in ring {
                 if self.world.ticks >= deadline {
@@ -166,6 +173,36 @@ impl Bot {
             }
         }
         Err(Error::Unreachable(format!("no clickable tile for NPC {slot} from {:?}", self.position())))
+    }
+
+    /// Side tiles of an NPC footprint (SW `anchor`, `size`) the bot can
+    /// click from and walk to, cheapest walk first. One `tiles_flags`
+    /// batch drops tiles nothing stands on and tiles walled off from the
+    /// NPC (engine `reachRectangle1`: no wall on the side facing it);
+    /// one `walk_costs` batch drops the unreachable rest (sealed pockets
+    /// answer at once, `nav/src/pocket.rs`). Blocked tiles never enter
+    /// the cost batch: they never settle and would exhaust the search.
+    /// The service down is `nav-down`, never a blind ring.
+    pub(crate) fn npc_stands(&mut self, anchor: (i32, i32), size: i32) -> Result<Vec<(i32, i32)>> {
+        let level = self.world.level;
+        let ring = npc_ring(anchor, size);
+        let tiles: Vec<(i32, i32, i32)> = ring.iter().map(|((x, z), _)| (*x, *z, level)).collect();
+        let rows = self.tiles_flags(&tiles)?;
+        let open: Vec<(i32, i32)> = ring
+            .iter()
+            .zip(rows.iter())
+            .filter(|((_, facing_wall), row)| {
+                crate::collision::tile_walkable(row.flags) && row.flags & facing_wall == 0
+            })
+            .map(|((tile, _), _)| *tile)
+            .collect();
+        let dests: Vec<lifescape_nav::plan::Tile> =
+            open.iter().map(|(x, z)| lifescape_nav::plan::Tile { x: *x, z: *z, level }).collect();
+        let costs = self.walk_costs(&dests);
+        let mut stands: Vec<((i32, i32), u32)> =
+            open.into_iter().zip(costs).filter_map(|(tile, cost)| cost.map(|cost| (tile, cost))).collect();
+        stands.sort_by_key(|(_, cost)| *cost);
+        Ok(stands.into_iter().map(|(tile, _)| tile).collect())
     }
 
     /// Walk one adjacent tile, without routing. True when the server moved us.
@@ -207,6 +244,24 @@ impl Bot {
         }
         Ok((self.world.x, self.world.z) == steps[steps.len() - 1])
     }
+}
+
+/// Side tiles of a square footprint anchored at its SW tile, each with
+/// the wall flag that, set on that tile, shuts the click (the wall on
+/// the edge facing the NPC: west side needs no east wall, and so on).
+pub(crate) fn npc_ring(anchor: (i32, i32), size: i32) -> Vec<((i32, i32), u32)> {
+    use crate::collision::{WALL_EAST, WALL_NORTH, WALL_SOUTH, WALL_WEST};
+    let size = size.max(1);
+    let mut ring = Vec::new();
+    for dz in 0..size {
+        ring.push(((anchor.0 - 1, anchor.1 + dz), WALL_EAST));
+        ring.push(((anchor.0 + size, anchor.1 + dz), WALL_WEST));
+    }
+    for dx in 0..size {
+        ring.push(((anchor.0 + dx, anchor.1 - 1), WALL_NORTH));
+        ring.push(((anchor.0 + dx, anchor.1 + size), WALL_SOUTH));
+    }
+    ring
 }
 
 /// Side adjacency to a square footprint anchored at its SW tile: on
@@ -298,6 +353,57 @@ mod tests {
             bot.world.z = tile.1;
             assert!(!bot.adjacent_to_npc(472), "{tile:?} is a corner, under, or out of reach");
         }
+    }
+
+    fn served_bot(x: i32, z: i32, socket: &str) -> (Bot, std::sync::Arc<lifescape_nav::service::Service>) {
+        use crate::client::travel::test_nav_context;
+        use lifescape_nav::service::{test_socket, PlanClient, Service, Snapshot};
+        let (world, tables) = test_nav_context();
+        let service = Service::start(Snapshot::new(world, tables, "test".to_string()), &test_socket(socket), 1)
+            .expect("service starts");
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.x = x;
+        bot.world.z = z;
+        bot.world.level = 0;
+        bot.last_keepalive = Some(std::time::Instant::now());
+        bot.last_send_tick = bot.world.ticks;
+        bot.plan_client = Some(PlanClient::new(service.socket_path(), "t01"));
+        bot.plan_data_version = Some("test".to_string());
+        (bot, service)
+    }
+
+    /// Varrock house (live NoRoute dossiers 2026-11-13): (3247,3398) is a
+    /// sealed pocket between table, stool and walls. A man east or north
+    /// of it rings it; the stands keep the reachable sides only.
+    #[test]
+    fn npc_stands_drop_the_sealed_pocket() {
+        let (mut bot, _service) = served_bot(3245, 3395, "sdk-ring-pocket");
+        let pocket = (3247, 3398);
+        for anchor in [(3248, 3398), (3247, 3399)] {
+            assert!(super::npc_ring(anchor, 1).iter().any(|(tile, _)| *tile == pocket), "{anchor:?} rings the pocket");
+            let stands = bot.npc_stands(anchor, 1).expect("service answers");
+            assert!(!stands.is_empty(), "{anchor:?} keeps reachable sides");
+            assert!(!stands.contains(&pocket), "{anchor:?}: pocket aimed at, {stands:?}");
+        }
+    }
+
+    /// Every side of a man at (3246,3398) is blocked, walled off from
+    /// him or the pocket: no walk at all, a typed error naming him.
+    #[test]
+    fn approach_npc_without_a_stand_names_the_npc() {
+        use crate::tables::{Tables, NOTABLES};
+        use crate::world::NpcInfo;
+        fn man(_npc_type: u16) -> Option<String> {
+            Some("man".to_string())
+        }
+        let (bot, _service) = served_bot(3245, 3395, "sdk-ring-none");
+        let mut bot = bot.with_tables(Tables { npc_name: man, ..NOTABLES });
+        bot.world.npcs.insert(9, NpcInfo { npc_type: 1, x: 3246, z: 3398, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
+        let err = bot.approach_npc(9, 60).expect_err("no reachable side");
+        let text = format!("{err}");
+        assert!(matches!(err, crate::error::Error::Unreachable(_)), "typed Unreachable, got {err:?}");
+        assert!(text.contains("NPC man (slot 9) at (3246,3398,0)"), "names the NPC: {text}");
+        assert_eq!((bot.world.x, bot.world.z), (3245, 3395), "never walked");
     }
 
     /// Far target with no maps: the exact walk fails offline at the first

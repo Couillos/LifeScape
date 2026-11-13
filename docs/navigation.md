@@ -91,6 +91,20 @@ sur le pas (3216,3220)->(3216,3219), replan identique). Peints en murs ils
 ne coupaient aucune pièce (40 battants F2P analysés), la marque reste le
 choix commun. Golden `nav/tests/door_swing.rs`.
 
+Battant ouvert en travers du pas (2026-11-13, SDK `client/door_leaf.rs`) :
+quand aucun détour n'existe, le plan traverse l'arête marquée ; si la
+porte est ouverte à ce moment, le battant est un vrai mur et le serveur
+refuse le pas (t01-21040 : cuisine de Falador (2988,3367), entrable
+seulement par l'arête du battant de 1512 (2989,3368) ; ouvert, 1515 en
+(2989,3367) angle ouest, « I can't reach that! »). `exec_walk` cherche
+avant chaque jambe un mur droit live en travers d'un pas (sur la tuile
+source, ou sur la cible d'un pas orthogonal) ; confirmé par la marque
+`DOOR_LEAF_*` statique (un batch `tiles_flags`, seulement quand un mur
+live croise un pas), il marche jusqu'à la tuile source, ferme le battant
+(op1, `[oploc1,_door_opened]` / `_door_*_opened` des portes doubles),
+attend sa disparition (23 ticks) puis reprend ; battant resté :
+`StepRefused` typé. Un mur live sans marque n'est jamais cliqué.
+
 Mobilier qui « s'ouvre » (catégories `chest_closed` 33, `cupboard_closed`
 35, `drawer` 37 : la variante ouverte bloque toujours) n'est jamais une
 porte (`loctypes.rs`) : avant, le plan « ouvrait » les tiroirs 350 de
@@ -135,6 +149,32 @@ atterrit, le plan répond `Disconnected` tout de suite (closest = départ)
 et `walk_costs` laisse la cible à `None` sans épuiser la recherche
 (lève en partie la « limite connue » ci-dessous pour ces cibles).
 Goldens `poche_*` (4-5 ms), test `pocket::tests`.
+
+`approach_npc` (SDK, 2026-11-13) ne vise plus que des stands
+atteignables (`Bot::npc_stands`) : tuiles de côté de l'emprise, un batch
+`tiles_flags` écarte les tuiles bloquées et celles murées côté PNJ (règle
+`reachRectangle1` : pas de mur sur l'arête face au PNJ), un batch
+`walk_costs` écarte les poches et le reste inatteignable (les tuiles
+bloquées n'y entrent jamais : elles épuiseraient la recherche), ordre
+par coût de marche. Aucun stand : `Unreachable` « NPC <nom> (slot N) at
+(x,z,niv): no side tile reachable », sans un pas. Avant : marche vers la
+poche, dossier NoRoute (Varrock (3247,3398)…, Lumbridge (3257,3242)).
+
+Escaliers en colimaçon du château de Lumbridge (2026-11-13) : le prober
+et l'exécuteur de montées cliquaient la tuile d'emprise la plus proche
+du stand ; le serveur ne trouve un loc que sur son origine
+(`OpLocHandler` → `Zone.getLoc(x, z, id)`), le clic tombait sans message.
+Les 6 verdicts du château (1738/1739/1740) étaient des `no_move` faux :
+l'étage 1 (le duc, Rune Mysteries) était injoignable. Les deux cliquent
+désormais `from` (l'origine, vrai pour les 367 lignes du dump). Verdicts
+du château reroulés en live (admin, clic origine) : 8 trajets ok. Le haut
+de la tour sud (niveau 2) est du ciel pour la carte : niveau 2 par la
+tour nord seulement. Goldens `chateau_escalier_*`, `chateau_duc_retour`,
+`chateau_toit_*`. Limites connues : les autres `no_move` du fichier de
+verdicts (1738/1740 ailleurs) viennent du même clic et attendent un
+`probe_transitions` relancé après déploiement ; `forceapproach` (loc
+config, ex. `spiralstairstop=east`, `stairs`, `stairstop`) n'est pas dans
+`gametypes.json`, les stands de montée l'ignorent.
 
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden

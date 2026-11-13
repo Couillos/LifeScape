@@ -170,3 +170,19 @@ poche_lumbridge_cloture | 3257,3244,0 | 3257,3242,0 | f2p | unreachable=Disconne
 # Varrock est derriere (3268,3435) n'a pas d'autre entree : poche scellee
 # (avant : plan par la porte, DoorDidNotOpen live bct5rxpg-14906).
 porte_verrouillee_varrock | 3269,3435,0 | 3268,3436,0 | f2p | unreachable=Disconnected
+# 48-54. escaliers en colimacon du chateau de Lumbridge (spiralstairs
+# 1738 / spiralstairsmiddle 1739 / spiralstairstop 1740, stairs.rs2) :
+# les verdicts no_move du prober (2026-11-06) venaient de son clic sur la
+# tuile d'emprise la plus proche du stand ; le serveur ne trouve un loc
+# que sur son origine (OpLocHandler -> Zone.getLoc). Reroules en live le
+# 2026-11-13 (admin, clic origine) : 8 trajets ok. Le duc (Rune
+# Mysteries) est au niveau 1 en (3210..3214,3218..3222). Niveau 2 par
+# la tour nord seulement : le haut de la tour sud est du ciel pour la
+# carte (tuiles OPEN sans toit, pas dans sky_floors).
+chateau_escalier_sud_montee | 3222,3218,0 | 3212,3220,1 | f2p | reachable ; uses_loc=1738 ; levels=0>1 ; stand=3206,3208
+chateau_escalier_nord_montee | 3215,3225,0 | 3205,3228,1 | f2p | reachable ; uses_loc=1738 ; levels=0>1 ; stand=3205,3228
+chateau_escalier_sud_descente | 3206,3211,1 | 3206,3210,0 | f2p | reachable ; uses_loc=1739 ; levels=1>0 ; stand=3205,3209
+chateau_escalier_nord_descente | 3206,3226,1 | 3207,3228,0 | f2p | reachable ; uses_loc=1739 ; levels=1>0 ; stand=3205,3228
+chateau_duc_retour | 3212,3220,1 | 3222,3218,0 | f2p | reachable ; uses_loc=1739 ; levels=1>0
+chateau_toit_montee | 3222,3218,0 | 3206,3229,2 | f2p | reachable ; levels=0>1>2 ; stand=3205,3228
+chateau_toit_descente | 3206,3229,2 | 3222,3218,0 | f2p | reachable ; uses_loc=1740 ; rides>=2 ; levels=1>0 ; stand=3206,3229

@@ -186,10 +186,10 @@ fn merge_verified(existing: Option<&str>, fresh: &[Entry], remove: &[(u16, i32, 
 }
 
 /// Ride one transition from its stand: pre-open the lid when one is
-/// listed, click the climb op on the footprint tile nearest the stand,
+/// listed, click the climb op on the loc origin (table `from`),
 /// then watch for the arrival like the executor does (same dialogue,
 /// jump and stillness rules, same bounds).
-fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: Option<u16>, climb_op: u8, climb_loc: u16, footprint: &[(i32, i32)], date: &str) -> Result<Entry, ScriptError> {
+fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: Option<u16>, climb_op: u8, climb_loc: u16, date: &str) -> Result<Entry, ScriptError> {
     if !cheat_teleport(bot, stand.level, stand.x, stand.z, TELEPORT_TIMEOUT)? {
         return Err(ScriptError::Usage(format!(
             "teleport to stand ({},{},{}) failed",
@@ -217,12 +217,11 @@ fn probe_row(bot: &mut Bot, view: RowView, stand: Tile, expect: Tile, open_to: O
     }
     let (start_level, start_x, start_z) = bot.position();
     let seen_messages = bot.world.messages.len();
-    let (click_x, click_z) = footprint
-        .iter()
-        .min_by_key(|(tile_x, tile_z)| (tile_x - stand.x).abs() + (tile_z - stand.z).abs())
-        .copied()
-        .unwrap_or((view.from.x, view.from.z));
-    bot.op_loc(climb_op, click_x, click_z, climb_loc)?;
+    // The loc origin (table `from`), like the travel executor: the
+    // server drops a click on any other footprint tile, and the nearest
+    // one recorded false no_move verdicts (Lumbridge castle spiral
+    // stairs, 2026-11-06, re-ridden ok live 2026-11-13).
+    bot.op_loc(climb_op, view.from.x, view.from.z, climb_loc)?;
     let started = bot.world.ticks;
     let watched = started + RIDE_WAIT;
     let entry = |bot: &Bot, result: &'static str, choice: String| Entry {
@@ -286,7 +285,6 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
         expect: Tile,
         open_to: Option<u16>,
         climb_op: u8,
-        footprint: Vec<(i32, i32)>,
     }
     let mut targets: Vec<Target> = Vec::new();
     let mut skipped = 0u32;
@@ -305,7 +303,6 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             expect,
             open_to: found.view.open_to,
             climb_op: found.view.climb_op,
-            footprint: found.view.footprint,
         });
     }
     bot.intend("probing transitions");
@@ -342,7 +339,6 @@ pub(crate) fn dev_probe_transitions(bot: &mut Bot, args: &[String]) -> ScriptRes
             target.open_to,
             target.climb_op,
             target.climb_loc,
-            &target.footprint,
             &date,
         ) {
             Ok(entry) => {
