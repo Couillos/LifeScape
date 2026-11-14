@@ -76,6 +76,13 @@ banquier, poche fermée). Seule table de ce dossier écrite à la main :
 (< 1 s) et imprime la table à recoller en cas d'écart. Branchée au SDK
 par `Tables::bank_client_stands` (`scripts/src/tables_live.rs`).
 
+Forge (`recipes.json`, kind `smith`, 2026-11-14) : XP = `bar_amount ×
+xpperbar` dixièmes (`smithing.struct`, payé par `smithing_anvil`), le
+dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
+(corrigé dans `tools/gamedata-dump.mts`, test
+`smith_rows_match_the_server_tables` qui relit dbrow + struct : niveau,
+barres, unités produites (clous 2), XP).
+
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
 
 ## Portes d'accès (`access.rs`, 2026-11-13)

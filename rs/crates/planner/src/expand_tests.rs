@@ -93,6 +93,27 @@ fn every_skill_owns_its_reach_tiers() {
     assert_eq!(reach_method("magic", 1), "fight:magic/wind_strike/chickens");
 }
 
+/// Runecraft tranches work the best rune whose talisman the brain can
+/// actually obtain (2026-11-14): air comes with Rune Mysteries, earth
+/// from men (1.56 %/kill), body from guards (3.12 %); mind (imps,
+/// wizards), water and fire (wizards, dark wizards, sewer skeletons) drop
+/// only from NPCs no combat rung hunts, so those tiers would block for
+/// good on their talisman. Air to 9, earth to 20, body past it.
+#[test]
+fn runecraft_tranches_work_obtainable_talismans() {
+    assert_eq!(reach_method("runecraft", 1), "runecraft:airrune");
+    assert_eq!(reach_method("runecraft", 2), "runecraft:airrune", "no mind talisman leg");
+    assert_eq!(reach_method("runecraft", 5), "runecraft:airrune", "no water talisman leg");
+    assert_eq!(reach_method("runecraft", 14), "runecraft:earthrune", "no fire talisman leg");
+    assert_eq!(reach_method("runecraft", 20), "runecraft:bodyrune");
+    for level in 1..=98u8 {
+        let method = reach_method("runecraft", level);
+        let rune = method.strip_prefix("runecraft:").expect("runecraft method");
+        let talisman = crate::tools::rune_talisman(rune).expect("talisman");
+        assert!(crate::tranches::talisman_obtainable(&talisman), "{level}: {method} needs {talisman}");
+    }
+}
+
 #[test]
 fn iron_never_lists_market() {
     let iron = Profile::new(true, 0.9, 0.4, 7, Archetype::Producer);

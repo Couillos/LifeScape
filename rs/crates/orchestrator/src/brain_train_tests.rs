@@ -39,6 +39,7 @@ fn life_for(skill: &str, level: u8) -> Life {
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

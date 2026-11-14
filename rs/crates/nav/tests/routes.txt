@@ -209,3 +209,24 @@ varrock_ouest_escalier | 3160,3433,0 | 3155,3435,1 | f2p | reachable ; uses_loc=
 moulin_montee | 3165,3306,0 | 3165,3306,2 | f2p | reachable ; rides>=2 ; levels=0>1>2
 moulin_descente | 3165,3306,2 | 3165,3306,0 | f2p | reachable ; rides>=2 ; levels=2>1>0
 moulin_etage_banque | 3165,3306,2 | 3092,3245,0 | f2p | reachable ; uses_loc=1746 ; levels=2>1>0
+# 62-64. Tour des Sorciers (Rune Mysteries, 2026-11-14) : la piece de
+# l'echelle de la cave est fermee par une porte DIAGONALE (1536, forme 9,
+# (3107,3162) angle sud) ; ouverte, elle devient une loc pleine en
+# (3106,3162) (doors.rs2 door_open, bras diagonal). La regle de portee
+# du moteur (reachWall1 WALL_DIAGONAL) etait sous la forme 1 dans la
+# nav : porte jamais cliquable, Sedridor (3103,9571) Disconnected
+# (closest (3067,9575), dossiers bst29bh9-218/-290/-423). Echelles
+# wizards_tower_laddertop 2147 (3104,3162) -> (3104,9576) et
+# wizards_tower_ladder 2148 (3103,9576) -> (3105,3162) (ladders.rs2).
+tour_sorciers_echelle | 3222,3218,0 | 3105,3162,0 | f2p | reachable ; uses_loc=1536 ; avoids=3106,3162
+tour_sorciers_sortie | 3105,3162,0 | 3109,3170,0 | f2p | reachable ; uses_loc=1536 ; avoids=3106,3162
+sedridor_depuis_duc | 3212,3220,1 | 3104,9571,0 | f2p | reachable ; uses_loc=2147 ; uses_loc=1530
+# 65-70. ruines des six autels F2P depuis une banque proche (stations.json
+# `ruin`, runecraft.rs2 : talisman sur les ruines -> temple) ; feu derriere
+# le peage d'Al Kharid (depuis la banque d'Al Kharid, meme cote).
+ruines_esprit | 2946,3368,0 | 2981,3513,0 | f2p | reachable ; adjusted_dest
+ruines_air | 3012,3355,0 | 2984,3291,0 | f2p | reachable ; adjusted_dest
+ruines_corps | 3094,3491,0 | 3052,3444,0 | f2p | reachable ; adjusted_dest
+ruines_eau | 3092,3243,0 | 3184,3164,0 | f2p | reachable ; adjusted_dest
+ruines_terre | 3253,3420,0 | 3305,3473,0 | f2p | reachable ; adjusted_dest
+ruines_feu | 3270,3167,0 | 3312,3254,0 | f2p | reachable ; adjusted_dest

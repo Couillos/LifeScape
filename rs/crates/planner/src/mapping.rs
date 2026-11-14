@@ -366,6 +366,11 @@ pub(crate) fn spot_for_drop(item: &str) -> Option<String> {
         .map(|spot| spot.key.to_string())
 }
 
+/// Script name of a quest key (`runemysteries` -> `quest_rune_mysteries`).
+pub(crate) fn quest_script_name(quest: &str) -> Option<&'static str> {
+    quest_script(quest)
+}
+
 fn quest_script(quest: &str) -> Option<&'static str> {
     Some(match quest {
         "cook" => "quest_cooks_assistant",

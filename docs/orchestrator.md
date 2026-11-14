@@ -55,7 +55,12 @@ d'origine `goal_origin`, nœuds avec deps, sous-tâches déposées sur
 blocage `filed`, méthode et alternatives chiffrées, compteurs), les
 souhaits (commande daemon `brain_wishes` = `brain_wishlist::wishlist`),
 ordres ouverts (plafond de reprix en mémoire) et deals, le live (niveaux,
-combat, pièces, porté), l'historique des buts et les bannissements.
+combat, pièces, porté), l'historique des buts et les bannissements,
+et `retired` (nœuds finis retirés du graphe, `lifecycle_retire` :
+totaux faits/abandonnés, quêtes prouvées, 40 derniers enregistrements ;
+panneau « Nœuds terminés »). Un fichier pas encore réécrit depuis la
+retraite est affiché retraité. La page Lives compte `done` = nœuds faits
+du graphe + `memory.done_total`.
 Source en échec ⇒ ligne dans `errors`, jamais une liste vide muette.
 `version` = mtime du fichier de vie + empreinte du contenu affiché (hors
 comptes à rebours) : le front relit toutes les 5 s et ne redessine le

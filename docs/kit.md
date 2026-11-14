@@ -77,19 +77,45 @@ Adaptateurs (un par famille d'interface, jamais par activité) :
 
 Postes : le site est cherché autour du point `near` de la tâche (rayon
 150) ; les stands sont les tuiles de côté de toute l'emprise du loc
-(largeur × longueur du dump, tournée par l'angle live : `furnace1` 3×3,
-cuisinière 1×2), jamais un coin ni une tuile sous le poste ; un refus
-serveur (« I can't reach that! », forceapproach) passe au stand suivant.
+(largeur × longueur du dump, tournée par l'angle du loc : `furnace1` 3×3,
+cuisinière 1×2), jamais un coin ni une tuile sous le poste, jamais un
+côté que le `forceapproach` serveur refuse (`stations::block_access`,
+relu des `.loc` par test : cuisinière, tour et four de potier, fours
+`furnace1/2` est, rouet sud, enclume de Doric nord ; tourné par l'angle).
+Angle = flux live s'il a changé le loc, sinon placement statique
+(`tiles_flags`) : le flux ne porte que les locs modifiés (2026-11-14, le
+`furnace1` tourné de Falador lu à 0 refusait tous ses stands ; Al Kharid
+essayait ouest, sud (torche : dossier NoRoute) et nord ~140 ticks par
+charge avant l'est). Un refus restant (« I can't reach that! ») passe au
+stand suivant.
 
-Fonte (`activities/smelt.rs`) : poste = four F2P le plus proche du bot
-(Wilderness seulement avec `wild`), `near` = ce four (pas la banque).
+Fonte (`activities/smelt.rs`) : poste = four du `--site`, sinon four F2P
+le plus proche du bot (Wilderness seulement avec `wild`, jamais l'île du
+tutoriel), `near` = ce four (pas la banque).
 Une charge = des jeux complets de la recette serveur (bronze = 1 cuivre
 + 1 étain, acier = 1 fer + 2 charbon, mithril/adamant/rune 4/6/8
 charbon) ; un intrant sous un jeu ⇒ `blocked{missing}` qui nomme chaque
 intrant manquant (cuivre en banque sans étain ⇒ `tin_ore`), jamais un
 clic de minerai seul (le serveur répond par sa boîte « need tin » et la
-charge ne consomme rien). Forge (`smith.rs`) : un marteau en banque est
-retiré avant tout `blocked{missing: hammer}`.
+charge ne consomme rien). Jeux d'une charge (`load_sets`, 2026-11-14) =
+min(place du sac, intrant le plus rare sac + banque connue, jeux restant
+dus au `--want`) : 20 cuivres et 5 étains chargent 5 jeux, jamais 14
+cuivres dont 9 inutiles ; le reste dû se divise par la chance serveur
+(`recipes::success_odds` : fer 50 %, 2 minerais par barre due), jamais
+au-delà de l'ordre. Forge (`smith.rs`, 2026-11-14) : enclume = celle du
+`--site` (celle de Doric aussi : le cerveau a vu la quête), sinon
+l'enclume ordinaire la plus proche hors Wilderness (`anvil_post`) ; barre
+sur l'enclume depuis le côté le plus proche (« can't reach » ⇒ côté
+suivant), puis UN appui Make par visite (`inv_button1/2/3` = 1/5/10,
+`make_choice` : le plus grand dans les barres ET le reste du `--want`,
+clous = 2 par appui) ; le serveur enchaîne (5 ticks par objet), la
+chaîne finit après 12 ticks sans barre consommée et la boîte « not
+enough bars » est fermée. Marteau et reliquat de barres gardés à chaque
+banque (fini le marteau déposé puis re-retiré) ; un marteau en banque
+est retiré avant tout `blocked{missing: hammer}` ; « complete Doric's
+Quest » ⇒ `blocked{quest:doric}`. Sites planner (`obtain::station_open`) :
+jamais l'île du tutoriel (four 3081,9496, enclumes 3075/3083) ni les
+enclumes de Doric (aucune porte de quête ne porte un site).
 
 Particularités cuisine : cuisinières d'abord (brûlent moins), puis
 cheminées, puis feux ; brûlés suivis comme produits (`Recipe.burnt`) ;
@@ -142,6 +168,22 @@ visite les quantités du plan (`SpellLoad::plan`), dimensionné par
 case, un non-empilable = une case par unité). `blocked{noms exacts}`
 seulement si sac + banque ne financent pas un sort ; un run sans but
 (ni count, ni `--want`, ni `--level`) qui a déjà lancé finit `ok` à sec.
+Cible notée (`SpellLoad::noted_target`, alchimie, 2026-11-14) : la cible
+sort de la banque en billets (`bank_withdraw_counts` reconnaît un id
+`cert_` et passe en mode note), une case pour toute la charge ; billets
+comptés comme sorts et gardés aux dépôts ; le sort vise la forme de base
+tant que le sac en a, puis le billet (le serveur alche un billet à son
+`oc_cost` de base). Cadence (`magic::CastPacer`) : `OpHeldTHandler`
+jette sans un mot un `OPHELDT` reçu pendant `p_delay` ; le sort suivant
+attend `cast_cooldown` = n + 1 trames après l'effet pour un `p_delay(n)`
+(le `World` décode les paquets AVANT de lever le délai du tick) : cycle
+de 5 ticks en haute alchimie (`p_delay(3)`), 3 en basse, superheat et
+enchantements (`p_delay(1)`) ; un envoi sans effet en 8 ticks est
+renvoyé (3 envois, puis échec avec la dernière ligne serveur) — avant,
+chaque deuxième alchimie partait trop tôt et le run échouait « never
+landed » 40 ticks plus tard. `alchemy` lit `--spell lowlvl_alchemy|
+highlvl_alchemy` (sinon haute dès 55, basse dès 21 ; niveau trop bas ⇒
+`blocked{level:magic:N}`).
 Combat magique : le passage en banque (`gear::magic_ammo`) retire les
 runes du sort ORDONNÉ (`--spell`), plus seulement air + esprit ; à court
 dans le sac avec les runes en banque, `kit::strike` demande un voyage

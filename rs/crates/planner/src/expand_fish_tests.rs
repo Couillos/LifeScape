@@ -23,6 +23,7 @@ fn quota(item: &str, count: i64) -> Life {
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

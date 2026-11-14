@@ -39,6 +39,30 @@ pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
     out
 }
 
+/// F2P runes by level gate, best first (server `runecraft.dbrow`).
+const RUNECRAFT_TIERS: [(u8, &str); 6] =
+    [(20, "bodyrune"), (14, "firerune"), (9, "earthrune"), (5, "waterrune"), (2, "mindrune"), (1, "airrune")];
+
+/// True when the brain has a way to a talisman: the quest that hands it
+/// over (`quests::QUEST_GRANTS`) or a production leg a script runs (a
+/// drop a combat rung farms).
+/// Static data: computed once per process (the brain asks every pass).
+pub fn talisman_obtainable(talisman: &str) -> bool {
+    static OBTAINABLE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    OBTAINABLE
+        .get_or_init(|| {
+            RUNECRAFT_TIERS
+                .iter()
+                .filter_map(|(_, rune)| crate::tools::rune_talisman(rune))
+                .filter(|name| {
+                    crate::quests::QUEST_GRANTS.iter().any(|(_, granted)| granted == name) || !crate::obtain_legs::production_legs(name).is_empty()
+                })
+                .collect()
+        })
+        .iter()
+        .any(|known| known == talisman)
+}
+
 /// Resource the brain fixes for one reach tranche (product of the tier
 /// worked during the tranche).
 pub fn tranche_resource(skill: &str, level: u8) -> String {
@@ -138,22 +162,15 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
-        "runecraft" => {
-            if level >= 20 {
-                "bodyrune"
-            } else if level >= 14 {
-                "firerune"
-            } else if level >= 9 {
-                "earthrune"
-            } else if level >= 5 {
-                "waterrune"
-            } else if level >= 2 {
-                "mindrune"
-            } else {
-                "airrune"
-            }
-            .to_string()
-        }
+        // The best rune open at the level whose talisman the brain can
+        // obtain (`talisman_obtainable`): air to 9, earth to 20, body
+        // past it (mind, water and fire talismans drop only from NPCs no
+        // combat rung hunts).
+        "runecraft" => RUNECRAFT_TIERS
+            .iter()
+            .find(|(gate, rune)| level >= *gate && crate::tools::rune_talisman(rune).is_some_and(|talisman| talisman_obtainable(&talisman)))
+            .map(|(_, rune)| rune.to_string())
+            .unwrap_or_else(|| "airrune".to_string()),
         // Bones (4.5 XP, every chicken and cow) to 20, big bones (15 XP)
         // after: the market or a giant spot feeds the climb.
         "prayer" => if level >= 20 { "big_bones" } else { "bones" }.to_string(),
