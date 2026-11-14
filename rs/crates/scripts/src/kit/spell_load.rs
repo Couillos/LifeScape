@@ -21,20 +21,38 @@ use crate::ScriptError;
 /// first is the cast target; none for teleports and telegrab).
 /// `whole_pack`: one cast converts every carried target (bones to
 /// bananas), so the runes ride for one cast and the inputs fill the pack.
+/// `noted_target`: the cast takes its target as a banknote too (alchemy:
+/// `oc_cost` of a `cert_` obj is its base cost, `inv_del` eats one note),
+/// so the target comes out of the bank noted, one slot for the whole load.
 #[derive(Debug, Clone)]
 pub struct SpellLoad {
     pub spell: String,
     pub runes: Vec<(String, i64)>,
     pub inputs: Vec<(String, u32)>,
     pub whole_pack: bool,
+    pub noted_target: bool,
 }
 
 /// One carried need: name, units per cast, rune (sized per cast even in
-/// a whole-pack load) or input.
+/// a whole-pack load) or input, and whether its banknote counts and is
+/// withdrawn (the noted target).
 struct Need {
     name: String,
     per_cast: u32,
     rune: bool,
+    noted: bool,
+}
+
+/// Banknote id of `base` (`cert_<name>`), `None` when it has none.
+pub fn note_of(base: u16) -> Option<u16> {
+    let note = crate::market_client::trade_id(base);
+    (note != base).then_some(note)
+}
+
+/// Pack units of a need: its banknotes too when the need rides noted.
+fn carried_units(bot: &Bot, obj: u16, noted: bool) -> u32 {
+    let notes = if noted { note_of(obj).map(|note| pack_total(bot, note)).unwrap_or(0) } else { 0 };
+    pack_total(bot, obj).saturating_add(notes)
 }
 
 /// Where a staff paying one of the cast's runes sits.
@@ -62,7 +80,7 @@ pub fn staff_choice(bot: &Bot, runes: &[(String, i64)]) -> Option<(&'static str,
 
 impl SpellLoad {
     pub fn new(spell: &str, runes: Vec<(String, i64)>, inputs: Vec<(String, u32)>) -> SpellLoad {
-        SpellLoad { spell: spell.to_string(), runes, inputs, whole_pack: false }
+        SpellLoad { spell: spell.to_string(), runes, inputs, whole_pack: false, noted_target: false }
     }
 
     /// Carried needs with the rune `paid` by a staff left out.
@@ -71,8 +89,9 @@ impl SpellLoad {
             name: name.clone(),
             per_cast: u32::try_from(*count).unwrap_or(u32::MAX).max(1),
             rune: true,
+            noted: false,
         });
-        let inputs = self.inputs.iter().map(|(name, count)| Need { name: name.clone(), per_cast: (*count).max(1), rune: false });
+        let inputs = self.inputs.iter().enumerate().map(|(at, (name, count))| Need { name: name.clone(), per_cast: (*count).max(1), rune: false, noted: at == 0 && self.noted_target });
         runes.chain(inputs).collect()
     }
 
@@ -84,7 +103,15 @@ impl SpellLoad {
     /// Item ids the load carries (runes and inputs, all of them): kept
     /// through the deposit that banks the products.
     pub fn carried_ids(&self, bot: &Bot) -> Vec<u16> {
-        self.needs(None).iter().filter_map(|need| obj_id(bot, &need.name).ok()).collect()
+        let mut ids = Vec::new();
+        for need in self.needs(None) {
+            let Ok(obj) = obj_id(bot, &need.name) else { continue };
+            ids.push(obj);
+            if let Some(note) = need.noted.then(|| note_of(obj)).flatten() {
+                ids.push(note);
+            }
+        }
+        ids
     }
 
     /// Casts the pack funds right now (worn staff counted); `u32::MAX`
@@ -92,7 +119,7 @@ impl SpellLoad {
     pub fn pack_casts(&self, bot: &Bot) -> u32 {
         self.needs(self.worn_paid(bot))
             .iter()
-            .map(|need| obj_id(bot, &need.name).map(|obj| pack_total(bot, obj) / need.per_cast).unwrap_or(0))
+            .map(|need| obj_id(bot, &need.name).map(|obj| carried_units(bot, obj, need.noted) / need.per_cast).unwrap_or(0))
             .min()
             .unwrap_or(u32::MAX)
     }
@@ -103,7 +130,7 @@ impl SpellLoad {
         let paid = staff_choice(bot, &self.runes).map(|(_, rune, _)| rune);
         self.needs(paid)
             .into_iter()
-            .filter(|need| obj_id(bot, &need.name).map(|obj| pack_total(bot, obj).saturating_add(banked_usable(bot, obj)) < need.per_cast).unwrap_or(true))
+            .filter(|need| obj_id(bot, &need.name).map(|obj| carried_units(bot, obj, need.noted).saturating_add(banked_usable(bot, obj)) < need.per_cast).unwrap_or(true))
             .map(|need| need.name)
             .collect()
     }
@@ -111,30 +138,37 @@ impl SpellLoad {
     /// Withdrawals (obj, units) that stock the pack for up to `wanted`
     /// casts (whole-pack loads: `wanted` targets, runes for one cast):
     /// bounded by pack + bank and by free slots (a stack takes one slot
-    /// once, a non-stackable one per unit). Empty when nothing fits.
+    /// once, a non-stackable one per unit). A noted target is withdrawn
+    /// as its banknote id (one slot). Empty when nothing fits.
     pub fn plan(&self, bot: &Bot, wanted: u32) -> Vec<(u16, u32)> {
         let free = u64::try_from(free_slots(bot)).unwrap_or(0);
-        let rows: Vec<(u16, u64, u64, u64, bool, bool)> = self
+        let rows: Vec<(u16, u64, u64, u64, bool, bool, u64)> = self
             .needs(self.worn_paid(bot))
             .iter()
             .filter_map(|need| {
                 let obj = obj_id(bot, &need.name).ok()?;
-                let stackable = knowledge::obj_by_id(usize::from(obj)).is_some_and(|entry| entry.stackable);
-                Some((obj, u64::from(need.per_cast), u64::from(pack_total(bot, obj)), u64::from(banked_usable(bot, obj)), stackable, need.rune))
+                let note = need.noted.then(|| note_of(obj)).flatten();
+                let stackable = note.is_some() || knowledge::obj_by_id(usize::from(obj)).is_some_and(|entry| entry.stackable);
+                let have = u64::from(carried_units(bot, obj, need.noted));
+                // A pack already holding the base form keeps its slots;
+                // the notes take one more only when none ride yet.
+                let pulled = note.unwrap_or(obj);
+                let stack_have = if note.is_some() { u64::from(pack_total(bot, pulled)) } else { have };
+                Some((pulled, u64::from(need.per_cast), have, u64::from(banked_usable(bot, obj)), stackable, need.rune, stack_have))
             })
             .collect();
         let whole = self.whole_pack;
         let units = |per: u64, rune: bool, casts: u64| if whole && rune { per * casts.min(1) } else { per * casts };
         let slots_for = |casts: u64| -> u64 {
             rows.iter()
-                .map(|(_, per, have, _, stackable, rune)| {
+                .map(|(_, per, have, _, stackable, rune, stack_have)| {
                     let extra = units(*per, *rune, casts).saturating_sub(*have);
-                    if *stackable { u64::from(extra > 0 && *have == 0) } else { extra }
+                    if *stackable { u64::from(extra > 0 && *stack_have == 0) } else { extra }
                 })
                 .sum()
         };
         let mut top = u64::from(wanted);
-        for (_, per, have, banked, _, rune) in &rows {
+        for (_, per, have, banked, _, rune, _) in &rows {
             if !(whole && *rune) {
                 top = top.min((have + banked) / per);
             } else if have + banked < *per {
@@ -148,7 +182,7 @@ impl SpellLoad {
             if slots_for(middle) <= free { low = middle } else { high = middle - 1 }
         }
         rows.iter()
-            .map(|(obj, per, have, _, _, rune)| (*obj, units(*per, *rune, low).saturating_sub(*have)))
+            .map(|(obj, per, have, _, _, rune, _)| (*obj, units(*per, *rune, low).saturating_sub(*have)))
             .filter(|(_, count)| *count > 0)
             .map(|(obj, count)| (obj, u32::try_from(count).unwrap_or(u32::MAX)))
             .collect()
@@ -371,5 +405,27 @@ pub(crate) mod tests {
         let mut load = SpellLoad::new("bones_to_bananas", runes, vec![("bones".to_string(), 1)]);
         load.whole_pack = true;
         assert_eq!(named(&bot, &load.plan(&bot, u32::MAX)), vec![("bones".to_string(), 25), ("earthrune".to_string(), 2), ("naturerune".to_string(), 1), ("waterrune".to_string(), 2)]);
+    }
+
+    /// Alchemy takes its target noted: 300 banked yew logs come out as
+    /// one stack of notes (the plan names the `cert_` id), never 25 per
+    /// trip; carried notes count as casts and stay kept through deposits.
+    #[test]
+    fn a_noted_target_rides_one_slot() {
+        let runes = crate::activities::alchemy::spell_runes("highlvl_alchemy");
+        let mut load = SpellLoad::new("highlvl_alchemy", runes, vec![("yew_logs".to_string(), 1)]);
+        load.noted_target = true;
+        let bot = stocked_bot(&[], &[("yew_logs", 300), ("naturerune", 400), ("firerune", 2000)]);
+        assert_eq!(named(&bot, &load.plan(&bot, u32::MAX)), vec![("cert_yew_logs".to_string(), 300), ("firerune".to_string(), 1500), ("naturerune".to_string(), 300)]);
+        assert_eq!(named(&bot, &load.plan(&bot, 40)), vec![("cert_yew_logs".to_string(), 40), ("firerune".to_string(), 200), ("naturerune".to_string(), 40)], "the order caps the load");
+        let bot = stocked_bot(&[("cert_yew_logs", 50), ("naturerune", 60), ("firerune", 500)], &[]);
+        assert_eq!(load.pack_casts(&bot), 50, "notes are casts");
+        assert!(load.shortfall(&bot).is_empty());
+        let logs = obj_id(&bot, "yew_logs").expect("logs");
+        let note = super::note_of(logs).expect("yew logs have a note");
+        assert!(load.carried_ids(&bot).contains(&note), "the notes survive the products deposit");
+        let mut plain = load.clone();
+        plain.noted_target = false;
+        assert_eq!(plain.pack_casts(&bot), 0, "unnoted loads read the base form only");
     }
 }

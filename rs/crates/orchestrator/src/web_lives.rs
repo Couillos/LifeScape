@@ -110,7 +110,8 @@ fn life_row(account: &str, life: &Value, file_modified: i64) -> Value {
         pending: counts.get("pending").copied().unwrap_or(0),
         blocked: counts.get("blocked").copied().unwrap_or(0),
         failed: counts.get("failed").copied().unwrap_or(0),
-        done: counts.get("done").copied().unwrap_or(0),
+        // Retired done nodes (`memory.done_total`, 2026-11-14) count too.
+        done: counts.get("done").copied().unwrap_or(0) + life.get("memory").get("done_total").as_i64().unwrap_or(0),
         updated: life_updated(life, file_modified),
     };
     row.to_value()

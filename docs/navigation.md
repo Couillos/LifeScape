@@ -159,6 +159,12 @@ que si le sac porte le péage (`travel_custom::paid_allowed`, 10 pièces,
 la clôture (golden `peage_detour`) ou répond `PaidOnly coins:10`.
 Avant : bct5rxpg (ground_pickup, 0 pièce) cliquait la porte 2882 puis
 2883, « Yes, ok. », rien, deux `DoorDidNotOpen`.
+Après le choix « Yes, ok. », le drain attend la réponse serveur
+(`toll_pick_answered` : dialogue fermé ou autre chose que le choix
+dépensé) avant de lire la page : le choix encore affiché au tick du clic
+passait pour « un nouveau choix », le `continue` du `chatplayer` ne
+partait jamais et la porte restait close (2026-11-14, admin, 10 pièces
+au sac : quatre `DoorDidNotOpen` ; après : deux `continue`, porte ok).
 
 Poches scellées (`nav/src/pocket.rs`) : une destination marchable mais
 emmurée (coin entre table, tabouret et murs, bande derrière une
@@ -219,6 +225,20 @@ membre), `laddertop_directional_188` (admin tué par les chevaliers noirs
 à l'arrivée). Test `nav/tests/force_approach.rs`, goldens 55-61
 (`chateau_tour_sud_toit_descente`, `tour_sorciers_*`, `manoir_draynor_etage`,
 `palais_varrock_etage`, `falador_chateau_etage`, `varrock_ouest_escalier`).
+
+Portes diagonales (forme 9, `WALL_DIAGONAL`, 2026-11-14) : la règle de
+portée moteur (`ReachStrategy.reachWall1`, bras `WALL_DIAGONAL` : les
+quatre voisins orthogonaux, sauf mur du stand tourné vers la porte)
+était codée sous la forme 1 dans `nav/src/reach.rs` ; aucune porte
+diagonale n'était cliquable. Tour des Sorciers : la pièce de l'échelle de
+la cave (Sedridor, Rune Mysteries) est fermée par 1536 (3107,3162) angle
+sud ⇒ Disconnected (dossiers bst29bh9-218/-290/-423). Ouverte
+(`doors.rs2`, bras diagonal de `door_open` : OUEST +z, NORD +x, EST −z,
+SUD −x), la porte devient une loc pleine pour 500 ticks, (3106,3162)
+ici : `gate_swing::open_diagonal_door_leaf` marque les quatre bords de
+cette tuile (`DOOR_LEAF_*`, jamais un mur) et le plan passe par
+(3107,3161). Goldens `tour_sorciers_echelle`, `tour_sorciers_sortie`
+(`avoids=3106,3162`), `sedridor_depuis_duc` (château niveau 1 → cave).
 
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden

@@ -76,9 +76,10 @@ pub fn next_id(life: &Life) -> String {
     format!("n{}", max_id_number(life) + 1)
 }
 
-fn max_id_number(life: &Life) -> usize {
-    // History ids count too: a withdrawn ladder step leaves the graph,
-    // never its number (`withdraw_gear_step`, logged by the brain).
+/// Highest node number ever issued: the graph, the history and the
+/// memory's high-water mark (retired nodes leave the graph, never their
+/// number: `lifecycle_retire`, `withdraw_gear_step`).
+pub fn max_id_number(life: &Life) -> usize {
     life.nodes
         .iter()
         .map(|node| node.id.as_str())
@@ -87,6 +88,7 @@ fn max_id_number(life: &Life) -> usize {
         .max()
         .unwrap_or(0)
         .max(life.nodes.len())
+        .max(life.memory.last_number)
 }
 
 /// Structural abandon (cascade, cycle): the dependency is the cause, so
@@ -660,6 +662,8 @@ pub fn record_block_from(life: &mut Life, index: usize, missing: &[String], leve
                     node.last_error = format!("{}{me} blocked on quest:{quest}", crate::quests::DISPROVED);
                 }
             }
+            // A retired proof is disproved the same way.
+            life.memory.quests_done.retain(|done| done != quest);
             let open = life.nodes.iter().find(|node| {
                 !waiting.contains(&node.id) && !is_terminal(&node.status) && matches!(&node.kind, NodeKind::CompleteQuest { quest: aimed } if aimed == quest)
             });

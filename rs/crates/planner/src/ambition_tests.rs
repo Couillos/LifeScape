@@ -41,6 +41,7 @@ fn life_with(kind: &str) -> Life {
         history: Vec::new(),
         ambition: new_ambition(kind, "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], ZERO).ok(),
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

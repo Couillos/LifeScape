@@ -55,6 +55,37 @@ pub fn method_quest(method: &str, item: Option<&str>) -> Option<String> {
     None
 }
 
+/// Objects a quest's own dialogue hands over and lets the bot keep, by
+/// planner quest key. Server truth (the grants live in area scripts, not
+/// under `quests/`, so the obtain index carries no quest for them):
+/// Rune Mysteries — `duke_horacio.rs2` `duke_rune_mysteries_start`
+/// `inv_add(inv, air_talisman, 1)`, given to Sedridor, handed back at
+/// completion (`sedridor.rs2` `head_wizard_notes`).
+pub const QUEST_GRANTS: [(&str, &str); 1] = [("runemysteries", "air_talisman")];
+
+/// The unfinished quest that hands `item` over, if any.
+pub fn granting_quest(item: &str, ctx: &ReadyCtx) -> Option<String> {
+    QUEST_GRANTS
+        .iter()
+        .find(|(quest, granted)| *granted == item && !ctx.quests_done.iter().any(|done| done == quest))
+        .map(|(quest, _)| quest.to_string())
+}
+
+/// A quest any bot runs at once: no skill gate, no object to bring, no
+/// combat, no quest-point gate, plannable solo (Rune Mysteries, Cook's
+/// Assistant...). Unlocking a way through it beats a resting market bid
+/// that nobody without the quest can fill.
+pub fn light_quest(key: &str) -> bool {
+    lifescape_gamedata::quest_requirements::by_key(key).is_some_and(|quest| {
+        quest.blocker.is_none()
+            && quest.skills.is_empty()
+            && quest.items.is_empty()
+            && quest.quest_points == 0
+            && quest.combat_level == 0
+            && quest.recommended_combat == 0
+    })
+}
+
 /// The quest `method` needs and the bot has not finished, if any.
 pub fn missing_quest(method: &str, item: Option<&str>, ctx: &ReadyCtx) -> Option<String> {
     method_quest(method, item).filter(|quest| !ctx.quests_done.iter().any(|done| done == quest))
@@ -111,18 +142,27 @@ pub fn quests_done_from(varp_of: &dyn Fn(i64) -> i64) -> Vec<String> {
 /// `done` (history), it proves nothing any more.
 pub const DISPROVED: &str = "disproved: ";
 
-/// Quests the life's own graph finished (a done `complete_quest` node
-/// no later `missing:quest:<key>` block disproved): proof between two
-/// engine saves (autosave every 15 min).
+/// Quests the life's own graph finished (a done `complete_quest` node,
+/// or its record in `memory.quests_done` once retired, that no later
+/// `missing:quest:<key>` block disproved): proof between two engine saves
+/// (autosave every 15 min).
 pub fn quests_done_in_graph(life: &Life) -> Vec<String> {
-    life.nodes
+    let mut done: Vec<String> = life
+        .nodes
         .iter()
         .filter(|node| node.status == NodeStatus::Done && !node.last_error.starts_with(DISPROVED))
         .filter_map(|node| match &node.kind {
             NodeKind::CompleteQuest { quest } => Some(quest.clone()),
             _ => None,
         })
-        .collect()
+        .collect();
+    // Proofs of retired quest nodes (`lifecycle_retire`): the memory.
+    for quest in &life.memory.quests_done {
+        if !done.contains(quest) {
+            done.push(quest.clone());
+        }
+    }
+    done
 }
 
 #[cfg(test)]

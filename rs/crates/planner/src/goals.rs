@@ -139,44 +139,45 @@ pub fn next_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, cou
     Some(GoalKind::MaxSkills { skills: vec![skill.to_string()], level: target })
 }
 
-/// True when the current goal's own root node is done: the newest node
-/// (highest id: `append_goal` numbers past every older node) of the
-/// goal's kind — equip step, quota/obtain, money, quest, area. Older
-/// goals' abandoned nodes linger in the graph and keep `graph_state` at
-/// `Stuck`; they never make a reached goal a failure (live 2026-11-13,
-/// bb4v5d9m: "equip melee" done every 4 s, closed stuck each time). Skill
-/// goals answer from the live levels (the brain), never here: `false`.
-pub fn goal_root_done(life: &Life) -> bool {
-    let serves = |kind: &NodeKind| match (&life.goal, kind) {
+/// True when `kind` is a root node of `goal` (equip step, quota/obtain,
+/// money, quest, area). Skill goals have no root node here: their climbs
+/// answer from the live levels.
+pub fn serves_goal(goal: &GoalKind, kind: &NodeKind) -> bool {
+    match (goal, kind) {
         (GoalKind::Obtain { item: goal_item, .. } | GoalKind::Produce { item: goal_item, .. }, NodeKind::ObtainItems { item, .. }) => item == goal_item,
         (GoalKind::MakeMoney | GoalKind::GetRich { .. }, NodeKind::MakeMoney) => true,
         (GoalKind::CompleteQuest { quest: goal_quest }, NodeKind::CompleteQuest { quest }) => quest == goal_quest,
         (GoalKind::EquipBest { style: goal_style }, NodeKind::EquipBest { style }) => style == goal_style,
         (GoalKind::AccessArea { area: goal_area }, NodeKind::AccessArea { area }) => area == goal_area,
         _ => false,
-    };
-    let number = |node: &Node| node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(0);
-    life.nodes
-        .iter()
-        .filter(|node| serves(&node.kind))
-        .max_by_key(|node| number(node))
-        .is_some_and(|node| node.status == crate::model::NodeStatus::Done)
+    }
+}
+
+/// True when the current goal's own root node is done: the newest node
+/// (highest id: `append_goal` numbers past every older node) of the
+/// goal's kind — equip step, quota/obtain, money, quest, area — read from
+/// the graph and from the retired records (a done root leaves the graph,
+/// `lifecycle_retire`). Older goals' abandoned nodes never make a reached
+/// goal a failure (live 2026-11-13, bb4v5d9m: "equip melee" done every
+/// 4 s, closed stuck each time). Skill goals answer from the live levels
+/// (the brain), never here: `false`.
+pub fn goal_root_done(life: &Life) -> bool {
+    let number = |id: &str| crate::lifecycle_retire::node_number(id).unwrap_or(0);
+    let live = life.nodes.iter().filter(|node| serves_goal(&life.goal, &node.kind)).map(|node| (number(&node.id), node.status == crate::model::NodeStatus::Done));
+    let retired = life.memory.recent.iter().filter(|row| serves_goal(&life.goal, &row.kind)).map(|row| (number(&row.id), row.outcome == "done"));
+    live.chain(retired).max_by_key(|(at, _)| *at).is_some_and(|(_, done)| done)
 }
 
 /// Replace the life's goal and append the new goal's nodes, renumbered
-/// past every existing id (old nodes stay as the record of past goals).
+/// past every id ever issued; the older goal's finished nodes retire at
+/// the next save (`lifecycle_retire`).
 /// Climbs start at the live level (`level_of`): no tranche already held.
 /// A production quota counts from the stock held now (`held_of`: pack,
 /// bank, worn): its obtain node asks `held + count`, so stock the bot
 /// already had never closes it without producing (review 2026-11-13).
 pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of: &dyn Fn(&str) -> u8, held_of: &dyn Fn(&str) -> i64) {
-    let offset = life
-        .nodes
-        .iter()
-        .filter_map(|node| node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()))
-        .max()
-        .unwrap_or(0)
-        .max(life.nodes.len());
+    // Past every id ever issued (retired ones included): never reused.
+    let offset = crate::lifecycle::max_id_number(life);
     let renumber = |id: &str| -> String {
         match id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
             Some(number) => format!("n{}", number + offset),
@@ -202,6 +203,9 @@ pub fn append_goal(life: &mut Life, goal: GoalKind, profile: &Profile, level_of:
     life.nodes.extend(fresh);
     life.goal = goal;
     life.active = None;
+    // The new goal's first number: abandoned nodes below it served a
+    // closed goal and retire at the next save (`lifecycle_retire`).
+    life.memory.floor = Some(offset + 1);
 }
 
 #[cfg(test)]
@@ -253,6 +257,7 @@ mod tests {
             )
             .ok(),
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 
@@ -309,6 +314,7 @@ mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         };
         for node in &mut life.nodes {
             node.status = NodeStatus::Done;

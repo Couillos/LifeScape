@@ -1,11 +1,13 @@
-//! Smith: bars + hammer on an anvil (catalogue §5.7, P1). Bar on an
-//! anvil opens the smithing columns; one Make press per item on the
-//! product cell, then wait out the bar consumption. The 274 column
-//! invs are uniform across bars (dagger..2h / axe..battleaxe /
-//! chainbody..platebody / med_helm..kiteshield; steel nails alone on
-//! column5), so the cell map is a shared suffix table plus the bar
-//! prefix, never a per-product hardcode. P1 always forges the highest
-//! platebody; Doric anvils need Doric's Quest (server gate, loud).
+//! Smith: bars + hammer on an anvil (catalogue §5.7, P1). Bar on the
+//! anvil opens the smithing columns; one Make press (1, 5 or 10, the
+//! largest the bars and the order allow: `inv_button1..3`) and the
+//! server chains the items (`smithing.rs2` `smithing_anvil`, 5 ticks an
+//! item). The 274 column invs are uniform across bars (dagger..2h /
+//! axe..battleaxe / chainbody..platebody / med_helm..kiteshield; steel
+//! nails alone on column5), so the cell map is a shared suffix table plus
+//! the bar prefix, never a per-product hardcode. The anvil is the
+//! brain's `--site`, else the nearest plain anvil (Doric's needs his
+//! quest, the Wilderness one is never a default).
 //!
 //! Process: poste enclume · action forger · interface colonnes ·
 //! intrants barre + marteau · produits pièce forgée.
@@ -16,14 +18,14 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
-use crate::kit::cycle::{resolve_keep, run, StepControl};
+use crate::kit::cycle::{poll_stop, resolve_keep, run, CycleState, StepControl, TaskSpec};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
-use crate::quests::common::use_item_on_loc;
 use crate::{ScriptError, ScriptResult};
 
 pub const SMITHING_STAT: u8 = 13;
-pub const HAMMER: &str = "hammer";
+pub use crate::kit::anvil::HAMMER;
+use crate::kit::anvil::{anvil_post, make_choice, smith_batch};
 pub const ANVILS: [&str; 2] = ["anvil", "doric_anvil"];
 /// Bar debugname and the product prefix the 274 column invs use
 /// (adamantite and runite bars shorten in product names).
@@ -33,8 +35,6 @@ pub const BAR_PREFIX: [(&str, &str); 6] = [("bronze_bar", "bronze"), ("iron_bar"
 pub const COLUMNS: [&[&str]; 4] = [&["dagger", "sword", "scimitar", "longsword", "2h_sword"], &["axe", "mace", "warhammer", "battleaxe"], &["chainbody", "platelegs", "plateskirt", "platebody"], &["med_helm", "full_helm", "sq_shield", "kiteshield"]];
 /// Highest platebody at each floor (catalogue §5.7 P1): product, level.
 pub const PLATEBODIES: [(&str, i64); 6] = [("bronze_platebody", 18), ("iron_platebody", 33), ("steel_platebody", 48), ("mithril_platebody", 68), ("adamant_platebody", 88), ("rune_platebody", 99)];
-const ITEM_TICKS: u64 = 40;
-
 /// F2P smith recipe making `product` (members excluded).
 pub fn smith_recipe(product: &str) -> Option<knowledge::recipes::Recipe> {
     knowledge::recipes::making(product, Some("smith")).into_iter().find(|entry| entry.members == Some(false))
@@ -59,8 +59,18 @@ pub fn smith_spot(product: &str) -> Option<(u8, u8)> {
     COLUMNS.iter().enumerate().find_map(|(column, cells)| cells.iter().position(|cell| *cell == suffix).map(|slot| (column as u8 + 1, slot as u8)))
 }
 
-/// Smith banked loads in the open session: `smith [product] [count]`
-/// (highest platebody by level when omitted, 0 = forever).
+/// Items the order still asks for: `--want <product> N` left (units over
+/// the product's yield per item, nails 2), `u32::MAX` without one.
+pub fn items_wanted(bot: &Bot, state: &CycleState, spec: &TaskSpec, product: u16, yield_each: u32) -> u32 {
+    let Some(goal) = state.want_goal(bot, spec).filter(|goal| goal.obj == product) else { return u32::MAX };
+    let held = pack_total(bot, product).saturating_add(crate::kit::pack::banked_usable(bot, product));
+    goal.held.saturating_sub(held).div_ceil(yield_each.max(1))
+}
+
+/// Smith banked loads in the open session: `smith [product] [count]
+/// [--want <product> N] [--site x,z,level]` (highest platebody by level
+/// when omitted, 0 = forever). Bars and the hammer come from the bank;
+/// the order's want caps every Make press.
 pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("smith", &rest)?;
@@ -76,39 +86,48 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let product_name = resource.as_deref().unwrap_or_else(|| product_for_level(level));
     let recipe = smith_recipe(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smith recipe makes {product_name:?} at {:?}", bot.position())))?;
     if level < recipe.level {
-        return Err(crate::kit::cycle::blocked_level("smithing", i64::from(recipe.level)));
+        return Err(crate::kit::cycle::blocked_level("smithing", recipe.level));
     }
     let (bar_name, bars_each) = recipe.inputs.first().ok_or_else(|| ScriptError::Usage(format!("smith {product_name} has no bar input at {:?}", bot.position())))?;
-    let bars_each = *bars_each as u32;
-    let (column, slot) = smith_spot(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smithing column cell makes {product_name:?} at {:?}", bot.position())))?;
+    let bars_each = (*bars_each as u32).max(1);
+    let yield_each = recipe.outputs.first().map(|(_, count)| *count as u32).unwrap_or(1).max(1);
+    let cell = smith_spot(product_name).ok_or_else(|| ScriptError::Usage(format!("no F2P smithing column cell makes {product_name:?} at {:?}", bot.position())))?;
     let bar = obj_id(bot, bar_name)?;
     let hammer = obj_id(bot, HAMMER)?;
     let product = obj_id(bot, product_name)?;
+    let post = anvil_post(spec.site, bot.world.x, bot.world.z, bot.world.level).ok_or_else(|| ScriptError::Usage(format!("no anvil post for site {:?} from {:?}", spec.site, bot.position())))?;
+    bot.log(&format!("anvil post {} at ({},{})", post.loc, post.x, post.z));
     let mut bank = nearest_bank(bot)?;
-    let post = knowledge::stations::nearest_station("anvil", bank.x, bank.z, bank.level).ok_or_else(|| ScriptError::Usage(format!("no anvil post near bank at {:?}", bot.position())))?;
-    bot.log(&format!("anvil post at ({},{})", post.x, post.z));
+    // The hammer and a part-set of bars ride every bank trip.
     let mut keep_smith: Vec<u16> = vec![bar, hammer];
     keep_smith.extend(task_keep.iter().copied());
-    restock(bot, &bank, &keep_smith, bar, hammer, bars_each, bar_name)?;
+    let forge = Forge { bar, hammer, bars_each, bar_name };
+    let first_due = items_wanted(bot, &CycleState::begin(bot, &spec), &spec, product, yield_each);
+    restock(bot, &bank, &keep_smith, &forge, first_due)?;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         if pack_total(step_bot, bar) < bars_each || pack_total(step_bot, hammer) == 0 {
-            restock(step_bot, &bank, &keep_smith, bar, hammer, bars_each, bar_name)?;
+            let due = items_wanted(step_bot, state, &spec, product, yield_each);
+            restock(step_bot, &bank, &keep_smith, &forge, due)?;
         }
         let made_before = pack_total(step_bot, product);
-        while pack_total(step_bot, bar) >= bars_each && free_slots(step_bot) > 0 {
-            match smith_one(step_bot, bar_name, product, column, slot) {
+        while poll_stop(step_bot, state, &spec).is_none() {
+            let (button, items) = make_choice(pack_total(step_bot, bar) / bars_each, items_wanted(step_bot, state, &spec, product, yield_each));
+            if items == 0 {
+                break;
+            }
+            match smith_batch(step_bot, &post, bar, product, cell, button) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died smithing, restocking to retry");
                     return Ok(StepControl::Continue);
                 }
                 Err(error) => return Err(error),
-                Ok(()) => {}
+                Ok(made) => step_bot.log(&format!("ok smithed {made} {product_name} (make {items})")),
             }
         }
         let made = pack_total(step_bot, product).saturating_sub(made_before);
         bank = nearest_bank(step_bot)?;
-        bank_trip(step_bot, &bank, &task_keep, 0)?;
+        bank_trip(step_bot, &bank, &keep_smith, 0)?;
         step_bot.log(&format!("ok load {} smithed {made} {product_name} (smithing={level})", state.units() + 1));
         Ok(StepControl::UnitDone)
     })
@@ -124,57 +143,106 @@ pub fn restock_order(hammer_carried: bool, free: u32, bars_each: u32) -> (u32, u
     (hammers, room / each * each)
 }
 
+/// The bar side of a smithing run: bar and hammer ids, bars per item.
+struct Forge<'a> {
+    bar: u16,
+    hammer: u16,
+    bars_each: u32,
+    bar_name: &'a str,
+}
+
+/// Bars to take out of the bank: the room's whole sets (`restock_order`)
+/// capped by the items still due, minus the bars already carried (live
+/// 2026-11-14: `--want bronze_dagger 12` took 25 bars, 13 rode home).
+pub fn bars_to_withdraw(room_bars: u32, items_due: u32, bars_each: u32, carried: u32) -> u32 {
+    let due_bars = items_due.saturating_mul(bars_each.max(1));
+    let room_total = room_bars.saturating_add(carried - carried % bars_each.max(1));
+    room_total.min(due_bars).saturating_sub(carried)
+}
+
 /// Restock bars with the hammer kept, never banked: a banked hammer comes
 /// out first (live 2026-11-13: will_field had two in the bank and blocked
 /// "missing: hammer" on every run, the brain buying more each time).
-/// Loud `blocked` when neither pack nor bank holds one, or no bar set.
-fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], bar: u16, hammer: u16, bars_each: u32, bar_name: &str) -> Result<(), ScriptError> {
+/// Bars for the items still due only. Loud `blocked` when neither pack
+/// nor bank holds a hammer, or no bar set.
+fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], forge: &Forge<'_>, items_due: u32) -> Result<(), ScriptError> {
     bank_trip(bot, bank, keep, 0)?;
-    let (hammers, bars) = restock_order(pack_total(bot, hammer) > 0, free_slots(bot) as u32, bars_each);
-    if hammers > 0 && bank_withdraw_items(bot, bank, &[hammer], hammers)? > 0 {
+    let (hammers, room_bars) = restock_order(pack_total(bot, forge.hammer) > 0, free_slots(bot) as u32, forge.bars_each);
+    if hammers > 0 && bank_withdraw_items(bot, bank, &[forge.hammer], hammers)? > 0 {
         bot.log("ok hammer restored from bank");
     }
-    if pack_total(bot, hammer) == 0 {
+    if pack_total(bot, forge.hammer) == 0 {
         return Err(ScriptError::Blocked { missing: vec![HAMMER.to_string()] });
     }
-    bank_withdraw_items(bot, bank, &[bar], bars)?;
-    if pack_total(bot, bar) < bars_each {
-        return Err(ScriptError::Blocked { missing: vec![bar_name.to_string()] });
-    }
-    Ok(())
-}
-
-/// Forge one item: bar on the nearest anvil, Make press on the product
-/// cell, wait out the bar consumption. A missing modal is loud (wrong
-/// post, or a Doric anvil before Doric's Quest).
-fn smith_one(bot: &mut Bot, bar_name: &str, product: u16, column: u8, slot: u8) -> Result<(), ScriptError> {
-    let had = pack_total(bot, product);
-    use_item_on_loc(bot, bar_name, &ANVILS)?;
-    let target = bot.world.ticks + ITEM_TICKS;
-    while bot.world.ticks < target && bot.world.modal.is_none() {
-        bot.pump(2)?;
-    }
-    if bot.world.modal.is_none() {
-        return Err(ScriptError::Failed(format!("smithing interface never opened at {:?} (Doric anvils need Doric's Quest)", bot.position())));
-    }
-    let column_com = (bot.tables.com_id)(&format!("smithing:column{column}")).ok_or_else(|| ScriptError::Usage(format!("unknown smithing column{column} at {:?}", bot.position())))?;
-    bot.inv_button(1, product, slot, column_com)?;
-    let target = bot.world.ticks + ITEM_TICKS;
-    while bot.world.ticks < target && pack_total(bot, product) <= had {
-        bot.pump(2)?;
-    }
-    if bot.world.modal.is_some() {
-        bot.close_modal()?;
-    }
-    if pack_total(bot, product) <= had {
-        return Err(ScriptError::Failed(format!("nothing smithed at {:?}", bot.position())));
+    let pulled = bars_to_withdraw(room_bars, items_due, forge.bars_each, pack_total(bot, forge.bar));
+    bank_withdraw_items(bot, bank, &[forge.bar], pulled)?;
+    if pack_total(bot, forge.bar) < forge.bars_each {
+        return Err(ScriptError::Blocked { missing: vec![forge.bar_name.to_string()] });
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{product_for_level, restock_order, smith_recipe, smith_spot, ANVILS, BAR_PREFIX, COLUMNS, HAMMER, PLATEBODIES};
+    use crate::kit::anvil::{anvil_post, anvil_refusal, make_choice};
+    use super::{bars_to_withdraw, product_for_level, restock_order, smith_recipe, smith_spot, ANVILS, BAR_PREFIX, COLUMNS, HAMMER, PLATEBODIES};
+
+    /// One Make press per anvil visit (`smithing.rs2`: `inv_button1/2/3`
+    /// = 1/5/10): the largest press within the bars AND the order, never
+    /// past `--want` (live 2026-11-13: will_field paid 27 ticks a dagger,
+    /// one bar-on-anvil per item).
+    #[test]
+    fn make_press_is_the_largest_within_bars_and_order() {
+        assert_eq!(make_choice(25, u32::MAX), (3, 10), "a full load chains ten");
+        assert_eq!(make_choice(7, u32::MAX), (2, 5));
+        assert_eq!(make_choice(4, u32::MAX), (1, 1));
+        assert_eq!(make_choice(25, 1), (1, 1), "--want 1 makes one");
+        assert_eq!(make_choice(25, 6), (2, 5), "then one more press of 1");
+        assert_eq!(make_choice(0, 10), (1, 0), "no bar set, nothing due");
+        assert_eq!(make_choice(10, 0), (1, 0), "order met, nothing due");
+    }
+
+    /// Live 2026-11-14 (bh99tw2f): `--site 3248,3404,0` with the bot at the
+    /// Al Kharid bank, the old run searched anvils 150 tiles around the bot
+    /// ("no loc anvil near (3269,3167)"). The post is the brain's site
+    /// (Doric's anvil too: the brain checked the quest); without a site,
+    /// the nearest plain anvil, never Doric's nor the Wilderness one.
+    #[test]
+    fn anvil_post_is_the_site_else_the_nearest_plain_anvil() {
+        let post = anvil_post(Some((3248, 3404, 0)), 3269, 3167, 0).expect("site anvil");
+        assert_eq!((post.x, post.z, post.loc.as_str()), (3248, 3404, "anvil"));
+        let doric = anvil_post(Some((2950, 3451, 0)), 2946, 3368, 0).expect("Doric site");
+        assert_eq!(doric.loc, "doric_anvil", "the brain's Doric site is honoured");
+        let falador = anvil_post(None, 2946, 3368, 0).expect("default post");
+        assert_eq!(falador.loc, "anvil", "Falador defaults to a plain anvil, got {falador:?}");
+        let edgeville = anvil_post(None, 3094, 3491, 0).expect("default post");
+        assert!(edgeville.z < 3520, "never the Wilderness anvil by default, got {edgeville:?}");
+        let rimmington = anvil_post(None, 2960, 3200, 0).expect("default post");
+        assert_eq!((rimmington.x, rimmington.z), (2999, 3144), "south: the Rimmington-side anvil");
+    }
+
+    /// Anvil refusals end the visit typed: the brain files the quest or
+    /// the hammer, never a blind retry.
+    #[test]
+    fn anvil_refusals_are_typed() {
+        match anvil_refusal("You must complete Doric's Quest to use this anvil.") {
+            Some(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["quest:doric".to_string()]),
+            other => panic!("quest gate, got {other:?}"),
+        }
+        assert!(matches!(anvil_refusal("You need a hammer to work the metal with."), Some(crate::ScriptError::Blocked { .. })));
+        assert!(anvil_refusal("You hammer the bronze and make a dagger.").is_none());
+    }
+
+    /// Bars follow the order: 12 daggers due take 12 bars, never the 25
+    /// of the room; a part-set carried counts; no order fills the room.
+    #[test]
+    fn bars_follow_the_items_due() {
+        assert_eq!(bars_to_withdraw(25, 12, 1, 0), 12, "12 daggers, 12 bars");
+        assert_eq!(bars_to_withdraw(25, u32::MAX, 5, 0), 25, "no want: the room");
+        assert_eq!(bars_to_withdraw(25, 2, 5, 3), 7, "2 platebodies with 3 bars carried");
+        assert_eq!(bars_to_withdraw(25, 1, 5, 10), 0, "carried bars cover the order");
+        assert_eq!(bars_to_withdraw(20, u32::MAX, 5, 3), 17, "the part-set completes into whole sets");
+    }
 
     /// A banked hammer is withdrawn (one, its slot taken from the bar
     /// room); a carried one never doubles. Bars come by whole items: a

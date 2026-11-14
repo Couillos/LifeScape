@@ -171,7 +171,11 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         return;
     }
     let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else {
-        crate::logln!("brain {account}: report for unknown node {node_id}, ignored");
+        // Finished nodes retire from the graph (`lifecycle_retire`); ids
+        // are never reused, so a late report names a retired node.
+        let retired = lifescape_planner::lifecycle_retire::node_number(&node_id).is_some_and(|number| number <= lifescape_planner::max_id_number(&life));
+        let what = if retired { "retired" } else { "unknown" };
+        crate::logln!("brain {account}: report for {what} node {node_id}, ignored");
         return;
     };
     if life.nodes[index].status != NodeStatus::Active {

@@ -85,6 +85,13 @@ de la carte servie par `lifescape_nav::toll_side::derive_region` ;
 `LIFESCAPE_BLESS_TOLL_REGION=1` réécrit le fichier (voir
 `docs/navigation.md` § Péage d'Al Kharid).
 
+Forge (`recipes.json`, kind `smith`, 2026-11-14) : XP = `bar_amount ×
+xpperbar` dixièmes (`smithing.struct`, payé par `smithing_anvil`), le
+dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
+(corrigé dans `tools/gamedata-dump.mts`, test
+`smith_rows_match_the_server_tables` qui relit dbrow + struct : niveau,
+barres, unités produites (clous 2), XP).
+
 Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
 
 ## Portes d'accès (`access.rs`, 2026-11-13)

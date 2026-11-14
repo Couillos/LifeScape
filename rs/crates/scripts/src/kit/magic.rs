@@ -96,6 +96,88 @@ pub fn cast_on_held(bot: &mut Bot, spell: &str, obj: u16) -> Result<(), ScriptEr
     Ok(())
 }
 
+/// Ticks to wait, from the frame showing a cast's effect, before sending
+/// the next `OPHELDT`. `p_delay(n)` keeps the caster busy until
+/// `tick + 1 + n`, `OpHeldTHandler` silently drops a cast decoded while
+/// delayed, and `World` decodes client input BEFORE it clears the delay
+/// that tick: the next send must be decoded at `tick + 2 + n`, i.e. sent
+/// `n + 1` frames after the effect. High alchemy `p_delay(3)` (a 5-tick
+/// cycle), low alchemy, superheat and the enchants `p_delay(1)` (3),
+/// bones to bananas `p_delay(2)`. Live 2026-11-14 (admin, 40 high alchs):
+/// one send per cast.
+pub fn cast_cooldown(spell: &str) -> u64 {
+    match spell {
+        "highlvl_alchemy" => 4,
+        "bones_to_bananas" | "telekinetic_grab" => 3,
+        _ => 2,
+    }
+}
+
+/// Sends of one cast before it fails loud (a send swallowed by a server
+/// delay or a lost frame is sent again, never waited out for 40 ticks).
+pub const CAST_SENDS: u32 = 3;
+/// Ticks one send gets to show its effect before the next send.
+pub const CAST_LAND_TICKS: u64 = 8;
+
+/// Paces casts on carried items: the next send waits out the server delay
+/// the last landed cast left, a send that shows no effect within
+/// `CAST_LAND_TICKS` is sent again (live 2026-11-14: the alchemy loop
+/// recast the tick the coins landed, the server dropped it as delayed and
+/// the run failed "never landed" 40 ticks later, one cast per run).
+pub struct CastPacer {
+    spell: String,
+    ready_at: u64,
+}
+
+impl CastPacer {
+    pub fn new(spell: &str) -> CastPacer {
+        CastPacer { spell: spell.to_string(), ready_at: 0 }
+    }
+
+    /// Tick from which the server takes the next cast.
+    pub fn ready_at(&self) -> u64 {
+        self.ready_at
+    }
+
+    /// Note a cast that landed at `tick`.
+    pub fn landed_at(&mut self, tick: u64) {
+        self.ready_at = tick + cast_cooldown(&self.spell);
+    }
+
+    /// Wait out the last cast's server delay before any other click: a
+    /// booth click sent while delayed is dropped like a cast (live
+    /// 2026-11-14: the bank trip right after the 198th low alchemy was
+    /// "refused from every stand").
+    pub fn settle(&self, bot: &mut Bot) -> Result<(), ScriptError> {
+        while bot.world.ticks < self.ready_at {
+            bot.pump(1)?;
+        }
+        Ok(())
+    }
+
+    /// Cast on the carried `obj` until `landed` reads its effect: waits
+    /// for the cooldown, sends, re-sends up to `CAST_SENDS`. Failed loud
+    /// (with the last server line) when no send lands.
+    pub fn cast_held(&mut self, bot: &mut Bot, obj: u16, landed: impl Fn(&Bot) -> bool) -> Result<(), ScriptError> {
+        while bot.world.ticks < self.ready_at {
+            bot.pump(1)?;
+        }
+        for _ in 0..CAST_SENDS {
+            cast_on_held(bot, &self.spell, obj)?;
+            let deadline = bot.world.ticks + CAST_LAND_TICKS;
+            while bot.world.ticks < deadline {
+                bot.pump(1)?;
+                if landed(bot) {
+                    self.landed_at(bot.world.ticks);
+                    return Ok(());
+                }
+            }
+        }
+        let last = bot.world.messages.last().cloned().unwrap_or_default();
+        Err(ScriptError::Failed(format!("{} never landed after {CAST_SENDS} sends at {:?} (last line {last:?})", self.spell, bot.position())))
+    }
+}
+
 /// Cast on a ground item: send `OPOBJT` at its tile. The caller pumps
 /// to its own observable (the item leaving the ground).
 pub fn cast_on_ground(bot: &mut Bot, spell: &str, x: i32, z: i32, obj: u16) -> Result<(), ScriptError> {

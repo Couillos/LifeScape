@@ -73,6 +73,32 @@ pub fn effective_state(life: &Life, live: &Value) -> GraphState {
     }
 }
 
+/// Root causes named in the stuck line (the rest is counted).
+const SUMMARY_ROOTS: usize = 3;
+/// Longest error quoted per root in the stuck line.
+const SUMMARY_ERROR_CHARS: usize = 160;
+
+/// The stuck line's tail, bounded whatever the graph holds: the count,
+/// how many fell by cascade (`dependency nX abandoned`), and the first
+/// root causes (live 2026-11-14, bst29bh9: ~90 `nX=dependency nY
+/// abandoned` pairs on one line).
+pub fn stuck_summary(life: &Life, abandoned: &[String]) -> String {
+    let nodes: Vec<&lifescape_planner::Node> = life.nodes.iter().filter(|node| abandoned.contains(&node.id)).collect();
+    let cascade = nodes.iter().filter(|node| node.last_error.starts_with("dependency ")).count();
+    let roots: Vec<String> = nodes
+        .iter()
+        .filter(|node| !node.last_error.starts_with("dependency "))
+        .map(|node| {
+            let error: String = node.last_error.replace(['\n', '\r'], " ").chars().take(SUMMARY_ERROR_CHARS).collect();
+            format!("{}={}", node.id, if error.is_empty() { "?".to_string() } else { error })
+        })
+        .collect();
+    let shown = roots.iter().take(SUMMARY_ROOTS).cloned().collect::<Vec<_>>().join(" | ");
+    let more = roots.len().saturating_sub(SUMMARY_ROOTS);
+    let more = if more > 0 { format!(" (+{more} more roots)") } else { String::new() };
+    format!("{} nodes ({cascade} by cascade); roots: {}{more}", nodes.len(), if shown.is_empty() { "?" } else { shown.as_str() })
+}
+
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
 }
@@ -101,13 +127,7 @@ pub(crate) fn on_stuck(life: &mut Life, live: &Value, abandoned: &[String]) -> b
     match spell(&life.history) {
         Spell::Final => retry_draw(life, live).1,
         Spell::Fresh => {
-            let causes: Vec<String> = life
-                .nodes
-                .iter()
-                .filter(|node| abandoned.contains(&node.id))
-                .map(|node| format!("{}={}", node.id, if node.last_error.is_empty() { "?" } else { node.last_error.as_str() }))
-                .collect();
-            crate::logln!("brain {}: graph stuck, nothing left to run; abandoned: {}", life.account, causes.join(" | "));
+            crate::logln!("brain {}: graph stuck, nothing left to run; abandoned: {}", life.account, stuck_summary(life, abandoned));
             push_history(life, "graph", "stuck");
             // A goal the bot already meets is done, whatever older
             // abandoned nodes linger in the graph.
@@ -193,6 +213,40 @@ mod tests {
         assert!(!goal_met(&GoalKind::MakeMoney, &live), "non-skill goals answer from the graph");
     }
 
+    /// bst29bh9 (live 2026-11-14): ~90 abandoned nodes, one cascade line
+    /// each, on one log line. The line names the count and the roots only.
+    #[test]
+    fn the_stuck_line_stays_bounded() {
+        use lifescape_planner::{Life, Node, NodeKind, NodeStatus};
+        let mut nodes = Vec::new();
+        for number in 1..=200 {
+            let mut node = Node::new(&format!("n{number}"), NodeKind::ObtainItems { item: "logs".to_string(), count: 1 }, Vec::new(), 1);
+            node.status = NodeStatus::Abandoned;
+            node.last_error = if number % 40 == 1 { format!("Failed: {}", "x".repeat(500)) } else { format!("dependency n{} abandoned", number - 1) };
+            nodes.push(node);
+        }
+        let ids: Vec<String> = nodes.iter().map(|node| node.id.clone()).collect();
+        let life = Life {
+            schema: 1,
+            account: "b0".to_string(),
+            created_at: 0,
+            seed: 0,
+            profile: lifescape_planner::Profile::new(false, 0.5, 0.5, 0, lifescape_planner::Archetype::Producer),
+            goal: GoalKind::MakeMoney,
+            nodes,
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        let line = super::stuck_summary(&life, &ids);
+        assert!(line.starts_with("200 nodes (195 by cascade); roots: n1=Failed: "), "{line}");
+        assert!(line.ends_with("(+2 more roots)"), "{line}");
+        assert!(line.len() < 700, "bounded: {} chars", line.len());
+    }
+
     /// bb4v5d9m (live 2026-11-13): an old abandoned obtain plus a done
     /// "equip melee" step is a finished goal, not a stuck spell; with the
     /// goal's own step abandoned the spell stands.
@@ -216,6 +270,7 @@ mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         };
         let live = object(vec![]);
         assert_eq!(super::effective_state(&life, &live), GraphState::Finished);

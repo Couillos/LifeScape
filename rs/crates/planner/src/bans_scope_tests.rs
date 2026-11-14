@@ -39,6 +39,7 @@ fn burnt_chain(goal: GoalKind, ironman: bool) -> Life {
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

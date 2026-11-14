@@ -78,6 +78,32 @@ pub fn nearest_station(kind: &str, x: i64, z: i64, level: i64) -> Option<Station
     best.map(|(_, entry)| entry)
 }
 
+/// Server `forceapproach` of a station loc (`*.loc` configs): the one
+/// side, unrotated, the op is accepted from; `None` = any side. The dumps
+/// do not carry it; `force_approach_matches_the_server_configs` rereads
+/// the content for every station loc.
+pub fn force_approach(loc: &str) -> Option<&'static str> {
+    match loc {
+        "range" | "potterywheel" | "potteryoven" | "furnace1" | "furnace2" => Some("east"),
+        "spinningwheel" => Some("south"),
+        "doric_anvil" => Some("north"),
+        _ => None,
+    }
+}
+
+/// Engine block-access flags of a station loc, unrotated (north 1, east
+/// 2, south 4, west 8 set = side refused; `LocConfig.ts` packs
+/// `forceapproach=east` as `0b1111 & !0b0010`). 0 = any side.
+pub fn block_access(loc: &str) -> u32 {
+    match force_approach(loc) {
+        Some("north") => 0b1110,
+        Some("east") => 0b1101,
+        Some("south") => 0b1011,
+        Some("west") => 0b0111,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{all_stations, nearest_station, station_kinds, stations_of};
@@ -150,5 +176,41 @@ mod tests {
                 assert!(!stations_of(station).is_empty(), "station {station} placed for {}", entry.source);
             }
         }
+    }
+
+    /// Every placed station loc's `forceapproach` is the server's (live
+    /// 2026-11-14: Al Kharid smelting walked the west, south and north
+    /// sides of `furnace1`, east-only, for ~140 ticks a load).
+    #[test]
+    fn force_approach_matches_the_server_configs() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let scripts = manifest.ancestors().map(|dir| dir.join("lostcity/content/scripts")).find(|candidate| candidate.is_dir()).expect("../lostcity checkout next to LifeScape");
+        let names: std::collections::BTreeSet<String> = all_stations().into_iter().map(|entry| entry.loc).collect();
+        let mut server: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        let mut pending = vec![scripts];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("content dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "loc") {
+                    let mut current = String::new();
+                    for line in std::fs::read_to_string(&path).expect("loc config").lines().map(str::trim) {
+                        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+                            current = name.to_string();
+                        } else if let Some(side) = line.strip_prefix("forceapproach=") {
+                            if names.contains(&current) {
+                                server.insert(current.clone(), side.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for name in &names {
+            assert_eq!(super::force_approach(name).map(str::to_string), server.get(name).cloned(), "{name} forceapproach");
+        }
+        assert_eq!(super::block_access("furnace1"), 0b1101, "east open only");
+        assert_eq!(super::block_access("anvil"), 0, "any side");
     }
 }

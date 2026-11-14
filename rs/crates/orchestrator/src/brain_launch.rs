@@ -349,7 +349,17 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // bid waits for a producer (never a worker held on an empty book).
     if lifescape_planner::gear_ladder::is_gear_obtain(&life, position) {
         ctx.coin_share_pct = Some(lifescape_planner::GEAR_SHARE_PCT);
-        if lifescape_planner::gear_ladder::withdraw_due(&ctx) {
+        // A shop-only piece (D-A) never has a market seller: the step walks
+        // to the shop, it is never withdrawn for an empty book.
+        let gear_item = match &life.nodes[position].kind {
+            NodeKind::ObtainItems { item, .. } => Some(item.clone()),
+            _ => None,
+        };
+        let shop_piece = gear_item.as_deref().is_some_and(crate::brain_gear::shop_only);
+        if !shop_piece && lifescape_planner::gear_ladder::withdraw_due(&ctx) {
+            if let Some(item) = &gear_item {
+                crate::brain_gear::note_withdrawn(&job.account, item);
+            }
             let removed = lifescape_planner::withdraw_gear_step(&mut life, position);
             crate::logln!("brain {}: gear step {} withdrawn: no seller, the standing bid waits", job.account, removed.join(", "));
             for id in &removed {

@@ -108,6 +108,14 @@ pub(crate) fn note_expired_bans(life: &mut Life) -> bool {
             changed = true;
         }
     }
+    // A ban caused by a quest the bot has since finished lifts at once
+    // (runecraft and mining banned on Rune Mysteries, 2026-11-14).
+    let done = crate::brain_rescue::quests_done(life);
+    for skill in lifescape_planner::quest_lifted_bans(&life.history, &ticks_since, &done) {
+        crate::logln!("brain {}: skill {skill} ban lifted: its quest is complete ({})", life.account, done.join(","));
+        push_history(life, "goal", &unban_entry(&skill));
+        changed = true;
+    }
     changed
 }
 
@@ -248,6 +256,7 @@ mod tests {
             // The explicit generalist keeps the plain lowest-skill draw.
             ambition: new_ambition(GENERALIST, "operator", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 0, &[], Stamp { tick: 0, secs: 0 }).ok(),
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

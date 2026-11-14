@@ -1,7 +1,9 @@
 //! Alchemy: low (21) and high (55) alchemy on stackable loot
 //! (catalogue §5.10). Declarations (levels, runes, alch values) come
 //! from the dumps and are unit-tested; runes and items are stocked from
-//! the pack and the known bank (`kit::spell_load`).
+//! the pack and the known bank (`kit::spell_load`), the items noted (one
+//! slot: the server alchs a banknote at its base cost), casts paced by
+//! the server delay (`kit::magic::CastPacer`: high a 5-tick cycle, low 3).
 //!
 //! Process: poste aucun (sort) · action alchimie · interface sort ·
 //! intrants objet + nature + feu · produits pièces.
@@ -11,17 +13,30 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, wield_staff_for};
+use crate::kit::magic::{wield_staff_for, CastPacer};
 use crate::kit::pack::{obj_id, pack_total};
-use crate::kit::spell_load::{run_casts, SpellLoad};
+use crate::kit::spell_load::{note_of, run_casts, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
 pub const MAGIC_STAT: u8 = 6;
 pub const LOW_SPELL: &str = "lowlvl_alchemy";
 pub const HIGH_SPELL: &str = "highlvl_alchemy";
-/// Ticks to wait out one cast (server delays plus the consume tick).
-pub const CAST_TICKS: u64 = 40;
+pub const LOW_LEVEL: i64 = 21;
+pub const HIGH_LEVEL: i64 = 55;
+
+/// The alchemy spell of a run and its level: the order's `--spell` when
+/// it names one of the two, else high from 55, low below. Any other
+/// `--spell` is a usage error (never a silent swap).
+pub fn alch_spell(ordered: Option<&str>, level: i64) -> Result<(&'static str, i64), ScriptError> {
+    match ordered {
+        Some(LOW_SPELL) => Ok((LOW_SPELL, LOW_LEVEL)),
+        Some(HIGH_SPELL) => Ok((HIGH_SPELL, HIGH_LEVEL)),
+        Some(other) => Err(ScriptError::Usage(format!("alchemy casts {LOW_SPELL} or {HIGH_SPELL}, not {other:?}"))),
+        None if level >= HIGH_LEVEL => Ok((HIGH_SPELL, HIGH_LEVEL)),
+        None => Ok((LOW_SPELL, LOW_LEVEL)),
+    }
+}
 
 /// Runes of a spell from the dump (case-insensitive debugname).
 pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
@@ -33,11 +48,12 @@ pub fn alch_value(name: &str) -> Option<(i64, i64)> {
     knowledge::objs_by_name(name).into_iter().find(|entry| entry.alch_high > 0).map(|entry| (entry.alch_high, entry.alch_low))
 }
 
-/// Alch a banked item in the open session: `alchemy <item> [count]`
-/// (low below 55, high from 55; count omitted or 0 = all held). Runes
-/// and items short in pack + bank fail `Blocked` by name (the brain
-/// files obtain tasks); one cast consumes the item and pays ~60% of its
-/// value in coins.
+/// Alch a banked item in the open session: `alchemy <item> [count]
+/// [--spell lowlvl_alchemy|highlvl_alchemy] [--want coins N] [--level
+/// magic N]` (low below 55, high from 55; count omitted or 0 = all held).
+/// Runes and items short in pack + bank fail `Blocked` by name (the
+/// brain files obtain tasks); one cast consumes the item (base or
+/// banknote) and pays 60% (high) or 40% (low) of its value in coins.
 pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("alchemy", &rest)?;
@@ -48,13 +64,13 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
     let item_name = resource.as_deref().ok_or_else(|| ScriptError::Usage(format!("alchemy <item> [count], no item at {:?}", bot.position())))?;
-    let high = level >= 55;
-    let spell = if high { HIGH_SPELL } else { LOW_SPELL };
-    let need = if high { 55 } else { 21 };
+    let (spell, need) = alch_spell(spec.spell.as_deref(), level)?;
+    let high = spell == HIGH_SPELL;
     if level < need {
-        return Err(crate::kit::cycle::blocked_level("magic", i64::from(need)));
+        return Err(crate::kit::cycle::blocked_level("magic", need));
     }
     let item = obj_id(bot, item_name)?;
+    let note = note_of(item);
     let coins = obj_id(bot, "coins")?;
     let runes = spell_runes(spell);
     if runes.is_empty() {
@@ -64,26 +80,48 @@ pub fn run_alchemy(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let worth = if high { worth_high } else { worth_low };
     // Pack, then the known bank (`kit::spell_load`): a fire staff pays the
     // fire runes, the coins are banked between loads.
-    let load = SpellLoad::new(spell, runes, vec![(item_name.to_string(), 1)]);
+    let mut load = SpellLoad::new(spell, runes, vec![(item_name.to_string(), 1)]);
+    load.noted_target = true;
     wield_staff_for(bot, &load.runes)?;
-    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| alch_one(cast_bot, spell, item, coins))?;
+    let mut pacer = CastPacer::new(spell);
+    // A dry pack goes to the bank next: the click waits out the cast.
+    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| {
+        alch_one(cast_bot, &mut pacer, item, note, coins)?;
+        if load.pack_casts(cast_bot) == 0 {
+            pacer.settle(cast_bot)?;
+        }
+        Ok(())
+    })?;
+    pacer.settle(bot)?;
     bot.log(&format!("ok {spell} x{done} on {item_name} (~{worth} coins each)"));
+    // The coins go to the bank (runes, targets, staves and the order's
+    // keep stay carried): a pack of alch gold is never walked around.
+    if pack_total(bot, coins) > 0 {
+        let mut kept = keep.clone();
+        kept.extend(load.carried_ids(bot));
+        kept.extend(crate::kit::magic::STAVES.iter().filter_map(|(staff, _)| obj_id(bot, staff).ok()));
+        let bank = crate::kit::bank::nearest_bank(bot)?;
+        crate::kit::bank::bank_trip(bot, &bank, &kept, 0)?;
+    }
     stop.map_or(Ok(0), crate::kit::cycle::exit_code)
 }
 
-/// One cast: the item leaves (or the coins grow) within the budget.
-fn alch_one(bot: &mut Bot, spell: &str, item: u16, coins: u16) -> Result<(), ScriptError> {
-    let had_item = pack_total(bot, item);
-    let had_coins = pack_total(bot, coins);
-    cast_on_held(bot, spell, item)?;
-    let target = bot.world.ticks + CAST_TICKS;
-    while bot.world.ticks < target {
-        bot.pump(2)?;
-        if pack_total(bot, item) < had_item || pack_total(bot, coins) > had_coins {
-            return Ok(());
-        }
+/// The carried form a cast targets: the base object while the pack holds
+/// one, else its banknote.
+pub fn cast_target(bot: &Bot, item: u16, note: Option<u16>) -> u16 {
+    match note {
+        Some(noted) if pack_total(bot, item) == 0 && pack_total(bot, noted) > 0 => noted,
+        _ => item,
     }
-    Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
+}
+
+/// One cast: the target leaves (or the coins grow), paced by the server
+/// delay of the previous cast.
+fn alch_one(bot: &mut Bot, pacer: &mut CastPacer, item: u16, note: Option<u16>, coins: u16) -> Result<(), ScriptError> {
+    let target = cast_target(bot, item, note);
+    let had_target = pack_total(bot, target);
+    let had_coins = pack_total(bot, coins);
+    pacer.cast_held(bot, target, |seen| pack_total(seen, target) < had_target || pack_total(seen, coins) > had_coins)
 }
 
 #[cfg(test)]
@@ -183,6 +221,52 @@ mod tests {
         assert_eq!(high_runes, vec![("firerune".to_string(), 5), ("naturerune".to_string(), 1)]);
         assert!(spell_runes("no_such_spell").is_empty(), "unknown spell has no runes");
         assert_eq!(MAGIC_STAT, 6, "provenance magic id");
+    }
+
+    /// The spell: the order's `--spell` when it names an alchemy, else
+    /// high from 55, low from 21 (below: the level gap blocks typed).
+    #[test]
+    fn spell_follows_the_order_then_the_level() {
+        use super::alch_spell;
+        assert_eq!(alch_spell(None, 54).expect("low"), (LOW_SPELL, 21));
+        assert_eq!(alch_spell(None, 55).expect("high"), (HIGH_SPELL, 55));
+        assert_eq!(alch_spell(Some(LOW_SPELL), 80).expect("ordered low"), (LOW_SPELL, 21), "the brain's spell wins");
+        assert_eq!(alch_spell(Some(HIGH_SPELL), 30).expect("ordered high"), (HIGH_SPELL, 55), "level checked by the caller");
+        assert!(alch_spell(Some("superheat_item"), 60).is_err(), "never a silent swap");
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (40, 0));
+        fund_pack(&mut bot, &[(0, "yew_logs", 1), (1, "naturerune", 1), (2, "firerune", 5)]);
+        match run_alchemy(&mut bot, &["yew_logs".to_string(), "--spell".to_string(), HIGH_SPELL.to_string()]) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["level:magic:55".to_string()]),
+            other => panic!("high alchemy at 40 blocks on the level, got {other:?}"),
+        }
+    }
+
+    /// The cast takes the base form while the pack holds one, then the
+    /// notes (the server alchs a banknote at its base cost).
+    #[test]
+    fn cast_target_prefers_the_base_then_the_note() {
+        use super::cast_target;
+        let mut bot = offline_bot();
+        let logs = obj_id(&bot, "yew_logs").expect("logs");
+        let note = crate::kit::spell_load::note_of(logs).expect("yew logs note");
+        fund_pack(&mut bot, &[(0, "cert_yew_logs", 20)]);
+        assert_eq!(cast_target(&bot, logs, Some(note)), note, "notes only");
+        fund_pack(&mut bot, &[(0, "cert_yew_logs", 20), (1, "yew_logs", 1)]);
+        assert_eq!(cast_target(&bot, logs, Some(note)), logs, "base first");
+        assert_eq!(cast_target(&bot, logs, None), logs);
+    }
+
+    /// High alchemy is a 5-tick cycle (`p_delay(3)`), low 3: the
+    /// next cast waits that out instead of being dropped as delayed.
+    #[test]
+    fn casts_are_paced_by_the_server_delay() {
+        use crate::kit::magic::{cast_cooldown, CastPacer};
+        assert_eq!(cast_cooldown(HIGH_SPELL), 4);
+        assert_eq!(cast_cooldown(LOW_SPELL), 2);
+        let mut pacer = CastPacer::new(HIGH_SPELL);
+        pacer.landed_at(100);
+        assert_eq!(pacer.ready_at(), 104);
     }
 
     /// Alch values come from the object dump, junk never alchs.

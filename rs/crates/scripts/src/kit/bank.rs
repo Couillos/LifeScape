@@ -22,9 +22,14 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 /// Past 3 hurts the trip aborts loudly instead of walking into death.
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
+/// Toll-fence search radius of the bank pick: the Wizards' Tower (3103)
+/// sits 165 tiles west of the Al Kharid fence (3268); at 150 the fence
+/// went unseen and t48 walked from the tower basement to Al Kharid.
+const BANK_FENCE_RADIUS: i32 = 200;
 
 /// Nearest free (non-members) bank booth by Manhattan distance, on this
-/// level when one stands there, else on the surface. Toll-fence aware: banks on
+/// level, else on the ground floor (no bank upstairs: windmill top), a
+/// dungeon tile ranked from the surface above it. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
 /// Needs the toll gate's fence line, served by the nav service.
 ///
@@ -36,11 +41,15 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     // On Karamja (no F2P bank) every bank is across the boat: rank them
     // from the Port Sarim dock it lands on.
     let (anchor_x, anchor_z, _) = knowledge::access::mainland_anchor(i64::from(here_x), i64::from(here_z), i64::from(bot.world.level));
-    let (here_x, here_z) = (anchor_x as i32, anchor_z as i32);
+    let (here_x, here_z) = surface_anchor(anchor_x as i32, anchor_z as i32);
+    // No bank on this level (windmill top, castle floors): the ground
+    // floor's banks, reached through the planner's stairs and ladders.
+    let level = i64::from(bot.world.level);
+    let level = if knowledge::banks::all_banks().iter().any(|bank| !bank.members && bank.level == level) { level } else { 0 };
     // Same discipline as `toll_gate_x`: a down service leaves the pick
     // unfenced (logged) instead of aborting the run; the walk itself
     // still fails loud with `nav-down`.
-    let gate_x = match bot.toll_fence(here_x, here_z, bot.world.level, 150) {
+    let gate_x = match bot.toll_fence(here_x, here_z, level as i32, BANK_FENCE_RADIUS) {
         Ok(gate) => gate.map(|(gate_x, _, _)| gate_x),
         Err(error) => {
             bot.log(&format!("toll fence unavailable ({error}), picking unfenced"));
@@ -53,18 +62,13 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     // (Draynor's, beside the young dark wizards, for combat 14 and
     // under) is never picked while a safe one exists on this level.
     let threats = crate::kit::danger::threats(bot);
-    // Same level when a free booth stands there, else the surface: no F2P
-    // bank stands above the ground in rev 274, and `bank_trip` rides the
-    // stairs itself (live 2026-11-14: bots on the mill top at
-    // (3165,3306,2) failed every task with "no reachable bank").
-    let here_level = i64::from(bot.world.level);
-    let level_has_bank = knowledge::banks::all_banks().iter().any(|bank| !bank.members && bank.level == here_level);
-    let candidates: Vec<knowledge::banks::Bank> = knowledge::banks::all_banks()
-        .into_iter()
-        .filter(|bank| !bank.members && (!level_has_bank || bank.level == here_level))
-        .collect();
-    let safe_exists = candidates.iter().any(|bank| crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none());
-    for bank in candidates {
+    let safe_exists = knowledge::banks::all_banks().iter().any(|bank| {
+        !bank.members && bank.level == level && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()
+    });
+    for bank in knowledge::banks::all_banks() {
+        if bank.members || bank.level != level {
+            continue;
+        }
         if safe_exists && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_some() {
             continue;
         }
@@ -82,6 +86,16 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     best.or(fallback)
         .map(|(_, bank)| bank)
         .ok_or_else(|| ScriptError::Failed(format!("no reachable bank from {:?}", bot.position())))
+}
+
+/// Surface point a bank is ranked from: a dungeon tile (z at or past
+/// 6400, the engine's underground offset) ranks from the tile above it.
+pub fn surface_anchor(x: i32, z: i32) -> (i32, i32) {
+    if z >= 6400 {
+        (x, z - 6400)
+    } else {
+        (x, z)
+    }
 }
 
 /// X of the nearest toll fence, served by the nav service. `None` when no
@@ -588,6 +602,31 @@ mod tests {
         assert!((bank.x - 3092).abs() + (bank.z - 3243).abs() > 20, "picked the Draynor bank at ({},{})", bank.x, bank.z);
         let threats = crate::kit::danger::threats(&bot);
         assert!(crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none());
+    }
+
+    /// Live 2026-11-14: essence_run from the Lumbridge windmill top
+    /// (2, 3165, 3306) failed "no reachable bank" 20 times (no bank on
+    /// level 2), and t40, done with Rune Mysteries in the Wizards' Tower
+    /// basement (0, 3103, 9570), walked to Edgeville (z 3493 is nearer
+    /// 9570 than Draynor's 3243). Upper floors rank the ground-floor
+    /// banks; dungeon tiles rank from the surface above (z − 6400).
+    #[test]
+    fn upper_floors_and_basements_rank_surface_banks() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        bot.world.stats.insert(3, (40, 0));
+        bot.world.level = 2;
+        bot.world.x = 3165;
+        bot.world.z = 3306;
+        let bank = super::nearest_bank(&mut bot).expect("a bank from the windmill top");
+        assert_eq!(bank.level, 0, "ground-floor bank");
+        bot.world.level = 0;
+        bot.world.x = 3103;
+        bot.world.z = 9570;
+        let bank = super::nearest_bank(&mut bot).expect("a bank from the tower basement");
+        assert!(bank.z < 3400, "a bank near the tower, not Edgeville: ({},{})", bank.x, bank.z);
+        assert_eq!(super::surface_anchor(3103, 9570), (3103, 3170));
+        assert_eq!(super::surface_anchor(3222, 3218), (3222, 3218));
     }
 
     /// Fresh accounts have 10 HP: the target never exceeds full health.

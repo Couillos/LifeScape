@@ -19,6 +19,44 @@ prévisible au dashboard, simple à implémenter, adapté au F2P (recettes
 `abandoned`. Fichier : `run/lives/<compte>.json`, écriture atomique
 (`paths::write_json`), schéma v1.
 
+Retraite des nœuds finis (demande utilisateur 2026-11-14,
+`planner/src/lifecycle_retire.rs`, `life_memory.rs`) : le graphe ne porte
+que le travail vivant, sa taille suit le but courant, jamais l'historique.
+Un nœud `done` quitte le graphe ET les listes `deps` (dépendance faite =
+satisfaite). Un nœud `abandoned` reste tant qu'il sert le but courant
+(numéro ≥ `memory.floor`, posé par `append_goal`) : la période de blocage
+le lit (rachat au marché, cause et portée du bannissement, relance) ; dès
+qu'un but suivant est tiré, il part avec sa cascade. Exceptions : un
+abandonné encore listé par un nœud gardé (nœud actif) reste avec lui ; le
+tutoriel abandonné sur l'île reste tant qu'il n'est pas prouvé (l'opérateur
+décide). La retraite tourne dans `brain::save_life` (sur une copie : les
+index du passage en cours restent valides) et au premier chargement d'un
+ancien fichier (`read_life_file`, une ligne `life loaded: N done and M
+abandoned nodes retired …`, plancher déduit : nœuds ouverts + racine(s)
+du but courant + leurs dépendances). Clé `memory` du fichier (bornée) :
+`last_number` (plus haut numéro jamais émis : un id retraité n'est jamais
+réutilisé, `lifecycle::max_id_number` ; un rapport tardif pour lui est
+loggé `report for retired node nX, ignored`), `floor`, `quests_done`
+(quêtes prouvées par le graphe, tutoriel compris ; un blocage
+`missing:quest:<clé>` les réfute), `done_total`/`abandoned_total`, et
+`recent` : les `RECENT_CAP` = 40 derniers nœuds retraités `{id, kind,
+params, outcome, last_error}` (preuve de la racine du but
+`goal_root_done`, série des concierges `space::janitor_stalled`,
+dashboard). Historique compacté au-delà de `HISTORY_COMPACT_AT` = 300
+entrées : les 200 dernières, plus les 60 dernières entrées `goal`, la
+dernière entrée de bannissement/levée par compétence, la dernière clôture
+de but, la dernière entrée hors `goal` (période), et la dernière entrée
+par (nœud vivant, issue) (`awaiting_fill`, cause d'abandon) : chaque règle
+« dernière entrée » lit la même réponse.
+
+Mesure (2026-11-14, copie de `run/lives`, bench ignoré
+`brain::retire_tests::life_retire_bench`, `LIFESCAPE_BENCH_LIVES=<copie>`) :
+bbkjz2vk 802 Ko → 46 Ko (666 → 2 nœuds, 4539 → 238 entrées), chargement
+25 → 1 ms CPU, écriture 21 → 1 ms ; bb4v5d9m 719 → 45 Ko (715 → 1 nœud),
+25 → 0,8 ms ; bst29bh9 222 → 32 Ko (206 → 1), 9 → 0,8 ms ; george_97
+264 → 33 Ko (246 → 2). Toutes les vies longues tiennent entre 25 et 47 Ko
+(l'historique borné et l'ambition dominent).
+
 ## Batterie de tâches (règle D21)
 
 Le brain fixe objectif (XP, niveau, quantité) et ressource exacte ; le
@@ -150,19 +188,24 @@ l'index d'obtention à `normalize`.
 But atteint malgré d'anciens abandons (2026-11-13, `brain_stuck::effective_state`) :
 un graphe `Stuck` dont le but courant est atteint — niveaux live, ou nœud
 racine du but (`goals::goal_root_done` : le plus récent nœud equip/obtain/
-argent/quête/zone du but) `done` — est traité `Finished` (clos `done`, but
+argent/quête/zone du but, dans le graphe ou `memory.recent` une fois
+retraité) `done` — est traité `Finished` (clos `done`, but
 suivant), jamais une période de blocage (live : 540 `graph stuck`/h ;
 bb4v5d9m bouclait « equip melee » fait toutes les 4 s, clos `stuck`, jalon
 bloqué ×3, ambition guerrier ↔ prêtre toutes les 30 s).
 
 Graphe bloqué (`brain_stuck.rs`) : une période de blocage = une ligne de
-log + `history: graph stuck`, une seule fois. Le but courant est clos
+log + `history: graph stuck`, une seule fois. La ligne est bornée
+(`stuck_summary`) : `abandoned: N nodes (K by cascade); roots: nX=<erreur>
+| … (+R more roots)` — 3 racines au plus, 160 caractères d'erreur chacune
+(avant : bst29bh9 alignait ~90 paires `nX=dependency nY abandoned`). Le but courant est clos
 une fois : `done` si les niveaux live l'atteignent (des nœuds abandonnés
 plus anciens n'en font pas un échec), `stuck` sinon ; puis but suivant.
 Plus aucun but ⇒ règle de relance (`lifecycle::revive_stuck`) : après
 `REVIVE_COOLDOWN_TICKS` = 6000 ticks de blocage (1 h en prod, 6 min en
-dev), chaque nœud abandonné (sauf les concierges `space_cleanup`, qui ont
-leur propre arrêt) repart avec des budgets neufs et des jambes re-dérivées
+dev), chaque nœud abandonné du but courant (ceux des buts clos sont
+retraités) — sauf les concierges `space_cleanup`, qui ont
+leur propre arrêt — repart avec des budgets neufs et des jambes re-dérivées
 (index d'obtention ; méthode de palier si toutes bannies), sa cascade
 avec lui ; `history: graph revived`. Au plus `MAX_REVIVES` = 3 relances
 par nœud ; au-delà `history: graph final`, une ligne, l'opérateur décide.
@@ -390,6 +433,48 @@ quête « déjà fait » pendant que l'essence bloquait 4 fois ⇒ minage banni)
 Un nœud bloqué ne se réutilise jamais lui-même ni ce qui l'attend comme
 dépendance (t01 : cuisine 10→20 bloquée sur un niveau de cuisine,
 cycle n8↔n9 abandonné).
+
+Quête légère d'abord (2026-11-14, `quests::light_quest` : ni niveau, ni
+objet, ni combat, ni points de quête, faisable seul — Rune Mysteries,
+Cook's Assistant…) : quand la seule voie de production est derrière elle
+et qu'aucune offre du marché n'est couverte, le résolveur bloque
+`missing:quest:<clé>` au lieu de poser une enchère au repos que personne
+ne remplit (live : `market order for 17 blankrune unfilled after 6000
+ticks`, runecraft et minage bannis, aucun bot n'ayant la quête). Une
+offre couverte achète toujours. Objets que la quête remet et laisse
+(`quests::QUEST_GRANTS`, preuve contenu : `duke_horacio.rs2` donne
+`air_talisman`, `sedridor.rs2` le rend à la fin) : l'obtention attend la
+quête, jamais la ferme aux gobelins (0,78 %/kill) ni le marché. Un ban
+de compétence dont la cause nomme une quête (`quest:<clé>` ou le script
+`quest_<nom>`) se lève dès que la quête est faite
+(`bans::quest_lifted_bans`, appelé par `brain_succession::note_expired_bans`
+avec `brain_rescue::quests_done`), sans attendre ses 6000 ticks.
+
+Rune Mysteries (script `quest_rune_mysteries`,
+`scripts/src/quests/rune_mysteries.rs`) : le varp `runemysteries` n'est
+pas transmis (`scope=perm`, sans `transmit`) — l'ancien solveur lisait 0
+et rejouait tout. L'étape se lit dans le sac : notes d'Aubury ⇒ Sedridor ;
+paquet ⇒ Aubury deux fois ; rien ⇒ le Duc (« Have you any quests for
+me? », « Sure, no problem. »), Sedridor (« I'm looking for the head
+wizard. », « Ok, here you are. », « Yes, certainly. »), puis Aubury si la
+manche finit sans objet. Réponses jamais vers la boutique d'Aubury
+(« No thank you »). Preuve live 2026-11-14 (t40 puis t48, `direct` sur un
+daemon privé portant la nav du correctif) : Duc → Sedridor (porte
+diagonale, échelle, porte 1530 de la cave) → Aubury ×2 → Sedridor, varp
+63 = 6 en ~1500 ticks.
+
+Runecraft (2026-11-14, `tranches::talisman_obtainable`) : chaque tranche
+travaille la meilleure rune ouverte dont le talisman s'obtient — quête
+(air) ou jambe de production exécutable (terre : hommes 1,56 %, corps :
+gardes 3,12 %). Esprit (diablotins, sorciers), eau et feu (sorciers,
+mages noirs, squelettes des égouts) ne tombent d'aucun échelon de combat :
+air jusqu'à 9, terre jusqu'à 20, corps ensuite (paliers 2/5/9/14/20
+inchangés). Un nouvel échelon qui chasse ces PNJ rouvre leurs paliers
+sans autre changement. Essence : `essence_run` lit rochers et portails
+de la mine en statique (le serveur ne streame jamais une loc statique ;
+avant : « Aubury did not teleport » une fois DANS la mine), arrivée et
+sortie par le carré 45_75, portail cliqué depuis un côté orthogonal
+(diagonale : « I can't reach that! »).
 
 Magasins (règle utilisateur 2026-11-13, `obtain::merchant_buy_allowed`) :
 un PNJ ne vend au bot que ce que F2P ne donne d'aucune autre façon —
@@ -679,7 +764,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:bread` | `bake_bread` | — | `--want`, `--site` |
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
-| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
+| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume ; jamais celles de Doric ni de l'île du tutoriel) |
 | `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais, charbon, runes de feu + nature retirés du sac puis de la banque ; bâton de feu porté, au sac ou en banque accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
@@ -701,7 +786,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
-| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) |
+| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) ; le script lit aussi `--spell lowlvl_alchemy\|highlvl_alchemy`, `--want`, `--level magic N` ; cible retirée en billets, pièces banquées en fin de run |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |
