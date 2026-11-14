@@ -36,7 +36,7 @@
 
 use super::flags::{
     ANGLE_EAST, ANGLE_NORTH, ANGLE_SOUTH, ANGLE_WEST, DOOR_LEAF_EAST, DOOR_LEAF_NORTH, DOOR_LEAF_SOUTH, DOOR_LEAF_WEST,
-    WALL_STRAIGHT,
+    WALL_DIAGONAL, WALL_STRAIGHT,
 };
 use super::loc_collision::CollisionMap;
 
@@ -140,6 +140,30 @@ pub fn paint_gate_swings(collision: &mut CollisionMap, leaves: &[ClosedLeaf]) {
         let (step_x, step_z) = swing_offset(leaf_angle);
         collision.add(leaf_x, leaf_z, door.level, leaf_mark(step_x, step_z));
         collision.add(leaf_x + step_x, leaf_z + step_z, door.level, leaf_mark(-step_x, -step_z));
+    }
+    for door in leaves.iter().filter(|leaf| leaf.shape == WALL_DIAGONAL && leaf.leaf == GateLeaf::Door) {
+        let (leaf_x, leaf_z) = open_diagonal_door_leaf(door.x, door.z, door.angle);
+        for (step_x, step_z) in [(-1, 0), (1, 0), (0, 1), (0, -1)] {
+            collision.add(leaf_x, leaf_z, door.level, leaf_mark(step_x, step_z));
+            collision.add(leaf_x + step_x, leaf_z + step_z, door.level, leaf_mark(-step_x, -step_z));
+        }
+    }
+}
+
+/// Where a closed diagonal single door (shape 9) lands once open
+/// (`doors.rs2` `door_open` diagonal arm): WEST one tile north, NORTH one
+/// tile east, EAST one tile south, SOUTH one tile west, still a diagonal
+/// wall, i.e. a loc that blocks its WHOLE tile for 500 ticks. Wizards'
+/// Tower ladder room 1536 (3107,3162) angle south opens onto (3106,3162):
+/// every edge of that tile is marked, never walled (a shut door leaves
+/// the tile free), so the plan goes round by (3107,3161) when it can.
+pub fn open_diagonal_door_leaf(door_x: i32, door_z: i32, angle: u8) -> (i32, i32) {
+    match angle {
+        ANGLE_WEST => (door_x, door_z + 1),
+        ANGLE_NORTH => (door_x + 1, door_z),
+        ANGLE_EAST => (door_x, door_z - 1),
+        ANGLE_SOUTH => (door_x - 1, door_z),
+        _ => (door_x, door_z),
     }
 }
 
@@ -262,6 +286,34 @@ mod tests {
         assert_eq!(extra((3215, 3219), (3216, 3219)), 0, "stand from the hall is free");
         assert_eq!(extra((3216, 3219), (3217, 3219)), 0, "the doorway crossing is free");
         assert_eq!(extra((3216, 3218), (3216, 3219)), 0, "between the two leaves is free");
+    }
+
+    /// Wizards' Tower ladder room: diagonal door 1536 (3107,3162) angle
+    /// south opens onto (3106,3162), a whole-tile loc. Every step onto or
+    /// across that tile costs extra; the way round by (3107,3161) is free.
+    #[test]
+    fn open_diagonal_door_leaf_marks_its_whole_tile() {
+        assert_eq!(open_diagonal_door_leaf(3107, 3162, ANGLE_SOUTH), (3106, 3162));
+        assert_eq!(open_diagonal_door_leaf(10, 10, ANGLE_WEST), (10, 11));
+        assert_eq!(open_diagonal_door_leaf(10, 10, ANGLE_NORTH), (11, 10));
+        assert_eq!(open_diagonal_door_leaf(10, 10, ANGLE_EAST), (10, 9));
+        let mut map = CollisionMap::new();
+        for x in 3103..3111 {
+            for z in 3158..3166 {
+                map.set(x, z, 0, 0);
+            }
+        }
+        let door = ClosedLeaf { x: 3107, z: 3162, level: 0, leaf: GateLeaf::Door, shape: WALL_DIAGONAL, angle: ANGLE_SOUTH };
+        paint_gate_swings(&mut map, &[door]);
+        let extra = |from: (i32, i32), to: (i32, i32)| {
+            leaf_step_extra(map.get(from.0, from.1, 0), map.get(to.0, to.1, 0), to.0 - from.0, to.1 - from.1)
+        };
+        assert!(step_open(&map, 3107, 3162, 0, -1, 0), "marked, never walled");
+        assert_eq!(extra((3107, 3162), (3106, 3162)), DOOR_LEAF_STEP_COST, "onto the open leaf");
+        assert_eq!(extra((3106, 3162), (3105, 3162)), DOOR_LEAF_STEP_COST, "off the open leaf");
+        assert_eq!(extra((3107, 3162), (3106, 3161)), DOOR_LEAF_STEP_COST, "diagonal brushing the leaf");
+        assert_eq!(extra((3107, 3162), (3107, 3161)), 0, "the way round stays free");
+        assert_eq!(extra((3107, 3161), (3106, 3161)), 0, "the way round stays free");
     }
 
     #[test]

@@ -16,7 +16,10 @@
 //!    the coins a purchase needs (`missing:coins:N`, filed as a
 //!    `have_coins` node that earns them), else the quest the only ways
 //!    need (`missing:quest:runemysteries`, filed as the quest's nodes).
-//!    Never a silent substitute.
+//!    Never a silent substitute. A LIGHT quest (`quests::light_quest`)
+//!    comes before the resting bid when no ask is covered, and always
+//!    when the quest itself hands the object over (`quests::QUEST_GRANTS`:
+//!    the Duke's air talisman).
 //!
 //! Coin and money nodes pick the most profitable money method the bot
 //! can work at its levels (published rates, market prices), not the
@@ -161,7 +164,22 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= budget);
     let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= budget);
     let producible = workable.iter().min_by_key(|alt| alt.est_ticks).cloned();
-    let pick: Option<String> = if (ask_covered || ask_partial) && producible.is_some() {
+    // A light quest that unlocks a way (essence behind Rune Mysteries) or
+    // hands the object over (the Duke's air talisman) comes before a
+    // resting bid: without the quest nobody fills it (live 2026-11-14:
+    // `market order for 17 blankrune unfilled after 6000 ticks`, then
+    // runecraft and mining banned). An unlocking quest yields to a
+    // covered ask; a granting one never does (the bot needs the quest
+    // for the essence anyway, the object comes with it).
+    let granted = crate::quests::granting_quest(item, ctx).filter(|_| need <= 1);
+    if granted.is_some() {
+        quest_gap = granted.clone();
+    }
+    let quest_first = quest_gap.as_deref().is_some_and(crate::quests::light_quest) && (granted.is_some() || !(ask_covered || ask_partial));
+    let pick: Option<String> = if granted.is_some() && quest_first {
+        // The quest hands it over: no drop farm, no purchase.
+        None
+    } else if (ask_covered || ask_partial) && producible.is_some() {
         // 1a. The bid takes the ask at once (`market:bid` at the ask, the
         // market first) and the bot produces meanwhile: whichever lands
         // first closes the node (D-B). Live 2026-11-13: a pure buy left
@@ -184,7 +202,7 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         // 3b. A dialogue seller, same rule (the seller's site may add the
         // toll: `place_on_site` budgets it).
         Some("dialogue:buy".to_string())
-    } else if market_ok && budget >= unit {
+    } else if market_ok && budget >= unit && !quest_first {
         // 4. Resting bid for what the wallet covers, the brain waits for
         // the fill.
         Some("market:buy".to_string())
@@ -204,7 +222,9 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     node.method = pick.clone();
     if pick.is_none() {
         // 5. Typed block: the cheapest thing that unlocks a way.
-        let reason = if let Some((skill, level)) = level_gap {
+        let reason = if let (true, Some(quest)) = (quest_first, quest_gap.as_ref()) {
+            Some(format!("missing:quest:{quest}"))
+        } else if let Some((skill, level)) = level_gap {
             Some(format!("missing:level:{skill}:{level}"))
         } else if let Some(tool) = tool_gap {
             Some(format!("missing:{tool}"))

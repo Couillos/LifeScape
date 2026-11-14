@@ -51,6 +51,8 @@ pub const WALL_STRAIGHT: u8 = 0;
 pub const WALL_DIAGONAL_CORNER: u8 = 1;
 pub const WALL_L: u8 = 2;
 pub const WALL_SQUARE_CORNER: u8 = 3;
+/// Diagonal wall: a loc blocking its whole tile (engine loc collision).
+pub const WALL_DIAGONAL: u8 = 9;
 
 pub const ANGLE_WEST: u8 = 0;
 pub const ANGLE_NORTH: u8 = 1;

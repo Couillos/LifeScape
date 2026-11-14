@@ -176,3 +176,65 @@ fn a_quest_block_disproves_done_quest_nodes() {
     assert!(life.nodes[0].deps.contains(&fresh.id), "the essence waits on the fresh quest node");
     assert_eq!(life.nodes[1].status, NodeStatus::Done, "history stays: the status is never rewritten");
 }
+
+/// Live 2026-11-14 (bbkjz2vk n639, b3gybcev n150): without Rune
+/// Mysteries the essence of a runecraft tranche went to a resting market
+/// bid nobody could fill (no bot had the quest), failed after 6000 ticks
+/// and banned runecraft and mining. A light quest that unlocks the way
+/// now comes first; a covered ask still buys at once.
+#[test]
+fn essence_without_the_quest_waits_on_the_quest_not_a_resting_bid() {
+    let mut ctx = pickaxe_ctx();
+    ctx.coins = 5000;
+    ctx.price = 4;
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "blankrune".to_string(), count: 17 }, Vec::new(), 17);
+    node.alternatives = crate::obtain_legs::obtain_alternatives("blankrune", false);
+    assert!(node.alternatives.iter().any(|alt| alt.method == "market:buy"), "essence trades: {:?}", node.alternatives);
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:quest:runemysteries".to_string() }, "method {:?}", node.method);
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "blankrune".to_string(), count: 17 }, Vec::new(), 17);
+    node.alternatives = crate::obtain_legs::obtain_alternatives("blankrune", false);
+    ctx.best_ask = Some(5);
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("market:buy"), "a covered ask buys: {:?}", node.status);
+    assert!(super::light_quest("runemysteries"));
+    assert!(!super::light_quest("dragon"), "Dragon Slayer is no light quest");
+}
+
+/// Talismans past air drop only (server drop tables): earth from men and
+/// body from guards farm on combat rungs; mind (imps, wizards), water and
+/// fire (wizards, dark wizards, sewer skeletons) have no rung, so the
+/// runecraft tranches skip their tiers (`tranches::talisman_obtainable`).
+#[test]
+fn talisman_legs_follow_the_combat_rungs() {
+    for talisman in ["earth_talisman", "body_talisman"] {
+        let legs = crate::obtain_legs::production_legs(talisman);
+        assert!(legs.iter().any(|leg| leg.method == format!("farm:{talisman}")), "{talisman}: {legs:?}");
+    }
+    for talisman in ["mind_talisman", "water_talisman", "fire_talisman"] {
+        assert!(!crate::tranches::talisman_obtainable(talisman), "{talisman} has no rung: a new rung lifts this");
+    }
+    assert!(crate::tranches::talisman_obtainable("air_talisman"), "Rune Mysteries hands it over");
+}
+
+/// Rune Mysteries hands the air talisman over (`duke_horacio.rs2`, back
+/// from Sedridor at completion): the obtain waits on the quest instead of
+/// farming goblins (0.78 % a kill) or bidding; once the quest is done the
+/// usual legs come back.
+#[test]
+fn the_air_talisman_comes_from_rune_mysteries() {
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.coins = 5000;
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "air_talisman".to_string(), count: 1 }, Vec::new(), 1);
+    node.alternatives = crate::obtain_legs::obtain_alternatives("air_talisman", false);
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:quest:runemysteries".to_string() }, "method {:?}", node.method);
+    assert_eq!(node.method, None);
+    ctx.quests_done = vec!["runemysteries".to_string()];
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "air_talisman".to_string(), count: 1 }, Vec::new(), 1);
+    node.alternatives = crate::obtain_legs::obtain_alternatives("air_talisman", false);
+    resolve_ready(&mut node, &ctx);
+    let quest_block = matches!(&node.status, NodeStatus::Blocked { reason } if reason.contains("quest"));
+    assert!(!quest_block, "quest done: a lost talisman takes the usual legs, got {:?} {:?}", node.method, node.status);
+    assert_eq!(super::granting_quest("mind_talisman", &ReadyCtx::blind(0.5)), None, "only the air talisman is a quest grant");
+}

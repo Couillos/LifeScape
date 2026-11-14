@@ -32,6 +32,8 @@ pub const NEED_QUEST: &str = "quest_rune_mysteries";
 pub const EMPTY_LIMIT: u32 = 3;
 /// Approach budget per rock and per Aubury walk.
 pub const ESSENCE_WALK_TICKS: u64 = 6000;
+/// Walk budget to one orthogonal side of the exit portal.
+pub const PORTAL_STAND_TICKS: u64 = 1500;
 
 /// True for a runecraft talisman debugname (kept, never banked).
 pub fn is_talisman(name: &str) -> bool {
@@ -57,11 +59,35 @@ fn live_locs(bot: &Bot, name: &str, radius: i32) -> Vec<(i32, i32, u16)> {
     found
 }
 
-/// Nearest live essence rock, occupation-dodged (the mine streams its locs;
-/// a stream gap waits instead of guessing).
-fn nearest_essence(bot: &mut Bot, banned: &BanSet, now: u64) -> Option<(i32, i32, u16)> {
+/// Map square of the rune essence mine (`m45_75`: the four rocks and the
+/// four exit portals, server `essence_mine_teleports` lands inside).
+pub const MINE_SQUARE: (i32, i32) = (45, 75);
+
+/// True inside the essence mine (level 0, map square 45_75).
+pub fn in_mine(x: i32, z: i32, level: i32) -> bool {
+    level == 0 && (x >> 6, z >> 6) == MINE_SQUARE
+}
+
+/// Essence rocks or exit portals around the bot by exact debugname: the
+/// mine's static locs (one service batch: the server never streams a
+/// static loc; live 2026-11-14, t48 stood in the mine at (2912,4825)
+/// and the run read "Aubury did not teleport", no rock ever streamed)
+/// plus any live one.
+fn mine_locs(bot: &mut Bot, name: &str, radius: i32) -> Result<Vec<(i32, i32, u16)>, ScriptError> {
+    let mut found = live_locs(bot, name, radius);
+    for row in bot.static_locs_near(bot.world.x, bot.world.z, bot.world.level, radius)? {
+        if (bot.tables.loc_name)(row.loc).unwrap_or_default() == name && !found.iter().any(|(x, z, _)| (*x, *z) == (row.x, row.z)) {
+            found.push((row.x, row.z, row.loc));
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Nearest essence rock among `rocks`, occupation-dodged.
+fn nearest_essence(bot: &mut Bot, rocks: Vec<(i32, i32, u16)>, banned: &BanSet, now: u64) -> Option<(i32, i32, u16)> {
     let mut cands: Vec<(i64, (i32, i32, u16))> = Vec::new();
-    for (x, z, loc) in live_locs(bot, ESSENCE_ROCK, 60) {
+    for (x, z, loc) in rocks {
         if banned.is_banned((x, z), now) {
             continue;
         }
@@ -119,7 +145,7 @@ fn work_essence(bot: &mut Bot, x: i32, z: i32, loc: u16, essence: u16) -> Result
 /// Aubury's teleport to the mine (op 4, no dialogue). Skipped when essence
 /// rock already streams nearby. A quest refusal fails loud naming the quest.
 fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
-    if !live_locs(bot, ESSENCE_ROCK, 60).is_empty() {
+    if in_mine(bot.world.x, bot.world.z, bot.world.level) {
         return Ok(());
     }
     // Out of view (live 2026-11-13: runs started in Lumbridge, Draynor or
@@ -132,7 +158,7 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
     let target = bot.world.ticks + 100;
     while bot.world.ticks < target {
         bot.pump(2)?;
-        if !live_locs(bot, ESSENCE_ROCK, 60).is_empty() {
+        if in_mine(bot.world.x, bot.world.z, bot.world.level) {
             bot.log("arrived in the essence mine");
             return Ok(());
         }
@@ -149,18 +175,35 @@ fn teleport_to_mine(bot: &mut Bot) -> Result<(), ScriptError> {
 fn return_through_portal(bot: &mut Bot) -> Result<(), ScriptError> {
     let target = bot.world.ticks + 200;
     while bot.world.ticks < target {
-        if let Some((x, z, loc)) = live_locs(bot, PORTAL, 60).into_iter().next() {
-            if !walk_checked(bot, x, z, ESSENCE_WALK_TICKS)? { return Err(ScriptError::Failed(format!("portal unreachable at ({x},{z})"))); }
-            bot.op_loc(1, x, z, loc)?;
-            let back = bot.world.ticks + 100;
-            while bot.world.ticks < back {
-                bot.pump(2)?;
-                if live_locs(bot, ESSENCE_ROCK, 60).is_empty() {
-                    bot.log("back from the essence mine");
-                    return Ok(());
+        let (here_x, here_z) = (bot.world.x, bot.world.z);
+        let nearest = mine_locs(bot, PORTAL, 60)?.into_iter().min_by_key(|(x, z, _)| (x - here_x).abs() + (z - here_z).abs());
+        if let Some((x, z, loc)) = nearest {
+            // The portal blocks its tile and answers only from an
+            // orthogonal side (live 2026-11-14, t48: the planner's
+            // diagonal fallback (2932,4816) read "I can't reach that!",
+            // (2932,4815) stepped through to Aubury).
+            for (stand_x, stand_z) in crate::devtools::sides_of(&[[i64::from(x), i64::from(z)]], bot.world.x, bot.world.z) {
+                if let Err(error) = bot.walk_to(stand_x, stand_z, bot.world.level, PORTAL_STAND_TICKS) {
+                    let error = ScriptError::from(error);
+                    if is_walk_abort(&error) {
+                        return Err(error);
+                    }
+                    continue;
+                }
+                if (bot.world.x, bot.world.z) != (stand_x, stand_z) {
+                    continue;
+                }
+                bot.op_loc(1, x, z, loc)?;
+                let back = bot.world.ticks + 100;
+                while bot.world.ticks < back {
+                    bot.pump(2)?;
+                    if !in_mine(bot.world.x, bot.world.z, bot.world.level) {
+                        bot.log("back from the essence mine");
+                        return Ok(());
+                    }
                 }
             }
-            return Err(ScriptError::Failed(format!("portal did not move us at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("portal ({x},{z}) did not move us at {:?}", bot.position())));
         }
         bot.pump(5)?;
     }
@@ -210,7 +253,8 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let mut empty = 0u32;
         while free_slots(step_bot) > 0 {
             let now = step_bot.world.ticks;
-            let Some((x, z, loc)) = nearest_essence(step_bot, &banned, now) else {
+            let rocks = mine_locs(step_bot, ESSENCE_ROCK, 60)?;
+            let Some((x, z, loc)) = nearest_essence(step_bot, rocks, &banned, now) else {
                 empty += 1;
                 if empty >= EMPTY_LIMIT {
                     break;
@@ -246,7 +290,7 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{essence_loc_id, is_talisman, live_locs, nearest_essence, ARCH, AUBURY, AUBURY_TELEPORT_OP, EMPTY_LIMIT, EPOCH, ESSENCE_ROCK, NEED_QUEST, PORTAL, PRODUCT, TALISMANS};
+    use super::{essence_loc_id, in_mine, is_talisman, live_locs, nearest_essence, ARCH, AUBURY, AUBURY_TELEPORT_OP, EMPTY_LIMIT, EPOCH, ESSENCE_ROCK, NEED_QUEST, PORTAL, PRODUCT, TALISMANS};
     use crate::kit::bans::BanSet;
     use crate::kit::pack::obj_id;
     use crate::tables_live::attach_live_tables;
@@ -308,10 +352,10 @@ mod tests {
         let found = live_locs(&bot, ESSENCE_ROCK, 60);
         assert_eq!(found, vec![(2901, 4831, loc)], "exact debugname only, got {found:?}");
         let banned = BanSet::new();
-        assert_eq!(nearest_essence(&mut bot, &banned, 0), Some((2901, 4831, loc)), "live rock picks");
+        assert_eq!(nearest_essence(&mut bot, found.clone(), &banned, 0), Some((2901, 4831, loc)), "live rock picks");
         let mut banned = BanSet::new();
         banned.ban_for((2901, 4831), 0, 10_000);
-        assert!(nearest_essence(&mut bot, &banned, 0).is_none(), "banned rock skipped, gap waits");
+        assert!(nearest_essence(&mut bot, found, &banned, 0).is_none(), "banned rock skipped, gap waits");
     }
 
     /// Live 2026-11-13 (62 "no Aubury near" over 10 bots, mining and
@@ -331,6 +375,20 @@ mod tests {
         bot.world.z = 3400;
         bot.world.npcs.insert(7u16, lifescape_sdk::world::NpcInfo { npc_type: aubury, x: 3253, z: 3402, level: 0, name: None, anim: None, face_entity: None, hit_tick: None });
         assert_eq!(crate::kit::shop::spawn_walk(&bot, "aubury", (AUBURY.0, AUBURY.1)), None, "streamed: no walk");
+    }
+
+    /// The mine is map square 45_75 (`m45_75.jm2`: rocks 2491 at
+    /// (2891,4847) (2893,4812) (2925,4848) (2927,4814), portals 2492 at
+    /// (2885,4850) (2889,4813) (2932,4854) (2933,4815)); t48 landed at
+    /// (2912,4825). Varrock, the air temple (44_75) and level 1 are out.
+    #[test]
+    fn mine_square_bounds() {
+        for (x, z) in [(2912, 4825), (2891, 4847), (2927, 4814), (2885, 4850), (2933, 4815)] {
+            assert!(in_mine(x, z, 0), "({x},{z}) in the mine");
+        }
+        assert!(!in_mine(3253, 3402, 0), "Aubury's shop");
+        assert!(!in_mine(2841, 4828, 0), "air temple");
+        assert!(!in_mine(2912, 4825, 1), "another level");
     }
 
     /// Bounds: the mine never depletes (the rock pays without `loc_change`),

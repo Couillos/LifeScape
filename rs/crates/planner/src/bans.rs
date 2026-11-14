@@ -138,6 +138,34 @@ pub fn banned_skills(history: &[HistoryEntry], ticks_since: &dyn Fn(i64) -> u64)
         .collect()
 }
 
+/// Active bans whose cause was a quest the bot has now finished
+/// (`missing:quest:<key>`, `quest:<key>`, or the quest script name in an
+/// essence refusal `needs quest_rune_mysteries`): the cause is gone, the
+/// ban lifts at once instead of idling out its 6000 ticks (live
+/// 2026-11-14: runecraft and mining banned "missing quest:runemysteries").
+/// Sorted by skill; the brain writes `unban:<skill>` for each.
+pub fn quest_lifted_bans(history: &[HistoryEntry], ticks_since: &dyn Fn(i64) -> u64, quests_done: &[String]) -> Vec<String> {
+    ban_states(history, ticks_since)
+        .into_iter()
+        .filter_map(|(skill, state)| match state {
+            BanState::Active { cause, .. } => quests_done
+                .iter()
+                .any(|quest| cause_names_quest(&cause, quest))
+                .then_some(skill),
+            BanState::Expired { .. } => None,
+        })
+        .collect()
+}
+
+/// True when a ban cause names `quest` (planner key or script name).
+fn cause_names_quest(cause: &str, quest: &str) -> bool {
+    let lower = cause.to_lowercase();
+    if lower.contains(&format!("quest:{quest}")) {
+        return true;
+    }
+    crate::mapping::quest_script_name(quest).is_some_and(|script| lower.contains(script))
+}
+
 #[cfg(test)]
 #[path = "bans_tests.rs"]
 mod tests;

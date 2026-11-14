@@ -64,31 +64,6 @@ fn solve_romeojuliet(bot: &mut Bot) -> Result<(), ScriptError> {
     Ok(())
 }
 
-fn solve_runemysteries(bot: &mut Bot) -> Result<(), ScriptError> {
-    bot.intend("quest runemysteries: delivering research");
-    // Duke re-talk is pure cost once started; stage-gate on the live varp.
-    if solver::varp(bot, "runemysteries") < 1 {
-        solver::talk_like(bot, "duke_of_lumbridge", &["talisman", "help", "runes", "yes"], None, 400)?;
-    }
-    if solver::varp(bot, "runemysteries") < 3 {
-        solver::talk_like(bot, "head_wizard", &["looking for the head wizard", "here you are", "certainly", "yes"], None, 400)?;
-    }
-    if solver::varp(bot, "runemysteries") < 4 {
-        solver::talk_like(bot, "aubury", &["package", "research", "head_wizard", "notes"], None, 400)?;
-    }
-    if solver::varp(bot, "runemysteries") < 5 {
-        solver::talk_like(bot, "aubury", &["notes", "head_wizard", "finished"], None, 400)?;
-    } else if solver::count(bot, solver::obj_id("research_notes")?) == 0 {
-        // Notes lost to a full pack: Aubury re-issues them on re-talk.
-        solver::talk_like(bot, "aubury", &["notes", "head_wizard", "finished"], None, 400)?;
-    }
-    solver::use_item_on_npc(bot, "research_notes", "head_wizard", Some((3103, 9571)))?;
-    if !solver::wait_complete(bot, 300)? {
-        return Err(lifescape_sdk::Error::Timeout(format!("rune mysteries never completed at {:?}", bot.position())).into());
-    }
-    Ok(())
-}
-
 fn solve_haunted(bot: &mut Bot) -> Result<(), ScriptError> {
     bot.intend("quest haunted: ernest the chicken");
     let stage = solver::varp(bot, "haunted");
@@ -139,7 +114,7 @@ pub fn run_quest(key: &str, bot: &mut Bot, _args: &[String]) -> ScriptResult {
         "sheep" => solver::run_requirements(bot, &requirements, solve_sheep),
         "hetty" => solver::run_requirements(bot, &requirements, solve_hetty),
         "romeojuliet" => solver::run_requirements(bot, &requirements, solve_romeojuliet),
-        "runemysteries" => solver::run_requirements(bot, &requirements, solve_runemysteries),
+        "runemysteries" => solver::run_requirements(bot, &requirements, super::rune_mysteries::solve),
         "haunted" => solver::run_requirements(bot, &requirements, solve_haunted),
         _ => Err(ScriptError::Usage(format!("quest {key:?} lives in batch B"))),
     }

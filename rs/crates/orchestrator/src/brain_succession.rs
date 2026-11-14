@@ -108,6 +108,14 @@ pub(crate) fn note_expired_bans(life: &mut Life) -> bool {
             changed = true;
         }
     }
+    // A ban caused by a quest the bot has since finished lifts at once
+    // (runecraft and mining banned on Rune Mysteries, 2026-11-14).
+    let done = crate::brain_rescue::quests_done(life);
+    for skill in lifescape_planner::quest_lifted_bans(&life.history, &ticks_since, &done) {
+        crate::logln!("brain {}: skill {skill} ban lifted: its quest is complete ({})", life.account, done.join(","));
+        push_history(life, "goal", &unban_entry(&skill));
+        changed = true;
+    }
     changed
 }
 
