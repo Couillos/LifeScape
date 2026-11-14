@@ -194,18 +194,41 @@ if (typeof document !== 'undefined') {
     return html;
   };
 
+  // Categories as a grid table: several rankings per row (a phone shows
+  // a compact block, never one long column).
+  let columnsShown = 0;
+  function categoryColumns() {
+    const width = window.innerWidth || 1024;
+    return width <= 720 ? 4 : 2;
+  }
+
   function renderCategories() {
     const list = page.categories(snapshot);
-    let html = '';
-    let group = '';
+    const columns = categoryColumns();
+    columnsShown = columns;
+    const groups = [];
     for (const entry of list) {
-      if (entry.group !== group) {
-        group = entry.group;
-        html += '<tr><th class="left">' + (group === 'skills' ? 'Skills' : 'Wealth') + '</th></tr>';
+      const last = groups[groups.length - 1];
+      if (last && last.group === entry.group) last.entries.push(entry);
+      else groups.push({ group: entry.group, entries: [entry] });
+    }
+    let html = '';
+    for (const block of groups) {
+      html += '<tr><th class="left" colspan="' + columns + '">' + (block.group === 'skills' ? 'Skills' : 'Wealth') + '</th></tr>';
+      for (let start = 0; start < block.entries.length; start += columns) {
+        html += '<tr>';
+        for (let slot = 0; slot < columns; slot += 1) {
+          const entry = block.entries[start + slot];
+          if (!entry) {
+            html += '<td></td>';
+            continue;
+          }
+          const current = !state.player && state.cat === entry.key;
+          html += '<td' + (current ? ' class="cur"' : '') + '><a class="cat" href="' + page.formatHash({ cat: entry.key })
+            + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + esc(entry.label) + '</a></td>';
+        }
+        html += '</tr>';
       }
-      const current = !state.player && state.cat === entry.key;
-      html += '<tr' + (current ? ' class="cur"' : '') + '><td class="left"><a class="cat" href="' + page.formatHash({ cat: entry.key })
-        + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + esc(entry.label) + '</a></td></tr>';
     }
     document.getElementById('cats').innerHTML = html;
   }
@@ -336,6 +359,9 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  window.addEventListener('resize', () => {
+    if (snapshot && categoryColumns() !== columnsShown) renderCategories();
+  });
   window.addEventListener('hashchange', () => {
     state = page.parseHash(location.hash);
     render();
