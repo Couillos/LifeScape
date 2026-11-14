@@ -183,12 +183,10 @@ pub fn choose(life: &Life, reader: &MarketReader, rows: &[(String, i64, f64)], s
     best_opportunity(&reader.bid_books(), &market, &producer).map(|found| (found, rate))
 }
 
-/// The bid goal for this life on a draw (live book, rates, own state),
-/// logged with its numbers; `None` when no bid beats the ambition.
-pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
-    if life.profile.ironman || crate::market_service::shared().is_none() {
-        return None;
-    }
+/// Runs `use_state` over this bot's own state (live levels, free
+/// holdings, bans, quests, rates): shared by the bid draw and the seller
+/// reserve cap, so both price a unit the same way.
+fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R) -> R {
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let locks = crate::brain_locks::locked_items(&life.account);
     let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
@@ -204,8 +202,52 @@ pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Strin
         units: &units,
         tick: crate::brain_ambition::stamp_now().tick,
     };
+    use_state(&state)
+}
+
+/// What making one unit of each `(item, units)` costs this bot (coins +
+/// its ticks at its coin rate): `bid_response::production_cost`, the
+/// make path a bid quota is priced with. The seller reserve never
+/// exceeds it (`brain_reserve`, 2026-11-14). Items it cannot make now
+/// are absent. One book read and one rates read for the whole pass.
+pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)]) -> HashMap<String, f64> {
+    if items.is_empty() || crate::market_service::shared().is_none() {
+        return HashMap::new();
+    }
+    let rows = rate_rows();
     let reader = MarketReader::live(&life.account);
-    let (found, rate) = choose(life, &reader, &rate_rows(), &state)?;
+    with_bot_state(life, live, |state| {
+        let rate = coin_rate(&rows, state.level_of);
+        let producer = Producer {
+            level_of: state.level_of,
+            held: state.held,
+            avoid: &state.avoid,
+            quests_done: &state.quests_done,
+            coin_rate: rate,
+            units_per_6000: state.units,
+            ironman: life.profile.ironman,
+            seed: life.seed,
+            tick: state.tick,
+        };
+        let market = |name: &str| reader.view(name);
+        items
+            .iter()
+            .filter_map(|(item, units)| {
+                let unit = lifescape_planner::bid_response::production_cost(item, *units, &market, &producer)?;
+                Some((item.clone(), unit.total(rate)))
+            })
+            .collect()
+    })
+}
+
+/// The bid goal for this life on a draw (live book, rates, own state),
+/// logged with its numbers; `None` when no bid beats the ambition.
+pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
+    if life.profile.ironman || crate::market_service::shared().is_none() {
+        return None;
+    }
+    let reader = MarketReader::live(&life.account);
+    let (found, rate) = with_bot_state(life, live, |state| choose(life, &reader, &rate_rows(), state))?;
     crate::logln!(
         "brain {}: answers bids: produce {} {} (best bid {}, unit {:.0} coins + {:.0} ticks, {:.1} coins/tick vs own {:.2}, net {:.0}; {})",
         life.account,

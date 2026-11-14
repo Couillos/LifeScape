@@ -107,14 +107,12 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
         return;
     }
     // What is still missing, capped by the wallet; at the best ask when
-    // it is fair (the bid crosses at once: market first), else at the
-    // reference walking up to the ceiling.
+    // the wallet covers it (the bid crosses at once: market first), else
+    // at the bot's own last fill on the item (the reference only when it
+    // never bought it, 2026-11-14), walking up to the ceiling.
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
-    let price = match ctx.best_ask {
-        Some(ask) if ask <= ceiling => ask,
-        _ => ctx.price.max(1).min(ceiling),
-    };
+    let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),
@@ -142,8 +140,8 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 
 /// A `market:buy` leg, placed daemon-side (no worker round-trip: the
 /// order is pure bookkeeping, the handover is the convene loop's): the
-/// covered best ask at once, else a bid at the reference walking up to
-/// the ceiling. Orders what is still missing, capped by the wallet (a
+/// covered best ask at once, else a bid at its own last fill price (the
+/// reference when it never bought the item) walking up to the ceiling. Orders what is still missing, capped by the wallet (a
 /// partial buy: the next resolve produces or buys the rest). Replaces
 /// any open bid of the account on that object.
 pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, String> {
@@ -154,10 +152,7 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, S
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
     let (_, ask) = service.lock_engine().books.get(&id).map(|book| book.best()).unwrap_or((None, None));
-    let price = match ask {
-        Some(best) if best <= ceiling => best,
-        _ => ctx.price.max(1).min(ceiling),
-    };
+    let price = lifescape_market::remembered_bid(ctx.price.max(1), ask, ceiling, service.own_buy_price(&job.account, id));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),

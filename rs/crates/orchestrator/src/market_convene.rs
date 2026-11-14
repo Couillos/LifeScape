@@ -248,6 +248,7 @@ impl MarketService {
             engine.ledger.credit_coins(&fill.seller, cost);
             engine.matched += 1;
         }
+        self.remember_fill(fill);
         let (tile_x, tile_y) = {
             let engine = self.lock_engine();
             let slot = (engine.deals.len() % crate::market_service::RING.len()) as usize;

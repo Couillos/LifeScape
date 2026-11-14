@@ -188,6 +188,38 @@ impl Store {
         Ok(open_deals)
     }
 
+    /// The account's own latest fill on `item` as buyer (`buyer` true) or
+    /// seller: `(price, created_clock)` of its newest deal that did not
+    /// fail (a failed handover is refunded, never a fill). Seller-side
+    /// price memory (2026-11-14): only the bot's own deals are read.
+    pub fn last_own_fill(&self, account: &str, item_id: i64, buyer: bool) -> Result<Option<(i64, i64)>, Error> {
+        let column = if buyer { "buyer" } else { "seller" };
+        let query = format!(
+            "SELECT price, created_clock FROM deals WHERE {column} = ?1 AND item_id = ?2 \
+             AND status != 'failed' ORDER BY created_clock DESC, deal_id DESC LIMIT 1"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let mut found_rows = statement.query(rusqlite::params![account, item_id])?;
+        match found_rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Item ids the account bought (newest non-failed buyer deals first,
+    /// distinct): a merchant's flip stock (2026-11-14).
+    pub fn items_bought_by(&self, account: &str) -> Result<Vec<i64>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT item_id FROM deals WHERE buyer = ?1 AND status != 'failed' ORDER BY item_id",
+        )?;
+        let mut found_rows = statement.query(rusqlite::params![account])?;
+        let mut items = Vec::new();
+        while let Some(row) = found_rows.next()? {
+            items.push(row.get(0)?);
+        }
+        Ok(items)
+    }
+
     /// Latest deals first (newest `created_clock`, `deal_id` tiebreak),
     /// every status: the market page feed shows buyer and seller pseudos.
     /// Limit clamps to one page (1..=100); callers pass the `limit` query.
@@ -292,6 +324,36 @@ impl Store {
 #[cfg(test)]
 mod deals_tests {
     use super::*;
+
+    /// Fill memory reads the account's own non-failed deals only.
+    #[test]
+    fn own_fills_skip_failed_deals_and_other_accounts() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 1519)?;
+        let deal = |buyer: &str, seller: &str, price: i64, clock: i64| NewDeal {
+            buyer: buyer.to_string(),
+            seller: seller.to_string(),
+            item_id: 1519,
+            quantity: 10,
+            price,
+            meeting_x: 0,
+            meeting_y: 0,
+            meeting_level: 0,
+            deadline_tick: 0,
+            clock,
+            taker_side: crate::OrderSide::Buy,
+        };
+        store.create_deal(&deal("bob", "lara_lane", 9, 100))?;
+        let failed = store.create_deal(&deal("bob", "lara_lane", 4, 200))?;
+        store.set_deal_status(failed, DealStatus::Failed, "no_show", 210)?;
+        store.create_deal(&deal("lara_lane", "ryan_park", 3, 300))?;
+        assert_eq!(store.last_own_fill("lara_lane", 1519, false)?, Some((9, 100)), "the failed 4 is no fill");
+        assert_eq!(store.last_own_fill("lara_lane", 1519, true)?, Some((3, 300)));
+        assert_eq!(store.last_own_fill("nina", 1519, true)?, None);
+        assert_eq!(store.items_bought_by("lara_lane")?, vec![1519]);
+        assert!(store.items_bought_by("ryan_park")?.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn deal_lifecycle_roundtrip() -> Result<(), Error> {
