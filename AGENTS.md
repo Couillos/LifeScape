@@ -27,13 +27,15 @@ restent minces et stateless. Ticks serveur : voir `../lostcity/engine/data/confi
 ## 3. Commandes
 
 ```sh
-cargo build --manifest-path rs/Cargo.toml
-cargo test --manifest-path rs/Cargo.toml --workspace
-./rs/target/debug/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
-./rs/target/debug/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | redeploy <compte> | shutdown
-./rs/target/debug/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
-./rs/target/debug/orchestrator replay-nav <dossier>
+cargo build --release --manifest-path rs/Cargo.toml
+cargo test --release --manifest-path rs/Cargo.toml --workspace
+./rs/target/release/orchestrator open <compte> | run <compte> <script> [args] | call <compte> <méthode> [args] | shell <compte>
+./rs/target/release/orchestrator status | show <compte> | see <compte> | logs <compte> [n] | unload <compte> | close <compte> | redeploy <compte> | shutdown
+./rs/target/release/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
+./rs/target/release/orchestrator replay-nav <dossier>
 ```
+
+Tout se compile en release (`--release`, build, tests, agents) : le daemon et les workers tournent depuis `rs/target/release/orchestrator`, jamais depuis `debug/`.
 
 ## 4. Règles dures
 

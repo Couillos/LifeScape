@@ -92,7 +92,7 @@ dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
 `smith_rows_match_the_server_tables` qui relit dbrow + struct : niveau,
 barres, unités produites (clous 2), XP).
 
-Boucle de vérification : `cargo test --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
+Boucle de vérification : `cargo test --release --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
 
 ## Portes d'accès (`access.rs`, 2026-11-13)
 

@@ -5,9 +5,9 @@ resolver = "2"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# Optimized dev builds (user decision 2026-11-13): the daemon and the
-# workers run the dev binary, and unoptimized nav planning was ~5x slower
-# (cold route 2.5 s vs 0.45 s in release). Debug info and assertions stay.
+# Everything builds in release (user decision 2026-11-14): the daemon and
+# the workers run rs/target/release/orchestrator. The dev profile stays
+# optimized for the rare debug build (unoptimized nav was ~5x slower).
 [profile.dev]
 opt-level = 1
 

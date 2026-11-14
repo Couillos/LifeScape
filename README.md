@@ -17,13 +17,13 @@ Toolchain : Rust stable, `cargo` seul. Layout `rs/` (workspace) :
 Instructions canoniques : `AGENTS.md` (+ `../lostcity/AGENTS.md`).
 
 ```sh
-cargo build --manifest-path rs/Cargo.toml
-cargo test --manifest-path rs/Cargo.toml
-./rs/target/debug/orchestrator open <compte>
-./rs/target/debug/orchestrator run <compte> woodcut 1
-./rs/target/debug/orchestrator status | show <compte> | logs <compte> 40
-./rs/target/debug/orchestrator unload <compte> | close <compte>
-./rs/target/debug/orchestrator shutdown
+cargo build --release --manifest-path rs/Cargo.toml
+cargo test --release --manifest-path rs/Cargo.toml
+./rs/target/release/orchestrator open <compte>
+./rs/target/release/orchestrator run <compte> woodcut 1
+./rs/target/release/orchestrator status | show <compte> | logs <compte> 40
+./rs/target/release/orchestrator unload <compte> | close <compte>
+./rs/target/release/orchestrator shutdown
 ```
 
 Dashboard : http://localhost:8765/ (état live + spectate).
