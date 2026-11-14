@@ -290,6 +290,26 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 const INBOX_CAPACITY: usize = 128;
 
 /// Accounts with a plain tick already queued (deduplication).
+/// Supervisor passes between two plain brain ticks of one account
+/// (CPU, VPS 2026-11-14): the supervisor passes every 500 ms over ~26
+/// jobs and each plain tick ran a full `maybe_launch` (resolve, market
+/// reads) — the brain thread sat at 30–85 % of a core doing nothing new.
+/// A report always goes through at once; a plain tick (idle detection,
+/// periodic sales) waits at most this many passes (~3 s).
+pub(crate) const PLAIN_TICK_EVERY: u32 = 6;
+
+/// True when this supervisor pass carries the account's plain tick:
+/// counts the pass and fires on every `PLAIN_TICK_EVERY`-th one.
+pub(crate) fn plain_tick_due(passes: &mut u32) -> bool {
+    *passes = passes.wrapping_add(1);
+    *passes % PLAIN_TICK_EVERY == 1
+}
+
+fn plain_tick_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+    PASSES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static QUEUED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
     QUEUED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
@@ -355,6 +375,12 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
     // always full — 2 340 "inbox full" lines in 36 min, every decision
     // delayed for nothing. A report always goes through.
     if !had_report {
+        let mut passes = plain_tick_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !plain_tick_due(passes.entry(job.account.clone()).or_insert(0)) {
+            return;
+        }
+    }
+    if !had_report {
         let mut waiting = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !waiting.insert(job.account.clone()) {
             return;
@@ -386,6 +412,15 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 mod tests {
     use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, parse_goal, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
+
+    #[test]
+    fn plain_ticks_fire_once_every_few_passes() {
+        let mut passes = 0;
+        let fired: Vec<bool> = (0..13).map(|_| super::plain_tick_due(&mut passes)).collect();
+        assert!(fired[0], "the first pass ticks at once (fresh account)");
+        assert_eq!(fired.iter().filter(|fired| **fired).count(), 3, "13 passes, one tick per {} passes", super::PLAIN_TICK_EVERY);
+        assert!(!fired[1] && fired[super::PLAIN_TICK_EVERY as usize]);
+    }
 
     #[test]
     fn goals_parse() {
