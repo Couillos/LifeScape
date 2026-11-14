@@ -418,6 +418,14 @@ fn wait_bones(bot: &mut Bot, bones: &u16, timeout: u64) -> Result<bool, ScriptEr
 
 fn ranged_kill(bot: &mut Bot) -> Result<(), ScriptError> {
     let bones = obj("newbiebones")?;
+    // A resumed session lands here with the bow and arrows still in the
+    // pack (live 2026-11-14, jim_ellis / ray_79: sword worn, every shot a
+    // melee swing at a fenced rat): wear them before shooting.
+    for name in ["shortbow", "bronze_arrow"] {
+        if bot.inventory().get(&obj(name)?).copied().unwrap_or(0) > 0 {
+            equip_held(bot, name)?;
+        }
+    }
     // Rotate spots: one ghost slot must not eat all four shots.
     let mut dud: Vec<u16> = Vec::new();
     for _ in 0..4 {
@@ -428,13 +436,33 @@ fn ranged_kill(bot: &mut Bot) -> Result<(), ScriptError> {
         }
         let Some(found) = spots.into_iter().next() else { continue };
         bot.op_npc(2, found)?;
-        if wait_bones(bot, &bones, 150)? {
+        if wait_own_kill(bot, found, bones, 150)? {
             bot.log("ok rat killed at range");
             return Ok(());
         }
         dud.push(found);
     }
     check(bot.position(), false, "ranged rat kill")
+}
+
+/// The shot rat itself died: its slot left the world and bones lie where
+/// it stood. Bones anywhere in the pen are not proof: another newcomer's
+/// kill fakes it (two bots on the same stage, live 2026-11-14).
+fn wait_own_kill(bot: &mut Bot, target: u16, bones: u16, timeout: u64) -> Result<bool, ScriptError> {
+    let deadline = bot.world.ticks + timeout;
+    let mut last_seen = bot.world.npcs.get(&target).map(|npc| (npc.x, npc.z));
+    while bot.world.ticks < deadline {
+        bot.pump(2)?;
+        match bot.world.npcs.get(&target) {
+            Some(npc) => last_seen = Some((npc.x, npc.z)),
+            None => {
+                let Some((x, z)) = last_seen else { return Ok(false) };
+                bot.pump(3)?;
+                return Ok(!bot.world.ground_items(x, z, bot.world.level, 1, Some(bones)).is_empty());
+            }
+        }
+    }
+    Ok(false)
 }
 
 // -- south -----------------------------------------------------------------
