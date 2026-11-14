@@ -21,7 +21,7 @@ use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
 pub use crate::no_route::{NoRoute, NoRouteReason};
-pub(crate) use crate::no_route::{DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
+pub(crate) use crate::no_route::{detour_cap, DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
 
 /// Identity hash with a bit mixer: tile keys pack level/z/x, so the
 /// raw low bits are just the x coordinate and whole columns would
@@ -318,11 +318,11 @@ enum PrevEdge {
 /// a better lifted path). Requirement and toll verdicts fall out of the
 /// lifted paths without extra full searches.
 ///
-/// Known limit: when the lifted-optimal path crosses a requirement
-/// door with missing tags, the answer is NeedsRequirement without
-/// searching for a longer tag-free detour. Requirement doors guard
-/// enclosed pockets (verified for the single current entry), so no
-/// such detour exists; revisit if a requirement door ever gets one.
+/// When the lifted-optimal path crosses a requirement door (or a
+/// custom edge) with missing tags, a strict search (requirements
+/// enforced) looks for a longer tag-free detour before answering
+/// NeedsRequirement: the brass-key door 1804 has one (the Edgeville
+/// trapdoor and the main dungeon reach the same giants' hall).
 pub fn plan(world: &StaticWorld, tables: &Tables, from: Tile, dest: Tile, options: &NavOptions) -> Result<Plan, NoRoute> {
     plan_yielding(world, tables, from, dest, options, &mut || true)
 }
@@ -399,7 +399,7 @@ pub(crate) fn plan_budgeted(
         });
     }
     let deadline = std::time::Instant::now() + budget;
-    let verdict_cut = match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, yield_, deadline) {
+    let verdict_cut = match dijkstra(world, tables, from, dest, options, true, options.allow_paid, false, &shared, u32::MAX, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(chain, cost, best) => {
             let mut blocked = Vec::new();
@@ -431,6 +431,24 @@ pub(crate) fn plan_budgeted(
                 }
                 return Ok(plan);
             }
+            // The lifted-optimal path crosses a missing requirement: a
+            // longer requirement-free detour may still exist (the
+            // Edgeville dungeon giants: brass-key door 1804 or the
+            // trapdoor and the main dungeon). The strict search finds it.
+            // Bounded by cost (`detour_cap`), so a requirement guarding a
+            // true pocket (guild door, boat fare) answers fast.
+            let detour_deadline = std::time::Instant::now() + DIAGNOSIS_BUDGET;
+            match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, shared, detour_cap(cost), yield_, detour_deadline) {
+                Outcome::Aborted => return Err(aborted(from)),
+                Outcome::Found(chain, cost, _) => {
+                    let mut plan = assemble(tables, from, dest, chain, cost);
+                    if plan.adjusted_dest.is_some() {
+                        plan.dest_blocker = blocker_at(world, tables, dest);
+                    }
+                    return Ok(plan);
+                }
+                Outcome::Closest(_) | Outcome::OverBudget(_) => {}
+            }
             return Err(NoRoute {
                 closest_reachable: best,
                 blocked_by_requirements: blocked,
@@ -450,7 +468,7 @@ pub(crate) fn plan_budgeted(
     if !options.allow_paid {
         // B: tolls lifted too. A path here that the searches above lack
         // must swing a toll gate: coins, not walls, block the way.
-        match dijkstra(world, tables, from, dest, options, true, true, false, &shared, yield_, deadline) {
+        match dijkstra(world, tables, from, dest, options, true, true, false, &shared, u32::MAX, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(chain, _, best) => {
                 let mut tolls = Vec::new();
@@ -500,7 +518,7 @@ pub(crate) fn plan_budgeted(
     if options.f2p_only {
         // C: bounds lifted, requirements enforced. Reaching the dest this
         // way proves the F2P fence is the blocker.
-        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, &shared, yield_, deadline) {
+        match dijkstra(world, tables, from, dest, options, false, options.allow_paid, true, &shared, u32::MAX, yield_, deadline) {
             Outcome::Aborted => return Err(aborted(from)),
             Outcome::Found(_, _, best) => {
                 return Err(NoRoute {
@@ -515,7 +533,7 @@ pub(crate) fn plan_budgeted(
         }
     }
     // D: fully filtered search, for the closest reachable tile.
-    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, &shared, yield_, deadline) {
+    let closest = match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, &shared, u32::MAX, yield_, deadline) {
         Outcome::Aborted => return Err(aborted(from)),
         Outcome::Found(_, _, best) | Outcome::Closest(best) | Outcome::OverBudget(best) => best,
     };
@@ -789,6 +807,7 @@ fn dijkstra(
     allow_paid: bool,
     ignore_f2p: bool,
     shared: &SharedEdges,
+    cost_cap: u32,
     yield_: &mut dyn FnMut() -> bool,
     deadline: std::time::Instant,
 ) -> Outcome {
@@ -844,7 +863,7 @@ fn dijkstra(
         // current best instead of burning the worker, as OverBudget —
         // never a Closest (Disconnected) nor a blocked-dest adjustment
         // to wherever the cut fell. The operator stop still wins above.
-        if visits > MAX_VISITS || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
+        if visits > MAX_VISITS || cost > cost_cap || (visits % 1024 == 0 && std::time::Instant::now() >= deadline) {
             return Outcome::OverBudget(best);
         }
         let here = unkey(key);

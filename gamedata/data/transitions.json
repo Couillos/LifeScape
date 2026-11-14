@@ -11848,5 +11848,455 @@
    3285,
    3497
   ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2924,
+    9650
+   ]
+  ],
+  "from": [
+   0,
+   2924,
+   9650
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_367",
+  "open_to": null,
+  "to": [
+   0,
+   2924,
+   3250
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2928,
+    9658
+   ]
+  ],
+  "from": [
+   0,
+   2928,
+   9658
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_368",
+  "open_to": null,
+  "to": [
+   0,
+   2928,
+   3258
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    2939,
+    9657
+   ]
+  ],
+  "from": [
+   0,
+   2939,
+   9657
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_369",
+  "open_to": null,
+  "to": [
+   0,
+   2939,
+   3257
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3008,
+    9550
+   ]
+  ],
+  "from": [
+   0,
+   3008,
+   9550
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_370",
+  "open_to": null,
+  "to": [
+   0,
+   3008,
+   3150
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3018,
+    9739
+   ]
+  ],
+  "from": [
+   0,
+   3018,
+   9739
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_371",
+  "open_to": null,
+  "to": [
+   0,
+   3018,
+   3339
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    9738
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   9738
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_372",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   3338
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    9740
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   9740
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_373",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   3340
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3019,
+    9850
+   ]
+  ],
+  "from": [
+   0,
+   3019,
+   9850
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_374",
+  "open_to": null,
+  "to": [
+   0,
+   3019,
+   3450
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3020,
+    9739
+   ]
+  ],
+  "from": [
+   0,
+   3020,
+   9739
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_375",
+  "open_to": null,
+  "to": [
+   0,
+   3020,
+   3339
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3096,
+    9867
+   ]
+  ],
+  "from": [
+   0,
+   3096,
+   9867
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_376",
+  "open_to": null,
+  "to": [
+   0,
+   3096,
+   3467
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3116,
+    9852
+   ]
+  ],
+  "from": [
+   0,
+   3116,
+   9852
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_377",
+  "open_to": null,
+  "to": [
+   0,
+   3116,
+   3452
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3209,
+    9616
+   ]
+  ],
+  "from": [
+   0,
+   3209,
+   9616
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_378",
+  "open_to": null,
+  "to": [
+   0,
+   3209,
+   3216
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3230,
+    9904
+   ]
+  ],
+  "from": [
+   0,
+   3230,
+   9904
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_379",
+  "open_to": null,
+  "to": [
+   0,
+   3230,
+   3504
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3231,
+    9801
+   ]
+  ],
+  "from": [
+   0,
+   3231,
+   9801
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_380",
+  "open_to": null,
+  "to": [
+   0,
+   3231,
+   3401
+  ]
+ },
+ {
+  "climb_loc": 1755,
+  "climb_op": 1,
+  "delta": [
+   0,
+   0,
+   -6400
+  ],
+  "disabled": null,
+  "footprint": [
+   [
+    3237,
+    9858
+   ]
+  ],
+  "from": [
+   0,
+   3237,
+   9858
+  ],
+  "kind": "ladder",
+  "loc": 1755,
+  "name": "ladder_from_cellar_381",
+  "open_to": null,
+  "to": [
+   0,
+   3237,
+   3458
+  ]
  }
 ]

@@ -32,10 +32,12 @@ fn threatens(our_combat: Option<u8>, vislevel: i64) -> bool {
     our_combat.is_none_or(|ours| i64::from(ours) <= vislevel * 2)
 }
 
-/// Wilderness surface (level 0, z 3520 and up in the F2P world): hunters
-/// there attack every combat level.
+/// Wilderness, the engine's own line (`gamedata::danger::in_wilderness`:
+/// the surface from z 3520 and the dungeons from z 9920): hunters there
+/// attack every combat level. The rest of the underground band (the
+/// Edgeville dungeon on the way to the giants) follows the passive rule.
 pub(crate) fn in_wilderness(spawn_x: i64, spawn_z: i64, level: i64) -> bool {
-    level == 0 && (2944..=3392).contains(&spawn_x) && spawn_z >= 3520
+    knowledge::danger::in_wilderness(spawn_x, spawn_z, level)
 }
 
 /// Hunters at or above this level can kill a low-level bot whatever its
@@ -170,6 +172,17 @@ mod tests {
     fn wilderness_hunters_ignore_the_two_times_rule() {
         let strong = threats_for(Some(30), 0);
         assert!(strong.iter().any(|threat| threat.z >= 3520), "wilderness hunters stay dangerous for combat 30");
+    }
+
+    /// The Edgeville dungeon below z 9920 is no Wilderness (engine line):
+    /// its level-22 skeletons on the trapdoor walk to the giants hunt a
+    /// combat-44 bot, ignore a combat-46 one; past the wild gate the
+    /// chaos druids hunt everyone.
+    #[test]
+    fn dungeon_hunters_follow_the_passive_rule() {
+        assert!(covering(&threats_for(Some(44), 0), 3121, 9908).is_some_and(|threat| threat.name == "skeleton_armed"));
+        assert!(covering(&threats_for(Some(46), 0), 3121, 9908).is_none_or(|threat| threat.name != "skeleton_armed"));
+        assert!(covering(&threats_for(Some(90), 0), 3109, 9931).is_some_and(|threat| threat.name == "chaos_druid"));
     }
 
     /// A high-level bot is not a target: vislevel 7 wizards ignore

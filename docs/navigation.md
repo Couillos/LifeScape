@@ -222,6 +222,24 @@ officier des douanes (voyage, fouille, « Ok. ») → (3032,3217,1),
 passerelle 2084 → (3029,3217,0), 30 pièces prises à chaque traversée ;
 l'exécuteur SDK lui-même attend un déploiement pour son essai live.
 
+## Détour sans prérequis (2026-11-14)
+
+La première recherche lève les prérequis. Si son chemin passe une porte
+(ou une arête custom) dont le tag manque, une recherche stricte bornée
+par le coût (`no_route::detour_cap` : `2 × coût levé + 64`) cherche un
+détour sans ce tag avant de répondre `NeedsRequirement`. Cas réel : salle
+des géants du donjon d'Edgeville, porte à clé 1804 (171) ou trappe et
+donjon principal (260). Goldens `geants_sans_cle` (deux recherches :
+`budget_ms=1500`), `geants_avec_cle`, `geants_retour`.
+
+Sorties de cave : `dump-transitions` ignorait l'en-tête
+`[oploc1,ladder_from_cellar] // mining guild ladder` (commentaire après
+le `]`) et aucun `ladder_from_cellar` ne remontait (donjon d'Edgeville,
+égouts de Varrock, guilde des mineurs, donjon des glaces, Karamja…) ;
+corrigé (commentaire retiré, branche `if(loc_coord = …)` de Zanaris
+liée à son seul emplacement). 15 lignes ajoutées en fin de
+`transitions.json`, noms existants inchangés (référencés par les tests).
+
 ## Danger et destinations substituées (2026-11-12)
 
 - `NavOptions::danger` : carrés `(x, z, niveau, rayon)` où un PNJ agressif

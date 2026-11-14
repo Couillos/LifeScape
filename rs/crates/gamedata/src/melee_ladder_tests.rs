@@ -112,18 +112,55 @@ fn foodless_mid_levels_ask_for_food() {
     }
 }
 
-/// Gates: the brass key opens the hill giants, ten coins the toll.
+/// Gates: ten coins open the toll. The hill giants need no key: the
+/// Edgeville trapdoor and the main dungeon reach their hall (golden
+/// route `geants_sans_cle`); the brass key is only a shortcut.
 #[test]
 fn gates_follow_the_holdings() {
     let melee = fighter(40, 40, &STEEL);
     let giants = |holdings: &Holdings| rate(&melee, holdings).into_iter().find(|entry| entry.rung.key == "hill_giants").expect("giants");
-    assert!(giants(&stocked()).refused.as_deref().is_some_and(|why| why.contains("BrassKey")));
-    let keyed = Holdings { brass_key: true, ..stocked() };
-    assert_eq!(giants(&keyed).refused, None, "key held: workable");
+    assert_eq!(giants(&stocked()).refused, None, "no key: workable by the trapdoor");
+    assert_eq!(giants(&Holdings { brass_key: true, ..stocked() }).refused, None, "key held: workable");
     let warriors = |holdings: &Holdings| rate(&melee, holdings).into_iter().find(|entry| entry.rung.key == "al_kharid_warriors").expect("warriors");
     assert!(warriors(&stocked()).refused.is_some(), "west, broke: closed");
     assert_eq!(warriors(&Holdings { coins: 10, ..stocked() }).refused, None, "ten coins pay the toll");
     assert_eq!(warriors(&Holdings { east_of_toll: true, ..stocked() }).refused, None, "already east");
+}
+
+/// Live 2026-11-14 (george_97: attack 61, strength 61, defence 60,
+/// hitpoints 60, combat 75, black armour, 10 shrimps, no key): the
+/// ladder hunted guards forever, the giants refused `gate BrassKey
+/// closed`. The strongest workable rungs now hold the band.
+#[test]
+fn veterans_hunt_the_giants_without_a_key() {
+    let melee = Fighter { attack_bonus: [-2, 20, 15], strength_bonus: 24, defence_bonus: [46, 57, 61], ..Fighter::naked(61, 61, 60, 60, 75) };
+    let holdings = Holdings { food_count: 10, best_heal: 3, coins: 0, brass_key: false, east_of_toll: false };
+    let rated = rate(&melee, &holdings);
+    let giants = rated.iter().find(|entry| entry.rung.key == "hill_giants").expect("giants");
+    assert_eq!(giants.refused, None, "giants workable: {:?}", giants.refused);
+    let mut picked = std::collections::BTreeSet::new();
+    for seed in 0..32 {
+        picked.insert(picked_key(&choose(&melee, &holdings, seed * 7_919)));
+    }
+    assert!(picked.contains("hill_giants"), "giants in the band: {picked:?}");
+    assert!(!picked.contains("guards"), "guards fell out of the band: {picked:?}");
+}
+
+/// Dungeon approach (`approach_threat`): the hunters met between the
+/// trapdoor and the hall must not burst the bot from its eat line
+/// either. A 15-hitpoint bot survives two giant hits (eat line 8.25)
+/// but not the armed hobgoblins on the way down.
+#[test]
+fn approach_burst_keeps_low_hitpoints_out_of_the_dungeon() {
+    let frail = fighter(30, 15, &IRON);
+    let giants = rate(&frail, &stocked()).into_iter().find(|entry| entry.rung.key == "hill_giants").expect("giants");
+    assert!(giants.refused.as_deref().is_some_and(|why| why.starts_with("approach")), "{:?}", giants.refused);
+    let sturdy = fighter(30, 30, &IRON);
+    let giants = rate(&sturdy, &stocked()).into_iter().find(|entry| entry.rung.key == "hill_giants").expect("giants");
+    assert_eq!(giants.refused, None, "30 hitpoints walk down: {:?}", giants.refused);
+    let threat = crate::melee_ladder::approach_threat(&rung_by_key("hill_giants").expect("giants"), (3111, 9837, 0), 20, 8.25);
+    assert!(threat.is_some(), "combat 20 meets a biting hunter on the way");
+    assert_eq!(crate::melee_ladder::approach_threat(&rung_by_key("cows").expect("cows"), (3253, 3270, 0), 3, 1.0), None, "surface: no approach");
 }
 
 /// The burst rule: two guard max hits from the eat line of a 10-hp bot
@@ -148,18 +185,26 @@ fn coin_droppers_carry_a_bonus() {
 }
 
 /// The seed spreads a fleet: many account names land on more than one
-/// (rung, first cluster) pair, and one name always lands the same.
+/// (rung, first cluster) pair, and one name always lands the same. At
+/// melee 30 the band holds guards, hobgoblins and the giants; at 45 only
+/// the two strongest camps stay in it (giants and hobgoblins), the fleet
+/// still split between them.
 #[test]
 fn seeds_spread_the_fleet_and_stay_stable() {
-    let melee = fighter(45, 45, &STEEL);
-    let mut seen = std::collections::BTreeSet::new();
-    for index in 0..12 {
-        let seed = seed_of(&format!("t{index:02}"));
-        if let Some(Pick::Hunt { rung, clusters, .. }) = choose(&melee, &stocked(), seed) {
-            seen.insert((rung.key, clusters.first().map(|(x, z, _, _)| (*x, *z))));
+    let spread = |melee: Fighter| {
+        let mut seen = std::collections::BTreeSet::new();
+        for index in 0..12 {
+            let seed = seed_of(&format!("t{index:02}"));
+            if let Some(Pick::Hunt { rung, clusters, .. }) = choose(&melee, &stocked(), seed) {
+                seen.insert((rung.key, clusters.first().map(|(x, z, _, _)| (*x, *z))));
+            }
         }
-    }
-    assert!(seen.len() >= 3, "12 bots spread over {seen:?}");
+        seen
+    };
+    let seen = spread(fighter(30, 30, &STEEL));
+    assert!(seen.len() >= 3, "12 bots at melee 30 spread over {seen:?}");
+    let seen = spread(fighter(45, 45, &STEEL));
+    assert!(seen.len() >= 2, "12 bots at melee 45 spread over {seen:?}");
     assert_eq!(seed_of("t01"), seed_of("t01"));
     let clusters = vec![(1, 1, 0, 3), (50, 50, 0, 3), (5, 5, 0, 2)];
     let firsts: std::collections::BTreeSet<(i64, i64, i64, usize)> = (0..40u64).map(|seed| order_clusters(&clusters, seed * 25_000)[0]).collect();

@@ -7,9 +7,13 @@
 //! food is carried everywhere except cows and chickens. A spot is
 //! workable when:
 //! - its gate holds: `Toll` needs 10 coins (or the bot already on the
-//!   Al Kharid flank), `BrassKey` the Edgeville dungeon key (pack or
-//!   bank); otherwise the ladder takes the next spot, never a block;
-//! - two NPC max hits from the eat line cannot kill (`burst`);
+//!   Al Kharid flank); otherwise the ladder takes the next spot, never
+//!   a block. The Edgeville dungeon giants need no key: the trapdoor
+//!   and the main dungeon reach their hall; an owned brass key only
+//!   rides along as the shortcut (`Rung::shortcut_key`);
+//! - two NPC max hits from the eat line cannot kill (`burst`), nor two
+//!   hits of any hunter met on the way down to an underground cluster
+//!   that would attack this combat level (`approach_threat`);
 //! - the food load (or, foodless, the hitpoints above the eat line)
 //!   covers `MIN_KILLS_PER_LOAD` kills;
 //! - one cluster at least sits outside every other hunter that would
@@ -66,8 +70,6 @@ pub enum Gate {
     Open,
     /// Across the Al Kharid toll fence.
     Toll,
-    /// Behind the Edgeville dungeon brass-key door.
-    BrassKey,
 }
 
 /// One rung: a `combat_spots` key, the NPC whose stats rate it, the
@@ -83,17 +85,26 @@ pub struct Rung {
     /// Hitpoints the NPC heals back per tick (monks: 2 hp on one swing
     /// in four, one swing per 4 ticks).
     pub self_heal_per_tick: f64,
+    /// Key that opens a shorter way in, carried every trip when owned
+    /// (the brass key: the house door west of Varrock drops straight
+    /// into the giants' hall). Never required.
+    pub shortcut_key: Option<&'static str>,
 }
 
 const fn rung(key: &'static str, npc: &'static str, food_exempt: bool, gate: Gate, area: Option<(i64, i64, i64, i64)>) -> Rung {
-    Rung { key, npc, food_exempt, gate, area, self_heal_per_tick: 0.0 }
+    Rung { key, npc, food_exempt, gate, area, self_heal_per_tick: 0.0, shortcut_key: None }
 }
 
 /// Every F2P melee rung the fight loop can hunt (surface, plus the
-/// Edgeville dungeon giants the router reaches with the brass key).
+/// Edgeville dungeon giants the router reaches by the Edgeville trapdoor,
+/// or the brass-key house when the key is owned).
 /// Left out: dark wizards (magic attackers, not a melee exchange), rats
-/// (mixed 2-10 hp NPCs), imps (teleport away mid-fight, max hit 0), bears/ice/wilderness (never safe), moss giants
-/// (Varrock sewers: no route offline, BudgetExhausted at the web), and
+/// (mixed 2-10 hp NPCs), imps (teleport away mid-fight, max hit 0),
+/// bears and the wilderness camps (never safe), moss giants (their F2P
+/// hall east of the Edgeville dungeon zombies sits behind the slashable
+/// web `bigweb_slashable` (3146, 9898): no nav edge, `Disconnected`
+/// offline), the Asgarnian ice dungeon (ice warriors and giants: no F2P
+/// bank within `danger::BANK_TREK_LIMIT` of Mudskipper Point), and
 /// Crandor or members spawns (area filters).
 pub const RUNGS: [Rung; 11] = [
     rung("chickens", "chicken", true, Gate::Open, None),
@@ -106,10 +117,10 @@ pub const RUNGS: [Rung; 11] = [
     // Al Kharid mine only (Karamja needs the boat).
     rung("scorpions", "scorpion", false, Gate::Toll, Some((3270, 3270, 3320, 3320))),
     rung("guards", "guard1", false, Gate::Open, None),
-    // Rimmington peninsula only (Crandor needs Dragon Slayer, the
-    // dungeon camp the brass key).
+    // Rimmington peninsula only (Crandor needs Dragon Slayer; the
+    // Edgeville dungeon camp mixes in the armed level-42 ones).
     rung("hobgoblins", "hobgoblin_unarmed", false, Gate::Open, Some((2895, 3270, 2920, 3300))),
-    rung("hill_giants", "giant", false, Gate::BrassKey, Some((3090, 9815, 3130, 9860))),
+    Rung { shortcut_key: Some(BRASS_KEY), ..rung("hill_giants", "giant", false, Gate::Open, Some((3090, 9815, 3130, 9860))) },
 ];
 
 /// Rung by spot key.
@@ -173,12 +184,47 @@ pub fn food_for(estimate: &Estimate, heal: i64) -> u32 {
 /// Underground tiles sit 6400 above their surface.
 const UNDERGROUND_OFFSET: i64 = 6400;
 
-/// Wilderness, surface (z 3520 up to the underground band) or the
-/// dungeons under it (z 9920 up). `danger::in_wilderness` reads every
-/// z from 3520 up as wild, the Edgeville dungeon included.
+/// Wilderness, surface or the dungeons under it (`danger::in_wilderness`,
+/// the engine's own line).
 pub fn in_wilderness_any(x: i64, z: i64, level: i64) -> bool {
-    let wild_x = level == 0 && (2944..=3392).contains(&x);
-    wild_x && ((3520..UNDERGROUND_OFFSET).contains(&z) || z >= 3520 + UNDERGROUND_OFFSET)
+    crate::danger::in_wilderness(x, z, level)
+}
+
+/// Box slack around the trapdoor-to-cluster span where an underground
+/// approach meets hunters: the Edgeville trapdoor walk to the giants
+/// loops up to z 9914 and east to x 3146 (golden `geants_sans_cle`),
+/// 46 and 35 tiles past the box of its ends.
+pub const APPROACH_MARGIN: i64 = 50;
+
+/// Worst hunter met on the way down to an underground cluster: one
+/// that would attack `combat` (server passive rule, the rung's own NPCs
+/// excluded: we came to fight them) and whose two max hits reach the
+/// eat line. (name, max hit), or `None` (surface cluster, or every
+/// hunter on the way passive or survivable). Hunters spawn anywhere in
+/// the box spanning the entrance landing (surface + 6400) and the
+/// cluster, `APPROACH_MARGIN` wider; Wilderness ones stay out (the
+/// routes never enter it).
+pub fn approach_threat(rung: &Rung, cluster: (i64, i64, i64), combat: i64, eat_line: f64) -> Option<(&'static str, i64)> {
+    let (x, z, level) = cluster;
+    if z < UNDERGROUND_OFFSET {
+        return None;
+    }
+    let spot = crate::combat_spots::by_key(rung.key)?;
+    let (landing_x, landing_z) = spot.entrance.map(|entrance| (entrance.surface.0, entrance.surface.1 + UNDERGROUND_OFFSET)).unwrap_or((x, z));
+    let (low_x, high_x) = (x.min(landing_x) - APPROACH_MARGIN, x.max(landing_x) + APPROACH_MARGIN);
+    let (low_z, high_z) = (z.min(landing_z) - APPROACH_MARGIN, z.max(landing_z) + APPROACH_MARGIN);
+    let combat = u8::try_from(combat.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX);
+    crate::danger::hunters()
+        .iter()
+        .filter(|hunter| hunter.level == level && !hunter.wilderness && !spot.npc_names.contains(&hunter.name))
+        .filter(|hunter| (low_x..=high_x).contains(&hunter.x) && (low_z..=high_z).contains(&hunter.z))
+        .filter(|hunter| crate::danger::hunts(hunter, Some(combat)))
+        .filter_map(|hunter| {
+            let npc = crate::npc_combat::by_name(hunter.name)?;
+            Some((hunter.name, crate::melee_math::max_hit(npc.strength + 9, npc.strength_bonus)))
+        })
+        .filter(|(_, max_hit)| (BURST_HITS * max_hit) as f64 >= eat_line)
+        .max_by_key(|(name, max_hit)| (*max_hit, *name))
 }
 
 /// F2P, non-wilderness spawn clusters of a rung on level 0 (15-tile
@@ -261,18 +307,22 @@ pub fn rate(fighter: &Fighter, holdings: &Holdings) -> Vec<Rated> {
         let value = estimate.xp_per_tick * fighting_share + COIN_XP_WEIGHT * coins / estimate.cycle_ticks;
         let eat_line = fighter.hitpoints as f64 * EAT_FRACTION;
         let pool = (fighter.hitpoints as f64 - eat_line) + f64::from(food) * heal as f64;
-        let clusters: Vec<(i64, i64, i64, usize)> = rung_clusters(&rung)
+        let safe: Vec<(i64, i64, i64, usize)> = rung_clusters(&rung)
             .into_iter()
             .filter(|(x, z, level, _)| i64::from(cluster_requirement(&rung, (*x, *z, *level))) <= fighter.combat)
             .collect();
+        let threats: Vec<Option<(&str, i64)>> = safe.iter().map(|(x, z, level, _)| approach_threat(&rung, (*x, *z, *level), fighter.combat, eat_line)).collect();
+        let clusters: Vec<(i64, i64, i64, usize)> = safe.iter().zip(&threats).filter(|(_, threat)| threat.is_none()).map(|(cluster, _)| *cluster).collect();
         let refused = if !gate_open(rung.gate, holdings) {
             Some(format!("gate {:?} closed", rung.gate))
         } else if (BURST_HITS * estimate.npc_max_hit) as f64 >= eat_line {
             Some(format!("burst: {BURST_HITS} x max hit {} >= eat line {eat_line:.1}", estimate.npc_max_hit))
         } else if !rung.food_exempt && pool < MIN_KILLS_PER_LOAD * estimate.damage_per_kill {
             Some(format!("load {pool:.1} hp < {MIN_KILLS_PER_LOAD} kills x {:.1}", estimate.damage_per_kill))
-        } else if clusters.is_empty() {
+        } else if safe.is_empty() {
             Some("no cluster safe for this combat level".to_string())
+        } else if let (true, Some((name, max_hit))) = (clusters.is_empty(), threats.iter().flatten().next()) {
+            Some(format!("approach: {name} {BURST_HITS} x max hit {max_hit} >= eat line {eat_line:.1}"))
         } else {
             None
         };
@@ -285,7 +335,6 @@ fn gate_open(gate: Gate, holdings: &Holdings) -> bool {
     match gate {
         Gate::Open => true,
         Gate::Toll => holdings.east_of_toll || holdings.coins >= TOLL_COINS,
-        Gate::BrassKey => holdings.brass_key,
     }
 }
 

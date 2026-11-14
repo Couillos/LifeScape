@@ -76,14 +76,19 @@ pub fn holdings(bot: &mut Bot) -> Holdings {
     holdings_from(food_in(bot, pack.iter().copied()), food_in(bot, bank.iter().copied()), coins, brass_key, east_of_toll)
 }
 
-/// Items a rung's gate needs on every trip (name, units).
+/// Items that ride every trip (name, units): what the rung's gate needs,
+/// plus its shortcut key when the bot owns it (the brass key: the nav
+/// takes the house door only with the key in the pack).
 pub fn gate_items(rung: &Rung, holdings: &Holdings) -> Vec<(String, u32)> {
-    match rung.gate {
+    let mut out = match rung.gate {
         Gate::Open => Vec::new(),
         Gate::Toll if holdings.east_of_toll => Vec::new(),
         Gate::Toll => vec![("coins".to_string(), TOLL_COINS)],
-        Gate::BrassKey => vec![(BRASS_KEY.to_string(), 1)],
+    };
+    if let Some(key) = rung.shortcut_key.filter(|key| *key == BRASS_KEY && holdings.brass_key) {
+        out.push((key.to_string(), 1));
     }
+    out
 }
 
 /// The plan of one hunt pick (pure: tests drive it without a bot).
@@ -167,13 +172,16 @@ mod tests {
         assert!(plan.keep.is_empty(), "open gate keeps nothing");
     }
 
-    /// Gate items ride every trip: the key for the giants, ten coins for
-    /// the toll from the west, nothing once east.
+    /// Gate items ride every trip: the owned key for the giants (a
+    /// shortcut, never required), ten coins for the toll from the west,
+    /// nothing once east.
     #[test]
     fn gates_keep_their_items() {
         let west = holdings_from((5, 3), (0, 0), 50, true, false);
         let giants = rung_by_key("hill_giants").expect("giants");
-        assert_eq!(gate_items(&giants, &west), vec![(BRASS_KEY.to_string(), 1)]);
+        assert_eq!(gate_items(&giants, &west), vec![(BRASS_KEY.to_string(), 1)], "owned key rides as the shortcut");
+        let keyless = holdings_from((5, 3), (0, 0), 50, false, false);
+        assert!(gate_items(&giants, &keyless).is_empty(), "no key: the trapdoor, nothing kept");
         let warriors = rung_by_key("al_kharid_warriors").expect("warriors");
         assert_eq!(gate_items(&warriors, &west), vec![("coins".to_string(), 10)]);
         let east = holdings_from((5, 3), (0, 0), 0, false, true);

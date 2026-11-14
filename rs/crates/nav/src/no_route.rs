@@ -38,6 +38,20 @@ pub(crate) const PLAN_BUDGET: Duration = Duration::from_secs(20);
 /// client's `SERVICE_WAIT_MAX` (30 s), or a slow plan reads nav-down.
 pub(crate) const DIAGNOSIS_BUDGET: Duration = Duration::from_secs(8);
 
+/// Requirement-free detour bound: a lifted path of cost `lifted` that
+/// crosses a missing requirement is retried strict up to
+/// `DETOUR_FACTOR x lifted + DETOUR_SLACK`. Edgeville bank -> hill
+/// giants: 171 through the brass-key door, 260 by the trapdoor (cap
+/// 406); a guild door or boat fare guarding a true pocket answers
+/// NeedsRequirement after a small sweep instead of the whole world.
+pub(crate) const DETOUR_FACTOR: u32 = 2;
+pub(crate) const DETOUR_SLACK: u32 = 64;
+
+/// Cost cap of the strict detour search after a lifted path of `lifted`.
+pub(crate) fn detour_cap(lifted: u32) -> u32 {
+    lifted.saturating_mul(DETOUR_FACTOR).saturating_add(DETOUR_SLACK)
+}
+
 /// Why no route exists.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NoRouteReason {

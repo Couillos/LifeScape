@@ -5,7 +5,7 @@
 # unreachable=<raison>, uses_loc=<id>, rides<=N, rides>=N, doors<=N,
 # walk_tiles<=N, walk_tiles>=N, levels=a>b>c, adjusted_dest, adjusted=<x>,<z>,
 # never_steps=<x1>,<z1>,<x2>,<z2>,
-# stand=<x>,<z>, avoids=<x>,<z>).
+# stand=<x>,<z>, avoids=<x>,<z>, budget_ms=<N> (latence max, defaut 300)).
 # 1. longue marche meme niveau en exterieur (Lumbridge -> Varrock est).
 longue_marche | 3222,3222,0 | 3250,3420,0 | - | reachable ; walk_tiles<=400
 # 2. entree par une porte fermee (1530 angle EST, stand est valide).
@@ -170,3 +170,18 @@ poche_lumbridge_cloture | 3257,3244,0 | 3257,3242,0 | f2p | unreachable=Disconne
 # Varrock est derriere (3268,3435) n'a pas d'autre entree : poche scellee
 # (avant : plan par la porte, DoorDidNotOpen live bct5rxpg-14906).
 porte_verrouillee_varrock | 3269,3435,0 | 3268,3436,0 | f2p | unreachable=Disconnected
+# 48-49. geants des collines du donjon d'Edgeville (2026-11-14) : la
+# salle des geants (et le spawn de la cle en laiton (3131,9862)) se
+# rejoint SANS cle par la trappe d'Edgeville (1568/1570) et le donjon
+# principal (portails doubledoors 1558 (3103,9908) et 1557 (3146,9871),
+# ouverture libre). Avant : la recherche levee passait par la porte a cle
+# 1804 (3115,3450) et repondait NeedsRequirement sans chercher ce detour,
+# donc aucun bot sans cle n'y allait (le ladder refusait les geants).
+# Deux recherches (levee puis stricte, ~136k visites) : budget 1500 ms.
+geants_sans_cle | 3093,3491,0 | 3112,9837,0 | f2p | reachable ; uses_loc=1570 ; avoids=3115,3450 ; budget_ms=1500
+geants_avec_cle | 3115,3448,0 | 3112,9837,0 | f2p,has=item:983 | reachable ; uses_loc=1804
+# 50. retour a la banque d'Edgeville par l'echelle ladder_from_cellar 1755
+# (3096,9867) : `ladders.rs2` [oploc1,ladder_from_cellar] (en-tete suivi
+# d'un commentaire, ignore par dump-transitions jusqu'au 2026-11-14 :
+# aucune sortie de cave, un bot descendu ne pouvait plus banquer).
+geants_retour | 3112,9837,0 | 3093,3491,0 | f2p | reachable ; uses_loc=1755 ; avoids=3115,3450
