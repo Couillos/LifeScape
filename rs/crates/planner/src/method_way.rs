@@ -249,6 +249,11 @@ pub fn action_xp(method: &str) -> Option<f64> {
         let xp = lifescape_gamedata::spells::all_spells().into_iter().find(|row| row.spell == spell).map(|row| row.xp)?;
         return (xp > 0).then_some(xp as f64 / 10.0);
     }
+    // Anvil work pays per bar hammered (the dump's smith rows carry 0).
+    if way.detail.starts_with("smith ") {
+        let tenths: i64 = way.inputs.iter().filter_map(|(bar, count)| lifescape_gamedata::recipes::smith_xp_per_bar(bar).map(|per| per * count)).sum();
+        return (tenths > 0).then_some(tenths as f64 / 10.0);
+    }
     let tenths = match skill.as_str() {
         "fishing" => lifescape_gamedata::fishing::all_fish_tiers().into_iter().find_map(|tier| {
             let at = tier.products.iter().position(|name| *name == product)?;
@@ -317,6 +322,11 @@ mod tests {
         assert_eq!(action_xp("bury:big_bones"), Some(15.0));
         assert!(action_xp("smelt:bronze_bar").is_some_and(|xp| xp > 6.0));
         assert!(action_xp("cook/raw_shrimp").is_some_and(|xp| xp >= 30.0));
+        // Anvil XP is per bar (server `xpperbar`): a platebody is 5 bars.
+        assert_eq!(action_xp("smith:bronze_dagger"), Some(12.5));
+        assert_eq!(action_xp("smith:bronze_platebody"), Some(62.5));
+        assert_eq!(action_xp("smith:steel_platebody"), Some(187.5));
+        assert_eq!(action_xp("smith:iron_scimitar"), Some(50.0));
     }
 
     #[test]

@@ -110,20 +110,24 @@ fn compute_production_legs(item: &str) -> Vec<ProductionLeg> {
         if crate::mapping::map_method(&method, &probe, None).is_none() {
             continue;
         }
-        if let Some(known) = out.iter_mut().find(|leg| leg.method == method) {
-            // Keep the easiest skill gate among duplicate ways.
-            if let (Some((_, known_level)), Some((_, level))) = (&known.skill, &way.skill) {
-                if level < known_level {
-                    known.skill = way.skill.clone();
-                }
-            }
-            continue;
-        }
         // A meal bakes from its base components (`cook_meals` assembles
         // the uncooked stage in the pack): flatten the prep chain.
         let inputs = if farmable_drop || pickup { Vec::new() } else { crate::method_way::flatten_prep(&way.inputs) };
         let quest = way.quest.as_deref().map(|quest| quest.strip_prefix("quest_").unwrap_or(quest).to_string());
-        out.push(ProductionLeg { method, skill: way.skill.clone(), inputs, tools: way.tools.clone(), quest, sites: way.sites.clone() });
+        let leg = ProductionLeg { method, skill: way.skill.clone(), inputs, tools: way.tools.clone(), quest, sites: way.sites.clone() };
+        if let Some(known) = out.iter_mut().find(|known| known.method == leg.method) {
+            match (&known.skill, &leg.skill) {
+                // `farm:<ore>` runs the skilled way (the mining script),
+                // never the guards' drop listed before it: the leg carries
+                // its gate and tools (a pickaxe), so the scorers price it.
+                (None, Some(_)) => *known = leg,
+                // Keep the easiest skill gate among duplicate ways.
+                (Some((_, known_level)), Some((_, level))) if level < known_level => known.skill = leg.skill,
+                _ => {}
+            }
+            continue;
+        }
+        out.push(leg);
     }
     out
 }
@@ -222,6 +226,18 @@ mod tests {
         let smith = production_legs("bronze_sword").into_iter().find(|leg| leg.method == "smith:bronze_sword").expect("smith leg");
         assert_eq!(smith.skill.as_ref().map(|(skill, _)| skill.as_str()), Some("smithing"));
         assert!(smith.inputs.iter().any(|(input, _)| input == "bronze_bar"));
+    }
+
+    /// Iron ore drops from guards (listed first) and is mined at 15:
+    /// `farm:iron_ore` runs the mining script, so its leg carries the
+    /// mining gate and the pickaxe (a miner prices its own ore).
+    #[test]
+    fn a_mined_ore_leg_carries_the_mining_gate_and_pickaxe() {
+        for (ore, level) in [("iron_ore", 15), ("copper_ore", 1)] {
+            let mined = leg(ore, &format!("farm:{ore}"));
+            assert_eq!(mined.skill, Some(("mining".to_string(), level)), "{ore}");
+            assert_eq!(mined.tools, vec!["bronze_pickaxe".to_string()], "{ore}");
+        }
     }
 
     fn leg(item: &str, method: &str) -> super::ProductionLeg {

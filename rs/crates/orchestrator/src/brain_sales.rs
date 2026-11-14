@@ -78,6 +78,15 @@ pub fn planned_methods(life: &Life) -> Vec<String> {
 /// product a transformation makes (sold unless another method eats it).
 /// Gatherers and melee/ranged fighters consume nothing kept.
 fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
+    // Alchemy works ON its object (never a product to sell) with nature
+    // and fire runes, a staff of fire standing for the fire.
+    if let Some(item) = method.strip_prefix("alch:") {
+        keep.extend(lifescape_planner::training::kept_inputs("magic", 99));
+        if !item.is_empty() {
+            keep.push(item.to_string());
+        }
+        return None;
+    }
     if let Some(spell) = method.strip_prefix("fight:magic/").and_then(|rest| rest.split('/').next()) {
         keep.extend(lifescape_planner::method_way::spell_runes(spell).into_iter().map(|(rune, _)| rune));
         return None;
@@ -112,6 +121,13 @@ pub fn working_keep(life: &Life, wished: &[String]) -> Vec<String> {
     for method in planned_methods(life) {
         if let Some(product) = method_inputs(&method, &mut keep) {
             products.push(product);
+        }
+    }
+    // An open magic climb past 21 keeps its alchemy runes between
+    // launches (priced at resolve: the next batch casts them).
+    for node in life.nodes.iter().filter(|node| !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)) {
+        if let NodeKind::ReachLevel { skill, level } = &node.kind {
+            keep.extend(lifescape_planner::training::kept_inputs(skill, *level));
         }
     }
     let consumed: Vec<String> = keep.clone();

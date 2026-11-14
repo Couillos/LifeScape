@@ -78,8 +78,14 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         ("stringing".to_string(), vec![input.to_string()])
     } else if let Some(item) = method.strip_prefix("alch:") {
         // The script takes the ITEM (`alchemy <item>` picks low/high
-        // by level itself): `alch:gold_ring`, never `alch:high`.
-        ("alchemy".to_string(), vec![item.to_string()])
+        // by level itself): `alch:gold_ring`, never `alch:high`. A
+        // training batch rides as the cast count (`alchemy <item> [count]`,
+        // 2026-11-14): the run ends on it, the climb re-prices.
+        let mut head = vec![item.to_string()];
+        if node.batch > 0 {
+            head.push(node.batch.to_string());
+        }
+        ("alchemy".to_string(), head)
     } else if let Some(ore) = method.strip_prefix("superheat:") {
         ("superheat".to_string(), vec![ore.to_string()])
     } else if let Some(amulet) = method.strip_prefix("enchant:") {

@@ -329,6 +329,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
+    // Smithing and magic (from 21) climbs pick their method with the
+    // market: what to hammer or smelt, alchemy or a combat spell.
+    crate::cpu_profile::timed("train.fill_ctx", || crate::brain_train::fill_ctx(&mut ctx, &life.nodes[position], &life, &live));
     drop(ctx_phase);
     // An obtain the holdings already meet closes without a launch
     // (positive proof: pack, bank, worn), like a met coin target below.
@@ -407,7 +410,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // fund): the block becomes an obtain sub-task now, never a node that
     // flips Ready/Blocked forever without launching.
     if let NodeStatus::Blocked { reason } = life.nodes[position].status.clone() {
-        let missing: Vec<String> = reason.strip_prefix("missing:").map(|need| vec![lift_coin_need(need, committed)]).unwrap_or_default();
+        // A priced training pick blocks on everything it lacks at once
+        // (`missing:hammer,bronze_bar`).
+        let missing: Vec<String> = reason.strip_prefix("missing:").map(|needs| needs.split(',').map(|need| lift_coin_need(need, committed)).collect()).unwrap_or_default();
         let id = life.nodes[position].id.clone();
         if missing.is_empty() {
             lifescape_planner::record_contract_error(&mut life, position, &format!("resolve blocked: {reason}"));

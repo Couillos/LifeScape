@@ -61,10 +61,13 @@ fn a_unit_costs_the_cheapest_inputs_plus_the_bots_time() {
     assert!(unit.plan.iter().any(|step| step == "buy bronze_bar"), "bars bought at 5: {unit:?}");
     assert!((unit.coins - 10.0).abs() < 1e-6, "two bars at 5: {unit:?}");
     assert!((unit.ticks - 10.0).abs() < 1e-6, "600 per 6000 ticks: {unit:?}");
-    // No bars on the market: the smith smelts them, ores unpriced and not
-    // held: nothing to make them from, so no unit cost at all.
+    // No bars on the market: the smith (mining 20) mines the ores itself
+    // (`farm:<ore>` is the mining leg, its pickaxe priced as a tool) and
+    // smelts them.
     let no_bars = |item: &str| if item == "bronze_bar" { None } else { market(item) };
-    assert_eq!(unit_cost("bronze_scimitar", 9, &no_bars, &bot), None);
+    let mined = unit_cost("bronze_scimitar", 9, &no_bars, &bot).expect("mined and smelted");
+    assert_eq!(mined.plan, ["make smith:bronze_scimitar", "make smelt:bronze_bar", "make farm:copper_ore", "make farm:tin_ore"], "{mined:?}");
+    assert!(mined.ticks > unit.ticks, "mining and smelting take the bot's time: {mined:?}");
 }
 
 /// Level, ban and tool gates: a level-1 smith, a banned smith and a smith

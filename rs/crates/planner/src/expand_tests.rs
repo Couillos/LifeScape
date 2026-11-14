@@ -64,14 +64,18 @@ fn tranche_resources_are_fixed() {
 #[test]
 fn every_skill_owns_its_reach_tiers() {
     assert_eq!(tranches("firemaking", 1, 99), vec![15, 30, 60, 99]);
-    assert_eq!(tranches("smithing", 1, 99), vec![15, 20, 30, 40, 50, 70, 85, 99]);
+    // Smithing cuts at each anvil unlock that changes the pick (2026-11-14).
+    let mut smithing = crate::training::smithing_cuts().to_vec();
+    smithing.push(99);
+    assert_eq!(tranches("smithing", 1, 99), smithing);
     assert_eq!(tranches("crafting", 1, 99), vec![5, 7, 8, 16, 20, 27, 34, 43, 70, 99]);
     assert_eq!(tranches("runecraft", 1, 99), vec![2, 5, 9, 14, 20, 99]);
     assert_eq!(tranches("prayer", 1, 99), vec![10, 20, 30, 40, 99], "banked bones, then big bones");
-    assert_eq!(tranches("magic", 1, 99), vec![10, 20, 30, 40, 99]);
+    assert_eq!(tranches("magic", 1, 99), vec![10, 20, 21, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99]);
     assert_eq!(reach_method("firemaking", 30), "fire:willow_logs");
-    assert_eq!(reach_method("smithing", 30), "smelt:steel_bar");
-    assert_eq!(reach_method("smithing", 1), "smelt:bronze_bar");
+    // Smelt then hammer (2026-11-14): the static product of the best metal.
+    assert_eq!(reach_method("smithing", 30), "smith:steel_dagger");
+    assert_eq!(reach_method("smithing", 1), "smith:bronze_dagger");
     assert_eq!(reach_method("crafting", 1), "spin:ball_of_wool");
     assert_eq!(reach_method("crafting", 7), "pottery:piedish", "the object name (fire_piedish)");
     assert_eq!(reach_method("crafting", 8), "jewelry:unstrung_gold_amulet", "object names, the furnace casts unstrung");
@@ -494,4 +498,37 @@ fn goals_climb_from_the_live_level() {
         guild.iter().all(|node| !matches!(&node.kind, NodeKind::ReachLevel { level, .. } if *level <= 40)),
         "guild gates climb from the live level too, got {guild:?}"
     );
+}
+
+/// A priced tranche (`training`) locks the brain's pick: its batch rides
+/// on the node; the hammer it lacks and the bars the pick found short
+/// block at once (`missing:hammer,bronze_bar`), the pick's method kept to
+/// size the obtains. Without a pick the static tranche method resolves.
+#[test]
+fn a_training_pick_locks_or_blocks_on_all_it_lacks() {
+    use crate::model::{Alternative, NodeStatus};
+    let mut ctx = ReadyCtx::blind(0.5);
+    let pick = crate::training::TrainPick { method: "smith:bronze_platebody".to_string(), batch: 0, missing: vec!["bronze_bar".to_string()], cost_per_xp: 1.0, xp_per_tick: 3.9 };
+    ctx.training = Some(pick.clone());
+    let mut node = Node::new("n3", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 20 }, Vec::new(), 20);
+    node.alternatives.push(Alternative { method: reach_method("smithing", 18), est_ticks: 0, est_coins: 0 });
+    node.status = NodeStatus::Ready;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("smith:bronze_platebody"));
+    assert_eq!(node.status, NodeStatus::Blocked { reason: "missing:hammer,bronze_bar".to_string() });
+    assert_eq!(crate::replan::need_count_from(&node, "bronze_bar", Some(18)), crate::sizing::tranche_need("smith:bronze_platebody", 18, 20, "bronze_bar").expect("bars"));
+    let mut alch = Node::new("n4", NodeKind::ReachLevel { skill: "magic".to_string(), level: 35 }, Vec::new(), 35);
+    alch.status = NodeStatus::Ready;
+    ctx.tools = vec!["hammer".to_string(), "naturerune".to_string(), "firerune".to_string()];
+    ctx.training = Some(crate::training::TrainPick { method: "alch:iron_dagger".to_string(), batch: 120, missing: vec!["naturerune".to_string()], cost_per_xp: 2.0, xp_per_tick: 6.0 });
+    resolve_ready(&mut alch, &ctx);
+    assert_eq!(alch.batch, 120);
+    assert_eq!(alch.status, NodeStatus::Blocked { reason: "missing:naturerune".to_string() });
+    assert_eq!(crate::replan::need_count_from(&alch, "naturerune", Some(25)), 120, "the batch, not the whole climb");
+    ctx.training = None;
+    node.status = NodeStatus::Ready;
+    node.method = None;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("smith:iron_dagger"), "static tranche method");
+    assert_eq!(node.batch, 0);
 }

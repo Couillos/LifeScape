@@ -88,9 +88,47 @@ pub fn success_odds(source: &str) -> f64 {
     }
 }
 
+/// Smithing XP per bar hammered on an anvil, in tenths. The dump's smith
+/// rows carry no XP: the server pays `bar_amount × xpperbar` of the bar's
+/// struct (`skill_smithing/configs/smithing/smithing.struct`,
+/// `[proc,smithing_anvil]`), whatever the product (a platebody is five
+/// daggers' worth of XP).
+pub fn smith_xp_per_bar(bar: &str) -> Option<i64> {
+    match bar {
+        "bronze_bar" => Some(125),
+        "iron_bar" => Some(250),
+        "steel_bar" => Some(375),
+        "mithril_bar" => Some(500),
+        "adamantite_bar" => Some(625),
+        "runite_bar" => Some(750),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{all_recipes, making, success_odds, using};
+    use super::{all_recipes, making, smith_xp_per_bar, success_odds, using};
+
+    /// The XP per bar mirrors the server structs (one `xpperbar` per bar).
+    #[test]
+    fn smith_xp_per_bar_follows_the_server_structs() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest
+            .ancestors()
+            .map(|dir| dir.join("lostcity/content/scripts/skill_smithing/configs/smithing/smithing.struct"))
+            .find(|candidate| candidate.is_file())
+            .expect("../lostcity checkout next to LifeScape");
+        let text = std::fs::read_to_string(&path).expect("smithing.struct readable");
+        let mut checked = 0;
+        for block in text.split("\n[").filter(|block| block.contains("param=xpperbar")) {
+            let field = |key: &str| block.lines().find_map(|line| line.strip_prefix(&format!("param={key},")).map(str::trim).map(str::to_string));
+            let (Some(bar), Some(xp)) = (field("namedobj"), field("xpperbar").and_then(|raw| raw.parse::<i64>().ok())) else { continue };
+            assert_eq!(smith_xp_per_bar(&bar), Some(xp), "{bar}");
+            checked += 1;
+        }
+        assert_eq!(checked, 6, "six smithable bars");
+        assert_eq!(smith_xp_per_bar("gold_bar"), None, "gold and silver never go on an anvil");
+    }
 
     #[test]
     fn recipe_vectors() {

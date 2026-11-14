@@ -104,6 +104,12 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
         let method = node.method.clone().or_else(|| node.alternatives.first().map(|alt| alt.method.clone())).unwrap_or_default();
         let from = tranche_start(skill, *level, live);
         if let Some(units) = crate::sizing::tranche_need(&method, from, *level, need) {
+            // A batch launch (alchemy casts the stock covers) asks only what
+            // the batch burns: the climb re-prices after it.
+            if node.batch > 0 {
+                let per_action = crate::sizing::per_action_need(&method, from, need).unwrap_or(1);
+                return units.min(node.batch.saturating_mul(per_action.max(1))).max(1);
+            }
             return units.max(1);
         }
     }
