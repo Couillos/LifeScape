@@ -17,6 +17,8 @@ use crate::client::Bot;
 pub(crate) struct CostStats {
     pub remote_calls: u64,
     pub dedup_hits: u64,
+    /// Whole batches answered by the worker memo (`static_cache`).
+    pub memo_hits: u64,
 }
 
 impl Bot {

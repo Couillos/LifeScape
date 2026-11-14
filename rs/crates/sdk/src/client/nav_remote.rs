@@ -5,19 +5,21 @@
 //! version resubmits once on skew, then `nav-down` — the same discipline
 //! as plans, never a local read.
 //!
-//! Only `wants` is cached worker-side (pinned by data version): it feeds
-//! every plan, so each plan would otherwise pay an extra round-trip
-//! before submitting. Every other read (`door_defs`, `tiles_flags`,
-//! `static_locs_near`, `in_f2p`, `toll_fence`, `transitions_list`,
-//! `probe_targets`, `doors_near`, `debug_snapshot`) fetches fresh on each
-//! call under the same version check + one resubmit: they run at most
-//! once per leg, plan or diagnosis, so the extra trip buys guaranteed
-//! post-reload freshness with no per-op invalidation state to keep.
+//! Cached worker-side, pinned by data version: `wants` (feeds every
+//! plan) and the static reads `door_defs`, `tiles_flags`, `in_f2p`,
+//! `static_locs_near`, `toll_fence` (`static_cache`: repeats answer with
+//! no round trip; a version change drops them all). The rest
+//! (`transitions_list`, `probe_targets`, `doors_near`, `debug_snapshot`)
+//! fetches fresh on each call under the same version check + one
+//! resubmit: dev tools and diagnosis, rare by construction.
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_nav::plan::{NavOptions, Tile};
 use lifescape_nav::service::PlanClient;
+use lifescape_nav::region_lists::{self, LocsList, TollList};
 use lifescape_nav::service_queries::{self, DebugAnswer, DoorDef, StaticLoc, TileFlags};
+
+use super::static_cache::TOLL_LIST_MARGIN;
 
 pub use lifescape_nav::service_queries::{ProbeTarget, TransitionView};
 
@@ -44,10 +46,27 @@ impl Bot {
         if loc_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let pinned = self.pinned_version();
+        if let Some(found) = self.static_cache.door_defs(&pinned, loc_ids) {
+            return Ok(found);
+        }
         let locs = loc_ids.iter().map(|loc| Value::Int(i64::from(*loc))).collect();
         let reply = self.query_remote("door_defs", vec![("locs", Value::Arr(locs))])?;
-        service_queries::decode_door_defs_reply(&reply)
-            .map_err(|error| Error::Travel(format!("nav-down: bad door_defs reply: {error}")))
+        let defs = service_queries::decode_door_defs_reply(&reply)
+            .map_err(|error| Error::Travel(format!("nav-down: bad door_defs reply: {error}")))?;
+        self.static_cache.store_door_defs(reply.get("version").as_str().unwrap_or(""), &defs);
+        Ok(defs)
+    }
+
+    /// Version the static cache answers under: the pinned one (empty
+    /// when unpinned, which disables the cache).
+    fn pinned_version(&self) -> String {
+        self.plan_data_version.clone().unwrap_or_default()
+    }
+
+    /// Static-cache (hits, misses) since session start.
+    pub fn static_cache_stats(&self) -> (u64, u64) {
+        (self.static_cache.stats.hits, self.static_cache.stats.misses)
     }
 
     /// Static flags for a batch of tiles (diagnosis, stepping), in request
@@ -55,6 +74,10 @@ impl Bot {
     pub fn tiles_flags(&mut self, tiles: &[(i32, i32, i32)]) -> Result<Vec<TileFlags>> {
         if tiles.is_empty() {
             return Ok(Vec::new());
+        }
+        let pinned = self.pinned_version();
+        if let Some(found) = self.static_cache.tiles_flags(&pinned, tiles) {
+            return Ok(found);
         }
         let coords = tiles
             .iter()
@@ -67,8 +90,10 @@ impl Bot {
             })
             .collect();
         let reply = self.query_remote("tiles_flags", vec![("tiles", Value::Arr(coords))])?;
-        service_queries::decode_tiles_flags_reply(&reply)
-            .map_err(|error| Error::Travel(format!("nav-down: bad tiles_flags reply: {error}")))
+        let rows = service_queries::decode_tiles_flags_reply(&reply)
+            .map_err(|error| Error::Travel(format!("nav-down: bad tiles_flags reply: {error}")))?;
+        self.static_cache.store_tiles_flags(reply.get("version").as_str().unwrap_or(""), tiles, &rows);
+        Ok(rows)
     }
 
     /// Batch flags that never fail the caller: `None` when the service is
@@ -83,6 +108,10 @@ impl Bot {
     /// worker-side `static_locs` scans (`find_loc`, booths, `gate_id`).
     /// Any service failure is `nav-down`, never a local scan.
     pub fn static_locs_near(&mut self, x: i32, z: i32, level: i32, radius: i32) -> Result<Vec<StaticLoc>> {
+        let pinned = self.pinned_version();
+        if let Some(found) = self.static_cache.static_locs_near(&pinned, x, z, level, radius) {
+            return Ok(found);
+        }
         let reply = self.query_remote(
             "static_locs_near",
             vec![
@@ -92,8 +121,11 @@ impl Bot {
                 ("radius", Value::Int(i64::from(radius))),
             ],
         )?;
-        service_queries::decode_static_locs_near_reply(&reply)
-            .map_err(|error| Error::Travel(format!("nav-down: bad static_locs_near reply: {error}")))
+        let locs = service_queries::decode_static_locs_near_reply(&reply)
+            .map_err(|error| Error::Travel(format!("nav-down: bad static_locs_near reply: {error}")))?;
+        let list = LocsList { x, z, level, radius: radius.max(0), locs: locs.clone() };
+        self.static_cache.store_locs_list(reply.get("version").as_str().unwrap_or(""), list);
+        Ok(locs)
     }
 
     /// One F2P verdict per tile, in request order. Replaces the spot
@@ -102,6 +134,10 @@ impl Bot {
     pub fn in_f2p_batch(&mut self, tiles: &[(i32, i32, i32)]) -> Result<Vec<bool>> {
         if tiles.is_empty() {
             return Ok(Vec::new());
+        }
+        let pinned = self.pinned_version();
+        if let Some(found) = self.static_cache.in_f2p(&pinned, tiles) {
+            return Ok(found);
         }
         let coords = tiles
             .iter()
@@ -114,14 +150,24 @@ impl Bot {
             })
             .collect();
         let reply = self.query_remote("in_f2p", vec![("tiles", Value::Arr(coords))])?;
-        service_queries::decode_in_f2p_reply(&reply)
-            .map_err(|error| Error::Travel(format!("nav-down: bad in_f2p reply: {error}")))
+        let inside = service_queries::decode_in_f2p_reply(&reply)
+            .map_err(|error| Error::Travel(format!("nav-down: bad in_f2p reply: {error}")))?;
+        self.static_cache.store_in_f2p(reply.get("version").as_str().unwrap_or(""), tiles, &inside);
+        Ok(inside)
     }
 
     /// Nearest toll-gate tile on this level within the radius, if any.
     /// Its x is the fence line banks and spots compare against; the tile
     /// itself is the approach point. Replaces `toll_gate_x`.
+    /// Asks a covering list (`radius + TOLL_LIST_MARGIN`) beside the
+    /// answer: later queries inside it answer locally. An old daemon
+    /// sends no list; the answer stands, nothing is cached.
     pub fn toll_fence(&mut self, x: i32, z: i32, level: i32, radius: i32) -> Result<Option<(i32, i32, i32)>> {
+        let pinned = self.pinned_version();
+        if let Some(found) = self.static_cache.toll_fence(&pinned, x, z, level, radius) {
+            return Ok(found);
+        }
+        let list_radius = radius.max(0) + TOLL_LIST_MARGIN;
         let reply = self.query_remote(
             "toll_fence",
             vec![
@@ -129,10 +175,16 @@ impl Bot {
                 ("z", Value::Int(i64::from(z))),
                 ("level", Value::Int(i64::from(level))),
                 ("radius", Value::Int(i64::from(radius))),
+                (region_lists::LIST_RADIUS_FIELD, Value::Int(i64::from(list_radius))),
             ],
         )?;
-        service_queries::decode_toll_fence_reply(&reply)
-            .map_err(|error| Error::Travel(format!("nav-down: bad toll_fence reply: {error}")))
+        let gate = service_queries::decode_toll_fence_reply(&reply)
+            .map_err(|error| Error::Travel(format!("nav-down: bad toll_fence reply: {error}")))?;
+        if let Some(gates) = region_lists::decode_gates(&reply) {
+            let list = TollList { x, z, level, radius: list_radius, gates };
+            self.static_cache.store_toll_list(reply.get("version").as_str().unwrap_or(""), list);
+        }
+        Ok(gate)
     }
 
     /// Every tag a plan may require, sorted and distinct, under the

@@ -182,6 +182,62 @@ impl StaticWorld {
             Some(zones) => zones.contains(&(tile_x >> 3, tile_z >> 3)),
         }
     }
+
+    /// Paint every pack square touching the Manhattan diamond (one write
+    /// lock for the whole region instead of one per tile). Squares are
+    /// self-contained (locs, doors and tolls key inside their own
+    /// square), so a region read after this equals the per-tile reads.
+    fn ensure_diamond(&self, tile_x: i32, tile_z: i32, radius: i32) {
+        let radius = radius.max(0);
+        let mut state = self.state.write().expect("static world lock poisoned");
+        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
+        for square_x in (tile_x - radius) >> 6..=(tile_x + radius) >> 6 {
+            for square_z in (tile_z - radius) >> 6..=(tile_z + radius) >> 6 {
+                if self.has_square(square_x, square_z) {
+                    pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, square_x, square_z);
+                }
+            }
+        }
+    }
+
+    /// Toll-gate tiles on `level` within a Manhattan radius, nearest
+    /// first, ties by x then z: exactly the order a per-tile diamond scan
+    /// (x outer, z inner, strict improvement) meets them. One write lock
+    /// to paint, one read lock to filter the (tiny) toll set.
+    pub fn toll_gates_within(&self, tile_x: i32, tile_z: i32, level: i32, radius: i32) -> Vec<(i32, i32, i32)> {
+        let radius = radius.max(0);
+        self.ensure_diamond(tile_x, tile_z, radius);
+        let state = self.state.read().expect("static world lock poisoned");
+        let mut gates: Vec<(i32, i32, i32)> = state
+            .toll_gates
+            .iter()
+            .filter(|(gate_x, gate_z, gate_level)| {
+                *gate_level == level && (gate_x - tile_x).abs() + (gate_z - tile_z).abs() <= radius
+            })
+            .copied()
+            .collect();
+        gates.sort_by_key(|(gate_x, gate_z, _)| ((gate_x - tile_x).abs() + (gate_z - tile_z).abs(), *gate_x, *gate_z));
+        gates
+    }
+
+    /// Static locs on `level` within a Manhattan radius, in diamond scan
+    /// order (x outer, z inner): one write lock to paint, one read lock
+    /// for the whole scan (was two locks per tile through `loc_at`).
+    pub fn static_locs_within(&self, tile_x: i32, tile_z: i32, level: i32, radius: i32) -> Vec<(i32, i32, (u16, u8, u8))> {
+        let radius = radius.max(0);
+        self.ensure_diamond(tile_x, tile_z, radius);
+        let state = self.state.read().expect("static world lock poisoned");
+        let mut out = Vec::new();
+        for scan_x in tile_x - radius..=tile_x + radius {
+            let rest = radius - (scan_x - tile_x).abs();
+            for scan_z in tile_z - rest..=tile_z + rest {
+                if let Some(entry) = state.static_locs.get(&(scan_x, scan_z, level)) {
+                    out.push((scan_x, scan_z, *entry));
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

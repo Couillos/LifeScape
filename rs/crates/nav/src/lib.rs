@@ -17,8 +17,12 @@ mod pocket;
 #[cfg(test)]
 mod plan_budget_tests;
 pub mod reach;
+pub mod region_lists;
 pub mod route;
 pub mod service;
+pub mod service_accept;
+#[cfg(test)]
+mod service_costs_tests;
 pub mod service_plan;
 pub mod service_queries;
 pub mod static_world;

@@ -650,9 +650,21 @@ impl Bot {
                 }
             }
         }
-        let costs = self
-            .walk_costs_remote(&client, &options, from, &unique)
-            .unwrap_or_else(|| vec![None; unique.len()]);
+        // Same source, same target set, same options, same version: the
+        // answer is fixed (pure static search), served with no trip.
+        let pinned = self.plan_data_version.clone().unwrap_or_default();
+        if let Some(costs) = self.static_cache.walk_costs(&pinned, from, &unique, &options) {
+            self.cost_stats.memo_hits += 1;
+            return slot_of.iter().map(|slot| costs[*slot]).collect();
+        }
+        let costs = match self.walk_costs_remote(&client, &options, from, &unique) {
+            Some(costs) => {
+                let served = self.plan_data_version.clone().unwrap_or_default();
+                self.static_cache.store_walk_costs(&served, from, &unique, &options, &costs);
+                costs
+            }
+            None => vec![None; unique.len()],
+        };
         self.cost_stats.remote_calls += 1;
         slot_of.iter().map(|slot| costs[*slot]).collect()
     }
@@ -1884,7 +1896,12 @@ mod tests {
         assert_eq!(after.walk_costs - before.walk_costs, 1, "one batch counted");
         let again = bot.walk_costs(&dests);
         assert_eq!(again, costs, "repeat serves identical costs");
-        assert_eq!(service.stats().walk_costs - before.walk_costs, 2, "each batch is one op");
+        assert_eq!(service.stats().walk_costs - before.walk_costs, 1, "repeat answered by the worker memo, no op");
+        assert_eq!(bot.cost_stats.memo_hits, 1, "one memo hit");
+        // A moved bot asks again (other source, other answer).
+        bot.world.x += 1;
+        bot.walk_costs(&dests);
+        assert_eq!(service.stats().walk_costs - before.walk_costs, 2, "new source is one op");
     }
 
     #[test]

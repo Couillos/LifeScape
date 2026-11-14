@@ -21,6 +21,29 @@ lectures batch hors queue `door_defs`, `tiles_flags`, `static_locs_near`,
 `probe_targets`, `doors_near`, plus `stats`. Chaque op batch est comptée
 et exposée dans `nav-stats`.
 
+CPU (2026-11-14) : le thread `plan-accept` ne fait plus qu'accepter ;
+chaque connexion (lecture de la ligne + `dispatch`) part sur le pool
+borné `plan-query` (2 threads, file 128, `service_accept.rs`, compteur
+`pooled`) — un client muet ou un `walk_costs` ne bloque plus les autres.
+`toll_fence` / `static_locs_near` lisent par région
+(`StaticWorld::toll_gates_within` / `static_locs_within` : un verrou
+d'écriture pour peindre, un de lecture pour lire, au lieu de deux par
+tuile ; `toll_fence` r150 5,8 ms → 7 µs). Cache `walk_costs` service
+indexé par l'ENSEMBLE des cibles + options complètes (danger inclus,
+il manquait) ; compteur `walk_costs_hits`. Côté worker,
+`sdk/src/client/static_cache.rs` répond sans aller-retour aux requêtes
+statiques déjà servies sous la même version : `door_defs`, `tiles_flags`,
+`in_f2p` (par clé, lot servi seulement s'il est entier en cache),
+`toll_fence` / `static_locs_near` (listes couvrantes
+`nav/src/region_lists.rs` : toute requête dont le losange tient dans une
+liste servie est filtrée localement, même ordre ; `toll_fence` demande
+`list_radius` = r + 48, champ additif `gates`, un vieux daemon ne le
+renvoie pas et rien n'est caché), `walk_costs` (lot entier, même
+source + ensemble + options). Invalidation : toute entrée appartient à
+une version ; la première réponse portant une autre version vide tout.
+Après un `reload-nav`, un worker ressert donc ses réponses statiques
+jusqu'au premier aller-retour (plan, miss) qui lui apprend la version.
+
 Planification 100 % distante (`Bot::plan_travel`,
 `rs/crates/sdk/src/client/travel.rs`) : sans monde local, le plan vient
 du service ou l'appel échoue en `Error::Travel("nav-down: …")` — down,
