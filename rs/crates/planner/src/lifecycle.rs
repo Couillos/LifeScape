@@ -305,12 +305,48 @@ pub fn revive_stuck(life: &mut Life, stuck_ticks: u64) -> Vec<String> {
 /// again. Returns one line per change; empty when `index` is no
 /// abandoned obtain.
 pub fn retarget_market(life: &mut Life, index: usize) -> Vec<String> {
-    let node = &mut life.nodes[index];
+    let node = &life.nodes[index];
     if node.status != NodeStatus::Abandoned || !matches!(node.kind, NodeKind::ObtainItems { .. }) {
         return Vec::new();
     }
-    let mut changes = vec![format!("{} rescued on the market (was: {})", node.id, node.last_error)];
-    node.alternatives = vec![crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }];
+    let legs = vec![crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 }];
+    retarget_legs(life, index, legs, "rescued on the market", "market rescue")
+}
+
+/// Production rescue (2026-11-14, live fiona_park: the same unfilled buy
+/// placed again after each rescue): an abandoned obtain whose last
+/// failure was the market itself (`bans_scope::market_failed`) never
+/// buys again; it goes back to work on the planner's non-market legs
+/// (craft, gather, farm, shop), fresh counters, its cascade revived.
+/// Empty when the item has no such leg (the ban follows, the planner
+/// replans) or `index` is no abandoned obtain.
+pub fn retarget_produce(life: &mut Life, index: usize) -> Vec<String> {
+    let node = &life.nodes[index];
+    let NodeKind::ObtainItems { item, .. } = &node.kind else { return Vec::new() };
+    if node.status != NodeStatus::Abandoned {
+        return Vec::new();
+    }
+    let produce = match &life.goal {
+        crate::model::GoalKind::Produce { item, .. } => Some(item.as_str()),
+        _ => None,
+    };
+    let legs: Vec<crate::model::Alternative> = crate::obtain_legs::legs_for(item, life.profile.ironman, produce)
+        .into_iter()
+        .filter(|leg| !leg.method.starts_with("market:"))
+        .collect();
+    if legs.is_empty() {
+        return Vec::new();
+    }
+    retarget_legs(life, index, legs, "rescued off the market", "production rescue")
+}
+
+/// Shared tail of both rescues: the node keeps `legs` only, fresh
+/// counters, and every node its abandonment cascaded to (`dependency
+/// <id> abandoned`, transitively) waits on it again.
+fn retarget_legs(life: &mut Life, index: usize, legs: Vec<crate::model::Alternative>, line: &str, cause: &str) -> Vec<String> {
+    let node = &mut life.nodes[index];
+    let mut changes = vec![format!("{} {line} (was: {})", node.id, node.last_error)];
+    node.alternatives = legs;
     node.status = NodeStatus::Pending;
     node.method = None;
     node.site = None;
@@ -319,7 +355,7 @@ pub fn retarget_market(life: &mut Life, index: usize) -> Vec<String> {
     node.failures = 0;
     node.blocks = 0;
     node.spent_ticks = 0;
-    node.last_error = format!("market rescue after: {}", node.last_error);
+    node.last_error = format!("{cause} after: {}", node.last_error);
     let mut revived = vec![node.id.clone()];
     let mut cursor = 0;
     while cursor < revived.len() {

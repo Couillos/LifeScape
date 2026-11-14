@@ -6,7 +6,8 @@
 //! - market rescue: before a stuck goal bans anything, each abandoned
 //!   obtain on the failed path is checked for a market route (live book
 //!   or reference price, the bot's free wallet) and the first one found
-//!   is bought instead.
+//!   is bought instead; one whose own buy went unfilled is produced
+//!   instead (never the same order twice), once per node.
 
 use lifescape_json::Value;
 use lifescape_planner::{GraphState, Life, NodeKind};
@@ -57,6 +58,22 @@ pub(crate) fn market_rescue(job: &Job, life: &mut Life, live: &Value) -> bool {
     for position in lifescape_planner::rescue_candidates(life, &cause.node) {
         let node = life.nodes[position].clone();
         let NodeKind::ObtainItems { item, count } = &node.kind else { continue };
+        // Its own buy went unfilled: never the same order again, its
+        // production legs instead (live fiona_park 2026-11-14), or the
+        // ban follows when it has none.
+        if lifescape_planner::market_failed(&node) {
+            let changes = lifescape_planner::retarget_produce(life, position);
+            if changes.is_empty() {
+                crate::logln!("brain {}: {item} unfilled on the market and never produced, no rescue", life.account);
+                continue;
+            }
+            for change in changes {
+                crate::logln!("brain {}: {change}", life.account);
+            }
+            crate::logln!("brain {}: {item} produced instead of bought again (root {}: {})", life.account, cause.node, cause.last_error);
+            push_history(life, &node.id, lifescape_planner::PRODUCE_RESCUE_TAG);
+            return true;
+        }
         let mut ctx = crate::brain_plan::ready_ctx(life, &node);
         crate::brain_market::fill_ctx(&mut ctx, &node, live);
         let held = crate::brain_plan::holdings_count(job, item);
@@ -76,7 +93,7 @@ pub(crate) fn market_rescue(job: &Job, life: &mut Life, live: &Value) -> bool {
             crate::logln!("brain {}: {change}", life.account);
         }
         crate::logln!("brain {}: {item} bought on the market instead of banning (root {}: {})", life.account, cause.node, cause.last_error);
-        push_history(life, &node.id, "market_rescue");
+        push_history(life, &node.id, lifescape_planner::MARKET_RESCUE_TAG);
         return true;
     }
     false

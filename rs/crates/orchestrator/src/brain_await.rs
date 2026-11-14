@@ -40,7 +40,7 @@ pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &st
         // The stale resting order goes before the retry places a fresh
         // one (PRD3 lot 0: bots stacked two identical bids on the same axe).
         let closed = crate::brain_market::cancel_open_buys(&job.account, item);
-        let text = format!("market order for {count} {item} unfilled after {AWAIT_FILL_TICKS} ticks (held {held}, {closed} cancelled)");
+        let text = lifescape_planner::market_unfilled_error(count, item, AWAIT_FILL_TICKS, held, closed);
         let fold = lifescape_planner::record_failure(life, position, &text);
         push_history(life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
     } else {

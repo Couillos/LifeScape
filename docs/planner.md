@@ -221,7 +221,15 @@ marché (échangeable, pas Iron, bourse libre ≥ quantité × meilleure offre
 de vente, sinon × prix de référence) ; la première qui passe repart en
 `market:buy` seul (`lifecycle::retarget_market`, compteurs neufs, ses
 dépendants en cascade reviennent, une seule fois par nœud) et rien n'est
-banni. Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
+banni. Une obtention dont le dernier échec est son propre achat resté
+sans vendeur (`bans_scope::market_failed`, texte
+`market_unfilled_error`) ne rachète jamais : elle repart sur ses jambes
+hors marché (`lifecycle::retarget_produce` : fabrication, récolte,
+élevage, magasin ; live fiona_park 2026-11-14, cinq amulettes de saphir
+rachetées en boucle) ; sans telle jambe, pas de sauvetage, le ban suit et
+le planificateur replanifie. Un seul sauvetage par nœud, quel qu'il soit
+(historique `market_rescue` / `produce_rescue`, `rescued_before`).
+Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
 (`banned_scope`) : compétences de la racine et de chaque nœud qui
 l'attend, plus celles dont l'objet est l'outil (barres de bronze ratées
 ⇒ forge, bûcheronnage — la hache —, allumage s'il brûlait ces bûches).
