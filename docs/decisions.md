@@ -459,3 +459,38 @@ profondeur lointaine n'est pas le prix du moment) ; ignorer le carnet
 (un vrai ask profond plus bas EST le prix du moment) ; filtrer les
 ordres sous un seuil de quantité fixe (un objet échangé à l'unité serait
 aveugle à son carnet).
+
+## 2026-11-14 — Rentabilité de tout le marché, demande dérivée, tableau des commandes
+
+Contexte : demande utilisateur « évaluer la rentabilité en fonction de
+toutes les dépendances et des rates, pour tout le marché » ; seuls les
+bids `pot_flour` étaient servis, aucune barre ni minerai n'était demandé
+au prix que justifient les armes.
+
+Décision :
+- Le moteur de réponse aux offres évalue chaque objet de valeur (bids,
+  prix courant avec volume, plancher d'alchimie du lanceur), coût
+  récursif avec tous les intrants, sites réels (site du brain au niveau
+  de combat, marche entre étapes, péage, bateau, outils achetés une fois,
+  remise à la fontaine) ; le forfait de 800 ticks par réponse est retiré.
+- Revenu = ce que le marché absorbe (bids au-dessus du coût, 50 % du
+  volume 24 h au prix courant derrière les asks déjà là, moins offre en
+  route, stock propre et réclamations) ; moitié par producteur.
+- Entraînement amorti : coût net des produits vendus pendant la montée,
+  nul si l'ambition monte déjà la compétence, un lot sur 4 sinon.
+- Demande dérivée : l'offre permanente d'un intrant (D-B) est plafonnée et
+  ouverte par la réserve dérivée du produit (80 % de sa valeur moins
+  temps et autres intrants).
+- Réclamations publiées sur un tableau public (unités par objet, sans
+  nom) : l'équivalent des commandes d'artisanat d'un vrai jeu. D22 (aucune
+  mémoire partagée) tient car l'information est publique et anonyme ; le
+  rejet D22 visait des « offres en route » lues dans l'état caché des
+  autres bots.
+- Poids d'ambition : un type sert toute demande que sa compétence
+  primaire fabrique à n'importe quel palier, ses intrants à moitié par
+  étape ; l'échelle du forgeron va jusqu'à l'adamant.
+
+Rejeté : garder le forfait de trajet (pénalise les petits lots proches) ;
+imputer toute la montée au lot (personne ne monte jamais) ; offres
+d'intrants au prix courant seulement (une barre à 2 ne fait bouger
+personne) ; lire les buts des autres bots (connaissance cachée, D22).

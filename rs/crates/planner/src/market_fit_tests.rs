@@ -9,12 +9,12 @@ use crate::ambition::{new_ambition, BotNow, MilestoneStatus, Stamp, Target};
 /// object nobody offers is never saturated.
 #[test]
 fn saturated_products_are_worth_the_share_the_market_absorbs() {
-    let willow = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 4_319 };
+    let willow = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 4_319, ..BookView::default() };
     let glut = saturation_factor(Some(&willow), 180.0);
     assert!(glut > 0.1 && glut < 0.15, "{glut}");
-    let wanted = BookView { bids: vec![(40, 300)], asks: vec![(45, 50)], volume_24h: 100 };
+    let wanted = BookView { bids: vec![(40, 300)], asks: vec![(45, 50)], volume_24h: 100, ..BookView::default() };
     assert_eq!(saturation_factor(Some(&wanted), 180.0), 1.0);
-    let empty = BookView { bids: Vec::new(), asks: Vec::new(), volume_24h: 0 };
+    let empty = BookView { bids: Vec::new(), asks: Vec::new(), volume_24h: 0, ..BookView::default() };
     assert_eq!(saturation_factor(Some(&empty), 500.0), 1.0, "first seller");
     assert_eq!(saturation_factor(None, 500.0), 1.0, "no data, no decision");
     assert!(saturation_factor(Some(&willow), 0.0) > glut, "the batch itself weighs");
@@ -23,7 +23,7 @@ fn saturated_products_are_worth_the_share_the_market_absorbs() {
 /// A real player lists what buyers take, not 24 310 feathers at once.
 #[test]
 fn a_lot_is_what_buyers_take_at_least_an_inventory() {
-    let feathers = BookView { bids: vec![(2, 50)], asks: vec![(1, 30_000)], volume_24h: 300 };
+    let feathers = BookView { bids: vec![(2, 50)], asks: vec![(1, 30_000)], volume_24h: 300, ..BookView::default() };
     assert_eq!(sale_lot(24_310, Some(&feathers)), 350);
     assert_eq!(sale_lot(24_310, None), SALE_LOT_MIN);
     assert_eq!(sale_lot(10, Some(&feathers)), 10, "never more than the stack");

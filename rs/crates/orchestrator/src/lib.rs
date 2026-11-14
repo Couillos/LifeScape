@@ -52,6 +52,7 @@ pub mod market_convene;
 pub mod market_convene_sweep;
 pub mod market_eta;
 pub mod market_daemon;
+pub mod market_claims;
 pub mod market_demand;
 pub mod market_reprice;
 pub mod market_seller;

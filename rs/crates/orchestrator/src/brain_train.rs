@@ -55,17 +55,6 @@ pub(crate) struct TrainMarket<'a> {
 pub(crate) fn choose_pick(skill: &str, level: u8, target: u8, life: &Life, state: &BotState, rows: &[(String, i64, f64)], market: &TrainMarket) -> Option<TrainPick> {
     let rate = coin_rate(rows, state.level_of);
     let ironman = life.profile.ironman;
-    let producer = lifescape_planner::bid_response::Producer {
-        level_of: state.level_of,
-        held: state.held,
-        avoid: &state.avoid,
-        quests_done: &state.quests_done,
-        coin_rate: rate,
-        units_per_6000: state.units,
-        ironman,
-        seed: life.seed,
-        tick: state.tick,
-    };
     let view = |item: &str| market.reader.view(item);
     let best_bid = |item: &str| view(item).and_then(|book| book.best_bid()).map(|price| price as f64);
     let sale_value = |item: &str| {
@@ -80,7 +69,8 @@ pub(crate) fn choose_pick(skill: &str, level: u8, target: u8, life: &Life, state
         if let Some(known) = memo.borrow().get(&key) {
             return known.clone();
         }
-        let found = lifescape_planner::bid_response::unit_cost(item, units, &view, &producer)
+        let found = state
+            .with_producer(life, rate, |producer| lifescape_planner::bid_response::unit_cost(item, units, &view, producer))
             .map(|unit| Acquired { coins_each: unit.total(rate), made_by: unit.plan.first().and_then(|step| step.strip_prefix("make ")).map(str::to_string) })
             .or_else(|| (!ironman).then(|| (market.traded)(item)).flatten().map(|price| Acquired { coins_each: price, made_by: None }))
             .or_else(|| {

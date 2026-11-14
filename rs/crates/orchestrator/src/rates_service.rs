@@ -769,7 +769,7 @@ fn split_three(key: &str) -> Option<(String, String, i64)> {
     Some((first, second, third))
 }
 
-fn snapshot_from_json(text: &str) -> Option<Snapshot> {
+pub(crate) fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     let value = lifescape_json::parse(text).ok()?;
     if value.get("schema").as_i64() != Some(1) && value.get("schema").as_i64() != Some(SNAPSHOT_SCHEMA) {
         return None;

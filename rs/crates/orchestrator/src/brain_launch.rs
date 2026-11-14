@@ -516,7 +516,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     let mut args = args;
     if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
-        crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx));
+        let derived = || crate::brain_market::derived_reserve(&life, launch, &live);
+        crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx, &derived));
     }
     // D52: flip and cleanup never sell worn, work tools or graph items.
     // The keep list carries the tools the bot works with

@@ -605,6 +605,13 @@ un cuisinier à 100 crevettes protégées bouclait jalon/fait/réinsertion).
 Les jalons faits sont bornés à `MAX_DONE_KEPT` = 40 (les plus anciens
 partent, ids jamais réutilisés).
 
+Rentabilité de tout le marché (2026-11-14, voir `docs/economy.md`
+§ Rentabilité de tout le marché) : le tirage pèse chaque objet de valeur
+(bids, prix courant, alchimie), pas seulement les bids ; les poids
+d'ambition comptent toute demande que la compétence primaire d'un type
+fabrique, même hors de portée (adamant → forgerons, minerais et charbon
+à moitié → mineurs).
+
 Réponse aux offres (2026-11-14, `brain_bids` + `planner::bid_response`,
 voir `docs/economy.md` § Producteurs qui répondent aux offres) : à chaque
 tirage, AVANT le jalon, une offre d'achat publique que le bot fabrique

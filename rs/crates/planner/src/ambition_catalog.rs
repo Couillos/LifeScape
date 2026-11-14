@@ -109,6 +109,8 @@ const SMITH: &[Rung] = &[
     make("smithing", 33, &["iron_platebody", "iron_platelegs", "iron_kiteshield"], 10), level_rung("mining", 30),
     make("smithing", 40, &["steel_dagger", "steel_sword", "steel_full_helm"], 20), make("smithing", 48, &["steel_platebody", "steel_platelegs"], 10),
     level_rung("mining", 55), make("smithing", 58, &["mithril_dagger", "mithril_full_helm"], 10), make("smithing", 68, &["mithril_platebody", "mithril_platelegs"], 5),
+    level_rung("mining", 70), make("smithing", 78, &["adamant_dagger", "adamant_full_helm", "adamant_scimitar"], 5),
+    make("smithing", 88, &["adamant_platebody", "adamant_platelegs"], 3),
 ];
 const MINER: &[Rung] = &[
     make("mining", 10, &["copper_ore", "tin_ore", "clay"], 100), make("mining", 20, &["iron_ore", "tin_ore"], 100),
@@ -266,20 +268,62 @@ pub fn method_skill(method: &str) -> Option<&'static str> {
     })
 }
 
-/// Demand weight per drawable kind: 1 + share of the open-bid value its
-/// products answer (0..n) + its best profit relative to the fleet's best
-/// (0..1, chain evals and measured methods, `(kind, profit)`). Keeps the
+/// Highest level a kind's ladder climbs `skill` to (0: never). A bot
+/// whose ambition climbs a skill values that XP: training it for a lot is
+/// no cost of the lot (`market_value::training_share`).
+pub fn ladder_level(kind: &str, skill: &str) -> u8 {
+    spec(kind).map(|entry| entry.ladder.iter().filter(|rung| rung.skill == skill).map(|rung| rung.level).max().unwrap_or(0)).unwrap_or(0)
+}
+
+/// How much a kind answers the demand for `item`: 1 when its ladder lists
+/// the object or its primary skill makes it at any tier (adamant armour
+/// out of every bot's reach still calls for smiths: « devenir forgeron
+/// parce que l'adamant se vend », 2026-11-14); half per recipe step when
+/// its skill makes an input (the ores and coal of a bar: miners); else 0.
+pub fn serves(kind: &str, item: &str) -> f64 {
+    if products(kind).contains(&item) {
+        return 1.0;
+    }
+    let Some(group) = primary_group(kind) else { return 0.0 };
+    let skills = group_skills(group);
+    serves_at(&skills, item, 0)
+}
+
+fn serves_at(skills: &[&str], item: &str, depth: u8) -> f64 {
+    let mut best: f64 = 0.0;
+    for leg in crate::obtain_legs::production_legs(item) {
+        if leg.skill.as_ref().is_some_and(|(skill, _)| skills.contains(&skill.as_str())) {
+            return 0.5f64.powi(i32::from(depth));
+        }
+        if depth < 2 {
+            for (input, _) in &leg.inputs {
+                best = best.max(serves_at(skills, input, depth + 1));
+            }
+        }
+    }
+    best
+}
+
+/// Demand weight per drawable kind: 1 + share of the open-bid value it
+/// answers (`serves`: its own products at any tier in full, the inputs
+/// its skill makes at half per step; 0..n) + its best profit relative to
+/// the fleet's best (0..1, chain evals and measured methods, `(kind,
+/// profit)`). A bid whose known margin is a loss pulls nobody. Keeps the
 /// draw random, tilted toward what buyers wait for and what pays.
 pub fn kind_weights(items: &[DemandItem], kind_profits: &[(String, f64)]) -> Vec<KindDemand> {
-    let top_weight = items.iter().map(|entry| entry.weight).fold(0.0, f64::max);
+    let wanted_items: Vec<&DemandItem> = items.iter().filter(|wanted| wanted.weight > 0.0 && wanted.margin.is_none_or(|margin| margin > 0.0)).collect();
+    let top_weight = wanted_items.iter().map(|entry| entry.weight).fold(0.0, f64::max);
     let top_profit = kind_profits.iter().map(|(_, profit)| *profit).fold(0.0, f64::max);
     let mut out = Vec::new();
     for entry in SPECS.iter().filter(|entry| entry.kind != crate::ambition::GENERALIST) {
-        let made = products(entry.kind);
         let mut demand = 0.0;
         let mut top: Option<(&DemandItem, f64)> = None;
-        for wanted in items.iter().filter(|wanted| made.contains(&wanted.item.as_str()) && wanted.weight > 0.0) {
-            let share = if top_weight > 0.0 { wanted.weight / top_weight } else { 0.0 };
+        for wanted in &wanted_items {
+            let answer = serves(entry.kind, &wanted.item);
+            if answer <= 0.0 {
+                continue;
+            }
+            let share = if top_weight > 0.0 { answer * wanted.weight / top_weight } else { 0.0 };
             demand += share;
             if top.is_none_or(|(_, known)| share > known) {
                 top = Some((wanted, share));

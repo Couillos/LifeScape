@@ -26,12 +26,17 @@ pub const RATE_WINDOW_TICKS: f64 = 6000.0;
 
 /// Public book of one object as one bot reads it: other accounts' bids
 /// (best first), every resting ask (cheapest first), units traded in the
-/// last 24 h.
+/// last 24 h, the current price (median of the last five fills clamped
+/// by the impact prices, `None` while it never traded) and the units
+/// other producers publicly claimed (`market_claims`: an order taken on
+/// the board, like a crafting order, 2026-11-14).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BookView {
     pub bids: Vec<(i64, i64)>,
     pub asks: Vec<(i64, i64)>,
     pub volume_24h: i64,
+    pub current: Option<i64>,
+    pub claimed: i64,
 }
 
 impl BookView {
@@ -49,6 +54,11 @@ impl BookView {
 
     pub fn ask_depth(&self) -> i64 {
         self.asks.iter().map(|(_, qty)| (*qty).max(0)).sum()
+    }
+
+    /// Units resting on the ask side at or under `price`.
+    pub fn asks_at_or_under(&self, price: i64) -> i64 {
+        self.asks.iter().filter(|(ask, _)| *ask <= price).map(|(_, qty)| (*qty).max(0)).sum()
     }
 
     /// Coins to buy `units` from the cheapest asks up, `None` when the
