@@ -101,23 +101,20 @@ fn clamp_quote(price: i64, floor: i64, ceiling: i64) -> i64 {
     price.max(floor).min(ceiling).max(1)
 }
 
+/// Repricing patience: one 5 % step at most per window of this many ticks
+/// (2026-11-14: 2000, was 200; daemon CPU over thousands of resting
+/// orders). `market_reprice::PATIENCE_TICKS` is this value.
+pub const PATIENCE_TICKS: u64 = 2000;
 /// A listing that filled within this many ticks of being listed sold
 /// FAST: it was cheap, so the seller's next lot of that item opens at
 /// least `FILL_MEMORY_PCT` % of that fill (2026-11-14, user rule 5). One
 /// patience window: the fill landed before any walk-down step.
-pub const FAST_FILL_TICKS: u64 = 200;
+pub const FAST_FILL_TICKS: u64 = PATIENCE_TICKS;
 /// Next opening after a fast fill, in percent of that fill's price.
 pub const FILL_MEMORY_PCT: i64 = 105;
 /// Opening ask of an object nobody traded: this many times the seller's
 /// own reserve (2026-11-14, user rule 4), then 5 % steps down to it.
 pub const UNTRADED_OPEN_RESERVES: i64 = 2;
-/// Anti-dumping lot (2026-11-14): one listing carries at most
-/// `1 / LOT_DEMAND_DIVISOR` (k = 1/4, the merchants' 25 % book share)
-/// of the public demand (24 h traded volume, or the resting bid depth
-/// when larger), never under `MIN_LOT` units.
-pub const LOT_DEMAND_DIVISOR: i64 = 4;
-/// Smallest lot a seller lists (an object with no public demand yet).
-pub const MIN_LOT: i64 = 10;
 
 /// One of the bot's OWN past fills on an item (its own data only).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -158,15 +155,6 @@ pub fn seller_open(reference: crate::price::Reference, best_bid: Option<i64>, re
 /// the item), never above the ceiling.
 pub fn remembered_bid(reference: i64, best_ask: Option<i64>, ceiling: i64, last_buy: Option<i64>) -> i64 {
     opening_bid(last_buy.filter(|price| *price >= 1).unwrap_or(reference), best_ask, ceiling)
-}
-
-/// Units of one listing (anti-dumping, 2026-11-14): at most a quarter of
-/// the public demand (`max(24 h volume, resting bid depth)`), at least
-/// `MIN_LOT`, never more than the free stock. The rest stays banked
-/// until this lot sold.
-pub fn lot_size(free: i64, volume_24h: i64, bid_depth: i64) -> i64 {
-    let demand = volume_24h.max(bid_depth).max(0);
-    (demand / LOT_DEMAND_DIVISOR).max(MIN_LOT).min(free.max(0))
 }
 
 /// Merchant quotes off the book (2026-11-14, user rule 6): buy at the
@@ -311,7 +299,7 @@ mod step_tests {
 
 #[cfg(test)]
 mod seller_tests {
-    use super::{flip_quotes, lot_size, remembered_bid, seller_open, FlipQuote, OwnFill};
+    use super::{flip_quotes, remembered_bid, seller_open, FlipQuote, OwnFill};
     use crate::price::Reference;
 
     const UNTRADED: Reference = Reference { price: 1, traded: false };
@@ -338,7 +326,7 @@ mod seller_tests {
     fn a_fast_own_fill_lifts_the_next_lot() {
         let traded = Reference { price: 10, traded: true };
         let fast = OwnFill { price: 20, rested_ticks: Some(120) };
-        let slow = OwnFill { price: 20, rested_ticks: Some(2000) };
+        let slow = OwnFill { price: 20, rested_ticks: Some(2500) };
         let unknown = OwnFill { price: 20, rested_ticks: None };
         assert!(fast.fast() && !slow.fast() && !unknown.fast());
         assert_eq!(seller_open(traded, None, 5, Some(fast)), (21, 5), "20 x 1.05");
@@ -353,14 +341,6 @@ mod seller_tests {
         assert_eq!(remembered_bid(1, None, 10, Some(12)), 10, "never above the ceiling");
         assert_eq!(remembered_bid(4, None, 50, None), 4, "never bought: the reference");
         assert_eq!(remembered_bid(1, Some(9), 50, Some(12)), 9, "a covered ask is taken");
-    }
-
-    #[test]
-    fn lots_follow_public_demand() {
-        assert_eq!(lot_size(33_364, 4319, 0), 1079, "a quarter of the day's volume");
-        assert_eq!(lot_size(33_364, 100, 800), 200, "or of the resting bid depth");
-        assert_eq!(lot_size(49_443, 0, 0), 10, "no demand: the minimum lot");
-        assert_eq!(lot_size(4, 4319, 0), 4, "never more than held");
     }
 
     #[test]

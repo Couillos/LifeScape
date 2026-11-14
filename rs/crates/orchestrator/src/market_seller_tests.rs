@@ -1,6 +1,7 @@
 use super::*;
 use crate::brain_reserve::{CostSource, OwnLine, OwnReport};
 use lifescape_market::Reference;
+use lifescape_planner::market_fit::BookView;
 
 fn reserve(coins: i64) -> Option<Reserve> {
     Some(Reserve { coins, source: CostSource::Measured })
@@ -8,16 +9,21 @@ fn reserve(coins: i64) -> Option<Reserve> {
 
 const UNTRADED: Reference = Reference { price: 1, traded: false };
 
+fn demand(volume_24h: i64, bids: Vec<(i64, i64)>) -> BookView {
+    BookView { bids, asks: Vec::new(), volume_24h }
+}
+
 /// Willow 2026-11-14: 33 364 open at 1 coin against 4 319 traded a day.
-/// A seller with 30 000 logs lists a quarter of the day's volume at its
-/// own cost, never the whole pile at the 1-coin reference.
+/// A seller with 30 000 logs lists what buyers take (bids + a day of
+/// volume, `market_fit::sale_lot`) at its own cost, never the whole pile
+/// at the 1-coin reference.
 #[test]
 fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
     let traded_at_one = Reference { price: 1, traded: true };
-    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, (4319, 0)), SaleDecision::List { qty: 1079, price: 4, floor: 4 });
-    assert_eq!(plan_sale(30_000, reserve(4), UNTRADED, None, None, (0, 0)), SaleDecision::List { qty: 10, price: 8, floor: 4 }, "untraded: 2 x reserve, minimum lot");
-    assert!(matches!(plan_sale(30_000, None, UNTRADED, None, None, (0, 0)), SaleDecision::Hold(_)), "no own cost: hold, never 1 coin");
-    assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, (99, 0)), SaleDecision::Hold(_)));
+    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, &demand(4319, vec![(2, 81)])), SaleDecision::List { qty: 4400, price: 4, floor: 4 });
+    assert_eq!(plan_sale(30_000, reserve(4), UNTRADED, None, None, &demand(0, Vec::new())), SaleDecision::List { qty: 28, price: 8, floor: 4 }, "untraded: 2 x reserve, one inventory");
+    assert!(matches!(plan_sale(30_000, None, UNTRADED, None, None, &demand(0, Vec::new())), SaleDecision::Hold(_)), "no own cost: hold, never 1 coin");
+    assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, &demand(99, Vec::new())), SaleDecision::Hold(_)));
 }
 
 /// The anti-bug band stays (reported, unchanged): a reserve over 5x a
@@ -25,9 +31,9 @@ fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
 #[test]
 fn the_band_caps_the_opening_and_holds_over_the_reserve() {
     let traded = Reference { price: 2, traded: true };
-    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, (100, 0)), SaleDecision::Hold(_)), "11 > 5 x 2");
+    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, &demand(100, Vec::new())), SaleDecision::Hold(_)), "11 > 5 x 2");
     let fast = OwnFill { price: 12, rested_ticks: Some(10) };
-    assert_eq!(plan_sale(50, reserve(4), traded, None, Some(fast), (100, 0)), SaleDecision::List { qty: 25, price: 10, floor: 4 }, "13 capped at 10");
+    assert_eq!(plan_sale(50, reserve(4), traded, None, Some(fast), &demand(30, Vec::new())), SaleDecision::List { qty: 30, price: 10, floor: 4 }, "13 capped at 10");
 }
 
 #[test]

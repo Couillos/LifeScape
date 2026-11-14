@@ -23,6 +23,6 @@ pub use guards::{check_coverage, check_price};
 pub use price::{bucketize, change_thousandths, reference_price, vwap, Candle, PricedFill, Reference};
 pub use trends::{compute_trend, TrendInput, TrendScores};
 pub use zip::{
-    demand_step, flip_quotes, lot_size, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
+    demand_step, flip_quotes, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
     ZipQuote,
 };

@@ -147,6 +147,9 @@ pub(crate) struct Engine {
     /// fast fill. The bot's own data only; the store's deals give the
     /// price back after a restart (speed then unknown).
     pub(crate) own_sells: HashMap<(String, i64), lifescape_market::OwnFill>,
+    /// Order ids adopted by demand pricing once (`market_reprice::adopt`
+    /// is idempotent: never re-adopted, never re-logged).
+    pub(crate) adopted: HashSet<i64>,
 }
 
 impl Engine {
@@ -172,6 +175,7 @@ impl Engine {
             quote_bounds: HashMap::new(),
             pair_cooldowns: HashMap::new(),
             own_sells: HashMap::new(),
+            adopted: HashSet::new(),
         }
     }
 

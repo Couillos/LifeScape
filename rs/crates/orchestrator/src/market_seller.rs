@@ -12,7 +12,8 @@
 //! `flip_quote` ops.
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{lot_size, seller_open, OwnFill, Reference};
+use lifescape_market::{seller_open, OwnFill, Reference};
+use lifescape_planner::market_fit::{sale_lot, BookView};
 use lifescape_planner::Life;
 
 use crate::brain_reserve::{OwnCosts, Reserve};
@@ -36,11 +37,12 @@ pub enum SaleDecision {
 
 /// One sale (pure): the opening ask from the seller's reserve and own
 /// last fill (`seller_open`), a lot sized to the public demand
-/// (`lot_size`), the 5x band of a traded reference respected (the
-/// opening comes down to it, never under the reserve: over it, hold).
-pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best_bid: Option<i64>, last_sell: Option<OwnFill>, demand: (i64, i64)) -> SaleDecision {
+/// (`market_fit::sale_lot`: bids + a day of volume, at least one
+/// inventory), the 5x band of a traded reference respected (the opening
+/// comes down to it, never under the reserve: over it, hold).
+pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best_bid: Option<i64>, last_sell: Option<OwnFill>, view: &BookView) -> SaleDecision {
     let Some(reserve) = reserve else { return SaleDecision::Hold("no own cost known".to_string()) };
-    let qty = lot_size(free, demand.0, demand.1);
+    let qty = sale_lot(free, Some(view));
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
@@ -107,23 +109,36 @@ pub fn flip_ticks_per_unit(reports: &[crate::brain_reserve::OwnReport]) -> Optio
     (units > 0).then(|| ticks as f64 / units as f64)
 }
 
+/// The `bid_response` make cost of `name` for `account` (its life and
+/// live snapshot from the supervisor), the reserve's cap; `None` when
+/// the bot is not supervised or cannot make it.
+fn make_cost_of(life: Option<&Life>, account: &str, name: &str, units: i64) -> Option<f64> {
+    let life = life?;
+    let live = crate::supervise::live_of(account)?;
+    crate::brain_bids::production_costs_for(life, &live, &[(name.to_string(), units.max(1))]).remove(name)
+}
+
 fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
 }
 
 impl MarketService {
-    /// Public demand of an item for a seller: 24 h traded volume and the
-    /// resting bid depth of every OTHER account.
-    pub(crate) fn public_demand(&self, account: &str, item: i64) -> (i64, i64) {
+    /// The public book of an item as a seller reads it (`BookView`):
+    /// every OTHER account's bids, every resting ask, 24 h volume.
+    pub(crate) fn public_view(&self, account: &str, item: i64) -> BookView {
         let clock = Self::now_clock();
-        let volume: i64 = self.lock_store().executions_for_item(item, clock - 86_400, clock + 1).unwrap_or_default().iter().map(|exec| exec.quantity).sum();
-        let depth: i64 = self
-            .lock_engine()
-            .books
-            .get(&item)
-            .map(|book| book.orders().into_iter().filter(|order| order.side == lifescape_market::Side::Buy && order.account != account).map(|order| order.remaining).sum())
-            .unwrap_or(0);
-        (volume, depth)
+        let volume_24h: i64 = self.lock_store().executions_for_item(item, clock - 86_400, clock + 1).unwrap_or_default().iter().map(|exec| exec.quantity).sum();
+        let mut view = BookView { volume_24h, ..BookView::default() };
+        if let Some(book) = self.lock_engine().books.get(&item) {
+            for order in book.orders().into_iter().filter(|order| order.remaining > 0) {
+                if order.side == lifescape_market::Side::Sell {
+                    view.asks.push((order.price, order.remaining));
+                } else if order.account != account {
+                    view.bids.push((order.price, order.remaining));
+                }
+            }
+        }
+        view
     }
 
     /// Records the seller's own fill with how long its listing rested
@@ -156,16 +171,18 @@ impl MarketService {
         self.lock_store().last_own_fill(account, item, true).ok().flatten().map(|(price, _)| price)
     }
 
-    /// The account's sale decision for `free` units of `name` (`item`).
-    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>) -> (SaleDecision, Option<Reserve>) {
+    /// The account's sale decision for `free` units of `name` (`item`),
+    /// its reserve capped at `make_cost` (`brain_bids::production_costs_for`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
             let store = self.lock_store();
-            costs.reserve(&store, name, item, life)
+            costs.reserve(&store, name, item, life, make_cost)
         };
         let reference = self.reference(item);
         let (bid, _) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
         let last = self.own_sell_fill(account, item);
-        (plan_sale(free, reserve, reference, bid, last, self.public_demand(account, item)), reserve)
+        (plan_sale(free, reserve, reference, bid, last, &self.public_view(account, item)), reserve)
     }
 
     /// `seller_quote {account, item, qty}`: the account's own listing for
@@ -179,7 +196,8 @@ impl MarketService {
         };
         let costs = OwnCosts::load(&self.lock_store(), &account);
         let life = crate::brain::load_life(&account);
-        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref());
+        let make_cost = make_cost_of(life.as_ref(), &account, name, qty);
+        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref(), make_cost);
         let reserve_value = reserve.map(|known| Value::Int(known.coins)).unwrap_or(Value::Null);
         match decision {
             SaleDecision::List { qty, price, floor } => object(vec![
@@ -211,8 +229,9 @@ impl MarketService {
             Some(paid) => Some(paid + margin),
             None => {
                 let life = crate::brain::load_life(&account);
+                let make_cost = make_cost_of(life.as_ref(), &account, name, held);
                 let store = self.lock_store();
-                costs.reserve(&store, name, item, life.as_ref()).map(|reserve| reserve.coins)
+                costs.reserve(&store, name, item, life.as_ref(), make_cost).map(|reserve| reserve.coins)
             }
         };
         let (bid, ask) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
@@ -220,13 +239,13 @@ impl MarketService {
         let reference = self.reference(item);
         let band = reference.traded.then(|| reference.price.saturating_mul(5));
         let sell = sell_floor.filter(|floor| band.is_none_or(|cap| *floor <= cap)).map(|_| band.map_or(quote.sell, |cap| quote.sell.min(cap)));
-        let (volume, depth) = self.public_demand(&account, item);
+        let lot = sale_lot(held, Some(&self.public_view(&account, item)));
         object(vec![
             ("ok", Value::Bool(true)),
             ("buy", quote.buy.map(Value::Int).unwrap_or(Value::Null)),
             ("sell", sell.map(Value::Int).unwrap_or(Value::Null)),
             ("sell_floor", sell_floor.map(Value::Int).unwrap_or(Value::Null)),
-            ("lot", Value::Int(lot_size(held, volume, depth))),
+            ("lot", Value::Int(lot)),
             ("margin", Value::Int(margin)),
         ])
     }

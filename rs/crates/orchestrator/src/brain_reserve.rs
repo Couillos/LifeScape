@@ -19,11 +19,14 @@
 //!   all: no time cost.
 //! - coins per tick: the best of the bot's own methods, measured as
 //!   (coins looted or shop-sold + units it farmed x its OWN last sale
-//!   price of them) / ticks. A bot that never looted coins also weighs
-//!   the planner's estimate of the coin-drop method `have_coins` uses
-//!   (men: coins per kill x the cold-start kill rate), the earning it
-//!   has not tried yet.
+//!   price of them) / ticks, never under `market_fit::MIN_COIN_RATE`
+//!   (0.1: never free time, the floor `bid_response` prices with).
 //! - a unit it BOUGHT costs at least its own last purchase price.
+//! - never over what MAKING it costs the bot as `bid_response` prices a
+//!   bid quota (`bid_response::production_cost`: coins + ticks at the
+//!   bot's coin rate, `brain_bids::production_costs_for`): a quota counts
+//!   the bids above that cost, so a producer never holds the stock the
+//!   bids it answered would buy.
 //!
 //! No time cost and no purchase: `None`, the bot holds the stock (never
 //! a 1-coin listing).
@@ -57,6 +60,8 @@ pub enum CostSource {
     Planned,
     Prior,
     Bought,
+    /// Capped at the `bid_response` cost of making it.
+    MakeCost,
 }
 
 /// A seller reserve in coins per unit, with its source.
@@ -145,25 +150,10 @@ pub fn measured_coins_per_tick(reports: &[OwnReport], own_sale: &dyn Fn(&str) ->
         .fold(None, |best: Option<f64>, rate| Some(best.map_or(rate, |known| known.max(rate))))
 }
 
-/// Planner estimate of the coin-drop method `have_coins` sends a bot to
-/// (men): expected coins per kill x the cold-start kill rate (one bones
-/// drop per kill, `prior_for("melee", "bones")`).
-pub fn estimated_coin_drop_rate() -> f64 {
-    let per_kill = lifescape_planner::resolve_obtain::coins_per_kill("fight:melee/men");
-    let kills = crate::rates_service::prior_for("melee", "bones").map(|(per_6000, _)| per_6000).unwrap_or(0.0);
-    per_kill * kills / crate::rates_service::NORMALIZE_TICKS
-}
-
-/// The bot's coins per tick: its best measured method, and the coin-drop
-/// estimate while it never looted coins itself.
+/// The bot's coins per tick: its best measured method, never under the
+/// shared floor `market_fit::MIN_COIN_RATE` (one tick is never free).
 pub fn coins_per_tick(reports: &[OwnReport], own_sale: &dyn Fn(&str) -> Option<i64>) -> f64 {
-    let measured = measured_coins_per_tick(reports, own_sale).unwrap_or(0.0);
-    let looted = reports.iter().any(|report| report.lines.iter().any(|line| coin_gain(line) && line.provenance == "loot"));
-    if looted {
-        measured
-    } else {
-        measured.max(estimated_coin_drop_rate())
-    }
+    measured_coins_per_tick(reports, own_sale).unwrap_or(0.0).max(lifescape_planner::market_fit::MIN_COIN_RATE)
 }
 
 /// Planner estimate from the bot's own graph: the cheapest farm way of an
@@ -206,18 +196,25 @@ pub fn reserve_coins(ticks_per_unit: f64, coins_per_tick: f64) -> i64 {
 }
 
 /// The reserve from the bot's own figures: the time cost (measured,
-/// planned, prior) and its own last purchase price, the larger wins.
-pub fn reserve_of(measured: Option<f64>, planned: Option<f64>, prior: Option<f64>, coins_per_tick: f64, bought: Option<i64>) -> Option<Reserve> {
+/// planned, prior) and its own last purchase price, the larger wins,
+/// then never over `make_cost` (the `bid_response` cost of making one
+/// unit, rounded down, at least 1 coin).
+pub fn reserve_of(measured: Option<f64>, planned: Option<f64>, prior: Option<f64>, coins_per_tick: f64, bought: Option<i64>, make_cost: Option<f64>) -> Option<Reserve> {
     let time = measured
         .map(|ticks| (ticks, CostSource::Measured))
         .or(planned.map(|ticks| (ticks, CostSource::Planned)))
         .or(prior.map(|ticks| (ticks, CostSource::Prior)))
         .map(|(ticks, source)| Reserve { coins: reserve_coins(ticks, coins_per_tick), source });
     let paid = bought.filter(|price| *price >= 1).map(|price| Reserve { coins: price, source: CostSource::Bought });
-    match (time, paid) {
+    let own = match (time, paid) {
         (Some(time), Some(paid)) => Some(if paid.coins > time.coins { paid } else { time }),
         (time, paid) => time.or(paid),
-    }
+    }?;
+    let cap = make_cost.filter(|cost| cost.is_finite()).map(|cost| (cost.floor() as i64).max(1));
+    Some(match cap {
+        Some(cap) if cap < own.coins => Reserve { coins: cap, source: CostSource::MakeCost },
+        _ => own,
+    })
 }
 
 /// Display name of a debug name (yields carry display names).
@@ -268,14 +265,15 @@ impl OwnCosts {
         OwnCosts { account: account.to_string(), reports, coins_per_tick }
     }
 
-    /// Reserve of `item` (debug name, obj id `item_id`).
-    pub fn reserve(&self, store: &Store, item: &str, item_id: i64, life: Option<&Life>) -> Option<Reserve> {
+    /// Reserve of `item` (debug name, obj id `item_id`), capped at
+    /// `make_cost` (`brain_bids::production_costs_for`) when known.
+    pub fn reserve(&self, store: &Store, item: &str, item_id: i64, life: Option<&Life>, make_cost: Option<f64>) -> Option<Reserve> {
         let display = display_of(item);
         let measured = measured_ticks_per_unit(&self.reports, &display, &item_weight);
         let planned = life.and_then(|life| planned_ticks_per_unit(life, item));
         let prior = prior_ticks_per_unit(&display);
         let bought = store.last_own_fill(&self.account, item_id, true).ok().flatten().map(|(price, _)| price);
-        reserve_of(measured, planned, prior, self.coins_per_tick, bought)
+        reserve_of(measured, planned, prior, self.coins_per_tick, bought, make_cost)
     }
 }
 

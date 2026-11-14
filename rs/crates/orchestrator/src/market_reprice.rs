@@ -25,7 +25,10 @@ use lifescape_json::{object, str_value, Value};
 use crate::market_service::MarketService;
 
 /// Default patience: ticks of one window (one step at most per window).
-pub const PATIENCE_TICKS: u64 = 200;
+/// 2000 ticks (2026-11-14, daemon CPU: 200 ticks = 12 s at the dev tick
+/// made ~55 amends/s over thousands of resting orders); the "fast fill"
+/// of `lifescape_market::OwnFill` is a fill inside this first window.
+pub const PATIENCE_TICKS: u64 = lifescape_market::zip::PATIENCE_TICKS;
 /// A sell's own cap: none (the 5x band of a traded reference bounds the
 /// walk-up, see `walk_cap`).
 pub const SELL_CAP: i64 = i64::MAX / 4;
@@ -91,8 +94,7 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
 
 /// Highest price a step may reach: the order's own ceiling, and for a
 /// traded object the 5x guard band (an amend past it would be refused).
-fn walk_cap(service: &MarketService, item: i64, bounds: &QuoteBounds) -> i64 {
-    let reference = service.reference(item);
+fn walk_cap(reference: lifescape_market::Reference, bounds: &QuoteBounds) -> i64 {
     if reference.traded {
         bounds.ceiling.min(reference.price.saturating_mul(5)).max(bounds.floor)
     } else {
@@ -105,29 +107,41 @@ fn resting(row: &lifescape_store::Order) -> bool {
 }
 
 /// One repricing pass at daemon wall `wall` with the measured tick
-/// length. Returns the number of orders moved.
+/// length. Returns the number of orders moved. Work follows change, not
+/// the order count (2026-11-14, daemon CPU): an order inside its
+/// patience window is skipped before any store read; one parked at a
+/// bound closes its window without an amend; the amends of a pass share
+/// one store transaction and the pass logs one summary line.
 pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize {
-    let entries: Vec<(i64, QuoteBounds)> =
-        service.lock_engine().quote_bounds.iter().map(|(order, bounds)| (*order, bounds.clone())).collect();
-    let mut moved = 0;
-    for (order, bounds) in entries {
+    let due: Vec<(i64, QuoteBounds)> = service
+        .lock_engine()
+        .quote_bounds
+        .iter()
+        .filter(|(_, bounds)| wall - bounds.last_change_wall >= bounds.patience_ticks as f64 * tick_ms.max(1.0) / 1000.0)
+        .map(|(order, bounds)| (*order, bounds.clone()))
+        .collect();
+    if due.is_empty() {
+        return 0;
+    }
+    let batch = service.lock_store().begin_batch().unwrap_or(false);
+    let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
+    // One reference read per item per pass (it scans the item's prints).
+    let mut references: std::collections::HashMap<i64, lifescape_market::Reference> = std::collections::HashMap::new();
+    for (order, bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
             service.lock_engine().quote_bounds.remove(&order);
             continue;
         };
-        let patience_secs = bounds.patience_ticks as f64 * tick_ms.max(1.0) / 1000.0;
-        if wall - bounds.last_change_wall < patience_secs {
-            continue;
-        }
         let filled = row.remaining < bounds.last_remaining;
-        let cap = walk_cap(service, row.item_id, &bounds);
+        let reference = *references.entry(row.item_id).or_insert_with(|| service.reference(row.item_id));
+        let cap = walk_cap(reference, &bounds);
         let next = lifescape_market::demand_step(row.price, bounds.sell, filled, bounds.floor, cap);
         let window = QuoteBounds { last_change_wall: wall, last_remaining: row.remaining, ..bounds.clone() };
         if next == row.price {
-            // Parked at a bound: the window closes, the next one reads
-            // fresh fills.
+            // Parked at a bound: the window closes, no amend, no log.
             service.lock_engine().quote_bounds.insert(order, window);
+            parked += 1;
             continue;
         }
         let reply = service.handle(&object(vec![
@@ -144,18 +158,20 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
                 guard.insert(replacement, window);
             }
             moved += 1;
-            crate::logln!(
-                "market-reprice: {} order {order} {} -> {next} ({})",
-                bounds.account,
-                row.price,
-                if filled { "filled" } else { "idle" }
-            );
         } else {
             // The original rests untouched (the checks run before the
             // cancel): it keeps walking next window.
             guard.insert(order, window);
-            crate::logln!("market-reprice: {} order {order} amend refused: {:?}", bounds.account, reply.get("error").as_str());
+            refused += 1;
         }
+    }
+    if batch {
+        if let Err(error) = service.lock_store().commit_batch() {
+            crate::logln!("market-reprice: batch commit failed: {error}");
+        }
+    }
+    if moved + refused > 0 {
+        crate::logln!("market-reprice: {moved} moved, {parked} at a bound, {refused} refused");
     }
     moved
 }
@@ -163,13 +179,22 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
 /// Re-adopts a resting order the engine has no bounds for (daemon
 /// restart, listings placed before demand pricing): it walks from now.
 /// Returns false when the order already walks.
+/// Idempotent (2026-11-14): an order id adopted once is never adopted
+/// again, even if its bounds were dropped since.
 pub fn adopt(service: &MarketService, order: i64, bounds: QuoteBounds) -> bool {
     let mut engine = service.lock_engine();
-    if engine.quote_bounds.contains_key(&order) {
+    if engine.quote_bounds.contains_key(&order) || !engine.adopted.insert(order) {
         return false;
     }
     engine.quote_bounds.insert(order, bounds);
     true
+}
+
+/// True once `order` walks or was adopted (the selling pass skips it
+/// before any reserve or book work).
+pub fn handled(service: &MarketService, order: i64) -> bool {
+    let engine = service.lock_engine();
+    engine.quote_bounds.contains_key(&order) || engine.adopted.contains(&order)
 }
 
 /// Outcome of `keep_bid`.

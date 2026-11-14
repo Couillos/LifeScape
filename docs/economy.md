@@ -20,7 +20,8 @@ marchands), `sim` (simulateur à graines fixes).
 
 Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
 ordre posé avec un `ceiling` (acheteur) ou un `floor` (vendeur) fait un
-pas de 5 % (≥ 1 pièce) par fenêtre de patience (200 ticks) tant qu'il
+pas de 5 % (≥ 1 pièce) par fenêtre de patience (2000 ticks depuis le
+2026-11-14, `zip::PATIENCE_TICKS`, voir § Coût CPU du repricing) tant qu'il
 reste au carnet (`market_reprice`, `lifescape_market::demand_step`), sa
 direction lue dans la fenêtre : vente servie (même en partie) → monte,
 vente au repos → descend jusqu'à son plancher, achat au repos → monte
@@ -405,7 +406,7 @@ combattant).
 1 pièce n'est que le prix d'amorçage public. Règles
 (`lifescape_market::zip`, `market_reprice`) : ouverture à la référence
 échangée (VWAP 24 h → dernier print), `2 × réserve` sinon, puis un pas
-de 5 % (≥ 1) par fenêtre de 200 ticks selon les exécutions de la
+de 5 % (≥ 1) par fenêtre de 2000 ticks selon les exécutions de la
 fenêtre (voir § Market). Un vendeur qui ne vend pas descend jusqu'à sa
 réserve (son propre coût, § Réserve vendeur) et y reste ; un vendeur
 qui vend monte ; un acheteur qui n'est pas servi monte jusqu'à ce que
@@ -436,30 +437,42 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   taux de démarrage à froid du script (`rates_service::prior_for`).
   Pièces par tick : la meilleure méthode du bot, (pièces ramassées ou
   vendues au magasin + unités farmées, nettes de la vente magasin, × son
-  propre dernier prix de vente) / ticks ; tant que le bot n'a jamais
-  ramassé de pièces, l'estimation planificateur de la méthode `have_coins`
-  (hommes : 8,2 pièces/kill × 60 kills/6000 ticks ≈ 0,082 pièce/tick)
-  compte aussi. Un objet ACHETÉ coûte au moins son propre dernier prix
-  d'achat. Aucun coût connu : le bot garde son stock (hold), jamais une
-  annonce à 1.
+  propre dernier prix de vente) / ticks, jamais sous
+  `market_fit::MIN_COIN_RATE` (0,1, le plancher du coût unitaire de
+  `bid_response` : le temps n'est jamais gratuit ; saule à 43,6 ticks →
+  5 pièces). Un objet ACHETÉ coûte au moins son propre dernier prix
+  d'achat. Plafond partagé avec la réponse aux offres : la réserve ne
+  dépasse jamais le coût de FABRICATION que `bid_response` donne au bot
+  (`bid_response::production_cost` = chemin « make » de `unit_cost`,
+  pièces + ticks × `market_fit::coin_rate` ; calculé une fois par passe
+  par `brain_bids::production_costs_for`, mêmes niveaux, bans, quêtes,
+  rendements et carnet que le tirage), arrondi bas, ≥ 1 : un quota compte
+  les bids au-dessus de ce coût, le producteur ne garde donc jamais le
+  stock que ces bids achèteraient. Aucun coût connu : le bot garde son
+  stock (hold), jamais une annonce à 1.
 - Ouverture (`zip::seller_open`) : référence échangée (ou meilleur bid
   plus riche) ; objet jamais échangé : `max(meilleur bid, 2 × réserve)` ;
   jamais sous la réserve ; ramenée à 5× d'une référence échangée (bande).
 - Mémoire des fills (`market_seller`, `Engine::own_sells` + `deals`) :
-  après une vente RAPIDE (servie ≤ `FAST_FILL_TICKS` = 200 ticks après
-  la mise en vente, soit avant tout pas de descente, durée mesurée
+  après une vente RAPIDE (servie ≤ `FAST_FILL_TICKS` = `PATIENCE_TICKS`
+  = 2000 ticks après la mise en vente, soit dans la première fenêtre,
+  avant tout pas de descente, durée mesurée
   depuis `QuoteBounds::listed_wall` ; un ask qui croise un bid à l'arrivée
   = 0), le lot suivant ouvre à ≥ 105 % de ce prix. Après redémarrage le
   prix revient du store (deals non échoués du bot), la vitesse non (pas
   de hausse). Une offre d'achat ouvre à son propre dernier prix d'achat
   (`remembered_bid`), l'ask couvert restant pris d'abord.
-- Anti-dumping : un lot = `max(10, demande publique / 4)` unités, plafonné
-  au stock libre (`zip::lot_size`, k = 1/4 comme la part de carnet
-  marchande ; demande = max(volume échangé 24 h, profondeur des bids des
-  AUTRES comptes)) ; le reste reste en banque, le lot suivant part quand
-  le précédent n'a plus de ligne au repos (vendu). Jamais sous la
-  réserve, jamais d'expiration qui brade. Mêmes règles pour le
-  `market sell` et le `market cleanup` des workers (op `seller_quote`).
+- Anti-dumping : un lot = `market_fit::sale_lot` (bids des AUTRES
+  comptes + volume 24 h, au moins 28, plafonné au stock libre ; une
+  seule règle avec la réponse aux offres) ; le reste reste en banque, le
+  lot suivant part quand le précédent n'a plus de ligne au repos
+  (vendu). Jamais sous la réserve, jamais d'expiration qui brade. Ce que
+  le plan du bot consommera n'est pas du surplus : jalons ouverts de
+  l'ambition par `market_fit::own_use_items` (`cleanup_keep`), nœuds
+  ouverts du graphe par `brain_sales::planned_methods` (tranche d'un nœud
+  niveau non résolu, runes d'un sort de combat). Mêmes règles pour le
+  `market sell` et le `market cleanup` des workers (op `seller_quote`,
+  niveaux live lus au superviseur pour le plafond de fabrication).
 - Marchands (`flip_quote`) : achat au meilleur bid + 1 seulement quand
   l'écart `(ask − 1) − (bid + 1)` couvre la marge minimale = ticks par
   unité flippée (mesurés sur ses rapports `market`, sinon 6000/100,
@@ -468,6 +481,17 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   marge (ou sa réserve pour un stock non acheté), à 2 × ce plancher
   sans ask ; jamais réf ± 1. Le stock de flip (objets que le marchand a
   achetés) n'est jamais relisté par `maybe_list_surplus`.
+- Coût CPU du repricing (2026-11-14, ~55 amends/s et ~10 000 lignes de
+  log en 3 min après le redémarrage) : patience 2000 ticks (était 200) ;
+  un ordre dans sa fenêtre est sauté avant toute lecture du store ; un
+  ordre parqué à une borne (réserve, plafond) ferme sa fenêtre sans
+  amend ni log ; une référence lue une fois par objet et par passe ; les
+  amends d'une passe partagent une transaction (`Store::begin_batch` /
+  `commit_batch`) ; une ligne de synthèse par passe (`market-reprice: N
+  moved, P at a bound, R refused`). Adoption idempotente : un ordre
+  adopté (ou relevé, retiré) une fois n'est jamais repris
+  (`Engine::adopted`, `market_reprice::handled`), une ligne de synthèse
+  par compte et par passe.
 - Plafond acheteur (décision utilisateur) : le plafond « juste »
   `min(pièces/qté, max(3 × réf, 20))` est retiré
   (`resolve_obtain::bid_ceiling` = pièces / quantité) ; aucun plafond lié
@@ -565,8 +589,9 @@ d'achat que ce bot sait fabriquer avec profit :
   jeté au rangement : un allumeur coupe ses bûches pour les brûler.
 - `sale_lot(stock, vue)` = ce que les acheteurs prennent (bids + volume
   24 h), au moins un inventaire (28), jamais plus que le stock : taille
-  d'une annonce de joueur. À brancher dans `brain_sales::surplus` (fichier
-  tenu par la refonte des prix vendeur), pas encore câblé.
+  d'une annonce de joueur. Câblé (2026-11-14) dans la vente par défaut,
+  l'adoption des annonces, `seller_quote` et `flip_quote`
+  (`market_seller`, § Réserve vendeur).
 - Origine des volumes absurdes (revue 2026-11-14, `task_yields`) :
   plumes ≈ 115 000 en montées de combat sur les poulets (butin, jamais
   lâché) ; saule ≈ 8 900 en tranches de bûcheronnage, 6 500 en `make_money`

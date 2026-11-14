@@ -243,6 +243,15 @@ fn make_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, 
     best
 }
 
+/// Cost of MAKING one unit of `item` now when the bot makes `units` of
+/// it: the make path `opportunity` prices a quota with (never the buy
+/// path). Shared with the seller reserve (`brain_reserve`, 2026-11-14):
+/// a reserve never exceeds it, so a producer never holds the stock the
+/// bids it answered would buy.
+pub fn production_cost(item: &str, units: i64, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<UnitCost> {
+    make_cost(item, units.max(1), market, bot, 0)
+}
+
 /// The opportunity of one object's bids for this bot (module doc), or
 /// `None` when nothing pays or the bot cannot make it now.
 pub fn opportunity(item: &str, view: &BookView, market: &dyn Fn(&str) -> Option<BookView>, bot: &Producer) -> Option<Opportunity> {

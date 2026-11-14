@@ -56,31 +56,45 @@ fn coins_per_tick_is_the_best_own_method() {
     // (the shop-sold feathers are not valued twice).
     let rate = measured_coins_per_tick(&reports, &sale).unwrap_or(0.0);
     assert!((rate - 0.2).abs() < 1e-9, "{rate}");
-    assert!((coins_per_tick(&reports, &sale) - 0.2).abs() < 1e-9, "a bot that looted coins uses its own figures only");
+    assert!((coins_per_tick(&reports, &sale) - 0.2).abs() < 1e-9, "its own best method");
     let unsold = |_: &str| None;
-    assert!((coins_per_tick(&reports, &unsold) - 0.03).abs() < 1e-9, "unsold logs earn nothing yet");
+    assert!((measured_coins_per_tick(&reports, &unsold).unwrap_or(0.0) - 0.03).abs() < 1e-9, "unsold logs earn nothing yet");
 }
 
-/// A bot that never looted coins weighs the planner's coin-drop
-/// estimate (men), never a 1-coin default.
+/// One tick is never free: under the shared floor `bid_response`
+/// prices with (0.1), the floor holds; never a 1-coin default.
 #[test]
-fn a_bot_without_coin_drops_weighs_the_planner_estimate() {
-    let estimate = estimated_coin_drop_rate();
-    assert!(estimate > 0.05 && estimate < 0.2, "men: ~8.2 coins per ~100-tick kill: {estimate}");
-    let reports = vec![report("woodcut", 6000, vec![line("Willow logs", "produced", 150)])];
-    let one_coin = |_: &str| Some(1);
-    assert!((coins_per_tick(&reports, &one_coin) - estimate).abs() < 1e-9, "logs sold at 1 coin earn less than men");
+fn coins_per_tick_never_falls_under_the_shared_floor() {
+    let floor = lifescape_planner::market_fit::MIN_COIN_RATE;
+    let reports = vec![report("melee", 1500, vec![line("Coins", "loot", 45)])];
+    assert!((coins_per_tick(&reports, &|_: &str| None) - floor).abs() < 1e-9, "0.03 measured, 0.1 floor");
+    assert!((coins_per_tick(&[], &|_: &str| None) - floor).abs() < 1e-9, "nothing measured: the floor");
+    // lara_lane's willow: 43.6 ticks a log at the floor = 5 coins.
+    assert_eq!(reserve_coins(6142.0 / 141.0, floor), 5);
 }
 
 #[test]
 fn reserve_prefers_measured_then_planned_then_prior_and_covers_purchases() {
     let rate = 0.1;
-    assert_eq!(reserve_of(Some(43.6), Some(10.0), Some(5.0), rate, None), Some(Reserve { coins: 5, source: CostSource::Measured }));
-    assert_eq!(reserve_of(None, Some(30.0), Some(5.0), rate, None), Some(Reserve { coins: 3, source: CostSource::Planned }));
-    assert_eq!(reserve_of(None, None, Some(33.3), rate, None), Some(Reserve { coins: 4, source: CostSource::Prior }));
-    assert_eq!(reserve_of(Some(20.0), None, None, rate, Some(9)), Some(Reserve { coins: 9, source: CostSource::Bought }), "never under what it paid");
-    assert_eq!(reserve_of(None, None, None, rate, Some(4)), Some(Reserve { coins: 4, source: CostSource::Bought }));
-    assert_eq!(reserve_of(None, None, None, rate, None), None, "no own cost: hold, never 1 coin");
+    assert_eq!(reserve_of(Some(43.6), Some(10.0), Some(5.0), rate, None, None), Some(Reserve { coins: 5, source: CostSource::Measured }));
+    assert_eq!(reserve_of(None, Some(30.0), Some(5.0), rate, None, None), Some(Reserve { coins: 3, source: CostSource::Planned }));
+    assert_eq!(reserve_of(None, None, Some(33.3), rate, None, None), Some(Reserve { coins: 4, source: CostSource::Prior }));
+    assert_eq!(reserve_of(Some(20.0), None, None, rate, Some(9), None), Some(Reserve { coins: 9, source: CostSource::Bought }), "never under what it paid");
+    assert_eq!(reserve_of(None, None, None, rate, Some(4), None), Some(Reserve { coins: 4, source: CostSource::Bought }));
+    assert_eq!(reserve_of(None, None, None, rate, None, None), None, "no own cost: hold, never 1 coin");
+}
+
+/// A bid quota is priced at the make cost (`bid_response`): the reserve
+/// never exceeds it, or the producer would hold the stock the bids it
+/// answered would buy.
+#[test]
+fn the_reserve_never_exceeds_the_bid_response_make_cost() {
+    let slow = reserve_of(Some(120.0), None, None, 0.1, None, Some(7.9));
+    assert_eq!(slow, Some(Reserve { coins: 7, source: CostSource::MakeCost }), "12 capped at floor(7.9)");
+    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, None, Some(30.0)), Some(Reserve { coins: 4, source: CostSource::Measured }), "under the cap: its own cost");
+    assert_eq!(reserve_of(None, None, None, 0.1, Some(20), Some(9.0)).map(|reserve| reserve.coins), Some(9));
+    assert_eq!(reserve_of(None, None, None, 0.1, None, Some(9.0)), None, "the cap alone is no own cost");
+    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, None, Some(0.4)).map(|reserve| reserve.coins), Some(1));
 }
 
 #[test]

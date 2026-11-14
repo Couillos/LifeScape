@@ -46,14 +46,13 @@ fn method_product(method: &str) -> Option<&str> {
 /// raw fish, a firemaker's logs, an unstrung amulet, a filled container.
 const INPUT_NAMED: [&str; 7] = ["cook/", "cook:", "fire:", "string:", "enchant:", "fill:", "tan:"];
 
-/// Every method the bot's own plan will work (2026-11-14, anti-dumping
+/// Every method the bot's open graph will work (2026-11-14, anti-dumping
 /// (c): what it will burn, cook, smith or cast is not surplus): the
-/// chosen method and alternatives of each open level or money node, the
-/// tranche method of an open level node not resolved yet, and the
-/// tranche of every unfinished level milestone and the production of
-/// every unfinished produce milestone of its ambition.
+/// chosen method and alternatives of each open level or money node, and
+/// the tranche method of an open level node not resolved yet. The
+/// ambition's open milestones are kept by `brain::cleanup_keep`
+/// (`market_fit::own_use_items`), never twice here.
 pub fn planned_methods(life: &Life) -> Vec<String> {
-    use lifescape_planner::ambition::{MilestoneStatus, Target};
     let mut methods: Vec<String> = Vec::new();
     for node in &life.nodes {
         if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
@@ -67,16 +66,6 @@ pub fn planned_methods(life: &Life) -> Vec<String> {
             if node.method.is_none() && node.alternatives.is_empty() {
                 methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1)));
             }
-        }
-    }
-    for milestone in life.ambition.iter().flat_map(|ambition| ambition.milestones.iter()) {
-        if milestone.status == MilestoneStatus::Done {
-            continue;
-        }
-        match &milestone.target {
-            Target::Level { skill, level } => methods.push(lifescape_planner::tranches::reach_method(skill, level.saturating_sub(1).max(1))),
-            Target::Produce { item, .. } => methods.push(format!("make:{item}")),
-            _ => {}
         }
     }
     methods.sort();
@@ -193,24 +182,42 @@ fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &
 /// bot's own reserve is amended up to it, one over the demand lot or
 /// without a known own cost is withdrawn (its stock back in the bank,
 /// the next pass lists a lot), the rest walks down to the reserve.
-fn adopt_listings(service: &crate::market_service::MarketService, account: &str, selling: &[lifescape_store::Order], costs: &crate::brain_reserve::OwnCosts, life: &Life) {
+fn adopt_listings(
+    service: &crate::market_service::MarketService,
+    account: &str,
+    selling: &[lifescape_store::Order],
+    costs: &crate::brain_reserve::OwnCosts,
+    life: &Life,
+    make_costs: &HashMap<String, f64>,
+) {
     use crate::market_seller::Adoption;
+    let (mut walked, mut raised, mut withdrawn) = (0usize, 0usize, 0usize);
     for row in selling {
-        if crate::market_reprice::bounds_of(service, row.order_id).is_some() {
+        // Idempotent: an order that walks or was adopted once is skipped
+        // before any reserve or book work (2026-11-14, daemon CPU).
+        if crate::market_reprice::handled(service, row.order_id) {
             continue;
         }
         let Some(name) = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).unwrap_or(0)).and_then(|obj| obj.name) else { continue };
+        let make_cost = make_costs.get(name).copied();
         let reserve = {
             let store = service.lock_store();
-            costs.reserve(&store, name, row.item_id, Some(life)).map(|reserve| reserve.coins)
+            costs.reserve(&store, name, row.item_id, Some(life), make_cost).map(|reserve| reserve.coins)
         };
-        let (volume, depth) = service.public_demand(account, row.item_id);
-        let lot = lifescape_market::lot_size(row.remaining, volume, depth);
-        let (order, floor) = match crate::market_seller::adoption(row.price, row.remaining, reserve, lot) {
+        let lot = lifescape_planner::market_fit::sale_lot(row.remaining, Some(&service.public_view(account, row.item_id)));
+        let decision = crate::market_seller::adoption(row.price, row.remaining, reserve, lot);
+        if !matches!(decision, Adoption::Walk { .. }) {
+            // Decided once: never retried nor re-logged every pass.
+            service.lock_engine().adopted.insert(row.order_id);
+        }
+        let (order, floor) = match decision {
             Adoption::Withdraw(why) => {
                 let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
-                let outcome = if reply.get("ok").as_bool() == Some(true) { "ok".to_string() } else { format!("{:?}", reply.get("error").as_str()) };
-                crate::logln!("brain {account}: listing {} ({} {name} @ {}) withdrawn ({why}): {outcome}", row.order_id, row.remaining, row.price);
+                if reply.get("ok").as_bool() == Some(true) {
+                    withdrawn += 1;
+                } else {
+                    crate::logln!("brain {account}: listing {} of {name} not withdrawn ({why}): {:?}", row.order_id, reply.get("error").as_str());
+                }
                 continue;
             }
             Adoption::Raise { price, floor } => {
@@ -219,7 +226,7 @@ fn adopt_listings(service: &crate::market_service::MarketService, account: &str,
                     crate::logln!("brain {account}: listing {} of {name} not raised to its reserve {price}: {:?}", row.order_id, reply.get("error").as_str());
                     continue;
                 };
-                crate::logln!("brain {account}: listing {} of {name} raised {} -> {price} (its own reserve)", row.order_id, row.price);
+                raised += 1;
                 (order, floor)
             }
             Adoption::Walk { floor } => (row.order_id, floor),
@@ -235,8 +242,11 @@ fn adopt_listings(service: &crate::market_service::MarketService, account: &str,
             listed_wall: wall_now(),
         };
         if crate::market_reprice::adopt(service, order, bounds) {
-            crate::logln!("brain {account}: listing {order} ({} {name} left) adopted by demand pricing, reserve {floor}", row.remaining);
+            walked += 1;
         }
+    }
+    if walked + raised + withdrawn > 0 {
+        crate::logln!("brain {account}: {walked} listings adopted by demand pricing ({raised} raised to the reserve), {withdrawn} withdrawn");
     }
 }
 
@@ -315,7 +325,17 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // is banked again and the next pass lists a demand lot.
     let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
     let costs = crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account);
-    adopt_listings(&service, &job.account, &selling, &costs, life);
+    let locks = crate::brain_locks::locked_items(&job.account);
+    let free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    // The `bid_response` make cost caps every reserve (one book and rates
+    // read for the pass): what a bid quota was priced at always sells.
+    let mut priced: Vec<(String, i64)> = free.clone();
+    priced.extend(selling.iter().filter_map(|row| {
+        let name = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).ok()?)?.name?;
+        Some((name.to_string(), row.remaining))
+    }));
+    let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced);
+    adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs);
     // A merchant's flip stock (what it bought) is priced by its flips
     // only (`flip_quote`), never relisted here (ryan_park held 81 % of
     // the sell side at 1 coin, 2026-11-14).
@@ -326,16 +346,14 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     };
     let mut placed = 0;
     // Only what no listing or deal already promises (the market refuses
-    // the rest anyway, `market_audit::uncommitted`).
-    let locks = crate::brain_locks::locked_items(&job.account);
-    let free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    // the rest anyway, `market_audit::uncommitted`): `free` above.
     let mut offers = surplus(&free, &keep, &worn, &listed);
     offers.extend(spare_tools(life, &free, &tools, &listed));
     for (name, item, qty) in offers {
         if flip_stock.contains(&item) {
             continue;
         }
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life));
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied());
         let (lot, price, floor) = match decision {
             crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),
             crate::market_seller::SaleDecision::Hold(why) => {
@@ -454,7 +472,8 @@ pub(crate) mod tests {
     /// Anti-dumping (c), 2026-11-14: what the bot's own plan will burn,
     /// cook or cast is not surplus, even before the node is resolved: a
     /// pending firemaking tranche keeps its logs, a magic tranche its
-    /// runes, an unfinished cooking milestone its raw fish.
+    /// runes, an unfinished cooking milestone its raw fish (the latter
+    /// through `market_fit::own_use_items` in `cleanup_keep`).
     #[test]
     fn planned_inputs_are_not_surplus() {
         use lifescape_planner::ambition::{Ambition, Milestone, MilestoneStatus, Target};

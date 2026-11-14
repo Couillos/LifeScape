@@ -90,7 +90,8 @@ fn standing_bids_keep_their_walk() {
     assert_eq!(bounds_of(&service, order).map(|bounds| bounds.ceiling), Some(10));
     let mut wall = 4_000_000_000.0;
     for _ in 0..3 {
-        wall += 200.0;
+        // One default window: 2000 ticks at 600 ms.
+        wall += 1200.0;
         reprice_round(&service, wall, 600.0);
     }
     assert_eq!(price_of(&service, "fighter"), Some(4), "three idle windows: 1 -> 4");
@@ -124,8 +125,34 @@ fn adopted_listings_walk() {
         listed_wall: 0.0,
     };
     assert!(adopt(&service, order, bounds.clone()));
-    assert!(!adopt(&service, order, bounds), "adopted once");
+    assert!(!adopt(&service, order, bounds.clone()), "adopted once");
+    // Idempotent even when its bounds are dropped (2026-11-14: hundreds
+    // of re-adoptions per bot per pass in the live log).
+    service.lock_engine().quote_bounds.remove(&order);
+    assert!(super::handled(&service, order));
+    assert!(!adopt(&service, order, bounds.clone()), "never re-adopted");
+    service.lock_engine().quote_bounds.insert(order, bounds);
     reprice_round(&service, 4_000_000_000.0, 600.0);
     assert_eq!(price_of(&service, "old_seller"), Some(8), "idle: walks down");
+    cleanup(&path);
+}
+
+/// Daemon CPU (2026-11-14): a resting order inside its patience window
+/// (default 2000 ticks) is not touched; one parked at its reserve never
+/// amends (its id stays, no new row).
+#[test]
+fn reprice_work_follows_change_not_order_count() {
+    assert_eq!(super::PATIENCE_TICKS, 2000);
+    assert_eq!(lifescape_market::zip::FAST_FILL_TICKS, super::PATIENCE_TICKS, "a fast fill is one inside the first window");
+    let (service, path) = service("cadence");
+    funded(&service, "parked");
+    let listed = place(&service, vec![("account", str_value("parked")), ("side", str_value("sell")), ("qty", Value::Int(10)), ("price", Value::Int(5)), ("floor", Value::Int(5))]);
+    let order = listed.get("order").as_i64().expect("order");
+    let start = bounds_of(&service, order).map(|bounds| bounds.last_change_wall).expect("walks");
+    assert_eq!(reprice_round(&service, start + 1000.0 * 0.6, 600.0), 0, "1000 ticks: inside the window");
+    assert_eq!(reprice_round(&service, start + 2100.0 * 0.6, 600.0), 0, "at its reserve: parked");
+    let rows = service.lock_store().account_orders("parked").unwrap_or_default();
+    assert_eq!(rows.len(), 1, "no amend, no replacement row: {rows:?}");
+    assert_eq!(rows[0].order_id, order);
     cleanup(&path);
 }

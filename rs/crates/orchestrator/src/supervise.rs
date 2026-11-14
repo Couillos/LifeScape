@@ -21,6 +21,15 @@ fn registry() -> &'static Mutex<Vec<(Arc<Orchestrator>, Arc<Job>)>> {
     REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Live snapshot of a supervised account (`None`: not supervised, no
+/// snapshot yet, or its job is busy): the market's seller quote prices
+/// with the bot's own levels (`market_seller`).
+pub(crate) fn live_of(account: &str) -> Option<lifescape_json::Value> {
+    let job = registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().find(|(_, job)| job.account == account).map(|(_, job)| job.clone())?;
+    let inner = job.inner.try_lock().ok()?;
+    inner.live.clone()
+}
+
 fn ensure_supervisor_thread() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
