@@ -58,8 +58,14 @@ fn ensure_daemon() -> bool {
         .try_clone()
         .map(std::process::Stdio::from)
         .unwrap_or_else(|_| std::process::Stdio::null());
+    // Two glibc malloc arenas (measured 2026-11-14, 60 bots): with the
+    // default (8 x cores) every short-lived web/socket thread fragments its
+    // own arena and RSS climbed 443 -> 847 MB in 40 min, near the nav
+    // shed line (920 MB); with 2 arenas 109 -> 296 MB over 45 min. The
+    // workers the daemon spawns inherit it.
     let _ = Command::new(std::env::current_exe().unwrap_or_else(|_| "orchestrator".into()))
         .arg("daemon")
+        .env("MALLOC_ARENA_MAX", "2")
         .current_dir(paths::root())
         .stdin(std::process::Stdio::null())
         .stdout(out)
