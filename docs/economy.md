@@ -719,6 +719,14 @@ entraînement.
   marché seulement : un spot de combat les lâche, D-A), et l'ask d'un
   autre compte le plus loin sous `net − 5 ticks × taux` est acheté pour
   l'alcher.
-- Limites : la tranche d'entraînement magie reste un sort de combat
-  (l'alchimie entraîne via les buts d'argent) ; aucun bot n'a magie 21
-  aujourd'hui (max 10), la règle s'allumera avec les mages.
+- Entraînement (2026-11-14, `training.rs`, `brain_train.rs`, voir
+  docs/planner.md « Entraînement au prix ») : dès magie 21, chaque
+  tranche compare au lancement le sort de combat et l'alchimie (stock
+  propre ou asks d'autres comptes au plus à la valeur d'alchimie) en
+  pièces par XP, perte comprise : l'alchimie entraîne même à petite perte
+  quand elle coûte moins par XP que les sorts. Le lot (lancers que stock,
+  runes et bourse couvrent) part en `alchemy <objet> <lot> --level magic
+  N` ; runes de nature au marché seulement (drops F2P, aucune boutique
+  F2P hors Wilderness), bâton de feu acheté quand il coûte moins que les
+  runes de feu de la montée. Aucun bot n'a magie 21 aujourd'hui (max 10) :
+  vérifié par simulation (magie 25 et 60, `brain_train_tests.rs`).

@@ -160,6 +160,10 @@ pub struct Node {
     /// way) is budgeted and the launch carries `boat` (`place_on_site`,
     /// `gamedata::access::behind_boat`).
     pub boat: bool,
+    /// Units the next launch works, chosen at resolve with the method
+    /// (an alchemy batch: casts the stock and runes cover, 2026-11-14);
+    /// 0 = until the node's own target. Reset at every resolve.
+    pub batch: i64,
 }
 
 impl Node {
@@ -181,6 +185,7 @@ impl Node {
             site: None,
             toll: false,
             boat: false,
+            batch: 0,
         }
     }
 
@@ -423,6 +428,7 @@ fn node_to_value(node: &Node) -> Value {
         ),
         ("toll", Value::Bool(node.toll)),
         ("boat", Value::Bool(node.boat)),
+        ("batch", Value::Int(node.batch)),
     ])
 }
 
@@ -469,6 +475,7 @@ fn node_from_value(value: &Value) -> Option<Node> {
         }),
         toll: value.get("toll").as_bool() == Some(true),
         boat: value.get("boat").as_bool() == Some(true),
+        batch: value.get("batch").as_i64().unwrap_or(0).max(0),
     })
 }
 

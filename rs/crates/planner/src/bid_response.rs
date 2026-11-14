@@ -301,7 +301,8 @@ fn merge_training(mut training: Vec<(String, u8, u8)>) -> Vec<(String, u8, u8)> 
 
 /// One-off cost of the levels a plan trains: (coins, ticks). Each skill
 /// trains with its reach tranche method from the live level
-/// (`tranches::reach_method`: smelting for smithing), its actions sized
+/// (`tranches::reach_method`: the static anvil product for smithing, its
+/// bars at their unit cost), its actions sized
 /// by the server XP table (`sizing`), each action at the bot's rate for
 /// that method, the inputs it burns at their unit cost. `None` when the
 /// training cannot be priced (no XP data, inputs nobody sells or makes).

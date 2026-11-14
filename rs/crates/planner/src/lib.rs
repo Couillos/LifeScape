@@ -38,6 +38,7 @@ pub mod skeleton_deps;
 pub mod sizing;
 pub mod space;
 pub mod tools;
+pub mod training;
 pub mod tranches;
 
 pub use catalog::{

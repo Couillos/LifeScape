@@ -43,6 +43,10 @@ pub fn xp_per_action(method: &str, level: u8) -> Option<f64> {
         let damage = HIT_ODDS * row.maxhit.unwrap_or(0) as f64 / 2.0;
         return Some(row.xp as f64 / 10.0 + 2.0 * damage);
     }
+    // Alchemy: the spell the level casts (low at 21, high at 55).
+    if method.starts_with("alch:") {
+        return crate::alchemy::alch_spell(level).map(|spell| spell.xp);
+    }
     action_xp(method)
 }
 
@@ -68,6 +72,13 @@ pub fn tranche_consumption(method: &str, from: u8, to: u8) -> Vec<(String, i64)>
     if let Some(spell) = magic_spell(method) {
         return spell_runes(&spell).into_iter().map(|(rune, per_cast)| (rune, per_cast * actions)).collect();
     }
+    // Alchemy: one object per cast plus the spell's runes (`alch:<object>`).
+    if let Some(item) = method.strip_prefix("alch:") {
+        let Some(spell) = crate::alchemy::alch_spell(from.max(1)) else { return Vec::new() };
+        let mut out = vec![(item.to_string(), actions)];
+        out.extend(spell.runes.iter().map(|(rune, per_cast)| (rune.clone(), per_cast * actions)));
+        return out;
+    }
     let Some((_, way)) = method_way(method) else { return Vec::new() };
     let success = if way.success > 0.0 { way.success } else { 1.0 };
     let mut out: Vec<(String, i64)> = Vec::new();
@@ -80,6 +91,23 @@ pub fn tranche_consumption(method: &str, from: u8, to: u8) -> Vec<(String, i64)>
         out.push(("thread".to_string(), (actions + 4) / 5));
     }
     out
+}
+
+/// Units of `need` one action of `method` at `level` burns (alchemy: one
+/// object, the spell's runes; recipes: the way's inputs per success).
+pub fn per_action_need(method: &str, level: u8, need: &str) -> Option<i64> {
+    if let Some(item) = method.strip_prefix("alch:") {
+        if item == need {
+            return Some(1);
+        }
+        return crate::alchemy::alch_spell(level.max(1))?.runes.into_iter().find(|(rune, _)| rune == need).map(|(_, count)| count);
+    }
+    if let Some(spell) = magic_spell(method) {
+        return spell_runes(&spell).into_iter().find(|(rune, _)| rune == need).map(|(_, count)| count);
+    }
+    let (_, way) = method_way(method)?;
+    let success = if way.success > 0.0 { way.success } else { 1.0 };
+    way.inputs.iter().find(|(input, _)| input == need).map(|(_, per)| ((*per).max(1) as f64 / success).ceil() as i64)
 }
 
 /// Units of `need` a tranche of `method` from `from` to `to` burns

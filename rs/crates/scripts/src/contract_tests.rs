@@ -182,3 +182,29 @@ fn positionals_resolve_in_their_scripts() {
     }
     assert_eq!(first("cook:trout"), "raw_trout");
 }
+
+/// Magic training by alchemy (planner `training`, 2026-11-14): the batch
+/// the brain priced rides as the alchemy cast count (`alchemy <item>
+/// [count]`), next to the climb's level: the run stops on whichever comes
+/// first, then the climb re-prices. Smithing climbs hammer with a level.
+#[test]
+fn priced_training_orders_parse() {
+    let mut climb = Node::new("n5", NodeKind::ReachLevel { skill: "magic".to_string(), level: 35 }, Vec::new(), 35);
+    climb.batch = 300;
+    let (script, args) = map_method("alch:iron_dagger", &climb, None).expect("alchemy maps");
+    assert_eq!(script, "alchemy");
+    let spec = crate::kit::cycle::parse_order("alchemy", &args).expect("alchemy parses");
+    assert_eq!(spec.resource, strings(&["iron_dagger"]));
+    assert_eq!(spec.targets.count, Some(300));
+    assert_eq!((spec.targets.level_skill.as_deref(), spec.targets.level), (Some("magic"), Some(35)));
+    let anvil = Node::new("n6", NodeKind::ReachLevel { skill: "smithing".to_string(), level: 20 }, Vec::new(), 20);
+    let (script, args) = map_method(&lifescape_planner::tranches::reach_method("smithing", 18), &anvil, None).expect("smith maps");
+    assert_eq!(script, "smith");
+    let spec = crate::kit::cycle::parse_order("smith", &args).expect("smith parses");
+    assert_eq!(spec.resource, strings(&["iron_dagger"]));
+    assert_eq!((spec.targets.level_skill.as_deref(), spec.targets.level), (Some("smithing"), Some(20)));
+    // Every anvil product the planner may pick has a column cell here.
+    for row in lifescape_planner::training::smith_products() {
+        assert!(crate::activities::smith::smith_spot(&row.product).is_some(), "{} has no smithing cell", row.product);
+    }
+}

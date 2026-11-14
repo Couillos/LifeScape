@@ -116,3 +116,19 @@ fn shop_across_the_fence_carries_toll() {
     }
     assert_eq!(seen, (true, true), "both sides of the fence exercised");
 }
+
+/// Magic training by alchemy (2026-11-14): the object first, the batch the
+/// brain priced as the cast count, then the tranche's level; a money
+/// alchemy (no batch) casts until its stock or budget ends.
+#[test]
+fn alchemy_training_carries_its_batch() {
+    let mut node = climb("magic", 30);
+    node.batch = 120;
+    let (script, args) = map_method("alch:iron_dagger", &node, None).expect("alchemy maps");
+    assert_eq!(script, "alchemy");
+    assert_eq!(&args[..5], ["iron_dagger", "120", "--level", "magic", "30"], "{args:?}");
+    let money = Node::new("n7", NodeKind::MakeMoney, Vec::new(), 0);
+    let (_, args) = map_method("alch:iron_dagger", &money, Some((100, 200))).expect("money alchemy maps");
+    assert_eq!(args.first().map(String::as_str), Some("iron_dagger"));
+    assert!(args.get(1).is_some_and(|arg| arg.starts_with("--")), "no count: {args:?}");
+}

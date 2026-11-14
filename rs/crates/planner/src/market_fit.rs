@@ -141,9 +141,20 @@ pub fn own_use_items(ambition: &Ambition) -> Vec<String> {
                 let mut start = from;
                 for cut in crate::tranches::tranches(skill, from, *level) {
                     let method = crate::tranches::reach_method(skill, start);
-                    out.extend(crate::sizing::tranche_consumption(&method, start, cut).into_iter().map(|(item, _)| item));
+                    for (item, _) in crate::sizing::tranche_consumption(&method, start, cut) {
+                        // A smith smelts its own bars (2026-11-14): the ores
+                        // its anvil tranches will melt stay too.
+                        if skill == "smithing" {
+                            for leg in crate::obtain_legs::production_legs(&item).into_iter().filter(|leg| leg.method.starts_with("smelt:")) {
+                                out.extend(leg.inputs.iter().map(|(name, _)| name.clone()));
+                            }
+                        }
+                        out.push(item);
+                    }
                     start = cut;
                 }
+                // A magic climb past 21 alchs: its nature and fire runes.
+                out.extend(crate::training::kept_inputs(skill, *level));
             }
             Target::Produce { item, .. } => {
                 for leg in crate::obtain_legs::production_legs(item) {

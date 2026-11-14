@@ -184,7 +184,7 @@ pub fn choose(life: &Life, reader: &MarketReader, rows: &[(String, i64, f64)], s
 /// Runs `use_state` over this bot's own state (live levels, free
 /// holdings, bans, quests, rates): shared by the bid draw and the seller
 /// reserve cap, so both price a unit the same way.
-fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R) -> R {
+pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R) -> R {
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let locks = crate::brain_locks::locked_items(&life.account);
     let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));

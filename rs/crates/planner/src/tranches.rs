@@ -11,6 +11,10 @@ pub const MELEE_LADDER: &str = "ladder";
 /// classic method (§8); one tier per 10 levels where the dump offers no
 /// finer step.
 pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
+    // Smithing cuts at every anvil unlock that changes what pays (a new
+    // metal, more bars per press, a new bar to smelt): each tranche re-
+    // picks its product at resolve (`training`).
+    let smithing = crate::training::smithing_cuts();
     let cuts: &[u8] = match skill {
         "fishing" => &[5, 10, 20, 25, 35, 40],
         "woodcutting" => &[15, 30, 45, 60, 75],
@@ -18,10 +22,14 @@ pub fn tranches(skill: &str, from: u8, to: u8) -> Vec<u8> {
         "cooking" => &[10, 20, 30, 45],
         "firemaking" => &[15, 30, 60],
         "crafting" => &[5, 7, 8, 16, 20, 27, 34, 43, 70],
-        "smithing" => &[15, 20, 30, 40, 50, 70, 85],
+        "smithing" => smithing,
         "runecraft" => &[2, 5, 9, 14, 20],
         "attack" | "strength" | "defence" | "hitpoints" => &[10, 20, 30, 40],
-        "magic" | "ranged" => &[10, 20, 30, 40],
+        // Magic: combat spells below 21; from low alchemy (21) and high
+        // alchemy (55) the method is priced at resolve, a tranche every
+        // five levels so the choice follows the market.
+        "magic" => &[10, 20, 21, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95],
+        "ranged" => &[10, 20, 30, 40],
         // Prayer buries banked bones (`bury_loot`), bones then big bones.
         "prayer" => &[10, 20, 30, 40],
         _ => &[10, 20, 30],
@@ -104,26 +112,8 @@ pub fn tranche_resource(skill: &str, level: u8) -> String {
             }
             .to_string()
         }
-        "smithing" => {
-            if level >= 85 {
-                "runite_bar"
-            } else if level >= 70 {
-                "adamantite_bar"
-            } else if level >= 50 {
-                "mithril_bar"
-            } else if level >= 40 {
-                "gold_bar"
-            } else if level >= 30 {
-                "steel_bar"
-            } else if level >= 20 {
-                "silver_bar"
-            } else if level >= 15 {
-                "iron_bar"
-            } else {
-                "bronze_bar"
-            }
-            .to_string()
-        }
+        // The bar the tranche's anvil product eats (best metal open).
+        "smithing" => crate::training::default_smith_bar(level).to_string(),
         "crafting" => {
             if level >= 70 {
                 "unstrung_diamond_amulet"
@@ -194,9 +184,12 @@ pub fn reach_method(skill: &str, level: u8) -> String {
         "mining" => format!("gather:mining/{}", tranche_resource(skill, level)),
         "cooking" => format!("cook/{}", tranche_resource(skill, level)),
         "firemaking" => format!("fire:{}", tranche_resource(skill, level)),
-        // Smelting trains smithing 1→99 (bronze 1, quest squire 1→29);
-        // plates run through the money chains, never the reach tiers.
-        "smithing" => format!("smelt:{}", tranche_resource(skill, level)),
+        // A player smelts bars then hammers them (2026-11-14): the static
+        // tranche method is the anvil product of the best metal open at
+        // the start (most bars per press, `training::default_smith_
+        // product`); the brain re-picks product or bar with the market at
+        // resolve (`training::rank_smithing`).
+        "smithing" => format!("smith:{}", crate::training::default_smith_product(level)),
         // One P1-first family per tier (D64): wheel, gold, pie dish,
         // gold amulet, silver symbol, then the gem ladder.
         "crafting" => {
@@ -223,3 +216,4 @@ pub fn reach_method(skill: &str, level: u8) -> String {
         _ => format!("fight:melee/{}", tranche_resource(skill, level)),
     }
 }
+

@@ -58,6 +58,10 @@ pub struct ReadyCtx {
     /// quest is missing never launches (`quests::method_quest`); Prince
     /// Ali Rescue makes the toll free.
     pub quests_done: Vec<String>,
+    /// The brain's priced pick for a smithing or magic tranche
+    /// (`training::best_pick`, market and holdings at resolve): locked
+    /// before the static tranche method. `None`: the static method.
+    pub training: Option<crate::training::TrainPick>,
 }
 
 impl ReadyCtx {
@@ -83,6 +87,7 @@ impl ReadyCtx {
             held: 0,
             coin_share_pct: None,
             quests_done: Vec::new(),
+            training: None,
         }
     }
 }
@@ -386,6 +391,7 @@ fn expand_quest_inner(quest: &str, profile: &Profile, counter: &mut usize, level
 /// public numbers and lock the cheapest (trait-weighted, D15). Reach
 /// and quest leaves keep their single method; only the estimate fills.
 pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
+    node.batch = 0;
     resolve_method(node, ctx);
     place_on_site(node, ctx);
 }
@@ -520,6 +526,9 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
             node.method = Some("space:cleanup".to_string());
         }
         _ => {
+            if node.method.is_none() && lock_training_pick(node, ctx) {
+                return;
+            }
             if node.method.is_none() {
                 // The tranche method may name gear the pack lacks: only a
                 // workable method locks; otherwise block typed on the
@@ -547,6 +556,39 @@ fn resolve_method(node: &mut Node, ctx: &ReadyCtx) {
             }
         }
     }
+}
+
+/// A priced tranche (`training`): the brain's pick locks with its batch
+/// (alchemy casts). The tools it lacks (the hammer) and the inputs the
+/// pick found short block typed, all at once, the pick's method kept so
+/// the obtain sub-tasks size on it (`replan::need_count_from`). `false`:
+/// no pick, or its quest is missing (the static method resolves).
+fn lock_training_pick(node: &mut Node, ctx: &ReadyCtx) -> bool {
+    if !matches!(node.kind, NodeKind::ReachLevel { .. }) {
+        return false;
+    }
+    let Some(pick) = ctx.training.as_ref() else { return false };
+    if crate::quests::missing_quest(&pick.method, None, ctx).is_some() {
+        return false;
+    }
+    let mut missing: Vec<String> = Vec::new();
+    if let Some(need) = required_tool(&pick.method) {
+        missing.extend(need.tools.iter().filter(|tool| !gear_ok(tool, ctx)).cloned());
+    }
+    // Bank unseen: the script finds banked inputs or blocks itself.
+    if ctx.bank_known {
+        for input in &pick.missing {
+            if !missing.contains(input) {
+                missing.push(input.clone());
+            }
+        }
+    }
+    node.method = Some(pick.method.clone());
+    node.batch = pick.batch;
+    if !missing.is_empty() {
+        node.status = NodeStatus::Blocked { reason: format!("missing:{}", missing.join(",")) };
+    }
+    true
 }
 
 #[cfg(test)]

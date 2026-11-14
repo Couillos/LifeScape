@@ -45,6 +45,7 @@ pub mod brain_reserve;
 pub mod brain_wishlist;
 pub mod brain_succession;
 pub mod brain_stuck;
+pub mod brain_train;
 pub mod brain_tutorial;
 pub mod market_absent;
 pub mod market_convene;

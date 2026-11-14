@@ -33,8 +33,11 @@ dans la tranche fixée (pas de positionnel ressource : `woodcut`/`mining`/
 Paliers : pêche [5,10,20,25,35,40], bûcheronnage [15,30,45,60,75], minage
 [10,15,20,30,40,55], cuisine [10,20,30,45], mêlée [10,20,30,40], prière
 [10,20,30,40] (enterrer en banque : `bury:bones` puis `bury:big_bones` à
-20), magie [10,20,30,40] (le meilleur sort de combat ouvert au départ :
-`fight:magic/<sort>/<spot>`). Chaque
+20), magie [10,20,21,25,30,…,95] (sous 21 le meilleur sort de combat
+ouvert au départ : `fight:magic/<sort>/<spot>` ; dès 21 tranche au prix,
+voir « Entraînement au prix »), forge aux déblocages d'enclume et de
+fonte (5, 9, 15, 18, 20, 24, 30, 33, 35, 39, 40, 48, 50…, tirés du dump :
+`training::smithing_cuts`). Chaque
 tranche porte la méthode du palier ouvert à son niveau de DÉPART (1→5
 crevettes, 5→10 sardines ; jamais le homard pour 35→40) : le contrôle
 d'outils du planner porte sur ce que le bot pêchera vraiment. Pas de
@@ -70,7 +73,73 @@ flèche par tir (4 XP par point de dégât, modèle : 60 % de touches à la
 moitié du coup max ; le script ne ramasse pas ses flèches), runes du sort
 par lancer (XP du sort + 2 par point de dégât), un fil pour 5 coutures.
 `need_count_from` dimensionne un blocage de tranche sur le reste de la
-tranche depuis le niveau live (jamais 1 ni 27).
+tranche depuis le niveau live (jamais 1 ni 27), borné par le lot du nœud
+(`node.batch`, alchimie : ce que le lot lance). Forge à l'enclume : XP par
+barre du serveur (`smithing.struct` `xpperbar` : bronze 12,5, fer 25, acier
+37,5, mithril 50, adamant 62,5, rune 75 ; le dump n'en porte pas,
+`gamedata::recipes::smith_xp_per_bar`), une plaque vaut 5 barres.
+Alchimie : un objet, une nature et 3 (basse) ou 5 (haute) feux par lancer.
+
+## Entraînement au prix (2026-11-14)
+
+`planner/src/training.rs` (pur) + `orchestrator/src/brain_train.rs`.
+Forge et magie (dès 21) choisissent leur méthode AU LANCEMENT avec le
+marché, comme un joueur : fondre puis forger ce qui paie, alcher plutôt
+que bombarder des vaches quand c'est moins cher par XP.
+
+- Score d'une méthode = pièces par XP : `(ticks par action × taux du bot
+  + intrants − valeur du produit) / XP par action`. Ticks : frappe 5,
+  fonte 5, lancer 5, sort de combat 7, plus un aller-retour banque de 60
+  ticks partagé par la charge (27 cases). Intrants : unités détenues à ce
+  que leur vente rapporte (meilleur bid / prix courant ; Iron : 0), le
+  reste au coût d'achat ou de fabrication du bot, temps compris
+  (`bid_response::unit_cost`), sinon au prix courant (offre au repos),
+  sinon magasin si D-A le permet (bâton de feu) ; un bâton élémentaire
+  paie sa rune ; une barre que le bot fond lui-même ajoute l'XP de fonte.
+  Produit : prix courant × part absorbée par le carnet
+  (`saturation_factor` du lot de la tranche), ou net d'alchimie si le bot
+  lance et que c'est mieux.
+- Forge : chaque produit F2P des quatre colonnes ouvert au niveau live
+  (`training::smith_products`, dump ; ni clous, ni fil, ni boulets —
+  membres en 274, `cannonballs.rs2`) et chaque barre à fondre (or 40,
+  argent 20…). Méthode statique du squelette (sans prix) : métal le plus
+  haut ouvert, produit au plus de barres par frappe (dague de bronze,
+  cimeterre à 5, marteau de guerre à 9, dague de fer à 15, plastron
+  d'acier à 48) ; ses barres sont déposées devant la tranche (marteau une
+  fois), et des barres détenues pèsent le choix vers elles. Les barres
+  s'obtiennent récursivement (marché, ou fonte avec minerais minés ou
+  achetés) ; enclumes et fourneaux sont des sites (pas de fourneau à
+  Varrock), le marteau est un outil exigé.
+- Magie : sous 21, le sort de combat de la tranche (inchangé, runes
+  déposées d'avance). Dès 21, rien n'est déposé d'avance : le choix
+  compare le sort de combat (`reach_method` au niveau live) et
+  l'alchimie (basse dès 21, haute dès 55) de chaque objet fourni : stock
+  propre libre (hors intrants du plan, équipement gardé, annonces) et asks
+  d'autres comptes au plus à la valeur d'alchimie. Lot = min(stock ou
+  asks, reste de la tranche, ce que la bourse paie), au moins 10 lancers.
+  Feu : bâton détenu, sinon runes, sinon bâton acheté quand les runes de
+  la montée coûtent plus. Runes de nature : marché seulement (drop F2P de
+  nombreux PNJ — gardes, géants, nains, magiciens —, autels de nature
+  membres, seules boutiques : Mage Arena en Wilderness et guilde des
+  magiciens membres) : sans vendeur, les runes détenues bornent le lot.
+- Résolution (`expand::lock_training_pick`) : le choix verrouille sa
+  méthode et son lot (`node.batch`) ; outils manquants (marteau) et
+  intrants courts bloquent EN UNE FOIS (`missing:hammer,bronze_bar`,
+  `missing:naturerune,staff_of_fire`), la méthode gardée pour
+  dimensionner les obtentions ; sans marché, aucun choix : méthode
+  statique. Lancement alchimie : `alchemy <objet> <lot> --level magic N`
+  (compte positionnel du script) ; la fin du lot (`goal_reached` avec XP)
+  rend la tranche prête et le choix suivant se refait au prix du moment.
+- Ventes : les produits forgés partent par la vente par défaut (ou
+  l'alchimie d'un lanceur si mieux) ; une montée de magie au-delà de 21
+  garde ses runes de nature, de feu et le bâton ; un objet d'une méthode
+  `alch:` ouverte n'est jamais listé.
+- `bid_response::training_cost` (entraînement pour une offre) suit la
+  méthode statique : forge = frappe, barres au coût unitaire.
+- Log : `brain <compte>: nX smithing 18->20 trains by smith:bronze_scimitar
+  (… coins/XP, … XP/tick, obtains bronze_bar)`. CPU : un calcul par
+  lancement d'une tranche forge/magie, carnet lu une fois, coûts mémorisés
+  (phase `train.fill_ctx` du profil).
 
 Dépendances au squelette (`skeleton_deps.rs`) : `expand_goal_from`,
 `expand_access`, `expand_quest_from` et le blocage `level:` passent par
@@ -651,7 +720,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:bread` | `bake_bread` | — | `--want`, `--site` |
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
-| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
+| `smith:<produit>` | `smith` | `<produit>` | `--level smithing N` (tranche au prix), `--want`, `--site` (enclume) ; marteau porté |
 | `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais, charbon, runes de feu + nature retirés du sac puis de la banque ; bâton de feu porté, au sac ou en banque accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
@@ -673,7 +742,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
-| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) |
+| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau), puis `<lot>` = lancers (tranche de magie au prix, `node.batch`) | `--level magic N` (tranche) ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |

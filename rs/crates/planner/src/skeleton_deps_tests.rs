@@ -51,14 +51,20 @@ fn fishing_files_its_tackle_and_bait() {
     assert_eq!(trout.deps.len(), 3, "previous tranche, fly rod, feathers: {:?}", trout.deps);
 }
 
-/// Smithing 1→15 smelts bronze: copper and tin sized by the XP (one of
-/// each per bar), no tool; runecraft files the talisman and the essence.
+/// Smithing 1→5 hammers bronze daggers (2026-11-14: smelt then smith):
+/// the hammer once and the bars sized by the anvil XP (12.5 a bar); the
+/// bars' own obtain smelts or buys them. Runecraft files the talisman and
+/// the essence.
 #[test]
 fn producers_file_their_inputs_and_tools() {
-    let smith = obtains(&chain("smithing", 1, 15));
-    let bars = crate::sizing::tranche_actions("smelt:bronze_bar", 1, 15).expect("bronze xp");
-    assert!(smith.iter().any(|(item, count, _)| item == "copper_ore" && *count == bars), "{smith:?}");
-    assert!(smith.iter().any(|(item, count, _)| item == "tin_ore" && *count == bars), "{smith:?}");
+    let smith = obtains(&chain("smithing", 1, 5));
+    let bars = crate::sizing::tranche_actions("smith:bronze_dagger", 1, 5).expect("bronze xp");
+    assert_eq!(bars, (388.0_f64 / 12.5).ceil() as i64, "XP 1→5 at 12.5 a bar");
+    assert!(smith.iter().any(|(item, count, _)| item == "bronze_bar" && *count == bars), "{smith:?}");
+    assert!(smith.iter().any(|(item, count, _)| item == "hammer" && *count == 1), "{smith:?}");
+    // A magic climb past 21 is priced at resolve: no runes filed ahead.
+    assert!(obtains(&chain("magic", 25, 30)).is_empty(), "combat spell or alchemy, decided with the market");
+    assert!(!obtains(&chain("magic", 10, 20)).is_empty(), "combat spells below 21 keep their runes ahead");
     let runes = obtains(&chain("runecraft", 1, 2));
     assert!(runes.iter().any(|(item, count, _)| item == "air_talisman" && *count == 1), "{runes:?}");
     assert!(runes.iter().any(|(item, count, _)| item == "blankrune" && *count == 17), "{runes:?}");

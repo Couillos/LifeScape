@@ -33,7 +33,7 @@ pub const ALCH_EVERY_SECS: f64 = 600.0;
 /// Most units one alchemy purchase or rune bid asks for.
 pub const ALCH_LOT: i64 = 100;
 
-fn obj_id(item: &str) -> Option<i64> {
+pub(crate) fn obj_id(item: &str) -> Option<i64> {
     lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64)
 }
 
@@ -46,7 +46,7 @@ fn current_price(item: &str) -> f64 {
 
 /// What selling one unit brings now: the best bid, else the current
 /// price of a traded object, else nothing (no buyer, no trade).
-fn sale_price(item: &str) -> f64 {
+pub(crate) fn sale_price(item: &str) -> f64 {
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0.0 };
     let bid = service.lock_engine().books.get(&id).and_then(|book| book.best().0).unwrap_or(0);
     let reference = service.reference(id);
@@ -81,7 +81,7 @@ fn stacks_of(live: &Value) -> Vec<(String, i64)> {
 
 /// Stock the bot could alch: `(object, free units, what one sells for)`,
 /// minus what it keeps (`keep`: its plan's inputs, its gear, its tools).
-fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, i64, f64)> {
+pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, i64, f64)> {
     let locks = crate::brain_locks::locked_items(account);
     stacks_of(live)
         .into_iter()
@@ -100,7 +100,7 @@ fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(String, i64,
 
 /// What the bot keeps out of alchemy: its plan's inputs and products,
 /// its gear (best per slot and better), its graph's obtains.
-fn kept(life: &Life, live: &Value) -> Vec<String> {
+pub(crate) fn kept(life: &Life, live: &Value) -> Vec<String> {
     let mut keep = crate::brain_sales::working_keep(life, &[]);
     let levels_owned = crate::brain_market::live_levels(live);
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
@@ -224,6 +224,42 @@ fn alch_ask(mage: &Caster, account: &str, own_rate: f64) -> Option<(String, i64,
         }
     }
     best
+}
+
+/// Other accounts' resting asks at or under the alchemy value of their
+/// object for this caster's spell, per object: `(object, units, coins
+/// they cost)` (magic training, `brain_train`: what a player buys to
+/// alch). Banknote books count as their object.
+pub(crate) fn cheap_asks(mage: &Caster, account: &str) -> Vec<(String, i64, f64)> {
+    let Some(service) = crate::market_service::shared() else { return Vec::new() };
+    let rows: Vec<(i64, i64, i64)> = {
+        let engine = service.lock_engine();
+        engine
+            .books
+            .iter()
+            .flat_map(|(item_id, book)| {
+                book.orders()
+                    .into_iter()
+                    .filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && !order.account.eq_ignore_ascii_case(account))
+                    .map(|order| (*item_id, order.price, order.remaining))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let mut totals: HashMap<String, (i64, f64)> = HashMap::new();
+    for (item_id, ask, qty) in rows {
+        let Some(item) = usize::try_from(item_id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name).map(|name| name.strip_prefix("cert_").unwrap_or(name).to_string()) else { continue };
+        let Some(value) = lifescape_planner::alchemy::alch_value(&item, mage.spell.high) else { continue };
+        if ask > value {
+            continue;
+        }
+        let entry = totals.entry(item).or_insert((0, 0.0));
+        entry.0 += qty;
+        entry.1 += (qty * ask.max(1)) as f64;
+    }
+    let mut out: Vec<(String, i64, f64)> = totals.into_iter().map(|(item, (units, coins))| (item, units, coins)).collect();
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out
 }
 
 /// One alchemy market pass for an idle, non-Iron caster: nature runes
