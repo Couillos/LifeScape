@@ -329,7 +329,7 @@ pub(crate) fn pick_near_fish_spot(
         if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
             continue;
         }
-        if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
+        if crate::kit::bans::across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
             continue;
         }
         let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {
@@ -390,7 +390,7 @@ pub(crate) fn pick_hop_fish_spot(
         if spot_level != bot.world.level || banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
             continue;
         }
-        if crate::kit::bans::across_toll(bot.world.x, spot_x, fence) {
+        if crate::kit::bans::across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
             continue;
         }
         let bank = match nearest_bank_at(spot_x, spot_z, spot_level) {

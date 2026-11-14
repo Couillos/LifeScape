@@ -99,3 +99,46 @@ fn a_rescued_obtain_buys_and_revives_its_dependents() {
     life.nodes[3].status = NodeStatus::Abandoned;
     assert!(rescue_candidates(&life, "n4").iter().all(|at| life.nodes[*at].id != "n4"), "rescued once only");
 }
+
+/// Live fiona_park 2026-11-14: five unstrung sapphire amulets bid,
+/// unfilled three times, rescued on the market, bid again. A node whose
+/// own market buy went unfilled is rescued on its production legs
+/// instead (never the same order again), and never twice.
+#[test]
+fn an_unfilled_buy_is_rescued_by_production_never_rebought() {
+    let unfilled = super::market_unfilled_error(5, "unstrung_sapphire_amulet", 6000, 0, 1);
+    assert_eq!(unfilled, "market order for 5 unstrung_sapphire_amulet unfilled after 6000 ticks (held 0, 1 cancelled)", "live text kept");
+    let mut amulet = node("n5", obtain("unstrung_sapphire_amulet"), &[], "market:buy", &unfilled);
+    amulet.alternatives.push(Alternative { method: "craft:unstrung_sapphire_amulet".to_string(), est_ticks: 0, est_coins: 0 });
+    amulet.failures = 3;
+    assert!(super::market_failed(&amulet), "the market itself failed");
+    assert!(!super::market_failed(&node("n9", obtain("logs"), &[], "farm:logs", "Failed: no tree")), "a gather failure is no market failure");
+    let mut life = burnt_chain(firemaking(), false);
+    life.nodes.push(node("n6", obtain("strung_sapphire_amulet"), &["n5"], "string:unstrung_sapphire_amulet", "dependency n5 abandoned"));
+    life.nodes.push(amulet);
+    let at = life.nodes.iter().position(|entry| entry.id == "n5").expect("n5");
+    assert_eq!(rescue_candidates(&life, "n5"), vec![at, at - 1], "the amulet, then the strung one waiting on it");
+    let changes = crate::lifecycle::retarget_produce(&mut life, at);
+    assert!(changes.iter().any(|line| line.contains("rescued off the market")), "{changes:?}");
+    let amulet = &life.nodes[at];
+    assert!(!amulet.alternatives.is_empty(), "production legs kept");
+    assert!(amulet.alternatives.iter().all(|alt| !alt.method.starts_with("market:")), "never the market again: {:?}", amulet.alternatives);
+    assert_eq!(amulet.failures, 0);
+    assert_eq!(life.nodes[at - 1].status, NodeStatus::Pending, "the strung amulet waits on it again");
+    // Abandoned again later: the history says it was rescued, the ban follows.
+    life.history.push(crate::model::HistoryEntry { node: "n5".to_string(), started: 0, ended: 0, outcome: super::PRODUCE_RESCUE_TAG.to_string() });
+    life.nodes[at].status = NodeStatus::Abandoned;
+    assert!(rescue_candidates(&life, "n5").iter().all(|position| life.nodes[*position].id != "n5"), "rescued once only");
+}
+
+/// An item with no production leg has nothing to fall back on off the
+/// market: no production rescue (the ban follows, the planner replans).
+#[test]
+fn no_production_leg_means_no_production_rescue() {
+    let mut life = burnt_chain(firemaking(), false);
+    let unfilled = super::market_unfilled_error(1, "no_such_object", 6000, 0, 0);
+    life.nodes.push(node("n7", obtain("no_such_object"), &[], "market:buy", &unfilled));
+    let at = life.nodes.len() - 1;
+    assert!(crate::lifecycle::retarget_produce(&mut life, at).is_empty());
+    assert_eq!(life.nodes[at].status, NodeStatus::Abandoned, "left abandoned");
+}

@@ -3,8 +3,10 @@
 //! food to 100 units and the best banked tool per kit spec resolve here.
 //! One pass: market sells for tradeable surplus (skipped when `--iron`),
 //! drop the rest (D10; PRD3: never an NPC shop sale); a bank still past
-//! the limit drops whole listed stacks cheapest-total first with orders
-//! cancelled (D17). Sells open at the market and walk down to the
+//! the limit drops whole stacks cheapest-total first with orders
+//! cancelled (D17) until it is back under: listed stock, and the surplus
+//! the carnet refuses (no own cost known), which never sells, so only its
+//! drop frees the slot. Sells open at the market and walk down to the
 //! reserve floor daemon-side (`market_reprice`).
 
 #![forbid(unsafe_code)]
@@ -13,7 +15,9 @@ use std::collections::{HashMap, HashSet};
 
 use lifescape_sdk::Bot;
 
-use crate::kit::{bank::nearest_bank, pack::{free_slots, obj_id}, tools::cleanup_keep_names};
+use crate::kit::janitor::{drop_all, next_chunk, packed, spent};
+use crate::kit::{bank::nearest_bank, pack::obj_id, tools::cleanup_keep_names};
+use crate::activities::market::seller_quote;
 use crate::market_client::{cancel_for, open_sell_items, place_sell};
 use crate::{ScriptError, ScriptResult};
 
@@ -59,10 +63,6 @@ fn bank_names(bot: &Bot) -> Vec<(u16, String)> {
     rows
 }
 
-fn spent(start_tick: u64, start_pause: u64, bot: &Bot) -> u64 {
-    bot.world.ticks.saturating_sub(start_tick).saturating_sub(bot.pause_ticks.saturating_sub(start_pause))
-}
-
 fn bank_open(bot: &mut Bot) -> Result<bool, ScriptError> {
     let home = nearest_bank(bot).map_err(|_| ScriptError::Blocked { missing: vec!["bank".to_string()] })?;
     if !bot.open_bank(home.x as i32, home.z as i32, home.loc_id as u16, 300)? {
@@ -84,40 +84,12 @@ fn withdraw_all(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
     Ok(())
 }
 
-fn packed(bot: &Bot, ids: &[u16]) -> Vec<u16> {
-    ids.iter().filter(|id| bot.inventory().get(id).copied().unwrap_or(0) > 0).copied().collect()
-}
-
-// Pack-sized withdrawal slice of banked ids: the pack holds 28, so every
-// pass lists, sells and drops in chunks instead of stalling full.
-fn next_chunk(bot: &Bot, ids: &[u16]) -> Vec<u16> {
-    let mut chunk = Vec::new();
-    let mut free = free_slots(bot);
-    for id in ids {
-        if bot.bank_items().get(id).copied().unwrap_or(0) == 0 || free == 0 {
-            continue;
-        }
-        chunk.push(*id);
-        free -= 1;
-    }
-    chunk
-}
-
-fn drop_all(bot: &mut Bot, id: u16, start_tick: u64, start_pause: u64, budget_max: u64) -> Result<bool, ScriptError> {
-    while bot.inventory().get(&id).copied().unwrap_or(0) > 0 {
-        if spent(start_tick, start_pause, bot) >= budget_max {
-            return Ok(false);
-        }
-        // Server truth beats a stale pack cache: already gone counts
-        // as dropped, never as a failed run.
-        match bot.drop(id, 750) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(error) if error.to_string().contains("no such item") => break,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(true)
+/// D17 candidate (pure): surplus the carnet refused this pass always
+/// (it can never sell, only its drop frees the slot); a resting listing
+/// only when nothing was listed this pass (fresh listings get one pass
+/// to fill first).
+fn d17_eligible(id: u16, unsellable: &[u16], listed_open: &HashSet<u16>, listed_now: u32) -> bool {
+    unsellable.contains(&id) || (listed_now == 0 && listed_open.contains(&id))
 }
 
 /// One janitor pass: exit 0 when the bank is back under the limit,
@@ -149,6 +121,9 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // listed stock is skipped, never stacked: a relist would double-spend
     // the ledger reservation, and the D17 gate below reads "nothing new".
     let (mut market_ids, mut listed_now): (Vec<u16>, u32) = (Vec::new(), 0);
+    // Tradeable surplus the carnet refused this pass: it never lists, so
+    // only D17 below can free its slot.
+    let mut unsellable: Vec<u16> = Vec::new();
     let listed_open = if parsed.iron { HashSet::new() } else { open_sell_items(bot) };
     if !parsed.iron {
         for id in &surplus_ids {
@@ -159,6 +134,17 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         let mut todo: Vec<u16> = market_ids.iter().filter(|id| !listed_open.contains(id)).copied().collect();
+        // Holds first, read off the bank count: a stack the seller holds
+        // (no own cost known, over the band) never leaves the bank for
+        // nothing. Withdrawn, it clogged the pack and starved every later
+        // chunk (live bdr53jee 2026-11-14: 13 holds, 56 types, each pass).
+        for id in todo.clone() {
+            let banked = i64::from(bot.bank_items().get(&id).copied().unwrap_or(0));
+            if banked > 0 && bot.inventory().get(&id).copied().unwrap_or(0) == 0 && seller_quote(bot, id, banked)?.is_none() {
+                unsellable.push(id);
+                todo.retain(|keep| keep != &id);
+            }
+        }
         loop {
             for id in packed(bot, &todo) {
                 if spent(start_tick, start_pause, bot) >= parsed.budget_max {
@@ -197,18 +183,19 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if chunk.is_empty() { break; }
         withdraw_all(bot, &chunk)?;
     }
-    // D17: a still-full bank with nothing newly listed drops whole listed
-    // stacks cheapest-total first, after cancelling their orders. Fresh
+    // D17: a still-full bank drops whole stacks cheapest-total first,
+    // after cancelling their orders, until it is back under the limit:
+    // the surplus the carnet refused this pass (it never lists), and,
+    // when nothing was newly listed, the stock resting listed. Fresh
     // listings get one full pass to fill (the next pass lists nothing new
-    // and escalates); unlisted surplus re-lists instead of bypassing the
-    // carnet (D12). Counts read with the bank open: closed reads lie.
+    // and escalates). Counts read with the bank open: closed reads lie.
     bank_open(bot)?;
-    if bot.bank_items().values().filter(|qty| **qty > 0).count() >= lifescape_planner::space::BANK_TYPE_LIMIT && listed_now == 0 {
+    if bot.bank_items().values().filter(|qty| **qty > 0).count() >= lifescape_planner::space::BANK_TYPE_LIMIT {
         let sheltered: HashSet<u16> = protected.iter().filter_map(|name| by_name.get(name.as_str()).copied()).collect();
         let mut stuck = Vec::new();
         for (id, name) in &named {
             let qty = i64::from(bot.bank_items().get(id).copied().unwrap_or(0));
-            if !sheltered.contains(id) && listed_open.contains(id) && qty > 0 {
+            if !sheltered.contains(id) && qty > 0 && d17_eligible(*id, &unsellable, &listed_open, listed_now) {
                 let price = lifescape_gamedata::obj_by_id(usize::from(*id)).map(|entry| entry.price.max(1)).unwrap_or(1);
                 stuck.push((name.clone(), qty, price));
             }
@@ -220,17 +207,33 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             let Some(id) = by_name.get(name.as_str()).copied() else { continue };
             cancel_for(bot, id)?;
             // Pack first (a clogged pack blocks the withdraw), then the
-            // banked stack, then the pack again: whole stacks go. The
-            // stop check reads warm (the withdraw just opened the bank).
-            drop_all(bot, id, start_tick, start_pause, parsed.budget_max)?;
-            if bot.bank_items().get(&id).copied().unwrap_or(0) == 0 {
+            // banked stack pack by pack (an unnoted stack outgrows one
+            // pack), each load dropped: whole stacks go. A withdraw that
+            // frees nothing (still locked by an order) ends the stack.
+            // The counts read warm (the withdraw just opened the bank).
+            if !drop_all(bot, id, start_tick, start_pause, parsed.budget_max)? {
+                return Ok(crate::kit::cycle::BUDGET_EXIT);
+            }
+            loop {
+                let banked = bot.bank_items().get(&id).copied().unwrap_or(0);
+                if banked == 0 {
+                    break;
+                }
+                withdraw_all(bot, &[id])?;
+                let left = bot.bank_items().get(&id).copied().unwrap_or(0);
+                if !drop_all(bot, id, start_tick, start_pause, parsed.budget_max)? {
+                    return Ok(crate::kit::cycle::BUDGET_EXIT);
+                }
+                if left >= banked {
+                    break;
+                }
+            }
+            if bot.bank_items().get(&id).copied().unwrap_or(0) > 0 {
+                bot.log(&format!("cleanup D17 could not clear {name} (still locked)"));
                 continue;
             }
-            withdraw_all(bot, &[id])?;
-            let done = bot.bank_items().values().filter(|qty| **qty > 0).count() < lifescape_planner::space::BANK_TYPE_LIMIT;
-            drop_all(bot, id, start_tick, start_pause, parsed.budget_max)?;
             bot.log(&format!("cleanup D17 dropped {name}"));
-            if done {
+            if bot.bank_items().values().filter(|qty| **qty > 0).count() < lifescape_planner::space::BANK_TYPE_LIMIT {
                 break;
             }
         }
@@ -243,7 +246,21 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{d17_eligible, parse_args};
+
+    /// Live bdr53jee 2026-11-14: the seller held 13 stacks (no own cost
+    /// known), D17 only looked at listed stock, the bank stayed at 56
+    /// types every pass. Refused surplus is always a D17 candidate; a
+    /// resting listing only once nothing new was listed.
+    #[test]
+    fn refused_surplus_always_escalates_to_d17() {
+        let listed: std::collections::HashSet<u16> = [526].into_iter().collect();
+        assert!(d17_eligible(561, &[561], &listed, 0), "refused: drop candidate");
+        assert!(d17_eligible(561, &[561], &listed, 3), "refused even beside fresh listings");
+        assert!(d17_eligible(526, &[], &listed, 0), "resting listing, nothing new listed");
+        assert!(!d17_eligible(526, &[], &listed, 1), "fresh listings get one pass first");
+        assert!(!d17_eligible(1205, &[], &listed, 0), "neither refused nor listed: untouched");
+    }
 
     #[test]
     fn cleanup_args_parse() {

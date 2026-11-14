@@ -101,15 +101,19 @@ pub fn starved_oldest(total_seen: usize, banned: &[((i32, i32), u64)]) -> Option
     banned.iter().min_by_key(|(_, until)| *until).map(|(pos, _)| *pos)
 }
 
-/// Toll-fence side test: the fence is a vertical line, spots flip sides
-/// with it. Same flank hunts together, never across.
-pub fn same_side(line: i32, first: i32, second: i32) -> bool {
-    (first >= line) == (second >= line)
+/// Toll-fence side test on tiles (x, z): the Al Kharid side is a region
+/// derived from the map (`gamedata::toll::behind`), never a line (the
+/// fence zigzags, the Al Kharid shore reaches x 3259; live bd23dqpq
+/// 2026-11-14). Same flank hunts together, never across.
+pub fn same_side(first: (i32, i32), second: (i32, i32)) -> bool {
+    lifescape_gamedata::toll::same_side((i64::from(first.0), i64::from(first.1)), (i64::from(second.0), i64::from(second.1)))
 }
 
-/// True when the spot sits across the toll fence from the bot.
-pub fn across_toll(bot_x: i32, spot_x: i32, line: Option<i32>) -> bool {
-    line.is_some_and(|fence| !same_side(fence, spot_x, bot_x))
+/// True when the spot sits across the toll fence from the bot; `fence`
+/// is the nearby gate (`toll_gate_x`), `None` = no gate in reach (or the
+/// run paid the toll): no filtering.
+pub fn across_toll(bot: (i32, i32), spot: (i32, i32), fence: Option<i32>) -> bool {
+    fence.is_some() && !same_side(spot, bot)
 }
 
 #[cfg(test)]
@@ -151,14 +155,17 @@ mod tests {
     }
 
 
-    /// Fence side: the gate line splits flanks; `None` means no filtering.
+    /// Fence side: the region splits flanks; `None` means no filtering.
+    /// The south coast spot (3267,3148) sits west of x = 3268 yet behind
+    /// the toll (live bd23dqpq 2026-11-14).
     #[test]
-    fn fence_side_splits_at_the_gate_line() {
-        assert!(same_side(3268, 3262, 3255), "west flank together");
-        assert!(same_side(3268, 3270, 3300), "east flank together");
-        assert!(!same_side(3268, 3262, 3270), "across never targets");
-        assert!(across_toll(2900, 3086, Some(2920)), "east spot is across");
-        assert!(!across_toll(2900, 2910, Some(2920)), "west spot is same side");
-        assert!(!across_toll(2900, 3086, None), "no fence means no filtering");
+    fn fence_side_follows_the_region() {
+        assert!(same_side((3262, 3220), (3255, 3275)), "west flank together");
+        assert!(same_side((3270, 3220), (3300, 3290)), "east flank together");
+        assert!(!same_side((3262, 3220), (3270, 3220)), "across never targets");
+        assert!(same_side((3269, 3167), (3267, 3148)), "the coast spot is on the Al Kharid flank");
+        assert!(across_toll((3222, 3218), (3267, 3148), Some(3268)), "coast spot across from Lumbridge");
+        assert!(!across_toll((3222, 3218), (3255, 3275), Some(3268)), "Lumbridge cows same side");
+        assert!(!across_toll((3222, 3218), (3267, 3148), None), "no fence means no filtering");
     }
 }

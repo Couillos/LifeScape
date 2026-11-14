@@ -52,7 +52,7 @@ pub fn reach_site(bot: &mut Bot) -> Result<bool, ScriptError> {
         Ok(true) => Ok(true),
         Err(error) if crate::kit::survival::is_walk_abort(&error) => Err(error),
         outcome => {
-            if crate::kit::bans::across_toll(bot.world.x, x, fence) {
+            if crate::kit::bans::across_toll((bot.world.x, bot.world.z), (x, z), fence) {
                 return Err(crate::kit::cycle::blocked_access(TOLL_AREA));
             }
             let reason = match outcome {

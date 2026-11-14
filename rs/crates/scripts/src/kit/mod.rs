@@ -18,7 +18,8 @@
 //! far bank for known banked items), `spell_load` (spell casts stocked
 //! from pack + known bank, staff counted), `fireline` (legal fire lines),
 //! `uniform` (guild uniform worn before the door, `--wear`), `anvil`
-//! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained).
+//! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained),
+//! `janitor` (bank cleanup budget, chunks, whole-stack drops).
 
 #![forbid(unsafe_code)]
 
@@ -37,6 +38,7 @@ pub mod fish_gear;
 pub mod foes;
 pub mod gear;
 pub mod hunt;
+pub mod janitor;
 pub mod ladder;
 pub mod harvest;
 pub mod load;

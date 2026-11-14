@@ -73,7 +73,7 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
             continue;
         }
         let dist = (bank.x - i64::from(here_x)).abs() + (bank.z - i64::from(here_z)).abs();
-        let across = gate_x.is_some_and(|line| (bank.x >= line as i64) != (here_x as i64 >= line as i64));
+        let across = crate::kit::bans::across_toll((here_x, here_z), (bank.x as i32, bank.z as i32), gate_x);
         let slot = if across { &mut fallback } else { &mut best };
         let weaker = match slot {
             Some((known, _)) => dist < *known,
@@ -114,6 +114,12 @@ pub fn toll_gate_x(bot: &mut Bot) -> Option<i32> {
     }
 }
 
+/// The bot stands behind the toll (the Al Kharid side region,
+/// `gamedata::toll::behind`), never an x line.
+fn al_kharid_side(bot: &Bot) -> bool {
+    lifescape_gamedata::toll::behind(i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level))
+}
+
 /// Cross the toll fence through the guard's dialog (10 coins). The side
 /// flip proves it: works eastward and westward, unlike a fixed check.
 pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
@@ -124,16 +130,16 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
         bot.log(&format!("no toll gate found near {:?}", bot.position()));
         return Ok(false);
     };
-    let start_side = bot.world.x >= line;
+    let start_side = al_kharid_side(bot);
     bot.intend(&format!("paying the toll gate at x={line}"));
     let target = bot.world.ticks + 1500;
-    while bot.world.ticks < target && (bot.world.x >= line) == start_side {
+    while bot.world.ticks < target && al_kharid_side(bot) == start_side {
         let gate = match bot.toll_fence(bot.world.x, bot.world.z, bot.world.level, 150)? {
             Some(gate) => gate,
             None => return Ok(false),
         };
         bot.approach(gate.0, gate.1, gate.2, 1, 300)?;
-        if (bot.world.x >= line) != start_side {
+        if al_kharid_side(bot) != start_side {
             bot.log(&format!("walked through the toll gate at {:?}", bot.position()));
             return Ok(true);
         }
@@ -162,16 +168,16 @@ pub fn cross_toll_gate(bot: &mut Bot) -> Result<bool, ScriptError> {
             crate::quests::common::drain_dialog(bot, 30)?;
         }
         let moved = bot.world.ticks + 30;
-        while bot.world.ticks < moved && (bot.world.x >= line) == start_side {
+        while bot.world.ticks < moved && al_kharid_side(bot) == start_side {
             bot.pump(2)?;
         }
-        if (bot.world.x >= line) != start_side {
+        if al_kharid_side(bot) != start_side {
             bot.log(&format!("through the toll gate at {:?}", bot.position()));
             return Ok(true);
         }
     }
     bot.log(&format!("toll gate did not move us at {:?}", bot.position()));
-    Ok((bot.world.x >= line) != start_side)
+    Ok(al_kharid_side(bot) != start_side)
 }
 
 fn gate_id(bot: &mut Bot, gate: (i32, i32, i32)) -> Result<u16, ScriptError> {

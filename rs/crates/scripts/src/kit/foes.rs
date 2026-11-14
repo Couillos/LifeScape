@@ -146,9 +146,9 @@ pub fn attack_nearest(
     // so the nearest flips sides every kill and each crossing walks the
     // ~200-tile foot detour (paid doors stay off all hunt). One side per
     // pick; the flank follows the bot, not the plan, so no replan loop.
-    if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
-        let home = bot.world.x;
-        cands.retain(|(_, x, _)| same_side(line, *x, home));
+    if crate::kit::bank::toll_gate_x(bot).is_some() {
+        let home = (bot.world.x, bot.world.z);
+        cands.retain(|(_, x, z)| same_side((*x, *z), home));
     }
     cands.sort_by_key(|(_, x, z)| (x - bot.world.x).abs() + (z - bot.world.z).abs());
     // Door-aware acquisition, first reachable wins (max 3 foes): the window

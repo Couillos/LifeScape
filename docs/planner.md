@@ -264,7 +264,15 @@ marché (échangeable, pas Iron, bourse libre ≥ quantité × meilleure offre
 de vente, sinon × prix de référence) ; la première qui passe repart en
 `market:buy` seul (`lifecycle::retarget_market`, compteurs neufs, ses
 dépendants en cascade reviennent, une seule fois par nœud) et rien n'est
-banni. Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
+banni. Une obtention dont le dernier échec est son propre achat resté
+sans vendeur (`bans_scope::market_failed`, texte
+`market_unfilled_error`) ne rachète jamais : elle repart sur ses jambes
+hors marché (`lifecycle::retarget_produce` : fabrication, récolte,
+élevage, magasin ; live fiona_park 2026-11-14, cinq amulettes de saphir
+rachetées en boucle) ; sans telle jambe, pas de sauvetage, le ban suit et
+le planificateur replanifie. Un seul sauvetage par nœud, quel qu'il soit
+(historique `market_rescue` / `produce_rescue`, `rescued_before`).
+Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
 (`banned_scope`) : compétences de la racine et de chaque nœud qui
 l'attend, plus celles dont l'objet est l'outil (barres de bronze ratées
 ⇒ forge, bûcheronnage — la hache —, allumage s'il brûlait ces bûches).
@@ -322,7 +330,18 @@ Péage d'Al Kharid (décision utilisateur 2026-11-13, `gamedata::toll`,
 serveur `border_gate.rs2` : 10 pièces prises dans le SAC, dans les deux
 sens, gratuit après Prince Ali Rescue). Le choix de site
 (`combat::pick_site_paid`) suit la règle des scripts (bot à ≤ 150 cases de
-la porte (3268,3227), cible de l'autre côté de x = 3268) : un site du
+la porte (3268,3227), cible de l'autre côté de la clôture,
+`gamedata::toll::crossing`) : le côté est une RÉGION dérivée de la
+connexité de la carte (`gamedata/data/toll_region.json`, voir
+`docs/navigation.md` § Péage), jamais la droite x = 3268 (la clôture
+zigzague, la côte sud d'Al Kharid descend à x 3259 : live bd23dqpq
+2026-11-14, banc (3267,3148) lancé sans `toll`, NoRoute, pêche bannie).
+Trois classes : derrière le péage, côté gratuit (reste de la fenêtre au
+sud du haut de la clôture, z ≤ 3329 : Lumbridge, Draynor, Port Sarim),
+terrain ouvert au-delà (Varrock, Falador : détour gratuit par le nord,
+jamais « de l'autre côté ») ; scripts (`kit::bans::across_toll`,
+`same_side`, `same_flank_clusters`, banque la plus proche, passage de la
+porte) et cerveau lisent la même région. Un site du
 même côté d'abord (or de Rimmington, pas d'Al Kharid, depuis Lumbridge —
 sara_miller) ; sinon un site de l'autre côté seulement si le péage est
 budgété (bourse ≥ 10 ou quête faite) ⇒ `node.toll`, lancement avec
@@ -639,14 +658,23 @@ valeur totale croissante, ordres annulés). Le cerveau insère le nœud
 de 6000 ticks. Le déclencheur précède le test de graphe terminal (une
 banque pleine se nettoie même graphe fini) ; l'arrêt sur deux abandons
 consécutifs borne les pannes persistantes sans bloquer les nettoyages
-sains. Le repli `await_fill` persiste son `done` (sinon l'obtention
+sains. Une passe qui sort sur budget avec la banque encore ≥ 55 types
+est close `done` mais notée `cleanup_short` (`brain_fold::done_outcome`) :
+aucun nouveau concierge pendant `CLEANUP_RETRY_SECS` = 900 s
+(`space::cleanup_cooling`), jamais une relance toutes les 7 s (live
+bdr53jee 2026-11-14 : quinze passes en deux minutes à 56 types). Le repli `await_fill` persiste son `done` (sinon l'obtention
 ferme ne se termine jamais). L'activité worker (`activities/market_cleanup.rs`, sous le
 plafond 200) : marché pour le surplus échangeable (lot et prix du
 daemon, `seller_quote` : réserve = coût propre du bot, voir
 `docs/economy.md` § Réserve vendeur ; sans coût connu, rien n'est
 listé), magasin
-général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
-la passe suivante, D12). Jambes alchimie décidées mais non exécutées
+général, jet du reste, D17 jusqu'à repasser sous la limite : le surplus
+que le carnet refuse (sans coût propre connu, hors bande) toujours — il
+ne se vend jamais, seul son jet libère la case ; il n'est plus retiré de
+la banque pour rien (il bouchait le sac et affamait les lots suivants) —
+et le stock listé quand rien de neuf n'a été listé (le non-listé reliste
+à la passe suivante, D12). Une pile non notée plus grosse qu'un sac part
+sac après sac. Jambes alchimie décidées mais non exécutées
 (pas de script de magie sur le socle : repli magasin, log).
 
 ## L10 : gate combat du cerveau

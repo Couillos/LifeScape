@@ -29,9 +29,9 @@ pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32
 /// Keepers a buy may walk to on its own: never in the Wilderness nor
 /// underground (z ≥ 6400), never across the toll fence `fence` (the
 /// brain passes `toll` when it funded the gate).
-pub fn reachable_keeper(spawn: (i64, i64, i64), bot_x: i32, fence: Option<i32>) -> bool {
+pub fn reachable_keeper(spawn: (i64, i64, i64), bot: (i32, i32), fence: Option<i32>) -> bool {
     let (x, z, level) = spawn;
-    !crate::kit::danger::in_wilderness(x, z, level) && z < 6400 && !crate::kit::bans::across_toll(bot_x, x as i32, fence)
+    !crate::kit::danger::in_wilderness(x, z, level) && z < 6400 && !crate::kit::bans::across_toll(bot, (x as i32, z as i32), fence)
 }
 
 /// `shop_stock_keeper` with the toll fence line (`None` = unfenced).
@@ -61,7 +61,7 @@ fn keeper_where(bot: &Bot, obj_name: &str, fence: Option<i32>, named: Option<&st
             let Some(entry) = knowledge::npc_by_id(npc_id) else { continue };
             let Some(keeper_name) = entry.name else { continue };
             for spawn in entry.spawns {
-                if spawn.level != i64::from(bot.world.level) || !reachable_keeper((spawn.x, spawn.z, spawn.level), bot.world.x, fence) {
+                if spawn.level != i64::from(bot.world.level) || !reachable_keeper((spawn.x, spawn.z, spawn.level), (bot.world.x, bot.world.z), fence) {
                     continue;
                 }
                 let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
@@ -484,11 +484,11 @@ mod tests {
     /// toll fence on its own (audit C10); `toll` lifts only the fence.
     #[test]
     fn keepers_stay_on_reachable_ground() {
-        assert!(super::reachable_keeper((3212, 3246, 0), 3222, Some(3268)), "Lumbridge store");
-        assert!(!super::reachable_keeper((3315, 3180, 0), 3222, Some(3268)), "Al Kharid across the fence");
-        assert!(super::reachable_keeper((3315, 3180, 0), 3222, None), "toll paid: fence lifted");
-        assert!(!super::reachable_keeper((3080, 3930, 0), 3222, None), "Wilderness never");
-        assert!(!super::reachable_keeper((3110, 9850, 0), 3222, None), "underground never");
+        assert!(super::reachable_keeper((3212, 3246, 0), (3222, 3218), Some(3268)), "Lumbridge store");
+        assert!(!super::reachable_keeper((3315, 3180, 0), (3222, 3218), Some(3268)), "Al Kharid across the fence");
+        assert!(super::reachable_keeper((3315, 3180, 0), (3222, 3218), None), "toll paid: fence lifted");
+        assert!(!super::reachable_keeper((3080, 3930, 0), (3222, 3218), None), "Wilderness never");
+        assert!(!super::reachable_keeper((3110, 9850, 0), (3222, 3218), None), "underground never");
     }
 
     /// PRD3 D-A: a producible object (smithed bronze axe) is never bought

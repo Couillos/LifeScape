@@ -82,9 +82,9 @@ pub fn foodless(plan: &HuntPlan, carried: u32) -> bool {
 /// empty and the caller fails named instead of burning NoRoute dossiers.
 /// Falls back to every cluster only when paid (an all-across spot still
 /// hunts instead of idling once the gate is crossable).
-pub(crate) fn same_flank_clusters(line: i32, home: i32, targets: &[(i32, i32, usize)], allow_paid: bool) -> Vec<(i32, i32, usize)> {
+pub(crate) fn same_flank_clusters(home: (i32, i32), targets: &[(i32, i32, usize)], allow_paid: bool) -> Vec<(i32, i32, usize)> {
     let kept: Vec<(i32, i32, usize)> =
-        targets.iter().filter(|(center_x, _, _)| same_side(line, *center_x, home)).copied().collect();
+        targets.iter().filter(|(center_x, center_z, _)| same_side((*center_x, *center_z), home)).copied().collect();
     if kept.is_empty() && allow_paid {
         targets.to_vec()
     } else {
@@ -179,7 +179,7 @@ pub fn run_spot_with(
     // oscillation inside the fight; this stops it between clusters.
     let mut targets = targets;
     if let Some(line) = crate::kit::bank::toll_gate_x(bot) {
-        let kept = same_flank_clusters(line, bot.world.x, &targets, bot.allow_paid);
+        let kept = same_flank_clusters((bot.world.x, bot.world.z), &targets, bot.allow_paid);
         if kept.len() != targets.len() {
             bot.log(&format!("toll fence line {line}: hunting {} of {} clusters on this flank", kept.len(), targets.len()));
         }

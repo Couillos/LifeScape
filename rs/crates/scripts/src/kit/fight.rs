@@ -135,7 +135,7 @@ pub fn fight(
     // One line per hunt: which flank we hold (or that no gate is mapped
     // yet, so the per-pick filter stays off and crossings stay possible).
     match crate::kit::bank::toll_gate_x(bot) {
-        Some(line) => bot.log(&format!("toll fence line {line}, hunting the {} flank", if bot.world.x >= line { "east" } else { "west" })),
+        Some(line) => bot.log(&format!("toll fence line {line}, hunting the {} flank", if lifescape_gamedata::toll::behind(i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level)) { "Al Kharid" } else { "toll-free" })),
         None => bot.log("toll fence: no gates mapped, cross-fence picks unfiltered"),
     }
     loop {
@@ -577,11 +577,11 @@ mod tests {
     #[test]
     fn clusters_stay_on_the_hunting_flank() {
         let mixed = vec![(3252, 3243, 16), (3274, 3213, 4)];
-        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3260, &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
-        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3270, &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
+        assert_eq!(crate::kit::hunt::same_flank_clusters((3260, 3240), &mixed, false), vec![(3252, 3243, 16)], "east cluster dropped");
+        assert_eq!(crate::kit::hunt::same_flank_clusters((3270, 3220), &mixed, true), vec![(3274, 3213, 4)], "west cluster dropped");
         let east_only = vec![(3274, 3213, 4)];
-        assert_eq!(crate::kit::hunt::same_flank_clusters(3268, 3270, &east_only, true), east_only, "paid all-across still hunts");
-        assert!(crate::kit::hunt::same_flank_clusters(3268, 3260, &east_only, false).is_empty(), "unpaid all-across stays empty");
+        assert_eq!(crate::kit::hunt::same_flank_clusters((3270, 3220), &east_only, true), east_only, "paid all-across still hunts");
+        assert!(crate::kit::hunt::same_flank_clusters((3260, 3240), &east_only, false).is_empty(), "unpaid all-across stays empty");
     }
 
     /// Auto re-pick from the west never idles on an across-toll pick: the
@@ -602,7 +602,7 @@ mod tests {
         assert!(fallback.min_level <= killer.min_level, "no harder than the across pick, got: {}", fallback.key);
         let targets = crate::kit::spots::ranked_clusters(&bot, &fallback);
         assert!(!targets.is_empty(), "fallback has same-level spawns");
-        let kept = crate::kit::hunt::same_flank_clusters(3268, bot.world.x, &targets, false);
+        let kept = crate::kit::hunt::same_flank_clusters((bot.world.x, bot.world.z), &targets, false);
         assert!(!kept.is_empty(), "{} has no west-flank cluster to hunt", fallback.key);
     }
 

@@ -170,6 +170,25 @@ pub fn cleanup_needed(open_exists: bool, stalled: bool, bank_types: usize) -> bo
     needs_cleanup(bank_types) && !open_exists && !stalled
 }
 
+/// History outcome of a janitor pass that ended with the bank still at
+/// or past the limit (`market cleanup` budget exit, folded done).
+pub const CLEANUP_SHORT_TAG: &str = "cleanup_short";
+/// Wall seconds a short janitor pass holds the next insert back: bounded,
+/// so the bot works meanwhile and new sales or fills can land (live
+/// bdr53jee 2026-11-14: a 56-type bank inserted a fresh janitor every
+/// 7 s, 15 passes in two minutes).
+pub const CLEANUP_RETRY_SECS: i64 = 900;
+
+/// True while the last janitor pass of the history ended short less than
+/// `CLEANUP_RETRY_SECS` ago (`now` in Unix seconds): no fresh insert yet.
+pub fn cleanup_cooling(history: &[crate::model::HistoryEntry], now: i64) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.outcome == CLEANUP_SHORT_TAG)
+        .is_some_and(|entry| now.saturating_sub(entry.ended) < CLEANUP_RETRY_SECS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -313,5 +332,22 @@ mod tests {
             !cleanup_stalled(&[cleanup_node(NodeStatus::Done), cleanup_node(NodeStatus::Abandoned)]),
             "one trailing failure retries"
         );
+    }
+
+    /// Live bdr53jee 2026-11-14: a pass that left 56 types behind was
+    /// followed by a fresh janitor 7 s later, fifteen times. A short pass
+    /// holds the next insert for `CLEANUP_RETRY_SECS`, then it may retry.
+    #[test]
+    fn a_short_pass_cools_down_before_the_next_insert() {
+        use super::{cleanup_cooling, CLEANUP_RETRY_SECS, CLEANUP_SHORT_TAG};
+        use crate::model::HistoryEntry;
+        let entry = |outcome: &str, ended: i64| HistoryEntry { node: "n9".to_string(), started: ended, ended, outcome: outcome.to_string() };
+        assert!(!cleanup_cooling(&[], 1000), "no pass yet: insert");
+        let short = vec![entry("launched", 990), entry(CLEANUP_SHORT_TAG, 1000)];
+        assert!(cleanup_cooling(&short, 1007), "seven seconds later: hold");
+        assert!(cleanup_cooling(&short, 1000 + CLEANUP_RETRY_SECS - 1), "still inside the window");
+        assert!(!cleanup_cooling(&short, 1000 + CLEANUP_RETRY_SECS), "window over: retry");
+        let drained = vec![entry("goal_reached", 1000)];
+        assert!(!cleanup_cooling(&drained, 1001), "a drained pass never holds the next one");
     }
 }

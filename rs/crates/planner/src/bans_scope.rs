@@ -8,7 +8,10 @@
 //! (the failed root first, then what waited on it) is checked for a market
 //! route (tradeable, not Iron, the wallet covers the ask or the reference
 //! price): the first one found is bought instead (`lifecycle::retarget_market`)
-//! and nothing is banned. Pure: the wallet and prices come from the brain.
+//! and nothing is banned. An obtain whose last failure was its own market
+//! buy going unfilled never buys again: it goes back to its non-market
+//! legs (`lifecycle::retarget_produce`), or the ban follows. One rescue
+//! per node (history tags). Pure: the wallet and prices come from the brain.
 
 use std::collections::BTreeSet;
 
@@ -115,6 +118,31 @@ pub fn market_only(node: &Node) -> bool {
     !node.alternatives.is_empty() && node.alternatives.iter().all(|alt| alt.method.starts_with("market:"))
 }
 
+/// History outcome of a market rescue (`retarget_market`).
+pub const MARKET_RESCUE_TAG: &str = "market_rescue";
+/// History outcome of a production rescue (`retarget_produce`).
+pub const PRODUCE_RESCUE_TAG: &str = "produce_rescue";
+
+/// Error text of a market buy that rested past its deadline unfilled
+/// (brain fill wait); `market_failed` reads it back.
+pub fn market_unfilled_error(count: i64, item: &str, ticks: u64, held: i64, cancelled: usize) -> String {
+    format!("market order for {count} {item} unfilled after {ticks} ticks (held {held}, {cancelled} cancelled)")
+}
+
+/// True when the node's last failure was its own market buy going
+/// unfilled: the market already had its chance, a rescue never places
+/// the same order again (live fiona_park 2026-11-14: five unstrung
+/// sapphire amulets bid, unfilled, rescued on the market, bid again).
+pub fn market_failed(node: &Node) -> bool {
+    node.last_error.starts_with("market order for ") && node.last_error.contains(" unfilled after ")
+}
+
+/// True when the history shows a rescue of `node_id` already (either
+/// kind): one rescue per node, the ban follows a second abandonment.
+pub fn rescued_before(life: &Life, node_id: &str) -> bool {
+    life.history.iter().any(|entry| entry.node == node_id && (entry.outcome == MARKET_RESCUE_TAG || entry.outcome == PRODUCE_RESCUE_TAG))
+}
+
 /// Abandoned obtains on the failed path, in rescue order (the root
 /// first, then what waited on it): never the goal's own production
 /// quota (a `produce` item is made, never bought), never one already
@@ -133,6 +161,7 @@ pub fn rescue_candidates(life: &Life, root: &str) -> Vec<usize> {
             let node = &life.nodes[*position];
             node.status == NodeStatus::Abandoned
                 && !market_only(node)
+                && !rescued_before(life, &node.id)
                 && matches!(&node.kind, NodeKind::ObtainItems { item, .. } if Some(item) != quota.as_ref() && crate::obtain_legs::tradeable_f2p(item))
         })
         .collect()

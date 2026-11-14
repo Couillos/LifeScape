@@ -76,6 +76,15 @@ banquier, poche fermée). Seule table de ce dossier écrite à la main :
 (< 1 s) et imprime la table à recoller en cas d'écart. Branchée au SDK
 par `Tables::bank_client_stands` (`scripts/src/tables_live.rs`).
 
+Région du péage d'Al Kharid (`lifescape-gamedata::toll`,
+`gamedata/data/toll_region.json`, 2026-11-14) : le côté Al Kharid de la
+clôture en bandes par rangée `[z, x0, x1, …]` plus la fenêtre de
+dérivation (`behind`, `toll_free_side`, `across`, `crossing`). Dérivée
+de la carte servie par `lifescape_nav::toll_side::derive_region` ;
+`rs/crates/nav/tests/toll_region.rs` la recalcule et échoue à l'écart,
+`LIFESCAPE_BLESS_TOLL_REGION=1` réécrit le fichier (voir
+`docs/navigation.md` § Péage d'Al Kharid).
+
 Forge (`recipes.json`, kind `smith`, 2026-11-14) : XP = `bar_amount ×
 xpperbar` dixièmes (`smithing.struct`, payé par `smithing_anvil`), le
 dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
