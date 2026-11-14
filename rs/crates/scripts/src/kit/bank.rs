@@ -22,9 +22,14 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 /// Past 3 hurts the trip aborts loudly instead of walking into death.
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
+/// Toll-fence search radius of the bank pick: the Wizards' Tower (3103)
+/// sits 165 tiles west of the Al Kharid fence (3268); at 150 the fence
+/// went unseen and t48 walked from the tower basement to Al Kharid.
+const BANK_FENCE_RADIUS: i32 = 200;
 
-/// Nearest free (non-members, same level) bank booth by Manhattan distance.
-/// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
+/// Nearest free (non-members) bank booth by Manhattan distance, on this
+/// level, else on the ground floor (no bank upstairs: windmill top), a
+/// dungeon tile ranked from the surface above it. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
 /// Needs the toll gate's fence line, served by the nav service.
 ///
@@ -44,7 +49,7 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     // Same discipline as `toll_gate_x`: a down service leaves the pick
     // unfenced (logged) instead of aborting the run; the walk itself
     // still fails loud with `nav-down`.
-    let gate_x = match bot.toll_fence(here_x, here_z, bot.world.level, 150) {
+    let gate_x = match bot.toll_fence(here_x, here_z, level as i32, BANK_FENCE_RADIUS) {
         Ok(gate) => gate.map(|(gate_x, _, _)| gate_x),
         Err(error) => {
             bot.log(&format!("toll fence unavailable ({error}), picking unfenced"));
