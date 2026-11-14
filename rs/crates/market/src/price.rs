@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 //! Current price and OHLCV buckets. The current price is what a player
 //! reads (user 2026-11-14): the median of the last five fills, clamped
-//! by the live book; never traded, the book (midpoint, else its one
-//! side), then 1 coin (PRD3: NPC shop prices never anchor the market).
+//! by the impact prices of the live book (the price to fill the usual
+//! lot, never a dust order's); never traded, the book (midpoint, else
+//! its one side), then 1 coin (PRD3: NPC shop prices never anchor the market).
 //! The VWAP stays for the market page's 24 h change only (display).
 //! Buckets align on multiples of the width since the epoch, in clock
 //! seconds; every fill also carries its server tick for later joins.
@@ -55,40 +56,90 @@ pub struct Reference {
 /// last trades I saw", never a 24 h average).
 pub const PRICE_FILLS: usize = 5;
 
+/// One of the last fills the current price reads: its price and its lot
+/// size (the impact size comes from the lot sizes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LastFill {
+    pub price: i64,
+    pub quantity: i64,
+}
+
+/// Largest impact size: past 1000 units a lot no longer says more about
+/// what a meaningful order is (user 2026-11-14).
+pub const IMPACT_CAP: i64 = 1000;
+
+/// Median of a non-empty list; an even count averages its two middles,
+/// rounded up.
+fn median_of(mut values: Vec<i64>) -> Option<i64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let middle = values.len() / 2;
+    Some(if values.len() % 2 == 1 { values[middle] } else { (values[middle - 1] + values[middle] + 1) / 2 })
+}
+
 /// Median of the last `PRICE_FILLS` prices (`prices` oldest first, any
 /// age); an even count averages its two middles. `None` without fills.
 pub fn median_price(prices: &[i64]) -> Option<i64> {
     let start = prices.len().saturating_sub(PRICE_FILLS);
-    let mut last: Vec<i64> = prices[start..].iter().copied().filter(|price| *price >= 1).collect();
-    if last.is_empty() {
-        return None;
+    median_of(prices[start..].iter().copied().filter(|price| *price >= 1).collect()).map(|median| median.max(1))
+}
+
+/// Impact size of an item (user 2026-11-14, the derivatives "impact
+/// notional"): the median quantity of its last `PRICE_FILLS` fills, at
+/// least 1, at most `IMPACT_CAP`; never traded, 1 unit.
+pub fn impact_size(last_fills: &[LastFill]) -> i64 {
+    let start = last_fills.len().saturating_sub(PRICE_FILLS);
+    let quantities = last_fills[start..].iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).map(|fill| fill.quantity).collect();
+    median_of(quantities).unwrap_or(1).clamp(1, IMPACT_CAP)
+}
+
+/// Impact price of one side: the price of the `size`-th unit walking the
+/// resting `levels` (price, quantity) from the best. `None` when the
+/// side holds fewer than `size` units (a thin side sets no price).
+pub fn impact_price(levels: &[(i64, i64)], size: i64) -> Option<i64> {
+    let mut covered = 0;
+    for (price, quantity) in levels.iter().copied().filter(|(price, quantity)| *price >= 1 && *quantity >= 1) {
+        covered += quantity;
+        if covered >= size.max(1) {
+            return Some(price);
+        }
     }
-    last.sort_unstable();
-    let middle = last.len() / 2;
-    let median = if last.len() % 2 == 1 { last[middle] } else { (last[middle - 1] + last[middle] + 1) / 2 };
-    Some(median.max(1))
+    None
 }
 
 /// Current price as a player reads it (user 2026-11-14, replaces the
 /// 24 h VWAP reference in every bot decision): the median of the last
-/// five fills (`last_prices`, oldest first, any age), clamped by the
-/// live book (a bid above it is what the object fetches now, an ask
-/// below it is what it costs now). Never traded: the book midpoint, else
-/// its one side, else 1 coin (`traded: false`: the opening rules of the
-/// callers apply, `zip::seller_open` opens at twice the reserve).
-pub fn current_price(last_prices: &[i64], best_bid: Option<i64>, best_ask: Option<i64>) -> Reference {
-    let bid = best_bid.filter(|price| *price >= 1);
-    let ask = best_ask.filter(|price| *price >= 1);
-    if let Some(median) = median_price(last_prices) {
+/// five fills (`last_fills`, oldest first, any age), clamped into
+/// [impact bid, impact ask] (the HKEX nominal price, with the
+/// derivatives' impact prices instead of the top of the book: one unit
+/// listed at 1 coin no longer drags an item traded in lots of 100 down
+/// to 1). The impact size is `impact_size(last_fills)`; a side holding
+/// fewer units does not clamp. `bids` / `asks` are the resting levels
+/// (price, quantity) best first; a caller may stop once the impact size
+/// is covered. Never traded: the book midpoint, else its one side, else
+/// 1 coin (`traded: false`: the opening rules of the callers apply,
+/// `zip::seller_open` opens at twice the reserve).
+pub fn current_price(last_fills: &[LastFill], bids: &[(i64, i64)], asks: &[(i64, i64)]) -> Reference {
+    let start = last_fills.len().saturating_sub(PRICE_FILLS);
+    let prices: Vec<i64> = last_fills[start..].iter().map(|fill| fill.price).collect();
+    let size = impact_size(last_fills);
+    let impact_bid = impact_price(bids, size);
+    let impact_ask = impact_price(asks, size);
+    if let Some(median) = median_price(&prices) {
         let mut price = median;
-        if let Some(bid) = bid.filter(|bid| *bid > price) {
+        if let Some(bid) = impact_bid.filter(|bid| *bid > price) {
             price = bid;
         }
-        if let Some(ask) = ask.filter(|ask| *ask < price) {
+        if let Some(ask) = impact_ask.filter(|ask| *ask < price) {
             price = ask;
         }
         return Reference { price: price.max(1), traded: true };
     }
+    let best = |levels: &[(i64, i64)]| levels.iter().find(|(price, quantity)| *price >= 1 && *quantity >= 1).map(|(price, _)| *price);
+    let bid = impact_bid.or_else(|| best(bids));
+    let ask = impact_ask.or_else(|| best(asks));
     let price = match (bid, ask) {
         (Some(bid), Some(ask)) => (bid + ask) / 2,
         (Some(side), None) | (None, Some(side)) => side,
@@ -172,20 +223,62 @@ mod tests {
         assert_eq!(vwap(&[]), None);
     }
 
+    fn lots(prices: &[i64], quantity: i64) -> Vec<LastFill> {
+        prices.iter().map(|price| LastFill { price: *price, quantity }).collect()
+    }
+
     #[test]
     fn current_price_is_the_median_of_five_fills_clamped_by_the_book() {
         let traded = |price| super::Reference { price, traded: true };
-        let quoted = |price| super::Reference { price, traded: false };
         // Only the last five count, whatever their age.
-        assert_eq!(current_price(&[900, 1, 7, 8, 9, 10, 11], None, None), traded(9));
-        assert_eq!(current_price(&[3, 9], None, None), traded(6), "even count: the middles averaged");
-        assert_eq!(current_price(&[5, 5, 5], Some(8), None), traded(8), "a richer bid is the price now");
-        assert_eq!(current_price(&[5, 5, 5], None, Some(3), ), traded(3), "a cheaper ask is the price now");
-        assert_eq!(current_price(&[5, 5, 5], Some(4), Some(6)), traded(5), "the book inside the fills: the fills");
-        assert_eq!(current_price(&[], Some(4), Some(6)), quoted(5), "never traded: the midpoint");
-        assert_eq!(current_price(&[], Some(4), None), quoted(4), "never traded, one side: that side");
-        assert_eq!(current_price(&[], None, Some(9)), quoted(9));
-        assert_eq!(current_price(&[], None, None), quoted(1), "never traded: 1 coin, no shop anchor");
+        assert_eq!(current_price(&lots(&[900, 1, 7, 8, 9, 10, 11], 1), &[], &[]), traded(9));
+        assert_eq!(current_price(&lots(&[3, 9], 1), &[], &[]), traded(6), "even count: the middles averaged");
+        assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[(8, 1)], &[]), traded(8), "a richer bid is the price now");
+        assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[], &[(3, 1)]), traded(3), "a cheaper ask is the price now");
+        assert_eq!(current_price(&lots(&[5, 5, 5], 1), &[(4, 1)], &[(6, 1)]), traded(5), "the book inside the fills: the fills");
+    }
+
+    #[test]
+    fn impact_size_is_the_median_lot_capped() {
+        assert_eq!(impact_size(&[]), 1, "never traded: one unit");
+        assert_eq!(impact_size(&lots(&[5, 5, 5], 100)), 100);
+        assert_eq!(impact_size(&[LastFill { price: 5, quantity: 1 }, LastFill { price: 5, quantity: 100 }, LastFill { price: 5, quantity: 300 }]), 100);
+        assert_eq!(impact_size(&lots(&[5], 50_000)), IMPACT_CAP, "capped at 1000");
+        assert_eq!(impact_size(&lots(&[5, 5, 5, 5, 5, 5, 5], 3)), 3);
+        assert_eq!(impact_price(&[(1, 1), (4, 60), (6, 100)], 100), Some(6), "the 100th unit sits at 6");
+        assert_eq!(impact_price(&[(1, 1), (4, 99)], 100), Some(4), "exactly covered");
+        assert_eq!(impact_price(&[(1, 1), (4, 98)], 100), None, "thin side: no impact price");
+    }
+
+    #[test]
+    fn a_dust_ask_does_not_move_a_lot_traded_item() {
+        // The historic 1-coin ratchet: one unit listed at 1 coin used to
+        // price feathers traded in lots of 100 at 1 for every bot.
+        let feathers = lots(&[4, 4, 5, 4, 4], 100);
+        let dust = [(1, 1), (4, 500)];
+        assert_eq!(current_price(&feathers, &[], &dust).price, 4, "the 100th unit is at 4");
+        assert_eq!(current_price(&feathers, &[], &[(1, 1)]).price, 4, "a lone dust ask is a thin side");
+        // A real deep ask below the median is the price now.
+        assert_eq!(current_price(&feathers, &[], &[(1, 1), (2, 150)]).price, 2);
+        // Lots of one: the single unit at 1 coin is the whole impact size.
+        assert_eq!(current_price(&lots(&[4, 4, 4], 1), &[], &[(1, 1)]).price, 1);
+    }
+
+    #[test]
+    fn a_thin_bid_side_is_ignored() {
+        let feathers = lots(&[4, 4, 4], 100);
+        assert_eq!(current_price(&feathers, &[(9, 10), (8, 20)], &[]).price, 4, "30 units of bids do not lift a lot of 100");
+        assert_eq!(current_price(&feathers, &[(9, 10), (7, 90), (2, 500)], &[]).price, 7, "a deep bid above the median lifts it to its 100th unit");
+        assert_eq!(current_price(&feathers, &[(3, 100)], &[]).price, 4, "a deep bid below the median: the fills");
+    }
+
+    #[test]
+    fn never_traded_reads_the_book_then_one_coin() {
+        let quoted = |price| super::Reference { price, traded: false };
+        assert_eq!(current_price(&[], &[(4, 1)], &[(6, 1)]), quoted(5), "never traded: the midpoint");
+        assert_eq!(current_price(&[], &[(4, 1)], &[]), quoted(4), "never traded, one side: that side");
+        assert_eq!(current_price(&[], &[], &[(9, 3), (12, 5)]), quoted(9), "impact size 1: the best ask");
+        assert_eq!(current_price(&[], &[], &[]), quoted(1), "never traded: 1 coin, no shop anchor");
     }
 
     #[test]

@@ -100,7 +100,7 @@ impl MarketService {
             taker
         };
         let mut engine = self.lock_engine();
-        engine.note_fill(item, price);
+        engine.note_fill(item, price, qty);
         engine.remember(Print { item, quantity: qty, price, clock, taker });
     }
 }

@@ -15,7 +15,7 @@ prix de l'ordre déjà au repos ; `market_uncross` guérit le reste (boot,
 puis chaque tour de convocation). Code pur dans
 `rs/crates/market/` : `book` (carnet + appariement), `guards` (bandes +
 couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
-derniers fills bornée par le carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
+derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
 
 Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
@@ -613,9 +613,10 @@ Décision utilisateur : plus aucune décision de bot ne lit la VWAP 24 h.
 Un bot price comme un joueur qui regarde les dernières ventes :
 `lifescape_market::current_price` = médiane des 5 DERNIERS fills de
 l'objet (quel que soit leur âge ; nombre pair = moyenne des deux du
-milieu), bornée par le carnet vivant (un bid plus haut est le prix du
-moment, un ask plus bas aussi). Jamais échangé : milieu du carnet, sinon
-son seul côté, sinon 1 pièce, `traded: false` (les règles d'ouverture
+milieu), bornée par les PRIX D'IMPACT du carnet vivant (§ Borne
+d'impact : un bid d'impact plus haut est le prix du moment, un ask
+d'impact plus bas aussi). Jamais échangé : milieu du carnet, sinon son
+seul côté, sinon 1 pièce, `traded: false` (les règles d'ouverture
 s'appliquent : `seller_open` ouvre à `max(meilleur bid, 2 × réserve)`).
 Branché partout où la référence décidait : `MarketService::reference`
 (ouvertures `opening_ask`/`opening_bid`/`remembered_bid`, repricing,
@@ -626,14 +627,47 @@ Le « % 24 h » de la page reste un affichage (VWAP du jour contre la
 veille), aucun bot ne le lit.
 
 CPU (« attention au cpu ») : jamais de scan de l'historique d'un objet.
-Le service garde un anneau en mémoire par objet (`Engine::last_prices`,
-5 prix), chargé une fois par une lecture indexée `LIMIT 5`
-(`Store::last_prices`, index `executions(item_id, clock)`), puis poussé à
-chaque fill réglé (`settle_print` → `Engine::note_fill`). Avant, chaque
-`reference()` lisait TOUTES les exécutions de l'objet depuis 0. Le volume
-24 h du `seller_quote` et des bids est un `SUM` indexé
+Le service garde un anneau en mémoire par objet (`Engine::last_fills`,
+5 fills (prix, quantité)), chargé une fois par une lecture indexée
+`LIMIT 5` (`Store::last_fills`, index `executions(item_id, clock)`), puis
+poussé à chaque fill réglé (`settle_print` → `Engine::note_fill`). Avant,
+chaque `reference()` lisait TOUTES les exécutions de l'objet depuis 0.
+Le volume 24 h du `seller_quote` et des bids est un `SUM` indexé
 (`Store::volume_between`), plus les lignes. `price_estimate` (rates) : 3
-lectures indexées (5 prix, meilleur bid, meilleur ask).
+lectures indexées (5 fills, puis les meilleurs bids et les meilleurs
+asks jusqu'à couvrir la taille d'impact, `Store::book_levels_covering`,
+`LIMIT 64` ordres par côté, arrêt dès la taille couverte).
+
+### Borne d'impact (2026-11-14)
+
+Défaut corrigé : borner par le MEILLEUR bid/ask laissait une poussière
+fixer le prix — une unité listée à 1 pièce ramenait à 1 le prix d'un
+objet échangé par lots de 100, pour tous les bots (le cliquet à 1 pièce
+historique). Comme le « mark price » des dérivés (prix d'impact), la
+borne lit maintenant le prix qu'il faut pour remplir un lot réel :
+
+- taille d'impact N = médiane des QUANTITÉS des 5 mêmes derniers fills
+  (`lifescape_market::impact_size`, au moins 1, plafond `IMPACT_CAP` =
+  1000) ; jamais échangé → N = 1 ;
+- ask d'impact = prix de la N-ième unité en remontant les asks au repos
+  depuis le meilleur ; bid d'impact pareil sur les bids
+  (`impact_price`) ; un côté dont la profondeur totale est < N ne borne
+  PAS (un côté mince ne fait pas le prix) ;
+- prix courant = médiane des 5 derniers prix bornée dans
+  [bid d'impact, ask d'impact] (bid d'abord, puis ask, l'ask gagne si
+  le carnet est croisé) ;
+- jamais échangé (aucun fill) : règles inchangées (milieu des deux
+  côtés, sinon le seul côté, sinon 1), avec N = 1 donc les meilleurs
+  prix.
+
+Exemples (tests `price.rs`, `market_impact_tests.rs`) : plumes en lots
+de 100 à 4, une unité à 1 → prix 4 ; 150 unités à 2 → prix 2 ; 10 unités
+bidées à 9 → prix 4 ; 90 de plus à 7 → prix 7 (la 100e unité). Les
+bornes de la bande anti-bug ×5/×0,2 lisent toujours `guard_anchor` =
+cette référence, `traded` garde son sens (vrai dès un fill).
+Coût : `MarketService::reference` parcourt dans le carnet mémoire les
+quelques meilleurs ordres de chaque côté jusqu'à N unités
+(`Book::levels_covering`), une passe, jamais le côté entier.
 
 ## Équipement : le meilleur abordable, tous les emplacements (2026-11-14)
 

@@ -1,27 +1,68 @@
 #![forbid(unsafe_code)]
 //! Cheap price reads for the bots (user 2026-11-14: "attention au cpu").
-//! The current price is the median of the last five fills
-//! (`lifescape_market::current_price`): one indexed `LIMIT` read on
-//! `idx_executions_item_clock`, never the whole history of an item. The
-//! 24 h volume is one indexed `SUM`, never the rows.
+//! The current price is the median of the last five fills clamped by
+//! the impact prices of the book (`lifescape_market::current_price`):
+//! one indexed `LIMIT` read on `idx_executions_item_clock`, never the
+//! whole history of an item, and one indexed read of the best open
+//! orders of a side, stopped once the impact size is covered. The 24 h
+//! volume is one indexed `SUM`, never the rows.
 
-use crate::{Error, Store};
+use crate::{Error, OrderSide, Store};
+
+/// Open orders an impact walk reads at most per side: a side whose
+/// first `IMPACT_ROWS` orders hold fewer units than the impact size is
+/// read as thin (the live engine book walks every order; a side of more
+/// than 64 dust orders is the only case where both differ).
+pub const IMPACT_ROWS: i64 = 64;
 
 impl Store {
-    /// Prices of the newest `limit` fills of one item, oldest first (any
-    /// age).
-    pub fn last_prices(&self, item_id: i64, limit: i64) -> Result<Vec<i64>, Error> {
+    /// (price, quantity) of the newest `limit` fills of one item, oldest
+    /// first (any age).
+    pub fn last_fills(&self, item_id: i64, limit: i64) -> Result<Vec<(i64, i64)>, Error> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT price FROM executions WHERE item_id = ?1 \
+            "SELECT price, quantity FROM executions WHERE item_id = ?1 \
              ORDER BY clock DESC, exec_id DESC LIMIT ?2",
         )?;
         let mut rows = statement.query(rusqlite::params![item_id, limit.max(0)])?;
-        let mut prices = Vec::new();
+        let mut fills = Vec::new();
         while let Some(row) = rows.next()? {
-            prices.push(row.get::<_, i64>(0)?);
+            fills.push((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?));
         }
-        prices.reverse();
-        Ok(prices)
+        fills.reverse();
+        Ok(fills)
+    }
+
+    /// Open (non-dormant) levels of one side of an item, best first,
+    /// (price, remaining), until `units` are covered or `IMPACT_ROWS`
+    /// orders were read (indexed on `idx_orders_item_status`, `LIMIT`).
+    pub fn book_levels_covering(&self, item_id: i64, side: OrderSide, units: i64) -> Result<Vec<(i64, i64)>, Error> {
+        let mut statement = self.connection.prepare_cached(match side {
+            OrderSide::Buy => {
+                "SELECT price, remaining FROM orders \
+                 WHERE item_id = ?1 AND status = 'open' AND side = 'buy' AND dormant = 0 AND remaining > 0 \
+                 ORDER BY price DESC, created_clock ASC LIMIT ?2"
+            }
+            OrderSide::Sell => {
+                "SELECT price, remaining FROM orders \
+                 WHERE item_id = ?1 AND status = 'open' AND side = 'sell' AND dormant = 0 AND remaining > 0 \
+                 ORDER BY price ASC, created_clock ASC LIMIT ?2"
+            }
+        })?;
+        let mut rows = statement.query(rusqlite::params![item_id, IMPACT_ROWS])?;
+        let mut levels: Vec<(i64, i64)> = Vec::new();
+        let mut covered = 0;
+        while let Some(row) = rows.next()? {
+            let (price, remaining) = (row.get::<_, i64>(0)?, row.get::<_, i64>(1)?);
+            match levels.last_mut() {
+                Some(last) if last.0 == price => last.1 += remaining,
+                _ => levels.push((price, remaining)),
+            }
+            covered += remaining;
+            if covered >= units.max(1) {
+                break;
+            }
+        }
+        Ok(levels)
     }
 
     /// Units of one item traded in `[from_clock, to_clock)`.
@@ -43,16 +84,34 @@ mod tests {
     }
 
     #[test]
-    fn last_prices_are_the_newest_fills_oldest_first() -> Result<(), crate::Error> {
+    fn last_fills_are_the_newest_fills_oldest_first() -> Result<(), crate::Error> {
         let store = Store::open_in_memory()?;
         store.upsert_item(&crate::Item { item_id: 314, name: "Feather".to_string(), shop_price: 0, alch_value: 0 })?;
         for (clock, price) in [(10, 1), (20, 2), (30, 3), (40, 4), (50, 5), (60, 6), (70, 7)] {
             store.record_execution(&fill(clock, price, 2))?;
         }
-        assert_eq!(store.last_prices(314, 5)?, vec![3, 4, 5, 6, 7]);
-        assert_eq!(store.last_prices(999, 5)?, Vec::<i64>::new());
+        assert_eq!(store.last_fills(314, 5)?, vec![(3, 2), (4, 2), (5, 2), (6, 2), (7, 2)]);
+        assert_eq!(store.last_fills(999, 5)?, Vec::<(i64, i64)>::new());
         assert_eq!(store.volume_between(314, 30, 61)?, 8);
         assert_eq!(store.volume_between(314, 100, 200)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn book_levels_stop_once_the_impact_size_is_covered() -> Result<(), crate::Error> {
+        let store = Store::open_in_memory()?;
+        store.upsert_item(&crate::Item { item_id: 314, name: "Feather".to_string(), shop_price: 0, alch_value: 0 })?;
+        let order = |side, quantity, price, dormant| crate::NewOrder { account: "t01".to_string(), side, item_id: 314, quantity, price, dormant, clock: 1 };
+        store.place_order(&order(crate::OrderSide::Sell, 1, 1, false))?;
+        store.place_order(&order(crate::OrderSide::Sell, 60, 4, false))?;
+        store.place_order(&order(crate::OrderSide::Sell, 30, 4, false))?;
+        store.place_order(&order(crate::OrderSide::Sell, 500, 6, false))?;
+        store.place_order(&order(crate::OrderSide::Sell, 500, 9, false))?;
+        store.place_order(&order(crate::OrderSide::Sell, 900, 2, true))?;
+        store.place_order(&order(crate::OrderSide::Buy, 10, 3, false))?;
+        assert_eq!(store.book_levels_covering(314, crate::OrderSide::Sell, 100)?, vec![(1, 1), (4, 90), (6, 500)], "dormant orders never rest");
+        assert_eq!(store.book_levels_covering(314, crate::OrderSide::Sell, 1)?, vec![(1, 1)]);
+        assert_eq!(store.book_levels_covering(314, crate::OrderSide::Buy, 100)?, vec![(3, 10)], "thin side: all it has");
         Ok(())
     }
 }

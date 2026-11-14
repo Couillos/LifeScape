@@ -88,6 +88,9 @@ mod market_uncross_tests;
 #[cfg(test)]
 #[path = "market_taker_tests.rs"]
 mod market_taker_tests;
+#[cfg(test)]
+#[path = "market_impact_tests.rs"]
+mod market_impact_tests;
 pub mod jobs;
 pub mod holdings;
 pub mod registry;
