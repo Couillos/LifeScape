@@ -134,5 +134,7 @@ des deals, options de filtres), `/api/errors/list?…&limit=` (lignes : heure
 UTC, compte, tâche/nœud/méthode, type, message, signature, x/z/niveau,
 zone, détail, dossier), `/api/errors/dossier/<fichier>`. Collecteur
 `errors_ingest.rs` (table `error_events`, sources task/nav/deal/brain,
-voir `docs/decisions.md`), lignes construites dans `errors_model.rs`,
+voir `docs/decisions.md` ; scan `run/failures` toutes les 30 s
+incrémental : seuls les noms jamais vus sont stat'és, passe complète
+horaire pour les réécritures en place, aucun dossier supprimé), lignes construites dans `errors_model.rs`,
 maths dans `errors_aggregate.rs`. Le spectateur suit `/#<compte>`.
