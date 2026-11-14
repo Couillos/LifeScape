@@ -13,8 +13,8 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
-use crate::kit::cycle::{resolve_keep, run, StepControl};
-use crate::kit::pack::{free_slots, obj_id, pack_total};
+use crate::kit::cycle::{resolve_keep, run, CycleState, StepControl, WantGoal};
+use crate::kit::pack::{banked_usable, free_slots, obj_id, pack_total};
 use crate::kit::produce::{self, Produce, ProduceJob, ProduceSite, ProduceUi};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
@@ -48,12 +48,29 @@ pub fn short_inputs(recipe_inputs: &[(String, i64)], carried: &dyn Fn(&str) -> i
 
 /// Furnace post for a run starting at (x, z, level): the nearest F2P
 /// furnace on that level (Manhattan), Wilderness furnaces only with
-/// `wild`. `None` when the level has none.
+/// `wild`, never Tutorial Island's. `None` when the level has none.
 pub fn furnace_post(x: i64, z: i64, level: i64, allow_wild: bool) -> Option<knowledge::stations::Station> {
     knowledge::stations::stations_of("furnace")
         .into_iter()
-        .filter(|post| post.level == level && (allow_wild || !knowledge::danger::in_wilderness(post.x, post.z, post.level)))
+        .filter(|post| post.level == level && knowledge::obtain::station_open(&post.loc, post.x, post.z) && (allow_wild || !knowledge::danger::in_wilderness(post.x, post.z, post.level)))
         .min_by_key(|post| ((post.x - x).abs() + (post.z - z).abs(), post.x, post.z))
+}
+
+/// Sets one load takes: the pack room (`free` slots plus the inputs
+/// already carried, over the slots of one set), the scarcest input in
+/// pack + bank (no half-load of copper without its tin), and the order's
+/// remaining sets. Never negative.
+pub fn load_sets(room_sets: i64, stock_sets: i64, wanted_sets: i64) -> i64 {
+    room_sets.min(stock_sets).min(wanted_sets).max(0)
+}
+
+/// Sets the order still asks for: the bars left to `--want` over the
+/// recipe's odds (iron fails half its smelts: two ores a bar),
+/// `i64::MAX` without a want on this bar.
+pub fn wanted_sets(goal: Option<WantGoal>, held_bars: u32, bar: u16, odds: f64) -> i64 {
+    let Some(goal) = goal.filter(|goal| goal.obj == bar) else { return i64::MAX };
+    let left = goal.held.saturating_sub(held_bars);
+    (f64::from(left) / odds.clamp(0.01, 1.0)).ceil() as i64
 }
 
 /// Highest F2P bar smeltable at `level` (steel from 30, P1 rentable).
@@ -96,22 +113,35 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let primary = obj_id(bot, primary_name)?;
     let bar = obj_id(bot, bar_name)?;
     let mut bank = nearest_bank(bot)?;
-    let (here_x, here_z, here_level) = (i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level));
-    let post = furnace_post(here_x, here_z, here_level, spec.allow_wild)
+    // The brain's `--site` furnace, else the nearest one to the bot.
+    let (here_x, here_z, here_level) = match spec.site {
+        Some((site_x, site_z, site_level)) => (i64::from(site_x), i64::from(site_z), i64::from(site_level)),
+        None => (i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level)),
+    };
+    let post = furnace_post(here_x, here_z, here_level, spec.allow_wild || spec.site.is_some())
         .ok_or_else(|| ScriptError::Usage(format!("no furnace on level {here_level} (wild={}) from {:?}", spec.allow_wild, bot.position())))?;
     bot.log(&format!("furnace post at ({},{})", post.x, post.z));
+    let odds = knowledge::recipes::success_odds(&recipe.source);
+    let still_wanted = |seen: &Bot, goal: Option<WantGoal>| wanted_sets(goal, pack_total(seen, bar).saturating_add(banked_usable(seen, bar)), bar, odds);
     // Ores carried in are banked with the rest and come back out as
     // balanced sets: a pack full of freshly mined copper would leave no
     // slot for the tin.
-    restock(bot, &bank, &task_keep, &inputs, &recipe.inputs)?;
+    let first_goal = CycleState::begin(bot, &spec).want_goal(bot, &spec);
+    let first_wanted = still_wanted(bot, first_goal);
+    restock(bot, &bank, &task_keep, &inputs, &recipe.inputs, first_wanted)?;
     let outcome = run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
+        let wanted = still_wanted(step_bot, state.want_goal(step_bot, &spec));
         if full_sets(step_bot, &inputs) == 0 {
-            restock(step_bot, &bank, &task_keep, &inputs, &recipe.inputs)?;
+            restock(step_bot, &bank, &task_keep, &inputs, &recipe.inputs, wanted)?;
         }
         // One use per full set: a stray ore past the last set would only
-        // raise the server's "need tin/coal" box.
-        let sets = full_sets(step_bot, &inputs) as u32;
+        // raise the server's "need tin/coal" box; never past the order.
+        let sets = full_sets(step_bot, &inputs).min(wanted).max(0) as u32;
+        if sets == 0 {
+            // `want: 0` would read "all carried": the order is met.
+            return Ok(StepControl::GoalReached);
+        }
         let job = ProduceJob { spec: &SMELT, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
@@ -146,9 +176,9 @@ fn full_sets(bot: &Bot, inputs: &[SetInput]) -> i64 {
 /// Bank, top the pack up, and stop `blocked` on every input short of one
 /// set (copper banked without tin names the tin; the brain files one
 /// obtain per name).
-fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], inputs: &[SetInput], recipe_inputs: &[(String, i64)]) -> Result<(), ScriptError> {
+fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], inputs: &[SetInput], recipe_inputs: &[(String, i64)], wanted: i64) -> Result<(), ScriptError> {
     bank_trip(bot, bank, keep, 0)?;
-    fill_sets(bot, bank, inputs)?;
+    fill_sets(bot, bank, inputs, wanted)?;
     let carried = |name: &str| inputs.iter().find(|input| input.name == name).map(|input| i64::from(pack_total(bot, input.id))).unwrap_or(0);
     let missing = short_inputs(recipe_inputs, &carried);
     if !missing.is_empty() {
@@ -158,15 +188,19 @@ fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], 
 }
 
 /// Top the pack up to balanced sets: what the pack already carries
-/// counts, each input is withdrawn up to `sets × each` (nothing when the
-/// booth is far: the caller reports `blocked`).
-fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[SetInput]) -> Result<(), ScriptError> {
+/// counts, each input is withdrawn up to `sets × each`, sets bounded by
+/// the room, the scarcest input (pack + known bank) and the order
+/// (`load_sets`); nothing when the booth is far (the caller reports
+/// `blocked`).
+fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[SetInput], wanted: i64) -> Result<(), ScriptError> {
     if !crate::kit::withdraw::reach_bank_for(bot, bank, &inputs.iter().map(|input| input.id).collect::<Vec<u16>>())? {
         return Ok(());
     }
     let per_bar: i64 = inputs.iter().map(|input| input.each).sum();
     let carried: i64 = inputs.iter().map(|input| i64::from(pack_total(bot, input.id))).sum();
-    let sets = (free_slots(bot) as i64 + carried) / per_bar.max(1);
+    let room = (free_slots(bot) as i64 + carried) / per_bar.max(1);
+    let stock = inputs.iter().map(|input| i64::from(pack_total(bot, input.id).saturating_add(banked_usable(bot, input.id))) / input.each).min().unwrap_or(0);
+    let sets = load_sets(room, stock, wanted);
     for input in inputs {
         let lacking = sets * input.each - i64::from(pack_total(bot, input.id));
         if lacking > 0 {
@@ -178,7 +212,34 @@ fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[Se
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_for_level, furnace_post, ore_recipe, short_inputs, smelt_recipe, BARS, FURNACES, SMITHING_STAT};
+    use super::{bar_for_level, furnace_post, load_sets, ore_recipe, short_inputs, smelt_recipe, wanted_sets, BARS, FURNACES, SMITHING_STAT};
+
+    /// A load is balanced and bounded: the room, the scarcest input in
+    /// pack + bank (20 copper and 5 tin load 5 sets, never 14 copper of
+    /// which 9 smelt nothing) and the order's remaining sets.
+    #[test]
+    fn a_load_is_bounded_by_room_stock_and_order() {
+        assert_eq!(load_sets(14, 5, i64::MAX), 5, "tin is the scarce input");
+        assert_eq!(load_sets(14, 100, i64::MAX), 14, "the pack is the bound");
+        assert_eq!(load_sets(14, 100, 3), 3, "--want 3 bars loads 3 sets");
+        assert_eq!(load_sets(9, 0, 5), 0, "nothing banked loads nothing");
+    }
+
+    /// `--want` sets over the server odds: iron fails half its smelts, so
+    /// 5 iron bars still due take 10 ores; certain bars take one set each;
+    /// a want on another object never caps the load.
+    #[test]
+    fn wanted_sets_follow_the_odds() {
+        use crate::kit::cycle::WantGoal;
+        let bar = 2351;
+        let goal = Some(WantGoal { obj: bar, held: 15 });
+        assert_eq!(wanted_sets(goal, 10, bar, 0.5), 10, "5 iron bars due: 10 ores");
+        assert_eq!(wanted_sets(goal, 10, bar, 1.0), 5);
+        assert_eq!(wanted_sets(goal, 15, bar, 1.0), 0, "met");
+        assert_eq!(wanted_sets(goal, 20, bar, 1.0), 0, "past it");
+        assert_eq!(wanted_sets(Some(WantGoal { obj: 1, held: 15 }), 0, bar, 1.0), i64::MAX, "want on another object");
+        assert_eq!(wanted_sets(None, 0, bar, 0.5), i64::MAX, "no want");
+    }
 
     /// Live 2026-11-13 (paul_rhodes, Falador; bh99tw2f, Al Kharid): 200
     /// copper banked, no tin; the run withdrew copper alone and used it on

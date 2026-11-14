@@ -84,18 +84,25 @@ fn open_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16]) -> R
 
 /// Withdraw exact counts of several items in one booth visit (spell loads:
 /// runes and targets). `bot.bank_withdraw` presses 1/5/10/all, honours
-/// market locks and ends quietly on a full pack. Connection and operator
-/// stops abort typed; any other refusal is logged and the caller judges
-/// the pack. Returns the units that came out.
+/// market locks and ends quietly on a full pack. A banknote id (`cert_`)
+/// comes out of its base stack in note mode (`bank_withdraw_noted`).
+/// Connection and operator stops abort typed; any other refusal is
+/// logged and the caller judges the pack. Returns the units that came out.
 pub fn bank_withdraw_counts(bot: &mut Bot, bank: &knowledge::banks::Bank, wants: &[(u16, u32)]) -> Result<u32, ScriptError> {
     let wants: Vec<(u16, u32)> = wants.iter().copied().filter(|(_, count)| *count > 0).collect();
     let ids: Vec<u16> = wants.iter().map(|(id, _)| *id).collect();
-    if ids.is_empty() || !open_bank_for(bot, bank, &ids)? {
+    // The bank holds base objects only: the walk/open check reads those.
+    let banked_ids: Vec<u16> = ids.iter().map(|id| crate::market_lots::note_base(*id).unwrap_or(*id)).collect();
+    if ids.is_empty() || !open_bank_for(bot, bank, &banked_ids)? {
         return Ok(0);
     }
     let before: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
     for (id, count) in wants {
-        match bot.bank_withdraw(id, count, 50) {
+        let pulled = match crate::market_lots::note_base(id) {
+            Some(base) => bot.bank_withdraw_noted(base, id, count, 50),
+            None => bot.bank_withdraw(id, count, 50),
+        };
+        match pulled {
             Ok(_) => {}
             Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => return Err(ScriptError::Sdk(error)),
             Err(other) => bot.log(&format!("bank withdraw of {} x{count}: {other}", crate::kit::pack::obj_label(bot, id))),

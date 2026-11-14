@@ -159,6 +159,12 @@ que si le sac porte le péage (`travel_custom::paid_allowed`, 10 pièces,
 la clôture (golden `peage_detour`) ou répond `PaidOnly coins:10`.
 Avant : bct5rxpg (ground_pickup, 0 pièce) cliquait la porte 2882 puis
 2883, « Yes, ok. », rien, deux `DoorDidNotOpen`.
+Après le choix « Yes, ok. », le drain attend la réponse serveur
+(`toll_pick_answered` : dialogue fermé ou autre chose que le choix
+dépensé) avant de lire la page : le choix encore affiché au tick du clic
+passait pour « un nouveau choix », le `continue` du `chatplayer` ne
+partait jamais et la porte restait close (2026-11-14, admin, 10 pièces
+au sac : quatre `DoorDidNotOpen` ; après : deux `continue`, porte ok).
 
 Poches scellées (`nav/src/pocket.rs`) : une destination marchable mais
 emmurée (coin entre table, tabouret et murs, bande derrière une

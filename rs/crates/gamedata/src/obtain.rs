@@ -183,10 +183,20 @@ fn npc_sites_by_name(name: &str) -> Vec<(i64, i64, i64)> {
     crate::npcs_by_name(name).iter().flat_map(|npc| npc_sites(npc.npc_id)).collect()
 }
 
+/// True for a station any F2P bot may work: never Tutorial Island (its
+/// mine furnace and anvils, `tutorial/util.rs2` `in_tutorial_island`:
+/// x 3053..=3156 z 3056..=3136, mine x 3072..=3118 z 9492..=9535, out of
+/// reach once the tutorial ends), never Doric's anvils (`smithing.rs2`:
+/// "You must complete Doric's Quest", no quest gate rides a site).
+pub fn station_open(loc: &str, x: i64, z: i64) -> bool {
+    let tutorial = ((3053..=3156).contains(&x) && (3056..=3136).contains(&z)) || ((3072..=3118).contains(&x) && (9492..=9535).contains(&z));
+    !tutorial && loc != "doric_anvil"
+}
+
 fn station_sites(kind: &str) -> Vec<(i64, i64, i64)> {
     crate::stations::stations_of(kind)
         .iter()
-        .filter(|station| crate::free_zones::is_free(station.x, station.z))
+        .filter(|station| crate::free_zones::is_free(station.x, station.z) && station_open(&station.loc, station.x, station.z))
         .map(|station| (station.x, station.z, station.level))
         .collect()
 }
