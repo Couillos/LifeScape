@@ -178,6 +178,22 @@ pub fn surface_of(x: i64, z: i64, level: i64) -> (i64, i64, i64) {
     (x, z, level)
 }
 
+/// Underground shop floors the nav routes: the Dwarven Mine below
+/// Falador's trapdoor (`trapdoor_open_357` (3018, 3450) → (3018, 9850),
+/// offline `orchestrator route 2965 3380 0 2998 9844 0`: 3 segments,
+/// cost 257). Its keepers: Nurmof's pickaxes (2998, 9844), the only F2P
+/// seller of iron to rune pickaxes; Drogo (3036, 9846); the dwarven
+/// general store (2993, 9828). Only a keeper's purchase walks there
+/// (`shopbuy` follows the nav route); gathers and drop farms still
+/// refuse the underground (`Gate::Underground` stays on these tiles).
+const ROUTED_SHOP_FLOORS: [((i64, i64), (i64, i64)); 1] = [((2985, 3045), (9820, 9855))];
+
+/// True when an underground shop keeper at (x, z, level) is reachable
+/// by the nav (`ROUTED_SHOP_FLOORS`).
+pub fn shop_floor_routed(x: i64, z: i64, level: i64) -> bool {
+    level == 0 && ROUTED_SHOP_FLOORS.iter().any(|((west, east), (south, north))| (*west..=*east).contains(&x) && (*south..=*north).contains(&z))
+}
+
 /// True when no bot can ever pass the gate today (no nav edge, no model).
 pub fn impassable(gate: &Gate) -> bool {
     match gate {
@@ -192,6 +208,19 @@ pub fn impassable(gate: &Gate) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The Dwarven Mine keepers are routed shop floors; the Mining Guild,
+    /// other dungeons and the surface are not.
+    #[test]
+    fn dwarven_mine_keepers_are_routed() {
+        use super::shop_floor_routed;
+        for (x, z) in [(2998, 9844), (3036, 9846), (2993, 9828)] {
+            assert!(shop_floor_routed(x, z, 0), "({x},{z})");
+        }
+        assert!(!shop_floor_routed(3040, 9740, 0), "the Mining Guild keeps its gate");
+        assert!(!shop_floor_routed(3100, 9900, 0), "another dungeon");
+        assert!(!shop_floor_routed(2998, 3444, 0), "surface");
+    }
+
     #[test]
     fn champions_guild_is_quest_point_gated() {
         let gates = super::gates_at(3197, 3355, 0);

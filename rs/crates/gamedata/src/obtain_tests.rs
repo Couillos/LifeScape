@@ -217,3 +217,23 @@ fn station_sites_are_reachable_f2p_posts() {
     assert!(!smith.sites.iter().any(|site| site.1 > 9000 && (3072..=3118).contains(&site.0)), "no Tutorial Island anvil: {:?}", smith.sites);
     assert!(super::station_open("anvil", 3188, 3421) && !super::station_open("doric_anvil", 2950, 3451) && !super::station_open("furnace2", 3081, 9496));
 }
+
+/// User 2026-11-14 ("personne n'a mieux qu'une bronze pickaxe"): no F2P
+/// recipe smiths a pickaxe in rev 274 (`smithing.inv` lists axes only)
+/// and no F2P monster drops one, so every upgrade pickaxe is a merchant
+/// purchase (Nurmof's `pickaxeshop`, Dwarven Mine) at the server price
+/// (`calc_shop_value`: cost × sell multiplier 1000 / 1000). Woodcutting
+/// axes are smithable: they stay player trade.
+#[test]
+fn upgrade_pickaxes_come_from_nurmof_axes_from_players() {
+    use super::{merchant_price, merchant_route};
+    for pickaxe in ["iron_pickaxe", "steel_pickaxe", "mithril_pickaxe", "adamant_pickaxe", "rune_pickaxe"] {
+        assert!(merchant_route(pickaxe), "{pickaxe}: shop only");
+        let cost = crate::objs_by_name(pickaxe)[0].price;
+        assert_eq!(merchant_price(pickaxe), Some(cost.max(1)), "{pickaxe}: Nurmof sells at cost");
+    }
+    for axe in ["iron_axe", "steel_axe", "mithril_axe", "adamant_axe", "rune_axe"] {
+        assert!(!merchant_route(axe), "{axe} is smithable: market, never the shop");
+    }
+    assert_eq!(merchant_price("dragon_platebody"), None, "no F2P keeper stocks it");
+}

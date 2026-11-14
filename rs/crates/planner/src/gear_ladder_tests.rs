@@ -229,3 +229,31 @@ fn melee_equip_goals_leave_the_set_to_the_ladder() {
     assert_eq!(equip.deps, vec!["n2".to_string(), "n3".to_string()]);
     assert!(withdraw_melee_set(&mut life).is_empty(), "idempotent");
 }
+
+/// User 2026-11-14 (no bot past a bronze pickaxe): a pickaxe step is a
+/// shop purchase at Nurmof (Dwarven Mine), mapped with its shop and site,
+/// and the step is a gear sub-goal (its failure bans no skill).
+#[test]
+fn a_pickaxe_step_buys_at_nurmof() {
+    let mut life = life_with(Vec::new());
+    let ids = insert_gear_step(&mut life, Some("steel_pickaxe"), "melee");
+    let obtain = life.nodes.iter().position(|node| node.id == ids[0]).expect("obtain");
+    let methods: Vec<&str> = life.nodes[obtain].alternatives.iter().map(|alt| alt.method.as_str()).collect();
+    assert_eq!(methods, vec!["shop:buy"], "only Nurmof sells it");
+    assert!(is_gear_obtain(&life, obtain));
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.coin_share_pct = Some(GEAR_SHARE_PCT);
+    ctx.coins = 2_000;
+    ctx.shop_price = 500;
+    ctx.combat = 3;
+    ctx.position = Some((2965, 3380, 0));
+    let mut node = life.nodes[obtain].clone();
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("shop:buy"), "{:?}", node.status);
+    assert_eq!(node.site, Some((2998, 9844, 0)), "Nurmof's spawn");
+    let (script, args) = crate::mapping::map_method("shop:buy", &node, None).expect("shop maps");
+    assert_eq!(script, "market");
+    let joined = args.join(" ");
+    assert!(joined.starts_with("shopbuy steel_pickaxe 1"), "{joined}");
+    assert!(joined.contains("--shop pickaxeshop") && joined.contains("--site 2998,9844,0"), "{joined}");
+}

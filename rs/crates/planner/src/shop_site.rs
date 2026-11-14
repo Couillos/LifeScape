@@ -6,7 +6,9 @@
 //!
 //! Rules: a shop whose quest the bot has not finished is out (Oziach
 //! before Dragon Slayer); a keeper in the Wilderness, underground or behind
-//! a gate the bot does not pass is out (`gamedata::access`); a keeper whose
+//! a gate the bot does not pass is out (`gamedata::access`), except the
+//! underground floors the nav routes (`shop_floor_routed`: the Dwarven
+//! Mine, Nurmof's pickaxes, 2026-11-14); a keeper whose
 //! tile a hunter covers at the bot's combat level is out; across the
 //! Al Kharid fence only with the fare covered. Nearest first.
 
@@ -32,7 +34,11 @@ pub fn pick_shop(item: &str, ctx: &ReadyCtx) -> Option<(String, (i64, i64, i64))
         }
         for site in &way.sites {
             let (x, z, level) = *site;
-            if !lifescape_gamedata::access::gates_at(x, z, level).iter().all(|gate| pass.opens(gate)) {
+            // An underground keeper the nav routes (the Dwarven Mine:
+            // Nurmof's pickaxes) is a walk, not a refusal.
+            let routed = lifescape_gamedata::access::shop_floor_routed(x, z, level);
+            let passes = |gate: &lifescape_gamedata::access::Gate| pass.opens(gate) || (routed && *gate == lifescape_gamedata::access::Gate::Underground);
+            if !lifescape_gamedata::access::gates_at(x, z, level).iter().all(passes) {
                 continue;
             }
             if lifescape_gamedata::danger::required_combat_at(x, z, level) > ctx.combat {
@@ -74,6 +80,21 @@ mod tests {
         assert!(!lifescape_gamedata::danger::in_wilderness(site.0, site.1, site.2));
         assert_eq!(shop_at("shears", site).as_deref(), Some(shop.as_str()));
         assert!(pick_shop("no_such_item", &ctx).is_none());
+    }
+
+    /// User 2026-11-14: upgrade pickaxes are Nurmof's alone (Dwarven
+    /// Mine, under Falador's trapdoor): a fresh bot from Falador buys
+    /// there, the mapping names `pickaxeshop` back from the site.
+    #[test]
+    fn pickaxes_come_from_nurmof() {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.combat = 3;
+        ctx.position = Some((2965, 3380, 0));
+        for pickaxe in ["iron_pickaxe", "steel_pickaxe", "mithril_pickaxe", "adamant_pickaxe", "rune_pickaxe"] {
+            let (shop, site) = pick_shop(pickaxe, &ctx).expect("Nurmof sells it");
+            assert_eq!(shop, "pickaxeshop", "{pickaxe} at {site:?}");
+            assert_eq!(shop_at(pickaxe, site).as_deref(), Some("pickaxeshop"));
+        }
     }
 
     /// Oziach sells the rune platebody only after Dragon Slayer.

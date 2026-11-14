@@ -27,11 +27,17 @@ pub fn shop_stock_keeper(bot: &Bot, obj_name: &str) -> Option<(String, (i32, i32
 }
 
 /// Keepers a buy may walk to on its own: never in the Wilderness nor
-/// underground (z ≥ 6400), never across the toll fence `fence` (the
-/// brain passes `toll` when it funded the gate).
+/// underground (z ≥ 6400) except on a floor the nav routes
+/// (`access::shop_floor_routed`: the Dwarven Mine, Nurmof's pickaxes),
+/// never across the toll fence `fence` (the brain passes `toll` when it
+/// funded the gate).
 pub fn reachable_keeper(spawn: (i64, i64, i64), bot: (i32, i32), fence: Option<i32>) -> bool {
     let (x, z, level) = spawn;
-    !crate::kit::danger::in_wilderness(x, z, level) && z < 6400 && !crate::kit::bans::across_toll(bot, (x as i32, z as i32), fence)
+    // The Wilderness test reads surface rows only (underground rows sit
+    // 6400 above their surface, `gamedata::access::gates_at`).
+    let surface = z < 6400 && !crate::kit::danger::in_wilderness(x, z, level);
+    let open = surface || knowledge::access::shop_floor_routed(x, z, level);
+    open && !crate::kit::bans::across_toll(bot, (x as i32, z as i32), fence)
 }
 
 /// `shop_stock_keeper` with the toll fence line (`None` = unfenced).
@@ -489,6 +495,9 @@ mod tests {
         assert!(super::reachable_keeper((3315, 3180, 0), (3222, 3218), None), "toll paid: fence lifted");
         assert!(!super::reachable_keeper((3080, 3930, 0), (3222, 3218), None), "Wilderness never");
         assert!(!super::reachable_keeper((3110, 9850, 0), (3222, 3218), None), "underground never");
+        // 2026-11-14: Nurmof (the only F2P pickaxe upgrade seller) stands
+        // on the Dwarven Mine floor the nav routes (Falador trapdoor).
+        assert!(super::reachable_keeper((2998, 9844, 0), (3018, 9850), None), "routed shop floor");
     }
 
     /// PRD3 D-A: a producible object (smithed bronze axe) is never bought

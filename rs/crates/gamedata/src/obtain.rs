@@ -534,6 +534,21 @@ pub fn merchant_route(item: &str) -> bool {
     merchant_buy_allowed(item) && ways(item).iter().any(|way| way.kind == WayKind::Shop)
 }
 
+/// Cheapest F2P NPC-shop price of `item` at base stock, the server
+/// formula (`shop.rs2` `calc_shop_value`: cost × max(100, sell
+/// multiplier) / 1000, at least 1). `None` when no F2P keeper stocks it:
+/// never a guessed price. Understocked shops charge more; the buy itself
+/// still checks the coins the trade asks.
+pub fn merchant_price(item: &str) -> Option<i64> {
+    let base = crate::objs_by_name(item).into_iter().next().map(|obj| obj.price)?;
+    crate::shops::all_shops()
+        .into_iter()
+        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == item))
+        .flat_map(|shop| shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)))
+        .map(|multiplier| (base * multiplier.max(100) / 1000).max(1))
+        .min()
+}
+
 pub fn merchant_buy_allowed(item: &str) -> bool {
     crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
         && !producible_f2p(item)
