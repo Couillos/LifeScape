@@ -441,13 +441,29 @@ fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>
     QUEUED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
-fn inbox() -> &'static std::sync::Mutex<
-    Option<std::sync::mpsc::SyncSender<(String, Option<Value>)>>,
-> {
-    static INBOX: std::sync::OnceLock<
-        std::sync::Mutex<Option<std::sync::mpsc::SyncSender<(String, Option<Value>)>>>,
-    > = std::sync::OnceLock::new();
+/// Brain threads (live 2026-11-14, 60 bots): one serial thread spent
+/// 56 s of every 60 s waiting (worker launch round trips, life saves)
+/// and reached each bot once every ~80 s, so most sat idle. Accounts
+/// are sharded by a stable hash: one account always lands on the same
+/// thread (its reports and ticks keep their order), different accounts
+/// decide in parallel; shared tables are behind their own locks.
+const BRAIN_SHARDS: usize = 4;
+
+type BrainSender = std::sync::mpsc::SyncSender<(String, Option<Value>)>;
+
+fn inbox() -> &'static std::sync::Mutex<Option<Vec<BrainSender>>> {
+    static INBOX: std::sync::OnceLock<std::sync::Mutex<Option<Vec<BrainSender>>>> = std::sync::OnceLock::new();
     INBOX.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Stable shard of an account (FNV-1a): same account, same thread.
+fn shard_of(account: &str, shards: usize) -> usize {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in account.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash % shards.max(1) as u64) as usize
 }
 
 fn ensure_brain(orch: &Arc<Orchestrator>) {
@@ -457,43 +473,51 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
             return;
         }
     }
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Option<Value>)>(INBOX_CAPACITY);
+    let mut senders = Vec::with_capacity(BRAIN_SHARDS);
+    let mut receivers = Vec::with_capacity(BRAIN_SHARDS);
+    for _ in 0..BRAIN_SHARDS {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, Option<Value>)>(INBOX_CAPACITY);
+        senders.push(sender);
+        receivers.push(receiver);
+    }
     {
         let mut slot = inbox().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *slot = Some(sender);
+        *slot = Some(senders);
     }
-    let orch = orch.clone();
-    std::thread::Builder::new()
-        .name("brain-tick".to_string())
-        .spawn(move || {
-            crate::cpu_profile::mark_brain_thread();
-            while let Ok((account, report)) = receiver.recv() {
-                if report.is_none() {
-                    queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
-                }
-                let job = orch.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&account).cloned();
-                let Some(job) = job else {
-                    continue;
-                };
-                if let Some(report) = report {
-                    // Rates first (L4 store, raw rows + snapshot buckets),
-                    // then the life graph. Both are bounded file/store
-                    // writes on the brain thread, never the supervisor.
-                    {
-                        let _phase = crate::cpu_profile::phase("tick.ingest_report");
-                        if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                            crate::logln!("job {account}: rates ingest failed: {error}");
-                        }
+    for (index, receiver) in receivers.into_iter().enumerate() {
+        let orch = orch.clone();
+        std::thread::Builder::new()
+            .name(format!("brain-tick-{index}"))
+            .spawn(move || {
+                crate::cpu_profile::mark_brain_thread();
+                while let Ok((account, report)) = receiver.recv() {
+                    if report.is_none() {
+                        queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
                     }
-                    crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
-                    let _phase = crate::cpu_profile::phase("tick.handle_report");
-                    handle_report(&orch, &job, &report);
+                    let job = orch.jobs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&account).cloned();
+                    let Some(job) = job else {
+                        continue;
+                    };
+                    if let Some(report) = report {
+                        // Rates first (L4 store, raw rows + snapshot buckets),
+                        // then the life graph. Both are bounded file/store
+                        // writes on the brain thread, never the supervisor.
+                        {
+                            let _phase = crate::cpu_profile::phase("tick.ingest_report");
+                            if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
+                                crate::logln!("job {account}: rates ingest failed: {error}");
+                            }
+                        }
+                        crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
+                        let _phase = crate::cpu_profile::phase("tick.handle_report");
+                        handle_report(&orch, &job, &report);
+                    }
+                    let _phase = crate::cpu_profile::phase("tick.maybe_launch");
+                    crate::brain_launch::maybe_launch(&orch, &job);
                 }
-                let _phase = crate::cpu_profile::phase("tick.maybe_launch");
-                crate::brain_launch::maybe_launch(&orch, &job);
-            }
-        })
-        .expect("brain thread spawns");
+            })
+            .expect("brain thread spawns");
+    }
 }
 
 /// Supervisor entry: enqueue only, never block. The brain thread folds
@@ -522,7 +546,7 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
-        .map(|sender| sender.try_send((job.account.clone(), report)))
+        .map(|senders| senders[shard_of(&job.account, senders.len())].try_send((job.account.clone(), report)))
         .is_some_and(|sent| sent.is_ok());
     if !queued && !had_report {
         queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&job.account);
