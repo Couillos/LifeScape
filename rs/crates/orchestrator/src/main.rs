@@ -26,6 +26,7 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
             object(vec![("ok", Value::Bool(false)), ("error", str_value(&error.to_string()))])
         })
     };
+    lifescape_orchestrator::cpu_profile::label_request(&request_kind(&request));
     let start = std::time::Instant::now();
     let reply = if request.as_obj().is_some() && request.get("ok").is_null() {
         match request.get("type").as_str() {
@@ -43,6 +44,17 @@ fn serve_client(orch: &Arc<Orchestrator>, stream: UnixStream) {
     let mut buf = json::stringify(&reply);
     buf.push('\n');
     let _ = (&stream).write_all(buf.as_bytes());
+}
+
+/// CPU-profile label: `push:<type>` for one-shot worker pushes,
+/// `cmd:market:<op>` for market ops over the CLI socket, `cmd:<cmd>`.
+fn request_kind(request: &Value) -> String {
+    match (request.get("type").as_str(), request.get("cmd").as_str()) {
+        (Some(kind @ ("snapshot" | "event")), _) => format!("push:{kind}"),
+        (_, Some("market")) => format!("cmd:market:{}", request.get("op").as_str().unwrap_or("?")),
+        (_, Some(command)) => format!("cmd:{command}"),
+        _ => "cmd:?".to_string(),
+    }
 }
 
 // "open"/"redeploy" spawn supervisors, so they need the Arc; every other command

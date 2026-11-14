@@ -324,7 +324,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // Withdrawn lots stay out this pass (still in `selling`): their stock
     // is banked again and the next pass lists a demand lot.
     let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
-    let costs = crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account);
+    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account));
     let locks = crate::brain_locks::locked_items(&job.account);
     let free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
     // The `bid_response` make cost caps every reserve (one book and rates

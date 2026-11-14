@@ -43,7 +43,13 @@ pub fn serve_pooled(
                     guard.recv().map_err(|_| ()).map(|stream| stream)
                 };
                 match stream {
-                    Ok(stream) => worker_serve(stream),
+                    Ok(stream) => {
+                        // CPU attribution: the handler names the request
+                        // (`cpu_profile::label_request`), the pool times it.
+                        let probe = crate::cpu_profile::Probe::start();
+                        worker_serve(stream);
+                        crate::cpu_profile::pool().finish(probe, &crate::cpu_profile::take_label());
+                    }
                     Err(()) => return,
                 }
             })

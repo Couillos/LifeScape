@@ -211,6 +211,7 @@ fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState
 /// exceeds it (`brain_reserve`, 2026-11-14). Items it cannot make now
 /// are absent. One book read and one rates read for the whole pass.
 pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)]) -> HashMap<String, f64> {
+    let _phase = crate::cpu_profile::phase("bids.production_costs");
     if items.is_empty() || crate::market_service::shared().is_none() {
         return HashMap::new();
     }
@@ -243,6 +244,7 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
 /// The bid goal for this life on a draw (live book, rates, own state),
 /// logged with its numbers; `None` when no bid beats the ambition.
 pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
+    let _phase = crate::cpu_profile::phase("bids.goal_for");
     if life.profile.ironman || crate::market_service::shared().is_none() {
         return None;
     }

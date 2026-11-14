@@ -114,6 +114,7 @@ pub mod verify_reject;
 pub mod daemon;
 pub mod daemon_watch;
 pub mod daemon_conn;
+pub mod cpu_profile;
 pub mod daemon_close;
 pub mod supervise;
 pub mod session;

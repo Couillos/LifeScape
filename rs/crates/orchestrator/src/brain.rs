@@ -40,11 +40,13 @@ pub fn life_path(account: &str) -> std::path::PathBuf {
 /// Load one life file; `None` means no autopilot for this account (not
 /// an error: manual bots have no file).
 pub fn load_life(account: &str) -> Option<Life> {
+    let _phase = crate::cpu_profile::phase("load_life");
     let path = life_path(account);
     let stamp = file_stamp(&path)?;
     if let Some(life) = cached_life(account, stamp) {
         return Some(life);
     }
+    let _miss = crate::cpu_profile::phase("load_life.parse");
     let text = std::fs::read_to_string(&path).ok()?;
     let value = lifescape_json::parse(&text).ok()?;
     let life = life_from_value(&value)?;
@@ -53,6 +55,7 @@ pub fn load_life(account: &str) -> Option<Life> {
 }
 
 pub fn save_life(life: &Life) -> Result<(), String> {
+    let _phase = crate::cpu_profile::phase("save_life");
     let path = life_path(&life.account);
     crate::paths::write_json(&path, &life_to_value(life)).map_err(|error| format!("brain save {}: {error}", life.account))?;
     if let Some(stamp) = file_stamp(&path) {
@@ -380,6 +383,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
     std::thread::Builder::new()
         .name("brain-tick".to_string())
         .spawn(move || {
+            crate::cpu_profile::mark_brain_thread();
             while let Ok((account, report)) = receiver.recv() {
                 if report.is_none() {
                     queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
@@ -392,12 +396,17 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
                     // Rates first (L4 store, raw rows + snapshot buckets),
                     // then the life graph. Both are bounded file/store
                     // writes on the brain thread, never the supervisor.
-                    if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                        crate::logln!("job {account}: rates ingest failed: {error}");
+                    {
+                        let _phase = crate::cpu_profile::phase("tick.ingest_report");
+                        if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
+                            crate::logln!("job {account}: rates ingest failed: {error}");
+                        }
                     }
                     crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
+                    let _phase = crate::cpu_profile::phase("tick.handle_report");
                     handle_report(&orch, &job, &report);
                 }
+                let _phase = crate::cpu_profile::phase("tick.maybe_launch");
                 crate::brain_launch::maybe_launch(&orch, &job);
             }
         })

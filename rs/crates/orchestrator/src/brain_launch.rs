@@ -82,22 +82,22 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     let mut dirty = false;
     // Every life holds an ambition (2026-11-13): the first pass that
     // meets one without assigns the whole fleet (coverage first).
-    if crate::brain_ambition::ensure(orch, &mut life, &live) {
+    if crate::cpu_profile::timed("ambition.ensure", || crate::brain_ambition::ensure(orch, &mut life, &live)) {
         dirty = true;
     }
     // Coverage repair (review 2026-11-13): an uncovered group is logged
     // and a redundant bot past the change throttle takes it.
-    if crate::brain_ambition::coverage_pass(&mut life, &live) {
+    if crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
         dirty = true;
     }
     // Space pressure (L8) precedes the terminal check: a full bank needs
     // its janitor even when the graph is done.
-    if maybe_insert_cleanup(&mut life, bank_types(job)) {
+    if crate::cpu_profile::timed("cleanup_check", || maybe_insert_cleanup(&mut life, bank_types(job))) {
         let inserted = life.nodes.last().map(|node| node.id.clone()).unwrap_or_default();
         crate::logln!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
         dirty = true;
     }
-    for change in lifescape_planner::normalize(&mut life) {
+    for change in crate::cpu_profile::timed("normalize", || lifescape_planner::normalize(&mut life)) {
         crate::logln!("brain {}: normalize {change}", job.account);
         dirty = true;
     }
@@ -148,7 +148,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     }
     // Tutorial gate: on the island only the tutorial runs; no position
     // yet means no launch at all.
-    match tutorial_gate(&mut life, &live) {
+    match crate::cpu_profile::timed("tutorial_gate", || tutorial_gate(&mut life, &live)) {
         TutorialGate::Launch(at) => {
             if !crate::registry::script_known("tutorial") {
                 fail_no_script(&mut life, at, "tutorial");
@@ -162,7 +162,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             note_launch(&job.account);
             save_or_log(&life);
             let args = vec![lifescape_json::str_value("--node"), lifescape_json::str_value(&id)];
-            let reply = orch.run_job(&job.account, "tutorial", &args);
+            let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, "tutorial", &args));
             if reply.get("ok").as_bool() != Some(true) {
                 crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
             }
@@ -196,23 +196,23 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     }
     // PRD3 lot 3: idle bots list their tradeable surplus on the market
     // (rate-limited, never an NPC sale).
-    crate::brain_sales::maybe_list_surplus(job, &life);
+    crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, &life));
     // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
-    crate::brain_wishlist::maybe_bid_wishes(job, &life);
+    crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, &life));
     // Equipment ladder (2026-11-13): the next tier as a graph step, or a
     // standing bid that waits for a producer.
-    if crate::brain_gear::gear_pass(job, &mut life, &live) {
+    if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
         dirty = true;
     }
     // Market buys parked on the book settle every pass; the worker never
     // waits for them (no idle bot, 2026-11-13).
-    let (settled, waiting) = crate::brain_filler::settle_parked(job, &mut life);
+    let (settled, waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut life));
     if settled {
         dirty = true;
     }
     // A reached goal over older goals' abandoned nodes is Finished, never
     // a stuck spell (`brain_stuck::effective_state`).
-    match crate::brain_stuck::effective_state(&life, &live) {
+    match crate::cpu_profile::timed("stuck.effective_state", || crate::brain_stuck::effective_state(&life, &live)) {
         GraphState::Launchable => {}
         GraphState::Running(_) => {
             if dirty {
@@ -226,11 +226,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         GraphState::Stuck { abandoned } => {
             // Before any ban (user decision 2026-11-13): an item on the
             // failed path the market can sell is bought instead.
-            if crate::brain_rescue::market_rescue(job, &mut life, &live) {
+            if crate::cpu_profile::timed("rescue.market", || crate::brain_rescue::market_rescue(job, &mut life, &live)) {
                 save_or_log(&life);
                 return;
             }
-            if crate::brain_stuck::on_stuck(&mut life, &live, &abandoned) || dirty {
+            if crate::cpu_profile::timed("stuck.on_stuck", || crate::brain_stuck::on_stuck(&mut life, &live, &abandoned)) || dirty {
                 save_or_log(&life);
             }
             return;
@@ -242,7 +242,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             if closing {
                 crate::brain_succession::close_goal(&mut life, &live, false);
             }
-            let (drawn, changed) = crate::brain_succession::redraw(&mut life, &live);
+            let (drawn, changed) = crate::cpu_profile::timed("succession.redraw", || crate::brain_succession::redraw(&mut life, &live));
             match drawn {
                 Some(label) => {
                     crate::logln!("brain {}: goal done -> next goal {label}", job.account);
@@ -263,8 +263,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // The gear sub-goal first, then the goal's next node; the tutorial
     // only ever starts through its gate. Parked market waits are skipped:
     // with nothing else ready, a short money window fills the wait.
-    let Some(position) = lifescape_planner::next_ready_except(&life, &waiting) else {
-        if !waiting.is_empty() && crate::brain_filler::launch_filler(orch, job, &mut life, &live, &waiting) {
+    let Some(position) = crate::cpu_profile::timed("next_ready", || lifescape_planner::next_ready_except(&life, &waiting)) else {
+        if !waiting.is_empty() && crate::cpu_profile::timed("filler.launch", || crate::brain_filler::launch_filler(orch, job, &mut life, &live, &waiting)) {
             return;
         }
         if dirty {
@@ -287,11 +287,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Quests the bot finished (engine save + done quest nodes): a quest
     // node already complete closes, a method behind a missing quest never
     // launches (the resolver plans the quest first).
-    let quests_done = crate::brain_rescue::quests_done(&life);
+    let quests_done = crate::cpu_profile::timed("rescue.quests_done", || crate::brain_rescue::quests_done(&life));
     if crate::brain_rescue::close_done_quest(&mut life, position, &quests_done) {
         save_or_log(&life);
         return;
     }
+    let ctx_phase = crate::cpu_profile::phase("ctx.build");
     let mut ctx = {
         let node = life.nodes[position].clone();
         ready_ctx(&life, &node)
@@ -322,7 +323,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
         Some((part(1)?, part(2)?, part(0)?))
     });
-    crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live);
+    crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
+    drop(ctx_phase);
     // An obtain the holdings already meet closes without a launch
     // (positive proof: pack, bank, worn), like a met coin target below.
     if let NodeKind::ObtainItems { item, count } = &life.nodes[position].kind {
@@ -367,7 +369,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     }
     {
         let node = &mut life.nodes[position];
-        resolve_ready(node, &ctx);
+        crate::cpu_profile::timed("resolve", || resolve_ready(node, &ctx));
         crate::logln!("brain {}: resolve {} -> {:?} (ctx coins={})", job.account, node.id, node.method, ctx.coins);
     }
     // A money or coin node never works a banned skill (D-SIDE: a side
@@ -468,7 +470,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // bid on the daemon market and the node waits for the fill.
     if method == "market:buy" {
         let id = node_snapshot.id.clone();
-        match crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx) {
+        match crate::cpu_profile::timed("market.obtain_bid", || crate::brain_market::place_obtain_bid(job, &node_snapshot, &ctx)) {
             Ok(_) => {
                 // Parked, not locked (no idle bot, 2026-11-13): the bid
                 // rests while the worker runs the next node or a filler.
@@ -494,7 +496,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     };
     let mut args = args;
     if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
-        crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx);
+        crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx));
     }
     // D52: flip and cleanup never sell worn, work tools or graph items.
     // The keep list carries the tools the bot works with
@@ -547,7 +549,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     save_or_log(&life);
     // Blocking worker RPC is fine here: this is the brain thread, not
     // the supervisor. A refused launch re-queues via crash recovery.
-    let reply = orch.run_job(&job.account, &script, &values);
+    let reply = crate::cpu_profile::timed("launch.run_job", || orch.run_job(&job.account, &script, &values));
     if reply.get("ok").as_bool() != Some(true) {
         crate::logln!("brain {}: launch refused: {}", job.account, reply.get("error").as_str().unwrap_or("?"));
     }
