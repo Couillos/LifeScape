@@ -81,7 +81,7 @@ const COST_BASE: u64 = 347;
 
 /// Per-phase wall-clock of one plan: a trivial leg must cost
 /// milliseconds, so a seconds-long plan names its spinner here.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct PlanTimings {
     options_ms: u128,
     plan_ms: u128,
@@ -184,6 +184,9 @@ impl Bot {
     /// guess. Every service failure (down, refused, stale after 1
     /// resubmit, timeout, interrupt) is `nav-down` — never a local plan.
     pub(crate) fn plan_travel(&mut self, dest: Tile) -> Result<(NavOptions, Plan, PlanTimings)> {
+        if let Some(here) = self.plan_here(dest) {
+            return Ok(here);
+        }
         let options_start = std::time::Instant::now();
         let options = self.nav_options_remote()?;
         let options_ms = options_start.elapsed().as_millis();

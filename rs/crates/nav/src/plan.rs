@@ -235,49 +235,8 @@ pub struct NavOptions {
     pub danger: Vec<DangerZone>,
 }
 
-/// One danger square: aggressive spawn plus its reach (Chebyshev).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DangerZone {
-    pub x: i32,
-    pub z: i32,
-    pub level: i32,
-    pub radius: i32,
-}
-
-/// Extra cost of one walk step landing in a danger square: a detour of
-/// up to this many tiles per avoided tile beats walking past a hunter.
-pub const DANGER_STEP_COST: u32 = 8;
-
-/// Danger tiles of one search, built once (squares overlap; lookups are
-/// one hash probe per step instead of a scan of every zone).
-#[derive(Default)]
-pub struct DangerMap {
-    tiles: HashSet<(i32, i32, i32)>,
-}
-
-impl DangerMap {
-    pub fn new(zones: &[DangerZone]) -> DangerMap {
-        let mut tiles = HashSet::new();
-        for zone in zones {
-            let radius = zone.radius.clamp(0, 32);
-            for tile_x in zone.x - radius..=zone.x + radius {
-                for tile_z in zone.z - radius..=zone.z + radius {
-                    tiles.insert((tile_x, tile_z, zone.level));
-                }
-            }
-        }
-        DangerMap { tiles }
-    }
-
-    /// Extra cost of stepping onto `tile`.
-    pub fn extra(&self, tile: Tile) -> u32 {
-        if !self.tiles.is_empty() && self.tiles.contains(&(tile.x, tile.z, tile.level)) {
-            DANGER_STEP_COST
-        } else {
-            0
-        }
-    }
-}
+/// Danger squares and their lookup live in `danger.rs` (bitmap, CPU).
+pub use crate::danger::{DangerMap, DangerZone, DANGER_STEP_COST};
 
 /// One banned edge, for the single executor replan.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -705,11 +664,23 @@ struct Search<'a> {
     base_flags: U64Map<u32>,
     open_flags: U64Map<u32>,
     doors: U64Map<Option<(u16, u8, u8)>>,
+    /// F2P verdict per 8x8 zone (`in_f2p` takes the world lock: it ran
+    /// for every neighbour of every visit).
+    f2p_zones: U64Map<bool>,
 }
 
 impl Search<'_> {
-    fn in_bounds(&self, tile: Tile) -> bool {
-        !self.options.f2p_only || self.ignore_f2p || self.world.in_f2p(tile.x, tile.z)
+    fn in_bounds(&mut self, tile: Tile) -> bool {
+        if !self.options.f2p_only || self.ignore_f2p {
+            return true;
+        }
+        let zone = Tile { x: tile.x >> 3, z: tile.z >> 3, level: 0 }.key();
+        if let Some(inside) = self.f2p_zones.get(&zone) {
+            return *inside;
+        }
+        let inside = self.world.in_f2p(tile.x, tile.z);
+        self.f2p_zones.insert(zone, inside);
+        inside
     }
 
     fn base(&mut self, tile: Tile) -> u32 {
@@ -833,6 +804,7 @@ fn dijkstra(
         base_flags: U64Map::default(),
         open_flags: U64Map::default(),
         doors: U64Map::default(),
+        f2p_zones: U64Map::default(),
 
     };
     let dest_walkable = tile_walkable(search.open(dest));
@@ -1148,6 +1120,7 @@ pub(crate) fn prepare_shared(
         base_flags: U64Map::default(),
         open_flags: U64Map::default(),
         doors: U64Map::default(),
+        f2p_zones: U64Map::default(),
     };
     prepare_edges(&mut permissive, yield_)
 }
@@ -1334,6 +1307,7 @@ pub fn ride_stands(world: &StaticWorld, tables: &Tables, options: &NavOptions, r
         base_flags: U64Map::default(),
         open_flags: U64Map::default(),
         doors: U64Map::default(),
+        f2p_zones: U64Map::default(),
     };
     stands(&mut search, row)
 }

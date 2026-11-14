@@ -30,7 +30,8 @@ planifie offline (`--paid`, `--ascii`), `replay-nav` classe un dossier
 d'échec (A/B/C), `dump-transitions` régénère
 `gamedata/data/transitions.json` depuis le serveur.
 `reload-nav` échange le snapshot du service sans redémarrer ;
-`nav-stats` imprime la jauge (cache L1, queue, refus cap/full/stale,
+`nav-stats` imprime la jauge (chemin court `fast=réponses/dont
+distance nulle/rendus au planificateur`, cache L1, queue, refus cap/full/stale,
 RAM warn/shed, RSS daemon, carrés peints) et le JSON complet expose en
 plus un compteur par op batch (`door_defs`, `tiles_flags`,
 `static_locs_near`, `in_f2p`, `toll_fence`, `wants`, `diff`, `debug`,
@@ -46,7 +47,9 @@ plus, par minute, le CPU des threads du service de navigation
 (`plan-pool`, `plan-query`, `plan-wait`, `plan-accept`) et les compteurs
 du cache de routes de la même minute (`exact`, `dominated`, `prefix`,
 `suffix`, `infix`, `splice`, `negative`, `miss`, `joins`, taux de hit,
-`walk_costs`, occupation, évictions, verdicts de poches).
+`walk_costs`, occupation, évictions, verdicts de poches) ; `plans` compte
+aussi les sauts courts du chemin court (`fast`, `fast_zero`,
+`fast_declined`, hors cache : `hit` reste le taux du cache sur les autres).
 Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 
 État et logs (`src/paths.rs`, racine détectée via le dossier `orchestration/`) :

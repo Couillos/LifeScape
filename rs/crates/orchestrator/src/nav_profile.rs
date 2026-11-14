@@ -56,12 +56,16 @@ pub fn nav_line(
     let (exact, dominated, prefix) = (delta(|s| s.exact_hits), delta(|s| s.dominated_hits), delta(|s| s.trunc_hits));
     let (suffix_all, infix, splice) = (delta(|s| s.suffix_hits), delta(|s| s.infix_hits), delta(|s| s.splice_hits));
     let (negative, misses, joins) = (delta(|s| s.negative_hits), delta(|s| s.misses), delta(|s| s.joins));
+    let (fast, fast_zero, fast_declined) = (delta(|s| s.fast_hits), delta(|s| s.fast_zero), delta(|s| s.fast_declined));
     let served = exact + dominated + prefix + suffix_all + splice + negative;
-    let plans = served + misses + joins;
-    let rate = if plans > 0 { 100.0 * served as f64 / plans as f64 } else { 0.0 };
+    // Short hops answered by the fast path never reach the cache: `hit`
+    // stays the cache rate of the other plans, `plans` counts them all.
+    let cached = served + misses + joins;
+    let plans = cached + fast;
+    let rate = if cached > 0 { 100.0 * served as f64 / cached as f64 } else { 0.0 };
     let (entries, negatives, bytes, pockets) = routes;
     line.push_str(&format!(
-        " | plans={plans} hit={rate:.0}% exact={exact} dominated={dominated} prefix={prefix} suffix={} infix={infix} splice={splice} negative={negative} miss={misses} joins={joins} | walk_costs={} | routes={entries}+{negatives}neg/{:.1}MiB evict={} pockets={pockets}",
+        " | plans={plans} fast={fast} fast_zero={fast_zero} fast_declined={fast_declined} hit={rate:.0}% exact={exact} dominated={dominated} prefix={prefix} suffix={} infix={infix} splice={splice} negative={negative} miss={misses} joins={joins} | walk_costs={} | routes={entries}+{negatives}neg/{:.1}MiB evict={} pockets={pockets}",
         suffix_all.saturating_sub(infix),
         delta(|s| s.walk_costs),
         bytes as f64 / (1024.0 * 1024.0),
@@ -104,10 +108,10 @@ mod tests {
         let cpu_before = BTreeMap::from([("plan-pool".to_string(), 1_000_000u64), ("plan-query".to_string(), 0)]);
         let cpu_after = BTreeMap::from([("plan-pool".to_string(), 51_000_000u64), ("plan-query".to_string(), 2_000_000)]);
         let before = CacheStats::default();
-        let after = CacheStats { exact_hits: 6, trunc_hits: 1, suffix_hits: 2, infix_hits: 1, splice_hits: 1, misses: 2, walk_costs: 3, ..CacheStats::default() };
+        let after = CacheStats { exact_hits: 6, trunc_hits: 1, suffix_hits: 2, infix_hits: 1, splice_hits: 1, misses: 2, walk_costs: 3, fast_hits: 20, fast_zero: 1, fast_declined: 4, ..CacheStats::default() };
         let line = nav_line(Duration::from_secs(60), &cpu_before, &cpu_after, &before, &after, (10, 2, 1024 * 1024, 5));
         assert!(line.starts_with("cpu-profile nav (60s): cpu_ms plan-pool=50 plan-query=2 total=52"), "{line}");
-        assert!(line.contains("plans=12 hit=83% exact=6 dominated=0 prefix=1 suffix=1 infix=1 splice=1 negative=0 miss=2"), "{line}");
+        assert!(line.contains("plans=32 fast=20 fast_zero=1 fast_declined=4 hit=83% exact=6 dominated=0 prefix=1 suffix=1 infix=1 splice=1 negative=0 miss=2"), "{line}");
         assert!(line.contains("walk_costs=3 | routes=10+2neg/1.0MiB evict=0 pockets=5"), "{line}");
     }
 }

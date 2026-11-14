@@ -389,6 +389,80 @@ de ratés avant contre ≈ 33 % en live) : en live la part servie est
 plus haute, le gain relatif par raté (arrêt au plancher, poches, verrou
 partagé) est le même.
 
+## Chemin court et coût fixe par requête (2026-11-14)
+
+Constat après le cache (live 13:45-13:48) : 700-900 plans/min, nav ≈ 7
+à 8,5 s CPU/min ; 52 % des plans font ≤ 3 cases sur un niveau (réalignement
+sur un poulet, un arbre, un rocher), 77 % ≤ 8, 1 % à distance nulle.
+Profil par étape (`service_replay_breakdown`, rejeu avec la vraie liste
+de danger, `nav/src/service_replay_live.rs` : `kit::danger::arm` envoie
+TOUS les spawns agressifs à moins de 250 cases, ~180 carrés) : le coût
+fixe était le `DangerMap` (HashSet de 40-67 k cases, ~7 ms) construit à
+chaque Dijkstra, à chaque `route_path::analyze` et à chaque `walk_costs`
+— un saut d'une case coûtait ~14 ms. Le reste : JSON ~60 µs, clé ~12 µs,
+poche ~20-180 µs (nouvelle cible), Dijkstra court ~90 µs.
+
+- `nav/src/danger.rs` : bitmap dense par niveau sur la boîte des carrés
+  (≈ 25 µs pour 180 carrés, lecture = un test de bit), même réponse case
+  par case (test contre l'ancien ensemble) ; `DangerMap::clipped` pour
+  une fenêtre.
+- Chemin court (`nav/src/fast_hop.rs`, `service_fast.rs`) : départ et
+  destination sur un niveau, Chebyshev ≤ 8 (`FAST_RADIUS`), destination
+  praticable en statique → Dijkstra de marche sur une fenêtre 33 × 33,
+  MÊMES pas, prix (1 + danger + battant), borne F2P et ordre (coût, clé)
+  que le planificateur, répondu sur le thread `plan-query` qui a lu la
+  trame (ni hand-off, ni ticket, ni cache, ni poche, ni `analyze`).
+  Servi seulement si PROUVÉ égal : toute arête que la fenêtre saute
+  (case portant une porte, arête vers une telle case, bord de fenêtre :
+  ≥ 1 ; ride/custom partant d'une case : ≥ `TRANSITION_COST`) donne une
+  borne coût(case) + minimum ; servi si coût ≤ la plus petite borne,
+  sinon le planificateur. Distance nulle praticable : plan vide coût 0.
+  Trame `plan` terminale identique (`outcome: ready`), `submit` en
+  ticket instantané. Le premier saut court après démarrage / `reload-nav`
+  construit le L2 sur la voie `plan-query` (une fois par version).
+- SDK : `walk_to` / `travel_to` vers la case du bot ne contacte plus le
+  service (`sdk/src/client/travel_here.rs`, plan vide, options par défaut
+  + danger, jamais lues sans replan).
+- Coût fixe restant : `decode_options` sans copie, danger trié par
+  requête ; cache de routes : listes de danger identiques comparées sans
+  tri ni balayage carré × carré (`zones_covered`, `zones_missing`),
+  `Patch::read` via un `DangerMap` fenêtré ; cache F2P par zone 8 × 8
+  dans les recherches (le verrou monde à chaque voisin) ; `walk_costs`
+  en tables à hachage identité + borne de but (avec seulement des cibles
+  praticables, une case ne s'étend pas si coût + borne inférieure vers la
+  cible la plus proche dépasse l'horizon : pas ≥ 1, ride/custom ≥ 20
+  depuis l'atterrissage le plus proche ; mêmes prix, `None` au-delà) ;
+  poches : portes lues une fois par case, ensembles à hachage identité.
+- Codec JSON du service sorti dans `nav/src/service_codec.rs`
+  (`service.rs` 3847 → ~3420 lignes, format inchangé).
+
+Compteurs : `fast_hits` / `fast_zero` / `fast_declined` (op `stats`,
+`nav-stats` `fast=a/b/c`, ligne `cpu-profile nav` `plans=… fast=…`,
+`hit` reste le taux du cache sur les plans non courts).
+
+Équivalence : goldens (`fast_hop_tests.rs` : sauts du poulailler aux coûts
+des logs, distance nulle, porte du château 1516 refusée, carré de danger
+contourné), 2 400 requêtes aléatoires (1 123 servies, coût ET cases
+identiques au planificateur), rejeu des 8 497 requêtes réelles du 14/11
+(5 996 servies, toutes identiques en coût et en cases), `walk_costs`
+borné = prix des plans unitaires sur 515 cibles aléatoires.
+
+Mesure (rejeu `service_replay`, 6 000 requêtes réelles mesurées après
+2 500 de chauffe, 1 343 `walk_costs`, séquentiel, CPU des threads
+`plan-*`) :
+| profil d'options | avant (ms CPU) | après (ms CPU) |
+|---|---|---|
+| danger live (~180 carrés) | 73 334 (pool 55 112, query 14 246, wait 3 707) | 9 972 (pool 6 483, query 2 361, wait 951) −86 % |
+| ancien profil (1 carré pour 10 %) | 9 900 (pool 5 830, query 2 052, wait 1 841) | 7 047 (pool 4 597, query 1 457, wait 828) −29 % |
+
+Ratés 2 835 → 707 (70 % des requêtes servies par le chemin court, 412
+refusées), `walk_costs` p50 0,6 ms / max 8 ms (avant 9 ms / 43 ms),
+qualité inchangée (300 re-planifiés à froid, surcoût max 2, aucun verdict
+différent). Prévision live (ratios par groupe du profil danger appliqués
+à la minute 13:45-13:48) : pool ≈ 0,35 s, query ≈ 0,55 s, wait ≈ 0,12 s,
+accept 0,05 s → ≈ 1,1 s CPU/min au lieu de 6-7 s ; borne prudente (ratios
+de l'ancien profil) ≈ 4,5-5 s/min.
+
 ## Arêtes ajoutées à la main : bateau de Karamja (2026-11-13)
 
 `gamedata/data/nav_overrides.json` `custom_edges` porte des arêtes que

@@ -169,8 +169,11 @@ fn format_nav_stats(stats: &Value) -> String {
         .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
         .unwrap_or_else(|| "-".to_string());
     format!(
-        "nav-stats v={} hits={} trunc={} suffix={} splice={} dominated={} negative={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} walk_costs={} detour(sum/max/plans)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
+        "nav-stats v={} fast={}/{}/{} hits={} trunc={} suffix={} splice={} dominated={} negative={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} walk_costs={} detour(sum/max/plans)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
         stats.get("version").as_str().unwrap_or("-"),
+        num("fast_hits"),
+        num("fast_zero"),
+        num("fast_declined"),
         num("hits"),
         num("trunc_hits"),
         num("suffix_hits"),
@@ -974,8 +977,12 @@ mod tests {
             ("detour_sum", Value::Int(40)),
             ("detour_max", Value::Int(12)),
             ("detour_plans", Value::Int(5)),
+            ("fast_hits", Value::Int(30)),
+            ("fast_zero", Value::Int(2)),
+            ("fast_declined", Value::Int(4)),
         ]);
         let line = format_nav_stats(&stats);
+        assert!(line.contains("fast=30/2/4"), "fast path relayed, got:\n{line}");
         assert!(line.contains("suffix=7"), "suffix relayed, got:\n{line}");
         assert!(line.contains("walk_costs=3"), "batches relayed, got:\n{line}");
         assert!(line.contains("detour(sum/max/plans)=40/12/5"), "detour relayed, got:\n{line}");

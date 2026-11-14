@@ -21,6 +21,7 @@ pub mod static_cache;
 pub mod travel;
 pub mod travel_custom;
 pub mod travel_dossier;
+pub mod travel_here;
 pub mod travel_hook;
 pub mod travel_pause;
 
