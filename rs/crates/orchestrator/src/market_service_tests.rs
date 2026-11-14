@@ -594,10 +594,11 @@ fn list_merges_same_name_forms_and_sorts_by_volume() {
     // Volume descends: Logs (5 + 7) before Coal (3).
     assert_eq!(rows[0].get("name").as_str(), Some("Logs"));
     assert_eq!(rows[0].get("volume24h").as_i64(), Some(12));
-    // Canonical id carries the volume; VWAP prices the merged fills.
+    // Canonical id carries the volume; its price is the current price
+    // bots read (2026-11-14: median of its last five fills, 12).
     assert_eq!(rows[0].get("item").as_i64(), Some(101));
-    assert_eq!(rows[0].get("price").as_i64(), Some(11));
-    // Change of the displayed VWAP (11) against the base (no previous
+    assert_eq!(rows[0].get("price").as_i64(), Some(12));
+    // Display-only change: today's VWAP (11) against the base (no previous
     // day: today's first print, 10): +10 %, not first-vs-last print.
     assert_eq!(rows[0].get("change24h").as_i64(), Some(100));
     assert_eq!(rows[1].get("name").as_str(), Some("Coal"));

@@ -99,6 +99,8 @@ impl MarketService {
             let _ = store.rebuild_candles(item, lifescape_store::YieldCandleResolution::Day1);
             taker
         };
-        self.lock_engine().remember(Print { item, quantity: qty, price, clock, taker });
+        let mut engine = self.lock_engine();
+        engine.note_fill(item, price);
+        engine.remember(Print { item, quantity: qty, price, clock, taker });
     }
 }

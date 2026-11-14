@@ -18,8 +18,8 @@
 //!   the measured method profits (`rates_service::profit_rows`).
 //! - `demand_items()` / `kind_demand()`: the planner inputs; each item
 //!   carries its per-unit `margin` at the best bid against its inputs at
-//!   their market reference (`planner::chain_profit`; an unpriced input
-//!   falls to the reference, which ends at 1 coin): only a positive margin
+//!   their current market price (`planner::chain_profit`; median of the
+//!   last five fills clamped by the book, ending at 1 coin): only a positive margin
 //!   makes a demand milestone (review 2026-11-13: a 1-coin bid made a
 //!   smith forge steel platebodies at a loss).
 
@@ -148,8 +148,9 @@ pub fn demand_items(signals: &[DemandSignal]) -> Vec<DemandItem> {
 }
 
 /// Pure `demand_items`: margin = best bid minus the inputs of the best
-/// production way at `reference` (debug name → market reference: 24 h
-/// VWAP, last print, mid, else 1 coin; never a shop price), per unit
+/// production way at `reference` (debug name → current price: median of
+/// the last five fills clamped by the book, else the book, else 1 coin;
+/// never a shop price), per unit
 /// (`planner::chain_profit`). An input with no reference (NaN) or an
 /// object no production way makes leaves the margin `None`. Inputs are
 /// costed at the reference even when the producer gathers them (the

@@ -16,7 +16,7 @@
 //! to 1 coin like any other.
 
 use crate::book::{Book, Fill, Side};
-use crate::price::{reference_price, PricedFill};
+use crate::price::{current_price, PricedFill};
 use crate::zip::{demand_step, opening_ask, opening_bid};
 
 const ITEM: i64 = 1;
@@ -73,9 +73,9 @@ struct Engine {
 
 impl Engine {
     fn reference(&self) -> i64 {
-        let recent: Vec<PricedFill> = self.fills.iter().rev().take(20).cloned().collect();
+        let prices: Vec<i64> = self.fills.iter().map(|fill| fill.price).collect();
         let (bid, ask) = self.book.best();
-        reference_price(&recent, self.fills.last().map(|fill| fill.price), bid, ask).price
+        current_price(&prices, bid, ask).price
     }
 
     fn place(&mut self, owner: usize, name: &str, side: Side, qty: i64, price: i64, floor: i64, ceiling: i64) -> Vec<Fill> {
@@ -176,7 +176,10 @@ pub fn run_demand(agents: &[Agent], unit_margin: &dyn Fn(i64) -> f64, rounds: us
             }
         }
     }
-    run.final_reference = engine.reference();
+    // The formed price is what traded last (median of the last five
+    // fills), not the book's leftovers: the sim's sellers walk down to 1.
+    let prices: Vec<i64> = engine.fills.iter().map(|fill| fill.price).collect();
+    run.final_reference = current_price(&prices, None, None).price;
     run
 }
 

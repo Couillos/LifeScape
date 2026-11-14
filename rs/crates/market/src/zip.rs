@@ -79,8 +79,9 @@ pub fn demand_step(current: i64, sell: bool, filled: bool, floor: i64, ceiling: 
     clamp_quote(moved, floor.max(1), ceiling.max(floor.max(1)))
 }
 
-/// Opening ask of a new listing (2026-11-13): the reference (24 h VWAP,
-/// else last print, else mid, else 1 coin), or the best resting bid when
+/// Opening ask of a new listing (2026-11-13): the current price
+/// (`price::current_price`: median of the last five fills clamped by the
+/// book, else the book, else 1 coin), or the best resting bid when
 /// a buyer already pays more (the listing crosses it at once). No margin
 /// on top: the fills of the listing walk it up (`demand_step`).
 pub fn opening_ask(reference: i64, best_bid: Option<i64>) -> i64 {
@@ -88,7 +89,7 @@ pub fn opening_ask(reference: i64, best_bid: Option<i64>) -> i64 {
 }
 
 /// Opening bid of a new buy order: the best ask when the ceiling covers
-/// it (take it), else the reference, never above the ceiling.
+/// it (take it), else the current price, never above the ceiling.
 pub fn opening_bid(reference: i64, best_ask: Option<i64>, ceiling: i64) -> i64 {
     let cap = ceiling.max(1);
     match best_ask {
@@ -135,8 +136,8 @@ impl OwnFill {
 
 /// Opening ask and reserve floor of a listing (2026-11-14, user rules
 /// 1, 4 and 5). `reserve` is the seller's OWN cost of one unit (never a
-/// 1-coin default). A traded object opens at its reference (or the best
-/// bid when richer); an object nobody traded (reference quoted from the
+/// 1-coin default). A traded object opens at its current price (or the
+/// best bid when richer); an object nobody traded (price quoted from the
 /// book, or the 1-coin default) opens at `max(best bid, 2 x reserve)`,
 /// never from that fallback. Never under the reserve; after a fast own
 /// fill, at least 105 % of that fill. Returns `(price, floor)` with

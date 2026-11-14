@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{check_coverage, check_price, reference_price, Order};
+use lifescape_market::{check_coverage, check_price, current_price, Order, PRICE_FILLS};
 use crate::market_seed::CatalogueItem;
 use lifescape_market::{Book, Deal, Side};
 use lifescape_store::{NewOrder, OrderSide, OrderStatus, Store, YieldCandleResolution};
@@ -150,6 +150,13 @@ pub(crate) struct Engine {
     /// Order ids adopted by demand pricing once (`market_reprice::adopt`
     /// is idempotent: never re-adopted, never re-logged).
     pub(crate) adopted: HashSet<i64>,
+    /// Last `PRICE_FILLS` fill prices per item, oldest first (the current
+    /// price, user 2026-11-14): loaded once per item from one indexed
+    /// read, then pushed on every settled fill (`settle_print`).
+    pub(crate) last_prices: HashMap<i64, VecDeque<i64>>,
+    /// Settled fills counted since start: a ring loaded from the store
+    /// while a fill settled is not cached (it could miss that fill).
+    pub(crate) fills_settled: u64,
 }
 
 impl Engine {
@@ -176,11 +183,25 @@ impl Engine {
             pair_cooldowns: HashMap::new(),
             own_sells: HashMap::new(),
             adopted: HashSet::new(),
+            last_prices: HashMap::new(),
+            fills_settled: 0,
         }
     }
 
     pub(crate) fn find_item(&self, item: i64) -> Option<&CatalogueItem> {
         self.catalogue.iter().find(|entry| entry.id == item)
+    }
+
+    /// A settled fill moves the current price of its item (a ring not
+    /// loaded yet is read from the store on first use).
+    pub(crate) fn note_fill(&mut self, item: i64, price: i64) {
+        self.fills_settled += 1;
+        if let Some(ring) = self.last_prices.get_mut(&item) {
+            ring.push_back(price);
+            while ring.len() > PRICE_FILLS {
+                ring.pop_front();
+            }
+        }
     }
 
     pub(crate) fn remember(&mut self, print: Print) {
@@ -326,21 +347,33 @@ impl MarketService {
         SystemTime::now().duration_since(UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
     }
 
-    /// Reference price: VWAP of the last day, else book mid, else shop.
-    /// Reference of one item (PRD3 lot 2): 24 h VWAP, else the last
-    /// print ever, else the book midpoint, else 1 coin. The shop price
-    /// never anchors it.
+    /// Last fill prices of one item, oldest first (at most
+    /// `PRICE_FILLS`, any age): the in-memory ring, loaded once from one
+    /// indexed `LIMIT` read (never a scan of the item's history).
+    pub(crate) fn last_fill_prices(&self, item: i64) -> Vec<i64> {
+        let seen = {
+            let engine = self.lock_engine();
+            if let Some(ring) = engine.last_prices.get(&item) {
+                return ring.iter().copied().collect();
+            }
+            engine.fills_settled
+        };
+        let loaded = self.lock_store().last_prices(item, PRICE_FILLS as i64).unwrap_or_default();
+        let mut engine = self.lock_engine();
+        if engine.fills_settled == seen {
+            engine.last_prices.insert(item, loaded.iter().copied().collect());
+        }
+        loaded
+    }
+
+    /// Current price of one item (user 2026-11-14, replaces the 24 h
+    /// VWAP in every bot decision): median of the last five fills
+    /// clamped by the live book, else the book, else 1 coin
+    /// (`lifescape_market::current_price`). The shop price never anchors it.
     pub(crate) fn reference(&self, item: i64) -> lifescape_market::Reference {
-        let clock = Self::now_clock();
-        let all = self.lock_store().executions_for_item(item, 0, clock + 1).unwrap_or_default();
-        let last_print = all.iter().max_by_key(|exec| exec.clock).map(|exec| exec.price);
-        let fills: Vec<lifescape_market::PricedFill> = all
-            .iter()
-            .filter(|exec| exec.clock >= clock - 86400)
-            .map(|exec| lifescape_market::PricedFill { quantity: exec.quantity, price: exec.price, clock: exec.clock })
-            .collect();
+        let prices = self.last_fill_prices(item);
         let (bid, ask) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-        reference_price(&fills, last_print, bid, ask)
+        current_price(&prices, bid, ask)
     }
 
     /// The guard anchor: only a traded reference caps an order.
@@ -396,16 +429,9 @@ impl MarketService {
         let shop = row.shop_price;
         drop(engine);
         let reference = self.reference(item);
-        // Last print from the store (durable): the in-memory ring forgot
-        // it at every daemon restart.
-        let clock = Self::now_clock();
-        let last = self
-            .lock_store()
-            .executions_for_item(item, 0, clock + 1)
-            .unwrap_or_default()
-            .iter()
-            .max_by_key(|exec| exec.clock)
-            .map(|exec| exec.price);
+        // Last print: the price ring (loaded from the store once, so it
+        // survives a daemon restart).
+        let last = self.last_fill_prices(item).last().copied();
         object(vec![
             ("ok", Value::Bool(true)),
             ("item", Value::Int(item)),
@@ -563,7 +589,7 @@ impl MarketService {
             self.lock_store().items_with_executions().unwrap_or_default().into_iter().collect()
         } else { std::collections::HashSet::new() };
         // One row per named good: 24h volume summed over every form,
-        // reference and change from the merged fills, canonical id = the
+        // change (display only) from the merged fills, canonical id = the
         // form carrying the volume (base on ties). Sorted by descending
         // volume so the traded goods surface first.
         let store = self.lock_store();
@@ -606,13 +632,14 @@ impl MarketService {
                 .map(|member| member.1)
                 .unwrap_or(1);
             let _ = shop;
-            let reference = reference_price(&fills, fills.last().map(|fill| fill.price), None, None).price;
             previous_day.sort_by_key(|fill| fill.clock);
-            // Change of the displayed reference (today's VWAP), not of the
-            // first vs last print (a lone print at 9 read +800 %).
+            // Display only (no bot reads it): today's VWAP against the day
+            // before (a lone print at 9 read +800 % against the first).
             let change = lifescape_market::change_thousandths(&fills, &previous_day);
-            items.push((name.clone(), canonical, reference, change, volume, order_count, open_qty));
+            let forms: Vec<i64> = volumes.iter().map(|member| member.0).collect();
+            items.push((name.clone(), canonical, forms, change, volume, order_count, open_qty));
         }
+        drop(store);
         // Descending 24h volume, then the largest open quantity, then the name.
         items.sort_by(|left, right| {
             right.4.cmp(&left.4).then(right.6.cmp(&left.6)).then(left.0.cmp(&right.0)).then(left.1.cmp(&right.1))
@@ -620,7 +647,12 @@ impl MarketService {
         let rows: Vec<Value> = items
             .into_iter()
             .take(limit)
-            .map(|(name, id, reference, change, volume, order_count, open_qty)| {
+            .map(|(name, id, forms, change, volume, order_count, open_qty)| {
+                // The current price bots read (last five fills of the
+                // form that traded, clamped by its book), only for the
+                // rows shown.
+                let priced = forms.iter().copied().find(|form| !self.last_fill_prices(*form).is_empty()).unwrap_or(id);
+                let reference = self.reference(priced).price;
                 object(vec![
                     ("orders", Value::Int(order_count as i64)),
                     ("open_qty", Value::Int(open_qty)),

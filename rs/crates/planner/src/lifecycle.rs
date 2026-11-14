@@ -431,8 +431,8 @@ pub fn insert_ready(life: &mut Life, mut node: Node) -> usize {
 }
 
 /// File an equipment ladder step (`gear_ladder`): with `item`, an
-/// `obtain_items` of one piece bought on the market only (never a shop:
-/// every ladder piece is producible, D-A), ready, then the `equip_best`
+/// `obtain_items` of one piece bought on the market (or at the NPC shop
+/// when only a shop sells it, D-A), ready, then the `equip_best`
 /// that wears it; without, the `equip_best` alone (a piece already owned).
 /// Returns the new ids. The caller files one step at a time
 /// (`gear_ladder::step_open`).
@@ -443,6 +443,11 @@ pub fn insert_gear_step(life: &mut Life, item: Option<&str>, style: &str) -> Vec
         let id = next_id(life);
         let mut obtain = Node::new(&id, NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
         obtain.alternatives.push(crate::model::Alternative { method: "market:buy".to_string(), est_ticks: 0, est_coins: 0 });
+        // A piece only an NPC shop sells (D-A: no F2P production, no
+        // drop) goes to the shop; every other piece is market only.
+        if lifescape_gamedata::obtain::merchant_buy_allowed(item) {
+            obtain.alternatives.push(crate::model::Alternative { method: "shop:buy".to_string(), est_ticks: 0, est_coins: 0 });
+        }
         obtain.status = NodeStatus::Ready;
         life.nodes.push(obtain);
         deps.push(id.clone());

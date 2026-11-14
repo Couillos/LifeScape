@@ -35,8 +35,8 @@
 //!   `prior: true` while a bucket holds fewer than 3 measured reports,
 //!   then replaced by the measured aggregate.
 //! - Profitability of one (method, band): revenue at the estimated sale
-//!   price (24 h market VWAP when the store has prints, else the shop
-//!   price) minus input cost (consumed lines at shop price) minus the
+//!   price (`price_estimate`: current price = median of the last five
+//!   fills clamped by the book, else the book, else 1 coin) minus input cost (consumed lines at shop price) minus the
 //!   market-pause friction (paused ticks measured per report, priced at
 //!   the activity's own revenue rate: paused time earns nothing) plus a
 //!   trend bonus (public trend score times revenue times a small weight).

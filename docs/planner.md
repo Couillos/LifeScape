@@ -673,7 +673,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
-| `alch:<objet>` | `alchemy` | `<objet>` | — |
+| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |

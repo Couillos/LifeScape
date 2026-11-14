@@ -130,12 +130,41 @@ fn pending_supply_held_stock_and_rich_time_hold_the_bot_back() {
 /// bot could only fill from the asks is no production.
 #[test]
 fn a_producer_never_flips_the_product() {
-    let avoid: Vec<String> = Vec::new();
-    let fresh = |_: &str| 1u8;
+    let banned = vec!["smithing".to_string()];
     let mut book = scimitar_bids();
     book.asks.push((10_000, 5));
     let flip_only = |item: &str| if item == "bronze_scimitar" { Some(book.clone()) } else { market(item) };
-    assert_eq!(opportunity("bronze_scimitar", &book, &flip_only, &smith(&fresh, &hammer_only, &avoid, 1)), None);
+    assert_eq!(opportunity("bronze_scimitar", &book, &flip_only, &smith(&smith_levels, &hammer_only, &banned, 1)), None);
+}
+
+/// Live 2026-11-14: the whole fleet had smithing 1 and nobody answered
+/// 18 bronze scimitar bids up to 2961. A level-1 bot trains to 5 (bronze
+/// bars smelted from ores on sale) for a bid worth it: the training is a
+/// one-off cost of the lot, and the quota still preempts. A gap past
+/// `MAX_TRAIN_LEVELS` never answers; a plain unit cost never trains.
+#[test]
+fn a_level_one_bot_trains_for_a_bid_worth_it() {
+    let avoid: Vec<String> = Vec::new();
+    let fresh = |_: &str| 1u8;
+    let with_ores = |item: &str| match item {
+        "copper_ore" | "tin_ore" => Some(BookView { bids: Vec::new(), asks: vec![(3, 500)], volume_24h: 0 }),
+        _ => market(item),
+    };
+    let seed = answering_seed("bronze_scimitar");
+    let bot = smith(&fresh, &hammer_only, &avoid, seed);
+    assert_eq!(unit_cost("bronze_scimitar", 1, &with_ores, &bot), None, "no training in a plain unit cost");
+    let found = opportunity("bronze_scimitar", &scimitar_bids(), &with_ores, &bot).expect("worth training");
+    assert_eq!(found.unit.train, vec![("smithing".to_string(), 1, 5)], "{found:?}");
+    let (coins, ticks) = super::training_cost(&found.unit.train, &with_ores, &bot).expect("priced");
+    assert!(coins > 0.0 && ticks > 0.0, "ores bought, smelting time: {coins} {ticks}");
+    assert!(found.ticks >= ticks + super::BID_TRIP_TICKS, "{found:?}");
+    assert!(preempts(&found, bot.coin_rate), "{found:?}");
+    let iron_bids = BookView { bids: vec![(5000, 4)], asks: Vec::new(), volume_24h: 0 };
+    let iron_market = |item: &str| match item {
+        "iron_bar" => Some(BookView { bids: Vec::new(), asks: vec![(20, 100)], volume_24h: 0 }),
+        _ => with_ores(item),
+    };
+    assert_eq!(opportunity("iron_platebody", &iron_bids, &iron_market, &bot), None, "smithing 33 is 32 levels away");
 }
 
 /// The spread: half the windows answer, the other half wait; different

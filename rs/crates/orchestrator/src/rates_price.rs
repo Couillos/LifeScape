@@ -5,11 +5,13 @@
 
 use lifescape_store::Store;
 
-/// Estimated sale price of an item display name (PRD3 lot 2): 24 h
-/// market VWAP, else the last print ever, else the best resting bid (a
-/// buyer is waiting: that is what the item fetches now), else 1 coin.
-/// The flag marks a price no trade backs yet (`price_prior`). NPC shop
-/// prices never value anything: nobody sells to merchants.
+/// Estimated sale price of an item display name: its current price
+/// (user 2026-11-14, `lifescape_market::current_price`: median of the
+/// last five fills, any age, clamped by the resting book; never traded:
+/// the book, else 1 coin). Three indexed reads (last five prices, best
+/// bid, best ask), never the item's whole history. The flag marks a
+/// price no trade backs yet (`price_prior`). NPC shop prices never value
+/// anything: nobody sells to merchants.
 pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
     // One name lookup, never the whole catalogue per call (CPU
     // 2026-11-14: `profit_rows` asked ~900 times per call).
@@ -23,28 +25,8 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
     let Some(item_id) = found_id else {
         return (1.0, true);
     };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|span| span.as_secs() as i64)
-        .unwrap_or(0);
-    let prints = store.executions_for_item(item_id, 0, now + 1).unwrap_or_default();
-    let recent: Vec<_> = prints.iter().filter(|print| print.clock >= now - 86400).collect();
-    let volume: i64 = recent.iter().map(|print| print.quantity).sum();
-    if volume > 0 {
-        let turnover: i64 = recent.iter().map(|print| print.quantity * print.price).sum();
-        return (turnover as f64 / volume as f64, false);
-    }
-    if let Some(last) = prints.iter().max_by_key(|print| print.clock) {
-        return (last.price.max(1) as f64, false);
-    }
-    let best_bid = store
-        .open_book(item_id, lifescape_store::OrderSide::Buy)
-        .unwrap_or_default()
-        .iter()
-        .map(|order| order.price)
-        .max();
-    match best_bid {
-        Some(bid) if bid >= 1 => (bid as f64, true),
-        _ => (1.0, true),
-    }
+    let prices = store.last_prices(item_id, lifescape_market::PRICE_FILLS as i64).unwrap_or_default();
+    let best = |side: lifescape_store::OrderSide| store.open_book(item_id, side).unwrap_or_default().first().map(|order| order.price);
+    let current = lifescape_market::current_price(&prices, best(lifescape_store::OrderSide::Buy), best(lifescape_store::OrderSide::Sell));
+    (current.price as f64, !current.traded)
 }

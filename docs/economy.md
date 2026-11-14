@@ -14,8 +14,8 @@ amend, relist après échec, réinsertion au boot — est TAKER et paie le
 prix de l'ordre déjà au repos ; `market_uncross` guérit le reste (boot,
 puis chaque tour de convocation). Code pur dans
 `rs/crates/market/` : `book` (carnet + appariement), `guards` (bandes +
-couverture), `deals` (machine à états), `price` (VWAP → mid → magasin,
-bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
+couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
+derniers fills bornée par le carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
 
 Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
@@ -27,7 +27,7 @@ direction lue dans la fenêtre : vente servie (même en partie) → monte,
 vente au repos → descend jusqu'à son plancher, achat au repos → monte
 jusqu'à son plafond, achat servi → redescend vers son prix d'ouverture.
 Acheteur : ouvre à l'ask s'il le couvre, sinon à son propre dernier
-prix d'achat de l'objet, sinon à la référence (`remembered_bid`),
+prix d'achat de l'objet, sinon au prix courant (`remembered_bid`),
 plafond = ce que son portefeuille paie (plus de plafond « juste »).
 Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
 ouverture à la référence échangée (ou au meilleur bid plus riche), à
@@ -43,8 +43,8 @@ sélection sur écart/volume, plafonds `max_capital_share` (10 %),
 Couverture vérifiée à l'ordre (objet possédé, pièces disponibles, registre
 en mémoire ; les holdings live des connectés se brancheront sur le même
 contrôle). Bande anti-bug (`guards::check_price`, inchangée 2026-11-14,
-décision utilisateur en attente) : avec une référence ÉCHANGÉE (VWAP
-24 h ou dernier print), tout ordre au-dessus de 5× est rejeté (achat
+décision utilisateur en attente) : avec une référence ÉCHANGÉE (prix
+courant issu des 5 derniers fills), tout ordre au-dessus de 5× est rejeté (achat
 comme vente, au placement et à l'amend), un achat sous 0,2× aussi ; une
 vente peut descendre à 1 ; sans référence échangée aucune bande. La
 marche (`market_reprice::walk_cap`) plafonne la montée à 5× ; un vendeur
@@ -97,7 +97,8 @@ petit id de compte envoie la demande. Échange SDK `trade_exchange` :
 billets (`bank_main:com_93` = notes, `com_94` = items) pour les gros
 lots, redépôt après l'échange, les DEUX écrans vérifiés avant accept.
 
-Référence (PRD3) = VWAP 24 h ; sinon dernier print ; sinon milieu du
+Référence (PRD3, remplacée le 2026-11-14 par le prix courant, § Prix
+courant) = VWAP 24 h ; sinon dernier print ; sinon milieu du
 carnet ; sinon **1 pièce** (jamais le prix magasin). Ce repli public
 reste honnête (« pas de donnée ») mais aucun vendeur n'en part : un
 objet non échangé (référence non `traded`) ouvre à `2 × réserve`. La bande anti-bug ne
@@ -353,6 +354,10 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 
 ## Équipement par paliers (2026-11-13)
 
+Remplacé le 2026-11-14 pour le CHOIX des pièces par § Équipement : le
+meilleur abordable (tous les emplacements à la fois) ; les mécaniques de
+pas (`insert_gear_step`, retrait des pas morts, `next_ready`) restent.
+
 Règles pures dans `planner/src/gear_ladder.rs`, câblage `brain_gear.rs`
 (une passe par compte toutes les 60 s, bots non Iron, but mêlée ou non
 combattant).
@@ -601,3 +606,119 @@ d'achat que ce bot sait fabriquer avec profit :
   paul_rhodes n60 `obtain oak_logs 308` a coupé 3 187 saules en 106 839
   ticks (le script coupe un autre arbre que la ressource du nœud : bug
   script hors de ce lot). Les quotas des échelles (100–200) sont sains.
+
+## Prix courant : les 5 derniers fills (2026-11-14)
+
+Décision utilisateur : plus aucune décision de bot ne lit la VWAP 24 h.
+Un bot price comme un joueur qui regarde les dernières ventes :
+`lifescape_market::current_price` = médiane des 5 DERNIERS fills de
+l'objet (quel que soit leur âge ; nombre pair = moyenne des deux du
+milieu), bornée par le carnet vivant (un bid plus haut est le prix du
+moment, un ask plus bas aussi). Jamais échangé : milieu du carnet, sinon
+son seul côté, sinon 1 pièce, `traded: false` (les règles d'ouverture
+s'appliquent : `seller_open` ouvre à `max(meilleur bid, 2 × réserve)`).
+Branché partout où la référence décidait : `MarketService::reference`
+(ouvertures `opening_ask`/`opening_bid`/`remembered_bid`, repricing,
+vente, réserve, gear, résolution des nœuds), `rates_price::price_estimate`
+(profits publiés, marges de demande `market_demand`, chaînes
+`planner::profit`), la cotation `quote` et le prix de la page marché.
+Le « % 24 h » de la page reste un affichage (VWAP du jour contre la
+veille), aucun bot ne le lit.
+
+CPU (« attention au cpu ») : jamais de scan de l'historique d'un objet.
+Le service garde un anneau en mémoire par objet (`Engine::last_prices`,
+5 prix), chargé une fois par une lecture indexée `LIMIT 5`
+(`Store::last_prices`, index `executions(item_id, clock)`), puis poussé à
+chaque fill réglé (`settle_print` → `Engine::note_fill`). Avant, chaque
+`reference()` lisait TOUTES les exécutions de l'objet depuis 0. Le volume
+24 h du `seller_quote` et des bids est un `SUM` indexé
+(`Store::volume_between`), plus les lignes. `price_estimate` (rates) : 3
+lectures indexées (5 prix, meilleur bid, meilleur ask).
+
+## Équipement : le meilleur abordable, tous les emplacements (2026-11-14)
+
+Constat live : 25 combattants niveau 40-58 en heaume moyen de bronze et
+dague de fer ; seuls des cimeterres de BRONZE montaient au carnet (18
+offres, 29 → 7321), un emplacement à la fois (`gear_ladder` : palier
+suivant de l'arme d'abord), jamais un plastron, des bottes ou une
+amulette ; les obtentions d'anciens buts `equip_best` (`iron_platebody`,
+`amulet_of_power`, `black_cape`, `leather_boots`…) ouvraient à 1 et
+étaient annulées après 6000 ticks à 1-20 pièces (« unfilled after 6000
+ticks », ~1 000 à 1 600 fois chacune dans les lignes « graph stuck »).
+
+Règle (`planner/src/gear_plan.rs`, pur ; câblage `brain_gear.rs`, une
+passe par compte toutes les 60 s, tout style de but, jamais Iron) :
+- Emplacements : arme, corps, jambes, tête, bouclier, pieds, mains, cou,
+  cape. Candidats par style (calculés une fois) : objets F2P échangeables,
+  obtenables sans quête, score de style > 0 (`gear::score` : mêlée =
+  bonus + 2 × force, distance = arc et cuir, magie = bâton et robes) ;
+  mêlée et magie à une main (bouclier), distance à l'arc (pas de
+  bouclier) ; munitions et runes restent des consommables des tranches.
+- Le bot veut, par emplacement, la meilleure pièce que ses niveaux
+  ouvrent et qui bat ce qu'il possède (sac, banque, porté). Le choix de
+  l'arme suit le score (hache de bataille, cimeterre ou épée longue).
+- Budget = 50 % (`GEAR_SHARE_PCT`) du portefeuille libéré de ses achats
+  NON équipement ; prix attendu = médiane des 5 derniers fills, sinon la
+  valeur de haute alchimie (personne ne vend dessous) ; tant que la somme
+  dépasse le budget, l'emplacement le plus cher descend à sa pièce
+  suivante moins chère (ou sort). Plafond de chaque envie = sa part du
+  budget (attendu × budget / total) ; l'offre ouvre AU PRIX ATTENDU
+  (`market_reprice::keep_bid_from`, jamais à 1) et monte avec la patience.
+- TOUS les emplacements enchérissent à la fois. Un ask au repos sous le
+  plafond, ou une pièce que seul un magasin vend (D-A), devient un nœud
+  `obtain_items` + `equip_best` (un pas ouvert à la fois, `shop:buy`
+  ajouté pour le seul cas D-A). Une pièce possédée meilleure que la
+  portée → `equip_best`. Les offres sur des pièces que le plan ne veut
+  plus sont annulées.
+- Gardé (jamais vendu) : par style et emplacement, la meilleure pièce
+  portable et toute meilleure pas encore portable (`kept_gear`) ; les
+  pièces remplacées sont du surplus (vente par défaut, ou alchimie d'un
+  lanceur). La liste d'envies (`brain_wishlist`) ne garde que les outils.
+
+## Producteurs : entraînement pour une offre (2026-11-14)
+
+Constat live : personne ne forgeait de cimeterre à 2 812 pièces parce
+que TOUTE la flotte avait forge 1 (sara_miller 18, harry_page 10,
+bh99tw2f 7) et que `bid_response` n'ouvrait que les jambes praticables
+au niveau ACTUEL (cimeterre de bronze : forge 5). Les tirages, eux, sont
+fréquents (~120 par heure pour ~25 bots) : la fenêtre n'était pas le
+frein. Depuis : une jambe jusqu'à 15 niveaux au-dessus
+(`MAX_TRAIN_LEVELS`) d'une compétence de production (forge, artisanat,
+cuisine, minage, pêche, bûcheronnage, allumage, runes) compte pour une
+offre (`unit_cost_training`) ; l'entraînement (méthode de tranche
+`reach_method`, actions par la table d'XP serveur, rythme du bot,
+intrants à leur coût unitaire) est un coût unique du lot, ajouté aux
+pièces et ticks de l'opportunité (`training_cost`). Le but `Produce`
+bloque sur le niveau (`missing:level:…`) et s'entraîne d'abord. Le
+plafond de la réserve vendeur (`production_cost`) reste sans
+entraînement.
+
+## Alchimie (2026-11-14)
+
+`planner/src/alchemy.rs` (pur) + `orchestrator/src/brain_alch.rs` :
+- Sorts de la table serveur : haute alchimie (magie 55, 1 nature + 5
+  feu, 65 XP), basse (21, 1 nature + 3 feu) ; un bâton de feu paie le
+  feu. Valeur = `alch_high`/`alch_low` des configs (coût × 0,6 / 0,4).
+  Net d'un lancer = valeur − runes au prix courant ; 1 lancer par 5 ticks.
+- Méthode d'argent : la meilleure alchimie du stock propre du bot (hors
+  keep-list, gear gardé, verrous d'annonces), seulement si le net bat la
+  vente (meilleur bid, sinon prix courant), est publiée `alch:<objet>`
+  dans `method_profit` des nœuds argent/pièces (`brain_alch::publish`) ;
+  `resolve_money` la classe avec les autres ; `required_tool` exige une
+  rune de nature et du feu (bâton accepté).
+- Tirage : un stock à alcher qui vaut le temps du bot comme une offre
+  (taux ≥ 2 × son taux, net ≥ 50, runes de nature en main pour ≥ 10
+  lancers) devient un but `MakeMoney` d'origine `alch:<objet>`
+  (ambition intacte).
+- Ventes : un lanceur ne liste pas ce qui s'alche mieux que ça ne se
+  vend (`alch_keep`) et ne vend jamais sous le net du lancer (plancher
+  `alch_floor`) : la valeur d'alchimie devient le plancher naturel du
+  marché.
+- Marché (`market_pass`, toutes les 600 s) : runes de nature pour le
+  stock à alcher (offre au prix courant + la moitié de la marge ; le
+  marché seulement : un spot de combat les lâche, D-A), et l'ask d'un
+  autre compte le plus loin sous `net − 5 ticks × taux` est acheté pour
+  l'alcher.
+- Limites : la tranche d'entraînement magie reste un sort de combat
+  (l'alchimie entraîne via les buts d'argent) ; aucun bot n'a magie 21
+  aujourd'hui (max 10), la règle s'allumera avec les mages.

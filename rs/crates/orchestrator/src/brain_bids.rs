@@ -91,8 +91,7 @@ fn volume_24h(item: &str) -> i64 {
     lifescape_gamedata::objs_by_name(item)
         .into_iter()
         .chain(lifescape_gamedata::objs_by_name(&format!("cert_{item}")))
-        .filter_map(|obj| store.executions_for_item(obj.obj_id as i64, clock - 86_400, clock + 1).ok())
-        .map(|fills| fills.iter().map(|fill| fill.quantity).sum::<i64>())
+        .filter_map(|obj| store.volume_between(obj.obj_id as i64, clock - 86_400, clock + 1).ok())
         .sum()
 }
 

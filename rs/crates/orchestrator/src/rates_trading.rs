@@ -205,8 +205,8 @@ pub struct TradingRow {
     pub stock_value: i64,
 }
 
-/// Trading rows with estimated prices (24 h VWAP else shop price, same as
-/// profit rows). Items with no position and no engagement are skipped.
+/// Trading rows with estimated prices (current price: last five fills,
+/// clamped by the book, same as profit rows). Items with no position and no engagement are skipped.
 pub fn trading_rows(store: &Store, book: &TradeBook) -> Vec<TradingRow> {
     let mut rows = Vec::new();
     for (item, stat) in &book.items {

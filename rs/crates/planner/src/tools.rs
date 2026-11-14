@@ -57,6 +57,12 @@ pub fn required_tool(method: &str) -> Option<ToolNeed> {
         let runes: Vec<String> = crate::method_way::spell_runes(&spell).into_iter().map(|(rune, _)| rune).collect();
         return (!runes.is_empty()).then_some(ToolNeed { tools: Vec::new(), consumables: runes });
     }
+    if method.starts_with("alch:") {
+        // Both alchemy spells burn one nature rune and fire runes (a
+        // staff of fire stands for the fire, `tool_family`).
+        let consumables = vec![crate::alchemy::NATURE_RUNE.to_string(), crate::alchemy::FIRE_RUNE.to_string()];
+        return Some(ToolNeed { tools: Vec::new(), consumables });
+    }
     let (_, way) = crate::method_way::method_way(method)?;
     let mut need = ToolNeed { tools: Vec::new(), consumables: Vec::new() };
     for tool in &way.tools {

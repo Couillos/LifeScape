@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
-//! Reference price and OHLCV buckets. The reference prefers traded
-//! reality (VWAP, then the last print ever), then the live book
-//! midpoint, then 1 coin: an object nobody ever traded is worth 1 until
-//! buyers bid it up (PRD3: NPC shop prices never anchor the market).
+//! Current price and OHLCV buckets. The current price is what a player
+//! reads (user 2026-11-14): the median of the last five fills, clamped
+//! by the live book; never traded, the book (midpoint, else its one
+//! side), then 1 coin (PRD3: NPC shop prices never anchor the market).
+//! The VWAP stays for the market page's 24 h change only (display).
 //! Buckets align on multiples of the width since the epoch, in clock
 //! seconds; every fill also carries its server tick for later joins.
 
@@ -42,29 +43,58 @@ pub fn vwap(fills: &[PricedFill]) -> Option<i64> {
     Some(((coins + qty / 2) / qty).max(1) as i64)
 }
 
-/// Reference price with its provenance: `traded` when it comes from
-/// real fills (only then does the 5x / 0.2x guard band apply).
+/// Current price with its provenance: `traded` when it comes from real
+/// fills (only then does the 5x / 0.2x guard band apply).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reference {
     pub price: i64,
     pub traded: bool,
 }
 
-/// Reference price: VWAP of `recent`, else the `last_print` ever, else
-/// the book midpoint (both sides needed), else 1 coin.
-pub fn reference_price(recent: &[PricedFill], last_print: Option<i64>, best_bid: Option<i64>, best_ask: Option<i64>) -> Reference {
-    if let Some(average) = vwap(recent) {
-        return Reference { price: average.max(1), traded: true };
+/// Fills a player looks at to price an object (user 2026-11-14: "the
+/// last trades I saw", never a 24 h average).
+pub const PRICE_FILLS: usize = 5;
+
+/// Median of the last `PRICE_FILLS` prices (`prices` oldest first, any
+/// age); an even count averages its two middles. `None` without fills.
+pub fn median_price(prices: &[i64]) -> Option<i64> {
+    let start = prices.len().saturating_sub(PRICE_FILLS);
+    let mut last: Vec<i64> = prices[start..].iter().copied().filter(|price| *price >= 1).collect();
+    if last.is_empty() {
+        return None;
     }
-    if let Some(last) = last_print.filter(|price| *price >= 1) {
-        return Reference { price: last, traded: true };
-    }
-    if let (Some(bid), Some(ask)) = (best_bid, best_ask) {
-        if bid >= 1 && ask >= 1 {
-            return Reference { price: ((bid + ask) / 2).max(1), traded: false };
+    last.sort_unstable();
+    let middle = last.len() / 2;
+    let median = if last.len() % 2 == 1 { last[middle] } else { (last[middle - 1] + last[middle] + 1) / 2 };
+    Some(median.max(1))
+}
+
+/// Current price as a player reads it (user 2026-11-14, replaces the
+/// 24 h VWAP reference in every bot decision): the median of the last
+/// five fills (`last_prices`, oldest first, any age), clamped by the
+/// live book (a bid above it is what the object fetches now, an ask
+/// below it is what it costs now). Never traded: the book midpoint, else
+/// its one side, else 1 coin (`traded: false`: the opening rules of the
+/// callers apply, `zip::seller_open` opens at twice the reserve).
+pub fn current_price(last_prices: &[i64], best_bid: Option<i64>, best_ask: Option<i64>) -> Reference {
+    let bid = best_bid.filter(|price| *price >= 1);
+    let ask = best_ask.filter(|price| *price >= 1);
+    if let Some(median) = median_price(last_prices) {
+        let mut price = median;
+        if let Some(bid) = bid.filter(|bid| *bid > price) {
+            price = bid;
         }
+        if let Some(ask) = ask.filter(|ask| *ask < price) {
+            price = ask;
+        }
+        return Reference { price: price.max(1), traded: true };
     }
-    Reference { price: 1, traded: false }
+    let price = match (bid, ask) {
+        (Some(bid), Some(ask)) => (bid + ask) / 2,
+        (Some(side), None) | (None, Some(side)) => side,
+        (None, None) => 1,
+    };
+    Reference { price: price.max(1), traded: false }
 }
 
 /// 24 h change of the displayed reference (thousandths): today's VWAP
@@ -143,14 +173,19 @@ mod tests {
     }
 
     #[test]
-    fn reference_falls_back_in_order() {
+    fn current_price_is_the_median_of_five_fills_clamped_by_the_book() {
         let traded = |price| super::Reference { price, traded: true };
         let quoted = |price| super::Reference { price, traded: false };
-        assert_eq!(reference_price(&[fill(10, 7, 1)], Some(3), Some(1), Some(2)), traded(7));
-        assert_eq!(reference_price(&[], Some(3), Some(4), Some(6)), traded(3), "last print beats the book");
-        assert_eq!(reference_price(&[], None, Some(4), Some(6)), quoted(5));
-        assert_eq!(reference_price(&[], None, Some(4), None), quoted(1), "one-sided book: never traded, 1 coin");
-        assert_eq!(reference_price(&[], None, None, None), quoted(1), "never traded: 1 coin, no shop anchor");
+        // Only the last five count, whatever their age.
+        assert_eq!(current_price(&[900, 1, 7, 8, 9, 10, 11], None, None), traded(9));
+        assert_eq!(current_price(&[3, 9], None, None), traded(6), "even count: the middles averaged");
+        assert_eq!(current_price(&[5, 5, 5], Some(8), None), traded(8), "a richer bid is the price now");
+        assert_eq!(current_price(&[5, 5, 5], None, Some(3), ), traded(3), "a cheaper ask is the price now");
+        assert_eq!(current_price(&[5, 5, 5], Some(4), Some(6)), traded(5), "the book inside the fills: the fills");
+        assert_eq!(current_price(&[], Some(4), Some(6)), quoted(5), "never traded: the midpoint");
+        assert_eq!(current_price(&[], Some(4), None), quoted(4), "never traded, one side: that side");
+        assert_eq!(current_price(&[], None, Some(9)), quoted(9));
+        assert_eq!(current_price(&[], None, None), quoted(1), "never traded: 1 coin, no shop anchor");
     }
 
     #[test]

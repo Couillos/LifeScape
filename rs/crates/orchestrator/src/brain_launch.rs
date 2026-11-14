@@ -199,8 +199,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, &life));
     // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
     crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, &life));
-    // Equipment ladder (2026-11-13): the next tier as a graph step, or a
-    // standing bid that waits for a producer.
+    // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
+    // asks under the alch floor bought to alch.
+    crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
+    // Gear plan (2026-11-14): the best affordable piece of every slot,
+    // standing bids that wait for a producer, steps for covered asks.
     if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
         dirty = true;
     }
@@ -324,6 +327,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         Some((part(1)?, part(2)?, part(0)?))
     });
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
+    // Alchemy of its own stock is a money method too (2026-11-14).
+    crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
     drop(ctx_phase);
     // An obtain the holdings already meet closes without a launch
     // (positive proof: pack, bank, worn), like a met coin target below.

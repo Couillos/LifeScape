@@ -11,7 +11,7 @@
 //! away past what buyers will pay?
 
 use crate::book::{Book, Side};
-use crate::price::{reference_price, PricedFill};
+use crate::price::{current_price, PricedFill};
 use crate::sim::FixedRng;
 use crate::zip::step_toward;
 
@@ -77,8 +77,7 @@ pub fn run_formation(mut traders: Vec<Trader>, arrivals: Vec<(usize, Trader)>, r
             if traders[who].units <= 0 {
                 continue;
             }
-            let recent: Vec<PricedFill> = fills.iter().rev().take(20).cloned().collect();
-            let reference = reference_price(&recent, prints.last().copied(), None, None).price;
+            let reference = current_price(&prints, None, None).price;
             let (bid, ask) = book.best();
             let price = match resting[who] {
                 // Unfilled since last round: one step toward the market.
@@ -111,9 +110,8 @@ pub fn run_formation(mut traders: Vec<Trader>, arrivals: Vec<(usize, Trader)>, r
             resting[who] = if rests && traders[who].units > 0 { Some((id, price)) } else { None };
         }
     }
-    let recent: Vec<PricedFill> = fills.iter().rev().take(20).cloned().collect();
     let volume = fills.iter().map(|fill| fill.quantity).sum();
-    Formation { final_reference: reference_price(&recent, prints.last().copied(), None, None).price, prints, max_ceiling, volume }
+    Formation { final_reference: current_price(&prints, None, None).price, prints, max_ceiling, volume }
 }
 
 fn trader(name: &str, buying: bool, units: i64, bound: i64) -> Trader {

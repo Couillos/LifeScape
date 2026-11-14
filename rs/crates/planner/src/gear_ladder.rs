@@ -17,6 +17,11 @@
 //!   shop: every step is producible, D-A).
 //!
 //! Pure: levels, holdings and market numbers come in as arguments.
+//!
+//! Since 2026-11-14 the CHOICE of pieces is `gear_plan` (best affordable
+//! piece of every slot at once, every combat style); this module keeps
+//! the step mechanics (`step_open`, `withdraw_dead_steps`, `next_ready`,
+//! `withdraw_due`, wallet shares) and the older tier helpers.
 
 use crate::expand::ReadyCtx;
 use crate::model::{Life, Node, NodeKind, NodeStatus};

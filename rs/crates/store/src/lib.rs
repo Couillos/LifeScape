@@ -22,6 +22,7 @@ pub mod errors;
 pub mod holdings;
 pub mod items;
 pub mod orders;
+pub mod prices;
 pub mod reports;
 pub mod schema;
 

@@ -20,7 +20,7 @@ pub use book::{Book, Fill, Order, Side};
 pub use deals::{Deal, DealStatus, FailReason};
 pub use error::Error;
 pub use guards::{check_coverage, check_price};
-pub use price::{bucketize, change_thousandths, reference_price, vwap, Candle, PricedFill, Reference};
+pub use price::{bucketize, change_thousandths, current_price, median_price, vwap, Candle, PricedFill, Reference, PRICE_FILLS};
 pub use trends::{compute_trend, TrendInput, TrendScores};
 pub use zip::{
     demand_step, flip_quotes, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,

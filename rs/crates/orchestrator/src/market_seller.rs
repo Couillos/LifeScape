@@ -127,7 +127,8 @@ impl MarketService {
     /// every OTHER account's bids, every resting ask, 24 h volume.
     pub(crate) fn public_view(&self, account: &str, item: i64) -> BookView {
         let clock = Self::now_clock();
-        let volume_24h: i64 = self.lock_store().executions_for_item(item, clock - 86_400, clock + 1).unwrap_or_default().iter().map(|exec| exec.quantity).sum();
+        // One indexed SUM, never the rows (CPU: hottest pool call).
+        let volume_24h: i64 = self.lock_store().volume_between(item, clock - 86_400, clock + 1).unwrap_or(0);
         let mut view = BookView { volume_24h, ..BookView::default() };
         if let Some(book) = self.lock_engine().books.get(&item) {
             for order in book.orders().into_iter().filter(|order| order.remaining > 0) {

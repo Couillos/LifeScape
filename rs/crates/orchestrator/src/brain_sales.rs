@@ -299,6 +299,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let mut wished: Vec<String> = crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item).collect();
     let live = job.inner.try_lock().ok().and_then(|inner| inner.live.clone()).unwrap_or(Value::Null);
     wished.extend(crate::brain_gear::ladder_keep(job, life, &live));
+    // A caster keeps what alchs for more than it sells (2026-11-14).
+    wished.extend(crate::brain_alch::alch_keep(life, &live));
     let stacks = crate::brain_plan::live_stacks(job);
     let tools = crate::brain_tools::kept_tools(life, &stacks);
     wished.extend(tools.iter().cloned());
@@ -355,7 +357,12 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         }
         let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied());
         let (lot, price, floor) = match decision {
-            crate::market_seller::SaleDecision::List { qty: lot, price, floor } => (lot, price, floor),
+            // The alch floor (2026-11-14): a caster never sells under what
+            // the cast nets it.
+            crate::market_seller::SaleDecision::List { qty: lot, price, floor } => match crate::brain_alch::alch_floor(&live, &name) {
+                Some(alch) if alch > floor => (lot, price.max(alch), alch),
+                _ => (lot, price, floor),
+            },
             crate::market_seller::SaleDecision::Hold(why) => {
                 crate::logln!("brain {}: holding {qty} {name} ({why})", job.account);
                 continue;

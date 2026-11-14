@@ -10,9 +10,9 @@
 //! never lists a wished object. Once owned, the kit's gear pass wears it
 //! at the next bank stop.
 //!
-//! Since 2026-11-13 melee (and non-combat) goals climb the equipment
-//! ladder instead (`brain_gear`: one tier at a time, as graph steps):
-//! their wishes are the tools only. Ceilings are wallet shares that rise
+//! Since 2026-11-14 the gear of every style is the gear plan's
+//! (`brain_gear` + `planner::gear_plan`: best affordable piece of every
+//! slot at once): the wishes are the tools only. Ceilings are wallet shares that rise
 //! as coins come in: `TOOL_SHARE_PCT` (25 %) per tool, `GEAR_SHARE_PCT`
 //! (50 %) split across ranged/magic gear wishes, each of the FREE wallet
 //! (`brain_gear::free_coins`: coins minus the bot's other resting buys).
@@ -122,9 +122,9 @@ pub fn wishlist(job: &Job, life: &Life) -> Vec<Wish> {
     let mut owned: Vec<String> = crate::brain_plan::live_stacks(job).into_iter().map(|(name, _)| name).collect();
     owned.extend(crate::brain_plan::worn_names(job));
     let mut list = wishes(style_of(life), &levels, &owned, &["pickaxe", "axe"]);
-    if crate::brain_gear::ladder_goal(life) {
-        list.retain(is_tool_wish);
-    }
+    // Gear of every style is the gear plan's (`brain_gear`, 2026-11-14):
+    // the wishlist keeps the tools.
+    list.retain(is_tool_wish);
     list
 }
 

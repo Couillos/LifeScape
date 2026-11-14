@@ -215,6 +215,14 @@ pub enum StandingBid {
 /// ask, else at the bot's own last fill on the item, else the reference
 /// (`remembered_bid`, 2026-11-14).
 pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, ceiling: i64) -> Result<StandingBid, String> {
+    keep_bid_from(service, account, item, qty, 1, ceiling)
+}
+
+/// `keep_bid` whose NEW bid opens at least at `open_at` (never over the
+/// ceiling): what the buyer knows the object is worth (the gear plan's
+/// expected price, 2026-11-14: a never-traded platebody bid opened at 1
+/// and climbed 5 % per window for hours). A resting bid keeps its walk.
+pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64, open_at: i64, ceiling: i64) -> Result<StandingBid, String> {
     let ceiling = ceiling.max(1);
     let open = service.lock_store().account_orders(account).unwrap_or_default().into_iter().find(|row| {
         row.item_id == item && row.side == lifescape_store::OrderSide::Buy && resting(row)
@@ -253,7 +261,10 @@ pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, cei
     }
     let reference = service.reference(item);
     let (_, ask) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-    let price = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price(account, item));
+    let remembered = lifescape_market::remembered_bid(reference.price, ask, ceiling, service.own_buy_price(account, item));
+    // A covered ask is taken at its price; otherwise the bid opens at
+    // what the buyer knows the object is worth, at least.
+    let price = if ask.is_some_and(|ask| ask >= 1 && ask <= ceiling) { remembered } else { remembered.max(open_at.min(ceiling)) };
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(account)),

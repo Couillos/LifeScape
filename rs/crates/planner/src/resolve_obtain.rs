@@ -244,6 +244,10 @@ pub fn money_methods(ctx: &ReadyCtx) -> Vec<String> {
         "fight:melee/chickens".to_string(),
     ];
     out.extend(COIN_SPOTS.iter().map(|spot| format!("fight:melee/{spot}")));
+    // Alchemy of the bot's own stock (2026-11-14): the brain prices it
+    // per object (`brain_alch`, `alchemy::best_alch`) and publishes it in
+    // `method_profit` only when the cast beats selling.
+    out.extend(ctx.method_profit.iter().filter(|(method, profit)| method.starts_with("alch:") && *profit > 0.0).map(|(method, _)| method.clone()));
     out.dedup();
     out
 }
@@ -325,6 +329,21 @@ mod tests {
     /// NPC shops never buy (PRD3): coins enter only as drops. A coin
     /// target goes to the spot that drops the most coins; the site pick
     /// falls back down the list when combat is too low.
+    #[test]
+    fn alching_own_stock_is_a_money_method_with_its_runes() {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.method_profit.push(("alch:steel_platebody".to_string(), 200_000.0));
+        ctx.bank_known = true;
+        ctx.tools = vec!["naturerune".to_string(), "staff_of_fire".to_string(), "bronze_pickaxe".to_string(), "bronze_axe".to_string()];
+        let mut money = Node::new("n10", NodeKind::MakeMoney, Vec::new(), 0);
+        resolve_money(&mut money, &ctx);
+        assert_eq!(money.method.as_deref(), Some("alch:steel_platebody"), "{:?}", money.alternatives);
+        ctx.tools.retain(|tool| tool != "naturerune");
+        let mut broke = Node::new("n11", NodeKind::MakeMoney, Vec::new(), 0);
+        resolve_money(&mut broke, &ctx);
+        assert_ne!(broke.method.as_deref(), Some("alch:steel_platebody"), "no nature rune, no cast");
+    }
+
     #[test]
     fn coin_targets_farm_coin_drops_first() {
         assert!((coins_per_kill("fight:melee/men") - 8.2).abs() < 0.1, "men drop ~8.2 coins: {}", coins_per_kill("fight:melee/men"));

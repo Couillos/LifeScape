@@ -1,34 +1,35 @@
 #![forbid(unsafe_code)]
-//! Equipment ladder in the brain (user rule 2026-11-13; pure rules in
-//! `lifescape_planner::gear_ladder`). Once per `GEAR_EVERY_SECS` for an
-//! idle, non-Iron bot of a melee (or non-combat) goal:
-//! - a dead ladder step (abandoned) leaves the graph on EVERY pass, any
+//! Equipment in the brain (user 2026-11-14: "les bots qui font de la
+//! mêlée devraient vouloir le meilleur matériel pour leur combat lvl";
+//! pure rules in `lifescape_planner::gear_plan`, the ladder module keeps
+//! the step mechanics). Once per `GEAR_EVERY_SECS` for an idle, non-Iron
+//! bot, whatever its goal's style (melee, ranged, magic; non-combat
+//! goals fight melee):
+//! - a dead gear step (abandoned) leaves the graph on EVERY pass, any
 //!   goal style (`withdraw_dead`, before `graph_state`: never a Stuck goal);
-//! - ceilings share the FREE wallet (`free_coins`: coins minus what the
-//!   bot's other resting buys commit); a goal leaving melee cancels its
-//!   ladder bids;
-//! - with no step open, the ladder names the next piece (one tier above
-//!   what the bot owns, weapon first, by its live levels) and:
-//!   - an owned piece not worn yet → an `equip_best` step;
-//!   - a seller on the market, or a wallet too thin to bid → an
-//!     `obtain_items` (market only) + `equip_best` step, launched before
-//!     the goal's next node: a covered ask is bought at once, a dearer one
-//!     blocks on the wallet whose share covers it (`have_coins` on the
-//!     coin-dropping spots);
-//!   - no seller → a standing bid (D-B) at the reference walking up to
-//!     `GEAR_SHARE_PCT` of the wallet: it waits for a producer while the
-//!     bot keeps working, its ceiling following the wallet.
-//! - Bids on other ladder pieces (an older step, an old best-gear wish)
-//!   are cancelled: one gear budget at a time.
+//! - an owned piece better than the worn one → an `equip_best` step;
+//! - every slot (weapon, body, legs, helm, shield, boots, gloves, amulet,
+//!   cape) wants the best piece the bot's levels open that its gear
+//!   budget affords (`gear_plan::plan_gear`): budget = `GEAR_SHARE_PCT`
+//!   of the wallet left free by its non-gear buys; expected price = the
+//!   median of the last five fills, else the high alchemy value; each
+//!   want bids its budget share (`keep_bid`: opens at the current price,
+//!   climbs with patience), ALL slots at once (live 2026-11-14: one
+//!   bronze scimitar at a time for level 50 fighters, nothing else);
+//! - a want with a resting ask under its ceiling, or one only an NPC
+//!   shop sells (D-A), becomes an `obtain_items` + `equip_best` step
+//!   (one open step at a time), launched before the goal's next node;
+//! - bids on wearables the plan no longer wants are cancelled (a slot
+//!   upgraded past it, a tier the budget dropped).
 //!
-//! Ranged and magic goals keep the wishlist (`brain_wishlist`): the
-//! ladder is the melee metal set.
+//! Tools stay with the wishlist (`brain_wishlist`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
-use lifescape_planner::gear_ladder::{self, GearMove, LADDER};
+use lifescape_gamedata::gear::Style;
+use lifescape_planner::{gear_ladder, gear_plan};
 use lifescape_planner::Life;
 
 use crate::brain::push_history;
@@ -54,10 +55,15 @@ fn last_equip() -> &'static Mutex<HashMap<(String, String), f64>> {
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// True when the goal fights melee or does not fight (producers fight
-/// melee too, `goal_combat_style`).
+/// Combat style of the life's goal (non-combat goals fight melee).
+pub fn goal_style(life: &Life) -> Style {
+    Style::parse(lifescape_planner::goal_combat_style(&life.goal))
+}
+
+/// Still true for melee and non-combat goals (callers that only speak of
+/// the melee ladder: the wishlist keeps tools only either way now).
 pub fn ladder_goal(life: &Life) -> bool {
-    lifescape_planner::goal_combat_style(&life.goal) == "melee"
+    goal_style(life) == Style::Melee
 }
 
 pub(crate) fn obj_id(item: &str) -> Option<i64> {
@@ -72,20 +78,30 @@ fn holdings(job: &Job) -> (Vec<String>, Vec<String>) {
     (owned, worn)
 }
 
-/// Ladder pieces the sales pass must never list: the best piece per slot
-/// the bot may wield (and higher tiers), plus the next step's object.
+/// Gear the sales pass must never list: per style and slot, the best
+/// piece the bot may wear and any better one (`gear_plan::kept_gear`).
+/// Replaced pieces are surplus: sold (or alched) by the default sales.
 pub fn ladder_keep(job: &Job, life: &Life, live: &Value) -> Vec<String> {
-    if life.profile.ironman || !ladder_goal(life) {
+    if life.profile.ironman {
         return Vec::new();
     }
     let levels_owned = crate::brain_market::live_levels(live);
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
+    let quests = crate::brain_rescue::quests_done(life);
+    let quests: Vec<&str> = quests.iter().map(String::as_str).collect();
     let (owned, _) = holdings(job);
-    let mut keep = gear_ladder::kept_pieces(&levels, &owned);
-    keep.extend(gear_ladder::next_gear_step(&levels, &owned).map(|step| step.item));
-    keep
+    gear_plan::kept_gear(&levels, &quests, &owned)
 }
 
+/// A wearable bid the gear plan owns (tools stay with the wishlist).
+fn gear_wearable(name: &str) -> bool {
+    let tool = name.ends_with("_pickaxe") || (name.ends_with("_axe") && !name.contains("battleaxe"));
+    !tool && lifescape_gamedata::equipment::by_name(name).is_some()
+}
+
+fn name_of(item_id: i64) -> Option<String> {
+    lifescape_gamedata::obj_by_id(usize::try_from(item_id).ok()?).and_then(|obj| obj.name).map(str::to_string)
+}
 
 /// A buy still resting on the book: open, or partly matched with a
 /// remainder (review 2026-11-13: `Matched` rows escaped the cancels).
@@ -132,6 +148,28 @@ pub(crate) fn free_coins(job: &Job, except: Option<i64>) -> i64 {
     (crate::brain_plan::holdings_count(job, "coins") - committed_coins(&job.account, except)).max(0)
 }
 
+/// The wallet the gear budget shares: coins minus what the bot's
+/// NON-gear resting buys and in-flight deals commit (the gear bids are
+/// re-shared by the plan itself, never counted against it).
+fn gear_free_coins(job: &Job) -> i64 {
+    let coins = crate::brain_plan::holdings_count(job, "coins");
+    let Some(service) = crate::market_service::shared() else { return coins.max(0) };
+    let store = service.lock_store();
+    let rows = store.account_orders(&job.account).unwrap_or_default();
+    let deals = store.open_deals_for_account(&job.account).unwrap_or_default();
+    drop(store);
+    let other: Vec<lifescape_store::Order> = rows.into_iter().filter(|row| !name_of(row.item_id).is_some_and(|name| gear_wearable(&name))).collect();
+    (coins - committed_from(&other, None) - deal_coins_from(&job.account, &deals)).max(0)
+}
+
+/// Expected price of a piece: the median of its last five fills (the
+/// bot's own resting bid never moves it), else its high alchemy value
+/// (the natural floor), at least 1.
+fn expected_price(service: Option<&std::sync::Arc<crate::market_service::MarketService>>, item: &str) -> i64 {
+    let traded = service.zip(obj_id(item)).and_then(|(service, id)| lifescape_market::median_price(&service.last_fill_prices(id)));
+    traded.unwrap_or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_high).unwrap_or(1)).max(1)
+}
+
 fn cancel_order(service: &crate::market_service::MarketService, account: &str, order: i64) -> bool {
     let reply = service.handle(&lifescape_json::object(vec![
         ("op", lifescape_json::str_value("cancel")),
@@ -141,28 +179,19 @@ fn cancel_order(service: &crate::market_service::MarketService, account: &str, o
     reply.get("ok").as_bool() == Some(true)
 }
 
-/// Cancels the account's resting buys on wearables other than `step`: an
-/// older ladder step, or a best-gear wish of the old wishlist (black
-/// platebody, amulet of power: live 2026-11-13). Spared: what the
-/// graph's own obtains want, and tools (the wishlist keeps those). With
-/// `ladder_only`, only ladder pieces go (a goal that left melee: its
-/// ranged/magic wishes stay, review 2026-11-13).
-fn cancel_stale_bids(job: &Job, life: &Life, step: Option<&str>, ladder_only: bool) {
+/// Cancels the account's resting buys on wearables the gear plan does
+/// not want (`wanted`): an upgraded slot, a tier the budget dropped, an
+/// old ladder step or wish. Spared: what the graph's own obtains want,
+/// and tools (the wishlist keeps those).
+fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String]) {
     let Some(service) = crate::market_service::shared() else { return };
-    let mut spared = crate::brain_wishlist::wanted_names(life);
-    if ladder_only {
-        spared.extend(crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item));
-    }
+    let spared = crate::brain_wishlist::wanted_names(life);
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
     for row in rows.iter().filter(|row| cancellable(row)) {
-        let Some(name) = lifescape_gamedata::obj_by_id(row.item_id as usize).and_then(|obj| obj.name).map(str::to_string) else { continue };
-        let ladder_piece = LADDER.iter().any(|slot| gear_ladder::piece_rank(slot, &name).is_some());
-        let tool = name.ends_with("_pickaxe") || (name.ends_with("_axe") && !name.contains("battleaxe"));
-        let gear = ladder_piece || (!ladder_only && lifescape_gamedata::equipment::by_name(&name).is_some() && !tool);
-        if gear && Some(name.as_str()) != step && !spared.contains(&name) {
+        let Some(name) = name_of(row.item_id) else { continue };
+        if gear_wearable(&name) && !wanted.contains(&name) && !spared.contains(&name) {
             let closed = cancel_order(&service, &job.account, row.order_id);
-            let why = if ladder_only { "the goal left the melee ladder" } else { "not the ladder step" };
-            crate::logln!("brain {}: gear bid {} on {name} cancelled ({closed}): {why}", job.account, row.order_id);
+            crate::logln!("brain {}: gear bid {} on {name} cancelled ({closed}): not wanted by the gear plan", job.account, row.order_id);
         }
     }
 }
@@ -206,9 +235,32 @@ fn withdraw_dead_steps_logged(job: &Job, life: &mut Life) -> bool {
     true
 }
 
-/// One ladder pass. Returns true when the life changed (save it).
+fn file_step(job: &Job, life: &mut Life, item: Option<&str>, style: Style, why: &str) {
+    let ids = lifescape_planner::insert_gear_step(life, item, style_name(style));
+    crate::logln!("brain {}: gear step {} ({why}): {}", job.account, item.unwrap_or("equip"), ids.join(", "));
+    for id in &ids {
+        push_history(life, id, "gear_step");
+    }
+    lifescape_planner::normalize(life);
+}
+
+fn style_name(style: Style) -> &'static str {
+    match style {
+        Style::Melee => "melee",
+        Style::Ranged => "ranged",
+        Style::Magic => "magic",
+    }
+}
+
+/// True for a piece only an NPC shop sells (D-A): no bid ever fills, the
+/// bot walks to the shop through an obtain step.
+fn shop_only(item: &str) -> bool {
+    lifescape_gamedata::obtain::merchant_buy_allowed(item)
+}
+
+/// One gear pass. Returns true when the life changed (save it).
 pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
-    let changed = withdraw_dead(job, life);
+    let mut changed = withdraw_dead(job, life);
     if life.profile.ironman {
         return changed;
     }
@@ -220,75 +272,64 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         }
         table.insert(job.account.clone(), now);
     }
-    if !ladder_goal(life) {
-        // A goal that left melee (ranged, magic) drops its ladder bids:
-        // their coins go back to the wallet its wishes share.
-        cancel_stale_bids(job, life, None, true);
-        return changed;
-    }
-    if gear_ladder::step_open(life) {
-        return changed;
-    }
-    let mut changed = changed;
     let levels_owned = crate::brain_market::live_levels(live);
     if levels_owned.is_empty() {
         return changed;
     }
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
+    let quests_owned = crate::brain_rescue::quests_done(life);
+    let quests: Vec<&str> = quests_owned.iter().map(String::as_str).collect();
+    let style = goal_style(life);
     let (owned, worn) = holdings(job);
-    let step = gear_ladder::next_gear_step(&levels, &owned);
-    let unworn = gear_ladder::unworn_upgrade(&levels, &owned, &worn);
-    let step_id = step.as_ref().and_then(|step| obj_id(&step.item));
-    let coins = free_coins(job, step_id);
-    let service = crate::market_service::shared();
-    let (best_ask, reference) = match (&service, step_id) {
-        (Some(service), Some(id)) => {
-            let ask = service.lock_engine().books.get(&id).and_then(|book| book.best().1);
-            (ask, service.reference(id).price)
-        }
-        _ => (None, 1),
-    };
-    let decision = gear_ladder::gear_move(step.as_ref(), unworn.as_deref(), coins, best_ask, reference);
-    cancel_stale_bids(job, life, step.as_ref().map(|step| step.item.as_str()), false);
-    match decision {
-        GearMove::Wait => {}
-        GearMove::Equip { item } => {
+    let mut step_open = gear_ladder::step_open(life);
+    if !step_open {
+        if let Some(item) = gear_plan::unworn_upgrade(style, &levels, &quests, &owned, &worn) {
             let key = (job.account.clone(), item.clone());
             let mut table = last_equip().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if table.get(&key).is_none_or(|last| now - last >= EQUIP_RETRY_SECS) {
                 table.insert(key, now);
-                let ids = lifescape_planner::insert_gear_step(life, None, "melee");
-                crate::logln!("brain {}: gear {item} owned, not worn: equip step {}", job.account, ids.join(", "));
-                for id in &ids {
-                    push_history(life, id, "gear_step");
-                }
-                lifescape_planner::normalize(life);
+                drop(table);
+                file_step(job, life, None, style, &format!("{item} owned, not worn"));
+                step_open = true;
                 changed = true;
             }
         }
-        GearMove::Obtain { item } => {
-            let ids = lifescape_planner::insert_gear_step(life, Some(&item), "melee");
-            crate::logln!(
-                "brain {}: gear step {item} (ask {best_ask:?}, wallet {coins}, cap {}): {}",
-                job.account,
-                gear_ladder::wallet_ceiling(coins, gear_ladder::GEAR_SHARE_PCT),
-                ids.join(", ")
-            );
-            for id in &ids {
-                push_history(life, id, "gear_step");
-            }
-            lifescape_planner::normalize(life);
-            changed = true;
+    }
+    let service = crate::market_service::shared();
+    let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
+    let wants = gear_plan::plan_gear(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    let wanted: Vec<String> = wants.iter().map(|want| want.item.clone()).collect();
+    cancel_stale_bids(job, life, &wanted);
+    let stepping = crate::brain_wishlist::wanted_names(life);
+    for want in &wants {
+        if stepping.contains(&want.item) {
+            continue;
         }
-        GearMove::StandingBid { item, ceiling, .. } => {
-            let (Some(service), Some(id)) = (service, obj_id(&item)) else { return changed };
-            match crate::market_reprice::keep_bid(&service, &job.account, id, 1, ceiling) {
-                Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
-                    crate::logln!("brain {}: gear {item} standing bid @ {price} (ceiling {ceiling}, wallet {coins}), waiting for a producer", job.account);
-                }
-                Ok(crate::market_reprice::StandingBid::Kept { .. }) => {}
-                Err(error) => crate::logln!("brain {}: gear {item} standing bid refused: {error}", job.account),
+        let id = obj_id(&want.item);
+        let best_ask = service.as_ref().zip(id).and_then(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1));
+        let covered = best_ask.is_some_and(|ask| ask <= want.ceiling);
+        if covered || shop_only(&want.item) {
+            if !step_open {
+                let why = format!("ask {best_ask:?}, ceiling {}, budget {budget}", want.ceiling);
+                file_step(job, life, Some(&want.item), style, &why);
+                step_open = true;
+                changed = true;
             }
+            continue;
+        }
+        let (Some(service), Some(id)) = (service.as_ref(), id) else { continue };
+        match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, want.ceiling) {
+            Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
+                crate::logln!(
+                    "brain {}: gear {} bid @ {price} (expected {}, ceiling {}, budget {budget}), waiting for a producer",
+                    job.account,
+                    want.item,
+                    want.expected,
+                    want.ceiling
+                );
+            }
+            Ok(crate::market_reprice::StandingBid::Kept { .. }) => {}
+            Err(error) => crate::logln!("brain {}: gear {} bid refused: {error}", job.account, want.item),
         }
     }
     changed

@@ -11,8 +11,9 @@
 //! if verdict.profit_per_6000 > 0.0 { /* worth making: train/produce, buy inputs */ }
 //! ```
 //! - `prices`: per-unit market prices by debug name — the object's own
-//!   (the best resting bid when a buyer waits, else the reference: 24 h
-//!   VWAP, last print, mid, 1 coin) and every input's (the reference, or
+//!   (the best resting bid when a buyer waits, else the current price:
+//!   median of the last five fills clamped by the book, else the book,
+//!   else 1 coin) and every input's (the current price, or
 //!   the best ask when the producer must buy it). Never an NPC shop price.
 //! - `units_per_6000`: measured output per 6000 ticks (rates page,
 //!   `task_yields`), or the cold-start prior.
