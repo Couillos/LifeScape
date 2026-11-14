@@ -76,12 +76,12 @@ fn coins_per_tick_never_falls_under_the_shared_floor() {
 #[test]
 fn reserve_prefers_measured_then_planned_then_prior_and_covers_purchases() {
     let rate = 0.1;
-    assert_eq!(reserve_of(Some(43.6), Some(10.0), Some(5.0), rate, None, None), Some(Reserve { coins: 5, source: CostSource::Measured }));
-    assert_eq!(reserve_of(None, Some(30.0), Some(5.0), rate, None, None), Some(Reserve { coins: 3, source: CostSource::Planned }));
-    assert_eq!(reserve_of(None, None, Some(33.3), rate, None, None), Some(Reserve { coins: 4, source: CostSource::Prior }));
-    assert_eq!(reserve_of(Some(20.0), None, None, rate, Some(9), None), Some(Reserve { coins: 9, source: CostSource::Bought }), "never under what it paid");
-    assert_eq!(reserve_of(None, None, None, rate, Some(4), None), Some(Reserve { coins: 4, source: CostSource::Bought }));
-    assert_eq!(reserve_of(None, None, None, rate, None, None), None, "no own cost: hold, never 1 coin");
+    assert_eq!(reserve_of(Some(43.6), Some(10.0), Some(5.0), rate, 0.0, None, None), Some(Reserve { coins: 5, source: CostSource::Measured }));
+    assert_eq!(reserve_of(None, Some(30.0), Some(5.0), rate, 0.0, None, None), Some(Reserve { coins: 3, source: CostSource::Planned }));
+    assert_eq!(reserve_of(None, None, Some(33.3), rate, 0.0, None, None), Some(Reserve { coins: 4, source: CostSource::Prior }));
+    assert_eq!(reserve_of(Some(20.0), None, None, rate, 0.0, Some(9), None), Some(Reserve { coins: 9, source: CostSource::Bought }), "never under what it paid");
+    assert_eq!(reserve_of(None, None, None, rate, 0.0, Some(4), None), Some(Reserve { coins: 4, source: CostSource::Bought }));
+    assert_eq!(reserve_of(None, None, None, rate, 0.0, None, None), None, "no own cost: hold, never 1 coin");
 }
 
 /// A bid quota is priced at the make cost (`bid_response`): the reserve
@@ -89,12 +89,12 @@ fn reserve_prefers_measured_then_planned_then_prior_and_covers_purchases() {
 /// answered would buy.
 #[test]
 fn the_reserve_never_exceeds_the_bid_response_make_cost() {
-    let slow = reserve_of(Some(120.0), None, None, 0.1, None, Some(7.9));
+    let slow = reserve_of(Some(120.0), None, None, 0.1, 0.0, None, Some(7.9));
     assert_eq!(slow, Some(Reserve { coins: 7, source: CostSource::MakeCost }), "12 capped at floor(7.9)");
-    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, None, Some(30.0)), Some(Reserve { coins: 4, source: CostSource::Measured }), "under the cap: its own cost");
-    assert_eq!(reserve_of(None, None, None, 0.1, Some(20), Some(9.0)).map(|reserve| reserve.coins), Some(9));
-    assert_eq!(reserve_of(None, None, None, 0.1, None, Some(9.0)), None, "the cap alone is no own cost");
-    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, None, Some(0.4)).map(|reserve| reserve.coins), Some(1));
+    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, 0.0, None, Some(30.0)), Some(Reserve { coins: 4, source: CostSource::Measured }), "under the cap: its own cost");
+    assert_eq!(reserve_of(None, None, None, 0.1, 0.0, Some(20), Some(9.0)).map(|reserve| reserve.coins), Some(9));
+    assert_eq!(reserve_of(None, None, None, 0.1, 0.0, None, Some(9.0)), None, "the cap alone is no own cost");
+    assert_eq!(reserve_of(Some(40.0), None, None, 0.1, 0.0, None, Some(0.4)).map(|reserve| reserve.coins), Some(1));
 }
 
 #[test]
@@ -117,4 +117,31 @@ fn planner_estimates_come_from_the_bots_own_graph() {
 fn reserves_round_up_and_never_reach_zero() {
     assert_eq!(reserve_coins(43.6, 0.082), 4);
     assert_eq!(reserve_coins(0.5, 0.01), 1);
+}
+
+/// Live bst29bh9: the forged helms were held "no own cost known". A
+/// processing report now names its product (`produced`) and the inputs
+/// it ate (`consumed`): one helm owes its smithing ticks plus two iron
+/// bars, each bar its smelting ticks plus two iron ores (cold-start
+/// mining ticks, never under the ore's own purchase price).
+#[test]
+fn processed_units_cost_their_ticks_plus_their_inputs() {
+    let reports = vec![
+        report("smelt", 300, vec![line("Iron bar", "produced", 10), line("Iron ore", "consumed", -20)]),
+        report("smith", 200, vec![line("Iron full helm", "produced", 2), line("Iron bar", "consumed", -4)]),
+    ];
+    assert_eq!(measured_inputs_per_unit(&reports, "Iron full helm", &flat), vec![("Iron bar".to_string(), 2.0)]);
+    assert_eq!(measured_inputs_per_unit(&reports, "Iron bar", &flat), vec![("Iron ore".to_string(), 2.0)]);
+    assert!(measured_inputs_per_unit(&reports, "Iron ore", &flat).is_empty(), "nothing made it");
+    let costs = OwnCosts { account: "bst29bh9".to_string(), reports, coins_per_tick: 0.5 };
+    let ore_ticks = prior_ticks_per_unit("Iron ore").expect("mining prior for iron ore");
+    let ore = (ore_ticks * 0.5).max(10.0);
+    let bought = |display: &str| (display == "Iron ore").then_some(10.0);
+    let bar = 30.0 * 0.5 + 2.0 * ore;
+    assert!((costs.unit_cost(&bought, "Iron bar", INPUT_DEPTH) - bar).abs() < 1e-6, "bar = ticks + ores");
+    let inputs = costs.input_coins(&bought, "Iron full helm", INPUT_DEPTH);
+    assert!((inputs - 2.0 * bar).abs() < 1e-6, "helm inputs = two bars, got {inputs}");
+    let helm_ticks = measured_ticks_per_unit(&costs.reports, "Iron full helm", &flat);
+    let reserve = reserve_of(helm_ticks, None, None, 0.5, inputs, None, None).expect("an own cost");
+    assert_eq!(reserve, Reserve { coins: (100.0 * 0.5 + 2.0 * bar).ceil() as i64, source: CostSource::Measured });
 }

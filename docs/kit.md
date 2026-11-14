@@ -303,3 +303,29 @@ et s'arrête sur `--want`/`--level`/budget comme `alchemy` et
 `enchant_teleport` (`poll_stop`). `mill_grain` prend la trémie la plus
 proche du `--site`. Les ordres `market buy|sell|flip|cleanup` ne portent
 plus `--site` ni `toll` (seul `shopbuy` marche vers un marchand).
+
+## Banque pleine (2026-11-14)
+
+Serveur (`bank.rs2`, `bank_check_allowed`) : une banque F2P qui occupe
+60 cases refuse tout type NOUVEAU (« You need to subscribe for a members
+account… ») ; un type déjà en banque s'empile toujours. Live bst29bh9 :
+chaque `smelt` et `mill_grain` échouait `deposit did not clear` sur le
+seul marteau acheté pour la forge. `kit/bank_full.rs` :
+`bank_trip` dépose ce qui rentre (`deposit_what_fits`) et garde dans le
+sac les types refusés (outils compris, loggé `bank full: kept …`) ;
+il n'échoue que quand un reste n'a aucune raison de rester (aucun refus
+du serveur, type déjà en banque) ou quand le sac n'a plus une case pour
+la charge (`deposit_verdict`). `bank_trip_resilient` ne cherche pas une
+autre banque quand c'est le produit de la charge qui est refusé (même
+compte, même banque pleine) : `bank full: … load stuck`.
+
+Concierge (`market cleanup`) : les comptes lisent le SAC
+(`Bot::pack_count`, `janitor::packed`) et la DERNIÈRE banque connue
+(`janitor::known_bank`, ouverte ou gardée à sa fermeture), jamais
+`inventory()` (banque ouverte = banque + miroir comptés comme portés) ni
+`bank_items()` (vide dès qu'un retrait ferme la boîte : D17 lisait
+« vidé, sous la limite » après la première pile). Le surplus se met en
+vente là où il est (sac + banque, le carnet réserve le stock en banque) ;
+une pile que le vendeur garde (aucun coût propre) ou que le carnet
+refuse est un candidat D17, lâchée pile entière jusqu'à repasser sous
+55 types.

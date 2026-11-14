@@ -265,14 +265,7 @@ pub fn live_bank_booths(bot: &mut Bot, bank_x: i32, bank_z: i32) -> Vec<(i32, i3
 
 pub use crate::kit::withdraw::bank_withdraw_items;
 
-/// The deposit is verified, never assumed: leftovers are a loud error,
-/// not a silent carry to the spot.
-pub fn require_deposit_cleared(bot: &Bot, deposited: bool) -> Result<(), ScriptError> {
-    if deposited {
-        return Ok(());
-    }
-    Err(ScriptError::Failed(format!("deposit did not clear at {:?}", bot.position())))
-}
+pub use crate::kit::bank_full::require_deposit_cleared;
 
 /// One more transit injury: logs `hurt en route` with the hp drop, waits
 /// bounded for a heal, and past the bound fails loudly instead of walking
@@ -298,6 +291,7 @@ pub fn bank_trip_resilient(
     withdraw_coins: u32,
     product_ids: &[u16],
 ) -> Result<u32, ScriptError> {
+    let seen = bot.world.messages.len();
     let first_trip = bank_trip(bot, bank, keep, withdraw_coins);
     let mut bank_coins = match first_trip {
         Ok(coins) => coins,
@@ -308,6 +302,10 @@ pub fn bank_trip_resilient(
         }
         Err(other) => return Err(other),
     };
+    if product_ids.iter().any(|id| pack_total(bot, *id) > 0) && crate::kit::bank_full::bank_full_since(bot, seen) {
+        // Every bank is the same full account: no other booth helps.
+        return Err(ScriptError::Failed(format!("bank full: the load's type is refused, load stuck at {:?}", bot.position())));
+    }
     if product_ids.iter().any(|id| pack_total(bot, *id) > 0) {
         bot.log(&format!("bank unreachable from {:?}, re-discovering", bot.position()));
         *bank = nearest_bank(bot)?;
@@ -514,8 +512,9 @@ pub fn bank_trip(
         }
         return Ok(0);
     }
-    let deposited = bot.bank_deposit_all(side_com, &keep, 25)?;
-    require_deposit_cleared(bot, deposited)?;
+    // Deposit what fits: a full bank's refused types stay in the pack
+    // (`bank_full`), the trip fails only when the load no longer fits.
+    crate::kit::bank_full::deposit_what_fits(bot, side_com, &keep)?;
     if withdraw_coins > 0 {
         if let Ok(coins) = obj_id(bot, "coins") {
             let _ = bot.bank_withdraw(coins, withdraw_coins, 50);

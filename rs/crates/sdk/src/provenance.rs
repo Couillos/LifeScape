@@ -36,7 +36,9 @@ pub enum Provenance {
     ShopSold,
     /// Player-to-player trade flow (market, later lots).
     Traded,
-    /// Eaten, buried, burned or otherwise used up.
+    /// Eaten, buried, burned or otherwise used up, recipe inputs a
+    /// processing run ate included (bars smithed, ores smelted, raw fish
+    /// cooked, essence crafted: the session's `report_flows`).
     Consumed,
     /// Dropped, tolled away or otherwise lost alive.
     Lost,

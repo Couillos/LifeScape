@@ -15,9 +15,8 @@ use std::collections::{HashMap, HashSet};
 
 use lifescape_sdk::Bot;
 
-use crate::kit::janitor::{drop_all, next_chunk, packed, spent};
+use crate::kit::janitor::{drop_all, known_bank, known_bank_types, next_chunk, packed, spent};
 use crate::kit::{bank::nearest_bank, pack::obj_id, tools::cleanup_keep_names};
-use crate::activities::market::seller_quote;
 use crate::market_client::{cancel_for, open_sell_items, place_sell};
 use crate::{ScriptError, ScriptResult};
 
@@ -52,7 +51,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CleanupArgs, ScriptError> {
 // Debug names in the bank; unknown ids never list, so never sell.
 fn bank_names(bot: &Bot) -> Vec<(u16, String)> {
     let mut rows = Vec::new();
-    for (id, qty) in bot.bank_items().iter() {
+    for (id, qty) in known_bank(bot).iter() {
         if *qty == 0 {
             continue;
         }
@@ -74,7 +73,7 @@ fn bank_open(bot: &mut Bot) -> Result<bool, ScriptError> {
 fn withdraw_all(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
     bank_open(bot)?;
     for id in ids {
-        let qty = bot.bank_items().get(id).copied().unwrap_or(0);
+        let qty = known_bank(bot).get(id).copied().unwrap_or(0);
         if qty > 0 {
             let _ = bot.bank_withdraw(*id, qty, 300);
         }
@@ -107,7 +106,8 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let _ = obj_id(bot, name)?;
     }
     let named = bank_names(bot);
-    let stacks: Vec<(String, i64)> = named.iter().map(|(held, name)| (name.clone(), i64::from(bot.bank_items().get(held).copied().unwrap_or(0)))).collect();
+    let bank = known_bank(bot);
+    let stacks: Vec<(String, i64)> = named.iter().map(|(held, name)| (name.clone(), i64::from(bank.get(held).copied().unwrap_or(0)))).collect();
     let (protected, surplus) = lifescape_planner::space::triage_bank(&stacks, &keep);
     bot.log(&format!("cleanup: {} protected, {} surplus", protected.len(), surplus.len()));
     if surplus.is_empty() {
@@ -116,9 +116,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let by_name: HashMap<&str, u16> = named.iter().map(|(id, name)| (name.as_str(), *id)).collect();
     let surplus_ids: Vec<u16> = surplus.iter().filter_map(|(name, _)| by_name.get(name.as_str()).copied()).collect();
     // Carnet stock leaves the later legs alone: the shop must never sell
-    // what the market reserved. Chunked: the pack holds 28, so list the
-    // carried stock, then withdraw and list the banked remainder. Already
-    // listed stock is skipped, never stacked: a relist would double-spend
+    // what the market reserved. Already listed stock is skipped, never stacked: a relist would double-spend
     // the ledger reservation, and the D17 gate below reads "nothing new".
     let (mut market_ids, mut listed_now): (Vec<u16>, u32) = (Vec::new(), 0);
     // Tradeable surplus the carnet refused this pass: it never lists, so
@@ -133,34 +131,28 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 market_ids.push(*id);
             }
         }
-        let mut todo: Vec<u16> = market_ids.iter().filter(|id| !listed_open.contains(id)).copied().collect();
-        // Holds first, read off the bank count: a stack the seller holds
-        // (no own cost known, over the band) never leaves the bank for
-        // nothing. Withdrawn, it clogged the pack and starved every later
-        // chunk (live bdr53jee 2026-11-14: 13 holds, 56 types, each pass).
-        for id in todo.clone() {
-            let banked = i64::from(bot.bank_items().get(&id).copied().unwrap_or(0));
-            if banked > 0 && bot.inventory().get(&id).copied().unwrap_or(0) == 0 && seller_quote(bot, id, banked)?.is_none() {
+        let todo: Vec<u16> = market_ids.iter().filter(|id| !listed_open.contains(id)).copied().collect();
+        // Listed where it lies (pack plus bank: the carnet reserves banked
+        // stock, the deal withdraws it), never withdrawn for nothing. A
+        // stack the seller holds (no own cost known, over the band) or the
+        // carnet refuses never lists this pass: D17 below frees its slot
+        // (live bst29bh9 2026-11-14: twelve holds read as "carried" through
+        // `inventory()`, never refused, the bank stayed at 60 types).
+        for id in todo {
+            if spent(start_tick, start_pause, bot) >= parsed.budget_max {
+                return Ok(crate::kit::cycle::BUDGET_EXIT);
+            }
+            let held = i64::from(bot.pack_count(id)) + i64::from(known_bank(bot).get(&id).copied().unwrap_or(0));
+            if held <= 0 {
+                continue;
+            }
+            // Reserve floor: 1 coin (no NPC buyback in the economy);
+            // the alchemy win stays planner-side (D2).
+            if place_sell(bot, id, held, lifescape_planner::space::reserve_floor(None))? {
+                listed_now += 1;
+            } else {
                 unsellable.push(id);
-                todo.retain(|keep| keep != &id);
             }
-        }
-        loop {
-            for id in packed(bot, &todo) {
-                if spent(start_tick, start_pause, bot) >= parsed.budget_max {
-                    return Ok(crate::kit::cycle::BUDGET_EXIT);
-                }
-                let held = i64::from(bot.inventory().get(&id).copied().unwrap_or(0));
-                // Reserve floor: 1 coin (no NPC buyback in the economy);
-                // the alchemy win stays planner-side (D2).
-                if place_sell(bot, id, held, lifescape_planner::space::reserve_floor(None))? {
-                    listed_now += 1;
-                }
-                todo.retain(|keep| keep != &id);
-            }
-            let chunk = next_chunk(bot, &todo);
-            if chunk.is_empty() { break; }
-            withdraw_all(bot, &chunk)?;
         }
     }
     // Non-carnet rest (untradeable surplus, or Iron stock), chunked like
@@ -177,24 +169,27 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             if !packed(bot, &rest).is_empty() {
                 break;
             }
-            rest.retain(|id| bot.bank_items().get(id).copied().unwrap_or(0) > 0);
+            rest.retain(|id| known_bank(bot).get(id).copied().unwrap_or(0) > 0);
         }
         let chunk = next_chunk(bot, &rest);
         if chunk.is_empty() { break; }
         withdraw_all(bot, &chunk)?;
+        // A withdrawal that freed nothing (stack locked) ends the leg
+        // instead of looping on it.
+        if packed(bot, &chunk).is_empty() { break; }
     }
     // D17: a still-full bank drops whole stacks cheapest-total first,
     // after cancelling their orders, until it is back under the limit:
     // the surplus the carnet refused this pass (it never lists), and,
     // when nothing was newly listed, the stock resting listed. Fresh
     // listings get one full pass to fill (the next pass lists nothing new
-    // and escalates). Counts read with the bank open: closed reads lie.
+    // and escalates). Counts read the last known bank (`known_bank`).
     bank_open(bot)?;
-    if bot.bank_items().values().filter(|qty| **qty > 0).count() >= lifescape_planner::space::BANK_TYPE_LIMIT {
+    if known_bank_types(bot) >= lifescape_planner::space::BANK_TYPE_LIMIT {
         let sheltered: HashSet<u16> = protected.iter().filter_map(|name| by_name.get(name.as_str()).copied()).collect();
         let mut stuck = Vec::new();
         for (id, name) in &named {
-            let qty = i64::from(bot.bank_items().get(id).copied().unwrap_or(0));
+            let qty = i64::from(known_bank(bot).get(id).copied().unwrap_or(0));
             if !sheltered.contains(id) && qty > 0 && d17_eligible(*id, &unsellable, &listed_open, listed_now) {
                 let price = lifescape_gamedata::obj_by_id(usize::from(*id)).map(|entry| entry.price.max(1)).unwrap_or(1);
                 stuck.push((name.clone(), qty, price));
@@ -210,17 +205,18 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             // banked stack pack by pack (an unnoted stack outgrows one
             // pack), each load dropped: whole stacks go. A withdraw that
             // frees nothing (still locked by an order) ends the stack.
-            // The counts read warm (the withdraw just opened the bank).
+            // Counts read the last known bank: the withdraw closes the
+            // dialog, a live read would say "cleared" every time.
             if !drop_all(bot, id, start_tick, start_pause, parsed.budget_max)? {
                 return Ok(crate::kit::cycle::BUDGET_EXIT);
             }
             loop {
-                let banked = bot.bank_items().get(&id).copied().unwrap_or(0);
+                let banked = known_bank(bot).get(&id).copied().unwrap_or(0);
                 if banked == 0 {
                     break;
                 }
                 withdraw_all(bot, &[id])?;
-                let left = bot.bank_items().get(&id).copied().unwrap_or(0);
+                let left = known_bank(bot).get(&id).copied().unwrap_or(0);
                 if !drop_all(bot, id, start_tick, start_pause, parsed.budget_max)? {
                     return Ok(crate::kit::cycle::BUDGET_EXIT);
                 }
@@ -228,18 +224,18 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
                     break;
                 }
             }
-            if bot.bank_items().get(&id).copied().unwrap_or(0) > 0 {
+            if known_bank(bot).get(&id).copied().unwrap_or(0) > 0 {
                 bot.log(&format!("cleanup D17 could not clear {name} (still locked)"));
                 continue;
             }
             bot.log(&format!("cleanup D17 dropped {name}"));
-            if bot.bank_items().values().filter(|qty| **qty > 0).count() < lifescape_planner::space::BANK_TYPE_LIMIT {
+            if known_bank_types(bot) < lifescape_planner::space::BANK_TYPE_LIMIT {
                 break;
             }
         }
     }
     bank_open(bot)?;
-    let types = bot.bank_items().values().filter(|qty| **qty > 0).count();
+    let types = known_bank_types(bot);
     bot.log(&format!("cleanup done: {types} bank types"));
     Ok(if types < lifescape_planner::space::BANK_TYPE_LIMIT { 0 } else { crate::kit::cycle::BUDGET_EXIT })
 }

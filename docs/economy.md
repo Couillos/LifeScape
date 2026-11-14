@@ -218,7 +218,27 @@ dans un rendement : produits de skill, drops, spawns fixes au sol et
 objets ramassés, provenance étiquetée (`produced`, `loot`,
 `ground_spawn`, `picked`). Les flux de boutique et d'échange
 (`shop_bought`, `traded`) sont stockés bruts mais exclus des taux ; les
-`consumed` (appâts, nourriture) nourrissent le coût des intrants.
+`consumed` (appâts, nourriture, intrants d'une transformation)
+nourrissent le coût des intrants.
+
+Provenance de production (2026-11-14, `orchestrator/src/report_flows.rs`) :
+toute activité de transformation étiquette ses produits `produced` et
+les intrants qu'elle a mangés `consumed`, lus dans les données du jeu
+que le planificateur utilise (`method_way::production_ways`,
+`obtain_legs::production_legs` + `map_method`), jamais une liste : un
+objet gagné est produit quand une de ses voies de production a
+travaillé pendant le run (XP de sa compétence montée, ou jambe du
+planificateur lancée par le script même du run : meunerie, traite,
+tonte, cueillette sans XP) et a mangé un de ses intrants (à travers les
+intermédiaires du même run : argile → argile molle → pot cru → pot) ;
+le brûlé est le sous-produit de sa recette ; les bûches brûlées, les
+runes d'un sort payé et l'objet alché sont `consumed` ; les pièces de
+l'alchimie sont `produced`. Live bst29bh9 `smith` avant : « Iron bar
+lost −4, Iron full helm ground_spawn +2 » ; après : `consumed` / `produced`.
+Les taux (`rates_service`, clé = script) apprennent donc les unités par
+6000 ticks de chaque méthode de transformation (`brain_bids::units_per_6000`,
+`bid_response`, `profit`), et le coût propre d'une unité fabriquée
+(§ Réserve vendeur) compte ses intrants.
 
 Ingestion : la session pousse le rapport, le superviseur du daemon le
 verse dans le store (`jobs::ingest_report_into`) puis dans l'agrégat
@@ -436,7 +456,13 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   entre ses lignes de farm (`produced`, `loot`, `ground_spawn`, pièces
   ramassées) au prorata `quantité × valeur de jeu` (pièces à 1) ; un
   rapport de récolte ou de production donne tous ses ticks à son
-  produit, un rapport de combat sa part de butin à chaque drop. Non
+  produit, un rapport de combat sa part de butin à chaque drop. Une unité
+  fabriquée ajoute les intrants qu'elle a mangés (lignes `consumed` de
+  ses rapports, même partage, `measured_inputs_per_unit`), chacun à SON
+  coût propre (ticks mesurés × pièces par tick + ses propres intrants,
+  3 niveaux, sinon a priori, jamais sous son dernier prix d'achat ;
+  `OwnCosts::unit_cost`) : casque de fer = ses ticks + 2 barres, une
+  barre = ses ticks de fonte + son minerai. Non
   mesuré : l'estimation du planificateur (`est_ticks` / quantité d'une
   alternative de farm d'un nœud d'obtention du graphe du bot), sinon le
   taux de démarrage à froid du script (`rates_service::prior_for`).

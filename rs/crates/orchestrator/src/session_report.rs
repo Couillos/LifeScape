@@ -1,9 +1,13 @@
 //! Task reports (contract v2): the session diffs holdings and XP
 //! before/after a run and labels every net flow by provenance. Positive
 //! flows: shop-coupled coins mark buys and sells; an activity product
-//! landing with skill XP is `produced`; melee gains are `loot`; the rest
-//! is `ground_spawn`. Negative flows: shop-coupled items are `shop_sold`;
-//! food, bait and buried bones are `consumed`; the rest is `lost`.
+//! landing with skill XP is `produced` (gatherers, and every processing
+//! activity through `report_flows`, read in the game data the planner
+//! uses: smith, smelt, cook, pottery, spin, runes, mill, alchemy coins…);
+//! melee gains are `loot`; the rest is `ground_spawn`. Negative flows:
+//! the recipe inputs a processing run ate are `consumed`; shop-coupled
+//! items are `shop_sold`; food, bait and buried bones are `consumed`;
+//! the rest is `lost`.
 //! Market runs (D44, D45): every leg flow reads `traded` (player fills),
 //! food eaten on the way stays `consumed`. A lone coin gain with no sale,
 //! no drop and no shop behind it is `unattributed`: an unexplained gap,
@@ -291,6 +295,12 @@ pub fn build_report(
     let shop_visit = positives && coins_delta < 0;
     let prayer_gain = xp_gain(before, after, 5);
     let trading = crate::rates_service::is_trading_method(&ctx.activity);
+    let debug_of = |id: u16| lifescape_gamedata::obj_by_id(usize::from(id)).and_then(|entry| entry.name).map(str::to_string);
+    let named: Vec<(String, i64)> = deltas.iter().filter_map(|(id, delta)| debug_of(*id).map(|name| (name, *delta))).collect();
+    let skill_gained = |skill: &str| lifescape_sdk::provenance::skill_id(skill).is_some_and(|stat| xp_gain(before, after, stat) > 0);
+    let flows = crate::report_flows::production_flows(&ctx.activity, &named, &skill_gained);
+    let made = |id: u16| debug_of(id).is_some_and(|name| flows.produced.contains(&name));
+    let eaten = |id: u16| debug_of(id).is_some_and(|name| flows.consumed.contains(&name));
     let mut items: Vec<FlowLine> = Vec::new();
     for (id, delta) in deltas {
         let name = display_name(bot, id);
@@ -302,7 +312,10 @@ pub fn build_report(
             lifescape_sdk::provenance::Provenance::Traded.as_str()
         } else if delta > 0 {
             if Some(id) == coins {
-                if negatives {
+                if flows.coins_produced {
+                    // Alchemy: the spell paid its XP and ate its runes.
+                    lifescape_sdk::provenance::Provenance::Produced.as_str()
+                } else if negatives {
                     lifescape_sdk::provenance::Provenance::ShopSold.as_str()
                 } else if ctx.activity == "melee" {
                     lifescape_sdk::provenance::Provenance::Loot.as_str()
@@ -311,7 +324,7 @@ pub fn build_report(
                     // unexplained gap (D45), never a yield.
                     lifescape_sdk::provenance::Provenance::Unattributed.as_str()
                 }
-            } else if skill.is_some_and(|stat| products.contains(&id) && xp_gain(before, after, stat) > 0) {
+            } else if skill.is_some_and(|stat| products.contains(&id) && xp_gain(before, after, stat) > 0) || made(id) {
                 // The skill's own product with its XP stays produced even
                 // when the run also bought something (bait, a tool).
                 lifescape_sdk::provenance::Provenance::Produced.as_str()
@@ -322,6 +335,10 @@ pub fn build_report(
             } else {
                 lifescape_sdk::provenance::Provenance::GroundSpawn.as_str()
             }
+        } else if eaten(id) {
+            // A recipe input the processing run ate (bars, ores, raw
+            // fish, essence, clay, wool, logs burnt, runes of a spell).
+            lifescape_sdk::provenance::Provenance::Consumed.as_str()
         } else if Some(id) == coins {
             if positives {
                 lifescape_sdk::provenance::Provenance::ShopBought.as_str()
@@ -539,6 +556,22 @@ mod tests {
         let feather_name = (bot.tables.obj_name)(feather).expect("feather display");
         assert_eq!(by_name[trout_name.as_str()], "produced", "the catch is the skill's product");
         assert_eq!(by_name[feather_name.as_str()], "shop_bought");
+    }
+
+    /// Live bst29bh9 `smith`: the helms forged with smithing XP are
+    /// `produced` and the bars they ate `consumed` (was ground_spawn and
+    /// lost: rates never learnt the method, the seller held the helms).
+    #[test]
+    fn processing_runs_report_products_and_inputs() {
+        let bot = live_bot();
+        let bar = (bot.tables.find_obj_by_name)("iron_bar").expect("iron_bar in dumps");
+        let helm = (bot.tables.find_obj_by_name)("iron_full_helm").expect("iron_full_helm in dumps");
+        let before = holdings(&[(bar, 4)], &[(13, (22, 7000))], 100);
+        let after = holdings(&[(helm, 2)], &[(13, (22, 7100))], 400);
+        let report = build_report(&bot, &before, &empty_bank(), &after, &empty_bank(), &ctx("smith", "goal_reached"));
+        let by_name: HashMap<&str, (&str, i64)> = report.items.iter().map(|flow| (flow.name.as_str(), (flow.provenance, flow.qty))).collect();
+        assert_eq!(by_name["Iron full helm"], ("produced", 2));
+        assert_eq!(by_name["Iron bar"], ("consumed", -4));
     }
 
     /// Unexplained losses are lost; a lone coin drain with no counterpart
