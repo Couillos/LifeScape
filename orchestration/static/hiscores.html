@@ -22,13 +22,14 @@
   #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
   #side { flex: 0 0 190px; }
   #board { flex: 1 1 520px; min-width: 300px; }
-  /* Categories: one link per table, the current one in yellow. */
-  #cats { list-style: none; margin: 0; padding: 0; }
-  #cats li.head { color: #ff0; margin: 10px 0 4px; font-size: 14px; }
-  #cats li.head:first-child { margin-top: 0; }
-  a.cat { display: block; color: #04A800; text-decoration: none; padding: 1px 6px; border: 1px solid transparent; border-radius: 3px; }
-  a.cat:hover { background: #1a1a1a; }
-  a.cat.cur { color: #ff0; border-color: #ff0; }
+  /* Categories: one table, one row per ranking, the current one in yellow. */
+  #cats { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #cats td, #cats th { border: 1px solid #333; padding: 2px 8px; text-align: left; }
+  #cats th { color: #888; font-weight: normal; }
+  #cats tr:hover td { background: #1a1a1a; }
+  a.cat { display: block; color: #04A800; text-decoration: none; }
+  #cats tr.cur td { font-weight: bold; }
+  #cats tr.cur a.cat { color: #ff0; }
   #side form { display: flex; gap: 4px; margin-bottom: 6px; }
   #side input { flex: 1 1 auto; min-width: 0; box-sizing: border-box; padding: 3px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
   #side button, .pager .btn { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; text-decoration: none; }
@@ -48,8 +49,6 @@
   .pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 6px; }
   @media (max-width: 720px) {
     #side, #board { flex: 1 1 100%; }
-    #cats { display: flex; flex-wrap: wrap; gap: 2px; }
-    #cats li.head { width: 100%; }
   }
 </style>
 </head>
@@ -64,7 +63,7 @@
 <div id="errors"></div>
 <div id="layout">
   <div id="side">
-    <ul id="cats"></ul>
+    <table id="cats"></table>
     <h2>Search</h2>
     <form id="byname" autocomplete="off"><input id="name" maxlength="24" placeholder="Player name" aria-label="Player name"><button type="submit">Go</button></form>
     <form id="byrank" autocomplete="off"><input id="rank" type="number" min="1" placeholder="Rank" aria-label="Rank"><button type="submit">Go</button></form>

@@ -201,11 +201,11 @@ if (typeof document !== 'undefined') {
     for (const entry of list) {
       if (entry.group !== group) {
         group = entry.group;
-        html += '<li class="head">' + (group === 'skills' ? 'Skills' : 'Wealth') + '</li>';
+        html += '<tr><th class="left">' + (group === 'skills' ? 'Skills' : 'Wealth') + '</th></tr>';
       }
       const current = !state.player && state.cat === entry.key;
-      html += '<li><a class="cat' + (current ? ' cur' : '') + '" href="' + page.formatHash({ cat: entry.key })
-        + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + esc(entry.label) + '</a></li>';
+      html += '<tr' + (current ? ' class="cur"' : '') + '><td class="left"><a class="cat" href="' + page.formatHash({ cat: entry.key })
+        + '"' + (entry.hint ? ' title="' + esc(entry.hint) + '"' : '') + '>' + esc(entry.label) + '</a></td></tr>';
     }
     document.getElementById('cats').innerHTML = html;
   }
