@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hiscores — LifeScape bots</title>
 <style>
-  /* Dashboard chrome (same as the other pages). */
   body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
   a { color: #04A800; }
   .muted { color: #888; }
@@ -15,72 +14,42 @@
   .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
   .navlink:hover { background: #262626; }
   .navlink[aria-current="page"] { color: #ff0; border-color: #ff0; }
-
-  /* Hiscores: an original take on the 2004 look (stone frame, gold
-     serif titles, parchment scroll), CSS only, no game artwork. */
-  :root {
-    --stone-dark: #1d1812; --stone: #2f271d; --stone-light: #4a3d2c; --rim: #7a6440;
-    --gold: #f2c55c; --gold-dim: #b8913f;
-    --parchment: #e9dbb5; --parchment-edge: #c8b083; --ink: #2a1c0c; --ink-soft: #6b5130;
-    --link: #6a1f04; --hit: #f7e7a6;
-  }
-  #hiscores { max-width: 980px; margin: 0 auto; }
-  .frame { background: linear-gradient(180deg, var(--stone-light), var(--stone) 40%, var(--stone-dark));
-    border: 3px ridge var(--rim); border-radius: 4px; padding: 10px; box-shadow: 0 0 0 1px #000, 0 6px 18px rgba(0, 0, 0, .7); }
-  .banner { text-align: center; padding: 6px 0 10px; }
-  .banner h1 { font-family: Georgia, "Times New Roman", serif; font-size: 30px; letter-spacing: 1px; color: var(--gold); margin: 0;
-    text-shadow: 1px 1px 0 #000, 0 0 8px rgba(242, 197, 92, .25); font-weight: normal; }
-  .banner .sub { color: var(--gold-dim); font-family: Georgia, "Times New Roman", serif; font-style: italic; margin-top: 2px; }
-  #status { color: #d9c9a0; font-size: 12px; text-align: center; margin: 4px 0 0; }
-  #errors { display: none; color: #ffb4a0; font-size: 12px; text-align: center; margin-top: 4px; }
-  .columns { display: flex; gap: 10px; align-items: flex-start; }
-  .side { flex: 0 0 170px; }
-  .centre { flex: 1 1 auto; min-width: 0; }
-  .panel { background: var(--stone-dark); border: 2px groove var(--rim); border-radius: 3px; padding: 8px; margin-bottom: 10px; }
-  .panel h3 { font-family: Georgia, "Times New Roman", serif; color: var(--gold); font-size: 14px; font-weight: normal; margin: 0 0 6px;
-    border-bottom: 1px solid var(--stone-light); padding-bottom: 3px; text-align: center; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  h3 { font-size: 13px; margin: 12px 0 4px; color: #ff0; font-weight: normal; }
+  #status { margin: 0 0 6px; }
+  #errors { display: none; color: #ff1744; margin: 0 0 6px; }
+  #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  #side { flex: 0 0 190px; }
+  #board { flex: 1 1 520px; min-width: 300px; }
+  /* Categories: one link per table, the current one in yellow. */
   #cats { list-style: none; margin: 0; padding: 0; }
-  #cats li.head { font-family: Georgia, "Times New Roman", serif; color: var(--gold); margin: 8px 0 2px; font-size: 13px; text-align: center;
-    border-bottom: 1px solid var(--stone-light); }
+  #cats li.head { color: #ff0; margin: 10px 0 4px; font-size: 14px; }
   #cats li.head:first-child { margin-top: 0; }
-  a.cat { display: block; color: #e8d7a8; text-decoration: none; padding: 2px 6px; border-radius: 2px; }
-  a.cat:hover { background: var(--stone-light); color: #fff; }
-  a.cat.cur { background: var(--rim); color: #fff; font-weight: bold; }
-  .side form { display: flex; flex-direction: column; gap: 4px; }
-  .side input { background: var(--parchment); color: var(--ink); border: 1px solid var(--rim); padding: 3px 5px; font-size: 13px; }
-  .side button { background: var(--stone-light); color: var(--gold); border: 1px outset var(--rim); padding: 3px; cursor: pointer;
-    font-family: Georgia, "Times New Roman", serif; }
-  .side button:hover { color: #fff; }
-  .scroll { background: radial-gradient(ellipse at center, #f3e8c8 0%, var(--parchment) 55%, var(--parchment-edge) 100%);
-    color: var(--ink); border: 1px solid #000; border-radius: 3px; box-shadow: inset 0 0 18px rgba(90, 60, 20, .45); padding: 10px 16px 14px; min-height: 420px; }
-  .scroll a { color: var(--link); }
-  .scroll-title { font-family: Georgia, "Times New Roman", serif; font-weight: normal; text-align: center; font-size: 20px; margin: 2px 0 8px;
-    color: var(--ink); border-bottom: 1px solid var(--parchment-edge); padding-bottom: 4px; }
-  .scroll-sub { font-family: Georgia, "Times New Roman", serif; font-weight: normal; font-size: 16px; margin: 14px 0 4px; color: var(--ink); }
-  .note { color: var(--ink-soft); font-size: 12px; margin: 2px 0 6px; text-align: center; }
-  .note.warn { color: #8a1c00; }
-  table.ranks { border-collapse: collapse; width: 100%; font-size: 13px; }
-  table.ranks th { font-family: Georgia, "Times New Roman", serif; font-weight: normal; color: var(--ink-soft); border-bottom: 2px solid var(--parchment-edge);
-    padding: 3px 8px; text-align: right; }
-  table.ranks td { padding: 2px 8px; text-align: right; border-bottom: 1px dotted var(--parchment-edge); font-variant-numeric: tabular-nums; }
+  a.cat { display: block; color: #04A800; text-decoration: none; padding: 1px 6px; border: 1px solid transparent; border-radius: 3px; }
+  a.cat:hover { background: #1a1a1a; }
+  a.cat.cur { color: #ff0; border-color: #ff0; }
+  #side form { display: flex; gap: 4px; margin-bottom: 6px; }
+  #side input { flex: 1 1 auto; min-width: 0; box-sizing: border-box; padding: 3px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  #side button, .pager .btn { background: #1b1b1b; color: #eee; border: 1px solid #444; padding: 2px 8px; cursor: pointer; text-decoration: none; }
+  .pager .btn.off { color: #555; cursor: default; }
+  h2.scroll-title { margin-top: 0; }
+  h3.scroll-sub { margin-top: 14px; }
+  .note { color: #888; margin: 2px 0 6px; }
+  .note.warn { color: #ff1744; }
+  table.ranks { border-collapse: collapse; font-size: 12px; width: 100%; }
+  table.ranks td, table.ranks th { border: 1px solid #333; padding: 2px 8px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  table.ranks th { color: #888; font-weight: normal; }
   table.ranks .left { text-align: left; }
-  table.ranks tbody tr:hover { background: rgba(255, 255, 255, .25); }
-  table.ranks tr.hit { background: var(--hit); font-weight: bold; }
-  .tag { font-size: 10px; border: 1px solid var(--ink-soft); color: var(--ink-soft); border-radius: 6px; padding: 0 4px; vertical-align: 1px; }
+  table.ranks tbody tr:hover { background: #1a1a1a; }
+  table.ranks tr.hit { font-weight: bold; color: #ff0; }
+  .tag { font-size: 10px; border: 1px solid #555; color: #888; border-radius: 6px; padding: 0 4px; vertical-align: 1px; }
   .tag.off { border-style: dashed; }
-  .pager { display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .pager .btn { font-family: Georgia, "Times New Roman", serif; text-decoration: none; color: var(--link); border: 1px solid var(--parchment-edge);
-    padding: 1px 8px; border-radius: 2px; background: rgba(255, 255, 255, .2); }
-  .pager .btn.off { color: #a8936c; }
-  .pager .pageno { color: var(--ink-soft); }
-  #rule { color: #a8936c; font-size: 11px; text-align: center; margin: 8px 4px 0; }
+  .pager { display: flex; gap: 8px; align-items: center; color: #888; margin-top: 6px; }
   @media (max-width: 720px) {
-    .columns { flex-direction: column; align-items: stretch; }
-    .side, .centre { flex: 1 1 auto; width: 100%; }
+    #side, #board { flex: 1 1 100%; }
     #cats { display: flex; flex-wrap: wrap; gap: 2px; }
     #cats li.head { width: 100%; }
-    .banner h1 { font-size: 24px; }
-    .scroll { padding: 8px; }
   }
 </style>
 </head>
@@ -91,37 +60,16 @@
     <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores" aria-current="page">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<div id="hiscores">
-  <div class="frame">
-    <div class="banner">
-      <h1>LifeScape Hiscores</h1>
-      <div class="sub">The finest adventurers of the realm</div>
-      <div id="status">loading…</div>
-      <div id="errors"></div>
-    </div>
-    <div class="columns">
-      <div class="side">
-        <div class="panel">
-          <h3>Select a table</h3>
-          <ul id="cats"></ul>
-        </div>
-      </div>
-      <div class="centre">
-        <div class="scroll" id="board"></div>
-      </div>
-      <div class="side">
-        <div class="panel">
-          <h3>Search by name</h3>
-          <form id="byname" autocomplete="off"><input id="name" maxlength="24" placeholder="Player name" aria-label="Player name"><button type="submit">Search</button></form>
-        </div>
-        <div class="panel">
-          <h3>Search by rank</h3>
-          <form id="byrank" autocomplete="off"><input id="rank" type="number" min="1" placeholder="Rank" aria-label="Rank"><button type="submit">Search</button></form>
-        </div>
-      </div>
-    </div>
-    <div id="rule"></div>
+<h1>Hiscores <span class="muted" id="status">loading…</span></h1>
+<div id="errors"></div>
+<div id="layout">
+  <div id="side">
+    <ul id="cats"></ul>
+    <h2>Search</h2>
+    <form id="byname" autocomplete="off"><input id="name" maxlength="24" placeholder="Player name" aria-label="Player name"><button type="submit">Go</button></form>
+    <form id="byrank" autocomplete="off"><input id="rank" type="number" min="1" placeholder="Rank" aria-label="Rank"><button type="submit">Go</button></form>
   </div>
+  <div id="board"></div>
 </div>
 <script src="/hiscores.js"></script>
 </body>

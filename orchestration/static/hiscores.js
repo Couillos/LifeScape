@@ -296,14 +296,12 @@ if (typeof document !== 'undefined') {
       status.textContent = loadError || 'loading…';
       return;
     }
-    const cost = snapshot.cost ? ' · snapshot ' + snapshot.cost.cpu_ms + ' ms CPU' : '';
-    status.textContent = page.freshness(snapshot, now) + ' (' + page.utcStamp(snapshot.generated_at) + ')' + cost
-      + ' · ' + ((snapshot.players || []).length) + ' players';
+    const ago = page.freshness(snapshot, now).split(' · ')[0];
+    status.textContent = '· ' + ((snapshot.players || []).length) + ' players' + (ago ? ' · ' + ago : '');
     const errors = (snapshot.errors || []).filter(Boolean);
     const box = document.getElementById('errors');
     box.style.display = errors.length ? 'block' : 'none';
     box.textContent = errors.join(' · ');
-    document.getElementById('rule').textContent = snapshot.rule || '';
   }
 
   function render() {
