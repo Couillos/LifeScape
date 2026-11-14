@@ -29,6 +29,7 @@ pub mod bans;
 pub mod chain_spec;
 pub mod cycle;
 pub mod danger;
+pub mod essence_mine;
 pub mod fight;
 pub mod fireline;
 pub mod fish;

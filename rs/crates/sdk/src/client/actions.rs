@@ -666,9 +666,27 @@ impl Bot {
     /// (click ignored, walk refused): the caller tries another booth.
     /// The old blind fan clicked from diagonals and wall-separated sides
     /// (Varrock east: 2303 "I can't reach that!" from (3251,3420)).
+    /// Level of booth `loc_id` at (x, z): the bot's level when the booth
+    /// stands there (live or static), else the ground floor — no F2P bank
+    /// stands upstairs in rev 274 (live 2026-11-14: eric_smith on the
+    /// windmill top asked for "booth 2213 not at (3091,3245,2)" on every
+    /// market delivery). The walk to the stand then rides the stairs.
+    fn booth_level(&mut self, x: i32, z: i32, loc_id: u16) -> Result<i32> {
+        let here = self.world.level;
+        if here == 0 {
+            return Ok(0);
+        }
+        if self.world.loc_at(x, z, here).is_some_and(|(placed, _, _)| placed == loc_id) {
+            return Ok(here);
+        }
+        let static_read = self.tiles_flags(&[(x, z, here)])?;
+        let upstairs = static_read.first().and_then(|read| read.loc).is_some_and(|(placed, _, _)| placed == loc_id);
+        Ok(if upstairs { here } else { 0 })
+    }
+
     pub fn open_bank(&mut self, x: i32, z: i32, loc_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("open_bank {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
-        let level = self.world.level;
+        let level = self.booth_level(x, z, loc_id)?;
         let stands = self.bank_booth_stands(x, z, level, loc_id)?;
         if stands.is_empty() {
             return Err(Error::Unreachable(format!(
