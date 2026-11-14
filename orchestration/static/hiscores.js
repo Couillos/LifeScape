@@ -214,9 +214,9 @@ if (typeof document !== 'undefined') {
     const link = (target, label, enabled) => enabled
       ? '<a class="btn" href="' + page.formatHash({ cat: state.cat, page: target }) + '">' + label + '</a>'
       : '<span class="btn off">' + label + '</span>';
-    return link(1, '« Top', current > 1) + link(current - 1, '‹ Up ' + page.PER_PAGE, current > 1)
+    return link(current - 1, '‹ Previous', current > 1)
       + '<span class="pageno">page ' + current + ' / ' + pages + '</span>'
-      + link(current + 1, 'Down ' + page.PER_PAGE + ' ›', current < pages);
+      + link(current + 1, 'Next ›', current < pages);
   }
 
   function renderRanking() {
