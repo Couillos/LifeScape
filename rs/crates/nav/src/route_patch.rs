@@ -17,7 +17,7 @@ use std::collections::BinaryHeap;
 use crate::bfs::can_step;
 use crate::collision::leaf_step_extra;
 use crate::plan::{NavOptions, Tile};
-use crate::route_path;
+
 use crate::static_world::StaticWorld;
 
 /// Flags + enterability of the window around one origin.
@@ -47,6 +47,9 @@ impl Patch {
         let padded = 2 * radius + 3;
         let mut flags = Vec::with_capacity((padded * padded) as usize);
         let mut enterable = Vec::with_capacity((padded * padded) as usize);
+        // One bitmap over the window instead of a scan of every square
+        // per tile (same clamp, same answer: `danger.rs`).
+        let danger = crate::plan::DangerMap::clipped(&options.danger, origin.x - radius, origin.z - radius, origin.x + radius, origin.z + radius);
         for offset_z in -radius - 1..=radius + 1 {
             for offset_x in -radius - 1..=radius + 1 {
                 let tile = Tile { x: origin.x + offset_x, z: origin.z + offset_z, level: origin.level };
@@ -56,7 +59,7 @@ impl Patch {
                     inside
                         && (!options.f2p_only || world.in_f2p(tile.x, tile.z))
                         && world.door_at(tile.x, tile.z, tile.level).is_none()
-                        && !route_path::in_zones(&options.danger, tile),
+                        && !danger.contains(tile),
                 );
             }
         }

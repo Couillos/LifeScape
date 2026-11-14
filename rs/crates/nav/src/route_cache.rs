@@ -416,11 +416,17 @@ fn drop_id<K: std::hash::Hash + Eq>(index: &mut HashMap<K, Vec<u64>>, key: &K, i
 }
 
 fn same_options(entry: &PlanEntry, options: &NavOptions) -> bool {
-    entry.allow_paid == options.allow_paid && entry.excluded == options.excluded_edges && sorted(&entry.danger) == sorted(&options.danger)
+    entry.allow_paid == options.allow_paid && entry.excluded == options.excluded_edges && same_zones(&entry.danger, &options.danger)
 }
 
 fn same_entry_options(left: &PlanEntry, right: &PlanEntry) -> bool {
-    left.allow_paid == right.allow_paid && left.excluded == right.excluded && sorted(&left.danger) == sorted(&right.danger)
+    left.allow_paid == right.allow_paid && left.excluded == right.excluded && same_zones(&left.danger, &right.danger)
+}
+
+/// Same danger multiset; identical lists (one bot's arm, sorted by the
+/// service) answer without the two sorted copies.
+fn same_zones(left: &[DangerZone], right: &[DangerZone]) -> bool {
+    left == right || (left.len() == right.len() && sorted(left) == sorted(right))
 }
 
 fn sorted(zones: &[DangerZone]) -> Vec<DangerZone> {
@@ -459,11 +465,14 @@ pub(crate) fn compatible(entry: &PlanEntry, options: &NavOptions, start: usize, 
             return false;
         }
     }
-    if !options.danger.is_empty() {
+    // A request square the entry also has never adds a step price: only
+    // the others are scanned (none for one bot's unchanged arm).
+    let added = route_path::zones_missing(&options.danger, &entry.danger);
+    if !added.is_empty() {
         for index in start + 1..=end.min(entry.info.last()) {
             let tile = entry.info.path[index];
             if entry.info.arrival[index] == Arrival::Walk
-                && route_path::in_zones(&options.danger, tile)
+                && route_path::in_zones(&added, tile)
                 && !route_path::in_zones(&entry.danger, tile)
             {
                 return false;

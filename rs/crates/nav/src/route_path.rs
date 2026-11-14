@@ -229,8 +229,18 @@ pub(crate) fn push_walk(segments: &mut Vec<Segment>, tiles: Vec<Tile>) {
 
 /// Every tile of `zone` inside some zone of `cover` (same level, square
 /// containment): the conservative tile-set inclusion the danger rule uses.
+/// Identical lists (one bot's unchanged arm) and squares present as-is
+/// in `cover` answer without the pairwise scan (CPU 2026-11-14: ~180
+/// live squares made it 32 k comparisons per candidate).
 pub(crate) fn zones_covered(zones: &[DangerZone], cover: &[DangerZone]) -> bool {
+    if zones == cover {
+        return true;
+    }
+    let sorted_cover = cover.is_sorted();
     zones.iter().all(|zone| {
+        if listed(cover, sorted_cover, zone) {
+            return true;
+        }
         let radius = zone.radius.clamp(0, 32);
         cover.iter().any(|outer| {
             let outer_radius = outer.radius.clamp(0, 32);
@@ -241,6 +251,25 @@ pub(crate) fn zones_covered(zones: &[DangerZone], cover: &[DangerZone]) -> bool 
                 && outer.z + outer_radius >= zone.z + radius
         })
     })
+}
+
+/// `zone` listed as-is in `list` (binary search when sorted: the
+/// service sorts every request's squares).
+fn listed(list: &[DangerZone], sorted: bool, zone: &DangerZone) -> bool {
+    if sorted {
+        list.binary_search(zone).is_ok()
+    } else {
+        list.contains(zone)
+    }
+}
+
+/// Squares of `zones` not listed as-is in `known`.
+pub(crate) fn zones_missing(zones: &[DangerZone], known: &[DangerZone]) -> Vec<DangerZone> {
+    if zones == known {
+        return Vec::new();
+    }
+    let sorted_known = known.is_sorted();
+    zones.iter().filter(|zone| !listed(known, sorted_known, zone)).copied().collect()
 }
 
 /// True when `tile` lies in one of `zones` (same clamp as `DangerMap`).

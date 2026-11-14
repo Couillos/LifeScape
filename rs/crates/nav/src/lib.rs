@@ -7,7 +7,11 @@ pub mod buffer;
 pub mod collision;
 pub mod costs;
 pub mod custom_edge;
+pub mod danger;
 pub mod f2p;
+pub mod fast_hop;
+#[cfg(test)]
+mod fast_hop_tests;
 mod fallback;
 pub mod loctypes;
 pub mod nav;
@@ -25,10 +29,14 @@ pub mod route_path;
 pub mod route_splice;
 pub mod service;
 pub mod service_accept;
+pub mod service_codec;
+mod service_fast;
 #[cfg(test)]
 mod service_costs_tests;
 #[cfg(test)]
 mod service_replay_tests;
+#[cfg(test)]
+mod service_replay_live;
 #[cfg(test)]
 mod route_cache_tests;
 pub mod service_plan;

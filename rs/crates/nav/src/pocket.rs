@@ -23,13 +23,17 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
 use std::sync::{Arc, Mutex};
 
 use crate::bfs::can_step;
 use crate::collision::{tile_walkable, CollisionMap};
-use crate::plan::{SharedEdges, Tile};
+use crate::plan::{IdHash, SharedEdges, Tile, U64Map};
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
+
+/// Tile-key set with the planner's identity hash (no SipHash per probe).
+type U64Set = HashSet<u64, BuildHasherDefault<IdHash>>;
 
 /// Largest pocket the flood proves: a room interior is a few dozen
 /// tiles, a fenced yard a few hundred; past this the region is a real
@@ -40,11 +44,17 @@ pub(crate) const POCKET_CAP: usize = 512;
 /// sides ignored): the widest walk the planner could take. Doors the
 /// overrides block tile by tile stay shut, as in the planner.
 pub(crate) fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile) -> u32 {
+    permissive_flags_with(world, tables, tile, &mut |near| world.door_at(near.x, near.z, near.level))
+}
+
+/// Same view with the door reads going through `door_at` (the flood
+/// caches them: each tile's door is read by its 9 neighbours' views).
+fn permissive_flags_with(world: &StaticWorld, tables: &Tables, tile: Tile, door_at: &mut dyn FnMut(Tile) -> Option<(u16, u8, u8)>) -> u32 {
     let mut doors = Vec::new();
     for dx in -1..=1 {
         for dz in -1..=1 {
             let near = Tile { x: tile.x + dx, z: tile.z + dz, level: tile.level };
-            let Some((id, shape, angle)) = world.door_at(near.x, near.z, near.level) else {
+            let Some((id, shape, angle)) = door_at(near) else {
                 continue;
             };
             if tables.is_blocked(id, near) {
@@ -79,22 +89,29 @@ pub(crate) fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile)
 pub(crate) enum PocketVerdict {
     /// Unwalkable destination, or a flood past `POCKET_CAP`: never sealed.
     Open,
-    Closed { members: HashSet<u64>, edge_in: bool },
+    Closed { members: U64Set, edge_in: bool },
 }
 
 /// Flood from `dest` with no start: the same walk as the per-start check,
 /// minus its early `next == from` exit, so one verdict answers every start.
 pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, dest: Tile) -> PocketVerdict {
-    let mut flags = HashMap::new();
+    let mut flags: U64Map<u32> = U64Map::default();
+    let mut doors: U64Map<Option<(u16, u8, u8)>> = U64Map::default();
     let mut view = |tile: Tile| -> u32 {
-        *flags.entry(tile.key()).or_insert_with(|| permissive_flags(world, tables, tile))
+        if let Some(known) = flags.get(&tile.key()) {
+            return *known;
+        }
+        let mut door_at = |near: Tile| *doors.entry(near.key()).or_insert_with(|| world.door_at(near.x, near.z, near.level));
+        let found = permissive_flags_with(world, tables, tile, &mut door_at);
+        flags.insert(tile.key(), found);
+        found
     };
     if !tile_walkable(view(dest)) {
         return PocketVerdict::Open;
     }
     let level = dest.level;
-    let mut seen: HashSet<u64> = HashSet::new();
-    let mut entries: HashSet<u64> = HashSet::new();
+    let mut seen = U64Set::default();
+    let mut entries = U64Set::default();
     seen.insert(dest.key());
     let mut queue = vec![dest];
     while let Some(here) = queue.pop() {

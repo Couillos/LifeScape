@@ -213,8 +213,8 @@ fn storm_replan_loop_starves_nobody() {
     assert_eq!(service.stats().misses, misses_before, "negative served from L1");
 }
 
-/// Queue-full is counted and observable: one exhaustive NoRoute pins the
-/// single pool lane (~1.5 s budget kill), then 33 accounts x 2 submits
+/// Queue-full is counted and observable: one plan (fresh L2 build) pins the
+/// single pool lane, then 33 accounts x 2 submits
 /// overfill the 64-slot queue (T11 recalibration for 300 bots). Exactly
 /// the last 2 refuse queue-full (never a block), the gauge shows depth
 /// 64, and the service heals after cancels.
@@ -224,7 +224,9 @@ fn queue_full_refuses_and_counts() {
     let options = short_options();
     let blocker = PlanClient::new(service.socket_path(), "wall-blocker");
     let block_from = Tile { x: 3219, z: 3218, level: 0 };
-    let block_dest = Tile { x: 3215, z: 3218, level: 0 };
+    // Not a short hop (`fast_hop::FAST_RADIUS`): the pool computes it,
+    // L2 build of a fresh service included, and pins the single lane.
+    let block_dest = Tile { x: 3215, z: 3238, level: 0 };
     let block_id = match blocker.submit(block_from, block_dest, &options, "lot4").expect("submit") {
         Submit::Accepted { id, .. } => id,
         Submit::Refused { reason, .. } => panic!("blocker refused: {reason}"),

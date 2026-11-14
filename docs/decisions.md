@@ -530,3 +530,30 @@ il fallait accepter un surcoût non prouvé) ; A* (heuristique admissible
 cassée par les rides/bateaux, risque sur les goldens) ; TTL sur les plans
 positifs (le monde statique ne change qu'au reload) ; écrire le snapshot
 à chaque rapport en asynchrone (même volume disque).
+
+## 2026-11-14 — Chemin court prouvé, coût fixe des plans
+
+Constat : après le cache de routes, nav ≈ 7-8,5 s CPU/min ; 52 % des plans
+≤ 3 cases, 77 % ≤ 8, chacun payant le planificateur complet ; profil par
+étape : le `DangerMap` (≈ 180 carrés live, HashSet de ~50 k cases, ~7 ms)
+reconstruit par Dijkstra, par `analyze` et par `walk_costs` dominait tout.
+
+Décision :
+- `DangerMap` en bitmap dense par niveau (même réponse par case).
+- Sauts courts (même niveau, Chebyshev ≤ 8) répondus sur `plan-query` par
+  un Dijkstra de marche fenêtré aux règles du planificateur, servi
+  SEULEMENT si l'égalité de coût est prouvée (bornes des arêtes sautées :
+  portes, bord, rides) ; sinon le planificateur. Distance nulle évitée
+  dans le SDK.
+- Coût fixe restant : danger trié, comparaisons de listes sans tri,
+  cache F2P par zone, `walk_costs` en hachage identité + borne de but
+  admissible, poches sans relecture des portes, codec sorti de `service.rs`.
+- Compteurs `fast_hits` / `fast_zero` / `fast_declined`.
+
+Rejeté : heuristique « court donc ligne droite » (non prouvée, portes et
+clôtures) ; mettre les sauts courts en cache (8 k entrées pour des plans de
+1-3 cases, et la clé contient la liste de danger) ; trame binaire pour les
+options (JSON ~60 µs, gain marginal, compatibilité des workers) ; abaisser
+le plafond des poches ou l'horizon `walk_costs` (changerait les réponses).
+Rejeu : 73,3 s → 10,0 s CPU (−86 %, danger live), 9,9 → 7,0 s (ancien
+profil) ; prévision live ≈ 1,1 s/min.

@@ -12,8 +12,12 @@
 //! The replay is sequential in log time order through a REAL `Service`
 //! on a test socket (`plan` op like the workers, plus one synthetic
 //! `walk_costs` ring per third short plan, the live 0.4 batch/plan
-//! ratio). Each account gets a fixed option profile (paid, item tags,
-//! danger square) so the key fragmentation of live bots is present.
+//! ratio). Each account gets a fixed option profile (paid, item tags)
+//! plus the live danger list of each request's start
+//! (`service_replay_live`, ~180 squares; `NAV_REPLAY_DANGER=0` keeps
+//! the first profile's single square for a tenth of the accounts), so
+//! the key fragmentation and per-request cost of live bots are present.
+//! `service_replay_breakdown` (same extract) times each stage alone.
 //! Reports the CPU of the service threads (`plan-*`, schedstat ns), the
 //! cache counters, and the route quality: every K-th served plan is
 //! re-planned fresh off the cache and the cost excess is measured.
@@ -27,7 +31,7 @@ use crate::service::{PlanClient, Poll, Service, Snapshot};
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
 
-fn real_snapshot() -> (Arc<Snapshot>, Arc<StaticWorld>, Arc<Tables>) {
+pub(crate) fn real_snapshot() -> (Arc<Snapshot>, Arc<StaticWorld>, Arc<Tables>) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let zip = root.join("lostcity/engine/data/pack/.cache/maps-server.zip");
     let gametypes = std::fs::read_to_string(root.join("LifeScape/gamedata/data/gametypes.json")).expect("gametypes");
@@ -68,8 +72,20 @@ pub(crate) fn parse_line(line: &str) -> Option<Request> {
     Some(Request { account, secs, from, dest, cost })
 }
 
-fn account_hash(account: &str) -> u64 {
+pub(crate) fn account_hash(account: &str) -> u64 {
     account.bytes().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3))
+}
+
+/// Per-request options: the account profile, with the live danger list
+/// (`kit::danger::arm` around the requesting tile, `service_replay_live`)
+/// unless `NAV_REPLAY_DANGER=0` (the first replay's single square).
+pub(crate) fn request_options(request: &Request) -> NavOptions {
+    let mut options = profile(&request.account);
+    if std::env::var("NAV_REPLAY_DANGER").as_deref() != Ok("0") {
+        let combat = crate::service_replay_live::combat_of(account_hash(&request.account));
+        options.danger = crate::service_replay_live::live_danger(request.from, combat);
+    }
+    options
 }
 
 /// Fixed per-account options: paid for an eighth, the live `wants` tags
@@ -122,7 +138,7 @@ fn service_replay() {
     let text = std::fs::read_to_string(&path).expect("replay extract");
     let mut requests: Vec<Request> = text.lines().filter_map(parse_line).collect();
     requests.sort_by_key(|request| request.secs);
-    if requests.len() > limit + warm {
+    if requests.len() > limit.saturating_add(warm) {
         requests.drain(..requests.len() - limit - warm);
     }
     let (snapshot, world, tables) = real_snapshot();
@@ -148,7 +164,7 @@ fn service_replay() {
             started = Instant::now();
             (served, failed, costs_batches) = (0, 0, 0);
         }
-        let options = profile(&request.account);
+        let options = request_options(request);
         let client = PlanClient::new(&sock, &request.account);
         let misses_before = service.stats().misses;
         let plan_start = Instant::now();
@@ -216,12 +232,15 @@ fn service_replay() {
     println!("replay requests={} (+{warm} warm-up) served={served} failed={failed} walk_costs={costs_batches} wall={:.1}s", requests.len() - warm, wall.as_secs_f64());
     println!("cpu_ms total={total:.0} {}", groups.iter().map(|(group, millis)| format!("{group}={millis:.0}")).collect::<Vec<_>>().join(" "));
     println!(
-        "cache hits={} trunc={} suffix={} miss={} joins={}",
+        "cache hits={} trunc={} suffix={} miss={} joins={} fast={} fast_zero={} fast_declined={}",
         after.hits - before.hits,
         after.trunc_hits - before.trunc_hits,
         after.suffix_hits - before.suffix_hits,
         after.misses - before.misses,
         after.joins - before.joins,
+        after.fast_hits - before.fast_hits,
+        after.fast_zero - before.fast_zero,
+        after.fast_declined - before.fast_declined,
     );
     for (name, (count, misses, millis)) in ["short<=5", "mid<=50", "long>50"].iter().zip(by_class.iter()) {
         println!("class {name}: requests={count} misses={misses} wall_ms={millis:.0}");
