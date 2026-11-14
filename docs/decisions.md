@@ -494,3 +494,39 @@ Rejeté : garder le forfait de trajet (pénalise les petits lots proches) ;
 imputer toute la montée au lot (personne ne monte jamais) ; offres
 d'intrants au prix courant seulement (une barre à 2 ne fait bouger
 personne) ; lire les buts des autres bots (connaissance cachée, D22).
+
+## 2026-11-14 — Cache de routes central, rapports de taux différés
+
+Constat (VPS 13:00) : daemon ≈ 19 % d'un cœur, dont `plan-query` 6 %
+(`walk_costs`) et `plan-pool` 5,8 % (Dijkstra des ratés) ; 17 Mio/min
+écrits sur disque, dont ~15 par `run/rates-snapshot.json` (790 Ko
+réécrits à chaque rapport). L'ancien L1 (1024 plans sous la clé complète,
+préfixe/suffixe par balayage JSON de tout le LRU, danger ignoré) servait
+~55 % des requêtes ; les options fragmentaient les clés (tags de pièces,
+péage) alors que le plan trouvé n'en dépend pas.
+
+Décision :
+- Un cache de routes unique dans le service, lié à la version du
+  snapshot (vidé au `reload-nav`), réutilisation PROUVÉE : dominance
+  d'options (tags, péage, bans, danger : règles de sous-graphe), sous-
+  chemins entre points de coupe re-tarifés pas à pas (exacts), épissures
+  par marches locales servies seulement si le surcoût est prouvé ≤
+  `max(4, 6 %)` par une borne inférieure (inégalité triangulaire sur le
+  chemin optimal en cache). Négatifs sous la clé complète, TTL 60 s.
+- Mêmes gains hors cache : mémo des poches scellées par version, lecture
+  du monde sous verrou partagé, arrêt de Dijkstra au plancher de rang
+  pour les destinations bloquées (réponse identique), horizon de
+  `walk_costs` (64 + 4 × distance), réveil des attentes `plan` par
+  condvar, ligne `cpu-profile nav` par minute.
+- Snapshot des taux : marqué sale à chaque rapport, écrit au plus une
+  fois par minute (`rates-flush`) et à l'arrêt propre. Perte possible au
+  crash / SIGTERM : la dernière minute d'agrégat (pas de gestionnaire de
+  signal sans `unsafe`) ; les lignes brutes du store restent.
+
+Rejeté : clés normalisées à l'aveugle (servir un plan à des options qu'il
+ne valide pas) ; épissure acceptée sur un simple « jambes courtes » (2 ×
+jambes est une borne trop lâche : elle refusait presque tout, ou alors
+il fallait accepter un surcoût non prouvé) ; A* (heuristique admissible
+cassée par les rides/bateaux, risque sur les goldens) ; TTL sur les plans
+positifs (le monde statique ne change qu'au reload) ; écrire le snapshot
+à chaque rapport en asynchrone (même volume disque).

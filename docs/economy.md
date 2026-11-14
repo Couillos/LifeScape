@@ -243,7 +243,13 @@ Les taux (`rates_service`, clé = script) apprennent donc les unités par
 Ingestion : la session pousse le rapport, le superviseur du daemon le
 verse dans le store (`jobs::ingest_report_into`) puis dans l'agrégat
 persisté (`rates_service`, `run/rates-snapshot.json`, rechargé au
-redémarrage : aucune mesure ne se perd avec le process). Les lignes
+redémarrage). Écriture différée (2026-11-14, `rates_flush.rs`) : un
+rapport marque l'agrégat « sale », le thread `rates-flush` réécrit le
+fichier (tmp + rename) au plus une fois par minute, et l'arrêt propre
+(`shutdown`) l'écrit avant de sortir. Un crash ou un SIGTERM (non
+interceptable en std sans `unsafe`) perd au plus la dernière minute
+d'agrégat ; les lignes brutes du store restent complètes. Avant : 790 Ko
+réécrits à chaque rapport (~15 Mo/min, ~25 ms de CPU par rapport). Les lignes
 brutes restent requêtables pour recouper plus tard.
 
 Agrégation : rendement normalisé par 6000 ticks, par triplet (méthode,

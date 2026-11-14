@@ -1,8 +1,11 @@
 //! Replay bench of the real plan traffic (ignored: needs the engine pack
 //! and an extract of worker `nav plan ... from (...) to (...)` lines).
 //!
-//! `NAV_REPLAY=<extract> [NAV_REPLAY_LIMIT=N] [NAV_REPLAY_QUALITY=K]
-//! cargo test -p lifescape-nav --release service_replay -- --ignored --nocapture`
+//! `NAV_REPLAY=<extract> [NAV_REPLAY_LIMIT=N] [NAV_REPLAY_WARM=W]
+//! [NAV_REPLAY_QUALITY=K] [NAV_REPLAY_MISSES=1] cargo test -p
+//! lifescape-nav --lib service_replay -- --ignored --nocapture`
+//! (the last N requests measured after W warm-up ones; `MISSES` prints
+//! every computed long request, cost > 50).
 //!
 //! Extract: `<account> [HH:MM:SS] ... nav plan N segments cost C from
 //! (x,z,l) to (x,z,l)` per line (worker logs prefixed by the account).

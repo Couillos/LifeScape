@@ -113,6 +113,36 @@ mod tests {
         assert_eq!(before_bytes / debounce.bytes, 20, "20x fewer bytes per minute");
     }
 
+    /// Disk bytes of one minute of live ingests (20 reports) on a COPY
+    /// of the live snapshot: old path (one atomic rewrite per report)
+    /// against the debounce (one rewrite per period), read from
+    /// `/proc/self/io` `wchar`. Ignored: needs `LIFESCAPE_RATES_PATH` =
+    /// a copy of `run/rates-snapshot.json`.
+    /// `LIFESCAPE_RATES_PATH=/tmp/copy.json cargo test -p lifescape-orchestrator --lib rates_flush_disk -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn rates_flush_disk_bytes_per_minute() {
+        let Ok(path) = std::env::var("LIFESCAPE_RATES_PATH") else { return };
+        assert!(!path.contains("/LifeScape/run/"), "a copy only, never the live file");
+        let written = || -> u64 {
+            let io = std::fs::read_to_string("/proc/self/io").unwrap_or_default();
+            io.lines().find_map(|line| line.strip_prefix("wchar: ").and_then(|value| value.trim().parse().ok())).unwrap_or(0)
+        };
+        let before = written();
+        for _report in 0..20 {
+            crate::rates_service::write_snapshot_file().expect("old path writes");
+        }
+        let old_bytes = written() - before;
+        let before = written();
+        for _report in 0..20 {
+            super::mark_dirty();
+        }
+        super::flush_now();
+        let new_bytes = written() - before;
+        println!("rates snapshot, 20 reports/min: before {old_bytes} B/min, after {new_bytes} B/min");
+        assert!(new_bytes * 10 < old_bytes);
+    }
+
     #[test]
     fn failed_write_stays_dirty_and_retries() {
         let mut debounce = Debounce::default();

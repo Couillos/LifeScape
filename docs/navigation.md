@@ -11,7 +11,8 @@ Le daemon porte l'unique snapshot (monde statique + `Tables` + version,
 `rs/crates/orchestrator/src/plan_service.rs`, socket
 `run/pathfinding.sock`) et sert les plans sur 2 threads (`PLAN_THREADS`),
 files bornées (`QUEUE_CAP` 16, `ACCOUNT_CAP` 2, `RESULTS_CAP` 256),
-cache L1 (1024 entrées, 32 Ko max/entrée), garde RAM (warn/shed),
+cache de routes central (§ Cache de routes, 8192 plans + 2048
+négatifs), garde RAM (warn/shed),
 timeouts `SUBMIT_TIMEOUT` 10 s / `POLL_TIMEOUT` 5 s / garde client
 `SERVICE_WAIT_MAX` 30 s (`rs/crates/nav/src/service.rs`).
 
@@ -292,6 +293,101 @@ chargement local : `route` (+ `--paid`, `--ascii`), `map`,
 run au démarrage au lieu de diverger. Référence moteur : goldens
 `rs/crates/nav/tests/` (`routes.txt`, `golden.rs`, `paid_only`,
 `one_way`, `abort`, `probe`) — le planificateur `plan` n'a pas changé.
+
+## Cache de routes (2026-11-14)
+
+Un seul cache pour tous les bots, dans le service (`nav/src/route_cache.rs`,
+`route_path.rs`, `route_splice.rs`, `route_patch.rs`), lié à UNE version
+de snapshot : `reload-nav` le vide (`RouteCache::reset`), un calcul de
+l'ancienne version qui finit après la bascule n'y entre jamais. Les plans
+ne dépendent que du monde statique et des options : l'état live des
+portes n'est pas une entrée du planificateur (une porte est toujours
+planifiée « ouvrable »), donc rien d'autre ne périme une entrée ; un
+échec live revient en arête bannie dans les options de la requête et
+n'est servi par aucune entrée qui la traverse.
+
+Recherche (ordre, `op_submit`) :
+1. Négatif vivant sous la clé complète (`PlanKey`, tags inclus) :
+   NoRoute servi `NEGATIVE_TTL` = 60 s puis recalculé (stoppe les
+   tempêtes de replan sur une destination morte).
+2. Même départ, même destination : un plan servi à toute requête dont
+   les options le valident EXACTEMENT (coût identique au plan frais) —
+   tags : la première recherche lève les prérequis, un plan trouvé ne
+   dépend que des tags de ses propres arêtes ; `allow_paid` : un plan
+   payant qui ne traverse ni péage ni bateau sert un bot sans péage
+   (sous-graphe) ; arêtes bannies : bans de l'entrée ⊆ bans de la
+   requête et aucune arête du plan bannie ; danger : carrés de l'entrée ⊆
+   carrés de la requête et aucune tuile marchée dans les carrés en plus.
+   Compteurs `exact` (mêmes options) / `dominated`.
+3. Sous-chemin (`prefix`, `suffix`, `infix`) : départ et destination sur
+   un chemin en cache, à des points de coupe (tuile atteinte par un pas de
+   marche, sans porte : même état de recherche qu'un plan frais), options
+   compatibles sur la tranche. Coût re-tarifé pas à pas avec la formule
+   du planificateur (marche 1 + danger + battant, porte 10 par arête,
+   ride 20 (+50 non vérifié), custom 70) ; si la somme ne retombe pas sur
+   le coût du plan, l'entrée ne sert qu'entière. Exact (sous-structure).
+4. Épissure (`splice`) : départ et/ou destination à ≤ 8 tuiles
+   (`SPLICE_RADIUS`) d'un chemin en cache dont la tranche coûte ≥ 32
+   (`SPLICE_MIN_COST` ; plus court, un plan frais coûte autant). Deux
+   jambes de marche locales (pas du planificateur, sans porte ni péage,
+   hors carrés de danger, borne F2P) rejoignent puis quittent le chemin.
+   **Règle epsilon** : servi seulement si `coût − borne_inf ≤
+   max(4, 6 % du coût)` (`splice_epsilon`), où `borne_inf` est une borne
+   inférieure RIGOUREUSE du plan frais : d(O,T) ≥ d(X,Y) − d(X,O) −
+   d(T,Y) maximisée sur les points de coupe X près du départ et Y près
+   de la destination (d(X,Y) lu sur les coûts cumulés du chemin optimal,
+   d(X,O) et d(T,Y) majorés par deux marches locales de plus). Le surcoût
+   est donc prouvé ≤ epsilon ; avec les diagonales la borne est souvent
+   serrée (départ le long d'un chemin droit : surcoût prouvé 0).
+   Destination bloquée (arbre, guichet) : épissure vers la tuile qu'un
+   plan ajusté en cache pour la même cible a choisie, si elle est sur
+   l'anneau praticable le plus proche (vue permissive) et ouverte vers la
+   cible ; la borne retire l'écart de l'anneau (un plan frais peut finir
+   sur une autre tuile de l'anneau). Plan servi ajusté comme le frais.
+5. Sinon calcul, avec vol en cours partagé (même clé complète déjà en
+   file ou en calcul : on rejoint le ticket, jamais deux Dijkstra).
+
+Candidats : index par paire, par départ, par destination et par
+cellules 16×16 traversées par le CHEMIN (une requête teste les entrées
+qui passent près de ses deux bouts, 48 au plus). LRU (`ROUTE_CAP` 8192
+plans, 64 Mio estimés), moitié la plus ancienne évincée sur alerte RAM.
+Aucune recherche sous le verrou du cache : les épissures tournent sur des
+candidats sortis du cache (`Arc`).
+
+Hors cache, même chantier CPU : verdicts de poches scellées mémorisés par
+version (`pocket::PocketMemo`, une inondation par tuile cible au lieu
+d'une par plan et par cible de `walk_costs`) ; `StaticWorld::get` lit
+sous verrou PARTAGÉ (le verrou exclusif ne sert plus qu'à peindre un
+carré : avant, chaque lecture de tuile sérialisait tous les threads) ;
+destination bloquée : Dijkstra s'arrête dès la première tuile au
+plancher de rang (`fallback::rank_floor` : anneau praticable le plus
+proche, ouvert vers la cible) — même réponse, sans balayer 64 tuiles
+au-delà (≈ 8-16 k visites par plan ajusté avant) ; `walk_costs` borne sa
+recherche à `64 + 4 × distance de la cible la plus lointaine` (une cible
+qui ne s'atteint que par un détour plus long lit `None` ; avant : jusqu'à
+500 k visites, 1,8 s) ; les attentes `plan` se réveillent sur une
+condvar à la fin du calcul au lieu de tranches de 10 ms.
+
+Preuve (rejeu du trafic réel, `nav/src/service_replay_tests.rs`, ignoré :
+`NAV_REPLAY=<extrait des lignes « nav plan … from (…) to (…) »>`,
+15 000 requêtes des logs du 14/11, 5 000 de chauffe, profil d'options
+par compte, un `walk_costs` par tiers de plans courts ; séquentiel) :
+| (10 000 requêtes mesurées) | avant | après |
+|---|---|---|
+| CPU `plan-pool` | 49,9 s | 12,6 s (−75 %) |
+| CPU `plan-query` (`walk_costs`) | 13,1 s | 3,5 s (−74 %) |
+| CPU `plan-wait` + `plan-accept` | 4,5 s | 4,5 s |
+| CPU total service | 67,6 s | 20,5 s (−70 %) |
+| plans calculés (ratés) | 7 682 | 4 898 |
+| temps mur (séquentiel) | 132,5 s | 21,5 s |
+| `walk_costs` p50 / max | 2,2 ms / 1 613 ms | 0,4 ms / 49 ms |
+
+Qualité : 500 requêtes re-planifiées à froid, surcoût max 4 (somme 58),
+aucun au-delà d'epsilon, aucun verdict différent ; goldens `routes.txt`
+inchangées. Le rejeu part d'un cache plus froid que le daemon (≈ 77 %
+de ratés avant contre ≈ 33 % en live) : en live la part servie est
+plus haute, le gain relatif par raté (arrêt au plancher, poches, verrou
+partagé) est le même.
 
 ## Arêtes ajoutées à la main : bateau de Karamja (2026-11-13)
 

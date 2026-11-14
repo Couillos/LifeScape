@@ -40,7 +40,13 @@ log du daemon porte une ligne `cpu-profile pool` (requêtes des pools
 daemon/marché par `cmd:<cmd>`, `push:<type>`, `market:<op>`) et une
 ligne `cpu-profile brain` (étapes `tick.*` du thread `brain-tick` et
 phases imbriquées), top 12 par CPU, format `nom=count/cpu_ms/wall_ms`
-(CPU du thread lu dans `/proc/thread-self/schedstat`).
+(CPU du thread lu dans `/proc/thread-self/schedstat`). Une ligne
+`cpu-profile nav` (thread `nav-profile`, `src/nav_profile.rs`) donne en
+plus, par minute, le CPU des threads du service de navigation
+(`plan-pool`, `plan-query`, `plan-wait`, `plan-accept`) et les compteurs
+du cache de routes de la même minute (`exact`, `dominated`, `prefix`,
+`suffix`, `infix`, `splice`, `negative`, `miss`, `joins`, taux de hit,
+`walk_costs`, occupation, évictions, verdicts de poches).
 Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 
 État et logs (`src/paths.rs`, racine détectée via le dossier `orchestration/`) :
