@@ -57,6 +57,8 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 (heartbeat SDK), `run/logs/<compte>.log`, `run/orchestrator.sock`,
 `run/pathfinding.sock`. Dashboard `http://localhost:8765/` (`src/web.rs`,
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
+Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
+`/hiscores`, `/errors`.
 Onglet « Cerveau » de la page Lives (`/life`, `brain.js`, 2026-11-13) :
 `GET /api/brain/<compte>` (`src/web_brain.rs`, lecture seule) agrège le
 fichier de vie (ambition passée telle quelle si présente, but + jalon
@@ -146,6 +148,52 @@ workers sont asynchrones (`push_conn`) : un daemon absent ne gèle plus
 leur pump. Build `dev` optimisé (`opt-level`), compilation sur 6 cœurs
 (`.cargo/config.toml`).
 
+Hiscores (2026-11-14) : page `/hiscores` (`orchestration/static/hiscores.html`,
+`hiscores.js`, lien « Hiscores » dans la barre de chaque page), style des
+hiscores de 2004 en CSS original (cadre de pierre, titres dorés serif,
+parchemin ; aucune image du jeu) : colonne de catégories (Overall + 19
+compétences rev 274 dans l'ordre des stats 0..17 puis 20 ; Wealth : Coins,
+Total value), tableau Rang / Nom / Niveau / XP par 25 avec pagination,
+recherche par nom (compte ou nom affiché, préfixe accepté) et par rang,
+vue personnelle (`#player=<compte>` : rang/niveau/XP de chaque compétence,
+rangs pièces et valeur, 10 objets les plus précieux). État dans le hash
+(`#cat=attack&page=2`, `#cat=coins&rank=30`). Calcul : `src/hiscores.rs`
+(pur : niveaux, rangs, valorisation) et `src/hiscores_service.rs` (collecte,
+cache, planification). Règles :
+- joueurs = comptes suivis par le daemon + vies `run/lives` écrites depuis
+  moins de 24 h, hors `admin`, `bite`, `run/economy-excluded.txt` et
+  `proof-*` ; les Ironmen sont classés (étiquette « iron ») ;
+- source : snapshot poussé du job s'il a moins de 10 min (seuls `skills`,
+  `inv`, `bank`, `worn` sont copiés), sinon fichier de sauvegarde engine
+  (XP serveur ÷ 10, étiquette « offline ») ; une banque live vide (pas
+  ouverte depuis le login) prend celle de la sauvegarde ;
+- niveau = niveau de base tiré de l'XP (`gamedata::xp`), jamais le niveau
+  boosté ; overall = niveau total puis XP totale ; compétence = XP ;
+  égalité départagée par nom de compte (rangs uniques) ;
+- pièces = sac + banque ; valeur = sac + banque + porté au prix courant
+  du marché (`MarketService::reference`, le prix des bots) pour les objets
+  du catalogue qui ont un trade ou un ordre au carnet ; pièces = 1, non
+  échangeable / hors catalogue / sans trade ni ordre = 0 ; marché absent ⇒
+  valeur non classée (`value` null) et ligne dans `errors`.
+Fréquence et CPU : thread `hiscores`, un snapshot au plus toutes les 30 min,
+le premier 240 s après le démarrage du daemon (après le pic de reprise),
+ou 30 min après le snapshot persisté s'il est plus récent. Le snapshot est
+gardé en mémoire déjà sérialisé et écrit atomiquement dans
+`run/hiscores.json` (rechargé au démarrage : servi tout de suite).
+`GET /api/hiscores` renvoie ces octets tels quels (aucun calcul par
+requête ; `ok:false` « first snapshot pending » avant le premier). Coût :
+ligne `hiscores: snapshot N players, cpu X ms, wall Y ms` dans
+`run/orchestrator.log`, entrée `hiscores.snapshot` dans la ligne
+`cpu-profile pool` de la minute, et `cost.cpu_ms`/`wall_ms` dans le JSON
+(mesure hors ligne, pire cas 58 comptes tous lus sur sauvegarde : ~32 ms
+CPU par snapshot, JSON ~65 Ko).
+Forme : `{ok, generated_at, next_at, interval_seconds, skills[19], market,
+rule, errors[], cost, players[{account, name, iron, source, overall:[rang,
+niveau, xp], skills:[[rang, niveau, xp]×19], coins:[rang, pièces],
+value:[rang, valeur]|null, top:[{id, name, count, price, value}]}]}`,
+joueurs dans l'ordre overall. Le front relit l'API toutes les 5 min.
+Tests : `hiscores_tests.rs` (dont la route web servie depuis un snapshot
+fixture), `node orchestration/static/hiscores.test.js`.
 Erreurs (2026-11-13) : page `/errors` (`orchestration/static/errors.html`,
 `errors.js`), API `web_errors.rs` : `/api/errors/summary?hours=1..72&source=
 &type=&account=&script=&zone=&signature=` (KPIs, tendance vs fenêtre

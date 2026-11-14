@@ -129,6 +129,9 @@ fn daemon_main() -> i32 {
         }
     };
     lifescape_orchestrator::holdings::start_sampler(orch.clone());
+    // Hiscores: snapshot at most every 30 min, first one 240 s after
+    // the start (after the restore spike); the page serves the cache.
+    lifescape_orchestrator::hiscores_service::start(orch.clone());
     // Errors page: one collector thread feeds `error_events` (pushed
     // task errors, brain log lines, rescanned dossiers and deals).
     lifescape_orchestrator::errors_ingest::start(&orch);

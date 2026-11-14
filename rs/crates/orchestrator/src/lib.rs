@@ -94,6 +94,8 @@ mod market_taker_tests;
 mod market_impact_tests;
 pub mod jobs;
 pub mod holdings;
+pub mod hiscores;
+pub mod hiscores_service;
 pub mod registry;
 pub mod mapcache;
 pub mod mapbuild;

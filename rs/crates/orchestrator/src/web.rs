@@ -3,6 +3,7 @@
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
 //! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /brain.js /economy /economy.js
 //! /errors /errors.js /api/errors/summary|list|dossier/<file> (web_errors)
+//! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
 //! /api/map /api/status /api/state/<account> /api/items /api/items/history
 //! /api/rates/table /api/lives /api/life/<account> /api/brain/<account> /api/economy
@@ -258,6 +259,24 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
                 content_type: "application/javascript",
                 cache: "no-store",
                 body: asset("brain.js").map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["hiscores"] || parts == ["hiscores.js"] {
+            let html = parts[0] == "hiscores";
+            return Ok(Response {
+                status: 200,
+                content_type: if html { "text/html; charset=utf-8" } else { "application/javascript" },
+                cache: "no-store",
+                body: asset(if html { "hiscores.html" } else { "hiscores.js" }).map_err(|error| error.to_string())?,
+            });
+        }
+        if parts == ["api", "hiscores"] {
+            // Cached snapshot bytes only: no computation per request.
+            return Ok(Response {
+                status: 200,
+                content_type: "application/json",
+                cache: "no-store",
+                body: crate::hiscores_service::api_body(),
             });
         }
         if parts == ["api", "economy"] {
