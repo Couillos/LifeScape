@@ -55,8 +55,8 @@ fn life_of(kind: &str, seed: u64, level_of: &dyn Fn(&str) -> u8) -> Life {
 
 fn scimitar_market() -> MarketReader {
     let mut views = HashMap::new();
-    views.insert("bronze_scimitar".to_string(), BookView { bids: SCIMITAR_BIDS.iter().map(|price| (*price, 1)).collect(), asks: Vec::new(), volume_24h: 0 });
-    views.insert("bronze_bar".to_string(), BookView { bids: Vec::new(), asks: vec![(5, 146)], volume_24h: 40 });
+    views.insert("bronze_scimitar".to_string(), BookView { bids: SCIMITAR_BIDS.iter().map(|price| (*price, 1)).collect(), asks: Vec::new(), volume_24h: 0, ..BookView::default() });
+    views.insert("bronze_bar".to_string(), BookView { bids: Vec::new(), asks: vec![(5, 146)], volume_24h: 40, ..BookView::default() });
     MarketReader::fixed(views)
 }
 
@@ -77,7 +77,7 @@ fn a_smith_answers_the_scimitar_bids_and_fills_them() {
     let seed = (1..200).find(|seed| answers_now(*seed, "bronze_scimitar", 0)).expect("a seed answers window 0");
     let mut life = life_of("warrior", seed, &level_of);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0 };
+    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
     let reader = scimitar_market();
     let (found, rate) = choose(&life, &reader, &[], &state).expect("the bids pay");
     assert!((rate - lifescape_planner::market_fit::MIN_COIN_RATE).abs() < 1e-9, "no published rate: time at the floor");
@@ -165,9 +165,9 @@ fn without_willow_demand_logs_are_burned_not_dumped() {
     let keep = crate::brain_sales::working_keep(&woodcutter, &[]);
     let offered = crate::brain_sales::surplus(&stacks, &keep, &[], &HashSet::new());
     assert_eq!(offered.iter().map(|(name, _, qty)| (name.as_str(), *qty)).collect::<Vec<_>>(), vec![("willow_logs", 2000)], "a woodcutter sells its logs");
-    let glut = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 4_319 };
+    let glut = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 4_319, ..BookView::default() };
     assert_eq!(sale_lot(2000, Some(&glut)), 2000.min(4_319), "a day of volume");
-    let thin = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 0 };
+    let thin = BookView { bids: Vec::new(), asks: vec![(1, 33_364)], volume_24h: 0, ..BookView::default() };
     assert_eq!(sale_lot(2000, Some(&thin)), lifescape_planner::market_fit::SALE_LOT_MIN, "one inventory into a dead market");
 
     // Money: the published woodcut profit (live 16 732 / 6000) against
@@ -188,4 +188,52 @@ fn without_willow_demand_logs_are_burned_not_dumped() {
     let mut blind = lifescape_planner::Node::new("n2", NodeKind::MakeMoney, Vec::new(), 0);
     resolve_ready(&mut blind, &ctx);
     assert_eq!(blind.method.as_deref(), Some("gather:woodcut/willow_logs"), "without saturation the glut wins (the old behavior)");
+}
+
+/// The market-wide choice (2026-11-14): bst29bh9 (smithing 22, mining 55,
+/// iron ore in the bank) reads the whole book: 3 iron full helm bids at
+/// 123, iron daggers trading at 60. It takes a lot; a second smith reads
+/// the first one's claim on the board and its lot shrinks. The bars its
+/// graph would buy carry a reservation that rises with the helm.
+#[test]
+fn smiths_weigh_the_whole_market_and_claims_share_it() {
+    let levels = [("smithing", 22), ("mining", 55), ("attack", 20), ("strength", 20), ("defence", 20)];
+    let snapshot = live(&levels, &[("hammer", 1), ("iron_ore", 60)]);
+    let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
+    let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
+    let book = |claimed: i64| {
+        let mut views = HashMap::new();
+        views.insert("iron_full_helm".to_string(), BookView { bids: vec![(123, 3)], claimed, ..BookView::default() });
+        views.insert("iron_dagger".to_string(), BookView { volume_24h: 400, current: Some(60), ..BookView::default() });
+        MarketReader::fixed(views)
+    };
+    let picks = |claimed: i64| {
+        let reader = book(claimed);
+        (0..400u64).find_map(|seed| {
+            let life = life_of("smith", seed, &level_of);
+            let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &sim_units, tick: 0, combat: 30, position: Some((3185, 3436, 0)), planned: Vec::new(), caster: None };
+            choose(&life, &reader, &[], &state).filter(|(found, _)| found.item == "iron_full_helm").map(|(found, _)| found)
+        })
+    };
+    let first = picks(0).expect("a smith answers the helm bids");
+    assert_eq!(first.count, 2, "{first:?}");
+    assert!(first.unit.plan.iter().any(|step| step == "held iron_ore"), "its own ore: {first:?}");
+    let second = picks(first.count).expect("one bid left");
+    assert_eq!(second.count, 1, "the claim is supply on its way: {second:?}");
+    assert_eq!(picks(3), None, "every bid claimed");
+
+    // Derived demand: the bars of that lot, priced from the helm.
+    let reserve_at = |helm: f64| {
+        let mut top = lifescape_planner::Node::new("n1", NodeKind::ObtainItems { item: "iron_full_helm".to_string(), count: 2 }, vec!["n2".to_string()], 2);
+        top.method = Some("smith:iron_full_helm".to_string());
+        let bars = lifescape_planner::Node::new("n2", NodeKind::ObtainItems { item: "iron_bar".to_string(), count: 4 }, Vec::new(), 4);
+        let value = move |item: &str| (item == "iron_full_helm").then_some(helm);
+        let input = |_: &str| 1.0;
+        let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value, input_price: &input, units_per_6000: &sim_units, coin_rate: 0.1 };
+        lifescape_planner::derived_demand::input_reserve(&[top, bars], 1, &prices).expect("derived")
+    };
+    let (open_low, ceiling_low) = lifescape_planner::derived_demand::derived_bounds(reserve_at(123.0), 500);
+    let (open_high, ceiling_high) = lifescape_planner::derived_demand::derived_bounds(reserve_at(1500.0), 5000);
+    assert!(open_low >= 20 && ceiling_low >= 40, "a 2-coin bar bid becomes {open_low}..{ceiling_low}");
+    assert!(open_high > 10 * open_low / 2 && ceiling_high > ceiling_low * 5, "{open_low}..{ceiling_low} → {open_high}..{ceiling_high}");
 }

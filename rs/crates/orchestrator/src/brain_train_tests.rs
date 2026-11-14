@@ -83,7 +83,7 @@ fn magic_25_alchs_its_daggers_and_launches_the_batch() {
     let life = life_for("magic", 35);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0 };
+    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
     let reader = book(&RUNE_ASKS, &[]);
     let price = |item: &str| traded(item).unwrap_or(1.0);
     let supply = vec![AlchSupply { item: "iron_dagger".to_string(), units: 300, unit_cost: 0.0, own: true }];
@@ -122,7 +122,7 @@ fn magic_60_buys_cheap_asks_to_high_alch() {
     let life = life_for("magic", 65);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0 };
+    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
     let high = lifescape_planner::alchemy::alch_value("steel_platebody", true).expect("alchs");
     let mut asks = RUNE_ASKS.to_vec();
     asks.push(("steel_platebody", high - 60, 150));
@@ -152,7 +152,7 @@ fn smith_18_hammers_what_the_book_pays() {
     {
         let level_of = |skill: &str| crate::brain_succession::live_level(&miner, skill);
         let held = |item: &str| crate::brain_ambition::live_count(&miner, item);
-        let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0 };
+        let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
         let none = |_: &str| None;
         let quiet = book(&[("bronze_bar", 5, 400)], &[]);
         let plain = TrainMarket { reader: &quiet, traded: &none, mage: None, supply: Vec::new(), coins: 5_000 };
@@ -163,7 +163,7 @@ fn smith_18_hammers_what_the_book_pays() {
     let snapshot = live(&[("smithing", 18), ("mining", 1)], &[]);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
-    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0 };
+    let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
     let none = |_: &str| None;
     let scimitars: Vec<(&str, i64, i64)> = [2961, 2896, 2876, 2484, 2434, 2133, 1967, 1930, 1774, 1500].iter().map(|price| ("bronze_scimitar", *price, 1)).collect();
     let reader = book(&[("bronze_bar", 5, 400)], &scimitars);

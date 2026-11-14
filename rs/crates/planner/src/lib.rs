@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod lifecycle_retire;
 pub mod life_memory;
 pub mod market_fit;
+pub mod market_value;
+pub mod derived_demand;
 pub mod mapping;
 pub mod method_way;
 pub mod model;

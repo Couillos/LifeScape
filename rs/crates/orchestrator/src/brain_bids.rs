@@ -1,20 +1,25 @@
 #![forbid(unsafe_code)]
-//! Producers respond to bids, brain side (user-approved point 7,
-//! 2026-11-14). The pure rules live in the planner
-//! (`bid_response`: unit cost, depth split, preempt rule, spread;
-//! `market_fit`: saturation, sale lots, own downstream use, coin rate);
+//! Producers answer the market, brain side (user-approved point 7,
+//! 2026-11-14, extended to the whole market the same day). The pure
+//! rules live in the planner (`bid_response`: unit cost with every
+//! dependency, real trips, training share, spread; `market_value`: what
+//! the market absorbs; `market_fit`: saturation, sale lots, coin rate);
 //! this file reads the PUBLIC book (the market engine's resting orders,
-//! the bot's own bids left out, 24 h volume from the executions), the
-//! published rates and the bot's own state, then hands the draw a
-//! production quota (`bid:<item>`) when a bid beats the ambition.
+//! the bot's own bids left out, current prices, 24 h volume, the public
+//! claims of the order board), the published rates and the bot's own
+//! state, then hands the draw a production quota (`bid:<item>`) when a
+//! lot beats the ambition, and posts the claim on the board.
 //!
 //! Called on EVERY goal draw (`brain_succession::draw_next`), before the
 //! ambition's milestone: the ambition and its milestones are untouched,
 //! the next draw weighs them again. The product sells through the
-//! default listing path once the quota is done (`brain_sales`).
+//! default listing path once the quota is done (`brain_sales`). CPU: the
+//! whole market is weighed once per account per `CHOICE_TTL_SECS` (a
+//! redraw retried every pass reuses the choice).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
 use lifescape_planner::bid_response::{best_opportunity, bid_goal, Opportunity, Producer};
@@ -26,6 +31,8 @@ use lifescape_planner::{GoalKind, Life, Node, NodeKind};
 pub const MAKE_UNITS_PER_6000: f64 = 600.0;
 /// Units per 6000 ticks of a gather nobody measured yet.
 pub const GATHER_UNITS_PER_6000: f64 = 200.0;
+/// A market-wide choice is reused this long per account (wall seconds).
+pub const CHOICE_TTL_SECS: u64 = 60;
 
 /// Debug name of a market object (banknotes trade as their base).
 fn debug_name(item_id: i64) -> Option<String> {
@@ -64,23 +71,24 @@ pub fn views_from(orders: &[Resting], account: &str) -> HashMap<String, BookView
 }
 
 /// The live book as `account` reads it (empty while the market is down:
-/// no data, no decision). 24 h volume is filled by `with_volume`.
-pub fn live_views(account: &str) -> HashMap<String, BookView> {
-    let Some(service) = crate::market_service::shared() else { return HashMap::new() };
+/// no data, no decision), with the market id of every object; 24 h
+/// volume and current prices are read on demand (`MarketReader::view`).
+fn live_views(account: &str) -> (HashMap<String, BookView>, HashMap<String, i64>) {
+    let Some(service) = crate::market_service::shared() else { return (HashMap::new(), HashMap::new()) };
+    let mut ids: HashMap<String, i64> = HashMap::new();
     let rows: Vec<Resting> = {
         let engine = service.lock_engine();
-        engine
-            .books
-            .iter()
-            .filter_map(|(item_id, book)| Some((debug_name(*item_id)?, book.orders())))
-            .flat_map(|(name, orders)| {
-                orders
-                    .into_iter()
-                    .map(move |order| (name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, order.price, order.remaining))
-            })
-            .collect()
+        let mut rows = Vec::new();
+        for (item_id, book) in engine.books.iter() {
+            let Some(name) = debug_name(*item_id) else { continue };
+            ids.entry(name.clone()).or_insert(*item_id);
+            for order in book.orders() {
+                rows.push((name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, order.price, order.remaining));
+            }
+        }
+        rows
     };
-    views_from(&rows, account)
+    (views_from(&rows, account), ids)
 }
 
 /// Units traded in the last 24 h for one object (every form).
@@ -95,31 +103,65 @@ fn volume_24h(item: &str) -> i64 {
         .sum()
 }
 
-/// A market reader over `views`, with the 24 h volume read once per
-/// object on demand (the recursion asks the same inputs again).
+/// Current price of one object when it traded (median of the last five
+/// fills clamped by the impact prices), `None` otherwise.
+fn current_of(item_id: i64) -> Option<i64> {
+    let service = crate::market_service::shared()?;
+    let reference = service.reference(item_id);
+    reference.traded.then_some(reference.price.max(1))
+}
+
+/// A market reader over `views`, with the 24 h volume and the current
+/// price read once per object on demand (the recursion asks the same
+/// inputs again), and the public claims of other producers.
 pub struct MarketReader {
     views: HashMap<String, BookView>,
+    ids: HashMap<String, i64>,
     volumes: RefCell<HashMap<String, i64>>,
-    live_volume: bool,
+    currents: RefCell<HashMap<String, Option<i64>>>,
+    claims: HashMap<String, i64>,
+    live: bool,
 }
 
 impl MarketReader {
-    /// Offline reader (tests, sims): volumes as given in the views.
+    /// Offline reader (tests, sims): views as given (volume, current
+    /// price and claims included).
     pub fn fixed(views: HashMap<String, BookView>) -> Self {
-        MarketReader { views, volumes: RefCell::new(HashMap::new()), live_volume: false }
+        MarketReader { views, ids: HashMap::new(), volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims: HashMap::new(), live: false }
     }
 
     pub fn live(account: &str) -> Self {
-        MarketReader { views: live_views(account), volumes: RefCell::new(HashMap::new()), live_volume: true }
+        let (views, ids) = live_views(account);
+        let claims = crate::market_claims::claimed_by_others(account);
+        MarketReader { views, ids, volumes: RefCell::new(HashMap::new()), currents: RefCell::new(HashMap::new()), claims, live: true }
+    }
+
+    fn current(&self, item: &str) -> Option<i64> {
+        if !self.live {
+            return self.views.get(item).and_then(|view| view.current);
+        }
+        if let Some(known) = self.currents.borrow().get(item) {
+            return *known;
+        }
+        let id = self.ids.get(item).copied().or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.obj_id as i64));
+        let price = id.and_then(current_of);
+        self.currents.borrow_mut().insert(item.to_string(), price);
+        price
     }
 
     /// The view of one object (`None`: nothing rests and nothing traded).
     pub fn view(&self, item: &str) -> Option<BookView> {
         let mut view = self.views.get(item).cloned();
-        if self.live_volume {
+        if self.live {
             let volume = *self.volumes.borrow_mut().entry(item.to_string()).or_insert_with(|| volume_24h(item));
             if volume > 0 {
                 view.get_or_insert_with(BookView::default).volume_24h = volume;
+            }
+            if let Some(price) = self.current(item) {
+                view.get_or_insert_with(BookView::default).current = Some(price);
+            }
+            if let Some(claimed) = self.claims.get(item).filter(|units| **units > 0) {
+                view.get_or_insert_with(BookView::default).claimed = *claimed;
             }
         }
         view
@@ -134,12 +176,126 @@ impl MarketReader {
         });
         out
     }
+
+    /// Every object with market value a producer can make: others' bids,
+    /// or a current price with a day of volume, or (for a caster) an
+    /// alchemy value. Views complete (volume, price, claims), sorted by
+    /// name (deterministic). Objects no production leg makes are left
+    /// out before any store read.
+    pub fn value_books(&self, alch: &dyn Fn(&str) -> Option<f64>) -> Vec<(String, BookView)> {
+        let mut names: Vec<&String> = self.views.keys().chain(self.ids.keys()).collect();
+        names.sort();
+        names.dedup();
+        names
+            .into_iter()
+            .filter(|item| !lifescape_planner::obtain_legs::production_legs(item).is_empty())
+            .filter_map(|item| {
+                // Cheap reads first: the volume is a store read.
+                let bids = self.views.get(item).is_some_and(|view| !view.bids.is_empty());
+                if !bids && self.current(item).is_none() && alch(item).is_none() {
+                    return None;
+                }
+                let view = self.view(item)?;
+                let valued = !view.bids.is_empty() || (view.current.is_some() && view.volume_24h > 0) || alch(item).is_some();
+                valued.then(|| (item.clone(), view))
+            })
+            .collect()
+    }
 }
 
-/// Published `(script, band, profit per 6000)` rows (rates page).
-/// Shared table (`rates_service::cached_profit_rows`), never rebuilt per call.
+/// Seconds a realizable rate table serves.
+pub const REALIZABLE_TTL_SECS: u64 = 60;
+
+/// Realizable `(script, band, profit per 6000)` rows: the published
+/// profits (rates page) times the share of each product the market
+/// absorbs (live 2026-11-14: a few bronze scimitar gear bids at ~2000
+/// published `smith` band 1 at 65 928 per 6000 ticks, valuing EVERY
+/// bot's time at 11 coins a tick, so no lot ever beat it). Shared and
+/// rebuilt every `REALIZABLE_TTL_SECS` (one book read for the table).
 pub fn rate_rows() -> Vec<(String, i64, f64)> {
-    crate::rates_service::cached_profit_rows().iter().map(|row| (row.method.clone(), row.band, row.profit)).collect()
+    type Table = Option<(std::time::Instant, Vec<(String, i64, f64)>)>;
+    static CACHE: OnceLock<Mutex<Table>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, rows)) = slot.as_ref().filter(|(built, _)| built.elapsed().as_secs() < REALIZABLE_TTL_SECS) {
+        return rows.clone();
+    }
+    let published: Vec<(String, i64, f64)> = crate::rates_service::cached_profit_rows().iter().map(|row| (row.method.clone(), row.band, row.profit)).collect();
+    let rows = if crate::market_service::shared().is_some() {
+        let reader = MarketReader::live("");
+        realizable_rows(&published, &crate::rates_service::live_snapshot().yield_rows(), &|item| reader.view(item))
+    } else {
+        published
+    };
+    *slot = Some((std::time::Instant::now(), rows.clone()));
+    rows
+}
+
+/// Debug name of a display name of the rates rows (first object).
+fn debug_of_display(display: &str) -> Option<String> {
+    static TABLE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut out = HashMap::new();
+        for obj in lifescape_gamedata::all_objs() {
+            let (Some(name), Some(shown)) = (obj.name, obj.display) else { continue };
+            if name.starts_with("cert_") {
+                continue;
+            }
+            // The object named like its display wins (`coins` over
+            // `fake_coins`), else the first.
+            let key = shown.to_lowercase();
+            let exact = key.replace(' ', "_") == name;
+            if exact || !out.contains_key(&key) {
+                out.insert(key, name.to_string());
+            }
+        }
+        out
+    });
+    table.get(&display.to_lowercase()).cloned().or_else(|| lifescape_gamedata::objs_by_name(display).first().and_then(|obj| obj.name).map(str::to_string))
+}
+
+/// Share of a window's `batch` buyers take: (resting bids + 24 h volume)
+/// over (resting asks + the batch), in [0, 1]. Unlike
+/// `market_fit::saturation_factor`, an object nobody offers AND nobody
+/// buys absorbs nothing: a steady hourly rate needs buyers, not a price
+/// left by one old fill.
+fn absorbed_share(view: Option<&BookView>, batch: f64) -> f64 {
+    let Some(view) = view else { return 0.0 };
+    let buyers = (view.bid_depth() + view.volume_24h.max(0)) as f64;
+    let offered = view.ask_depth() as f64 + batch.max(1.0);
+    (buyers / offered).clamp(0.0, 1.0)
+}
+
+/// Pure: each published row times the share of its products the market
+/// absorbs at their yield (`absorbed_share`, weighted by each product's
+/// value per 6000 ticks: current price, else best bid, else 1). A loss
+/// stays a loss; a row without measured products keeps its profit.
+pub fn realizable_rows(rows: &[(String, i64, f64)], yields: &[crate::rates_service::YieldRow], view: &dyn Fn(&str) -> Option<BookView>) -> Vec<(String, i64, f64)> {
+    rows.iter()
+        .map(|(script, band, profit)| {
+            if *profit <= 0.0 {
+                return (script.clone(), *band, *profit);
+            }
+            let mut value = 0.0;
+            let mut absorbed = 0.0;
+            for row in yields.iter().filter(|row| row.method == *script && row.band == *band && row.mean > 0.0) {
+                // Coins picked up are money, no market to absorb them
+                // (`fake_coins` shares their display name).
+                if row.item.eq_ignore_ascii_case("coins") {
+                    value += row.mean;
+                    absorbed += row.mean;
+                    continue;
+                }
+                let book = debug_of_display(&row.item).and_then(|item| view(&item));
+                let price = book.as_ref().and_then(|known| known.current.or(known.best_bid())).unwrap_or(1).max(1) as f64;
+                let worth = row.mean * price;
+                value += worth;
+                absorbed += worth * absorbed_share(book.as_ref(), row.mean);
+            }
+            let share = if value > 0.0 { absorbed / value } else { 1.0 };
+            (script.clone(), *band, profit * share)
+        })
+        .collect()
 }
 
 /// Units per 6000 ticks of a production method for an object: measured
@@ -161,29 +317,74 @@ pub struct BotState<'a> {
     pub quests_done: Vec<String>,
     pub units: &'a dyn Fn(&str, &str) -> f64,
     pub tick: u64,
+    pub combat: u8,
+    pub position: Option<(i64, i64, i64)>,
+    /// Highest level the bot's ambition climbs each skill to.
+    pub planned: Vec<(String, u8)>,
+    /// The bot as a caster (alchemy floor), when it casts.
+    pub caster: Option<lifescape_planner::alchemy::Caster>,
 }
 
-/// Pure choice: the bid this life answers now, if any (planner rules).
+impl BotState<'_> {
+    /// The planner's view of this bot at `rate` coins per tick; `use_it`
+    /// runs with it (the closures live on this frame).
+    pub fn with_producer<R>(&self, life: &Life, rate: f64, use_it: impl FnOnce(&Producer) -> R) -> R {
+        let planned = |skill: &str| self.planned.iter().filter(|(name, _)| name == skill).map(|(_, level)| *level).max().unwrap_or(0);
+        let alch = |item: &str| self.caster.as_ref().and_then(|mage| mage.net(item));
+        let producer = Producer {
+            level_of: self.level_of,
+            held: self.held,
+            avoid: &self.avoid,
+            quests_done: &self.quests_done,
+            coin_rate: rate,
+            units_per_6000: self.units,
+            ironman: life.profile.ironman,
+            seed: life.seed,
+            tick: self.tick,
+            combat: self.combat,
+            position: self.position,
+            free_pass: self.quests_done.iter().any(|quest| quest == lifescape_gamedata::toll::FREE_PASS_QUEST),
+            planned_level: &planned,
+            alch_net: &alch,
+        };
+        use_it(&producer)
+    }
+}
+
+/// Highest level the life's ambition climbs each skill to: its ladder
+/// (`ambition_catalog::ladder_level`) and its open level milestones.
+pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
+    let Some(ambition) = life.ambition.as_ref() else { return Vec::new() };
+    let mut out: Vec<(String, u8)> = Vec::new();
+    for skill in lifescape_planner::GROUPS.iter().flat_map(|group| lifescape_planner::ambition_catalog::group_skills(group)) {
+        let level = lifescape_planner::ambition_catalog::ladder_level(&ambition.kind, skill);
+        if level > 0 {
+            out.push((skill.to_string(), level));
+        }
+    }
+    for stone in ambition.milestones.iter().filter(|stone| stone.status != lifescape_planner::MilestoneStatus::Done) {
+        if let lifescape_planner::Target::Level { skill, level } = &stone.target {
+            out.push((skill.clone(), *level));
+        }
+    }
+    out
+}
+
+/// Pure choice: the lot this life makes now, if any (planner rules),
+/// with the bot's coin rate.
 pub fn choose(life: &Life, reader: &MarketReader, rows: &[(String, i64, f64)], state: &BotState) -> Option<(Opportunity, f64)> {
     let rate = coin_rate(rows, state.level_of);
-    let producer = Producer {
-        level_of: state.level_of,
-        held: state.held,
-        avoid: &state.avoid,
-        quests_done: &state.quests_done,
-        coin_rate: rate,
-        units_per_6000: state.units,
-        ironman: life.profile.ironman,
-        seed: life.seed,
-        tick: state.tick,
-    };
-    let market = |item: &str| reader.view(item);
-    best_opportunity(&reader.bid_books(), &market, &producer).map(|found| (found, rate))
+    state.with_producer(life, rate, |producer| {
+        let market = |item: &str| reader.view(item);
+        let books = reader.value_books(producer.alch_net);
+        best_opportunity(&books, &market, producer).map(|found| (found, rate))
+    })
 }
 
 /// Runs `use_state` over this bot's own state (live levels, free
-/// holdings, bans, quests, rates): shared by the bid draw and the seller
-/// reserve cap, so both price a unit the same way.
+/// holdings, bans, quests, rates, position, plans, caster): shared by the
+/// bid draw, the seller reserve cap and the priced training, so all price
+/// a unit the same way.
 pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnce(&BotState) -> R) -> R {
     let level_of = |skill: &str| crate::brain_succession::live_level(live, skill);
     let locks = crate::brain_locks::locked_items(&life.account);
@@ -192,6 +393,10 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
     let units = |method: &str, item: &str| units_per_6000(&snapshot, method, item);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
+    let position = live.get("position").as_arr().and_then(|cells| {
+        let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
+        Some((part(1)?, part(2)?, part(0)?))
+    });
     let state = BotState {
         level_of: &level_of,
         held: &held,
@@ -199,15 +404,20 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
         quests_done: crate::brain_rescue::quests_done(life),
         units: &units,
         tick: crate::brain_ambition::stamp_now().tick,
+        combat: crate::brain_plan::live_combat(live),
+        position,
+        planned: planned_levels(life),
+        caster: if life.profile.ironman { None } else { crate::brain_alch::caster_for(live) },
     };
     use_state(&state)
 }
 
 /// What making one unit of each `(item, units)` costs this bot (coins +
-/// its ticks at its coin rate): `bid_response::production_cost`, the
-/// make path a bid quota is priced with. The seller reserve never
-/// exceeds it (`brain_reserve`, 2026-11-14). Items it cannot make now
-/// are absent. One book read and one rates read for the whole pass.
+/// its ticks at its coin rate, the lot's one-off walks and fares spread
+/// over the units): `bid_response::production_cost`, the make path a
+/// quota is priced with. The seller reserve never exceeds it
+/// (`brain_reserve`, 2026-11-14). Items it cannot make now are absent.
+/// One book read and one rates read for the whole pass.
 pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, i64)]) -> HashMap<String, f64> {
     let _phase = crate::cpu_profile::phase("bids.production_costs");
     if items.is_empty() || crate::market_service::shared().is_none() {
@@ -217,48 +427,74 @@ pub(crate) fn production_costs_for(life: &Life, live: &Value, items: &[(String, 
     let reader = MarketReader::live(&life.account);
     with_bot_state(life, live, |state| {
         let rate = coin_rate(&rows, state.level_of);
-        let producer = Producer {
-            level_of: state.level_of,
-            held: state.held,
-            avoid: &state.avoid,
-            quests_done: &state.quests_done,
-            coin_rate: rate,
-            units_per_6000: state.units,
-            ironman: life.profile.ironman,
-            seed: life.seed,
-            tick: state.tick,
-        };
-        let market = |name: &str| reader.view(name);
-        items
-            .iter()
-            .filter_map(|(item, units)| {
-                let unit = lifescape_planner::bid_response::production_cost(item, *units, &market, &producer)?;
-                Some((item.clone(), unit.total(rate)))
-            })
-            .collect()
+        state.with_producer(life, rate, |producer| {
+            let market = |name: &str| reader.view(name);
+            items
+                .iter()
+                .filter_map(|(item, units)| {
+                    let unit = lifescape_planner::bid_response::production_cost(item, *units, &market, producer)?;
+                    Some((item.clone(), unit.total_for(*units, rate)))
+                })
+                .collect()
+        })
     })
 }
 
+/// Last market-wide choice per account: (wall seconds, spread window,
+/// the choice).
+type Choice = Option<(Opportunity, f64)>;
+
+fn choices() -> &'static Mutex<HashMap<String, (u64, u64, Choice)>> {
+    static TABLE: OnceLock<Mutex<HashMap<String, (u64, u64, Choice)>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn wall_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs()).unwrap_or(0)
+}
+
 /// The bid goal for this life on a draw (live book, rates, own state),
-/// logged with its numbers; `None` when no bid beats the ambition.
+/// logged with its numbers, its claim posted on the board; `None` when no
+/// lot beats the ambition.
 pub(crate) fn bid_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, String)> {
     let _phase = crate::cpu_profile::phase("bids.goal_for");
     if life.profile.ironman || crate::market_service::shared().is_none() {
         return None;
     }
-    let reader = MarketReader::live(&life.account);
-    let (found, rate) = with_bot_state(life, live, |state| choose(life, &reader, &rate_rows(), state))?;
+    let window = crate::brain_ambition::stamp_now().tick / lifescape_planner::bid_response::BID_WINDOW_TICKS;
+    let now = wall_secs();
+    let cached = choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&life.account).cloned();
+    let chosen = match cached {
+        Some((at, seen_window, choice)) if now.saturating_sub(at) < CHOICE_TTL_SECS && seen_window == window => choice,
+        _ => {
+            let reader = MarketReader::live(&life.account);
+            let choice = with_bot_state(life, live, |state| choose(life, &reader, &rate_rows(), state));
+            choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(life.account.clone(), (now, window, choice.clone()));
+            choice
+        }
+    };
+    let (found, rate) = chosen?;
+    // Taken: the next draw weighs the market again.
+    choices().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&life.account);
+    let secs = crate::market_claims::claim_secs(found.ticks, crate::market_eta::live_tick_ms());
+    crate::market_claims::claim(&life.account, &found.item, found.count, secs);
     crate::logln!(
-        "brain {}: answers bids: produce {} {} (best bid {}, unit {:.0} coins + {:.0} ticks, {:.1} coins/tick vs own {:.2}, net {:.0}; {})",
+        "brain {}: answers the market: produce {} {} ({} to bids, best {}; {} at the current price; {} alched; revenue {:.0}, unit {:.0} coins + {:.0} ticks, lot {:.0} ticks, {:.1} coins/tick vs own {:.2}, net {:.0}, train {:?}; {})",
         life.account,
         found.count,
         found.item,
+        found.from_bids,
         found.best_bid,
+        found.from_sales,
+        found.from_alch,
+        found.revenue,
         found.unit.coins,
         found.unit.ticks,
+        found.ticks,
         found.rate,
         rate,
         found.profit,
+        found.unit.train,
         found.unit.plan.join(" < ")
     );
     Some(bid_goal(&found))
@@ -282,5 +518,36 @@ mod tests {
         let scimitar = &views["bronze_scimitar"];
         assert_eq!(scimitar.bids, vec![(2961, 1), (2876, 2)]);
         assert_eq!(views["bronze_bar"].asks, vec![(5, 146)], "own asks count, empty rows do not");
+    }
+
+    /// Live 2026-11-14: a few bronze scimitar fills published `smith`
+    /// band 1 at 65 929 per 6000 ticks, the time of every bot then worth 11
+    /// coins a tick. Realizable: the share buyers absorb (3 bids against
+    /// 21 asks and a window's 136 scimitars); coins picked up count whole;
+    /// a product nobody buys is worth nothing per hour.
+    #[test]
+    fn coin_rates_read_what_the_market_absorbs() {
+        let yield_row = |method: &str, item: &str, band: i64, mean: f64| crate::rates_service::YieldRow {
+            method: method.to_string(),
+            item: item.to_string(),
+            band,
+            count: 3,
+            mean,
+            stddev: 0.0,
+            ema: mean,
+            prior: false,
+        };
+        let yields = vec![yield_row("smith", "Bronze scimitar", 1, 136.0), yield_row("melee", "Coins", 1, 800.0), yield_row("cook", "Shrimps", 1, 300.0)];
+        let rows = vec![("smith".to_string(), 1, 65_929.0), ("melee".to_string(), 1, 800.0), ("cook".to_string(), 1, 3_000.0), ("woodcut".to_string(), 1, 500.0)];
+        let view = |item: &str| match item {
+            "bronze_scimitar" => Some(lifescape_planner::market_fit::BookView { bids: vec![(2000, 3)], asks: vec![(1149, 21)], current: Some(1149), ..Default::default() }),
+            _ => None,
+        };
+        let realizable = super::realizable_rows(&rows, &yields, &view);
+        let profit = |script: &str| realizable.iter().find(|row| row.0 == script).map(|row| row.2).unwrap_or(f64::NAN);
+        assert!((profit("smith") - 65_929.0 * 3.0 / 157.0).abs() < 1.0, "{realizable:?}");
+        assert_eq!(profit("melee"), 800.0, "coins are money");
+        assert_eq!(profit("cook"), 0.0, "no buyer of shrimps at all");
+        assert_eq!(profit("woodcut"), 500.0, "no measured product: kept");
     }
 }

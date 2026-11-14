@@ -581,7 +581,8 @@ d'achat que ce bot sait fabriquer avec profit :
   sans fabriquer) ; le bot en prend la MOITIÉ (`PRODUCER_SPLIT`, arrondi
   haut, ≤ 100). Revendre l'objet acheté n'est pas produire (marchands).
 - Règle de score : taux brut = (revenu des bids pris − pièces dépensées)
-  / (ticks de production + 800 ticks d'aller-retour Varrock). L'offre
+  / (ticks de production + trajet réel du lot, § Rentabilité de tout le
+  marché ; l'ancien forfait de 800 ticks par réponse est retiré). L'offre
   passe DEVANT l'ambition seulement si ce taux ≥ 2 × le taux du bot
   (`BID_PREEMPT`) et si le net après le temps ≥ 50 pièces
   (`BID_MIN_PROFIT`). Entre plusieurs, le meilleur taux, incliné de
@@ -790,3 +791,110 @@ entraînement.
   F2P hors Wilderness), bâton de feu acheté quand il coûte moins que les
   runes de feu de la montée. Aucun bot n'a magie 21 aujourd'hui (max 10) :
   vérifié par simulation (magie 25 et 60, `brain_train_tests.rs`).
+
+## Rentabilité de tout le marché (2026-11-14)
+
+Demande utilisateur : « le brain doit être capable d'évaluer la
+rentabilité en fonction de toutes les dépendances et des rates (si
+existants), pour tout le marché » ; une forte demande d'un produit doit
+faire produire et vendre, et tirer le prix de ses composants vers le
+haut. Constat live (11:40) : seuls les bids `pot_flour` trouvaient
+preneur ; bst29bh9 (forge 22, minerai de fer en banque) perdait 559 sur
+3 heaumes de fer à 123 à cause du forfait de 800 ticks ; le bouclier de
+fer (forge 27) portait toute la montée 22→27 (−12 431) ; personne
+n'enchérissait sur les barres ni les minerais au prix que les produits
+justifient.
+
+Évaluation (`planner/src/bid_response.rs`, `market_value.rs`, câblage
+`brain_bids.rs`) — à chaque tirage, pour CHAQUE objet de valeur
+(offres d'autres comptes, prix courant échangé avec volume 24 h, plancher
+d'alchimie du bot lanceur) qu'une jambe de production fabrique :
+- Coût unitaire récursif (profondeur 4 : amulette enfilée, amulette,
+  barre, minerai) : acheter (asks qui couvrent la quantité) ou fabriquer
+  (niveau, bans, quête, outils, rendements appris sinon a priori), chaque
+  intrant à son propre coût ; stock détenu au prix de sa vente.
+- Frais fixes du LOT, jamais par réponse : site choisi comme le brain le
+  ferait (`market_value::leg_site` = `combat::pick_site_gated` au niveau
+  de combat du bot, sites sûrs et ouverts seulement) ; marche (Manhattan,
+  1 tick/case) de chaque étape vers l'étape suivante (minerai → fourneau
+  → enclume → fontaine), péage Al Kharid aller-retour (sauf Prince Ali)
+  et bateau de Karamja, outils achetés une fois, trajet fontaine → site
+  pour les intrants achetés (une remise : le plus long), trajet de la
+  position du bot au premier site, remise à la fontaine (`HANDOVER_TICKS`
+  = 100). Le coût par unité étale ces frais sur le lot (`total_for`).
+- Revenu = ce que le marché absorbe (`market_value::absorbed_lot`) :
+  bids au-dessus du coût, moins les asks à ≤ 125 % du meilleur bid (offre
+  en route) ; plus les ventes au prix courant sur la journée (50 % du
+  volume 24 h moins les asks déjà au repos à ce prix ou dessous) ; moins
+  le stock libre du bot et les unités RÉCLAMÉES par d'autres producteurs
+  (tableau public, ci-dessous) ; le bot en prend la moitié
+  (`PRODUCER_SPLIT`, ≤ 100) ; un lanceur ajoute son plancher d'alchimie
+  (net des runes et de 5 ticks de lancer au taux du bot) jusqu'à un
+  inventaire (28).
+- Entraînement = investissement (`training_charge`) : coût brut de la
+  montée (temps au taux du bot + intrants) moins la valeur des produits
+  faits en montant (prix courant ou meilleur bid × saturation), puis une
+  PART seulement : rien quand l'ambition du bot monte déjà cette
+  compétence (échelle du catalogue ou jalon niveau ouvert,
+  `brain_bids::planned_levels`), un lot sur `TRAINING_AMORTIZE_LOTS` (4)
+  sinon. `MAX_TRAIN_LEVELS` (15) inchangé.
+- Règle de choix inchangée : taux ≥ 2 × taux du bot et net ≥ 50 ;
+  meilleur taux incliné ±15 % ; étalement une fenêtre sur deux. Log :
+  `brain <compte>: answers the market: produce N <objet> (k to bids, best
+  …; k at the current price; k alched; revenue …, unit …, lot … ticks,
+  … coins/tick vs own …, net …, train …; plan)`.
+- CPU : un choix par compte et par fenêtre d'étalement mis en cache 60 s
+  (`CHOICE_TTL_SECS` ; un tirage réessayé à chaque passe le réutilise) ;
+  prix courants et volumes lus à la demande et mémorisés par lecteur ;
+  objets sans jambe de production écartés avant toute lecture du store ;
+  volume lu seulement pour un objet avec bids, prix échangé ou alchimie.
+
+Taux du bot réalisable (`brain_bids::rate_rows`, `realizable_rows`) :
+le taux de `market_fit::coin_rate` lit les profits publiés MULTIPLIÉS par
+la part que le marché absorbe de chaque produit de la ligne ((bids +
+volume 24 h) / (asks + rendement d'une fenêtre), pondéré par la valeur ;
+pièces ramassées entières ; un produit sans aucun acheteur ne vaut rien
+à l'heure). Live : quelques fills de cimeterres de bronze publiaient
+`smith` tranche 1 à 65 929 / 6000 ticks, soit 11 pièces/tick pour TOUS
+les bots (forge ≥ 1) : aucun lot ne battait ce temps. Table partagée,
+reconstruite toutes les 60 s (une lecture du carnet). La page rates
+reste brute (information opérateur).
+
+Tableau des commandes (`market_claims.rs`) : un bot qui prend un lot
+publie « N unités de X réclamées » ; tout bot lit le total réclamé par
+les autres (jamais qui, jamais autre chose) et le retire de ce que le
+marché absorbe. Public comme le tableau des commandes d'artisanat d'un
+vrai jeu : D22 tient (voir `decisions.md`). En mémoire, expire après 2 ×
+la durée estimée du lot (10 min à 6 h), libéré au tirage suivant du bot.
+
+Demande dérivée (`planner/src/derived_demand.rs`,
+`brain_market::derived_reserve`) : quand un nœud d'obtention nourrit un
+produit du graphe (barres d'un heaume, minerai d'une barre), son prix de
+réserve = (valeur du produit × 0,8 − temps de l'étape au taux du bot −
+autres intrants au meilleur ask / prix courant) / unités par produit,
+récursif (le minerai vaut la valeur DÉRIVÉE de la barre). Valeur du
+produit = meilleur bid d'un autre compte, sinon prix courant. L'offre
+permanente posée à côté de la production (D-B) a pour plafond
+`min(portefeuille, réserve)` et ouvre à au moins la moitié de la réserve
+(`derived_bounds`) : une barre à 2 pièces que personne ne remplit ne
+fait bouger aucun mineur, une barre à 23 si. Fondeurs et mineurs y
+répondent par le même moteur (les barres et minerais ont des jambes de
+production). Une réserve ≤ 0 (produit qui vaut moins que ses intrants)
+plafonne l'offre à 1. Log `standing bid … (ceiling C, derived reserve R)`.
+Toutes les recettes F2P passent par ces chemins (forge, fonte, cuisine,
+artisanat, poterie, cuir, bijoux, filage, runes, récoltes).
+
+Ambitions (`ambition_catalog::kind_weights`, `serves`) : une offre
+compte pour un type quand son échelle liste l'objet OU que sa
+compétence primaire le fabrique à n'importe quel palier (adamant hors de
+portée de toute la flotte → forgerons), et pour moitié par étape de
+recette quand sa compétence en fabrique un intrant (minerai, charbon →
+mineurs) ; une marge connue négative ne tire personne. L'échelle du
+forgeron va jusqu'à l'adamant (minage 70, forge 78 dague/heaume/
+cimeterre, forge 88 plastron/jambières).
+
+Vendeur : un ask ancré sur un fill isolé descend (test
+`market/src/outlier_tests.rs`, cas du cimeterre de bronze) : le prix
+courant est borné par l'ask d'impact (1 unité → 1149, pas 2747), un
+nouveau lot ouvre là, et les asks au repos marchent de 5 % par fenêtre
+jusqu'à leur réserve (≤ 140 en 60 fenêtres). Bande ×5 inchangée.

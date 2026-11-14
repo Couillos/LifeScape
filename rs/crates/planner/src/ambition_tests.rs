@@ -82,6 +82,26 @@ fn beyond_coverage_draws_vary_and_follow_demand() {
     assert_eq!(why, "demand:bronze_platebody");
 }
 
+/// « Devenir forgeron parce que l'adamant se vend » (2026-11-14): open
+/// adamant bids out of every bot's reach weigh the smith (its skill makes
+/// them at any tier) and, at half per step, the miner (ores and coal of
+/// the bars); a bid whose known margin is a loss pulls nobody.
+#[test]
+fn out_of_reach_demand_calls_for_smiths_and_miners() {
+    let wanted = |item: &str, weight: f64, margin: Option<f64>| DemandItem { item: item.to_string(), weight, unmet: 5, margin };
+    let demand = kind_weights(&[wanted("adamant_platebody", 2900.0 * 5.0, Some(800.0)), wanted("raw_shrimp", 10.0, Some(2.0))], &[]);
+    let weight = |kind: &str| demand.iter().find(|row| row.kind == kind).map(|row| row.weight).unwrap_or(0.0);
+    assert!(weight("smith") >= 1.9, "{demand:?}");
+    assert!(weight("miner") > 1.2 && weight("miner") < weight("smith"), "{demand:?}");
+    assert!(weight("fisher") < 1.01 && weight("warrior") < 1.01, "{demand:?}");
+    let smiths = (0..400u64).filter(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &demand, &[]).0 == "smith").count();
+    let plain = (0..400u64).filter(|seed| draw_kind(&bot("x", seed * 7_919 + 1, &[]), &[], &[], &[]).0 == "smith").count();
+    assert!(smiths > plain, "adamant demand tilts the draw toward smiths: {smiths} vs {plain}");
+    let loss = kind_weights(&[wanted("adamant_platebody", 2900.0 * 5.0, Some(-10.0))], &[]);
+    assert!(loss.iter().all(|row| row.weight < 1.01), "{loss:?}");
+    assert!(products("smith").contains(&"adamant_platebody"), "the smith ladder reaches adamant");
+}
+
 /// Melee is ONE group: one warrior covers attack, strength and defence,
 /// and no ambition is ever keyed on a single melee stat.
 #[test]

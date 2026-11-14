@@ -26,3 +26,6 @@ pub use zip::{
     demand_step, flip_quotes, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
     ZipQuote,
 };
+
+#[cfg(test)]
+mod outlier_tests;

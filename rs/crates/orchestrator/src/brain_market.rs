@@ -91,8 +91,12 @@ pub fn saturated_profit(
 
 /// D-B: a production leg launched for a tradeable object keeps a bid on
 /// the market beside it (resolution marked it `market:bid`). Placed
-/// daemon-side, never twice for the same object.
-pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
+/// daemon-side, never twice for the same object. Derived demand
+/// (2026-11-14): when the object is an input of a product the bot's
+/// graph makes, `derived` gives its reservation price
+/// (`planner::derived_demand`): the bid's ceiling is the wallet's capped
+/// by it, and it opens at half of it when the book is cheaper.
+pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn Fn() -> Option<f64>) {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return };
     if !node.alternatives.iter().any(|alt| alt.method == "market:bid") {
         return;
@@ -114,8 +118,13 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
     // at the bot's own last fill on the item (the reference only when it
     // never bought it, 2026-11-14), walking up to the ceiling.
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
-    let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
-    let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id));
+    let wallet = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
+    let reserve = derived();
+    let (open, ceiling) = match reserve {
+        Some(reserve) => lifescape_planner::derived_demand::derived_bounds(reserve, wallet),
+        None => (1, wallet),
+    };
+    let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id)).max(open).min(ceiling.max(1));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),
@@ -125,11 +134,34 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
         ("price", Value::Int(price)),
         ("ceiling", Value::Int(ceiling.max(price))),
     ]));
+    let derived_note = reserve.map(|value| format!(", derived reserve {value:.0}")).unwrap_or_default();
     crate::logln!(
-        "brain {}: standing bid {quantity}/{count} {item} @ {price} (ceiling {ceiling}) beside production: {}",
+        "brain {}: standing bid {quantity}/{count} {item} @ {price} (ceiling {ceiling}{derived_note}) beside production: {}",
         job.account,
         if reply.get("ok").as_bool() == Some(true) { "placed".to_string() } else { format!("refused {:?}", reply.get("error").as_str()) }
     );
+}
+
+/// Reservation price of what the obtain node at `index` gets, when it
+/// feeds a product the bot's graph makes (derived demand, public values:
+/// others' best bid or the current price; other inputs at the best ask or
+/// current price; the bot's own rates and coin rate). `None` otherwise.
+pub(crate) fn derived_reserve(life: &lifescape_planner::Life, index: usize, live: &Value) -> Option<f64> {
+    let node = life.nodes.get(index)?;
+    let consumed = life.nodes.iter().any(|other| other.deps.contains(&node.id) && matches!(other.kind, NodeKind::ObtainItems { .. }));
+    if !consumed || life.profile.ironman {
+        return None;
+    }
+    let _phase = crate::cpu_profile::phase("market.derived_reserve");
+    let reader = crate::brain_bids::MarketReader::live(&life.account);
+    let rows = crate::brain_bids::rate_rows();
+    crate::brain_bids::with_bot_state(life, live, |state| {
+        let rate = lifescape_planner::market_fit::coin_rate(&rows, state.level_of);
+        let value_of = |item: &str| reader.view(item).and_then(|view| view.best_bid().max(view.current)).map(|price| price as f64);
+        let input_price = |item: &str| reader.view(item).and_then(|view| view.best_ask().or(view.current)).unwrap_or(1) as f64;
+        let prices = lifescape_planner::derived_demand::DerivedPrices { value_of: &value_of, input_price: &input_price, units_per_6000: state.units, coin_rate: rate };
+        lifescape_planner::derived_demand::input_reserve(&life.nodes, index, &prices)
+    })
 }
 
 /// True while `account` has a buyer deal on `item` in flight (live

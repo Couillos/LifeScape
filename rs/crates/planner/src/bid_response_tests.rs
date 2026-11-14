@@ -9,18 +9,18 @@ use crate::model::GoalKind;
 /// bars resting at 5 (146 units), nobody producing.
 fn scimitar_bids() -> BookView {
     let prices = [2961, 2896, 2876, 2484, 2434, 2133, 1967, 1930, 1774, 1500, 1400, 1300, 1200, 1100, 1000, 900, 800, 700];
-    BookView { bids: prices.iter().map(|price| (*price, 1)).collect(), asks: Vec::new(), volume_24h: 0 }
+    BookView { bids: prices.iter().map(|price| (*price, 1)).collect(), asks: Vec::new(), volume_24h: 0, ..BookView::default() }
 }
 
 fn bars_at_five() -> BookView {
-    BookView { bids: Vec::new(), asks: vec![(5, 146)], volume_24h: 40 }
+    BookView { bids: Vec::new(), asks: vec![(5, 146)], volume_24h: 40, ..BookView::default() }
 }
 
 fn market(item: &str) -> Option<BookView> {
     match item {
         "bronze_scimitar" => Some(scimitar_bids()),
         "bronze_bar" => Some(bars_at_five()),
-        "hammer" => Some(BookView { bids: Vec::new(), asks: vec![(12, 3)], volume_24h: 0 }),
+        "hammer" => Some(BookView { bids: Vec::new(), asks: vec![(12, 3)], volume_24h: 0, ..BookView::default() }),
         _ => None,
     }
 }
@@ -42,7 +42,22 @@ fn yields(method: &str, _item: &str) -> f64 {
 }
 
 fn smith<'a>(level_of: &'a dyn Fn(&str) -> u8, held: &'a dyn Fn(&str) -> i64, avoid: &'a [String], seed: u64) -> Producer<'a> {
-    Producer { level_of, held, avoid, quests_done: &[], coin_rate: 0.5, units_per_6000: &yields, ironman: false, seed, tick: 0 }
+    Producer {
+        level_of,
+        held,
+        avoid,
+        quests_done: &[],
+        coin_rate: 0.5,
+        units_per_6000: &yields,
+        ironman: false,
+        seed,
+        tick: 0,
+        combat: 3,
+        position: None,
+        free_pass: false,
+        planned_level: &super::no_plan,
+        alch_net: &super::no_alch,
+    }
 }
 
 /// Seed whose word answers `item` in window 0.
@@ -85,7 +100,10 @@ fn feasibility_reads_levels_bans_and_tools() {
     let with_shop = unit_cost("bronze_scimitar", 1, &no_hammer_seller, &bot);
     assert!(with_shop.is_some(), "a hammer is an NPC shop object (D-A): {with_shop:?}");
     let bought = unit_cost("bronze_scimitar", 4, &market, &bot).expect("hammer at the ask");
-    assert!((bought.coins - (10.0 + 12.0 / 4.0)).abs() < 1e-6, "the hammer spreads over the lot: {bought:?}");
+    assert!((bought.coins - 10.0).abs() < 1e-6, "bars per unit: {bought:?}");
+    assert!((bought.fixed_coins - 12.0).abs() < 1e-6, "the hammer is bought once for the lot: {bought:?}");
+    let spread = bought.total_for(4, 0.0) - bought.total_for(1, 0.0);
+    assert!((spread + 12.0 * 3.0 / 4.0).abs() < 1e-6, "and spreads over the units: {spread}");
 }
 
 /// The live book: a smith fills half of what pays (split), never the
@@ -121,7 +139,7 @@ fn pending_supply_held_stock_and_rich_time_hold_the_bot_back() {
     assert_eq!(found.count, 1, "18 bids − 16 pending = 2, half each: {found:?}");
     let stocked = |item: &str| if item == "bronze_scimitar" { 18 } else { hammer_only(item) };
     assert_eq!(opportunity("bronze_scimitar", &scimitar_bids(), &market, &smith(&smith_levels, &stocked, &avoid, seed)), None, "it sells what it holds");
-    let cheap = BookView { bids: vec![(9, 5)], asks: Vec::new(), volume_24h: 0 };
+    let cheap = BookView { bids: vec![(9, 5)], asks: Vec::new(), volume_24h: 0, ..BookView::default() };
     assert_eq!(opportunity("bronze_scimitar", &cheap, &market, &bot), None, "9 < 10 coins of bars + time");
     let mut rich = smith(&smith_levels, &hammer_only, &avoid, seed);
     rich.coin_rate = 200.0;
@@ -150,7 +168,7 @@ fn a_level_one_bot_trains_for_a_bid_worth_it() {
     let avoid: Vec<String> = Vec::new();
     let fresh = |_: &str| 1u8;
     let with_ores = |item: &str| match item {
-        "copper_ore" | "tin_ore" => Some(BookView { bids: Vec::new(), asks: vec![(3, 500)], volume_24h: 0 }),
+        "copper_ore" | "tin_ore" => Some(BookView { bids: Vec::new(), asks: vec![(3, 500)], volume_24h: 0, ..BookView::default() }),
         _ => market(item),
     };
     let seed = answering_seed("bronze_scimitar");
@@ -160,11 +178,16 @@ fn a_level_one_bot_trains_for_a_bid_worth_it() {
     assert_eq!(found.unit.train, vec![("smithing".to_string(), 1, 5)], "{found:?}");
     let (coins, ticks) = super::training_cost(&found.unit.train, &with_ores, &bot).expect("priced");
     assert!(coins > 0.0 && ticks > 0.0, "ores bought, smelting time: {coins} {ticks}");
-    assert!(found.ticks >= ticks + super::BID_TRIP_TICKS, "{found:?}");
+    // An investment: the lot carries one share of it (no plan climbs
+    // smithing, no market for the training products here).
+    let (charged_coins, charged_ticks) = super::training_charge(&found.unit.train, &with_ores, &bot).expect("charged");
+    let share = 1.0 / crate::market_value::TRAINING_AMORTIZE_LOTS;
+    assert!((charged_coins - coins * share).abs() < 1e-6 && (charged_ticks - ticks * share).abs() < 1e-6, "{charged_coins} {charged_ticks}");
+    assert!(found.ticks >= charged_ticks + crate::market_value::HANDOVER_TICKS, "{found:?}");
     assert!(preempts(&found, bot.coin_rate), "{found:?}");
-    let iron_bids = BookView { bids: vec![(5000, 4)], asks: Vec::new(), volume_24h: 0 };
+    let iron_bids = BookView { bids: vec![(5000, 4)], asks: Vec::new(), volume_24h: 0, ..BookView::default() };
     let iron_market = |item: &str| match item {
-        "iron_bar" => Some(BookView { bids: Vec::new(), asks: vec![(20, 100)], volume_24h: 0 }),
+        "iron_bar" => Some(BookView { bids: Vec::new(), asks: vec![(20, 100)], volume_24h: 0, ..BookView::default() }),
         _ => with_ores(item),
     };
     assert_eq!(opportunity("iron_platebody", &iron_bids, &iron_market, &bot), None, "smithing 33 is 32 levels away");

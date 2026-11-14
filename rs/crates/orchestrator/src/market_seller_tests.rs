@@ -10,7 +10,7 @@ fn reserve(coins: i64) -> Option<Reserve> {
 const UNTRADED: Reference = Reference { price: 1, traded: false };
 
 fn demand(volume_24h: i64, bids: Vec<(i64, i64)>) -> BookView {
-    BookView { bids, asks: Vec::new(), volume_24h }
+    BookView { bids, asks: Vec::new(), volume_24h, ..BookView::default() }
 }
 
 /// Willow 2026-11-14: 33 364 open at 1 coin against 4 319 traded a day.
