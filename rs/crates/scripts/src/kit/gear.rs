@@ -13,7 +13,7 @@ use lifescape_sdk::Bot;
 
 use crate::kit::bank::{heal_at_bank, live_bank_booths, nearest_bank};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
-use crate::skill_walk::walk_checked;
+use crate::skill_walk::walk_checked_at;
 use crate::ScriptError;
 
 pub const ARMOUR_SLOTS: [i64; 10] = [0, 1, 2, 4, 5, 7, 9, 10, 12, 13];
@@ -363,7 +363,7 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
     bot.intend(&format!("banking at ({bank_x},{bank_z})"));
     // Dead socket or operator stop, not a missed bank: typed to the
     // session instead of a quiet equip-and-continue.
-    match walk_checked(bot, bank_x, bank_z, 15000) {
+    match walk_checked_at(bot, bank_x, bank_z, bank.level as i32, 15000) {
         Ok(true) => {}
         Ok(false) => {
             let available = available_gear(bot);

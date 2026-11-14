@@ -61,6 +61,10 @@ pub enum Gate {
     Key { area: &'static str, item: &'static str },
     /// Island reached by the Port Sarim boat (fare each way).
     Boat { area: &'static str, fare: i64 },
+    /// Door the content script opens only above a quest-point total
+    /// (Champions' Guild, `champions_guild.rs2`: 32). Never opened by the
+    /// planner today (no quest-point count in its context).
+    QuestPoints { area: &'static str, points: i64 },
     /// Below ground with no gate the planner models.
     Underground,
     /// Wilderness surface.
@@ -71,7 +75,7 @@ impl Gate {
     /// Planner key of the gate (`access:<area>` blocks, logs).
     pub fn area(&self) -> &'static str {
         match self {
-            Gate::Guild { area, .. } | Gate::Key { area, .. } | Gate::Boat { area, .. } => area,
+            Gate::Guild { area, .. } | Gate::Key { area, .. } | Gate::Boat { area, .. } | Gate::QuestPoints { area, .. } => area,
             Gate::Underground => "underground",
             Gate::Wilderness => "wilderness",
         }
@@ -122,6 +126,16 @@ fn areas() -> Vec<Area> {
         },
         // The brass-key house west of Varrock and the dungeon room below.
         Area { x: (3112, 3118), z: (3447, 3453), levels: (0, 0), gate: Gate::Key { area: "edgeville_dungeon", item: "edgevilledungeonkey" }, door: None },
+        // Champions' Guild (door 1805 at (3191,3363), 32 quest points):
+        // nav reads every tile here NeedsRequirement (live 2026-11-14,
+        // ryan_park sent to chickens at (3198,3355) through the door).
+        Area {
+            x: (3188, 3198),
+            z: (3352, 3362),
+            levels: (0, 1),
+            gate: Gate::QuestPoints { area: "champions_guild", points: 32 },
+            door: Some((3191, 3364, 0)),
+        },
         // Karamja (F2P north half), south of the Rimmington coast.
         Area { x: (2740, 2975), z: (2880, 3186), levels: (0, 1), gate: Gate::Boat { area: "karamja", fare: crate::services::BOAT_FARE_GP }, door: None },
         // Crandor: Ned's ship during Dragon Slayer only.
@@ -172,12 +186,19 @@ pub fn impassable(gate: &Gate) -> bool {
         Gate::Boat { area: "karamja", .. } => !BOAT_ROUTED,
         Gate::Boat { .. } => true,
         Gate::Underground | Gate::Wilderness => true,
-        Gate::Guild { .. } | Gate::Key { .. } => false,
+        Gate::Guild { .. } | Gate::Key { .. } | Gate::QuestPoints { .. } => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn champions_guild_is_quest_point_gated() {
+        let gates = super::gates_at(3197, 3355, 0);
+        assert!(gates.iter().any(|gate| matches!(gate, super::Gate::QuestPoints { area: "champions_guild", points: 32 })));
+        assert!(super::gates_at(3199, 3355, 0).is_empty(), "the field east of the guild is open");
+    }
+
     use super::{behind_boat, gates_at, impassable, mainland_anchor, surface_of, Gate, KARAMJA_DOCK};
 
     /// Doors from the server map: the guild gates cover their interiors,

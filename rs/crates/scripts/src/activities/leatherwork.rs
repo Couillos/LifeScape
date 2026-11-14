@@ -18,7 +18,7 @@ use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::produce::{count_answer, match_option};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
 use crate::quests::common::inv_slot;
-use crate::skill_walk::walk_checked;
+use crate::skill_walk::walk_checked_at;
 use crate::{ScriptError, ScriptResult};
 
 pub const CRAFTING_STAT: u8 = 12;
@@ -137,7 +137,7 @@ fn tan_from_bank(
     crate::kit::tan::walk_to_tanner(bot)?;
     let tanned = crate::kit::tan::tan_run(bot, product)?;
     bot.log(&format!("ok tanned {tanned} {hide_name}"));
-    if !walk_checked(bot, bank.x as i32, bank.z as i32, crate::kit::tan::TANNER_WALK_TICKS)? {
+    if !walk_checked_at(bot, bank.x as i32, bank.z as i32, bank.level as i32, crate::kit::tan::TANNER_WALK_TICKS)? {
         return Err(ScriptError::Usage(format!("no walk back to the bank at {:?}", bot.position())));
     }
     bank_trip(bot, bank, keep_sew, 0)?;
