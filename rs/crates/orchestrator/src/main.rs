@@ -193,6 +193,10 @@ fn daemon_main() -> i32 {
         };
         lifescape_orchestrator::daemon_pool::serve_pooled(server, serve, keep_running);
     }
+    // Graceful exit (`shutdown`): the debounced rates snapshot is written
+    // before the process ends (a SIGTERM cannot be caught std-only: that
+    // path loses at most one `FLUSH_PERIOD` of ingests, see `rates_flush`).
+    lifescape_orchestrator::rates_flush::flush_now();
     let _ = std::fs::remove_file(paths::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::plan_service::socket_path());
     let _ = std::fs::remove_file(lifescape_orchestrator::market_service::socket_path());

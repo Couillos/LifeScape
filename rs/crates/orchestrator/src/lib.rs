@@ -150,6 +150,7 @@ pub mod admission;
 pub mod api_shapes;
 pub mod push_hub;
 pub mod push_conn;
+pub mod rates_flush;
 pub mod rates_price;
 pub mod rates_service;
 pub mod heartbeat_flows;

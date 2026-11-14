@@ -10,7 +10,8 @@
 //! (method, item, level-band) plus one per (method, skill, level-band)
 //! for XP, plus the merchant book (`trading`) for `market`/`shop`
 //! methods. It lives in memory, is rewritten atomically to
-//! `run/rates-snapshot.json` on every ingest, and reloads from that file
+//! `run/rates-snapshot.json` at most once per minute when dirty
+//! (`rates_flush`, plus a flush at graceful shutdown), and reloads from that file
 //! when the daemon restarts (schema 1 files load with an empty book), so
 //! no measured yield is lost with the process. When the file is missing
 //! or corrupt, trading positions rebuild from the store log
@@ -639,7 +640,7 @@ fn profit_value(row: &ProfitRow) -> Value {
     ])
 }
 
-/// Snapshot file beside the staging log: rewritten on every ingest,
+/// Snapshot file beside the staging log: rewritten by `rates_flush`,
 /// reloaded when the daemon restarts.
 pub fn snapshot_path() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("LIFESCAPE_RATES_PATH") {
@@ -828,26 +829,33 @@ pub(crate) fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     Some(snapshot)
 }
 
-/// Records one parsed report in the live snapshot and persists the file.
-/// Loud error, never a silent drop: the store rows are already written
-/// by the caller, so a snapshot failure must shout, not vanish.
+/// Records one parsed report in the live snapshot and marks it dirty:
+/// the `rates-flush` thread persists it at most once per
+/// `rates_flush::FLUSH_PERIOD`, the daemon's graceful exit flushes the
+/// rest (crash/SIGTERM loses at most that window, see `rates_flush`).
 pub fn record_snapshot(parsed: &ParsedReport) -> Result<(), String> {
-    {
-        let mut guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.record(parsed);
-        let value = snapshot_to_value(&guard);
-        drop(guard);
-        profit::invalidate();
-        let path = snapshot_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| format!("rates snapshot dir: {error}"))?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, lifescape_json::stringify(&value))
-            .map_err(|error| format!("rates snapshot write: {error}"))?;
-        std::fs::rename(&tmp, &path).map_err(|error| format!("rates snapshot rename: {error}"))?;
-    }
+    global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).record(parsed);
+    profit::invalidate();
+    crate::rates_flush::mark_dirty();
     Ok(())
+}
+
+/// Writes the live snapshot atomically (tmp + rename); returns the bytes
+/// written. Loud error, never a silent drop: the flusher logs and retries.
+pub(crate) fn write_snapshot_file() -> Result<usize, String> {
+    let value = {
+        let guard = global_snapshot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        snapshot_to_value(&guard)
+    };
+    let path = snapshot_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("rates snapshot dir: {error}"))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let text = lifescape_json::stringify(&value);
+    std::fs::write(&tmp, &text).map_err(|error| format!("rates snapshot write: {error}"))?;
+    std::fs::rename(&tmp, &path).map_err(|error| format!("rates snapshot rename: {error}"))?;
+    Ok(text.len())
 }
 
 /// Dashboard payload: opens the daemon store, serves yield rows, XP
