@@ -40,14 +40,54 @@ pub fn life_path(account: &str) -> std::path::PathBuf {
 /// Load one life file; `None` means no autopilot for this account (not
 /// an error: manual bots have no file).
 pub fn load_life(account: &str) -> Option<Life> {
-    let text = std::fs::read_to_string(life_path(account)).ok()?;
+    let path = life_path(account);
+    let stamp = file_stamp(&path)?;
+    if let Some(life) = cached_life(account, stamp) {
+        return Some(life);
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
     let value = lifescape_json::parse(&text).ok()?;
-    life_from_value(&value)
+    let life = life_from_value(&value)?;
+    remember_life(&life, stamp);
+    Some(life)
 }
 
 pub fn save_life(life: &Life) -> Result<(), String> {
-    crate::paths::write_json(&life_path(&life.account), &life_to_value(life))
-        .map_err(|error| format!("brain save {}: {error}", life.account))
+    let path = life_path(&life.account);
+    crate::paths::write_json(&path, &life_to_value(life)).map_err(|error| format!("brain save {}: {error}", life.account))?;
+    if let Some(stamp) = file_stamp(&path) {
+        remember_life(life, stamp);
+    }
+    Ok(())
+}
+
+/// File identity a cached life is valid for: modification time and size.
+/// Any outside write (operator edit, `--goal` reset) changes it and the
+/// next load parses the file again.
+type LifeStamp = (std::time::SystemTime, u64);
+
+fn file_stamp(path: &std::path::Path) -> Option<LifeStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Parsed lives by account (CPU, VPS 2026-11-14): the brain loaded and
+/// parsed each life JSON (up to ~600 KB) on every tick of every account —
+/// the bulk of `brain-tick`'s CPU. A clone of the parsed graph replaces
+/// the parse while the file is unchanged.
+fn life_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (LifeStamp, Life)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (LifeStamp, Life)>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn cached_life(account: &str, stamp: LifeStamp) -> Option<Life> {
+    let cache = life_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.get(account).filter(|(seen, _)| *seen == stamp).map(|(_, life)| life.clone())
+}
+
+fn remember_life(life: &Life, stamp: LifeStamp) {
+    let mut cache = life_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(life.account.clone(), (stamp, life.clone()));
 }
 
 /// Accepted `--goal` shapes: `max:a,b:40`, `obtain:feather:2000`,
@@ -524,6 +564,24 @@ mod tests {
             ambition: None,
             goal_origin: None,
         }
+    }
+
+    #[test]
+    fn cached_life_serves_until_the_file_changes() {
+        let dir = std::env::temp_dir().join(format!("lifescape-life-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("t99.json");
+        std::fs::write(&path, "{}").expect("first write");
+        let stamp = super::file_stamp(&path).expect("stamp");
+        let mut life = terminal_life();
+        life.account = format!("cache-test-{}", std::process::id());
+        super::remember_life(&life, stamp);
+        assert_eq!(super::cached_life(&life.account, stamp), Some(life.clone()), "unchanged file: the parsed life, no parse");
+        std::fs::write(&path, "{ \"changed\": true }").expect("outside write");
+        let moved = super::file_stamp(&path).expect("stamp");
+        assert_ne!(moved, stamp, "size changed");
+        assert_eq!(super::cached_life(&life.account, moved), None, "changed file: parse again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
