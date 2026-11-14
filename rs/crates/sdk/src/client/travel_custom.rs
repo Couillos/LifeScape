@@ -70,6 +70,15 @@ fn at(bot: &Bot, tile: Tile) -> bool {
     (bot.world.x, bot.world.z, bot.world.level) == (tile.x, tile.z, tile.level)
 }
 
+/// Landing of a teleporting loc: the expected tile or one of its eight
+/// neighbours on the same level. Some server teleports pick a free square
+/// around their coord (live 2026-11-14: the essence mine exit portal
+/// landed at (3254,3401) and (3252,3402) for (3253,3401)); the next walk
+/// segment starts from wherever the bot stands.
+fn landed_near(bot: &Bot, tile: Tile) -> bool {
+    bot.world.level == tile.level && (bot.world.x - tile.x).abs().max((bot.world.z - tile.z).abs()) <= 1
+}
+
 fn last_game_message(bot: &Bot) -> String {
     bot.world.messages.last().cloned().unwrap_or_else(|| "no game message".to_string())
 }
@@ -112,7 +121,7 @@ impl Bot {
         let watched = self.world.ticks + LOC_JUMP_WAIT;
         while self.world.ticks < watched {
             self.pump(1)?;
-            if at(self, expect) {
+            if landed_near(self, expect) {
                 return Ok(());
             }
             if self.world.level != start.2 || (self.world.x - start.0).abs().max((self.world.z - start.1).abs()) > 3 {
@@ -248,6 +257,18 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_teleport_landing_one_square_off_counts() {
+        let mut bot = crate::client::Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.world.level = 0;
+        bot.world.x = 3254;
+        bot.world.z = 3401;
+        assert!(super::landed_near(&bot, lifescape_nav::plan::Tile { x: 3253, z: 3401, level: 0 }));
+        bot.world.x = 3255;
+        assert!(!super::landed_near(&bot, lifescape_nav::plan::Tile { x: 3253, z: 3401, level: 0 }));
+    }
+
     use super::{fare_pick, paid_allowed};
 
     /// Live 2026-11-13 (bct5rxpg-13908): allow_paid with an empty wallet
