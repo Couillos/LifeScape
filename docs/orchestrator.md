@@ -215,3 +215,11 @@ ligne `error_events` de type `no_progress` (source `task`, signature
 cerveau compte l'échec du nœud. Les échecs `failed: no progress …` de la
 garde du kit et les lignes `brain <c>: nX no progress: …` (fenêtres sans
 progrès vers le nœud) sont rangés sous le même type.
+Bots inactifs (2026-11-14, `brain_idle.rs`) : un worker piloté par le
+cerveau, connecté, ni en pause ni tenu, sans script depuis 5 min écrit
+`brain <c>: idle <N>s without a script: <3 dernières décisions du
+cerveau>` (répété toutes les 15 min) → ligne `error_events` de type
+`idle_bot` (source `brain`, signature = dernière décision normalisée).
+Le cerveau enchaîne jusqu'à 6 passes quand une passe change la vie sans
+rien lancer (`brain_chain.rs`) ; le tick simple d'un compte part toutes
+les 3 s d'horloge (`brain::PLAIN_TICK_SECS`).

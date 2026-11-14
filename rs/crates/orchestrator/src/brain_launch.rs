@@ -411,9 +411,18 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if matches!(life.nodes[position].kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
         let banned = lifescape_planner::banned_skills(&life.history, &|stamp: i64| crate::brain_stuck::seconds_to_ticks(now_unix() - stamp));
         let money_id = life.nodes[position].id.clone();
-        match lifescape_planner::steer_off_bans(&mut life.nodes[position], &ctx, &banned) {
-            Ok(true) => crate::logln!("brain {}: {money_id} steered off banned {} -> {:?}", job.account, banned.join(","), life.nodes[position].method),
-            Ok(false) => {}
+        // Every workable method banned: the best ranked one works through
+        // its ban, never an idle bot (2026-11-14).
+        match lifescape_planner::steer_for_work(&mut life.nodes[position], &ctx, &banned, &[]) {
+            Ok(lifescape_planner::WorkSteer::OffBans(true)) => {
+                crate::logln!("brain {}: {money_id} steered off banned {} -> {:?}", job.account, banned.join(","), life.nodes[position].method)
+            }
+            Ok(lifescape_planner::WorkSteer::OffBans(false)) => {}
+            Ok(lifescape_planner::WorkSteer::ThroughBan(skill)) => crate::logln!(
+                "brain {}: {money_id} works through the {skill} ban (every workable money method is banned) -> {:?}",
+                job.account,
+                life.nodes[position].method
+            ),
             Err(reason) => {
                 crate::logln!("brain {}: {money_id} waits: {reason}", job.account);
                 lifescape_planner::retry_uncounted(&mut life, position);
@@ -613,6 +622,7 @@ pub(crate) fn note_launch(account: &str) {
     // A stop noted before this launch (reopen of an idle bot) covered an
     // earlier run: it never excuses this one.
     crate::brain_grace::take_operator_stop(account);
+    crate::brain_chain::note_launched(account);
     launch_marks()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

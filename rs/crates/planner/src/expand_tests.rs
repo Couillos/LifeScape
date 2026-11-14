@@ -447,7 +447,9 @@ fn merchant_legs_follow_d_a() {
 /// Live bct5rxpg (2026-11-12): shrimp fishing needs combat 15 (Draynor
 /// wizards), so the site pick fell back to `market:buy` the resolver had
 /// refused for want of coins. The fallback only ever tries field
-/// methods; with none safe, the node blocks on the combat level.
+/// methods; with none safe, the node blocks on the coins of the purchase
+/// the market offers (2026-11-14, ryan_mason: never on the combat level
+/// when a purchase sells the object, `prefer_purchase_over_combat`).
 #[test]
 fn site_fallback_never_revives_a_refused_purchase() {
     use crate::model::NodeStatus;
@@ -460,7 +462,7 @@ fn site_fallback_never_revives_a_refused_purchase() {
     resolve_ready(&mut nodes[0], &ctx);
     assert_ne!(nodes[0].method.as_deref(), Some("market:buy"), "no coins: never a purchase, got {:?}", nodes[0].status);
     assert_ne!(nodes[0].method.as_deref(), Some("market:bid"), "the bid marker is no method");
-    assert!(matches!(&nodes[0].status, NodeStatus::Blocked { reason } if reason.starts_with("missing:combat:")), "got {:?}", nodes[0].status);
+    assert!(matches!(&nodes[0].status, NodeStatus::Blocked { reason } if reason.starts_with("missing:coins:")), "got {:?}", nodes[0].status);
 }
 
 /// 2026-11-13: an object the bot cannot make (no workable production)

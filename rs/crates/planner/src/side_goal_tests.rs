@@ -80,3 +80,33 @@ fn money_resolution_steers_off_banned_skills() {
     node.method = Some("gather:woodcut/logs".to_string());
     assert!(steer_off_bans(&mut node, &ctx, &banned(&["woodcutting"])).is_err());
 }
+
+/// A ban never idles a bot (live 2026-11-14, george_97: "no filler:
+/// every workable money method trains a banned skill (strength)" for the
+/// whole ban): a money window that must run works through the ban of its
+/// best ranked method, never through a filler that just failed.
+#[test]
+fn a_money_window_works_through_a_ban_rather_than_idling() {
+    use super::{steer_for_work, WorkSteer};
+    let mut node = Node::new("fill-n459", NodeKind::HaveCoins { amount: 15 }, Vec::new(), 0);
+    for method in ["fight:melee/men", "fight:melee/goblins", "gather:woodcut/logs"] {
+        node.alternatives.push(Alternative { method: method.to_string(), est_ticks: 6000, est_coins: 0 });
+    }
+    node.method = Some("fight:melee/men".to_string());
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.tools = vec!["bronze_axe".to_string()];
+    let none: Vec<String> = Vec::new();
+    assert_eq!(steer_for_work(&mut node, &ctx, &banned(&["strength"]), &none), Ok(WorkSteer::OffBans(true)), "an unbanned method first");
+    assert_eq!(node.method.as_deref(), Some("gather:woodcut/logs"));
+    node.method = Some("fight:melee/men".to_string());
+    let steer = steer_for_work(&mut node, &ctx, &banned(&["strength", "woodcutting"]), &none);
+    assert_eq!(steer, Ok(WorkSteer::ThroughBan("attack".to_string())), "all banned: the best ranked works through its ban");
+    assert_eq!(node.method.as_deref(), Some("fight:melee/men"));
+    // A filler that just failed on melee never runs again at once.
+    node.method = Some("fight:melee/men".to_string());
+    let steer = steer_for_work(&mut node, &ctx, &banned(&["woodcutting"]), &banned(&["attack"]));
+    assert_eq!(steer, Ok(WorkSteer::ThroughBan("woodcutting".to_string())));
+    assert_eq!(node.method.as_deref(), Some("gather:woodcut/logs"));
+    node.method = Some("fight:melee/men".to_string());
+    assert!(steer_for_work(&mut node, &ctx, &none, &banned(&["attack", "woodcutting"])).is_err(), "nothing outside the failed fillers");
+}

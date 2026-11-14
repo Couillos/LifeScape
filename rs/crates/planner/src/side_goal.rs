@@ -129,6 +129,44 @@ pub fn steer_off_bans(node: &mut Node, ctx: &ReadyCtx, avoid: &[String]) -> Resu
     Err(format!("every workable money method trains a banned skill ({})", avoid.join(",")))
 }
 
+/// How a money window was steered (`steer_for_work`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkSteer {
+    /// Off every ban (`true`: moved from the locked method).
+    OffBans(bool),
+    /// Every workable method trains a banned skill: the best ranked one
+    /// works through the ban on this skill (a ban never idles a bot,
+    /// user rule 2026-11-14 "aucun bot inactif").
+    ThroughBan(String),
+}
+
+/// Steering of a money window that must run (filler, coin target, side
+/// money goal): off the bans when any workable method allows it; else
+/// through the ban of the best ranked workable method, never through
+/// `strict` (fillers that just failed: the same failure again is no
+/// work). `Err` only when nothing outside `strict` is workable at all.
+/// Live 2026-11-14 (george_97, t01, bd23dqpq…): "every workable money
+/// method trains a banned skill (strength)" left bots idle on a parked
+/// buy for the whole ban.
+pub fn steer_for_work(node: &mut Node, ctx: &ReadyCtx, banned: &[String], strict: &[String]) -> Result<WorkSteer, String> {
+    let mut avoid: Vec<String> = banned.to_vec();
+    avoid.extend(strict.iter().filter(|skill| !banned.contains(skill)).cloned());
+    let refusal = match steer_off_bans(node, ctx, &avoid) {
+        Ok(moved) => return Ok(WorkSteer::OffBans(moved)),
+        Err(reason) => reason,
+    };
+    match steer_off_bans(node, ctx, strict) {
+        Ok(_) => {
+            let skill = node.method.as_deref().and_then(method_skill).filter(|skill| skill_banned(skill, banned));
+            match skill {
+                Some(skill) => Ok(WorkSteer::ThroughBan(skill.to_string())),
+                None => Ok(WorkSteer::OffBans(true)),
+            }
+        }
+        Err(_) => Err(refusal),
+    }
+}
+
 #[cfg(test)]
 #[path = "side_goal_tests.rs"]
 mod tests;

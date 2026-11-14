@@ -111,10 +111,16 @@ pub fn observe_report(account: &str, report: &Value, job: &Job) {
 /// graphs and goals, bans. Cheap prefix test first; a no-op until the
 /// collector runs (workers and CLI never start it).
 pub fn observe_log_line(line: &str) {
-    if !line.starts_with("brain ") || SENDER.get().is_none() {
+    if !line.starts_with("brain ") {
         return;
     }
-    let wanted = line.contains(" -> abandoned (")
+    // The idle detector's reasons: the account's last brain decisions.
+    crate::brain_idle::remember_line(line);
+    if SENDER.get().is_none() {
+        return;
+    }
+    let wanted = line.contains(crate::brain_idle::ALERT_MARKER)
+        || line.contains(" -> abandoned (")
         || line.contains(": graph stuck")
         || line.contains(": goal stuck")
         || line.contains(" banned ")

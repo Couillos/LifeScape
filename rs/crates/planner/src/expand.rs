@@ -394,6 +394,7 @@ pub fn resolve_ready(node: &mut Node, ctx: &ReadyCtx) {
     node.batch = 0;
     resolve_method(node, ctx);
     place_on_site(node, ctx);
+    crate::resolve_obtain::prefer_purchase_over_combat(node, ctx);
 }
 
 /// The brain's site choice for the locked method (game data, bot's

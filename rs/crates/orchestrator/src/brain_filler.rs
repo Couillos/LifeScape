@@ -169,17 +169,19 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     crate::brain_market::fill_ctx(&mut ctx, &node, live);
     lifescape_planner::resolve_ready(&mut node, &ctx);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
-    let mut banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
-    // A filler that just failed (or ended without working) sits out.
-    for skill in failed_filler_skills(life, &ticks_since) {
-        if !banned.contains(&skill) {
-            banned.push(skill);
+    let banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
+    // A filler that just failed (or ended without working) sits out,
+    // strictly; a goal ban is avoided when anything else works, never a
+    // reason to idle (2026-11-14, george_97: "no filler" for a whole ban).
+    let failed = failed_filler_skills(life, &ticks_since);
+    let through = match lifescape_planner::steer_for_work(&mut node, &ctx, &banned, &failed) {
+        Ok(lifescape_planner::WorkSteer::ThroughBan(skill)) => Some(skill),
+        Ok(lifescape_planner::WorkSteer::OffBans(_)) => None,
+        Err(reason) => {
+            note_idle(life, &format!("{} awaiting its fill, no filler: {reason}", waiting.join(",")));
+            return false;
         }
-    }
-    if let Err(reason) = lifescape_planner::steer_off_bans(&mut node, &ctx, &banned) {
-        note_idle(life, &format!("{} awaiting its fill, no filler: {reason}", waiting.join(",")));
-        return false;
-    }
+    };
     let method = match (&node.status, node.method.clone()) {
         (NodeStatus::Blocked { reason }, _) => {
             note_idle(life, &format!("{} awaiting its fill, filler blocked: {reason}", waiting.join(",")));
@@ -199,7 +201,8 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         note_idle(life, &format!("{} awaiting its fill, filler script {script} unknown", waiting.join(",")));
         return false;
     }
-    crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
+    let through = through.map(|skill| format!(" through the {skill} ban (every workable money method is banned)")).unwrap_or_default();
+    crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile{through} ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
     push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{method}"));
     if let Err(error) = crate::brain::save_life(life) {
         crate::logln!("{error}");

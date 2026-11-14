@@ -76,6 +76,7 @@ pub fn save_life(life: &Life) -> Result<(), String> {
     let _phase = crate::cpu_profile::phase("save_life");
     let path = life_path(&life.account);
     let retired = write_life_file(&path, life)?;
+    crate::brain_chain::note_saved(&life.account);
     if let Some(stamp) = file_stamp(&path) {
         remember_life(retired.as_ref().unwrap_or(life), stamp);
     }
@@ -416,23 +417,29 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 const INBOX_CAPACITY: usize = 128;
 
 /// Accounts with a plain tick already queued (deduplication).
-/// Supervisor passes between two plain brain ticks of one account
-/// (CPU, VPS 2026-11-14): the supervisor passes every 500 ms over ~26
-/// jobs and each plain tick ran a full `maybe_launch` (resolve, market
-/// reads) — the brain thread sat at 30–85 % of a core doing nothing new.
-/// A report always goes through at once; a plain tick (idle detection,
-/// periodic sales) waits at most this many passes (~3 s).
-pub(crate) const PLAIN_TICK_EVERY: u32 = 6;
+/// Wall time between two plain brain ticks of one account (CPU, VPS
+/// 2026-11-14: a full `maybe_launch` every 500 ms supervisor pass burnt
+/// 30–85 % of a core doing nothing new). A report always goes through at
+/// once; a plain tick (idle detection, parked buys, periodic sales)
+/// waits at most this long. Time, not a pass count (live 2026-11-14, 60
+/// bots: one supervisor sweep took ~8 s, so "every 6th pass" meant one
+/// tick per ~50–90 s and idle bots waited that long between decisions:
+/// ryan_mason one node per ~1.5 min, owen_wood/lily_brook 2 min idle
+/// after a gear step closed without a launch).
+pub(crate) const PLAIN_TICK_SECS: f64 = 3.0;
 
 /// True when this supervisor pass carries the account's plain tick:
-/// counts the pass and fires on every `PLAIN_TICK_EVERY`-th one.
-pub(crate) fn plain_tick_due(passes: &mut u32) -> bool {
-    *passes = passes.wrapping_add(1);
-    *passes % PLAIN_TICK_EVERY == 1
+/// at least `PLAIN_TICK_SECS` since the last one (`None`: never ticked).
+pub(crate) fn plain_tick_due(last: &mut Option<f64>, now: f64) -> bool {
+    if last.is_some_and(|at| now - at < PLAIN_TICK_SECS) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
-fn plain_tick_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
-    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+fn plain_tick_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<f64>>> {
+    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>> = std::sync::OnceLock::new();
     PASSES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -513,7 +520,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
                         handle_report(&orch, &job, &report);
                     }
                     let _phase = crate::cpu_profile::phase("tick.maybe_launch");
-                    crate::brain_launch::maybe_launch(&orch, &job);
+                    crate::brain_chain::run(&orch, &job);
                 }
             })
             .expect("brain thread spawns");
@@ -525,6 +532,8 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
 /// drained, so the brain never misses a push.
 pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Value>) {
     ensure_brain(orch);
+    // No silent idle (2026-11-14): a brain-run worker idle 5 min alerts.
+    crate::brain_idle::watch(job);
     let had_report = report.is_some();
     // One plain tick per account in flight: the supervisor passes every
     // 500 ms over ~26 jobs (~52 ticks/s) and a capacity-16 inbox was
@@ -532,7 +541,7 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
     // delayed for nothing. A report always goes through.
     if !had_report {
         let mut passes = plain_tick_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !plain_tick_due(passes.entry(job.account.clone()).or_insert(0)) {
+        if !plain_tick_due(passes.entry(job.account.clone()).or_insert(None), crate::jobs::now_secs()) {
             return;
         }
     }
@@ -590,13 +599,19 @@ mod tests {
         assert!(pinned_start("hitpoints", 99, 11).is_err());
     }
 
+    /// A plain tick is due on wall time, whatever the sweep length: a
+    /// slow sweep (60 bots, ~8 s) ticks every account each sweep, a fast
+    /// one (500 ms) every `PLAIN_TICK_SECS`.
     #[test]
-    fn plain_ticks_fire_once_every_few_passes() {
-        let mut passes = 0;
-        let fired: Vec<bool> = (0..13).map(|_| super::plain_tick_due(&mut passes)).collect();
-        assert!(fired[0], "the first pass ticks at once (fresh account)");
-        assert_eq!(fired.iter().filter(|fired| **fired).count(), 3, "13 passes, one tick per {} passes", super::PLAIN_TICK_EVERY);
-        assert!(!fired[1] && fired[super::PLAIN_TICK_EVERY as usize]);
+    fn plain_ticks_fire_on_wall_time_not_pass_count() {
+        let mut last = None;
+        assert!(super::plain_tick_due(&mut last, 100.0), "the first pass ticks at once (fresh account)");
+        let fast: Vec<bool> = (1..=12).map(|step| super::plain_tick_due(&mut last, 100.0 + f64::from(step) * 0.5)).collect();
+        assert_eq!(fast.iter().filter(|fired| **fired).count(), 2, "6 s of 500 ms passes: one tick per {} s", super::PLAIN_TICK_SECS);
+        let mut slow = Some(200.0);
+        for step in 1..=5 {
+            assert!(super::plain_tick_due(&mut slow, 200.0 + f64::from(step) * 8.0), "an 8 s sweep ticks every pass");
+        }
     }
 
     #[test]

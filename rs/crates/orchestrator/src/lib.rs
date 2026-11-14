@@ -25,6 +25,8 @@ pub mod brain;
 pub mod brain_alch;
 pub mod brain_ambition;
 pub mod brain_await;
+pub mod brain_chain;
+pub mod brain_idle;
 pub mod brain_bids;
 #[cfg(test)]
 mod brain_bids_sim_tests;

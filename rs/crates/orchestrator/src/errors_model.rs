@@ -360,6 +360,14 @@ pub fn from_brain_line(line: &str, clock: i64) -> Option<ErrorRecord> {
         row.signature = format!("no progress: {}", signature(cause, account));
         return Some(row);
     }
+    // `idle <N>s without a script: <reasons>` (`brain_idle`): a brain-run
+    // bot idle past the alert threshold, with its last decisions.
+    if let Some((_, reasons)) = rest.strip_prefix("idle ").and_then(|tail| tail.split_once(crate::brain_idle::ALERT_MARKER)) {
+        row.kind = "idle_bot".to_string();
+        let last = reasons.rsplit(" | ").next().unwrap_or(reasons);
+        row.signature = format!("idle without a script: {}", signature(last, account));
+        return Some(row);
+    }
     if rest.starts_with("revive cap reached") {
         row.kind = "revive_cap".to_string();
         row.signature = signature(rest, account);

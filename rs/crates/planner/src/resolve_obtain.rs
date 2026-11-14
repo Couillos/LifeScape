@@ -242,6 +242,31 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     }
 }
 
+/// An obtain whose field legs (ground spawn, drop farm) are safe only
+/// above the bot's combat level, while a purchase sells it, blocks on
+/// the coins of the purchase, never on the combat level (live
+/// 2026-11-14, ryan_mason: one 1-coin air rune blocked on `combat:43`,
+/// 39 levels of training filed for it and no money method ever ran).
+/// The coins are a `have_coins` node the money methods earn; the
+/// cheapest priced purchase leg (market, shop, dialogue seller) sets the
+/// wallet. Without a purchase leg (Iron, untradeable) the combat level
+/// stays the block.
+pub(crate) fn prefer_purchase_over_combat(node: &mut Node, ctx: &ReadyCtx) {
+    let combat_block = matches!(&node.status, NodeStatus::Blocked { reason } if reason.starts_with("missing:combat:"));
+    if !combat_block || !matches!(node.kind, crate::model::NodeKind::ObtainItems { .. }) {
+        return;
+    }
+    let cheapest = node
+        .alternatives
+        .iter()
+        .filter(|alt| matches!(alt.method.as_str(), "market:buy" | "shop:buy" | "dialogue:buy") && alt.est_coins > 0)
+        .map(|alt| alt.est_coins)
+        .min();
+    if let Some(cost) = cheapest {
+        node.status = NodeStatus::Blocked { reason: format!("missing:coins:{}", wallet_for(ctx, cost)) };
+    }
+}
+
 /// Melee spots whose NPCs drop coins, the only coins that enter the
 /// economy without a buyer (NPC shops never buy, PRD3): men 8.2 and
 /// goblins 2.2 coins per kill in the F2P drop tables.
@@ -381,3 +406,7 @@ mod tests {
         assert_ne!(money.method.as_deref(), Some("fight:melee/men"), "unmeasured ties keep the historic order");
     }
 }
+
+#[cfg(test)]
+#[path = "idle_unlock_tests.rs"]
+mod idle_unlock_tests;

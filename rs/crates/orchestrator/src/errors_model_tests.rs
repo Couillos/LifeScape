@@ -170,6 +170,16 @@ fn brain_lines_parse_abandon_stuck_and_ban() {
     assert!(from_brain_line("brain t05: normalize n31 abandoned: dependency n33 abandoned", 10).is_none(), "cascades skipped");
     assert!(from_brain_line("brain t05: folded report stop=failed", 10).is_none());
     assert!(from_brain_line("job t05: event x", 10).is_none());
+    // The idle detector (`brain_idle`): one row per alert, grouped by the
+    // last brain decision.
+    let idle = from_brain_line(
+        "brain ryan_mason: idle 312s without a script: n19 blocked at resolve (missing:airrune) -> pending | n20 blocked at resolve (missing:combat:43) -> pending",
+        10,
+    )
+    .expect("idle");
+    assert_eq!(idle.kind, "idle_bot");
+    assert_eq!(idle.account, "ryan_mason");
+    assert_eq!(idle.signature, "idle without a script: n# blocked at resolve (missing:combat:#) -> pending");
 }
 
 #[test]

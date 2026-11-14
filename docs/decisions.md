@@ -583,3 +583,42 @@ chasseurs du trajet (hobgoblins armés : combat 85).
 Restent hors ladder : géants moussus (salle derrière la toile à trancher
 `bigweb_slashable` (3146,9898), aucune arête nav), donjon des glaces
 (pas de banque F2P à `BANK_TREK_LIMIT` de Mudskipper Point).
+
+## 2026-11-14 — Aucun bot inactif (2) : achat plutôt que combat, ban traversé, passes enchaînées, détecteur
+
+Constat live (60 bots) : ryan_mason (mage épinglé, 0 pièce) inactif 30+ min,
+un nœud toutes les ~1,5 min, `obtain airrune` bloqué `missing:combat:43`
+(sites du sol/drop sûrs seulement à 43) puis `reach_combat 43` (style magie)
+bloqué faute de runes, en boucle ; aucune méthode d'argent lancée. Ailleurs :
+1,5–2 min sans décision après chaque nœud clos sans lancement (owen_wood,
+lily_brook, jim_ellis : pièce d'équipement déjà détenue, enchère parquée) ;
+remplissage refusé tant que toutes les méthodes d'argent sont bannies
+(george_97 « no filler … (strength) »).
+
+Décisions :
+- Une obtention dont les jambes de terrain exigent un combat que le bot n'a
+  pas, alors qu'un achat la vend (marché, boutique, vendeur de dialogue,
+  jambe chiffrée), bloque sur les pièces de l'achat (`have_coins`), jamais
+  sur le niveau de combat (`resolve_obtain::prefer_purchase_over_combat`).
+  Sans jambe d'achat (Iron, non échangeable), le combat reste le blocage.
+- Filet : un blocage `combat:N` dont un `reach_combat ≥ N` attend déjà le
+  nœud bloqué est un cycle : abandon typé immédiat (`cycle: …`), jamais un
+  jumeau neuf (`lifecycle::cycle_twin`). Objets et niveaux exclus (une
+  montée bloquée sur les barres du palier suivant reste normale).
+- Fenêtre d'argent obligatoire (remplissage, nœud pièces, but `side:money`) :
+  hors bans si possible, sinon la mieux classée travaille À TRAVERS son ban
+  (`side_goal::steer_for_work`, log `through the <skill> ban`), jamais à
+  travers un remplissage qui vient d'échouer. Un ban ne laisse jamais un bot
+  sans rien faire (règle utilisateur).
+- Tick simple du cerveau sur l'horloge (`PLAIN_TICK_SECS` = 3 s) et non plus
+  « une passe superviseur sur 6 » (balayage de ~8 s à 60 bots : un tick par
+  50–90 s). Une passe qui a changé la vie sans rien lancer est suivie d'une
+  autre aussitôt, jusqu'à `brain_chain::CHAINED_PASSES` (6).
+- Détecteur (`brain_idle`) : un worker piloté par le cerveau (fichier de
+  vie), connecté, ni en pause ni tenu par l'opérateur, sans script depuis
+  5 min écrit `brain <compte>: idle <N>s without a script: <3 dernières
+  décisions>` → ligne `idle_bot` de la page Erreurs ; répété toutes les
+  15 min tant que ça dure.
+Rejeté : entraîner 39 niveaux de combat pour une rune à 1 pièce ; attendre
+la fin du ban ; un remplissage générique sans attente parquée (non demandé :
+le détecteur rend visible tout autre cas).
