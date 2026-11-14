@@ -103,7 +103,11 @@ pub fn signature(message: &str, account: &str) -> String {
 
 /// Script error type from its display text (`ScriptError` prefixes).
 pub fn script_kind(message: &str) -> &'static str {
-    if message.starts_with("failed:") {
+    // The kit's progress guard (`kit::progress`) fails silent loops with
+    // `no progress: …`: grouped with the daemon's own detector rows.
+    if message.starts_with("failed: no progress") {
+        crate::report_progress::KIND
+    } else if message.starts_with("failed:") {
         "Failed"
     } else if message.starts_with("usage:") {
         "Usage"
@@ -194,6 +198,7 @@ pub fn from_report(
         _ => format!("task {stop}"),
     };
     let kind = match error.get("type").as_str() {
+        Some(_) if message.starts_with("no progress") => crate::report_progress::KIND.to_string(),
         Some(found) if !found.is_empty() => found.to_string(),
         _ if stop == "blocked" => "Blocked".to_string(),
         _ => "failed".to_string(),
@@ -226,6 +231,37 @@ pub fn from_report(
     }
     place(&mut row, position, zone_of);
     Some((outcome, row))
+}
+
+/// Row for a report the silent-loop detector flags
+/// (`report_progress::assess`): source `task`, kind `no_progress`, the
+/// pattern in the signature, ticks and bank opens in the detail.
+pub fn from_idle_report(account: &str, report: &Value, position: Option<(i64, i64, i64)>, clock: i64, zone_of: ZoneOf<'_>) -> Option<ErrorRecord> {
+    let finding = crate::report_progress::assess(report)?;
+    let text = |key: &str| report.get(key).as_str().unwrap_or("").to_string();
+    let activity = text("activity");
+    let mut row = ErrorRecord {
+        clock,
+        source: "task".to_string(),
+        kind: crate::report_progress::KIND.to_string(),
+        account: account.to_string(),
+        script: activity.clone(),
+        node_id: text("node_id"),
+        method: activity.clone(),
+        stop: text("stop"),
+        signature: format!("no progress {}: {activity}", finding.pattern),
+        message: clip(&finding.message, MESSAGE_CAP),
+        detail: format!(
+            "{} ticks, {} bank opens, {} items, {} xp",
+            report.get("ticks").as_i64().unwrap_or(0),
+            report.get("bank_opens").as_i64().unwrap_or(0),
+            crate::report_progress::units_gained(report),
+            crate::report_progress::xp_gained(report)
+        ),
+        ..ErrorRecord::default()
+    };
+    place(&mut row, position, zone_of);
+    Some(row)
 }
 
 fn tile_of(value: &Value) -> Option<(i64, i64, i64)> {
@@ -314,6 +350,14 @@ pub fn from_brain_line(line: &str, clock: i64) -> Option<ErrorRecord> {
     if rest.starts_with("goal stuck") {
         row.kind = "goal_stuck".to_string();
         row.signature = signature(rest, account);
+        return Some(row);
+    }
+    // `nX no progress: …` (brain_fold: windows of a node without
+    // progress toward it, the report itself was not empty).
+    if let Some((node, cause)) = rest.split_once(" no progress: ").filter(|(node, _)| node.starts_with('n') && !node.contains(' ')) {
+        row.kind = crate::report_progress::KIND.to_string();
+        row.node_id = node.to_string();
+        row.signature = format!("no progress: {}", signature(cause, account));
         return Some(row);
     }
     if rest.starts_with("revive cap reached") {

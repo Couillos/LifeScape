@@ -99,8 +99,7 @@ pub fn run_spin(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} spun (crafting={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("spun (crafting={level})")))
     })
 }
 

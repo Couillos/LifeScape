@@ -195,6 +195,11 @@ pub struct Bot {
     /// released at empty. Two thresholds so the run flag never flaps
     /// around one (walk legs read it through `want_run`).
     pub run_latch: bool,
+    /// Bank interfaces opened by this session (`open_bank` that saw the
+    /// bank stream). Read as a delta by the task report and the kit's
+    /// progress guard: a loop that opens the bank again and again without
+    /// producing anything is a silent loop, never a normal rhythm.
+    pub bank_opens: u64,
 }
 
 impl Bot {
@@ -244,6 +249,7 @@ impl Bot {
             pauses_done: 0,
             zone_label: "?".to_string(),
             run_latch: false,
+            bank_opens: 0,
         }
     }
 

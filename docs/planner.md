@@ -286,7 +286,22 @@ Rapports (contrat v2) : tout lancement `--node` produit un `task_report`
 mort ⇒ échec compté puis relance ; échec de voyage ⇒ méthode bannie +
 échec compté ; `blocked` ⇒ sous-tâche `obtain` par objet manquant
 (réutilisée si déjà ouverte) ; `stopped` (unload, redémarrage) ⇒ prêt,
-non compté ; fenêtre finie avec but atteint ⇒ `done`. Progrès
+non compté ; fenêtre finie avec but atteint ⇒ `done`. Boucles muettes
+(2026-11-14, `brain_fold::verdict_watched`, `report_progress.rs` : n133
+de harry_page relancé ~115 fois, 689 124 ticks, `budget_exhausted` sans
+objet ni XP plié en fin de fenêtre) : un rapport que le détecteur signale
+(`no_output` : fenêtre ≥ 1000 ticks finie au budget sans XP ni objet
+gagné ; `bank_churn` : ≥ 40 banques, moins d'unités gagnées que de
+banques, 0 XP ; marché, `walkto`, tuto, `equip` exclus) échoue son nœud
+(`no progress: …`, compté, 3 ⇒ abandon puis règles de rachat/ban) ; un
+nœud mesurable (montée, combat, obtention) qui finit 3 fenêtres d'affilée
+sans progrès vers lui (`engagement_idle` dans l'historique, arrêts
+opérateur ignorés) échoue aussi, ligne `brain <c>: nX no progress: …`.
+Une sous-tâche bloquée sur un intrant d'un étage intermédiaire (argile et
+eau de l'argile molle d'un plat) est dimensionnée à travers l'étage
+(`replan::nested_per_unit`, 2 étages : 16 plats crus ⇒ 16 argiles, pas
+1) ; les récipients d'eau d'une méthode `pottery:` sont plafonnés à
+`POTTERY_VESSELS` = 7 (le script les remplit lui-même). Progrès
 (2026-11-13, `brain_fold::xp_toward`, `lifecycle::record_xp`) : l'XP que
 le rapport crédite à la montée (sa compétence ; toute compétence de combat
 pour `reach_combat`) remet à zéro le compteur de blocages comme un niveau

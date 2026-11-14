@@ -93,8 +93,7 @@ pub fn run_cut_gems(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let made = before.saturating_sub(pack_total(step_bot, uncut));
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} cut {made} {uncut_name} (crafting={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("cut {made} {uncut_name} (crafting={level})")))
     });
     outcome
 }

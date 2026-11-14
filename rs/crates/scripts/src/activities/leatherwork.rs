@@ -102,8 +102,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let made = before.saturating_sub(pack_total(step_bot, leather));
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} sewed {made} {product_name} (crafting={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("sewed {made} {product_name} (crafting={level})")))
     });
     outcome
 }

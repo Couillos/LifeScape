@@ -19,7 +19,8 @@
 //! from pack + known bank, staff counted), `fireline` (legal fire lines),
 //! `uniform` (guild uniform worn before the door, `--wear`), `anvil`
 //! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained),
-//! `janitor` (bank cleanup budget, chunks, whole-stack drops).
+//! `janitor` (bank cleanup budget, chunks, whole-stack drops), `progress`
+//! (silent-loop guard of every `cycle::run`: no output, bank churn).
 
 #![forbid(unsafe_code)]
 
@@ -50,6 +51,7 @@ pub mod mine;
 pub mod observe;
 pub mod pack;
 pub mod produce;
+pub mod progress;
 pub mod shop;
 pub mod site;
 pub mod spell_load;
@@ -62,5 +64,6 @@ pub mod toll;
 pub mod tools;
 pub mod trees;
 pub mod uniform;
+pub mod water;
 pub mod withdraw;
 pub mod woodcut;

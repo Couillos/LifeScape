@@ -91,8 +91,7 @@ pub fn run_stringing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let made = before.saturating_sub(pack_total(step_bot, unstrung));
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} strung {made} {unstrung_name} (crafting={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("strung {made} {unstrung_name} (crafting={level})")))
     });
     outcome
 }

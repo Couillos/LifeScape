@@ -145,6 +145,15 @@ fn site_tiles(bot: &mut Bot, name: &str, near: (i32, i32)) -> Vec<(i32, i32, i32
             bot.log(&format!("station search: static locs unavailable ({error}), live only"));
         }
     }
+    // The served static map keeps one loc per tile: a wall on the same
+    // tile hides the station (live 2026-11-14, Barbarian Village wheels
+    // (3087,3409)/(3087,3410) share their tiles with the hut walls, "no
+    // produce station potterywheel"). The station dump names them all.
+    for station in knowledge::stations::stations_of(name) {
+        if let Ok(loc) = u16::try_from(station.loc_id) {
+            consider(station.x as i32, station.z as i32, station.level as i32, loc);
+        }
+    }
     cands.sort();
     cands.dedup();
     cands.into_iter().map(|(_, tile)| tile).collect()
@@ -281,7 +290,11 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
         ProduceUi::Grid { button } => {
             let com = grid_button(bot, button)?;
             let target = bot.world.ticks + UI_TICKS;
-            while bot.world.ticks < target && bot.world.modal.is_none() {
+            let seen = bot.world.messages.len();
+            // A wrong-side stand answers "I can't reach that!" at once:
+            // stop waiting for the grid (the caller moves on).
+            let refused = |bot: &Bot| bot.world.messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("can't reach"));
+            while bot.world.ticks < target && bot.world.modal.is_none() && !refused(bot) {
                 bot.pump(2)?;
             }
             if bot.world.modal.is_none() {
@@ -332,17 +345,20 @@ fn stands_for(x: i32, z: i32, span: (i32, i32), from: (i32, i32), blocked: u32) 
 /// Angle of the station loc at (x, z): the live stream when it changed
 /// the loc, else the static map placement (the stream only carries
 /// changed locs: live 2026-11-14, Falador's turned `furnace1` read 0 and
-/// every stand was refused). 0 when neither knows it.
-fn station_angle(bot: &mut Bot, x: i32, z: i32, loc: u16) -> u8 {
+/// every stand was refused). `None` when neither knows it: the served
+/// map keeps one loc per tile and a wall on the station's tile hides it
+/// (Barbarian Village wheels) — every side is then offered, the server's
+/// "I can't reach that!" moving on to the next.
+fn station_angle(bot: &mut Bot, x: i32, z: i32, loc: u16) -> Option<u8> {
     let level = bot.world.level;
     if let Some((_, _, angle)) = bot.world.loc_at(x, z, level).filter(|(placed, _, _)| *placed == loc) {
-        return angle;
+        return Some(angle);
     }
     match bot.tiles_flags(&[(x, z, level)]) {
-        Ok(reads) => reads.first().and_then(|read| read.loc).filter(|(placed, _, _)| *placed == loc).map(|(_, _, angle)| angle).unwrap_or(0),
+        Ok(reads) => reads.first().and_then(|read| read.loc).filter(|(placed, _, _)| *placed == loc).map(|(_, _, angle)| angle),
         Err(error) => {
-            bot.log(&format!("station angle: static read failed ({error}), angle 0"));
-            0
+            bot.log(&format!("station angle: static read failed ({error}), every side offered"));
+            None
         }
     }
 }
@@ -396,7 +412,19 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
         if single_shot && consumed > 0 {
             break;
         }
-        if click_once(bot, job, site, have, target - consumed).is_err() {
+        // A refused click (grid never opened, choice never answered) ends
+        // the site loud in the log: the caller's "consumed nothing" then
+        // names its cause (live 2026-11-14, wheel grid, silent break).
+        let seen_click = bot.world.messages.len();
+        if let Err(error) = click_once(bot, job, site, have, target - consumed) {
+            let fresh: Vec<String> = bot.world.messages.get(seen_click..).unwrap_or(&[]).to_vec();
+            bot.log(&format!("{} click refused: {error}; game: {fresh:?}", job.spec.verb));
+            // "I can't reach that!" before any interface: this stand is
+            // the wrong side, the next one may reach (Barbarian Village
+            // wheels: the east stand is behind the hut wall).
+            if consumed == 0 && fresh.iter().any(|message| message.to_lowercase().contains("can't reach")) {
+                return Ok(SiteDone::NextStand);
+            }
             break;
         }
         match drain_click(bot, job.input, have) {
@@ -484,7 +512,8 @@ fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Re
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
     let from = (bot.world.x, bot.world.z);
     let angle = station_angle(bot, x, z, loc);
-    for (stand_x, stand_z) in stands_for(x, z, station_span(loc, angle), from, station_blocked(loc, angle)) {
+    let blocked = angle.map_or(0, |angle| station_blocked(loc, angle));
+    for (stand_x, stand_z) in stands_for(x, z, station_span(loc, angle.unwrap_or(0)), from, blocked) {
         if pack_total(bot, job.input) == 0 {
             break;
         }
@@ -647,6 +676,19 @@ mod tests {
         let found = site_tiles(&mut bot, "range", (3200, 3200));
         assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3200, 3200)), "streamed range resolves, got: {found:?}");
         assert!(site_tiles(&mut bot, "no_such_station", (3200, 3200)).is_empty(), "unknown station finds nothing");
+    }
+
+    /// Live 2026-11-14 (admin, `pottery --site 3087,3410,0`): the served
+    /// static map keeps the hut wall on the wheel tiles, "no produce
+    /// station potterywheel". The station dump finds both wheels.
+    #[test]
+    fn wheels_under_walls_come_from_the_station_dump() {
+        let mut bot = offline_bot();
+        bot.world.level = 0;
+        let found = site_tiles(&mut bot, "potterywheel", (3087, 3410));
+        assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3087, 3409)), "{found:?}");
+        assert!(found.iter().any(|(x, z, _, _)| (*x, *z) == (3087, 3410)), "{found:?}");
+        assert!(site_tiles(&mut bot, "potterywheel", (3200, 3200)).iter().all(|(x, _, _, _)| *x != 3087), "out of radius");
     }
 
     /// Stands ring the station orthogonally, nearest first.

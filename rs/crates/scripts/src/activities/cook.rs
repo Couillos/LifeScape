@@ -92,8 +92,7 @@ pub fn run_cook(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &task_keep, 0)?;
-        step_bot.log(&format!("ok load {} cooked (cooking={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("cooked (cooking={level})")))
     });
     outcome
 }

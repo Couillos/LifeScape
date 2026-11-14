@@ -118,8 +118,7 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             Err(error) => return Err(error),
         }
-        step_bot.log(&format!("ok load {} banked (wc={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("banked (wc={level})")))
     })
 }
 

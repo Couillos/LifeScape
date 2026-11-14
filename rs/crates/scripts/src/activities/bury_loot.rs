@@ -57,8 +57,7 @@ pub fn run_bury_loot(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
         let buried = crate::kit::loot::bury_bones(step_bot)?;
-        step_bot.log(&format!("ok load {} buried {buried} {bones_name}", state.units() + 1));
-        Ok(crate::kit::cycle::StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("buried {buried} {bones_name}")))
     })
 }
 

@@ -11,7 +11,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::cycle::{resolve_keep, run, StepControl};
+use crate::kit::cycle::{resolve_keep, run};
 use crate::kit::bank::{bank_trip, nearest_bank};
 use crate::kit::pack::obj_id;
 use crate::kit::survival::{check_events, learn_level};
@@ -73,8 +73,7 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if toolless >= 2 {
             return Err(crate::kit::tools::blocked_tool("bronze_pickaxe"));
         }
-        step_bot.log(&format!("ok load {} banked (mining={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("banked (mining={level})")))
     })
 }
 

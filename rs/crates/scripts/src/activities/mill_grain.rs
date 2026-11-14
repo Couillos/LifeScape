@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 
 use lifescape_sdk::Bot;
-use crate::kit::{bank::{bank_trip, bank_trip_resilient, bank_withdraw_items, nearest_bank}, cycle::{resolve_keep, run, StepControl}, pack::{free_slots, obj_id, pack_total}};
+use crate::kit::{bank::{bank_trip, bank_trip_resilient, bank_withdraw_items, nearest_bank}, cycle::{resolve_keep, run}, pack::{free_slots, obj_id, pack_total}};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -179,8 +179,7 @@ pub fn run_mill_grain(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if milled + taken == 0 { return Err(ScriptError::Usage(format!("mill gave nothing at {:?}", step_bot.position()))); }
         step_bot.log(&format!("ok milled {milled} grain, took {taken} flour"));
         bank_trip_resilient(step_bot, &mut bank, &task_keep, 0, &[flour])?;
-        step_bot.log(&format!("ok load {} milled", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, "milled"))
     })
 }
 

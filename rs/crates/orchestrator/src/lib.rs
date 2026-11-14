@@ -144,6 +144,7 @@ pub mod session_push;
 pub mod session_heartbeat;
 pub mod session_report;
 pub mod report_flows;
+pub mod report_progress;
 pub mod session_rescue;
 pub mod staticmap;
 pub mod res_stats;

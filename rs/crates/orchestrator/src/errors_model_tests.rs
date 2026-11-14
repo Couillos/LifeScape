@@ -178,3 +178,23 @@ fn utc_text_formats_civil_time() {
     assert_eq!(utc_text(1_794_565_628), "2026-11-13 10:27:08");
     assert_eq!(utc_text(951_782_400), "2000-02-29 00:00:00");
 }
+
+/// Live 2026-11-14 (pottery loops): a budget window without output is a
+/// `no_progress` row (source task, pattern in the signature), the kit
+/// guard's `failed: no progress …` and the brain's idle-window line are
+/// grouped under the same type.
+#[test]
+fn silent_loops_are_no_progress_rows() {
+    let report = json::parse(r#"{"activity":"pottery","node_id":"n133","stop":"budget_exhausted","ticks":6076,"items":[],"xp":[],"bank_opens":280}"#).expect("json");
+    let row = from_idle_report("harry_page", &report, Some((3212, 3436, 0)), 1_000, &town).expect("flagged");
+    assert_eq!((row.source.as_str(), row.kind.as_str(), row.node_id.as_str()), ("task", "no_progress", "n133"));
+    assert_eq!(row.signature, "no progress no_output: pottery");
+    assert_eq!(row.zone, "Varrock");
+    assert!(row.detail.contains("280 bank opens"), "{}", row.detail);
+    let working = json::parse(r#"{"activity":"pottery","stop":"budget_exhausted","ticks":6000,"items":[{"name":"Pie dish","qty":20}],"xp":[]}"#).expect("json");
+    assert!(from_idle_report("harry_page", &working, None, 1_000, &no_zone).is_none());
+    assert_eq!(script_kind("failed: no progress: pottery 3 loads in a row produced nothing"), "no_progress");
+    assert_eq!(script_kind("failed: mine failed"), "Failed");
+    let line = from_brain_line("brain harry_page: n133 no progress: 3 budget windows in a row without progress toward the node", 5).expect("row");
+    assert_eq!((line.kind.as_str(), line.node_id.as_str()), ("no_progress", "n133"));
+}

@@ -148,6 +148,50 @@ pub(crate) fn verdict(stop: &str, error: Option<(String, String)>, missing: &[St
     }
 }
 
+/// Budget windows in a row without progress toward a measurable node
+/// (climb XP, obtained items) before the node counts a failure: the brain
+/// never relaunches a method that does nothing forever (live 2026-11-14:
+/// pottery n133 relaunched ~115 times, 689 124 ticks, 0 dish).
+pub(crate) const IDLE_WINDOWS_LIMIT: u32 = 3;
+/// History outcome of a budget window without progress toward its node.
+pub(crate) const IDLE_OUTCOME: &str = "engagement_idle";
+
+/// `verdict` plus the silent-loop rules: a run the detector flags
+/// (`report_progress::assess`: no output, bank churn) fails its node at
+/// once; a budget window without progress toward the node is the
+/// `idle_windows + 1`-th in a row and fails it at `IDLE_WINDOWS_LIMIT`.
+/// A goal met wins over both.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verdict_watched(
+    stop: &str,
+    error: Option<(String, String)>,
+    missing: &[String],
+    goal_met: bool,
+    market_pending: bool,
+    progressed: bool,
+    silent: Option<&str>,
+    idle_windows: Option<u32>,
+) -> Verdict {
+    let window_end = stop == "budget_exhausted" || (stop == "goal_reached" && !market_pending);
+    if window_end && !goal_met {
+        if let Some(text) = silent {
+            return Verdict::Failure(text.to_string());
+        }
+        if let Some(before) = idle_windows.filter(|_| !progressed && stop == "budget_exhausted") {
+            if before + 1 >= IDLE_WINDOWS_LIMIT {
+                return Verdict::Failure(format!("no progress: {} budget windows in a row without progress toward the node", before + 1));
+            }
+        }
+    }
+    verdict(stop, error, missing, goal_met, market_pending, progressed)
+}
+
+/// Budget windows without progress the node ended just before this one
+/// (latest first, operator stops skipped).
+pub(crate) fn idle_windows(life: &lifescape_planner::Life, node: &str) -> u32 {
+    life.history.iter().rev().filter(|entry| entry.node == node && entry.outcome != "stopped").take_while(|entry| entry.outcome == IDLE_OUTCOME).count() as u32
+}
+
 /// Fold one pushed report into the graph; launches nothing (the launch
 /// pass runs right after, same brain tick).
 pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &Value) {
@@ -240,7 +284,17 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         _ => (true, false),
     };
     let progressed = xp > 0 || (matches!(kind, NodeKind::ObtainItems { .. }) && life.nodes[index].progress_current > held_before);
-    let decision = verdict(&stop, error, &missing, goal_met, market_pending, progressed);
+    // Silent loops: the report-level detector (no output, bank churn),
+    // then windows without progress toward a measurable node.
+    let silent = crate::report_progress::assess(report).map(|finding| finding.message);
+    let measured = matches!(kind, NodeKind::ReachLevel { .. } | NodeKind::ReachCombat { .. } | NodeKind::ObtainItems { .. });
+    let idle_before = measured.then(|| idle_windows(&life, &node_id));
+    let decision = verdict_watched(&stop, error, &missing, goal_met, market_pending, progressed, silent.as_deref(), idle_before);
+    if let (Verdict::Failure(text), None) = (&decision, &silent) {
+        if text.starts_with("no progress") {
+            crate::logln!("brain {account}: {node_id} {text}");
+        }
+    }
     let id = life.nodes[index].id.clone();
     match &decision {
         Verdict::Done => {
@@ -259,7 +313,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
         }
         Verdict::EngagementEnd => {
             end_engagement(&mut life, index);
-            push_history(&mut life, &id, "engagement_end");
+            push_history(&mut life, &id, if measured && !progressed { IDLE_OUTCOME } else { "engagement_end" });
         }
         Verdict::Stopped => {
             retry_uncounted(&mut life, index);
@@ -365,6 +419,52 @@ mod tests {
         assert_eq!(verdict("goal_reached", None, &[], false, false, true), Verdict::EngagementEnd);
         assert!(matches!(verdict("goal_reached", None, &[], false, false, false), Verdict::Failure(_)), "no progress still counts");
         assert_eq!(verdict("goal_reached", None, &[], true, false, true), Verdict::Done);
+    }
+
+    /// Live 2026-11-14 (harry_page n133, pottery): every window ended on
+    /// its budget with no item and no XP and folded `EngagementEnd`, 115
+    /// relaunches. A flagged window now fails the node; a window that
+    /// produced something but nothing toward the node is idle, and the
+    /// third idle window in a row fails it too. A goal met still wins.
+    #[test]
+    fn silent_windows_fail_their_node() {
+        use super::verdict_watched;
+        let silent = Some("no progress: pottery ran 6076 ticks to its budget with 0 items, 0 XP (280 bank opens)");
+        assert!(matches!(verdict_watched("budget_exhausted", None, &[], false, false, false, silent, Some(0)), Verdict::Failure(text) if text.starts_with("no progress")));
+        assert_eq!(verdict_watched("budget_exhausted", None, &[], true, false, false, silent, Some(0)), Verdict::Done, "goal landed");
+        assert_eq!(verdict_watched("budget_exhausted", None, &[], false, false, false, None, Some(1)), Verdict::EngagementEnd, "second idle window");
+        assert!(matches!(verdict_watched("budget_exhausted", None, &[], false, false, false, None, Some(2)), Verdict::Failure(_)), "third idle window");
+        assert_eq!(verdict_watched("budget_exhausted", None, &[], false, false, true, None, Some(2)), Verdict::EngagementEnd, "progress resets");
+        assert_eq!(verdict_watched("budget_exhausted", None, &[], false, false, false, None, None), Verdict::EngagementEnd, "money nodes have no measure");
+        assert!(matches!(verdict_watched("goal_reached", None, &[], false, false, false, silent, Some(0)), Verdict::Failure(_)));
+        assert_eq!(verdict_watched("stopped", None, &[], false, false, false, silent, Some(5)), Verdict::Stopped, "operator stops never count");
+    }
+
+    /// Idle windows count back from the latest entry of the node; another
+    /// outcome ends the streak, operator stops are skipped.
+    #[test]
+    fn idle_windows_count_the_trailing_streak() {
+        use lifescape_planner::{Archetype, GoalKind, Life, Profile};
+        let mut life = Life {
+            schema: 1,
+            account: "t00".to_string(),
+            created_at: 0,
+            seed: 7,
+            profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Producer),
+            goal: GoalKind::MaxSkills { skills: vec!["crafting".to_string()], level: 10 },
+            nodes: Vec::new(),
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        for (node, outcome) in [("n1", "engagement_idle"), ("n1", "engagement_end"), ("n1", "engagement_idle"), ("n2", "failed"), ("n1", "stopped"), ("n1", "engagement_idle")] {
+            crate::brain::push_history(&mut life, node, outcome);
+        }
+        assert_eq!(super::idle_windows(&life, "n1"), 2);
+        assert_eq!(super::idle_windows(&life, "n2"), 0);
     }
 
     /// XP the report credits to the node's skill (or any combat skill for

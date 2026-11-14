@@ -49,6 +49,45 @@ et les outils gratuits seuls comptent avant `blocked{missing}` (3 charges
 sans hache, 2 sans pioche). La garde (`keep`) suit les voyages banque des
 récolteurs ; l'équipement garde son jeu propre.
 
+Garde de progrès (2026-11-14, `kit/progress.rs`, boucles muettes de
+`pottery` : ~1400 banques en 30 min, « ok load » sans un plat) : après
+chaque pas de `cycle::run`, l'état est marqué (XP totale, détenu par objet
+= sac + porté + dernière banque connue, ouvertures de banque
+`Bot::bank_opens`, position). Progrès = XP totale en hausse ou un objet
+au-dessus de son plus haut vu depuis le dernier progrès (un dépôt, un
+retrait, un aller-retour qui rend ce qu'il a pris ne comptent jamais).
+Sans progrès, `Failed("no progress: <activité> <motif> (0 product, 0 XP,
+N bank opens, T ticks, <positions>) at …")` : 3 charges `UnitDone`
+d'affilée, 6 ouvertures de banque sur au moins 2 pas (barattage), 12 pas
+et 1500 ticks (reprises), ou 3000 ticks quel que soit le rythme ; les
+positions de fin de pas disent l'aller-retour (`back and forth A <-> B`).
+« ok load » : chaque activité finit sa charge par
+`state.load_done(bot, …)`, qui logge `ok load N …` seulement si la charge
+a produit, sinon `empty load N …` (la garde échoue à la 3e).
+
+Eau (`kit/water.rs`) : un récipient d'eau est un outil. `mix_all` utilise
+l'intrant sur les pleins portés, remplit les vides d'UNE sorte (celle dont
+la source est la plus proche de la banque) à sa source la plus
+proche de la banque (fontaine, évier, puits pour les seaux ; jamais
+autour du site assigné) et recommence tant qu'il reste de l'intrant ;
+aucun récipient en sac ni en banque connue ⇒ `blocked{bucket_water}`
+(un seau se remplit aussi aux puits : celui d'Edgeville jouxte la banque ;
+les fontaines de cruche les plus proches, au monastère, ne se rejoignent
+que par le niveau 1 de la Wilderness). Un mélange envoyé pendant un
+`p_delay` est jeté sans un mot par `OpHeldUHandler` : renvoyé (5 envois
+de 6 ticks).
+Poterie (`activities/pottery.rs`) : banque du `--site` (Barbarian
+Village → Edgeville, jamais la banque proche du bot), 7 récipients (pleins
+d'abord) + argile pour le reste du sac en une visite, `blocked{clay,
+bucket_water}` en une fois, mélange, tour, four ; un ordre `piedish_unfired`
+s'arrête à la tour (le cuire mangeait l'objet compté par `--want`) ; une
+charge sans pièce = `Failed`. Les pièces déjà banquées au-delà du
+mélange (crues d'un ordre cuit, argile molle) sortent d'abord, sans eau.
+Live `admin` (2026-11-14, `direct`, Barbarian Village) : 14 argiles,
+3 seaux remplis 3 fois au puits d'Edgeville, 14 argiles molles, tour
+(côté ouest après refus est), four, 14 plats banqués en 740 ticks ;
+banque vide ⇒ `blocked{clay}`.
+
 Pause inline générique : `pose_market` à côté du rescue, même porte à un
 seul niveau, rescue prioritaire. Le market attend `at_safe_point`, rejoue
 son script puis retourne marcher au point de départ ; l'horloge
@@ -87,7 +126,13 @@ Angle = flux live s'il a changé le loc, sinon placement statique
 `furnace1` tourné de Falador lu à 0 refusait tous ses stands ; Al Kharid
 essayait ouest, sud (torche : dossier NoRoute) et nord ~140 ticks par
 charge avant l'est). Un refus restant (« I can't reach that! ») passe au
-stand suivant.
+stand suivant, y compris avant une grille (l'attente de la grille
+s'arrête au refus). La carte servie ne garde qu'un loc par case : un
+mur sur la case du poste le cache (2026-11-14, tours de Barbarian
+Village (3087,3409)/(3087,3410) : « no produce station potterywheel »).
+Les postes viennent donc aussi du dump `stations` ; leur angle inconnu
+⇒ tous les côtés offerts. Un clic refusé (grille jamais ouverte) est
+loggé avec les messages du jeu, plus jamais un `break` muet.
 
 Fonte (`activities/smelt.rs`) : poste = four du `--site`, sinon four F2P
 le plus proche du bot (Wilderness seulement avec `wild`, jamais l'île du

@@ -96,8 +96,7 @@ pub fn run_smelt_jewelry(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &keep_cast, 0)?;
-        step_bot.log(&format!("ok load {} cast {product_name} (crafting={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("cast {product_name} (crafting={level})")))
     })
 }
 
