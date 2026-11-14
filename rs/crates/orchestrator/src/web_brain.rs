@@ -135,6 +135,32 @@ fn node_value(node: &Node) -> Value {
     ])
 }
 
+/// Finished nodes retired from the graph (`lifecycle_retire`): lifetime
+/// counts and the last few records, newest first.
+fn retired_view(life: &Life) -> Value {
+    let recent = life
+        .memory
+        .recent
+        .iter()
+        .rev()
+        .map(|row| {
+            object(vec![
+                ("id", str_value(&row.id)),
+                ("kind", str_value(node_kind_name(&row.kind))),
+                ("label", str_value(&node_label(&row.kind))),
+                ("outcome", str_value(&row.outcome)),
+                ("last_error", str_value(&row.last_error)),
+            ])
+        })
+        .collect();
+    object(vec![
+        ("done_total", Value::Int(life.memory.done_total as i64)),
+        ("abandoned_total", Value::Int(life.memory.abandoned_total as i64)),
+        ("quests_done", arr(life.memory.quests_done.iter().map(|quest| str_value(quest)).collect())),
+        ("recent", arr(recent)),
+    ])
+}
+
 /// (debug name, display name) of an object id; empty when unknown.
 fn item_names(item_id: i64) -> (String, String) {
     let obj = usize::try_from(item_id).ok().and_then(lifescape_gamedata::obj_by_id);
@@ -338,9 +364,14 @@ pub fn brain_version(life_mtime_ms: i64, payload: &Value) -> String {
 /// The whole view from a parsed life file and its sources. A life the
 /// planner cannot read is a loud error (never a half-drawn brain).
 pub fn brain_payload(account: &str, life_value: &Value, sources: &BrainSources, ticks_since: &dyn Fn(i64) -> u64) -> Value {
-    let Some(life) = life_from_value(life_value) else {
+    let Some(mut life) = life_from_value(life_value) else {
         return err_json(format!("life {account} unreadable (schema {:?})", life_value.get("schema").as_i64()));
     };
+    // A file the brain has not saved since the retirement (2026-11-14)
+    // shows the graph the brain works on: finished nodes retired.
+    if lifescape_planner::retire_due(&life) {
+        lifescape_planner::retire_finished(&mut life);
+    }
     let orders: Vec<Value> = sources.orders.iter().map(|row| order_value(row, &sources.ceilings)).collect();
     let deals: Vec<Value> = sources.deals.iter().map(|row| deal_value(row, account)).collect();
     let wishes: Vec<Value> = sources.wishes.iter().map(|wish| wish_value(wish, &orders)).collect();
@@ -351,6 +382,7 @@ pub fn brain_payload(account: &str, life_value: &Value, sources: &BrainSources, 
         ("goal", goal_value(&life, life_value)),
         ("active", life.active.as_deref().map(str_value).unwrap_or(Value::Null)),
         ("nodes", arr(life.nodes.iter().map(node_value).collect())),
+        ("retired", retired_view(&life)),
         ("wishes", arr(wishes)),
         ("orders", arr(orders)),
         ("deals", arr(deals)),

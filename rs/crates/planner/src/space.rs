@@ -124,6 +124,29 @@ pub fn launch_allowed(method: &str, ironman: bool) -> bool {
     !ironman || iron_may_use(method)
 }
 
+/// `cleanup_stalled` over a whole life: finished janitors still in the
+/// graph and the retired ones (`memory.recent`, `lifecycle_retire`), in
+/// id order.
+pub fn janitor_stalled(life: &crate::model::Life) -> bool {
+    use crate::model::{NodeKind, NodeStatus};
+    let number = |id: &str| crate::lifecycle_retire::node_number(id).unwrap_or(0);
+    let mut finished: Vec<(usize, bool)> = life
+        .memory
+        .recent
+        .iter()
+        .filter(|row| matches!(row.kind, NodeKind::SpaceCleanup))
+        .map(|row| (number(&row.id), row.outcome == "abandoned"))
+        .chain(
+            life.nodes
+                .iter()
+                .filter(|node| matches!(node.kind, NodeKind::SpaceCleanup) && matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned))
+                .map(|node| (number(&node.id), node.status == NodeStatus::Abandoned)),
+        )
+        .collect();
+    finished.sort();
+    finished.len() >= 2 && finished.iter().rev().take(2).all(|(_, abandoned)| *abandoned)
+}
+
 /// Stall guard: the last two finished janitors both abandoned means the
 /// pressure never drains (persistent failure), so inserts stop. A `done`
 /// anywhere in the tail breaks the streak: healthy cleanups never stall.

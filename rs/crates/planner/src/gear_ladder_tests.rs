@@ -117,6 +117,7 @@ fn life_with(nodes: Vec<Node>) -> Life {
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

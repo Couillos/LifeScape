@@ -49,6 +49,7 @@ fn life_of(kind: &str, seed: u64, level_of: &dyn Fn(&str) -> u8) -> Life {
         history: Vec::new(),
         ambition: new_ambition(kind, "random", &now, seed, &[], Stamp { tick: 0, secs: 0 }).ok(),
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

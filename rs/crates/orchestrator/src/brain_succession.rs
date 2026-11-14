@@ -248,6 +248,7 @@ mod tests {
             // The explicit generalist keeps the plain lowest-skill draw.
             ambition: new_ambition(GENERALIST, "operator", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 0, &[], Stamp { tick: 0, secs: 0 }).ok(),
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

@@ -25,6 +25,7 @@ fn life_with(methods: &[&str]) -> Life {
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 
