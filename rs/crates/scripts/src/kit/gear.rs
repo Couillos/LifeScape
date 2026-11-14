@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::bank::{heal_at_bank, live_bank_booths, nearest_bank};
-use crate::kit::pack::{free_slots, obj_id, pack_total};
-use crate::skill_walk::walk_checked_at;
+use crate::kit::pack::{free_slots, obj_id};
 use crate::ScriptError;
+
+pub use crate::kit::combat_bank::{magic_ammo, prepare_at_bank, prepare_at_bank_for};
 
 pub const ARMOUR_SLOTS: [i64; 10] = [0, 1, 2, 4, 5, 7, 9, 10, 12, 13];
 /// Quiver (arrows): worn only by a ranged run (PRD3 lot 6).
@@ -69,6 +69,41 @@ pub fn available_gear(bot: &Bot) -> HashMap<u16, String> {
     found
 }
 
+/// `available_gear` plus the last known bank (open, or closed and kept
+/// in `inv_closed`), market locks excluded: what a bank leg or an
+/// `equip` step can wear. `inventory()` alone counts the open bank only.
+pub fn owned_gear(bot: &Bot) -> HashMap<u16, String> {
+    let mut found = available_gear(bot);
+    for id in crate::kit::pack::banked_ids(bot) {
+        if let Some(name) = (bot.tables.obj_name)(id) {
+            found.insert(id, name);
+        }
+    }
+    found
+}
+
+/// Worn object per slot right now (weapon and armour slots).
+pub fn worn_snapshot(bot: &Bot) -> HashMap<i64, u16> {
+    ARMOUR_SLOTS.into_iter().chain([WEAPON_SLOT]).filter_map(|slot| worn_obj(bot, slot).map(|obj| (slot, obj))).collect()
+}
+
+/// `equip_plan`, then one log line per slot that changed (`{what}
+/// <objet> (slot n)`), quiet when nothing did (live 2026-11-14 : un
+/// « equipped bronze_med_helm » par voyage banque). Returns the changed
+/// slots with the object now worn (empty name when emptied).
+pub fn equip_logged(bot: &mut Bot, plan: &HashMap<i64, Vec<knowledge::equipment::Wearable>>, what: &str) -> Result<Vec<(i64, String)>, ScriptError> {
+    let before = worn_snapshot(bot);
+    equip_plan(bot, plan)?;
+    let after = worn_snapshot(bot);
+    let mut changed = Vec::new();
+    for slot in changed_slots(&before, &after) {
+        let name = after.get(&slot).and_then(|obj| (bot.tables.obj_name)(*obj)).unwrap_or_default();
+        bot.log(&format!("{what} {name} (slot {slot})"));
+        changed.push((slot, name));
+    }
+    Ok(changed)
+}
+
 /// Best wearable per slot among the available obj ids. The style used for
 /// the weapon score is the one `fight` will press (controlled when the
 /// category offers it, else the weakest skill): `kit::fight` owns the
@@ -121,6 +156,10 @@ pub fn gear_plan(
             // Melee prefers a one-handed weapon so the shield slot stays
             // useful; bows are two-handed by nature, never demoted.
             cands.sort_by_key(|entry| knowledge::equipment::covers_slot(entry, 5));
+            // A woodcutting axe or a pickaxe is a tool (live 2026-11-14,
+            // pia_brown and leo_king swinging bronze/steel axes with a
+            // sword or a mace owned): last resort, only before fists.
+            cands.sort_by_key(knowledge::gear::is_tool);
         }
     }
     // Server ammo rule (player_ranged.rs2): an arrow above the bow's tier
@@ -140,10 +179,12 @@ pub fn weapon_fits_style(entry: &knowledge::equipment::Wearable, style: &str) ->
     entry.wearpos != WEAPON_SLOT || knowledge::gear::score(entry, knowledge::gear::Style::parse(style)) >= 0
 }
 
-/// Name of the wielded weapon when a melee run must not swing it (bow,
-/// crossbow, throwable, staff), else None.
+/// Name of the wielded weapon when the run must not fight with it: a
+/// bow, crossbow, throwable or staff in melee, a melee weapon in ranged
+/// (live 2026-11-14, ryan_park « ranged chickens » à la dague de fer).
+/// Magic casts whatever is wielded: None.
 pub fn off_style_weapon(bot: &Bot) -> Option<String> {
-    if bot.combat_style != "melee" {
+    if bot.combat_style != "melee" && bot.combat_style != "ranged" {
         return None;
     }
     let name = worn_obj(bot, WEAPON_SLOT).and_then(|obj| knowledge::obj_by_id(usize::from(obj)).and_then(|row| row.name))?;
@@ -154,11 +195,11 @@ pub fn off_style_weapon(bot: &Bot) -> Option<String> {
 /// Take the wielded weapon off (worn tab "Remove": equip.rs2
 /// `[inv_button1,wornitems:wear]` -> `~unequip`, refused with "You don't
 /// have enough free space to do that." on a full pack). Typed failure
-/// when it stays wielded: a melee run never swings a bow.
+/// when it stays wielded: a run never fights with an off-style weapon.
 fn unwield_weapon(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
     let Some(obj) = worn_obj(bot, WEAPON_SLOT) else { return Ok(()) };
     if free_slots(bot) == 0 {
-        return Err(ScriptError::Failed(format!("melee run wields {name} and the pack is full: cannot unwield it")));
+        return Err(ScriptError::Failed(format!("{} run wields {name} and the pack is full: cannot unwield it", bot.combat_style)));
     }
     let worn_com = (bot.tables.com_id)(WORN_COM_NAME)
         .ok_or_else(|| ScriptError::Usage(format!("{WORN_COM_NAME} missing from component table")))?;
@@ -167,11 +208,11 @@ fn unwield_weapon(bot: &mut Bot, name: &str) -> Result<(), ScriptError> {
     while bot.world.ticks < target {
         bot.pump(2)?;
         if worn_obj(bot, WEAPON_SLOT).is_none() {
-            bot.log(&format!("unwielded {name}: no melee weapon owned, fighting unarmed"));
+            bot.log(&format!("unwielded {name}: no {} weapon wieldable", bot.combat_style));
             return Ok(());
         }
     }
-    Err(ScriptError::Failed(format!("melee run still wields {name} after Remove")))
+    Err(ScriptError::Failed(format!("{} run still wields {name} after Remove", bot.combat_style)))
 }
 
 /// Gear score, slot by slot. Weapon: the style's own attack bonus plus
@@ -212,7 +253,7 @@ fn gear_score(
         + entry.prayer as f64
 }
 
-fn worn_obj(bot: &Bot, slot: i64) -> Option<u16> {
+pub(crate) fn worn_obj(bot: &Bot, slot: i64) -> Option<u16> {
     let worn_com = (bot.tables.com_id)(WORN_COM_NAME)?;
     bot.world.inv.get(&worn_com)?.get(&(slot as u8)).map(|(held, _)| *held)
 }
@@ -322,6 +363,14 @@ pub fn equip_plan(bot: &mut Bot, plan: &HashMap<i64, Vec<knowledge::equipment::W
     Ok(equipped)
 }
 
+/// Emplacements dont l'objet porté a changé entre deux relevés.
+pub fn changed_slots(before: &HashMap<i64, u16>, after: &HashMap<i64, u16>) -> Vec<i64> {
+    let mut slots: Vec<i64> = before.keys().chain(after.keys()).copied().filter(|slot| before.get(slot) != after.get(slot)).collect();
+    slots.sort_unstable();
+    slots.dedup();
+    slots
+}
+
 pub fn current_weapon_category(bot: &Bot) -> String {
     match worn_obj(bot, WEAPON_SLOT) {
         Some(obj) => knowledge::equipment::all_wearables()
@@ -333,198 +382,15 @@ pub fn current_weapon_category(bot: &Bot) -> String {
     }
 }
 
-/// Deposit loot, withdraw the best gear and food for the current levels.
-pub fn prepare_at_bank(bot: &mut Bot) -> Result<bool, ScriptError> {
-    prepare_at_bank_for(bot, crate::kit::survival::FOOD_TARGET as u32, &[])
-}
-
-/// `prepare_at_bank` with the hunt's food load (`food_target` units)
-/// and items that ride every trip (`keep_items` as (name, units): the
-/// brass key of the Edgeville dungeon giants, the toll coins), kept
-/// through the deposit and topped up from the bank.
-pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(String, u32)]) -> Result<bool, ScriptError> {
-    let bank = match nearest_bank(bot) {
-        // No service means no fence line and no walk: typed `nav-down`
-        // stays loud instead of degrading into an equip-and-continue.
-        Err(error)
-            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
-        {
-            return Err(error)
-        }
-        Ok(bank) => bank,
-        Err(_) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-    };
-    let (bank_x, bank_z) = (bank.x as i32, bank.z as i32);
-    bot.intend(&format!("banking at ({bank_x},{bank_z})"));
-    // Dead socket or operator stop, not a missed bank: typed to the
-    // session instead of a quiet equip-and-continue.
-    match walk_checked_at(bot, bank_x, bank_z, bank.level as i32, 15000) {
-        Ok(true) => {}
-        Ok(false) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-        // No service means no walk at all: typed `nav-down` stays loud
-        // instead of degrading into an equip-and-continue.
-        Err(error)
-            if matches!(&error, ScriptError::Sdk(lifescape_sdk::Error::Travel(detail)) if detail.contains("nav-down")) =>
-        {
-            return Err(error)
-        }
-        Err(error) if crate::kit::survival::is_walk_abort(&error) => return Err(error),
-        Err(_) => {
-            let available = available_gear(bot);
-            let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
-            equip_plan(bot, &plan)?;
-            return Ok(false);
-        }
-    }
-    // The bank tile is safe: heal low HP here before the booth instead
-    // of walking hurt into the next hunt.
-    heal_at_bank(bot)?;
-    // Nearest booth first, every refusal falls through to the next: the
-    // dump's Manhattan pick can name a spawn behind the counter while its
-    // neighbour faces us. Only all-refused is quiet.
-    let mut opened = false;
-    for (booth_x, booth_z, booth_loc) in live_bank_booths(bot, bank_x, bank_z) {
-        if bot.open_bank(booth_x, booth_z, booth_loc, 50)? {
-            opened = true;
-            break;
-        }
-        bot.log(&format!("bank booth ({booth_x},{booth_z}) refused from here, trying next"));
-    }
-    if !opened {
-        bot.log(&format!("bank did not open at {:?}", bot.position()));
-        return Ok(false);
-    }
-    let bank_main = (bot.tables.com_id)("bank_main:inv")
-        .ok_or_else(|| ScriptError::Usage("bank_main:inv missing from component table".to_string()))?;
-    let target = bot.world.ticks + 50;
-    while bot.world.ticks < target && !bot.world.inv.contains_key(&bank_main) {
-        bot.pump(5)?;
-    }
-    if !bot.world.inv.contains_key(&bank_main) {
-        bot.close_modal()?;
-        return Ok(false);
-    }
-    let side_bank = (bot.tables.com_id)("bank_side:inv")
-        .ok_or_else(|| ScriptError::Usage("bank_side:inv missing from component table".to_string()))?;
-    let carried: Vec<(u16, u32)> = bot.inventory().into_iter().collect();
-    let available = available_gear(bot);
-    let mut keep: Vec<u16> = carried
-        .iter()
-        .filter(|(held, _)| {
-            available.contains_key(held)
-                && knowledge::equipment::all_wearables().iter().any(|entry| obj_id(bot, &entry.name).is_ok_and(|id| id == *held))
-        })
-        .map(|(held, _)| *held)
-        .collect();
-    let banked: Vec<String> = bot.bank_items().keys().filter_map(|id| (bot.tables.obj_name)(*id)).collect();
-    let bank_refs: Vec<&str> = banked.iter().map(String::as_str).collect();
-    if lifescape_gamedata::food::best_food(&bank_refs).is_none() {
-        keep.extend(carried.iter().filter(|(held, _)| {
-            (bot.tables.obj_name)(*held).is_some_and(|name| lifescape_gamedata::food::heal(&name) > 0)
-        }).map(|(held, _)| *held));
-    }
-    keep.extend(
-        carried
-            .iter()
-            .filter(|(held, _)| keep_items.iter().any(|(name, _)| obj_id(bot, name).is_ok_and(|kept| kept == *held)))
-            .map(|(held, _)| *held),
-    );
-    keep.sort();
-    keep.dedup();
-    bot.bank_deposit_all(side_bank, &keep, 25)?;
-    // A paid run (`toll`) leaves the bank with the fare in the pack.
-    if let Ok(coins) = obj_id(bot, "coins") {
-        let short = crate::kit::toll::restock_reserve(bot, pack_total(bot, coins));
-        if short > 0 && bot.bank_items().contains_key(&coins) {
-            let _ = bot.bank_withdraw(coins, short, 25);
-        }
-    }
-    for (name, units) in keep_items {
-        let Ok(obj) = obj_id(bot, name) else { continue };
-        let carried: u32 = bot.backpack().1.iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).sum();
-        let short = units.saturating_sub(carried);
-        if short > 0 && bot.bank_items().contains_key(&obj) && (carried > 0 || free_slots(bot) > 0) {
-            let _ = bot.bank_withdraw(obj, short, 25);
-        }
-    }
-    let food_room = food_target as usize;
-    let available = available_gear(bot);
-    let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
-    for slot in [3, 0, 4, 7, 5, 2, 9, 10, 12, 1] {
-        for entry in plan.get(&slot).cloned().unwrap_or_default().into_iter().take(2) {
-            let Ok(obj) = obj_id(bot, &entry.name) else {
-                continue;
-            };
-            if bot.inventory().contains_key(&obj) || free_slots(bot) <= food_room {
-                continue;
-            }
-            let _ = bot.bank_withdraw(obj, 1, 25);
-        }
-        if free_slots(bot) <= food_room {
-            break;
-        }
-    }
-    // Ammunition rides whole stacks (PRD3 lot 6): the quiver for a
-    // ranged run, the wind-strike runes for a magic run.
-    let ammo: Vec<String> = match bot.combat_style.as_str() {
-        "ranged" => plan.get(&AMMO_SLOT).and_then(|cands| cands.first()).map(|arrow| vec![arrow.name.clone()]).unwrap_or_default(),
-        "magic" => magic_ammo(bot),
-        _ => Vec::new(),
-    };
-    for name in ammo {
-        let Ok(obj) = obj_id(bot, &name) else { continue };
-        let stock = bot.bank_items().get(&obj).copied().unwrap_or(0);
-        if stock > 0 && (bot.inventory().contains_key(&obj) || free_slots(bot) > 0) {
-            let _ = bot.bank_withdraw(obj, stock, 25);
-        }
-    }
-    crate::kit::survival::withdraw_food_to(bot, food_target)?;
-    bot.close_modal()?;
-    bot.pump(5)?;
-    for (slot, name) in equip_plan(bot, &plan)?.iter() {
-        bot.log(&format!("equipped {name} (slot {slot})"));
-    }
-    Ok(true)
-}
-
-/// Runes a magic run's bank leg withdraws (whole stacks): the ordered
-/// spell's (`--spell`), wind strike's without one.
-pub fn magic_ammo(bot: &Bot) -> Vec<String> {
-    let spell = bot.combat_spell.as_deref().unwrap_or(crate::activities::magic_style::DAMAGE_SPELLS[0].0);
-    crate::activities::magic_style::spell_runes(spell).into_iter().map(|(name, _)| name).collect()
-}
-
 /// Re-wear the best kit from what is actually carried (pack + worn):
 /// after a death the pack dropped, after a loot the best changed. One
 /// evaluation per event, never per kill or per tick; no bank trip and
 /// never a buy — the bank only enters at prepare_at_bank on the way in.
 /// Logs the slots that changed, quiet when nothing does.
 pub fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
-    let before: HashMap<i64, u16> = ARMOUR_SLOTS
-        .into_iter()
-        .chain([WEAPON_SLOT])
-        .filter_map(|slot| worn_obj(bot, slot).map(|obj| (slot, obj)))
-        .collect();
     let available = available_gear(bot);
     let plan = gear_plan(bot, &available, crate::kit::style::fight_weapon_style, crate::kit::style::style_damage_key);
-    equip_plan(bot, &plan)?;
-    for slot in ARMOUR_SLOTS.into_iter().chain([WEAPON_SLOT]) {
-        if worn_obj(bot, slot) != before.get(&slot).copied() {
-            let name =
-                worn_obj(bot, slot).and_then(|obj| (bot.tables.obj_name)(obj)).unwrap_or_default();
-            bot.log(&format!("{why}: now wearing {name} (slot {slot})"));
-        }
-    }
+    equip_logged(bot, &plan, &format!("{why}: now wearing"))?;
     Ok(())
 }
 
@@ -659,6 +525,64 @@ mod tests {
         let pickaxe = crate::kit::pack::obj_id(&bot, "bronze_pickaxe").expect("pickaxe id");
         bot.world.inv.insert(worn_com, std::collections::HashMap::from([(WEAPON_SLOT as u8, (pickaxe, 1))]));
         assert_eq!(super::off_style_weapon(&bot), None, "a pickaxe swings");
+    }
+
+    fn owned(bot: &Bot, names: &[&str]) -> std::collections::HashMap<u16, String> {
+        names.iter().map(|name| (crate::kit::pack::obj_id(bot, name).expect("obj id"), name.to_string())).collect()
+    }
+
+    /// Live 2026-11-14 (pia_brown, leo_king) : la hache de bûcheron est
+    /// un outil, jamais l'arme de combat quand une vraie arme est
+    /// possédée (masse, épée, dague) ; seule, elle reste mieux que les
+    /// poings.
+    #[test]
+    fn melee_plan_demotes_woodcutting_axes() {
+        let mut bot = stat_bot(54, 54, 54);
+        bot.combat_style = "melee".to_string();
+        let plan = super::gear_plan(&bot, &owned(&bot, &["steel_axe", "iron_mace", "iron_dagger"]), fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT).first().map(String::as_str), Some("iron_mace"), "{:?}", plan_names(&plan, WEAPON_SLOT));
+        assert_eq!(plan_names(&plan, WEAPON_SLOT).last().map(String::as_str), Some("steel_axe"), "the axe is the last resort");
+        let plan = super::gear_plan(&bot, &owned(&bot, &["bronze_axe", "bronze_sword", "iron_dagger"]), fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT).first().map(String::as_str), Some("bronze_sword"));
+        let plan = super::gear_plan(&bot, &owned(&bot, &["steel_axe"]), fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT), vec!["steel_axe".to_string()], "alone, the axe beats fists");
+        let plan = super::gear_plan(&bot, &owned(&bot, &["black_battleaxe", "iron_dagger"]), fight_weapon_style, style_damage_key);
+        assert_eq!(plan_names(&plan, WEAPON_SLOT).first().map(String::as_str), Some("black_battleaxe"), "a battleaxe is a weapon");
+    }
+
+    /// Live 2026-11-14 (ryan_park) : une course à distance ne garde jamais
+    /// une dague en main ; l'arc et l'armure de cuir passent devant.
+    #[test]
+    fn ranged_plan_wields_the_bow_never_the_dagger() {
+        let mut bot = stat_bot(49, 49, 49);
+        bot.world.stats.insert(4, (1, 0));
+        bot.combat_style = "ranged".to_string();
+        let plan = super::gear_plan(
+            &bot,
+            &owned(&bot, &["iron_dagger", "shortbow", "longbow", "leather_armour", "bronze_med_helm", "iron_arrow", "bronze_arrow"]),
+            fight_weapon_style,
+            style_damage_key,
+        );
+        assert_eq!(plan_names(&plan, WEAPON_SLOT).first().map(String::as_str), Some("shortbow"));
+        assert!(!plan_names(&plan, WEAPON_SLOT).contains(&"iron_dagger".to_string()));
+        assert_eq!(plan_names(&plan, 4).first().map(String::as_str), Some("leather_armour"));
+        let mut arrows = plan_names(&plan, super::AMMO_SLOT);
+        arrows.sort();
+        assert_eq!(arrows, vec!["bronze_arrow".to_string(), "iron_arrow".to_string()], "the shortbow takes both");
+        let worn_com = (bot.tables.com_id)(super::WORN_COM_NAME).expect("worn com");
+        let dagger = crate::kit::pack::obj_id(&bot, "iron_dagger").expect("dagger");
+        bot.world.inv.insert(worn_com, std::collections::HashMap::from([(WEAPON_SLOT as u8, (dagger, 1))]));
+        assert_eq!(super::off_style_weapon(&bot).as_deref(), Some("iron_dagger"), "ranged never swings a dagger");
+    }
+
+    /// Live 2026-11-14 : « equipped bronze_med_helm » à chaque voyage
+    /// banque. Seuls les emplacements qui changent se loggent.
+    #[test]
+    fn unchanged_slots_stay_quiet() {
+        let before = std::collections::HashMap::from([(0i64, 1139u16), (3, 1203)]);
+        assert!(super::changed_slots(&before, &before.clone()).is_empty());
+        let after = std::collections::HashMap::from([(0i64, 1139u16), (3, 841)]);
+        assert_eq!(super::changed_slots(&before, &after), vec![3]);
     }
 
     /// Equal scores keep the cheaper kit: bronze before steel (dump shop

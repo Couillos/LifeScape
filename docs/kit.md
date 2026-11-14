@@ -329,3 +329,42 @@ vente là où il est (sac + banque, le carnet réserve le stock en banque) ;
 une pile que le vendeur garde (aucun coût propre) ou que le carnet
 refuse est un candidat D17, lâchée pile entière jusqu'à repasser sous
 55 types.
+
+## Voyage banque de combat (2026-11-14)
+
+`kit/combat_bank.rs` (`prepare_at_bank[_for]`, réexporté par `gear`).
+Live frank_lane, pia_brown, leo_king, bbkjz2vk, bd23dqpq : la garde du
+dépôt valait « tout objet portable du sac », lue sur `inventory()`
+(banque ouverte = banque + miroir) ; le butin (20 casques médiums,
+dagues de fer, 140 flèches de bronze) restait au sac, chaque kill
+finissait `left: pack full` et repartait à la banque, des centaines de
+trajets sans erreur. Le même `inventory()` lisait « déjà porté » un arc
+ou une épée rangés : jamais retirés (ryan_park à la dague en distance,
+pia_brown à la hache).
+
+Garde (`combat_keep_ids`) = munitions du style (toutes les flèches que
+l'arc prévu accepte ; runes du sort ordonné) + objets de la chasse
+(`HuntPlan.keep` : clé de laiton, pièces du péage) + nourriture portée
+seulement quand la banque n'en a pas. Tout le reste est déposé
+(`deposit_what_fits`) : butin, doublons, outils ; la passe de vente
+normale s'en charge. Pièces prévues absentes du corps
+(`kit_to_withdraw`, premier candidat par emplacement, pas de bouclier
+sous un arc) : UNE unité chacune ; nourriture au plan sans descendre
+sous 2 cases libres (`food_load`) ; équipement ; une pièce remplacée
+retombée au sac repart en banque dans la même visite (`pack_surplus`).
+Un voyage qui laisse moins de 2 cases libres (`fight` repart à ≤ 1)
+échoue `Failed` en nommant le contenu du sac (`trip_verdict`), jamais
+une boucle. Équiper ne logge que les emplacements qui changent
+(`gear::equip_logged`, fini le « equipped bronze_med_helm » par voyage).
+
+Plan d'arme : en mêlée une hache de bûcheron ou une pioche
+(`gamedata::gear::is_tool`) passe derrière toute vraie arme possédée
+(seule, elle reste mieux que les poings) ; masses (`weapon_spiked`)
+pesées comme les armes contondantes, boutons `combat_spiked`
+attaque/force/défense. Distance : jamais d'arme de mêlée en main
+(`off_style_weapon` la retire sans arc). `equip <style>` lit le kit
+possédé (sac + porté + banque connue, `gear::owned_gear`) et va
+chercher en banque les pièces prévues qui n'y sont que là (plus la pile
+de flèches quand le carquois est vide) ; le cerveau
+(`gear_plan::unworn_upgrade`) ne compte plus un outil porté comme
+l'arme du bot.

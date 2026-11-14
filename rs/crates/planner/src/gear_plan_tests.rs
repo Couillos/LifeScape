@@ -86,3 +86,17 @@ fn replaced_pieces_are_surplus() {
     let worn = vec!["bronze_scimitar".to_string()];
     assert_eq!(unworn_upgrade(Style::Melee, &levels, &[], &owned, &worn).as_deref(), Some("mithril_scimitar"));
 }
+
+/// Live 2026-11-14 (leo_king, pia_brown) : une hache de bûcheron portée
+/// n'est pas l'arme du bot ; la masse possédée est une montée à porter.
+/// ryan_park : en distance, l'arc banqué bat la dague portée.
+#[test]
+fn a_worn_woodcutting_axe_is_no_weapon() {
+    let levels = [("attack", 54), ("defence", 43), ("strength", 54), ("ranged", 1)];
+    let owned: Vec<String> = ["steel_axe", "iron_mace", "iron_dagger"].iter().map(|name| name.to_string()).collect();
+    let worn = vec!["steel_axe".to_string()];
+    assert_eq!(unworn_upgrade(Style::Melee, &levels, &[], &owned, &worn).as_deref(), Some("iron_mace"));
+    let owned: Vec<String> = ["iron_dagger", "shortbow", "bronze_med_helm"].iter().map(|name| name.to_string()).collect();
+    let worn = vec!["iron_dagger".to_string(), "bronze_med_helm".to_string()];
+    assert_eq!(unworn_upgrade(Style::Ranged, &levels, &[], &owned, &worn).as_deref(), Some("shortbow"));
+}

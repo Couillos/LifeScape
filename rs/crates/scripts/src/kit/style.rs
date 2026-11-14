@@ -103,6 +103,9 @@ pub(crate) fn style_buttons(category: &str, skill: &str) -> Option<&'static str>
         ("weapon_scythe", "attack") => Some("combat_scythe:scythe0"),
         ("weapon_scythe", "strength") => Some("combat_scythe:scythe1"),
         ("weapon_scythe", "defence") => Some("combat_scythe:scythe3"),
+        ("weapon_spiked", "attack") => Some("combat_spiked:spiked0"),
+        ("weapon_spiked", "strength") => Some("combat_spiked:spiked1"),
+        ("weapon_spiked", "defence") => Some("combat_spiked:spiked3"),
         ("weapon_spear", "attack" | "strength") => Some("combat_spear:spear0"),
         ("weapon_spear", "defence") => Some("combat_spear:spear3"),
         ("unarmed", "attack") => Some("combat_unarmed:unarmed0"),
@@ -190,7 +193,9 @@ pub(crate) fn weapon_weight(category: &str) -> f64 {
     match category {
         "weapon_slash" => 1.0,
         "weapon_stab" => 0.9,
-        "weapon_axe" | "weapon_blunt" => 0.85,
+        // Maces (spiked) hit like blunt weapons: 0.5 ranked an iron mace
+        // under an iron dagger (live 2026-11-14, leo_king).
+        "weapon_axe" | "weapon_blunt" | "weapon_spiked" => 0.85,
         "weapon_pickaxe" => 0.7,
         "weapon_2h_sword" | "weapon_spear" => 0.6,
         _ => 0.5,
@@ -224,6 +229,7 @@ pub(crate) fn style_damage_key(category: &str, style: &str) -> Option<&'static s
         ("weapon_pickaxe", _) => Some("stab"),
         ("weapon_spear", _) => Some("stab"),
         ("weapon_spiked", "controlled") => Some("stab"),
+        ("weapon_spiked", _) => Some("crush"),
         ("weapon_polearm", "controlled") => Some("stab"),
         ("weapon_polearm", "defence") => Some("stab"),
         ("weapon_polearm", _) => Some("slash"),

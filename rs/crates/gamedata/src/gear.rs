@@ -80,7 +80,9 @@ pub fn is_magic_weapon(entry: &Wearable) -> bool {
     entry.wearpos == WEAPON && is_staff(entry)
 }
 
-fn is_tool(entry: &Wearable) -> bool {
+/// Outil de récolte porté en main (pioche, hache de bûcheron ; jamais une
+/// hache de bataille) : une arme de dernier recours.
+pub fn is_tool(entry: &Wearable) -> bool {
     entry.name.ends_with("_pickaxe") || entry.name.ends_with("_axe") && !entry.name.contains("battleaxe")
 }
 

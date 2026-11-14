@@ -109,6 +109,7 @@ pub fn candidates(style: Style) -> &'static [GearPiece] {
 fn owned_score(style: Style, wearpos: i64, owned: &[String], levels: &[(&str, i64)], quests_done: &[&str]) -> i64 {
     owned
         .iter()
+        .filter(|name| !is_tool(name))
         .filter_map(|name| lifescape_gamedata::equipment::by_name(name))
         .filter(|entry| entry.wearpos == wearpos && wieldable(entry, levels, quests_done))
         .map(|entry| score(&entry, style))
@@ -214,7 +215,9 @@ pub fn unworn_upgrade(style: Style, levels: &[(&str, i64)], quests_done: &[&str]
             continue;
         }
         let value = score(&entry, style);
-        let current = worn_entries.iter().filter(|worn| worn.wearpos == entry.wearpos).map(|worn| score(worn, style)).max().unwrap_or(0);
+        // A worn woodcutting axe or pickaxe is a tool, not the weapon
+        // (live 2026-11-14, leo_king swinging a steel axe, a mace owned).
+        let current = worn_entries.iter().filter(|worn| worn.wearpos == entry.wearpos && !is_tool(&worn.name)).map(|worn| score(worn, style)).max().unwrap_or(0);
         if value > current.max(0) && best.as_ref().is_none_or(|(at, gain, _)| priority < *at || (priority == *at && value - current > *gain)) {
             best = Some((priority, value - current, name.clone()));
         }
