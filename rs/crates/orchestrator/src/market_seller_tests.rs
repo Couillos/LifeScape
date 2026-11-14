@@ -20,10 +20,10 @@ fn demand(volume_24h: i64, bids: Vec<(i64, i64)>) -> BookView {
 #[test]
 fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
     let traded_at_one = Reference { price: 1, traded: true };
-    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, &demand(4319, vec![(2, 81)])), SaleDecision::List { qty: 4400, price: 4, floor: 4 });
-    assert_eq!(plan_sale(30_000, reserve(4), UNTRADED, None, None, &demand(0, Vec::new())), SaleDecision::List { qty: 28, price: 8, floor: 4 }, "untraded: 2 x reserve, one inventory");
-    assert!(matches!(plan_sale(30_000, None, UNTRADED, None, None, &demand(0, Vec::new())), SaleDecision::Hold(_)), "no own cost: hold, never 1 coin");
-    assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, &demand(99, Vec::new())), SaleDecision::Hold(_)));
+    assert_eq!(plan_sale(30_000, reserve(4), traded_at_one, None, None, FoundMarks::default(), &demand(4319, vec![(2, 81)])), SaleDecision::List { qty: 4400, price: 4, floor: 4 });
+    assert_eq!(plan_sale(30_000, reserve(4), UNTRADED, None, None, FoundMarks::default(), &demand(0, Vec::new())), SaleDecision::List { qty: 28, price: 8, floor: 4 }, "untraded: 2 x reserve, one inventory");
+    assert!(matches!(plan_sale(30_000, None, UNTRADED, None, None, FoundMarks::default(), &demand(0, Vec::new())), SaleDecision::Hold(_)), "no own cost: hold, never 1 coin");
+    assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, FoundMarks::default(), &demand(99, Vec::new())), SaleDecision::Hold(_)));
 }
 
 /// The anti-bug band stays (reported, unchanged): a reserve over 5x a
@@ -31,17 +31,68 @@ fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
 #[test]
 fn the_band_caps_the_opening_and_holds_over_the_reserve() {
     let traded = Reference { price: 2, traded: true };
-    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, &demand(100, Vec::new())), SaleDecision::Hold(_)), "11 > 5 x 2");
+    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, FoundMarks::default(), &demand(100, Vec::new())), SaleDecision::Hold(_)), "11 > 5 x 2");
     let fast = OwnFill { price: 12, rested_ticks: Some(10) };
-    assert_eq!(plan_sale(50, reserve(4), traded, None, Some(fast), &demand(30, Vec::new())), SaleDecision::List { qty: 30, price: 10, floor: 4 }, "13 capped at 10");
+    assert_eq!(plan_sale(50, reserve(4), traded, None, Some(fast), FoundMarks::default(), &demand(30, Vec::new())), SaleDecision::List { qty: 30, price: 10, floor: 4 }, "13 capped at 10");
 }
 
 #[test]
 fn stale_listings_are_raised_walked_or_withdrawn() {
-    assert_eq!(adoption(1, 500, Some(4), 1079), Adoption::Raise { price: 4, floor: 4 }, "ryan_park's 1-coin asks come up to the reserve");
-    assert_eq!(adoption(9, 500, Some(4), 1079), Adoption::Walk { floor: 4 });
-    assert!(matches!(adoption(1, 33_364, Some(4), 1079), Adoption::Withdraw(_)), "a dump over the lot goes back to the bank");
-    assert!(matches!(adoption(5, 10, None, 1079), Adoption::Withdraw(_)), "no own cost: held");
+    assert_eq!(adoption(1, 500, Some(4), 1079, None), Adoption::Raise { price: 4, floor: 4 }, "ryan_park's 1-coin asks come up to the reserve");
+    assert_eq!(adoption(9, 500, Some(4), 1079, None), Adoption::Walk { floor: 4 });
+    assert!(matches!(adoption(1, 33_364, Some(4), 1079, None), Adoption::Withdraw(_)), "a dump over the lot goes back to the bank");
+    assert!(matches!(adoption(5, 10, None, 1079, None), Adoption::Withdraw(_)), "no own cost: held");
+}
+
+fn found() -> Option<Reserve> {
+    Some(Reserve { coins: 1, source: CostSource::Found })
+}
+
+fn asks(asks: Vec<(i64, i64)>) -> BookView {
+    BookView { asks, ..BookView::default() }
+}
+
+/// Live frank_lane 2026-11-14: 838 bronze arrows held (reserve 12 over
+/// the 5x band of 2), 41 iron daggers (nobody traded them, asks at 18-28),
+/// fur with an empty book. Found stock lists a whole demand lot (at
+/// least an inventory, never one unit of a big stack) at the clearing
+/// price, floor 1, never above the 5x band.
+#[test]
+fn found_loot_lists_a_whole_lot_at_a_clearing_price() {
+    let arrows = Reference { price: 2, traded: true };
+    let view = BookView { asks: vec![(1, 7), (2, 14), (2, 451)], volume_24h: 332, ..BookView::default() };
+    let marks = |others_ask: Option<i64>, anchor: Option<i64>| FoundMarks { others_ask, anchor };
+    assert_eq!(plan_sale(838, found(), arrows, None, None, marks(Some(1), Some(1)), &view), SaleDecision::List { qty: 332, price: 2, floor: 1 });
+    let daggers = Reference { price: 18, traded: false };
+    assert_eq!(plan_sale(41, found(), daggers, None, None, marks(Some(18), Some(21)), &asks(vec![(18, 2), (22, 4), (28, 9)])), SaleDecision::List { qty: 28, price: 17, floor: 1 }, "an inventory, just under the cheapest ask");
+    // Fur: only its own old ask rests (131): it never anchors the lot.
+    assert_eq!(plan_sale(6, found(), Reference { price: 131, traded: false }, None, None, marks(None, Some(12)), &asks(vec![(131, 2)])), SaleDecision::List { qty: 6, price: 12, floor: 1 }, "the whole small stack at its alch value");
+    // An outlier fill never lifts the opening over the 5x band.
+    let outlier = Reference { price: 30, traded: true };
+    let fast = OwnFill { price: 600, rested_ticks: Some(5) };
+    assert_eq!(plan_sale(10, found(), outlier, None, Some(fast), FoundMarks::default(), &asks(Vec::new())), SaleDecision::List { qty: 10, price: 150, floor: 1 });
+}
+
+/// Iron dagger 1 @628 resting while 40 more sat in the bank: a listing
+/// that lists a sliver of the free stack is regrouped (withdrawn, the next
+/// pass lists a whole lot); partly sold or demand-sized lots stay.
+#[test]
+fn a_sliver_of_a_big_stack_is_regrouped() {
+    assert!(undersized(1, 1, 40, 28), "1 of 41");
+    assert!(undersized(2, 2, 5, 7), "staff: 2 of 7");
+    assert!(!undersized(26, 26, 4_677, 28), "cow hides: a demand lot already");
+    assert!(!undersized(2, 2, 0, 2), "nothing more held");
+    assert!(!undersized(28, 10, 30, 40), "partly sold: walks on");
+}
+
+/// Re-adoption after a restart: an ask above today's opening comes down
+/// to it (frank_lane's staff at 1644 against asks at 17), never under the
+/// reserve.
+#[test]
+fn stale_asks_above_the_opening_come_down() {
+    assert_eq!(adoption(1644, 2, Some(1), 28, Some(16)), Adoption::Lower { price: 16, floor: 1 });
+    assert_eq!(adoption(12, 2, Some(1), 28, Some(16)), Adoption::Walk { floor: 1 }, "under the opening: walks");
+    assert_eq!(adoption(1, 500, Some(4), 1079, Some(2)), Adoption::Raise { price: 4, floor: 4 }, "the reserve still wins");
 }
 
 #[test]

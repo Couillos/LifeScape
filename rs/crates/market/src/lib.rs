@@ -23,9 +23,11 @@ pub use guards::{check_coverage, check_price};
 pub use price::{bucketize, change_thousandths, current_price, impact_price, impact_size, median_price, vwap, Candle, LastFill, PricedFill, Reference, IMPACT_CAP, PRICE_FILLS};
 pub use trends::{compute_trend, TrendInput, TrendScores};
 pub use zip::{
-    demand_step, flip_quotes, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
+    demand_step, flip_quotes, found_open, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
     ZipQuote,
 };
 
+#[cfg(test)]
+mod found_tests;
 #[cfg(test)]
 mod outlier_tests;

@@ -1,4 +1,4 @@
-use super::{kept_gear, plan_gear, unworn_upgrade};
+use super::{kept_gear, plan_gear, spare_gear_units, unworn_upgrade};
 use lifescape_gamedata::gear::{Style, SHIELD, WEAPON};
 
 /// Expected price as the brain gives it for untraded objects: the high
@@ -99,4 +99,16 @@ fn a_worn_woodcutting_axe_is_no_weapon() {
     let owned: Vec<String> = ["iron_dagger", "shortbow", "bronze_med_helm"].iter().map(|name| name.to_string()).collect();
     let worn = vec!["iron_dagger".to_string(), "bronze_med_helm".to_string()];
     assert_eq!(unworn_upgrade(Style::Ranged, &levels, &[], &owned, &worn).as_deref(), Some("shortbow"));
+}
+
+/// Live frank_lane 2026-11-14: a worn bronze med helm kept all 88 banked
+/// copies off the market. One spare copy stays, the rest sells; a piece
+/// the graph keeps whole stays whole.
+#[test]
+fn spare_copies_of_kept_gear_sell() {
+    let stacks = vec![("bronze_med_helm".to_string(), 88), ("iron_dagger".to_string(), 41), ("black_battleaxe".to_string(), 1), ("staff".to_string(), 7)];
+    let gear = vec!["bronze_med_helm".to_string(), "black_battleaxe".to_string(), "staff".to_string()];
+    let keep = vec!["staff".to_string()];
+    let spares = spare_gear_units(&stacks, &gear, &keep);
+    assert_eq!(spares, vec![("bronze_med_helm".to_string(), 87)], "one helm stays, the lone axe stays, the kept staff stays whole");
 }

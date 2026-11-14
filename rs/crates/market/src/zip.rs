@@ -150,6 +150,32 @@ pub fn seller_open(reference: crate::price::Reference, best_bid: Option<i64>, re
     (base.max(remembered).max(reserve), reserve)
 }
 
+/// Opening ask of FOUND stock (2026-11-14: loot, drops, ground spawns:
+/// zero own cost, the fight or the walk paid nothing for it), priced to
+/// clear like a player emptying a loot bank: a traded object at its
+/// current price (impact-clamped, `current_price`) or the best bid when
+/// richer; an untraded one just under the cheapest resting ask (or into
+/// a richer bid); with an empty book at `anchor` (the object's high
+/// alchemy value, public game data: the price buyers bid gear at, see
+/// `gear_plan`) else `2 x floor`. Never under `floor` (1, or a caster's
+/// alchemy net); a fast own fill lifts the lot like `seller_open`.
+/// Returns `(price, floor)`: the walk-down (`demand_step`) stops there.
+pub fn found_open(reference: crate::price::Reference, best_bid: Option<i64>, best_ask: Option<i64>, floor: i64, anchor: Option<i64>, last_sell: Option<OwnFill>) -> (i64, i64) {
+    let floor = floor.max(1);
+    let bid = best_bid.unwrap_or(0);
+    let base = if reference.traded {
+        reference.price.max(bid)
+    } else {
+        match best_ask.filter(|ask| *ask >= 1) {
+            Some(ask) => (ask - 1).max(bid),
+            None if bid >= 1 => bid,
+            None => anchor.filter(|value| *value >= 1).unwrap_or(floor.saturating_mul(UNTRADED_OPEN_RESERVES)),
+        }
+    };
+    let remembered = last_sell.filter(OwnFill::fast).map(|fill| ceil_pct(fill.price, FILL_MEMORY_PCT)).unwrap_or(0);
+    (base.max(remembered).max(floor), floor)
+}
+
 /// Opening bid that remembers the buyer's OWN last fill on the item
 /// (2026-11-14, user rule 5): a covered ask is taken, else the bid rests
 /// at its own last fill price (the reference only when it never bought

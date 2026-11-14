@@ -200,6 +200,19 @@ pub fn kept_gear(levels: &[(&str, i64)], quests_done: &[&str], owned: &[String])
     keep
 }
 
+/// Spare copies of kept or worn wearables (2026-11-14, live frank_lane:
+/// a worn bronze med helm protected all 88 looted copies in the bank).
+/// One unworn copy of each stays (a replacement after a death), the
+/// rest is surplus `(name, qty)`; a name the plan keeps whole (`keep`:
+/// graph obtains, quest items) is not touched.
+pub fn spare_gear_units(stacks: &[(String, i64)], gear: &[String], keep: &[String]) -> Vec<(String, i64)> {
+    stacks
+        .iter()
+        .filter(|(name, qty)| *qty > 1 && gear.contains(name) && !keep.contains(name))
+        .map(|(name, qty)| (name.clone(), qty - 1))
+        .collect()
+}
+
 /// An owned piece the bot may wear that beats what it wears in that slot
 /// for `style`: bought or delivered, not worn yet.
 pub fn unworn_upgrade(style: Style, levels: &[(&str, i64)], quests_done: &[&str], owned: &[String], worn: &[String]) -> Option<String> {
