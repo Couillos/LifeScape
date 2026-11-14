@@ -170,3 +170,11 @@ poche_lumbridge_cloture | 3257,3244,0 | 3257,3242,0 | f2p | unreachable=Disconne
 # Varrock est derriere (3268,3435) n'a pas d'autre entree : poche scellee
 # (avant : plan par la porte, DoorDidNotOpen live bct5rxpg-14906).
 porte_verrouillee_varrock | 3269,3435,0 | 3268,3436,0 | f2p | unreachable=Disconnected
+# 48. moulin de Lumbridge (m49_51.jm2) : ladder 1747 (3164,3307,0), laddermiddle
+# 1748 (3164,3307,1), laddertop 1746 (3164,3307,2) ; tremie hopper_lumbridge
+# (3166,3307,2). Live 2026-11-14 : 4 bots coinces au dernier etage (3165,3306,2)
+# ("no reachable bank", banques F2P toutes au sol) ; les echelles servent dans
+# les deux sens et la banque de Draynor se rejoint depuis le haut.
+moulin_montee | 3165,3306,0 | 3165,3306,2 | f2p | reachable ; rides>=2 ; levels=0>1>2
+moulin_descente | 3165,3306,2 | 3165,3306,0 | f2p | reachable ; rides>=2 ; levels=2>1>0
+moulin_etage_banque | 3165,3306,2 | 3092,3245,0 | f2p | reachable ; uses_loc=1746 ; levels=2>1>0

@@ -42,11 +42,13 @@ pub fn reach_site(bot: &mut Bot) -> Result<bool, ScriptError> {
     if at_site(bot) {
         return Ok(false);
     }
-    let Some((x, z, _)) = bot.assigned_site else { return Ok(false) };
-    bot.log(&format!("nothing to work here, walking to the assigned site ({x},{z})"));
+    let Some((x, z, level)) = bot.assigned_site else { return Ok(false) };
+    bot.log(&format!("nothing to work here, walking to the assigned site ({x},{z},{level})"));
     bot.intend(&format!("walking to the work site at ({x},{z})"));
     let fence = if bot.allow_paid { None } else { crate::kit::bank::toll_gate_x(bot) };
-    match crate::skill_walk::walk_checked(bot, x, z, SITE_WALK_TICKS) {
+    // The site's own level, never the bot's: from the mill top (level 2)
+    // a level-0 fishing site was asked on level 2 and failed Disconnected.
+    match crate::skill_walk::walk_checked_at(bot, x, z, level, SITE_WALK_TICKS) {
         Ok(true) => Ok(true),
         Err(error) if crate::kit::survival::is_walk_abort(&error) => Err(error),
         outcome => {
@@ -85,5 +87,34 @@ mod tests {
         bot.world.x = 3296;
         bot.world.z = 3290;
         assert!(at_site(&bot), "at the rocks");
+    }
+
+    /// Live 2026-11-14 (lara_lane, george_97): stranded on the mill top
+    /// (3165,3306,2), the fishing site (3085,3230,0) was walked "on the
+    /// bot's level" and failed `Disconnected`. The walk targets the site's
+    /// level: the plan rides the ladders down and the trip only fails at
+    /// the offline socket, never on the plan.
+    #[test]
+    fn site_walk_targets_the_site_level() {
+        let (mut bot, _service) = crate::served_nav_bot("site-level");
+        bot.world.level = 2;
+        bot.world.x = 3165;
+        bot.world.z = 3306;
+        bot.world.stats.insert(3, (30, 0));
+        bot.assigned_site = Some((3085, 3230, 0));
+        let error = super::reach_site(&mut bot).expect_err("offline: the trip cannot be sent");
+        let text = error.to_string();
+        assert!(!text.contains("Disconnected") && !text.contains("NoRoute"), "planned across levels, got: {text}");
+    }
+
+    /// The bank serving an upper-floor site (the mill hopper, level 2) is
+    /// a free surface bank, never "none" (mill_grain fell back to the
+    /// bot's own pick and failed "no reachable bank").
+    #[test]
+    fn upper_floor_site_banks_on_the_surface() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.assigned_site = Some((3166, 3307, 2));
+        let bank = site_bank(&bot).expect("a surface bank for the mill");
+        assert!(!bank.members && bank.level == 0, "got {bank:?}");
     }
 }

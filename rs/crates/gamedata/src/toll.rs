@@ -20,10 +20,13 @@ pub const FREE_PASS_QUEST: &str = "prince";
 
 /// True when the bot at `from` must cross the toll fence to reach `to`
 /// (same rule the scripts apply live): the bot stands within reach of
-/// the gate, both tiles on the surface level, on opposite sides of x = 3268.
+/// the gate, the target on the surface level, on opposite sides of x = 3268.
+/// An upper floor (levels 1-3) stands over its surface tile: a bot on
+/// the Lumbridge castle floors walks down and crosses like one on the
+/// ground (never "not crossing" because it stands upstairs).
 pub fn crossing(from: (i64, i64, i64), to: (i64, i64, i64)) -> bool {
     let (gate_x, gate_z, gate_level) = GATE;
-    if from.2 != gate_level || to.2 != gate_level {
+    if !(gate_level..=3).contains(&from.2) || to.2 != gate_level {
         return false;
     }
     if (from.0 - gate_x).abs() + (from.1 - gate_z).abs() > FENCE_REACH {
@@ -47,5 +50,6 @@ mod tests {
         assert!(crossing((3290, 3180, 0), (3255, 3275, 0)), "Al Kharid to the cows crosses back");
         assert!(!crossing((3210, 3420, 0), (3294, 3287, 0)), "Varrock is out of the gate's reach");
         assert!(!crossing(lumbridge, (3294, 9687, 1)), "never across levels");
+        assert!(crossing((3212, 3223, 1), (3294, 3287, 0)), "the castle's first floor crosses like its ground floor");
     }
 }

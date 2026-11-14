@@ -100,6 +100,8 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let no_bank = spec.no_bank;
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     bot.allow_shop = spec.allow_shop;
+    // The brain's site anchors the hunt (`kit::foes::ranked_clusters`).
+    bot.assigned_site = spec.site;
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
     // PRD3 lot 6: the run fights ranged for real (gear scored for it,
@@ -115,6 +117,8 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut tally = crate::kit::survival::DeathTally::fresh();
     let auto = spots.is_empty();
     let mut state = CycleState::begin(bot, &spec);
+    let keys: Vec<&str> = queue.iter().map(|spot| spot.key).collect();
+    let mut worked = false;
     while !queue.is_empty() {
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);
@@ -148,6 +152,7 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
             other => other?,
         };
         state.add_units(total);
+        worked |= total > 0 || banked || died;
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);
         }
@@ -184,6 +189,9 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 break;
             }
         }
+    }
+    if !worked {
+        return Err(crate::kit::hunt::nothing_hunted_error(bot, "ranged", &keys));
     }
     Ok(0)
 }

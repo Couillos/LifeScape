@@ -153,6 +153,21 @@ d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
 achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
 hache, cisailles) : c'est la jambe d'obtention du brain.
 
+Étages (2026-11-14, 4-5 bots bloqués au sommet du moulin de Lumbridge
+(3165,3306,2)) : aucune banque F2P n'est à l'étage en rév. 274, donc
+`nearest_bank`/`nearest_bank_at` (`gamedata::banks::nearest_free_bank`)
+prennent une banque du même niveau si elle existe, sinon celle du sol ;
+`bank_trip` descend par les échelles du routeur. `reach_site` marche au
+NIVEAU DU SITE (`skill_walk::walk_checked_at`), jamais au niveau du bot
+(avant : (3085,3230,2) demandé depuis l'étage, `Disconnected`). Les
+combats (`melee`, `ranged`, `magic`) lisent `--site` : grappes au niveau
+du site, la plus proche du site d'abord (`kit::foes::ranked_clusters`),
+marche au niveau du site ; aucun spawn = `Failed` typé, et un run sans
+kill, sans banque ni mort échoue (`nothing_hunted_error`) au lieu d'un
+`goal_reached` à 0 tick. Le moulin (`mill_grain`) trouve trémie, levier et
+meule dans la carte servie (`static_locs_near`) : le worker ne peint aucune
+carte, `world.loc_at` seul ne voyait jamais la trémie.
+
 Postes et combat : niveau manquant = `blocked{level:...}` (plus de
 Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
 brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat
