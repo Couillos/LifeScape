@@ -87,10 +87,22 @@ pub fn touched_ids(groups: &[DealGroup], coins: u16) -> Vec<u16> {
     touched
 }
 
-/// Carried units of an object in either form (base or banknote).
+/// Carried units of an object in either form (base or banknote) that a
+/// trade may take: base units the running script holds (a quest's air
+/// talisman, `Bot::hold_in_pack`) never count.
 pub fn carried(bot: &Bot, item: u16) -> u32 {
     let note = trade_id(item);
-    pack_total(bot, item) + if note != item { pack_total(bot, note) } else { 0 }
+    free_base(bot, item) + if note != item { pack_total(bot, note) } else { 0 }
+}
+
+/// Base units of `item` in the pack a trade may offer: none while the
+/// running script holds that object.
+pub fn free_base(bot: &Bot, item: u16) -> u32 {
+    if bot.pack_holds().contains(&item) {
+        0
+    } else {
+        pack_total(bot, item)
+    }
 }
 
 /// Which groups the pack covers, walked in order: each covered group
@@ -174,10 +186,13 @@ pub fn pack_to_restore(carried: &[(u16, u32)], tools: &[u16], note_of: &dyn Fn(u
     out
 }
 
-/// Live form of `pack_to_restore` on the current pack.
+/// Live form of `pack_to_restore` on the current pack: tools and the
+/// script's held objects never leave the pack, so never come back out.
 pub fn carried_before(bot: &Bot) -> Vec<Carried> {
     let carried: Vec<(u16, u32)> = bot.backpack().1.into_iter().map(|(_, held)| held).collect();
-    pack_to_restore(&carried, &tool_ids(bot), &note_base)
+    let mut stays = tool_ids(bot);
+    stays.extend(bot.pack_holds());
+    pack_to_restore(&carried, &stays, &note_base)
 }
 
 /// Tools stay in the pack across the trip: the paused activity resumes
@@ -336,6 +351,20 @@ mod tests {
         let (groups, unknown) = group_deals(&[(9, 0, 0)], &[]);
         assert!(groups.is_empty());
         assert_eq!(unknown, vec![9]);
+    }
+
+    /// Live 2026-11-14 (bh99tw2f): a delivery paused Rune Mysteries and
+    /// banked the Duke's air talisman, which its listings then locked.
+    /// The quest holds it: it never leaves the pack, so the restore list
+    /// never names it (the bank would refuse the locked unit anyway).
+    #[test]
+    fn a_held_quest_object_never_leaves_the_pack() {
+        use super::pack_to_restore;
+        let (coins, talisman) = (995u16, 1438u16);
+        let held = lifescape_sdk::client::locks::deposit_keep(&[], &[talisman]);
+        let restore = pack_to_restore(&[(coins, 12), (talisman, 1)], &held, &|_| None);
+        assert!(restore.iter().all(|stack| stack.base != talisman), "{restore:?}");
+        assert_eq!(restore.len(), 1, "the coins come back");
     }
 
     /// Coverage walks the groups in order: a stack or a purse is never

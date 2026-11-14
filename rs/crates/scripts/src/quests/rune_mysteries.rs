@@ -75,33 +75,69 @@ fn make_room(bot: &mut Bot, keep: &[u16]) -> Result<(), ScriptError> {
     Ok(())
 }
 
+/// Quest objects the bank held when the run looked: `(object, banked,
+/// locked by the bot's open market sales)`.
+type BankedObjects = Vec<(u16, u32, u32)>;
+
 /// Quest objects a bank trip put away (live 2026-11-14, bct5rxpg: the
 /// Duke's air talisman banked at 09:16, every later round read Start
 /// and Sedridor never took it): withdrawn before the stage is read, the
-/// stage being read off the pack only.
-fn fetch_banked(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
+/// stage being read off the pack only. Counts what really landed (live
+/// 2026-11-14, bh99tw2f: "1 quest object(s) withdrawn" while the bank
+/// refused the talisman, all ten units locked by its listings).
+fn fetch_banked(bot: &mut Bot, ids: &[u16]) -> Result<BankedObjects, ScriptError> {
     if ids.iter().any(|id| solver::count(bot, *id) > 0) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     // The bank view streams only while a booth is open (a fresh session
     // reads it empty): open the nearest one, read it, withdraw there.
     bot.intend("rune mysteries: checking the bank for the quest objects");
     let bank = crate::kit::bank::nearest_bank(bot)?;
     if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
-        return Ok(());
+        return Ok(Vec::new());
     }
     bot.pump(3)?;
     let banked = bot.bank_items();
+    let mut seen: BankedObjects = Vec::new();
     let mut pulled = 0;
     for id in ids {
-        if banked.get(id).copied().unwrap_or(0) > 0 && bot.bank_withdraw(*id, 1, 50).is_ok() {
+        let in_bank = banked.get(id).copied().unwrap_or(0);
+        if in_bank == 0 {
+            continue;
+        }
+        seen.push((*id, in_bank, bot.locked(*id)));
+        let before = bot.pack_count(*id);
+        if let Err(error) = bot.bank_withdraw(*id, 1, 50) {
+            bot.log(&format!("rune mysteries: withdrawal of obj {id} failed: {error}"));
+        }
+        if bot.pack_count(*id) > before {
             pulled += 1;
         }
     }
     bot.close_modal()?;
     bot.pump(2)?;
-    bot.log(&format!("rune mysteries: {pulled} quest object(s) withdrawn from the bank"));
-    Ok(())
+    bot.log(&format!("rune mysteries: {pulled} of {} banked quest object(s) withdrawn", seen.len()));
+    Ok(seen)
+}
+
+/// Why the run has no air talisman for Sedridor, `None` while one is
+/// carried. The Duke re-issues one only while none is held anywhere
+/// (`duke_horacio.rs2`: `~obj_gettotal(air_talisman) = 0`, pack + bank +
+/// worn), so a banked unit the bank refuses dead-ends the quest.
+pub fn talisman_gap(carried: u32, banked: u32, locked: u32) -> Option<String> {
+    if carried > 0 {
+        return None;
+    }
+    let why = if banked == 0 {
+        "none banked either, and the Duke handed none".to_string()
+    } else if locked >= banked {
+        format!("{banked} banked, all locked by open market sales")
+    } else {
+        format!("{banked} banked ({locked} locked by open market sales) but the withdrawal failed")
+    };
+    Some(format!(
+        "rune mysteries: no air talisman for Sedridor: {why}; the Duke re-issues one only when none is held in pack, bank or worn"
+    ))
 }
 
 pub(crate) fn solve(bot: &mut Bot) -> Result<(), ScriptError> {
@@ -110,7 +146,11 @@ pub(crate) fn solve(bot: &mut Bot) -> Result<(), ScriptError> {
     let package = solver::obj_id("research_package")?;
     let talisman = solver::obj_id("air_talisman")?;
     make_room(bot, &[notes, package, talisman])?;
-    fetch_banked(bot, &[notes, package, talisman])?;
+    let banked = fetch_banked(bot, &[notes, package, talisman])?;
+    let (talisman_banked, talisman_locked) = banked.iter().find(|(id, _, _)| *id == talisman).map(|(_, held, locked)| (*held, *locked)).unwrap_or((0, 0));
+    // No early verdict on a banked-but-locked talisman: past the handover
+    // (Aubury holding the package) the quest needs none. The opening
+    // round below tells.
     for round in 0..ROUNDS {
         let stage = stage_of(solver::count(bot, notes), solver::count(bot, package));
         bot.log(&format!("rune mysteries round {round}: {stage:?}"));
@@ -127,15 +167,23 @@ pub(crate) fn solve(bot: &mut Bot) -> Result<(), ScriptError> {
                 if round == 0 {
                     solver::talk_like(bot, "duke_of_lumbridge", &DUKE_ANSWERS, None, TALK_TICKS)?;
                 }
+                let carried = bot.pack_count(talisman);
                 solver::talk_like(bot, "head_wizard", &SEDRIDOR_ANSWERS, None, TALK_TICKS)?;
                 if stage_of(solver::count(bot, notes), solver::count(bot, package)) == Stage::Start {
                     solver::talk_like(bot, "aubury", &AUBURY_ANSWERS, None, TALK_TICKS)?;
+                }
+                // The opening round moved nothing and no talisman went to
+                // Sedridor: later rounds would repeat the same refusal.
+                if round == 0 && stage_of(solver::count(bot, notes), solver::count(bot, package)) == Stage::Start {
+                    if let Some(cause) = talisman_gap(carried, talisman_banked, talisman_locked) {
+                        return Err(ScriptError::Failed(cause));
+                    }
                 }
             }
         }
     }
     Err(ScriptError::Failed(format!(
-        "rune mysteries: no notes after {ROUNDS} rounds at {:?} (notes {}, package {}, talisman {})",
+        "rune mysteries: no notes after {ROUNDS} rounds at {:?} (notes {}, package {}, talisman {} carried, {talisman_banked} banked, {talisman_locked} locked by market sales)",
         bot.position(),
         solver::count(bot, notes),
         solver::count(bot, package),
@@ -145,7 +193,7 @@ pub(crate) fn solve(bot: &mut Bot) -> Result<(), ScriptError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stage_of, Stage, AUBURY_ANSWERS, DUKE_ANSWERS, SEDRIDOR_ANSWERS};
+    use super::{stage_of, talisman_gap, Stage, AUBURY_ANSWERS, DUKE_ANSWERS, SEDRIDOR_ANSWERS};
 
     /// Server option texts (content scripts, verbatim): each answer list
     /// picks the quest line and never the shop.
@@ -194,5 +242,18 @@ mod tests {
         for name in ["research_notes", "research_package", "air_talisman"] {
             super::solver::obj_id(name).unwrap_or_else(|_| panic!("{name} in dumps"));
         }
+    }
+
+    /// Live 2026-11-14 (bh99tw2f): ten talismans banked, all ten locked
+    /// by its listings. The error names the object and where it is, never
+    /// "no notes after 4 rounds".
+    #[test]
+    fn a_missing_talisman_names_its_cause() {
+        let locked = talisman_gap(0, 10, 10).expect("no talisman carried");
+        assert!(locked.contains("10 banked, all locked by open market sales"), "{locked}");
+        assert!(locked.contains("air talisman"));
+        assert!(talisman_gap(0, 0, 0).expect("none").contains("the Duke handed none"));
+        assert!(talisman_gap(0, 3, 1).expect("refused").contains("withdrawal failed"));
+        assert_eq!(talisman_gap(1, 10, 10), None, "carried: Sedridor takes it");
     }
 }

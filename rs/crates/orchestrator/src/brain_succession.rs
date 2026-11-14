@@ -73,6 +73,15 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
         class: "graph stuck".to_string(),
         last_error: "no abandoned node found".to_string(),
     });
+    // A quest that failed for good cools as a quest, never as the skills
+    // of the goal waiting on it (user rule 2026-11-14: Rune Mysteries
+    // banned mining on bh99tw2f): its nodes wait out the cooldown
+    // (`brain_quest_gate::cooled_waits`), the goal is redrawn.
+    if let Some(quest) = lifescape_planner::node_quest(life, &cause.node) {
+        crate::logln!("brain {}: quest {quest} cooling {SKILL_BAN_TICKS} ticks, no skill banned: {}", life.account, cause.describe());
+        push_history(life, "goal", &ban_entry(&lifescape_planner::quest_ban_key(&quest), SKILL_BAN_TICKS, &cause));
+        return;
+    }
     // The failed item takes its dependency subtree down (user decision
     // 2026-11-13): every skill that needs it, not only the goal's (a
     // failed bronze axe bans woodcutting and the firemaking that burns
@@ -383,5 +392,29 @@ mod tests {
         assert_eq!(lifted, lifescape_planner::TRAINABLE.len(), "one noted expiry per skill");
         let (again, changed) = redraw(&mut life, &live(&[]));
         assert!(again.is_none() && !changed, "an open goal is never redrawn");
+    }
+
+    /// Live 2026-11-14 (bh99tw2f): Rune Mysteries failed three times and
+    /// banned mining (the essence quota's skill). A failed quest bans no
+    /// skill: the quest itself cools, its next node waits it out.
+    #[test]
+    fn a_stuck_quest_cools_and_bans_no_skill() {
+        let mut life = life_with(GoalKind::Produce { item: "blankrune".to_string(), count: 200 });
+        let mut quota = Node::new("n415", NodeKind::ObtainItems { item: "blankrune".to_string(), count: 200 }, vec!["n416".to_string()], 200);
+        quota.method = Some("gather:mining/blankrune".to_string());
+        quota.status = NodeStatus::Abandoned;
+        quota.last_error = "dependency n416 abandoned".to_string();
+        let mut quest = Node::new("n416", NodeKind::CompleteQuest { quest: "runemysteries".to_string() }, Vec::new(), 1);
+        quest.status = NodeStatus::Abandoned;
+        quest.failures = 3;
+        quest.last_error = "Failed: rune mysteries: no air talisman".to_string();
+        life.nodes = vec![quota, quest];
+        life.history.push(HistoryEntry { node: "n416".to_string(), started: 0, ended: 0, outcome: "abandoned".to_string() });
+        super::close_goal_history(&mut life, true);
+        let fresh = |_: i64| 0u64;
+        let banned = lifescape_planner::banned_skills(&life.history, &fresh);
+        assert_eq!(banned, vec!["quest:runemysteries".to_string()], "no skill, the quest cools");
+        assert_eq!(lifescape_planner::cooled_quests(&life.history, &fresh), vec!["runemysteries".to_string()]);
+        assert!(lifescape_planner::goal_closed(&life.history), "the goal is closed once");
     }
 }

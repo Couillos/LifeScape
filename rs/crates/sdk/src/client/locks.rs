@@ -21,11 +21,25 @@ pub struct Locks {
     pub coins: u32,
     /// Set by the trade procedure while it withdraws its own lots.
     pub trading: bool,
+    /// Objects the running script keeps in its pack (a quest's talisman,
+    /// package, notes and brought items): no deposit-all banks them and
+    /// no market handover trades them (live 2026-11-14, bh99tw2f: a
+    /// delivery mid-quest banked the Duke's air talisman). Set by the
+    /// script, never by the daemon's pushes.
+    pub held: Vec<u16>,
 }
 
 /// Shared between the bot and its session, which receives the daemon's
 /// pushes while a script holds the bot.
 pub type SharedLocks = Arc<Mutex<Locks>>;
+
+/// What a deposit-all leaves in the pack: the caller's keep list plus
+/// the script's held objects. Pure, locked by test.
+pub fn deposit_keep(keep: &[u16], held: &[u16]) -> Vec<u16> {
+    let mut out = keep.to_vec();
+    out.extend(held.iter().copied().filter(|object| !keep.contains(object)));
+    out
+}
 
 /// Units of an object a withdrawal may take: what the bank holds beyond
 /// the locked part. Pure, so the rule is locked by test.
@@ -65,6 +79,18 @@ impl Bot {
         }
     }
 
+    /// Keeps `objects` in the pack for the running script (empty: none).
+    pub fn hold_in_pack(&self, objects: &[u16]) {
+        if let Ok(mut locks) = self.locks.lock() {
+            locks.held = objects.to_vec();
+        }
+    }
+
+    /// Objects the running script keeps in its pack.
+    pub fn pack_holds(&self) -> Vec<u16> {
+        self.locks.lock().map(|locks| locks.held.clone()).unwrap_or_default()
+    }
+
     /// Replaces the pushed locks (daemon side), keeping the trade flag.
     pub fn replace_locks(shared: &SharedLocks, items: HashMap<u16, u32>, coins: u32) {
         if let Ok(mut locks) = shared.lock() {
@@ -76,7 +102,7 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::{withdraw_cap, Bot, COINS};
+    use super::{deposit_keep, withdraw_cap, Bot, COINS};
     use std::collections::HashMap;
 
     #[test]
@@ -98,5 +124,19 @@ mod tests {
         assert_eq!(bot.withdrawable(COINS, 50), 50);
         bot.set_trading(false);
         assert_eq!(bot.withdrawable(COINS, 50), 10);
+    }
+
+    /// A held quest object survives every deposit-all; the daemon's lock
+    /// pushes never clear it.
+    #[test]
+    fn held_objects_stay_in_the_pack() {
+        let bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.hold_in_pack(&[1438, 290]);
+        Bot::replace_locks(&bot.locks, HashMap::from([(1438u16, 9u32)]), 0);
+        assert_eq!(bot.pack_holds(), vec![1438, 290], "pushes keep the holds");
+        assert_eq!(deposit_keep(&[1265], &bot.pack_holds()), vec![1265, 1438, 290]);
+        assert_eq!(deposit_keep(&[1438], &[1438]), vec![1438], "no duplicate");
+        bot.hold_in_pack(&[]);
+        assert!(bot.pack_holds().is_empty());
     }
 }

@@ -97,8 +97,14 @@ pub fn dependents(life: &Life, root: &str) -> Vec<usize> {
 
 /// Every skill the failed `root` takes down: the skills of the root and
 /// of each node waiting on it, plus the skills whose gear the root's
-/// item is. Sorted, unique.
+/// item is. Sorted, unique. A failed quest takes no skill down (user
+/// rule 2026-11-14: Rune Mysteries failing banned the mining of the
+/// essence quota waiting on it): the quest cools as a quest
+/// (`quest_hold::quest_ban_key`).
 pub fn banned_scope(life: &Life, root: &str) -> Vec<String> {
+    if crate::quest_hold::node_quest(life, root).is_some() {
+        return Vec::new();
+    }
     let mut out: BTreeSet<String> = BTreeSet::new();
     for position in dependents(life, root) {
         let node = &life.nodes[position];
