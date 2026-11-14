@@ -75,6 +75,6 @@ pub use model::{
 };
 pub use replan::{need_count, ReplanCause, draw_engagement_ticks, needs_replan, replan_node, INPUT_BATCH};
 pub use space::{
-    Fallback, ItemEcon, cleanup_needed, cleanup_stalled, d17_order, fallback_for, iron_may_use, launch_allowed,
-    market_leg, needs_cleanup, reserve_floor, triage_bank, BANK_TYPE_LIMIT, FOOD_KEEP_MIN,
+    Fallback, ItemEcon, cleanup_cooling, cleanup_needed, cleanup_stalled, d17_order, fallback_for, iron_may_use, launch_allowed,
+    market_leg, needs_cleanup, reserve_floor, triage_bank, BANK_TYPE_LIMIT, CLEANUP_RETRY_SECS, CLEANUP_SHORT_TAG, FOOD_KEEP_MIN,
 };

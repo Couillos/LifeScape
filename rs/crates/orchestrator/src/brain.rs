@@ -299,6 +299,16 @@ pub fn cleanup_keep(life: &Life) -> Vec<String> {
 /// full bank needs its janitor even when everything else is done.
 /// Returns true when a node was inserted.
 pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
+    maybe_insert_cleanup_at(life, bank_type_count, unix_now())
+}
+
+/// `maybe_insert_cleanup` at `now` (Unix seconds): a janitor pass that
+/// ended short (`CLEANUP_SHORT_TAG`) holds the next insert for
+/// `CLEANUP_RETRY_SECS`, never a tight relaunch loop.
+pub fn maybe_insert_cleanup_at(life: &mut Life, bank_type_count: usize, now: i64) -> bool {
+    if lifescape_planner::cleanup_cooling(&life.history, now) {
+        return false;
+    }
     let open = life.nodes.iter().any(|node| {
         matches!(node.kind, NodeKind::SpaceCleanup)
             && !matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned)
@@ -319,8 +329,12 @@ pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
     true
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
+}
+
 pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    let now = unix_now();
     life.history.push(HistoryEntry { node: node.to_string(), started: now, ended: now, outcome: outcome.to_string() });
 }
 
@@ -459,7 +473,7 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, parse_goal, MAX_IRON};
+    use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, maybe_insert_cleanup_at, parse_goal, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
 
     #[test]
@@ -611,6 +625,18 @@ mod tests {
             stalled.nodes.push(abandoned);
         }
         assert!(!maybe_insert_cleanup(&mut stalled, 60), "two abandoned in a row stop the loop");
+    }
+
+    /// Live bdr53jee 2026-11-14: a janitor done with 56 types left was
+    /// followed by a fresh one 7 s later, fifteen times. The short pass
+    /// holds inserts for `CLEANUP_RETRY_SECS`, then the next one runs.
+    #[test]
+    fn a_short_janitor_pass_backs_off() {
+        let mut life = terminal_life();
+        life.history.push(lifescape_planner::HistoryEntry { node: "n2".to_string(), started: 1000, ended: 1000, outcome: lifescape_planner::CLEANUP_SHORT_TAG.to_string() });
+        assert!(!maybe_insert_cleanup_at(&mut life, 56, 1007), "seven seconds later: no fresh janitor");
+        assert_eq!(life.nodes.len(), 1, "life untouched");
+        assert!(maybe_insert_cleanup_at(&mut life, 56, 1000 + lifescape_planner::CLEANUP_RETRY_SECS), "the window over: the next pass runs");
     }
 
     /// P3.6 integration: every family method the planner emits names a

@@ -105,6 +105,18 @@ pub(crate) fn xp_toward(report: &Value, kind: &NodeKind) -> i64 {
         .unwrap_or(0)
 }
 
+/// History outcome of a node folded done: a janitor pass that exits on
+/// its budget (`market cleanup` exits so only while the bank is still at
+/// or past the limit) is short, and holds the next insert back
+/// (`space::cleanup_cooling`); everything else reached its goal.
+pub(crate) fn done_outcome(kind: &NodeKind, stop: &str) -> &'static str {
+    if matches!(kind, NodeKind::SpaceCleanup) && stop != "goal_reached" {
+        lifescape_planner::CLEANUP_SHORT_TAG
+    } else {
+        "goal_reached"
+    }
+}
+
 /// Decide from the stop, the typed error, missing items, and what the
 /// goal check says (`goal_met`, `market_pending`, `progressed`: the run
 /// earned XP toward the climb or items toward the obtain).
@@ -234,7 +246,7 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
             }
             let proof = life.nodes[index].progress_target.max(life.nodes[index].progress_current);
             complete_node(&mut life, index, proof);
-            push_history(&mut life, &id, "goal_reached");
+            push_history(&mut life, &id, done_outcome(&kind, &stop));
         }
         Verdict::AwaitFill => {
             // Stays active (the lock holds) until the holdings check in
@@ -313,6 +325,18 @@ mod tests {
         assert!(matches!(verdict("failed", typed("Sdk", "sdk: travel failure NoRoute seg=None"), &[], false, false, false), Verdict::Travel(_)));
         assert!(matches!(verdict("failed", None, &["died at (0,1,2)".to_string()], false, false, false), Verdict::Failure(text) if text == "died"));
         assert!(matches!(verdict("failed", None, &[], false, false, false), Verdict::Failure(_)), "an untyped failure still counts");
+    }
+
+    /// Live bdr53jee 2026-11-14: `market cleanup` left 56 types and exited
+    /// on its budget; the pass is short (cools the next insert down), a
+    /// drained one reached its goal, other nodes never read short.
+    #[test]
+    fn a_janitor_budget_exit_is_a_short_pass() {
+        use super::done_outcome;
+        use lifescape_planner::NodeKind;
+        assert_eq!(done_outcome(&NodeKind::SpaceCleanup, "budget_exhausted"), lifescape_planner::CLEANUP_SHORT_TAG);
+        assert_eq!(done_outcome(&NodeKind::SpaceCleanup, "goal_reached"), "goal_reached");
+        assert_eq!(done_outcome(&NodeKind::HaveCoins { amount: 10 }, "budget_exhausted"), "goal_reached");
     }
 
     #[test]

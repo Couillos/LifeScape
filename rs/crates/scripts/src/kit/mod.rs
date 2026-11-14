@@ -17,7 +17,8 @@
 //! (A-on-B transformation), `withdraw` (bank withdrawals, walking to a
 //! far bank for known banked items), `spell_load` (spell casts stocked
 //! from pack + known bank, staff counted), `fireline` (legal fire lines),
-//! `uniform` (guild uniform worn before the door, `--wear`).
+//! `uniform` (guild uniform worn before the door, `--wear`), `janitor`
+//! (bank cleanup budget, chunks, whole-stack drops).
 
 #![forbid(unsafe_code)]
 
@@ -34,6 +35,7 @@ pub mod fish_gear;
 pub mod foes;
 pub mod gear;
 pub mod hunt;
+pub mod janitor;
 pub mod ladder;
 pub mod harvest;
 pub mod load;

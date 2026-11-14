@@ -565,14 +565,23 @@ valeur totale croissante, ordres annulés). Le cerveau insère le nœud
 de 6000 ticks. Le déclencheur précède le test de graphe terminal (une
 banque pleine se nettoie même graphe fini) ; l'arrêt sur deux abandons
 consécutifs borne les pannes persistantes sans bloquer les nettoyages
-sains. Le repli `await_fill` persiste son `done` (sinon l'obtention
+sains. Une passe qui sort sur budget avec la banque encore ≥ 55 types
+est close `done` mais notée `cleanup_short` (`brain_fold::done_outcome`) :
+aucun nouveau concierge pendant `CLEANUP_RETRY_SECS` = 900 s
+(`space::cleanup_cooling`), jamais une relance toutes les 7 s (live
+bdr53jee 2026-11-14 : quinze passes en deux minutes à 56 types). Le repli `await_fill` persiste son `done` (sinon l'obtention
 ferme ne se termine jamais). L'activité worker (`activities/market_cleanup.rs`, sous le
 plafond 200) : marché pour le surplus échangeable (lot et prix du
 daemon, `seller_quote` : réserve = coût propre du bot, voir
 `docs/economy.md` § Réserve vendeur ; sans coût connu, rien n'est
 listé), magasin
-général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
-la passe suivante, D12). Jambes alchimie décidées mais non exécutées
+général, jet du reste, D17 jusqu'à repasser sous la limite : le surplus
+que le carnet refuse (sans coût propre connu, hors bande) toujours — il
+ne se vend jamais, seul son jet libère la case ; il n'est plus retiré de
+la banque pour rien (il bouchait le sac et affamait les lots suivants) —
+et le stock listé quand rien de neuf n'a été listé (le non-listé reliste
+à la passe suivante, D12). Une pile non notée plus grosse qu'un sac part
+sac après sac. Jambes alchimie décidées mais non exécutées
 (pas de script de magie sur le socle : repli magasin, log).
 
 ## L10 : gate combat du cerveau
