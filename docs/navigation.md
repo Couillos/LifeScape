@@ -306,6 +306,26 @@ officier des douanes (voyage, fouille, « Ok. ») → (3032,3217,1),
 passerelle 2084 → (3029,3217,0), 30 pièces prises à chaque traversée ;
 l'exécuteur SDK lui-même attend un déploiement pour son essai live.
 
+## Péage d'Al Kharid : côtés par connexité (2026-11-14)
+
+`nav/src/toll_side.rs` (pur) : `flood` remplit à pied un niveau dans une
+fenêtre (pas serveur, portes ordinaires ouvertes, portes à péage et
+portes bloquées à la main fermées, exigences ignorées : un remplissage
+optimiste resté séparé prouve la séparation). `derive_region` part des
+deux cases de la porte (3268,3227) / (3267,3227) dans la fenêtre
+x 2880-3400, z 3100-…, et monte le plafond nord par dichotomie tant que
+les deux côtés restent disjoints : la clôture s'arrête à z 3329 (au-delà,
+(3267-3270, 3330) relie les deux côtés à pied : le détour gratuit par
+le nord, ~300 cases de Lumbridge à la banque d'Al Kharid). Les cases non
+marchables (eau d'un banc, rochers, arbres) prennent le côté de leurs
+voisines marchables les plus proches (anneau Chebyshev ≤ 3, majorité,
+égalité = aucun côté). Le côté est sérialisé dans
+`gamedata/data/toll_region.json` (test d'or `tests/toll_region.rs`,
+réécriture `LIFESCAPE_BLESS_TOLL_REGION=1`), lu par `gamedata::toll` :
+cerveau et scripts testent la même région, jamais x = 3268 (la clôture
+passe à x 3266 vers z 3240, à x 3270 en haut ; la rive sud d'Al Kharid
+descend à x 3259).
+
 ## Danger et destinations substituées (2026-11-12)
 
 - `NavOptions::danger` : carrés `(x, z, niveau, rayon)` où un PNJ agressif

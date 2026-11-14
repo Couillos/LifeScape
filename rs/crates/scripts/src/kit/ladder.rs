@@ -72,7 +72,7 @@ pub fn holdings(bot: &mut Bot) -> Holdings {
     let key_id = crate::kit::pack::obj_id(bot, BRASS_KEY).ok();
     let coins = count_of(&pack, coins_id) + count_of(&bank, coins_id);
     let brass_key = count_of(&pack, key_id) + count_of(&bank, key_id) > 0;
-    let east_of_toll = crate::kit::bank::toll_gate_x(bot).is_some_and(|line| bot.world.x >= line);
+    let east_of_toll = crate::kit::bank::toll_gate_x(bot).is_some() && lifescape_gamedata::toll::behind(i64::from(bot.world.x), i64::from(bot.world.z), i64::from(bot.world.level));
     holdings_from(food_in(bot, pack.iter().copied()), food_in(bot, bank.iter().copied()), coins, brass_key, east_of_toll)
 }
 

@@ -279,7 +279,18 @@ Péage d'Al Kharid (décision utilisateur 2026-11-13, `gamedata::toll`,
 serveur `border_gate.rs2` : 10 pièces prises dans le SAC, dans les deux
 sens, gratuit après Prince Ali Rescue). Le choix de site
 (`combat::pick_site_paid`) suit la règle des scripts (bot à ≤ 150 cases de
-la porte (3268,3227), cible de l'autre côté de x = 3268) : un site du
+la porte (3268,3227), cible de l'autre côté de la clôture,
+`gamedata::toll::crossing`) : le côté est une RÉGION dérivée de la
+connexité de la carte (`gamedata/data/toll_region.json`, voir
+`docs/navigation.md` § Péage), jamais la droite x = 3268 (la clôture
+zigzague, la côte sud d'Al Kharid descend à x 3259 : live bd23dqpq
+2026-11-14, banc (3267,3148) lancé sans `toll`, NoRoute, pêche bannie).
+Trois classes : derrière le péage, côté gratuit (reste de la fenêtre au
+sud du haut de la clôture, z ≤ 3329 : Lumbridge, Draynor, Port Sarim),
+terrain ouvert au-delà (Varrock, Falador : détour gratuit par le nord,
+jamais « de l'autre côté ») ; scripts (`kit::bans::across_toll`,
+`same_side`, `same_flank_clusters`, banque la plus proche, passage de la
+porte) et cerveau lisent la même région. Un site du
 même côté d'abord (or de Rimmington, pas d'Al Kharid, depuis Lumbridge —
 sara_miller) ; sinon un site de l'autre côté seulement si le péage est
 budgété (bourse ≥ 10 ou quête faite) ⇒ `node.toll`, lancement avec

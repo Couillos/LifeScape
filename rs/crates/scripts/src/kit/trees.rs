@@ -137,7 +137,7 @@ fn nearest_hop_spot(
         {
             continue;
         }
-        if across_toll(bot.world.x, spot_x, fence) {
+        if across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
             *saw_paid_only = true;
             continue;
         }
@@ -209,7 +209,7 @@ pub(crate) fn pick_tree_spot(
             {
                 continue;
             }
-            if across_toll(bot.world.x, spot_x, fence) {
+            if across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
                 saw_paid_only = true;
                 continue;
             }
@@ -332,7 +332,7 @@ pub(crate) fn pick_tree_spot(
                     } else {
                         "gone".to_string()
                     }
-                } else if across_toll(bot.world.x, spot_x, fence) {
+                } else if across_toll((bot.world.x, bot.world.z), (spot_x, spot_z), fence) {
                     "toll".to_string()
                 } else if wide_inside.as_ref().is_some_and(|verdicts| !verdicts[index]) {
                     "f2p".to_string()
@@ -637,11 +637,11 @@ mod tests {
         let (mut bot, _service) = served_spot_bot(3275, 3227, "spot-fence-line");
         bot.allow_paid = false;
         assert_eq!(toll_gate_x(&mut bot), Some(3268), "gate line from the service");
-        assert!(same_side(3268, 3275, 3300), "east flank together");
-        assert!(!same_side(3268, 3275, 3249), "across never targets");
-        assert!(across_toll(3275, 3249, Some(3268)), "west spot is across");
-        assert!(!across_toll(3275, 3300, Some(3268)), "east spot is same side");
-        assert!(!across_toll(3275, 3249, None), "no fence means no filtering");
+        assert!(same_side((3275, 3227), (3300, 3290)), "east flank together");
+        assert!(!same_side((3275, 3227), (3249, 3201)), "across never targets");
+        assert!(across_toll((3275, 3227), (3249, 3201), Some(3268)), "west spot is across");
+        assert!(!across_toll((3275, 3227), (3300, 3290), Some(3268)), "east spot is same side");
+        assert!(!across_toll((3275, 3227), (3249, 3201), None), "no fence means no filtering");
         // No fence near Draynor: the getter stays quiet there.
         let (mut draynor, _service) = served_spot_bot(3091, 3242, "spot-fence-far");
         draynor.allow_paid = false;
