@@ -163,6 +163,7 @@ pub mod heartbeat_flows;
 pub mod session_log;
 pub mod log_rotate;
 pub mod brain_tools;
+pub mod brain_tool_shop;
 pub mod store_queue;
 pub mod daemon_pool;
 pub mod worker_owner;

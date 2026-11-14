@@ -18,6 +18,11 @@
 //! (`brain_gear::free_coins`: coins minus the bot's other resting buys).
 //! A resting wish bid keeps its walk (`market_reprice::keep_bid`): only
 //! its ceiling moves.
+//!
+//! Since 2026-11-14 a tool only an NPC shop sells (every upgrade pickaxe:
+//! Nurmof, D-A) is never bid (`biddable`): `brain_tool_shop` files a
+//! `shop:buy` gear step for it and cancels the old bids. Smithable axes
+//! keep their market bid.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -143,6 +148,13 @@ pub fn wish_ceiling(wish: &Wish, coins: i64, gear_wishes: usize) -> i64 {
     }
 }
 
+/// A wish the market may fill: tradeable, and not a tool only an NPC
+/// shop sells (user 2026-11-14: 185 pickaxe bids, never filled; those
+/// are bought at the shop, `brain_tool_shop`).
+pub fn biddable(item: &str, tradeable: impl Fn(&str) -> bool) -> bool {
+    tradeable(item) && !crate::brain_tool_shop::merchant_tool(item)
+}
+
 fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
     static TABLE: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -165,7 +177,7 @@ pub fn maybe_bid_wishes(job: &Job, life: &Life) -> usize {
     }
     let Some(service) = crate::market_service::shared() else { return 0 };
     let wishes = wishlist(job, life);
-    let top: Vec<Wish> = wishes.into_iter().filter(|wish| crate::brain_sales::tradeable(&wish.item)).take(WISH_BIDS).collect();
+    let top: Vec<Wish> = wishes.into_iter().filter(|wish| biddable(&wish.item, crate::brain_sales::tradeable)).take(WISH_BIDS).collect();
     let gear_wishes = top.iter().filter(|wish| !is_tool_wish(wish)).count();
     let mut placed = 0;
     for wish in &top {
@@ -206,6 +218,18 @@ mod tests {
         assert!(!names.iter().any(|name| name.ends_with("_axe") && !name.contains("battle")), "no axe owned: no axe wish");
         let geared: Vec<String> = list.iter().map(|wish| wish.item.clone()).chain(owned.clone()).collect();
         assert!(wishes(Style::Melee, &levels, &geared, &["pickaxe", "axe"]).is_empty(), "owning the set ends the wishes");
+    }
+
+    /// User 2026-11-14: pickaxes (shop only) never rest as market bids;
+    /// smithable axes still do.
+    #[test]
+    fn merchant_tools_are_never_bid() {
+        use super::biddable;
+        let any = |_: &str| true;
+        assert!(!biddable("mithril_pickaxe", any));
+        assert!(!biddable("steel_pickaxe", any));
+        assert!(biddable("steel_axe", any));
+        assert!(!biddable("steel_axe", |_: &str| false), "untradeable never bids");
     }
 
     /// Wish ceilings are wallet shares: they rise as coins come in.

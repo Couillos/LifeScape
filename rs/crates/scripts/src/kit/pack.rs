@@ -25,18 +25,10 @@ pub fn obj_price(name: &str) -> i64 {
 }
 
 /// Cheapest NPC-shop purchase price at base stock, the server formula
-/// (`shop.rs2` `calc_shop_value`: cost × max(100, sell multiplier) /
-/// 1000). `None` when no keeper stocks it: nothing to buy, never a
-/// guessed price. Understocked shops charge more; the buy itself still
-/// checks the coins the trade asks.
+/// (`gamedata::obtain::merchant_price`). `None` when no keeper stocks
+/// it: nothing to buy, never a guessed price.
 pub fn shop_price(name: &str) -> Option<i64> {
-    let base = obj_price(name);
-    knowledge::shops::all_shops()
-        .into_iter()
-        .filter(|shop| shop.members != Some(true) && shop.stocks.iter().any(|stock| stock.obj == name))
-        .flat_map(|shop| shop.keepers.into_iter().map(|keeper| keeper.sell_multiplier.unwrap_or(1000)))
-        .map(|multiplier| (base * multiplier.max(100) / 1000).max(1))
-        .min()
+    knowledge::obtain::merchant_price(name)
 }
 
 /// Display name for logs, empty when the tables do not know the id.

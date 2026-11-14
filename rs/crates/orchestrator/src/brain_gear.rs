@@ -22,7 +22,9 @@
 //! - bids on wearables the plan no longer wants are cancelled (a slot
 //!   upgraded past it, a tier the budget dropped).
 //!
-//! Tools stay with the wishlist (`brain_wishlist`).
+//! Tools stay with the wishlist (`brain_wishlist`), except those only an
+//! NPC shop sells: `brain_tool_shop` files them as steps through
+//! `file_step` (same cooldown, same no-ban rule).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -72,7 +74,7 @@ pub(crate) fn note_withdrawn(account: &str, item: &str) {
     table.insert((account.to_string(), item.to_string()), wall_now());
 }
 
-fn recently_withdrawn(account: &str, item: &str, now: f64) -> bool {
+pub(crate) fn recently_withdrawn(account: &str, item: &str, now: f64) -> bool {
     let table = last_withdrawn().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     table.get(&(account.to_string(), item.to_string())).is_some_and(|last| now - last < WITHDRAWN_RETRY_SECS)
 }
@@ -93,7 +95,7 @@ pub(crate) fn obj_id(item: &str) -> Option<i64> {
 }
 
 /// Owned debug names (pack, bank, worn) and worn names.
-fn holdings(job: &Job) -> (Vec<String>, Vec<String>) {
+pub(crate) fn holdings(job: &Job) -> (Vec<String>, Vec<String>) {
     let worn = crate::brain_plan::worn_names(job);
     let mut owned: Vec<String> = crate::brain_plan::live_stacks(job).into_iter().map(|(name, _)| name).collect();
     owned.extend(worn.iter().cloned());
@@ -121,7 +123,7 @@ fn gear_wearable(name: &str) -> bool {
     !tool && lifescape_gamedata::equipment::by_name(name).is_some()
 }
 
-fn name_of(item_id: i64) -> Option<String> {
+pub(crate) fn name_of(item_id: i64) -> Option<String> {
     lifescape_gamedata::obj_by_id(usize::try_from(item_id).ok()?).and_then(|obj| obj.name).map(str::to_string)
 }
 
@@ -272,7 +274,7 @@ fn withdraw_dead_steps_logged(job: &Job, life: &mut Life) -> bool {
     true
 }
 
-fn file_step(job: &Job, life: &mut Life, item: Option<&str>, style: Style, why: &str) {
+pub(crate) fn file_step(job: &Job, life: &mut Life, item: Option<&str>, style: Style, why: &str) {
     let ids = lifescape_planner::insert_gear_step(life, item, style_name(style));
     crate::logln!("brain {}: gear step {} ({why}): {}", job.account, item.unwrap_or("equip"), ids.join(", "));
     for id in &ids {

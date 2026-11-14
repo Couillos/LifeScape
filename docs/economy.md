@@ -744,6 +744,24 @@ passe par compte toutes les 60 s, tout style de but, jamais Iron) :
   pièces remplacées sont du surplus (vente par défaut, ou alchimie d'un
   lanceur). La liste d'envies (`brain_wishlist`) ne garde que les outils.
 
+## Outils marchands : pioches chez Nurmof (2026-11-14)
+
+Constat live : personne au-delà d'une pioche de bronze ; 185 offres
+« wish … pickaxe » jamais remplies (aucune recette F2P ne forge de pioche
+en rev 274, aucun monstre F2P n'en lâche : seul Nurmof, `pickaxeshop`,
+Dwarven Mine, vend fer → rune). Règle (`brain_tool_shop.rs`, passe de 60 s,
+Iron compris) : pour une famille que le travail du bot exige
+(`brain_tools::work_needs`, même prédicat que la garde des ventes), la
+meilleure pioche marchande (`merchant_route`) que son niveau ouvre, au-dessus
+de la meilleure utilisable qu'il possède, dont le prix boutique
+(`merchant_price`, formule serveur) ≤ 25 % (`TOOL_SHARE_PCT`) du portefeuille
+libre → pas d'équipement `shop:buy` (`file_step` : un pas à la fois, cooldown
+`WITHDRAWN_RETRY_SECS`, jamais de bannissement). Aucune offre marché sur un
+outil marchand (`brain_wishlist::biddable`), les anciennes sont annulées.
+Les haches (forgeables) gardent l'offre marché. La Dwarven Mine est un étage
+de boutiques routé (`access::shop_floor_routed`, trappe de Falador) : la
+cueillette et les fermes de drop y restent refusées.
+
 ## Producteurs : entraînement pour une offre (2026-11-14)
 
 Constat live : personne ne forgeait de cimeterre à 2 812 pièces parce

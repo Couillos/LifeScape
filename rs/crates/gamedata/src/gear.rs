@@ -192,18 +192,29 @@ pub fn best_gear(style: Style, levels: &[(&str, i64)], quests_done: &[&str]) -> 
 /// Best tool of a family the bot can use: pickaxes by mining level
 /// (`levelrequire` = the server's mining gate), axes by woodcutting tier.
 pub fn best_tool(family: &str, levels: &[(&str, i64)]) -> Option<String> {
+    usable_tools(family, levels).into_iter().next()
+}
+
+/// Every F2P tool of a family the bot's level opens, best first (tier,
+/// then strength), the order the server prefers among carried tools
+/// (`pickaxe_checker.rs2`: best usable, worn or in the pack).
+pub fn usable_tools(family: &str, levels: &[(&str, i64)]) -> Vec<String> {
     let (suffix, skill) = match family {
         "pickaxe" => ("_pickaxe", "mining"),
         "axe" => ("_axe", "woodcutting"),
-        _ => return None,
+        _ => return Vec::new(),
     };
-    all_wearables()
+    let mut tools: Vec<Wearable> = all_wearables()
         .into_iter()
         .filter(|entry| entry.name.ends_with(suffix) && !entry.name.contains("battleaxe"))
         .filter(|entry| crate::objs_by_name(&entry.name).into_iter().next().is_some_and(|obj| obj.members == Some(false)))
         .filter(|entry| entry.tier.max(1) <= level(levels, skill).max(1) && crate::obtain::obtainable_f2p(&entry.name))
-        .max_by_key(|entry| (entry.tier, entry.strength))
-        .map(|entry| entry.name)
+        .collect();
+    // `max_by_key` kept the LAST of equal keys: the reversed sort keeps
+    // that winner first.
+    tools.reverse();
+    tools.sort_by(|left, right| (right.tier, right.strength).cmp(&(left.tier, left.strength)));
+    tools.into_iter().map(|entry| entry.name).collect()
 }
 
 #[cfg(test)]

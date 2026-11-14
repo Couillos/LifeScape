@@ -207,6 +207,11 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
         dirty = true;
     }
+    // Merchant tools (2026-11-14): an upgrade pickaxe only Nurmof sells
+    // becomes a `shop:buy` gear step, never a market bid nobody fills.
+    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, &mut life, &live)) {
+        dirty = true;
+    }
     // Market buys parked on the book settle every pass; the worker never
     // waits for them (no idle bot, 2026-11-13).
     let (settled, waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut life));
