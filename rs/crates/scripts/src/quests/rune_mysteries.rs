@@ -80,18 +80,26 @@ fn make_room(bot: &mut Bot, keep: &[u16]) -> Result<(), ScriptError> {
 /// and Sedridor never took it): withdrawn before the stage is read, the
 /// stage being read off the pack only.
 fn fetch_banked(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
-    let banked = bot.bank_items();
-    let wants: Vec<(u16, u32)> = ids
-        .iter()
-        .filter(|id| solver::count(bot, **id) == 0 && banked.get(id).copied().unwrap_or(0) > 0)
-        .map(|id| (*id, 1))
-        .collect();
-    if wants.is_empty() {
+    if ids.iter().any(|id| solver::count(bot, *id) > 0) {
         return Ok(());
     }
-    bot.intend("rune mysteries: taking the quest objects out of the bank");
+    // The bank view streams only while a booth is open (a fresh session
+    // reads it empty): open the nearest one, read it, withdraw there.
+    bot.intend("rune mysteries: checking the bank for the quest objects");
     let bank = crate::kit::bank::nearest_bank(bot)?;
-    let pulled = crate::kit::withdraw::bank_withdraw_counts(bot, &bank, &wants)?;
+    if !bot.open_bank(bank.x as i32, bank.z as i32, bank.loc_id as u16, 300)? {
+        return Ok(());
+    }
+    bot.pump(3)?;
+    let banked = bot.bank_items();
+    let mut pulled = 0;
+    for id in ids {
+        if banked.get(id).copied().unwrap_or(0) > 0 && bot.bank_withdraw(*id, 1, 50).is_ok() {
+            pulled += 1;
+        }
+    }
+    bot.close_modal()?;
+    bot.pump(2)?;
     bot.log(&format!("rune mysteries: {pulled} quest object(s) withdrawn from the bank"));
     Ok(())
 }
