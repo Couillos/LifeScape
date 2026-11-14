@@ -50,9 +50,35 @@ pub fn nearest_bank(x: i64, z: i64, level: i64) -> Option<Bank> {
     best.map(|(_, bank)| bank)
 }
 
+/// Closest F2P booth to `(x, z, level)`: same level first, else any
+/// level (Manhattan), reached through the stairs and ladders the router
+/// rides. No F2P bank stands above the ground in rev 274, so a bot on an
+/// upper floor (the Lumbridge mill top, the castle's first floor) banks on
+/// the surface instead of finding none (live 2026-11-14: four bots
+/// stranded at (3165,3306,2), "no reachable bank").
+pub fn nearest_free_bank(x: i64, z: i64, level: i64) -> Option<Bank> {
+    all_banks()
+        .into_iter()
+        .filter(|bank| !bank.members)
+        .min_by_key(|bank| (bank.level != level, (bank.x - x).abs() + (bank.z - z).abs()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{all_banks, nearest_bank};
+    use super::{all_banks, nearest_bank, nearest_free_bank};
+
+    /// Upper floors bank on the surface: the mill top (level 2) and the
+    /// Lumbridge spinning wheel floor (level 1) get a free ground bank,
+    /// never a members booth that happens to share the level.
+    #[test]
+    fn upper_floor_banks_on_the_surface() {
+        for (x, z, level) in [(3165, 3306, 2), (3209, 3212, 1)] {
+            let bank = nearest_free_bank(x, z, level).expect("a free bank");
+            assert!(!bank.members && bank.level == 0, "({x},{z},{level}) -> {bank:?}");
+        }
+        let ground = nearest_free_bank(3092, 3245, 0).expect("Draynor");
+        assert!(!ground.members && ground.level == 0 && (ground.x - 3092).abs() + (ground.z - 3245).abs() <= 4, "same level, nearest: {ground:?}");
+    }
 
     #[test]
     fn booth_count_and_nearest() {

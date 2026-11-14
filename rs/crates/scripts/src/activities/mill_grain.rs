@@ -40,19 +40,48 @@ pub fn pick_hopper(bot: &Bot) -> Option<lifescape_gamedata::stations::Station> {
     lifescape_gamedata::stations::stations_of("hopper").into_iter().min_by_key(|hopper| (hopper.x - i64::from(bot.world.x)).abs() + (hopper.z - i64::from(bot.world.z)).abs() + if hopper.loc == GUILD_HOPPER && (level < GUILD_COOKING || !hat) { 10_000 } else { 0 })
 }
 
-/// Lever loc near the hopper (live stream only: `hopperlevers1-4` /
-/// `hoppercontrol_inuse` in the 274 scripts).
-pub fn lever_near(bot: &Bot, x: i32, z: i32, level: i32) -> Option<(i32, i32, u16)> {
-    let mut found: Vec<(i64, (i32, i32, u16))> = Vec::new();
-    for ((lx, lz, llevel), slot) in &bot.world.locs {
-        if let Some((loc, _, _)) = slot.as_ref().filter(|_| *llevel == level) {
-            let name = lifescape_gamedata::loc_by_id(usize::from(*loc)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
-            if (name.contains("hopperlever") || name.contains("hoppercontrol")) && (lx - x).abs() + (lz - z).abs() <= 8 {
-                found.push((i64::from((lx - x).abs() + (lz - z).abs()), (*lx, *lz, *loc)));
+/// Manhattan reach of the lever scan around the hopper.
+const LEVER_RADIUS: i32 = 8;
+
+fn loc_debugname(loc: u16) -> String {
+    lifescape_gamedata::loc_by_id(usize::from(loc)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase()
+}
+
+/// Nearest loc to `(x, z)` on `level` within `radius` whose debugname
+/// passes `accept`: the live stream first (a `loc_change` such as
+/// `millbase_flour` overrides the map), then one static batch from the
+/// nav service. The worker paints no map, so `world.loc_at` alone never
+/// saw the hopper (live 2026-11-14: every `mill_grain` run failed "no
+/// hopper loc at (3166,3307)" on the hopper floor and stranded the bot
+/// there).
+fn station_loc(bot: &mut Bot, x: i32, z: i32, level: i32, radius: i32, accept: &dyn Fn(&str) -> bool) -> Result<Option<(i32, i32, u16)>, ScriptError> {
+    let mut best: Option<(i32, (i32, i32, u16))> = None;
+    let consider = |tile_x: i32, tile_z: i32, loc: u16, best: &mut Option<(i32, (i32, i32, u16))>| {
+        let dist = (tile_x - x).abs() + (tile_z - z).abs();
+        if dist <= radius && accept(&loc_debugname(loc)) && best.is_none_or(|(known, _)| dist < known) {
+            *best = Some((dist, (tile_x, tile_z, loc)));
+        }
+    };
+    for ((tile_x, tile_z, tile_level), slot) in &bot.world.locs {
+        if let Some((loc, _, _)) = slot.as_ref().filter(|_| *tile_level == level) {
+            consider(*tile_x, *tile_z, *loc, &mut best);
+        }
+    }
+    if best.is_none() {
+        for row in bot.static_locs_near(x, z, level, radius)? {
+            // A tile the live stream changed or cleared is not the map's.
+            if row.level == level && !bot.world.locs.contains_key(&(row.x, row.z, row.level)) {
+                consider(row.x, row.z, row.loc, &mut best);
             }
         }
     }
-    found.into_iter().filter(|(dist, _)| *dist <= 8).min_by_key(|(dist, _)| *dist).map(|(_, tile)| tile)
+    Ok(best.map(|(_, tile)| tile))
+}
+
+/// Lever loc near the hopper (`hopperlevers1-4` / `hoppercontrol_inuse`
+/// in the 274 scripts), live stream then map.
+pub fn lever_near(bot: &mut Bot, x: i32, z: i32, level: i32) -> Result<Option<(i32, i32, u16)>, ScriptError> {
+    station_loc(bot, x, z, level, LEVER_RADIUS, &|name| name.contains("hopperlever") || name.contains("hoppercontrol"))
 }
 
 /// Mill one pack: upstairs the grain slides down the chute, downstairs the
@@ -60,8 +89,11 @@ pub fn lever_near(bot: &Bot, x: i32, z: i32, level: i32) -> Option<(i32, i32, u1
 fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grain: u16, pot: u16, flour: u16) -> Result<(u32, u32), ScriptError> {
     let (hx, hz, hl) = (hopper.x as i32, hopper.z as i32, hopper.level as i32);
     bot.travel_to(lifescape_sdk::plan::Tile { x: hx, z: hz, level: hl })?;
-    let (hopper_id, _, _) = bot.world.loc_at(hx, hz, hl).ok_or_else(|| ScriptError::Failed(format!("no hopper loc at ({hx},{hz})")))?;
-    let Some((lever_x, lever_z, lever_id)) = lever_near(bot, hx, hz, hl) else {
+    let hopper_name = hopper.loc.to_lowercase();
+    let Some((_, _, hopper_id)) = station_loc(bot, hx, hz, hl, 0, &|name| name == hopper_name || name == "hopper_full")? else {
+        return Err(ScriptError::Failed(format!("no hopper loc at ({hx},{hz},{hl}) from {:?}", bot.position())));
+    };
+    let Some((lever_x, lever_z, lever_id)) = lever_near(bot, hx, hz, hl)? else {
         return Err(ScriptError::Failed(format!("no hopper lever near ({hx},{hz}) at {:?}", bot.position())));
     };
     let grain_before = pack_total(bot, grain);
@@ -81,8 +113,9 @@ fn mill_pack(bot: &mut Bot, hopper: &lifescape_gamedata::stations::Station, grai
         .min_by_key(|mill| (mill.x - hopper.x).abs() + (mill.z - hopper.z).abs())
         .map(|mill| (mill.x as i32, mill.z as i32)).ok_or_else(|| ScriptError::Failed(format!("no millbase near ({hx},{hz})")))?;
     bot.travel_to(lifescape_sdk::plan::Tile { x: bx, z: bz, level: 0 })?;
-    let Some((mill_id, _, _)) = bot.world.loc_at(bx, bz, 0) else {
-        return Ok((milled, 0));
+    // `millbase` from the map, `millbase_flour` once the stream changed it.
+    let Some((_, _, mill_id)) = station_loc(bot, bx, bz, 0, 0, &|name| name.starts_with("millbase"))? else {
+        return Err(ScriptError::Failed(format!("no millbase loc at ({bx},{bz},0) from {:?}", bot.position())));
     };
     let flour_before = pack_total(bot, flour);
     let mut takes = 0;
@@ -219,16 +252,34 @@ mod tests {
         assert_eq!(usable.loc, "hopper_lumbridge", "hatless level 1 skips the guild mill, got {usable:?}");
     }
 
-    /// Lever scan: a live `hopperlevers` loc near the hopper resolves, far
-    /// tiles and other levels never do.
+    /// Lever scan: a live `hopperlevers` loc near the hopper wins without
+    /// asking the map.
     #[test]
-    fn lever_resolves_live_only() {
+    fn lever_resolves_live_first() {
         let mut bot = offline_bot();
         bot.world.level = 2;
         let lever = (0u16..).find(|id| knowledge::loc_by_id(usize::from(*id)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase().contains("hopperlever")).expect("a lever loc exists");
         bot.world.locs.insert((3167, 3307, 2), Some((lever, 0, 0)));
-        assert_eq!(lever_near(&mut bot, 3166, 3307, 2), Some((3167, 3307, lever)), "lever resolves");
-        assert!(lever_near(&mut bot, 3166, 3307, 0).is_none(), "other levels never match");
-        assert!(lever_near(&mut bot, 3000, 3000, 2).is_none(), "far tiles never match");
+        assert_eq!(lever_near(&mut bot, 3166, 3307, 2).expect("live, no service needed"), Some((3167, 3307, lever)), "lever resolves");
+    }
+
+    /// Live 2026-11-14: the worker paints no map, so the hopper, its
+    /// lever and the millbase (static locs, never streamed) were never
+    /// found ("no hopper loc at (3166,3307)") and the bot stayed on the
+    /// hopper floor. The map serves them: hopper_lumbridge at
+    /// (3166,3307,2), hopperlevers1 at (3166,3305,2), millbase at
+    /// (3166,3307,0) (m49_51.jm2); other levels and far tiles never match.
+    #[test]
+    fn mill_locs_resolve_from_the_map() {
+        let (mut bot, _service) = crate::served_nav_bot("mill-locs");
+        bot.world.level = 2;
+        let hopper = super::station_loc(&mut bot, 3166, 3307, 2, 0, &|name| name == "hopper_lumbridge").expect("served");
+        assert_eq!(hopper.map(|(x, z, loc)| (x, z, super::loc_debugname(loc))), Some((3166, 3307, "hopper_lumbridge".to_string())));
+        let lever = lever_near(&mut bot, 3166, 3307, 2).expect("served").expect("the lever from the map");
+        assert_eq!((lever.0, lever.1, super::loc_debugname(lever.2)), (3166, 3305, "hopperlevers1".to_string()));
+        let base = super::station_loc(&mut bot, 3166, 3307, 0, 0, &|name| name.starts_with("millbase")).expect("served");
+        assert_eq!(base.map(|(x, z, loc)| (x, z, super::loc_debugname(loc))), Some((3166, 3307, "millbase".to_string())));
+        assert!(lever_near(&mut bot, 3166, 3307, 0).expect("served").is_none(), "other levels never match");
+        assert!(lever_near(&mut bot, 3000, 3000, 2).expect("served").is_none(), "far tiles never match");
     }
 }

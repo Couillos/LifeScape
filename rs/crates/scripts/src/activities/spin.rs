@@ -111,7 +111,9 @@ fn wheel_site(bot: &Bot) -> Option<((i32, i32), lifescape_gamedata::banks::Bank)
         .into_iter()
         .filter(|station| station.level == level && lifescape_gamedata::free_zones::is_free(station.x, station.z))
         .min_by_key(|station| (station.x - i64::from(bot.world.x)).abs() + (station.z - i64::from(bot.world.z)).abs())?;
-    let bank = lifescape_gamedata::banks::nearest_bank(wheel.x, wheel.z, level)?;
+    // A first-floor wheel (Lumbridge castle) banks on the surface, never
+    // at a members booth that happens to share the level.
+    let bank = crate::kit::spots::nearest_bank_at(wheel.x as i32, wheel.z as i32, level as i32)?;
     Some(((wheel.x as i32, wheel.z as i32), bank))
 }
 

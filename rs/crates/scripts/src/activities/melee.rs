@@ -71,6 +71,9 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let no_bank = spec.no_bank;
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     bot.allow_shop = spec.allow_shop;
+    // The brain's site anchors the hunt (`kit::foes::ranked_clusters`);
+    // never one a previous run left on the session's Bot.
+    bot.assigned_site = spec.site;
     // The session's Bot outlives one run: a ranged or magic run before
     // this one left its style behind. Melee scores, plans and attacks
     // melee (no bow, no quiver refill).
@@ -104,6 +107,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // instead of ending the run idle; explicit picks keep the Usage.
     let auto = spots.is_empty();
     let mut state = CycleState::begin(bot, &spec);
+    let (keys, mut worked): (Vec<&str>, bool) = (queue.iter().map(|spot| spot.key).collect(), false);
     while !queue.is_empty() {
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);
@@ -139,6 +143,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
             other => other?,
         };
         state.add_units(total);
+        worked |= total > 0 || banked || died;
         if let Some(stop) = poll_stop(bot, &state, &spec) {
             return exit_code(stop);
         }
@@ -176,5 +181,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
         }
     }
-    Ok(0)
+    // Nothing killed, banked or lost: no cluster was ever reached. Never
+    // a 0-tick goal_reached the brain relaunches at once.
+    if worked { Ok(0) } else { Err(crate::kit::hunt::nothing_hunted_error(bot, "melee", &keys)) }
 }

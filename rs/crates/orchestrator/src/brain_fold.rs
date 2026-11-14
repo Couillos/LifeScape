@@ -146,6 +146,18 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
     if node_id.is_empty() {
         return;
     }
+    // A filler window (`fill-<id>`) lives outside the graph: its report
+    // lands in the history, a failed one keeps its skill out of the next
+    // fillers (never "unknown node, ignored": that relaunched a 0-tick
+    // filler in a loop).
+    if crate::brain_filler::is_filler_node(&node_id) {
+        let line = crate::brain_filler::fold_filler_report(&mut life, &node_id, report);
+        crate::logln!("brain {account}: {line}");
+        if save_life(&life).is_err() {
+            crate::logln!("brain {account}: life save failed, filler report dropped");
+        }
+        return;
+    }
     let Some(index) = life.nodes.iter().position(|node| node.id == node_id) else {
         crate::logln!("brain {account}: report for unknown node {node_id}, ignored");
         return;

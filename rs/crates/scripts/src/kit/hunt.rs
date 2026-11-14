@@ -16,7 +16,7 @@ use crate::kit::bans::same_side;
 use crate::kit::gear::{equip_plan, gear_plan, prepare_at_bank_for};
 use crate::kit::style::{fight_weapon_style, style_damage_key};
 use crate::kit::survival::{food_count, FOOD_TARGET};
-use crate::skill_walk::walk_checked;
+use crate::skill_walk::walk_checked_at;
 use crate::ScriptError;
 
 /// What a hunt carries and where it goes.
@@ -110,6 +110,19 @@ pub fn budget_left(ticks_limit: u64, started: u64, now: u64) -> u64 {
     ticks_limit.saturating_sub(now.saturating_sub(started))
 }
 
+/// Typed failure of a spot with no free spawn on the hunt's level: never
+/// a 0-tick "goal reached".
+pub fn no_spawn_error(bot: &Bot, spot: &str) -> ScriptError {
+    ScriptError::Failed(format!("no spawn for {spot} on level {} near {:?} (site {:?})", bot.world.level, bot.position(), bot.assigned_site))
+}
+
+/// Typed failure of a fight run that killed nothing, banked nothing and
+/// never died: every cluster walk failed. Reported as `goal_reached` it
+/// read as a success and the brain relaunched it at once.
+pub fn nothing_hunted_error(bot: &Bot, style: &str, spots: &[&str]) -> ScriptError {
+    ScriptError::Failed(format!("{style} {}: nothing killed, no cluster reached from {:?}", spots.join(","), bot.position()))
+}
+
 /// The pre-ladder hunt (`HuntPlan::plain`).
 pub fn run_spot(
     bot: &mut Bot,
@@ -139,12 +152,25 @@ pub fn run_spot_with(
             bot.position()
         )));
     }
+    // The brain's site (`--site`) anchors the hunt: clusters are ranked
+    // around it, on its level, and walked to on that level, never around
+    // wherever the last run left the bot (live 2026-11-14: `melee men
+    // --site 3100,3279,0` from the mill top (3165,3306,2) found "no spawn
+    // for men" on level 2 and reported goal_reached after 0 ticks, in a
+    // loop). Ladder clusters keep the bot's level.
+    let hunt_level = match (&plan.clusters, bot.assigned_site) {
+        (None, Some((_, _, site_level))) => site_level,
+        _ => bot.world.level,
+    };
     let targets = match &plan.clusters {
         Some(clusters) => clusters.clone(),
         None => crate::kit::foes::ranked_clusters(bot, spot),
     };
     if targets.is_empty() {
         bot.log(&format!("no spawn for {}", spot.key));
+        if plan.clusters.is_none() {
+            return Err(no_spawn_error(bot, spot.key));
+        }
         return Ok((0, false, false));
     }
     // One flank per hunt: cluster centers across the toll fence would
@@ -218,7 +244,7 @@ pub fn run_spot_with(
             }
             // A dead socket must reconnect, not limp to the next cluster:
             // propagate connection failures, swallow the rest as before.
-            match walk_checked(bot, center_x, center_z, 15000) {
+            match walk_checked_at(bot, center_x, center_z, hunt_level, 15000) {
                 Err(error) if crate::kit::survival::is_conn_abort(&error) => return Err(error),
                 Err(_) | Ok(false) => {
                     // A sticking door (or a step refused for a tick) must

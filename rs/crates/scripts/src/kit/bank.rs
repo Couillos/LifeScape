@@ -23,8 +23,8 @@ const TRANSIT_ATTEMPTS: u32 = 3;
 const TRANSIT_MAX_HURTS: u32 = 3;
 const TRANSIT_HEAL_TICKS: u64 = 200;
 
-/// Nearest free (non-members, same level) bank booth by Manhattan distance.
-/// Nearest bankhall, F2P and on this level. Toll-fence aware: banks on
+/// Nearest free (non-members) bank booth by Manhattan distance, on this
+/// level when one stands there, else on the surface. Toll-fence aware: banks on
 /// the far side of a toll gate are last resort, never the default.
 /// Needs the toll gate's fence line, served by the nav service.
 ///
@@ -53,13 +53,18 @@ pub fn nearest_bank(bot: &mut Bot) -> Result<knowledge::banks::Bank, ScriptError
     // (Draynor's, beside the young dark wizards, for combat 14 and
     // under) is never picked while a safe one exists on this level.
     let threats = crate::kit::danger::threats(bot);
-    let safe_exists = knowledge::banks::all_banks().iter().any(|bank| {
-        !bank.members && bank.level == i64::from(bot.world.level) && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none()
-    });
-    for bank in knowledge::banks::all_banks() {
-        if bank.members || bank.level != i64::from(bot.world.level) {
-            continue;
-        }
+    // Same level when a free booth stands there, else the surface: no F2P
+    // bank stands above the ground in rev 274, and `bank_trip` rides the
+    // stairs itself (live 2026-11-14: bots on the mill top at
+    // (3165,3306,2) failed every task with "no reachable bank").
+    let here_level = i64::from(bot.world.level);
+    let level_has_bank = knowledge::banks::all_banks().iter().any(|bank| !bank.members && bank.level == here_level);
+    let candidates: Vec<knowledge::banks::Bank> = knowledge::banks::all_banks()
+        .into_iter()
+        .filter(|bank| !bank.members && (!level_has_bank || bank.level == here_level))
+        .collect();
+    let safe_exists = candidates.iter().any(|bank| crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_none());
+    for bank in candidates {
         if safe_exists && crate::kit::danger::covering(&threats, bank.x as i32, bank.z as i32).is_some() {
             continue;
         }
@@ -917,5 +922,22 @@ mod tests {
         bot.allow_wild = true;
         let got = nearest_bank(&mut bot).expect("unfenced pick resolves");
         assert_eq!((got.x, got.z, got.level), (3091, 3242, 0), "draynor wins unfenced, got: {got:?}");
+    }
+
+    /// Live 2026-11-14 (george_97, bmzvbp5u, bst29bh9, bcm9kxn4): on the
+    /// mill's hopper floor (3165,3306,2) every task failed "no reachable
+    /// bank" — no F2P booth stands above the ground. The pick falls to a
+    /// free surface bank; `bank_trip` rides the ladders down.
+    #[test]
+    fn upper_floor_picks_a_surface_bank() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        for (x, z, level) in [(3165, 3306, 2), (3212, 3223, 1)] {
+            bot.world.level = level;
+            bot.world.x = x;
+            bot.world.z = z;
+            let got = nearest_bank(&mut bot).expect("a surface bank from an upper floor");
+            assert!(!got.members && got.level == 0, "({x},{z},{level}) -> {got:?}");
+        }
     }
 }

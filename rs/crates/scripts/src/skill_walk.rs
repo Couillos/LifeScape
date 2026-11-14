@@ -134,8 +134,19 @@ pub fn hurt_aborts(hp_now: u8, hp_before: u8, max_hp: u8) -> bool {
 /// A final-leg Ok on a blocked décor tile (the router settles on the
 /// adjacent tile) ends the walk with Ok(true): the caller clicks from there.
 pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Result<bool, ScriptError> {
+    let level = bot.world.level;
+    walk_checked_at(bot, dest_x, dest_z, level, timeout)
+}
+
+/// `walk_checked` to a tile on a named level: the router rides the
+/// stairs and ladders between. A brain site sits on its own level (the
+/// mill's hopper floor is level 2, every fishing spot level 0): walking
+/// to it "on the bot's level" asked for (3085,3230,2) from the mill top
+/// and failed `Disconnected` (live 2026-11-14, lara_lane).
+pub fn walk_checked_at(bot: &mut Bot, dest_x: i32, dest_z: i32, dest_level: i32, timeout: u64) -> Result<bool, ScriptError> {
     let deadline = bot.world.ticks + timeout;
-    if (bot.world.x, bot.world.z) == (dest_x, dest_z) {
+    let arrived = |bot: &Bot| (bot.world.x, bot.world.z, bot.world.level) == (dest_x, dest_z, dest_level);
+    if arrived(bot) {
         return Ok(true);
     }
     // Already dead (respawn pending): no point walking a corpse.
@@ -155,7 +166,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             ))
             .into());
         }
-        if (bot.world.x, bot.world.z) == (dest_x, dest_z) {
+        if arrived(bot) {
             return Ok(true);
         }
         if hitpoints(bot) == 0 {
@@ -182,7 +193,7 @@ pub fn walk_checked(bot: &mut Bot, dest_x: i32, dest_z: i32, timeout: u64) -> Re
             LegVerdict::Continue
         });
         install_between_legs(bot, hook);
-        let outcome = bot.walk_to(dest_x, dest_z, bot.world.level, rest);
+        let outcome = bot.walk_to(dest_x, dest_z, dest_level, rest);
         remove_between_legs(bot);
         match outcome {
             // Blocked décor (tree, rock, booth) never converges on its exact

@@ -15,16 +15,21 @@ use crate::ScriptError;
 // Pools of a different kind: NPC groups instead of resource tiles. Shares
 // the walk-refinement and flank filters with the gather pools above.
 
-fn nearest_bank_tile(bot: &Bot) -> Option<(i32, i32, i32)> {
-    knowledge::banks::all_banks()
-        .into_iter()
-        .filter(|bank| !bank.members && bank.level == i64::from(bot.world.level))
-        .min_by_key(|bank| (bank.x - i64::from(bot.world.x)).abs() + (bank.z - i64::from(bot.world.z)).abs())
-        .map(|bank| (bank.level as i32, bank.x as i32, bank.z as i32))
+/// Where a hunt is anchored: the brain's site (`--site`) when it fixed
+/// one, else the bot itself.
+fn hunt_anchor(bot: &Bot) -> (i32, i32, i32) {
+    bot.assigned_site.unwrap_or((bot.world.x, bot.world.z, bot.world.level))
 }
 
-/// NPC spawn clusters for a spot (same-level spawns only).
+fn nearest_bank_tile(anchor: (i32, i32, i32)) -> Option<(i32, i32, i32)> {
+    knowledge::banks::nearest_free_bank(i64::from(anchor.0), i64::from(anchor.1), i64::from(anchor.2)).map(|bank| (bank.level as i32, bank.x as i32, bank.z as i32))
+}
+
+/// NPC spawn clusters for a spot, on the anchor's level (the site's when
+/// the brain fixed one). With a site the cluster nearest it leads (the
+/// brain picked that camp); without one the bank-distance rank holds.
 pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) -> Vec<(i32, i32, usize)> {
+    let anchor = hunt_anchor(bot);
     let mut spawns: Vec<(i64, i64)> = Vec::new();
     for entry in knowledge::all_npcs() {
         let name = entry.name.unwrap_or_default();
@@ -34,7 +39,7 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
         for spawn in entry.spawns {
             // shortcut: same-level spawns only; the fighter never rides
             // down to a dungeon camp. Revisit if one is wanted.
-            if spawn.level != i64::from(bot.world.level) {
+            if spawn.level != i64::from(anchor.2) {
                 continue;
             }
             // Members land and the Wilderness are never hunting grounds:
@@ -70,10 +75,14 @@ pub fn ranked_clusters(bot: &Bot, spot: &knowledge::combat_spots::CombatSpot) ->
         .map(|group| {
             let center_x = (group.iter().map(|item| item.0).sum::<i64>() / group.len() as i64) as i32;
             let center_z = (group.iter().map(|item| item.1).sum::<i64>() / group.len() as i64) as i32;
-            let dist = nearest_bank_tile(bot).map(|(_, bank_x, bank_z)| {
-                (bank_x - center_x).abs() + (bank_z - center_z).abs()
-            }).unwrap_or(10000) as f64;
-            (group.len() as f64 - dist / 40.0, center_x, center_z, group.len())
+            let score = match bot.assigned_site {
+                Some((site_x, site_z, _)) => -f64::from((center_x - site_x).abs().max((center_z - site_z).abs())),
+                None => {
+                    let dist = nearest_bank_tile(anchor).map(|(_, bank_x, bank_z)| (bank_x - center_x).abs() + (bank_z - center_z).abs()).unwrap_or(10000) as f64;
+                    group.len() as f64 - dist / 40.0
+                }
+            };
+            (score, center_x, center_z, group.len())
         })
         .collect();
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -187,9 +196,29 @@ pub fn attack_nearest(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_shop_staff, rank_foes};
+    use super::{is_shop_staff, rank_foes, ranked_clusters};
     use crate::tables_live::attach_live_tables;
+    use lifescape_gamedata as knowledge;
     use lifescape_sdk::Bot;
+
+    /// Live 2026-11-14 (george_97): `melee men --site 3100,3279,0` from
+    /// the mill top (3165,3306,2) logged "no spawn for men" and ended
+    /// goal_reached after 0 ticks. The site anchors the clusters: its
+    /// level, the camp nearest it first.
+    #[test]
+    fn site_anchors_clusters_across_levels() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        bot.world.level = 2;
+        bot.world.x = 3165;
+        bot.world.z = 3306;
+        let men = knowledge::combat_spots::by_key("men").expect("men spot");
+        assert!(ranked_clusters(&bot, &men).is_empty(), "no man spawns on the mill top");
+        bot.assigned_site = Some((3100, 3279, 0));
+        let clusters = ranked_clusters(&bot, &men);
+        let (first_x, first_z, _) = *clusters.first().expect("the site's level has men");
+        assert!((first_x - 3100).abs().max((first_z - 3279).abs()) <= 20, "the camp at the site leads, got ({first_x},{first_z}) of {clusters:?}");
+    }
 
     /// Shop staff are excluded by op category, never by name: the
     /// Lumbridge general store pair (520/521), Bob (519) and bankers

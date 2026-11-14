@@ -201,3 +201,11 @@ manoir_draynor_etage | 3108,3358,0 | 3108,3366,1 | f2p | reachable ; uses_loc=17
 palais_varrock_etage | 3212,3465,0 | 3212,3476,1 | f2p | reachable ; uses_loc=1722 ; levels=0>1 ; stand=3212,3472
 falador_chateau_etage | 2965,3345,0 | 2959,3372,1 | f2p | reachable ; uses_loc=1722 ; levels=0>1 ; stand=2959,3368
 varrock_ouest_escalier | 3160,3433,0 | 3155,3435,1 | f2p | reachable ; uses_loc=1722 ; levels=0>1 ; stand=3159,3435
+# 48. moulin de Lumbridge (m49_51.jm2) : ladder 1747 (3164,3307,0), laddermiddle
+# 1748 (3164,3307,1), laddertop 1746 (3164,3307,2) ; tremie hopper_lumbridge
+# (3166,3307,2). Live 2026-11-14 : 4 bots coinces au dernier etage (3165,3306,2)
+# ("no reachable bank", banques F2P toutes au sol) ; les echelles servent dans
+# les deux sens et la banque de Draynor se rejoint depuis le haut.
+moulin_montee | 3165,3306,0 | 3165,3306,2 | f2p | reachable ; rides>=2 ; levels=0>1>2
+moulin_descente | 3165,3306,2 | 3165,3306,0 | f2p | reachable ; rides>=2 ; levels=2>1>0
+moulin_etage_banque | 3165,3306,2 | 3092,3245,0 | f2p | reachable ; uses_loc=1746 ; levels=2>1>0
