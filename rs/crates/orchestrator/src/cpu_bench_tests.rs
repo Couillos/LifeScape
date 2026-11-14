@@ -46,6 +46,16 @@ fn cpu_bench() {
         timed("Store::open", 20, || lifescape_store::Store::open(&crate::market_service::db_path()).is_ok());
         timed("profit_rows uncached (memoised build)", 3, || crate::rates_service::profit_rows(&store, &snapshot));
     }
+    {
+        // Current price of every catalogue item (impact clamp 2026-11-14):
+        // the live engine read and the store read of the rates.
+        let items = service.lock_store().list_items().expect("items");
+        println!("current price over {} items", items.len());
+        let _ = items.iter().map(|item| service.reference(item.item_id).price).sum::<i64>();
+        timed("reference(every item, rings warm)", 20, || items.iter().map(|item| service.reference(item.item_id).price).sum::<i64>());
+        let store = lifescape_store::Store::open(&crate::market_service::db_path()).expect("store copy");
+        timed("price_estimate(every item)", 5, || items.iter().map(|item| crate::rates_price::price_estimate(&store, &item.name).0).sum::<f64>());
+    }
     timed("brain_bids::rate_rows (cached)", 20, crate::brain_bids::rate_rows);
     for item in ["iron_bar", "logs", "bronze_bar", "cowhide", "coal", "steel_bar", "leather", "ball_of_wool", "shrimps", "bronze_dagger", "tin_ore"] {
         timed(&format!("production_legs({item})"), 50, || lifescape_planner::obtain_legs::production_legs(item).len());

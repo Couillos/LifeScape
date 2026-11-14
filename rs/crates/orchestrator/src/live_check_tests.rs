@@ -59,7 +59,7 @@ fn live_check() {
         owners.push((name, order.account.clone(), order.side == lifescape_store::OrderSide::Buy, order.price, order.remaining));
     }
     let price_of = |item: &str| -> i64 {
-        let traded = store.item_id_by_name(&crate::brain_reserve::display_of(item)).ok().flatten().and_then(|id| lifescape_market::median_price(&store.last_prices(id, 5).unwrap_or_default()));
+        let traded = store.item_id_by_name(&crate::brain_reserve::display_of(item)).ok().flatten().and_then(|id| lifescape_market::median_price(&store.last_fills(id, 5).unwrap_or_default().iter().map(|fill| fill.0).collect::<Vec<i64>>()));
         traded.unwrap_or_else(|| lifescape_gamedata::objs_by_name(item).into_iter().next().map(|obj| obj.alch_high).unwrap_or(1)).max(1)
     };
     eprintln!("== gear each combat bot wants (budget = 50 % of its coins) ==");

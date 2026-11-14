@@ -434,3 +434,28 @@ de base au milieu du panneau volume, rouge (vente) en dessous, même
 échelle ; l'inconnu s'empile en gris au-dessus du vert. Rejeté : deviner
 le côté des anciennes exécutions (prix vs bougie précédente) ;
 recalculer `vb`/`vs` à chaque requête au lieu du cache de bougies.
+
+## 2026-11-14 — Prix courant borné par les prix d'impact
+
+Constat : le prix courant (médiane des 5 derniers fills bornée par le
+meilleur bid / meilleur ask) se laissait fixer par une poussière : une
+unité listée à 1 pièce ramenait à 1 le prix d'un objet échangé par lots
+de 100, pour tous les bots (cliquet à 1 pièce). Pratique des vraies
+places : le dernier prix seul n'est qu'un AFFICHAGE ; le « nominal
+price » de HKEX = dernier prix borné dans [meilleur bid, meilleur ask] ;
+le « mark price » des dérivés (BitMEX, Binance, OKX) lit des prix
+d'IMPACT (le prix pour remplir une taille significative) et des
+médianes, précisément pour qu'un ordre minuscule ne bouge pas la
+référence. Le nôtre : médiane des 5 derniers fills bornée par les prix
+d'impact, taille d'impact N = médiane des quantités de ces 5 fills
+(1 ≤ N ≤ 1000, jamais échangé → 1) ; un côté de profondeur < N ne borne
+pas ; jamais échangé, règles inchangées (milieu, sinon un côté, sinon
+1). Bande ×5/×0,2 et drapeau `traded` inchangés. CPU : anneau mémoire
+(prix, quantité) par objet, une passe sur les quelques meilleurs ordres
+du carnet mémoire ; côté store une lecture indexée des meilleurs ordres
+(`LIMIT 64`, arrêt dès N couvert). Rejeté : meilleur bid/ask (poussière
+souveraine) ; VWAP de profondeur sur tout le carnet (scan, et une
+profondeur lointaine n'est pas le prix du moment) ; ignorer le carnet
+(un vrai ask profond plus bas EST le prix du moment) ; filtrer les
+ordres sous un seuil de quantité fixe (un objet échangé à l'unité serait
+aveugle à son carnet).

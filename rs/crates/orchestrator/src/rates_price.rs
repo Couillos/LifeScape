@@ -7,9 +7,10 @@ use lifescape_store::Store;
 
 /// Estimated sale price of an item display name: its current price
 /// (user 2026-11-14, `lifescape_market::current_price`: median of the
-/// last five fills, any age, clamped by the resting book; never traded:
-/// the book, else 1 coin). Three indexed reads (last five prices, best
-/// bid, best ask), never the item's whole history. The flag marks a
+/// last five fills, any age, clamped by the impact prices of the
+/// resting book; never traded: the book, else 1 coin). Three indexed
+/// reads (last five fills, the best bids then the best asks until the
+/// impact size is covered), never the item's whole history. The flag marks a
 /// price no trade backs yet (`price_prior`). NPC shop prices never value
 /// anything: nobody sells to merchants.
 pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
@@ -25,8 +26,14 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
     let Some(item_id) = found_id else {
         return (1.0, true);
     };
-    let prices = store.last_prices(item_id, lifescape_market::PRICE_FILLS as i64).unwrap_or_default();
-    let best = |side: lifescape_store::OrderSide| store.open_book(item_id, side).unwrap_or_default().first().map(|order| order.price);
-    let current = lifescape_market::current_price(&prices, best(lifescape_store::OrderSide::Buy), best(lifescape_store::OrderSide::Sell));
+    let last: Vec<lifescape_market::LastFill> = store
+        .last_fills(item_id, lifescape_market::PRICE_FILLS as i64)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(price, quantity)| lifescape_market::LastFill { price, quantity })
+        .collect();
+    let size = lifescape_market::impact_size(&last);
+    let levels = |side| store.book_levels_covering(item_id, side, size).unwrap_or_default();
+    let current = lifescape_market::current_price(&last, &levels(lifescape_store::OrderSide::Buy), &levels(lifescape_store::OrderSide::Sell));
     (current.price as f64, !current.traded)
 }

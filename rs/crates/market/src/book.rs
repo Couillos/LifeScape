@@ -88,6 +88,29 @@ impl Book {
         rows
     }
 
+    /// Resting levels of one side, best first, (price, qty), until
+    /// `units` are covered, the last level cut there (the impact walk of
+    /// `price::current_price`: the few best orders, never the whole side).
+    pub fn levels_covering(&self, side: Side, units: i64) -> Vec<(i64, i64)> {
+        let orders = match side {
+            Side::Buy => &self.buys,
+            Side::Sell => &self.sells,
+        };
+        let mut rows: Vec<(i64, i64)> = Vec::new();
+        let mut covered = 0;
+        for order in orders.iter().filter(|order| order.remaining > 0) {
+            match rows.last_mut() {
+                Some(last) if last.0 == order.price => last.1 += order.remaining,
+                _ => rows.push((order.price, order.remaining)),
+            }
+            covered += order.remaining;
+            if covered >= units.max(1) {
+                break;
+            }
+        }
+        rows
+    }
+
     /// Best bid and best ask, when both sides rest.
     pub fn best(&self) -> (Option<i64>, Option<i64>) {
         (self.buys.first().map(|order| order.price), self.sells.first().map(|order| order.price))
@@ -437,6 +460,19 @@ mod tests {
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].price, 5, "resting ask sets the price");
         assert_eq!(book.depth(Side::Sell, 4), vec![(5, 70)]);
+    }
+
+    #[test]
+    fn levels_covering_stop_at_the_impact_size() {
+        let mut book = Book::new();
+        place(&mut book, 1, "dust", Side::Sell, 1, 1);
+        place(&mut book, 2, "seller-a", Side::Sell, 60, 4);
+        place(&mut book, 3, "seller-b", Side::Sell, 30, 4);
+        place(&mut book, 4, "seller-c", Side::Sell, 500, 6);
+        place(&mut book, 5, "seller-d", Side::Sell, 500, 9);
+        assert_eq!(book.levels_covering(Side::Sell, 100), vec![(1, 1), (4, 90), (6, 500)]);
+        assert_eq!(book.levels_covering(Side::Sell, 1), vec![(1, 1)]);
+        assert_eq!(book.levels_covering(Side::Buy, 100), Vec::<(i64, i64)>::new());
     }
 
     #[test]

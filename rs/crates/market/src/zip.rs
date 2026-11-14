@@ -81,7 +81,7 @@ pub fn demand_step(current: i64, sell: bool, filled: bool, floor: i64, ceiling: 
 
 /// Opening ask of a new listing (2026-11-13): the current price
 /// (`price::current_price`: median of the last five fills clamped by the
-/// book, else the book, else 1 coin), or the best resting bid when
+/// impact prices of the book, else the book, else 1 coin), or the best resting bid when
 /// a buyer already pays more (the listing crosses it at once). No margin
 /// on top: the fills of the listing walk it up (`demand_step`).
 pub fn opening_ask(reference: i64, best_bid: Option<i64>) -> i64 {
