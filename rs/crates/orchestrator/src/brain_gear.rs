@@ -55,6 +55,28 @@ fn last_equip() -> &'static Mutex<HashMap<(String, String), f64>> {
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// A step withdrawn for lack of a seller is not filed again for this long:
+/// the standing bid waits for a producer and the bot works its goal
+/// meanwhile (live 2026-11-14 08:05: a step filed then withdrawn on every
+/// plain tick held 25 bots idle).
+pub const WITHDRAWN_RETRY_SECS: f64 = 1800.0;
+
+fn last_withdrawn() -> &'static Mutex<HashMap<(String, String), f64>> {
+    static TABLE: OnceLock<Mutex<HashMap<(String, String), f64>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records a gear step withdrawn for lack of a seller (see `WITHDRAWN_RETRY_SECS`).
+pub(crate) fn note_withdrawn(account: &str, item: &str) {
+    let mut table = last_withdrawn().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.insert((account.to_string(), item.to_string()), wall_now());
+}
+
+fn recently_withdrawn(account: &str, item: &str, now: f64) -> bool {
+    let table = last_withdrawn().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    table.get(&(account.to_string(), item.to_string())).is_some_and(|last| now - last < WITHDRAWN_RETRY_SECS)
+}
+
 /// Combat style of the life's goal (non-combat goals fight melee).
 pub fn goal_style(life: &Life) -> Style {
     Style::parse(lifescape_planner::goal_combat_style(&life.goal))
@@ -223,9 +245,24 @@ fn withdraw_dead_steps_logged(job: &Job, life: &mut Life) -> bool {
         .filter(|node| node.status == lifescape_planner::NodeStatus::Abandoned && !node.last_error.is_empty())
         .map(|node| format!("{}={}", node.id, node.last_error))
         .collect();
+    let items: Vec<(String, String)> = life
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            lifescape_planner::NodeKind::ObtainItems { item, .. } => Some((node.id.clone(), item.clone())),
+            _ => None,
+        })
+        .collect();
     let removed = lifescape_planner::withdraw_dead_steps(life);
     if removed.is_empty() {
         return false;
+    }
+    // A dead step's piece cools down like a withdrawn one: never refiled
+    // on the next pass to die again.
+    for (node_id, item) in &items {
+        if removed.contains(node_id) {
+            note_withdrawn(&job.account, item);
+        }
     }
     let mine: Vec<&String> = causes.iter().filter(|cause| removed.iter().any(|node_id| cause.starts_with(&format!("{node_id}=")))).collect();
     crate::logln!("brain {}: gear step {} died ({}), withdrawn", job.account, removed.join(", "), mine.iter().map(|cause| cause.as_str()).collect::<Vec<_>>().join(" | "));
@@ -254,7 +291,7 @@ fn style_name(style: Style) -> &'static str {
 
 /// True for a piece only an NPC shop sells (D-A): no bid ever fills, the
 /// bot walks to the shop through an obtain step.
-fn shop_only(item: &str) -> bool {
+pub(crate) fn shop_only(item: &str) -> bool {
     lifescape_gamedata::obtain::merchant_buy_allowed(item)
 }
 
@@ -309,7 +346,7 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         let best_ask = service.as_ref().zip(id).and_then(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1));
         let covered = best_ask.is_some_and(|ask| ask <= want.ceiling);
         if covered || shop_only(&want.item) {
-            if !step_open {
+            if !step_open && !recently_withdrawn(&job.account, &want.item, now) {
                 let why = format!("ask {best_ask:?}, ceiling {}, budget {budget}", want.ceiling);
                 file_step(job, life, Some(&want.item), style, &why);
                 step_open = true;
@@ -337,6 +374,16 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn withdrawn_piece_cools_down_per_account() {
+        let now = super::wall_now();
+        assert!(!super::recently_withdrawn("cooldown_probe", "black_med_helm", now));
+        super::note_withdrawn("cooldown_probe", "black_med_helm");
+        assert!(super::recently_withdrawn("cooldown_probe", "black_med_helm", super::wall_now()));
+        assert!(!super::recently_withdrawn("cooldown_other", "black_med_helm", super::wall_now()));
+        assert!(!super::recently_withdrawn("cooldown_probe", "black_med_helm", now + super::WITHDRAWN_RETRY_SECS + 1.0));
+    }
+
     use super::{cancellable, committed_from};
     use lifescape_store::{Order, OrderSide, OrderStatus};
 
