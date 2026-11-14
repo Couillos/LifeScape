@@ -230,3 +230,8 @@ ruines_corps | 3094,3491,0 | 3052,3444,0 | f2p | reachable ; adjusted_dest
 ruines_eau | 3092,3243,0 | 3184,3164,0 | f2p | reachable ; adjusted_dest
 ruines_terre | 3253,3420,0 | 3305,3473,0 | f2p | reachable ; adjusted_dest
 ruines_feu | 3270,3167,0 | 3312,3254,0 | f2p | reachable ; adjusted_dest
+# Mine d'essence (2026-11-14) : les 4 portails de sortie (loc 2492,
+# essence_mine.rs2) ramènent chez Aubury (3253,3401) ; sans eux un bot
+# déposé dans la mine (t01, alice_swift en (2926,4847)) restait Disconnected.
+mine_essence_sortie | 2926,4847,0 | 3253,3420,0 | f2p | reachable
+mine_essence_sortie_ouest | 2890,4813,0 | 3253,3420,0 | f2p | reachable
