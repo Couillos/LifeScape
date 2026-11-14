@@ -19,9 +19,12 @@ fn service(tag: &str) -> (MarketService, std::path::PathBuf) {
     (MarketService::open(&path, catalogue).expect("opens"), path)
 }
 
-fn cleanup(path: &std::path::PathBuf) {
+fn cleanup(service: MarketService, path: &std::path::PathBuf) {
+    drop(service);
     let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(path.with_extension("db-journal"));
+    for suffix in ["db-journal", "db-wal", "db-shm"] {
+        let _ = std::fs::remove_file(path.with_extension(suffix));
+    }
 }
 
 fn fund(service: &MarketService, account: &str) {
@@ -78,7 +81,7 @@ fn a_dust_ask_never_moves_a_lot_traded_item() {
     place(&service, "deep", "sell", 150, 2);
     assert_eq!(reference(&service), 2, "a real ask below the median is the price now");
     assert_eq!(estimate(&service), 2.0);
-    cleanup(&path);
+    cleanup(service, &path);
 }
 
 /// A bid side thinner than the usual lot never lifts the price; a deep
@@ -100,7 +103,7 @@ fn a_thin_bid_never_lifts_a_lot_traded_item() {
     place(&service, "deep", "buy", 90, 7);
     assert_eq!(reference(&service), 7, "the 100th unit is bid at 7");
     assert_eq!(estimate(&service), 7.0);
-    cleanup(&path);
+    cleanup(service, &path);
 }
 
 /// Never traded: the impact size is one unit, the book's best prices
@@ -117,5 +120,5 @@ fn never_traded_reads_the_best_prices() {
     assert_eq!(reference(&service), 6, "midpoint of 3 and 9");
     assert_eq!(estimate(&service), 6.0);
     assert_eq!(service.guard_anchor(314), None, "a quote never caps an order");
-    cleanup(&path);
+    cleanup(service, &path);
 }
