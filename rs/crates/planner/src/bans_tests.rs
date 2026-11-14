@@ -88,6 +88,7 @@ fn life_of(nodes: Vec<Node>, history: Vec<HistoryEntry>) -> Life {
         history,
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 

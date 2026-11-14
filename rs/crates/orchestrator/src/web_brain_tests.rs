@@ -48,6 +48,7 @@ fn fixture_life() -> Life {
         ],
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     }
 }
 
@@ -143,7 +144,8 @@ fn shape_without_ambition() {
     }
     assert_eq!(reach.get("label").as_str(), Some("fishing 20"));
     assert_eq!(json::stringify(&reach.get("progress")), "[0, 20]");
-    assert_eq!(json::stringify(&reach.get("deps")), r#"["n1", "n3"]"#);
+    // The done n1 is retired (2026-11-14): out of the graph and the deps.
+    assert_eq!(json::stringify(&reach.get("deps")), r#"["n3"]"#);
     assert_eq!(json::stringify(&reach.get("filed")), r#"["n3"]"#, "the obtain it filed when blocked");
     let chosen: Vec<bool> = reach.get("alternatives").as_arr().unwrap_or(&Vec::new()).iter().filter_map(|alt| alt.get("chosen").as_bool()).collect();
     assert_eq!(chosen, vec![true, false]);
@@ -152,7 +154,11 @@ fn shape_without_ambition() {
     assert_eq!(obtain.get("block").as_str(), Some("missing:coins:5"));
     assert_eq!(obtain.get("item").as_str(), Some("net"));
     assert_eq!(obtain.get("failures").as_i64(), Some(2));
-    assert!(node(&payload, "n1").get("block").is_null());
+    assert!(payload.get("nodes").as_arr().is_some_and(|rows| rows.iter().all(|row| row.get("id").as_str() != Some("n1"))), "done n1 left the graph");
+    let retired = payload.get("retired");
+    assert_eq!(retired.get("done_total").as_i64(), Some(1));
+    assert_eq!(retired.get("recent").as_arr().and_then(|rows| rows.first()).and_then(|row| row.get("id").as_str()), Some("n1"));
+    assert_eq!(retired.get("recent").as_arr().and_then(|rows| rows.first()).and_then(|row| row.get("label").as_str()), Some("fishing 10"));
 
     let orders = payload.get("orders").as_arr().cloned().unwrap_or_default();
     assert_eq!(orders.len(), 2);

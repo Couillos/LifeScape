@@ -111,18 +111,27 @@ pub fn quests_done_from(varp_of: &dyn Fn(i64) -> i64) -> Vec<String> {
 /// `done` (history), it proves nothing any more.
 pub const DISPROVED: &str = "disproved: ";
 
-/// Quests the life's own graph finished (a done `complete_quest` node
-/// no later `missing:quest:<key>` block disproved): proof between two
-/// engine saves (autosave every 15 min).
+/// Quests the life's own graph finished (a done `complete_quest` node,
+/// or its record in `memory.quests_done` once retired, that no later
+/// `missing:quest:<key>` block disproved): proof between two engine saves
+/// (autosave every 15 min).
 pub fn quests_done_in_graph(life: &Life) -> Vec<String> {
-    life.nodes
+    let mut done: Vec<String> = life
+        .nodes
         .iter()
         .filter(|node| node.status == NodeStatus::Done && !node.last_error.starts_with(DISPROVED))
         .filter_map(|node| match &node.kind {
             NodeKind::CompleteQuest { quest } => Some(quest.clone()),
             _ => None,
         })
-        .collect()
+        .collect();
+    // Proofs of retired quest nodes (`lifecycle_retire`): the memory.
+    for quest in &life.memory.quests_done {
+        if !done.contains(quest) {
+            done.push(quest.clone());
+        }
+    }
+    done
 }
 
 #[cfg(test)]

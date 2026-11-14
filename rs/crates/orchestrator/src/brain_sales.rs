@@ -452,6 +452,7 @@ pub(crate) mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

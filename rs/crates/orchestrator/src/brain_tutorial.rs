@@ -85,7 +85,9 @@ pub fn tutorial_gate(life: &mut Life, live: &Value) -> TutorialGate {
             return TutorialGate::Launch(at);
         }
         let abandoned = life.nodes.iter().find(|node| is_tutorial(node) && node.status == NodeStatus::Abandoned);
-        let done = life.nodes.iter().any(|node| is_tutorial(node) && node.status == NodeStatus::Done);
+        // A done tutorial node retires (`lifecycle_retire`): its proof
+        // stays in the memory's quests.
+        let done = lifescape_planner::quests_done_in_graph(life).iter().any(|quest| quest == "tutorial");
         if let (Some(node), false) = (abandoned, done) {
             return TutorialGate::Hold(format!("tutorial {} abandoned on the island ({}), operator decides", node.id, node.last_error));
         }
@@ -125,6 +127,7 @@ mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

@@ -47,21 +47,52 @@ pub fn load_life(account: &str) -> Option<Life> {
         return Some(life);
     }
     let _miss = crate::cpu_profile::phase("load_life.parse");
-    let text = std::fs::read_to_string(&path).ok()?;
-    let value = lifescape_json::parse(&text).ok()?;
-    let life = life_from_value(&value)?;
+    let life = read_life_file(&path)?;
     remember_life(&life, stamp);
     Some(life)
 }
 
+/// Parse a life file, its finished nodes retired: files written before
+/// the retirement (2026-11-14) shed them on first read (one log line);
+/// the next save writes the small file.
+pub(crate) fn read_life_file(path: &std::path::Path) -> Option<Life> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value = lifescape_json::parse(&text).ok()?;
+    let mut life = life_from_value(&value)?;
+    if lifescape_planner::retire_due(&life) {
+        let retirement = lifescape_planner::retire_finished(&mut life);
+        if retirement.floor_inferred.is_some() || retirement.done.len() + retirement.abandoned.len() > 0 {
+            crate::logln!("brain {}: life loaded: {} ({} nodes left)", life.account, retirement.describe(), life.nodes.len());
+        }
+    }
+    Some(life)
+}
+
+/// Write a life, its finished nodes retired first (`lifecycle_retire`:
+/// done nodes leave the graph, abandoned ones with their goal, history
+/// compacted). The caller's copy is untouched: indexes it holds stay
+/// valid until its pass ends; the next load reads the retired graph.
 pub fn save_life(life: &Life) -> Result<(), String> {
     let _phase = crate::cpu_profile::phase("save_life");
     let path = life_path(&life.account);
-    crate::paths::write_json(&path, &life_to_value(life)).map_err(|error| format!("brain save {}: {error}", life.account))?;
+    let retired = write_life_file(&path, life)?;
     if let Some(stamp) = file_stamp(&path) {
-        remember_life(life, stamp);
+        remember_life(retired.as_ref().unwrap_or(life), stamp);
     }
     Ok(())
+}
+
+/// Write `life` to `path`, retired first when due; returns the retired
+/// copy when one was made (the version on disk).
+pub(crate) fn write_life_file(path: &std::path::Path, life: &Life) -> Result<Option<Life>, String> {
+    let retired = lifescape_planner::retire_due(life).then(|| {
+        let mut copy = life.clone();
+        lifescape_planner::retire_finished(&mut copy);
+        copy
+    });
+    let on_disk = retired.as_ref().unwrap_or(life);
+    crate::paths::write_json(path, &life_to_value(on_disk)).map_err(|error| format!("brain save {}: {error}", life.account))?;
+    Ok(retired)
 }
 
 /// File identity a cached life is valid for: modification time and size.
@@ -241,6 +272,7 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         history: Vec::new(),
         ambition: None,
         goal_origin: None,
+        memory: Default::default(),
     };
     save_life(&life)?;
     Ok(life)
@@ -305,17 +337,14 @@ pub fn maybe_insert_cleanup(life: &mut Life, bank_type_count: usize) -> bool {
     });
     // Done breaks a failure streak; two abandoned janitors in a row mean
     // the pressure never drains, so inserts stop instead of looping.
-    let stalled = lifescape_planner::cleanup_stalled(&life.nodes);
+    // Retired janitors count too (`memory.recent`).
+    let stalled = lifescape_planner::janitor_stalled(life);
     if !lifescape_planner::cleanup_needed(open, stalled, bank_type_count) {
         return false;
     }
-    let mut counter = life.nodes.len();
-    for node in &life.nodes {
-        if let Some(number) = node.id.strip_prefix('n').and_then(|raw| raw.parse::<usize>().ok()) {
-            counter = counter.max(number);
-        }
-    }
-    lifescape_planner::insert_ready(life, Node::new(&format!("n{}", counter + 1), NodeKind::SpaceCleanup, Vec::new(), 0));
+    // Past every id ever issued (retired ones included).
+    let id = lifescape_planner::next_id(life);
+    lifescape_planner::insert_ready(life, Node::new(&id, NodeKind::SpaceCleanup, Vec::new(), 0));
     true
 }
 
@@ -458,6 +487,10 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 }
 
 #[cfg(test)]
+#[path = "brain_retire_tests.rs"]
+mod retire_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, parse_goal, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
@@ -548,6 +581,7 @@ mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         };
         let keep = cleanup_keep(&life);
         assert!(keep.contains(&"feather".to_string()), "graph obtain survives, got {keep:?}");
@@ -572,6 +606,7 @@ mod tests {
             history: Vec::new(),
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

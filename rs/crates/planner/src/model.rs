@@ -227,6 +227,9 @@ pub struct Life {
     pub ambition: Option<crate::ambition::Ambition>,
     /// Milestone id the current goal was drawn from (`m3`), if any.
     pub goal_origin: Option<String>,
+    /// Bounded memory of retired nodes (`life_memory`): the graph holds
+    /// the live work only (`lifecycle_retire`).
+    pub memory: crate::life_memory::LifeMemory,
 }
 
 pub const LIFE_SCHEMA: i64 = 1;
@@ -314,7 +317,7 @@ fn goal_from_value(value: &Value) -> Option<GoalKind> {
     }
 }
 
-fn kind_to_parts(kind: &NodeKind) -> (String, Value) {
+pub(crate) fn kind_to_parts(kind: &NodeKind) -> (String, Value) {
     match kind {
         NodeKind::ReachLevel { skill, level } => (
             "reach_level".to_string(),
@@ -349,7 +352,7 @@ fn kind_to_parts(kind: &NodeKind) -> (String, Value) {
     }
 }
 
-fn kind_from_parts(kind: &str, params: &Value) -> Option<NodeKind> {
+pub(crate) fn kind_from_parts(kind: &str, params: &Value) -> Option<NodeKind> {
     match kind {
         "reach_level" => Some(NodeKind::ReachLevel {
             skill: params.get("skill").as_str().unwrap_or("").to_string(),
@@ -528,6 +531,7 @@ pub fn life_to_value(life: &Life) -> Value {
         ),
         ("ambition", life.ambition.as_ref().map(crate::ambition::ambition_to_value).unwrap_or(Value::Null)),
         ("goal_origin", life.goal_origin.as_deref().map(str_value).unwrap_or(Value::Null)),
+        ("memory", crate::life_memory::memory_to_value(&life.memory)),
     ])
 }
 
@@ -585,6 +589,9 @@ pub fn life_from_value(value: &Value) -> Option<Life> {
         // Absent before ambitions: loads fine, the brain assigns one.
         ambition: crate::ambition::ambition_from_value(&value.get("ambition")),
         goal_origin: value.get("goal_origin").as_str().map(str::to_string),
+        // Absent before the memory (2026-11-14): default, the first
+        // retirement infers the floor and prunes what accumulated.
+        memory: crate::life_memory::memory_from_value(&value.get("memory")),
     })
 }
 
@@ -614,6 +621,7 @@ mod tests {
             }],
             ambition: None,
             goal_origin: None,
+            memory: Default::default(),
         }
     }
 

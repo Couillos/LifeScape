@@ -474,6 +474,16 @@ var BrainView = (function () {
       return '<div>' + esc(deal.role) + ' ' + esc(deal.qty) + ' × ' + esc(deal.name || deal.item) + ' @ ' + esc(deal.price) +
         ' <span class="alt">avec ' + esc(deal.partner) + ' · ' + esc(deal.status) + '</span></div>';
     }).join('') : '<div class="muted">aucun</div>'));
+    // Finished nodes leave the graph (retired, bounded memory): totals
+    // and the last few records.
+    var retired = payload.retired || {};
+    var recent = (retired.recent || []).slice(0, 12);
+    out.push('<h3>Nœuds terminés</h3><div class="muted">' + esc(retired.done_total || 0) + ' faits · ' + esc(retired.abandoned_total || 0) + ' abandonnés' +
+      ((retired.quests_done || []).length ? ' · quêtes : ' + retired.quests_done.map(esc).join(', ') : '') + '</div>' +
+      (recent.length ? recent.map(function (row) {
+        return '<div><span class="chip ' + (row.outcome === 'done' ? 'st-done' : 'st-failed') + '">' + esc(row.id) + '</span> ' + esc(row.label) +
+          (row.last_error ? '<div class="alt">' + esc(row.last_error) + '</div>' : '') + '</div>';
+      }).join('') : '<div class="muted">aucun</div>'));
     var history = (payload.goal_history || []).slice(-15).reverse();
     out.push('<h3>Historique des buts</h3>' + (history.length ? history.map(function (entry) {
       var date = new Date(entry.at * 1000);
