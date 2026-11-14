@@ -57,8 +57,11 @@ use crate::model::GoalKind;
 
 /// Prefix of a bid goal's origin (`life.goal_origin`, `bid:<item>`).
 pub const BID_PREFIX: &str = "bid:";
-/// A bid must pay this many times the bot's own coin rate.
-pub const BID_PREEMPT: f64 = 2.0;
+/// A bid must pay this many times the bot's own coin rate: a real
+/// player switches as soon as a lot pays clearly better than its best
+/// alternative (2.0 before 2026-11-14: no lot ever beat twice the best
+/// realizable rate, nobody forged the demanded gear).
+pub const BID_PREEMPT: f64 = 1.25;
 /// Coins a bid goal must net after paying for the bot's time.
 pub const BID_MIN_PROFIT: f64 = 50.0;
 /// Share of the remaining profitable depth one producer takes (1/2).
