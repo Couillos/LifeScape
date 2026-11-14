@@ -21,6 +21,29 @@ lectures batch hors queue `door_defs`, `tiles_flags`, `static_locs_near`,
 `probe_targets`, `doors_near`, plus `stats`. Chaque op batch est comptée
 et exposée dans `nav-stats`.
 
+CPU (2026-11-14) : le thread `plan-accept` ne fait plus qu'accepter ;
+chaque connexion (lecture de la ligne + `dispatch`) part sur le pool
+borné `plan-query` (2 threads, file 128, `service_accept.rs`, compteur
+`pooled`) — un client muet ou un `walk_costs` ne bloque plus les autres.
+`toll_fence` / `static_locs_near` lisent par région
+(`StaticWorld::toll_gates_within` / `static_locs_within` : un verrou
+d'écriture pour peindre, un de lecture pour lire, au lieu de deux par
+tuile ; `toll_fence` r150 5,8 ms → 7 µs). Cache `walk_costs` service
+indexé par l'ENSEMBLE des cibles + options complètes (danger inclus,
+il manquait) ; compteur `walk_costs_hits`. Côté worker,
+`sdk/src/client/static_cache.rs` répond sans aller-retour aux requêtes
+statiques déjà servies sous la même version : `door_defs`, `tiles_flags`,
+`in_f2p` (par clé, lot servi seulement s'il est entier en cache),
+`toll_fence` / `static_locs_near` (listes couvrantes
+`nav/src/region_lists.rs` : toute requête dont le losange tient dans une
+liste servie est filtrée localement, même ordre ; `toll_fence` demande
+`list_radius` = r + 48, champ additif `gates`, un vieux daemon ne le
+renvoie pas et rien n'est caché), `walk_costs` (lot entier, même
+source + ensemble + options). Invalidation : toute entrée appartient à
+une version ; la première réponse portant une autre version vide tout.
+Après un `reload-nav`, un worker ressert donc ses réponses statiques
+jusqu'au premier aller-retour (plan, miss) qui lui apprend la version.
+
 Planification 100 % distante (`Bot::plan_travel`,
 `rs/crates/sdk/src/client/travel.rs`) : sans monde local, le plan vient
 du service ou l'appel échoue en `Error::Travel("nav-down: …")` — down,
@@ -91,6 +114,20 @@ sur le pas (3216,3220)->(3216,3219), replan identique). Peints en murs ils
 ne coupaient aucune pièce (40 battants F2P analysés), la marque reste le
 choix commun. Golden `nav/tests/door_swing.rs`.
 
+Battant ouvert en travers du pas (2026-11-13, SDK `client/door_leaf.rs`) :
+quand aucun détour n'existe, le plan traverse l'arête marquée ; si la
+porte est ouverte à ce moment, le battant est un vrai mur et le serveur
+refuse le pas (t01-21040 : cuisine de Falador (2988,3367), entrable
+seulement par l'arête du battant de 1512 (2989,3368) ; ouvert, 1515 en
+(2989,3367) angle ouest, « I can't reach that! »). `exec_walk` cherche
+avant chaque jambe un mur droit live en travers d'un pas (sur la tuile
+source, ou sur la cible d'un pas orthogonal) ; confirmé par la marque
+`DOOR_LEAF_*` statique (un batch `tiles_flags`, seulement quand un mur
+live croise un pas), il marche jusqu'à la tuile source, ferme le battant
+(op1, `[oploc1,_door_opened]` / `_door_*_opened` des portes doubles),
+attend sa disparition (23 ticks) puis reprend ; battant resté :
+`StepRefused` typé. Un mur live sans marque n'est jamais cliqué.
+
 Mobilier qui « s'ouvre » (catégories `chest_closed` 33, `cupboard_closed`
 35, `drawer` 37 : la variante ouverte bloque toujours) n'est jamais une
 porte (`loctypes.rs`) : avant, le plan « ouvrait » les tiroirs 350 de
@@ -135,6 +172,53 @@ atterrit, le plan répond `Disconnected` tout de suite (closest = départ)
 et `walk_costs` laisse la cible à `None` sans épuiser la recherche
 (lève en partie la « limite connue » ci-dessous pour ces cibles).
 Goldens `poche_*` (4-5 ms), test `pocket::tests`.
+
+`approach_npc` (SDK, 2026-11-13) ne vise plus que des stands
+atteignables (`Bot::npc_stands`) : tuiles de côté de l'emprise, un batch
+`tiles_flags` écarte les tuiles bloquées et celles murées côté PNJ (règle
+`reachRectangle1` : pas de mur sur l'arête face au PNJ), un batch
+`walk_costs` écarte les poches et le reste inatteignable (les tuiles
+bloquées n'y entrent jamais : elles épuiseraient la recherche), ordre
+par coût de marche. Aucun stand : `Unreachable` « NPC <nom> (slot N) at
+(x,z,niv): no side tile reachable », sans un pas. Avant : marche vers la
+poche, dossier NoRoute (Varrock (3247,3398)…, Lumbridge (3257,3242)).
+
+Escaliers en colimaçon du château de Lumbridge (2026-11-13) : le prober
+et l'exécuteur de montées cliquaient la tuile d'emprise la plus proche
+du stand ; le serveur ne trouve un loc que sur son origine
+(`OpLocHandler` → `Zone.getLoc(x, z, id)`), le clic tombait sans message.
+Les 6 verdicts du château (1738/1739/1740) étaient des `no_move` faux :
+l'étage 1 (le duc, Rune Mysteries) était injoignable. Les deux cliquent
+désormais `from` (l'origine, vrai pour les 367 lignes du dump). Verdicts
+du château reroulés en live (admin, clic origine) : 8 trajets ok. Le haut
+de la tour sud (niveau 2) est du ciel pour la carte (stand ajouté à
+`sky_floors` depuis, voir plus bas). Goldens `chateau_escalier_*`, `chateau_duc_retour`,
+`chateau_toit_*`.
+
+Côté d'approche des montées (2026-11-13) : les 91 `no_move` du
+2026-11-06 portaient tous « I can't reach that! » (le serveur trouvait
+le loc ; seuls les 8 `spiralstairs`/`spiralstairsmiddle` 2×2 hors
+château venaient du clic d'emprise). Deux causes dans `plan::stands` :
+`forceapproach` ignoré (`stairs` sud, `stairstop` nord, `spiralstairstop`
+est, échelles `*_directional`, échelles de navire, `woodenstairs*`,
+`spookystairs*`… : `LocConfig.ts` bloque les quatre côtés sauf le nommé,
+tourné par l'angle, `reach::rotate_flags`) et largeur/longueur passées
+à l'envers à `reach` (un escalier 2×3 à angle impair lu 2 de large : une
+tuile voisine « chevauchait » le loc). `dump-transitions` écrit
+désormais `force_approach` (drapeaux moteur, 0 = tout côté) par ligne
+de `transitions.json`, lu par `Tables` ; `stands` le passe à `reach` et
+suit l'ordre moteur (`reachedLoc(.., type.width, type.length, ..)`).
+Vérifié en live (admin, `call` cheat tele + `op_loc` depuis le premier
+stand calculé, 2026-11-13) : 87 `no_move` → ok ; 14 tuiles d'arrivée ou
+de stand non peintes ajoutées à `sky_floors` (hauts de tours niveau 3,
+haut de la tour sud du château, ponts du navire de Karamja, étage
+(3175..3176,3401..3419)). Restent `no_move` : `miningguildladder` (Mining
+60). Non verdictés (barrières de contenu) : `monasteryladder` (ordre de
+la Guilde de prière), `newbieladder*` (tutoriel), `shantay_pass` (monde
+membre), `laddertop_directional_188` (admin tué par les chevaliers noirs
+à l'arrivée). Test `nav/tests/force_approach.rs`, goldens 55-61
+(`chateau_tour_sud_toit_descente`, `tour_sorciers_*`, `manoir_draynor_etage`,
+`palais_varrock_etage`, `falador_chateau_etage`, `varrock_ouest_escalier`).
 
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden

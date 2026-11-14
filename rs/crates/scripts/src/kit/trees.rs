@@ -885,14 +885,14 @@ mod tests {
         let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
         let picked = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
         assert_eq!(picked.1, (3203, 3246), "walk-cheap wins over the Manhattan lure, got: {picked:?}");
-        // L1 hit: the same cands cost no new compute.
+        // Worker memo: the same cands from the same tile cost no trip.
         let before = service.stats();
         let cands = vec![(26, (3252, 3237)), (32, (3203, 3246))];
         let again = refine_by_walk(&mut bot, cands).expect("non-empty pool picks");
         assert_eq!(again.1, (3203, 3246), "repeat ranks identically");
         let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "second ranking hits L1, never recomputes");
-        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
+        assert_eq!(after.misses - before.misses, 0, "second ranking never recomputes");
+        assert_eq!(after.walk_costs, before.walk_costs, "worker memo served the repeat, no round trip");
     }
 
     /// No planner wired (old offline tests, golden paths): the pick keeps

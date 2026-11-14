@@ -13,8 +13,11 @@ use crate::{ScriptError, ScriptResult};
 use super::market::tradeable_id;
 
 /// `market flip [--budget-max N] [--node ID] [item] [qty]`: merchant
-/// engagement (D18) on the one script every bot already runs. Buys under
-/// the reference, sells the pack stock over it, waits out the engagement
+/// engagement (D18) on the one script every bot already runs. Prices off
+/// the book (daemon `flip_quote`, 2026-11-14): buys at the best bid + 1
+/// when the spread pays its time, sells a demand-sized lot of its stock
+/// at the best ask - 1, never under what the stock cost plus that
+/// margin (never at reference +/- 1), waits out the engagement
 /// (market pauses still deliver inline), cancels the leftovers, exits on
 /// budget so the session reports `budget_exhausted`. Engagement sans
 /// objet: no item target, the clock ends it.
@@ -37,12 +40,13 @@ pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
     }
     let id = tradeable_id(&item)?;
-    let quote = market_call("quote", vec![("item", Value::Int(i64::from(id)))])?;
-    let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
+    let quote = market_call("flip_quote", vec![("account", str_value(&bot.username)), ("item", Value::Int(i64::from(id))), ("qty", Value::Int(qty))])?;
+    let legs = FlipLegs::from_reply(&quote).map_err(|error| ScriptError::Usage(format!("flip_quote {item}: {error}")))?;
+    bot.log(&format!("flip {item}: buy {:?} sell {:?} (floor {:?}, margin {}, lot {})", legs.buy, legs.sell, legs.sell_floor, legs.margin, legs.lot));
     let coins = obj_id(bot, "coins")?;
     let pack_coins = bot.inventory().get(&coins).copied().unwrap_or(0) as i64;
-    let buy_price = (reference - 1).max(1);
-    let buy_qty = qty.min(pack_coins / buy_price.max(1)).max(0);
+    let buy_price = legs.buy.unwrap_or(0);
+    let buy_qty = if buy_price >= 1 { qty.min(pack_coins / buy_price).max(0) } else { 0 };
     if buy_qty > 0 {
         let reply = market_call(
             "place",
@@ -56,7 +60,7 @@ pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
         )?;
         bot.log(&format!("flip buy {buy_qty} x{item} @ {buy_price} ({})", reply.get("order").as_i64().unwrap_or(-1)));
     } else {
-        bot.log("flip: no coins for the buy leg, holding the sell leg only");
+        bot.log("flip: no buy leg (spread under its margin, or no coins)");
     }
     let held = bot.inventory().get(&id).copied().unwrap_or(0) as i64;
     // Merchants trade their banked stock, not just what they carry: pull
@@ -74,19 +78,23 @@ pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
             held = bot.inventory().get(&id).copied().unwrap_or(0) as i64;
         }
     }
-    if held > 0 {
-        let sell_price = reference + 1;
+    // One demand-sized lot (no dumping), walking down to its floor.
+    let lot = held.min(qty).min(legs.lot);
+    if let (true, Some(sell_price), Some(floor)) = (lot > 0, legs.sell, legs.sell_floor) {
         let reply = market_call(
             "place",
             vec![
                 ("account", str_value(&bot.username)),
                 ("side", str_value("sell")),
                 ("item", Value::Int(i64::from(id))),
-                ("qty", Value::Int(held.min(qty))),
+                ("qty", Value::Int(lot)),
                 ("price", Value::Int(sell_price)),
+                ("floor", Value::Int(floor.min(sell_price))),
             ],
         )?;
-        bot.log(&format!("flip sell {} x{item} @ {sell_price} ({})", held.min(qty), reply.get("order").as_i64().unwrap_or(-1)));
+        bot.log(&format!("flip sell {lot} x{item} @ {sell_price} floor {floor} ({})", reply.get("order").as_i64().unwrap_or(-1)));
+    } else if held > 0 {
+        bot.log(&format!("flip: holding {held} {item} (no own cost known or over the band)"));
     }
     let start_tick = bot.world.ticks;
     let start_pause = bot.pause_ticks;
@@ -99,6 +107,31 @@ pub fn run_flip(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     cancel_open(bot)?;
     Ok(crate::kit::cycle::BUDGET_EXIT)
+}
+
+/// The daemon's flip legs for this merchant (`flip_quote`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlipLegs {
+    pub buy: Option<i64>,
+    pub sell: Option<i64>,
+    pub sell_floor: Option<i64>,
+    pub lot: i64,
+    pub margin: i64,
+}
+
+impl FlipLegs {
+    pub(crate) fn from_reply(reply: &Value) -> Result<FlipLegs, String> {
+        if reply.get("ok").as_bool() != Some(true) {
+            return Err(reply.get("error").as_str().unwrap_or("flip_quote refused").to_string());
+        }
+        Ok(FlipLegs {
+            buy: reply.get("buy").as_i64(),
+            sell: reply.get("sell").as_i64(),
+            sell_floor: reply.get("sell_floor").as_i64(),
+            lot: reply.get("lot").as_i64().unwrap_or(0),
+            margin: reply.get("margin").as_i64().unwrap_or(0),
+        })
+    }
 }
 
 /// Most valuable banked or carried F2P tradeable stock (debug name,
@@ -196,4 +229,27 @@ pub(crate) fn parse_flip(args: &[String]) -> Result<(u64, Vec<String>), ScriptEr
         }
     }
     Ok((budget_max, positionals))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FlipLegs;
+    use lifescape_json::{object, Value};
+
+    #[test]
+    fn flip_legs_read_the_daemon_quote() {
+        let reply = object(vec![
+            ("ok", Value::Bool(true)),
+            ("buy", Value::Int(11)),
+            ("sell", Value::Int(19)),
+            ("sell_floor", Value::Int(14)),
+            ("lot", Value::Int(25)),
+            ("margin", Value::Int(3)),
+        ]);
+        assert_eq!(FlipLegs::from_reply(&reply), Ok(FlipLegs { buy: Some(11), sell: Some(19), sell_floor: Some(14), lot: 25, margin: 3 }));
+        let held = object(vec![("ok", Value::Bool(true)), ("buy", Value::Null), ("sell", Value::Null), ("lot", Value::Int(10)), ("margin", Value::Int(2))]);
+        let legs = FlipLegs::from_reply(&held).expect("parses");
+        assert_eq!((legs.buy, legs.sell), (None, None), "no leg: nothing placed, never ref +/- 1");
+        assert!(FlipLegs::from_reply(&object(vec![("ok", Value::Bool(false))])).is_err());
+    }
 }

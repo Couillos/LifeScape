@@ -178,9 +178,9 @@ pub struct TransitionRef {
     pub op: u8,
     pub from: Tile,
     pub to: Tile,
-    /// Every tile the loc covers: only one of them answers the climb op,
-    /// and the table `from` is not always that one. The executor clicks
-    /// the footprint tile nearest its stand.
+    /// Every tile the loc covers. Only the origin `from` answers the
+    /// climb op (the server finds a loc on its origin tile alone): the
+    /// executor and the prober click `from`, never another footprint tile.
     pub footprint: Vec<(i32, i32)>,
     /// Prober verdict carried for the executor message (`NeedsChoice`
     /// names the no-recorded-pick suffix). Absent on old plans: false.
@@ -1188,9 +1188,13 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
         }
     }
     let (mut width, mut height) = (1, 1);
+    // Engine order (`reachedLoc(.., type.width, type.length, ..)`):
+    // width spans x unrotated. Swapped, a 2x3 stair at angle 3 read
+    // as 2 wide and 3 deep, and a tile beside it "overlapped" the
+    // loc (stairs_326 stand north: no_move live 2026-11-13).
     if let Some(def) = search.world.loc_def(row.loc as usize) {
-        width = def.length;
-        height = def.width;
+        width = def.width;
+        height = def.length;
     }
     let mut candidates: Vec<(i32, i32)> = Vec::new();
     for (x, z) in &anchor_tiles {
@@ -1225,7 +1229,7 @@ fn stands(search: &mut Search, row: &Transition) -> Vec<Tile> {
             height,
             angle,
             shape,
-            0,
+            row.force_approach,
         ) {
             // A ride landing inside a wall never executes (the server
             // climbs onto a walkable tile): drop the stand here so the

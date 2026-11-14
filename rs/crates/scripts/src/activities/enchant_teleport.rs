@@ -1,9 +1,8 @@
 //! Enchant and travel magic: amulet enchantment (7/27/49/57), the three
 //! F2P teleports (25/31/37) and bones to bananas (15), all catalogue
 //! §5.10. Levels and runes come from the spell dump and are
-//! unit-tested; casting is a dette like alchemy (no spell-cast op in
-//! the SDK), so the run resolves spell, level, runes and target, then
-//! fails loud with the exact missing piece.
+//! unit-tested; runes and targets are stocked from the pack and the
+//! known bank (`kit::spell_load`), products banked between loads.
 //!
 //! Process: poste aucun (sort) · action enchanter/téléporter ·
 //! interface sort · intrants amulette/os + runes · produits amulettes
@@ -14,8 +13,9 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, missing_runes, spell_com};
+use crate::kit::magic::{cast_on_held, spell_com, wield_staff_for};
 use crate::kit::pack::{obj_id, pack_total};
+use crate::kit::spell_load::{run_casts, stock_for, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -53,10 +53,13 @@ pub fn teleport_level(name: &str) -> Option<i64> {
     TELEPORTS.iter().find(|(spell, _)| spell.eq_ignore_ascii_case(name)).map(|(_, level)| *level)
 }
 
-/// Cast in the open session: `enchant_teleport <spell|amulet> [count]`.
-/// Enchants and bananas cast on the carried target (`OPHELDT`);
-/// teleports press the spellbook button (`IF_BUTTON`) and land the bot
-/// elsewhere. Missing runes or targets fail `Blocked`.
+/// Cast in the open session: `enchant_teleport <spell|amulet> [count]
+/// [--want ITEM N] [--level magic N]`. Enchants and bananas cast on the
+/// carried target (`OPHELDT`); teleports press the spellbook button
+/// (`IF_BUTTON`) and land the bot elsewhere. Runes and targets come from
+/// the pack, then the known bank (`kit::spell_load`: a staff pays its
+/// rune, products banked between loads); `Blocked` names exactly what
+/// pack + bank lack.
 pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("enchant_teleport", &rest)?;
@@ -65,7 +68,7 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
-    let _ = crate::kit::cycle::resolve_keep(bot, &spec)?;
+    let keep = crate::kit::cycle::resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
@@ -87,37 +90,21 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
         return Err(ScriptError::Usage(format!("{spell} has no runes in the dump at {:?}", bot.position())));
     }
     let target_obj = if input.is_empty() { None } else { Some(obj_id(bot, &input)?) };
-    let missing = missing_runes(bot, &runes);
-    if !missing.is_empty() {
-        return Err(ScriptError::Blocked { missing });
-    }
-    if target_obj.is_some_and(|obj| pack_total(bot, obj) == 0) {
-        return Err(ScriptError::Blocked { missing: vec![input.clone()] });
-    }
+    let inputs = if input.is_empty() { Vec::new() } else { vec![(input.clone(), 1)] };
+    let mut load = SpellLoad::new(&spell, runes, inputs);
+    load.whole_pack = spell == BONES_TO_BANANAS;
+    // A carried staff of the cast's element goes on before any sizing.
+    wield_staff_for(bot, &load.runes)?;
     // Teleports move the bot, not an item: exactly one cast per run.
-    // Held targets run the pack (count omitted or 0 = the load).
-    let want = if target_obj.is_none() { 1 } else { spec.targets.count.filter(|count| *count > 0).unwrap_or(u32::MAX) };
-    // The order's other stops (`--want`, `--level magic N`, budget).
-    let mut spec = spec;
-    spec.targets.count = None;
-    let state = crate::kit::cycle::CycleState::begin(bot, &spec);
-    let mut done = 0u32;
-    while done < want {
-        if let Some(stop) = crate::kit::cycle::poll_stop(bot, &state, &spec).filter(|_| target_obj.is_some()) {
-            bot.log(&format!("ok {spell} x{done}, order met"));
-            return crate::kit::cycle::exit_code(stop);
-        }
-        if !missing_runes(bot, &runes).is_empty() {
-            break;
-        }
-        if target_obj.is_some_and(|obj| pack_total(bot, obj) == 0) {
-            break;
-        }
-        cast_one(bot, &spell, target_obj)?;
-        done += 1;
-    }
+    let Some(target) = target_obj else {
+        stock_for(bot, &load, &keep, 1)?;
+        cast_one(bot, &spell, None)?;
+        bot.log(&format!("ok {spell} x1"));
+        return Ok(0);
+    };
+    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| cast_one(cast_bot, &spell, Some(target)))?;
     bot.log(&format!("ok {spell} x{done}"));
-    Ok(0)
+    stop.map_or(Ok(0), crate::kit::cycle::exit_code)
 }
 
 /// Ticks to wait out one cast (server delays plus the convert tick).
@@ -189,6 +176,31 @@ mod tests {
             .expect_err("no runes, no cast");
         assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got {error}");
         assert!(format!("{error}").contains("cosmicrune"), "names the rune, got {error}");
+    }
+
+    /// bd23dqpq (live 2026-11-13, blocked four times "missing:
+    /// cosmicrune, waterrune"): 2 cosmic and 67 water in the bank, the
+    /// amulet carried. The run goes to the bank (offline: the walk fails
+    /// typed), never `blocked` on runes the bank holds.
+    #[test]
+    fn banked_runes_send_the_run_to_the_bank() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("strung_sapphire_amulet", 1)], &[("cosmicrune", 2), ("waterrune", 67)]);
+        bot.world.stats.insert(MAGIC_STAT, (7, 0));
+        bot.world.x = 3222;
+        bot.world.z = 3218;
+        let error = run_enchant_teleport(&mut bot, &["strung_sapphire_amulet".to_string()]).expect_err("offline bank walk fails");
+        assert!(!matches!(error, crate::ScriptError::Blocked { .. }), "the bank holds the runes, got {error}");
+    }
+
+    /// Pack and bank both short: blocked with exact names only.
+    #[test]
+    fn short_pack_and_bank_block_with_exact_names() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("strung_sapphire_amulet", 1)], &[("waterrune", 67)]);
+        bot.world.stats.insert(MAGIC_STAT, (7, 0));
+        match run_enchant_teleport(&mut bot, &["strung_sapphire_amulet".to_string()]) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["cosmicrune".to_string()]),
+            other => panic!("blocked on cosmic only, got {other:?}"),
+        }
     }
 
     /// A funded enchant reaches the send brick: dead socket fails `Sdk`,

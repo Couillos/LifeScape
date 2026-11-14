@@ -50,6 +50,20 @@ pub fn spell_shortfall(bot: &Bot, runes: &[(String, i64)]) -> Vec<String> {
     missing_runes(bot, &unpaid)
 }
 
+/// Runes of a cast pack + known bank cannot fund (worn staff element
+/// excluded): empty when a bank trip refills the cast.
+pub fn bank_shortfall(bot: &Bot, runes: &[(String, i64)]) -> Vec<String> {
+    runes
+        .iter()
+        .filter(|(name, _)| !staff_pays(bot, name))
+        .filter(|(name, count)| {
+            let need = u32::try_from(*count).unwrap_or(u32::MAX);
+            obj_id(bot, name).map(|obj| pack_total(bot, obj).saturating_add(crate::kit::pack::banked_usable(bot, obj)) < need).unwrap_or(true)
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 /// Wield a carried staff of one of the cast's elements when no worn
 /// staff pays any of them yet (the planner sized the runes counting it).
 /// True when a staff went on.

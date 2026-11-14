@@ -255,20 +255,16 @@ pub struct StaticLoc {
 }
 
 /// Static locs within a Manhattan radius on one level, nearest first.
-/// Diamond scan through the public tile read (same one-lock-per-tile
-/// discipline as `tiles_flags`): no worker-side `static_locs` scan, and
+/// Region read (`StaticWorld::static_locs_within`: one paint lock, one
+/// read lock, same diamond): no worker-side `static_locs` scan, and
 /// name resolution stays worker-side.
 pub fn static_locs_near(snapshot: &Snapshot, tile_x: i32, tile_z: i32, level: i32, radius: i32) -> Vec<StaticLoc> {
-    let radius = radius.max(0);
-    let mut out = Vec::new();
-    for scan_x in tile_x - radius..=tile_x + radius {
-        let rest = radius - (scan_x - tile_x).abs();
-        for scan_z in tile_z - rest..=tile_z + rest {
-            if let Some((loc, shape, angle)) = snapshot.world.loc_at(scan_x, scan_z, level) {
-                out.push(StaticLoc { x: scan_x, z: scan_z, level, loc, shape, angle });
-            }
-        }
-    }
+    let mut out: Vec<StaticLoc> = snapshot
+        .world
+        .static_locs_within(tile_x, tile_z, level, radius)
+        .into_iter()
+        .map(|(x, z, (loc, shape, angle))| StaticLoc { x, z, level, loc, shape, angle })
+        .collect();
     out.sort_by_key(|entry| ((entry.x - tile_x).abs() + (entry.z - tile_z).abs(), entry.x, entry.z, entry.loc));
     out
 }
@@ -280,23 +276,11 @@ pub fn in_f2p_batch(snapshot: &Snapshot, tiles: &[Tile]) -> Vec<bool> {
 }
 
 /// Nearest toll-gate tile on this level within a Manhattan radius, if
-/// any. Diamond scan through the public toll read; its x is the fence
-/// line, the tile itself the approach point.
+/// any (ties by x then z, the old diamond-scan order). Region read over
+/// the toll set; its x is the fence line, the tile itself the approach
+/// point.
 pub fn toll_fence(snapshot: &Snapshot, tile_x: i32, tile_z: i32, level: i32, radius: i32) -> Option<(i32, i32, i32)> {
-    let radius = radius.max(0);
-    let mut best: Option<((i32, i32, i32), i32)> = None;
-    for scan_x in tile_x - radius..=tile_x + radius {
-        let rest = radius - (scan_x - tile_x).abs();
-        for scan_z in tile_z - rest..=tile_z + rest {
-            if snapshot.world.is_toll(scan_x, scan_z, level) {
-                let dist = (scan_x - tile_x).abs() + (scan_z - tile_z).abs();
-                if best.is_none_or(|(_, known)| dist < known) {
-                    best = Some(((scan_x, scan_z, level), dist));
-                }
-            }
-        }
-    }
-    best.map(|(tile, _)| tile)
+    snapshot.world.toll_gates_within(tile_x, tile_z, level, radius).into_iter().next()
 }
 
 /// Every tag a plan may require, sorted and distinct, for the worker to

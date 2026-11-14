@@ -40,14 +40,57 @@ pub fn life_path(account: &str) -> std::path::PathBuf {
 /// Load one life file; `None` means no autopilot for this account (not
 /// an error: manual bots have no file).
 pub fn load_life(account: &str) -> Option<Life> {
-    let text = std::fs::read_to_string(life_path(account)).ok()?;
+    let _phase = crate::cpu_profile::phase("load_life");
+    let path = life_path(account);
+    let stamp = file_stamp(&path)?;
+    if let Some(life) = cached_life(account, stamp) {
+        return Some(life);
+    }
+    let _miss = crate::cpu_profile::phase("load_life.parse");
+    let text = std::fs::read_to_string(&path).ok()?;
     let value = lifescape_json::parse(&text).ok()?;
-    life_from_value(&value)
+    let life = life_from_value(&value)?;
+    remember_life(&life, stamp);
+    Some(life)
 }
 
 pub fn save_life(life: &Life) -> Result<(), String> {
-    crate::paths::write_json(&life_path(&life.account), &life_to_value(life))
-        .map_err(|error| format!("brain save {}: {error}", life.account))
+    let _phase = crate::cpu_profile::phase("save_life");
+    let path = life_path(&life.account);
+    crate::paths::write_json(&path, &life_to_value(life)).map_err(|error| format!("brain save {}: {error}", life.account))?;
+    if let Some(stamp) = file_stamp(&path) {
+        remember_life(life, stamp);
+    }
+    Ok(())
+}
+
+/// File identity a cached life is valid for: modification time and size.
+/// Any outside write (operator edit, `--goal` reset) changes it and the
+/// next load parses the file again.
+type LifeStamp = (std::time::SystemTime, u64);
+
+fn file_stamp(path: &std::path::Path) -> Option<LifeStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Parsed lives by account (CPU, VPS 2026-11-14): the brain loaded and
+/// parsed each life JSON (up to ~600 KB) on every tick of every account —
+/// the bulk of `brain-tick`'s CPU. A clone of the parsed graph replaces
+/// the parse while the file is unchanged.
+fn life_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (LifeStamp, Life)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (LifeStamp, Life)>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn cached_life(account: &str, stamp: LifeStamp) -> Option<Life> {
+    let cache = life_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.get(account).filter(|(seen, _)| *seen == stamp).map(|(_, life)| life.clone())
+}
+
+fn remember_life(life: &Life, stamp: LifeStamp) {
+    let mut cache = life_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(life.account.clone(), (stamp, life.clone()));
 }
 
 /// Accepted `--goal` shapes: `max:a,b:40`, `obtain:feather:2000`,
@@ -224,10 +267,13 @@ pub fn create_user(account_opt: Option<String>, iron: bool, goal: Option<String>
 }
 
 /// Keep-list for a cleanup order: unfinished graph obtain items plus the
-/// item checks of unfinished quests, deduplicated and sorted. Coins, food
-/// and best tools are added worker-side (planner triage, kit specs).
+/// item checks of unfinished quests, plus what the ambition's own open
+/// milestones will consume (`market_fit::own_use_items`: a firemaker's
+/// logs, a cook's raw fish, a smith's bars and ores, a priest's bones —
+/// never sold, never dropped), deduplicated and sorted. Coins, food and
+/// best tools are added worker-side (planner triage, kit specs).
 pub fn cleanup_keep(life: &Life) -> Vec<String> {
-    let mut keep = Vec::new();
+    let mut keep = life.ambition.as_ref().map(lifescape_planner::market_fit::own_use_items).unwrap_or_default();
     for node in &life.nodes {
         if matches!(node.status, NodeStatus::Done | NodeStatus::Abandoned) {
             continue;
@@ -287,6 +333,26 @@ pub(crate) fn push_history(life: &mut Life, node: &str, outcome: &str) {
 const INBOX_CAPACITY: usize = 128;
 
 /// Accounts with a plain tick already queued (deduplication).
+/// Supervisor passes between two plain brain ticks of one account
+/// (CPU, VPS 2026-11-14): the supervisor passes every 500 ms over ~26
+/// jobs and each plain tick ran a full `maybe_launch` (resolve, market
+/// reads) — the brain thread sat at 30–85 % of a core doing nothing new.
+/// A report always goes through at once; a plain tick (idle detection,
+/// periodic sales) waits at most this many passes (~3 s).
+pub(crate) const PLAIN_TICK_EVERY: u32 = 6;
+
+/// True when this supervisor pass carries the account's plain tick:
+/// counts the pass and fires on every `PLAIN_TICK_EVERY`-th one.
+pub(crate) fn plain_tick_due(passes: &mut u32) -> bool {
+    *passes = passes.wrapping_add(1);
+    *passes % PLAIN_TICK_EVERY == 1
+}
+
+fn plain_tick_passes() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static PASSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+    PASSES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn queued_ticks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static QUEUED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
     QUEUED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
@@ -317,6 +383,7 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
     std::thread::Builder::new()
         .name("brain-tick".to_string())
         .spawn(move || {
+            crate::cpu_profile::mark_brain_thread();
             while let Ok((account, report)) = receiver.recv() {
                 if report.is_none() {
                     queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&account);
@@ -329,12 +396,17 @@ fn ensure_brain(orch: &Arc<Orchestrator>) {
                     // Rates first (L4 store, raw rows + snapshot buckets),
                     // then the life graph. Both are bounded file/store
                     // writes on the brain thread, never the supervisor.
-                    if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
-                        crate::logln!("job {account}: rates ingest failed: {error}");
+                    {
+                        let _phase = crate::cpu_profile::phase("tick.ingest_report");
+                        if let Err(error) = crate::jobs::ingest_report_persisted(&report) {
+                            crate::logln!("job {account}: rates ingest failed: {error}");
+                        }
                     }
                     crate::logln!("brain {}: folded report stop={}", account, report.get("stop").as_str().unwrap_or("?"));
+                    let _phase = crate::cpu_profile::phase("tick.handle_report");
                     handle_report(&orch, &job, &report);
                 }
+                let _phase = crate::cpu_profile::phase("tick.maybe_launch");
                 crate::brain_launch::maybe_launch(&orch, &job);
             }
         })
@@ -351,6 +423,12 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
     // 500 ms over ~26 jobs (~52 ticks/s) and a capacity-16 inbox was
     // always full — 2 340 "inbox full" lines in 36 min, every decision
     // delayed for nothing. A report always goes through.
+    if !had_report {
+        let mut passes = plain_tick_passes().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !plain_tick_due(passes.entry(job.account.clone()).or_insert(0)) {
+            return;
+        }
+    }
     if !had_report {
         let mut waiting = queued_ticks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !waiting.insert(job.account.clone()) {
@@ -383,6 +461,15 @@ pub fn on_supervise(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: Option<Val
 mod tests {
     use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, parse_goal, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
+
+    #[test]
+    fn plain_ticks_fire_once_every_few_passes() {
+        let mut passes = 0;
+        let fired: Vec<bool> = (0..13).map(|_| super::plain_tick_due(&mut passes)).collect();
+        assert!(fired[0], "the first pass ticks at once (fresh account)");
+        assert_eq!(fired.iter().filter(|fired| **fired).count(), 3, "13 passes, one tick per {} passes", super::PLAIN_TICK_EVERY);
+        assert!(!fired[1] && fired[super::PLAIN_TICK_EVERY as usize]);
+    }
 
     #[test]
     fn goals_parse() {
@@ -486,6 +573,24 @@ mod tests {
             ambition: None,
             goal_origin: None,
         }
+    }
+
+    #[test]
+    fn cached_life_serves_until_the_file_changes() {
+        let dir = std::env::temp_dir().join(format!("lifescape-life-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("t99.json");
+        std::fs::write(&path, "{}").expect("first write");
+        let stamp = super::file_stamp(&path).expect("stamp");
+        let mut life = terminal_life();
+        life.account = format!("cache-test-{}", std::process::id());
+        super::remember_life(&life, stamp);
+        assert_eq!(super::cached_life(&life.account, stamp), Some(life.clone()), "unchanged file: the parsed life, no parse");
+        std::fs::write(&path, "{ \"changed\": true }").expect("outside write");
+        let moved = super::file_stamp(&path).expect("stamp");
+        assert_ne!(moved, stamp, "size changed");
+        assert_eq!(super::cached_life(&life.account, moved), None, "changed file: parse again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

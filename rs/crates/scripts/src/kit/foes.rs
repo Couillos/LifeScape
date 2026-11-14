@@ -237,13 +237,15 @@ mod tests {
             ranked == vec![(9u16, 3203, 3246), (7u16, 3252, 3237)] || ranked == window,
             "walk-cheap first or Manhattan fallback, got: {ranked:?}"
         );
-        // L1 hit: the same pair costs no new compute.
+        // Worker memo: the same window from the same tile costs no trip.
         let before = service.stats();
+        let (calls_before, _) = bot.cost_stats();
         let again = rank_foes(&mut bot, window.clone());
         assert_eq!(again, ranked, "repeat ranks identically");
         let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "second ranking hits L1, never recomputes");
-        assert!(after.hits + after.trunc_hits > before.hits + before.trunc_hits, "L1 served the repeat");
+        assert_eq!(after.misses - before.misses, 0, "second ranking never recomputes");
+        assert_eq!(after.walk_costs, before.walk_costs, "worker memo served the repeat, no round trip");
+        assert_eq!(bot.cost_stats().0, calls_before, "no remote cost call");
     }
 
     /// No planner wired (or nothing plannable): the window keeps its

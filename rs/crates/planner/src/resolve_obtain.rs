@@ -37,9 +37,10 @@ fn level_of(ctx: &ReadyCtx, skill: &str) -> Option<u8> {
     ctx.levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level)
 }
 
-/// Per-unit ceiling of a bid: what the wallet covers, capped at three
-/// times the market value (never less than 20 coins: an untraded object
-/// must be biddable above its 1-coin default).
+/// Per-unit ceiling of a bid: what the wallet covers, nothing else
+/// (user decision 2026-11-14: the `min(coins/qty, max(3 x ref, 20))`
+/// "fair" cap is gone; a buyer is limited only by what it can pay, the
+/// market sets what the object is worth).
 pub fn bid_ceiling(ctx: &ReadyCtx, count: i64) -> i64 {
     // A capped purchase (equipment step): its wallet share is the cap,
     // and it rises with the wallet (no fair-price clamp: the market sets
@@ -47,8 +48,7 @@ pub fn bid_ceiling(ctx: &ReadyCtx, count: i64) -> i64 {
     if let Some(share) = ctx.coin_share_pct {
         return (crate::gear_ladder::wallet_ceiling(ctx.coins, share) / count.max(1)).max(1);
     }
-    let affordable = ctx.coins / count.max(1);
-    affordable.min(fair_unit(ctx)).max(1)
+    (ctx.coins / count.max(1)).max(1)
 }
 
 /// Coins the market legs may spend: the wallet, or its share when the
@@ -67,11 +67,6 @@ fn wallet_for(ctx: &ReadyCtx, cost: i64) -> i64 {
         Some(share) => crate::gear_ladder::coins_for(cost, share),
         None => cost,
     }
-}
-
-/// One unit's fair price: three times the market value, at least 20.
-fn fair_unit(ctx: &ReadyCtx) -> i64 {
-    (ctx.price.max(1) * 3).max(20)
 }
 
 /// Units a `market:buy` leg orders: what is still missing, capped by
@@ -164,11 +159,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         });
     }
     // 1. A covered ask: take it, whole or the part the wallet covers
-    // (a fair ask only: at most the bid ceiling of one unit).
+    // (any ask the wallet pays: no fair-price cap, 2026-11-14).
     let budget = market_coins(ctx);
     let ask_covered = market_ok && ctx.best_ask.is_some_and(|ask| ask * need <= budget);
-    let fair = if ctx.coin_share_pct.is_some() { budget } else { fair_unit(ctx) };
-    let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= budget && ask <= fair);
+    let ask_partial = market_ok && ctx.best_ask.is_some_and(|ask| ask <= budget);
     let producible = workable.iter().min_by_key(|alt| alt.est_ticks).cloned();
     // A light quest that unlocks a way (essence behind Rune Mysteries) or
     // hands the object over (the Duke's air talisman) comes before a

@@ -24,6 +24,9 @@ pub mod paths;
 pub mod brain;
 pub mod brain_ambition;
 pub mod brain_await;
+pub mod brain_bids;
+#[cfg(test)]
+mod brain_bids_sim_tests;
 pub mod economy_guard;
 pub mod brain_fold;
 pub mod brain_gear;
@@ -35,6 +38,7 @@ pub mod brain_market;
 pub mod brain_plan;
 pub mod brain_rescue;
 pub mod brain_sales;
+pub mod brain_reserve;
 pub mod brain_wishlist;
 pub mod brain_succession;
 pub mod brain_stuck;
@@ -46,6 +50,7 @@ pub mod market_eta;
 pub mod market_daemon;
 pub mod market_demand;
 pub mod market_reprice;
+pub mod market_seller;
 pub mod market_service;
 pub mod market_audit;
 pub mod market_merge;
@@ -109,6 +114,10 @@ pub mod verify_reject;
 pub mod daemon;
 pub mod daemon_watch;
 pub mod daemon_conn;
+pub mod cpu_profile;
+#[cfg(test)]
+#[path = "cpu_bench_tests.rs"]
+mod cpu_bench_tests;
 pub mod daemon_close;
 pub mod supervise;
 pub mod session;

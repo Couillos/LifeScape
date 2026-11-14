@@ -35,6 +35,12 @@ RAM warn/shed, RSS daemon, carrés peints) et le JSON complet expose en
 plus un compteur par op batch (`door_defs`, `tiles_flags`,
 `static_locs_near`, `in_f2p`, `toll_fence`, `wants`, `diff`, `debug`,
 `transitions_list`, `probe_targets`, `doors_near`).
+Profil CPU toujours actif (`src/cpu_profile.rs`) : toutes les 60 s le
+log du daemon porte une ligne `cpu-profile pool` (requêtes des pools
+daemon/marché par `cmd:<cmd>`, `push:<type>`, `market:<op>`) et une
+ligne `cpu-profile brain` (étapes `tick.*` du thread `brain-tick` et
+phases imbriquées), top 12 par CPU, format `nom=count/cpu_ms/wall_ms`
+(CPU du thread lu dans `/proc/thread-self/schedstat`).
 Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 
 État et logs (`src/paths.rs`, racine détectée via le dossier `orchestration/`) :
@@ -134,5 +140,7 @@ des deals, options de filtres), `/api/errors/list?…&limit=` (lignes : heure
 UTC, compte, tâche/nœud/méthode, type, message, signature, x/z/niveau,
 zone, détail, dossier), `/api/errors/dossier/<fichier>`. Collecteur
 `errors_ingest.rs` (table `error_events`, sources task/nav/deal/brain,
-voir `docs/decisions.md`), lignes construites dans `errors_model.rs`,
+voir `docs/decisions.md` ; scan `run/failures` toutes les 30 s
+incrémental : seuls les noms jamais vus sont stat'és, passe complète
+horaire pour les réécritures en place, aucun dossier supprimé), lignes construites dans `errors_model.rs`,
 maths dans `errors_aggregate.rs`. Le spectateur suit `/#<compte>`.

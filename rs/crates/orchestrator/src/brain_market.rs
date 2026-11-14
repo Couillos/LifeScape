@@ -43,16 +43,50 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
     }
     if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
         let snapshot = crate::rates_service::live_snapshot();
-        let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) else { return };
-        let rows = crate::rates_service::profit_rows(&store, &snapshot);
+        // Shared table (an unopenable store serves it empty: no profit
+        // pushed, as the early return did).
+        let rows = crate::rates_service::cached_profit_rows();
+        if rows.is_empty() {
+            return;
+        }
+        // Saturation (user rule 2026-11-14): a product under a wall of
+        // asks is worth the share the market absorbs (public book only).
+        // Every bid counts as absorption here (own ones too: a buyer is
+        // a buyer); no account is left out.
+        let reader = crate::brain_bids::MarketReader::live("");
         for method in lifescape_planner::resolve_obtain::money_methods(ctx) {
             let Some(script) = crate::brain_plan::rate_key(&method, node) else { continue };
             let best = rows.iter().filter(|row| row.method == script).map(|row| row.profit).fold(f64::MIN, f64::max);
             if best > f64::MIN {
-                ctx.method_profit.push((method, best));
+                ctx.method_profit.push((method.clone(), saturated_profit(&method, best, &|item| reader.view(item), &|item| crate::brain_bids::units_per_6000(&snapshot, &method, item))));
             }
         }
     }
+}
+
+/// Object a money method sells (`gather:woodcut/willow_logs` →
+/// `willow_logs`, `gather:sheep/wool` → `wool`); fights loot a mix and
+/// name none.
+pub fn money_product(method: &str) -> Option<&str> {
+    let rest = method.strip_prefix("gather:")?;
+    rest.rsplit('/').next().filter(|item| !item.is_empty())
+}
+
+/// A money method's published profit weighed by the saturation of its
+/// product (`market_fit::saturation_factor`: bids + a day of volume over
+/// resting asks + one window's batch). A loss stays a loss; a method
+/// naming no product keeps its profit.
+pub fn saturated_profit(
+    method: &str,
+    profit: f64,
+    view: &dyn Fn(&str) -> Option<lifescape_planner::market_fit::BookView>,
+    units: &dyn Fn(&str) -> f64,
+) -> f64 {
+    let Some(item) = money_product(method) else { return profit };
+    if profit <= 0.0 {
+        return profit;
+    }
+    profit * lifescape_planner::market_fit::saturation_factor(view(item).as_ref(), units(item))
 }
 
 /// D-B: a production leg launched for a tradeable object keeps a bid on
@@ -76,14 +110,12 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx) {
         return;
     }
     // What is still missing, capped by the wallet; at the best ask when
-    // it is fair (the bid crosses at once: market first), else at the
-    // reference walking up to the ceiling.
+    // the wallet covers it (the bid crosses at once: market first), else
+    // at the bot's own last fill on the item (the reference only when it
+    // never bought it, 2026-11-14), walking up to the ceiling.
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
-    let price = match ctx.best_ask {
-        Some(ask) if ask <= ceiling => ask,
-        _ => ctx.price.max(1).min(ceiling),
-    };
+    let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),
@@ -111,8 +143,8 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 
 /// A `market:buy` leg, placed daemon-side (no worker round-trip: the
 /// order is pure bookkeeping, the handover is the convene loop's): the
-/// covered best ask at once, else a bid at the reference walking up to
-/// the ceiling. Orders what is still missing, capped by the wallet (a
+/// covered best ask at once, else a bid at its own last fill price (the
+/// reference when it never bought the item) walking up to the ceiling. Orders what is still missing, capped by the wallet (a
 /// partial buy: the next resolve produces or buys the rest). Replaces
 /// any open bid of the account on that object.
 pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, String> {
@@ -123,10 +155,7 @@ pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, S
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
     let (_, ask) = service.lock_engine().books.get(&id).map(|book| book.best()).unwrap_or((None, None));
-    let price = match ask {
-        Some(best) if best <= ceiling => best,
-        _ => ctx.price.max(1).min(ceiling),
-    };
+    let price = lifescape_market::remembered_bid(ctx.price.max(1), ask, ceiling, service.own_buy_price(&job.account, id));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
         ("account", str_value(&job.account)),

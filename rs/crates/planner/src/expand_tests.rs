@@ -193,14 +193,18 @@ fn ready_resolution_prices_and_picks() {
     let mut stocked = thin.clone();
     stocked.held = 190;
     assert_eq!(crate::resolve_obtain::buy_quantity(&stocked, 200), 10, "only what is still missing");
-    // An ask far above the item's value is no bargain: produce instead.
+    // No fair-price cap (user decision 2026-11-14): an ask far above the
+    // reference is still taken when the wallet pays it, beside production.
     let mut dear = thin.clone();
     dear.best_ask = Some(21);
     dear.coins = 25;
     let mut steep = nodes[0].clone();
     steep.method = None;
     resolve_ready(&mut steep, &dear);
-    assert_eq!(steep.method.as_deref(), Some("farm:feather"), "an unfair partial ask is not taken");
+    assert_eq!(steep.method.as_deref(), Some("farm:feather"), "the bot produces the rest meanwhile");
+    assert!(steep.alternatives.iter().any(|alt| alt.method == "market:bid"), "a 21-coin ask on a 1-coin reference is bid: the wallet is the only cap");
+    assert_eq!(crate::resolve_obtain::bid_ceiling(&dear, 1), 25, "the whole wallet, never min(3 x ref, 20)");
+    assert_eq!(crate::resolve_obtain::bid_ceiling(&dear, 5), 5, "coins over quantity");
 
     // A net is not producible: the merchant sells it (D-A), never the field.
     let mut net = expand_goal(&GoalKind::Obtain { item: "net".to_string(), count: 1 }, &profile());

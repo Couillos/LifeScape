@@ -432,6 +432,13 @@ un cuisinier à 100 crevettes protégées bouclait jalon/fait/réinsertion).
 Les jalons faits sont bornés à `MAX_DONE_KEPT` = 40 (les plus anciens
 partent, ids jamais réutilisés).
 
+Réponse aux offres (2026-11-14, `brain_bids` + `planner::bid_response`,
+voir `docs/economy.md` § Producteurs qui répondent aux offres) : à chaque
+tirage, AVANT le jalon, une offre d'achat publique que le bot fabrique
+maintenant à un taux ≥ 2 × la valeur de son temps devient un quota
+`Produce` d'origine `bid:<objet>` (ambition intacte, comme un but
+d'appoint) ; sinon le tirage ci-dessous.
+
 Tirage (`goals::draw_goal_origin`, toujours l'unique point d'entrée) :
 premier jalon ouvert dont les compétences ne sont pas bannies (`bans.rs`
 respecté), but + `life.goal_origin = "mN"` + historique `goal:
@@ -549,8 +556,10 @@ banque pleine se nettoie même graphe fini) ; l'arrêt sur deux abandons
 consécutifs borne les pannes persistantes sans bloquer les nettoyages
 sains. Le repli `await_fill` persiste son `done` (sinon l'obtention
 ferme ne se termine jamais). L'activité worker (`activities/market_cleanup.rs`, sous le
-plafond 200) : marché pour le surplus échangeable (plancher de réserve
-aussitôt, descente par pas différée — `my_orders` sans âge), magasin
+plafond 200) : marché pour le surplus échangeable (lot et prix du
+daemon, `seller_quote` : réserve = coût propre du bot, voir
+`docs/economy.md` § Réserve vendeur ; sans coût connu, rien n'est
+listé), magasin
 général, jet du reste, D17 sur stock listé seul (le non-listé reliste à
 la passe suivante, D12). Jambes alchimie décidées mais non exécutées
 (pas de script de magie sur le socle : repli magasin, log).
@@ -643,7 +652,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
 | `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
-| `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais + runes de feu + nature dans le sac ; bâton de feu porté accepté) |
+| `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais, charbon, runes de feu + nature retirés du sac puis de la banque ; bâton de feu porté, au sac ou en banque accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
 | `spin:<produit>` | `spin` | `<intrant>` (`wool`) | `--level crafting N`, `--want`, `--site` (rouet) |
@@ -663,7 +672,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `milk:<produit>` | `milk` | — | `--want` ; seau consommé |
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
-| `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` |
+| `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
 | `alch:<objet>` | `alchemy` | `<objet>` | — |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |

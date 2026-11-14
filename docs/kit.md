@@ -126,6 +126,28 @@ sinon `blocked{outil}`) sert tinderbox, ciseau, aiguille, moule ; les
 `fill_*` des postes passent par `reach_bank_for` (fini le `blocked`
 d'un intrant rangé dans une banque à 20 cases).
 
+Sorts (`kit/spell_load.rs`, 2026-11-13) : `enchant_teleport`,
+`alchemy`, `superheat` et `telegrab_wine` comptent runes et cibles dans
+le sac PUIS la banque connue (`banked_usable`), jamais le sac seul
+(bd23dqpq bloqué 4 fois « missing: cosmicrune, waterrune » avec 2
+cosmiques et 67 eaux en banque). `SpellLoad` = runes par sort + intrants
+par sort (le premier est la cible ; superheat acier = minerai de fer + 2
+charbons ; bananes = un sort pour tout le sac). Un bâton élémentaire
+paie sa rune comme le compte le planner (`tools::family_held`) : porté,
+au sac (manié) ou en banque (retiré puis manié, `ensure_staff`). Quand
+le sac ne finance plus un sort : `bank_trip` banque les produits (runes,
+cibles et bâtons gardés), puis `bank_withdraw_counts` retire en une
+visite les quantités du plan (`SpellLoad::plan`), dimensionné par
+`count`/`--want` restants, la banque et les cases libres (une pile = une
+case, un non-empilable = une case par unité). `blocked{noms exacts}`
+seulement si sac + banque ne financent pas un sort ; un run sans but
+(ni count, ni `--want`, ni `--level`) qui a déjà lancé finit `ok` à sec.
+Combat magique : le passage en banque (`gear::magic_ammo`) retire les
+runes du sort ORDONNÉ (`--spell`), plus seulement air + esprit ; à court
+dans le sac avec les runes en banque, `kit::strike` demande un voyage
+banque (`Ok(false)`, comme un carquois vide) au lieu de `blocked`
+(`magic::bank_shortfall`).
+
 Feux (`kit/fireline.rs`, règles de `firemaking.rs2`) : case légale =
 non `WALK_BLOCKED`, aucune emprise de loc `active=1` (feu existant
 compris, statique + live), F2P, hors des boîtes `bank_zones`
@@ -152,6 +174,17 @@ d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
 (`fly_fishing_rod`, `feather`, pack + banque connue comptés). Aucun
 achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
 hache, cisailles) : c'est la jambe d'obtention du brain.
+
+`--want` d'un récolteur (2026-11-14, paul_rhodes n60 : `obtain oak_logs
+308` lancé `woodcut --site …` sans ses bûches par un binaire d'avant le
+contrat, 3 649 bûches de saule en 25 runs finis au budget) : l'objet
+compté EST la cible. `woodcut --want oak_logs N` sans positionnel coupe
+du chêne ; un positionnel qui nomme un autre objet (`woodcut willow_logs
+--want oak_logs N`) est un `Usage` (ordre croisé, le but ne bougerait
+jamais). Le but s'arrête aussi en cours de charge : `CycleState::want_goal`
+→ `LoadCfg::until`, `run_load` rend la charge finie dès que sac + banque
+connue atteignent base + N (comme un sac plein), le script la banque et
+le cycle s'arrête, plus un sac entier au-delà de N.
 
 Postes et combat : niveau manquant = `blocked{level:...}` (plus de
 Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du

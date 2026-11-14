@@ -31,23 +31,17 @@ pub(super) fn tradeable_id(name: &str) -> Result<u16, ScriptError> {
     Ok(entry.obj_id as u16)
 }
 
-/// Opening price of an unpriced order (PRD3 lot 2). A buyer takes the
-/// best ask when its ceiling covers it, else opens at the reference
-/// (never above the ceiling); a seller asks the reference, or the best
-/// bid when a buyer already pays more (2026-11-13: no margin on top, the
-/// daemon walks a listing up while it sells). Mirrors
-/// `lifescape_market::{opening_bid, opening_ask}` (no market dependency
-/// in the scripts crate).
-pub(crate) fn opening_price(buying: bool, reference: i64, bid: Option<i64>, ask: Option<i64>, ceiling: Option<i64>) -> i64 {
+/// Opening price of an unpriced buy (PRD3 lot 2): the best ask when the
+/// ceiling covers it, else the reference, never above the ceiling.
+/// Mirrors `lifescape_market::opening_bid` (no market dependency in the
+/// scripts crate). Sells never price here: the daemon's `seller_quote`
+/// prices them from the seller's own reserve (2026-11-14).
+pub(crate) fn opening_bid_price(reference: i64, ask: Option<i64>, ceiling: Option<i64>) -> i64 {
     let reference = reference.max(1);
-    if buying {
-        let cap = ceiling.unwrap_or(reference).max(1);
-        match ask {
-            Some(best) if best <= cap => best,
-            _ => reference.min(cap),
-        }
-    } else {
-        reference.max(bid.unwrap_or(0))
+    let cap = ceiling.unwrap_or(reference).max(1);
+    match ask {
+        Some(best) if best <= cap => best,
+        _ => reference.min(cap),
     }
 }
 
@@ -117,15 +111,21 @@ pub fn parse_order(args: &[String]) -> Result<(), ScriptError> {
 }
 
 fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
-    let SideOrder { item, qty, price, ceiling, mut floor } = parse_side(args)?;
-    let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
-    let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
-    let price = price.unwrap_or_else(|| opening_price(buying, reference, quote.get("bid").as_i64(), quote.get("ask").as_i64(), ceiling));
-    // Sellers walk down to a floor: half a traded reference by default,
-    // 1 coin for a never-traded object (the buyers set its price).
-    if !buying && floor.is_none() {
-        floor = Some(if quote.get("traded").as_bool() == Some(true) { (reference / 2).max(1) } else { 1 });
-    }
+    let SideOrder { item, mut qty, price, ceiling, mut floor } = parse_side(args)?;
+    let price = if buying {
+        let quote = market_call("quote", vec![("item", Value::Int(i64::from(item)))])?;
+        let reference = quote.get("reference").as_i64().unwrap_or(1).max(1);
+        price.unwrap_or_else(|| opening_bid_price(reference, quote.get("ask").as_i64(), ceiling))
+    } else {
+        // Sellers price from their own reserve (daemon `seller_quote`):
+        // a demand-sized lot, never under the reserve, never a 1-coin
+        // fallback; no known own cost = hold.
+        let Some(quoted) = seller_quote(bot, item, qty)? else { return Ok(1) };
+        qty = quoted.qty;
+        let reserve = floor.unwrap_or(quoted.floor).max(quoted.floor);
+        floor = Some(reserve);
+        price.unwrap_or(quoted.price).max(reserve)
+    };
     let mut params = vec![
         ("account", str_value(&bot.username)),
         ("side", str_value(if buying { "buy" } else { "sell" })),
@@ -155,6 +155,47 @@ fn place_side(bot: &mut Bot, args: &[String], buying: bool) -> ScriptResult {
     Ok(0)
 }
 
+/// A seller's own listing, as the daemon prices it (`seller_quote`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SellerQuote {
+    pub qty: i64,
+    pub price: i64,
+    pub floor: i64,
+}
+
+impl SellerQuote {
+    /// `Ok(None)` = hold (no own cost known, nothing free, band).
+    pub(crate) fn from_reply(reply: &Value) -> Result<Option<SellerQuote>, String> {
+        if reply.get("ok").as_bool() != Some(true) {
+            return Err(reply.get("error").as_str().unwrap_or("seller_quote refused").to_string());
+        }
+        if reply.get("hold").as_str().is_some() {
+            return Ok(None);
+        }
+        match (reply.get("qty").as_i64(), reply.get("price").as_i64(), reply.get("floor").as_i64()) {
+            (Some(qty), Some(price), Some(floor)) => Ok(Some(SellerQuote { qty, price, floor })),
+            _ => Err("seller_quote without qty/price/floor".to_string()),
+        }
+    }
+}
+
+/// The daemon's quote for selling `qty` of `item` (the bot's own reserve
+/// and demand lot); `None` = hold, logged.
+pub(crate) fn seller_quote(bot: &mut Bot, item: u16, qty: i64) -> Result<Option<SellerQuote>, ScriptError> {
+    let reply = market_call("seller_quote", vec![("account", str_value(&bot.username)), ("item", Value::Int(i64::from(item))), ("qty", Value::Int(qty))])?;
+    match SellerQuote::from_reply(&reply) {
+        Ok(Some(quote)) => Ok(Some(quote)),
+        Ok(None) => {
+            bot.log(&format!("sell {item}: holding ({})", reply.get("hold").as_str().unwrap_or("?")));
+            Ok(None)
+        }
+        Err(error) => {
+            bot.log(&format!("sell {item}: no quote ({error})"));
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::place_side;
@@ -173,15 +214,23 @@ mod tests {
     }
 
     #[test]
-    fn opening_prices_follow_the_book() {
-        use super::opening_price;
-        assert_eq!(opening_price(true, 1, None, None, Some(20)), 1, "untraded: bid opens at 1");
-        assert_eq!(opening_price(true, 1, None, Some(12), Some(20)), 12, "covered ask: take it");
-        assert_eq!(opening_price(true, 10, None, Some(30), Some(20)), 10, "ask above the ceiling: rest at the reference");
-        assert_eq!(opening_price(true, 50, None, None, Some(20)), 20, "never above the ceiling");
-        assert_eq!(opening_price(false, 100, None, None, None), 100, "ask at the reference");
-        assert_eq!(opening_price(false, 100, Some(130), None, None), 130, "a richer bid wins");
-        assert_eq!(opening_price(false, 1, None, None, None), 1, "untraded seller asks 1");
+    fn opening_bids_follow_the_book() {
+        use super::opening_bid_price;
+        assert_eq!(opening_bid_price(1, None, Some(20)), 1, "untraded: bid opens at the reference");
+        assert_eq!(opening_bid_price(1, Some(12), Some(20)), 12, "covered ask: take it");
+        assert_eq!(opening_bid_price(10, Some(30), Some(20)), 10, "ask above the ceiling: rest at the reference");
+        assert_eq!(opening_bid_price(50, None, Some(20)), 20, "never above the ceiling");
+    }
+
+    #[test]
+    fn seller_quotes_parse_lists_and_holds() {
+        use lifescape_json::{object, str_value, Value};
+        let listed = object(vec![("ok", Value::Bool(true)), ("qty", Value::Int(25)), ("price", Value::Int(8)), ("floor", Value::Int(4))]);
+        assert_eq!(super::SellerQuote::from_reply(&listed), Ok(Some(super::SellerQuote { qty: 25, price: 8, floor: 4 })));
+        let held = object(vec![("ok", Value::Bool(true)), ("hold", str_value("no own cost known"))]);
+        assert_eq!(super::SellerQuote::from_reply(&held), Ok(None), "a hold lists nothing");
+        let refused = object(vec![("ok", Value::Bool(false)), ("error", str_value("unknown item 7"))]);
+        assert!(super::SellerQuote::from_reply(&refused).is_err());
     }
 
     #[test]

@@ -60,7 +60,8 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
-        let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, target.as_ref())?;
+        let until = state.want_goal(step_bot, &spec);
+        let (ok, new_level) = crate::kit::fish::fish_load(step_bot, level, &mut bank, coins, target.as_ref(), until)?;
         level = new_level;
         if !ok {
             return Err(ScriptError::Failed(format!("fish failed at {:?}", step_bot.position())));

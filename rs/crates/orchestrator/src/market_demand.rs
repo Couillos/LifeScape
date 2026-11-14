@@ -198,12 +198,9 @@ pub fn chain_profits() -> Vec<ChainProfit> {
 /// Best profit per ambition kind: chains plus measured method profits.
 pub fn kind_profits() -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = chain_profits().into_iter().filter_map(|row| Some((row.kind?, row.profit_per_6000))).collect();
-    if let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) {
-        let snapshot = crate::rates_service::live_snapshot();
-        for row in crate::rates_service::profit_rows(&store, &snapshot) {
-            if let Some(kind) = method_skill(&row.method).and_then(kind_for_skill) {
-                out.push((kind.to_string(), row.profit));
-            }
+    for row in crate::rates_service::cached_profit_rows().iter() {
+        if let Some(kind) = method_skill(&row.method).and_then(kind_for_skill) {
+            out.push((kind.to_string(), row.profit));
         }
     }
     out

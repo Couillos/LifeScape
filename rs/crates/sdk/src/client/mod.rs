@@ -7,6 +7,7 @@ pub mod actions;
 pub mod approach;
 pub mod cost_cache;
 pub mod design;
+pub mod door_leaf;
 pub mod doors;
 pub mod exchange;
 pub mod loc_stands;
@@ -16,6 +17,7 @@ pub mod nav_remote;
 pub mod service_wait;
 pub mod snapshot_view;
 pub mod social;
+pub mod static_cache;
 pub mod travel;
 pub mod travel_custom;
 pub mod travel_dossier;
@@ -160,6 +162,9 @@ pub struct Bot {
     /// Served `wants` tags pinned by version: options build without
     /// tables and without a second round-trip while the version holds.
     pub(crate) wants_cache: Option<(String, Vec<String>)>,
+    /// Static service answers pinned by version (`static_cache`): door
+    /// defs, tile flags, F2P, toll lists, static loc lists, walk costs.
+    pub(crate) static_cache: static_cache::StaticCache,
     /// E14 walk-cost counters (remote calls vs in-batch duplicates).
     pub(crate) cost_stats: cost_cache::CostStats,
     /// Last positions with their tick, oldest first, capped
@@ -228,6 +233,7 @@ impl Bot {
             assigned_site: None,
             plan_data_version: None,
             wants_cache: None,
+            static_cache: static_cache::StaticCache::default(),
             cost_stats: cost_cache::CostStats::default(),
             trail: Vec::new(),
             on_pump: None,

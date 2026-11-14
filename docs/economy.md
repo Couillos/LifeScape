@@ -20,17 +20,21 @@ marchands), `sim` (simulateur à graines fixes).
 
 Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
 ordre posé avec un `ceiling` (acheteur) ou un `floor` (vendeur) fait un
-pas de 5 % (≥ 1 pièce) par fenêtre de patience (200 ticks) tant qu'il
+pas de 5 % (≥ 1 pièce) par fenêtre de patience (2000 ticks depuis le
+2026-11-14, `zip::PATIENCE_TICKS`, voir § Coût CPU du repricing) tant qu'il
 reste au carnet (`market_reprice`, `lifescape_market::demand_step`), sa
 direction lue dans la fenêtre : vente servie (même en partie) → monte,
 vente au repos → descend jusqu'à son plancher, achat au repos → monte
 jusqu'à son plafond, achat servi → redescend vers son prix d'ouverture.
-Acheteur : ouvre à l'ask s'il le couvre, sinon à la référence
-(`opening_bid`). Vendeur : ouvre à la référence, ou au meilleur bid s'il
-est plus riche (`opening_ask`, plus de marge de 10 %), plancher moitié
-de la référence échangée, 1 sinon (jamais un coût d'intrant). Une vente
-monte sans plafond propre (la bande 5× d'une référence échangée la
-borne). Voir § Prix par l'offre et la demande. Les PNJ n'ancrent plus rien : aucun bot ne
+Acheteur : ouvre à l'ask s'il le couvre, sinon à son propre dernier
+prix d'achat de l'objet, sinon à la référence (`remembered_bid`),
+plafond = ce que son portefeuille paie (plus de plafond « juste »).
+Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
+ouverture à la référence échangée (ou au meilleur bid plus riche), à
+`max(meilleur bid, 2 × réserve)` pour un objet jamais échangé, jamais
+sous la réserve (`seller_open`). Une vente monte sans plafond propre
+(la bande 5× d'une référence échangée la borne). Voir § Prix par l'offre
+et la demande et § Réserve vendeur. Les PNJ n'ancrent plus rien : aucun bot ne
 vend à un marchand, et l'achat marchand est réservé aux objets non
 productibles en F2P (D-A, voir `decisions.md`). Marchands (`market:flip`, ~10 %) :
 sélection sur écart/volume, plafonds `max_capital_share` (10 %),
@@ -38,8 +42,14 @@ sélection sur écart/volume, plafonds `max_capital_share` (10 %),
 
 Couverture vérifiée à l'ordre (objet possédé, pièces disponibles, registre
 en mémoire ; les holdings live des connectés se brancheront sur le même
-contrôle). Bande anti-bug : rejet au-dessus de 5× la référence, achat
-rejeté sous 0,2×, ventes jusqu'à 1 pièce. Deals livrés physiquement place
+contrôle). Bande anti-bug (`guards::check_price`, inchangée 2026-11-14,
+décision utilisateur en attente) : avec une référence ÉCHANGÉE (VWAP
+24 h ou dernier print), tout ordre au-dessus de 5× est rejeté (achat
+comme vente, au placement et à l'amend), un achat sous 0,2× aussi ; une
+vente peut descendre à 1 ; sans référence échangée aucune bande. La
+marche (`market_reprice::walk_cap`) plafonne la montée à 5× ; un vendeur
+dont la réserve dépasse 5× d'une référence effondrée garde son stock
+(hold), son ouverture est ramenée à 5× sinon. Deals livrés physiquement place
 de Varrock (anneau autour de la fontaine, voir § Place ci-dessous) :
 `matched → convened(case d'échange, échéance) → both_arrived →
 trading → settled | failed{no_show|mismatch|death|timeout|nav_down}`.
@@ -88,7 +98,9 @@ billets (`bank_main:com_93` = notes, `com_94` = items) pour les gros
 lots, redépôt après l'échange, les DEUX écrans vérifiés avant accept.
 
 Référence (PRD3) = VWAP 24 h ; sinon dernier print ; sinon milieu du
-carnet ; sinon **1 pièce** (jamais le prix magasin). La bande anti-bug ne
+carnet ; sinon **1 pièce** (jamais le prix magasin). Ce repli public
+reste honnête (« pas de donnée ») mais aucun vendeur n'en part : un
+objet non échangé (référence non `traded`) ouvre à `2 × réserve`. La bande anti-bug ne
 s'applique qu'à une référence issue de vraies transactions. Bougies OHLCV en horloge (1 h / 7 jours,
 1 jour / 6 mois et plus), recalculables depuis `executions` (source de
 vérité), tick serveur stocké avec chaque exécution. Tendances calculées
@@ -275,14 +287,24 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
 ## PRD3 : économie centrale
 
 - Ventes par défaut : le cerveau liste le surplus échangeable des bots
-  inactifs (`brain_sales`, toutes les 600 s) à la référence, prix qui
-  marche ensuite avec la demande ; protégés : pièces, nourriture ≤ 100,
-  keep-list du graphe, intrants du skill entraîné (et un produit qu'une
-  autre méthode ouverte consomme), outils, porté, pièces de l'échelle
-  d'équipement et palier suivant, envies. Les produits fabriqués
-  (barres, forgé, artisanat, cuisine) sont vendus. Les annonces sans
-  bornes (posées avant un redémarrage) sont réadoptées à chaque passe
-  (hors marchands, qui fixent leurs prix).
+  inactifs (`brain_sales`, toutes les 600 s) par LOTS (§ Réserve
+  vendeur), prix qui marche ensuite avec la demande sans passer sous la
+  réserve ; protégés : pièces, nourriture ≤ 100, keep-list du graphe,
+  intrants de tout ce que le plan du bot travaillera
+  (`brain_sales::planned_methods` : méthodes et alternatives des nœuds
+  niveau/argent ouverts, tranche d'un nœud niveau pas encore résolu,
+  tranche de chaque jalon niveau et production de chaque jalon produire
+  non finis de l'ambition ; bûches d'un futur allumeur, poisson cru
+  d'un futur cuisinier, minerai/barres d'un fondeur/forgeron, runes
+  d'un sort de combat) et un produit qu'une autre méthode ouverte
+  consomme, outils, porté, pièces de l'échelle d'équipement et palier
+  suivant, envies. Les produits fabriqués (barres, forgé, artisanat,
+  cuisine) sont vendus. Les annonces sans bornes (posées avant un
+  redémarrage) sont réadoptées à chaque passe, marchands compris
+  (`market_seller::adoption`) : sous la réserve → relevée à la réserve,
+  au-delà du lot de demande ou sans coût connu → retirée (stock rendu à
+  la banque, la passe suivante liste un lot), sinon marche jusqu'à la
+  réserve.
 - Achats : `market:buy` posé par le cerveau (offre avec plafond) puis
   PARQUÉ (`park_for_fill`, D-SIDE) : l'offre attend au carnet pendant que
   le worker lance le nœud prêt suivant, sinon une fenêtre d'argent de
@@ -381,14 +403,99 @@ combattant).
 
 ## Prix par l'offre et la demande (2026-11-13)
 
-1 pièce n'est que le prix d'amorçage. Règles (`lifescape_market::zip`,
-`market_reprice`) : ouverture à la référence (VWAP 24 h → dernier print
-→ milieu → 1), puis un pas de 5 % (≥ 1) par fenêtre de 200 ticks selon
-les exécutions de la fenêtre (voir § Market). Aucun plancher lié au coût
-des intrants : un vendeur qui ne vend pas descend, un vendeur qui vend
-monte ; un acheteur qui n'est pas servi monte jusqu'à sa part de
-portefeuille. Le prix suit donc la masse monétaire : plus de pièces →
-plafonds plus hauts → prix plus hauts.
+1 pièce n'est que le prix d'amorçage public. Règles
+(`lifescape_market::zip`, `market_reprice`) : ouverture à la référence
+échangée (VWAP 24 h → dernier print), `2 × réserve` sinon, puis un pas
+de 5 % (≥ 1) par fenêtre de 2000 ticks selon les exécutions de la
+fenêtre (voir § Market). Un vendeur qui ne vend pas descend jusqu'à sa
+réserve (son propre coût, § Réserve vendeur) et y reste ; un vendeur
+qui vend monte ; un acheteur qui n'est pas servi monte jusqu'à ce que
+son portefeuille paie. Le prix suit donc la masse monétaire : plus de
+pièces → plafonds plus hauts → prix plus hauts.
+
+## Réserve vendeur, mémoire des fills, anti-dumping (2026-11-14)
+
+Constat 2026-11-14 : 104 carnets actifs sur 117 à 1 pièce, 84 % des
+deals à 1, masse monétaire ×25 en 11 h. Causes : plancher vendeur =
+référence/2 avec référence = VWAP 24 h pondéré en quantité (un gros dump
+abaisse le plancher : saule 13 → 6 → 2 → 1) ; objets jamais échangés
+ouverts à 1 ; stock de flip des marchands relisté à la référence
+(ryan_park : 81 % du côté vente à 1) ; lots entiers jetés d'un coup.
+
+Toutes les entrées sont les données PROPRES du bot (ses rapports, ses
+fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
+
+- Réserve (`brain_reserve`) = ticks qu'une unité a coûté AU BOT × ses
+  pièces par tick, arrondi au supérieur (≥ 1). Ticks par unité mesurés
+  sur ses 200 derniers rapports : les ticks d'un rapport sont partagés
+  entre ses lignes de farm (`produced`, `loot`, `ground_spawn`, pièces
+  ramassées) au prorata `quantité × valeur de jeu` (pièces à 1) ; un
+  rapport de récolte ou de production donne tous ses ticks à son
+  produit, un rapport de combat sa part de butin à chaque drop. Non
+  mesuré : l'estimation du planificateur (`est_ticks` / quantité d'une
+  alternative de farm d'un nœud d'obtention du graphe du bot), sinon le
+  taux de démarrage à froid du script (`rates_service::prior_for`).
+  Pièces par tick : la meilleure méthode du bot, (pièces ramassées ou
+  vendues au magasin + unités farmées, nettes de la vente magasin, × son
+  propre dernier prix de vente) / ticks, jamais sous
+  `market_fit::MIN_COIN_RATE` (0,1, le plancher du coût unitaire de
+  `bid_response` : le temps n'est jamais gratuit ; saule à 43,6 ticks →
+  5 pièces). Un objet ACHETÉ coûte au moins son propre dernier prix
+  d'achat. Plafond partagé avec la réponse aux offres : la réserve ne
+  dépasse jamais le coût de FABRICATION que `bid_response` donne au bot
+  (`bid_response::production_cost` = chemin « make » de `unit_cost`,
+  pièces + ticks × `market_fit::coin_rate` ; calculé une fois par passe
+  par `brain_bids::production_costs_for`, mêmes niveaux, bans, quêtes,
+  rendements et carnet que le tirage), arrondi bas, ≥ 1 : un quota compte
+  les bids au-dessus de ce coût, le producteur ne garde donc jamais le
+  stock que ces bids achèteraient. Aucun coût connu : le bot garde son
+  stock (hold), jamais une annonce à 1.
+- Ouverture (`zip::seller_open`) : référence échangée (ou meilleur bid
+  plus riche) ; objet jamais échangé : `max(meilleur bid, 2 × réserve)` ;
+  jamais sous la réserve ; ramenée à 5× d'une référence échangée (bande).
+- Mémoire des fills (`market_seller`, `Engine::own_sells` + `deals`) :
+  après une vente RAPIDE (servie ≤ `FAST_FILL_TICKS` = `PATIENCE_TICKS`
+  = 2000 ticks après la mise en vente, soit dans la première fenêtre,
+  avant tout pas de descente, durée mesurée
+  depuis `QuoteBounds::listed_wall` ; un ask qui croise un bid à l'arrivée
+  = 0), le lot suivant ouvre à ≥ 105 % de ce prix. Après redémarrage le
+  prix revient du store (deals non échoués du bot), la vitesse non (pas
+  de hausse). Une offre d'achat ouvre à son propre dernier prix d'achat
+  (`remembered_bid`), l'ask couvert restant pris d'abord.
+- Anti-dumping : un lot = `market_fit::sale_lot` (bids des AUTRES
+  comptes + volume 24 h, au moins 28, plafonné au stock libre ; une
+  seule règle avec la réponse aux offres) ; le reste reste en banque, le
+  lot suivant part quand le précédent n'a plus de ligne au repos
+  (vendu). Jamais sous la réserve, jamais d'expiration qui brade. Ce que
+  le plan du bot consommera n'est pas du surplus : jalons ouverts de
+  l'ambition par `market_fit::own_use_items` (`cleanup_keep`), nœuds
+  ouverts du graphe par `brain_sales::planned_methods` (tranche d'un nœud
+  niveau non résolu, runes d'un sort de combat). Mêmes règles pour le
+  `market sell` et le `market cleanup` des workers (op `seller_quote`,
+  niveaux live lus au superviseur pour le plafond de fabrication).
+- Marchands (`flip_quote`) : achat au meilleur bid + 1 seulement quand
+  l'écart `(ask − 1) − (bid + 1)` couvre la marge minimale = ticks par
+  unité flippée (mesurés sur ses rapports `market`, sinon 6000/100,
+  l'estimation de l'engagement `market:flip`) × ses pièces par tick ;
+  vente d'un lot de demande à l'ask − 1, jamais sous son prix d'achat +
+  marge (ou sa réserve pour un stock non acheté), à 2 × ce plancher
+  sans ask ; jamais réf ± 1. Le stock de flip (objets que le marchand a
+  achetés) n'est jamais relisté par `maybe_list_surplus`.
+- Coût CPU du repricing (2026-11-14, ~55 amends/s et ~10 000 lignes de
+  log en 3 min après le redémarrage) : patience 2000 ticks (était 200) ;
+  un ordre dans sa fenêtre est sauté avant toute lecture du store ; un
+  ordre parqué à une borne (réserve, plafond) ferme sa fenêtre sans
+  amend ni log ; une référence lue une fois par objet et par passe ; les
+  amends d'une passe partagent une transaction (`Store::begin_batch` /
+  `commit_batch`) ; une ligne de synthèse par passe (`market-reprice: N
+  moved, P at a bound, R refused`). Adoption idempotente : un ordre
+  adopté (ou relevé, retiré) une fois n'est jamais repris
+  (`Engine::adopted`, `market_reprice::handled`), une ligne de synthèse
+  par compte et par passe.
+- Plafond acheteur (décision utilisateur) : le plafond « juste »
+  `min(pièces/qté, max(3 × réf, 20))` est retiré
+  (`resolve_obtain::bid_ceiling` = pièces / quantité) ; aucun plafond lié
+  à la richesse.
 
 Simulations hors ligne (`market/src/sim_demand.rs`,
 `orchestrator/src/economy_sim_tests.rs`) : un acheteur (plafond 60)
@@ -415,3 +522,82 @@ retenue ; les intrants récoltés soi-même sont comptés au prix de marché
 (coût d'opportunité). `profit_per_6000 > 0` avec une offre au-dessus de
 `input_cost` = signal de produire (entraîner le skill, acheter les
 intrants).
+
+## Producteurs qui répondent aux offres (point 7, 2026-11-14)
+
+À CHAQUE tirage de but (`brain_succession::draw_next`, avant le jalon
+de l'ambition, pas seulement quand les compétences sont bannies), le
+cerveau lit le carnet PUBLIC (`brain_bids` : ordres au repos du moteur,
+ses propres offres exclues, volume 24 h des exécutions) et demande au
+planner (`planner/src/bid_response.rs`, pur) s'il existe une offre
+d'achat que ce bot sait fabriquer avec profit :
+- Coût unitaire (`unit_cost`, récursif sur la recette, 3 niveaux) : le
+  moins cher de ACHETER (asks au repos qui couvrent la quantité) et
+  FABRIQUER (jambe de production praticable MAINTENANT : niveau atteint
+  et compétence non bannie, quête faite, outils détenus ou achetables —
+  ask au repos, ou magasin PNJ si D-A l'autorise —, site hors guilde ;
+  ses ticks = 6000 / unités par 6000, mesurées sinon a priori, sinon 600
+  fabrication / 200 récolte ; chaque intrant à SON coût unitaire). Un
+  stock détenu coûte ce que sa vente rapporterait (meilleur bid public)
+  et aucun temps. Total = pièces + ticks × taux du bot.
+- Taux du bot (`market_fit::coin_rate`) : meilleur profit publié (page
+  rates) parmi les scripts que ses niveaux ouvrent (bande ≤ niveau),
+  plancher 0,1 pièce/tick (le temps n'est jamais gratuit) ; les flips
+  ne comptent pas.
+- Profondeur : bids qui paient plus que le coût total ; moins les asks au
+  repos à ≤ 125 % du meilleur bid (offre déjà en route : ces vendeurs
+  descendent vers les bids) ; moins le stock libre du bot (il le vend
+  sans fabriquer) ; le bot en prend la MOITIÉ (`PRODUCER_SPLIT`, arrondi
+  haut, ≤ 100). Revendre l'objet acheté n'est pas produire (marchands).
+- Règle de score : taux brut = (revenu des bids pris − pièces dépensées)
+  / (ticks de production + 800 ticks d'aller-retour Varrock). L'offre
+  passe DEVANT l'ambition seulement si ce taux ≥ 2 × le taux du bot
+  (`BID_PREEMPT`) et si le net après le temps ≥ 50 pièces
+  (`BID_MIN_PROFIT`). Entre plusieurs, le meilleur taux, incliné de
+  ±15 % par un mot propre au bot et à l'objet.
+- Étalement (sans état d'un autre bot) : un bot ne répond à un objet que
+  dans une fenêtre de 6000 ticks sur deux choisie par son mot
+  (`answers_now`, rotation par fenêtre) ; avec la moitié de la
+  profondeur par producteur, les bots capables ne se ruent pas tous sur
+  le même carnet.
+- But : `GoalKind::Produce{objet, N}` (jambes de production seules,
+  intrants par les sous-tâches, marché d'abord), origine `bid:<objet>` :
+  aucun jalon, ambition intacte, le tirage suivant la repèse. Log
+  `brain <compte>: answers bids: produce N <objet> (best bid …, unit …
+  coins + … ticks, … coins/tick vs own …, net …; plan)`. Le produit fini
+  sort de la keep-list et part par la vente par défaut (`brain_sales`,
+  ouverture au meilleur bid, pas de 5 % ensuite).
+- Iron : jamais.
+
+## Saturation et usage propre (« les bots jouent comme des joueurs », 2026-11-14)
+
+`planner/src/market_fit.rs` (pur, carnet public + état du bot) :
+- `saturation_factor(vue, lot)` = (profondeur des bids + volume 24 h) /
+  (asks au repos + lot), borné [0, 1] ; 1 sans ask (le premier vendeur
+  fixe le prix) ou sans donnée. Les méthodes d'argent récoltées
+  (`gather:<…>/<objet>`) valent leur profit publié × ce facteur
+  (`brain_market::fill_ctx` → `saturated_profit`) : 33 364 bûches de
+  saule à 1 pièce pour 4 319 échangées par jour ⇒ ×0,13, une méthode
+  dont le produit se vend passe devant. Les combats (butin mêlé) gardent
+  leur profit.
+- `own_use_items(ambition)` : ce que les jalons ouverts du bot
+  consommeront (chaque tranche d'un jalon de niveau, de son niveau live à
+  la cible, `sizing::tranche_consumption` : bûches de l'allumeur, poisson
+  cru du cuisinier, minerais de la fonte, os du prêtre, runes, flèches ;
+  intrants d'un quota et les leurs : barres puis minerais). Ajouté à
+  `brain::cleanup_keep` ⇒ ni vendu (`brain_sales::working_keep`) ni
+  jeté au rangement : un allumeur coupe ses bûches pour les brûler.
+- `sale_lot(stock, vue)` = ce que les acheteurs prennent (bids + volume
+  24 h), au moins un inventaire (28), jamais plus que le stock : taille
+  d'une annonce de joueur. Câblé (2026-11-14) dans la vente par défaut,
+  l'adoption des annonces, `seller_quote` et `flip_quote`
+  (`market_seller`, § Réserve vendeur).
+- Origine des volumes absurdes (revue 2026-11-14, `task_yields`) :
+  plumes ≈ 115 000 en montées de combat sur les poulets (butin, jamais
+  lâché) ; saule ≈ 8 900 en tranches de bûcheronnage, 6 500 en `make_money`
+  et ≈ 11 500 en obtentions : b8jxrdd2 n93/n109 = `obtain willow_logs
+  2359` d'une tranche d'allumage 30→45 (`tranche_consumption`), chaîne
+  abandonnée puis 2 035 bûches listées à 1 (corrigé par l'usage propre) ;
+  paul_rhodes n60 `obtain oak_logs 308` a coupé 3 187 saules en 106 839
+  ticks (le script coupe un autre arbre que la ressource du nœud : bug
+  script hors de ce lot). Les quotas des échelles (100–200) sont sains.

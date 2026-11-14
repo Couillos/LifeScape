@@ -1,8 +1,7 @@
 //! Superheat: smelt ores to bars anywhere with 43 Magic (catalogue
 //! §5.10, P2). The ore-to-bar declaration reuses the smelt recipes from
-//! the dump; casting itself is a dette like alchemy: the SDK has no
-//! spell-cast op outside combat, so the run resolves everything and
-//! fails loud with the exact missing piece.
+//! the dump; ores, coal and runes are stocked from the pack and the
+//! known bank (`kit::spell_load`).
 //!
 //! Process: poste aucun (sort) · action superheat · interface sort ·
 //! intrants minerai (+ charbon) + nature + feu · produits barres.
@@ -12,9 +11,10 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::cycle::{exit_code, poll_stop, CycleState};
-use crate::kit::magic::{cast_on_held, spell_shortfall, wield_staff_for};
+use crate::kit::cycle::exit_code;
+use crate::kit::magic::{cast_on_held, wield_staff_for};
 use crate::kit::pack::{obj_id, pack_total};
+use crate::kit::spell_load::{run_casts, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
 use crate::{ScriptError, ScriptResult};
 
@@ -49,21 +49,20 @@ pub fn superheat_runes() -> Vec<(String, i64)> {
 }
 
 /// Superheat carried ores in the open session: `superheat <bar|ore>
-/// [count] [--want ITEM N] [--level magic N]` (count omitted or 0 = the
-/// pack). Missing runes or ore fail `Blocked` (the brain files obtain
-/// tasks); a worn (or carried) fire staff pays the fire runes. Each cast
-/// consumes the ore and pays a bar plus the spell XP.
+/// [count] [--want ITEM N] [--level magic N]` (count omitted or 0 = all
+/// held). Runes, ore or coal short in pack + bank fail `Blocked` by name
+/// (the brain files obtain tasks); a worn, carried or banked fire staff
+/// pays the fire runes. Each cast consumes the ore and pays a bar plus
+/// the spell XP.
 pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
-    let mut spec = crate::kit::cycle::parse_cli("superheat", &rest)?;
-    // Count 0 = the whole pack: no unit target.
-    spec.targets.count = spec.targets.count.filter(|count| *count > 0);
+    let spec = crate::kit::cycle::parse_cli("superheat", &rest)?;
     if spec.allow_paid {
         bot.allow_paid = true;
         bot.log("toll gates allowed for this run");
     }
     bot.allow_shop = spec.allow_shop;
-    let _ = crate::kit::cycle::resolve_keep(bot, &spec)?;
+    let keep = crate::kit::cycle::resolve_keep(bot, &spec)?;
     wait_pack_streamed(bot)?;
     check_events(bot)?;
     let level = learn_level(bot, MAGIC_STAT, 1);
@@ -78,30 +77,22 @@ pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     if runes.is_empty() {
         return Err(ScriptError::Usage(format!("{SUPERHEAT_SPELL} has no runes in the dump at {:?}", bot.position())));
     }
-    wield_staff_for(bot, &runes)?;
-    let missing = spell_shortfall(bot, &runes);
-    if !missing.is_empty() {
-        return Err(ScriptError::Blocked { missing });
-    }
-    if pack_total(bot, ore) == 0 {
-        return Err(ScriptError::Blocked { missing: vec![ore_name.to_string()] });
-    }
-    // The order's stops (`--want`, `--level`, budget, count) end the run;
-    // an empty pack ends it with what it made.
-    let mut state = CycleState::begin(bot, &spec);
-    loop {
-        if let Some(stop) = poll_stop(bot, &state, &spec) {
-            bot.log(&format!("ok {SUPERHEAT_SPELL} x{} on {ore_name} for {bar_name}", state.units()));
-            return exit_code(stop);
-        }
-        if pack_total(bot, ore) == 0 || !spell_shortfall(bot, &runes).is_empty() {
-            break;
-        }
-        superheat_one(bot, ore, bar)?;
-        state.note_unit();
-    }
-    bot.log(&format!("ok {SUPERHEAT_SPELL} x{} on {ore_name} for {bar_name}", state.units()));
-    Ok(0)
+    // Pack, then the known bank (`kit::spell_load`): the recipe's inputs
+    // (steel: the ore plus two coal) ride per cast, a fire staff pays the
+    // fire runes, the bars are banked between loads.
+    let load = SpellLoad::new(SUPERHEAT_SPELL, runes, superheat_inputs(&ore_name, &bar_name));
+    wield_staff_for(bot, &load.runes)?;
+    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| superheat_one(cast_bot, ore, bar))?;
+    bot.log(&format!("ok {SUPERHEAT_SPELL} x{done} on {ore_name} for {bar_name}"));
+    stop.map_or(Ok(0), exit_code)
+}
+
+/// Per-cast inputs: the target ore first, then the smelt recipe's other
+/// inputs (steel: 2 coal), from the dump.
+pub fn superheat_inputs(ore: &str, bar: &str) -> Vec<(String, u32)> {
+    let recipe = knowledge::recipes::making(bar, Some("smelt")).into_iter().find(|entry| entry.members == Some(false));
+    let others = recipe.map(|entry| entry.inputs).unwrap_or_default().into_iter().filter(|(name, _)| name != ore);
+    std::iter::once((ore.to_string(), 1)).chain(others.map(|(name, count)| (name, u32::try_from(count).unwrap_or(1)))).collect()
 }
 
 /// One cast: the ore leaves (or the bar lands) within the budget.
@@ -152,6 +143,25 @@ mod tests {
         let error = run_superheat(&mut bot, &["iron_ore".to_string()]).expect_err("no runes, no cast");
         assert!(matches!(error, crate::ScriptError::Blocked { .. }), "blocked, got {error}");
         assert!(format!("{error}").contains("naturerune"), "names the rune, got {error}");
+    }
+
+    /// Ore and runes banked, nothing carried: the run goes to the bank
+    /// (offline: the walk fails typed), never `blocked` on what the bank
+    /// holds. Steel needs its two coal per cast, named when short.
+    #[test]
+    fn banked_load_sends_the_run_to_the_bank() {
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[], &[("naturerune", 5), ("firerune", 20), ("iron_ore", 5)]);
+        bot.world.stats.insert(super::MAGIC_STAT, (43, 0));
+        bot.world.x = 3222;
+        bot.world.z = 3218;
+        let error = run_superheat(&mut bot, &["iron_bar".to_string()]).expect_err("offline bank walk fails");
+        assert!(!matches!(error, crate::ScriptError::Blocked { .. }), "the bank holds the load, got {error}");
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[("coal", 1)], &[("naturerune", 5), ("firerune", 20), ("iron_ore", 5)]);
+        bot.world.stats.insert(super::MAGIC_STAT, (43, 0));
+        match run_superheat(&mut bot, &["steel_bar".to_string()]) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["coal".to_string()]),
+            other => panic!("blocked on coal only, got {other:?}"),
+        }
     }
 
     /// A funded cast reaches the send brick: dead socket fails `Sdk`,

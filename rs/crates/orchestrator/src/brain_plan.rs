@@ -84,8 +84,9 @@ pub(crate) fn ready_ctx(life: &Life, node: &Node) -> ReadyCtx {
     };
     let snapshot = crate::rates_service::live_snapshot();
     if let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) {
-        // Best published coin rate prices the grind (fallback 0.5).
-        let profits = crate::rates_service::profit_rows(&store, &snapshot);
+        // Best published coin rate prices the grind (fallback 0.5); the
+        // shared table, never rebuilt per context (CPU 2026-11-14).
+        let profits = crate::rates_service::cached_profit_rows();
         if let Some(top) = profits.iter().map(|row| row.profit).max_by(|left, right| left.total_cmp(right)) {
             if top > 0.0 {
                 ctx.coins_per_tick = (top / crate::rates_service::NORMALIZE_TICKS).max(0.01);

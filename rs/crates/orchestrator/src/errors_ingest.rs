@@ -5,8 +5,9 @@
 //! Pushed sources go through a bounded channel, never blocking the
 //! caller: script error events and failed/blocked task reports (from
 //! `ingest_push`), brain lines (from `logln!`). Pulled sources are
-//! rescanned every 30 s: nav dossiers (`run/failures/*.json`, by mtime)
-//! and failed deals (`deals` table). Pulled rows carry a unique
+//! rescanned every 30 s: nav dossiers (`run/failures/*.json`, by mtime;
+//! incremental: only names never seen are stat'ed, a full stat pass runs
+//! hourly to catch a name rewritten in place) and failed deals (`deals` table). Pulled rows carry a unique
 //! `source_ref`, so rescans and restarts never duplicate. Rows older than
 //! the retention are purged hourly. A full channel or a store failure is
 //! logged, never silent.
@@ -32,6 +33,12 @@ const BATCH_ROWS: usize = 200;
 const BATCH_AGE: Duration = Duration::from_secs(2);
 const SCAN_EVERY: Duration = Duration::from_secs(30);
 const PURGE_EVERY: Duration = Duration::from_secs(3_600);
+/// Full dossier pass (stat every file): catches a dossier rewritten under
+/// a name already seen (`{account}-{tick}` after a tick reset).
+const FULL_SCAN_EVERY: Duration = Duration::from_secs(3_600);
+/// A dossier younger than this is re-examined next scan (it may still
+/// be being written); older ones are remembered as seen.
+const SETTLE_SECS: i64 = 2;
 /// Pending intake kept across store failures before dropping (logged).
 const PENDING_CAP: usize = 20_000;
 /// A dossier this fresh takes its task from the job's current run.
@@ -143,7 +150,7 @@ fn collect(receiver: Receiver<Intake>, orch: Weak<Orchestrator>) {
     let mut last_flush = Instant::now();
     let mut last_scan: Option<Instant> = None;
     let mut last_purge: Option<Instant> = None;
-    let mut dossier_cursor: Option<i64> = None;
+    let mut dossier_cursor = DossierCursor::default();
     loop {
         match receiver.recv_timeout(Duration::from_secs(1)) {
             Ok(intake) => pending.push(intake),
@@ -285,15 +292,38 @@ fn mtime_of(entry: &std::fs::DirEntry) -> Option<i64> {
     Some(modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64)
 }
 
+fn name_hash(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Scan state across passes (CPU 2026-11-14: `run/failures` holds ~60k
+/// dossiers, and each 30 s pass used to stat every one of them).
+/// `clock`: newest dossier mtime pulled. `seen`: hashes of the names
+/// already examined (8 bytes each), skipped without a stat until the
+/// next hourly full pass, which rebuilds the set from the directory.
+#[derive(Default)]
+pub(crate) struct DossierCursor {
+    clock: Option<i64>,
+    seen: std::collections::HashSet<u64>,
+    last_full: Option<Instant>,
+    /// Files stat'ed by the last pass (the cost this cursor bounds).
+    examined: usize,
+}
+
 /// Dossiers written at or after the cursor (first pass: the newest nav
 /// row, else the retention start), oldest first, in batches of 500.
+/// Between hourly full passes only never-seen names are stat'ed.
 pub(crate) fn scan_dossiers(
     store: &Store,
     dir: &Path,
-    cursor: &mut Option<i64>,
+    cursor: &mut DossierCursor,
     orch: &Weak<Orchestrator>,
 ) -> Result<usize, String> {
-    let start = match *cursor {
+    let full = cursor.clock.is_none() || cursor.last_full.is_none_or(|at| at.elapsed() >= FULL_SCAN_EVERY);
+    let start = match cursor.clock {
         Some(clock) => clock,
         None => store
             .latest_error_clock("nav")
@@ -306,12 +336,23 @@ pub(crate) fn scan_dossiers(
         Err(error) => return Err(format!("failures dir {}: {error}", dir.display())),
     };
     let mut fresh: Vec<(i64, String)> = Vec::new();
+    let now = now_clock();
+    let mut seen = if full { std::collections::HashSet::new() } else { std::mem::take(&mut cursor.seen) };
+    cursor.examined = 0;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.ends_with(".json") {
             continue;
         }
+        let hash = name_hash(&name);
+        if !full && seen.contains(&hash) {
+            continue;
+        }
+        cursor.examined += 1;
         if let Some(mtime) = mtime_of(&entry) {
+            if now - mtime > SETTLE_SECS {
+                seen.insert(hash);
+            }
             // One second of slack: a file written in the cursor's second
             // may have been missed; the unique ref drops the repeat.
             if mtime >= start - 1 {
@@ -319,8 +360,11 @@ pub(crate) fn scan_dossiers(
             }
         }
     }
+    cursor.seen = seen;
+    if full {
+        cursor.last_full = Some(Instant::now());
+    }
     fresh.sort();
-    let now = now_clock();
     let mut inserted = 0;
     let mut newest = start;
     for chunk in fresh.chunks(500) {
@@ -346,7 +390,7 @@ pub(crate) fn scan_dossiers(
         }
         inserted += store.record_errors(&rows).map_err(|error| error.to_string())?;
     }
-    *cursor = Some(newest);
+    cursor.clock = Some(newest);
     Ok(inserted)
 }
 
@@ -367,17 +411,59 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), dossier).unwrap();
         let store = Store::open_in_memory().unwrap();
         let orch: Weak<Orchestrator> = Weak::new();
-        let mut cursor = None;
+        let mut cursor = DossierCursor::default();
         assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 1);
-        assert!(cursor.is_some());
+        assert!(cursor.clock.is_some());
         assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "rescan adds nothing");
-        let mut fresh_cursor = None;
+        let mut fresh_cursor = DossierCursor::default();
         assert_eq!(scan_dossiers(&store, &dir, &mut fresh_cursor, &orch).unwrap(), 0, "restart adds nothing");
         let rows = store.errors_matching(&lifescape_store::ErrorFilter::default()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].dossier, "t01-5.json");
         let missing = dir.join("absent");
-        assert_eq!(scan_dossiers(&store, &missing, &mut None, &orch).unwrap(), 0);
+        assert_eq!(scan_dossiers(&store, &missing, &mut DossierCursor::default(), &orch).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn age(path: &Path, secs: u64) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(secs)).unwrap();
+    }
+
+    /// Incremental passes stat only never-seen names: a settled directory
+    /// costs zero stats, a new dossier costs one and lands once. The
+    /// hourly full pass stats everything again (rewrites in place).
+    #[test]
+    fn dossier_scan_stats_only_new_names() {
+        let dir = std::env::temp_dir().join(format!("lifescape-errors-incr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dossier = r#"{"account":"t01","from":{"level":0,"x":10,"z":20},"error":{"kind":"NoRoute","observed":"travel: no route"}}"#;
+        for tick in 0..50 {
+            let path = dir.join(format!("t01-{tick}.json"));
+            std::fs::write(&path, dossier).unwrap();
+            age(&path, 10);
+        }
+        let store = Store::open_in_memory().unwrap();
+        let orch: Weak<Orchestrator> = Weak::new();
+        let mut cursor = DossierCursor::default();
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 50);
+        assert_eq!(cursor.examined, 50, "first pass is full");
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0);
+        assert_eq!(cursor.examined, 0, "settled directory: no stat at all");
+        let path = dir.join("t02-7.json");
+        std::fs::write(&path, dossier.replace("t01", "t02")).unwrap();
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 1, "new dossier lands");
+        assert_eq!(cursor.examined, 1, "only the new name is stat'ed");
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "fresh file re-read, deduped");
+        assert_eq!(cursor.examined, 1, "a still-fresh file is re-examined until it settles");
+        age(&path, 10);
+        scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap();
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0);
+        assert_eq!(cursor.examined, 0, "settled again");
+        cursor.last_full = None;
+        assert_eq!(scan_dossiers(&store, &dir, &mut cursor, &orch).unwrap(), 0, "full pass adds nothing new");
+        assert_eq!(cursor.examined, 51, "full pass stats everything");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

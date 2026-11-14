@@ -81,7 +81,23 @@ fn method_for(item: &str, kind: WayKind, detail: &str, inputs: &[(String, i64)])
 }
 
 /// Production legs of `item` that map to a script, deduplicated.
+/// Memoised per object for the process (CPU 2026-11-14: the bid and
+/// seller cost recursion asked the same objects thousands of times a
+/// minute, ~2-4 ms per smelted bar). Pure function of the static
+/// gamedata (its own indexes are process-lifetime `OnceLock`s too), so a
+/// cached answer is the same answer.
 pub fn production_legs(item: &str) -> Vec<ProductionLeg> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<ProductionLeg>>>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(item) {
+        return known.clone();
+    }
+    let legs = compute_production_legs(item);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(item.to_string(), legs.clone());
+    legs
+}
+
+fn compute_production_legs(item: &str) -> Vec<ProductionLeg> {
     let probe = Node::new("probe", NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
     let mut out: Vec<ProductionLeg> = Vec::new();
     for way in crate::method_way::production_ways(item) {
@@ -174,10 +190,21 @@ pub fn legs_for(item: &str, ironman: bool, produce: Option<&str>) -> Vec<Alterna
 
 #[cfg(test)]
 mod tests {
-    use super::{obtain_alternatives, production_legs};
+    use super::{compute_production_legs, obtain_alternatives, production_legs};
 
     fn methods(item: &str) -> Vec<String> {
         production_legs(item).into_iter().map(|leg| leg.method).collect()
+    }
+
+    /// The memo answers exactly what a fresh computation does, cold and
+    /// warm (superheat, smelt, recipes, gathers, unknown objects).
+    #[test]
+    fn memoised_legs_equal_fresh_legs() {
+        for item in ["iron_bar", "bronze_bar", "logs", "ball_of_wool", "bronze_dagger", "no_such_object"] {
+            let fresh = compute_production_legs(item);
+            assert_eq!(production_legs(item), fresh, "{item} cold");
+            assert_eq!(production_legs(item), fresh, "{item} warm");
+        }
     }
 
     #[test]

@@ -133,7 +133,11 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     note_expired_bans(life);
     crate::brain_ambition::before_draw(life, live);
     let level_of = |skill: &str| live_level(live, skill);
-    let drawn = match draw_goal_origin(life, &level_of, &ticks_since) {
+    // Producers respond to bids (point 7): a public bid this bot can make
+    // at a profit worth twice its time preempts the milestone, the
+    // ambition untouched (`brain_bids`, `planner::bid_response`).
+    let answered = crate::brain_bids::bid_goal_for(life, live).map(|(goal, origin)| (goal, Some(origin)));
+    let drawn = match answered.map(Ok).unwrap_or_else(|| draw_goal_origin(life, &level_of, &ticks_since)) {
         // No idle bot (D-SIDE): every open milestone banned draws a
         // temporary side goal, the ambition and its milestones untouched;
         // the next draw returns to the ambition once a milestone is free.
@@ -169,7 +173,7 @@ pub(crate) fn draw_next(life: &mut Life, live: &Value) -> Option<String> {
     append_goal(life, next, &profile, &level_of, &held_of);
     mark_drawn(life, origin.as_deref());
     let label = match origin.as_deref() {
-        Some(side) if side.starts_with(SIDE_PREFIX) => format!("{label} ({side})"),
+        Some(side) if side.starts_with(SIDE_PREFIX) || side.starts_with(lifescape_planner::bid_response::BID_PREFIX) => format!("{label} ({side})"),
         Some(milestone_id) => {
             crate::logln!("brain {}: goal {label} from milestone {milestone_id}", life.account);
             label

@@ -60,10 +60,26 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| arg.to_string()).collect()
 }
 
+/// A gatherer's quantity order counts the resource it works (the planner
+/// files `farm:<item>` for `obtain <item>`): the shared order node takes
+/// the method's resource as its item, never a crossed pair.
+fn gatherer_order(method: &str, node: &Node) -> Node {
+    let gathered = ["gather:fishing/", "gather:mining/", "gather:woodcut/", "farm:"]
+        .iter()
+        .find_map(|prefix| method.strip_prefix(prefix))
+        .filter(|item| map_method(method, node, None).is_some_and(|(script, _)| matches!(script.as_str(), "fishing" | "mining" | "woodcut")) && !item.is_empty());
+    let mut node = node.clone();
+    if let (Some(item), NodeKind::ObtainItems { count, .. }) = (gathered, &node.kind) {
+        node.kind = NodeKind::ObtainItems { item: item.to_string(), count: *count };
+    }
+    node
+}
+
 #[test]
 fn every_mapped_order_parses_in_its_script() {
     for method in methods() {
         for node in nodes() {
+            let node = gatherer_order(&method, &node);
             let Some((script, args)) = map_method(&method, &node, Some((6000, 9000))) else {
                 // Purchases move an obtain's missing units: no leg on a climb.
                 let purchase = matches!(method.as_str(), "market:buy" | "market:sell" | "shop:buy" | "dialogue:buy");
@@ -76,10 +92,14 @@ fn every_mapped_order_parses_in_its_script() {
             }
         }
     }
-    let gather = map_method("farm:raw_trout", &nodes()[0], None).expect("farm maps").1;
+    let gather = map_method("farm:raw_trout", &gatherer_order("farm:raw_trout", &nodes()[0]), None).expect("farm maps").1;
     let spec = crate::kit::cycle::parse_order("fishing", &gather).expect("fishing parses");
     assert_eq!(spec.resource, strings(&["raw_trout"]), "the fish rides first: {gather:?}");
-    assert_eq!((spec.targets.want_item.as_deref(), spec.allow_paid, spec.site), (Some("feather"), true, Some((3294, 3287, 0))));
+    assert_eq!((spec.targets.want_item.as_deref(), spec.allow_paid, spec.site), (Some("raw_trout"), true, Some((3294, 3287, 0))));
+    // A crossed order (another item counted than the one worked) never
+    // runs: it would cut willow for an oak quota until the budget ends.
+    let crossed = map_method("farm:willow_logs", &Node::new("n60", NodeKind::ObtainItems { item: "oak_logs".to_string(), count: 308 }, Vec::new(), 308), None).expect("maps").1;
+    assert!(check_order("woodcut", &crossed).is_err(), "crossed order {crossed:?} must fail loud");
 }
 
 /// The new flags land in the spec the scripts honor: the spell magic

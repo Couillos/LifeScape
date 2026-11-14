@@ -584,6 +584,9 @@ impl crate::kit::load::LoopOps for WoodOps<'_> {
     }
 }
 
+/// One load of the ordered tiers; `until` (the run's `--want` goal) ends
+/// it before the pack fills.
+#[allow(clippy::too_many_arguments)]
 pub fn chop_load(
     bot: &mut Bot,
     tiers: &[knowledge::trees::TreeTier],
@@ -592,12 +595,14 @@ pub fn chop_load(
     level: i64,
     banned: &mut BanSet,
     observe: &mut Observe,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(bool, i64), ScriptError> {
     let log_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     // Threat bans outlive one load: move the caller's set into the driver
     // state, run, move back (restored on every exit below, errors too).
     let mut state = crate::kit::load::LoopState::resume(bot, std::mem::take(banned));
-    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, observe);
+    let cfg = crate::kit::load::LoadCfg::gather().until(until);
+    let out = chop_inner(bot, tiers, bank, coins, level, &mut state, log_ids, observe, &cfg);
     *banned = std::mem::take(&mut state.banned);
     out
 }
@@ -612,6 +617,7 @@ fn chop_inner(
     state: &mut crate::kit::load::LoopState,
     log_ids: Vec<u16>,
     observe: &mut Observe,
+    cfg: &crate::kit::load::LoadCfg,
 ) -> Result<(bool, i64), ScriptError> {
     let mut ops = WoodOps { tiers, bank, coins, level, log_ids, observe, streak: 0, travel_dead: None };
     loop {
@@ -625,7 +631,7 @@ fn chop_inner(
             }
             state.idle_since += bot.world.ticks - spent;
         }
-        if crate::kit::load::run_load(bot, &crate::kit::load::LoadCfg::gather(), state, &mut ops)? {
+        if crate::kit::load::run_load(bot, cfg, state, &mut ops)? {
             return Ok((true, learn_level(bot, WC_STAT, ops.level)));
         }
         if AXE_SPEC.best_held(bot).is_none() {

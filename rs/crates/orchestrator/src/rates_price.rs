@@ -11,21 +11,23 @@ use lifescape_store::Store;
 /// The flag marks a price no trade backs yet (`price_prior`). NPC shop
 /// prices never value anything: nobody sells to merchants.
 pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
-    let catalogue = match store.list_items() {
-        Ok(rows) => rows,
+    // One name lookup, never the whole catalogue per call (CPU
+    // 2026-11-14: `profit_rows` asked ~900 times per call).
+    let found_id = match store.item_id_by_name(item) {
+        Ok(found) => found,
         Err(_) => return (1.0, true),
     };
     if item.eq_ignore_ascii_case("coins") {
         return (1.0, false);
     }
-    let Some(found) = catalogue.iter().find(|row| row.name == item) else {
+    let Some(item_id) = found_id else {
         return (1.0, true);
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|span| span.as_secs() as i64)
         .unwrap_or(0);
-    let prints = store.executions_for_item(found.item_id, 0, now + 1).unwrap_or_default();
+    let prints = store.executions_for_item(item_id, 0, now + 1).unwrap_or_default();
     let recent: Vec<_> = prints.iter().filter(|print| print.clock >= now - 86400).collect();
     let volume: i64 = recent.iter().map(|print| print.quantity).sum();
     if volume > 0 {
@@ -36,7 +38,7 @@ pub fn price_estimate(store: &Store, item: &str) -> (f64, bool) {
         return (last.price.max(1) as f64, false);
     }
     let best_bid = store
-        .open_book(found.item_id, lifescape_store::OrderSide::Buy)
+        .open_book(item_id, lifescape_store::OrderSide::Buy)
         .unwrap_or_default()
         .iter()
         .map(|order| order.price)

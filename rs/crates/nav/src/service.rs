@@ -169,29 +169,29 @@ fn edge_key(edge: &EdgeId) -> String {
 /// served from cache with no compute, plans and batches alike.
 const COSTS_CACHE_CAP: usize = 256;
 
+///
+/// Keyed by the target SET (sorted, distinct): a batch's per-target
+/// costs do not depend on the order it lists them (the search keeps one
+/// entry per distinct tile), so a re-ordered window hits too. The danger
+/// squares are part of the key (they price steps), like `PlanKey`.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct CostsKey {
-    from: Tile,
+    plan: PlanKey,
     dests: Vec<Tile>,
-    allow_paid: bool,
-    f2p_only: bool,
-    satisfied: Vec<String>,
-    excluded: Vec<String>,
-    version: String,
 }
 
 impl CostsKey {
     fn of(from: Tile, dests: &[Tile], options: &NavOptions, version: &str) -> Self {
-        CostsKey {
-            from,
-            dests: dests.to_vec(),
-            allow_paid: options.allow_paid,
-            f2p_only: options.f2p_only,
-            satisfied: options_satisfied(options),
-            excluded: options_excluded(options),
-            version: version.to_string(),
-        }
+        CostsKey { plan: PlanKey::of(from, from, options, version), dests: costs_set(dests) }
     }
+}
+
+/// Sorted distinct targets: the costs cache key and its value order.
+fn costs_set(dests: &[Tile]) -> Vec<Tile> {
+    let mut set = dests.to_vec();
+    set.sort_by_key(|tile| (tile.level, tile.x, tile.z));
+    set.dedup();
+    set
 }
 
 // -- lot 3 cache -------------------------------------------------------------
@@ -1168,6 +1168,10 @@ pub struct Service {
     submits_served: AtomicU64,
     polls_served: AtomicU64,
     walk_costs_served: AtomicU64,
+    /// `walk_costs` batches served from the costs cache (no search).
+    walk_costs_hits: AtomicU64,
+    /// Connections served by the `plan-query` pool (never the acceptor).
+    pooled: AtomicU64,
     detour_sum: AtomicU64,
     detour_max: AtomicU32,
     detour_plans: AtomicU64,
@@ -1236,6 +1240,8 @@ impl Service {
             submits_served: AtomicU64::new(0),
             polls_served: AtomicU64::new(0),
             walk_costs_served: AtomicU64::new(0),
+            walk_costs_hits: AtomicU64::new(0),
+            pooled: AtomicU64::new(0),
             detour_sum: AtomicU64::new(0),
             detour_max: AtomicU32::new(0),
             detour_plans: AtomicU64::new(0),
@@ -1249,17 +1255,12 @@ impl Service {
                 .spawn(move || worker.serve_plans())
                 .expect("plan pool spawns");
         }
-        let acceptor = Arc::clone(&service);
+        // The acceptor only accepts: every connection is read and served
+        // on the bounded `plan-query` pool (`service_accept`).
+        let lanes = crate::service_accept::start_query_pool(Arc::clone(&service), crate::service_accept::QUERY_THREADS);
         std::thread::Builder::new()
             .name("plan-accept".to_string())
-            .spawn(move || {
-                for stream in listener.incoming() {
-                    match stream {
-                        Ok(stream) => acceptor.serve_one(stream),
-                        Err(_) => break,
-                    }
-                }
-            })
+            .spawn(move || crate::service_accept::accept_loop(listener, lanes))
             .expect("plan acceptor spawns");
         // E3 waiter pool (single-round-trip `plan` ops): bounded threads
         // + queue, filled here so `plan_handoff` never blocks the acceptor.
@@ -1394,6 +1395,12 @@ impl Service {
 
     pub fn painted_squares(&self) -> usize {
         self.snapshot.lock().unwrap().world.painted_squares()
+    }
+
+    /// One pooled connection (`plan-query` lane): counted, then served.
+    pub(crate) fn serve_pooled(&self, stream: UnixStream) {
+        self.pooled.fetch_add(1, Ordering::Relaxed);
+        self.serve_one(stream);
     }
 
     fn serve_one(&self, stream: UnixStream) {
@@ -1566,6 +1573,8 @@ impl Service {
                     ("submits", Value::Int(stats.submits as i64)),
                     ("polls", Value::Int(stats.polls as i64)),
                     ("walk_costs", Value::Int(stats.walk_costs as i64)),
+                    ("walk_costs_hits", Value::Int(self.walk_costs_hits.load(Ordering::Relaxed) as i64)),
+                    ("pooled", Value::Int(self.pooled.load(Ordering::Relaxed) as i64)),
                     ("detour_sum", Value::Int(stats.detour_sum as i64)),
                     ("detour_max", Value::Int(i64::from(stats.detour_max))),
                     ("detour_plans", Value::Int(stats.detour_plans as i64)),
@@ -1981,7 +1990,13 @@ impl Service {
         let key = CostsKey::of(parsed.from, &parsed.dests, &parsed.options, &version);
         if let Some(found) = self.costs_cache.lock().unwrap().get(&key).cloned() {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            return walk_costs::encode_response(&walk_costs::WalkCostsResp { costs: found, version });
+            self.walk_costs_hits.fetch_add(1, Ordering::Relaxed);
+            let costs = parsed
+                .dests
+                .iter()
+                .map(|dest| key.dests.binary_search_by_key(&(dest.level, dest.x, dest.z), |tile| (tile.level, tile.x, tile.z)).ok().and_then(|slot| found[slot]))
+                .collect();
+            return walk_costs::encode_response(&walk_costs::WalkCostsResp { costs, version });
         }
         let Some(shared) = self.shared_edges(&snapshot) else {
             // The L2 builds infallibly here (no yield gate): all-None
@@ -2007,7 +2022,12 @@ impl Service {
             if cache.len() >= COSTS_CACHE_CAP {
                 cache.clear();
             }
-            cache.insert(key, found.clone());
+            let by_set = key
+                .dests
+                .iter()
+                .map(|tile| parsed.dests.iter().position(|dest| dest == tile).and_then(|index| found[index]))
+                .collect();
+            cache.insert(key, by_set);
         }
         walk_costs::encode_response(&walk_costs::WalkCostsResp { costs: found, version })
     }
@@ -2178,9 +2198,24 @@ impl Service {
             }
         };
         let snapshot = self.snapshot.lock().unwrap().clone();
-        let gate = service_queries::toll_fence(&snapshot, center.0, center.1, center.2, center.3);
         self.toll_fence_served.fetch_add(1, Ordering::Relaxed);
-        service_queries::encode_toll_fence_reply(gate, &version)
+        // Additive covering list (`region_lists`): the worker re-serves
+        // every query inside it with no round trip. Same region read.
+        let Some(list_radius) = crate::region_lists::list_radius(request) else {
+            let gate = service_queries::toll_fence(&snapshot, center.0, center.1, center.2, center.3);
+            return service_queries::encode_toll_fence_reply(gate, &version);
+        };
+        let gates = snapshot.world.toll_gates_within(center.0, center.1, center.2, list_radius.max(center.3));
+        let radius = center.3.max(0);
+        let gate = gates
+            .iter()
+            .find(|gate| (gate.0 - center.0).abs() + (gate.1 - center.1).abs() <= radius)
+            .copied();
+        let mut reply = service_queries::encode_toll_fence_reply(gate, &version);
+        if let Value::Obj(fields) = &mut reply {
+            fields.insert(crate::region_lists::GATES_FIELD.to_string(), crate::region_lists::encode_gates(&gates));
+        }
+        reply
     }
 
     /// Direct read, no ticket: every tag a plan may require, sorted and

@@ -46,6 +46,7 @@ fn serve_one(service: Arc<MarketService>, stream: UnixStream) {
         Some(frame) if frame.as_obj().is_some() => frame,
         _ => object(vec![]),
     };
+    crate::cpu_profile::label_request(&format!("market:{}", request.get("op").as_str().unwrap_or("?")));
     let reply = service.handle(&request);
     let mut buf = lifescape_json::stringify(&reply);
     buf.push('\n');

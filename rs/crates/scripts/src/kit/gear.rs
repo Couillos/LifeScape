@@ -478,7 +478,7 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
     // ranged run, the wind-strike runes for a magic run.
     let ammo: Vec<String> = match bot.combat_style.as_str() {
         "ranged" => plan.get(&AMMO_SLOT).and_then(|cands| cands.first()).map(|arrow| vec![arrow.name.clone()]).unwrap_or_default(),
-        "magic" => vec!["airrune".to_string(), "mindrune".to_string()],
+        "magic" => magic_ammo(bot),
         _ => Vec::new(),
     };
     for name in ammo {
@@ -495,6 +495,13 @@ pub fn prepare_at_bank_for(bot: &mut Bot, food_target: u32, keep_items: &[(Strin
         bot.log(&format!("equipped {name} (slot {slot})"));
     }
     Ok(true)
+}
+
+/// Runes a magic run's bank leg withdraws (whole stacks): the ordered
+/// spell's (`--spell`), wind strike's without one.
+pub fn magic_ammo(bot: &Bot) -> Vec<String> {
+    let spell = bot.combat_spell.as_deref().unwrap_or(crate::activities::magic_style::DAMAGE_SPELLS[0].0);
+    crate::activities::magic_style::spell_runes(spell).into_iter().map(|(name, _)| name).collect()
 }
 
 /// Re-wear the best kit from what is actually carried (pack + worn):
@@ -523,6 +530,19 @@ pub fn rewear(bot: &mut Bot, why: &str) -> Result<(), ScriptError> {
 
 #[cfg(test)]
 mod tests {
+    /// The bank leg of a magic run withdraws the ORDERED spell's runes
+    /// (fire strike: mind, fire, air), not the wind-strike pair: a
+    /// `fight:magic/fire_strike` run left the fire runes banked.
+    #[test]
+    fn magic_run_withdraws_the_ordered_spell_runes() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        bot.combat_style = "magic".to_string();
+        assert_eq!(super::magic_ammo(&bot), vec!["mindrune".to_string(), "airrune".to_string()], "no spell: wind strike");
+        bot.combat_spell = Some("fire_strike".to_string());
+        assert_eq!(super::magic_ammo(&bot), vec!["mindrune".to_string(), "firerune".to_string(), "airrune".to_string()]);
+    }
+
     use super::{loss_cost, prepare_at_bank, WEAPON_SLOT};
     use crate::kit::style::{fight_weapon_style, style_damage_key};
     use crate::tables_live::attach_live_tables;

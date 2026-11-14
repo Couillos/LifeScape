@@ -33,6 +33,9 @@ pub struct LoadCfg {
     pub repick_tries: u32,
     pub repick_wait: u64,
     pub round_idle: u64,
+    /// The run's `--want` goal: the load is done once it is met, even
+    /// with free slots (`None` = full pack only).
+    pub until: Option<crate::kit::cycle::WantGoal>,
 }
 
 impl LoadCfg {
@@ -41,8 +44,14 @@ impl LoadCfg {
         LoadCfg {
             stall_ticks: 1000, gone_ban: 250, structural_ban: 7200, unreach_ban: 1800, refusal_ban: 500,
             flee_cap: 2, flee_ban: 500, flee_wait: 200, death_ban: 18000, death_wait: 40,
-            repick_tries: 16, repick_wait: 15, round_idle: 12,
+            repick_tries: 16, repick_wait: 15, round_idle: 12, until: None,
         }
+    }
+
+    /// The same config with the run's `--want` goal (`CycleState::want_goal`).
+    pub fn until(mut self, goal: Option<crate::kit::cycle::WantGoal>) -> LoadCfg {
+        self.until = goal;
+        self
     }
 }
 
@@ -263,7 +272,9 @@ pub fn run_load<Ops: LoopOps>(
     let mut had = 0u32;
     loop {
         check_events(bot)?;
-        if ops.is_full(bot) {
+        // A met `--want` ends the load like a full pack: the caller banks
+        // it and the cycle stops, never a whole extra pack past N.
+        if ops.is_full(bot) || cfg.until.is_some_and(|goal| goal.met(bot)) {
             return Ok(true);
         }
         if !ops.has_tool(bot) {
@@ -538,6 +549,27 @@ mod tests {
             Err(crate::ScriptError::Failed(detail)) => assert!(detail.contains("assigned site (3294,3287)"), "walks for the site: {detail}"),
             other => panic!("site walk expected, got {other:?}"),
         }
+    }
+
+    /// `--want` ends the load, not only the run: once the ordered item's
+    /// held total (pack + known bank) reaches the goal the load returns
+    /// done (banked, then the cycle stops), never a full extra pack past N.
+    #[test]
+    fn want_goal_ends_the_load() {
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        attach_live_tables(&mut bot);
+        let oak = crate::kit::pack::obj_id(&bot, "oak_logs").expect("oak_logs");
+        let pack = (bot.tables.com_id)("inventory:inv").expect("inventory");
+        bot.world.inv.insert(pack, [(0u8, (oak, 1u32))].into_iter().collect());
+        bot.world.x = 3232;
+        bot.world.z = 3203;
+        bot.assigned_site = Some((3294, 3287, 0));
+        let short = LoadCfg::gather().until(Some(crate::kit::cycle::WantGoal { obj: oak, held: 2 }));
+        let mut state = LoopState::fresh(&bot);
+        assert!(run_load(&mut bot, &short, &mut state, &mut DummyOps).is_err(), "1 of 2 held: the load keeps working (offline: the site walk fails)");
+        bot.world.inv.insert(pack, [(0u8, (oak, 1u32)), (1u8, (oak, 1u32))].into_iter().collect());
+        let mut state = LoopState::fresh(&bot);
+        assert!(run_load(&mut bot, &short, &mut state, &mut DummyOps).expect("goal met"), "2 of 2 held: load done");
     }
 
     /// Default hooks: keep-all spots, drop-on-NoBait, default outcome map.

@@ -107,6 +107,26 @@ impl Store {
         Ok(Self { connection })
     }
 
+    /// Opens one write batch (a single transaction for a pass of many
+    /// small writes: the market reprice pass, 2026-11-14). Returns false
+    /// when a batch is already open (the caller then commits nothing).
+    pub fn begin_batch(&self) -> Result<bool, Error> {
+        if !self.connection.is_autocommit() {
+            return Ok(false);
+        }
+        self.connection.execute_batch("BEGIN")?;
+        Ok(true)
+    }
+
+    /// Commits the batch `begin_batch` opened.
+    pub fn commit_batch(&self) -> Result<(), Error> {
+        if self.connection.is_autocommit() {
+            return Ok(());
+        }
+        self.connection.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
     /// Schema version of the open file (equals the latest migration).
     pub fn schema_version(&self) -> Result<u32, Error> {
         schema::current_version(&self.connection)
