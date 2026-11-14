@@ -41,6 +41,7 @@ pub mod brain_launch;
 pub mod brain_locks;
 pub mod brain_market;
 pub mod brain_plan;
+pub mod brain_quest_gate;
 pub mod brain_rescue;
 pub mod brain_sales;
 pub mod brain_reserve;

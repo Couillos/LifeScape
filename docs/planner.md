@@ -374,6 +374,26 @@ Sinon le but clos bloqué bannit TOUT le sous-arbre de l'objet
 (`banned_scope`) : compétences de la racine et de chaque nœud qui
 l'attend, plus celles dont l'objet est l'outil (barres de bronze ratées
 ⇒ forge, bûcheronnage — la hache —, allumage s'il brûlait ces bûches).
+Exception : une quête en échec ne bannit AUCUNE compétence (2026-11-14,
+Rune Mysteries avait banni le minage de l'essence qui l'attendait) ; la
+quête elle-même refroidit (`goal: stuck:quest:<clé>@6000:…`,
+`quest_hold::cooled_quests`), ses nœuds prêts attendent comme un achat
+parqué.
+
+Objets de quête (`planner/src/quest_hold.rs`, `brain_quest_gate.rs`,
+2026-11-14, bh99tw2f : ses annonces verrouillaient les dix talismans
+d'air en banque, boucle Rune Mysteries) : tant qu'un nœud de quête est
+ouvert, ses objets (`quest_requirements::reserved_objects` : objets
+apportés à leur quantité, objets remis par les PNJ — talisman, paquet,
+notes — à 1) sont réservés : la passe de vente ne les propose pas et
+coupe l'annonce qui les verrouille (reste ré-annoncé au même prix), le
+marché refuse toute annonce qui les prendrait (`free_coverage`). Une
+quête ne part qu'avec ses objets en main (`quest_shortfalls`) : objet
+apporté manquant ⇒ obtention d'abord (`record_block_from`), unités
+détenues mais annoncées ⇒ libérées puis attente d'une passe ; objet
+remis détenu nulle part ⇒ la quête le donne. Pendant la quête, le script
+garde ces objets dans le sac (`Bot::hold_in_pack`) : aucune livraison
+marché ne les range ni ne les échange.
 
 Bannissements temporaires et typés (décision utilisateur 2026-11-13) : un
 but clos bloqué (graphe bloqué, but non atteint en live) bannit chaque

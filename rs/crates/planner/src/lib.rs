@@ -33,6 +33,7 @@ pub mod method_way;
 pub mod model;
 pub mod obtain_legs;
 pub mod profit;
+pub mod quest_hold;
 pub mod quests;
 pub mod replan;
 pub mod resolve_obtain;
@@ -65,6 +66,7 @@ pub use bans::{ban_entry, ban_states, banned_skills, quest_lifted_bans, stuck_ca
 pub use gear_ladder::{gear_move, next_gear_step, next_ready, next_ready_except, withdraw_dead_steps, withdraw_melee_set, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
 pub use profit::{chain_profit, ChainProfit, ProfitError};
 pub use quests::{method_quest, missing_quest, quests_done_from, quests_done_in_graph};
+pub use quest_hold::{cooled_quest_nodes, cooled_quests, node_quest, open_quests, quest_ban_key, quest_shortfalls, reserved_quest_objects, withhold_reserved, QuestShortfall, QUEST_BAN_PREFIX};
 pub use side_goal::{method_banned, side_goal, steer_off_bans, SIDE_PREFIX};
 pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, serves_goal, next_goal, NoGoal, DONE_TAG, STUCK_TAG, TRAINABLE};
 pub use ambition::{

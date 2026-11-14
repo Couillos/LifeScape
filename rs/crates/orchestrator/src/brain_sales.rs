@@ -395,6 +395,11 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     wished.extend(tools.iter().cloned());
     let whole = working_keep(life, &wished);
     let keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());
+    // An open quest keeps its objects (2026-11-14, bh99tw2f: its own
+    // listings locked every banked air talisman): a listing that locks
+    // them is cut first, and they are never offered below.
+    let reserved = lifescape_planner::reserved_quest_objects(life);
+    crate::brain_quest_gate::release_for_quests(&service, &job.account, &stacks, &reserved);
     let mut selling: Vec<lifescape_store::Order> = service
         .lock_store()
         .account_orders(&job.account)
@@ -422,14 +427,14 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         HashSet::new()
     };
     let mut locks = crate::brain_locks::locked_items(&job.account);
-    let mut free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    let mut free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     // A sliver listed out of a big stack is withdrawn and the whole
     // stack lists as one lot in this same pass.
     let regrouped = regroup_slivers(&service, &job.account, &selling, &free, &keep, &flip_stock);
     if !regrouped.is_empty() {
         selling.retain(|row| !regrouped.contains(&row.order_id));
         locks = crate::brain_locks::locked_items(&job.account);
-        free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+        free = lifescape_planner::withhold_reserved(&free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name)), &reserved);
     }
     // Withdrawn lots stay out this pass (still in `selling`): their stock
     // is banked again and the next pass lists a demand lot.

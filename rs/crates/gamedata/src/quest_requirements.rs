@@ -392,9 +392,66 @@ pub fn by_key(key: &str) -> Option<QuestRequirements> {
     build_f2p_quests().into_iter().find(|quest| quest.key == key)
 }
 
+/// Objects a quest's own NPCs hand over mid-run and expect back later
+/// (never brought, never bought), by quest key. Server truth (rev 274):
+/// - `runemysteries`: the Duke's air talisman (`duke_horacio.rs2`,
+///   re-issued only while `~obj_gettotal(air_talisman) = 0`, pack + bank
+///   + worn), Sedridor's research package and Aubury's notes (each
+///   re-issued only when none is held anywhere);
+/// - `demon`: the three silverlight keys (Prysin's drain, Rovin, Traiborn);
+/// - `hunt`: the Karamja rum, the chest key and the pirate message.
+///
+/// A unit of these banked but promised to a market sale is out of
+/// reach: the quest dead-ends (live 2026-11-14, bh99tw2f: 10 air
+/// talismans banked, all 10 locked by its listings, Sedridor "...except
+/// I don't have it with me" round after round).
+pub fn quest_objects(key: &str) -> &'static [&'static str] {
+    match key {
+        "runemysteries" => &["air_talisman", "research_package", "research_notes"],
+        "demon" => &["silverlight_key_1", "silverlight_key_2", "silverlight_key_3"],
+        "hunt" => &["karamja_rum", "chest_key", "piratemessage"],
+        _ => &[],
+    }
+}
+
+/// Every object an open quest keeps on hand, `(debug name, units)`: its
+/// brought items at their count and one unit of each handed object.
+/// Coins are the wallet's (never reserved here). Empty for an unknown key.
+pub fn reserved_objects(key: &str) -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = Vec::new();
+    if let Some(quest) = by_key(key) {
+        for item in quest.items.iter().filter(|item| item.item != "coins") {
+            out.push((item.item.clone(), item.count.max(1)));
+        }
+    }
+    for name in quest_objects(key) {
+        if !out.iter().any(|(held, _)| held == name) {
+            out.push((name.to_string(), 1));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{all_f2p_quests, by_key};
+    use super::{all_f2p_quests, by_key, quest_objects, reserved_objects};
+
+    /// Every handed quest object resolves in the object table; an open
+    /// quest reserves its brought items and handed objects, never coins.
+    #[test]
+    fn quest_objects_resolve_and_reserve() {
+        for quest in all_f2p_quests() {
+            for name in quest_objects(&quest.key) {
+                assert!(!crate::objs_by_name(name).is_empty(), "{name} of {} in the dumps", quest.key);
+            }
+        }
+        let rune = reserved_objects("runemysteries");
+        assert!(rune.contains(&("air_talisman".to_string(), 1)), "{rune:?}");
+        assert!(rune.contains(&("research_notes".to_string(), 1)));
+        assert_eq!(reserved_objects("sheep"), vec![("ball_of_wool".to_string(), 20)]);
+        assert!(reserved_objects("demon").iter().all(|(name, _)| name != "coins"), "coins are the wallet's");
+        assert!(reserved_objects("nope").is_empty());
+    }
 
     #[test]
     fn f2p_vectors() {

@@ -600,8 +600,16 @@ pub fn withdraw_requirements(bot: &mut Bot, requirements: &QuestRequirements) ->
             continue;
         }
         bot.bank_withdraw(obj, (item.count - have as i64) as u32, 60)?;
-        if (count(bot, obj) as i64) < item.count {
-            return Err(ScriptError::Sdk(Error::State(format!("could not withdraw enough {}", item.item))));
+        let carried = count(bot, obj) as i64;
+        if carried < item.count {
+            // The real cause, never a bare "not enough" (bh99tw2f
+            // 2026-11-14: the units were banked, locked by its listings).
+            return Err(ScriptError::Failed(format!(
+                "{}: {carried} carried, {} needed; {} banked unit(s) locked by open market sales",
+                item.item,
+                item.count,
+                bot.locked(obj)
+            )));
         }
     }
     Ok(())
@@ -679,6 +687,25 @@ pub fn quest_outcome(key: &str, solved: bool, error: Option<ScriptError>, gaps: 
 /// top-up, requirement check against live state, solve, completion wait.
 // shortcut: no save-file completion merge; the runner trusts live varps only.
 pub fn run_requirements(bot: &mut Bot, requirements: &QuestRequirements, solve: impl FnOnce(&mut Bot) -> Result<(), ScriptError>) -> ScriptResult {
+    // The quest's objects stay in the pack for the whole run: a market
+    // delivery that pauses it banks everything else (live 2026-11-14,
+    // bh99tw2f: the Duke's air talisman banked mid-quest, locked there).
+    bot.hold_in_pack(&quest_hold_ids(&requirements.key));
+    let outcome = run_requirements_held(bot, requirements, solve);
+    bot.hold_in_pack(&[]);
+    outcome
+}
+
+/// Object ids a quest keeps in the pack while it runs (brought items and
+/// handed objects, `quest_requirements::reserved_objects`).
+pub fn quest_hold_ids(key: &str) -> Vec<u16> {
+    gamedata::quest_requirements::reserved_objects(key)
+        .iter()
+        .filter_map(|(name, _)| gamedata::objs_by_name(name).into_iter().next().map(|obj| obj.obj_id as u16))
+        .collect()
+}
+
+fn run_requirements_held(bot: &mut Bot, requirements: &QuestRequirements, solve: impl FnOnce(&mut Bot) -> Result<(), ScriptError>) -> ScriptResult {
     bot.relogin()?;
     let _ = bot.pump(10)?;
     // Requirement check against live state: skills, carried items, bank.

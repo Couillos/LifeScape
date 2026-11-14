@@ -158,6 +158,11 @@ pub(crate) struct Engine {
     /// Settled fills counted since start: a ring loaded from the store
     /// while a fill settled is not cached (it could miss that fill).
     pub(crate) fills_settled: u64,
+    /// Units each account's open quests keep, per base object
+    /// (`brain_quest_gate::publish_reserved`, every brain pass): never
+    /// offered for sale (`free_coverage`), so a quest object is never
+    /// locked in the bank by a listing (bh99tw2f, 2026-11-14).
+    pub(crate) quest_reserved: HashMap<String, std::collections::BTreeMap<i64, i64>>,
 }
 
 impl Engine {
@@ -186,6 +191,7 @@ impl Engine {
             adopted: HashSet::new(),
             last_fills: HashMap::new(),
             fills_settled: 0,
+            quest_reserved: HashMap::new(),
         }
     }
 

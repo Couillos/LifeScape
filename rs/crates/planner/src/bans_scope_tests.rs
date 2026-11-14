@@ -142,3 +142,15 @@ fn no_production_leg_means_no_production_rescue() {
     assert!(crate::lifecycle::retarget_produce(&mut life, at).is_empty());
     assert_eq!(life.nodes[at].status, NodeStatus::Abandoned, "left abandoned");
 }
+
+/// Live 2026-11-14 (bh99tw2f): Rune Mysteries failed three times, the
+/// essence quota waiting on it (`gather:mining/blankrune`) banned mining.
+/// A quest failure bans no skill: the quest cools as a quest instead.
+#[test]
+fn a_failed_quest_bans_no_skill() {
+    let mut quest = node("n416", NodeKind::CompleteQuest { quest: "runemysteries".to_string() }, &[], "quest:runemysteries", "Failed: rune mysteries");
+    quest.failures = 3;
+    let mut life = burnt_chain(GoalKind::Produce { item: "blankrune".to_string(), count: 200 }, false);
+    life.nodes = vec![node("n415", obtain("blankrune"), &["n416"], "gather:mining/blankrune", "dependency n416 abandoned"), quest];
+    assert!(banned_scope(&life, "n416").is_empty(), "got {:?}", banned_scope(&life, "n416"));
+}

@@ -578,8 +578,11 @@ impl Bot {
     }
 
     /// Deposit the backpack with the bank's "Deposit All" action (op 4 per
-    /// slot, one burst, then one retry of leftovers). Tick-bounded.
+    /// slot, one burst, then one retry of leftovers). Tick-bounded. The
+    /// running script's held objects (`hold_in_pack`) always stay.
     pub fn bank_deposit_all(&mut self, side_com: u16, keep_ids: &[u16], timeout: u64) -> Result<bool> {
+        let kept = super::locks::deposit_keep(keep_ids, &self.pack_holds());
+        let keep_ids: &[u16] = &kept;
         self.act(format!("bank_deposit_all keep={} timeout={timeout}", keep_ids.len()));
         for _ in 0..2 {
             let (_, slots) = self.backpack();

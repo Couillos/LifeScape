@@ -124,6 +124,13 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
             }
         }
     }
+    // A quest blocked on a brought item obtains the quest's count (20
+    // balls of wool for Sheep Shearer, never one).
+    if let NodeKind::CompleteQuest { quest } = &node.kind {
+        if let Some(item) = lifescape_gamedata::quest_requirements::by_key(quest).and_then(|required| required.items.into_iter().find(|item| item.item == need)) {
+            return item.count.max(1);
+        }
+    }
     let (product, units) = match &node.kind {
         NodeKind::ObtainItems { item, count } => (item.clone(), Some((*count).max(1))),
         _ => {

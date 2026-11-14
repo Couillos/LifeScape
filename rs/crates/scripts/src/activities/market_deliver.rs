@@ -192,8 +192,11 @@ fn meet_and_trade(bot: &mut Bot, group: &DealGroup, deadline: u64, coins: u16, r
                 }
             }
         } else {
-            let form = if pack_total(bot, group.item) >= group.qty { group.item } else { trade };
-            if pack_total(bot, form) < group.qty {
+            // A base unit the paused quest holds never trades (its air
+            // talisman, live 2026-11-14): the notes go instead.
+            let form = if crate::market_lots::free_base(bot, group.item) >= group.qty { group.item } else { trade };
+            let offered = if form == group.item { crate::market_lots::free_base(bot, form) } else { pack_total(bot, form) };
+            if offered < group.qty {
                 bot.log(&format!("deals {ids:?}: lots gone"));
                 let _ = bot.trade_close();
                 reports.report(bot, group, "failed", "short");

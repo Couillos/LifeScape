@@ -342,8 +342,28 @@ impl MarketService {
         let engine = self.lock_engine();
         let stock = engine.ledger.stock_rows(account);
         let (units, coins) = uncommitted(side, item, engine.ledger.coins_of(account), &stock, &resting);
+        // An open quest's objects are never offered (bh99tw2f, 2026-11-14:
+        // every banked air talisman listed, Rune Mysteries dead-ended).
+        let reserved = engine.quest_reserved.get(account).and_then(|kept| kept.get(&base_of(item))).copied().unwrap_or(0);
+        let units = if side == OrderSide::Sell { net_of_reserve(units, reserved) } else { units };
         (units, coins)
     }
+
+    /// Replaces what `account`'s open quests keep (base object id ->
+    /// units); empty clears it.
+    pub(crate) fn set_quest_reserved(&self, account: &str, reserved: BTreeMap<i64, i64>) {
+        let mut engine = self.lock_engine();
+        if reserved.is_empty() {
+            engine.quest_reserved.remove(account);
+        } else {
+            engine.quest_reserved.insert(account.to_string(), reserved);
+        }
+    }
+}
+
+/// Free units a sale may claim once `reserved` units stay with the bot.
+pub fn net_of_reserve(units: i64, reserved: i64) -> i64 {
+    (units - reserved.max(0)).max(0)
 }
 
 /// Daemon side of the locks: one `set_locks` per live worker each round.

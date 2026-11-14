@@ -194,6 +194,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
         return;
     }
+    // The open quests' objects never go on sale (2026-11-14, bh99tw2f):
+    // published before any listing pass.
+    crate::cpu_profile::timed("quest_gate.publish", || crate::brain_quest_gate::publish_reserved(&job.account, &life));
     // PRD3 lot 3: idle bots list their tradeable surplus on the market
     // (rate-limited, never an NPC sale).
     crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, &life));
@@ -214,10 +217,18 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     }
     // Market buys parked on the book settle every pass; the worker never
     // waits for them (no idle bot, 2026-11-13).
-    let (settled, waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut life));
+    let (settled, mut waiting) = crate::cpu_profile::timed("filler.settle_parked", || crate::brain_filler::settle_parked(job, &mut life));
     if settled {
         dirty = true;
     }
+    // Quest gate (2026-11-14): a ready quest launches only with its
+    // objects at hand (missing ones obtained first, listed ones
+    // released); a cooled quest waits like a parked buy.
+    let (gated, quest_waits) = crate::cpu_profile::timed("quest_gate.hold_pass", || crate::brain_quest_gate::hold_pass(job, &mut life, &live));
+    if gated {
+        dirty = true;
+    }
+    waiting.extend(quest_waits);
     // A reached goal over older goals' abandoned nodes is Finished, never
     // a stuck spell (`brain_stuck::effective_state`).
     match crate::cpu_profile::timed("stuck.effective_state", || crate::brain_stuck::effective_state(&life, &live)) {
