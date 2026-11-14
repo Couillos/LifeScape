@@ -170,3 +170,15 @@ poche_lumbridge_cloture | 3257,3244,0 | 3257,3242,0 | f2p | unreachable=Disconne
 # Varrock est derriere (3268,3435) n'a pas d'autre entree : poche scellee
 # (avant : plan par la porte, DoorDidNotOpen live bct5rxpg-14906).
 porte_verrouillee_varrock | 3269,3435,0 | 3268,3436,0 | f2p | unreachable=Disconnected
+# 48-50. Tour des Sorciers (Rune Mysteries, 2026-11-14) : la piece de
+# l'echelle de la cave est fermee par une porte DIAGONALE (1536, forme 9,
+# (3107,3162) angle sud) ; ouverte, elle devient une loc pleine en
+# (3106,3162) (doors.rs2 door_open, bras diagonal). La regle de portee
+# du moteur (reachWall1 WALL_DIAGONAL) etait sous la forme 1 dans la
+# nav : porte jamais cliquable, Sedridor (3103,9571) Disconnected
+# (closest (3067,9575), dossiers bst29bh9-218/-290/-423). Echelles
+# wizards_tower_laddertop 2147 (3104,3162) -> (3104,9576) et
+# wizards_tower_ladder 2148 (3103,9576) -> (3105,3162) (ladders.rs2).
+tour_sorciers_echelle | 3222,3218,0 | 3105,3162,0 | f2p | reachable ; uses_loc=1536 ; avoids=3106,3162
+tour_sorciers_sortie | 3105,3162,0 | 3109,3170,0 | f2p | reachable ; uses_loc=1536 ; avoids=3106,3162
+sedridor_depuis_duc | 3212,3220,1 | 3104,9571,0 | f2p | reachable ; uses_loc=2147 ; uses_loc=1530

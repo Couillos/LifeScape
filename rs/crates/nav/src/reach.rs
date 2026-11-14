@@ -297,7 +297,8 @@ fn reach_wall(
                 && (tile & collision::BLOCK_EAST) == collision::OPEN)
             || (src_x == dest_x && src_z == dest_z - 1);
     }
-    if shape == 1 {
+    // Diagonal wall (WALL_DIAGONAL): engine `reachWall1` arm.
+    if shape == 9 {
         return (src_x == dest_x
             && src_z == dest_z + 1
             && (tile & collision::WALL_SOUTH) == collision::OPEN)
@@ -440,5 +441,23 @@ mod tests {
     fn straight_wall_reached_beside() {
         assert!(reached(&open_flag, 0, 4, 5, 5, 5, 1, 1, ANGLE_WEST, 0, 0));
         assert!(!reached(&open_flag, 0, 6, 5, 5, 5, 1, 1, ANGLE_WEST, 0, 0));
+    }
+
+    /// Engine `ReachStrategy.reachWall1`: a diagonal wall (shape 9, the
+    /// Wizards' Tower ladder-room door 1536 at (3107,3162)) answers from
+    /// its four orthogonal neighbours unless the stand's own wall faces
+    /// it; a diagonal-corner pillar (shape 1) never answers. The nav had
+    /// the diagonal arm under shape 1: every diagonal door was unclickable
+    /// and the tower basement (Sedridor, Rune Mysteries) unreachable.
+    #[test]
+    fn diagonal_wall_reached_from_orthogonal_sides() {
+        for (src_x, src_z) in [(4, 5), (6, 5), (5, 4), (5, 6)] {
+            assert!(reached(&open_flag, 0, src_x, src_z, 5, 5, 1, 1, ANGLE_SOUTH, 9, 0), "({src_x},{src_z})");
+            assert!(!reached(&open_flag, 0, src_x, src_z, 5, 5, 1, 1, ANGLE_SOUTH, 1, 0), "corner ({src_x},{src_z})");
+        }
+        assert!(!reached(&open_flag, 0, 4, 4, 5, 5, 1, 1, ANGLE_SOUTH, 9, 0), "diagonal stand");
+        let north_wall = |_x: i32, _z: i32, _level: i32| collision::WALL_NORTH;
+        assert!(!reached(&north_wall, 0, 5, 4, 5, 5, 1, 1, ANGLE_SOUTH, 9, 0), "own north wall faces the door");
+        assert!(reached(&north_wall, 0, 5, 6, 5, 5, 1, 1, ANGLE_SOUTH, 9, 0), "north wall does not face from above");
     }
 }

@@ -117,3 +117,26 @@ fn the_stuck_cause_is_the_root_of_the_latest_abandon() {
     assert_eq!(stuck_cause(&contract).map(|found| found.class), Some("contract error".to_string()));
     assert_eq!(stuck_cause(&life_of(Vec::new(), Vec::new())), None);
 }
+
+/// Live 2026-11-14: runecraft and mining banned on "missing
+/// quest:runemysteries" and "essence needs quest_rune_mysteries". Once
+/// the quest is done the cause is gone: those bans lift at once, others
+/// (and the quest still missing) keep theirs.
+#[test]
+fn a_finished_quest_lifts_its_bans() {
+    let quest = StuckCause { node: "n198".to_string(), class: "4 blocks".to_string(), last_error: "Blocked: missing quest:runemysteries".to_string() };
+    let essence = StuckCause {
+        node: "n63".to_string(),
+        class: "contract error".to_string(),
+        last_error: "Usage: usage: essence needs quest_rune_mysteries at (0, 3253, 3402)".to_string(),
+    };
+    let history = vec![
+        entry("goal", &ban_entry("runecraft", SKILL_BAN_TICKS, &quest), 100),
+        entry("goal", &ban_entry("mining", SKILL_BAN_TICKS, &essence), 100),
+        entry("goal", &ban_entry("firemaking", SKILL_BAN_TICKS, &cause()), 100),
+    ];
+    let lifted = super::quest_lifted_bans(&history, &since(200), &["runemysteries".to_string()]);
+    assert_eq!(lifted, vec!["mining".to_string(), "runecraft".to_string()]);
+    assert!(super::quest_lifted_bans(&history, &since(200), &["cook".to_string()]).is_empty(), "another quest lifts nothing");
+    assert!(super::quest_lifted_bans(&history, &since(100 + SKILL_BAN_TICKS), &["runemysteries".to_string()]).is_empty(), "expired bans are the expiry's");
+}
