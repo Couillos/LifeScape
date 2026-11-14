@@ -526,6 +526,14 @@ pub fn producible_f2p(item: &str) -> bool {
 /// gather or farm in F2P (shears, nets, rods…). Producible objects and
 /// drops a bot can farm (feathers from chickens, bait from men: user
 /// rule 2026-11-13) come from players: the market, or the bot's own work.
+/// True when an NPC shop route exists for `item`: the D-A rule allows the
+/// purchase AND some shop actually stocks it (live 2026-11-14:
+/// black_full_helm passed D-A with no shop anywhere, `shopbuy` failed
+/// "no reachable shop" on every pass).
+pub fn merchant_route(item: &str) -> bool {
+    merchant_buy_allowed(item) && ways(item).iter().any(|way| way.kind == WayKind::Shop)
+}
+
 pub fn merchant_buy_allowed(item: &str) -> bool {
     crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
         && !producible_f2p(item)

@@ -292,7 +292,7 @@ fn style_name(style: Style) -> &'static str {
 /// True for a piece only an NPC shop sells (D-A): no bid ever fills, the
 /// bot walks to the shop through an obtain step.
 pub(crate) fn shop_only(item: &str) -> bool {
-    lifescape_gamedata::obtain::merchant_buy_allowed(item)
+    lifescape_gamedata::obtain::merchant_route(item)
 }
 
 /// One gear pass. Returns true when the life changed (save it).
