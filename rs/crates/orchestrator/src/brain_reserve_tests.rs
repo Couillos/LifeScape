@@ -22,20 +22,60 @@ fn a_gathering_report_gives_its_product_every_tick() {
     assert_eq!(measured_ticks_per_unit(&reports, "Oak logs", &flat), None);
 }
 
-/// bct5rxpg, report 8220: 1501 ticks of melee shared by loot value; the
-/// looted coins take their share, a market report never counts.
+/// bct5rxpg, report 8220, re-read 2026-11-14 (frank_lane): a fight's
+/// drops are FOUND, they take no share of its ticks (the fight paid in
+/// XP); a gathered line in the same report keeps its share, the drops
+/// still weigh in the total.
 #[test]
-fn a_combat_report_gives_each_drop_its_loot_share() {
+fn combat_drops_take_no_ticks() {
     let weight = |item: &str| if item == "Bronze med helm" { 24.0 } else { 1.0 };
     let reports = vec![
-        report("melee", 1500, vec![line("Coins", "loot", 50), line("Bronze med helm", "loot", 1), line("Logs", "loot", 26)]),
+        report("melee", 1500, vec![line("Coins", "loot", 50), line("Bronze med helm", "loot", 1), line("Logs", "produced", 26)]),
         report("market", 9000, vec![line("Logs", "traded", 500)]),
     ];
-    // Total value 50 + 24 + 26 = 100: the helm takes 24 % of 1500 ticks.
-    let helm = measured_ticks_per_unit(&reports, "Bronze med helm", &weight).unwrap_or(0.0);
-    assert!((helm - 360.0).abs() < 1e-9, "{helm}");
+    assert_eq!(measured_ticks_per_unit(&reports, "Bronze med helm", &weight), None, "loot: no time cost");
+    // Total value 50 + 24 + 26 = 100: the logs take 26 % of 1500 ticks.
     let logs = measured_ticks_per_unit(&reports, "Logs", &weight).unwrap_or(0.0);
     assert!((logs - 15.0).abs() < 1e-9, "26 % of 1500 over 26 logs: {logs}");
+    assert_eq!(own_origin(&reports, "Bronze med helm"), (0, 1));
+    assert_eq!(own_origin(&reports, "Logs"), (26, 0), "a market report never counts");
+}
+
+/// Live frank_lane 2026-11-14 (Al Kharid warriors): "holding 1
+/// bronze_dagger (no own cost known)", steel arrow listed at 7082
+/// (reserve 3541 measured), bronze arrows held (reserve 12 over the 5x
+/// band of 2). Found stock gets a 1-coin `Found` reserve; a purchase
+/// still floors it; an object it never recorded and cannot make is
+/// found too; one it can make keeps its make cost.
+#[test]
+fn found_stock_has_a_one_coin_reserve() {
+    let found = Reserve { coins: 1, source: CostSource::Found };
+    assert_eq!(found_reserve(42, None, None), found);
+    assert_eq!(found_reserve(42, None, Some(30.0)), found, "looted: the make cost is no own cost");
+    assert_eq!(found_reserve(0, None, None), found, "nothing known, cannot make it: found");
+    assert_eq!(found_reserve(0, None, Some(30.5)), Reserve { coins: 30, source: CostSource::MakeCost });
+    assert_eq!(found_reserve(42, Some(9), None), Reserve { coins: 9, source: CostSource::Bought }, "never under what it paid");
+    // The live report 20092 (14551 ticks of melee): every drop is found.
+    let reports = vec![report(
+        "melee",
+        14551,
+        vec![
+            line("Bronze arrow", "loot", 42),
+            line("Bronze med helm", "loot", 3),
+            line("Iron dagger", "loot", 2),
+            line("Steel arrow", "loot", 1),
+            line("Coins", "shop_sold", 949),
+            line("Cabbage", "consumed", -10),
+        ],
+    )];
+    for display in ["Bronze arrow", "Bronze med helm", "Iron dagger", "Steel arrow"] {
+        assert_eq!(measured_ticks_per_unit(&reports, display, &item_weight), None, "{display}");
+        assert!(measured_inputs_per_unit(&reports, display, &item_weight).is_empty(), "eaten food is no input of a drop: {display}");
+    }
+    // Found inputs cost no time either (looted copper ore in a bar).
+    let costs = OwnCosts { account: "frank_lane".to_string(), reports: vec![report("melee", 6000, vec![line("Copper ore", "loot", 2)])], coins_per_tick: 4.8 };
+    assert_eq!(costs.unit_cost(&|_: &str| None, "Copper ore", INPUT_DEPTH), 0.0);
+    assert!(prior_ticks_per_unit("Feather").is_none(), "a combat prior is loot, never a time cost");
 }
 
 /// Coins per tick: the best own method, coins looted plus its farmed

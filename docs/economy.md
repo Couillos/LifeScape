@@ -330,8 +330,9 @@ exécutions, bougies, rapports, rendements, fiabilité, tendances.
   redémarrage) sont réadoptées à chaque passe, marchands compris
   (`market_seller::adoption`) : sous la réserve → relevée à la réserve,
   au-delà du lot de demande ou sans coût connu → retirée (stock rendu à
-  la banque, la passe suivante liste un lot), sinon marche jusqu'à la
-  réserve.
+  la banque, la passe suivante liste un lot), au-dessus de l'ouverture
+  du jour → descendue à elle, sinon marche jusqu'à la réserve (voir
+  § Butin).
 - Achats : `market:buy` posé par le cerveau (offre avec plafond) puis
   PARQUÉ (`park_for_fill`, D-SIDE) : l'offre attend au carnet pendant que
   le worker lance le nœud prêt suivant, sinon une fenêtre d'argent de
@@ -485,8 +486,9 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   par `brain_bids::production_costs_for`, mêmes niveaux, bans, quêtes,
   rendements et carnet que le tirage), arrondi bas, ≥ 1 : un quota compte
   les bids au-dessus de ce coût, le producteur ne garde donc jamais le
-  stock que ces bids achèteraient. Aucun coût connu : le bot garde son
-  stock (hold), jamais une annonce à 1.
+  stock que ces bids achèteraient. Butin (`loot`, `ground_spawn`,
+  `drop`) : coût nul, réserve `Found` à 1 (§ Butin) ; aucune trace
+  propre : coût de fabrication si le bot sait le faire, sinon trouvé.
 - Ouverture (`zip::seller_open`) : référence échangée (ou meilleur bid
   plus riche) ; objet jamais échangé : `max(meilleur bid, 2 × réserve)` ;
   jamais sous la réserve ; ramenée à 5× d'une référence échangée (bande).
@@ -904,3 +906,67 @@ Vendeur : un ask ancré sur un fill isolé descend (test
 courant est borné par l'ask d'impact (1 unité → 1149, pas 2747), un
 nouveau lot ouvre là, et les asks au repos marchent de 5 % par fenêtre
 jusqu'à leur réserve (≤ 140 en 60 fenêtres). Bande ×5 inchangée.
+
+## Butin : coût nul, lots entiers, prix qui écoule (2026-11-14)
+
+Constat live (15:40, frank_lane, mêlée aux guerriers d'Al Kharid) :
+banque 52/60 types dont 88 heaumes moyens de bronze, 41 dagues de fer,
+838 flèches de bronze ; une seule annonce de dague (1 @628 pour ~30),
+aucune pour les heaumes ni les flèches ; bâton 2 @1644, flèche d'acier
+1 @729, rune de loi 2 @330 ; « holding 1 bronze_dagger (no own cost
+known) ». Causes vérifiées :
+- la réserve partageait les ticks du combat entre les drops au prorata
+  de leur valeur : une flèche d'acier « coûtait » 3 541, une flèche de
+  bronze 12 (hors bande 5× d'un prix de 2 → gardée), un drop absent des
+  200 derniers rapports n'avait aucun coût → gardé ;
+- le heaume PORTÉ protégeait par son nom toute la pile de la banque
+  (idem pour la meilleure pièce gardée par `kept_gear`) ;
+- une annonce de 1 unité excluait l'objet des passes suivantes : la pile
+  grossissait derrière un éclat jamais vendu ;
+- une annonce réadoptée gardait son prix ancré sur l'ancienne réserve et
+  ne descendait que de 5 % par fenêtre.
+
+Règles :
+- Coût propre (`brain_reserve`) : seules les unités `produced` portent
+  des ticks (récolte, fabrication) ; le butin, les drops et les
+  apparitions au sol sont TROUVÉS : le combat se paie en XP ou en
+  pièces, ils ne coûtent rien (`own_origin`, réserve `Found` à 1). Un
+  objet à la fois fabriqué et trouvé garde le coût de sa part fabriquée
+  (ticks et intrants × part fabriquée). Sans trace propre : estimation
+  du plan ou a priori d'une récolte (pêche, bûcheronnage, minage ; plus
+  jamais l'a priori de combat), sinon coût de fabrication `bid_response`
+  si le bot sait le faire, sinon trouvé. Un achat garde son prix payé
+  comme plancher. Un intrant trouvé ne coûte rien non plus
+  (`unit_cost`).
+- Ouverture d'un objet trouvé (`lifescape_market::found_open`) : objet
+  échangé → prix courant (médiane des 5 derniers fills bornée par
+  l'impact) ou meilleur bid plus riche ; jamais échangé → juste sous
+  l'ask le moins cher (ou dans un bid plus riche), carnet vide → valeur
+  de haute alchimie (donnée publique, le prix attendu de `gear_plan`),
+  sinon 2 × plancher ; jamais au-dessus de la bande 5× d'un objet
+  échangé ; mémoire d'un fill rapide inchangée. Plancher 1, ou le net
+  d'alchimie d'un lanceur (`alch_floor`) ; les lanceurs achètent sous ce
+  net (`brain_alch`), c'est le plancher naturel du marché. La patience
+  (5 % par fenêtre de 2000 ticks) descend l'ask jusqu'au plancher.
+- Lots entiers : `sale_lot` inchangé (bids + volume 24 h, au moins un
+  inventaire, jamais plus que la pile). Une annonce intacte qui n'offre
+  qu'un éclat d'une grosse pile (≤ moitié du lot de la pile entière,
+  `market_seller::undersized`) est retirée et la pile part en un lot
+  dans la même passe (`brain_sales::regroup_slivers` ; objets non
+  gardés, lignes `open` seulement, jamais le stock de flip d'un
+  marchand).
+- Réadoption (après redémarrage) : un ask au-dessus de l'ouverture du
+  jour descend à elle (`Adoption::Lower`), jamais sous la réserve.
+- Équipement porté ou gardé : UNE copie de rechange reste (une mort fait
+  perdre le porté), le reste est du surplus
+  (`gear_plan::spare_gear_units`) ; une pièce que le plan garde entière
+  (obtention, quête) n'est pas touchée.
+- Gardé (inchangé) : nourriture jusqu'à 100 unités, outils de travail,
+  intrants des méthodes ouvertes, gear gardé, objets d'ambition et de
+  quête ; un plan à distance garde ses munitions (`fight:ranged/` →
+  flèches de la tranche), un combattant de mêlée vend les siennes.
+
+Vérification hors ligne (`loot_check_tests.rs`, ignoré, mêmes variables
+que `live_check` + `LIFESCAPE_CHECK_ACCOUNT` optionnel) : sur une copie
+de la base et un `/api/status`, les annonces regroupées, abaissées et
+les lots que chaque bot posterait.

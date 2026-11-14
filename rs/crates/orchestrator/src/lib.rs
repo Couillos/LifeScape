@@ -30,6 +30,8 @@ pub mod brain_bids;
 mod brain_bids_sim_tests;
 #[cfg(test)]
 mod live_check_tests;
+#[cfg(test)]
+mod loot_check_tests;
 pub mod economy_guard;
 pub mod brain_fold;
 pub mod brain_gear;

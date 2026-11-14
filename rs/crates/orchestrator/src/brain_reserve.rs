@@ -11,7 +11,8 @@
 //!   its farm lines (`produced`, `loot`, `ground_spawn`, looted coins) in
 //!   proportion to `quantity x object value` (the game's own item value,
 //!   coins at 1): a gathering or production report gives its product
-//!   all its ticks, a combat report gives each drop its loot share.
+//!   all its ticks; only `produced` units take a share (drops are found,
+//!   see below).
 //!   A processing report (forge, smelt, cook…) also names the inputs it
 //!   ate (`consumed`): their quantity per unit, shared the same way, is
 //!   costed at the input's OWN unit cost (its measured ticks x coins per
@@ -21,8 +22,8 @@
 //!   Unmeasured: the planner's estimate of the way that makes it (the
 //!   `est_ticks` of a farm alternative of an obtain node of the bot's
 //!   graph, per unit), else the planner's cold-start rate of the
-//!   gathering/combat script (`rates_service::prior_for`). Nothing at
-//!   all: no time cost.
+//!   gathering script (`rates_service::prior_for`). Nothing at all: no
+//!   time cost.
 //! - coins per tick: the best of the bot's own methods, measured as
 //!   (coins looted or shop-sold + units it farmed x its OWN last sale
 //!   price of them) / ticks, never under `market_fit::MIN_COIN_RATE`
@@ -34,8 +35,17 @@
 //!   the bids above that cost, so a producer never holds the stock the
 //!   bids it answered would buy.
 //!
-//! No time cost and no purchase: `None`, the bot holds the stock (never
-//! a 1-coin listing).
+//! FOUND stock (2026-11-14, live frank_lane: 41 iron daggers, 88 bronze
+//! med helms, 838 bronze arrows banked, one dagger listed at 628 for a
+//! value of ~30): loot, drops and ground spawns cost the bot NOTHING. The
+//! fight paid itself in XP (or coins), the walk to a spawn in the spawn;
+//! sharing the fight's ticks among the drops priced a steel arrow at
+//! 3541. An object the bot's own reports only show as found (or that a
+//! combat prior alone would cost) gets a `Found` reserve of 1 coin: it is
+//! surplus, sold at a clearing price (`lifescape_market::found_open`).
+//! Made and found units of one object: the made share keeps its time.
+//! No own record at all: the `bid_response` make cost when the bot can
+//! make it, else found.
 
 use lifescape_planner::{Life, NodeKind, NodeStatus};
 use lifescape_store::{Store, TaskReport, TaskYield};
@@ -71,6 +81,8 @@ pub enum CostSource {
     Bought,
     /// Capped at the `bid_response` cost of making it.
     MakeCost,
+    /// Loot, drop or ground spawn: zero own cost, 1-coin floor.
+    Found,
 }
 
 /// A seller reserve in coins per unit, with its source.
@@ -89,6 +101,33 @@ fn farm_line(line: &OwnLine) -> bool {
     line.quantity > 0 && crate::rates_service::is_farm_provenance(&line.provenance)
 }
 
+/// Provenances of FOUND stock (loot, drops, ground spawns): zero own cost.
+pub fn is_found_provenance(provenance: &str) -> bool {
+    matches!(provenance, "loot" | "ground_spawn" | "drop")
+}
+
+/// A line that MADE units (gathered, processed): they carry its ticks.
+fn made_line(line: &OwnLine) -> bool {
+    line.quantity > 0 && line.provenance == "produced"
+}
+
+/// Units of `display` the bot's counted reports MADE and FOUND.
+pub fn own_origin(reports: &[OwnReport], display: &str) -> (i64, i64) {
+    let mut made = 0i64;
+    let mut found = 0i64;
+    for line in reports.iter().filter(|report| counted(report)).flat_map(|report| report.lines.iter()) {
+        if line.quantity <= 0 || !line.item.eq_ignore_ascii_case(display) {
+            continue;
+        }
+        if line.provenance == "produced" {
+            made += line.quantity;
+        } else if is_found_provenance(&line.provenance) {
+            found += line.quantity;
+        }
+    }
+    (made, found)
+}
+
 fn coin_gain(line: &OwnLine) -> bool {
     // `produced` coins: alchemy turned stock into coins.
     line.quantity > 0 && crate::brain_reserve::is_coins(&line.item) && matches!(line.provenance.as_str(), "loot" | "shop_sold" | "produced")
@@ -101,11 +140,13 @@ fn input_line(line: &OwnLine) -> bool {
 
 /// Each counted report that made `display`: the units it made and the
 /// report's share owed to them (`quantity x weight` among its farm lines
-/// and coin gains).
+/// and coin gains). Found units (loot, ground spawns) take no share of
+/// their own; they still weigh in the total (a fight's drops never make
+/// its other products dearer).
 fn unit_shares<'a>(reports: &'a [OwnReport], display: &str, weight: &dyn Fn(&str) -> f64) -> Vec<(&'a OwnReport, i64, f64)> {
     let mut shares = Vec::new();
     for report in reports.iter().filter(|report| counted(report)) {
-        let own: i64 = report.lines.iter().filter(|line| farm_line(line) && line.item.eq_ignore_ascii_case(display)).map(|line| line.quantity).sum();
+        let own: i64 = report.lines.iter().filter(|line| made_line(line) && line.item.eq_ignore_ascii_case(display)).map(|line| line.quantity).sum();
         if own <= 0 {
             continue;
         }
@@ -127,8 +168,9 @@ fn counted(report: &OwnReport) -> bool {
     report.ticks > 0 && !crate::rates_service::is_trading_method(&report.method)
 }
 
-/// Measured ticks one unit of `display` cost: the report ticks shared
-/// by `quantity x weight` among the report's farm lines and coin gains.
+/// Measured ticks one MADE unit of `display` cost: the report ticks
+/// shared by `quantity x weight` among the report's farm lines and coin
+/// gains. `None` for found-only objects (loot is free).
 pub fn measured_ticks_per_unit(reports: &[OwnReport], display: &str, weight: &dyn Fn(&str) -> f64) -> Option<f64> {
     let shares = unit_shares(reports, display, weight);
     let units: i64 = shares.iter().map(|(_, own, _)| *own).sum();
@@ -227,9 +269,10 @@ pub fn planned_ticks_per_unit(life: &Life, item: &str) -> Option<f64> {
     best
 }
 
-/// Planner cold-start estimate of the script that farms `display`.
+/// Planner cold-start estimate of the gathering script that makes
+/// `display` (a combat prior is loot: found, no time cost).
 pub fn prior_ticks_per_unit(display: &str) -> Option<f64> {
-    ["fishing", "woodcut", "mining", "melee"]
+    ["fishing", "woodcut", "mining"]
         .iter()
         .filter_map(|script| crate::rates_service::prior_for(script, display))
         .map(|(per_6000, _)| per_6000)
@@ -272,6 +315,19 @@ pub fn reserve_of(measured: Option<f64>, planned: Option<f64>, prior: Option<f64
         Some(cap) if cap < own.coins => Reserve { coins: cap, source: CostSource::MakeCost },
         _ => own,
     })
+}
+
+/// Reserve of an object without own time cost: its own last purchase
+/// (capped like any reserve), else `Found` when the bot found it (or
+/// knows nothing of it and cannot make it), else the make cost.
+pub fn found_reserve(found_units: i64, bought: Option<i64>, make_cost: Option<f64>) -> Reserve {
+    if let Some(paid) = reserve_of(None, None, None, 0.0, 0.0, bought, make_cost) {
+        return paid;
+    }
+    match make_cost.filter(|cost| cost.is_finite() && found_units <= 0) {
+        Some(cost) => Reserve { coins: (cost.floor() as i64).max(1), source: CostSource::MakeCost },
+        None => Reserve { coins: 1, source: CostSource::Found },
+    }
 }
 
 /// Display name of a debug name (yields carry display names).
@@ -332,12 +388,24 @@ impl OwnCosts {
     /// `make_cost` (`brain_bids::production_costs_for`) when known.
     pub fn reserve(&self, store: &Store, item: &str, item_id: i64, life: Option<&Life>, make_cost: Option<f64>) -> Option<Reserve> {
         let display = display_of(item);
-        let measured = measured_ticks_per_unit(&self.reports, &display, &item_weight);
-        let planned = life.and_then(|life| planned_ticks_per_unit(life, item));
-        let prior = prior_ticks_per_unit(&display);
         let bought = store.last_own_fill(&self.account, item_id, true).ok().flatten().map(|(price, _)| price);
-        let inputs = self.input_coins(&|input: &str| last_bought(store, &self.account, input), &display, INPUT_DEPTH);
-        reserve_of(measured, planned, prior, self.coins_per_tick, inputs, bought, make_cost)
+        let (made, found) = own_origin(&self.reports, &display);
+        if made <= 0 {
+            // Found, or nothing measured: a planned or gathering prior
+            // only for an object the bot never found.
+            let planned = life.filter(|_| found <= 0).and_then(|life| planned_ticks_per_unit(life, item));
+            let prior = if found <= 0 { prior_ticks_per_unit(&display) } else { None };
+            if planned.is_none() && prior.is_none() {
+                return Some(found_reserve(found, bought, make_cost));
+            }
+            return reserve_of(None, planned, prior, self.coins_per_tick, 0.0, bought, make_cost);
+        }
+        // Made and found: the found units cost nothing, the made share
+        // keeps its time and inputs.
+        let made_share = made as f64 / (made + found.max(0)) as f64;
+        let measured = measured_ticks_per_unit(&self.reports, &display, &item_weight).map(|ticks| ticks * made_share);
+        let inputs = self.input_coins(&|input: &str| last_bought(store, &self.account, input), &display, INPUT_DEPTH) * made_share;
+        reserve_of(measured, None, None, self.coins_per_tick, inputs, bought, make_cost)
     }
 
     /// Coins of the inputs one unit of `display` ate, each at its own
@@ -356,6 +424,10 @@ impl OwnCosts {
     /// bot's rate plus its own inputs, else its cold-start ticks, never
     /// under its own last purchase price; 0 when nothing is known.
     pub fn unit_cost(&self, bought: &dyn Fn(&str) -> Option<f64>, display: &str, depth: u8) -> f64 {
+        if matches!(own_origin(&self.reports, display), (0, found) if found > 0) {
+            // A found input (looted feathers) cost no time.
+            return bought(display).unwrap_or(0.0);
+        }
         let made = measured_ticks_per_unit(&self.reports, display, &item_weight)
             .map(|ticks| ticks * self.coins_per_tick + self.input_coins(bought, display, depth))
             .or_else(|| prior_ticks_per_unit(display).map(|ticks| ticks * self.coins_per_tick));

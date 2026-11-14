@@ -91,6 +91,11 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
         keep.extend(lifescape_planner::method_way::spell_runes(spell).into_iter().map(|(rune, _)| rune));
         return None;
     }
+    // A ranged fight fires the tranche's ammunition (`sizing`): kept.
+    if method.starts_with("fight:ranged/") {
+        keep.extend(lifescape_planner::sizing::tranche_consumption(method, 1, 2).into_iter().map(|(ammo, _)| ammo));
+        return None;
+    }
     if method.starts_with("gather:") || method.starts_with("fight:") || method.starts_with("market:") {
         return None;
     }
@@ -205,9 +210,10 @@ fn adopt_listings(
     costs: &crate::brain_reserve::OwnCosts,
     life: &Life,
     make_costs: &HashMap<String, f64>,
+    live: &Value,
 ) {
-    use crate::market_seller::Adoption;
-    let (mut walked, mut raised, mut withdrawn) = (0usize, 0usize, 0usize);
+    use crate::market_seller::{Adoption, SaleDecision};
+    let (mut walked, mut raised, mut lowered, mut withdrawn) = (0usize, 0usize, 0usize, 0usize);
     for row in selling {
         // Idempotent: an order that walks or was adopted once is skipped
         // before any reserve or book work (2026-11-14, daemon CPU).
@@ -216,12 +222,17 @@ fn adopt_listings(
         }
         let Some(name) = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).unwrap_or(0)).and_then(|obj| obj.name) else { continue };
         let make_cost = make_costs.get(name).copied();
-        let reserve = {
-            let store = service.lock_store();
-            costs.reserve(&store, name, row.item_id, Some(life), make_cost).map(|reserve| reserve.coins)
+        // Today's opening for this stock (2026-11-14: an ask anchored on
+        // an old reserve or an outlier comes down to it).
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost);
+        let reserve = reserve.map(|reserve| reserve.coins);
+        let alch = crate::brain_alch::alch_floor(live, name).unwrap_or(0);
+        let opening = match today {
+            SaleDecision::List { price, .. } => Some(price.max(alch)),
+            SaleDecision::Hold(_) => None,
         };
         let lot = lifescape_planner::market_fit::sale_lot(row.remaining, Some(&service.public_view(account, row.item_id)));
-        let decision = crate::market_seller::adoption(row.price, row.remaining, reserve, lot);
+        let decision = crate::market_seller::adoption(row.price, row.remaining, reserve, lot, opening);
         if !matches!(decision, Adoption::Walk { .. }) {
             // Decided once: never retried nor re-logged every pass.
             service.lock_engine().adopted.insert(row.order_id);
@@ -236,13 +247,19 @@ fn adopt_listings(
                 }
                 continue;
             }
-            Adoption::Raise { price, floor } => {
+            Adoption::Raise { price, floor } | Adoption::Lower { price, floor } => {
+                let up = matches!(decision, Adoption::Raise { .. });
                 let reply = service.handle(&object(vec![("op", str_value("amend")), ("account", str_value(account)), ("order", Value::Int(row.order_id)), ("price", Value::Int(price))]));
                 let Some(order) = reply.get("order").as_i64().filter(|_| reply.get("ok").as_bool() == Some(true)) else {
-                    crate::logln!("brain {account}: listing {} of {name} not raised to its reserve {price}: {:?}", row.order_id, reply.get("error").as_str());
+                    let target = if up { "raised to its reserve" } else { "lowered to today's opening" };
+                    crate::logln!("brain {account}: listing {} of {name} not {target} {price}: {:?}", row.order_id, reply.get("error").as_str());
                     continue;
                 };
-                raised += 1;
+                if up {
+                    raised += 1;
+                } else {
+                    lowered += 1;
+                }
                 (order, floor)
             }
             Adoption::Walk { floor } => (row.order_id, floor),
@@ -261,9 +278,62 @@ fn adopt_listings(
             walked += 1;
         }
     }
-    if walked + raised + withdrawn > 0 {
-        crate::logln!("brain {account}: {walked} listings adopted by demand pricing ({raised} raised to the reserve), {withdrawn} withdrawn");
+    if walked + raised + lowered + withdrawn > 0 {
+        crate::logln!("brain {account}: {walked} listings adopted by demand pricing ({raised} raised to the reserve, {lowered} lowered to today's opening), {withdrawn} withdrawn");
     }
+}
+
+/// Spare copies of kept or worn wearables (one unworn copy stays,
+/// `gear_plan::spare_gear_units`): `(name, id, qty)`.
+fn spare_gear(stacks: &[(String, i64)], gear: &[String], whole: &[String], listed: &HashSet<i64>) -> Vec<(String, i64, i64)> {
+    lifescape_planner::gear_plan::spare_gear_units(stacks, gear, whole)
+        .into_iter()
+        .filter(|(name, _)| tradeable(name))
+        .filter_map(|(name, qty)| {
+            let id = lifescape_gamedata::objs_by_name(&name).into_iter().next()?.obj_id as i64;
+            (!listed.contains(&id)).then_some((name, id, qty))
+        })
+        .collect()
+}
+
+/// Resting listings that offer a sliver of a big free stack
+/// (`market_seller::undersized`; live frank_lane 2026-11-14: 1 iron
+/// dagger listed at 628, 40 banked and never listed): withdrawn so the
+/// stack lists as one lot. Only surplus items (not kept), open rows,
+/// never a merchant's flip stock. Returns the order ids withdrawn.
+fn regroup_slivers(
+    service: &crate::market_service::MarketService,
+    account: &str,
+    selling: &[lifescape_store::Order],
+    free: &[(String, i64)],
+    keep: &[String],
+    flip_stock: &HashSet<i64>,
+) -> Vec<i64> {
+    let mut withdrawn = Vec::new();
+    for row in selling.iter().filter(|row| row.status == lifescape_store::OrderStatus::Open && !flip_stock.contains(&row.item_id)) {
+        let Some(name) = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).unwrap_or(0)).and_then(|obj| obj.name) else { continue };
+        if crate::brain_plan::sale_blocked(name, keep, &[]) {
+            continue;
+        }
+        let spare: i64 = free.iter().filter(|(held, _)| held == name).map(|(_, qty)| *qty).sum();
+        // Cheap gate before the book read: the whole stack must be at
+        // least twice the listing.
+        if spare <= 0 || row.quantity.saturating_mul(2) > row.remaining + spare {
+            continue;
+        }
+        let lot = lifescape_planner::market_fit::sale_lot(row.remaining + spare, Some(&service.public_view(account, row.item_id)));
+        if !crate::market_seller::undersized(row.quantity, row.remaining, spare, lot) {
+            continue;
+        }
+        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+        if reply.get("ok").as_bool() == Some(true) {
+            crate::logln!("brain {account}: listing {} of {} {name} withdrawn ({spare} more free, lot {lot}): the stack lists as one lot", row.order_id, row.remaining);
+            withdrawn.push(row.order_id);
+        } else {
+            crate::logln!("brain {account}: listing {} of {name} not regrouped: {:?}", row.order_id, reply.get("error").as_str());
+        }
+    }
+    withdrawn
 }
 
 /// Resting sells that lock the last free copy of a tool the bot works
@@ -314,13 +384,17 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let worn = crate::brain_plan::worn_names(job);
     let mut wished: Vec<String> = crate::brain_wishlist::wishlist(job, life).into_iter().map(|wish| wish.item).collect();
     let live = job.inner.try_lock().ok().and_then(|inner| inner.live.clone()).unwrap_or(Value::Null);
-    wished.extend(crate::brain_gear::ladder_keep(job, life, &live));
+    // Kept and worn gear keep ONE spare copy, never the whole stack
+    // (2026-11-14: a worn bronze med helm protected 88 looted copies).
+    let mut gear = crate::brain_gear::ladder_keep(job, life, &live);
+    gear.extend(worn.iter().cloned());
     // A caster keeps what alchs for more than it sells (2026-11-14).
     wished.extend(crate::brain_alch::alch_keep(life, &live));
     let stacks = crate::brain_plan::live_stacks(job);
     let tools = crate::brain_tools::kept_tools(life, &stacks);
     wished.extend(tools.iter().cloned());
-    let keep = crate::brain_plan::merge_keep(working_keep(life, &wished), worn.clone());
+    let whole = working_keep(life, &wished);
+    let keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());
     let mut selling: Vec<lifescape_store::Order> = service
         .lock_store()
         .account_orders(&job.account)
@@ -339,21 +413,6 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         let still = withdraw_tool_listings(&service, &job.account, &locking);
         selling.retain(|row| !locking.iter().any(|(order, _)| *order == row.order_id) || still.contains(&row.order_id));
     }
-    // Withdrawn lots stay out this pass (still in `selling`): their stock
-    // is banked again and the next pass lists a demand lot.
-    let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
-    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account));
-    let locks = crate::brain_locks::locked_items(&job.account);
-    let free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
-    // The `bid_response` make cost caps every reserve (one book and rates
-    // read for the pass): what a bid quota was priced at always sells.
-    let mut priced: Vec<(String, i64)> = free.clone();
-    priced.extend(selling.iter().filter_map(|row| {
-        let name = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).ok()?)?.name?;
-        Some((name.to_string(), row.remaining))
-    }));
-    let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced);
-    adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs);
     // A merchant's flip stock (what it bought) is priced by its flips
     // only (`flip_quote`), never relisted here (ryan_park held 81 % of
     // the sell side at 1 coin, 2026-11-14).
@@ -362,11 +421,35 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     } else {
         HashSet::new()
     };
+    let mut locks = crate::brain_locks::locked_items(&job.account);
+    let mut free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    // A sliver listed out of a big stack is withdrawn and the whole
+    // stack lists as one lot in this same pass.
+    let regrouped = regroup_slivers(&service, &job.account, &selling, &free, &keep, &flip_stock);
+    if !regrouped.is_empty() {
+        selling.retain(|row| !regrouped.contains(&row.order_id));
+        locks = crate::brain_locks::locked_items(&job.account);
+        free = free_stacks(&stacks, &|name| crate::brain_locks::locked_in(&locks, name));
+    }
+    // Withdrawn lots stay out this pass (still in `selling`): their stock
+    // is banked again and the next pass lists a demand lot.
+    let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
+    let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account));
+    // The `bid_response` make cost caps every reserve (one book and rates
+    // read for the pass): what a bid quota was priced at always sells.
+    let mut priced: Vec<(String, i64)> = free.clone();
+    priced.extend(selling.iter().filter_map(|row| {
+        let name = lifescape_gamedata::obj_by_id(usize::try_from(crate::market_audit::base_of(row.item_id)).ok()?)?.name?;
+        Some((name.to_string(), row.remaining))
+    }));
+    let make_costs = crate::brain_bids::production_costs_for(life, &live, &priced);
+    adopt_listings(&service, &job.account, &selling, &costs, life, &make_costs, &live);
     let mut placed = 0;
     // Only what no listing or deal already promises (the market refuses
     // the rest anyway, `market_audit::uncommitted`): `free` above.
     let mut offers = surplus(&free, &keep, &worn, &listed);
     offers.extend(spare_tools(life, &free, &tools, &listed));
+    offers.extend(spare_gear(&free, &gear, &whole, &listed));
     for (name, item, qty) in offers {
         if flip_stock.contains(&item) {
             continue;
@@ -564,6 +647,19 @@ pub(crate) mod tests {
         for tool in ["chisel", "needle", "shears", "knife", "fishing_bait", "net", "tinderbox"] {
             assert!(!crate::brain_plan::sale_blocked(tool, &kept, &[]), "{tool} sells when unused");
         }
+    }
+
+    /// Loot is surplus, ammunition a ranged plan fires is not (2026-11-14):
+    /// an archer keeps its bronze arrows, a melee fighter sells them.
+    #[test]
+    fn a_ranged_plan_keeps_its_arrows_a_melee_one_sells_them() {
+        let archer = super::working_keep(&life_training(&[("ranged", "fight:ranged/cows")]), &[]);
+        assert!(archer.contains(&"bronze_arrow".to_string()), "{archer:?}");
+        let fighter = super::working_keep(&life_training(&[("attack", "fight:melee/al_kharid_warriors")]), &[]);
+        assert!(!fighter.contains(&"bronze_arrow".to_string()), "{fighter:?}");
+        let stacks = vec![("bronze_arrow".to_string(), 838), ("iron_dagger".to_string(), 41)];
+        let names: Vec<String> = surplus(&stacks, &fighter, &[], &HashSet::new()).into_iter().map(|(name, _, _)| name).collect();
+        assert_eq!(names, vec!["bronze_arrow".to_string(), "iron_dagger".to_string()]);
     }
 
     #[test]

@@ -757,7 +757,7 @@ bdr53jee 2026-11-14 : quinze passes en deux minutes à 56 types). Le repli `awai
 ferme ne se termine jamais). L'activité worker (`activities/market_cleanup.rs`, sous le
 plafond 200) : marché pour le surplus échangeable (lot et prix du
 daemon, `seller_quote` : réserve = coût propre du bot, voir
-`docs/economy.md` § Réserve vendeur ; sans coût connu, rien n'est
+`docs/economy.md` § Réserve vendeur et § Butin ; sans coût connu, rien n'est
 listé), magasin
 général, jet du reste, D17 jusqu'à repasser sous la limite : le surplus
 que le carnet refuse (sans coût propre connu, hors bande) toujours — il

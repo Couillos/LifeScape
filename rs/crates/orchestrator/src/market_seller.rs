@@ -12,11 +12,11 @@
 //! `flip_quote` ops.
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_market::{seller_open, OwnFill, Reference};
+use lifescape_market::{found_open, seller_open, OwnFill, Reference};
 use lifescape_planner::market_fit::{sale_lot, BookView};
 use lifescape_planner::Life;
 
-use crate::brain_reserve::{OwnCosts, Reserve};
+use crate::brain_reserve::{CostSource, OwnCosts, Reserve};
 use crate::market_service::MarketService;
 
 /// Planner estimate of one flip unit when the merchant never measured
@@ -35,18 +35,35 @@ pub enum SaleDecision {
     Hold(String),
 }
 
+/// What a FOUND lot prices against (`found_open`): the cheapest ask of
+/// ANOTHER account (the seller's own listing never anchors its own
+/// opening) and the object's high alchemy value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FoundMarks {
+    pub others_ask: Option<i64>,
+    pub anchor: Option<i64>,
+}
+
 /// One sale (pure): the opening ask from the seller's reserve and own
 /// last fill (`seller_open`), a lot sized to the public demand
 /// (`market_fit::sale_lot`: bids + a day of volume, at least one
 /// inventory), the 5x band of a traded reference respected (the opening
-/// comes down to it, never under the reserve: over it, hold).
-pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best_bid: Option<i64>, last_sell: Option<OwnFill>, view: &BookView) -> SaleDecision {
+/// comes down to it, never under the reserve: over it, hold). Found
+/// stock (`CostSource::Found`: loot, drops, ground spawns) opens at the
+/// clearing price instead (`found_open`: current price, just under the
+/// cheapest ask of another account for an untraded object, else its
+/// high alchemy value, `FoundMarks`) and walks down to 1.
+pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best_bid: Option<i64>, last_sell: Option<OwnFill>, marks: FoundMarks, view: &BookView) -> SaleDecision {
     let Some(reserve) = reserve else { return SaleDecision::Hold("no own cost known".to_string()) };
     let qty = sale_lot(free, Some(view));
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
-    let (mut price, floor) = seller_open(reference, best_bid, reserve.coins, last_sell);
+    let (mut price, floor) = if reserve.source == CostSource::Found {
+        found_open(reference, best_bid, marks.others_ask, reserve.coins, marks.anchor, last_sell)
+    } else {
+        seller_open(reference, best_bid, reserve.coins, last_sell)
+    };
     if reference.traded {
         let band = reference.price.saturating_mul(5);
         if floor > band {
@@ -65,13 +82,18 @@ pub enum Adoption {
     Walk { floor: i64 },
     /// Under the reserve: amended up to it, then walks.
     Raise { price: i64, floor: i64 },
+    /// Over today's opening (an ask anchored on an old reserve or an
+    /// outlier, frank_lane's staff at 1644 against asks at 17): amended
+    /// down to it, then walks.
+    Lower { price: i64, floor: i64 },
     /// Withdrawn (stock back to the bank): over the demand lot, or no own
     /// cost known. The next selling pass lists a lot.
     Withdraw(String),
 }
 
-/// Adoption of one resting listing (pure).
-pub fn adoption(price: i64, remaining: i64, reserve: Option<i64>, lot: i64) -> Adoption {
+/// Adoption of one resting listing (pure); `opening` = the ask the
+/// seller would post for it today (`plan_sale`).
+pub fn adoption(price: i64, remaining: i64, reserve: Option<i64>, lot: i64, opening: Option<i64>) -> Adoption {
     let Some(reserve) = reserve else { return Adoption::Withdraw("no own cost known".to_string()) };
     if remaining > lot {
         return Adoption::Withdraw(format!("{remaining} over the demand lot {lot}"));
@@ -79,7 +101,20 @@ pub fn adoption(price: i64, remaining: i64, reserve: Option<i64>, lot: i64) -> A
     if price < reserve {
         return Adoption::Raise { price: reserve, floor: reserve };
     }
-    Adoption::Walk { floor: reserve }
+    match opening.filter(|opening| *opening >= reserve && *opening < price) {
+        Some(opening) => Adoption::Lower { price: opening, floor: reserve },
+        None => Adoption::Walk { floor: reserve },
+    }
+}
+
+/// A resting listing that offers a sliver of a big free stack (pure,
+/// 2026-11-14, frank_lane: 1 iron dagger listed, 40 banked, the stack
+/// never listed because the item had a listing): untouched (`remaining
+/// == quantity`), more units free beside it, and at most half the lot
+/// the whole stack would list (`lot_of_whole` = `sale_lot(remaining +
+/// free)`). It is withdrawn and the stack lists as one lot.
+pub fn undersized(quantity: i64, remaining: i64, free: i64, lot_of_whole: i64) -> bool {
+    remaining == quantity && free > 0 && quantity.saturating_mul(2) <= lot_of_whole
 }
 
 /// Minimum flip margin per unit (pure): the merchant's ticks per flipped
@@ -183,7 +218,11 @@ impl MarketService {
         let reference = self.reference(item);
         let (bid, _) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
         let last = self.own_sell_fill(account, item);
-        (plan_sale(free, reserve, reference, bid, last, &self.public_view(account, item)), reserve)
+        let others_ask = self.lock_engine().books.get(&item).and_then(|book| {
+            book.orders().into_iter().filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && order.account != account && order.price >= 1).map(|order| order.price).min()
+        });
+        let marks = FoundMarks { others_ask, anchor: lifescape_planner::alchemy::alch_value(name, true) };
+        (plan_sale(free, reserve, reference, bid, last, marks, &self.public_view(account, item)), reserve)
     }
 
     /// `seller_quote {account, item, qty}`: the account's own listing for
