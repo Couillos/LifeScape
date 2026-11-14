@@ -2,7 +2,8 @@
 //! fights. Split out of `kit::fight` (rule 4; `fight::run_spot` stays
 //! the public entry). The ladder adds a `HuntPlan`: its seeded cluster
 //! order (the Edgeville dungeon giants included, the router reaching
-//! them with the brass key), the sized food load, the food rule (no
+//! them by the Edgeville trapdoor, or the brass-key house when the key
+//! rides along), the sized food load, the food rule (no
 //! dangerous spot without food: typed `Blocked` instead) and the items
 //! kept through deposits.
 
@@ -145,7 +146,7 @@ pub fn run_spot_with(
 ) -> Result<(u32, bool, bool), ScriptError> {
     if spot.entrance.is_some() && plan.clusters.is_none() {
         // Underground camps only ride with the ladder's clusters (route
-        // verified offline, gate held); a bare key never walks down.
+        // verified offline, approach rated); a bare key never walks down.
         return Err(ScriptError::Usage(format!(
             "spot {} is underground, not traversable from {:?}",
             spot.key,

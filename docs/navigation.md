@@ -515,6 +515,23 @@ réécriture `LIFESCAPE_BLESS_TOLL_REGION=1`), lu par `gamedata::toll` :
 cerveau et scripts testent la même région, jamais x = 3268 (la clôture
 passe à x 3266 vers z 3240, à x 3270 en haut ; la rive sud d'Al Kharid
 descend à x 3259).
+## Détour sans prérequis (2026-11-14)
+
+La première recherche lève les prérequis. Si son chemin passe une porte
+(ou une arête custom) dont le tag manque, une recherche stricte bornée
+par le coût (`no_route::detour_cap` : `2 × coût levé + 64`) cherche un
+détour sans ce tag avant de répondre `NeedsRequirement`. Cas réel : salle
+des géants du donjon d'Edgeville, porte à clé 1804 (171) ou trappe et
+donjon principal (260). Goldens `geants_sans_cle` (deux recherches :
+`budget_ms=1500`), `geants_avec_cle`, `geants_retour`.
+
+Sorties de cave : `dump-transitions` ignorait l'en-tête
+`[oploc1,ladder_from_cellar] // mining guild ladder` (commentaire après
+le `]`) et aucun `ladder_from_cellar` ne remontait (donjon d'Edgeville,
+égouts de Varrock, guilde des mineurs, donjon des glaces, Karamja…) ;
+corrigé (commentaire retiré, branche `if(loc_coord = …)` de Zanaris
+liée à son seul emplacement). 15 lignes ajoutées en fin de
+`transitions.json`, noms existants inchangés (référencés par les tests).
 
 ## Danger et destinations substituées (2026-11-12)
 

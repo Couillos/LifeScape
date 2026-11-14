@@ -187,8 +187,16 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
     // a NoRoute-by-exhaustion is bounded by MAX_VISITS and the plan
     // wall-clock budget, not by finding a route, and its milliseconds
     // stay printed above for the record.
+    // A route that needs the strict detour search after a blocked lifted
+    // one (`budget_ms=`) runs two full searches: its own, wider budget.
+    let budget = assertions_raw
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("budget_ms="))
+        .map(|raw| raw.parse::<u128>().expect("budget_ms number"))
+        .unwrap_or(300);
     if result.is_ok() && !cfg!(debug_assertions) {
-        assert!(ms < 300, "route {name}: plan took {ms}ms, budget is 300ms");
+        assert!(ms < budget, "route {name}: plan took {ms}ms, budget is {budget}ms");
     }
     for assertion in assertions_raw.split(';').map(str::trim).filter(|part| !part.is_empty()) {
         if assertion == "reachable" {
@@ -286,6 +294,8 @@ fn check_route(world: &Arc<StaticWorld>, tables: &Tables, line: &str) {    let c
             let pair: Vec<i32> = stand.split(',').map(|part| part.trim().parse().expect("stand pair")).collect();
             assert!(pair.len() == 2, "route {name}: stand needs x,z");
             assert!(has_stand(plan, pair[0], pair[1]), "route {name}: no segment stands on ({},{})", pair[0], pair[1]);
+        } else if assertion.starts_with("budget_ms=") {
+            // Read above, before the latency check.
         } else if let Some(avoid) = assertion.strip_prefix("avoids=") {
             let plan = result.as_ref().unwrap_or_else(|_| panic!("route {name}: expected a plan"));
             let pair: Vec<i32> = avoid.split(',').map(|part| part.trim().parse().expect("avoids pair")).collect();

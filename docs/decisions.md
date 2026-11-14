@@ -557,3 +557,29 @@ options (JSON ~60 µs, gain marginal, compatibilité des workers) ; abaisser
 le plafond des poches ou l'horizon `walk_costs` (changerait les réponses).
 Rejeu : 73,3 s → 10,0 s CPU (−86 %, danger live), 9,9 → 7,0 s (ancien
 profil) ; prévision live ≈ 1,1 s/min.
+## 2026-11-14 — Géants des collines sans clé, Wilderness à la ligne moteur
+
+Constat live : aucun bot `melee ladder` n'allait aux géants (george_97,
+combat 75, chassait les gardes ; log `gate BrassKey closed`). Quatre causes :
+(1) le ladder exigeait la clé en laiton, jamais obtenue (spawn (3131,9862)
+souterrain, donc aucune jambe `ground:`) ; (2) la nav répondait
+`NeedsRequirement` dès que le chemin levé passait la porte à clé 1804,
+sans chercher le détour sans clé (trappe d'Edgeville, portails 1558/1557
+du donjon : 260 contre 171) ; (3) `danger::in_wilderness` lisait tout
+z ≥ 3520 comme Wilderness, souterrains compris : chaque chasseur de
+donjon était agressif à vie, aucun camp souterrain voisin n'était sûr ;
+(4) aucune échelle de cave ne remontait (`dump-transitions` sautait
+`ladder_from_cellar`, en-tête commenté) : un bot descendu ne pouvait plus
+banquer. Décisions : la nav relance une recherche stricte bornée par le coût
+(`2 × levé + 64`) avant `NeedsRequirement` ; Wilderness = test moteur
+`Player.isInWilderness` (z 3520..6400 et 9920..12800, x 2944..3391) ; les
+géants sont `Gate::Open`, la clé possédée ne sert que de raccourci
+(`Rung::shortcut_key`, gardée à chaque voyage) ; un camp souterrain est
+refusé si un chasseur de l'approche (boîte trappe→camp ± 50) qui
+attaquerait ce niveau de combat brise la ligne de repas en deux coups
+(`approach_threat`, même règle que `burst`). Rejeté : faire obtenir la
+clé (inutile, le donjon y mène) ; exiger la passivité de tous les
+chasseurs du trajet (hobgoblins armés : combat 85).
+Restent hors ladder : géants moussus (salle derrière la toile à trancher
+`bigweb_slashable` (3146,9898), aucune arête nav), donjon des glaces
+(pas de banque F2P à `BANK_TREK_LIMIT` de Mudskipper Point).

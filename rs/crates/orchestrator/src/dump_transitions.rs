@@ -183,7 +183,10 @@ fn script_blocks(text: &str) -> Vec<(String, String)> {
     let mut header: Option<String> = None;
     let mut body: Vec<&str> = Vec::new();
     for line in text.lines() {
-        let stripped = line.trim();
+        // A header may carry a trailing comment (`[oploc1,ladder_from_cellar]
+        // // mining guild ladder`): without the strip its body fell into the
+        // previous handler and no cellar ladder ever climbed back up.
+        let stripped = line.split("//").next().unwrap_or("").trim();
         if stripped.starts_with('[') && stripped.ends_with(']') && stripped.len() >= 2 {
             if let Some(open) = header.take() {
                 blocks.push((open, body.join("\n")));
@@ -548,6 +551,67 @@ fn destination(text: &str, from_tile: (i32, i32, i32)) -> (Option<(i32, i32, i32
     (None, None)
 }
 
+/// Placement branches of a handler: `if(loc_coord = <coord>) { ... }`
+/// (or one inline statement) keeps its body only for the placement at
+/// that coord and drops it for every other one. `ladder_from_cellar`
+/// opens with the Zanaris case: read whole, every cellar ladder of the
+/// world climbed to Zanaris.
+fn loc_coord_branch(body: &str, from_tile: (i32, i32, i32)) -> String {
+    let key = packed_key(from_tile.0, from_tile.1, from_tile.2);
+    let lines: Vec<&str> = body.lines().collect();
+    let mut out: Vec<&str> = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let compact: String = line.split("//").next().unwrap_or("").chars().filter(|ch| !ch.is_whitespace()).collect();
+        let Some(rest) = compact.strip_prefix("if(loc_coord=") else {
+            out.push(line);
+            index += 1;
+            continue;
+        };
+        let Some(close) = rest.find(')') else {
+            out.push(line);
+            index += 1;
+            continue;
+        };
+        let (coord, after) = (&rest[..close], &rest[close + 1..]);
+        if !coord.bytes().all(|byte| byte.is_ascii_digit() || byte == b'_') {
+            out.push(line);
+            index += 1;
+            continue;
+        }
+        let matches = coord == key;
+        if !after.starts_with('{') {
+            // Inline form: the statement rides on the `if` line.
+            if matches {
+                out.push(line);
+            }
+            index += 1;
+            continue;
+        }
+        let mut depth = 0i32;
+        let mut end = index;
+        for (ahead, tail) in lines.iter().enumerate().skip(index) {
+            for ch in tail.split("//").next().unwrap_or("").chars() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            end = ahead;
+            if depth <= 0 {
+                break;
+            }
+        }
+        if matches {
+            return lines[index + 1..end].join("\n");
+        }
+        index = end + 1;
+    }
+    out.join("\n")
+}
+
 fn joined_body(bodies: &[String]) -> String {
     bodies.join("\n")
 }
@@ -569,7 +633,7 @@ fn resolved(
     } else {
         body
     };
-    Some(destination(&active, from_tile))
+    Some(destination(&loc_coord_branch(&active, from_tile), from_tile))
 }
 
 /// `(opened name, op, destination)` when the click opens a trapdoor first.
@@ -858,7 +922,7 @@ pub fn dump_transitions(output: &Path) -> Result<(usize, usize), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::dump_transitions;
+    use super::{dump_transitions, loc_coord_branch, script_blocks};
     use lifescape_json as json;
     use crate::paths;
     use std::collections::HashSet;
@@ -912,5 +976,32 @@ mod tests {
             }
             assert_eq!(norm_footprint(got), norm_footprint(want), "row {index} footprint drifted");
         }
+    }
+
+    /// `ladders.rs2`: `[oploc1,ladder_from_cellar] // mining guild ladder`
+    /// is a header despite its comment, and its Zanaris case only binds
+    /// the Zanaris placement: every other cellar ladder climbs 6400 up.
+    #[test]
+    fn commented_headers_and_coord_branches() {
+        let source = "[oploc1,ladder_cellar]\np_arrivedelay;\n[oploc1,ladder_from_cellar] // mining guild ladder\nif(loc_coord = 0_50_149_22_52) { // Zanaris\n    ~climb_ladder(0_50_49_1_33, true);\n    return;\n}\n~climb_ladder(movecoord(coord(), 0, 0, -6400), true);";
+        let blocks = script_blocks(source);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert_eq!(blocks[1].0, "oploc1,ladder_from_cellar");
+        let generic = loc_coord_branch(&blocks[1].1, (0, 3097, 9867));
+        assert!(!generic.contains("0_50_49_1_33") && generic.contains("-6400"), "{generic}");
+        let zanaris = loc_coord_branch(&blocks[1].1, (0, 3222, 9588));
+        assert!(zanaris.contains("0_50_49_1_33") && !zanaris.contains("-6400"), "{zanaris}");
+    }
+
+    /// The Edgeville dungeon ladder under the trapdoor (3096, 9867) climbs
+    /// back to the surface: before, no dump row left that dungeon and a
+    /// bot sent to the hill giants could never bank (`Disconnected`).
+    #[test]
+    fn edgeville_dungeon_ladder_climbs_out() {
+        let text = std::fs::read_to_string(paths::root().join("gamedata").join("data").join("transitions.json")).expect("read committed transitions");
+        let rows = json::parse(&text).expect("parse committed").as_arr().cloned().unwrap_or_default();
+        let exit = rows.iter().find(|row| triple(row.get("from")) == (0, 3096, 9867)).expect("a row leaves (3096, 9867)");
+        assert_eq!(triple(exit.get("to")).2, 3467, "climbs 6400 up: {exit:?}");
+        assert!(exit.get("name").as_str().is_some_and(|name| name.starts_with("ladder_from_cellar")), "{exit:?}");
     }
 }

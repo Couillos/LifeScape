@@ -36,10 +36,14 @@ pub struct Hunter {
     pub name: &'static str,
 }
 
-/// Wilderness surface (level 0, z 3520 and up): hunters ignore the
-/// passive rule there.
-pub fn in_wilderness(x: i64, z: i64, level: i64) -> bool {
-    level == 0 && (2944..=3392).contains(&x) && z >= 3520
+/// Wilderness, the engine's own test (`Player.isInWilderness`, every
+/// level): x 2944..3392, the surface from z 3520 below the underground
+/// band, and the dungeons under it from z 9920 (Edgeville dungeon north
+/// of its wild gate). Hunters ignore the passive rule there. The rest
+/// of the underground band (Edgeville dungeon giants, Varrock sewers)
+/// is not Wilderness: its hunters turn passive like the surface ones.
+pub fn in_wilderness(x: i64, z: i64, _level: i64) -> bool {
+    (2944..3392).contains(&x) && ((3520..6400).contains(&z) || (9920..12800).contains(&z))
 }
 
 /// Every lethal aggressive spawn of the dump (members spawns excluded).
@@ -170,7 +174,27 @@ pub fn method_requirement(kind: &str, resource: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{method_requirement, required_combat_at, site_requirement, NEVER};
+    use super::{hunters, in_wilderness, method_requirement, passive_from, required_combat_at, site_requirement, NEVER};
+
+    /// Server line (`Player.isInWilderness`): the Edgeville dungeon
+    /// under z 9920 is no Wilderness, so its skeletons turn passive past
+    /// twice their level like surface hunters (before: every underground
+    /// hunter read wild, never passive, and no dungeon camp next to one
+    /// was ever safe).
+    #[test]
+    fn underground_is_wild_only_past_the_server_line() {
+        assert!(!in_wilderness(3111, 9837, 0), "Edgeville dungeon hill giants");
+        assert!(!in_wilderness(3160, 9890, 0), "moss giants hall");
+        assert!(in_wilderness(3105, 9940, 0), "chaos druids past the wild gate");
+        assert!(in_wilderness(3050, 3704, 0), "surface Wilderness");
+        assert!(!in_wilderness(3392, 3600, 0), "x 3392 is east of the line");
+        assert!(!in_wilderness(3094, 3491, 0), "Edgeville bank");
+        let skeleton = hunters().iter().find(|hunter| hunter.name == "skeleton_armed" && (hunter.x, hunter.z) == (3121, 9908)).expect("dungeon skeleton");
+        assert!(!skeleton.wilderness);
+        assert_eq!(passive_from(skeleton), 45, "vislevel 22: passive from combat 45");
+        let druid = hunters().iter().find(|hunter| hunter.name == "chaos_druid" && (hunter.x, hunter.z) == (3105, 9936)).expect("wild druid");
+        assert_eq!(passive_from(druid), NEVER);
+    }
 
     /// Computed, not written: the only toll-free shrimp water with a bank
     /// in reach is Draynor's, under level-7 wizards (passive past 14).

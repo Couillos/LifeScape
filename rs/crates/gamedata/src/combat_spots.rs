@@ -11,7 +11,7 @@ pub struct Entrance {
 }
 
 /// One training spot: NPC debugnames, melee range, access and danger.
-/// `access` names what the bot needs (key, fare, toll, quest) or `None`;
+/// `access` names what the bot needs (fare, toll, quest) or `None`;
 /// `danger` is `safe`, `aggressive`, `wild` or `underground`.
 #[derive(Debug, Clone, Copy)]
 pub struct CombatSpot {
@@ -77,7 +77,7 @@ const SPOTS: [CombatSpot; 9] = [
         min_level: 30,
         max_level: 60,
         entrance: Some(EDGEVILLE_DUNGEON),
-        access: Some("brass key"),
+        access: None,
         danger: "underground",
     },
     CombatSpot {
@@ -142,11 +142,11 @@ const CATALOGUE_SPOTS: [CombatSpot; 26] = [
         min_level: 30,
         max_level: 60,
         entrance: Some(EDGEVILLE_DUNGEON),
-        access: Some("brass key"),
+        access: None,
         danger: "underground",
     },
     CombatSpot { key: "bears", npc_names: &["brownbear", "darkbear"], min_level: 30, max_level: 45, entrance: None, access: None, danger: WILD_DANGER },
-    CombatSpot { key: "hobgoblins", npc_names: &["hobgoblin_unarmed", "hobgoblin_armed"], min_level: 30, max_level: 50, entrance: Some(EDGEVILLE_DUNGEON), access: Some("brass key"), danger: "underground" },
+    CombatSpot { key: "hobgoblins", npc_names: &["hobgoblin_unarmed", "hobgoblin_armed"], min_level: 30, max_level: 50, entrance: Some(EDGEVILLE_DUNGEON), access: None, danger: "underground" },
     CombatSpot { key: "red_spiders", npc_names: &["deadly_red_spider"], min_level: 35, max_level: 60, entrance: Some(VARROCK_SEWERS), access: None, danger: "aggressive" },
     CombatSpot {
         key: "moss_giants",
@@ -296,7 +296,10 @@ mod tests {
         }
         assert!(positions("no_such_spot").is_empty());
         // Access extras from the catalogue.
-        assert_eq!(by_key("hill_giants").expect("hill").access, Some("brass key"));
+        // The Edgeville trapdoor and the main dungeon reach the giants'
+        // hall: the brass key is a shortcut, never a requirement
+        // (golden route `geants_sans_cle`).
+        assert_eq!(by_key("hill_giants").expect("hill").access, None);
         assert!(by_key("lesser_demons").expect("lesser").access.unwrap_or("").contains("30gp"));
         assert!(by_key("al_kharid_warriors").expect("warrior").access.unwrap_or("").contains("10gp"));
         let wild: Vec<&str> = spots.iter().filter(|entry| entry.danger == "wild").map(|entry| entry.key).collect();
