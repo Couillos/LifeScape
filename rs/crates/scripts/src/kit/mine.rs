@@ -222,9 +222,12 @@ pub fn mine_load(
     bank: &mut knowledge::banks::Bank,
     coins: u16,
     level: i64,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(bool, i64), ScriptError> {
     let ore_ids: Vec<u16> = tiers.iter().filter_map(|tier| obj_id(bot, &tier.product).ok()).collect();
     let mut state = crate::kit::load::LoopState::fresh(bot);
+    // The run's `--want` goal ends the load before the pack fills.
+    let cfg = crate::kit::load::LoadCfg::gather().until(until);
     loop {
         if PICK_SPEC.best_held(bot).is_none() {
             // Recovery walks (shop, bank) are not mining: don't bill
@@ -237,7 +240,7 @@ pub fn mine_load(
             state.idle_since += bot.world.ticks - spent;
         }
         let mut ops = MineOps { tiers, bank, coins, ore_ids: ore_ids.clone(), level };
-        if crate::kit::load::run_load(bot, &crate::kit::load::LoadCfg::gather(), &mut state, &mut ops)? {
+        if crate::kit::load::run_load(bot, &cfg, &mut state, &mut ops)? {
             return Ok((true, learn_level(bot, MINING_STAT, ops.level)));
         }
         if PICK_SPEC.best_held(bot).is_none() {

@@ -96,7 +96,8 @@ pub fn run_woodcut(bot: &mut Bot, args: &[String]) -> ScriptResult {
             return Ok(StepControl::Continue);
         }
         axeless = 0;
-        let (ok, new_level) = crate::kit::woodcut::chop_load(step_bot, &tiers, &mut bank, coins, level, &mut banned, &mut observe)?;
+        let until = state.want_goal(step_bot, &spec);
+        let (ok, new_level) = crate::kit::woodcut::chop_load(step_bot, &tiers, &mut bank, coins, level, &mut banned, &mut observe, until)?;
         level = new_level;
         // A failed load (threats, stumps, stall) retries with bans kept:
         // stumps regrow and hunters wander off.
@@ -136,6 +137,9 @@ mod tests {
     fn ordered_log_only_and_level_gap_blocks() {
         let willow = super::ordered_tree_tiers(Some("willow_logs"), 40).expect("willow at 40");
         assert!(!willow.is_empty() && willow.iter().all(|tier| tier.product == "willow_logs"));
+        // paul_rhodes n60: an oak quota at woodcutting 61 cuts oak only.
+        let oak = super::ordered_tree_tiers(Some("oak_logs"), 61).expect("oak at 61");
+        assert!(!oak.is_empty() && oak.iter().all(|tier| tier.product == "oak_logs"), "no willow or yew for an oak order");
         match super::ordered_tree_tiers(Some("yew_logs"), 40) {
             Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["level:woodcutting:60".to_string()]),
             other => panic!("yew at 40 must block on level, got {other:?}"),

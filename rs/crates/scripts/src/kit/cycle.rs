@@ -302,6 +302,21 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
     if let Some(ticks) = flag_ticks {
         spec.budget_max_ticks = ticks;
     }
+    // A gatherer counts the resource it works (paul_rhodes n60: an oak
+    // quota launched without its logs cut willow until the budget ended,
+    // 25 runs). `--want <item>` alone names the target; a positional
+    // naming another item is a crossed order that never stops on its goal.
+    if matches!(activity, "fishing" | "mining" | "woodcut") {
+        if let Some(item) = spec.targets.want_item.clone() {
+            match spec.resource.first() {
+                None => spec.resource.push(item),
+                Some(resource) if resource.eq_ignore_ascii_case(&item) => {}
+                Some(resource) => {
+                    return Err(ScriptError::Usage(format!("{activity} works {resource} but --want counts {item}: one item per order")));
+                }
+            }
+        }
+    }
     Ok(spec)
 }
 
@@ -395,6 +410,15 @@ impl CycleState {
         self.want_base = spec.targets.want_item.as_deref().map(|item| held_total(bot, item));
     }
 
+    /// The `--want` goal for the load driver (`LoadCfg::until`): the
+    /// ordered object and the held total that meets it. `None` without
+    /// `--want` (or an unknown name, which holds nothing).
+    pub fn want_goal(&self, bot: &Bot, spec: &TaskSpec) -> Option<WantGoal> {
+        let item = spec.targets.want_item.as_deref()?;
+        let obj = (bot.tables.find_obj_by_name)(item)?;
+        Some(WantGoal { obj, held: self.want_base?.saturating_add(spec.targets.want_count?) })
+    }
+
     /// Ticks of engagement so far: wall ticks minus market pauses.
     pub fn work_ticks(&self, bot: &Bot) -> u64 {
         let wall = bot.world.ticks.saturating_sub(self.start_tick);
@@ -450,6 +474,21 @@ pub fn poll_stop(bot: &Bot, state: &CycleState, spec: &TaskSpec) -> Option<StopR
         }
     }
     None
+}
+
+/// A run's `--want` goal as the load driver checks it: the ordered
+/// object and the held total (pack + known bank) that meets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WantGoal {
+    pub obj: u16,
+    pub held: u32,
+}
+
+impl WantGoal {
+    /// True once pack plus known bank hold `held` units of `obj`.
+    pub fn met(&self, bot: &Bot) -> bool {
+        crate::kit::pack::pack_total(bot, self.obj).saturating_add(crate::kit::pack::banked_usable(bot, self.obj)) >= self.held
+    }
 }
 
 /// Units of `item` held: pack plus the last known bank view (unknown
@@ -721,6 +760,23 @@ mod tests {
         let want = parse_cli("mining", &["gold_ore".to_string(), "--want".to_string(), "gold_ore".to_string(), "100".to_string()]).expect("want parses");
         assert_eq!((want.targets.want_item.as_deref(), want.targets.want_count), (Some("gold_ore"), Some(100)));
         assert!(parse_cli("mining", &["--want".to_string(), "gold_ore".to_string()]).is_err(), "want needs a count");
+    }
+
+    /// paul_rhodes n60 (`obtain oak_logs 308`): launched `woodcut --site
+    /// ...` without the logs, the run cut 3,649 willow logs over 25
+    /// budget-ended runs. A gatherer's `--want` names its target: a bare
+    /// `--want oak_logs N` cuts oak, a positional naming another item is a
+    /// Usage error (the counted item would never move).
+    #[test]
+    fn gatherer_want_names_the_resource() {
+        for (activity, target, other) in [("woodcut", "oak_logs", "willow_logs"), ("mining", "tin_ore", "iron_ore"), ("fishing", "raw_trout", "raw_salmon")] {
+            let bare = parse_cli(activity, &["--want".to_string(), target.to_string(), "308".to_string()]).expect("bare want parses");
+            assert_eq!(bare.resource, vec![target.to_string()], "{activity}: the want item is the target");
+            let same = parse_cli(activity, &[target.to_string(), "--want".to_string(), target.to_string(), "70".to_string()]).expect("same item parses");
+            assert_eq!(same.resource, vec![target.to_string()], "{activity}");
+            let crossed = parse_cli(activity, &[other.to_string(), "--want".to_string(), target.to_string(), "70".to_string()]);
+            assert!(matches!(crossed, Err(crate::ScriptError::Usage(_))), "{activity} {other} --want {target} must fail Usage, got {crossed:?}");
+        }
     }
 
     /// Typed gaps the brain files as sub-goals (never a Usage retry).
