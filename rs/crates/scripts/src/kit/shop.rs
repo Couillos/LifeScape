@@ -568,7 +568,7 @@ mod tests {
         attach_live_tables(&mut bot);
         crate::wire_nav(&mut bot);
         bot.world.level = 0;
-        bot.world.x = 3095;
+        bot.world.x = 3088;
         bot.world.z = 3240;
         bot.world.npcs.insert(
             7,
