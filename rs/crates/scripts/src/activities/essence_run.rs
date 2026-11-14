@@ -32,6 +32,8 @@ pub const NEED_QUEST: &str = "quest_rune_mysteries";
 pub const EMPTY_LIMIT: u32 = 3;
 /// Approach budget per rock and per Aubury walk.
 pub const ESSENCE_WALK_TICKS: u64 = 6000;
+/// Walk budget to one orthogonal side of the exit portal.
+pub const PORTAL_STAND_TICKS: u64 = 1500;
 
 /// True for a runecraft talisman debugname (kept, never banked).
 pub fn is_talisman(name: &str) -> bool {
@@ -176,17 +178,32 @@ fn return_through_portal(bot: &mut Bot) -> Result<(), ScriptError> {
         let (here_x, here_z) = (bot.world.x, bot.world.z);
         let nearest = mine_locs(bot, PORTAL, 60)?.into_iter().min_by_key(|(x, z, _)| (x - here_x).abs() + (z - here_z).abs());
         if let Some((x, z, loc)) = nearest {
-            if !walk_checked(bot, x, z, ESSENCE_WALK_TICKS)? { return Err(ScriptError::Failed(format!("portal unreachable at ({x},{z})"))); }
-            bot.op_loc(1, x, z, loc)?;
-            let back = bot.world.ticks + 100;
-            while bot.world.ticks < back {
-                bot.pump(2)?;
-                if !in_mine(bot.world.x, bot.world.z, bot.world.level) {
-                    bot.log("back from the essence mine");
-                    return Ok(());
+            // The portal blocks its tile and answers only from an
+            // orthogonal side (live 2026-11-14, t48: the planner's
+            // diagonal fallback (2932,4816) read "I can't reach that!",
+            // (2932,4815) stepped through to Aubury).
+            for (stand_x, stand_z) in crate::devtools::sides_of(&[[i64::from(x), i64::from(z)]], bot.world.x, bot.world.z) {
+                if let Err(error) = bot.walk_to(stand_x, stand_z, bot.world.level, PORTAL_STAND_TICKS) {
+                    let error = ScriptError::from(error);
+                    if is_walk_abort(&error) {
+                        return Err(error);
+                    }
+                    continue;
+                }
+                if (bot.world.x, bot.world.z) != (stand_x, stand_z) {
+                    continue;
+                }
+                bot.op_loc(1, x, z, loc)?;
+                let back = bot.world.ticks + 100;
+                while bot.world.ticks < back {
+                    bot.pump(2)?;
+                    if !in_mine(bot.world.x, bot.world.z, bot.world.level) {
+                        bot.log("back from the essence mine");
+                        return Ok(());
+                    }
                 }
             }
-            return Err(ScriptError::Failed(format!("portal did not move us at {:?}", bot.position())));
+            return Err(ScriptError::Failed(format!("portal ({x},{z}) did not move us at {:?}", bot.position())));
         }
         bot.pump(5)?;
     }

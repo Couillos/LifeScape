@@ -200,6 +200,22 @@ fn essence_without_the_quest_waits_on_the_quest_not_a_resting_bid() {
     assert!(!super::light_quest("dragon"), "Dragon Slayer is no light quest");
 }
 
+/// Talismans past air drop only (server drop tables): earth from men and
+/// body from guards farm on combat rungs; mind (imps, wizards), water and
+/// fire (wizards, dark wizards, sewer skeletons) have no rung, so the
+/// runecraft tranches skip their tiers (`tranches::talisman_obtainable`).
+#[test]
+fn talisman_legs_follow_the_combat_rungs() {
+    for talisman in ["earth_talisman", "body_talisman"] {
+        let legs = crate::obtain_legs::production_legs(talisman);
+        assert!(legs.iter().any(|leg| leg.method == format!("farm:{talisman}")), "{talisman}: {legs:?}");
+    }
+    for talisman in ["mind_talisman", "water_talisman", "fire_talisman"] {
+        assert!(!crate::tranches::talisman_obtainable(talisman), "{talisman} has no rung: a new rung lifts this");
+    }
+    assert!(crate::tranches::talisman_obtainable("air_talisman"), "Rune Mysteries hands it over");
+}
+
 /// Rune Mysteries hands the air talisman over (`duke_horacio.rs2`, back
 /// from Sedridor at completion): the obtain waits on the quest instead of
 /// farming goblins (0.78 % a kill) or bidding; once the quest is done the

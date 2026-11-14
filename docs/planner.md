@@ -396,7 +396,23 @@ paquet ⇒ Aubury deux fois ; rien ⇒ le Duc (« Have you any quests for
 me? », « Sure, no problem. »), Sedridor (« I'm looking for the head
 wizard. », « Ok, here you are. », « Yes, certainly. »), puis Aubury si la
 manche finit sans objet. Réponses jamais vers la boutique d'Aubury
-(« No thank you »).
+(« No thank you »). Preuve live 2026-11-14 (t40 puis t48, `direct` sur un
+daemon privé portant la nav du correctif) : Duc → Sedridor (porte
+diagonale, échelle, porte 1530 de la cave) → Aubury ×2 → Sedridor, varp
+63 = 6 en ~1500 ticks.
+
+Runecraft (2026-11-14, `tranches::talisman_obtainable`) : chaque tranche
+travaille la meilleure rune ouverte dont le talisman s'obtient — quête
+(air) ou jambe de production exécutable (terre : hommes 1,56 %, corps :
+gardes 3,12 %). Esprit (diablotins, sorciers), eau et feu (sorciers,
+mages noirs, squelettes des égouts) ne tombent d'aucun échelon de combat :
+air jusqu'à 9, terre jusqu'à 20, corps ensuite (paliers 2/5/9/14/20
+inchangés). Un nouvel échelon qui chasse ces PNJ rouvre leurs paliers
+sans autre changement. Essence : `essence_run` lit rochers et portails
+de la mine en statique (le serveur ne streame jamais une loc statique ;
+avant : « Aubury did not teleport » une fois DANS la mine), arrivée et
+sortie par le carré 45_75, portail cliqué depuis un côté orthogonal
+(diagonale : « I can't reach that! »).
 
 Magasins (règle utilisateur 2026-11-13, `obtain::merchant_buy_allowed`) :
 un PNJ ne vend au bot que ce que F2P ne donne d'aucune autre façon —
