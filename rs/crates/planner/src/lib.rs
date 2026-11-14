@@ -69,7 +69,7 @@ pub use side_goal::{method_banned, side_goal, steer_off_bans, SIDE_PREFIX};
 pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, serves_goal, next_goal, NoGoal, DONE_TAG, STUCK_TAG, TRAINABLE};
 pub use ambition::{
     achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
-    new_ambition_extended, next_milestone, open_count, AmbitionError, BotNow,
+    new_ambition_extended, next_milestone, open_count, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
     on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
     AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
 };

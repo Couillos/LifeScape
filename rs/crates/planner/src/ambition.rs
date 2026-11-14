@@ -14,7 +14,7 @@
 
 use lifescape_json::{object, str_value, Value};
 
-use crate::ambition_catalog::{pick_product, spec, DemandItem, Then};
+use crate::ambition_catalog::{group_of_skill, kind_for_group, pick_product, spec, DemandItem, Then};
 use crate::model::{GoalKind, Life};
 
 /// Ticks between two optional ambition changes (72 min at 60 ms dev, 12 h
@@ -36,6 +36,19 @@ pub const EXTEND_ORIGIN: &str = "extend";
 /// Explicit ambition that keeps the plain lowest-skill draw; never drawn
 /// by the fleet, only set by an operator.
 pub const GENERALIST: &str = "generalist";
+/// `why` prefix of an operator-pinned ambition (`pinned_ambition`).
+pub const PIN_WHY: &str = "operator:pin:";
+
+/// Operator pin (`create-user --goal ambition:<skill>:<level>`, user
+/// decision 2026-11-14): the ambition is never redrawn, changed nor
+/// repaired while `skill` is under `level`; its ladder, then its
+/// extension (the last rungs climb the skill, checked at creation), drive
+/// the goals until the level is met (`release_pin`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pin {
+    pub skill: String,
+    pub level: u8,
+}
 
 /// What a milestone asks for (`kind` + `target` in the file).
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +176,8 @@ pub struct Ambition {
     /// Next catalogue rung to materialize.
     pub rung: usize,
     pub revisions: Vec<Revision>,
+    /// Operator pin (`None`: drawn by the fleet, free to change).
+    pub pin: Option<Pin>,
 }
 
 /// When a draw happens: daemon tick clock and unix seconds.
@@ -189,6 +204,9 @@ pub enum AmbitionError {
     /// The ladder gives this bot no open milestone (it is far past every
     /// rung): never an ambition achieved at birth, redrawn every pass.
     NoMilestone(String),
+    /// A pin no ambition can climb to its level (no group kind, a ladder
+    /// whose extension never trains the skill, a level outside 2..=99).
+    NotPinnable(String),
 }
 
 impl std::fmt::Display for AmbitionError {
@@ -196,6 +214,7 @@ impl std::fmt::Display for AmbitionError {
         match self {
             AmbitionError::UnknownKind(kind) => write!(formatter, "ambition {kind} unknown to the catalogue"),
             AmbitionError::NoMilestone(kind) => write!(formatter, "ambition {kind} gives no open milestone at these levels"),
+            AmbitionError::NotPinnable(skill) => write!(formatter, "no ambition climbs {skill} (pin refused)"),
         }
     }
 }
@@ -226,6 +245,44 @@ pub fn new_ambition_extended(kind: &str, why: &str, now: &BotNow, seed: u64, dem
     Ok(ambition)
 }
 
+/// The operator-pinned ambition for `skill` up to `level`: the catalogue
+/// kind whose primary group is the skill's (magic → mage, smithing →
+/// smith…), pinned (`Pin`). Refused when no kind covers the group or its
+/// extension rungs never climb the skill (it would stall short of the
+/// level), or the level is outside 2..=99.
+pub fn pinned_ambition(skill: &str, level: u8, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
+    let refused = || AmbitionError::NotPinnable(skill.to_string());
+    if !(2..=99).contains(&level) {
+        return Err(refused());
+    }
+    let kind = group_of_skill(skill).and_then(kind_for_group).ok_or_else(refused)?;
+    let found = spec(kind).ok_or_else(refused)?;
+    let lap = EXTEND_LAP.min(found.ladder.len());
+    let climbs = found.ladder[found.ladder.len() - lap..].iter().any(|rung| rung.skill == skill && rung.level > 0);
+    if !climbs {
+        return Err(refused());
+    }
+    let mut ambition = new_ambition_extended(kind, &format!("{PIN_WHY}{skill}:{level}"), now, seed, demand, stamp)?;
+    ambition.pin = Some(Pin { skill: skill.to_string(), level });
+    Ok(ambition)
+}
+
+/// True while an operator pin holds the ambition (no redraw, no change).
+pub fn pinned(ambition: &Ambition) -> bool {
+    ambition.pin.is_some()
+}
+
+/// Lift the pin once its skill reaches the level; returns the lifted pin
+/// (the brain logs it). The ambition then lives like any other.
+pub fn release_pin(ambition: &mut Ambition, level_of: &dyn Fn(&str) -> u8) -> Option<Pin> {
+    let reached = ambition.pin.as_ref().is_some_and(|pin| level_of(&pin.skill) >= pin.level);
+    if reached {
+        ambition.pin.take()
+    } else {
+        None
+    }
+}
+
 fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
     let found = spec(kind).ok_or_else(|| AmbitionError::UnknownKind(kind.to_string()))?;
     let mut ambition = Ambition {
@@ -238,6 +295,7 @@ fn fresh_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[Dema
         drawn_at: stamp.secs,
         rung: 0,
         revisions: Vec::new(),
+        pin: None,
     };
     refresh(&mut ambition, now, seed, demand);
     Ok(ambition)
@@ -514,6 +572,10 @@ pub enum CloseOutcome {
     Blocked { id: String, count: u32 },
     /// Blocked `MILESTONE_MAX_BLOCKS` times: redraw the ambition now.
     RedrawNeeded { id: String, count: u32 },
+    /// Blocked `MILESTONE_MAX_BLOCKS` times in a pinned ambition: the
+    /// milestone is dropped (the next refresh materializes the next rung),
+    /// the ambition kept.
+    Dropped { id: String, count: u32 },
 }
 
 /// Fold a goal close into its milestone (`life.goal_origin`).
@@ -526,7 +588,14 @@ pub fn on_goal_closed(life: &mut Life, stuck: bool) -> CloseOutcome {
         stone.blocked_count += 1;
         stone.status = MilestoneStatus::Blocked;
         let count = stone.blocked_count;
-        return if count >= MILESTONE_MAX_BLOCKS { CloseOutcome::RedrawNeeded { id: origin, count } } else { CloseOutcome::Blocked { id: origin, count } };
+        if count < MILESTONE_MAX_BLOCKS {
+            return CloseOutcome::Blocked { id: origin, count };
+        }
+        let Some(ambition) = life.ambition.as_mut().filter(|ambition| pinned(ambition)) else {
+            return CloseOutcome::RedrawNeeded { id: origin, count };
+        };
+        ambition.milestones.retain(|kept| kept.id != origin);
+        return CloseOutcome::Dropped { id: origin, count };
     }
     match stone.target {
         Target::Produce { count, .. } => {
@@ -624,6 +693,13 @@ pub fn ambition_to_value(ambition: &Ambition) -> Value {
         ("drawn_at", Value::Int(ambition.drawn_at)),
         ("rung", Value::Int(ambition.rung as i64)),
         ("revisions", Value::Arr(revisions)),
+        (
+            "pin",
+            match &ambition.pin {
+                Some(pin) => object(vec![("skill", str_value(&pin.skill)), ("level", Value::Int(i64::from(pin.level)))]),
+                None => Value::Null,
+            },
+        ),
     ])
 }
 
@@ -678,6 +754,11 @@ pub fn ambition_from_value(value: &Value) -> Option<Ambition> {
         drawn_at: value.get("drawn_at").as_i64().unwrap_or(0),
         rung: value.get("rung").as_i64().unwrap_or(0).max(0) as usize,
         revisions,
+        // Absent before pins (2026-11-14): a drawn ambition.
+        pin: value.get("pin").get("skill").as_str().map(|skill| Pin {
+            skill: skill.to_string(),
+            level: value.get("pin").get("level").as_i64().unwrap_or(99).clamp(2, 99) as u8,
+        }),
     })
 }
 
@@ -688,3 +769,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ambition_repair_tests.rs"]
 mod repair_tests;
+
+#[cfg(test)]
+#[path = "ambition_pin_tests.rs"]
+mod pin_tests;

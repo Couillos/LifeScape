@@ -4,7 +4,7 @@
 //! bot's own levels. Pure: every bot's levels, profile and current kind
 //! come in as plain values; the daemon reads the life files.
 
-use crate::ambition::{may_change, Ambition, GENERALIST};
+use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
 use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, MERCHANT, SPECS};
 
 /// One bot as the fleet assignment sees it.
@@ -165,9 +165,9 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
 /// last change is `AMBITION_CHANGE_TICKS` old (the user's rule: one change
 /// per 72 000 ticks). Checked by the brain on every pass, not only after
 /// a milestone. `None`: no gap, sole holder, throttled, or no gap this bot
-/// may hold (Iron and the merchant).
+/// may hold (Iron and the merchant), or an operator pin.
 pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
-    if gaps.is_empty() || ambition.kind == GENERALIST || !redundant || !may_change(ambition, ticks_since) {
+    if gaps.is_empty() || ambition.kind == GENERALIST || pinned(ambition) || !redundant || !may_change(ambition, ticks_since) {
         return None;
     }
     let (kind, why) = draw_kind(bot, gaps, demand, &[ambition.kind.as_str()]);
@@ -179,9 +179,10 @@ pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], red
 /// primary group another bot also covers (`redundant`) fills an open gap
 /// first; otherwise one chance in four (seeded per completed milestone)
 /// of a fresh demand-weighted draw. The sole holder of a group never
-/// leaves it. Returns (kind, why) when the ambition should change.
+/// leaves it, nor does an operator pin. Returns (kind, why) when the
+/// ambition should change.
 pub fn optional_change(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
-    if ambition.kind == GENERALIST || !may_change(ambition, ticks_since) || !redundant {
+    if ambition.kind == GENERALIST || pinned(ambition) || !may_change(ambition, ticks_since) || !redundant {
         return None;
     }
     if let Some(filled) = coverage_repair(ambition, bot, gaps, redundant, demand, ticks_since) {

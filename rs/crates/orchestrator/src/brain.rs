@@ -124,7 +124,8 @@ fn remember_life(life: &Life, stamp: LifeStamp) {
     cache.insert(life.account.clone(), (stamp, life.clone()));
 }
 
-/// Accepted `--goal` shapes: `max:a,b:40`, `obtain:feather:2000`,
+/// Accepted `--goal` shapes (besides the pin `ambition:<skill>:<level>`,
+/// `parse_pin`): `max:a,b:40`, `obtain:feather:2000`,
 /// `produce:bronze_platebody:20` (made, never bought),
 /// `money`, `quest:cook`, `equip:melee`, `area:karamja`, `rich[:merchant
 /// |:producer]`. Bare `rich` draws the archetype (10% merchant).
@@ -181,6 +182,32 @@ pub fn parse_goal(text: &str) -> Result<GoalKind, String> {
         };
     }
     Err(format!("unknown goal {text:?} (max:|obtain:|produce:|money|quest:|equip:|area:|rich)"))
+}
+
+/// `ambition:<skill>:<level>` (operator pin, user decision 2026-11-14):
+/// `Some((skill, level))`, `None` for every other goal text.
+pub fn parse_pin(text: &str) -> Result<Option<(String, u8)>, String> {
+    let Some(rest) = text.trim().strip_prefix("ambition:") else { return Ok(None) };
+    let usage = || "goal ambition:<skill>:<level> (level 2-99)".to_string();
+    let (skill, level) = rest.rsplit_once(':').ok_or_else(usage)?;
+    let level: u8 = level.parse().map_err(|_| usage())?;
+    if skill.is_empty() || !(2..=99).contains(&level) {
+        return Err(usage());
+    }
+    Ok(Some((skill.to_string(), level)))
+}
+
+/// The pinned ambition of a fresh account (levels 1, hitpoints 10, no
+/// coins), its first open milestone's goal and that milestone's id.
+fn pinned_start(skill: &str, level: u8, seed: u64) -> Result<(lifescape_planner::Ambition, GoalKind, String), String> {
+    let level_of = |name: &str| if name == "hitpoints" { 10 } else { 1 };
+    let held = |_: &str| 0;
+    let now = lifescape_planner::BotNow { level_of: &level_of, coins: 0, held: &held };
+    let ambition = lifescape_planner::pinned_ambition(skill, level, &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    let first = lifescape_planner::next_milestone(&ambition, &[]).ok_or_else(|| format!("pinned ambition {} has no open milestone", ambition.kind))?;
+    let goal = lifescape_planner::goal_for_milestone(first);
+    let origin = first.id.clone();
+    Ok((ambition, goal, origin))
 }
 
 fn xorshift(seed: u64, stream: u64) -> u64 {
@@ -243,7 +270,11 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
     if iron && !iron_allowed(iron_count()) {
         return Err(format!("iron cap reached ({MAX_IRON}): no new Ironman"));
     }
-    let goal = parse_goal(goal_text)?;
+    let pin = parse_pin(goal_text)?;
+    let goal = match &pin {
+        Some(_) => GoalKind::MakeMoney,
+        None => parse_goal(goal_text)?,
+    };
     if iron {
         if let GoalKind::GetRich { merchant: Some(true) } = goal {
             return Err("iron never merchants".to_string());
@@ -255,8 +286,16 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         .unwrap_or(1)
         ^ (std::process::id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let profile = draw_profile(seed, iron);
+    // A pin starts on its ambition's first milestone, linked (`m1`).
+    let (goal, ambition, origin) = match pin {
+        Some((skill, level)) => {
+            let (ambition, goal, origin) = pinned_start(&skill, level, seed)?;
+            (goal, Some(ambition), Some(origin))
+        }
+        None => (goal, None, None),
+    };
     let nodes = expand_goal(&goal, &profile);
-    let life = Life {
+    let mut life = Life {
         schema: lifescape_planner::model::LIFE_SCHEMA,
         account: account.to_string(),
         created_at: std::time::SystemTime::now()
@@ -270,10 +309,11 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         engagement: None,
         active: None,
         history: Vec::new(),
-        ambition: None,
+        ambition,
         goal_origin: None,
         memory: Default::default(),
     };
+    lifescape_planner::mark_drawn(&mut life, origin.as_deref());
     save_life(&life)?;
     Ok(life)
 }
@@ -506,8 +546,25 @@ mod retire_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, maybe_insert_cleanup_at, parse_goal, MAX_IRON};
+    use super::{cleanup_keep, draw_profile, generate_pseudo, iron_allowed, maybe_insert_cleanup, maybe_insert_cleanup_at, parse_goal, parse_pin, pinned_start, MAX_IRON};
     use lifescape_planner::{GoalKind, Life, Node, NodeKind};
+
+    /// `--goal ambition:<skill>:<level>` pins the kind and starts on its
+    /// first milestone (linked); other goal texts are no pin; bad pins
+    /// are typed errors, never a silent default.
+    #[test]
+    fn pin_goal_starts_on_its_first_milestone() {
+        assert_eq!(parse_pin("ambition:magic:99"), Ok(Some(("magic".to_string(), 99))));
+        assert_eq!(parse_pin("max:magic:99"), Ok(None));
+        assert!(parse_pin("ambition:magic").is_err());
+        assert!(parse_pin("ambition:magic:100").is_err());
+        let (ambition, goal, origin) = pinned_start("smithing", 99, 11).expect("pinned");
+        assert_eq!(ambition.kind, "smith");
+        assert!(lifescape_planner::pinned(&ambition));
+        assert_eq!(origin, "m1");
+        assert!(matches!(goal, GoalKind::MaxSkills { ref skills, level: 10 } if skills == &vec!["mining".to_string()]), "smith starts on mining 10: {goal:?}");
+        assert!(pinned_start("hitpoints", 99, 11).is_err());
+    }
 
     #[test]
     fn plain_ticks_fire_once_every_few_passes() {

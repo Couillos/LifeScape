@@ -331,6 +331,20 @@ tuto abandonné sur l'île ⇒ aucun lancement, l'opérateur décide.
 tutoriel au premier passage, puis le but. `Iron` ne marchande jamais
 (ni `market:*` ni `flip`, même en `rich`).
 
+Épingle d'ambition (décision utilisateur 2026-11-14) : `--goal
+ambition:<compétence>:<niveau>` (ex. `ambition:magic:99`) crée la vie avec
+l'ambition du groupe de la compétence (`magic` → `mage`, `smithing` →
+`smith`, `cooking` → `cook`…) ÉPINGLÉE (`ambition.pin = {skill, level}`,
+`why = operator:pin:<compétence>:<niveau>`, `ambition::pinned_ambition`)
+et part sur son premier jalon (`goal_origin = m1`). Tant que la compétence
+n'a pas le niveau : jamais de redraw (bloqué ×3 ⇒ le jalon est retiré,
+`CloseOutcome::Dropped`, l'échelle continue), jamais de changement
+facultatif ni de réparation de couverture, échelle épuisée ⇒ prolongement
+(`extend`, +5 niveaux jusqu'à 99). Refus typé (`NotPinnable`) si aucune
+ambition ne grimpe la compétence (PV, membres) ou niveau hors 2..=99.
+Niveau atteint ⇒ l'épingle tombe (`release_pin`, loggé) et l'ambition vit
+comme les autres.
+
 Succession (`planner/src/goals.rs`, `planner/src/bans.rs`,
 `brain_succession.rs`) : un but est clos UNE fois (`goal_closed` : la
 dernière entrée hors `graph`/`unban:` est un `done:`/`stuck:`), puis

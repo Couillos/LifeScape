@@ -29,7 +29,7 @@ use lifescape_json::Value;
 use lifescape_planner::ambition_catalog::{group_skills, primary_group, SPECS};
 use lifescape_planner::{
     achieved, assign_fleet, coverage_gaps, coverage_repair, describe_ambition, draw_kind, extend_ambition, new_ambition, new_ambition_extended,
-    on_goal_closed, optional_change, refresh, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
+    on_goal_closed, optional_change, pinned, refresh, release_pin, revise, Ambition, BotNow, CloseOutcome, DemandItem, FleetBot, KindDemand, Life, Stamp, GROUPS,
     MILESTONE_MAX_BLOCKS,
 };
 
@@ -313,6 +313,9 @@ pub(crate) fn before_draw(life: &mut Life, live: &Value) {
     let seed = life.seed;
     let account = life.account.clone();
     let Some(ambition) = life.ambition.as_mut() else { return };
+    if let Some(pin) = release_pin(ambition, &|skill| crate::brain_succession::live_level(live, skill)) {
+        crate::logln!("brain {account}: pin {} {} reached, ambition {} free to change", pin.skill, pin.level, ambition.kind);
+    }
     let closed = with_now(live, |now| refresh(ambition, now, seed, &items));
     for milestone_id in &closed {
         crate::logln!("brain {account}: milestone {milestone_id} done (live levels/coins)");
@@ -329,11 +332,19 @@ fn on_achieved(life: &mut Life, live: &Value) {
     let kind = ambition.kind.clone();
     let throttled = !lifescape_planner::may_change(ambition, &ticks_since);
     let (_, redundant) = fleet_view(life);
-    if redundant && !throttled {
+    // An operator pin never leaves its kind: it extends toward its level.
+    let held = pinned(ambition);
+    if redundant && !throttled && !held {
         redraw(life, live, &[kind.as_str()], "achieved");
         return;
     }
-    let why = if redundant { "changed less than 72000 ticks ago" } else { "sole holder of its group" };
+    let why = if held {
+        "operator pin"
+    } else if redundant {
+        "changed less than 72000 ticks ago"
+    } else {
+        "sole holder of its group"
+    };
     let seed = life.seed;
     let Some(ambition) = life.ambition.as_mut() else { return };
     let added = with_now(live, |now| extend_ambition(ambition, now, seed));
@@ -358,6 +369,10 @@ pub(crate) fn after_close(life: &mut Life, live: &Value, stuck: bool) {
             let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
             crate::logln!("brain {}: milestone {id} blocked {count} times, redrawing ambition {kind} (approved policy)", life.account);
             redraw(life, live, &[kind.as_str()], &format!("blocked:{id}x{count}"));
+        }
+        CloseOutcome::Dropped { id, count } => {
+            let kind = life.ambition.as_ref().map(|ambition| ambition.kind.clone()).unwrap_or_default();
+            crate::logln!("brain {}: milestone {id} blocked {count} times, dropped; pinned ambition {kind} kept", life.account);
         }
         CloseOutcome::Done(id) => {
             crate::logln!("brain {}: milestone {id} done", life.account);
