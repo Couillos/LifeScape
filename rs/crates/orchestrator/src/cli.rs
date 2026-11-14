@@ -169,11 +169,14 @@ fn format_nav_stats(stats: &Value) -> String {
         .map(|bytes| format!("{}Mo", bytes / (1024 * 1024)))
         .unwrap_or_else(|| "-".to_string());
     format!(
-        "nav-stats v={} hits={} trunc={} suffix={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} walk_costs={} detour(sum/max/plans)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
+        "nav-stats v={} hits={} trunc={} suffix={} splice={} dominated={} negative={} joins={} miss={} l1={}/{}B age={} q={} inflight={} refused(cap/full/stale)={}/{}/{} unknown={} walk_costs={} detour(sum/max/plans)={}/{}/{} batch(door_defs/tiles_flags/static_locs_near/in_f2p/toll_fence/wants/diff/debug/transitions_list/probe_targets/doors_near)={}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{} ram(warn/shed)={}/{} rss={} painted={}",
         stats.get("version").as_str().unwrap_or("-"),
         num("hits"),
         num("trunc_hits"),
         num("suffix_hits"),
+        num("splice_hits"),
+        num("dominated_hits"),
+        num("negative_hits"),
         num("joins"),
         num("misses"),
         num("l1_len"),

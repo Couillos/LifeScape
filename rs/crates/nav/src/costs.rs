@@ -21,6 +21,15 @@
 //! nearby targets in milliseconds, and a clock cut would read `None`
 //! for farther targets in slow builds. The visit bound alone guarantees
 //! termination; the op runs inline on the acceptor like `op_debug`.
+//!
+//! Cost horizon (CPU 2026-11-14): the search stops past `horizon(from,
+//! dests)` = `COSTS_HORIZON_FLOOR + COSTS_HORIZON_FACTOR` x the farthest
+//! target's Chebyshev distance. A target only reachable by a longer
+//! detour (an NPC across a river, a ring tile behind a fence the pocket
+//! flood cannot close) reads `None`, like an unplannable one: callers
+//! rank nearby stands and spots, and such a target used to sweep the
+//! whole reachable world (up to `MAX_VISITS`, 1.8 s live) for an answer
+//! nobody picks.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -35,6 +44,15 @@ use crate::tables::Tables;
 /// Search budget: explored tiles before the area reads disconnected,
 /// same bound as `plan.rs` (an exhaustive miss stops here, never hangs).
 const MAX_VISITS: usize = 500_000;
+/// Cost horizon floor and factor (module doc).
+pub const COSTS_HORIZON_FLOOR: u32 = 64;
+pub const COSTS_HORIZON_FACTOR: u32 = 4;
+
+/// Costliest walk the batch still prices (module doc).
+pub fn horizon(from: Tile, dests: &[Tile]) -> u32 {
+    let farthest = dests.iter().map(|dest| (dest.x - from.x).abs().max((dest.z - from.z).abs())).max().unwrap_or(0);
+    COSTS_HORIZON_FLOOR + COSTS_HORIZON_FACTOR * farthest.max(0) as u32
+}
 
 type Key = (i32, i32, i32);
 
@@ -168,7 +186,7 @@ pub fn plan_costs(
     let Some(shared) = crate::plan::prepare_shared(world, tables, options, &mut always) else {
         return vec![None; dests.len()];
     };
-    plan_costs_with(world, tables, from, dests, options, &shared)
+    plan_costs_with(world, tables, from, dests, options, &shared, None)
 }
 
 /// Same search on a precomputed L2 edge set (the service pool path).
@@ -179,6 +197,7 @@ pub(crate) fn plan_costs_with(
     dests: &[Tile],
     options: &NavOptions,
     shared: &SharedEdges,
+    memo: Option<&crate::pocket::PocketMemo>,
 ) -> Vec<Option<u32>> {
     let mut search = Search {
         world,
@@ -200,13 +219,15 @@ pub(crate) fn plan_costs_with(
         indices: Vec<usize>,
         best: Tile,
         rank: (i32, i32, bool, u32),
+        /// Best prefix any tile can reach (`fallback::rank_floor`).
+        floor: Option<(i32, i32, bool)>,
     }
     let mut blocked: Vec<Blocked> = Vec::new();
     for (index, dest) in dests.iter().enumerate() {
         if collision::tile_walkable(search.open(*dest)) {
             // A sealed pocket never settles: left `None` at once instead
             // of exhausting the search for every other target.
-            if crate::pocket::sealed(world, tables, shared, from, *dest) {
+            if crate::pocket::sealed_with(memo, world, tables, shared, from, *dest) {
                 continue;
             }
             settle.entry(key_of(*dest)).or_default().push(index);
@@ -215,7 +236,11 @@ pub(crate) fn plan_costs_with(
         } else {
             let walled = crate::fallback::walled_off(&mut |tile| search.open(tile), from, *dest);
             let rank = from.fallback_rank(*dest, 0, walled);
-            blocked.push(Blocked { dest: *dest, indices: vec![index], best: from, rank });
+            let floor = crate::fallback::rank_floor(
+                &mut |tile| if search.in_bounds(tile) { Some(search.open(tile)) } else { None },
+                *dest,
+            );
+            blocked.push(Blocked { dest: *dest, indices: vec![index], best: from, rank, floor });
         }
     }
     let mut costs: Vec<Option<u32>> = vec![None; dests.len()];
@@ -229,13 +254,14 @@ pub(crate) fn plan_costs_with(
     dist.insert(key_of(from), 0);
     heap.push((Reverse(0), Reverse(key_of(from)), false));
     let mut visits = 0usize;
+    let horizon = horizon(from, dests);
     while let Some((Reverse(cost), Reverse(found), opened)) = heap.pop() {
         let known = if opened { &dist_open } else { &dist };
         if known.get(&found).is_some_and(|known| *known != cost) {
             continue;
         }
         visits += 1;
-        if visits > MAX_VISITS {
+        if visits > MAX_VISITS || cost > horizon {
             break;
         }
         if let Some(indices) = settle.remove(&found) {
@@ -247,12 +273,30 @@ pub(crate) fn plan_costs_with(
             }
         }
         let here = tile_of(found);
+        let mut finalized = false;
         for target in blocked.iter_mut() {
             let walled = crate::fallback::walled_off(&mut |tile| search.open(tile), here, target.dest);
             let rank = here.fallback_rank(target.dest, cost, walled);
             if rank < target.rank {
                 target.rank = rank;
                 target.best = here;
+            }
+            // Rank floor popped in cost order: final (same rule as
+            // `dijkstra`), priced now, the search goes on only for the
+            // other targets.
+            let prefix = (target.rank.0, target.rank.1, target.rank.2);
+            if target.best == here && !opened && target.floor == Some(prefix) {
+                for index in &target.indices {
+                    costs[*index] = Some(cost);
+                }
+                target.indices.clear();
+                finalized = true;
+            }
+        }
+        if finalized {
+            blocked.retain(|target| !target.indices.is_empty());
+            if settle.is_empty() && blocked.is_empty() {
+                return costs;
             }
         }
         // Walk and door neighbours, eight directions in fixed order.

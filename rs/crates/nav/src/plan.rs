@@ -375,6 +375,22 @@ pub(crate) fn plan_yielding_with(
     plan_budgeted(world, tables, from, dest, options, shared, yield_, PLAN_BUDGET)
 }
 
+/// Service path: same plan, sealed-pocket verdicts through the version
+/// memo (one flood per destination tile per snapshot, not per plan).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_memo(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    shared: &SharedEdges,
+    memo: &crate::pocket::PocketMemo,
+    yield_: &mut dyn FnMut() -> bool,
+) -> Result<Plan, NoRoute> {
+    plan_budgeted_memo(world, tables, from, dest, options, shared, Some(memo), yield_, PLAN_BUDGET)
+}
+
 /// Same plan under an explicit wall budget (tests force a cut with it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_budgeted(
@@ -387,9 +403,24 @@ pub(crate) fn plan_budgeted(
     yield_: &mut dyn FnMut() -> bool,
     budget: Duration,
 ) -> Result<Plan, NoRoute> {
+    plan_budgeted_memo(world, tables, from, dest, options, shared, None, yield_, budget)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_budgeted_memo(
+    world: &StaticWorld,
+    tables: &Tables,
+    from: Tile,
+    dest: Tile,
+    options: &NavOptions,
+    shared: &SharedEdges,
+    memo: Option<&crate::pocket::PocketMemo>,
+    yield_: &mut dyn FnMut() -> bool,
+    budget: Duration,
+) -> Result<Plan, NoRoute> {
     // Sealed pocket (walkable, walled in, no edge lands in it): the
     // searches below would sweep the whole world to say Disconnected.
-    if crate::pocket::sealed(world, tables, shared, from, dest) {
+    if crate::pocket::sealed_with(memo, world, tables, shared, from, dest) {
         return Err(NoRoute {
             closest_reachable: from,
             blocked_by_requirements: Vec::new(),
@@ -805,6 +836,12 @@ fn dijkstra(
 
     };
     let dest_walkable = tile_walkable(search.open(dest));
+    // Blocked destination: the best rank prefix any tile can reach.
+    let floor = if dest_walkable {
+        None
+    } else {
+        crate::fallback::rank_floor(&mut |tile| if search.in_bounds(tile) { Some(search.open(tile)) } else { None }, dest)
+    };
     let danger = DangerMap::new(&options.danger);
     let (rides, customs) = shared;
     let mut dist: U64Map<u32> = U64Map::default();
@@ -854,6 +891,15 @@ fn dijkstra(
         if rank < best_rank {
             best_rank = rank;
             best = here;
+        }
+        // Blocked destination (tree, booth, fishing spot): the best tile
+        // at the rank floor (`fallback::rank_floor`) is the best rank
+        // there is, and pops come in cost order, so nothing later can
+        // beat it. Same answer as the sweep below, without exploring 64
+        // tiles past it (CPU 2026-11-14: adjusted plans swept ~8-16k
+        // tiles each, a start already beside the target included).
+        if best == here && !fresh && floor == Some((best_rank.0, best_rank.1, best_rank.2)) {
+            return Outcome::Found(rebuild(&prev, from, best), cost, best);
         }
         if key == dest_key && dest_walkable {
             if std::env::var("PLAN_DEBUG").is_ok() {

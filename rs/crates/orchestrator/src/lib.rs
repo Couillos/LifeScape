@@ -100,6 +100,7 @@ pub mod mapbuild;
 pub mod mapcli;
 pub mod minimap;
 pub mod plan_service;
+pub mod nav_profile;
 pub mod png;
 pub mod web;
 pub mod web_items;

@@ -18,13 +18,13 @@
 //! logs it and counts it. A version skew (client vs server snapshot)
 //! refuses stale too; the client resubmits once, never loops.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use lifescape_json::{self as json, object, str_value, Value};
@@ -33,6 +33,9 @@ use crate::plan::{
     self, Blocker, EdgeId, NavOptions, NoRoute, NoRouteReason, Plan, Segment, SharedEdges, Tile,
     TransitionRef,
 };
+use crate::pocket::PocketMemo;
+use crate::route_cache::{Fast, PlanEntry, RouteCache, RouteStats, NEGATIVE_TTL};
+use crate::{route_path, route_splice};
 use crate::service_queries;
 use crate::static_world::StaticWorld;
 use crate::tables::Tables;
@@ -194,19 +197,18 @@ fn costs_set(dests: &[Tile]) -> Vec<Tile> {
     set
 }
 
-// -- lot 3 cache -------------------------------------------------------------
+// -- route cache ---------------------------------------------------------------
 //
-// L1: complete plans AND negatives, keyed by the full PlanKey (options +
-// data version, never normalized). A bumped version makes every old key
-// unreachable: no flush, no stale serve, eviction does the rest.
-// Truncation: a dest ON a cached plan serves the prefix with no search
-// (optimal by substructure); anything else recomputes, never extends.
+// L1 is the central route cache (`route_cache.rs`, CPU 2026-11-14): one
+// cache for every bot, reset on a version bump. Plans are served to any
+// request whose options they provably satisfy (exact cost), sub-paths
+// between split points (prefix / suffix / infix, exact cost) and short
+// splices onto a cached path (epsilon rule, `route_splice.rs`); NoRoute
+// verdicts live `NEGATIVE_TTL` under their full key.
 // L2: one shared edge set per data version (2 slots: current + draining).
 //
-// Revert (1 point): make `Lru::get`/`Lru::truncate` return None and skip
-// the `insert` in `serve_plans` — the service is back to a lot2 wrapper
-// (pool + shared L2) with zero behavior change. Version pinning stays:
-// it is the staleness guard, not the cache.
+// Revert (1 point): skip `fast`/`reuse` in `op_submit` and the inserts
+// in `serve_plans` — the service is back to a pool + shared L2 wrapper.
 
 /// Global plan cache bound: worst case 1024 x 9.6 Ko ~ 10 Mo + ~0.35 Mo
 /// overhead (§5.9: 11 Mo line, never raised without rebouclage).
@@ -253,6 +255,13 @@ pub struct CacheStats {
     /// Suffix serves (N2): the requester stood mid-plan, the tail served
     /// with no search, priced by substructure like a prefix.
     pub suffix_hits: u64,
+    /// Route cache detail (`route_cache::RouteStats`): exact pair hits,
+    /// option-dominated pair hits, infix slices, splices, live negatives.
+    pub exact_hits: u64,
+    pub dominated_hits: u64,
+    pub infix_hits: u64,
+    pub splice_hits: u64,
+    pub negative_hits: u64,
     pub misses: u64,
     pub joins: u64,
     pub l2_hits: u64,
@@ -277,183 +286,6 @@ pub struct CacheStats {
     pub detour_plans: u64,
 }
 
-struct LruEntry {
-    is_plan: bool,
-    body: Value,
-    bytes: usize,
-    inserted: std::time::Instant,
-}
-
-struct Lru {
-    map: HashMap<PlanKey, LruEntry>,
-    order: VecDeque<PlanKey>,
-    evictions: u64,
-    stored_bytes: usize,
-}
-
-impl Lru {
-    fn new() -> Self {
-        Lru {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            evictions: 0,
-            stored_bytes: 0,
-        }
-    }
-
-    fn get(&mut self, key: &PlanKey) -> Option<(bool, Value)> {
-        let entry = self.map.get(key)?;
-        let out = (entry.is_plan, entry.body.clone());
-        // Refresh: most-recently-used goes back.
-        if let Some(pos) = self.order.iter().position(|known| known == key) {
-            self.order.remove(pos);
-        }
-        self.order.push_back(key.clone());
-        Some(out)
-    }
-
-    /// Same from/options/version with dest on the cached tile path:
-    /// exact prefix, no search (substructure-optimal, §5.3).
-    fn truncate(
-        &mut self,
-        tables: &Tables,
-        from: Tile,
-        dest: Tile,
-        options: &NavOptions,
-        version: &str,
-    ) -> Option<Value> {
-        // Cheap filter first (field compares, no decode); decode only the
-        // few candidates sharing from/options/version.
-        let mut candidates: Vec<(PlanKey, Value)> = Vec::new();
-        for (key, entry) in self.map.iter() {
-            if !entry.is_plan
-                || key.from != from
-                || key.dest == dest
-                || key.version != version
-                || key.allow_paid != options.allow_paid
-                || key.f2p_only != options.f2p_only
-                || key.satisfied != options_satisfied(options)
-                || key.excluded != options_excluded(options)
-            {
-                continue;
-            }
-            candidates.push((key.clone(), entry.body.clone()));
-        }
-        for (key, body) in candidates {
-            let Ok(cached) = decode_plan(&body) else {
-                continue;
-            };
-            let Some(prefix) = truncate_plan(tables, from, &cached, dest) else {
-                continue;
-            };
-            let value = encode_plan(&prefix);
-            // The prefix serves through the same slot shape as a hit.
-            self.get(&key);
-            return Some(value);
-        }
-        None
-    }
-
-    /// Same dest/options/version with `from` ON a cached plan path:
-    /// the tail from there, priced by substructure (cached cost minus
-    /// the dropped prefix, edge by edge). Serves replans after a flight
-    /// and mid-route joins with no search. Adjusted plans never serve:
-    /// their last tile is not the destination.
-    fn suffix(
-        &mut self,
-        tables: &Tables,
-        from: Tile,
-        dest: Tile,
-        options: &NavOptions,
-        version: &str,
-    ) -> Option<Value> {
-        let mut candidates: Vec<(PlanKey, Value)> = Vec::new();
-        for (key, entry) in self.map.iter() {
-            if !entry.is_plan
-                || key.dest != dest
-                || key.from == from
-                || key.version != version
-                || key.allow_paid != options.allow_paid
-                || key.f2p_only != options.f2p_only
-                || key.satisfied != options_satisfied(options)
-                || key.excluded != options_excluded(options)
-            {
-                continue;
-            }
-            candidates.push((key.clone(), entry.body.clone()));
-        }
-        for (key, body) in candidates {
-            let Ok(cached) = decode_plan(&body) else {
-                continue;
-            };
-            let Some(tail) = split_suffix(tables, key.from, &cached, from) else {
-                continue;
-            };
-            let value = encode_plan(&tail);
-            // The suffix serves through the same slot shape as a hit.
-            self.get(&key);
-            return Some(value);
-        }
-        None
-    }
-
-    fn insert(&mut self, key: PlanKey, is_plan: bool, body: Value) -> bool {
-        let bytes = json::stringify(&body).len();
-        if bytes > L1_MAX_ENTRY_BYTES {
-            return false;
-        }
-        let now = std::time::Instant::now();
-        if self.map.contains_key(&key) {
-            if let Some(pos) = self.order.iter().position(|known| known == &key) {
-                self.order.remove(pos);
-            }
-            if let Some(old) = self.map.get(&key) {
-                self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
-            }
-        }
-        self.order.push_back(key.clone());
-        self.stored_bytes += bytes;
-        self.map.insert(key, LruEntry { is_plan, body, bytes, inserted: now });
-        while self.map.len() > L1_CAP {
-            if let Some(oldest) = self.order.pop_front() {
-                if let Some(old) = self.map.remove(&oldest) {
-                    self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
-                    self.evictions += 1;
-                }
-            } else {
-                break;
-            }
-        }
-        true
-    }
-
-    /// Age of the least-recently-used entry (front of the order): the L1
-    /// max age the lot 4 metrics read. None when the cache is empty.
-    fn oldest_age(&self) -> Option<std::time::Duration> {
-        let now = std::time::Instant::now();
-        self.order
-            .front()
-            .and_then(|key| self.map.get(key))
-            .map(|entry| now.saturating_duration_since(entry.inserted))
-    }
-
-    /// Halve the cache oldest-first (§5.9 warn at 80 %): evictions counted,
-    /// newest half keeps serving. Empty/small caches drop nothing.
-    fn evict_half(&mut self) {
-        let drop = self.map.len() / 2;
-        for _ in 0..drop {
-            if let Some(oldest) = self.order.pop_front() {
-                if let Some(old) = self.map.remove(&oldest) {
-                    self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
-                    self.evictions += 1;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-}
-
 /// Resident set size of this process in bytes (see `Service::rss_bytes`).
 fn rss_bytes() -> u64 {
     let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
@@ -463,199 +295,6 @@ fn rss_bytes() -> u64 {
         .and_then(|field| field.parse().ok())
         .unwrap_or(0);
     resident_pages.saturating_mul(4096)
-}
-
-fn options_satisfied(options: &NavOptions) -> Vec<String> {    let mut satisfied: Vec<String> = options.satisfied.iter().cloned().collect();
-    satisfied.sort();
-    satisfied
-}
-
-fn options_excluded(options: &NavOptions) -> Vec<String> {
-    let mut excluded: Vec<String> = options.excluded_edges.iter().map(edge_key).collect();
-    excluded.sort();
-    excluded
-}
-
-/// Walking-order tile path of a plan, `from` first: walk tiles in order,
-/// door crossings, ride/custom landings. Stands are already the cursor.
-fn plan_path(from: Tile, plan: &Plan) -> Vec<Tile> {
-    let mut path = vec![from];
-    for segment in &plan.segments {
-        match segment {
-            Segment::Walk { tiles } => path.extend(tiles.iter().copied()),
-            Segment::OpenDoor { cross_to, .. } => path.push(*cross_to),
-            Segment::Ride { expect, .. } | Segment::Custom { expect, .. } => path.push(*expect),
-        }
-    }
-    path
-}
-
-/// Exact prefix of `cached` ending on `dest` (first occurrence: the
-/// shortest prefix landing there). Costs are re-derived edge by edge with
-/// the same formula as `assemble`, so the prefix prices exactly what a
-/// fresh search would. `None`: dest is not on the path (recompute).
-fn truncate_plan(tables: &Tables, from: Tile, cached: &Plan, dest: Tile) -> Option<Plan> {
-    let path = plan_path(from, cached);
-    let pos = path.iter().position(|tile| *tile == dest)?;
-    if pos == 0 {
-        return Some(Plan {
-            segments: Vec::new(),
-            cost: 0,
-            adjusted_dest: None,
-            dest_blocker: None,
-        });
-    }
-    let mut remaining = pos;
-    let mut segments = Vec::new();
-    let mut cost = 0u32;
-    for segment in &cached.segments {
-        match segment {
-            Segment::Walk { tiles } => {
-                if remaining > tiles.len() {
-                    cost += tiles.len() as u32;
-                    remaining -= tiles.len();
-                    segments.push(segment.clone());
-                } else {
-                    cost += remaining as u32;
-                    segments.push(Segment::Walk {
-                        tiles: tiles[..remaining].to_vec(),
-                    });
-                    remaining = 0;
-                    break;
-                }
-            }
-            Segment::OpenDoor { door, stand, cross_to } => {
-                // One segment per opening, one or two Dijkstra edges:
-                // stepping on then straight off the same door merges two
-                // edges into one segment (assemble), while stopping on the
-                // tile or starting from it rides one. Count per edge, so
-                // the prefix prices exactly what a fresh search charges.
-                let door_tile = Tile {
-                    x: door.x,
-                    z: door.z,
-                    level: door.level,
-                };
-                let edges = u32::from(*stand != door_tile) + u32::from(*cross_to != door_tile);
-                cost += edges * plan::DOOR_COST;
-                remaining -= 1;
-                segments.push(segment.clone());
-                if remaining == 0 {
-                    break;
-                }
-            }
-            Segment::Ride { transition, .. } => {
-                cost += plan::TRANSITION_COST
-                    + if tables
-                        .verdict(transition.loc, transition.from)
-                        .is_some_and(crate::tables::Verdict::verified)
-                    {
-                        0
-                    } else {
-                        plan::UNVERIFIED_PENALTY
-                    };
-                remaining -= 1;
-                segments.push(segment.clone());
-                if remaining == 0 {
-                    break;
-                }
-            }
-            Segment::Custom { .. } => {
-                cost += plan::TRANSITION_COST + plan::UNVERIFIED_PENALTY;
-                remaining -= 1;
-                segments.push(segment.clone());
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-    }
-    if remaining != 0 {
-        return None;
-    }
-    Some(Plan {
-        segments,
-        cost,
-        adjusted_dest: None,
-        dest_blocker: None,
-    })
-}
-
-/// Tail of `cached` from `from` (which must lie strictly inside its tile
-/// path), priced by substructure: cached cost minus the dropped prefix,
-/// the prefix priced edge by edge with the same formula as `assemble`.
-/// `None`: `from` is not on the path, or the plan is adjusted (its last
-/// tile is not the destination, so no tail ends there).
-fn split_suffix(tables: &Tables, cached_from: Tile, cached: &Plan, from: Tile) -> Option<Plan> {
-    if cached.adjusted_dest.is_some() {
-        return None;
-    }
-    let path = plan_path(cached_from, cached);
-    let pos = path.iter().position(|tile| *tile == from)?;
-    if pos == 0 {
-        return None;
-    }
-    let mut remaining = pos;
-    let mut prefix_cost = 0u32;
-    let mut suffix = Vec::new();
-    for segment in &cached.segments {
-        if remaining == 0 {
-            suffix.push(segment.clone());
-            continue;
-        }
-        match segment {
-            Segment::Walk { tiles } => {
-                if remaining >= tiles.len() {
-                    prefix_cost += tiles.len() as u32;
-                    remaining -= tiles.len();
-                } else {
-                    // Split inside this walk: drop `remaining`, keep the rest.
-                    prefix_cost += remaining as u32;
-                    let keep = tiles[remaining..].to_vec();
-                    if !keep.is_empty() {
-                        suffix.push(Segment::Walk { tiles: keep });
-                    }
-                    remaining = 0;
-                }
-            }
-            Segment::OpenDoor { door, stand, cross_to } => {
-                // One path tile per opening; one or two Dijkstra edges
-                // (same count as `truncate_plan`).
-                let door_tile = Tile {
-                    x: door.x,
-                    z: door.z,
-                    level: door.level,
-                };
-                let edges = u32::from(*stand != door_tile) + u32::from(*cross_to != door_tile);
-                prefix_cost += edges * plan::DOOR_COST;
-                remaining -= 1;
-            }
-            Segment::Ride { transition, .. } => {
-                prefix_cost += plan::TRANSITION_COST
-                    + if tables
-                        .verdict(transition.loc, transition.from)
-                        .is_some_and(crate::tables::Verdict::verified)
-                    {
-                        0
-                    } else {
-                        plan::UNVERIFIED_PENALTY
-                    };
-                remaining -= 1;
-            }
-            Segment::Custom { .. } => {
-                prefix_cost += plan::TRANSITION_COST + plan::UNVERIFIED_PENALTY;
-                remaining -= 1;
-            }
-        }
-    }
-    if remaining != 0 {
-        return None;
-    }
-    Some(Plan {
-        cost: cached.cost.saturating_sub(prefix_cost),
-        segments: suffix,
-        adjusted_dest: None,
-        dest_blocker: None,
-    })
 }
 
 // -- JSON codec (options serialized integrally, never normalized) -------------
@@ -1102,6 +741,10 @@ pub fn decode_noroute(value: &Value) -> Result<NoRoute, String> {
 
 // -- server ------------------------------------------------------------------
 
+/// One snapshot version's shared search state: the L2 edge set and the
+/// sealed-pocket verdicts (both static per version).
+type L2Slot = (Arc<SharedEdges>, Arc<PocketMemo>);
+
 struct Job {
     id: u64,
     account: String,
@@ -1125,13 +768,13 @@ enum Slot {
 /// results, snapshot); the pool never holds any lock during a Dijkstra.
 pub struct Service {
     admission: Mutex<HashMap<String, usize>>,
-    l1: Mutex<Lru>,
+    routes: Mutex<RouteCache>,
     costs_cache: Mutex<HashMap<CostsKey, Vec<Option<u32>>>>,
     /// N8 best-served baselines: cheapest computed cost per PlanKey. A
     /// repeated pair must re-price identically (deterministic planner),
     /// so any excess is a regression, never geometry.
     best_costs: Mutex<HashMap<PlanKey, u32>>,
-    l2: Mutex<(HashMap<String, Arc<SharedEdges>>, Vec<String>)>,
+    l2: Mutex<(HashMap<String, L2Slot>, Vec<String>)>,
     inflight: Mutex<HashMap<PlanKey, u64>>,
     tickets: Mutex<HashMap<u64, (PlanKey, String)>>,
     waiters: Mutex<HashMap<u64, usize>>,
@@ -1142,8 +785,6 @@ pub struct Service {
     queued: AtomicUsize,
     next_id: AtomicU64,
     hits: AtomicU64,
-    trunc_hits: AtomicU64,
-    suffix_hits: AtomicU64,
     misses: AtomicU64,
     joins: AtomicU64,
     l2_hits: AtomicU64,
@@ -1179,6 +820,11 @@ pub struct Service {
     /// E3 waiter pool for the `plan` op (single-round-trip plans): bound
     /// filled at `start`, read by `plan_handoff`.
     wait_tx: Mutex<Option<mpsc::SyncSender<crate::service_plan::WaitJob>>>,
+    /// Terminal outcomes stored so far + the condvar `plan` waiters
+    /// sleep on: a finished search wakes them at once instead of the
+    /// next 10 ms poll slice (reactivity, fewer idle wake-ups).
+    completions: Mutex<u64>,
+    completed: Condvar,
 }
 
 impl Service {
@@ -1200,7 +846,7 @@ impl Service {
         let (queue_tx, queue_rx) = mpsc::sync_channel(QUEUE_CAP);
         let service = Arc::new(Service {
             admission: Mutex::new(HashMap::new()),
-            l1: Mutex::new(Lru::new()),
+            routes: Mutex::new(RouteCache::new(&snapshot.version)),
             costs_cache: Mutex::new(HashMap::new()),
             best_costs: Mutex::new(HashMap::new()),
             l2: Mutex::new((HashMap::new(), Vec::new())),
@@ -1214,8 +860,6 @@ impl Service {
             queued: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
             hits: AtomicU64::new(0),
-            trunc_hits: AtomicU64::new(0),
-            suffix_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             joins: AtomicU64::new(0),
             l2_hits: AtomicU64::new(0),
@@ -1247,6 +891,8 @@ impl Service {
             detour_plans: AtomicU64::new(0),
             sock_path: sock.to_path_buf(),
             wait_tx: Mutex::new(None),
+            completions: Mutex::new(0),
+            completed: Condvar::new(),
         });
         for index in 0..threads.max(1) {
             let worker = Arc::clone(&service);
@@ -1285,15 +931,21 @@ impl Service {
     /// Lot 3 counters: hit-rate verdict reads these, not the logs.
     /// Lot 4 adds the refused_* ones: the fairness verdict reads those.
     pub fn stats(&self) -> CacheStats {
+        let routes = self.route_stats();
         CacheStats {
-            hits: self.hits.load(Ordering::Relaxed),
-            trunc_hits: self.trunc_hits.load(Ordering::Relaxed),
-            suffix_hits: self.suffix_hits.load(Ordering::Relaxed),
+            hits: self.hits.load(Ordering::Relaxed) + routes.exact + routes.dominated + routes.negative,
+            trunc_hits: routes.prefix,
+            suffix_hits: routes.suffix + routes.infix,
+            exact_hits: routes.exact,
+            dominated_hits: routes.dominated,
+            infix_hits: routes.infix,
+            splice_hits: routes.splice,
+            negative_hits: routes.negative,
             misses: self.misses.load(Ordering::Relaxed),
             joins: self.joins.load(Ordering::Relaxed),
             l2_hits: self.l2_hits.load(Ordering::Relaxed),
             l2_miss: self.l2_miss.load(Ordering::Relaxed),
-            evictions: self.l1.lock().unwrap().evictions,
+            evictions: routes.evictions,
             refused_cap: self.refused_cap.load(Ordering::Relaxed),
             refused_full: self.refused_full.load(Ordering::Relaxed),
             refused_stale: self.refused_stale.load(Ordering::Relaxed),
@@ -1350,18 +1002,33 @@ impl Service {
         let old = guard.version.clone();
         let new = snapshot.version.clone();
         *guard = snapshot;
+        drop(guard);
         // New world, new baselines: old floors never price new geometry.
         self.best_costs.lock().unwrap().clear();
+        // New world, empty route cache: nothing planned on the old one
+        // is ever served (in-flight inserts of the old version drop).
+        self.routes.lock().unwrap().reset(&new);
         (old, new)
+    }
+
+    /// Route cache counters and occupancy (`nav-stats`, cpu-profile nav).
+    pub fn route_stats(&self) -> RouteStats {
+        self.routes.lock().unwrap().snapshot_stats()
+    }
+
+    /// Sealed-pocket verdicts memoized for the current version.
+    pub fn pocket_verdicts(&self) -> usize {
+        let version = self.version();
+        self.l2.lock().unwrap().0.get(&version).map(|(_, pockets)| pockets.len()).unwrap_or(0)
     }
 
     /// L1 occupancy: entry count and stored bytes (RAM §5.9 evidence).
     pub fn l1_len(&self) -> usize {
-        self.l1.lock().unwrap().map.len()
+        self.routes.lock().unwrap().len()
     }
 
     pub fn l1_bytes(&self) -> usize {
-        self.l1.lock().unwrap().stored_bytes
+        self.routes.lock().unwrap().bytes()
     }
 
     /// Lot 4 operator metrics: queue depth now, in-flight tickets now, L1
@@ -1379,7 +1046,7 @@ impl Service {
     }
 
     pub fn l1_oldest_age_ms(&self) -> Option<u128> {
-        self.l1
+        self.routes
             .lock()
             .unwrap()
             .oldest_age()
@@ -1523,6 +1190,17 @@ impl Service {
         }
     }
 
+    /// Completions so far (read BEFORE a poll, then `wait_completion`).
+    pub(crate) fn completion_mark(&self) -> u64 {
+        *self.completions.lock().unwrap()
+    }
+
+    /// Sleeps until a search completes after `seen`, at most `slice`.
+    pub(crate) fn wait_completion(&self, seen: u64, slice: Duration) {
+        let guard = self.completions.lock().unwrap();
+        let _ = self.completed.wait_timeout_while(guard, slice, |count| *count == seen);
+    }
+
     /// Served snapshot version for waiter replies.
     pub(crate) fn version_public(&self) -> String {
         self.version()
@@ -1553,6 +1231,12 @@ impl Service {
                     ("hits", Value::Int(stats.hits as i64)),
                     ("trunc_hits", Value::Int(stats.trunc_hits as i64)),
                     ("suffix_hits", Value::Int(stats.suffix_hits as i64)),
+                    ("exact_hits", Value::Int(stats.exact_hits as i64)),
+                    ("dominated_hits", Value::Int(stats.dominated_hits as i64)),
+                    ("infix_hits", Value::Int(stats.infix_hits as i64)),
+                    ("splice_hits", Value::Int(stats.splice_hits as i64)),
+                    ("negative_hits", Value::Int(stats.negative_hits as i64)),
+                    ("pocket_verdicts", Value::Int(self.pocket_verdicts() as i64)),
                     ("misses", Value::Int(stats.misses as i64)),
                     ("joins", Value::Int(stats.joins as i64)),
                     ("l2_hits", Value::Int(stats.l2_hits as i64)),
@@ -1674,41 +1358,28 @@ impl Service {
                     "pathfinding ram warn rss={}B: L1 halved",
                     Self::rss_bytes()
                 );
-                self.l1.lock().unwrap().evict_half();
+                self.routes.lock().unwrap().evict_half();
             }
             RamGate::Pass => {}
         }
-        // LOT3 L1: the full key (options + current version) first, before
-        // any admission accounting: a hit never consumes queue or cap.
-        // Bind first: no guard survives into the reply path (lock order
-        // is sequential everywhere, never nested).
+        // Route cache first, before any admission accounting: a hit never
+        // consumes queue or cap. Lock order stays sequential (never two
+        // held): the fast lookup is search-free under the cache lock; a
+        // sub-path / splice runs on candidates taken out of it.
         let key = PlanKey::of(from, dest, &options, &version);
-        let hit = self.l1.lock().unwrap().get(&key);
-        if let Some((is_plan, body)) = hit {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return self.instant_slot(is_plan, body);
+        let fast = self.routes.lock().unwrap().fast(&version, &key, from, dest, &options);
+        match fast {
+            Some(Fast::Negative(body)) => return self.instant_slot(false, body),
+            Some(Fast::Plan(entry)) => return self.instant_slot(true, encode_plan(&entry.plan)),
+            None => {}
         }
-        // LOT3 truncation: dest on a cached plan serves the prefix.
-        let tables = self.snapshot.lock().unwrap().tables.clone();
-        let prefix = self
-            .l1
-            .lock()
-            .unwrap()
-            .truncate(&tables, from, dest, &options, &version);
-        if let Some(prefix) = prefix {
-            self.trunc_hits.fetch_add(1, Ordering::Relaxed);
-            return self.instant_slot(true, prefix);
-        }
-        // N2 suffix: from on a cached plan serves the tail (replans
-        // after a flight, mid-route joins) with no search either.
-        let suffix = self
-            .l1
-            .lock()
-            .unwrap()
-            .suffix(&tables, from, dest, &options, &version);
-        if let Some(suffix) = suffix {
-            self.suffix_hits.fetch_add(1, Ordering::Relaxed);
-            return self.instant_slot(true, suffix);
+        let candidates = self.routes.lock().unwrap().candidates(&version, from, dest, &options);
+        if !candidates.is_empty() {
+            let snapshot = self.snapshot.lock().unwrap().clone();
+            if let Some((id, kind, plan)) = route_splice::reuse(&snapshot.world, &snapshot.tables, &candidates, from, dest, &options) {
+                self.routes.lock().unwrap().served(id, kind);
+                return self.instant_slot(true, encode_plan(&plan));
+            }
         }
         // LOT3 vol en cours: same full key already queued/computing ->
         // join it, never duplicate the Dijkstra. Sequential locks only
@@ -1998,7 +1669,7 @@ impl Service {
                 .collect();
             return walk_costs::encode_response(&walk_costs::WalkCostsResp { costs, version });
         }
-        let Some(shared) = self.shared_edges(&snapshot) else {
+        let Some((shared, pockets)) = self.shared_edges(&snapshot) else {
             // The L2 builds infallibly here (no yield gate): all-None
             // keeps the caller on Manhattan order instead of inventing
             // costs.
@@ -2014,6 +1685,7 @@ impl Service {
             &parsed.dests,
             &parsed.options,
             &shared,
+            Some(&pockets),
         );
         // Bounded batch cache (cleared when full, never truth): the next
         // identical ranking window serves with no search.
@@ -2431,13 +2103,14 @@ impl Service {
             let shared = self.shared_edges(&snapshot);
             let cancel = Arc::clone(&job.cancel);
             let outcome = match shared {
-                Some(shared) => plan::plan_yielding_with(
+                Some((shared, pockets)) => plan::plan_memo(
                     &snapshot.world,
                     &snapshot.tables,
                     job.from,
                     job.dest,
                     &job.options,
                     &shared,
+                    &pockets,
                     &mut || !cancel.load(Ordering::Relaxed),
                 ),
                 None => Err(plan::aborted_no_route(job.from)),
@@ -2462,19 +2135,37 @@ impl Service {
                 self.detour_plans.fetch_add(1, Ordering::Relaxed);
                 self.detour_max.fetch_max(detour, Ordering::Relaxed);
             }
-            // Encode + L1 first (no results lock held: lock order stays
-            // sequential). A cancelled outcome still caches: same key
-            // means the same plan, and the next submit hits it.
+            // Encode + route cache first (no results lock held: lock order
+            // stays sequential). A cancelled outcome still caches: same
+            // key means the same plan, and the next submit hits it.
             let key = PlanKey::of(job.from, job.dest, &job.options, &snapshot.version);
             let (is_plan, body) = match &outcome {
                 Ok(plan) => (true, encode_plan(plan)),
                 Err(no) => (false, encode_noroute(no)),
             };
-            // Negatives cache (the dearest hits); Aborted and
+            // Negatives cache for `NEGATIVE_TTL`; Aborted and
             // BudgetExhausted never do (they depend on stop and load).
-            let cacheable = outcome.as_ref().err().is_none_or(|no| no.reason.cacheable());
-            if cacheable {
-                self.l1.lock().unwrap().insert(key, is_plan, body.clone());
+            // Plans are analysed (path, exact step prices, split points)
+            // outside every lock, then stored for every bot.
+            match &outcome {
+                Ok(plan) => {
+                    let info = route_path::analyze(&snapshot.world, &snapshot.tables, job.from, plan, &job.options.danger);
+                    let entry = PlanEntry {
+                        from: job.from,
+                        dest: job.dest,
+                        plan: plan.clone(),
+                        f2p_only: job.options.f2p_only,
+                        allow_paid: job.options.allow_paid,
+                        excluded: job.options.excluded_edges.clone(),
+                        danger: job.options.danger.clone(),
+                        info,
+                    };
+                    self.routes.lock().unwrap().insert_plan(&snapshot.version, entry);
+                }
+                Err(no) if no.reason.cacheable() => {
+                    self.routes.lock().unwrap().insert_negative(&snapshot.version, key, body.clone(), NEGATIVE_TTL);
+                }
+                Err(_) => {}
             }
             // One critical section: Pending becomes Ready/Failed with no
             // poll-visible hole (a poll never sees a missing live ticket).
@@ -2494,6 +2185,8 @@ impl Service {
                         break;
                     }
                 }
+                *self.completions.lock().unwrap() += 1;
+                self.completed.notify_all();
             }
             // A cancelled ticket drops its outcome; a served one leaves
             // its terminal slot for every waiter to poll. Admission is
@@ -2514,7 +2207,7 @@ impl Service {
 
     /// LOT3 L2: one edge set per data version, shared by every search.
     /// A reload drains the old version while the new one computes once.
-    fn shared_edges(&self, snapshot: &Arc<Snapshot>) -> Option<Arc<SharedEdges>> {
+    fn shared_edges(&self, snapshot: &Arc<Snapshot>) -> Option<L2Slot> {
         if let Some(shared) = self.l2.lock().unwrap().0.get(&snapshot.version).cloned() {
             self.l2_hits.fetch_add(1, Ordering::Relaxed);
             return Some(shared);
@@ -2524,11 +2217,15 @@ impl Service {
         // identical for every job, so a default options fits all.
         let mut always = || true;
         let edges = plan::prepare_shared(&snapshot.world, &snapshot.tables, &NavOptions::default(), &mut always)?;
-        let shared = Arc::new(edges);
+        let shared: L2Slot = (Arc::new(edges), Arc::new(PocketMemo::default()));
         let mut l2 = self.l2.lock().unwrap();
-        if !l2.0.contains_key(&snapshot.version) {
+        if let Some(raced) = l2.0.get(&snapshot.version) {
+            // Another thread built it first: share its memo too.
+            return Some(raced.clone());
+        }
+        {
             l2.1.push(snapshot.version.clone());
-            l2.0.insert(snapshot.version.clone(), Arc::clone(&shared));
+            l2.0.insert(snapshot.version.clone(), shared.clone());
             while l2.0.len() > L2_VERSIONS_CAP {
                 let oldest = l2.1.remove(0);
                 l2.0.remove(&oldest);
@@ -3436,10 +3133,13 @@ mod tests {
         )
         .expect("service starts");
         let client = PlanClient::new(service.socket_path(), "vol");
-        // Exhaustive NoRoute: the single pool thread stays busy past the
-        // 1.5 s budget, so the twin submit always lands mid-flight.
-        let from = Tile { x: 3219, z: 3218, level: 0 };
-        let dest = Tile { x: 3215, z: 3218, level: 0 };
+        // Exhaustive NoRoute (Karamja dock, boat fare without paid): the
+        // single pool thread sweeps the mainland past the 1.5 s budget,
+        // so the twin submit always lands mid-flight. (The old castle
+        // pair is fast since sealed pockets and blocked destinations
+        // stop early.)
+        let from = Tile { x: 3222, z: 3218, level: 0 };
+        let dest = Tile { x: 2956, z: 3146, level: 0 };
         let id = match client.submit(from, dest, &short_options(), "lot3-vol").expect("submit") {
             Submit::Accepted { id, .. } => id,
             Submit::Refused { reason, .. } => panic!("refused: {reason}"),
@@ -3464,96 +3164,6 @@ mod tests {
             "lot3-vol",
         );
         assert!(!fast.segments.is_empty(), "healthy after cancel");
-    }
-
-    /// LOT3 truncation: a dest ON a cached plan serves the prefix with no
-    /// search, priced exactly like a fresh plan.
-    #[test]
-    fn truncation_serves_exact_prefix() {
-        let (world, tables) = shared_world();
-        // Pure unit shape first: a walk-only plan prefixes by tile count.
-        let from = Tile { x: 0, z: 0, level: 0 };
-        let tiles: Vec<Tile> = (1..=5).map(|x| Tile { x, z: 0, level: 0 }).collect();
-        let walk = Plan {
-            segments: vec![Segment::Walk { tiles: tiles.clone() }],
-            cost: 5,
-            adjusted_dest: None,
-            dest_blocker: None,
-        };
-        let prefix = truncate_plan(&tables, from, &walk, Tile { x: 3, z: 0, level: 0 }).expect("on-path");
-        assert_eq!(prefix.cost, 3, "walk prefix priced per tile");
-        assert_eq!(plan_path(from, &prefix).last(), Some(&Tile { x: 3, z: 0, level: 0 }));
-        assert!(truncate_plan(&tables, from, &walk, Tile { x: 9, z: 9, level: 0 }).is_none(), "off-path recomputes");
-        // Through the service: full leg, then a mid-path dest.
-        let service = Service::start(
-            Snapshot::new(world.clone(), tables.clone(), "lot3-trunc".to_string()),
-            &test_socket("plan-trunc"),
-            2,
-        )
-        .expect("service starts");
-        let client = PlanClient::new(service.socket_path(), "trunc");
-        let door_from = Tile { x: 3228, z: 3214, level: 0 };
-        let door_dest = Tile { x: 3224, z: 3214, level: 0 };
-        let full = submit_ready(&client, door_from, door_dest, &short_options(), "lot3-trunc");
-        let path = plan_path(door_from, &full);
-        assert!(path.len() > 3, "door leg has a walk worth prefixing");
-        let mid = path[path.len() / 2];
-        let before = service.stats();
-        let served = submit_ready(&client, door_from, mid, &short_options(), "lot3-trunc");
-        let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "prefix serves with no search");
-        assert_eq!(after.trunc_hits - before.trunc_hits, 1, "one truncation counted");
-        assert_eq!(plan_path(door_from, &served).last(), Some(&mid), "prefix lands on dest");
-        // Exact price: a fresh sync plan for the same prefix costs the same.
-        let mut sync = None;
-        for _ in 0..5 {
-            if let Ok(found) = plan::plan(&world, &tables, door_from, mid, &short_options()) {
-                sync = Some(found);
-                break;
-            }
-        }
-        let sync = sync.expect("sync prefix converges");
-        assert_eq!(served.cost, sync.cost, "truncated prefix is substructure-optimal");
-    }
-
-    /// LOT3 truncation, merged doors: `assemble` folds stepping on then
-    /// straight off the same door (two Dijkstra edges, 2 x DOOR_COST) into
-    /// one segment. The prefix must count per edge, not per segment —
-    /// a merged prefix served 10 under the true 20 (same tiles, tight
-    /// executor timeout, `served != sync`).
-    #[test]
-    fn truncation_counts_merged_door_per_edge() {
-        let (_, tables) = shared_world();
-        let from = Tile { x: 0, z: 0, level: 0 };
-        let stand = Tile { x: 1, z: 0, level: 0 };
-        let door_tile = Tile { x: 2, z: 0, level: 0 };
-        let beyond = Tile { x: 3, z: 0, level: 0 };
-        let door = crate::plan::DoorRef { loc: 7, x: 2, z: 0, level: 0, open_op: Some(1), toll: false };
-        // Merged: cross_to past the door tile (two edges).
-        let merged = Plan {
-            segments: vec![
-                Segment::Walk { tiles: vec![stand] },
-                Segment::OpenDoor { door: door.clone(), stand, cross_to: beyond },
-                Segment::Walk { tiles: vec![Tile { x: 4, z: 0, level: 0 }] },
-            ],
-            cost: 1 + 2 * plan::DOOR_COST + 1,
-            adjusted_dest: None,
-            dest_blocker: None,
-        };
-        let prefix = truncate_plan(&tables, from, &merged, beyond).expect("on-path");
-        assert_eq!(prefix.cost, 1 + 2 * plan::DOOR_COST, "merged door counts two edges");
-        // Single: stopping on the door tile (one edge).
-        let single = Plan {
-            segments: vec![
-                Segment::Walk { tiles: vec![stand] },
-                Segment::OpenDoor { door, stand, cross_to: door_tile },
-            ],
-            cost: 1 + plan::DOOR_COST,
-            adjusted_dest: None,
-            dest_blocker: None,
-        };
-        let prefix = truncate_plan(&tables, from, &single, door_tile).expect("on-path");
-        assert_eq!(prefix.cost, 1 + plan::DOOR_COST, "single door counts one edge");
     }
 
     /// N1: one `walk_costs` op serves the whole batch in one search —
@@ -3608,57 +3218,6 @@ mod tests {
         // Stale version refuses loud, never serves.
         let refused = client.walk_costs(from, &[near], &short_options(), "stale-v1");
         assert!(refused.is_err(), "stale version refuses, got: {refused:?}");
-    }
-
-    /// N2 suffix: standing mid-plan serves the tail with no search,
-    /// priced exactly like a fresh plan from there.
-    #[test]
-    fn suffix_serves_tail_without_search() {
-        let (world, tables) = shared_world();
-        let service = Service::start(
-            Snapshot::new(world.clone(), tables.clone(), "lot3-suffix".to_string()),
-            &test_socket("plan-suffix"),
-            2,
-        )
-        .expect("service starts");
-        let client = PlanClient::new(service.socket_path(), "suffix");
-        // Unit shape first: a walk-only plan suffixes by tile count.
-        let from = Tile { x: 0, z: 0, level: 0 };
-        let tiles: Vec<Tile> = (1..=5).map(|x| Tile { x, z: 0, level: 0 }).collect();
-        let walk = Plan {
-            segments: vec![Segment::Walk { tiles: tiles.clone() }],
-            cost: 5,
-            adjusted_dest: None,
-            dest_blocker: None,
-        };
-        let tail = split_suffix(&tables, from, &walk, Tile { x: 2, z: 0, level: 0 }).expect("mid-path");
-        assert_eq!(tail.cost, 3, "dropped prefix priced per tile");
-        assert_eq!(plan_path(Tile { x: 2, z: 0, level: 0 }, &tail).last(), Some(&Tile { x: 5, z: 0, level: 0 }));
-        assert!(split_suffix(&tables, from, &walk, from).is_none(), "start is a prefix, not a suffix");
-        assert!(split_suffix(&tables, from, &walk, Tile { x: 9, z: 9, level: 0 }).is_none(), "off-path recomputes");
-        // Through the service: full leg, then a mid-path start.
-        let door_from = Tile { x: 3228, z: 3214, level: 0 };
-        let door_dest = Tile { x: 3224, z: 3214, level: 0 };
-        let full = submit_ready(&client, door_from, door_dest, &short_options(), "lot3-suffix");
-        let path = plan_path(door_from, &full);
-        assert!(path.len() > 3, "door leg has a walk worth suffixing");
-        let mid = path[path.len() / 2];
-        let before = service.stats();
-        let served = submit_ready(&client, mid, door_dest, &short_options(), "lot3-suffix");
-        let after = service.stats();
-        assert_eq!(after.misses - before.misses, 0, "suffix serves with no search");
-        assert_eq!(after.suffix_hits - before.suffix_hits, 1, "one suffix counted");
-        assert_eq!(plan_path(mid, &served).last(), Some(&door_dest), "suffix lands on dest");
-        // Exact price: a fresh sync plan for the same tail costs the same.
-        let mut sync = None;
-        for _ in 0..5 {
-            if let Ok(found) = plan::plan(&world, &tables, mid, door_dest, &short_options()) {
-                sync = Some(found);
-                break;
-            }
-        }
-        let sync = sync.expect("sync suffix converges");
-        assert_eq!(served.cost, sync.cost, "truncated tail is substructure-optimal");
     }
 
     /// Waiter-pool polls stay off the public gauge: `op_poll_public`
@@ -3771,8 +3330,8 @@ mod tests {
         assert_eq!(after.hits - before.hits, 0, "zero stale hits across the bump");
         // Vol en cours across the bump: an old-version submit refuses
         // stale; a new-version twin joins the new flight, not the old one.
-        let slow_from = Tile { x: 3219, z: 3218, level: 0 };
-        let slow_dest = Tile { x: 3215, z: 3218, level: 0 };
+        let slow_from = Tile { x: 3222, z: 3218, level: 0 };
+        let slow_dest = Tile { x: 2956, z: 3146, level: 0 };
         let id = match client.submit(slow_from, slow_dest, &short_options(), "lot3-new").expect("submit") {
             Submit::Accepted { id, .. } => id,
             Submit::Refused { reason, .. } => panic!("refused: {reason}"),
@@ -3920,34 +3479,6 @@ mod tests {
             ram_gate_for(u64::MAX, RAM_WARN_BYTES, RAM_SHED_BYTES),
             RamGate::Shed
         );
-    }
-
-    /// L1 halve oldest-first (§5.9 warn): 4 entries in, oldest 2 out,
-    /// newest 2 keep serving.
-    #[test]
-    fn l1_evict_half_keeps_newest() {
-        let mut lru = Lru::new();
-        let options = short_options();
-        let keys: Vec<PlanKey> = (0..4)
-            .map(|x| {
-                PlanKey::of(
-                    Tile { x, z: 0, level: 0 },
-                    Tile { x: x + 10, z: 0, level: 0 },
-                    &options,
-                    "v",
-                )
-            })
-            .collect();
-        for key in &keys {
-            assert!(lru.insert(key.clone(), true, Value::Bool(true)));
-        }
-        assert_eq!(lru.map.len(), 4, "four entries in");
-        lru.evict_half();
-        assert_eq!(lru.map.len(), 2, "oldest half out");
-        assert!(!lru.map.contains_key(&keys[0]), "oldest evicted");
-        assert!(!lru.map.contains_key(&keys[1]), "second oldest evicted");
-        assert!(lru.map.contains_key(&keys[2]), "newest kept");
-        assert!(lru.map.contains_key(&keys[3]), "newest kept");
     }
 
     /// Double cancel + cancel-after-completion (E6): every release is

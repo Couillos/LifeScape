@@ -71,17 +71,32 @@ impl StaticWorld {
     /// planner must not cut through them. `sky_floors` allowlist (real
     /// floors the pack leaves OPEN, proven live) stays OPEN.
     pub fn get(&self, tile_x: i32, tile_z: i32, level: i32) -> u32 {
-        if level > 0 && self.state.read().expect("static world lock poisoned").sky_floors.contains(&(tile_x, tile_z, level)) {
-            return OPEN;
-        }
-        if !self.has_square(tile_x >> 6, tile_z >> 6) {
-            return if level > 0 { NULL } else { OPEN };
+        // Read-lock fast path (CPU 2026-11-14): once a square is painted,
+        // every read shares the lock. The write lock (exclusive) is only
+        // taken to paint a missing square; it used to be taken on EVERY
+        // read, serializing all plan threads on one lock.
+        {
+            let state = self.state.read().expect("static world lock poisoned");
+            if level > 0 && state.sky_floors.contains(&(tile_x, tile_z, level)) {
+                return OPEN;
+            }
+            if !self.has_square(tile_x >> 6, tile_z >> 6) {
+                return if level > 0 { NULL } else { OPEN };
+            }
+            if state.pack.is_loaded(tile_x >> 6, tile_z >> 6) {
+                return Self::painted_flags(&state, tile_x, tile_z, level);
+            }
         }
         let mut state = self.state.write().expect("static world lock poisoned");
-        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, sky_floors, .. } = &mut *state;
+        let PagedState { pack, collision, static_locs, static_layers, doors, toll_gates, .. } = &mut *state;
         pack.ensure_square(collision, static_locs, static_layers, doors, toll_gates, tile_x >> 6, tile_z >> 6);
-        let flags = collision.get(tile_x, tile_z, level);
-        if level > 0 && flags == OPEN && !sky_floors.contains(&(tile_x, tile_z, level)) {
+        Self::painted_flags(&state, tile_x, tile_z, level)
+    }
+
+    /// Flags of a painted tile (upper OPEN tiles off the allowlist are sky).
+    fn painted_flags(state: &PagedState, tile_x: i32, tile_z: i32, level: i32) -> u32 {
+        let flags = state.collision.get(tile_x, tile_z, level);
+        if level > 0 && flags == OPEN && !state.sky_floors.contains(&(tile_x, tile_z, level)) {
             return NULL;
         }
         flags
@@ -89,6 +104,9 @@ impl StaticWorld {
 
     fn ensure(&self, tile_x: i32, tile_z: i32) {
         if !self.has_square(tile_x >> 6, tile_z >> 6) {
+            return;
+        }
+        if self.state.read().expect("static world lock poisoned").pack.is_loaded(tile_x >> 6, tile_z >> 6) {
             return;
         }
         let mut state = self.state.write().expect("static world lock poisoned");

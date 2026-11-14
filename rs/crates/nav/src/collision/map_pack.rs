@@ -240,6 +240,11 @@ impl MapPack {
         self.loaded.len()
     }
 
+    /// True once this square painted (read-lock fast path of the world).
+    pub fn is_loaded(&self, square_x: i32, square_z: i32) -> bool {
+        self.loaded.contains(&(square_x, square_z))
+    }
+
     pub fn loc_def(&self, loc_id: usize) -> Option<&LocDef> {
         self.defs.get(loc_id).and_then(|slot| slot.as_ref())
     }

@@ -115,6 +115,7 @@ fn daemon_main() -> i32 {
         Ok(snapshot) => match lifescape_orchestrator::plan_service::start(snapshot) {
             Ok(service) => {
                 println!("pathfinding service on {}", lifescape_orchestrator::plan_service::socket_path().display());
+                lifescape_orchestrator::nav_profile::start(service.clone());
                 Some(service)
             }
             Err(error) => {

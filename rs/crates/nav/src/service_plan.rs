@@ -90,6 +90,7 @@ pub fn answer_plan(service: &service::Service, mut stream: UnixStream, request: 
     };
     let deadline = std::time::Instant::now() + Duration::from_millis(wait_ms.min(15_000));
     loop {
+        let seen = service.completion_mark();
         match service.op_poll_public(id) {
             WaitPoll::Terminal(outcome) => {
                 // Release only the waiter count: pool completion already
@@ -115,7 +116,9 @@ pub fn answer_plan(service: &service::Service, mut stream: UnixStream, request: 
                     let _ = stream.write_all(buf.as_bytes());
                     return;
                 }
-                std::thread::sleep(WAIT_SLICE);
+                // Woken by the completing search (condvar), the slice
+                // only bounds a missed wake-up.
+                service.wait_completion(seen, WAIT_SLICE);
             }
         }
     }

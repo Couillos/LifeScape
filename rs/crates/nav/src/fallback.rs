@@ -58,6 +58,46 @@ pub(crate) fn walled_off(flags: &mut dyn FnMut(Tile) -> u32, here: Tile, dest: T
     flags(here) & here_mask != 0 || flags(dest) & dest_mask != 0
 }
 
+/// Rings scanned for the rank floor (bounded work per blocked search).
+const FLOOR_RINGS: i32 = 16;
+
+/// Best fallback rank prefix (level, Chebyshev, walled) ANY tile could
+/// reach for a blocked `dest`: the nearest same-level ring holding a
+/// walkable in-bounds tile (`probe` gives the search's flags, `None`
+/// out of bounds), an open neighbour before a walled one. A search that
+/// pops a tile with exactly this prefix can stop there: pops come in
+/// cost order, so no later tile ranks better (CPU 2026-11-14). `None`
+/// past `FLOOR_RINGS`: the search sweeps as before.
+pub(crate) fn rank_floor(probe: &mut dyn FnMut(Tile) -> Option<u32>, dest: Tile) -> Option<(i32, i32, bool)> {
+    for ring in 1..=FLOOR_RINGS {
+        let mut walled_only = false;
+        for step_x in -ring..=ring {
+            for step_z in -ring..=ring {
+                if step_x.abs() != ring && step_z.abs() != ring {
+                    continue;
+                }
+                let tile = Tile { x: dest.x + step_x, z: dest.z + step_z, level: dest.level };
+                let Some(flags) = probe(tile) else { continue };
+                if !crate::collision::tile_walkable(flags) {
+                    continue;
+                }
+                if ring > 1 {
+                    return Some((0, ring, false));
+                }
+                if walled_off(&mut |near| probe(near).unwrap_or(0), tile, dest) {
+                    walled_only = true;
+                } else {
+                    return Some((0, 1, false));
+                }
+            }
+        }
+        if walled_only {
+            return Some((0, 1, true));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::walled_off;

@@ -22,7 +22,8 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use crate::bfs::can_step;
 use crate::collision::{tile_walkable, CollisionMap};
@@ -38,7 +39,7 @@ pub(crate) const POCKET_CAP: usize = 512;
 /// Collision with every openable door swung (requirements, tolls and
 /// sides ignored): the widest walk the planner could take. Doors the
 /// overrides block tile by tile stay shut, as in the planner.
-fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile) -> u32 {
+pub(crate) fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile) -> u32 {
     let mut doors = Vec::new();
     for dx in -1..=1 {
         for dz in -1..=1 {
@@ -71,22 +72,29 @@ fn permissive_flags(world: &StaticWorld, tables: &Tables, tile: Tile) -> u32 {
     scratch.get(tile.x, tile.z, tile.level)
 }
 
-/// True when `dest` is walkable and sealed: no walk (doors swung), ride
-/// or custom edge can reach it from outside, and `from` is not inside.
-/// The planner's verdict on such a destination is always `Disconnected`.
-pub(crate) fn sealed(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, from: Tile, dest: Tile) -> bool {
-    if from == dest {
-        return false;
-    }
-    let mut flags = std::collections::HashMap::new();
+/// Start-independent flood verdict of one destination tile. `Closed`
+/// keeps every tile a start could stand on and still enter the pocket:
+/// the walkable members plus the unwalkable tiles that step in (the
+/// original check stopped on `next == from` before the walkable test).
+pub(crate) enum PocketVerdict {
+    /// Unwalkable destination, or a flood past `POCKET_CAP`: never sealed.
+    Open,
+    Closed { members: HashSet<u64>, edge_in: bool },
+}
+
+/// Flood from `dest` with no start: the same walk as the per-start check,
+/// minus its early `next == from` exit, so one verdict answers every start.
+pub(crate) fn verdict(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, dest: Tile) -> PocketVerdict {
+    let mut flags = HashMap::new();
     let mut view = |tile: Tile| -> u32 {
         *flags.entry(tile.key()).or_insert_with(|| permissive_flags(world, tables, tile))
     };
     if !tile_walkable(view(dest)) {
-        return false;
+        return PocketVerdict::Open;
     }
     let level = dest.level;
     let mut seen: HashSet<u64> = HashSet::new();
+    let mut entries: HashSet<u64> = HashSet::new();
     seen.insert(dest.key());
     let mut queue = vec![dest];
     while let Some(here) = queue.pop() {
@@ -103,15 +111,13 @@ pub(crate) fn sealed(world: &StaticWorld, tables: &Tables, shared: &SharedEdges,
             if !can_step(&mut step, next.x, next.z, here.x, here.z) {
                 continue;
             }
-            if next == from {
-                return false;
-            }
             if !tile_walkable(view(next)) {
+                entries.insert(next.key());
                 continue;
             }
             seen.insert(next.key());
             if seen.len() > POCKET_CAP {
-                return false;
+                return PocketVerdict::Open;
             }
             queue.push(next);
         }
@@ -119,7 +125,81 @@ pub(crate) fn sealed(world: &StaticWorld, tables: &Tables, shared: &SharedEdges,
     let (rides, customs) = shared;
     let ride_in = rides.values().flatten().any(|edge| seen.contains(&edge.dest.key()));
     let custom_in = customs.values().flatten().any(|edge| seen.contains(&edge.dest.key()));
-    !ride_in && !custom_in
+    seen.extend(entries);
+    PocketVerdict::Closed { members: seen, edge_in: ride_in || custom_in }
+}
+
+/// The per-start answer read off a start-independent verdict.
+pub(crate) fn sealed_by(verdict: &PocketVerdict, from: Tile, dest: Tile) -> bool {
+    if from == dest {
+        return false;
+    }
+    match verdict {
+        PocketVerdict::Open => false,
+        PocketVerdict::Closed { members, edge_in } => !edge_in && !members.contains(&from.key()),
+    }
+}
+
+/// True when `dest` is walkable and sealed: no walk (doors swung), ride
+/// or custom edge can reach it from outside, and `from` is not inside.
+/// The planner's verdict on such a destination is always `Disconnected`.
+pub(crate) fn sealed(world: &StaticWorld, tables: &Tables, shared: &SharedEdges, from: Tile, dest: Tile) -> bool {
+    if from == dest {
+        return false;
+    }
+    sealed_by(&verdict(world, tables, shared, dest), from, dest)
+}
+
+/// Verdicts kept past one search (CPU 2026-11-14): the flood is static
+/// per snapshot version, and every plan miss and every `walk_costs`
+/// target paid it again (8 floods of up to 512 tiles per NPC ring). The
+/// service owns one memo per L2 version; bounded (cleared when full).
+#[derive(Default)]
+pub struct PocketMemo {
+    verdicts: Mutex<HashMap<u64, Arc<PocketVerdict>>>,
+}
+
+/// Memo bound: a verdict is a few hundred tile keys at most.
+const MEMO_CAP: usize = 65_536;
+
+impl PocketMemo {
+    pub(crate) fn sealed(&self, world: &StaticWorld, tables: &Tables, shared: &SharedEdges, from: Tile, dest: Tile) -> bool {
+        if from == dest {
+            return false;
+        }
+        let known = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&dest.key()).cloned();
+        let found = match known {
+            Some(found) => found,
+            None => {
+                // Computed outside the lock: two threads may flood the
+                // same tile once each, never block each other.
+                let fresh = Arc::new(verdict(world, tables, shared, dest));
+                let mut verdicts = self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if verdicts.len() >= MEMO_CAP {
+                    verdicts.clear();
+                }
+                verdicts.insert(dest.key(), Arc::clone(&fresh));
+                fresh
+            }
+        };
+        sealed_by(&found, from, dest)
+    }
+
+    pub fn len(&self) -> usize {
+        self.verdicts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Sealed check through the memo when the caller has one.
+pub(crate) fn sealed_with(memo: Option<&PocketMemo>, world: &StaticWorld, tables: &Tables, shared: &SharedEdges, from: Tile, dest: Tile) -> bool {
+    match memo {
+        Some(memo) => memo.sealed(world, tables, shared, from, dest),
+        None => sealed(world, tables, shared, from, dest),
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +250,21 @@ mod tests {
         ] {
             assert!(!sealed(&world, &tables, &shared, from, dest), "{why}: {dest:?} is enterable");
         }
+        // The memo answers exactly like the per-start flood, for starts
+        // outside, inside and on the pocket's unwalkable rim.
+        let memo = super::PocketMemo::default();
+        for (from, dest) in [
+            (tile(3245, 3395, 0), tile(3247, 3398, 0)),
+            (tile(3247, 3398, 0), tile(3247, 3398, 0)),
+            (tile(3246, 3396, 0), tile(3246, 3396, 0)),
+            (tile(3222, 3222, 0), tile(3246, 3396, 0)),
+            (tile(3257, 3244, 0), tile(3257, 3242, 0)),
+            (tile(3257, 3242, 0), tile(3257, 3243, 0)),
+        ] {
+            for start in [from, tile(from.x + 1, from.z, 0), tile(dest.x, dest.z + 1, 0), tile(dest.x - 1, dest.z, 0)] {
+                assert_eq!(memo.sealed(&world, &tables, &shared, start, dest), sealed(&world, &tables, &shared, start, dest), "{start:?} -> {dest:?}");
+            }
+        }
+        assert!(!memo.is_empty(), "verdicts kept");
     }
 }
