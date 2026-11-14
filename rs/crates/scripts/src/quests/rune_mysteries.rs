@@ -75,12 +75,34 @@ fn make_room(bot: &mut Bot, keep: &[u16]) -> Result<(), ScriptError> {
     Ok(())
 }
 
+/// Quest objects a bank trip put away (live 2026-11-14, bct5rxpg: the
+/// Duke's air talisman banked at 09:16, every later round read Start
+/// and Sedridor never took it): withdrawn before the stage is read, the
+/// stage being read off the pack only.
+fn fetch_banked(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
+    let banked = bot.bank_items();
+    let wants: Vec<(u16, u32)> = ids
+        .iter()
+        .filter(|id| solver::count(bot, **id) == 0 && banked.get(id).copied().unwrap_or(0) > 0)
+        .map(|id| (*id, 1))
+        .collect();
+    if wants.is_empty() {
+        return Ok(());
+    }
+    bot.intend("rune mysteries: taking the quest objects out of the bank");
+    let bank = crate::kit::bank::nearest_bank(bot)?;
+    let pulled = crate::kit::withdraw::bank_withdraw_counts(bot, &bank, &wants)?;
+    bot.log(&format!("rune mysteries: {pulled} quest object(s) withdrawn from the bank"));
+    Ok(())
+}
+
 pub(crate) fn solve(bot: &mut Bot) -> Result<(), ScriptError> {
     bot.intend("quest runemysteries: delivering research");
     let notes = solver::obj_id("research_notes")?;
     let package = solver::obj_id("research_package")?;
     let talisman = solver::obj_id("air_talisman")?;
     make_room(bot, &[notes, package, talisman])?;
+    fetch_banked(bot, &[notes, package, talisman])?;
     for round in 0..ROUNDS {
         let stage = stage_of(solver::count(bot, notes), solver::count(bot, package));
         bot.log(&format!("rune mysteries round {round}: {stage:?}"));
