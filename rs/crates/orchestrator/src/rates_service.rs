@@ -622,81 +622,9 @@ fn xp_value(row: &XpRow) -> Value {
 
 pub use crate::rates_price::price_estimate;
 
-/// Public trend score of an item display name (24 h period preferred),
-/// 0.0 when unscored.
-pub fn trend_score(store: &Store, item: &str) -> f64 {
-    let catalogue = match store.list_items() {
-        Ok(rows) => rows,
-        Err(_) => return 0.0,
-    };
-    let Some(found) = catalogue.iter().find(|row| row.name == item) else {
-        return 0.0;
-    };
-    let scores = store.trends_for_item(found.item_id).unwrap_or_default();
-    scores.iter().find(|trend| trend.period == "24h").map(|trend| trend.score).unwrap_or_else(|| {
-        scores.first().map(|trend| trend.score).unwrap_or(0.0)
-    })
-}
-
-/// One profitability row per (method, band): revenue at estimated
-/// prices, input cost at shop prices, pause friction, trend bonus.
-#[derive(Clone, Debug)]
-pub struct ProfitRow {
-    pub method: String,
-    pub band: i64,
-    pub revenue: f64,
-    pub input_cost: f64,
-    pub friction: f64,
-    pub trend_bonus: f64,
-    pub profit: f64,
-    pub price_prior: bool,
-}
-
-/// Builds profitability from the snapshot, pricing through the store.
-pub fn profit_rows(store: &Store, snapshot: &Snapshot) -> Vec<ProfitRow> {
-    let mut bands: BTreeMap<(String, i64), Vec<(String, f64)>> = BTreeMap::new();
-    for ((method, item, band), stat) in &snapshot.yields {
-        bands.entry((method.clone(), *band)).or_default().push((item.clone(), stat.mean()));
-    }
-    let mut rows = Vec::new();
-    for ((method, band), products) in bands {
-        let mut revenue_items = Vec::new();
-        let mut price_prior = false;
-        let mut trend_weighted = 0.0;
-        for (item, mean) in &products {
-            let (price, prior) = price_estimate(store, item);
-            price_prior = price_prior || prior;
-            revenue_items.push((*mean, price));
-            trend_weighted += mean * price * trend_score(store, item);
-        }
-        let revenue: f64 = revenue_items.iter().map(|(yield_per, price)| yield_per * price).sum();
-        let mut input_cost = 0.0;
-        for ((input_method, input_item, input_band), stat) in &snapshot.inputs {
-            if input_method == &method && input_band == &band {
-                let (price, prior) = price_estimate(store, input_item);
-                price_prior = price_prior || prior;
-                input_cost += stat.mean() * price;
-            }
-        }
-        let pause_per = snapshot.pause_per_6000(&method, band);
-        let score = if revenue > 0.0 { trend_weighted / revenue } else { 0.0 };
-        let profit = profit_per_6000(&revenue_items, input_cost, pause_per, score, TREND_WEIGHT);
-        let friction = pause_per * revenue / NORMALIZE_TICKS;
-        let trend_bonus = score * revenue * TREND_WEIGHT;
-        rows.push(ProfitRow {
-            method: method.clone(),
-            band,
-            revenue,
-            input_cost,
-            friction,
-            trend_bonus,
-            profit,
-            price_prior,
-        });
-    }
-    rows.sort_by(|left, right| (left.method.clone(), left.band).cmp(&(right.method.clone(), right.band)));
-    rows
-}
+#[path = "rates_profit.rs"]
+mod profit;
+pub use profit::{cached_profit_rows, profit_rows, trend_score, ProfitRow, PROFIT_TTL};
 
 fn profit_value(row: &ProfitRow) -> Value {
     object(vec![
@@ -909,6 +837,7 @@ pub fn record_snapshot(parsed: &ParsedReport) -> Result<(), String> {
         guard.record(parsed);
         let value = snapshot_to_value(&guard);
         drop(guard);
+        profit::invalidate();
         let path = snapshot_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| format!("rates snapshot dir: {error}"))?;

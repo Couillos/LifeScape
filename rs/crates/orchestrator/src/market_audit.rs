@@ -238,19 +238,23 @@ impl MarketService {
     /// lock bites, holds base objects). Pushed to the workers (`set_locks`) so no script spends them
     /// outside the trade procedure (user rule 2026-11-13).
     pub(crate) fn locks_for(&self, accounts: &[String]) -> BTreeMap<String, (i64, BTreeMap<i64, i64>)> {
-        let open: Vec<Order> = self
-            .lock_store()
-            .resting_orders()
-            .unwrap_or_default()
-            .into_iter()
-            // Open rows and the resting remainder of partly filled ones.
-            .filter(|order| order.remaining > 0 && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched))
-            .collect();
         let mut out: BTreeMap<String, (i64, BTreeMap<i64, i64>)> = BTreeMap::new();
         for account in accounts {
+            // The account's own resting rows through its index (the
+            // whole-carnet scan read ~95k rows per call, many calls per
+            // brain pass: CPU 2026-11-14). Same rows as `resting_orders`
+            // (not dormant), open and the resting remainder of partly
+            // filled ones.
+            let open: Vec<Order> = self
+                .lock_store()
+                .account_orders(account)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|order| !order.dormant && order.remaining > 0 && matches!(order.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched))
+                .collect();
             let mut coins = 0i64;
             let mut items: BTreeMap<i64, i64> = BTreeMap::new();
-            for order in open.iter().filter(|order| &order.account == account) {
+            for order in &open {
                 if order.side == OrderSide::Buy {
                     coins += order.remaining.max(0) * order.price.max(0);
                 } else {

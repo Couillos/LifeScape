@@ -51,6 +51,20 @@ impl Store {
         }
     }
 
+    /// Lowest item id whose name is exactly `name` (same pick as the
+    /// first match of `list_items`), `None` when unknown. One indexed-size
+    /// scan, never the whole catalogue materialised (CPU 2026-11-14).
+    pub fn item_id_by_name(&self, name: &str) -> Result<Option<i64>, Error> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT item_id FROM items WHERE name = ?1 ORDER BY item_id LIMIT 1",
+        )?;
+        let mut found_rows = statement.query(rusqlite::params![name])?;
+        match found_rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Whole catalogue ordered by id.
     pub fn list_items(&self) -> Result<Vec<Item>, Error> {
         let mut statement = self.connection.prepare(
@@ -68,6 +82,18 @@ impl Store {
 #[cfg(test)]
 mod items_tests {
     use super::*;
+
+    #[test]
+    fn item_id_by_name_takes_the_first_exact_match() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        for (item_id, name) in [(7, "Logs"), (3, "Logs"), (9, "logs")] {
+            store.upsert_item(&Item { item_id, name: name.to_string(), shop_price: 0, alch_value: 0 })?;
+        }
+        assert_eq!(store.item_id_by_name("Logs")?, Some(3));
+        assert_eq!(store.item_id_by_name("logs")?, Some(9), "case-sensitive like the catalogue scan");
+        assert_eq!(store.item_id_by_name("Oak logs")?, None);
+        Ok(())
+    }
 
     #[test]
     fn upsert_and_get_roundtrip() -> Result<(), Error> {

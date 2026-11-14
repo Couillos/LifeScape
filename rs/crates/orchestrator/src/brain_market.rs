@@ -43,9 +43,12 @@ pub fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, live: &Value) {
     }
     if matches!(node.kind, NodeKind::MakeMoney | NodeKind::HaveCoins { .. }) {
         let snapshot = crate::rates_service::live_snapshot();
-        let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) else { return };
-        let rows = crate::rates_service::profit_rows(&store, &snapshot);
-        drop(store);
+        // Shared table (an unopenable store serves it empty: no profit
+        // pushed, as the early return did).
+        let rows = crate::rates_service::cached_profit_rows();
+        if rows.is_empty() {
+            return;
+        }
         // Saturation (user rule 2026-11-14): a product under a wall of
         // asks is worth the share the market absorbs (public book only).
         // Every bid counts as absorption here (own ones too: a buyer is

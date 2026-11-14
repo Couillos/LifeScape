@@ -115,6 +115,9 @@ pub mod daemon;
 pub mod daemon_watch;
 pub mod daemon_conn;
 pub mod cpu_profile;
+#[cfg(test)]
+#[path = "cpu_bench_tests.rs"]
+mod cpu_bench_tests;
 pub mod daemon_close;
 pub mod supervise;
 pub mod session;

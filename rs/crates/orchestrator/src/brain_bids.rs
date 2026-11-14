@@ -138,10 +138,9 @@ impl MarketReader {
 }
 
 /// Published `(script, band, profit per 6000)` rows (rates page).
+/// Shared table (`rates_service::cached_profit_rows`), never rebuilt per call.
 pub fn rate_rows() -> Vec<(String, i64, f64)> {
-    let Ok(store) = lifescape_store::Store::open(&crate::market_service::db_path()) else { return Vec::new() };
-    let snapshot = crate::rates_service::live_snapshot();
-    crate::rates_service::profit_rows(&store, &snapshot).into_iter().map(|row| (row.method, row.band, row.profit)).collect()
+    crate::rates_service::cached_profit_rows().iter().map(|row| (row.method.clone(), row.band, row.profit)).collect()
 }
 
 /// Units per 6000 ticks of a production method for an object: measured
