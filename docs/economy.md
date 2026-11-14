@@ -744,23 +744,33 @@ passe par compte toutes les 60 s, tout style de but, jamais Iron) :
   pièces remplacées sont du surplus (vente par défaut, ou alchimie d'un
   lanceur). La liste d'envies (`brain_wishlist`) ne garde que les outils.
 
-## Outils marchands : pioches chez Nurmof (2026-11-14)
+## Trousse permanente : hache, pioche, marteau, tinderbox (2026-11-14)
 
 Constat live : personne au-delà d'une pioche de bronze ; 185 offres
 « wish … pickaxe » jamais remplies (aucune recette F2P ne forge de pioche
 en rev 274, aucun monstre F2P n'en lâche : seul Nurmof, `pickaxeshop`,
-Dwarven Mine, vend fer → rune). Règle (`brain_tool_shop.rs`, passe de 60 s,
-Iron compris) : pour une famille que le travail du bot exige
-(`brain_tools::work_needs`, même prédicat que la garde des ventes), la
-meilleure pioche marchande (`merchant_route`) que son niveau ouvre, au-dessus
-de la meilleure utilisable qu'il possède, dont le prix boutique
-(`merchant_price`, formule serveur) ≤ 25 % (`TOOL_SHARE_PCT`) du portefeuille
-libre → pas d'équipement `shop:buy` (`file_step` : un pas à la fois, cooldown
-`WITHDRAWN_RETRY_SECS`, jamais de bannissement). Aucune offre marché sur un
-outil marchand (`brain_wishlist::biddable`), les anciennes sont annulées.
-Les haches (forgeables) gardent l'offre marché. La Dwarven Mine est un étage
-de boutiques routé (`access::shop_floor_routed`, trappe de Falador) : la
-cueillette et les fermes de drop y restent refusées.
+Dwarven Mine, vend fer → rune) ; puis décision utilisateur : chaque bot
+(Iron compris) possède en permanence une hache, une pioche, un marteau et
+une tinderbox, et ne les revend plus en changeant de but.
+Règle (`planner::tool_kit`, passe `brain_tool_shop.rs` de 60 s, banque
+diffusée, avant le plan d'équipement) : trousse de base d'abord (marteau,
+tinderbox, pioche, hache manquants : meilleur palier ≤ 25 % du portefeuille
+libre, sinon le moins cher ≤ 50 %), puis améliorations (meilleur palier que
+le niveau ouvre au-dessus du palier qui travaille, ≤ 25 % `TOOL_SHARE_PCT`).
+Chaque achat devient un pas d'équipement (`file_step` : un pas à la fois,
+cooldown `WITHDRAWN_RETRY_SECS`, jamais de bannissement) : `shop:buy`
+(Nurmof, magasins généraux) ou, pour une hache, ask couvert puis Bob's
+Brilliant Axes (exception D-A `kit_shop_route`, bronze → acier). Aucune
+offre marché sur un outil vendu en boutique (`brain_wishlist::biddable`),
+les anciennes sont annulées ; les haches mithril+ (forgées seulement)
+gardent l'offre de la liste d'envies. Garde (`brain_tools::kept_tools`) :
+meilleure hache/pioche détenue + meilleure qui travaille, 1 marteau,
+1 tinderbox ; le reste se vend. Les outils inutilisés restent en banque :
+chaque script ne garde au sac que son outil (`ToolSpec::keep_ids`), le
+voyage en banque dépose le reste une fois, rien ne les retire hors besoin.
+La Dwarven Mine est un étage de boutiques routé
+(`access::shop_floor_routed`, trappe de Falador) : la cueillette et les
+fermes de drop y restent refusées.
 
 ## Producteurs : entraînement pour une offre (2026-11-14)
 

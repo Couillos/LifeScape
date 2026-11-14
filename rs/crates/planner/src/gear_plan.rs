@@ -121,6 +121,20 @@ fn owned_score(style: Style, wearpos: i64, owned: &[String], levels: &[(&str, i6
 /// worn debug names; `budget`: coins the gear may take (a share of the
 /// free wallet); `price_of`: expected price of one object.
 pub fn plan_gear(style: Style, levels: &[(&str, i64)], quests_done: &[&str], owned: &[String], budget: i64, price_of: &dyn Fn(&str) -> i64) -> Vec<GearWant> {
+    plan_gear_from(style, levels, quests_done, owned, budget, price_of, &|_| true)
+}
+
+/// `plan_gear` over the pieces `allowed` lets the bot obtain (an Iron:
+/// shop-only pieces, no market).
+pub fn plan_gear_from(
+    style: Style,
+    levels: &[(&str, i64)],
+    quests_done: &[&str],
+    owned: &[String],
+    budget: i64,
+    price_of: &dyn Fn(&str) -> i64,
+    allowed: &dyn Fn(&str) -> bool,
+) -> Vec<GearWant> {
     if budget < 1 {
         return Vec::new();
     }
@@ -135,7 +149,7 @@ pub fn plan_gear(style: Style, levels: &[(&str, i64)], quests_done: &[&str], own
         let have = owned_score(style, wearpos, owned, levels, quests_done);
         let mut options: Vec<(String, i64, i64)> = Vec::new();
         for piece in candidates(style).iter().filter(|piece| piece.wearpos == wearpos && piece.score > have) {
-            if !wieldable(&piece.entry, levels, quests_done) || owned.contains(&piece.item) {
+            if !wieldable(&piece.entry, levels, quests_done) || owned.contains(&piece.item) || !allowed(&piece.item) {
                 continue;
             }
             let price = price_of(&piece.item).max(1);
@@ -161,7 +175,22 @@ pub fn plan_gear(style: Style, levels: &[(&str, i64)], quests_done: &[&str], own
             .filter_map(|(index, pick)| pick.map(|at| (index, slots[index].2[at].2)))
             .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
             .map(|(index, _)| index);
-        let Some(index) = dearest else { break };
+        let Some(dearest) = dearest else { break };
+        // A complete set first (user 2026-11-14): an empty slot about to
+        // drop its last (cheapest) piece keeps it while an upgrade of an
+        // owned slot can still step down or drop instead.
+        let last = picks[dearest].is_some_and(|at| at + 1 >= slots[dearest].2.len());
+        let index = if last && slots[dearest].1 == 0 {
+            picks
+                .iter()
+                .enumerate()
+                .filter(|(index, pick)| pick.is_some() && slots[*index].1 > 0)
+                .filter_map(|(index, pick)| pick.map(|at| (index, slots[index].2[at].2)))
+                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+                .map_or(dearest, |(index, _)| index)
+        } else {
+            dearest
+        };
         picks[index] = picks[index].and_then(|at| (at + 1 < slots[index].2.len()).then_some(at + 1));
     }
     let total: i64 = picks.iter().zip(&slots).filter_map(|(pick, slot)| pick.map(|at| slot.2[at].2)).sum();

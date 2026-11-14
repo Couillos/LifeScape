@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
 //! Tools a bot keeps off the market (user rule 2026-11-13: tools SELL;
-//! a bot keeps only what it works with).
+//! a bot keeps only what it works with; amended 2026-11-14: a bot keeps
+//! its tools across goals, the permanent kit `planner::tool_kit`).
+//!
+//! Permanent kit (every bot, whatever its work): the best held axe and
+//! pickaxe (and the best one its level works with), one hammer, one
+//! tinderbox (`tool_kit::kit_keep`). Lower tiers and spare copies sell.
 //!
 //! A bot keeps ONE unit of the best tool it holds in each family its work
 //! needs — the methods of its open graph nodes (gathering, fighting and
@@ -88,10 +93,11 @@ pub fn work_needs(life: &Life) -> (Vec<String>, Vec<String>) {
 /// Names the bot keeps off the market for its work: the best held member
 /// of each needed tool family (one unit, see `spare_tool_units`) and
 /// every held member of a needed consumable family (whole stacks).
-pub fn kept_tools(life: &Life, stacks: &[(String, i64)]) -> Vec<String> {
+pub fn kept_tools(life: &Life, stacks: &[(String, i64)], levels: &[(&str, i64)]) -> Vec<String> {
     let held = |name: &str| stacks.iter().any(|(held_name, qty)| held_name == name && *qty > 0);
     let (tools, consumables) = work_needs(life);
-    let mut kept = Vec::new();
+    let owned: Vec<String> = stacks.iter().filter(|(_, qty)| *qty > 0).map(|(name, _)| name.clone()).collect();
+    let mut kept = lifescape_planner::tool_kit::kit_keep(levels, &owned);
     for tool in &tools {
         if let Some(best) = family_of(tool).into_iter().find(|member| held(member)) {
             kept.push(best);
@@ -105,11 +111,22 @@ pub fn kept_tools(life: &Life, stacks: &[(String, i64)]) -> Vec<String> {
     kept
 }
 
-/// Every name of the needed tool families (consumables excluded): the
-/// names whose spare copies beyond one unit sell.
+/// Every name of the needed tool families and of the permanent kit
+/// (consumables excluded): the names whose spare copies beyond one unit
+/// sell.
 fn single_unit_tools(life: &Life) -> Vec<String> {
     let (tools, _) = work_needs(life);
-    tools.iter().flat_map(|tool| family_of(tool)).collect()
+    tools.iter().map(String::as_str).chain(lifescape_planner::tool_kit::PERMANENT_KIT).flat_map(family_of).collect()
+}
+
+/// Base levels of a live snapshot as `(skill, level)` (empty without one).
+pub fn live_levels(live: &lifescape_json::Value) -> Vec<(String, i64)> {
+    crate::brain_market::live_levels(live).into_iter().map(|(name, level)| (name, i64::from(level))).collect()
+}
+
+/// Borrowed view of `live_levels` for the pure rules.
+pub fn level_refs(levels: &[(String, i64)]) -> Vec<(&str, i64)> {
+    levels.iter().map(|(name, level)| (name.as_str(), *level)).collect()
 }
 
 /// Spare units of kept tools: a bot keeps one of each, the rest sells

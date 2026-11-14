@@ -549,6 +549,31 @@ pub fn merchant_price(item: &str) -> Option<i64> {
         .min()
 }
 
+/// True for an F2P woodcutting axe (never a battleaxe): the axe of the
+/// permanent tool kit.
+pub fn kit_axe(item: &str) -> bool {
+    item.ends_with("_axe")
+        && !item.contains("battleaxe")
+        && crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
+}
+
+/// D-A exception (user 2026-11-14, permanent tool kit): every bot owns an
+/// axe, and "a market bid at 1-2 coins nobody fills is not acceptable:
+/// if nobody sells, the shop". A kit axe some F2P shop stocks (Bob's
+/// Brilliant Axes: bronze, iron, steel) may be bought there, by the
+/// brain's kit step only (`shop:buy` beside its `market:buy`: a covered
+/// ask first). Graph obtains keep D-A (`merchant_buy_allowed`): their
+/// axes wait for a smith. Every merchant route counts too.
+pub fn kit_shop_route(item: &str) -> bool {
+    merchant_route(item) || (kit_axe(item) && ways(item).iter().any(|way| way.kind == WayKind::Shop))
+}
+
+/// A shop purchase the kit executor accepts: D-A (`merchant_buy_allowed`)
+/// or the kit axe exception (`kit_shop_route`).
+pub fn shop_buy_allowed(item: &str) -> bool {
+    merchant_buy_allowed(item) || kit_shop_route(item)
+}
+
 pub fn merchant_buy_allowed(item: &str) -> bool {
     crate::objs_by_name(item).into_iter().next().is_some_and(|obj| obj.members == Some(false))
         && !producible_f2p(item)

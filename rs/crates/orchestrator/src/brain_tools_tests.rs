@@ -33,22 +33,36 @@ fn stacks(rows: &[(&str, i64)]) -> Vec<(String, i64)> {
     rows.iter().map(|(name, qty)| (name.to_string(), *qty)).collect()
 }
 
-/// User rule 2026-11-13: tools sell. A woodcutter keeps its best axe,
-/// nothing else of its kit-less trades: the bronze axe, the hammer and the
-/// net it never uses are surplus.
+/// User rule 2026-11-13: tools sell, amended 2026-11-14 (permanent
+/// kit). A woodcutter keeps its best axe and the kit's hammer; the lower
+/// bronze axe and the net it never uses are surplus.
 #[test]
-fn only_the_best_tool_of_the_work_stays() {
+fn only_the_best_tool_of_the_work_and_the_kit_stay() {
     let life = life_with(&["gather:woodcut/logs"]);
     let held = stacks(&[("bronze_axe", 1), ("steel_axe", 1), ("hammer", 1), ("net", 1)]);
-    assert_eq!(kept_tools(&life, &held), vec!["steel_axe".to_string()]);
+    assert_eq!(kept_tools(&life, &held, &[]), vec!["hammer".to_string(), "steel_axe".to_string()]);
 }
 
-/// A tool the bot does not hold is never "kept" (nothing to keep), and a
-/// bot with no work keeps no tool at all.
+/// User 2026-11-14: a bot keeps its tools when it changes goals. With no
+/// work at all it still keeps its kit (the best pickaxe and the one its
+/// mining level works with, a hammer, a tinderbox); a tool it does not
+/// hold is never "kept", and a foreign tool (net) still sells.
 #[test]
-fn no_work_no_kept_tool() {
+fn the_kit_stays_without_work() {
     let idle = life_with(&[]);
-    assert!(kept_tools(&idle, &stacks(&[("hammer", 1), ("bronze_pickaxe", 1)])).is_empty());
+    let held = stacks(&[("hammer", 1), ("bronze_pickaxe", 1), ("rune_pickaxe", 1), ("iron_pickaxe", 1), ("tinderbox", 1), ("net", 1)]);
+    let kept = kept_tools(&idle, &held, &[("mining", 5)]);
+    assert_eq!(kept, vec!["hammer".to_string(), "iron_pickaxe".to_string(), "rune_pickaxe".to_string(), "tinderbox".to_string()]);
+    assert!(kept_tools(&idle, &stacks(&[("net", 1)]), &[]).is_empty());
+}
+
+/// Spare kit copies sell even without work: one hammer stays.
+#[test]
+fn spare_kit_copies_sell() {
+    let idle = life_with(&[]);
+    let held = stacks(&[("hammer", 3), ("tinderbox", 1)]);
+    let kept = kept_tools(&idle, &held, &[]);
+    assert_eq!(spare_tool_units(&idle, &held, &kept), vec![("hammer".to_string(), 2)]);
 }
 
 /// Spare copies sell: one hammer kept for smithing, 3 listed. A milker's
@@ -58,12 +72,12 @@ fn no_work_no_kept_tool() {
 fn spare_copies_of_a_kept_tool_sell() {
     let life = life_with(&["smith:bronze_sword"]);
     let held = stacks(&[("hammer", 4)]);
-    let kept = kept_tools(&life, &held);
+    let kept = kept_tools(&life, &held, &[]);
     assert_eq!(kept, vec!["hammer".to_string()]);
     assert_eq!(spare_tool_units(&life, &held, &kept), vec![("hammer".to_string(), 3)]);
     let milker = life_with(&["milk:bucket_milk"]);
     let buckets = stacks(&[("bucket_empty", 24)]);
-    let kept = kept_tools(&milker, &buckets);
+    let kept = kept_tools(&milker, &buckets, &[]);
     assert_eq!(kept, vec!["bucket_empty".to_string()]);
     assert!(spare_tool_units(&milker, &buckets, &kept).is_empty(), "consumed: never sold by the unit rule");
 }
@@ -73,7 +87,7 @@ fn spare_copies_of_a_kept_tool_sell() {
 fn bait_stacks_stay_whole() {
     let life = life_with(&["gather:fishing/raw_sardine"]);
     let held = stacks(&[("fishing_rod", 1), ("fishing_bait", 300)]);
-    let kept = kept_tools(&life, &held);
+    let kept = kept_tools(&life, &held, &[]);
     assert!(kept.contains(&"fishing_bait".to_string()) && kept.contains(&"fishing_rod".to_string()), "{kept:?}");
     assert!(spare_tool_units(&life, &held, &kept).is_empty(), "bait never sold by the unit rule");
 }
@@ -82,7 +96,7 @@ fn bait_stacks_stay_whole() {
 #[test]
 fn production_tools_come_from_the_recipe() {
     let life = life_with(&["smith:bronze_dagger"]);
-    let kept = kept_tools(&life, &stacks(&[("hammer", 1), ("chisel", 1)]));
+    let kept = kept_tools(&life, &stacks(&[("hammer", 1), ("chisel", 1)]), &[]);
     assert_eq!(kept, vec!["hammer".to_string()]);
 }
 

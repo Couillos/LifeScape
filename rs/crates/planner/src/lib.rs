@@ -42,6 +42,7 @@ pub mod side_goal;
 pub mod skeleton_deps;
 pub mod sizing;
 pub mod space;
+pub mod tool_kit;
 pub mod tools;
 pub mod training;
 pub mod tranches;

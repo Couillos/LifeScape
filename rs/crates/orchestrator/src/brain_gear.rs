@@ -2,9 +2,10 @@
 //! Equipment in the brain (user 2026-11-14: "les bots qui font de la
 //! mêlée devraient vouloir le meilleur matériel pour leur combat lvl";
 //! pure rules in `lifescape_planner::gear_plan`, the ladder module keeps
-//! the step mechanics). Once per `GEAR_EVERY_SECS` for an idle, non-Iron
-//! bot, whatever its goal's style (melee, ranged, magic; non-combat
-//! goals fight melee):
+//! the step mechanics). User 2026-11-14: every bot owns at least one
+//! complete combat set, the best it affords, never sold (`ladder_keep`).
+//! Once per `GEAR_EVERY_SECS` for an idle bot, whatever its goal's style
+//! (melee, ranged, magic; non-combat goals fight melee):
 //! - a dead gear step (abandoned) leaves the graph on EVERY pass, any
 //!   goal style (`withdraw_dead`, before `graph_state`: never a Stuck goal);
 //! - an owned piece better than the worn one → an `equip_best` step;
@@ -20,11 +21,13 @@
 //!   shop sells (D-A), becomes an `obtain_items` + `equip_best` step
 //!   (one open step at a time), launched before the goal's next node;
 //! - bids on wearables the plan no longer wants are cancelled (a slot
-//!   upgraded past it, a tier the budget dropped).
+//!   upgraded past it, a tier the budget dropped);
+//! - an Iron (no market) plans only the pieces an NPC shop sells (D-A,
+//!   `shop_only`), priced at the shop, and files them as steps.
 //!
-//! Tools stay with the wishlist (`brain_wishlist`), except those only an
-//! NPC shop sells: `brain_tool_shop` files them as steps through
-//! `file_step` (same cooldown, same no-ban rule).
+//! Tools are the permanent kit's (`brain_tool_shop`, steps through
+//! `file_step`: same cooldown, same no-ban rule); smithed-only axe tiers
+//! stay with the wishlist (`brain_wishlist`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -106,9 +109,6 @@ pub(crate) fn holdings(job: &Job) -> (Vec<String>, Vec<String>) {
 /// piece the bot may wear and any better one (`gear_plan::kept_gear`).
 /// Replaced pieces are surplus: sold (or alched) by the default sales.
 pub fn ladder_keep(job: &Job, life: &Life, live: &Value) -> Vec<String> {
-    if life.profile.ironman {
-        return Vec::new();
-    }
     let levels_owned = crate::brain_market::live_levels(live);
     let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
     let quests = crate::brain_rescue::quests_done(life);
@@ -291,18 +291,53 @@ fn style_name(style: Style) -> &'static str {
     }
 }
 
-/// True for a piece only an NPC shop sells (D-A): no bid ever fills, the
-/// bot walks to the shop through an obtain step.
+/// True for a piece only an NPC shop sells (D-A), or a kit axe Bob sells
+/// (`kit_shop_route`): never left to a bid nobody fills, the bot walks
+/// to the shop through an obtain step (a kit axe takes a covered ask
+/// first).
 pub(crate) fn shop_only(item: &str) -> bool {
-    lifescape_gamedata::obtain::merchant_route(item)
+    lifescape_gamedata::obtain::kit_shop_route(item)
+}
+
+/// Iron gear (user 2026-11-14, no market): the plan over the pieces an
+/// NPC shop sells, priced at the shop, the first want filed as a step
+/// when none is open. Returns true when the life changed.
+fn iron_gear(job: &Job, life: &mut Life, plan: &IronPlan) -> bool {
+    if gear_ladder::step_open(life) {
+        return false;
+    }
+    let budget = gear_ladder::wallet_ceiling(crate::brain_plan::holdings_count(job, "coins"), gear_ladder::GEAR_SHARE_PCT);
+    let price_of = |item: &str| lifescape_gamedata::obtain::merchant_price(item).unwrap_or(i64::MAX / 64);
+    let allowed = |item: &str| lifescape_gamedata::obtain::merchant_route(item);
+    let wants = gear_plan::plan_gear_from(plan.style, &plan.levels(), &plan.quests(), &plan.owned, budget, &price_of, &allowed);
+    let now = wall_now();
+    let Some(want) = wants.iter().find(|want| !recently_withdrawn(&job.account, &want.item, now)) else { return false };
+    let why = format!("Iron, shop price {}, budget {budget}", want.expected);
+    file_step(job, life, Some(&want.item), plan.style, &why);
+    true
+}
+
+/// What the Iron gear plan reads (owned copies of the pass's inputs).
+struct IronPlan {
+    style: Style,
+    levels: Vec<(String, i64)>,
+    quests: Vec<String>,
+    owned: Vec<String>,
+}
+
+impl IronPlan {
+    fn levels(&self) -> Vec<(&str, i64)> {
+        self.levels.iter().map(|(name, level)| (name.as_str(), *level)).collect()
+    }
+
+    fn quests(&self) -> Vec<&str> {
+        self.quests.iter().map(String::as_str).collect()
+    }
 }
 
 /// One gear pass. Returns true when the life changed (save it).
 pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let mut changed = withdraw_dead(job, life);
-    if life.profile.ironman {
-        return changed;
-    }
     let now = wall_now();
     {
         let mut table = last_pass().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -333,6 +368,18 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
                 changed = true;
             }
         }
+    }
+    if life.profile.ironman {
+        if !step_open {
+            let plan = IronPlan {
+                style,
+                levels: levels.iter().map(|(name, level)| (name.to_string(), *level)).collect(),
+                quests: quests_owned.clone(),
+                owned: owned.clone(),
+            };
+            changed |= iron_gear(job, life, &plan);
+        }
+        return changed;
     }
     let service = crate::market_service::shared();
     let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);

@@ -368,7 +368,9 @@ pub fn buy_stock_at(bot: &mut Bot, obj_name: &str, count: u32, shop: Option<&str
     // D-A (PRD3): NPC purchases only for objects nobody makes or
     // gathers in F2P. A producible object comes from the market or the
     // bot's own work: blocked typed, so the brain files the obtain.
-    if !knowledge::obtain::merchant_buy_allowed(obj_name) {
+    // Exception: the permanent kit's axes (`kit_shop_route`, user
+    // 2026-11-14), bought here only by the brain's kit step.
+    if !knowledge::obtain::shop_buy_allowed(obj_name) {
         bot.log(&format!("merchant purchase of {obj_name} forbidden: producible in F2P (market or craft it)"));
         return Err(ScriptError::Blocked { missing: vec![obj_name.to_string()] });
     }
@@ -500,17 +502,20 @@ mod tests {
         assert!(super::reachable_keeper((2998, 9844, 0), (3018, 9850), None), "routed shop floor");
     }
 
-    /// PRD3 D-A: a producible object (smithed bronze axe) is never bought
-    /// from a merchant; the refusal is typed `Blocked` so the brain files
-    /// an obtain (market or craft), before any walk.
+    /// PRD3 D-A: a producible object (smithed bronze sword, stocked by
+    /// Varrock's sword shop) is never bought from a merchant; the refusal
+    /// is typed `Blocked` so the brain files an obtain (market or craft),
+    /// before any walk. The permanent kit's axes are the one exception
+    /// (`obtain::kit_shop_route`, user 2026-11-14).
     #[test]
     fn producible_objects_never_buy_from_merchants() {
         let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
         attach_live_tables(&mut bot);
-        match buy_stock(&mut bot, "bronze_axe", 1) {
-            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["bronze_axe".to_string()]),
-            other => panic!("producible axe must block, got {other:?}"),
+        match buy_stock(&mut bot, "bronze_sword", 1) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["bronze_sword".to_string()]),
+            other => panic!("producible sword must block, got {other:?}"),
         }
+        assert!(lifescape_gamedata::obtain::shop_buy_allowed("bronze_axe"), "kit axe: the shop is allowed");
     }
 
     /// Shared loud guard: zero progress after a trade click is an error,

@@ -257,3 +257,36 @@ fn a_pickaxe_step_buys_at_nurmof() {
     assert!(joined.starts_with("shopbuy steel_pickaxe 1"), "{joined}");
     assert!(joined.contains("--shop pickaxeshop") && joined.contains("--site 2998,9844,0"), "{joined}");
 }
+
+/// User 2026-11-14 (permanent kit): an axe step takes a covered ask
+/// first, else Bob's Brilliant Axes (Lumbridge), never a resting bid
+/// nobody fills; an Iron goes to the shop.
+#[test]
+fn a_kit_axe_step_buys_the_ask_else_at_bob() {
+    let mut life = life_with(Vec::new());
+    let ids = insert_gear_step(&mut life, Some("bronze_axe"), "melee");
+    let obtain = life.nodes.iter().position(|node| node.id == ids[0]).expect("obtain");
+    let methods: Vec<&str> = life.nodes[obtain].alternatives.iter().map(|alt| alt.method.as_str()).collect();
+    assert_eq!(methods, vec!["market:buy", "shop:buy"]);
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.coin_share_pct = Some(GEAR_SHARE_PCT);
+    ctx.coins = 100;
+    ctx.price = 16;
+    ctx.shop_price = 16;
+    ctx.combat = 3;
+    ctx.position = Some((3222, 3218, 0));
+    let mut node = life.nodes[obtain].clone();
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("shop:buy"), "no seller: the shop, {:?}", node.status);
+    assert_eq!(node.site, Some((3232, 3203, 0)), "Bob's spawn");
+    let (_, args) = crate::mapping::map_method("shop:buy", &node, None).expect("shop maps");
+    assert!(args.join(" ").contains("--shop axeshop"), "{args:?}");
+    let mut node = life.nodes[obtain].clone();
+    ctx.best_ask = Some(12);
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("market:buy"), "a covered ask first");
+    let mut node = life.nodes[obtain].clone();
+    ctx.ironman = true;
+    resolve_ready(&mut node, &ctx);
+    assert_eq!(node.method.as_deref(), Some("shop:buy"), "an Iron never buys on the market");
+}

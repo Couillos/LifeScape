@@ -131,7 +131,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     }
     let shop_cover = ctx.shop_price.max(1) * count;
     let shop_quest = missing_quest("shop:buy", Some(item), ctx);
-    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && crate::expand::source_flags(item).1 && shop_quest.is_none();
+    // A kit axe step lists `shop:buy` itself (D-A exception,
+    // `kit_shop_route`); graph obtains list it only when D-A allows.
+    let shop_route = crate::expand::source_flags(item).1 || lifescape_gamedata::obtain::kit_shop_route(item);
+    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && shop_route && shop_quest.is_none();
     if candidates.iter().any(|method| method == "shop:buy") {
         if let Some(quest) = shop_quest {
             quest_gap.get_or_insert(quest);

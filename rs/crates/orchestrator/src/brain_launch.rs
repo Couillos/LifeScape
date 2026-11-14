@@ -205,14 +205,16 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
     // asks under the alch floor bought to alch.
     crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));
+    // Permanent tool kit (2026-11-14): axe, pickaxe, hammer, tinderbox,
+    // the best tier the level opens, filed as gear steps (a shop, or a
+    // covered ask for an axe), never a market bid nobody fills. Before
+    // the gear plan: the cheap base kit first.
+    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, &mut life, &live)) {
+        dirty = true;
+    }
     // Gear plan (2026-11-14): the best affordable piece of every slot,
     // standing bids that wait for a producer, steps for covered asks.
     if crate::cpu_profile::timed("gear_pass", || crate::brain_gear::gear_pass(job, &mut life, &live)) {
-        dirty = true;
-    }
-    // Merchant tools (2026-11-14): an upgrade pickaxe only Nurmof sells
-    // becomes a `shop:buy` gear step, never a market bid nobody fills.
-    if crate::cpu_profile::timed("tool_shop_pass", || crate::brain_tool_shop::tool_shop_pass(job, &mut life, &live)) {
         dirty = true;
     }
     // Market buys parked on the book settle every pass; the worker never
@@ -328,8 +330,12 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if let NodeKind::ObtainItems { item, .. } = &life.nodes[position].kind {
         // The whole family counts (a steel pickaxe meets `bronze_pickaxe`,
         // a staff of air any number of air runes), except for the goal's
-        // own production quota (air runes to craft are runes, not a staff).
-        let quota = matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
+        // own production quota (air runes to craft are runes, not a staff)
+        // and a gear step, which wants that very piece (a kit
+        // `bronze_pickaxe` for a bot whose rune pickaxe is above its
+        // mining level never closes on the rune one).
+        let exact = lifescape_planner::gear_ladder::is_gear_obtain(&life, position);
+        let quota = exact || matches!(&life.goal, lifescape_planner::GoalKind::Produce { item: made, .. } if made == item);
         ctx.held = if quota { holdings_count(job, item) } else { lifescape_planner::tools::family_held(item, i64::MAX / 4, &|name| holdings_count(job, name)) };
         committed = crate::brain_gear::committed_coins(&job.account, crate::brain_gear::obj_id(item));
         ctx.coins = (ctx.coins - committed).max(0);
@@ -552,7 +558,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if method == "market:flip" {
         let stacks = live_stacks(job);
         let mut keep = cleanup_keep(&life);
-        keep.extend(crate::brain_tools::kept_tools(&life, &stacks));
+        let levels = crate::brain_tools::live_levels(&live);
+        keep.extend(crate::brain_tools::kept_tools(&life, &stacks, &crate::brain_tools::level_refs(&levels)));
         let worn = worn_names(job);
         if let Some((item, qty)) = pick_flip_target(&stacks, &keep, &worn) {
             crate::logln!("brain {}: flip D52 target {item} x{qty}", job.account);
@@ -562,11 +569,16 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
             crate::logln!("brain {}: flip D52 no safe stock, clock ends it", job.account);
         }
     }
-    // Cleanup carries its keep-list (graph obtains, quest checks) and the
-    // Iron flag (D2 direct, no carnet) to the worker; coins, food and best
-    // tools resolve worker-side.
+    // Cleanup carries its keep-list (graph obtains, quest checks, the
+    // permanent tool kit and the kept combat set: never sold nor dropped,
+    // 2026-11-14) and the Iron flag (D2 direct, no carnet) to the worker;
+    // coins, food and best tools resolve worker-side.
     if method == "space:cleanup" {
-        for kept in merge_keep(cleanup_keep(&life), worn_names(job)) {
+        let levels = crate::brain_tools::live_levels(&live);
+        let mut keep = cleanup_keep(&life);
+        keep.extend(crate::brain_tools::kept_tools(&life, &live_stacks(job), &crate::brain_tools::level_refs(&levels)));
+        keep.extend(crate::brain_gear::ladder_keep(job, &life, &live));
+        for kept in merge_keep(keep, worn_names(job)) {
             args.push("--keep".to_string());
             args.push(kept);
         }

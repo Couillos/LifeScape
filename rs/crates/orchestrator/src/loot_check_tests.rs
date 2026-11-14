@@ -126,7 +126,7 @@ fn loot_check() {
         owned.extend(worn.iter().cloned());
         let mut gear = lifescape_planner::gear_plan::kept_gear(&levels, &quests, &owned);
         gear.extend(worn.iter().cloned());
-        let tools = crate::brain_tools::kept_tools(&life, &stacks);
+        let tools = crate::brain_tools::kept_tools(&life, &stacks, &levels);
         let mut wished = crate::brain_alch::alch_keep(&life, &job);
         wished.extend(tools.iter().cloned());
         let whole = crate::brain_sales::working_keep(&life, &wished);

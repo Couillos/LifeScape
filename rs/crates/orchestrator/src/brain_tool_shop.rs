@@ -1,75 +1,54 @@
 #![forbid(unsafe_code)]
-//! Merchant tools (user 2026-11-14: "personne n'a mieux qu'une bronze
-//! pickaxe"). No F2P recipe smiths a pickaxe in rev 274 and no F2P
-//! monster drops one: iron to rune pickaxes come from Nurmof's shop
-//! (Dwarven Mine, `pickaxeshop`) only. The wishlist bid on them on the
-//! market (185 bids, never filled: no bot sells one). Here a tool whose
-//! upgrade has a merchant route (`gamedata::obtain::merchant_route`, D-A)
-//! becomes a gear step instead, the equipment precedent (`brain_gear`):
-//! an `obtain_items` resolved `shop:buy` + the `equip_best` that closes
-//! the step, launched before the goal's next node, never blocking it.
+//! Permanent tool kit in the brain (user decision 2026-11-14: every bot,
+//! Iron included, owns an axe, a pickaxe, a hammer and a tinderbox, the
+//! best tier its level opens, and keeps them across goals). The rule is
+//! pure (`lifescape_planner::tool_kit`); this pass files its purchases.
 //!
-//! Rule (`tool_purchase`, pure): for a tool family the bot's work needs
-//! (`brain_tools::work_needs`: the same predicate the sales pass keeps
-//! tools by, so a bought tool is never listed while it is useful), the
-//! best merchant tool its level opens that beats the best usable one it
-//! owns and whose shop price (`merchant_price`, the server formula) fits
-//! `TOOL_SHARE_PCT` (25 %) of its free wallet (`brain_gear::free_coins`).
-//! A thin wallet takes the best tier it pays (steel before rune); no
-//! affordable upgrade, nothing filed (the bot earns, the next pass looks
-//! again). Only an upgrade of a family it already uses: a missing tool
-//! is the graph's own obtain.
+//! Once per `TOOL_SHOP_EVERY_SECS`, with the bank streamed (a banked tool
+//! is never bought twice) and no gear step open, the next kit purchase
+//! (`tool_kit::kit_purchase`: base kit first, cheapest tools first, then
+//! upgrades; wallet shares of the FREE wallet `brain_gear::free_coins`)
+//! becomes a gear step (`brain_gear::file_step`): an `obtain_items`
+//! resolved `shop:buy` (Nurmof's pickaxes, the general stores' hammer and
+//! tinderbox) or, for an axe, `market:buy` on a covered ask else Bob's
+//! shop (D-A exception, `gamedata::obtain::kit_shop_route`), plus the
+//! `equip_best` that closes the step. Launched before the goal's next
+//! node, never blocking it. History: 2026-11-14 the pass bought only
+//! pickaxe upgrades for bots whose work needed the family.
 //!
 //! Loops: one gear step at a time (`gear_ladder::step_open`); a dead
 //! step cools its piece down (`WITHDRAWN_RETRY_SECS`, `withdraw_dead`);
 //! its failure never bans a skill (`brain_succession`: gear subtree); a
 //! shop piece is never withdrawn on an empty book (`brain_launch`). The
-//! old tool is surplus (sold by the sales pass) and never wished again:
-//! the rule only buys above the best owned tier. Resting market buys on
-//! merchant tools (old wishes) are cancelled.
+//! kit tools are kept by the sales pass (`brain_tools::kept_tools`), the
+//! replaced lower tier sells, and the rule only buys above the best
+//! working tier: no buy/sell loop. Resting market buys on shop-sold
+//! tools (old wishes) are cancelled.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use lifescape_json::Value;
-use lifescape_planner::gear_ladder::{self, TOOL_SHARE_PCT};
-use lifescape_planner::Life;
+use lifescape_planner::gear_ladder;
+use lifescape_planner::{Life, NodeKind, NodeStatus};
 
 use crate::jobs::Job;
 
-/// Wall seconds between two tool shop passes for one account.
+/// Wall seconds between two kit passes for one account.
 pub const TOOL_SHOP_EVERY_SECS: f64 = 60.0;
 
-/// Tool families: gear family, canonical name in the work needs.
-const FAMILIES: [(&str, &str); 2] = [("pickaxe", "bronze_pickaxe"), ("axe", "bronze_axe")];
-
-/// One shop purchase: the tool and its shop price.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolPurchase {
-    pub item: String,
-    pub price: i64,
-}
-
-/// The best merchant tool of `family` (`pickaxe`, `axe`) the bot's
-/// `levels` open, better than the best usable tool of that family it
-/// `owned` (pack, bank, worn), whose shop price fits `ceiling`. `None`
-/// when it owns none (the graph obtains a first tool), already holds the
-/// best, or no better merchant tier fits the wallet. Pure.
-pub fn tool_purchase(family: &str, levels: &[(&str, i64)], owned: &[String], ceiling: i64) -> Option<ToolPurchase> {
-    let usable = lifescape_gamedata::gear::usable_tools(family, levels);
-    let owned_rank = usable.iter().position(|name| owned.contains(name))?;
-    usable[..owned_rank]
-        .iter()
-        .filter(|name| lifescape_gamedata::obtain::merchant_route(name))
-        .filter_map(|name| lifescape_gamedata::obtain::merchant_price(name).map(|price| ToolPurchase { item: name.clone(), price }))
-        .find(|purchase| purchase.price <= ceiling)
-}
-
-/// True for a gathering tool (pickaxe, woodcutting axe) only an NPC shop
-/// sells (D-A): no market bid ever fills for it.
+/// True for a gathering tool (pickaxe, woodcutting axe) the kit buys
+/// through a step (an NPC shop sells it, `kit_shop_route`): never a
+/// market wish bid.
 pub fn merchant_tool(name: &str) -> bool {
     let tool = name.ends_with("_pickaxe") || (name.ends_with("_axe") && !name.contains("battleaxe"));
     tool && crate::brain_gear::shop_only(name)
+}
+
+/// True while an obtain of `item` runs (Active): the kit never buys a
+/// second one beside it.
+pub fn obtain_in_flight(life: &Life, item: &str) -> bool {
+    life.nodes.iter().any(|node| node.status == NodeStatus::Active && matches!(&node.kind, NodeKind::ObtainItems { item: wanted, .. } if wanted == item))
 }
 
 fn wall_now() -> f64 {
@@ -81,7 +60,7 @@ fn last_pass() -> &'static Mutex<HashMap<String, f64>> {
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Cancels the account's resting buys on merchant tools (old wishlist
+/// Cancels the account's resting buys on shop-sold tools (old wishlist
 /// bids nobody fills), except what the graph's own obtains want.
 fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
     let Some(service) = crate::market_service::shared() else { return };
@@ -97,11 +76,11 @@ fn cancel_merchant_tool_bids(job: &Job, life: &Life) {
     names.dedup();
     for name in &names {
         let closed = crate::brain_market::cancel_open_buys(&job.account, name);
-        crate::logln!("brain {}: wish bid on {name} cancelled ({closed}): only a shop sells it, bought there", job.account);
+        crate::logln!("brain {}: wish bid on {name} cancelled ({closed}): the kit buys it through a step", job.account);
     }
 }
 
-/// One tool shop pass. Returns true when the life changed (save it).
+/// One kit pass. Returns true when the life changed (save it).
 pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     let now = wall_now();
     {
@@ -111,33 +90,31 @@ pub(crate) fn tool_shop_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         }
         table.insert(job.account.clone(), now);
     }
-    cancel_merchant_tool_bids(job, life);
-    if gear_ladder::step_open(life) {
+    if !life.profile.ironman {
+        cancel_merchant_tool_bids(job, life);
+    }
+    // A bank not streamed yet hides banked tools: never buy a second one.
+    if gear_ladder::step_open(life) || live.get("bank_streamed").as_bool() != Some(true) {
         return false;
     }
-    let levels_owned = crate::brain_market::live_levels(live);
+    let levels_owned = crate::brain_tools::live_levels(live);
     if levels_owned.is_empty() {
         return false;
     }
-    let levels: Vec<(&str, i64)> = levels_owned.iter().map(|(name, level)| (name.as_str(), i64::from(*level))).collect();
-    let (needed, _) = crate::brain_tools::work_needs(life);
+    let levels = crate::brain_tools::level_refs(&levels_owned);
     let (owned, _) = crate::brain_gear::holdings(job);
-    let stepping = crate::brain_wishlist::wanted_names(life);
     let coins = crate::brain_gear::free_coins(job, None);
-    let ceiling = gear_ladder::wallet_ceiling(coins, TOOL_SHARE_PCT);
-    for (family, canonical) in FAMILIES {
-        if !needed.iter().any(|tool| tool == canonical) {
-            continue;
-        }
-        let Some(purchase) = tool_purchase(family, &levels, &owned, ceiling) else { continue };
-        if stepping.contains(&purchase.item) || crate::brain_gear::recently_withdrawn(&job.account, &purchase.item, now) {
-            continue;
-        }
-        let why = format!("{family} upgrade at the shop, price {}, ceiling {ceiling} of wallet {coins}", purchase.price);
-        crate::brain_gear::file_step(job, life, Some(&purchase.item), crate::brain_gear::goal_style(life), &why);
-        return true;
-    }
-    false
+    let purchases = lifescape_planner::tool_kit::kit_purchases(&levels, &owned, coins);
+    let Some(purchase) = purchases
+        .into_iter()
+        .find(|purchase| !obtain_in_flight(life, &purchase.item) && !crate::brain_gear::recently_withdrawn(&job.account, &purchase.item, now))
+    else {
+        return false;
+    };
+    let kind = if purchase.base { "missing kit tool" } else { "kit upgrade" };
+    let why = format!("{kind}, shop price {}, free wallet {coins}", purchase.price);
+    crate::brain_gear::file_step(job, life, Some(&purchase.item), crate::brain_gear::goal_style(life), &why);
+    true
 }
 
 #[cfg(test)]

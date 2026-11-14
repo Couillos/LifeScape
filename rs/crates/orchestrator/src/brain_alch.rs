@@ -99,7 +99,8 @@ pub(crate) fn alch_stock(live: &Value, account: &str, keep: &[String]) -> Vec<(S
 }
 
 /// What the bot keeps out of alchemy: its plan's inputs and products,
-/// its gear (best per slot and better), its graph's obtains.
+/// its gear (best per slot and better), its graph's obtains, its tools
+/// (the permanent kit and its work's, `brain_tools::kept_tools`).
 pub(crate) fn kept(life: &Life, live: &Value) -> Vec<String> {
     let mut keep = crate::brain_sales::working_keep(life, &[]);
     let levels_owned = crate::brain_market::live_levels(live);
@@ -108,6 +109,7 @@ pub(crate) fn kept(life: &Life, live: &Value) -> Vec<String> {
     let quests: Vec<&str> = quests.iter().map(String::as_str).collect();
     let owned: Vec<String> = stacks_of(live).into_iter().map(|(name, _)| name).collect();
     keep.extend(lifescape_planner::gear_plan::kept_gear(&levels, &quests, &owned));
+    keep.extend(crate::brain_tools::kept_tools(life, &stacks_of(live), &levels));
     keep
 }
 

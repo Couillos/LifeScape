@@ -19,10 +19,11 @@
 //! A resting wish bid keeps its walk (`market_reprice::keep_bid`): only
 //! its ceiling moves.
 //!
-//! Since 2026-11-14 a tool only an NPC shop sells (every upgrade pickaxe:
-//! Nurmof, D-A) is never bid (`biddable`): `brain_tool_shop` files a
-//! `shop:buy` gear step for it and cancels the old bids. Smithable axes
-//! keep their market bid.
+//! Since 2026-11-14 a tool an NPC shop sells (every pickaxe: Nurmof,
+//! D-A; Bob's axes up to steel: the permanent kit's D-A exception) is
+//! never bid (`biddable`): `brain_tool_shop` files a gear step for it (a
+//! covered ask first for an axe, else the shop) and cancels the old
+//! bids. Smithed-only axes (mithril and up) keep their market bid.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -148,9 +149,9 @@ pub fn wish_ceiling(wish: &Wish, coins: i64, gear_wishes: usize) -> i64 {
     }
 }
 
-/// A wish the market may fill: tradeable, and not a tool only an NPC
-/// shop sells (user 2026-11-14: 185 pickaxe bids, never filled; those
-/// are bought at the shop, `brain_tool_shop`).
+/// A wish the market may fill: tradeable, and not a tool an NPC shop
+/// sells (user 2026-11-14: 185 pickaxe bids, never filled; those are the
+/// kit's steps, `brain_tool_shop`).
 pub fn biddable(item: &str, tradeable: impl Fn(&str) -> bool) -> bool {
     tradeable(item) && !crate::brain_tool_shop::merchant_tool(item)
 }
@@ -220,16 +221,17 @@ mod tests {
         assert!(wishes(Style::Melee, &levels, &geared, &["pickaxe", "axe"]).is_empty(), "owning the set ends the wishes");
     }
 
-    /// User 2026-11-14: pickaxes (shop only) never rest as market bids;
-    /// smithable axes still do.
+    /// User 2026-11-14: pickaxes (shop only) and Bob's axes (the kit's
+    /// steps) never rest as market bids; smithed-only axes still do.
     #[test]
     fn merchant_tools_are_never_bid() {
         use super::biddable;
         let any = |_: &str| true;
         assert!(!biddable("mithril_pickaxe", any));
         assert!(!biddable("steel_pickaxe", any));
-        assert!(biddable("steel_axe", any));
-        assert!(!biddable("steel_axe", |_: &str| false), "untradeable never bids");
+        assert!(!biddable("steel_axe", any), "Bob sells it: a kit step");
+        assert!(biddable("mithril_axe", any), "smithed only: the market");
+        assert!(!biddable("mithril_axe", |_: &str| false), "untradeable never bids");
     }
 
     /// Wish ceilings are wallet shares: they rise as coins come in.

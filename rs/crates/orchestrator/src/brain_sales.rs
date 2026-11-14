@@ -357,7 +357,7 @@ fn withdraw_tool_listings(service: &crate::market_service::MarketService, accoun
     for (order, name) in listings {
         let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(account)), ("order", Value::Int(*order))]));
         if reply.get("ok").as_bool() == Some(true) {
-            crate::logln!("brain {account}: listing {order} of {name} cancelled (its last copy of a tool it works with)");
+            crate::logln!("brain {account}: listing {order} of {name} cancelled (its last copy of a kit or work tool)");
         } else {
             crate::logln!("brain {account}: listing {order} of {name} not cancelled: {:?}", reply.get("error").as_str());
             kept.push(*order);
@@ -391,7 +391,8 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     // A caster keeps what alchs for more than it sells (2026-11-14).
     wished.extend(crate::brain_alch::alch_keep(life, &live));
     let stacks = crate::brain_plan::live_stacks(job);
-    let tools = crate::brain_tools::kept_tools(life, &stacks);
+    let levels = crate::brain_tools::live_levels(&live);
+    let tools = crate::brain_tools::kept_tools(life, &stacks, &crate::brain_tools::level_refs(&levels));
     wished.extend(tools.iter().cloned());
     let whole = working_keep(life, &wished);
     let keep = crate::brain_plan::merge_keep(whole.clone(), gear.clone());

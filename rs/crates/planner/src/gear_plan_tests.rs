@@ -112,3 +112,32 @@ fn spare_copies_of_kept_gear_sell() {
     let spares = spare_gear_units(&stacks, &gear, &keep);
     assert_eq!(spares, vec![("bronze_med_helm".to_string(), 87)], "one helm stays, the lone axe stays, the kept staff stays whole");
 }
+
+/// User 2026-11-14 ("au moins 1 équipement de combat complet"): a thin
+/// budget never drops an EMPTY slot while an upgrade of an owned slot
+/// can give way. Equal prices: the old rule dropped the weapon (first
+/// slot) and kept the helm upgrade.
+#[test]
+fn empty_slots_come_before_upgrades() {
+    let owned = vec!["bronze_med_helm".to_string()];
+    let flat = |_: &str| 10;
+    let low = [("attack", 1), ("defence", 1), ("strength", 1)];
+    let all = plan_gear(Style::Melee, &low, &[], &owned, 1_000_000, &flat);
+    let helm = all.iter().find(|want| want.wearpos == lifescape_gamedata::gear::HEAD).expect("a helm upgrade at level 1");
+    let budget = 10 * (all.len() as i64 - 1);
+    let wants = plan_gear(Style::Melee, &low, &[], &owned, budget, &flat);
+    assert_eq!(wants.len(), all.len() - 1, "{wants:?}");
+    assert!(wants.iter().any(|want| want.wearpos == WEAPON), "the empty weapon slot stays: {wants:?}");
+    assert!(!wants.iter().any(|want| want.item == helm.item), "the helm upgrade gives way: {wants:?}");
+}
+
+/// An Iron plans only what it can obtain without the market (shop-only
+/// pieces, `plan_gear_from`'s filter).
+#[test]
+fn the_filter_bounds_the_candidates() {
+    use super::plan_gear_from;
+    let shop_only = |item: &str| lifescape_gamedata::obtain::merchant_route(item);
+    let wants = plan_gear_from(Style::Melee, &FIGHTER, &[], &[], 1_000_000, &alch_price, &shop_only);
+    assert!(!wants.is_empty(), "black pieces, a wooden shield...");
+    assert!(wants.iter().all(|want| shop_only(&want.item)), "{wants:?}");
+}

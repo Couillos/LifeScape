@@ -237,3 +237,27 @@ fn upgrade_pickaxes_come_from_nurmof_axes_from_players() {
     }
     assert_eq!(merchant_price("dragon_platebody"), None, "no F2P keeper stocks it");
 }
+
+/// User 2026-11-14 (permanent tool kit): Bob's Brilliant Axes sells the
+/// bronze, iron and steel axes; the kit buys them there when no player
+/// sells. Mithril and better are smithed only: no shop route. Graph
+/// obtains keep D-A (no merchant purchase of a producible axe).
+#[test]
+fn kit_axes_have_a_shop_route_up_to_steel() {
+    use super::{kit_axe, kit_shop_route, merchant_buy_allowed, merchant_price, shop_buy_allowed};
+    for axe in ["bronze_axe", "iron_axe", "steel_axe"] {
+        assert!(kit_shop_route(axe) && shop_buy_allowed(axe), "{axe}: Bob sells it");
+        assert!(!merchant_buy_allowed(axe), "{axe}: D-A unchanged for graph obtains");
+    }
+    // Bob sells at cost (16, 200); the Wilderness bandit camp for less.
+    assert!(merchant_price("bronze_axe").is_some_and(|price| price <= 16));
+    assert!(merchant_price("steel_axe").is_some_and(|price| price <= 200));
+    for axe in ["mithril_axe", "adamant_axe", "rune_axe", "black_axe"] {
+        assert!(!kit_shop_route(axe), "{axe}: no F2P shop, players only");
+    }
+    assert!(!kit_axe("bronze_battleaxe") && !kit_shop_route("bronze_battleaxe"));
+    for tool in ["hammer", "tinderbox", "bronze_pickaxe", "rune_pickaxe"] {
+        assert!(kit_shop_route(tool), "{tool}: merchant route");
+    }
+    assert!(!kit_shop_route("bronze_sword"), "not a kit tool");
+}

@@ -622,3 +622,45 @@ Décisions :
 Rejeté : entraîner 39 niveaux de combat pour une rune à 1 pièce ; attendre
 la fin du ban ; un remplissage générique sans attente parquée (non demandé :
 le détecteur rend visible tout autre cas).
+
+## 2026-11-14 — Trousse permanente et équipement complet (utilisateur)
+
+Décision utilisateur, pour TOUS les bots (non combattants compris ; Iron :
+sans marché) :
+- Un bot garde ses outils quand il change de but. La garde des ventes
+  (`brain_tools::kept_tools`) ajoute la trousse (`planner::tool_kit`) au
+  travail en cours : par famille la meilleure hache / pioche détenue (même
+  au-dessus du niveau) et la meilleure qui travaille à son niveau (pioche :
+  niveau de minage, `pickaxe_checker.rs2` ; hache : toute hache détenue,
+  `woodcutting_axe_checker` sans niveau en 2004), 1 marteau, 1 tinderbox.
+  Paliers inférieurs et copies en trop : surplus vendu. Même garde pour le
+  concierge de banque (`space:cleanup --keep`, avec l'équipement gardé) et
+  l'alchimie.
+- Trousse permanente : hache, pioche, marteau, tinderbox. Achat
+  (`tool_kit::kit_purchase`, passe `brain_tool_shop` de 60 s, banque
+  diffusée, aucun pas d'équipement ouvert, avant le plan d'équipement) :
+  d'abord la trousse de base (marteau, tinderbox, pioche, hache manquants),
+  le meilleur palier ≤ 25 % (`TOOL_SHARE_PCT`) du portefeuille libre, sinon
+  le palier le moins cher ≤ 50 % (`KIT_BASE_SHARE_PCT`) ; puis les
+  améliorations : meilleur palier au-dessus du palier qui travaille, ≤ 25 %.
+  Palier hache : niveau de bûcheronnage (règle utilisateur) ; le niveau
+  d'attaque ne compte que pour manier (le serveur coupe avec la hache dans
+  le sac). Prix : coût de l'objet (Bob, Nurmof ; magasins généraux 1 pièce).
+- Exception D-A (haches de la trousse, `obtain::kit_shop_route`) : Bob's
+  Brilliant Axes vend bronze, fer, acier. Le pas d'équipement d'une hache
+  porte `market:buy` puis `shop:buy` : un ask couvert d'abord, sinon la
+  boutique ; jamais une offre au repos que personne ne remplit. Les
+  obtentions du graphe gardent D-A (leur hache attend un forgeron). Mithril
+  et plus : marché seul (liste d'envies).
+- Équipement complet : le plan d'équipement (`gear_plan`) garde un
+  emplacement VIDE tant qu'une amélioration d'un emplacement déjà équipé peut
+  céder (budget court) ; jamais vendu (`kept_gear`). Iron : plan restreint
+  aux pièces de boutique (`plan_gear_from`, `merchant_route`), au prix
+  boutique, déposé en pas d'équipement.
+- Pas d'obtention d'équipement close par un autre membre de la famille :
+  un pas qui veut `bronze_pickaxe` ne se ferme pas sur une pioche de rune
+  au-dessus du niveau (`brain_launch`, `is_gear_obtain` → compte exact).
+Rejeté : offre marché à 1-2 pièces sur une hache de base ; achat du palier
+maximal sans budget ; garder tous les paliers (le surplus finance le reste).
+Non fait : ramassage des spawns au sol pour un bot à 0 pièce (la trousse
+attend qu'il gagne ses 2 à 32 premières pièces).
