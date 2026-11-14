@@ -175,6 +175,17 @@ d'attendre sur place (`run_load` → `reach_site` ; péage seul chemin sans
 achat en magasin dans les scripts (filet, canne, plumes, appât, pioche,
 hache, cisailles) : c'est la jambe d'obtention du brain.
 
+`--want` d'un récolteur (2026-11-14, paul_rhodes n60 : `obtain oak_logs
+308` lancé `woodcut --site …` sans ses bûches par un binaire d'avant le
+contrat, 3 649 bûches de saule en 25 runs finis au budget) : l'objet
+compté EST la cible. `woodcut --want oak_logs N` sans positionnel coupe
+du chêne ; un positionnel qui nomme un autre objet (`woodcut willow_logs
+--want oak_logs N`) est un `Usage` (ordre croisé, le but ne bougerait
+jamais). Le but s'arrête aussi en cours de charge : `CycleState::want_goal`
+→ `LoadCfg::until`, `run_load` rend la charge finie dès que sac + banque
+connue atteignent base + N (comme un sac plein), le script la banque et
+le cycle s'arrête, plus un sac entier au-delà de N.
+
 Postes et combat : niveau manquant = `blocked{level:...}` (plus de
 Usage), Rune Mysteries = `blocked{quest:runemysteries}`, le `--site` du
 brain choisit le poste (`kit::produce`), `pottery <produit>` (pot, plat

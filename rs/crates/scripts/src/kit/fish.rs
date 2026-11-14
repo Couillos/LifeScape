@@ -346,18 +346,20 @@ pub(crate) fn structurally_dry(bot: &mut Bot, level: i64, bank: &knowledge::bank
 }
 
 /// One load: `target` is the brain's fish tier (only tier fished), `None`
-/// on manual runs (best geared tier by level).
+/// on manual runs (best geared tier by level); `until` (the run's
+/// `--want` goal) ends it before the pack fills.
 pub fn fish_load(
     bot: &mut Bot,
     level: i64,
     bank: &mut knowledge::banks::Bank,
     coins: u16,
     target: Option<&knowledge::fishing::FishTier>,
+    until: Option<crate::kit::cycle::WantGoal>,
 ) -> Result<(bool, i64), ScriptError> {
     let mut ops = FishOps { bank, coins, bait_ban: 0, short_bait: None, level, target: target.cloned() };
     let ok = crate::kit::load::run_load(
         bot,
-        &crate::kit::load::LoadCfg::gather(),
+        &crate::kit::load::LoadCfg::gather().until(until),
         &mut crate::kit::load::LoopState::fresh(bot),
         &mut ops,
     )?;

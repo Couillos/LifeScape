@@ -60,7 +60,8 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut toolless = 0u32;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
-        let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level)?;
+        let until = state.want_goal(step_bot, &spec);
+        let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
         if !ok {
             return Err(ScriptError::Failed(format!("mine failed at {:?}", step_bot.position())));
