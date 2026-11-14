@@ -196,3 +196,24 @@ fn moulds_and_talismans_are_tools() {
     let sapphire = ways("sapphire").into_iter().find(|way| way.kind == WayKind::Make).expect("gem cutting");
     assert_eq!(sapphire.tools, vec!["chisel".to_string()]);
 }
+
+/// Furnace and anvil sites the planner may pick: Lumbridge, Al Kharid,
+/// Falador (+ the Wilderness furnace, gated by danger) and the plain
+/// anvils; never Varrock for a furnace (it has none: live "no produce
+/// station furnace1/furnace2 near (3186,3436)"), never Tutorial Island's
+/// mine (3081,9496), never Doric's quest-gated anvils (2950,3451).
+#[test]
+fn station_sites_are_reachable_f2p_posts() {
+    let smelt = ways("steel_bar").into_iter().find(|way| way.detail.starts_with("smelt ")).expect("steel smelts");
+    let near = |sites: &[(i64, i64, i64)], x: i64, z: i64| sites.iter().any(|site| (site.0 - x).abs() <= 2 && (site.1 - z).abs() <= 2);
+    for (x, z, town) in [(3226, 3255, "Lumbridge"), (3272, 3185, "Al Kharid"), (2975, 3368, "Falador")] {
+        assert!(near(&smelt.sites, x, z), "{town} furnace offered: {:?}", smelt.sites);
+    }
+    assert!(!smelt.sites.iter().any(|site| (3150..=3290).contains(&site.0) && (3380..=3500).contains(&site.1)), "no furnace in Varrock: {:?}", smelt.sites);
+    assert!(!smelt.sites.iter().any(|site| site.1 > 9000 && (3072..=3118).contains(&site.0)), "no Tutorial Island furnace: {:?}", smelt.sites);
+    let smith = ways("bronze_dagger").into_iter().find(|way| way.detail.starts_with("smith ")).expect("dagger smiths");
+    assert!(near(&smith.sites, 3188, 3421) && near(&smith.sites, 3248, 3404), "Varrock anvils offered: {:?}", smith.sites);
+    assert!(!near(&smith.sites, 2950, 3451), "Doric's anvils need his quest: {:?}", smith.sites);
+    assert!(!smith.sites.iter().any(|site| site.1 > 9000 && (3072..=3118).contains(&site.0)), "no Tutorial Island anvil: {:?}", smith.sites);
+    assert!(super::station_open("anvil", 3188, 3421) && !super::station_open("doric_anvil", 2950, 3451) && !super::station_open("furnace2", 3081, 9496));
+}

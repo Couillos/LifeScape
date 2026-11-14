@@ -1229,8 +1229,9 @@ impl Bot {
         loop {
             match self.toll_pick()? {
                 Some(picked) => {
+                    let picked_from = self.chat_options();
                     self.chat_choose(&picked)?;
-                    self.drain_toll_pick()?;
+                    self.drain_toll_pick(&picked_from)?;
                     return Ok(true);
                 }
                 None => {
@@ -1261,8 +1262,16 @@ impl Bot {
     /// options means continue; a closed dialog or a new choice ends
     /// the drain and `finish_door` decides. Bounded like the pre-pick
     /// wait, so a stuck dialog fails loud instead of wedging the leg.
-    fn drain_toll_pick(&mut self) -> Result<()> {
+    fn drain_toll_pick(&mut self, picked_from: &[(u16, String)]) -> Result<()> {
         let watched = self.world.ticks + TOLL_POST_PICK_WAIT;
+        // The pick's answer lands a frame later: until then the spent
+        // choice is still on screen and read as "a new choice", which
+        // ended the drain before the chatplayer continue (live
+        // 2026-11-14, admin at the Al Kharid gate: "Yes, ok." picked,
+        // no continue, "door did not open" four times).
+        while self.world.ticks < watched && !self.toll_pick_answered(picked_from) {
+            self.pump(1)?;
+        }
         while self.world.ticks < watched {
             if !self.toll_continue_due() {
                 return Ok(());
@@ -1271,6 +1280,12 @@ impl Bot {
             self.pump(1)?;
         }
         Ok(())
+    }
+
+    /// True once the server answered the toll pick: the dialog closed or
+    /// shows anything but the choice the pick was made from. Pure.
+    fn toll_pick_answered(&self, picked_from: &[(u16, String)]) -> bool {
+        self.world.modal.is_none() || self.chat_options() != picked_from
     }
 
     /// True while a plain chat page is up with no choice to pick: the
@@ -2094,6 +2109,26 @@ mod tests {
         assert!(!bot.toll_continue_due(), "main window is never continued");
         bot.world.modal = None;
         assert!(!bot.toll_continue_due(), "closed dialog ends the drain");
+    }
+
+    /// The pick is answered a frame later: the spent 3-way choice still
+    /// on screen is not an answer (the drain waits), the chatplayer page
+    /// or a closed dialog is.
+    #[test]
+    fn toll_pick_waits_for_the_server_answer() {
+        let mut bot = offline_bot(3267, 3227);
+        bot.world.modal = Some(crate::world::Modal { layer: "chat".to_string(), interface_id: 2469 });
+        bot.world.texts.insert(2471, "No thank you, I'll walk around.".to_string());
+        bot.world.texts.insert(2473, "Yes, ok.".to_string());
+        let picked_from = bot.chat_options();
+        assert!(!picked_from.is_empty(), "the choice is up");
+        assert!(!bot.toll_pick_answered(&picked_from), "the spent choice is no answer yet");
+        bot.world.modal = Some(crate::world::Modal { layer: "chat".to_string(), interface_id: 968 });
+        bot.world.texts.clear();
+        bot.world.texts.insert(2, "Yes, ok.".to_string());
+        assert!(bot.toll_pick_answered(&picked_from), "the chatplayer page answers");
+        bot.world.modal = None;
+        assert!(bot.toll_pick_answered(&picked_from), "a closed dialog answers");
     }
 
     /// R9 island trap (b7e2ggbp): a zero-step plan adjusted on place

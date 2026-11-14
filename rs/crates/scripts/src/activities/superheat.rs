@@ -12,7 +12,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::cycle::exit_code;
-use crate::kit::magic::{cast_on_held, wield_staff_for};
+use crate::kit::magic::{wield_staff_for, CastPacer};
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::spell_load::{run_casts, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
@@ -21,8 +21,6 @@ use crate::{ScriptError, ScriptResult};
 pub const MAGIC_STAT: u8 = 6;
 pub const SUPERHEAT_SPELL: &str = "superheat_item";
 pub const SUPERHEAT_LEVEL: i64 = 43;
-/// Ticks to wait out one cast (server delays plus the smelt tick).
-pub const CAST_TICKS: u64 = 40;
 
 /// F2P smelt recipe eating `ore` (members excluded).
 pub fn bar_for_ore(ore: &str) -> Option<knowledge::recipes::Recipe> {
@@ -82,7 +80,16 @@ pub fn run_superheat(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // fire runes, the bars are banked between loads.
     let load = SpellLoad::new(SUPERHEAT_SPELL, runes, superheat_inputs(&ore_name, &bar_name));
     wield_staff_for(bot, &load.runes)?;
-    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| superheat_one(cast_bot, ore, bar))?;
+    let mut pacer = CastPacer::new(SUPERHEAT_SPELL);
+    // A dry pack goes to the bank next: the click waits out the cast.
+    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| {
+        superheat_one(cast_bot, &mut pacer, ore, bar)?;
+        if load.pack_casts(cast_bot) == 0 {
+            pacer.settle(cast_bot)?;
+        }
+        Ok(())
+    })?;
+    pacer.settle(bot)?;
     bot.log(&format!("ok {SUPERHEAT_SPELL} x{done} on {ore_name} for {bar_name}"));
     stop.map_or(Ok(0), exit_code)
 }
@@ -95,19 +102,12 @@ pub fn superheat_inputs(ore: &str, bar: &str) -> Vec<(String, u32)> {
     std::iter::once((ore.to_string(), 1)).chain(others.map(|(name, count)| (name, u32::try_from(count).unwrap_or(1)))).collect()
 }
 
-/// One cast: the ore leaves (or the bar lands) within the budget.
-fn superheat_one(bot: &mut Bot, ore: u16, bar: u16) -> Result<(), ScriptError> {
+/// One cast: the ore leaves (or the bar lands), paced by the server delay
+/// of the previous cast (`superheat.rs2` `p_delay(1)`).
+fn superheat_one(bot: &mut Bot, pacer: &mut CastPacer, ore: u16, bar: u16) -> Result<(), ScriptError> {
     let had_ore = pack_total(bot, ore);
     let had_bar = pack_total(bot, bar);
-    cast_on_held(bot, SUPERHEAT_SPELL, ore)?;
-    let target = bot.world.ticks + CAST_TICKS;
-    while bot.world.ticks < target {
-        bot.pump(2)?;
-        if pack_total(bot, ore) < had_ore || pack_total(bot, bar) > had_bar {
-            return Ok(());
-        }
-    }
-    Err(ScriptError::Failed(format!("{SUPERHEAT_SPELL} never landed at {:?}", bot.position())))
+    pacer.cast_held(bot, ore, |seen| pack_total(seen, ore) < had_ore || pack_total(seen, bar) > had_bar)
 }
 
 #[cfg(test)]

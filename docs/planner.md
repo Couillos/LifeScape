@@ -694,7 +694,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `bake:bread` | `bake_bread` | — | `--want`, `--site` |
 | `bake:<repas>` (`redberry_pie`, `meat_pie`, `stew`, `apple_pie`, `plain_pizza`, `cake`) | `cook_meals` | `<repas>` | `--want`, `--site`, `--wear` ; intrants en banque = composants de base (farine, eau, plat à tarte, baies…) |
 | `smelt:<barre>` | `smelt` | `<barre>` | `--level smithing N`, `--want`, `--site` (fourneau), `toll` |
-| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume) |
+| `smith:<produit>` | `smith` | `<produit>` | `--want`, `--site` (enclume ; jamais celles de Doric ni de l'île du tutoriel) |
 | `superheat:<barre>` | `superheat` | `<barre>` (le script lance sur son minerai, charbon porté) | `--want`, `--level magic N` (minerais, charbon, runes de feu + nature retirés du sac puis de la banque ; bâton de feu porté, au sac ou en banque accepté) |
 | `jewelry:<produit>` | `smelt_jewelry` | `<produit>` (nom d'objet : `unstrung_gold_amulet`, `nostringstar`…) | `--level crafting N`, `--want`, `--site` (fourneau) ; moule = outil porté |
 | `string:<non_enfilé>` | `stringing` | `<non_enfilé>` | `--want` |
@@ -716,7 +716,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
-| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) |
+| `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau) | — ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) ; le script lit aussi `--spell lowlvl_alchemy\|highlvl_alchemy`, `--want`, `--level magic N` ; cible retirée en billets, pièces banquées en fin de run |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |

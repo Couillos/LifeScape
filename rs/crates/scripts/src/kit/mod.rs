@@ -17,11 +17,13 @@
 //! (A-on-B transformation), `withdraw` (bank withdrawals, walking to a
 //! far bank for known banked items), `spell_load` (spell casts stocked
 //! from pack + known bank, staff counted), `fireline` (legal fire lines),
-//! `uniform` (guild uniform worn before the door, `--wear`).
+//! `uniform` (guild uniform worn before the door, `--wear`), `anvil`
+//! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained).
 
 #![forbid(unsafe_code)]
 
 pub mod ammo;
+pub mod anvil;
 pub mod bank;
 pub mod bans;
 pub mod chain_spec;

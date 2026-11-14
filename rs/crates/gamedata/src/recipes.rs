@@ -132,4 +132,55 @@ mod tests {
         assert!(before_bar.contains("if ($product = iron_bar)") && before_bar.contains("randominc(1) = 1"), "iron 50 % roll moved in the server script");
         assert_eq!(before_bar.matches("randominc").count(), 1, "a new failing bar appeared in the server script");
     }
+
+    /// Sections `[name]` of a server config file as (name, key → values).
+    fn config_sections(text: &str) -> Vec<(String, Vec<(String, String)>)> {
+        let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        for line in text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with("//")) {
+            if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+                sections.push((name.to_string(), Vec::new()));
+            } else if let (Some((key, value)), Some(section)) = (line.split_once('='), sections.last_mut()) {
+                section.1.push((key.to_string(), value.to_string()));
+            }
+        }
+        sections
+    }
+
+    /// Every anvil row of the dump is the server's `smithing.dbrow` row:
+    /// level, bars eaten, units made (nails 2, arrowheads 15) and XP =
+    /// `bar_amount × xpperbar` tenths (`smithing.rs2` `smithing_anvil`;
+    /// the dump said 0 for all 129 rows until 2026-11-14).
+    #[test]
+    fn smith_rows_match_the_server_tables() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let configs = manifest
+            .ancestors()
+            .map(|dir| dir.join("lostcity/content/scripts/skill_smithing/configs/smithing"))
+            .find(|candidate| candidate.is_dir())
+            .expect("../lostcity checkout next to LifeScape");
+        let read = |file: &str| std::fs::read_to_string(configs.join(file)).expect("smithing config readable");
+        let mut xp_per_bar: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        for (_, params) in config_sections(&read("smithing.struct")) {
+            let param = |key: &str| params.iter().filter_map(|(_, value)| value.split_once(',')).find(|(name, _)| *name == key).map(|(_, value)| value.to_string());
+            if let (Some(bar), Some(xp)) = (param("namedobj"), param("xpperbar")) {
+                xp_per_bar.insert(bar, xp.parse().expect("xpperbar int"));
+            }
+        }
+        let rows = config_sections(&read("smithing.dbrow"));
+        let dumped = all_recipes(Some("smith"));
+        assert_eq!(dumped.len(), rows.len(), "one dump row per server row");
+        for (name, data) in rows {
+            let field = |key: &str| data.iter().filter_map(|(_, value)| value.split_once(',')).find(|(column, _)| *column == key).map(|(_, value)| value.to_string()).expect("dbrow column");
+            let number = |key: &str| field(key).parse::<i64>().expect("dbrow int");
+            let row = dumped.iter().find(|recipe| recipe.source == name).unwrap_or_else(|| panic!("{name} dumped"));
+            let bar = field("bar");
+            assert_eq!(row.level, number("levelrequired"), "{name} level");
+            assert_eq!(row.inputs, vec![(bar.clone(), number("bar_amount"))], "{name} bars");
+            assert_eq!(row.outputs, vec![(field("product"), number("product_amount"))], "{name} units");
+            assert_eq!(row.xp, number("bar_amount") * xp_per_bar[&bar], "{name} xp");
+        }
+        let platebody = making("rune_platebody", Some("smith"));
+        assert_eq!((platebody[0].level, platebody[0].xp), (99, 3750), "5 runite bars at 75 XP");
+        assert_eq!(making("nails", Some("smith"))[0].outputs, vec![("nails".to_string(), 2)]);
+    }
 }
