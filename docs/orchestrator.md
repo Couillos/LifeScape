@@ -155,3 +155,12 @@ voir `docs/decisions.md` ; scan `run/failures` toutes les 30 s
 incrémental : seuls les noms jamais vus sont stat'és, passe complète
 horaire pour les réécritures en place, aucun dossier supprimé), lignes construites dans `errors_model.rs`,
 maths dans `errors_aggregate.rs`. Le spectateur suit `/#<compte>`.
+Boucles muettes (2026-11-14, `report_progress.rs`) : chaque rapport porte
+`bank_opens` (compteur SDK `Bot::bank_opens`, delta du run) ; un rapport
+`no_output` (fenêtre ≥ 1000 ticks au budget, 0 XP, 0 objet) ou
+`bank_churn` (≥ 40 banques, moins d'unités que de banques, 0 XP) écrit une
+ligne `error_events` de type `no_progress` (source `task`, signature
+`no progress <motif>: <activité>`, détail ticks/banques/objets/XP) et le
+cerveau compte l'échec du nœud. Les échecs `failed: no progress …` de la
+garde du kit et les lignes `brain <c>: nX no progress: …` (fenêtres sans
+progrès vers le nœud) sont rangés sous le même type.

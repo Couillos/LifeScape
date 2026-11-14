@@ -10,7 +10,7 @@
 
 use lifescape_sdk::Bot;
 
-use crate::kit::cycle::{resolve_keep, run, StepControl};
+use crate::kit::cycle::{resolve_keep, run};
 use crate::kit::bank::{bank_trip, nearest_bank};
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
@@ -72,16 +72,14 @@ pub fn run_fishing(bot: &mut Bot, args: &[String]) -> ScriptResult {
         // every trip between it and the water).
         if spec.no_bank {
             let dropped = drop_catch(step_bot, &task_keep)?;
-            step_bot.log(&format!("ok load {} dropped ({dropped} fish, fishing={level})", state.units() + 1));
-            return Ok(StepControl::UnitDone);
+            return Ok(state.load_done(step_bot, &format!("dropped ({dropped} fish, fishing={level})")));
         }
         // Gear (tools and bait) stays in the pack across bank trips.
         let mut keep: Vec<u16> = crate::kit::tools::FISH_SPEC.known_ids(step_bot).into_iter().collect();
         keep.extend(["feather", "fishing_bait"].iter().filter_map(|bait| obj_id(step_bot, bait).ok()));
         keep.extend(task_keep.iter().copied());
         bank_trip(step_bot, &bank, &keep, 0)?;
-        step_bot.log(&format!("ok load {} banked (fishing={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("banked (fishing={level})")))
     })
 }
 

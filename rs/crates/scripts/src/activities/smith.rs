@@ -128,8 +128,7 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let made = pack_total(step_bot, product).saturating_sub(made_before);
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &keep_smith, 0)?;
-        step_bot.log(&format!("ok load {} smithed {made} {product_name} (smithing={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("smithed {made} {product_name} (smithing={level})")))
     })
 }
 

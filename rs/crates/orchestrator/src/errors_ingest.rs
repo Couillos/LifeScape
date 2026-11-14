@@ -47,6 +47,8 @@ const FRESH_DOSSIER_SECS: i64 = 90;
 enum Intake {
     Event { account: String, frame: Value, clock: i64 },
     Report { account: String, report: Value, position: Option<(i64, i64, i64)>, clock: i64 },
+    /// A report the silent-loop detector flags (`report_progress`).
+    Idle { account: String, report: Value, position: Option<(i64, i64, i64)>, clock: i64 },
     Brain { line: String, clock: i64 },
 }
 
@@ -84,6 +86,12 @@ pub fn observe_event(account: &str, frame: &Value) {
 /// message), else the live one. Call before locking the job.
 pub fn observe_report(account: &str, report: &Value, job: &Job) {
     let stop = report.get("stop").as_str().unwrap_or("");
+    // A silent loop (window without output, bank churn) is a row of its
+    // own, never a quiet `budget_exhausted` (2026-11-14, pottery loops).
+    if crate::report_progress::assess(report).is_some() {
+        let position = job.inner.try_lock().ok().and_then(|inner| inner.live.as_ref().and_then(|live| errors_model::position_of(live.get("position"))));
+        send(Intake::Idle { account: account.to_string(), report: report.clone(), position, clock: now_clock() });
+    }
     if stop != "failed" && stop != "blocked" {
         return;
     }
@@ -110,7 +118,8 @@ pub fn observe_log_line(line: &str) {
         || line.contains(": graph stuck")
         || line.contains(": goal stuck")
         || line.contains(" banned ")
-        || line.contains(": revive cap reached");
+        || line.contains(": revive cap reached")
+        || line.contains(" no progress: ");
     if wanted {
         send(Intake::Brain { line: line.to_string(), clock: now_clock() });
     }
@@ -253,6 +262,11 @@ fn flush(store: &Store, intakes: &[Intake], orch: &Weak<Orchestrator>) -> Result
                     }
                     row.position = position;
                     row.zone = position.map(|(pos_x, pos_z, _)| zone_of(pos_x, pos_z)).unwrap_or_default();
+                    batch.push(row);
+                }
+            }
+            Intake::Idle { account, report, position, clock } => {
+                if let Some(row) = errors_model::from_idle_report(account, report, *position, *clock, zone_of) {
                     batch.push(row);
                 }
             }

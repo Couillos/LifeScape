@@ -85,8 +85,7 @@ pub fn run_firemaking(bot: &mut Bot, args: &[String]) -> ScriptResult {
         };
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &keep_log, 0)?;
-        step_bot.log(&format!("ok load {} lit {lit} {log_name} (firemaking={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("lit {lit} {log_name} (firemaking={level})")))
     });
     outcome
 }

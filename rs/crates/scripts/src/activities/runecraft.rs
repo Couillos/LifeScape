@@ -148,8 +148,7 @@ pub fn run_runecraft(bot: &mut Bot, args: &[String]) -> ScriptResult {
         };
         bank = nearest_bank(step_bot)?;
         bank_trip(step_bot, &bank, &keep_stock, 0)?;
-        step_bot.log(&format!("ok load {} bound {made} {rune_name} ({prefix}={level})", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, &format!("bound {made} {rune_name} ({prefix}={level})")))
     });
     outcome
 }

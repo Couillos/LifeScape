@@ -714,6 +714,7 @@ impl Bot {
                 }
             }
             if self.click_bank(x, z, loc_id, timeout)? {
+                self.bank_opens = self.bank_opens.saturating_add(1);
                 return Ok(true);
             }
             refused.push(format!("({},{}) click refused", stand.0, stand.1));

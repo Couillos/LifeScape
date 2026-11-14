@@ -372,6 +372,9 @@ pub struct CycleState {
     units: u32,
     /// Held count of the `--want` item at start (pack + known bank).
     want_base: Option<u32>,
+    /// Silent-loop guard (`kit::progress`), observed after every step of
+    /// `run`; `load_done` reads it to tell an `ok load` from an empty one.
+    progress: crate::kit::progress::ProgressGuard,
 }
 
 impl CycleState {
@@ -382,7 +385,19 @@ impl CycleState {
             start_xp: bot.world.stats.clone(),
             units: 0,
             want_base: None,
+            progress: crate::kit::progress::ProgressGuard::start("run", &crate::kit::progress::mark(bot)),
         }
+    }
+
+    /// End of one load: logs `ok load N <what>` only when the load
+    /// produced (XP, or an object above its high mark since the last
+    /// progress: a deposit or a withdrawal moves objects, never makes
+    /// them), else `empty load N <what>` — the guard fails the run on
+    /// the third empty load in a row. Returns `UnitDone`.
+    pub fn load_done(&self, bot: &Bot, what: &str) -> StepControl {
+        let verdict = if self.progress.progressed(&crate::kit::progress::mark(bot)) { "ok load" } else { "empty load" };
+        bot.log(&format!("{verdict} {} {what}", self.units + 1));
+        StepControl::UnitDone
     }
 
     pub fn note_unit(&mut self) {
@@ -524,15 +539,23 @@ pub fn run(bot: &mut Bot, spec: &TaskSpec, mut step: impl FnMut(&mut Bot, &mut C
     crate::kit::uniform::wear_uniform(bot, &spec.wear)?;
     let mut state = CycleState::start(bot);
     state.note_want_base(bot, spec);
+    // No load loop runs silent: a run of steps that produce nothing (no
+    // XP, no object above its high mark, bank churn) fails typed
+    // `no progress: …` instead of looping to the budget (`kit::progress`).
+    state.progress = crate::kit::progress::ProgressGuard::start(spec.activity, &crate::kit::progress::mark(bot));
     loop {
         if let Some(stop) = poll_stop(bot, &state, spec) {
             return exit_code(stop);
         }
-        match step(bot, &mut state)? {
-            StepControl::Continue => {}
-            StepControl::UnitDone => state.note_unit(),
+        let unit = match step(bot, &mut state)? {
+            StepControl::Continue => false,
+            StepControl::UnitDone => {
+                state.note_unit();
+                true
+            }
             StepControl::GoalReached => return Ok(0),
-        }
+        };
+        state.progress.observe(&crate::kit::progress::mark(bot), unit)?;
     }
 }
 
@@ -666,12 +689,37 @@ mod tests {
         let mut bot = offline_bot();
         let spec = parse_cli("woodcut", &["3".to_string()]).expect("count parses");
         let mut calls = 0u32;
-        let outcome = run(&mut bot, &spec, |_, _| {
+        let outcome = run(&mut bot, &spec, |step_bot, _| {
             calls += 1;
+            gain_xp(step_bot);
             Ok(StepControl::UnitDone)
         });
         assert_eq!(outcome.unwrap(), 0);
         assert_eq!(calls, 3, "one unit per load, no more");
+    }
+
+    /// One load's worth of woodcutting XP (a producing step).
+    fn gain_xp(bot: &mut Bot) {
+        let (level, xp) = bot.world.stats.get(&8).copied().unwrap_or((1, 0));
+        bot.world.stats.insert(8, (level, xp + 250));
+    }
+
+    /// Live 2026-11-14 (pottery, ~1400 bank opens in 30 min): loads that
+    /// produce nothing never run to the budget in silence. Three empty
+    /// loads in a row fail typed `no progress: …`.
+    #[test]
+    fn run_fails_loud_on_loads_without_output() {
+        let mut bot = offline_bot();
+        let spec = parse_cli("pottery", &["--budget-max".to_string(), "6000".to_string()]).expect("budget parses");
+        let mut calls = 0u32;
+        let outcome = run(&mut bot, &spec, |step_bot, _| {
+            calls += 1;
+            step_bot.world.ticks += 65;
+            Ok(StepControl::UnitDone)
+        });
+        let error = outcome.expect_err("silent loop fails");
+        assert!(error.to_string().contains("no progress: pottery 3 loads in a row produced nothing"), "{error}");
+        assert_eq!(calls, 3);
     }
 
     /// Explicit goal from the step ends the run at once (quest done).
@@ -692,6 +740,7 @@ mod tests {
         let outcome = run(&mut bot, &spec, |step_bot, _| {
             calls += 1;
             step_bot.world.ticks += 2000;
+            gain_xp(step_bot);
             Ok(StepControl::Continue)
         });
         assert_eq!(outcome.unwrap(), BUDGET_EXIT);
@@ -709,6 +758,7 @@ mod tests {
         let outcome = run(&mut bot, &spec, |step_bot, _| {
             calls += 1;
             step_bot.world.ticks += 2000;
+            gain_xp(step_bot);
             if calls >= 3 {
                 step_bot.world.modal = None;
             }

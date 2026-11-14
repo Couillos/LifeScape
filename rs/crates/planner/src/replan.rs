@@ -112,6 +112,17 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
             }
             return units.max(1);
         }
+        // A climb whose subject is made from intermediate stages (pie
+        // dishes from soft clay): the tranche's actions times the base
+        // components per unit (clay, water vessels capped).
+        if let (Some(actions), Some(subject)) = (crate::sizing::tranche_actions(&method, from, *level), method_subject(&method)) {
+            if let Some(per_unit) = nested_per_unit(subject, need, NESTED_STAGES) {
+                if let Some(cap) = refilled_vessels(node, need) {
+                    return actions.min(cap).max(1);
+                }
+                return ((actions as f64) * per_unit).ceil().max(1.0) as i64;
+            }
+        }
     }
     let (product, units) = match &node.kind {
         NodeKind::ObtainItems { item, count } => (item.clone(), Some((*count).max(1))),
@@ -146,6 +157,11 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
         }
         let Some((_, per_action)) = way.inputs.iter().find(|(input, _)| input == need) else { continue };
         let per_action = (*per_action).max(1);
+        if let Some(count) = units {
+            if let Some(cap) = refilled_vessels(node, need) {
+                return count.min(cap).max(1);
+            }
+        }
         return match units {
             // Inputs per unit made: an iron smelt fails half the time
             // (`Way::expected_out` 0.5), so a bar costs two ores.
@@ -159,7 +175,59 @@ pub fn need_count_from(node: &Node, need: &str, live: Option<u8>) -> i64 {
             }
         };
     }
+    // An input of an intermediate stage (clay and water of the soft clay
+    // a pie dish is shaped from): the scaled count, never one unit (live
+    // 2026-11-14, `obtain piedish_unfired 16` blocked on clay asked 1).
+    if let Some(count) = units {
+        if let Some(cap) = refilled_vessels(node, need) {
+            return count.min(cap).max(1);
+        }
+        if let Some(per_unit) = nested_per_unit(&product, need, NESTED_STAGES) {
+            return ((count as f64) * per_unit).ceil().max(1.0) as i64;
+        }
+    }
     1
+}
+
+/// Intermediate stages `nested_per_unit` looks through (pie dish ← soft
+/// clay ← clay: two).
+const NESTED_STAGES: u8 = 2;
+
+/// Water vessels a pottery run carries: the script refills the emptied
+/// jugs at the nearest fountain between mixes (`activities/pottery.rs`),
+/// so a handful serves any count.
+pub const POTTERY_VESSELS: i64 = 7;
+
+/// Vessel cap when `need` is a water vessel the node's method refills
+/// itself (pottery), `None` otherwise.
+fn refilled_vessels(node: &Node, need: &str) -> Option<i64> {
+    let method = node.method.as_deref().or_else(|| node.alternatives.first().map(|alt| alt.method.as_str()))?;
+    let water = matches!(need, "jug_water" | "bucket_water" | "bowl_water");
+    (water && method.starts_with("pottery:")).then_some(POTTERY_VESSELS)
+}
+
+/// Units of `need` one unit of `product` burns through up to `depth`
+/// intermediate production stages (inputs per action ÷ expected output
+/// at every stage). `None` when no production way leads to it.
+pub fn nested_per_unit(product: &str, need: &str, depth: u8) -> Option<f64> {
+    for way in lifescape_gamedata::obtain::ways(product) {
+        if !way.is_production() {
+            continue;
+        }
+        let out = if way.expected_out() > 0.0 { way.expected_out() } else { 1.0 };
+        for (input, per_action) in &way.inputs {
+            let per_unit = (*per_action).max(1) as f64 / out;
+            if input == need {
+                return Some(per_unit);
+            }
+            if depth > 0 && input != product {
+                if let Some(inner) = nested_per_unit(input, need, depth - 1) {
+                    return Some(per_unit * inner);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Apply one replan cause: returns fresh sub-task nodes to insert (e.g. an
@@ -236,6 +304,25 @@ pub fn replan_node_from(node: &mut Node, cause: &ReplanCause, missing: &[String]
 mod tests {
     use super::{ENGAGE_MAX, ENGAGE_MIN, ReplanCause, draw_engagement_ticks, needs_replan, replan_node};
     use crate::model::{Node, NodeKind, NodeStatus};
+
+    /// Live 2026-11-14 (harry_page n133, `obtain piedish_unfired 16`,
+    /// `pottery:piedish_unfired`): the script blocked on clay and the
+    /// sub-task asked ONE clay (the dish is shaped from soft clay, the
+    /// clay sits one stage deeper). The count scales through the soft
+    /// clay stage; the water vessels the script refills are capped.
+    #[test]
+    fn nested_inputs_scale_with_the_order() {
+        let mut node = Node::new("n133", NodeKind::ObtainItems { item: "piedish_unfired".to_string(), count: 16 }, Vec::new(), 16);
+        node.method = Some("pottery:piedish_unfired".to_string());
+        assert_eq!(super::need_count(&node, "clay"), 16, "one clay per soft clay per dish");
+        assert_eq!(super::need_count(&node, "softclay"), 16, "direct input unchanged");
+        assert_eq!(super::need_count(&node, "jug_water"), super::POTTERY_VESSELS, "refilled vessels, a handful");
+        assert_eq!(super::nested_per_unit("piedish", "clay", 2), Some(1.0), "dish ← unfired ← soft clay ← clay");
+        assert_eq!(super::nested_per_unit("piedish", "iron_ore", 2), None);
+        assert_eq!(super::need_count(&node, "bucket_water"), super::POTTERY_VESSELS, "the script blocks on buckets");
+        let water = crate::obtain_legs::obtain_alternatives("bucket_water", false);
+        assert!(water.iter().any(|alt| alt.method.starts_with("fill:")), "buckets are filled by the brain: {water:?}");
+    }
 
     #[test]
     fn engagement_draw_stays_in_bounds_and_replays() {

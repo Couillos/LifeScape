@@ -193,8 +193,7 @@ pub fn run_milk(bot: &mut Bot, args: &[String]) -> ScriptResult {
         if !ensure_buckets(step_bot, &bank, empty)? {
             return Err(ScriptError::Blocked { missing: vec![EMPTY.to_string()] });
         }
-        step_bot.log(&format!("ok load {} banked", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, "banked"))
     })
 }
 

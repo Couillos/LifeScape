@@ -103,8 +103,7 @@ pub fn run_fill_water(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             Err(error) => return Err(error),
         }
-        step_bot.log(&format!("ok load {} filled", state.units() + 1));
-        Ok(StepControl::UnitDone)
+        Ok(state.load_done(step_bot, "filled"))
     });
     outcome
 }

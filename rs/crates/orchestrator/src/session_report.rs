@@ -36,6 +36,8 @@ pub struct Holdings {
     pub tick: u64,
     pub pause_ticks: u64,
     pub seen_messages: usize,
+    /// Session bank-open counter (`Bot::bank_opens`) at the snapshot.
+    pub bank_opens: u64,
 }
 
 /// Split the live inventories into visible pack/worn plus the live bank
@@ -72,6 +74,7 @@ pub fn snapshot_holdings(bot: &Bot) -> Holdings {
         tick: bot.world.ticks,
         pause_ticks: bot.pause_ticks,
         seen_messages: bot.world.messages.len(),
+        bank_opens: bot.bank_opens,
     }
 }
 
@@ -125,6 +128,9 @@ pub struct TaskReport {
     pub levels_before: Vec<(u8, u8)>,
     pub levels_after: Vec<(u8, u8)>,
     pub error: Option<(String, String)>,
+    /// Bank interfaces opened during the run (silent-loop detector,
+    /// `report_progress`).
+    pub bank_opens: u64,
 }
 
 /// Run start snapshot: what the session needs to close the report at
@@ -384,6 +390,7 @@ pub fn build_report(
         items,
         levels_before: levels(before),
         levels_after: levels(after),
+        bank_opens: after.bank_opens.saturating_sub(before.bank_opens),
     }
 }
 
@@ -434,6 +441,7 @@ pub fn report_value(account: &str, report: &TaskReport) -> Value {
         ("missing", Value::Arr(report.missing.iter().map(|name| str_value(name)).collect())),
         ("ticks", Value::Int(report.ticks as i64)),
         ("market_pause_ticks", Value::Int(report.market_pause_ticks as i64)),
+        ("bank_opens", Value::Int(report.bank_opens as i64)),
         ("xp", Value::Arr(xp)),
         ("items", Value::Arr(items)),
         ("levels_before", levels(&report.levels_before)),
@@ -479,6 +487,7 @@ mod tests {
             tick,
             pause_ticks: 0,
             seen_messages: 0,
+            bank_opens: 0,
         }
     }
 
