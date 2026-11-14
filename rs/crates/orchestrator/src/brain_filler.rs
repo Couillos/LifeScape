@@ -13,7 +13,11 @@
 //! - with none, runs a FILLER: one short money window (`FILLER_TICKS`),
 //!   coin-dropping spots first (the wait is often a wallet short of a few
 //!   coins), steered off banned skills. Its node (`fill-<id>`) is not in
-//!   the graph: its report is ignored by the fold, nothing is counted.
+//!   the graph: the fold hands its report here (`fold_filler_report`),
+//!   nothing is counted on the graph, but a filler that failed or ended
+//!   without working (live 2026-11-14: `melee men` from the mill top,
+//!   goal_reached after 0 ticks, relaunched every 10 s for an hour) keeps
+//!   its skill out of the next fillers for `FILLER_RETRY_TICKS`.
 
 use std::sync::Arc;
 
@@ -26,6 +30,75 @@ use crate::jobs::Job;
 
 /// Ticks of one filler window (then the pass rechecks the waits).
 pub const FILLER_TICKS: u64 = 1500;
+/// A failed or empty filler keeps its skill out of the fillers this long.
+pub const FILLER_RETRY_TICKS: u64 = 500;
+/// History prefix of a filler launch (`filler:<method>`).
+const FILLER_LAUNCH_TAG: &str = "filler:";
+/// History prefix of a filler that failed (`filler_failed:<method>`).
+const FILLER_FAILED_TAG: &str = "filler_failed:";
+
+/// True for a filler node id (`fill-<parked id>`).
+pub(crate) fn is_filler_node(node_id: &str) -> bool {
+    node_id.starts_with("fill-")
+}
+
+/// What a filler report says: `Some(true)` it worked (ticks spent, no
+/// error, ended on its goal or budget), `Some(false)` it failed or ended
+/// at once without working, `None` an operator stop (neutral).
+pub(crate) fn filler_worked(report: &Value) -> Option<bool> {
+    let stop = report.get("stop").as_str().unwrap_or("");
+    if stop == "stopped" {
+        return None;
+    }
+    let ticks = report.get("ticks").as_i64().unwrap_or(0);
+    let errored = report.get("error").get("type").as_str().is_some();
+    Some(matches!(stop, "goal_reached" | "budget_exhausted") && ticks > 0 && !errored)
+}
+
+/// Fold one filler report into the history (never into the graph).
+/// Returns the log line.
+pub(crate) fn fold_filler_report(life: &mut Life, node_id: &str, report: &Value) -> String {
+    let method = life
+        .history
+        .iter()
+        .rev()
+        .filter(|entry| entry.node == node_id)
+        .find_map(|entry| entry.outcome.strip_prefix(FILLER_LAUNCH_TAG))
+        .unwrap_or("?")
+        .to_string();
+    let stop = report.get("stop").as_str().unwrap_or("?").to_string();
+    let ticks = report.get("ticks").as_i64().unwrap_or(0);
+    let error = report.get("error").get("message").as_str().unwrap_or("").to_string();
+    match filler_worked(report) {
+        Some(true) => {
+            push_history(life, node_id, "filler_done");
+            format!("filler {node_id} ({method}) worked: {stop} after {ticks} ticks")
+        }
+        Some(false) => {
+            push_history(life, node_id, &format!("{FILLER_FAILED_TAG}{method}"));
+            format!("filler {node_id} ({method}) failed: {stop} after {ticks} ticks {error}; its skill sits out the fillers for {FILLER_RETRY_TICKS} ticks")
+        }
+        None => format!("filler {node_id} ({method}) stopped by the operator"),
+    }
+}
+
+/// Skills of the fillers that failed within `FILLER_RETRY_TICKS`
+/// (`ticks_since` maps a history stamp to elapsed ticks).
+pub(crate) fn failed_filler_skills(life: &Life, ticks_since: &dyn Fn(i64) -> u64) -> Vec<String> {
+    let mut skills: Vec<String> = Vec::new();
+    for entry in life.history.iter().filter(|entry| is_filler_node(&entry.node)) {
+        let Some(method) = entry.outcome.strip_prefix(FILLER_FAILED_TAG) else { continue };
+        if ticks_since(entry.ended) >= FILLER_RETRY_TICKS {
+            continue;
+        }
+        if let Some(skill) = lifescape_planner::ambition_catalog::method_skill(method) {
+            if !skills.iter().any(|known| known == skill) {
+                skills.push(skill.to_string());
+            }
+        }
+    }
+    skills
+}
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0)
@@ -95,7 +168,14 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     });
     crate::brain_market::fill_ctx(&mut ctx, &node, live);
     lifescape_planner::resolve_ready(&mut node, &ctx);
-    let banned = lifescape_planner::banned_skills(&life.history, &&|stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp));
+    let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
+    let mut banned = lifescape_planner::banned_skills(&life.history, &ticks_since);
+    // A filler that just failed (or ended without working) sits out.
+    for skill in failed_filler_skills(life, &ticks_since) {
+        if !banned.contains(&skill) {
+            banned.push(skill);
+        }
+    }
     if let Err(reason) = lifescape_planner::steer_off_bans(&mut node, &ctx, &banned) {
         note_idle(life, &format!("{} awaiting its fill, no filler: {reason}", waiting.join(",")));
         return false;
@@ -120,7 +200,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         return false;
     }
     crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
-    push_history(life, &node.id, "filler");
+    push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{method}"));
     if let Err(error) = crate::brain::save_life(life) {
         crate::logln!("{error}");
     }

@@ -406,6 +406,12 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
     }
     let outcome: (String, Option<Value>, Option<Value>, String, Vec<String>) = (|| {
         let mut bot = shared.bot.lock().unwrap();
+        // The session's Bot outlives one run: a site is the run's own
+        // (`--site`), never the one an earlier run left behind. A rescue
+        // runs inside its run and keeps it.
+        if !is_rescue {
+            bot.assigned_site = None;
+        }
         match lifescape_scripts::run(script, &mut bot, args) {
             Ok(code) => {
                 if code == 0 {

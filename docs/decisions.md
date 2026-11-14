@@ -337,7 +337,12 @@ Décision (application de la règle utilisateur « aucun bot inactif ») :
   le worker lance le nœud prêt suivant hors attentes
   (`next_ready_except`), sinon un REMPLISSAGE : une fenêtre d'argent de
   1500 ticks (spots à pièces d'abord, hors compétences bannies), nœud
-  `fill-<id>` hors graphe (rapport ignoré, rien compté). Une attente
+  `fill-<id>` hors graphe (rien compté sur le graphe). Son rapport est lu
+  (`brain_filler::fold_filler_report`, 2026-11-14) : un remplissage en
+  échec ou fini sans travailler (0 tick, erreur) écarte sa compétence des
+  remplissages suivants pendant `FILLER_RETRY_TICKS` (500) — avant, « report
+  for unknown node, ignored » relançait le même `melee men` à 0 tick toutes
+  les 10 s pendant une heure. Une attente
   verrouillée par un ancien daemon est parquée au premier passage.
 - Équipement mêlée : un but `EquipBest{melee}` (jalon `equip` des
   ambitions guerrier/prêtre) ne développe plus le set niveau 1 en
