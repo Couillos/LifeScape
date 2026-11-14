@@ -372,6 +372,32 @@ Un nœud bloqué ne se réutilise jamais lui-même ni ce qui l'attend comme
 dépendance (t01 : cuisine 10→20 bloquée sur un niveau de cuisine,
 cycle n8↔n9 abandonné).
 
+Quête légère d'abord (2026-11-14, `quests::light_quest` : ni niveau, ni
+objet, ni combat, ni points de quête, faisable seul — Rune Mysteries,
+Cook's Assistant…) : quand la seule voie de production est derrière elle
+et qu'aucune offre du marché n'est couverte, le résolveur bloque
+`missing:quest:<clé>` au lieu de poser une enchère au repos que personne
+ne remplit (live : `market order for 17 blankrune unfilled after 6000
+ticks`, runecraft et minage bannis, aucun bot n'ayant la quête). Une
+offre couverte achète toujours. Objets que la quête remet et laisse
+(`quests::QUEST_GRANTS`, preuve contenu : `duke_horacio.rs2` donne
+`air_talisman`, `sedridor.rs2` le rend à la fin) : l'obtention attend la
+quête, jamais la ferme aux gobelins (0,78 %/kill) ni le marché. Un ban
+de compétence dont la cause nomme une quête (`quest:<clé>` ou le script
+`quest_<nom>`) se lève dès que la quête est faite
+(`bans::quest_lifted_bans`, appelé par `brain_succession::note_expired_bans`
+avec `brain_rescue::quests_done`), sans attendre ses 6000 ticks.
+
+Rune Mysteries (script `quest_rune_mysteries`,
+`scripts/src/quests/rune_mysteries.rs`) : le varp `runemysteries` n'est
+pas transmis (`scope=perm`, sans `transmit`) — l'ancien solveur lisait 0
+et rejouait tout. L'étape se lit dans le sac : notes d'Aubury ⇒ Sedridor ;
+paquet ⇒ Aubury deux fois ; rien ⇒ le Duc (« Have you any quests for
+me? », « Sure, no problem. »), Sedridor (« I'm looking for the head
+wizard. », « Ok, here you are. », « Yes, certainly. »), puis Aubury si la
+manche finit sans objet. Réponses jamais vers la boutique d'Aubury
+(« No thank you »).
+
 Magasins (règle utilisateur 2026-11-13, `obtain::merchant_buy_allowed`) :
 un PNJ ne vend au bot que ce que F2P ne donne d'aucune autre façon —
 ni production ni drop qu'un spot farme. Plumes (poulets), appât (hommes),

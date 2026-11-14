@@ -220,6 +220,20 @@ membre), `laddertop_directional_188` (admin tué par les chevaliers noirs
 (`chateau_tour_sud_toit_descente`, `tour_sorciers_*`, `manoir_draynor_etage`,
 `palais_varrock_etage`, `falador_chateau_etage`, `varrock_ouest_escalier`).
 
+Portes diagonales (forme 9, `WALL_DIAGONAL`, 2026-11-14) : la règle de
+portée moteur (`ReachStrategy.reachWall1`, bras `WALL_DIAGONAL` : les
+quatre voisins orthogonaux, sauf mur du stand tourné vers la porte)
+était codée sous la forme 1 dans `nav/src/reach.rs` ; aucune porte
+diagonale n'était cliquable. Tour des Sorciers : la pièce de l'échelle de
+la cave (Sedridor, Rune Mysteries) est fermée par 1536 (3107,3162) angle
+sud ⇒ Disconnected (dossiers bst29bh9-218/-290/-423). Ouverte
+(`doors.rs2`, bras diagonal de `door_open` : OUEST +z, NORD +x, EST −z,
+SUD −x), la porte devient une loc pleine pour 500 ticks, (3106,3162)
+ici : `gate_swing::open_diagonal_door_leaf` marque les quatre bords de
+cette tuile (`DOOR_LEAF_*`, jamais un mur) et le plan passe par
+(3107,3161). Goldens `tour_sorciers_echelle`, `tour_sorciers_sortie`
+(`avoids=3106,3162`), `sedridor_depuis_duc` (château niveau 1 → cave).
+
 Porte verrouillée pour toujours : `lockeddoor1` (1591, op1 Open,
 `locked_doors.rs2` ne l'ouvre jamais) est dans `blocked_locs` ; golden
 `porte_verrouillee_varrock`.

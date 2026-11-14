@@ -138,5 +138,5 @@ fn a_finished_quest_lifts_its_bans() {
     let lifted = super::quest_lifted_bans(&history, &since(200), &["runemysteries".to_string()]);
     assert_eq!(lifted, vec!["mining".to_string(), "runecraft".to_string()]);
     assert!(super::quest_lifted_bans(&history, &since(200), &["cook".to_string()]).is_empty(), "another quest lifts nothing");
-    assert!(super::quest_lifted_bans(&history, &since(100 + SKILL_BAN_TICKS), &["runemysteries".to_string()]).is_empty(), "expired bans are the expiry's");
+    assert!(super::quest_lifted_bans(&history, &since(100 + SKILL_BAN_TICKS as i64), &["runemysteries".to_string()]).is_empty(), "expired bans are the expiry's");
 }
