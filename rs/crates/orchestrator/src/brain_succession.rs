@@ -82,6 +82,13 @@ fn close_goal_history(life: &mut Life, stuck: bool) {
             skills.push(skill);
         }
     }
+    // An equipment step is a side purchase: its failure (an unfilled bid
+    // on a piece nobody sells) never bans the goal's skills (live
+    // 2026-11-14: black_med_helm and black_kiteshield bids banned cooking
+    // and strength). The gear plan cools the piece down instead.
+    if lifescape_planner::gear_ladder::gear_subtree(life).contains(&cause.node) {
+        skills.clear();
+    }
     if skills.is_empty() {
         crate::logln!("brain {}: goal {} stuck: {}", life.account, goal_label(&life.goal), cause.describe());
         push_history(life, "goal", &ban_entry("", 0, &cause));
