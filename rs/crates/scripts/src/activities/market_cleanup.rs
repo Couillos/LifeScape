@@ -83,12 +83,16 @@ fn withdraw_all(bot: &mut Bot, ids: &[u16]) -> Result<(), ScriptError> {
     Ok(())
 }
 
-/// D17 candidate (pure): surplus the carnet refused this pass always
-/// (it can never sell, only its drop frees the slot); a resting listing
-/// only when nothing was listed this pass (fresh listings get one pass
-/// to fill first).
-fn d17_eligible(id: u16, unsellable: &[u16], listed_open: &HashSet<u16>, listed_now: u32) -> bool {
-    unsellable.contains(&id) || (listed_now == 0 && listed_open.contains(&id))
+/// D17 candidate (pure): surplus the carnet refused this pass (it can
+/// never sell, only its drop frees the slot) and stock resting listed
+/// since an earlier pass. Listings placed this pass are not in
+/// `listed_open`: they get this pass to fill. The old rule also spared
+/// the resting listings whenever anything new listed (live ryan_park
+/// 2026-11-15: each pass listed 3 fresh stacks out of 46 surplus, D17
+/// never ran, the bank sat at 60 types and every load failed "bank full"
+/// 151 times in two hours).
+fn d17_eligible(id: u16, unsellable: &[u16], listed_open: &HashSet<u16>) -> bool {
+    unsellable.contains(&id) || listed_open.contains(&id)
 }
 
 /// One janitor pass: exit 0 when the bank is back under the limit,
@@ -118,7 +122,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     // Carnet stock leaves the later legs alone: the shop must never sell
     // what the market reserved. Already listed stock is skipped, never stacked: a relist would double-spend
     // the ledger reservation, and the D17 gate below reads "nothing new".
-    let (mut market_ids, mut listed_now): (Vec<u16>, u32) = (Vec::new(), 0);
+    let mut market_ids: Vec<u16> = Vec::new();
     // Tradeable surplus the carnet refused this pass: it never lists, so
     // only D17 below can free its slot.
     let mut unsellable: Vec<u16> = Vec::new();
@@ -148,9 +152,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
             }
             // Reserve floor: 1 coin (no NPC buyback in the economy);
             // the alchemy win stays planner-side (D2).
-            if place_sell(bot, id, held, lifescape_planner::space::reserve_floor(None))? {
-                listed_now += 1;
-            } else {
+            if !place_sell(bot, id, held, lifescape_planner::space::reserve_floor(None))? {
                 unsellable.push(id);
             }
         }
@@ -180,17 +182,17 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     // D17: a still-full bank drops whole stacks cheapest-total first,
     // after cancelling their orders, until it is back under the limit:
-    // the surplus the carnet refused this pass (it never lists), and,
-    // when nothing was newly listed, the stock resting listed. Fresh
-    // listings get one full pass to fill (the next pass lists nothing new
-    // and escalates). Counts read the last known bank (`known_bank`).
+    // the surplus the carnet refused this pass (it never lists) and the
+    // stock resting listed since an earlier pass (`d17_eligible`): this
+    // pass's fresh listings get the pass to fill. Counts read the last
+    // known bank (`known_bank`).
     bank_open(bot)?;
     if known_bank_types(bot) >= lifescape_planner::space::BANK_TYPE_LIMIT {
         let sheltered: HashSet<u16> = protected.iter().filter_map(|name| by_name.get(name.as_str()).copied()).collect();
         let mut stuck = Vec::new();
         for (id, name) in &named {
             let qty = i64::from(known_bank(bot).get(id).copied().unwrap_or(0));
-            if !sheltered.contains(id) && qty > 0 && d17_eligible(*id, &unsellable, &listed_open, listed_now) {
+            if !sheltered.contains(id) && qty > 0 && d17_eligible(*id, &unsellable, &listed_open) {
                 let price = lifescape_gamedata::obj_by_id(usize::from(*id)).map(|entry| entry.price.max(1)).unwrap_or(1);
                 stuck.push((name.clone(), qty, price));
             }
@@ -247,15 +249,14 @@ mod tests {
     /// Live bdr53jee 2026-11-14: the seller held 13 stacks (no own cost
     /// known), D17 only looked at listed stock, the bank stayed at 56
     /// types every pass. Refused surplus is always a D17 candidate; a
-    /// resting listing only once nothing new was listed.
+    /// resting listing too, fresh listings beside it or not (ryan_park
+    /// 2026-11-15).
     #[test]
     fn refused_surplus_always_escalates_to_d17() {
         let listed: std::collections::HashSet<u16> = [526].into_iter().collect();
-        assert!(d17_eligible(561, &[561], &listed, 0), "refused: drop candidate");
-        assert!(d17_eligible(561, &[561], &listed, 3), "refused even beside fresh listings");
-        assert!(d17_eligible(526, &[], &listed, 0), "resting listing, nothing new listed");
-        assert!(!d17_eligible(526, &[], &listed, 1), "fresh listings get one pass first");
-        assert!(!d17_eligible(1205, &[], &listed, 0), "neither refused nor listed: untouched");
+        assert!(d17_eligible(561, &[561], &listed), "refused: drop candidate");
+        assert!(d17_eligible(526, &[], &listed), "resting listing from an earlier pass");
+        assert!(!d17_eligible(1205, &[], &listed), "neither refused nor resting: untouched");
     }
 
     #[test]

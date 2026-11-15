@@ -176,10 +176,21 @@ pub fn obtain_alternatives(item: &str, ironman: bool) -> Vec<Alternative> {
     out
 }
 
-/// Legs of a production quota (`GoalKind::Produce`): every production
-/// way, never the market nor a shop (the product must be made).
+/// Legs of a production quota (`GoalKind::Produce`): every SKILLED
+/// production way, never the market nor a shop (the product must be
+/// made). A ground pickup or an unskilled drop farm trains nothing (live
+/// 2026-11-15: smith milestones "produce iron_platelegs" ran
+/// `ground:iron_platelegs` on a spawn 17 bots shared, failed 3 times and
+/// redrew 22 smiths away; runecrafters picked mind runes off the floor).
+/// A drop farm stays only for a product no skill makes (a warrior's cow
+/// hides: the fight is the training).
 pub fn produce_alternatives(item: &str) -> Vec<Alternative> {
-    production_legs(item).into_iter().map(|leg| Alternative { method: leg.method, est_ticks: 0, est_coins: 0 }).collect()
+    let legs: Vec<ProductionLeg> = production_legs(item).into_iter().filter(|leg| !leg.method.starts_with("ground:")).collect();
+    let skilled = legs.iter().any(|leg| leg.skill.is_some());
+    legs.into_iter()
+        .filter(|leg| !skilled || leg.skill.is_some())
+        .map(|leg| Alternative { method: leg.method, est_ticks: 0, est_coins: 0 })
+        .collect()
 }
 
 /// Legs of an obtain node: production only for the goal's quota item
@@ -194,7 +205,20 @@ pub fn legs_for(item: &str, ironman: bool, produce: Option<&str>) -> Vec<Alterna
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_production_legs, obtain_alternatives, production_legs};
+    use super::{compute_production_legs, obtain_alternatives, produce_alternatives, production_legs};
+
+    /// A production quota is made, never picked up (iron platelegs have a
+    /// Varrock ground spawn, mind runes four).
+    #[test]
+    fn quotas_never_run_a_pickup_or_an_unskilled_farm() {
+        for item in ["iron_platelegs", "iron_platebody", "mindrune", "earthrune", "airrune"] {
+            let legs: Vec<String> = produce_alternatives(item).into_iter().map(|leg| leg.method).collect();
+            assert!(!legs.is_empty(), "{item} keeps a skilled leg");
+            assert!(legs.iter().all(|method| !method.starts_with("ground:")), "{item}: {legs:?}");
+        }
+        assert!(produce_alternatives("iron_platelegs").iter().any(|leg| leg.method.starts_with("smith")), "smithing makes them");
+        assert!(produce_alternatives("mindrune").iter().any(|leg| leg.method.starts_with("runecraft")), "the altar makes them");
+    }
 
     fn methods(item: &str) -> Vec<String> {
         production_legs(item).into_iter().map(|leg| leg.method).collect()

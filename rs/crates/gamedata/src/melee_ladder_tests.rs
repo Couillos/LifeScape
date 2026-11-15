@@ -238,3 +238,15 @@ fn ladder_table() {
     }
 }
 
+
+
+/// The asked food grows with max hitpoints, never past half of them.
+#[test]
+fn asked_food_follows_max_hitpoints() {
+    assert_eq!(super::food_to_ask(1), "shrimp", "shrimps at the least");
+    assert_eq!(super::food_to_ask(10), "herring");
+    assert_eq!(super::food_to_ask(20), "tuna");
+    assert_eq!(super::food_to_ask(24), "lobster");
+    assert_eq!(super::food_to_ask(28), "swordfish");
+    assert_eq!(super::food_to_ask(99), "swordfish");
+}

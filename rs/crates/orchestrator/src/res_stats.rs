@@ -21,10 +21,9 @@ struct Counters {
     pushes: AtomicU64,
     push_bytes: AtomicU64,
     files_written: AtomicU64,
-    /// Pushed light frames + hub reconnects + admission refusals (E13).
+    /// Pushed light frames + hub reconnects (E13).
     lights: AtomicU64,
     reconnects: AtomicU64,
-    admission_refused: AtomicU64,
     /// Last recorded free disk in Go (gauge, set on each `open`).
     disk_free_gb: AtomicU64,
 }
@@ -39,7 +38,6 @@ fn counters() -> &'static Counters {
         files_written: AtomicU64::new(0),
         lights: AtomicU64::new(0),
         reconnects: AtomicU64::new(0),
-        admission_refused: AtomicU64::new(0),
         disk_free_gb: AtomicU64::new(0),
     })
 }
@@ -72,10 +70,6 @@ pub fn record_push_reconnect() {
 }
 
 /// One refused `open` (envelope or pace, never silent degradation).
-pub fn record_admission_refused() {
-    counters().admission_refused.fetch_add(1, Ordering::Relaxed);
-}
-
 /// Free-disk gauge in Go (set on each `open`; D34 warning input).
 /// Never a refusal: the arbitration binds endurance runs, not openings.
 pub fn record_disk(free_bytes: u64) {
@@ -98,7 +92,6 @@ pub fn snapshot_json() -> Value {
     let files = counts.files_written.load(Ordering::Relaxed);
     let lights = counts.lights.load(Ordering::Relaxed);
     let reconnects = counts.reconnects.load(Ordering::Relaxed);
-    let refused = counts.admission_refused.load(Ordering::Relaxed);
     let disk_gb = counts.disk_free_gb.load(Ordering::Relaxed);
     let plan = crate::plan_service::stats_json();
     let plan_num = |key: &str| plan.as_ref().and_then(|stats| stats.get(key).as_i64()).unwrap_or(0);
@@ -120,7 +113,6 @@ pub fn snapshot_json() -> Value {
         ("lights", Value::Int(lights as i64)),
         ("lights_per_s", Value::Float(per_second(lights, uptime_secs))),
         ("push_reconnects", Value::Int(reconnects as i64)),
-        ("admission_refused", Value::Int(refused as i64)),
         ("disk_free_go", Value::Int(disk_gb as i64)),
         ("disk_low", Value::Bool(disk_gb > 0 && disk_gb < 60)),
     ])
@@ -157,7 +149,6 @@ mod tests {
             "lights",
             "lights_per_s",
             "push_reconnects",
-            "admission_refused",
             "disk_free_go",
             "disk_low",
         ] {

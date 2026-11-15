@@ -413,3 +413,31 @@ chercher en banque les pièces prévues qui n'y sont que là (plus la pile
 de flèches quand le carquois est vide) ; le cerveau
 (`gear_plan::unworn_upgrade`) ne compte plus un outil porté comme
 l'arme du bot.
+
+## Échoué sur Karamja, munitions, bans, tonte (2026-11-15)
+
+- `kit/stranded.rs` : avant chaque script (sauf rescues, tutoriel et
+  outils de dev, `lib::guards_the_fare`), un bot sur Karamja avec moins de
+  30 pièces en sac gagne le retour chez Luthas (`luthas.rs2` : 30 pièces
+  par caisse de 10 bananes, `banana_crate.rs2`, `banana_tree.rs2`) ; sac
+  plein : une unité de l'objet le moins cher est jetée. La caisse pleine se
+  lit au message serveur (« The crate is already full. ») ou à dix
+  bananes posées : la varp `crate_bananas` n'arrive jamais au client.
+  Ensuite, un run sans ordre `boat` qui démarre sur l'île rentre d'abord à
+  Port Sarim (traversée payée ouverte pour cette marche seulement) : ses
+  chemins non payants ne mènent à aucune banque depuis l'île.
+- `quests::common::find_loc` : l'état live d'une case remplace son loc
+  statique (arbre à bananes cueilli → `bananatreefour` ; cliquer l'id
+  statique était ignoré sans message par le serveur).
+- Munitions (`gamedata::equipment::ammo_fits`, règle de
+  `player_ranged.rs2`) : un arc tire des `arrows` jusqu'à son tier, une
+  arbalète des `bolts`. Plan d'équipement, recharge du carquois et
+  remèdes l'appliquent (frank_shaw : 64 carreaux derrière un arc long en
+  chêne, un run de 18 000 ticks sans un tir).
+- Bûcheron : un arbre dont aucune case voisine n'a de route (preuve
+  `Disconnected` du planificateur, `skill_walk::step_adjacent_proved`)
+  est banni longtemps ; `BanSet::ban_at_least` empêche le ban court qui
+  suit d'écraser ce ban long.
+- Tonte : un pré épuisé envoie le bot jusqu'à 2 autres prés (au-delà de
+  30 cases) avant l'échec « no sheep ».
+

@@ -49,7 +49,7 @@ Tout se compile en release (`--release`, build, tests, agents) : le daemon et le
 8. Scripts minces et stateless : logique skill uniquement, réutilisable → SDK, données → gamedata, aucun état persisté.
 9. Protocole dans le SDK seulement : aucun script ne touche `Connection`, trames ni opcodes.
 10. Serveur = vérité : `../lostcity/engine` + `../lostcity/content` (rev 274) ; lecture/dump autorisés, modification seulement sur demande explicite. Client JS de référence (arbitrage protocole/contenu, lecture seule) : `../Client-TS` (branche 274, `src/client/Client.ts`, opcodes `src/io/ClientProt.ts|ServerProt.ts`) — le consulter en cas de doute paquet/modale/séquence, avant tout fix SDK.
-11. Comptes : `admin` pour les tests de dev, jamais `bite` (personnel) ; `t01`… et nommés = runs légitimes.
+11. Comptes : `admin` pour les tests de dev, jamais `bite` (personnel) ; les 63 comptes nommés de la flotte = runs légitimes.
 12. Aucun cheat en code commité (`bot.cheat`, `::...`) hors outils dev autorisés (`give`, `goto`, `probe_*`, `debug_walk`, `check_*`).
 13. Économie propre : `admin` ne transmet jamais à un autre compte un objet ou de l'argent obtenu en trichant (`give`, `giveother`, échange, dépôt au sol, ordre au marché) ; ce qu'il triche reste chez lui, pour ses tests.
 

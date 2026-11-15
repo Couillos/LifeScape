@@ -36,6 +36,11 @@ pub const EXTEND_ORIGIN: &str = "extend";
 /// Explicit ambition that keeps the plain lowest-skill draw; never drawn
 /// by the fleet, only set by an operator.
 pub const GENERALIST: &str = "generalist";
+/// Operator-only ambition (user 2026-11-15): be first in the overall
+/// highscores, ranked by total level then total XP. Never drawn by the
+/// fleet, never redrawn, changed nor repaired; it draws the lowest F2P
+/// skill (`goals::OVERALL_SKILLS`), the cheapest level of the account.
+pub const OVERALL: &str = "overall";
 /// `why` prefix of an operator-pinned ambition (`pinned_ambition`).
 pub const PIN_WHY: &str = "operator:pin:";
 
@@ -225,7 +230,7 @@ impl std::fmt::Display for AmbitionError {
 /// open milestone is refused (`NoMilestone`), except the generalist's.
 pub fn new_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
     let ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
-    if ambition.kind != GENERALIST && open_count(&ambition) == 0 {
+    if !ladderless(&ambition.kind) && open_count(&ambition) == 0 {
         return Err(AmbitionError::NoMilestone(kind.to_string()));
     }
     Ok(ambition)
@@ -236,7 +241,7 @@ pub fn new_ambition(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[De
 /// refused; `NoMilestone` only when even the extension is empty.
 pub fn new_ambition_extended(kind: &str, why: &str, now: &BotNow, seed: u64, demand: &[DemandItem], stamp: Stamp) -> Result<Ambition, AmbitionError> {
     let mut ambition = fresh_ambition(kind, why, now, seed, demand, stamp)?;
-    if ambition.kind != GENERALIST && open_count(&ambition) == 0 {
+    if !ladderless(&ambition.kind) && open_count(&ambition) == 0 {
         extend(&mut ambition, now, seed);
         if open_count(&ambition) == 0 {
             return Err(AmbitionError::NoMilestone(kind.to_string()));
@@ -267,9 +272,17 @@ pub fn pinned_ambition(skill: &str, level: u8, now: &BotNow, seed: u64, demand: 
     Ok(ambition)
 }
 
-/// True while an operator pin holds the ambition (no redraw, no change).
+/// True while an operator pin holds the ambition (no redraw, no change):
+/// a skill pin, or the operator-only `overall` ambition (held for good).
 pub fn pinned(ambition: &Ambition) -> bool {
-    ambition.pin.is_some()
+    ambition.pin.is_some() || ambition.kind == OVERALL
+}
+
+/// Kinds with no ladder that draw their goals directly (`goals`): the
+/// generalist and the overall highscore. Never "achieved", never refused
+/// for want of a milestone.
+pub fn ladderless(kind: &str) -> bool {
+    kind == GENERALIST || kind == OVERALL
 }
 
 /// Lift the pin once its skill reaches the level; returns the lifted pin
@@ -419,6 +432,36 @@ pub fn refresh(ambition: &mut Ambition, now: &BotNow, seed: u64, demand: &[Deman
     closed
 }
 
+/// Open ladder production milestones the catalogue no longer offers
+/// (a ladder revised under a running life: the mage's amulets of magic,
+/// 2026-11-15, held six mages at magic 20 behind a crafting chain nobody
+/// climbed) leave the ambition. Returns their ids: the caller closes the
+/// goal one of them is running.
+pub fn drop_stale_products(ambition: &mut Ambition) -> Vec<String> {
+    if spec(&ambition.kind).is_none() {
+        return Vec::new();
+    }
+    let kind = ambition.kind.clone();
+    let offered = |item: &str| crate::ambition_catalog::ladder_offers(&kind, item);
+    let servable = |item: &str| crate::ambition_catalog::servable(&kind, item).is_some();
+    let mut dropped = Vec::new();
+    ambition.milestones.retain(|stone| {
+        // A demand quota stays while the kind still serves the item (its
+        // ladder or its own one-step production, `insert_demand_milestone`).
+        let stale = stone.status != MilestoneStatus::Done
+            && match (&stone.target, stone.origin.as_str()) {
+                (Target::Produce { item, .. }, "ladder") => !offered(item),
+                (Target::Produce { item, .. }, origin) if origin.starts_with("demand:") => !offered(item) && !servable(item),
+                _ => false,
+            };
+        if stale {
+            dropped.push(stone.id.clone());
+        }
+        !stale
+    });
+    dropped
+}
+
 /// Materialize milestones past the catalogue ladder (the sole holder of
 /// a group at the end of its ladder, or an achieved ambition the 72 000
 /// tick throttle keeps): the last `EXTEND_LAP` rungs cycle, each level
@@ -507,6 +550,20 @@ fn insert_demand_milestone(ambition: &mut Ambition, now: &BotNow, demand: &[Dema
             }
             if best.is_none_or(|(known, _, _)| wanted.weight > known.weight) {
                 best = Some((wanted, skill, rung.level));
+            }
+        }
+    }
+    // Beyond the ladder: a paying bid the kind's own skills serve in one
+    // step at its levels now (`servable`), the heaviest first.
+    if best.is_none() {
+        for wanted in demand.iter().filter(|entry| entry.unmet > 0 && entry.weight > 0.0 && entry.margin.is_some_and(|margin| margin > 0.0)) {
+            let Some((skill, level)) = crate::ambition_catalog::servable(&ambition.kind, &wanted.item) else { continue };
+            if level > level_of(&skill).max(1) || (now.held)(&wanted.item) >= demand_quota(wanted.unmet) {
+                continue;
+            }
+            if best.is_none_or(|(known, _, _)| wanted.weight > known.weight) {
+                let skill: &str = found.groups.iter().flat_map(|group| crate::ambition_catalog::group_skills(group)).find(|known| *known == skill).unwrap_or("");
+                best = Some((wanted, skill, level));
             }
         }
     }
@@ -620,7 +677,7 @@ pub fn on_goal_closed(life: &mut Life, stuck: bool) -> CloseOutcome {
 /// Every rung materialized and every milestone done: the ambition is met.
 pub fn achieved(ambition: &Ambition) -> bool {
     let Some(found) = spec(&ambition.kind) else { return false };
-    ambition.kind != GENERALIST && ambition.rung >= found.ladder.len() && ambition.milestones.iter().all(|stone| stone.status == MilestoneStatus::Done)
+    !ladderless(&ambition.kind) && ambition.rung >= found.ladder.len() && ambition.milestones.iter().all(|stone| stone.status == MilestoneStatus::Done)
 }
 
 /// Unix seconds of the last change (the draw, else the last revision).

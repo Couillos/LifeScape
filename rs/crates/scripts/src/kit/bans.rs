@@ -42,6 +42,14 @@ impl BanSet {
         self.bans.insert(pos, now.saturating_add(duration));
     }
 
+    /// `ban_for` that never shortens a running ban: a transient short
+    /// ban must not erase the planner-proven long one set just before.
+    pub fn ban_at_least(&mut self, pos: (i32, i32), now: u64, duration: u64) {
+        let until = now.saturating_add(duration);
+        let entry = self.bans.entry(pos).or_insert(until);
+        *entry = (*entry).max(until);
+    }
+
     /// True while the ban clock still runs (expired entries read as free;
     /// `retain` reaps them on the next loop pass).
     pub fn is_banned(&self, pos: (i32, i32), now: u64) -> bool {
@@ -120,6 +128,17 @@ pub fn across_toll(bot: (i32, i32), spot: (i32, i32), fence: Option<i32>) -> boo
 mod tests {
     use super::{across_toll, same_side, starved_oldest, BanSet};
 
+
+    /// A proven long ban survives the transient short ban that follows.
+    #[test]
+    fn a_short_ban_never_shortens_a_long_one() {
+        let mut bans = BanSet::new();
+        bans.ban_for((1, 2), 100, 5000);
+        bans.ban_at_least((1, 2), 101, 250);
+        assert!(bans.is_banned((1, 2), 4000), "long ban kept");
+        bans.ban_at_least((5, 6), 100, 250);
+        assert!(bans.is_banned((5, 6), 300) && !bans.is_banned((5, 6), 350), "fresh short ban");
+    }
 
     /// Ban clocks: a short ban frees at expiry, a door ban (`u64::MAX`)
     /// survives every retain, and the reap drops only the expired.

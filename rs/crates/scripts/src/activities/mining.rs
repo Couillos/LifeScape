@@ -64,7 +64,17 @@ pub fn run_mining(bot: &mut Bot, args: &[String]) -> ScriptResult {
         let (ok, new_level) = crate::kit::mine::mine_load(step_bot, &tiers, &mut bank, coins, level, until)?;
         level = new_level;
         if !ok {
-            return Err(ScriptError::Failed(format!("mine failed at {:?}", step_bot.position())));
+            // Typed context (rule 6, live 2026-11-15: 272 bare "mine
+            // failed" over 34 bots could not be classed).
+            let ores: Vec<&str> = tiers.iter().map(|tier| tier.product.as_str()).collect();
+            let last = step_bot.world.messages.last().cloned().unwrap_or_else(|| "no game message".to_string());
+            return Err(ScriptError::Failed(format!(
+                "mine failed at {:?}: no {} mined (load stalled or hurt), hp {}, {} free slots; last game: {last}",
+                step_bot.position(),
+                ores.join("/"),
+                crate::kit::survival::hitpoints(step_bot),
+                crate::kit::pack::free_slots(step_bot)
+            )));
         }
         let mut keep: Vec<u16> = pick.known_ids(step_bot).into_iter().collect();
         keep.extend(task_keep.iter().copied());

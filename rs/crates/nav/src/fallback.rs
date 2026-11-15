@@ -58,6 +58,39 @@ pub(crate) fn walled_off(flags: &mut dyn FnMut(Tile) -> u32, here: Tile, dest: T
     flags(here) & here_mask != 0 || flags(dest) & dest_mask != 0
 }
 
+/// First underground row: cellars and dungeons (map squares z >= 100)
+/// lie 6400 tiles north of the surface they sit under, on the same
+/// level, joined to it only by rides.
+pub(crate) const UNDERGROUND_Z: i32 = 6400;
+
+/// Slack past the best fallback Chebyshev before a tile is pruned.
+const FALLBACK_SLACK: i32 = 64;
+
+/// `tile` moved onto `onto`'s plane (surface or underground): the
+/// underground map lies under the surface it joins, 6400 rows north.
+fn on_plane_of(tile: Tile, onto: Tile) -> Tile {
+    let shift = match (tile.z >= UNDERGROUND_Z, onto.z >= UNDERGROUND_Z) {
+        (true, false) => -UNDERGROUND_Z,
+        (false, true) => UNDERGROUND_Z,
+        _ => 0,
+    };
+    Tile { z: tile.z + shift, ..tile }
+}
+
+/// Blocked-destination prune (`dijkstra`, `walk_costs`): `next` lies so
+/// far past the best fallback (`best_chebyshev`) that walking on from it
+/// can never improve the answer. Measured on the destination's plane: a
+/// raw Chebyshev across the surface/underground split reads ~6400 and
+/// cut the way to the true closest tile when it runs underground. Live
+/// 2026-11-14 (alicefield, hill giants (3109,9841) -> Edgeville booth
+/// (3095,3489)): the cellar ladder put the search in the brass-key
+/// house, 36 tiles off the booth, every dungeon tile then read ~6350
+/// away and was cut, the trapdoor exit was never reached and the house
+/// became the adjusted target (SDK: Disconnected, adjusted too far).
+pub(crate) fn past_fallback(next: Tile, dest: Tile, best_chebyshev: i32) -> bool {
+    next.level == dest.level && on_plane_of(next, dest).chebyshev(dest) > best_chebyshev + FALLBACK_SLACK
+}
+
 /// Rings scanned for the rank floor (bounded work per blocked search).
 const FLOOR_RINGS: i32 = 16;
 
@@ -137,5 +170,19 @@ mod tests {
         assert!(!walled_off(&mut flags, shore, water));
         assert!(!walled_off(&mut flags, side, water));
         assert!(shore.fallback_rank(water, 0, false) < side.fallback_rank(water, 1, false));
+    }
+
+    /// Edgeville booth (3095,3489) with the best fallback in the key
+    /// house (36 away): the dungeon under Edgeville stays in the search
+    /// (gate (3145,9871) reads 50 on the surface plane), a far surface
+    /// tile and the far underground still go.
+    #[test]
+    fn underground_reads_on_the_surface_plane() {
+        let booth = Tile { x: 3095, z: 3489, level: 0 };
+        assert!(!super::past_fallback(Tile { x: 3145, z: 9871, level: 0 }, booth, 36));
+        assert!(!super::past_fallback(Tile { x: 3109, z: 9841, level: 0 }, booth, 36));
+        assert!(super::past_fallback(Tile { x: 3300, z: 3489, level: 0 }, booth, 36));
+        assert!(super::past_fallback(Tile { x: 3300, z: 9889, level: 0 }, booth, 36));
+        assert!(!super::past_fallback(Tile { x: 3300, z: 3489, level: 1 }, booth, 36), "other levels never prune");
     }
 }

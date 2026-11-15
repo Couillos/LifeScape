@@ -21,7 +21,7 @@ use crate::static_world::StaticWorld;
 use crate::tables::{Tables, Transition, Verdict};
 
 pub use crate::no_route::{NoRoute, NoRouteReason};
-pub(crate) use crate::no_route::{detour_cap, DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
+pub(crate) use crate::no_route::{DIAGNOSIS_BUDGET, MAX_VISITS, PLAN_BUDGET};
 
 /// Identity hash with a bit mixer: tile keys pack level/z/x, so the
 /// raw low bits are just the x coordinate and whole columns would
@@ -262,7 +262,7 @@ pub(crate) struct CustomPrepared {
 }
 
 #[derive(Clone, Debug)]
-enum PrevEdge {
+pub(crate) enum PrevEdge {
     Walk,
     Door(DoorRef),
     Ride { index: usize, dest: Tile, pre_open: Option<OpenStep> },
@@ -424,26 +424,26 @@ fn plan_budgeted_memo(
             // The lifted-optimal path crosses a missing requirement: a
             // longer requirement-free detour may still exist (the
             // Edgeville dungeon giants: brass-key door 1804 or the
-            // trapdoor and the main dungeon). The strict search finds it.
-            // Bounded by cost (`detour_cap`), so a requirement guarding a
-            // true pocket (guild door, boat fare) answers fast.
-            let detour_deadline = std::time::Instant::now() + DIAGNOSIS_BUDGET;
-            match dijkstra(world, tables, from, dest, options, false, options.allow_paid, false, shared, detour_cap(cost), yield_, detour_deadline) {
-                Outcome::Aborted => return Err(aborted(from)),
-                Outcome::Found(chain, cost, _) => {
+            // trapdoor and the main dungeon). The strict search finds it;
+            // a true pocket (guild door, boat fare) is proven, not assumed
+            // from a cost cap (`detour.rs`).
+            let reason = match crate::detour::strict_detour(world, tables, from, dest, options, shared, cost, &blocked, yield_) {
+                crate::detour::Detour::Aborted => return Err(aborted(from)),
+                crate::detour::Detour::Found(chain, cost) => {
                     let mut plan = assemble(tables, from, dest, chain, cost);
                     if plan.adjusted_dest.is_some() {
                         plan.dest_blocker = blocker_at(world, tables, dest);
                     }
                     return Ok(plan);
                 }
-                Outcome::Closest(_) | Outcome::OverBudget(_) => {}
-            }
+                crate::detour::Detour::Sealed => NoRouteReason::NeedsRequirement,
+                crate::detour::Detour::Cut => NoRouteReason::BudgetExhausted,
+            };
             return Err(NoRoute {
                 closest_reachable: best,
                 blocked_by_requirements: blocked,
                 disabled_transitions_nearby: disabled_nearby(tables, dest),
-                reason: NoRouteReason::NeedsRequirement,
+                reason,
                 blockers: seal_nearby(world, tables, dest),
             });
         }
@@ -585,7 +585,7 @@ pub fn door_stands(world: &StaticWorld, shape: u8, angle: u8, at: Tile) -> Vec<T
 /// the server reach rule: WEST stands west, NORTH stands north, and so
 /// on. Mirrors the unconditional arms in `reach.rs` exactly; other
 /// shapes have no single stand, so they report none.
-fn door_stand(shape: u8, angle: u8, at: Tile) -> Option<Tile> {
+pub(crate) fn door_stand(shape: u8, angle: u8, at: Tile) -> Option<Tile> {
     if shape != 0 {
         return None;
     }
@@ -664,7 +664,7 @@ fn transition_ref(row: &Transition, tables: &Tables) -> TransitionRef {
     }
 }
 
-enum Outcome {
+pub(crate) enum Outcome {
     Found(Vec<(Tile, PrevEdge)>, u32, Tile),
     Closest(Tile),
     /// Cut by `MAX_VISITS` or the wall deadline: the best tile so far.
@@ -799,7 +799,7 @@ fn yield_due(visits: usize, last_yield: std::time::Instant) -> bool {
     visits % 16384 == 0 || (visits % 16 == 0 && last_yield.elapsed() >= std::time::Duration::from_secs(1))
 }
 
-fn dijkstra(
+pub(crate) fn dijkstra(
     world: &StaticWorld,
     tables: &Tables,
     from: Tile,
@@ -907,8 +907,8 @@ fn dijkstra(
             // Blocked destination: the closest tile is the whole answer,
             // so tiles far past the current best can never improve it.
             // The true closest is never pruned: its distance stays under
-            // every best seen so far.
-            if !dest_walkable && next.level == dest.level && next.chebyshev(dest) > best_rank.1 + 64 {
+            // every best seen so far. Same plane only (`past_fallback`).
+            if !dest_walkable && crate::fallback::past_fallback(next, dest, best_rank.1) {
                 continue;
             }
             if !search.in_bounds(next) {

@@ -45,6 +45,7 @@ pub mod space;
 pub mod tool_kit;
 pub mod tools;
 pub mod training;
+pub mod training_production;
 pub mod tranches;
 
 pub use catalog::{
@@ -69,12 +70,12 @@ pub use profit::{chain_profit, ChainProfit, ProfitError};
 pub use quests::{method_quest, missing_quest, quests_done_from, quests_done_in_graph};
 pub use quest_hold::{cooled_quest_nodes, cooled_quests, node_quest, open_quests, quest_ban_key, quest_shortfalls, reserved_quest_objects, withhold_reserved, QuestShortfall, QUEST_BAN_PREFIX};
 pub use side_goal::{method_banned, side_goal, steer_for_work, steer_off_bans, WorkSteer, SIDE_PREFIX};
-pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, serves_goal, next_goal, NoGoal, DONE_TAG, STUCK_TAG, TRAINABLE};
+pub use goals::{append_goal, draw_goal, draw_goal_origin, goal_closed, goal_root_done, goal_skills, lowest_skill_goal, serves_goal, next_goal, NoGoal, DONE_TAG, OVERALL_SKILLS, STUCK_TAG, TRAINABLE};
 pub use ambition::{
-    achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
+    achieved, ambition_from_value, describe as describe_ambition, ambition_to_value, drop_stale_products, extend as extend_ambition, goal_for_milestone, mark_drawn, may_change, new_ambition,
     new_ambition_extended, next_milestone, open_count, pinned, pinned_ambition, release_pin, AmbitionError, BotNow, Pin,
     on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
-    AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS,
+    AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS, OVERALL,
 };
 pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS, MERCHANT};
 pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, optional_change, Assignment, FleetBot};

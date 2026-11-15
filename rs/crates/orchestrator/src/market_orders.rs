@@ -66,7 +66,7 @@ impl MarketService {
         }
         let item = row.item_id;
         let side = book_side(row.side);
-        if let Err(error) = check_price(side, price, self.guard_anchor(item)) {
+        if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
         }
         let clock = Self::now_clock();

@@ -316,6 +316,13 @@ pub fn modal_outcome(bot: &mut Bot) -> Result<Option<WorkOutcome>, ScriptError> 
 /// a herd) when none streams around the bot. False when the dump knows
 /// no such spawn.
 pub fn walk_to_nearest_spawn(bot: &mut Bot, npc: &str, ticks: u64) -> Result<bool, ScriptError> {
+    walk_to_spawn_beyond(bot, npc, ticks, -1)
+}
+
+/// `walk_to_nearest_spawn` skipping every spawn within `beyond` tiles
+/// (Manhattan) of the bot: the next pen when this one is worked out
+/// (Falador's 3 sheep, 8 shearers, 2026-11-15).
+pub fn walk_to_spawn_beyond(bot: &mut Bot, npc: &str, ticks: u64, beyond: i64) -> Result<bool, ScriptError> {
     let mut best: Option<(i64, (i64, i64))> = None;
     for row in lifescape_gamedata::npcs_by_name(npc) {
         for spawn in lifescape_gamedata::f2p::f2p_npc_spawns(Some(row.npc_id)) {
@@ -323,7 +330,7 @@ pub fn walk_to_nearest_spawn(bot: &mut Bot, npc: &str, ticks: u64) -> Result<boo
                 continue;
             }
             let dist = (spawn.x - i64::from(bot.world.x)).abs() + (spawn.z - i64::from(bot.world.z)).abs();
-            if best.is_none_or(|(known, _)| dist < known) {
+            if dist > beyond && best.is_none_or(|(known, _)| dist < known) {
                 best = Some((dist, (spawn.x, spawn.z)));
             }
         }

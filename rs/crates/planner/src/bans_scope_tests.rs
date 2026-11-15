@@ -154,3 +154,14 @@ fn a_failed_quest_bans_no_skill() {
     life.nodes = vec![node("n415", obtain("blankrune"), &["n416"], "gather:mining/blankrune", "dependency n416 abandoned"), quest];
     assert!(banned_scope(&life, "n416").is_empty(), "got {:?}", banned_scope(&life, "n416"));
 }
+
+/// A pickup on a contested spawn bans no craft (live 2026-11-15:
+/// `ground:iron_platelegs` failures banned smithing).
+#[test]
+fn a_ground_pickup_bans_no_skill() {
+    let mut node = Node::new("n1", NodeKind::ObtainItems { item: "iron_platelegs".to_string(), count: 1 }, Vec::new(), 1);
+    node.method = Some("ground:iron_platelegs".to_string());
+    assert_eq!(super::node_skill(&node), None);
+    node.method = Some("smith:iron_platelegs".to_string());
+    assert_eq!(super::node_skill(&node).as_deref(), Some("smithing"));
+}

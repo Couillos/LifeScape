@@ -97,7 +97,14 @@ pub fn find_loc_from(bot: &mut Bot, names: &[&str], radius: i32, from: (i32, i32
     let target = bot.world.ticks + 20;
     loop {
         let mut best: Option<(i32, i32, i32, i32, u16)> = None;
+        // A live change at a tile replaces its static loc: a banana tree
+        // picked to `bananatreefour` (or a depleted rock) answers only to
+        // its live id; clicking the static `bananatreefull` id was
+        // silently ignored (leo_king 2026-11-15, 2400 ticks of clicks).
         for row in &static_rows {
+            if bot.world.locs.contains_key(&(row.x, row.z, row.level)) {
+                continue;
+            }
             matches(row.x, row.z, row.level, row.loc, &mut best);
         }
         for (tile, loc) in &bot.world.locs {

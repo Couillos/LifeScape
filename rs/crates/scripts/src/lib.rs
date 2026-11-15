@@ -336,9 +336,27 @@ fn runner(name: &str) -> Option<Runner> {
 /// nothing falls back silently.
 pub fn run(name: &str, bot: &mut Bot, args: &[String]) -> ScriptResult {
     match runner(name) {
-        Some(execute) => execute(bot, args),
+        Some(execute) => {
+            // A bot left on Karamja without the fare back earns it first
+            // (`kit::stranded`): every walk off the island needs it.
+            if guards_the_fare(name) {
+                kit::stranded::earn_fare_if_stranded(bot)?;
+                kit::stranded::leave_island_unless_sailing(bot, args)?;
+            }
+            execute(bot, args)
+        }
         None => Err(ScriptError::Usage(format!("unknown script {name:?}"))),
     }
+}
+
+/// Runs the stranded-fare guard precedes: everything but the rescues,
+/// the tutorial and the dev tools (they act where they stand).
+fn guards_the_fare(name: &str) -> bool {
+    const DEV_TOOLS: [&str; 15] = [
+        "check_transitions", "probe_transitions", "check_doors", "check_routes", "walktour", "bank_deposit", "drop",
+        "trade_swap", "quest_reset", "reset_quests", "give", "goto", "walkto", "debug_walk", "hello",
+    ];
+    !(name.starts_with("rescue_") || name.starts_with("tutorial") || name.starts_with("probe_") || name.starts_with("check_") || DEV_TOOLS.contains(&name))
 }
 
 #[cfg(test)]

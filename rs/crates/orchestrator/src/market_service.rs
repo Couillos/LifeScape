@@ -403,12 +403,6 @@ impl MarketService {
         current_price(&last, &bids, &asks)
     }
 
-    /// The guard anchor: only a traded reference caps an order.
-    pub(crate) fn guard_anchor(&self, item: i64) -> Option<i64> {
-        let reference = self.reference(item);
-        reference.traded.then_some(reference.price)
-    }
-
     /// One JSON-lines request in, one reply out. Pure dispatch: every
     /// op below is also covered by the service tests over fake clients.
     pub fn handle(&self, request: &Value) -> Value {
@@ -729,7 +723,7 @@ impl MarketService {
         if self.lock_engine().find_item(item).is_none() {
             return Self::err(format!("unknown item {item}"));
         }
-        if let Err(error) = check_price(side, price, self.guard_anchor(item)) {
+        if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
         }
         {

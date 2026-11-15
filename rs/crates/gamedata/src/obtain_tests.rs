@@ -102,6 +102,8 @@ const NO_F2P_SOURCE: &[&str] = &[
     "anchovie_pizza",
     "black_2h_sword",
     "black_axe",
+    // Champions' Guild shop only, behind the 32 quest-point door.
+    "black_full_helm",
     "black_scimitar",
     "black_warhammer",
     "blackrobebottom",
@@ -260,4 +262,25 @@ fn kit_axes_have_a_shop_route_up_to_steel() {
         assert!(kit_shop_route(tool), "{tool}: merchant route");
     }
     assert!(!kit_shop_route("bronze_sword"), "not a kit tool");
+}
+
+/// Live 2026-11-15: 394 `shopbuy black_full_helm: no reachable shop`
+/// over 36 bots. Its only stockist is the Champions' Guild shop, behind
+/// the 32 quest-point door no planner opens: no shop way, no merchant
+/// route.
+#[test]
+fn a_shop_behind_the_quest_point_door_is_no_way() {
+    assert!(!super::ways("black_full_helm").iter().any(|way| way.kind == super::WayKind::Shop), "championshop only");
+    assert!(!super::merchant_route("black_full_helm"));
+    assert!(super::ways("bronze_pickaxe").iter().any(|way| way.kind == super::WayKind::Shop), "Nurmof still sells");
+}
+
+/// Only the server's pickables pick (`pickables.rs2`): no pick way for
+/// cooking apples, redberries, grapes or tomatoes.
+#[test]
+fn only_server_pickables_pick() {
+    for item in ["cooking_apple", "redberries", "grapes", "tomato"] {
+        assert!(!super::ways(item).iter().any(|way| way.detail.contains("pick") || way.detail.contains("field")), "{item}: {:?}", super::ways(item));
+    }
+    assert!(!super::ways("cabbage").is_empty());
 }

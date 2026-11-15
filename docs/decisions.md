@@ -664,3 +664,4 @@ Rejeté : offre marché à 1-2 pièces sur une hache de base ; achat du palier
 maximal sans budget ; garder tous les paliers (le surplus finance le reste).
 Non fait : ramassage des spawns au sol pour un bot à 0 pièce (la trousse
 attend qu'il gagne ses 2 à 32 premières pièces).
+- 2026-11-15 — Admission de sessions retirée (E1 enveloppe, E10 pas d'ouverture 2 s) sur décision utilisateur : tout `open` passe immédiatement ; `admission.rs` → `disk_guard.rs` (avertissement D34 seul). Rejeté : garder le pas d'ouverture (création de comptes refusée à la suite).

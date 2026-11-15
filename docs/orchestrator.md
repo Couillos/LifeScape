@@ -18,8 +18,8 @@ CLI (`src/cli.rs`, `src/main.rs`, le daemon démarre seul) :
 
 `verify` (W2) : runner de scénarios déclaratifs (`scenarios/*.json`, lus avec
 `lifescape-json`). Setup série via `admin` (cheats + `bank_all`, effets
-vérifiés), runs parallèles sur comptes distincts (N clampé à 20 D38, tête
-d'admission), verdicts `show` vs baseline (position, inventaire pack+banque,
+vérifiés), runs parallèles sur comptes distincts (N clampé à 20 D38),
+verdicts `show` vs baseline (position, inventaire pack+banque,
 delta, XP, message par tick, PNJ). Dossier <40 lignes en échec uniquement.
 Modules : `verify_cmd.rs` (runner), `verify_scenario.rs` (format),
 `verify_assert.rs` (asserts).
@@ -114,8 +114,7 @@ Code worker changé (sdk, scripts, envois) → après `restore_jobs done`,
 fois la reprise finie, jamais `run/lives` qui garde d'anciens comptes),
 un compte à la fois, jamais en parallèle. `redeploy` = `close` puis `open`
 sous un seul verrou de compte (aucun `open` market-absent/brain ne s'y
-glisse) ; il attend lui-même le pas d'admission (`admission:open-rate
-wait`) et le serveur qui garde encore le joueur (`already logged in`,
+glisse) ; il attend lui-même le serveur qui garde encore le joueur (`already logged in`,
 relogin retenté 2 s jusqu'à 120 ticks, `TIMEOUT_NO_RESPONSE` = 100).
 Code ≠ 0 → lire l'erreur, ne pas boucler.
 
@@ -223,3 +222,8 @@ cerveau>` (répété toutes les 15 min) → ligne `error_events` de type
 Le cerveau enchaîne jusqu'à 6 passes quand une passe change la vie sans
 rien lancer (`brain_chain.rs`) ; le tick simple d'un compte part toutes
 les 3 s d'horloge (`brain::PLAIN_TICK_SECS`).
+
+Admission retirée (décision utilisateur 2026-11-15, « retire
+l'admission ») : plus d'enveloppe E1 ni de pas d'ouverture E10, tout
+`open` passe tout de suite ; seul l'avertissement disque D34 reste
+(`disk_guard.rs`, loggé, jamais un refus).

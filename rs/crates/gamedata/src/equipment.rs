@@ -116,6 +116,23 @@ pub fn covers_slot(entry: &Wearable, slot: i64) -> bool {
     slot == entry.wearpos || slot == entry.wearpos2 || slot == entry.wearpos3
 }
 
+/// Server ammo rule (`player_ranged.rs2` `player_ranged_check_ammo`): a
+/// bow (`weapon_bow`) fires `arrows` up to its tier, a crossbow
+/// (`weapon_crossbow`) fires `bolts`. `weapon` `None` (nothing known
+/// wielded) reads as a tier-1 bow. Live frank_shaw 2026-11-15: 64 bolts
+/// in the quiver of an oak longbow passed the tier-only check, "You
+/// can't use that ammo with your bow." for a whole 18 000-tick run.
+pub fn ammo_fits(weapon: Option<&Wearable>, ammo: &Wearable) -> bool {
+    if ammo.rangebonus <= 0 {
+        return false;
+    }
+    match weapon.and_then(|held| held.category.as_deref()) {
+        Some("weapon_crossbow") => ammo.category.as_deref() == Some("bolts"),
+        Some("weapon_bow") => ammo.category.as_deref() == Some("arrows") && ammo.tier <= weapon.map(|held| held.tier.max(1)).unwrap_or(1),
+        _ => ammo.category.as_deref() == Some("arrows") && ammo.tier <= 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{by_name, covers_slot, requirements_met};
@@ -157,5 +174,16 @@ mod tests {
         gated.requirements.push(("quest_points".to_string(), 1));
         assert!(!requirements_met(&gated, &[("attack", 99)]));
         assert!(super::by_name("no_such_item").is_none());
+    }
+
+    #[test]
+    fn bows_take_arrows_and_crossbows_bolts() {
+        let get = |name: &str| super::by_name(name).expect(name);
+        let (longbow, crossbow) = (get("oak_longbow"), get("crossbow"));
+        assert!(super::ammo_fits(Some(&longbow), &get("bronze_arrow")));
+        assert!(!super::ammo_fits(Some(&longbow), &get("bolt")), "frank_shaw: bolts in a bow quiver");
+        assert!(super::ammo_fits(Some(&crossbow), &get("bolt")));
+        assert!(!super::ammo_fits(Some(&crossbow), &get("bronze_arrow")));
+        assert!(!super::ammo_fits(Some(&get("shortbow")), &get("mithril_arrow")), "tier above the bow");
     }
 }

@@ -16,6 +16,11 @@ use crate::model::{GoalKind, HistoryEntry, Life, Node, NodeKind, Profile};
 /// Skills the socle trains end to end (gather, fight, cook, fire). The
 /// order breaks ties before the seed does.
 pub const TRAINABLE: &[&str] = &["woodcutting", "mining", "fishing", "attack", "strength", "defence", "cooking", "firemaking"];
+/// Every F2P skill the overall ambition climbs (rev 274; hitpoints rise
+/// with the combat skills, fletching is members-only).
+pub const OVERALL_SKILLS: &[&str] = &[
+    "attack", "strength", "defence", "ranged", "prayer", "magic", "cooking", "woodcutting", "fishing", "firemaking", "crafting", "smithing", "mining", "runecraft",
+];
 
 /// History tag of a goal that ended stuck (`node: "goal"`): each skill it
 /// trained is banned for `bans::SKILL_BAN_TICKS` (`bans::ban_entry`).
@@ -89,6 +94,11 @@ pub fn draw_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn F
 pub fn draw_goal_origin(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64) -> Result<(GoalKind, Option<String>), NoGoal> {
     let avoid = crate::bans::banned_skills(&life.history, ticks_since);
     let ambition = life.ambition.as_ref().ok_or(NoGoal::NoAmbition)?;
+    // Overall highscore (total level, then XP): the lowest F2P skill is
+    // the account's cheapest level (one XP curve for all skills).
+    if ambition.kind == crate::ambition::OVERALL {
+        return lowest_skill_goal(OVERALL_SKILLS, level_of, &avoid, life.seed, life.history.len() as u64).map(|goal| (goal, None)).ok_or(NoGoal::NothingTrainable);
+    }
     if ambition.kind != crate::ambition::GENERALIST {
         if let Some(stone) = crate::ambition::next_milestone(ambition, &avoid) {
             return Ok((crate::ambition::goal_for_milestone(stone), Some(stone.id.clone())));
@@ -119,9 +129,15 @@ fn generalist_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, avoid: &[String])
 /// 99. Ties go to the seed-rotated order, so bots do not all pick the
 /// same skill. `None` when every trainable skill is stuck or maxed.
 pub fn next_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, counter: u64) -> Option<GoalKind> {
-    let rotation = (seed.wrapping_add(counter.wrapping_mul(0x9E37_79B9_7F4A_7C15)) % TRAINABLE.len() as u64) as usize;
+    lowest_skill_goal(TRAINABLE, level_of, avoid, seed, counter)
+}
+
+/// `next_goal` over any skill list (`OVERALL_SKILLS` for the overall
+/// ambition): the lowest skill not stuck nor maxed, seed-rotated ties.
+pub fn lowest_skill_goal(skills: &[&str], level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, counter: u64) -> Option<GoalKind> {
+    let rotation = (seed.wrapping_add(counter.wrapping_mul(0x9E37_79B9_7F4A_7C15)) % skills.len().max(1) as u64) as usize;
     let mut best: Option<(u8, usize, &str)> = None;
-    for (index, skill) in TRAINABLE.iter().enumerate() {
+    for (index, skill) in skills.iter().enumerate() {
         if avoid.iter().any(|stuck| stuck == skill) {
             continue;
         }
@@ -129,7 +145,7 @@ pub fn next_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], seed: u64, cou
         if level >= 99 {
             continue;
         }
-        let order = (index + TRAINABLE.len() - rotation) % TRAINABLE.len();
+        let order = (index + skills.len() - rotation) % skills.len();
         if best.is_none_or(|(known, known_order, _)| (level, order) < (known, known_order)) {
             best = Some((level, order, skill));
         }

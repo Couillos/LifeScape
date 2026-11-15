@@ -27,14 +27,10 @@ fn refusal(error: &str) -> Value {
     object(vec![("ok", Value::Bool(false)), ("error", str_value(error))])
 }
 
-/// Why a redeploy reopen may be retried, and after how long: the open
-/// pace (`admission:open-rate wait Ns`) or the server still holding the
-/// player of the worker just closed (login code 5). Anything else is a
-/// real failure, reported as is.
+/// Why a redeploy reopen may be retried, and after how long: the server
+/// still holding the player of the worker just closed (login code 5).
+/// Anything else is a real failure, reported as is.
 pub fn reopen_retry_secs(error: &str) -> Option<f64> {
-    if let Some(rest) = error.strip_prefix("admission:open-rate wait ") {
-        return rest.trim_end_matches('s').parse::<f64>().ok().map(|wait| wait.max(0.1));
-    }
     if error.contains("already logged in") {
         return Some(RELOGIN_RETRY_SECS);
     }
@@ -187,11 +183,10 @@ impl Orchestrator {
 mod tests {
     use super::reopen_retry_secs;
 
-    /// Redeploy retries only the two known transient refusals.
+    /// Redeploy retries only the server's player hold.
     #[test]
-    fn reopen_retries_pace_and_server_hold_only() {
-        assert_eq!(reopen_retry_secs("admission:open-rate wait 0.6s"), Some(0.6));
-        assert_eq!(reopen_retry_secs("admission:open-rate wait 0.0s"), Some(0.1), "never a busy loop");
+    fn reopen_retries_the_server_hold_only() {
+        assert_eq!(reopen_retry_secs("admission:open-rate wait 0.6s"), None, "no admission any more");
         assert_eq!(
             reopen_retry_secs("login failed: login: login refused: 5 (already logged in)"),
             Some(2.0)

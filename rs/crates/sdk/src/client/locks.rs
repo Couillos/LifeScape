@@ -51,6 +51,21 @@ pub fn withdraw_cap(banked: u32, locked: u32, trading: bool) -> u32 {
     }
 }
 
+/// Lowers the lock of `obj` by `units` (never under 0; the entry goes
+/// at 0). Pure, locked by test.
+pub fn release(locks: &mut Locks, obj: u16, units: u32) {
+    if obj == COINS {
+        locks.coins = locks.coins.saturating_sub(units);
+        return;
+    }
+    let left = locks.items.get(&obj).copied().unwrap_or(0).saturating_sub(units);
+    if left == 0 {
+        locks.items.remove(&obj);
+    } else {
+        locks.items.insert(obj, left);
+    }
+}
+
 impl Bot {
     /// Locked units of `obj` (coins included), 0 inside a trade.
     pub fn locked(&self, obj: u16) -> u32 {
@@ -69,6 +84,16 @@ impl Bot {
     pub fn withdrawable(&self, obj: u16, banked: u32) -> u32 {
         let trading = self.locks.lock().map(|locks| locks.trading).unwrap_or(false);
         withdraw_cap(banked, self.locked(obj), trading)
+    }
+
+    /// Frees `units` of the lock on base object `obj` after this worker
+    /// cancelled the order that promised them (live 2026-11-15: cleanup
+    /// cancelled its listings yet every withdraw still read the pushed
+    /// lock, 56 bank types stayed). The daemon's next push recomputes.
+    pub fn release_locked(&self, obj: u16, units: u32) {
+        if let Ok(mut locks) = self.locks.lock() {
+            release(&mut locks, obj, units);
+        }
     }
 
     /// Opens or closes the trade window of the locks: only the market
@@ -102,8 +127,18 @@ impl Bot {
 
 #[cfg(test)]
 mod tests {
-    use super::{deposit_keep, withdraw_cap, Bot, COINS};
+    use super::{deposit_keep, release, withdraw_cap, Bot, Locks, COINS};
     use std::collections::HashMap;
+
+    #[test]
+    fn a_cancelled_order_releases_its_lock() {
+        let mut locks = Locks::default();
+        locks.items.insert(526, 4);
+        release(&mut locks, 526, 3);
+        assert_eq!(locks.items.get(&526), Some(&1));
+        release(&mut locks, 526, 9);
+        assert!(!locks.items.contains_key(&526), "never under 0, entry gone");
+    }
 
     #[test]
     fn locked_part_never_leaves_outside_a_trade() {

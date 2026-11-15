@@ -236,34 +236,14 @@ impl Orchestrator {
 
     /// `open_job` body, lifecycle claim held by the caller (open, redeploy).
     pub(crate) fn open_claimed(self: &Arc<Self>, account: &str, no_login: bool) -> Value {
-        // E1 admission + E10 pace: refuse loudly past the envelope or
-        // inside the open interval, never degrade the running bots.
-        if let Some(wait) = crate::admission::open_rate_due() {
-            crate::res_stats::record_admission_refused();
-            return object(vec![
-                ("ok", Value::Bool(false)),
-                ("error", str_value(&format!("admission:open-rate wait {wait:.1}s"))),
-            ]);
-        }
+        // No session admission (user 2026-11-15): every open goes
+        // through at once; the disk line only warns (D34).
         {
-            let snapshot = crate::res_stats::snapshot_json();
-            let rate = |key: &str| snapshot.get(key).as_f64().unwrap_or(0.0);
-            let load = crate::admission::DaemonLoad {
-                online_bots: self.jobs.lock().unwrap().len(),
-                pushes_per_s: rate("pushes_per_s"),
-                push_bytes_per_s: rate("push_bytes_per_s"),
-                files_per_s: rate("files_per_s"),
-                plan_submits_per_s: rate("plan_submits_per_s"),
-            };
-            if let crate::admission::Admission::Refuse { reason } = crate::admission::admission_check(&load) {
-                crate::res_stats::record_admission_refused();
-                return object(vec![("ok", Value::Bool(false)), ("error", str_value(&reason))]);
-            }
             // D34 warning only (arbitration): log + res-stats flag, the
-            // open goes through. Hard refusals stay envelope-only.
-            let free = crate::admission::free_disk_bytes(&crate::paths::run_dir());
+            // open goes through.
+            let free = crate::disk_guard::free_disk_bytes(&crate::paths::run_dir());
             crate::res_stats::record_disk(free);
-            if let Some(warning) = crate::admission::disk_warning(free) {
+            if let Some(warning) = crate::disk_guard::disk_warning(free) {
                 crate::logln!("open {account}: {warning}");
             }
         }

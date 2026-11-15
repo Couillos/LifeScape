@@ -1,10 +1,22 @@
 {
   "id": "tutorial_fresh",
-  "accounts": ["btjk4cpk"],
+  "accounts": [
+    "admin"
+  ],
   "setup": [],
-  "run": {"script": "tutorial", "args": [], "budget_ticks": 6000},
+  "run": {
+    "script": "tutorial",
+    "args": [],
+    "budget_ticks": 6000
+  },
   "assert": [
-    {"type": "position", "level": 0, "x": 3222, "z": 3219, "radius": 40}
+    {
+      "type": "position",
+      "level": 0,
+      "x": 3222,
+      "z": 3219,
+      "radius": 40
+    }
   ],
   "timeout_s": 900.0
 }

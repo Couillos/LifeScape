@@ -47,8 +47,8 @@ pub struct FoundMarks {
 /// One sale (pure): the opening ask from the seller's reserve and own
 /// last fill (`seller_open`), a lot sized to the public demand
 /// (`market_fit::sale_lot`: bids + a day of volume, at least one
-/// inventory), the 5x band of a traded reference respected (the opening
-/// comes down to it, never under the reserve: over it, hold). Found
+/// inventory), never under the reserve (no reference band, user rule
+/// 2026-11-15). Found
 /// stock (`CostSource::Found`: loot, drops, ground spawns) opens at the
 /// clearing price instead (`found_open`: current price, just under the
 /// cheapest ask of another account for an untraded object, else its
@@ -59,18 +59,11 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
-    let (mut price, floor) = if reserve.source == CostSource::Found {
+    let (price, floor) = if reserve.source == CostSource::Found {
         found_open(reference, best_bid, marks.others_ask, reserve.coins, marks.anchor, last_sell)
     } else {
         seller_open(reference, best_bid, reserve.coins, last_sell)
     };
-    if reference.traded {
-        let band = reference.price.saturating_mul(5);
-        if floor > band {
-            return SaleDecision::Hold(format!("reserve {floor} over the 5x band of reference {}", reference.price));
-        }
-        price = price.min(band);
-    }
     SaleDecision::List { qty, price, floor }
 }
 
@@ -255,7 +248,7 @@ impl MarketService {
     /// (`lifescape_market::flip_quotes`) with its own minimum margin; the
     /// sell leg never under what the stock cost it plus that margin, its
     /// lot sized to the public demand. `sell` is null (hold) when the
-    /// stock has no known own cost or its floor is over the 5x band.
+    /// stock has no known own cost.
     pub(crate) fn op_flip_quote(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("").to_string();
         let item = request.get("item").as_i64().unwrap_or(-1);
@@ -276,9 +269,7 @@ impl MarketService {
         };
         let (bid, ask) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
         let quote = lifescape_market::flip_quotes(bid, ask, margin, sell_floor.unwrap_or(1));
-        let reference = self.reference(item);
-        let band = reference.traded.then(|| reference.price.saturating_mul(5));
-        let sell = sell_floor.filter(|floor| band.is_none_or(|cap| *floor <= cap)).map(|_| band.map_or(quote.sell, |cap| quote.sell.min(cap)));
+        let sell = sell_floor.map(|_| quote.sell);
         let lot = sale_lot(held, Some(&self.public_view(&account, item)));
         object(vec![
             ("ok", Value::Bool(true)),

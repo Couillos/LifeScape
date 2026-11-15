@@ -4,7 +4,7 @@
 // rankings (coins, total value at the market current price).
 // The daemon computes the snapshot every 30 min; this page only reads
 // `/api/hiscores` (re-read every 5 min, cheap: cached bytes).
-// State lives in the URL hash: `#cat=attack&page=2` or `#player=t01`.
+// State lives in the URL hash: `#cat=attack&page=2` or `#player=jonas_brown`.
 //
 // Pure helpers (Hiscores.*) touch no DOM: `node hiscores.test.js`.
 const Hiscores = (() => {

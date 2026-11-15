@@ -380,6 +380,17 @@ fn station_span(loc: u16, angle: u8) -> (i32, i32) {
     }
 }
 
+/// Side stands of the loc at (x, z) on the bot's level, nearest the bot
+/// first (live or static angle, rotated footprint and forceapproach).
+/// OPLOC carries no path: the server runs the op only from a tile that
+/// reaches the loc (`Player.processInteraction`), never a corner.
+pub(crate) fn loc_side_stands(bot: &mut Bot, x: i32, z: i32, loc: u16) -> Vec<(i32, i32)> {
+    let from = (bot.world.x, bot.world.z);
+    let angle = station_angle(bot, x, z, loc);
+    let blocked = angle.map_or(0, |angle| station_blocked(loc, angle));
+    stands_for(x, z, station_span(loc, angle.unwrap_or(0)), from, blocked)
+}
+
 /// True when the run died since `seen` (server line or flatlined hp).
 /// Updates the index so the next call never replays a line.
 fn died(bot: &Bot, seen: &mut usize) -> bool {
@@ -510,10 +521,7 @@ enum SiteDone {
 fn work_loc(bot: &mut Bot, job: &ProduceJob<'_>, x: i32, z: i32, loc: u16) -> Result<ProduceBatch, ScriptError> {
     let target = if job.want == 0 { u32::MAX } else { job.want };
     let made_before: u32 = job.products.iter().map(|id| pack_total(bot, *id)).sum();
-    let from = (bot.world.x, bot.world.z);
-    let angle = station_angle(bot, x, z, loc);
-    let blocked = angle.map_or(0, |angle| station_blocked(loc, angle));
-    for (stand_x, stand_z) in stands_for(x, z, station_span(loc, angle.unwrap_or(0)), from, blocked) {
+    for (stand_x, stand_z) in loc_side_stands(bot, x, z, loc) {
         if pack_total(bot, job.input) == 0 {
             break;
         }

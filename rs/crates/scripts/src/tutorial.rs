@@ -421,8 +421,12 @@ fn ranged_kill(bot: &mut Bot) -> Result<(), ScriptError> {
     // A resumed session lands here with the bow and arrows still in the
     // pack (live 2026-11-14, jim_ellis / ray_79: sword worn, every shot a
     // melee swing at a fenced rat): wear them before shooting.
+    // The backpack alone: `inventory()` also sums the worn gear, so a bow
+    // already worn read "to wear" and the wield failed "item 841 is not in
+    // the backpack" on every resume (live 2026-11-15: Zezima, N0valyfe,
+    // Yogosun stuck at Rat ranging).
     for name in ["shortbow", "bronze_arrow"] {
-        if bot.inventory().get(&obj(name)?).copied().unwrap_or(0) > 0 {
+        if bot.pack_count(obj(name)?) > 0 {
             equip_held(bot, name)?;
         }
     }

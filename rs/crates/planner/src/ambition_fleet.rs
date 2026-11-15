@@ -131,7 +131,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         return (kind.to_string(), format!("coverage:{gap}"));
     }
     let mut weighted: Vec<(&str, f64, Option<String>)> = Vec::new();
-    for entry in SPECS.iter().filter(|entry| entry.kind != GENERALIST && !exclude.contains(&entry.kind)) {
+    for entry in SPECS.iter().filter(|entry| !crate::ambition::ladderless(entry.kind) && !exclude.contains(&entry.kind)) {
         if entry.kind == MERCHANT && bot.ironman {
             continue;
         }

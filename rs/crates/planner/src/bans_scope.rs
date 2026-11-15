@@ -23,6 +23,12 @@ pub fn node_skill(node: &Node) -> Option<String> {
         return Some(skill.clone());
     }
     let method = node.method.clone().or_else(|| node.alternatives.iter().map(|alt| alt.method.clone()).find(|method| !method.starts_with("market:") && !method.starts_with("shop:")));
+    // A ground pickup works no skill: a contested spawn never bans the
+    // craft of its item (live 2026-11-15: iron_platelegs pickups banned
+    // smithing on 22 smiths).
+    if method.as_deref().is_some_and(|method| method.starts_with("ground:")) {
+        return None;
+    }
     if let Some(skill) = method.as_deref().and_then(method_skill) {
         return Some(skill);
     }

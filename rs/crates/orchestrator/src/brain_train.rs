@@ -148,10 +148,11 @@ pub(crate) fn fill_ctx(ctx: &mut ReadyCtx, node: &Node, life: &Life, live: &Valu
     let pick = crate::brain_bids::with_bot_state(life, live, |state| choose_pick(skill, level, *target, life, state, &rows, &market));
     match &pick {
         Some(found) => crate::logln!(
-            "brain {}: {} {skill} {level}->{target} trains by {} ({:.2} coins/XP, {:.1} XP/tick{}{})",
+            "brain {}: {} {skill} {level}->{target} trains by {} ({:+.2} coins/tick, {:.2} coins/XP, {:.1} XP/tick{}{})",
             life.account,
             node.id,
             found.method,
+            found.profit_per_tick,
             found.cost_per_xp,
             found.xp_per_tick,
             if found.batch > 0 { format!(", batch {}", found.batch) } else { String::new() },

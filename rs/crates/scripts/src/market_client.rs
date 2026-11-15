@@ -262,8 +262,14 @@ pub fn place_sell(bot: &mut Bot, item: u16, qty: i64, floor: i64) -> Result<bool
 /// Cancel every open order of one item (D17: the drop follows the cancel).
 pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
     let reply = market_call("my_orders", vec![("account", str_value(&bot.username))])?;
+    // Resting orders on the object or its banknote book, partly filled
+    // ones too (`matched`): each cancel frees its lock at once (live
+    // 2026-11-15: open-only cancels left every lock, 56 types stayed).
+    let note = trade_id(item);
     for entry in reply.get("orders").as_arr().cloned().unwrap_or_default() {
-        if entry.get("status").as_str() != Some("open") || entry.get("item").as_i64() != Some(i64::from(item)) {
+        let resting = matches!(entry.get("status").as_str(), Some("open") | Some("matched"));
+        let ours = entry.get("item").as_i64().is_some_and(|id| id == i64::from(item) || id == i64::from(note));
+        if !resting || !ours {
             continue;
         }
         let order = entry.get("order").as_i64().unwrap_or(-1);
@@ -271,6 +277,11 @@ pub fn cancel_for(bot: &mut Bot, item: u16) -> Result<(), ScriptError> {
             market_call("cancel", vec![("account", str_value(&bot.username)), ("order", Value::Int(order))])?;
         if done.get("ok").as_bool() != Some(true) {
             bot.log(&format!("cleanup cancel {order} refused: {}", done.get("error").as_str().unwrap_or("?")));
+            continue;
+        }
+        if entry.get("side").as_str() == Some("sell") {
+            let left = u32::try_from(entry.get("left").as_i64().unwrap_or(0).max(0)).unwrap_or(u32::MAX);
+            bot.release_locked(item, left);
         }
     }
     Ok(())

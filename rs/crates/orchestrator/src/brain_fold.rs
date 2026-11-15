@@ -140,6 +140,11 @@ pub(crate) fn verdict(stop: &str, error: Option<(String, String)>, missing: &[St
         "blocked" => Verdict::Failure(format!("blocked without a typed missing item ({text})")),
         _ => match error {
             Some((kind, _)) if kind == "Usage" => Verdict::Contract(text),
+            // Deaths at a spot (the fight's own guard, `survival.rs`): the
+            // spot is out of the bot's league, the skill sits out at once
+            // instead of three more deaths (live 2026-11-15: 33 bots sent
+            // back to guards, `melee guards --want grain`).
+            Some((_, message)) if message.contains("too dangerous after") => Verdict::Contract(text),
             Some((_, message)) if is_travel_failure(&lifescape_json::object(vec![("message", lifescape_json::str_value(&message))])) => Verdict::Travel(text),
             Some(_) => Verdict::Failure(text),
             None if missing.iter().any(|need| need.contains("died") || need.contains("death")) => Verdict::Failure("died".to_string()),
@@ -365,6 +370,13 @@ pub(crate) fn handle_report(orch: &Arc<Orchestrator>, job: &Arc<Job>, report: &V
 #[cfg(test)]
 mod tests {
     use super::{verdict, Verdict};
+
+    /// A spot that killed the bot bans its skill at once (contract).
+    #[test]
+    fn a_deadly_spot_is_a_contract_error() {
+        let error = Some(("Sdk".to_string(), "sdk: unreachable: spot guards too dangerous after 1 deaths, re-gear or pick easier foes".to_string()));
+        assert!(matches!(verdict("exit", error, &[], false, false, false), Verdict::Contract(_)));
+    }
 
     fn typed(kind: &str, message: &str) -> Option<(String, String)> {
         Some((kind.to_string(), message.to_string()))

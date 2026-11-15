@@ -5,7 +5,7 @@ Unitaires : `cargo test --release --manifest-path rs/Cargo.toml` (tout), ou `-p 
 Chaque module gamedata rejoue 2-3 vecteurs connus ; tant qu'un contrôle échoue,
 corriger le dump ou le code puis relancer.
 
-Runs légitimes sur `t01` (jamais `bite`) ; diagnostics dev (`debug_walk`, `check_*`, `probe_*`, `give`, `goto`, cheat) sur `admin` uniquement :
+Runs légitimes sur les comptes nommés de la flotte (jamais `bite`) ; diagnostics dev (`debug_walk`, `check_*`, `probe_*`, `give`, `goto`, cheat) sur `admin` uniquement :
 `open`, `run`, `call`, `unload`, `close`, `show` ×2 (ticks qui avancent).
 Une théorie protocole = un diagnostic live (`debug_walk`, `check_doors`,
 `check_transitions`, `check_routes`, `call`/`shell`) avant d'entrer dans le SDK.
@@ -71,6 +71,12 @@ Lumbridge, budget 150.
 
 Preuve : `verify --all` série == `--parallel 3` (t40/t41/t42) : 3 ok des deux
 côtés ; échec forcé → dossier 17 lignes, cause + position.
+
+Comptes des scénarios (décision utilisateur 2026-11-15) : tous sur `admin`
+(t40-t42 supprimés avec les comptes hors flotte). En série (`--parallel 1`,
+défaut) un même compte enchaîne les scénarios ; `--parallel N > 1` exige des
+comptes distincts et refuse (« no free account ») les scénarios en trop.
+`tutorial_fresh` n'a de sens que sur un compte neuf (admin a fini le tuto).
 
 ## Échec rapide et budgets (W4)
 

@@ -369,11 +369,7 @@ pub(crate) fn plan_costs_with(
             // never improve a fallback (same prune as `dijkstra`). Never
             // prunes while a walkable target is unsettled: it might lie
             // beyond.
-            if settle.is_empty()
-                && blocked.iter().all(|target| {
-                    next.level == target.dest.level && next.chebyshev(target.dest) > target.rank.1 + 64
-                })
-            {
+            if settle.is_empty() && blocked.iter().all(|target| crate::fallback::past_fallback(next, target.dest, target.rank.1)) {
                 continue;
             }
             if !search.in_bounds(next) {

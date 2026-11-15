@@ -9,7 +9,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use knowledge::melee_ladder::{Gate, Holdings, Pick, Rung, BRASS_KEY, FOOD_ITEM, TOLL_COINS};
+use knowledge::melee_ladder::{food_to_ask, Gate, Holdings, Pick, Rung, BRASS_KEY, TOLL_COINS};
 use knowledge::melee_math::Fighter;
 
 use crate::kit::gear::WORN_COM_NAME;
@@ -42,6 +42,12 @@ pub fn fighter(bot: &Bot) -> Fighter {
     let (attack, defence, strength, hitpoints) = (base_level(bot, 0, 1), base_level(bot, 1, 1), base_level(bot, 2, 1), base_level(bot, 3, 10));
     let combat = bot.combat_level().map(i64::from).unwrap_or(3);
     Fighter::naked(attack, strength, defence, hitpoints, combat).wearing(&worn_gear(bot))
+}
+
+/// Food a foodless bot asks the brain for: the biggest heal its max
+/// hitpoints use (`melee_ladder::food_to_ask`).
+pub fn asked_food(bot: &Bot) -> &'static str {
+    food_to_ask(base_level(bot, 3, 10))
 }
 
 /// Units and best heal of the edible stacks in `stacks` (obj id, count).
@@ -104,7 +110,7 @@ pub fn plan_of(rung: &Rung, clusters: &[(i64, i64, i64, usize)], food: Option<u3
 
 /// Ask the ladder (rungs in `excluded` left out: killers of this run).
 /// Hunt: the spot and its plan (the toll opened when the rung needs it).
-/// NeedFood: typed `Blocked` on `FOOD_ITEM`. Nothing workable: Failed.
+/// NeedFood: typed `Blocked` on `asked_food`. Nothing workable: Failed.
 pub fn pick(bot: &mut Bot, excluded: &[&str]) -> Result<(knowledge::combat_spots::CombatSpot, HuntPlan), ScriptError> {
     let melee = fighter(bot);
     let owned = holdings(bot);
@@ -136,8 +142,9 @@ pub fn pick(bot: &mut Bot, excluded: &[&str]) -> Result<(knowledge::combat_spots
             Ok((spot, plan_of(&rung, &clusters, food, &owned)))
         }
         Some(Pick::NeedFood { rung, count }) => {
-            bot.log(&format!("ladder: {} needs food ({count} {FOOD_ITEM}), none owned: blocking", rung.key));
-            Err(food_blocked(FOOD_ITEM))
+            let food = asked_food(bot);
+            bot.log(&format!("ladder: {} needs food ({count} {food}), none owned: blocking", rung.key));
+            Err(food_blocked(food))
         }
         None => Err(ScriptError::Failed(format!("ladder: no workable melee rung at {:?}", bot.position()))),
     }

@@ -68,6 +68,11 @@ fn stacks_of(live: &Value) -> Vec<(String, i64)> {
     for key in ["inv", "bank"] {
         for entry in live.get(key).as_arr().cloned().unwrap_or_default() {
             let Some(name) = crate::brain_plan::live_debug_name(&entry) else { continue };
+            // Banknotes count as their object (live 2026-11-15
+            // bb4v5d9m: 14 steel longswords bought arrive noted, the
+            // training pick read them "missing" and abandoned; the
+            // script alchs a note of the base name, `note_of`).
+            let name = name.strip_prefix("cert_").map(str::to_string).unwrap_or(name);
             let qty = entry.get("count").as_i64().unwrap_or(1);
             if qty > 0 && name != "coins" && !name.ends_with("rune") {
                 *totals.entry(name).or_insert(0) += qty;
@@ -132,6 +137,12 @@ pub(crate) fn publish(ctx: &mut lifescape_planner::expand::ReadyCtx, node: &life
     }
 }
 
+/// Highest price a caster bids for a nature rune: its current price plus
+/// half the margin of the cast it enables (never a loss on the cast).
+pub(crate) fn nature_ceiling(current: f64, margin: f64) -> i64 {
+    (current.max(1.0) + margin.max(0.0) / 2.0).floor() as i64
+}
+
 /// Nature runes the bot holds (pack and bank).
 fn natures_held(live: &Value) -> i64 {
     crate::brain_ambition::live_count(live, NATURE_RUNE)
@@ -172,11 +183,22 @@ pub(crate) fn alch_goal_for(life: &Life, live: &Value) -> Option<(GoalKind, Stri
 pub(crate) fn alch_keep(life: &Life, live: &Value) -> Vec<String> {
     let Some(mage) = caster_for(live) else { return Vec::new() };
     let keep = kept(life, live);
-    alch_stock(live, &life.account, &keep)
+    let mut out: Vec<String> = alch_stock(live, &life.account, &keep)
         .into_iter()
-        .filter(|(item, _, price)| mage.profit(item, *price).is_some_and(|profit| profit > 0.0))
+        .filter(|(item, _, price)| mage.profit(item, *price).is_some_and(|profit| profit > 0.0) )
         .map(|(item, _, _)| item)
-        .collect()
+        .collect();
+    // A caster's runes and staff are its means of work (live 2026-11-15:
+    // bb4v5d9m and sean_lane bought nature runes at 1 then listed them at
+    // 4 and never cast).
+    out.extend(caster_means());
+    out
+}
+
+/// What every caster keeps out of its sales: the alchemy runes and the
+/// staff that pays the fire.
+pub(crate) fn caster_means() -> Vec<String> {
+    vec![NATURE_RUNE.to_string(), lifescape_planner::alchemy::FIRE_RUNE.to_string(), FIRE_STAFF.to_string()]
 }
 
 /// The natural price floor of a caster's listing: the cast's net,
@@ -195,11 +217,13 @@ fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
 }
 
-/// The resting ask (another account's) furthest under the cast's net
-/// less the bot's time: `(object, book id, ask, units resting,
-/// ceiling)` (a banknote book bids on its own id).
-fn alch_ask(mage: &Caster, account: &str, own_rate: f64) -> Option<(String, i64, i64, i64, i64)> {
-    let service = crate::market_service::shared()?;
+/// Resting asks (other accounts', the cheapest per book) under the
+/// cast's net less the bot's time, best profit per cast FIRST, strictly
+/// decreasing (user rule 2026-11-15: buy the biggest margins first):
+/// `(object, book id, ask, units resting, ceiling)` (a banknote book
+/// bids on its own id).
+fn alch_asks(mage: &Caster, account: &str, own_rate: f64) -> Vec<(String, i64, i64, i64, i64)> {
+    let Some(service) = crate::market_service::shared() else { return Vec::new() };
     let asks: Vec<(i64, i64, i64)> = {
         let engine = service.lock_engine();
         engine
@@ -214,18 +238,22 @@ fn alch_ask(mage: &Caster, account: &str, own_rate: f64) -> Option<(String, i64,
             })
             .collect()
     };
-    let mut best: Option<(String, i64, i64, i64, i64)> = None;
+    let mut out = Vec::new();
     for (item_id, ask, qty) in asks {
-        let Some(item) = lifescape_gamedata::obj_by_id(usize::try_from(item_id).ok()?).and_then(|obj| obj.name).map(|name| name.strip_prefix("cert_").unwrap_or(name).to_string()) else { continue };
+        let Some(item) = usize::try_from(item_id).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name).map(|name| name.strip_prefix("cert_").unwrap_or(name).to_string()) else { continue };
         let Some(ceiling) = alch_bid_ceiling(mage, &item, own_rate) else { continue };
-        if ask > ceiling {
-            continue;
-        }
-        if best.as_ref().is_none_or(|(_, _, known_ask, _, known_ceiling)| ceiling - ask > known_ceiling - known_ask) {
-            best = Some((item, item_id, ask, qty, ceiling));
+        if ask <= ceiling {
+            out.push((item, item_id, ask, qty, ceiling));
         }
     }
-    best
+    rank_by_profit(&mut out);
+    out
+}
+
+/// Biggest profit per cast (`ceiling - ask`) first, then the object name
+/// for a stable order.
+fn rank_by_profit(asks: &mut [(String, i64, i64, i64, i64)]) {
+    asks.sort_by(|left, right| (right.4 - right.2).cmp(&(left.4 - left.2)).then_with(|| left.0.cmp(&right.0)));
 }
 
 /// Other accounts' resting asks at or under the alchemy value of their
@@ -288,28 +316,79 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
     let mut placed = 0;
     // Runes for the stock: a nature rune is worth its price plus half the
     // margin of the cast it enables.
-    if let (Some((_, pick)), Some(id)) = (best_for(life, live), obj_id(NATURE_RUNE)) {
-        let missing = (pick.casts - natures).clamp(0, ALCH_LOT);
-        let ceiling = (current_price(NATURE_RUNE) + pick.profit_each / 2.0).floor() as i64;
+    // The opportunity a rune serves: the bot's own stock to alch, else the
+    // best ask to buy and alch (a caster with nothing in hand still buys
+    // runes for the cheap lots others list, live 2026-11-15).
+    let opportunity = best_for(life, live).map(|(_, pick)| (pick.item, pick.casts, pick.profit_each)).or_else(|| {
+        alch_asks(&mage, &job.account, own_rate).into_iter().next().map(|(item, _, ask, resting, ceiling)| (item, resting.min(ALCH_LOT), (ceiling - ask) as f64))
+    });
+    if let (Some((item, casts, margin)), Some(id)) = (opportunity, obj_id(NATURE_RUNE)) {
+        let missing = (casts.max(lifescape_planner::alchemy::MIN_ALCH_CASTS) - natures).clamp(0, ALCH_LOT);
+        let ceiling = nature_ceiling(current_price(NATURE_RUNE), margin);
         if missing > 0 && ceiling >= 1 && coins >= ceiling {
             let qty = missing.min(coins / ceiling.max(1));
             if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling) {
-                crate::logln!("brain {}: alchemy needs {qty} nature runes, bid @ {price} (ceiling {ceiling}) for {}", job.account, pick.item);
+                crate::logln!("brain {}: alchemy needs {qty} nature runes, bid @ {price} (ceiling {ceiling}) for {item}", job.account);
             }
             placed += 1;
         }
     }
-    // Buy to alch: an ask under the floor, runes in hand.
+    // Buy to alch, biggest profit per cast first and down the list while
+    // runes, coins and the lot last (user rule 2026-11-15).
     if natures >= lifescape_planner::alchemy::MIN_ALCH_CASTS {
-        if let Some((item, id, ask, resting, ceiling)) = alch_ask(&mage, &job.account, own_rate) {
-            let qty = resting.min(natures).min(ALCH_LOT).min(coins / ask.max(1));
-            if qty >= 1 {
-                if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling) {
-                    crate::logln!("brain {}: buys {qty} {item} @ {price} to alch (ask {ask}, alch floor {ceiling})", job.account);
-                }
-                placed += 1;
+        let (mut runes_left, mut coins_left, mut lot_left) = (natures, coins, ALCH_LOT);
+        for (item, id, ask, resting, ceiling) in alch_asks(&mage, &job.account, own_rate) {
+            let qty = resting.min(runes_left).min(lot_left).min(coins_left / ask.max(1));
+            if qty < 1 {
+                continue;
+            }
+            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling) {
+                crate::logln!("brain {}: buys {qty} {item} @ {price} to alch (ask {ask}, alch floor {ceiling}, profit {} each)", job.account, ceiling - ask);
+            }
+            placed += 1;
+            runes_left -= qty;
+            lot_left -= qty;
+            coins_left -= qty * ask.max(1);
+            if runes_left < 1 || lot_left < 1 || coins_left < 1 {
+                break;
             }
         }
     }
     placed
+}
+
+#[cfg(test)]
+mod notes_tests {
+    use lifescape_json::{object, Value};
+
+    /// Noted and unnoted stock of one object fold into one stack.
+    #[test]
+    fn banknotes_fold_into_their_object() {
+        let note = |name: &str, count: i64| object(vec![("name", Value::Str(name.to_string())), ("count", Value::Int(count))]);
+        let live = object(vec![
+            ("inv", Value::Arr(vec![note("steel_longsword", 1)])),
+            ("bank", Value::Arr(vec![note("cert_steel_longsword", 13), note("naturerune", 40)])),
+        ]);
+        assert_eq!(super::stacks_of(&live), vec![("steel_longsword".to_string(), 14)]);
+    }
+
+    /// A caster keeps its runes and staff; a rune's ceiling is its price
+    /// plus half the cast margin it enables.
+    #[test]
+    fn casters_keep_their_runes_and_bid_on_the_margin() {
+        let means = super::caster_means();
+        assert!(means.iter().any(|name| name == "naturerune") && means.iter().any(|name| name == "firerune"));
+        assert_eq!(super::nature_ceiling(1.0, 400.0), 201, "a 400-coin cast pays a nature up to 201");
+        assert_eq!(super::nature_ceiling(4.0, -3.0), 4, "a losing cast never lifts the bid");
+    }
+
+    /// Buys go down the list by profit per cast, biggest first.
+    #[test]
+    fn alch_buys_rank_by_decreasing_profit() {
+        let row = |item: &str, ask: i64, ceiling: i64| (item.to_string(), 0, ask, 5, ceiling);
+        let mut asks = vec![row("steel_pickaxe", 1, 130), row("mithril_pickaxe", 2, 450), row("iron_dagger", 1, 6), row("black_battleaxe", 1, 435)];
+        super::rank_by_profit(&mut asks);
+        let order: Vec<&str> = asks.iter().map(|row| row.0.as_str()).collect();
+        assert_eq!(order, vec!["mithril_pickaxe", "black_battleaxe", "steel_pickaxe", "iron_dagger"]);
+    }
 }

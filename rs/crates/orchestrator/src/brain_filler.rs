@@ -166,6 +166,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
         Some((part(1)?, part(2)?, part(0)?))
     });
+    ctx.crowd = crate::site_crowd::others(&job.account);
     crate::brain_market::fill_ctx(&mut ctx, &node, live);
     lifescape_planner::resolve_ready(&mut node, &ctx);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now_secs() - stamp);
@@ -201,6 +202,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         note_idle(life, &format!("{} awaiting its fill, filler script {script} unknown", waiting.join(",")));
         return false;
     }
+    crate::site_crowd::note(&job.account, node.site);
     let through = through.map(|skill| format!(" through the {skill} ban (every workable money method is banned)")).unwrap_or_default();
     crate::logln!("brain {}: {} awaiting its fill, working {method} meanwhile{through} ({FILLER_TICKS} ticks): {script} {}", job.account, waiting.join(","), args.join(" "));
     push_history(life, &node.id, &format!("{FILLER_LAUNCH_TAG}{method}"));

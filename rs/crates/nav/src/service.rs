@@ -217,11 +217,12 @@ pub const L1_MAX_ENTRY_BYTES: usize = 32 * 1024;
 /// L2 versions kept: the live one plus the draining pre-reload one.
 pub const L2_VERSIONS_CAP: usize = 2;
 
-/// RAM §5.9: 1 Go hard cap, enforcement warn 80 % / shed 90 % / abort 95 %.
-/// Mo entail MiB here (80 % of 1024 = 819.2 ≈ 820, 90 % = 921.6 ≈ 920).
-pub const RAM_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
-pub const RAM_WARN_BYTES: u64 = 820 * 1024 * 1024;
-pub const RAM_SHED_BYTES: u64 = 920 * 1024 * 1024;
+/// RAM §5.9: 4 Go hard cap (raised from 1 Go 2026-11-15), enforcement
+/// warn 80 % / shed 90 % / abort 95 %, derived from the cap.
+/// Mo entail MiB here (80 % of 4096 ≈ 3277, 90 % ≈ 3686).
+pub const RAM_LIMIT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub const RAM_WARN_BYTES: u64 = RAM_LIMIT_BYTES / 100 * 80;
+pub const RAM_SHED_BYTES: u64 = RAM_LIMIT_BYTES / 100 * 90;
 
 /// Admission verdict for one RSS reading: Pass serves, Warn serves after
 /// logging + halving L1, Shed refuses (existing Refuse path, caller falls
@@ -3073,14 +3074,14 @@ mod tests {
     }
 
     /// §5.9 enforcement trigger (E5): pure gate, injected thresholds, no
-    /// real memory pressure. Constants match the doc lines (820/920 Mo of
-    /// the 1 Go cap). The shed Refuse path itself is the existing one the
+    /// real memory pressure. Constants match the doc lines (80/90 % of
+    /// the 4 Go cap). The shed Refuse path itself is the existing one the
     /// queue-full tests already prove falls back sync client-side.
     #[test]
     fn ram_gate_fires_on_injected_thresholds() {
-        assert_eq!(RAM_LIMIT_BYTES, 1024 * 1024 * 1024, "1 Go hard cap");
-        assert_eq!(RAM_WARN_BYTES, 820 * 1024 * 1024, "doc warn line");
-        assert_eq!(RAM_SHED_BYTES, 920 * 1024 * 1024, "doc shed line");
+        assert_eq!(RAM_LIMIT_BYTES, 4 * 1024 * 1024 * 1024, "4 Go hard cap");
+        assert_eq!(RAM_WARN_BYTES / (1024 * 1024), 3276, "doc warn line (80 %)");
+        assert_eq!(RAM_SHED_BYTES / (1024 * 1024), 3686, "doc shed line (90 %)");
         assert_eq!(ram_gate_for(0, RAM_WARN_BYTES, RAM_SHED_BYTES), RamGate::Pass);
         assert_eq!(
             ram_gate_for(RAM_WARN_BYTES - 1, RAM_WARN_BYTES, RAM_SHED_BYTES),

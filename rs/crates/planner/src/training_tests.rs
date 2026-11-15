@@ -188,3 +188,23 @@ fn magic_under_21_keeps_the_combat_spells() {
     let supply = vec![AlchSupply { item: "iron_dagger".to_string(), units: 300, unit_cost: 10.0, own: true }];
     assert_eq!(with_prices(&book, 0.5, 1000, |prices| best_pick("magic", 20, 21, prices, &supply)), None);
 }
+
+/// User 2026-11-15: the most profitable method, never a loss when one
+/// pays; among losses the smallest coin loss per XP (not per tick).
+#[test]
+fn a_paying_method_beats_any_loss() {
+    let row = |method: &str, profit_per_tick: f64, xp_per_tick: f64| super::TrainPick {
+        method: method.to_string(),
+        batch: 0,
+        missing: Vec::new(),
+        cost_per_xp: -profit_per_tick / xp_per_tick,
+        xp_per_tick,
+        profit_per_tick,
+    };
+    let mut picks = vec![row("slow_small_loss", -0.5, 0.5), row("fast_loss", -2.0, 4.0), row("pays", 0.3, 1.0), row("pays_more", 1.2, 0.8)];
+    super::sort_best_first(&mut picks);
+    let order: Vec<&str> = picks.iter().map(|pick| pick.method.as_str()).collect();
+    assert_eq!(order, vec!["pays_more", "pays", "fast_loss", "slow_small_loss"], "0.5/XP lost beats 1.0/XP lost");
+}
+
+

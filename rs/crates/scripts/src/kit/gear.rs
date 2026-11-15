@@ -164,9 +164,10 @@ pub fn gear_plan(
     }
     // Server ammo rule (player_ranged.rs2): an arrow above the bow's tier
     // is refused, so the quiver follows the bow the plan wears.
-    if let Some(bow_tier) = plan.get(&WEAPON_SLOT).and_then(|cands| cands.first()).map(|bow| bow.tier.max(1)) {
+    // Bows fire arrows, crossbows bolts (`equipment::ammo_fits`).
+    if let Some(weapon) = plan.get(&WEAPON_SLOT).and_then(|cands| cands.first()).cloned() {
         if let Some(arrows) = plan.get_mut(&AMMO_SLOT) {
-            arrows.retain(|arrow| arrow.tier <= bow_tier);
+            arrows.retain(|arrow| knowledge::equipment::ammo_fits(Some(&weapon), arrow));
         }
     }
     plan
@@ -313,20 +314,19 @@ pub fn wield_held(bot: &mut Bot, obj: u16) -> Result<bool, ScriptError> {
 /// wields the best carried arrow the worn bow accepts (server ammo rule:
 /// arrow tier <= bow tier). True when arrows are worn afterwards.
 pub fn refill_quiver(bot: &mut Bot) -> Result<bool, ScriptError> {
-    if worn_obj(bot, AMMO_SLOT).is_some() {
+    let wearable_of = |id: u16| knowledge::obj_by_id(usize::from(id)).and_then(|obj| obj.name).and_then(knowledge::equipment::by_name);
+    let weapon = worn_obj(bot, WEAPON_SLOT).and_then(wearable_of);
+    // A loaded quiver counts only when the weapon fires it: bolts behind a
+    // bow are swapped for carried arrows (equipping replaces the slot).
+    if worn_obj(bot, AMMO_SLOT).and_then(wearable_of).is_some_and(|ammo| knowledge::equipment::ammo_fits(weapon.as_ref(), &ammo)) {
         return Ok(true);
     }
-    let bow_tier = worn_obj(bot, WEAPON_SLOT)
-        .and_then(|id| knowledge::obj_by_id(usize::from(id)).and_then(|obj| obj.name))
-        .and_then(knowledge::equipment::by_name)
-        .map(|bow| bow.tier.max(1))
-        .unwrap_or(1);
     let mut arrows: Vec<knowledge::equipment::Wearable> = bot
         .inventory()
         .keys()
         .filter_map(|id| knowledge::obj_by_id(usize::from(*id)).and_then(|obj| obj.name))
         .filter_map(knowledge::equipment::by_name)
-        .filter(|entry| entry.wearpos == AMMO_SLOT && entry.rangebonus > 0 && entry.tier <= bow_tier)
+        .filter(|entry| entry.wearpos == AMMO_SLOT && knowledge::equipment::ammo_fits(weapon.as_ref(), entry))
         .collect();
     arrows.sort_by_key(|entry| std::cmp::Reverse(entry.rangebonus));
     for entry in arrows {

@@ -179,6 +179,19 @@ fn npc_sites(npc_id: usize) -> Vec<(i64, i64, i64)> {
     crate::f2p::f2p_npc_spawns(Some(npc_id)).iter().map(|spawn| (spawn.x, spawn.z, spawn.level)).collect()
 }
 
+/// True when a shop keeper's spawn is reachable: no gate no bot passes
+/// (a routed shop floor underground passes) and no quest-point door
+/// (`access::Gate::QuestPoints`, never opened).
+fn shop_site_open((x, z, level): (i64, i64, i64)) -> bool {
+    // The Dwarven Mine keepers (Nurmof) are routed shop floors.
+    let routed = crate::access::shop_floor_routed(x, z, level);
+    crate::access::gates_at(x, z, level).iter().all(|gate| match gate {
+        crate::access::Gate::QuestPoints { .. } => false,
+        crate::access::Gate::Underground => routed,
+        other => !crate::access::impassable(other),
+    })
+}
+
 fn npc_sites_by_name(name: &str) -> Vec<(i64, i64, i64)> {
     crate::npcs_by_name(name).iter().flat_map(|npc| npc_sites(npc.npc_id)).collect()
 }
@@ -313,10 +326,18 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
     let way = match source {
         ItemSource::Shop { shop } => {
             let access = crate::f2p::f2p_shop_access(&shop)?;
+            // A keeper behind a door no bot opens (Champions' Guild 32
+            // quest points: no quest-point count in the planner, live
+            // 2026-11-15 black_full_helm) is no way at all.
+            let sites: Vec<(i64, i64, i64)> =
+                access.npcs.iter().flat_map(|npc| npc_sites(*npc)).filter(|site| shop_site_open(*site)).collect();
+            if sites.is_empty() {
+                return None;
+            }
             let mut way = Way::new(WayKind::Shop, shop);
             way.coins = price_of(item);
             way.quest = access.quest;
-            way.sites = access.npcs.iter().flat_map(|npc| npc_sites(*npc)).collect();
+            way.sites = sites;
             way
         }
         ItemSource::Spawn { x, z, level } => {

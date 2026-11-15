@@ -1,14 +1,37 @@
 {
   "id": "cook_shrimp",
-  "accounts": ["t40", "t41", "t42"],
-  "setup": [
-    {"op": "tele_admin", "level": 0, "x": 3268, "z": 3167},
-    {"op": "teleother"},
-    {"op": "bank_all", "keep": []}
+  "accounts": [
+    "admin"
   ],
-  "run": {"script": "cook", "args": ["raw_shrimp", "1"], "budget_ticks": 1700},
+  "setup": [
+    {
+      "op": "tele_admin",
+      "level": 0,
+      "x": 3268,
+      "z": 3167
+    },
+    {
+      "op": "teleother"
+    },
+    {
+      "op": "bank_all",
+      "keep": []
+    }
+  ],
+  "run": {
+    "script": "cook",
+    "args": [
+      "raw_shrimp",
+      "1"
+    ],
+    "budget_ticks": 1700
+  },
   "assert": [
-    {"type": "xp", "skill": "cooking", "min_gain": 30}
+    {
+      "type": "xp",
+      "skill": "cooking",
+      "min_gain": 30
+    }
   ],
   "timeout_s": 180.0
 }

@@ -146,11 +146,14 @@ banque_varrock_ouest_place | 3213,3425,0 | 3185,3436,0 | f2p | reachable ; walk_
 # 30 pieces, pont de Port Sarim (3032,3217,1) ; gangplank.rs2 : la
 # passerelle de debarquement telejump sur le quai). Aretes custom_edges
 # de nav_overrides.json : chemin paye (allow_paid) et `coins:30` en sac.
+# L'aller exige `coins:60` (aller + retour, 2026-11-15) : 30 pieces seules
+# laissaient le bot bloque sur l'ile (bateau_aller_sans_retour).
 bateau_sans_droit | 3029,3217,0 | 2915,3150,0 | f2p | unreachable=PaidOnly ; blocked_custom=boat_port_sarim_to_karamja
 bateau_sans_piece | 3029,3217,0 | 2915,3150,0 | paid,f2p | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
-bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218
+bateau_aller_sans_retour | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30 | unreachable=NeedsRequirement ; blocked_custom=boat_port_sarim_to_karamja
+bateau_aller | 3029,3217,0 | 2915,3150,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja ; uses_custom=gangplank_karamja_dock ; levels=0>1>0 ; stand=3027,3218
 bateau_retour | 2915,3150,0 | 3029,3217,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_karamja_to_port_sarim ; uses_custom=gangplank_port_sarim_dock ; levels=0>1>0 ; stand=2954,3147
-bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30 | reachable ; uses_custom=boat_port_sarim_to_karamja
+bateau_draynor_homard | 3092,3245,0 | 2924,3178,0 | paid,f2p,has=coins:30,has=coins:60 | reachable ; uses_custom=boat_port_sarim_to_karamja
 bateau_ile_libre | 2956,3146,0 | 2924,3178,0 | f2p | reachable ; doors<=0
 # 41-46. poches scellees (2026-11-13) : tuile marchable sans aucune entree
 # (murs, mobilier, cloture ; aucune porte, montee ou arete custom n'y
@@ -250,3 +253,19 @@ geants_avec_cle | 3115,3448,0 | 3112,9837,0 | f2p,has=item:983 | reachable ; use
 # d'un commentaire, ignore par dump-transitions jusqu'au 2026-11-14 :
 # aucune sortie de cave, un bot descendu ne pouvait plus banquer).
 geants_retour | 3112,9837,0 | 3093,3491,0 | f2p | reachable ; uses_loc=1755 ; avoids=3115,3450
+# 51. retour au guichet (bloque) de la banque d'Edgeville (3095,3489)
+# (alicefield 2026-11-14 22:39, puis bloque des heures) : l'elagage de
+# la cible bloquee (Chebyshev > meilleur + 64, meme niveau) lisait le
+# donjon (z + 6400) comme loin du guichet ; des que l'echelle de cave
+# posait la recherche dans la maison a cle (3115,3453), tout le donjon
+# etait coupe et la maison devenait la cible ajustee (Disconnected cote
+# SDK, cible ajustee trop loin).
+geants_guichet | 3109,9841,0 | 3095,3489,0 | f2p | reachable ; adjusted=3094,3489 ; uses_loc=1755 ; avoids=3115,3450 ; budget_ms=3000
+# 52. Varrock -> geants sans cle (alicefield 00:04) : chemin leve par la
+# porte 1804 (126), detour strict par la trappe (417) au-dela du plafond
+# 2 x 126 + 64 : NeedsRequirement alors que le detour existe.
+geants_depuis_varrock | 3185,3436,0 | 3111,9837,0 | f2p | reachable ; uses_loc=1570 ; avoids=3115,3450 ; budget_ms=3000
+# 53. sortie de l'autel Earth (bh99tw2f 2026-11-15, coupe dans le temple
+# par un redeploy) : aucun bord ne sortait des temples de runecraft, tout
+# trajet lisait Disconnected ; bords custom `<rune>temple_exit_portal`.
+autel_terre_sortie | 2657,4839,0 | 3253,3420,0 | f2p | reachable ; uses_loc=2468

@@ -184,9 +184,10 @@ fn harvest_sources(name: &str, out: &mut Vec<ItemSource>) {
             out.push(ItemSource::Pick { field: field.to_string() });
         }
     }
-    if matches!(name, "redberries" | "grapes" | "cooking_apple" | "tomato" | "onion" | "potato" | "cabbage") {
-        out.push(ItemSource::Pick { field: name.to_string() });
-    }
+    // Only the four F2P field crops above pick (`pickables.rs2`: oploc2
+    // potato, wheat, onion, cabbage, flax members): redberries, grapes,
+    // cooking apples and tomatoes have no pick op in rev 274 (live
+    // 2026-11-15: 285 "no F2P field crop named cooking_apple").
     // Water filling at fountains/sinks/wells (catalogue §6).
     if matches!(name, "jug_water" | "bowl_water" | "bucket_water" | "bowl_of_water" | "vial_water") {
         out.push(ItemSource::Fill { point: "fountain".to_string() });

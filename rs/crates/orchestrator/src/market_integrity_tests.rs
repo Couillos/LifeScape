@@ -166,8 +166,7 @@ fn amend_of_a_partly_filled_order_rests_once() {
 }
 
 /// Finding 2: the fold never loses lots. Fragments placed before the
-/// first print sit above the new 5x band; merging them must not run
-/// them through the placement guards again.
+/// first print merge into one order at their own price.
 #[test]
 fn fold_keeps_fragments_outside_the_price_band() {
     let (service, path) = service("fold-band");
@@ -177,11 +176,10 @@ fn fold_keeps_fragments_outside_the_price_band() {
     for qty in [2, 13, 4] {
         assert_eq!(place(&service, "fiona_park", "sell", FEATHER, qty, 10).get("status").as_str(), Some("open"));
     }
-    // A settled print at 1 coin: the band now caps new orders at 5.
+    // A settled print at 1 coin caps nothing (no band, 2026-11-15).
     place(&service, "maker", "sell", FEATHER, 1, 1);
     place(&service, "taker", "buy", FEATHER, 1, 1);
     crate::market_test_support::settle_matched(&service);
-    assert_eq!(place(&service, "fiona_park", "sell", FEATHER, 1, 10).get("ok").as_bool(), Some(false), "band on");
     // The ledger no longer covers anything either: the lots were
     // covered when placed.
     service.lock_engine().ledger.sync_account("fiona_park", 0, &[]);

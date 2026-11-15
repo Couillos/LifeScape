@@ -363,3 +363,52 @@ fn life_file_keeps_the_ambition() {
     let legacy = crate::model::life_from_value(&old).expect("old files load");
     assert!(legacy.ambition.is_none() && legacy.goal_origin.is_none());
 }
+
+/// A revised ladder drops the open quotas it no longer offers (the
+/// mage's amulets of magic, 2026-11-15) and the demand quotas the kind
+/// no longer serves; done ones and quotas still on the ladder stay.
+#[test]
+fn a_revised_ladder_drops_its_stale_quotas() {
+    let mut mage = new_ambition("mage", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 7, &[], ZERO).expect("mage");
+    assert!(mage.milestones.iter().all(|stone| !matches!(&stone.target, Target::Produce { .. })), "the mage climbs levels only");
+    let stale = |id: &str, status: MilestoneStatus, origin: &str| super::Milestone {
+        id: id.to_string(),
+        label: String::new(),
+        target: Target::Produce { item: "amulet_of_magic".to_string(), count: 10, skill: "magic".to_string() },
+        status,
+        progress: (0, 10),
+        blocked_count: 0,
+        origin: origin.to_string(),
+    };
+    mage.milestones.push(stale("m90", MilestoneStatus::Active, "ladder"));
+    mage.milestones.push(stale("m91", MilestoneStatus::Done, "ladder"));
+    mage.milestones.push(stale("m92", MilestoneStatus::Pending, "demand:amulet_of_magic"));
+    // The demand quota leaves too: a mage serves no amulet of magic in
+    // one step (its strung amulet is a crafting chain).
+    assert_eq!(super::drop_stale_products(&mut mage), vec!["m90".to_string(), "m92".to_string()]);
+    assert!(mage.milestones.iter().any(|stone| stone.id == "m91"), "done quotas stay");
+    let mut miner = new_ambition("miner", "random", &BotNow { level_of: &|_| 1, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("miner");
+    assert!(super::drop_stale_products(&mut miner).is_empty(), "a current ladder keeps its quotas");
+}
+
+/// Open bids beyond the ladder: a smith serves steel bars (mined ore and
+/// coal, smelted), a mage no amulet of magic; a paying steel-bar bid
+/// becomes the smith's demand quota once its level opens the smelt.
+#[test]
+fn a_kind_serves_the_bids_its_own_skills_make() {
+    assert_eq!(crate::ambition_catalog::servable("smith", "steel_bar").map(|(skill, _)| skill), Some("smithing".to_string()));
+    assert_eq!(crate::ambition_catalog::servable("mage", "amulet_of_magic"), None);
+    assert_eq!(crate::ambition_catalog::servable("warrior", "steel_bar"), None);
+    let bid = vec![DemandItem { item: "steel_bar".to_string(), weight: 900.0, unmet: 40, margin: Some(120.0) }];
+    let smith_levels = [("smithing", 35u8), ("mining", 40u8)];
+    let level_of = levels(&smith_levels);
+    let mut smith = new_ambition("smith", "random", &BotNow { level_of: &level_of, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("smith");
+    smith.milestones.retain(|stone| !stone.origin.starts_with("demand:"));
+    refresh(&mut smith, &BotNow { level_of: &level_of, coins: 0, held: &|_| 0 }, 3, &bid);
+    assert!(smith.milestones.iter().any(|stone| stone.origin == "demand:steel_bar"), "{:?}", smith.milestones.iter().map(|stone| &stone.origin).collect::<Vec<_>>());
+    let novice = [("smithing", 10u8)];
+    let novice_of = levels(&novice);
+    let mut low = new_ambition("smith", "random", &BotNow { level_of: &novice_of, coins: 0, held: &|_| 0 }, 3, &[], ZERO).expect("smith");
+    refresh(&mut low, &BotNow { level_of: &novice_of, coins: 0, held: &|_| 0 }, 3, &bid);
+    assert!(!low.milestones.iter().any(|stone| stone.origin == "demand:steel_bar"), "smelting steel needs 30");
+}

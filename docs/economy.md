@@ -13,7 +13,7 @@ refroidissement de 3000 ticks) : tout ordre qui (ré)entre — placement,
 amend, relist après échec, réinsertion au boot — est TAKER et paie le
 prix de l'ordre déjà au repos ; `market_uncross` guérit le reste (boot,
 puis chaque tour de convocation). Code pur dans
-`rs/crates/market/` : `book` (carnet + appariement), `guards` (bandes +
+`rs/crates/market/` : `book` (carnet + appariement), `guards` (prix ≥ 1 +
 couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
 derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
@@ -33,7 +33,7 @@ Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
 ouverture à la référence échangée (ou au meilleur bid plus riche), à
 `max(meilleur bid, 2 × réserve)` pour un objet jamais échangé, jamais
 sous la réserve (`seller_open`). Une vente monte sans plafond propre
-(la bande 5× d'une référence échangée la borne). Voir § Prix par l'offre
+(seule la demande l'arrête). Voir § Prix par l'offre
 et la demande et § Réserve vendeur. Les PNJ n'ancrent plus rien : aucun bot ne
 vend à un marchand, et l'achat marchand est réservé aux objets non
 productibles en F2P (D-A, voir `decisions.md`). Marchands (`market:flip`, ~10 %) :
@@ -42,14 +42,11 @@ sélection sur écart/volume, plafonds `max_capital_share` (10 %),
 
 Couverture vérifiée à l'ordre (objet possédé, pièces disponibles, registre
 en mémoire ; les holdings live des connectés se brancheront sur le même
-contrôle). Bande anti-bug (`guards::check_price`, inchangée 2026-11-14,
-décision utilisateur en attente) : avec une référence ÉCHANGÉE (prix
-courant issu des 5 derniers fills), tout ordre au-dessus de 5× est rejeté (achat
-comme vente, au placement et à l'amend), un achat sous 0,2× aussi ; une
-vente peut descendre à 1 ; sans référence échangée aucune bande. La
-marche (`market_reprice::walk_cap`) plafonne la montée à 5× ; un vendeur
-dont la réserve dépasse 5× d'une référence effondrée garde son stock
-(hold), son ouverture est ramenée à 5× sinon. Deals livrés physiquement place
+contrôle). Aucune bande de prix (décision utilisateur 2026-11-15 : l'offre et la
+demande seules font les prix) : `guards::check_price` refuse seulement un
+prix < 1 ; plus de plafond 5× ni de plancher 0,2× autour de la référence,
+ni au placement, ni à l'amend, ni dans la marche (`market_reprice`) ou
+l'ouverture vendeur. Deals livrés physiquement place
 de Varrock (anneau autour de la fontaine, voir § Place ci-dessous) :
 `matched → convened(case d'échange, échéance) → both_arrived →
 trading → settled | failed{no_show|mismatch|death|timeout|nav_down}`.
@@ -101,8 +98,7 @@ Référence (PRD3, remplacée le 2026-11-14 par le prix courant, § Prix
 courant) = VWAP 24 h ; sinon dernier print ; sinon milieu du
 carnet ; sinon **1 pièce** (jamais le prix magasin). Ce repli public
 reste honnête (« pas de donnée ») mais aucun vendeur n'en part : un
-objet non échangé (référence non `traded`) ouvre à `2 × réserve`. La bande anti-bug ne
-s'applique qu'à une référence issue de vraies transactions. Bougies OHLCV en horloge (1 h / 7 jours,
+objet non échangé (référence non `traded`) ouvre à `2 × réserve`. Bougies OHLCV en horloge (1 h / 7 jours,
 1 jour / 6 mois et plus), recalculables depuis `executions` (source de
 vérité), tick serveur stocké avec chaque exécution. Tendances calculées
 uniquement sur données publiques (profondeur du carnet + exécutions :
@@ -816,6 +812,20 @@ entraînement.
   marché seulement : un spot de combat les lâche, D-A), et l'ask d'un
   autre compte le plus loin sous `net − 5 ticks × taux` est acheté pour
   l'alcher.
+- 2026-11-15 : les billets (`cert_*`) comptent comme leur objet dans le
+  stock à alcher (`stacks_of` ; avant, un lot acheté arrivé noté lisait
+  « missing » et le nœud abandonnait) ; un lanceur garde ses runes de
+  nature, de feu et son bâton (`caster_means`, ventes et `cleanup`) ; il
+  enchérit sur les runes de nature pour la meilleure occasion, son stock
+  ou à défaut le meilleur ask à alcher (plafond = prix courant + moitié
+  de la marge, `nature_ceiling`) ; les achats à alcher descendent la
+  liste par profit par lancer DÉCROISSANT (`rank_by_profit`) tant que
+  runes, pièces et lot suivent.
+- Entraînement, classement (décision utilisateur 2026-11-15 : « la
+  méthode la plus rentable », remplace le moindre coût par XP) : toute
+  méthode qui gagne des pièces passe avant toute perte, la meilleure en
+  pièces par tick (temps non compté) ; si toutes perdent, la plus petite
+  perte en pièces par XP (`training::sort_best_first`, `rank_key`).
 - Entraînement (2026-11-14, `training.rs`, `brain_train.rs`, voir
   docs/planner.md « Entraînement au prix ») : dès magie 21, chaque
   tranche compare au lancement le sort de combat et l'alchimie (stock
@@ -998,3 +1008,16 @@ Vérification hors ligne (`loot_check_tests.rs`, ignoré, mêmes variables
 que `live_check` + `LIFESCAPE_CHECK_ACCOUNT` optionnel) : sur une copie
 de la base et un `/api/status`, les annonces regroupées, abaissées et
 les lots que chaque bot posterait.
+
+## Entraînement en achetant les composants (2026-11-15)
+
+Cooking, crafting, firemaking et prayer rejoignent la forge et la magie
+dans l'entraînement au prix (`planner/src/training_production.rs`, voir
+`docs/planner.md` § Magie, ranged, demande servie) : chaque recette
+ouverte est chiffrée à ce que coûtent ses intrants au bot (stock détenu
+à sa valeur de vente, sinon achat au marché ou fabrication, temps du bot
+compris à son taux de gain) moins ce que le marché paie le produit. La
+plus rentable gagne, sinon la moins chère par XP : un bot qui gagne
+mieux en farmant de l'argent achète les composants bon marché au lieu de
+les récolter.
+

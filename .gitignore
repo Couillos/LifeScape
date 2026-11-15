@@ -15,3 +15,5 @@ orchestration/static/map-current.json
 
 # Sauvegardes de nettoyage (base + .sav), jamais commitees
 backup/poison-*/
+backup/pre-migration*/
+backup/*.tar.gz

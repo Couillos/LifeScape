@@ -90,6 +90,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     if crate::cpu_profile::timed("ambition.coverage", || crate::brain_ambition::coverage_pass(&mut life, &live)) {
         dirty = true;
     }
+    // A revised catalogue ladder drops the stale quotas it no longer offers.
+    if crate::brain_ambition::sync_catalog(&mut life, &live) {
+        dirty = true;
+    }
     // Space pressure (L8) precedes the terminal check: a full bank needs
     // its janitor even when the graph is done.
     if crate::cpu_profile::timed("cleanup_check", || maybe_insert_cleanup(&mut life, bank_types(job))) {
@@ -348,6 +352,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let part = |slot: usize| cells.get(slot).and_then(|cell| cell.as_i64());
         Some((part(1)?, part(2)?, part(0)?))
     });
+    // The fleet's sites: a crowded rock field reads farther.
+    ctx.crowd = crate::site_crowd::others(&job.account);
     crate::cpu_profile::timed("market.fill_ctx", || crate::brain_market::fill_ctx(&mut ctx, &life.nodes[position], &live));
     // Alchemy of its own stock is a money method too (2026-11-14).
     crate::cpu_profile::timed("alch.publish", || crate::brain_alch::publish(&mut ctx, &life.nodes[position], &life, &live));
@@ -546,6 +552,7 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         return;
     };
     let mut args = args;
+    crate::site_crowd::note(&job.account, node_snapshot.site);
     if matches!(node_snapshot.kind, NodeKind::ObtainItems { .. }) && !method.starts_with("shop:") {
         let derived = || crate::brain_market::derived_reserve(&life, launch, &live);
         crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx, &derived));
@@ -578,6 +585,8 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let mut keep = cleanup_keep(&life);
         keep.extend(crate::brain_tools::kept_tools(&life, &live_stacks(job), &crate::brain_tools::level_refs(&levels)));
         keep.extend(crate::brain_gear::ladder_keep(job, &life, &live));
+        // A caster's alchemy stock and runes (2026-11-15).
+        keep.extend(crate::brain_alch::alch_keep(&life, &live));
         for kept in merge_keep(keep, worn_names(job)) {
             args.push("--keep".to_string());
             args.push(kept);

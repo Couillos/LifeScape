@@ -494,6 +494,9 @@ aussi les tarifs comme portés). Goldens `bateau_*` (`uses_custom=`,
 `call`) : Captain Tobias → (2956,3143,1), passerelle 2082 → (2956,3146,0),
 officier des douanes (voyage, fouille, « Ok. ») → (3032,3217,1),
 passerelle 2084 → (3029,3217,0), 30 pièces prises à chaque traversée ;
+l'aller exige `coins:60` en sac (`requires` de l'arête, 2026-11-15 :
+james_mason, leo_king et tom_king avaient traversé avec 30 pièces, puis
+étaient restés bloqués sur l'île ; golden `bateau_aller_sans_retour`) ;
 l'exécuteur SDK lui-même attend un déploiement pour son essai live.
 
 ## Péage d'Al Kharid : côtés par connexité (2026-11-14)
@@ -524,6 +527,28 @@ détour sans ce tag avant de répondre `NeedsRequirement`. Cas réel : salle
 des géants du donjon d'Edgeville, porte à clé 1804 (171) ou trappe et
 donjon principal (260). Goldens `geants_sans_cle` (deux recherches :
 `budget_ms=1500`), `geants_avec_cle`, `geants_retour`.
+
+Plafond insuffisant (2026-11-15, `nav/src/detour.rs`) : avec les cases de
+danger que le worker envoie à chaque plan (combat 33 : géants, chasseurs
+du donjon, +8/pas), sortir de la salle coûtait 1980 en strict contre 453
+levé (plafond 970) : toute route depuis (3109,9841) répondait
+`NeedsRequirement` 1804 (alicefield bloqué des heures ; le dossier ne
+porte pas le danger, d'où le replay hors ligne divergent). Varrock ->
+géants, sans danger : 417 contre 126 (plafond 316). Désormais la recherche
+plafonnée ne sert qu'à répondre vite : épuisée sous le plafond =
+`NeedsRequirement` ; coupée par le plafond, chaque porte bloquante subit
+une preuve de poche (flood strict de rayon 128 depuis chaque côté, sans
+danger) : un côté qui se ferme = poche (guilde des champions) ; sinon
+recherche stricte sans plafond. Coupure budget = `BudgetExhausted`
+(jamais en cache L1). Arêtes custom (bateau) : réponse plafonnée gardée.
+Tests `giants_exit_tests`, golden `geants_depuis_varrock`.
+
+Élagage de cible bloquée (`fallback::past_fallback`) : la distance se
+mesure sur le plan de la cible (souterrain = surface + 6400 en z). Avant,
+le guichet d'Edgeville (3095,3489) depuis la salle : l'échelle de cave
+posait la recherche dans la maison à clé (36), tout le donjon lisait
+~6350 et était coupé, la maison devenait la cible ajustée (SDK :
+`Disconnected closest=(3115,3453)`). Golden `geants_guichet`.
 
 Sorties de cave : `dump-transitions` ignorait l'en-tête
 `[oploc1,ladder_from_cellar] // mining guild ladder` (commentaire après
@@ -560,3 +585,10 @@ liée à son seul emplacement). 15 lignes ajoutées en fin de
   recherche ; les pickers ne peuvent donc pas encore vérifier
   l'atteignabilité d'un spot avant de le choisir (à faire côté nav :
   coût vers la case d'appui la plus proche, recherche bornée).
+
+Sorties des temples de runecraft (2026-11-15) : bords custom
+`<rune>temple_exit_portal` (air, mind, water, earth, fire, body ;
+`runecraft.rs2 [oploc1,_rc_exit_portal]` → `exit_coord` de
+`runecraft.dbrow`). Un bot coupé dans un temple (redeploy en plein trajet,
+bh99tw2f) n'avait aucune sortie : tout trajet lisait Disconnected.
+Golden `autel_terre_sortie`.

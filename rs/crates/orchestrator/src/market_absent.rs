@@ -6,7 +6,7 @@
 //! seller t01 offline, "parties missing" every round).
 //!
 //! Each convene round: an absent party with no session is opened through
-//! the daemon's own `open_job` (E1 admission and E10 open pace included),
+//! the daemon's own `open_job` (no admission since 2026-11-15),
 //! one account at a time, off the convene thread (an open blocks up to
 //! the open timeout). An account that cannot be opened (staff/private,
 //! login refused) or that stays absent past `ABSENT_GRACE_TICKS` fails
@@ -116,7 +116,7 @@ impl AbsentTracker {
             return;
         }
         let error = reply.get("error").as_str().unwrap_or("open failed without a reason").to_string();
-        if error.starts_with("admission:open-rate") || error.starts_with("already open") {
+        if error.starts_with("already open") {
             return;
         }
         self.open_failed.insert(account.to_string(), error);
@@ -226,15 +226,15 @@ mod tests {
         assert!(matches!(actions.as_slice(), [AbsentAction::Fail(account, _)] if account == "bite"), "{actions:?}");
     }
 
-    /// Admission pace refusals retry; a hard open failure fails the deals.
+    /// An open in flight elsewhere retries; a hard failure fails the deals.
     #[test]
     fn open_errors_retry_or_fail() {
         let mut tracker = AbsentTracker::new();
         let none = |_: &str| false;
         tracker.plan(&names(&["t01"]), &none, &excluded(), 100.0, 60);
-        tracker.record_open("t01", &object(vec![("ok", Value::Bool(false)), ("error", str_value("admission:open-rate wait 1.2s"))]));
+        tracker.record_open("t01", &object(vec![("ok", Value::Bool(false)), ("error", str_value("already open t01: another open/close is in flight"))]));
         let retry = tracker.plan(&names(&["t01"]), &none, &excluded(), 110.0, 60);
-        assert_eq!(retry, vec![AbsentAction::Open("t01".to_string())], "pace refusal retries");
+        assert_eq!(retry, vec![AbsentAction::Open("t01".to_string())], "an open in flight retries");
         tracker.record_open("t01", &object(vec![("ok", Value::Bool(false)), ("error", str_value("login refused"))]));
         let failed = tracker.plan(&names(&["t01"]), &none, &excluded(), 120.0, 60);
         assert!(matches!(failed.as_slice(), [AbsentAction::Fail(account, why)] if account == "t01" && why.contains("login refused")), "{failed:?}");

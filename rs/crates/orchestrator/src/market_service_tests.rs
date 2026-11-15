@@ -125,7 +125,7 @@ fn amend_is_cancel_and_replace_behind_the_queue() {
 }
 
 #[test]
-fn guards_reject_bands_and_naked_orders() {
+fn guards_reject_naked_orders_never_prices() {
     let (service, path) = service("guards");
     funded(&service, "poor");
     // Never traded (PRD3 lot 2): the reference is 1 coin and does not
@@ -138,7 +138,7 @@ fn guards_reject_bands_and_naked_orders() {
         ("qty", Value::Int(1)),
         ("price", Value::Int(11)),
     ]));
-    assert_eq!(free_bid.get("ok").as_bool(), Some(true), "untraded items have no band: {free_bid:?}");
+    assert_eq!(free_bid.get("ok").as_bool(), Some(true), "no band: {free_bid:?}");
     // Naked sell: no stock funded on this account.
     let naked = service.handle(&request(vec![
         ("op", str_value("place")),
@@ -811,10 +811,10 @@ fn list_traded_only_hides_untraded_goods() {
     cleanup(&path);
 }
 
-/// PRD3 lot 2: the first print turns the band on. Before it, any bid
-/// lists; after a trade at 2, a bid above 5x (10) is refused.
+/// No band (user rule 2026-11-15): after a trade at 2, a bid at 50x
+/// or a sell at 1 still lists; supply and demand decide.
 #[test]
-fn first_print_turns_the_band_on() {
+fn a_traded_reference_caps_nothing() {
     let (service, path) = service("band");
     funded(&service, "maker");
     funded(&service, "taker");
@@ -835,8 +835,7 @@ fn first_print_turns_the_band_on() {
     let quote = service.handle(&request(vec![("op", str_value("quote")), ("item", Value::Int(314))]));
     assert_eq!(quote.get("reference").as_i64(), Some(2));
     assert_eq!(quote.get("traded").as_bool(), Some(true));
-    assert_eq!(place("taker", "buy", 11).get("ok").as_bool(), Some(false), "11 > 5x the traded 2");
-    assert_eq!(place("taker", "buy", 10).get("ok").as_bool(), Some(true), "10 = 5x stays inside");
+    assert_eq!(place("taker", "buy", 100).get("ok").as_bool(), Some(true), "50x the traded 2 lists");
     cleanup(&path);
 }
 

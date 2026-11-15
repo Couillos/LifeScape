@@ -85,16 +85,11 @@ fn worn(bot: &Bot, slot: i64) -> Option<u16> {
     bot.world.inv.get(&worn_com)?.get(&(slot as u8)).map(|(held, _)| *held)
 }
 
-/// Tier of the wielded bow (1 when unknown: bronze always fits).
-fn bow_tier(bot: &Bot) -> i64 {
-    worn(bot, WEAPON_SLOT).and_then(wearable).map(|bow| bow.tier.max(1)).unwrap_or(1)
-}
-
-/// The quiver holds arrows the wielded bow accepts (server ammo rule:
-/// arrow tier <= bow tier).
+/// The quiver holds ammo the wielded weapon fires (server ammo rule:
+/// arrows for bows up to their tier, bolts for crossbows).
 fn quiver_fits_bow(bot: &Bot) -> bool {
-    let tier = bow_tier(bot);
-    worn(bot, AMMO_SLOT).and_then(wearable).is_some_and(|arrow| arrow.rangebonus > 0 && arrow.tier <= tier)
+    let weapon = worn(bot, WEAPON_SLOT).and_then(wearable);
+    worn(bot, AMMO_SLOT).and_then(wearable).is_some_and(|ammo| knowledge::equipment::ammo_fits(weapon.as_ref(), &ammo))
 }
 
 /// Last known bank contents: open now, else the copy kept at close.
@@ -108,9 +103,9 @@ fn known_bank(bot: &Bot) -> HashMap<u16, u32> {
 
 /// The bank holds arrows the wielded bow accepts.
 fn bank_has_ammo(bot: &Bot) -> bool {
-    let tier = bow_tier(bot);
+    let weapon = worn(bot, WEAPON_SLOT).and_then(wearable);
     known_bank(bot).into_iter().any(|(id, count)| {
-        count > 0 && wearable(id).is_some_and(|arrow| arrow.wearpos == AMMO_SLOT && arrow.rangebonus > 0 && arrow.tier <= tier)
+        count > 0 && wearable(id).is_some_and(|ammo| ammo.wearpos == AMMO_SLOT && knowledge::equipment::ammo_fits(weapon.as_ref(), &ammo))
     })
 }
 

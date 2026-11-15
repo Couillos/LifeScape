@@ -6,8 +6,7 @@
 //! stabilized pre-run baseline), wall `timeout_s`. Each scenario runs on a
 //! distinct account; `verify [ids|--all] [--parallel N]` prints one table
 //! row per scenario and the failure dossier (cause, position, log tail)
-//! only for failures. `--parallel` is clamped to 1..=20 (D38) and to the
-//! daemon admission headroom.
+//! only for failures. `--parallel` is clamped to 1..=20 (D38).
 //!
 //! Setup never trusts a cheat reply: `give` answers `Ok` on a full pack
 //! (27/28 seen live), so the runner polls `show` until the effect is
@@ -124,30 +123,22 @@ fn worker_live(account: &str) -> bool {
 }
 
 fn ensure_open(account: &str) -> Result<(), String> {
-    // Live workers need no open: the daemon paces accepts (E10, one per
-    // 2 s), so a redundant `open` inside the window reads as a refusal.
+    // Live workers need no open.
     if worker_live(account) {
         return Ok(());
     }
-    for _attempt in 0..5 {
-        let reply = daemon_send(
-            &object(vec![("cmd", str_value("open")), ("account", str_value(account))]),
-            Duration::from_secs(WORKER_TIMEOUT),
-        )?;
-        if reply.get("ok").as_bool() == Some(true) {
-            return Ok(());
-        }
-        let error = reply.get("error").as_str().unwrap_or("open refused").to_string();
-        if error.contains("already open") {
-            return Ok(());
-        }
-        if error.contains("admission:open-rate") {
-            std::thread::sleep(Duration::from_millis(2500));
-            continue;
-        }
-        return Err(error);
+    let reply = daemon_send(
+        &object(vec![("cmd", str_value("open")), ("account", str_value(account))]),
+        Duration::from_secs(WORKER_TIMEOUT),
+    )?;
+    if reply.get("ok").as_bool() == Some(true) {
+        return Ok(());
     }
-    Err(format!("open {account}: paced out by admission:open-rate"))
+    let error = reply.get("error").as_str().unwrap_or("open refused").to_string();
+    if error.contains("already open") {
+        return Ok(());
+    }
+    Err(error)
 }
 
 fn short_error(error: &Value) -> String {
@@ -464,20 +455,6 @@ fn finish_single(scenario: &Scenario, account: &str, baseline: &Value, wall_star
 
 // -- table + parallelism -----------------------------------------------------
 
-fn admission_headroom() -> Option<usize> {
-    let status = daemon_send(&object(vec![("cmd", str_value("status"))]), Duration::from_secs(10)).ok()?;
-    let online = status.get("jobs").as_arr().map(Vec::len).unwrap_or(0);
-    let stats = daemon_send(&object(vec![("cmd", str_value("res-stats"))]), Duration::from_secs(10)).ok()?;
-    let load = crate::admission::DaemonLoad {
-        online_bots: online,
-        pushes_per_s: stats.get("pushes_per_s").as_f64().unwrap_or(0.0),
-        push_bytes_per_s: stats.get("push_bytes_per_s").as_f64().unwrap_or(0.0),
-        files_per_s: stats.get("files_per_s").as_f64().unwrap_or(0.0),
-        plan_submits_per_s: stats.get("plan_submits_per_s").as_f64().unwrap_or(0.0),
-    };
-    Some(crate::admission::max_online_bots(&load).saturating_sub(online))
-}
-
 /// CLI entry: `verify [ids|--all] [--parallel N]`. One distinct account per
 /// scenario, a table row each, dossiers for failures only. Exit 0 when
 /// every scenario is ok, 1 otherwise, 2 on usage errors.
@@ -521,28 +498,20 @@ pub fn verify_cli(args: &[String]) -> i32 {
         return 2;
     }
     parallel = parallel.clamp(1, MAX_PARALLEL).min(ids.len());
-    if parallel > 1 {
-        match admission_headroom() {
-            Some(headroom) if headroom < parallel => {
-                println!("verify: admission headroom {headroom}, parallel capped");
-                parallel = headroom.max(1);
-            }
-            None => println!("verify: admission unreadable, parallel kept at {parallel}"),
-            _ => {}
-        }
-    }
     let mut scenarios: Vec<Result<Scenario, String>> = Vec::new();
     for id in &ids {
         scenarios.push(load_scenario(id));
     }
-    // One distinct account per scenario: first admitted name not taken yet.
+    // One distinct account per scenario when runs go in parallel: first
+    // admitted name not taken yet. Serial runs (parallel 1) reuse it: the
+    // scenarios all run on `admin` since 2026-11-15 (user rule).
     let mut taken: Vec<String> = Vec::new();
     let mut assignments: Vec<(String, Result<Scenario, String>)> = Vec::new();
     for (id, scenario) in ids.iter().zip(scenarios.into_iter()) {
         match scenario {
             Err(error) => assignments.push((String::new(), Err(error.clone()))),
             Ok(scenario) => {
-                let free = scenario.accounts.iter().find(|name| !taken.contains(name)).cloned();
+                let free = scenario.accounts.iter().find(|name| parallel <= 1 || !taken.contains(name)).cloned();
                 match free {
                     Some(account) => {
                         taken.push(account.clone());

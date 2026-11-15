@@ -1,31 +1,15 @@
 #![forbid(unsafe_code)]
-//! Guard rails: every order is rejected loudly when it is too far from
-//! the reference price or uncovered. Sells may fall to 1 coin; buys must
-//! sit inside 0.2x-5x of the reference when one is known.
+//! Guard rails: an order is rejected loudly when its price is not a
+//! positive coin count or it is uncovered. No band around a reference
+//! (user rule 2026-11-15): supply and demand alone drive prices.
 
 use crate::error::Error;
 use crate::Side;
 
-/// Price band check. `reference` is `None` until the object has traded
-/// (a quote-only or default 1-coin reference never caps an order, or
-/// nobody could ever bid an untraded object above 5 coins); without one
-/// only the 1-coin floor applies.
-pub fn check_price(side: Side, price: i64, reference: Option<i64>) -> Result<(), Error> {
+/// Price check: at least 1 coin, nothing else (no reference band).
+pub fn check_price(price: i64) -> Result<(), Error> {
     if price < 1 {
         return Err(Error::Invalid(format!("bad price {price}")));
-    }
-    let Some(anchor) = reference else {
-        return Ok(());
-    };
-    if anchor < 1 {
-        return Err(Error::Invalid(format!("bad reference {anchor}")));
-    }
-    // Integer math: price > 5x  <=>  price/anchor > 5 without floats.
-    if price > anchor.saturating_mul(5) {
-        return Err(Error::Rejected(format!("price {price} above 5x reference {anchor}")));
-    }
-    if side == Side::Buy && price.saturating_mul(5) < anchor {
-        return Err(Error::Rejected(format!("buy price {price} below 0.2x reference {anchor}")));
     }
     Ok(())
 }
@@ -67,25 +51,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bands_pin_buys_but_let_sells_fall() {
-        assert!(check_price(Side::Buy, 500, Some(100)).is_ok());
-        assert!(check_price(Side::Sell, 1, Some(100)).is_ok());
-        assert!(matches!(
-            check_price(Side::Buy, 501, Some(100)),
-            Err(Error::Rejected(_))
-        ));
-        assert!(matches!(
-            check_price(Side::Sell, 501, Some(100)),
-            Err(Error::Rejected(_))
-        ));
-        // 19 is below 0.2x of 100 for a buy, fine for a sell.
-        assert!(matches!(
-            check_price(Side::Buy, 19, Some(100)),
-            Err(Error::Rejected(_))
-        ));
-        assert!(check_price(Side::Sell, 19, Some(100)).is_ok());
-        assert!(check_price(Side::Buy, 20, Some(100)).is_ok());
-        assert!(check_price(Side::Buy, 7, None).is_ok());
+    fn any_positive_price_passes_supply_and_demand_decide() {
+        assert!(check_price(1).is_ok());
+        assert!(check_price(1_000_000).is_ok());
+        assert!(matches!(check_price(0), Err(Error::Invalid(_))));
+        assert!(matches!(check_price(-3), Err(Error::Invalid(_))));
     }
 
     #[test]

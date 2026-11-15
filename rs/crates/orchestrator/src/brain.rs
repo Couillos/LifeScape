@@ -198,6 +198,21 @@ pub fn parse_pin(text: &str) -> Result<Option<(String, u8)>, String> {
     Ok(Some((skill.to_string(), level)))
 }
 
+/// `create-user --goal ambition:overall` (user 2026-11-15): the
+/// operator-only highscore ambition (first overall: total level, then XP).
+pub const OVERALL_GOAL: &str = "ambition:overall";
+
+/// The overall ambition of a fresh account and its first goal: the lowest
+/// F2P skill (`goals::lowest_skill_goal`), no milestone.
+fn overall_start(seed: u64) -> Result<(lifescape_planner::Ambition, GoalKind), String> {
+    let level_of = |name: &str| if name == "hitpoints" { 10 } else { 1 };
+    let held = |_: &str| 0;
+    let now = lifescape_planner::BotNow { level_of: &level_of, coins: 0, held: &held };
+    let ambition = lifescape_planner::new_ambition(lifescape_planner::OVERALL, "operator:overall", &now, seed, &[], crate::brain_ambition::stamp_now()).map_err(|error| error.to_string())?;
+    let goal = lifescape_planner::lowest_skill_goal(lifescape_planner::OVERALL_SKILLS, &level_of, &[], seed, 0).ok_or("overall: no trainable skill")?;
+    Ok((ambition, goal))
+}
+
 /// The pinned ambition of a fresh account (levels 1, hitpoints 10, no
 /// coins), its first open milestone's goal and that milestone's id.
 fn pinned_start(skill: &str, level: u8, seed: u64) -> Result<(lifescape_planner::Ambition, GoalKind, String), String> {
@@ -271,9 +286,11 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
     if iron && !iron_allowed(iron_count()) {
         return Err(format!("iron cap reached ({MAX_IRON}): no new Ironman"));
     }
-    let pin = parse_pin(goal_text)?;
+    let overall = goal_text.trim() == OVERALL_GOAL;
+    let pin = if overall { None } else { parse_pin(goal_text)? };
     let goal = match &pin {
         Some(_) => GoalKind::MakeMoney,
+        None if overall => GoalKind::MakeMoney,
         None => parse_goal(goal_text)?,
     };
     if iron {
@@ -292,6 +309,10 @@ pub fn ensure_life(account: &str, iron: bool, goal_text: &str) -> Result<Life, S
         Some((skill, level)) => {
             let (ambition, goal, origin) = pinned_start(&skill, level, seed)?;
             (goal, Some(ambition), Some(origin))
+        }
+        None if overall => {
+            let (ambition, goal) = overall_start(seed)?;
+            (goal, Some(ambition), None)
         }
         None => (goal, None, None),
     };

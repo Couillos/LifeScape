@@ -60,8 +60,9 @@ fn ensure_daemon() -> bool {
         .unwrap_or_else(|_| std::process::Stdio::null());
     // Two glibc malloc arenas (measured 2026-11-14, 60 bots): with the
     // default (8 x cores) every short-lived web/socket thread fragments its
-    // own arena and RSS climbed 443 -> 847 MB in 40 min, near the nav
-    // shed line (920 MB); with 2 arenas 109 -> 296 MB over 45 min. The
+    // own arena and RSS climbed 443 -> 847 MB in 40 min, near the then
+    // nav shed line (920 MB, cap since raised to 4 GB); with 2 arenas
+    // 109 -> 296 MB over 45 min. The
     // workers the daemon spawns inherit it.
     let _ = Command::new(std::env::current_exe().unwrap_or_else(|_| "orchestrator".into()))
         .arg("daemon")
@@ -136,7 +137,7 @@ fn format_res_stats(stats: &Value) -> String {
     let rate = |key: &str| stats.get(key).as_f64().map(|n| format!("{n:.2}")).unwrap_or_else(|| "-".to_string());
     let uptime = stats.get("uptime_secs").as_f64().map(|s| format!("{s:.0}s")).unwrap_or_else(|| "-".to_string());
     format!(
-        "res-stats up={} conn={} ({} /s) pushes={} ({} /s, {} B at {} B/s) lights={} ({} /s) plans={} ({} /s) polls={} ({} /s) files={} ({} /s) reconnects={} refused={} disk={}Go low={}",
+        "res-stats up={} conn={} ({} /s) pushes={} ({} /s, {} B at {} B/s) lights={} ({} /s) plans={} ({} /s) polls={} ({} /s) files={} ({} /s) reconnects={} disk={}Go low={}",
         uptime,
         int("connections"),
         rate("connections_per_s"),
@@ -153,7 +154,6 @@ fn format_res_stats(stats: &Value) -> String {
         int("files_written"),
         rate("files_per_s"),
         int("push_reconnects"),
-        int("admission_refused"),
         int("disk_free_go"),
         stats.get("disk_low").as_bool().map(|low| low.to_string()).unwrap_or_else(|| "-".to_string()),
     )

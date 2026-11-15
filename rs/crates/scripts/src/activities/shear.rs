@@ -33,6 +33,10 @@ pub const TOOLLESS_LIMIT: u32 = 3;
 pub const EMPTY_LIMIT: u32 = 5;
 /// Approach budget per sheep.
 pub const SHEEP_WALK_TICKS: u64 = 6000;
+/// Other pens a worked-out pen sends the shearer to before it fails.
+const PEN_MOVES: u32 = 2;
+/// Tiles around the bot that count as the same pen.
+const PEN_RADIUS: i64 = 30;
 
 /// One click, one sheep: use the shears, watch the wool land. A sheared
 /// sheep is depletion (the type flips to `sheepsheered`); a fled sheep
@@ -154,6 +158,7 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut banned = BanSet::new();
     let mut toolless = 0u32;
     let mut empty = 0u32;
+    let mut pens_tried = 0u32;
     run(bot, &spec, |step_bot, state| {
         check_events(step_bot)?;
         bank = nearest_bank(step_bot)?;
@@ -178,8 +183,17 @@ pub fn run_shear(bot: &mut Bot, args: &[String]) -> ScriptResult {
                 return Ok(StepControl::Continue);
             }
             empty += 1;
+            if empty >= EMPTY_LIMIT && pens_tried < PEN_MOVES {
+                // This pen is worked out (sheared sheep regrow slowly):
+                // the next pen beyond it before any failure.
+                pens_tried += 1;
+                if crate::kit::harvest::walk_to_spawn_beyond(step_bot, SHEEP_NAMES[0], SHEEP_WALK_TICKS, PEN_RADIUS)? {
+                    empty = 1;
+                    return Ok(StepControl::Continue);
+                }
+            }
             if empty >= EMPTY_LIMIT {
-                return Err(ScriptError::Failed(format!("no sheep near {:?}", step_bot.position())));
+                return Err(ScriptError::Failed(format!("no sheep near {:?} ({pens_tried} other pens tried)", step_bot.position())));
             }
             step_bot.log("no sheep, waiting for respawns");
             for _ in 0..10 {

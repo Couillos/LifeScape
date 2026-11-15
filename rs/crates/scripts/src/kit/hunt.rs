@@ -241,7 +241,7 @@ pub fn run_spot_with(
             // food everywhere but cows and chickens).
             if foodless(plan, food_count(bot)) {
                 bot.log(&format!("no food for {} after the bank trip, blocking", spot.key));
-                return Err(food_blocked(knowledge::melee_ladder::FOOD_ITEM));
+                return Err(food_blocked(crate::kit::ladder::asked_food(bot)));
             }
             // A dead socket must reconnect, not limp to the next cluster:
             // propagate connection failures, swallow the rest as before.

@@ -62,6 +62,9 @@ pub struct ReadyCtx {
     /// (`training::best_pick`, market and holdings at resolve): locked
     /// before the static tranche method. `None`: the static method.
     pub training: Option<crate::training::TrainPick>,
+    /// Sites the rest of the fleet works right now, with how many bots
+    /// each (`combat::pick_site_crowded`): a crowded site reads farther.
+    pub crowd: Vec<((i64, i64, i64), u32)>,
 }
 
 impl ReadyCtx {
@@ -88,6 +91,7 @@ impl ReadyCtx {
             coin_share_pct: None,
             quests_done: Vec::new(),
             training: None,
+            crowd: Vec::new(),
         }
     }
 }
@@ -461,7 +465,7 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         return;
     }
     for method in &candidates {
-        match crate::combat::pick_site_gated(method, ctx.combat, ctx.position, fare, &pass) {
+        match crate::combat::pick_site_crowded(method, ctx.combat, ctx.position, fare, &pass, &ctx.crowd) {
             crate::combat::SitePick::Anywhere => {
                 node.method = Some(method.clone());
                 return;

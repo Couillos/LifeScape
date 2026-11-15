@@ -26,14 +26,14 @@ fn a_sale_lists_a_demand_lot_at_the_sellers_own_cost() {
     assert!(matches!(plan_sale(0, reserve(4), UNTRADED, None, None, FoundMarks::default(), &demand(99, Vec::new())), SaleDecision::Hold(_)));
 }
 
-/// The anti-bug band stays (reported, unchanged): a reserve over 5x a
-/// traded reference holds; an opening over it comes down to it.
+/// No band (user rule 2026-11-15): a reserve over 5x a traded reference
+/// still lists at its own floor; a fast fill opens above it.
 #[test]
-fn the_band_caps_the_opening_and_holds_over_the_reserve() {
+fn no_band_caps_the_opening_or_holds_over_the_reserve() {
     let traded = Reference { price: 2, traded: true };
-    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, FoundMarks::default(), &demand(100, Vec::new())), SaleDecision::Hold(_)), "11 > 5 x 2");
+    assert!(matches!(plan_sale(50, reserve(11), traded, None, None, FoundMarks::default(), &demand(100, Vec::new())), SaleDecision::List { floor: 11, .. }), "11 > 5 x 2 lists anyway");
     let fast = OwnFill { price: 12, rested_ticks: Some(10) };
-    assert_eq!(plan_sale(50, reserve(4), traded, None, Some(fast), FoundMarks::default(), &demand(30, Vec::new())), SaleDecision::List { qty: 30, price: 10, floor: 4 }, "13 capped at 10");
+    assert!(matches!(plan_sale(50, reserve(4), traded, None, Some(fast), FoundMarks::default(), &demand(30, Vec::new())), SaleDecision::List { qty: 30, floor: 4, price } if price > 10), "no 5x cap");
 }
 
 #[test]
@@ -67,10 +67,10 @@ fn found_loot_lists_a_whole_lot_at_a_clearing_price() {
     assert_eq!(plan_sale(41, found(), daggers, None, None, marks(Some(18), Some(21)), &asks(vec![(18, 2), (22, 4), (28, 9)])), SaleDecision::List { qty: 28, price: 17, floor: 1 }, "an inventory, just under the cheapest ask");
     // Fur: only its own old ask rests (131): it never anchors the lot.
     assert_eq!(plan_sale(6, found(), Reference { price: 131, traded: false }, None, None, marks(None, Some(12)), &asks(vec![(131, 2)])), SaleDecision::List { qty: 6, price: 12, floor: 1 }, "the whole small stack at its alch value");
-    // An outlier fill never lifts the opening over the 5x band.
+    // No band: a fast fill far above the reference is the opening's guide.
     let outlier = Reference { price: 30, traded: true };
     let fast = OwnFill { price: 600, rested_ticks: Some(5) };
-    assert_eq!(plan_sale(10, found(), outlier, None, Some(fast), FoundMarks::default(), &asks(Vec::new())), SaleDecision::List { qty: 10, price: 150, floor: 1 });
+    assert!(matches!(plan_sale(10, found(), outlier, None, Some(fast), FoundMarks::default(), &asks(Vec::new())), SaleDecision::List { qty: 10, floor: 1, price } if price > 150));
 }
 
 /// Iron dagger 1 @628 resting while 40 more sat in the bank: a listing

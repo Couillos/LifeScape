@@ -136,7 +136,7 @@ pub fn smithing_cuts() -> &'static [u8] {
 /// skeleton files no consumption for a magic one (the object to alch is
 /// unknown until then).
 pub fn priced_at_resolve(skill: &str, start: u8) -> bool {
-    skill == "smithing" || (skill == "magic" && start >= ALCH_FROM_LEVEL)
+    skill == "smithing" || (skill == "magic" && start >= ALCH_FROM_LEVEL) || crate::training_production::PRODUCTION_SKILLS.contains(&skill)
 }
 
 /// What the bot pays for one unit it does not hold.
@@ -185,14 +185,38 @@ pub struct TrainPick {
     pub missing: Vec<String>,
     pub cost_per_xp: f64,
     pub xp_per_tick: f64,
+    /// Coins the method earns per tick, time not counted (product value
+    /// less inputs; negative = a loss). The ranking key (user
+    /// 2026-11-15: the most profitable method, never a loss when one pays).
+    pub profit_per_tick: f64,
 }
 
 /// Cost of `units` of one input: held units at their sale value, the
 /// rest acquired; `bonus_xp` per unit when the bot makes it with `skill`.
-struct Costed {
-    each: f64,
-    bonus_xp: f64,
-    short: bool,
+pub(crate) struct Costed {
+    pub(crate) each: f64,
+    pub(crate) bonus_xp: f64,
+    pub(crate) short: bool,
+}
+
+/// `cost_input` for the sibling pricers (`training_production`).
+pub(crate) fn cost_input_of(item: &str, units: i64, first_load: i64, skill: &str, prices: &TrainPrices) -> Option<Costed> {
+    cost_input(item, units, first_load, skill, prices)
+}
+
+/// `actions_for` for the sibling pricers.
+pub(crate) fn actions_for_xp(xp_needed: f64, xp_each: f64) -> i64 {
+    actions_for(xp_needed, xp_each)
+}
+
+/// `pick` for the sibling pricers.
+pub(crate) fn pick_of(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_each: f64, ticks_each: f64, coin_rate: f64) -> Option<TrainPick> {
+    pick(method, batch, missing, cost_each, xp_each, ticks_each, coin_rate)
+}
+
+/// `sort_best_first` for the sibling pricers.
+pub(crate) fn sort_picks(picks: &mut [TrainPick]) {
+    sort_best_first(picks);
 }
 
 /// An elemental staff pays its rune (`tools::tool_family`).
@@ -231,8 +255,17 @@ fn actions_for(xp_needed: f64, xp_each: f64) -> i64 {
     ((xp_needed / xp_each).ceil() as i64).clamp(1, MAX_PRICED_ACTIONS)
 }
 
-fn pick(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_each: f64, ticks_each: f64) -> Option<TrainPick> {
-    (xp_each > 0.0 && ticks_each > 0.0).then(|| TrainPick { method, batch, missing, cost_per_xp: cost_each / xp_each, xp_per_tick: xp_each / ticks_each })
+/// `cost_each` carries the bot's time (`ticks_each × coin_rate`): the
+/// profit adds it back, coins only.
+fn pick(method: String, batch: i64, missing: Vec<String>, cost_each: f64, xp_each: f64, ticks_each: f64, coin_rate: f64) -> Option<TrainPick> {
+    (xp_each > 0.0 && ticks_each > 0.0).then(|| TrainPick {
+        method,
+        batch,
+        missing,
+        cost_per_xp: cost_each / xp_each,
+        xp_per_tick: xp_each / ticks_each,
+        profit_per_tick: coin_rate - cost_each / ticks_each,
+    })
 }
 
 /// Every smithing method at `level` toward `target`, priced, best first:
@@ -252,7 +285,7 @@ pub fn rank_smithing(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPi
         let value = (prices.product_value)(&row.product, actions).max(0.0);
         let cost_each = ticks_each * prices.coin_rate + row.bars as f64 * bars.each - value;
         let missing = if bars.short { vec![row.bar.to_string()] } else { Vec::new() };
-        out.extend(pick(method, 0, missing, cost_each, xp_each + row.bars as f64 * bars.bonus_xp, ticks_each));
+        out.extend(pick(method, 0, missing, cost_each, xp_each + row.bars as f64 * bars.bonus_xp, ticks_each, prices.coin_rate));
     }
     for recipe in lifescape_gamedata::recipes::all_recipes(Some("smelt")) {
         if recipe.members != Some(false) || recipe.level > i64::from(level) {
@@ -285,7 +318,7 @@ pub fn rank_smithing(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPi
         }
         let ticks_each = SMELT_TICKS / success + BANK_TRIP_TICKS * slots / (LOAD_SLOTS + 1.0);
         let value = (prices.product_value)(bar, actions).max(0.0);
-        out.extend(pick(method, 0, missing, ticks_each * prices.coin_rate + inputs_each - value, xp_each, ticks_each));
+        out.extend(pick(method, 0, missing, ticks_each * prices.coin_rate + inputs_each - value, xp_each, ticks_each, prices.coin_rate));
     }
     sort_best_first(&mut out);
     out
@@ -314,7 +347,7 @@ pub fn rank_magic(level: u8, target: u8, prices: &TrainPrices, supply: &[AlchSup
             }
         }
         if feasible {
-            out.extend(pick(fight, 0, missing, FIGHT_CAST_TICKS * prices.coin_rate + runes_each, xp_each, FIGHT_CAST_TICKS));
+            out.extend(pick(fight, 0, missing, FIGHT_CAST_TICKS * prices.coin_rate + runes_each, xp_each, FIGHT_CAST_TICKS, prices.coin_rate));
         }
     }
     if let Some(spell) = alch_spell(level) {
@@ -399,11 +432,25 @@ fn alch_option(spell: &crate::alchemy::AlchSpell, casts_needed: i64, offer: &Alc
     let stackable = lifescape_gamedata::objs_by_name(&offer.item).into_iter().next().is_some_and(|obj| obj.stackable);
     let ticks_each = CAST_TICKS + if stackable { 0.0 } else { BANK_TRIP_TICKS / (LOAD_SLOTS - 1.0) };
     let cost_each = ticks_each * prices.coin_rate + offer.unit_cost.max(0.0) + natures_per as f64 * natures.each + fire_each - value;
-    pick(format!("alch:{}", offer.item), casts, missing, cost_each, spell.xp, ticks_each)
+    pick(format!("alch:{}", offer.item), casts, missing, cost_each, spell.xp, ticks_each, prices.coin_rate)
 }
 
+/// Most profitable first (user 2026-11-15): every paying method (coins
+/// per tick > 0, time not counted) before any loss, the best profit per
+/// tick first; when all lose, the smallest coin loss per XP (a loss per
+/// tick would crown the slowest method); then the fastest XP, the name.
 fn sort_best_first(picks: &mut [TrainPick]) {
-    picks.sort_by(|left, right| left.cost_per_xp.total_cmp(&right.cost_per_xp).then_with(|| left.method.cmp(&right.method)));
+    picks.sort_by(|left, right| rank_key(left).total_cmp(&rank_key(right)).then_with(|| right.xp_per_tick.total_cmp(&left.xp_per_tick)).then_with(|| left.method.cmp(&right.method)));
+}
+
+/// Ascending key: a paying method keys below every loss (its negated
+/// profit per tick), a loss keys at its coin loss per XP (>= 0).
+fn rank_key(pick: &TrainPick) -> f64 {
+    if pick.profit_per_tick > 0.0 {
+        -pick.profit_per_tick
+    } else {
+        -pick.profit_per_tick / pick.xp_per_tick.max(f64::MIN_POSITIVE)
+    }
 }
 
 /// The pick for a tranche of `skill` at the live `level` toward
@@ -415,6 +462,7 @@ pub fn best_pick(skill: &str, level: u8, target: u8, prices: &TrainPrices, suppl
     let ranked = match skill {
         "smithing" => rank_smithing(level, target, prices),
         "magic" => rank_magic(level, target, prices, supply),
+        other if crate::training_production::PRODUCTION_SKILLS.contains(&other) => crate::training_production::rank_production(other, level, target, prices),
         _ => Vec::new(),
     };
     ranked.into_iter().next()

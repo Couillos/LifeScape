@@ -20,7 +20,8 @@
 //! `uniform` (guild uniform worn before the door, `--wear`), `anvil`
 //! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained),
 //! `janitor` (bank cleanup budget, chunks, whole-stack drops), `progress`
-//! (silent-loop guard of every `cycle::run`: no output, bank churn).
+//! (silent-loop guard of every `cycle::run`: no output, bank churn), `mill`
+//! (windmill hopper, lever and flour bin clicked from side stands).
 
 #![forbid(unsafe_code)]
 
@@ -47,6 +48,7 @@ pub mod harvest;
 pub mod load;
 pub mod loot;
 pub mod magic;
+pub mod mill;
 pub mod mine;
 pub mod observe;
 pub mod pack;
@@ -56,6 +58,7 @@ pub mod shop;
 pub mod site;
 pub mod spell_load;
 pub mod spots;
+pub mod stranded;
 pub mod strike;
 pub mod style;
 pub mod survival;

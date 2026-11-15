@@ -76,7 +76,6 @@ fn a_dust_ask_never_moves_a_lot_traded_item() {
     assert_eq!(reference(&service), 4);
     place(&service, "dust", "sell", 1, 1);
     assert_eq!(reference(&service), 4, "one unit at 1 coin is not the 100th unit");
-    assert_eq!(service.guard_anchor(314), Some(4), "the 5x band keeps reading the impact price");
     assert_eq!(estimate(&service), 4.0, "the rates read the same price from the store");
     place(&service, "deep", "sell", 150, 2);
     assert_eq!(reference(&service), 2, "a real ask below the median is the price now");
@@ -119,6 +118,5 @@ fn never_traded_reads_the_best_prices() {
     place(&service, "buyer", "buy", 500, 3);
     assert_eq!(reference(&service), 6, "midpoint of 3 and 9");
     assert_eq!(estimate(&service), 6.0);
-    assert_eq!(service.guard_anchor(314), None, "a quote never caps an order");
     cleanup(service, &path);
 }

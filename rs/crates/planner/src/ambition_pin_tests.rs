@@ -155,3 +155,30 @@ fn the_pin_lifts_at_its_level_and_survives_the_file() {
     let unpinned = ambition_from_value(&ambition_to_value(&ambition)).expect("reads back");
     assert_eq!(unpinned.pin, None);
 }
+
+/// The overall highscore ambition (user 2026-11-15): operator-only, held
+/// for good (never redrawn, changed, repaired, nor "achieved"), never
+/// drawn by the fleet, and its goal is always the lowest F2P skill.
+#[test]
+fn the_overall_ambition_climbs_the_lowest_skill_for_good() {
+    let ambition = super::new_ambition(super::OVERALL, "operator:overall", &fresh_now(), 3, &[], ZERO).expect("ladderless kind");
+    assert!(pinned(&ambition), "held like a pin");
+    assert!(!achieved(&ambition), "an empty ladder is never achieved");
+    let long_ago = |_: i64| u64::MAX;
+    let gaps = vec!["prayer".to_string()];
+    assert_eq!(coverage_repair(&ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
+    assert_eq!(optional_change(&ambition, &fleet_bot(), &gaps, true, &[], &long_ago), None);
+    for seed in 0..50 {
+        let mut bot = fleet_bot();
+        bot.seed = seed;
+        let (kind, _) = crate::ambition_fleet::draw_kind(&bot, &[], &[], &[]);
+        assert_ne!(kind, super::OVERALL, "never a fleet draw (seed {seed})");
+    }
+    let mut life = life_pinned("magic");
+    life.ambition = Some(ambition);
+    // Every skill 30 but runecraft 7: runecraft is the cheapest level.
+    let level_of = |skill: &str| if skill == "runecraft" { 7 } else { 30 };
+    let (goal, origin) = crate::goals::draw_goal_origin(&life, &level_of, &|_| 0).expect("a goal");
+    assert_eq!(goal, GoalKind::MaxSkills { skills: vec!["runecraft".to_string()], level: 15 });
+    assert_eq!(origin, None);
+}

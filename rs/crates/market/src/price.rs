@@ -45,7 +45,7 @@ pub fn vwap(fills: &[PricedFill]) -> Option<i64> {
 }
 
 /// Current price with its provenance: `traded` when it comes from real
-/// fills (only then does the 5x / 0.2x guard band apply).
+/// fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reference {
     pub price: i64,

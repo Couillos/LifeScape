@@ -106,3 +106,55 @@ fn drop_farms_hunt_only_rated_survivable_spots() {
     assert!(crate::tools::method_feasible("farm:bones", &fresh));
 }
 
+
+fn miner(level: u8) -> Pass {
+    Pass { levels: vec![("mining".to_string(), level)], held: Vec::new() }
+}
+
+fn in_mining_guild(pick: &SitePick) -> bool {
+    matches!(pick, SitePick::At((x, z, level)) if lifescape_gamedata::access::gates_at(*x, *z, *level).iter().any(|gate| gate.area() == "mining_guild"))
+}
+
+/// User 2026-11-15: a miner who passes the Mining Guild door (mining 60)
+/// works its coal and mithril, even from Edgeville where the Barbarian
+/// Village coal is nearer; below 60, never inside.
+#[test]
+fn a_qualified_miner_works_the_mining_guild() {
+    const EDGEVILLE: (i64, i64, i64) = (3094, 3491, 0);
+    for ore in ["coal", "mithril_ore"] {
+        let method = format!("gather:mining/{ore}");
+        let pick = pick_site_gated(&method, 40, Some(EDGEVILLE), broke(), &miner(63));
+        assert!(in_mining_guild(&pick), "{ore} at 63: {pick:?}");
+        let below = pick_site_gated(&method, 40, Some(EDGEVILLE), broke(), &miner(59));
+        assert!(!in_mining_guild(&below), "{ore} at 59: {below:?}");
+    }
+}
+
+/// Lobsters and swordfish are Karamja water: a fisher with the fare goes.
+#[test]
+fn lobsters_and_swordfish_sail_to_karamja() {
+    let rich = Fare { wallet: 10_000, free_pass: false };
+    for fish in ["raw_lobster", "raw_swordfish"] {
+        let pick = pick_site_gated(&format!("gather:fishing/{fish}"), 40, Some(FALADOR), rich, &Pass::default());
+        assert!(matches!(pick, SitePick::Boat { .. }), "{fish}: {pick:?}");
+    }
+}
+
+/// A crowded coal site reads farther: with a dozen fleet miners on the
+/// nearest coal rocks a miner below the guild level picks other coal.
+#[test]
+fn a_crowded_coal_site_sends_the_next_miner_elsewhere() {
+    const EDGEVILLE: (i64, i64, i64) = (3094, 3491, 0);
+    let method = "gather:mining/coal";
+    let SitePick::At(nearest) = pick_site_gated(method, 40, Some(EDGEVILLE), broke(), &miner(30)) else {
+        panic!("coal is workable at 30");
+    };
+    let crowd = [(nearest, 12u32)];
+    let pick = super::pick_site_crowded(method, 40, Some(EDGEVILLE), broke(), &miner(30), &crowd);
+    match pick {
+        SitePick::At(other) => assert!(super::crowd_penalty(other, &crowd) == 0, "crowded {nearest:?}, picked {other:?}"),
+        other => panic!("another coal site exists: {other:?}"),
+    }
+    let lone = [(nearest, 1u32)];
+    assert_eq!(super::pick_site_crowded(method, 40, Some(EDGEVILLE), broke(), &miner(30), &lone), SitePick::At(nearest), "one miner is no crowd");
+}

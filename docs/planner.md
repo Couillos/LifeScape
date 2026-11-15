@@ -637,7 +637,11 @@ Tous les produits ont une jambe de production (testé).
 Jalons (`milestones`, 3 ouverts matérialisés d'avance) : `level` (clos
 quand le niveau live l'atteint), `produce` (but `GoalKind::Produce
 {item,count}` = un nœud `obtain` à jambes de PRODUCTION seulement, jamais
-acheté ; intrants achetables via les sous-tâches ; la vente par défaut
+acheté ; 2026-11-15 : jamais ramassé au sol (`ground:`), et une ferme de
+drops seulement quand aucune compétence ne fabrique l'objet (les peaux
+du guerrier) — sinon les smiths ramassaient des iron_platelegs et les
+runecrafters des mind runes, sans XP (`produce_alternatives`) ; un échec
+de ramassage ne bannit aucune compétence (`bans_scope::node_skill`) ; intrants achetables via les sous-tâches ; la vente par défaut
 liste le résultat une fois le nœud fini), `equip`, `coins` (merchant :
 `GetRich{merchant}` jusqu'au montant détenu, pack + banque). Demande :
 une offre d'achat ouverte qu'une ambition sait servir (à ≤ 10 niveaux,
@@ -797,8 +801,11 @@ général, jet du reste, D17 jusqu'à repasser sous la limite : le surplus
 que le carnet refuse (sans coût propre connu, hors bande) toujours — il
 ne se vend jamais, seul son jet libère la case ; il n'est plus retiré de
 la banque pour rien (il bouchait le sac et affamait les lots suivants) —
-et le stock listé quand rien de neuf n'a été listé (le non-listé reliste
-à la passe suivante, D12). Une pile non notée plus grosse qu'un sac part
+et le stock listé depuis une passe précédente, même quand la passe en
+liste de nouveaux (2026-11-15, ryan_park : 3 piles fraîches par passe
+sur 46 de surplus, D17 ne tournait jamais, banque bloquée à 60 types) ;
+seules les annonces de la passe courante ont leur passe pour se remplir
+(le non-listé reliste à la passe suivante, D12). Une pile non notée plus grosse qu'un sac part
 sac après sac. Jambes alchimie décidées mais non exécutées
 (pas de script de magie sur le socle : repli magasin, log).
 
@@ -922,3 +929,69 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `equip:<style>` | `equip` | `<style>` | — |
 
 Achats en dialogue : `dialogue:buy` ⇒ `dialogue_buy <objet> --want <objet> N --site <vendeur> [toll]` (une unité par conversation, réponses lues dans `gamedata::dialogue_shops`, pièces tirées de la banque d'abord, sac plein ⇒ banque).
+
+## Guildes, nourriture, poisson de Karamja (2026-11-15)
+
+- Site : parmi les sites ouverts, une guilde que le bot passe l'emporte sur
+  les sites publics, puis le plus proche (`combat::pick_site_gated`) : un
+  mineur ≥ 60 mine le charbon et le mithril de la Mining Guild (porte
+  serveur `mining_guild.rs2` : mining ≥ 60), sous 60 jamais.
+- Nourriture demandée par un bot de mêlée sans nourriture : le plus gros
+  soin de `melee_ladder::FOOD_LADDER` jusqu'à la moitié de ses PV max
+  (`food_to_ask` : 10 PV → hareng, 20 → thon, 24 → homard, 28+ →
+  espadon ; crevette au minimum). Avant : toujours `shrimp`, d'où la
+  demande de crevettes en tête du marché.
+- Pêcheur : homard, thon et espadon sont des paliers (40 : homard/thon,
+  50-60 : espadon/homard ; bateau routé). Cuisinier : homard à 50,
+  espadon à 60.
+
+## Ambition « overall » : premier au classement (2026-11-15)
+
+Décision utilisateur : une ambition opératrice `overall` vise la première
+place du classement overall, classé au total des niveaux puis à l'XP
+totale à total égal. `create-user <pseudo> --goal ambition:overall`
+(comptes Zezima, N0valyfe, Yogosun). Sans échelle (`ambition::ladderless`,
+comme le généraliste) : chaque but tiré est la compétence F2P la plus
+basse de `goals::OVERALL_SKILLS` (14 compétences ; les PV montent avec le
+combat), jusqu'au prochain multiple de 5 au moins 5 niveaux plus haut —
+une seule courbe d'XP, donc le niveau le moins cher du compte est
+toujours celui de la compétence la plus basse ; égalités tournées par la
+graine. Tenue pour épinglée (`pinned`) : jamais retirée, changée ni
+réparée ; jamais « achevée » ; jamais tirée par la flotte
+(`ladderless` exclu de `draw_kind` et `kind_weights`).
+
+## Magie, ranged, demande servie, affluence (2026-11-15)
+
+Demande utilisateur : « assure-toi que les gens entraînent leur magic et
+range, et que le système motive les bots à produire les ressources
+manquantes sur le marché et à acheter les trucs pas chers ».
+
+- Échelle du mage : des paliers de niveau seulement (10, 20, 25, 30, 35,
+  40, 45, 50, 55, 60 ; équipement à 10, 30, 50). Les quotas d'amulettes
+  de magie sont retirés : leur chaîne crafting 13 (amulette de saphir,
+  enfilage) bloquait six mages à magic 20, qui faisaient du melee en
+  remplissage. Chaque montée choisit sa méthode la plus rentable
+  (`training::best_pick` : sorts de combat, alchimie dès 21).
+- Synchronisation du catalogue (`ambition::drop_stale_products`, appelée
+  par `brain_ambition::sync_catalog` à chaque passe de lancement) : un
+  jalon de production ouvert que l'échelle n'offre plus (origine
+  `ladder`), ou un quota de demande que le métier ne sert plus, quitte
+  l'ambition. Si l'objectif en cours venait de ce jalon, il est clos
+  « done » (aucun ban) et le suivant est tiré.
+- Demande servie hors échelle (`ambition_catalog::servable`) : un ordre
+  d'achat rentable (`margin > 0`) devient un jalon de demande pour un
+  métier dont une compétence de groupe produit l'objet en une étape, à
+  partir de rien ou d'intrants que ses propres compétences récoltent, au
+  niveau actuel du bot (forgeron : barres d'acier à smithing 30 ; jamais
+  une amulette de magie pour un mage). L'échelle reste prioritaire.
+- Entraînement au prix étendu (`training_production.rs`) : cooking,
+  crafting, firemaking et prayer choisissent au lancement la recette
+  ouverte la plus rentable (mêmes score et tri que la forge, intrants
+  détenus/achetés/fabriqués au prix du bot, produit au prix que le marché
+  absorbe ; seules les recettes qu'un script lance en montée de niveau).
+- Choix de site selon l'affluence (`combat::pick_site_crowded`, registre
+  `orchestrator/src/site_crowd.rs`) : chaque autre bot dont le dernier
+  lancement travaille à moins de 15 cases d'un site ajoute 40 cases à
+  sa distance (12 mineurs sur les 5 rocs de charbon de Barbarian Village :
+  « no coal mined » 98 fois en 2 h). Les guildes restent prioritaires.
+

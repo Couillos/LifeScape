@@ -5,7 +5,7 @@
 //! coin) per patience window, by amend (cancel + replace: a fresh price
 //! may cross the book), its direction read from the window's fills:
 //! - an ask that sold (even partly) walks UP, toward its cap (none of
-//!   its own: the 5x band of a traded reference bounds it);
+//!   its own: demand alone stops it);
 //! - an ask that rested unfilled walks down to its reserve floor (the
 //!   seller's own cost, `brain_reserve`, never under it);
 //! - a bid that rested unfilled walks up to its ceiling (the wallet
@@ -29,8 +29,7 @@ use crate::market_service::MarketService;
 /// made ~55 amends/s over thousands of resting orders); the "fast fill"
 /// of `lifescape_market::OwnFill` is a fill inside this first window.
 pub const PATIENCE_TICKS: u64 = lifescape_market::zip::PATIENCE_TICKS;
-/// A sell's own cap: none (the 5x band of a traded reference bounds the
-/// walk-up, see `walk_cap`).
+/// A sell's own cap: none (no reference band, user rule 2026-11-15).
 pub const SELL_CAP: i64 = i64::MAX / 4;
 
 /// Repricing bounds of one resting order.
@@ -92,16 +91,6 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
     })
 }
 
-/// Highest price a step may reach: the order's own ceiling, and for a
-/// traded object the 5x guard band (an amend past it would be refused).
-fn walk_cap(reference: lifescape_market::Reference, bounds: &QuoteBounds) -> i64 {
-    if reference.traded {
-        bounds.ceiling.min(reference.price.saturating_mul(5)).max(bounds.floor)
-    } else {
-        bounds.ceiling
-    }
-}
-
 fn resting(row: &lifescape_store::Order) -> bool {
     matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0
 }
@@ -125,8 +114,6 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
     }
     let batch = service.lock_store().begin_batch().unwrap_or(false);
     let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
-    // One reference read per item per pass (it scans the item's prints).
-    let mut references: std::collections::HashMap<i64, lifescape_market::Reference> = std::collections::HashMap::new();
     for (order, bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
@@ -134,9 +121,7 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             continue;
         };
         let filled = row.remaining < bounds.last_remaining;
-        let reference = *references.entry(row.item_id).or_insert_with(|| service.reference(row.item_id));
-        let cap = walk_cap(reference, &bounds);
-        let next = lifescape_market::demand_step(row.price, bounds.sell, filled, bounds.floor, cap);
+        let next = lifescape_market::demand_step(row.price, bounds.sell, filled, bounds.floor, bounds.ceiling);
         let window = QuoteBounds { last_change_wall: wall, last_remaining: row.remaining, ..bounds.clone() };
         if next == row.price {
             // Parked at a bound: the window closes, no amend, no log.

@@ -69,14 +69,33 @@ where
 /// step landed, false when no ring tile was reachable (caller bans). Far
 /// drift (>4) aborts the ring early.
 pub fn step_adjacent(bot: &mut Bot, target_x: i32, target_z: i32) -> Result<bool, ScriptError> {
+    Ok(step_adjacent_proved(bot, target_x, target_z)? == Adjacent::Reached)
+}
+
+/// Outcome of `step_adjacent_proved`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adjacent {
+    Reached,
+    /// Every neighbour tried answered a planner `Disconnected` proof
+    /// from where the bot stands: no adjacent tile is walkable from here
+    /// (Draynor willow (3062,3251), jane_95 2026-11-15: 250t short bans
+    /// re-picked it every few minutes for two hours).
+    Disconnected,
+    /// A walk fell short (timeout, refused step): transient.
+    FellShort,
+}
+
+/// `step_adjacent` telling a static proof apart from a transient miss.
+pub fn step_adjacent_proved(bot: &mut Bot, target_x: i32, target_z: i32) -> Result<Adjacent, ScriptError> {
     let mut neighbors: Vec<(i32, i32)> = (-1..=1)
         .flat_map(|dx| (-1..=1).map(move |dz| (target_x + dx, target_z + dz)))
         .filter(|tile| *tile != (target_x, target_z))
         .collect();
     neighbors.sort_by_key(|tile| (tile.0 - bot.world.x).abs() + (tile.1 - bot.world.z).abs());
+    let mut all_disconnected = true;
     for (next_x, next_z) in neighbors {
         match bot.walk_to(next_x, next_z, bot.world.level, 100) {
-            Ok(()) => return Ok(true),
+            Ok(()) => return Ok(Adjacent::Reached),
             Err(error)
                 if matches!(
                     error,
@@ -85,13 +104,20 @@ pub fn step_adjacent(bot: &mut Bot, target_x: i32, target_z: i32) -> Result<bool
             {
                 return Err(error.into())
             }
-            Err(_) => {}
+            Err(error) => all_disconnected &= disconnected_proof(&error),
         }
         if (bot.world.x - target_x).abs() + (bot.world.z - target_z).abs() > 4 {
-            return Ok(false);
+            return Ok(if all_disconnected { Adjacent::Disconnected } else { Adjacent::FellShort });
         }
     }
-    Ok(false)
+    Ok(if all_disconnected { Adjacent::Disconnected } else { Adjacent::FellShort })
+}
+
+/// True for a planner NoRoute `Disconnected` answer (static map proof),
+/// never for a leg timeout, a refused step or a nav outage.
+pub fn disconnected_proof(error: &Error) -> bool {
+    let text = error.to_string();
+    text.contains("no route") && text.contains("Disconnected") && !text.contains("nav-down")
 }
 
 /// Cooperative blockage recovery: the transparent pause gate cannot fire

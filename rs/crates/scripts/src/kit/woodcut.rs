@@ -194,8 +194,18 @@ fn work_spot(
         }
     }
     if (bot.world.x - tree_x).abs() + (bot.world.z - tree_z).abs() > 1 {
-        if !crate::skill_walk::step_adjacent(bot, tree_x, tree_z)? {
-            return Ok((WorkOutcome::Unreachable, 0));
+        match crate::skill_walk::step_adjacent_proved(bot, tree_x, tree_z)? {
+            crate::skill_walk::Adjacent::Reached => {}
+            crate::skill_walk::Adjacent::FellShort => return Ok((WorkOutcome::Unreachable, 0)),
+            crate::skill_walk::Adjacent::Disconnected => {
+                // Planner proof on every neighbour: same long ban as a
+                // disconnected first walk (a short ban re-picks it).
+                let ban = walk_fail_ban(true);
+                bot.log(&format!("no neighbour of ({tree_x},{tree_z}) routes from {:?}, long-banning {ban}t", bot.position()));
+                banned.ban_for((tree_x, tree_z), bot.world.ticks, ban);
+                *travel_dead = Some(((tree_x, tree_z), (bot.world.x, bot.world.z)));
+                return Ok((WorkOutcome::Unreachable, 0));
+            }
         }
     }
     let tree_loc = live_loc_id(bot, tree_x, tree_z)?;
@@ -504,7 +514,7 @@ impl crate::kit::load::LoopOps for WoodOps<'_> {
                 // Walk-leg failure (never arrived, leg timeout, step refused
                 // far away): short ban + retry, NEVER structural or long.
                 bot.log(&format!("unreachable, short-banning ({spot_x},{spot_z}) for {GONE_BAN_TICKS}t (walk fell short)"));
-                state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
+                state.banned.ban_at_least(at, bot.world.ticks, GONE_BAN_TICKS);
                 state.spot = None;
                 self.streak += 1;
                 // Pocket landing (yank mid-run): every spot fails at the

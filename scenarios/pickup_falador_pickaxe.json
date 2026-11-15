@@ -1,7 +1,7 @@
 {
   "id": "pickup_falador_pickaxe",
   "accounts": [
-    "t42"
+    "admin"
   ],
   "setup": [
     {

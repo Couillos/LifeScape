@@ -63,6 +63,12 @@ fn nearest_essence(bot: &mut Bot, rocks: Vec<(i32, i32, u16)>, banned: &BanSet, 
         .map(|(_, tile)| tile)
 }
 
+/// A rock reads live while the bot stands in the mine and the rock is
+/// either unstreamed there (static locs never stream) or still the rock.
+fn rock_live(x: i32, z: i32, level: i32, seen: Option<u16>, rock: u16) -> bool {
+    crate::kit::essence_mine::in_mine(x, z, level) && seen.is_none_or(|id| id == rock)
+}
+
 /// One click, one rock: the mine runs on the mining script (`mining.rs2`
 /// `blankrunestone` arms), so the acks and the re-click probe are mining's.
 struct EssenceSource {
@@ -83,7 +89,11 @@ impl HarvestSource for EssenceSource {
 
     fn slot_gone(&self, _bot: &mut Bot, _target: &HarvestTarget) -> bool { false }
     fn slot_moved(&self, _bot: &mut Bot, _target: &HarvestTarget) -> bool { false }
-    fn target_live(&self, bot: &mut Bot, _target: &HarvestTarget) -> bool { bot.world.loc_at(self.x, self.z, bot.world.level).is_none_or(|(id, _, _)| id == self.loc) }
+    /// Live only inside the mine with the rock in view: out of the mine
+    /// (a market delivery walked the bot to Varrock) the stand ends
+    /// (live 2026-11-15, alice_knight clicked the rock from the Varrock
+    /// bank 47,875 times over 10 h).
+    fn target_live(&self, bot: &mut Bot, _target: &HarvestTarget) -> bool { rock_live(bot.world.x, bot.world.z, bot.world.level, bot.world.loc_at(self.x, self.z, bot.world.level).map(|(id, _, _)| id), self.loc) }
     fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool { false }
     /// Mining probes reachability after every quiet round (a wall-separated
     /// rock only refuses when clicked).
@@ -146,6 +156,9 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
         teleport_to_mine(step_bot)?;
         let mut empty = 0u32;
         while free_slots(step_bot) > 0 {
+            // Pulled out mid-load (market delivery, rescue): back in
+            // through Aubury before any rock.
+            teleport_to_mine(step_bot)?;
             let now = step_bot.world.ticks;
             let rocks = mine_locs(step_bot, ESSENCE_ROCK, 60)?;
             let Some((x, z, loc)) = nearest_essence(step_bot, rocks, &banned, now) else {
@@ -183,6 +196,16 @@ pub fn run_essence_run(bot: &mut Bot, args: &[String]) -> ScriptResult {
 
 #[cfg(test)]
 mod tests {
+    /// Out of the mine no rock is live, whatever streams there; inside,
+    /// an unstreamed static rock still is.
+    #[test]
+    fn a_rock_is_never_live_from_outside_the_mine() {
+        let rock = 2491;
+        assert!(!super::rock_live(3185, 3436, 0, None, rock), "Varrock bank: the stand ends");
+        assert!(super::rock_live(2911, 4832, 0, None, rock), "in the mine, unstreamed static rock");
+        assert!(!super::rock_live(2911, 4832, 0, Some(1), rock), "another loc there");
+    }
+
     use super::{essence_loc_id, in_mine, is_talisman, live_locs, nearest_essence, ARCH, AUBURY, AUBURY_TELEPORT_OP, EMPTY_LIMIT, EPOCH, ESSENCE_ROCK, NEED_QUEST, PORTAL, PRODUCT, TALISMANS};
     use crate::kit::bans::BanSet;
     use crate::kit::pack::obj_id;

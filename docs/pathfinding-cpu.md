@@ -555,9 +555,14 @@ bank trips, hunts, tutos : tous passent par `plan_travel`
 globale, même fallback sync. Aucune priorité par type de script, et c'est
 suffisant à ~0,3 req/s/bot (§2).
 
-### 5.9 Budget RAM dur : 1 Go LIMITE DURE (décision produit, non négociable)
+### 5.9 Budget RAM dur : 4 Go LIMITE DURE (décision produit, non négociable)
 
-**1 Go = plafond opposable du process daemon, service inclus, mesuré en
+> 2026-11-15 : plafond relevé de 1 Go à 4 Go (décision utilisateur). Seuils
+> d'enforcement dérivés du plafond dans `service.rs` : warn 80 % ≈ 3277 Mo,
+> shed 90 % ≈ 3686 Mo, abort 95 % ≈ 3891 Mo. Le tableau ci-dessous garde le
+> chiffrage d'origine (calé sur 1 Go) : la marge est désormais ~3,3 Go.
+
+**4 Go = plafond opposable du process daemon, service inclus, mesuré en
 VmHWM/RSS.** Ni ordre de grandeur, ni objectif : tout dépassement = bug
 bloquant. Jamais de dépassement « temporaire accepté », jamais d'OOM
 silencieux. Les « ~200 Mo » et « ~10 Mo » des §§2-5.8 deviennent les
@@ -579,16 +584,16 @@ sans reboucler ce tableau : une hausse qui fait dépasser 1 Go même en pic
 reload est refusée, même avec un hit mesuré supérieur.
 
 Enforcement — ce qui se passe QUAND on approche de la limite (pas « si ») :
-- **80 % (820 Mo)** : log WARN `pathfinding ram 80%` (même format que
+- **80 % (3277 Mo ; 820 Mo sous l'ancien plafond 1 Go)** : log WARN `pathfinding ram 80%` (même format que
   `nav timing`) + L1 évincé de moitié + compteur `ram-warn`. IMPLÉMENTÉ lot 4
   (`ram_gate_for` + `evict_half`, compteurs exposés `nav-stats`). La peinture
   paresseuse continue (bornée par le pack, ligne monde) mais chaque carré
   peint est loggé.
-- **90 % (920 Mo)** : admission gelée — tout `submit` → `Refuse` + fallback
+- **90 % (3686 Mo ; 920 Mo sous l'ancien plafond 1 Go)** : admission gelée — tout `submit` → `Refuse` + fallback
   sync local loggé/compté (§5.2) ; plans > 32 Ko servis mais non cachés ;
   compteur `ram-shed`. IMPLÉMENTÉ lot 4 (`refused:ram-shed`, chemin Refuse
   existant → fallback sync, compteur exposé `nav-stats`).
-- **95 % (970 Mo)** : abandon des recherches en vol les plus grosses
+- **95 % (3891 Mo ; 970 Mo sous l'ancien plafond 1 Go)** : abandon des recherches en vol les plus grosses
   (flag cancel du ticket, `dijkstra` `plan.rs:574-578` → `Aborted`) +
   fallback sync ; jamais de kill process, jamais de réponse partielle.
   NON CÂBLÉ (TODO(shedding) `service.rs`) : le shed à 90 % gèle déjà toute

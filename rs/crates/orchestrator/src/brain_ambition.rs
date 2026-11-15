@@ -397,6 +397,31 @@ fn maybe_change(life: &mut Life, live: &Value) {
     }
 }
 
+/// Catalogue sync: open ladder production milestones the catalogue no
+/// longer offers leave the ambition (`drop_stale_products`); the goal one
+/// of them was running closes done (no ban: the bot did nothing wrong)
+/// and the next one is drawn from the revised ladder. True when the life
+/// changed (save it).
+pub(crate) fn sync_catalog(life: &mut Life, live: &Value) -> bool {
+    let Some(ambition) = life.ambition.as_mut() else { return false };
+    let dropped = lifescape_planner::drop_stale_products(ambition);
+    if dropped.is_empty() {
+        return false;
+    }
+    crate::logln!("brain {}: milestones {} left the {} ladder (catalogue revised)", life.account, dropped.join(", "), ambition.kind);
+    let running = life.goal_origin.as_ref().is_some_and(|origin| dropped.contains(origin));
+    if running && !lifescape_planner::goal_closed(&life.history) {
+        match crate::brain_succession::succeed_goal(life, live, false) {
+            Some(label) => {
+                crate::logln!("brain {}: goal of a dropped milestone closed, next goal {label}", life.account);
+                lifescape_planner::normalize(life);
+            }
+            None => crate::logln!("brain {}: goal of a dropped milestone closed, nothing drawable yet", life.account),
+        }
+    }
+    true
+}
+
 /// Wall seconds between two coverage checks of one account.
 pub const COVERAGE_EVERY_SECS: f64 = 300.0;
 

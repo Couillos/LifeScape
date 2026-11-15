@@ -59,8 +59,20 @@ pub const FOOD_ERRAND_GAIN: f64 = 1.3;
 pub const TOLL_COINS: u32 = 10;
 /// Heal assumed when the bot owns no food yet (shrimps, cooked meat).
 pub const DEFAULT_HEAL: i64 = 3;
-/// Food the brain obtains when the bot owns none (`Blocked`).
-pub const FOOD_ITEM: &str = "shrimp";
+/// F2P fish the brain may ask for when the bot owns no food, smallest
+/// heal first (`food_to_ask`): all fished and cooked by bots, Karamja's
+/// tuna, lobster and swordfish included (boat routed).
+pub const FOOD_LADDER: [&str; 9] = ["shrimp", "sardine", "herring", "trout", "pike", "salmon", "tuna", "lobster", "swordfish"];
+
+/// Food the brain obtains when the bot owns none (`Blocked`): the
+/// biggest heal of `FOOD_LADDER` up to half the bot's max hitpoints
+/// (user 2026-11-15: "privilégier les nourritures qui donnent le plus
+/// d'hp en fonction de leur niveau d'hitpoint max"; every melee bot used
+/// to ask shrimps, the market's top bid). Shrimps at the least.
+pub fn food_to_ask(max_hitpoints: i64) -> &'static str {
+    let room = (max_hitpoints / 2).max(crate::food::heal(FOOD_LADDER[0]));
+    FOOD_LADDER.iter().copied().filter(|food| crate::food::heal(food) <= room).max_by_key(|food| crate::food::heal(food)).unwrap_or(FOOD_LADDER[0])
+}
 /// Brass key debugname (`item:983`, the Edgeville dungeon door).
 pub const BRASS_KEY: &str = "edgevilledungeonkey";
 
@@ -164,7 +176,7 @@ pub enum Pick {
     /// this many food units per load (`None`: exempt, carry as usual).
     Hunt { rung: Rung, clusters: Vec<(i64, i64, i64, usize)>, food: Option<u32> },
     /// The best rung needs food and the bot owns none: obtain this many
-    /// of `FOOD_ITEM` first.
+    /// of `food_to_ask(max hitpoints)` first.
     NeedFood { rung: Rung, count: u32 },
 }
 

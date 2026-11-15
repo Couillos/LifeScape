@@ -8,11 +8,14 @@ pub mod collision;
 pub mod costs;
 pub mod custom_edge;
 pub mod danger;
+mod detour;
 pub mod f2p;
 pub mod fast_hop;
 #[cfg(test)]
 mod fast_hop_tests;
 mod fallback;
+#[cfg(test)]
+mod giants_exit_tests;
 pub mod loctypes;
 pub mod nav;
 pub mod no_route;
