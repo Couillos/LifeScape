@@ -87,9 +87,13 @@ fn method_inputs(method: &str, keep: &mut Vec<String>) -> Option<String> {
         }
         return None;
     }
-    if let Some(spell) = method.strip_prefix("fight:magic/").and_then(|rest| rest.split('/').next()) {
-        keep.extend(lifescape_planner::method_way::spell_runes(spell).into_iter().map(|(rune, _)| rune));
-        return None;
+    // Every per-cast spell (combat spell, curse, teleport, bananas: D18)
+    // burns its runes, bananas their bones too; bananas are the product.
+    if let Some(spell) = lifescape_planner::spell_methods::cast_spell(method) {
+        keep.extend(lifescape_planner::method_way::spell_runes(&spell).into_iter().map(|(rune, _)| rune));
+        let (product, way) = lifescape_planner::method_way::method_way(method)?;
+        keep.extend(way.inputs.into_iter().map(|(input, _)| input));
+        return (!product.is_empty()).then_some(product);
     }
     // A ranged fight fires the tranche's ammunition (`sizing`): kept.
     if method.starts_with("fight:ranged/") {

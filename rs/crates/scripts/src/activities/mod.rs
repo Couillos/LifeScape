@@ -9,6 +9,7 @@ pub mod bake_bread;
 pub mod bury_loot;
 pub mod cook;
 pub mod cook_meals;
+pub mod curse;
 pub mod cut_gems;
 pub mod dialogue_buy;
 pub mod dye;

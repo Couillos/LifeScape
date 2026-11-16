@@ -1258,7 +1258,8 @@
       "hitpoints": 25,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 13
+      "strength": 13,
+      "undead": true
     },
     "dragonslayer_giantrat": {
       "attack": 6,
@@ -1277,7 +1278,8 @@
       "slashdefence": 11,
       "stabdefence": 9,
       "strength": 18,
-      "strengthbonus": 14
+      "strengthbonus": 14,
+      "undead": true
     },
     "dragonslayer_zombie": {
       "attack": 19,
@@ -1289,7 +1291,8 @@
       "slashdefence": 8,
       "stabdefence": 10,
       "strength": 21,
-      "strengthbonus": 7
+      "strengthbonus": 7,
+      "undead": true
     },
     "druid": {
       "attack": 28,
@@ -1466,7 +1469,8 @@
       "attack": 165,
       "defence": 167,
       "hitpoints": 150,
-      "strength": 168
+      "strength": 168,
+      "undead": true
     },
     "elemental_air": {
       "attack": 40,
@@ -1640,7 +1644,8 @@
       "hitpoints": 25,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 13
+      "strength": 13,
+      "undead": true
     },
     "ghoul": {
       "attack": 30,
@@ -1683,7 +1688,8 @@
       "slashdefence": 11,
       "stabdefence": 9,
       "strength": 35,
-      "strengthbonus": 14
+      "strengthbonus": 14,
+      "undead": true
     },
     "giantspider1": {
       "attackbonus": -10,
@@ -2316,7 +2322,8 @@
       "hitpoints": 25,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 13
+      "strength": 13,
+      "undead": true
     },
     "iban": {
       "attack": 76,
@@ -2914,42 +2921,48 @@
       "damagetype": "crush",
       "defence": 9,
       "hitpoints": 25,
-      "strength": 9
+      "strength": 9,
+      "undead": true
     },
     "macro_shade2": {
       "attack": 22,
       "damagetype": "crush",
       "defence": 22,
       "hitpoints": 40,
-      "strength": 22
+      "strength": 22,
+      "undead": true
     },
     "macro_shade3": {
       "attack": 38,
       "damagetype": "crush",
       "defence": 38,
       "hitpoints": 60,
-      "strength": 38
+      "strength": 38,
+      "undead": true
     },
     "macro_shade4": {
       "attack": 65,
       "damagetype": "crush",
       "defence": 65,
       "hitpoints": 85,
-      "strength": 65
+      "strength": 65,
+      "undead": true
     },
     "macro_shade5": {
       "attack": 100,
       "damagetype": "crush",
       "defence": 100,
       "hitpoints": 120,
-      "strength": 100
+      "strength": 100,
+      "undead": true
     },
     "macro_shade6": {
       "attack": 130,
       "damagetype": "crush",
       "defence": 130,
       "hitpoints": 170,
-      "strength": 130
+      "strength": 130,
+      "undead": true
     },
     "macro_swarm": {
       "attack": 50,
@@ -3017,42 +3030,48 @@
       "damagetype": "crush",
       "defence": 9,
       "hitpoints": 20,
-      "strength": 9
+      "strength": 9,
+      "undead": true
     },
     "macro_zombie2": {
       "attack": 22,
       "damagetype": "crush",
       "defence": 22,
       "hitpoints": 40,
-      "strength": 22
+      "strength": 22,
+      "undead": true
     },
     "macro_zombie3": {
       "attack": 38,
       "damagetype": "crush",
       "defence": 38,
       "hitpoints": 60,
-      "strength": 38
+      "strength": 38,
+      "undead": true
     },
     "macro_zombie4": {
       "attack": 65,
       "damagetype": "crush",
       "defence": 65,
       "hitpoints": 85,
-      "strength": 65
+      "strength": 65,
+      "undead": true
     },
     "macro_zombie5": {
       "attack": 100,
       "damagetype": "crush",
       "defence": 100,
       "hitpoints": 120,
-      "strength": 100
+      "strength": 100,
+      "undead": true
     },
     "macro_zombie6": {
       "attack": 130,
       "damagetype": "crush",
       "defence": 130,
       "hitpoints": 170,
-      "strength": 130
+      "strength": 130,
+      "undead": true
     },
     "magic_store_owner": {
       "attack": 8,
@@ -3953,70 +3972,80 @@
       "damagetype": "crush",
       "defence": 26,
       "hitpoints": 38,
-      "strength": 30
+      "strength": 30,
+      "undead": true
     },
     "shade_level2": {
       "attack": 64,
       "damagetype": "crush",
       "defence": 42,
       "hitpoints": 56,
-      "strength": 47
+      "strength": 47,
+      "undead": true
     },
     "shade_level3": {
       "attack": 88,
       "damagetype": "crush",
       "defence": 60,
       "hitpoints": 76,
-      "strength": 55
+      "strength": 55,
+      "undead": true
     },
     "shade_level4": {
       "attack": 102,
       "damagetype": "crush",
       "defence": 70,
       "hitpoints": 90,
-      "strength": 84
+      "strength": 84,
+      "undead": true
     },
     "shade_level5": {
       "attack": 120,
       "damagetype": "crush",
       "defence": 85,
       "hitpoints": 110,
-      "strength": 100
+      "strength": 100,
+      "undead": true
     },
     "shadeshadow_level1": {
       "attack": 45,
       "damagetype": "crush",
       "defence": 26,
       "hitpoints": 38,
-      "strength": 30
+      "strength": 30,
+      "undead": true
     },
     "shadeshadow_level2": {
       "attack": 64,
       "damagetype": "crush",
       "defence": 42,
       "hitpoints": 56,
-      "strength": 47
+      "strength": 47,
+      "undead": true
     },
     "shadeshadow_level3": {
       "attack": 88,
       "damagetype": "crush",
       "defence": 60,
       "hitpoints": 76,
-      "strength": 55
+      "strength": 55,
+      "undead": true
     },
     "shadeshadow_level4": {
       "attack": 102,
       "damagetype": "crush",
       "defence": 70,
       "hitpoints": 90,
-      "strength": 84
+      "strength": 84,
+      "undead": true
     },
     "shadeshadow_level5": {
       "attack": 120,
       "damagetype": "crush",
       "defence": 85,
       "hitpoints": 110,
-      "strength": 100
+      "strength": 100,
+      "undead": true
     },
     "shadow_spider": {
       "attack": 44,
@@ -4135,7 +4164,8 @@
       "slashdefence": 11,
       "stabdefence": 9,
       "strength": 18,
-      "strengthbonus": 14
+      "strengthbonus": 14,
+      "undead": true
     },
     "skeleton_unagressive": {
       "attack": 17,
@@ -4145,7 +4175,8 @@
       "hitpoints": 24,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 17
+      "strength": 17,
+      "undead": true
     },
     "skeleton_unarmed": {
       "attack": 24,
@@ -4155,14 +4186,16 @@
       "hitpoints": 17,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 24
+      "strength": 24,
+      "undead": true
     },
     "skeletonmage": {
       "attack": 14,
       "damagetype": "crush",
       "defence": 14,
       "hitpoints": 17,
-      "strength": 14
+      "strength": 14,
+      "undead": true
     },
     "skull_skeleton": {
       "attack": 10,
@@ -4172,7 +4205,8 @@
       "hitpoints": 18,
       "slashdefence": 5,
       "stabdefence": 5,
-      "strength": 11
+      "strength": 11,
+      "undead": true
     },
     "slave_rowdy": {
       "attack": 7,
@@ -4269,7 +4303,8 @@
       "damagetype": "crush",
       "defence": 10,
       "hitpoints": 22,
-      "strength": 9
+      "strength": 9,
+      "undead": true
     },
     "tbwt_beast": {
       "attack": 80,
@@ -4336,7 +4371,8 @@
       "damagetype": "crush",
       "defence": 80,
       "hitpoints": 80,
-      "strength": 80
+      "strength": 80,
+      "undead": true
     },
     "thug": {
       "attack": 7,
@@ -5205,7 +5241,8 @@
       "damagetype": "crush",
       "defence": 23,
       "hitpoints": 20,
-      "strength": 20
+      "strength": 20,
+      "undead": true
     },
     "zanarisleprechaun": {
       "attack": 10,
@@ -5219,7 +5256,8 @@
       "damagetype": "crush",
       "defence": 18,
       "hitpoints": 24,
-      "strength": 13
+      "strength": 13,
+      "undead": true
     },
     "zombie_armed": {
       "attack": 19,
@@ -5232,7 +5270,8 @@
       "slashdefence": 8,
       "stabdefence": 9,
       "strength": 21,
-      "strengthbonus": 7
+      "strengthbonus": 7,
+      "undead": true
     },
     "zombie_entranan": {
       "attack": 19,
@@ -5244,14 +5283,16 @@
       "slashdefence": 8,
       "stabdefence": 10,
       "strength": 21,
-      "strengthbonus": 7
+      "strengthbonus": 7,
+      "undead": true
     },
     "zombie_unarmed": {
       "attack": 8,
       "damagetype": "crush",
       "defence": 10,
       "hitpoints": 22,
-      "strength": 9
+      "strength": 9,
+      "undead": true
     },
     "zoo_keeper": {
       "attack": 10,
@@ -5265,7 +5306,8 @@
       "damagetype": "slash",
       "defence": 80,
       "hitpoints": 70,
-      "strength": 80
+      "strength": 80,
+      "undead": true
     },
     "zq_mainzombie2": {
       "attack": 58,
@@ -5277,14 +5319,16 @@
       "slashdefence": 5,
       "stabdefence": 5,
       "strength": 54,
-      "strengthbonus": 15
+      "strengthbonus": 15,
+      "undead": true
     },
     "zq_mainzombie3": {
       "attack": 85,
       "damagetype": "slash",
       "defence": 80,
       "hitpoints": 80,
-      "strength": 80
+      "strength": 80,
+      "undead": true
     },
     "zqskeleton_armed": {
       "attack": 55,
@@ -5296,14 +5340,16 @@
       "slashdefence": 5,
       "stabdefence": 5,
       "strength": 55,
-      "strengthbonus": 5
+      "strengthbonus": 5,
+      "undead": true
     },
     "zqskeleton_unarmed": {
       "attack": 63,
       "damagetype": "slash",
       "defence": 63,
       "hitpoints": 47,
-      "strength": 63
+      "strength": 63,
+      "undead": true
     },
     "zqzombie_armed": {
       "attack": 65,
@@ -5312,14 +5358,16 @@
       "defence": 65,
       "hitpoints": 59,
       "strength": 65,
-      "strengthbonus": 5
+      "strengthbonus": 5,
+      "undead": true
     },
     "zqzombie_unarmed": {
       "attack": 63,
       "damagetype": "slash",
       "defence": 63,
       "hitpoints": 47,
-      "strength": 63
+      "strength": 63,
+      "undead": true
     }
   },
   "source": "lostcity/content/scripts/**/*.npc (orchestrator dump-npc-ranges)"

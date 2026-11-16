@@ -87,8 +87,9 @@ pub fn reach_chain_planned(skill: &str, from: u8, to: u8, counter: &mut usize, a
                 out.push(node);
             }
         }
-        // A magic tranche past 21 picks combat spell or alchemy at resolve
-        // with the market (`training`): nothing to file ahead, its pick
+        // A magic tranche from confuse (3, D18) picks combat spell, curse,
+        // teleport, bananas or alchemy at resolve with the market
+        // (`training`): nothing to file ahead, its pick
         // blocks typed on what it lacks. Smithing files the bars of its
         // static product (held bars weigh the pick toward them).
         let priced_later = skill == "magic" && crate::training::priced_at_resolve(skill, start);

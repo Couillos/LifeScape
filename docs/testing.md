@@ -123,3 +123,16 @@ Rien n'est vendu, échangé ni posé où un bot passe.
 
 `run <compte> <script> ... --wait -- --site x,z,niv` : après `--`, les
 arguments passent tels quels au script (drapeaux de lancement du brain).
+
+## Store des tests unitaires (2026-11-16)
+
+Les tests unitaires de l'orchestrateur n'ouvrent jamais `run/lifescape.db` :
+`paths::store_db()` renvoie un fichier par processus sous le répertoire
+temporaire en `cfg(test)`. Un `cargo test` d'un build à schéma plus récent
+migrait sinon le fichier live et verrouillait le daemon d'un schéma plus
+ancien hors de son store (live 2026-11-16 : schéma 5 contre daemon 4,
+~6 min d'ingestions refusées). Les rapports de tâche du contrat 2 se
+testent en golden (`flow_causes_tests.rs`, `session_report_tests.rs`) et
+en live par `check-method` : chaque rapport poussé est loggé
+(`task_report {…}`) avec une ligne `task_report alert …` par flux
+`unattributed` ou écart `residual` du contrôle de cohérence.

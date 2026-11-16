@@ -1,0 +1,438 @@
+PLAN — RENDEMENTS : UNE SEULE MESURE, XP ET RENTABILITE DERIVEES
+=================================================================
+Date : 2026-11-16. Statut : plan, aucun code écrit.
+Source : audit du 2026-11-16 (rates_service, session_report, store,
+brain_plan, brain_bids, brain_reserve, training, sizing, chains) +
+lecture seule de run/rates-snapshot.json et run/lifescape.db.
+
+
+0. PRINCIPE CIBLE (demande utilisateur 2026-11-16)
+---------------------------------------------------
+On ne mesure qu'une chose : le RENDEMENT d'une activité (unités par 6000
+ticks de travail). Tout le reste en est DERIVE, jamais mesuré à part :
+
+  XP / 6000 ticks   = Σ rendement(unité porteuse d'XP) × XP de l'unité
+                      (XP de l'unité = dump du jeu / 10, source unique,
+                      planner::method_way::action_xp)
+  Profit / 6000     = Σ rendement(produit) × prix live
+                      − Σ consommation(intrant) × prix live
+                      (± temps de marché, voir §4)
+
+Trois familles de rentabilité, toutes au prix du marché en direct :
+  (a) farm      : récolter/combattre et vendre ce qu'on obtient ;
+  (b) recette   : transformer des ressources (les siennes ou farmées) ;
+  (c) 100 % market : acheter TOUS les intrants au marché, crafter,
+                  revendre le produit fini au marché.
+
+
+1. CONSTAT DE L'AUDIT (état au 2026-11-16)
+------------------------------------------
+Mesure : session_report diffe avoirs + XP début/fin de run, étiquette la
+provenance ; ticks = temps réel du run moins pauses market.
+Stockage : store task_reports/task_yields (70 497 rapports, 246 483
+lignes) ; agrégat run/rates-snapshot.json (4,4 Mo), seaux (script, objet
+ou skill, tranche de 5 niveaux), n, moyenne, écart-type, EMA, TOUS les
+échantillons.
+
+Problèmes, par gravité :
+
+A. XP mesurée jamais utilisée. measured_xp n'a aucun lecteur ; 79 756
+   échantillons servent seulement la page rates. Les montées de niveau
+   se dimensionnent sur des constantes (training.rs:28-37 : presse 5
+   ticks, BANK_TRIP_TICKS = 60 partout ; sizing.rs:23 HIT_ODDS = 0,6).
+   docs/economy.md affirme le contraire.
+   -> Résolu par le principe §0 : l'XP devient dérivée des rendements.
+
+B. Clé de mesure = nom du script. task_reports.method ne contient
+   jamais ':' : "fishing" mélange spots et engins, "melee" toutes les
+   cibles (1052 seaux), aucun palier d'outil. Tranche = niveau du
+   premier skill gagnant de l'XP (context_level). Pour un ObtainItems
+   le cerveau force la tranche 1 (brain_plan.rs:71) puis prend la
+   tranche la plus échantillonnée : niveau réel du bot ignoré.
+
+C. Estimateur biaisé.
+   - moyenne de ratios par rapport ; 35 % des rapports < 100 ticks
+     (médiane 871) -> taux absurdes : mining|Copper ore|31 moyenne 472,
+     médiane 194, max 11 013 / 6000 (≈ 1,8 minerai/tick, impossible) ;
+   - biais par type d'arrêt (cuivre, Σqté/Σticks) : goal_reached 157,
+     budget_exhausted 114, failed 63 ; failed/blocked (22 % des
+     rapports) entrent dans la moyenne ;
+   - aucune fenêtre : le cerveau lit la moyenne de tout l'historique
+     (EMA calculée, jamais lue) ; échantillons conservés sans borne
+     (jusqu'à 1708 par seau).
+
+D. Seuil incohérent : la page sert le prior sous n = 3, le cerveau prend
+   la mesure dès n = 1 (bucket_mean, count > 0). 1351 seaux sur 2784
+   ont n < 3.
+
+E. Attribution par différence bruitée : tout gain d'un run melee est
+   "loot" (10 734 lignes cuivre/pot/grain/appât en melee) ;
+   ground_pickup CV ≈ 4. Gonfle la rentabilité publiée.
+
+F. Priors codés à la main (rates_service.rs:170, 13 objets ; :577, 7
+   couples XP), contraire à P3.6 ; inconnu -> 200/6000 à l'aveugle
+   (brain_plan.rs:62) ou GATHER/MAKE_UNITS_PER_6000 : fallback non
+   demandé (règle 7).
+
+G. Store non rejouable : pas de pause, lieu, cible, outil, niveaux ->
+   le snapshot ne se reconstruit pas depuis la base
+   (rates_service.rs:29-31), pas de re-découpe possible.
+   live_snapshot() clone > 176 000 flottants à chaque ready_ctx (D26).
+   rates_service.rs = 934 lignes (règle 4 : découper avant d'ajouter).
+
+H. Connaissance : tous les bots lisent la même moyenne de flotte ;
+   seule diversité = ±2 % de jitter (brain_plan.rs:318-326) ->
+   grégarisme. La foule d'un spot est diluée dans le script global, un
+   bot ne peut pas l'éviter. Un bot bien équipé ignore qu'il va plus
+   vite. Seul brain_reserve raisonne sur l'expérience propre du bot.
+
+Doc : economy.md annonce un prix de vente VWAP 24 h ; le code prend la
+médiane des 5 derniers fills bornée par le carnet (rates_price).
+
+
+
+
+2. VISION : DES GUIDES GENERES, LUS PAR LES BOTS
+------------------------------------------------
+Inspiration (OSRS, pas 274 : idées seulement) :
+  oldschool.runescape.wiki/w/Money_making_guide
+  oldschool.runescape.wiki/w/Skill_training_guides
+Les joueurs choisissent avec ces références. Nos guides sont la même
+chose en plus générique et plus fourni : générés, jamais écrits à la
+main, une ligne pour CHAQUE méthode jouable en F2P 274, recalculés quand
+une mesure ou un prix change.
+
+Guide money making (une ligne par méthode × site × outil × tranche) :
+  famille (farm | recette | chaîne | 100 % market | flip), méthode fine,
+  site, palier d'outil, tranche ; prérequis complets (niveaux, quêtes,
+  outils, capital de départ d'un lot ; Wilderness = prérequis de combat,
+  jamais un refus de zone) ; intrants/6000 (qté × prix courant) ;
+  produits/6000 (qté × prix courant) ; profit/6000 ; XP/6000 par skill
+  en bonus ; confiance (mesuré/estimé, n, âge, dispersion).
+Guide d'entraînement (une ligne par skill × tranche × méthode × site ×
+  outil × mode d'approvisionnement) :
+  XP/6000, pièces/6000 (gain ou dépense), pièces/XP, ticks jusqu'à la
+  fin de tranche, mode d'approvisionnement (autonome : intrants
+  farmés, temps compté | marché : intrants achetés, pièces converties
+  en temps, D17), prérequis, confiance.
+Equilibre du marché, indirect : le guide lit le prix courant ; quand
+trop de bots font la même chose, le prix du produit baisse (ZIP), la
+ligne descend, le tirage pondéré répartit les bots ailleurs. Aucune
+connaissance cachée (D22) : seuls prix publics et mesures publiées.
+
+
+3. DECISIONS UTILISATEUR (2026-11-16)
+-------------------------------------
+D1  Guides lus par les bots ET affichés au dashboard (mêmes chiffres).
+D2  Granularité : méthode fine + site + palier d'outil + tranche de 5.
+D3  Combat : unité mesurée = kills par type de PNJ ; XP = kills × XP
+    d'un kill tirée du jeu (PV × 4 au style + PV × 1,33, à vérifier
+    dans ../lostcity/content combat.rs2) ; donne aussi drops/kill.
+D4  XP observée : contrôle de cohérence uniquement (XP dérivée vs
+    observée, alerte > 5 %), jamais une décision.
+D5  Recette sur ses ressources : intrants au prix de vente courant
+    (coût d'opportunité).
+D6  Money making classé en profit/6000 ticks ; trajets et attente
+    market comptés dans les ticks.
+D7  Fenêtre : déclin par ticks de travail cumulés (demi-vie ~60 000
+    ticks, à calibrer).
+D8  Anciennes mesures SUPPRIMEES (refacto propre) : rates-snapshot.json
+    et lignes task_reports/task_yields v1 purgées au lot R1 (opération
+    destructive : confirmée à l'exécution). Démarrage sur priors du jeu.
+D9  Colonnes : prérequis complets + confiance. PAS de colonne capacité
+    ni risque.
+D10 Choix d'un bot : tirage pondéré parmi les lignes proches du
+    meilleur (≤ 15 % du top), pondéré par le score et le profil.
+D11 Guide public seul : pas de mélange avec l'expérience propre du bot
+    (brain_reserve, réserve vendeur, reste un sujet séparé).
+D12 Prix de vente : prix courant (médiane des 5 derniers fills bornée
+    par le carnet). Pas de saturation dans le guide.
+D13 Deux traits de profil :
+    - market_affinity (existant) : autarcique ↔ marché. Autarcique :
+      achète seulement quand farmer coûte beaucoup plus (pioche rune,
+      armure qu'il ne sait pas forger). Marché : achète même à perte
+      dès que c'est plus rapide (yew pour firemaking) ;
+    - NOUVEAU trait rapide ↔ économe : pèse XP/6000 contre pièces
+      dépensées (pièces/XP).
+D14 Exploration : une ligne à < 3 mesures reçoit une part fixe des
+    tirages (~5 %) jusqu'à être mesurée.
+D15 100 % market : intrants comptés au prix courant (symétrique de la
+    vente).
+D16 Chaînes (minerai → barre → objet, farm puis transformation) = lignes
+    à part entière, comparées à la vente à chaque étage.
+D17 Pièces → temps : coût d'achat en ticks = prix ÷ profit/6000 de la
+    meilleure ligne money making ACCESSIBLE à ce bot (niveaux, quêtes).
+
+
+4. LOTS
+-------
+R0  Doc d'abord : entrée decisions.md (rendement seule mesure ; XP et
+    profit dérivés ; guides générés ; D1-D17), economy.md § Rendements
+    réécrit (corrige VWAP -> médiane 5 fills, et l'affirmation XP).
+
+R1  Contrat de rapport, store, purge.
+    - méthode fine du planificateur dans le rapport (plus le nom du
+      script) ; site, cible, palier d'outil, niveaux de TOUS les skills,
+      work_ticks et pause_ticks séparés ;
+    - unités porteuses d'XP hors objets gagnés, tirées des données
+      (method_way + gamedata), jamais une liste : kills (D3), intrant
+      consommé (bûche brûlée, os enterré, objet alché ou enchanté,
+      essence en runecraft), lancers (sorts, telegrab) ; échecs sans XP
+      (fer, brûlé) : seul le produit réussi compte ;
+    - attribution : un gain hors produits/drops attendus de la méthode
+      n'est plus "loot" (cuivre en melee) ; viser le ledger par flux du
+      SDK (item_ledger) plutôt que le diff net ;
+    - migration store (colonnes ci-dessus), purge v1 (D8) ;
+    - tests : contrat JSON, migration, golden rapports par famille.
+
+R2  Estimateur du rendement.
+    - clé D2 ; repli de clé explicite et loggé (sans site -> méthode
+      fine toutes zones), jamais un chiffre inventé ;
+    - Σ quantités / Σ work_ticks × 6000 avec déclin D7 ; mémoire bornée
+      par seau ;
+    - runs courts (< ~300 ticks) pondérés à la baisse ; failed/blocked
+      hors taux, en taux d'échec séparé (confiance) ;
+    - plafond physique par méthode (ticks minimaux d'action du serveur)
+      : échantillon au-dessus rejeté et loggé ;
+    - prior calculé du jeu pour TOUTE méthode : 6000 / (ticks d'action
+      / succès au niveau + trajet banque nav depuis le site) ×
+      produits/action ; remplace prior_for / xp_prior_for ; prior
+      incalculable = erreur typée (fin des 200 à l'aveugle et des
+      GATHER/MAKE_UNITS_PER_6000) ;
+    - seuil unique n ≥ 3 (page et cerveau) ; lecture à la tranche réelle
+      du bot ; plus de clone complet du snapshot par décision ;
+    - découper rates_service.rs (934 lignes) avant d'ajouter.
+
+R3  XP dérivée.
+    - XP/6000 = Σ rendement(unité) × XP(unité) (dump / 10,
+      method_way::action_xp, P3.6) ; combat : kills × XP/kill ;
+    - suppression des seaux XP mesurés ; contrôle D4 ;
+    - training.rs, sizing.rs (HIT_ODDS), chains.rs, durées ReachLevel,
+      brain_train : ticks par unité = 6000 / rendement, plus de
+      constantes (BANK_TRIP_TICKS, presse 5 ticks).
+
+R4  Moteur de guides (pur, testable hors ligne) + guide money making.
+    - générateur : toutes les méthodes F2P (gather, fight, recettes,
+      smith/smelt/cook/craft/fletch/runecraft/alch, chaînes D16,
+      100 % market, flip) × sites × outils × tranches ; entrées =
+      rendements R2, XP R3, prix courants, prérequis gamedata/planner ;
+    - farm : Σ produits × prix − Σ consommables × prix ;
+    - recette sur stock : produit × prix − intrants × prix (D5) ;
+    - chaîne : temps par unité de chaque étage, prix du seul produit
+      final, comparée à vendre à chaque étage ;
+    - 100 % market : produit × prix − intrants × prix (D15), ticks =
+      craft + trajets place de Varrock et atelier (ETA nav) + attente
+      de deal mesurée (pause_ticks) ; prérequis = capital d'un lot ;
+      Ironman exclu ;
+    - une seule table publiée, remplace rates_profit, realizable_rows,
+      units_per_6000, farm_yield (doublons).
+
+R5  Exécution 100 % market.
+    - méthode planificateur dédiée (nom proposé "trade:craft/<recette>")
+      : market:buy des intrants -> craft -> vente, lot borné par le
+      capital ; script mince réutilisant craft et jambes market ;
+    - rapport : achats/ventes "traded" + rendement du craft ; profit
+      réalisé vs prévu sur la page economy.
+
+R6  Guide d'entraînement + traits.
+    - lignes skill × tranche × méthode × site × outil × mode
+      (autonome | marché) ;
+    - nouveau trait rapide ↔ économe dans le profil (D13), tiré à la
+      création comme market_affinity ;
+    - score d'une ligne pour un bot : ticks totaux par XP (temps propre
+      + pièces converties via D17) pesés par rapide ↔ économe contre
+      pièces/XP ; mode marché pesé par market_affinity (comme
+      choose_market_or_farm) ;
+    - exemple attendu : firemaking yew, un bot "marché" achète le yew
+      (money making + achat < coupe), un autarcique le coupe ; une
+      pioche rune s'achète chez tous (farm hors de portée).
+
+R7  Choix des bots.
+    - tirage pondéré D10 + exploration D14, sur les deux guides ;
+    - brain_plan (choose_money / rank_money_diverse), brain_train,
+      résolution farm/achat rebranchés sur les guides ; suppression du
+      jitter ±2 %.
+
+R8  Dashboard : pages "money making" et "training" (filtres skill,
+    tranche, famille, prérequis ; confiance visible) ; docs à jour.
+
+
+5. VERIFICATION
+---------------
+Chaque lot : test qui échoue d'abord, un crate à la fois, --release,
+live admin/admin2 (check-method) avant la flotte.
+  - aucun échantillon au-dessus du plafond physique accepté ;
+  - XP dérivée vs observée < 5 % (check-method --print-all) ;
+  - durée prévue d'une tranche vs réelle < 20 % sur la flotte ;
+  - toutes les méthodes F2P présentes dans les guides (estimées ou
+    mesurées) ; part des lignes mesurées qui croît (exploration) ;
+  - profit prévu vs réalisé (100 % market) suivi page economy ;
+  - prix : pas d'oscillation entretenue sur les produits les plus
+    choisis (inversions suivies comme dans le simulateur market) ;
+  - snapshot de taille bornée, reconstructible depuis le store.
+
+
+6. POINTS ENCORE OUVERTS (défauts proposés, à confirmer en route)
+-----------------------------------------------------------------
+- Demi-vie du déclin (60 000 ticks), bande du tirage (15 %), part
+  d'exploration (5 %), seuil de run court (300 ticks) : à calibrer en
+  live.
+- Nom de la méthode 100 % market ("trade:craft/<recette>").
+- Fréquence de recalcul des guides (à chaque rapport/prix, cache court).
+
+
+7. AUDIT DES SKILLS SANS PRODUIT (2026-11-16)
+---------------------------------------------
+Principe corrigé : "XP = rendement × XP de l'objet" ne couvre pas tout.
+Règle générale : XP/6000 = Σ compteurs d'UNITES PORTEUSES × XP/unité,
+une unité étant l'une des quatre :
+  P produit réussi        (minerai, bûche, poisson, barre, objet forgé…)
+  C intrant consommé      (bûche brûlée, os enterré, objet alché,
+                           essence en runecraft, bijou enchanté)
+  S lancer de sort        (téléport, malédictions, XP de base d'un sort
+                           de combat, même raté)
+  K dégâts / kills        (combat : XP = dégâts × 10 dixièmes × 4
+                           selon le style, × multiplicateur du PNJ ;
+                           PV = × 1,33 ; combat.rs2
+                           give_combat_experience)
+
+Skills F2P (274) :
+  Attack/Strength/Defence  K, réparti selon le STYLE (accurate,
+                           aggressive, defensive, controlled 1,33×3) :
+                           le style fait partie de la clé de méthode.
+  Hitpoints                K (1,33 par point), dérivé de tout combat.
+  Ranged                   K (4, ou 2+2 Defence en longrange) ; flèches
+                           = C au coût, jamais une unité d'XP.
+  Magic                    combat : S (XP de base par lancer) + K (2 par
+                           point) ; teleports/malédictions : S ; enchant,
+                           bones to bananas, superheat, telegrab : P ;
+                           alchemy : C (l'objet alché ; les pièces sont
+                           le profit, pas l'unité).
+  Prayer                   C (os enterré), souvent DANS un run de combat.
+  Firemaking               C (bûche brûlée) ; les cendres tombent au sol
+                           (firemaking.rs2:132), jamais ramassées : la
+                           way "fire:* -> ashes" n'est pas l'unité.
+  Runecraft                C (essence) : plusieurs runes par essence à
+                           haut niveau, l'XP est par essence.
+  Cooking                  P (réussi ; brûlé = 0 XP). Vin : XP à la
+                           fermentation, différée, peut tomber après le
+                           run.
+  Crafting                 P par ETAGE (poterie : façonnage + cuisson,
+                           deux XP pour un pot final).
+  Smithing                 P (barre réussie ; fer 50 % d'échec ; forge
+                           par barre) ; superheat = Magic + Smithing.
+  Mining, Woodcutting,     P ; gemmes = sous-produit sans XP ; poissons
+  Fishing                  multiples par méthode (XP par espèce).
+  Quêtes                   XP forfaitaire (chains::QuestShortcut) : pas
+                           un taux.
+Activités sans XP (lait, eau, tonte, cueillette, moulin, teinture,
+tannage, ramassage) : rendement seul, guide money making uniquement.
+
+Constats live (rates-snapshot, store) :
+  - firemaking : 424 rapports, bûches en "consumed", "rendements"
+    parasites (Logs, Tinderbox, Fishing rod), XP attack/hitpoints
+    parasites (combats pendant le run) ;
+  - enchant_teleport : seuls les enchantements laissent une trace, les
+    téléports ne produisent rien de mesurable aujourd'hui ;
+  - telegrab_wine : 4 rapports, zéro flux ;
+  - alchemy : intrants dont "Adamant pickaxe" (outil de la trousse
+    permanente alché ? à vérifier, violation possible de la trousse) ;
+  - combat : os ramassés puis enterrés dans le même run -> diff net = 0,
+    l'XP de prière n'a pas d'unité visible.
+
+Trous du système :
+  T1 Le diff net efface tout ce qui est produit puis consommé dans le
+     même run (os enterrés en combat, coupe + feu, fonte + forge, pot
+     façonné puis cuit, poisson pêché puis cuit). Les unités doivent
+     venir du ledger par action du SDK (item_ledger existe déjà,
+     attribution "skill" dans la fenêtre d'XP) + compteurs d'événements
+     (kills, dégâts, lancers), jamais du diff net.
+  T2 Combat : kills seuls insuffisants pour la magie (XP de base par
+     lancer) ; multiplicateur XP par PNJ à dumper ; style dans la clé.
+  T3 Familles absentes du planificateur : teleport (3 sorts F2P,
+     script enchant_teleport déjà capable), malédictions confuse/
+     weaken/curse/bind (aucun script), bones_to_bananas (script, pas de
+     famille), crumble_undead (exclu de best_combat_spell : nom absent
+     du dump, alors que 24,5 XP de base au niveau 39).
+  T4 action_xp est centré produit : firemaking -> ashes, alchemy ->
+     coins ; il faut une table unité porteuse par famille.
+  T5 XP différée (vin) : unité comptée à la fermentation.
+Effet économique : ces skills sont les PUITS du marché (bûches, os,
+runes de loi/corps/nature, objets alchés) : sans eux les objets ne
+font que s'accumuler ; ils portent la demande qui équilibre les prix.
+
+Décisions (2026-11-16, suite) :
+D18 TOUS les sorts F2P deviennent des méthodes du planificateur, sans
+    exception : téléports Varrock/Lumbridge/Falador, malédictions
+    confuse/weaken/curse/bind (nouveau script), bones_to_bananas,
+    crumble_undead (en plus des combats, enchant, alch, superheat,
+    telegrab déjà présents). Chacun avec son unité porteuse (S ou P)
+    et sa ligne dans les guides.
+D19 Comptage des unités : ledger par action du SDK (item_ledger) +
+    compteurs d'événements (kills, dégâts, lancers). Le diff net ne
+    sert plus qu'au contrôle de cohérence (T1).
+D20 Quêtes : lignes "raccourci" dans le guide d'entraînement (XP
+    forfaitaire, durée mesurée de la quête, prérequis), comparées aux
+    méthodes de la tranche.
+
+
+8. CONSOMMATION : TOUS LES SKILLS (2026-11-16, correction utilisateur)
+---------------------------------------------------------------------
+"Rendement" = BILAN DE FLUX SIGNE par méthode et par 6000 ticks : ce
+qui entre (+) ET ce qui sort (−), mesurés de la même façon. Chaque
+skill consomme quelque chose ; la consommation est le côté demande du
+marché et le coût de la méthode.
+
+Par skill (F2P 274) — produit / consommé par recette / consommables de
+méthode / sous-produits :
+  Attack/Str/Def  drops / — / nourriture, (potions membres) / os, cuir…
+  Ranged          drops / — / FLECHES (1 sur 5 cassée, le reste au sol
+                  non ramassé), nourriture / os
+  Magic combat    drops / — / RUNES par lancer (ou bâton élémentaire),
+                  nourriture / os
+  Magic utilité   enchant, bananes, barres, vin / bijou, os, minerai,
+                  objet alché / runes (loi, cosmique, nature, corps…) /
+                  pièces (alch)
+  Prayer          — / OS enterrés / — / —
+  Hitpoints       dérivé du combat
+  Firemaking      — (cendres au sol) / BUCHES / tinderbox (outil) / —
+  Cooking         plat cuit / CRU (brûlé = perte) / — / brûlé
+  Woodcutting     bûches / — / — / —
+  Fishing         poissons / — / APPAT, PLUMES / —
+  Mining          minerais / — / — / gemmes
+  Smithing        barres, objets / MINERAI+CHARBON, BARRES / — /
+                  fer raté (minerai perdu)
+  Crafting        pots, cuir, bijoux, gemmes taillées, laine / ARGILE,
+                  peaux, or/argent, gemmes, laine / FIL (1 par 5),
+                  eau, moule / —
+  Runecraft       runes / ESSENCE / talisman (outil) / —
+Transverses : péages et passeurs (fee), morts (objets perdus),
+nourriture des trajets dangereux, achats de kit.
+
+Constat store (task_yields, quantités négatives) :
+  - ranged : flèches en "lost" (−4 928) et "ground_spawn" négatif
+    (−5 655), jamais en "consumed" -> coût des flèches absent du profit
+    et de la demande ;
+  - cook : crevettes crues "lost" −12 436 contre "consumed" −16 060 :
+    ~44 % de la consommation (brûlés jetés) mal étiquetée ;
+  - firemaking : bûches "lost" −7 186 à côté de "consumed" ;
+  - magic : runes aussi en "lost" et "ground_spawn" négatif ;
+  - smith : "Hammer consumed" 61 fois (outil de la trousse, pas un
+    intrant) ;
+  - pièces "lost" énormes : fishing −603 056, stringing −437 587,
+    melee −195 829 (morts ? deals ? à expliquer) ;
+  - nourriture mangée en combat quasi absente des "consumed" ;
+  - "shop_sold" de nourriture/flèches dans des runs melee/ranged alors
+    qu'aucun bot ne vend aux marchands (D-A) : attribution à revoir.
+Conséquence : profits surestimés pour combat, ranged, cuisine,
+firemaking ; demande des consommables invisible pour le marché.
+
+Exigences ajoutées à R1/R2/R4 :
+  - toute sortie d'objet d'un run est attribuée par le ledger SDK à
+    une cause : recette (C), consommable de méthode, sous-produit jeté,
+    nourriture, munition, rune, péage, mort, vente, transfert ; "lost"
+    et "unattributed" deviennent des alertes à zéro visé ;
+  - consommation agrégée par (méthode fine, objet, tranche) en /6000,
+    comme les produits ;
+  - profit = Σ flux signés × prix courant + flux de pièces (péages) ;
+  - test golden par skill, bilan complet (entrées ET sorties).

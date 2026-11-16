@@ -89,6 +89,8 @@ pub fn dump_npc_ranges(output: &Path) -> Result<usize, String> {
     println!("dump-npc-ranges: {count} NPCs from {} files -> {}", files.len(), output.display());
     // Same configs, second table: the combat block the melee ladder reads.
     crate::dump_npc_combat::dump_npc_combat(&files, &output.with_file_name("npc_combat.json"))?;
+    // The spell side of a target check (crumble undead: `undead`).
+    crate::dump_spell_targets::dump_spell_targets(&content_dir().join("scripts"), &output.with_file_name("spell_targets.json"))?;
     Ok(count)
 }
 

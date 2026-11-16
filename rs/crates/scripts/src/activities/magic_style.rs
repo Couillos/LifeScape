@@ -126,11 +126,24 @@ fn require_combat_gear(bot: &Bot, spell: &str) -> Result<(), crate::ScriptError>
     if missing.is_empty() { Ok(()) } else { Err(crate::ScriptError::Blocked { missing }) }
 }
 
+/// Level of an F2P damage spell of the dump (`Spell::deals_damage`:
+/// the strikes, bolts, blasts and crumble undead, whose missing display
+/// name never hides it), `None` otherwise.
+pub fn dump_damage_level(name: &str) -> Option<i64> {
+    knowledge::spells::by_name(name).into_iter().find(|row| !row.members && row.deals_damage()).map(|row| row.level)
+}
+
+/// Spots of the order the spell cannot affect: crumble undead hits only
+/// NPCs whose config sets the server's `undead` param (`spells::affects`).
+pub fn unfit_spots(spell: &str, spots: &[knowledge::combat_spots::CombatSpot]) -> Vec<&'static str> {
+    spots.iter().filter(|spot| !spot.npc_names.iter().all(|npc| knowledge::spells::affects(spell, npc))).map(|spot| spot.key).collect()
+}
+
 /// The ordered spell (`--spell`): a known F2P damage spell the level
 /// casts, else `Usage` (contract bug) or `Blocked{level:magic:N}`.
 fn ordered_spell(bot: &Bot, spell: Option<&str>) -> Result<Option<String>, crate::ScriptError> {
     let Some(name) = spell else { return Ok(None) };
-    let (_, need, _) = damage_spell(name).ok_or_else(|| crate::ScriptError::Usage(format!("no F2P damage spell {name:?}")))?;
+    let need = dump_damage_level(name).ok_or_else(|| crate::ScriptError::Usage(format!("no F2P damage spell {name:?}")))?;
     if magic_level(bot) < need {
         return Err(crate::kit::cycle::blocked_level("magic", need));
     }
@@ -155,6 +168,12 @@ pub fn run_magic(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.combat_style = "magic".to_string();
     bot.combat_spell = ordered_spell(bot, spec.spell.as_deref())?;
     let cast = bot.combat_spell.clone().unwrap_or_else(|| DAMAGE_SPELLS[0].0.to_string());
+    // A spell with a target param (crumble undead) on a camp it cannot
+    // affect is a contract bug: the server refuses every cast.
+    let unfit = unfit_spots(&cast, &crate::kit::fight::named_spots(&spots)?);
+    if !unfit.is_empty() {
+        return Err(crate::ScriptError::Usage(format!("{cast} cannot affect the NPCs of {}", unfit.join(","))));
+    }
     crate::kit::magic::wield_staff_for(bot, &spell_runes(&cast))?;
     require_combat_gear(bot, &cast)?;
     let picked: Vec<knowledge::combat_spots::CombatSpot> = {
@@ -294,6 +313,28 @@ mod tests {
         assert!(can_crumble(39), "crumble at 39");
         assert_eq!(CURSES.len(), 3, "three F2P curses");
         assert_eq!(DAMAGE_SPELLS.len(), 12, "strikes, bolts, blasts");
+    }
+
+    /// Crumble undead (no display name in the dump) is an ordered damage
+    /// spell, refused on a camp without the server's `undead` param.
+    #[test]
+    fn crumble_undead_rides_on_undead_camps_only() {
+        assert_eq!(super::dump_damage_level("crumble_undead"), Some(39));
+        assert_eq!(super::dump_damage_level("fire_strike"), Some(13));
+        assert_eq!(super::dump_damage_level("confuse"), None, "a curse deals no damage");
+        let camp = |key: &str| lifescape_gamedata::combat_spots::by_key(key).expect("spot");
+        assert!(super::unfit_spots("crumble_undead", &[camp("wild_skeletons"), camp("ghosts")]).is_empty());
+        assert_eq!(super::unfit_spots("crumble_undead", &[camp("cows")]), vec!["cows"]);
+        assert!(super::unfit_spots("fire_bolt", &[camp("cows")]).is_empty());
+        let mut bot = crate::kit::spell_load::tests::stocked_bot(&[], &[]);
+        bot.world.stats.insert(6, (45, 0));
+        let args = |spot: &str| vec![spot.to_string(), "--spell".to_string(), "crumble_undead".to_string()];
+        assert!(matches!(super::run_magic(&mut bot, &args("cows")), Err(crate::ScriptError::Usage(_))), "never on cows");
+        bot.world.stats.insert(6, (30, 0));
+        match super::run_magic(&mut bot, &args("wild_skeletons")) {
+            Err(crate::ScriptError::Blocked { missing }) => assert_eq!(missing, vec!["level:magic:39".to_string()]),
+            other => panic!("crumble at 30 blocks on the level, got {other:?}"),
+        }
     }
 
     #[test]

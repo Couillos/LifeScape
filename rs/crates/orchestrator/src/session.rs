@@ -38,7 +38,7 @@ use lifescape_sdk::Bot;
 use lifescape_json::{self as json, Value, object, str_value};
 use crate::paths;
 use crate::session_heartbeat::heartbeat_value;
-use crate::session_report::{report_value, snapshot_holdings, ReportCtx, TaskStart};
+use crate::session_report::TaskStart;
 use crate::session_rescue::PendingRescue;
 use crate::zones;
 
@@ -354,7 +354,7 @@ pub(crate) fn spawn_script_thread(shared: &Arc<Shared>, script: &str, args: &[St
     shared.log(&format!("=== session run {} {script} ===", shared.account));
     let worker = Arc::clone(&shared);
     let script_name = script.to_string();
-    let script_args = args.to_vec();
+    let (script_args, _) = crate::report_meta::strip_meta(args);
     let thread_name = format!("script-{}", shared.account);
     std::thread::Builder::new()
         .name(thread_name)
@@ -536,43 +536,10 @@ pub(crate) fn run_script_thread(shared: &Arc<Shared>, script: &str, args: &[Stri
         write_heartbeat(shared);
         return;
     }
-    // Task report (contract v2): diff the start holdings, push to the
-    // daemon, log one JSON line. Rescues and legacy scripts carry no
-    // start snapshot and report nothing structured.
+    // Task report (contract 2, `session_report`): rescues and legacy
+    // scripts carry no start snapshot and report nothing structured.
     if !is_rescue {
-        if let Some(start) = shared.task_start.lock().unwrap().take() {
-            let bot = shared.bot.lock().unwrap();
-            let end = snapshot_holdings(&bot);
-            // The end cache counts only when the bank opened in-run
-            // (baseline set): a run that never banks sees no bank moves,
-            // so pre-stock stays invisible instead of popping as gains.
-            let baseline = shared.bank_baseline.lock().unwrap().take();
-            let bank_end = if baseline.is_some() { shared.last_bank.lock().unwrap().clone() } else { HashMap::new() };
-            let baseline = baseline.unwrap_or_default();
-            let report = crate::session_report::build_report(
-                &bot,
-                &start.holdings,
-                &baseline,
-                &end,
-                &bank_end,
-                &ReportCtx {
-                    activity: start.script.clone(),
-                    node_id: start.node_id,
-                    stop: outcome.3.clone(),
-                    missing: outcome.4.clone(),
-                    error: outcome.2.as_ref().map(|error| {
-                        (
-                            error.get("type").as_str().unwrap_or("?").to_string(),
-                            error.get("message").as_str().unwrap_or("").to_string(),
-                        )
-                    }),
-                },
-            );
-            drop(bot);
-            let value = report_value(&shared.account, &report);
-            crate::session_push::push_task_report(&shared.account, &value);
-            shared.log(&format!("task_report {}", json::stringify(&value)));
-        }
+        crate::session_report::finish_task_report(shared, &outcome.3, &outcome.4, outcome.2.as_ref());
     }
     shared.budget_stop.store(false, Ordering::SeqCst);
     // The failure marker logs after the lock drops: stamping takes it.
@@ -967,6 +934,7 @@ mod tests {
                 node_id: "n9".to_string(),
                 holdings: start_holdings,
                 pause_ticks: 0,
+                meta: crate::report_meta::RunMeta::default(),
             })),
             last_bank: Mutex::new(std::collections::HashMap::new()),
             bank_baseline: Mutex::new(None),

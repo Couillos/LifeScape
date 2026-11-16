@@ -211,7 +211,7 @@ pub fn method_skill(method: &str) -> Option<&'static str> {
         "fire" => "firemaking",
         "spin" | "jewelry" | "string" | "pottery" | "craft" | "tan" | "cut" => "crafting",
         "runecraft" | "essence" => "runecraft",
-        "enchant" | "alch" | "superheat" | "telegrab" => "magic",
+        "enchant" | "alch" | "superheat" | "telegrab" | "teleport" | "curse" | "bananas" => "magic",
         "bury" => "prayer",
         "fight" => match tail.split('/').next().unwrap_or("") {
             "ranged" => "ranged",

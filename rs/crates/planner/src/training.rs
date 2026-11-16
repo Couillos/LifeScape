@@ -3,7 +3,8 @@
 //! method at resolve with the market, like a player picks what to make:
 //! smelt bars then hammer what pays best (bronze daggers, then scimitars,
 //! warhammers and platebodies as levels open them, iron, steel...), alch
-//! from magic 21 when it beats the combat spells.
+//! from magic 21 when it beats the combat spells, a teleport, a curse or
+//! bones to bananas when one of them does (D18).
 //!
 //! Score of one method = coins one XP costs the bot (lower wins):
 //! `(ticks per action × coin rate + inputs − product value) / XP per action`
@@ -132,11 +133,12 @@ pub fn smithing_cuts() -> &'static [u8] {
 }
 
 /// True when a tranche of `skill` from `start` picks its method at
-/// resolve with prices: smithing always, magic from low alchemy. The
-/// skeleton files no consumption for a magic one (the object to alch is
-/// unknown until then).
+/// resolve with prices: smithing always, magic from the first level that
+/// opens a second method (confuse at 3, D18: every F2P spell competes).
+/// The skeleton files no consumption for a magic one (the spell, its
+/// runes and the object to alch are unknown until then).
 pub fn priced_at_resolve(skill: &str, start: u8) -> bool {
-    skill == "smithing" || (skill == "magic" && start >= ALCH_FROM_LEVEL) || crate::training_production::PRODUCTION_SKILLS.contains(&skill)
+    skill == "smithing" || (skill == "magic" && start >= crate::training_spells::magic_priced_from()) || crate::training_production::PRODUCTION_SKILLS.contains(&skill)
 }
 
 /// What the bot pays for one unit it does not hold.
@@ -325,8 +327,10 @@ pub fn rank_smithing(level: u8, target: u8, prices: &TrainPrices) -> Vec<TrainPi
 }
 
 /// Every magic method at `level` toward `target`, priced, best first:
-/// the combat spell of the tranche (`tranches::reach_method`) and, from
-/// 21, alchemy of each supplied object (low below 55, high from 55).
+/// the combat spell of the tranche (`tranches::reach_method`), from 21
+/// alchemy of each supplied object (low below 55, high from 55), and the
+/// D18 spells open at the level (`training_spells`: teleports, curses,
+/// bones to bananas, crumble undead on the undead).
 pub fn rank_magic(level: u8, target: u8, prices: &TrainPrices, supply: &[AlchSupply]) -> Vec<TrainPick> {
     let xp_needed = crate::sizing::xp_between(level, target.max(level.saturating_add(1)));
     let mut out = Vec::new();
@@ -356,6 +360,7 @@ pub fn rank_magic(level: u8, target: u8, prices: &TrainPrices, supply: &[AlchSup
             out.extend(alch_option(&spell, casts_needed, offer, prices));
         }
     }
+    out.extend(crate::training_spells::spell_options(level, target, prices));
     sort_best_first(&mut out);
     out
 }
@@ -470,12 +475,22 @@ pub fn best_pick(skill: &str, level: u8, target: u8, prices: &TrainPrices, suppl
 
 /// Objects an open tranche of `skill` toward `target` keeps out of the
 /// sales between launches: the alchemy runes (and the staff) of a magic
-/// climb past 21.
+/// climb past 21, the runes of every D18 spell it may pick (teleports,
+/// curses, bones to bananas, crumble undead) and the bones bananas eat.
 pub fn kept_inputs(skill: &str, target: u8) -> Vec<String> {
-    if skill == "magic" && target > ALCH_FROM_LEVEL {
-        return vec![NATURE_RUNE.to_string(), FIRE_RUNE.to_string(), FIRE_STAFF.to_string()];
+    if skill != "magic" {
+        return Vec::new();
     }
-    Vec::new()
+    let mut out = Vec::new();
+    if target > ALCH_FROM_LEVEL {
+        out.extend([NATURE_RUNE.to_string(), FIRE_RUNE.to_string(), FIRE_STAFF.to_string()]);
+    }
+    for item in crate::training_spells::kept_spell_inputs(target) {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

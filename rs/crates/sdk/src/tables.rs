@@ -22,6 +22,8 @@ pub struct Tables {
     pub obj_take_op: fn(obj_id: u16) -> Option<u8>,
     /// Inv-op number (1-based) for `Drop`, if any.
     pub obj_drop_op: fn(obj_id: u16) -> Option<u8>,
+    /// Label of inv-op `op` (1-based) of an object ("Eat", "Bury"), if any.
+    pub obj_inv_op: fn(obj_id: u16, op: u8) -> Option<String>,
     /// First object id whose name contains the needle, if any.
     pub find_obj_by_name: fn(needle: &str) -> Option<u16>,
     /// Component id by dotted name, if known.
@@ -56,6 +58,10 @@ fn unknown_drop_op(_obj_id: u16) -> Option<u8> {
     None
 }
 
+fn unknown_inv_op(_obj_id: u16, _op: u8) -> Option<String> {
+    None
+}
+
 fn unknown_find_obj(_needle: &str) -> Option<u16> {
     None
 }
@@ -76,6 +82,7 @@ pub const NOTABLES: Tables = Tables {
     obj_name: unknown_obj_name,
     obj_take_op: unknown_take_op,
     obj_drop_op: unknown_drop_op,
+    obj_inv_op: unknown_inv_op,
     find_obj_by_name: unknown_find_obj,
     com_id: unknown_com_id,
     bank_client_stands: unknown_bank_stands,
@@ -93,6 +100,7 @@ mod tests {
         assert!((NOTABLES.obj_name)(0).is_none());
         assert!((NOTABLES.obj_take_op)(0).is_none());
         assert!((NOTABLES.obj_drop_op)(0).is_none());
+        assert!((NOTABLES.obj_inv_op)(0, 1).is_none());
         assert!((NOTABLES.find_obj_by_name)("coins").is_none());
         assert!((NOTABLES.com_id)("bank_main:inv").is_none());
         assert!((NOTABLES.bank_client_stands)(3186, 3436, 0).is_none());

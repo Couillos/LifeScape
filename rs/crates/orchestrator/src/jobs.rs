@@ -395,7 +395,7 @@ pub fn resolve_state(mut state: Value) -> Value {
 /// Store file the daemon alone opens (the same file the market service
 /// holds): one short-lived connection per report, WAL-safe.
 fn rates_db_path() -> std::path::PathBuf {
-    crate::paths::run_dir().join("lifescape.db")
+    crate::paths::store_db()
 }
 
 /// Parses one pushed TaskReport and appends its raw rows to the store:
@@ -408,6 +408,9 @@ pub fn ingest_report_into(
     report: &Value,
 ) -> Result<crate::rates_service::ParsedReport, String> {
     let parsed = crate::rates_service::parse_report(report)?;
+    // Contract 2 (plan rendements R1): parsed before any write, so an
+    // unknown cause or contract never leaves half a report behind.
+    let contract = crate::report_contract::parse_contract(report)?;
     let report_id = store
         .record_task_report(&lifescape_store::NewTaskReport {
             account: parsed.account.clone(),
@@ -446,6 +449,23 @@ pub fn ingest_report_into(
             })
             .map_err(|error| format!("rates store xp: {error}"))?;
         lines += 1;
+    }
+    if let Some(contract) = contract {
+        let measure = lifescape_store::ReportMeasure {
+            planner_method: contract.planner_method,
+            method_source: contract.method_source,
+            site: contract.site,
+            target: contract.target,
+            tool: contract.tool,
+            combat_style: contract.combat_style,
+            work_ticks: contract.work_ticks,
+            pause_ticks: contract.pause_ticks,
+            levels: contract.levels,
+            flows: contract.flows,
+            units: contract.units,
+            alerts: contract.alerts,
+        };
+        store.record_report_measure(report_id, &measure).map_err(|error| format!("rates store measure: {error}"))?;
     }
     crate::logln!(
         "rates: stored report {report_id} {} {} ({} lines)",
@@ -577,6 +597,34 @@ mod tests {
         assert!(aggregates.iter().any(|line| line.provenance == "shop_bought"), "shop line kept");
         assert!(aggregates.iter().any(|line| line.provenance == "traded"), "trade line kept");
         assert_eq!(aggregates.iter().map(|line| line.report_count).sum::<i64>(), 4, "one report, four lines");
+    }
+
+    /// A contract-2 report stores its measure beside the legacy lines;
+    /// the legacy aggregation reads the same report unchanged.
+    #[test]
+    fn ingest_stores_the_contract_two_measure() {
+        let store = lifescape_store::Store::open_in_memory().expect("memory store");
+        let mut report = fishing_report();
+        if let Value::Obj(map) = &mut report {
+            map.insert("contract".to_string(), Value::Int(2));
+            map.insert("planner_method".to_string(), str_value("gather:fishing/raw_shrimp"));
+            map.insert("method_source".to_string(), str_value("node"));
+            map.insert("work_ticks".to_string(), Value::Int(6000));
+            map.insert("flows".to_string(), Value::Arr(vec![object(vec![("name", str_value("Raw shrimps")), ("cause", str_value("product")), ("qty", Value::Int(300))])]));
+            map.insert("units".to_string(), object(vec![("product", object(vec![("Raw shrimps", Value::Int(300))]))]));
+        }
+        let parsed = super::ingest_report_into(&store, &report).expect("ingests");
+        assert_eq!(parsed.method, "fishing", "the legacy key stays the script");
+        let measure = store.report_measure(1).expect("reads").expect("measure 2");
+        assert_eq!((measure.planner_method.as_str(), measure.work_ticks), ("gather:fishing/raw_shrimp", 6000));
+        assert_eq!(measure.flows, vec![("Raw shrimps".to_string(), "product".to_string(), 300)]);
+        assert_eq!(measure.units, vec![("product".to_string(), "Raw shrimps".to_string(), 300)]);
+        // An unknown cause fails before any row lands.
+        if let Value::Obj(map) = &mut report {
+            map.insert("flows".to_string(), Value::Arr(vec![object(vec![("name", str_value("X")), ("cause", str_value("magic")), ("qty", Value::Int(1))])]));
+        }
+        assert!(super::ingest_report_into(&store, &report).is_err());
+        assert_eq!(store.v1_measure_counts().expect("counts").reports, 0, "nothing half-stored");
     }
 
     /// Empty account or method fails loud, never stores a phantom row.

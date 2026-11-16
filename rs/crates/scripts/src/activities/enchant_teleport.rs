@@ -3,6 +3,11 @@
 //! §5.10. Levels and runes come from the spell dump and are
 //! unit-tested; runes and targets are stocked from the pack and the
 //! known bank (`kit::spell_load`), products banked between loads.
+//! Teleports and bones to bananas are spellbook buttons (`[if_button,
+//! magic:...]` in `teleport.rs2`, `convert_bones.rs2`), enchants a cast
+//! on the carried jewel (`OPHELDT`). D18 (2026-11-16): a teleport order
+//! with a goal (`--level`, count, budget) casts until it, a magic climb;
+//! a goalless one casts once (travel).
 //!
 //! Process: poste aucun (sort) · action enchanter/téléporter ·
 //! interface sort · intrants amulette/os + runes · produits amulettes
@@ -13,7 +18,7 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::magic::{cast_on_held, spell_com, wield_staff_for};
+use crate::kit::magic::{cast_on_held, wield_staff_for, CastPacer};
 use crate::kit::pack::{obj_id, pack_total};
 use crate::kit::spell_load::{run_casts, stock_for, SpellLoad};
 use crate::kit::survival::{check_events, learn_level, wait_pack_streamed};
@@ -39,10 +44,20 @@ pub fn enchants() -> Vec<(String, i64, String, String)> {
         })
         .collect()
 }
-/// F2P teleports: spell and level (catalogue §5.10).
-pub const TELEPORTS: [(&str, i64); 3] =
-    [("varrock_teleport", 25), ("lumbridge_teleport", 31), ("falador_teleport", 37)];
+/// F2P teleports from the spell dump (`*_teleport`, members rows out):
+/// spell and level, lowest first (Varrock 25, Lumbridge 31, Falador 37).
+pub fn teleports() -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = knowledge::spells::all_spells()
+        .into_iter()
+        .filter(|row| !row.members && row.level >= 1 && row.spell.ends_with("_teleport") && !row.runes.is_empty())
+        .map(|row| (row.spell, row.level))
+        .collect();
+    out.sort_by_key(|(_, level)| *level);
+    out
+}
 pub const BONES_TO_BANANAS: &str = "bones_to_bananas";
+/// The only bones the spell converts (`convert_bones.rs2`).
+pub const BANANA_BONES: &str = "bones";
 
 /// Runes of a spell from the dump (case-insensitive debugname).
 pub fn spell_runes(spell: &str) -> Vec<(String, i64)> {
@@ -63,7 +78,18 @@ fn strung_input(wanted: &str) -> String {
 
 /// Required level of a teleport spell (`None` for anything else).
 pub fn teleport_level(name: &str) -> Option<i64> {
-    TELEPORTS.iter().find(|(spell, _)| spell.eq_ignore_ascii_case(name)).map(|(_, level)| *level)
+    teleports().into_iter().find(|(spell, _)| spell.eq_ignore_ascii_case(name)).map(|(_, level)| level)
+}
+
+/// True when the order names a goal the casts climb to (a teleport
+/// training run): a count, a level, an XP amount or a budget.
+fn has_goal(spec: &crate::kit::cycle::TaskSpec) -> bool {
+    let targets = &spec.targets;
+    targets.count.is_some_and(|count| count > 0) || targets.level_skill.is_some() || targets.xp_skill.is_some() || spec.budget_max_ticks > 0
+}
+
+fn magic_xp(bot: &Bot) -> i32 {
+    bot.world.stats.get(&MAGIC_STAT).map(|(_, xp)| *xp).unwrap_or(0)
 }
 
 /// Cast in the open session: `enchant_teleport <spell|amulet> [count]
@@ -89,9 +115,10 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (spell, need, input) = if let Some((spell, need, _)) = enchant_for(wanted) {
         (spell, need, strung_input(wanted))
     } else if let Some(need) = teleport_level(wanted) {
-        (wanted.to_string(), need, String::new())
+        (wanted.to_lowercase(), need, String::new())
     } else if wanted.eq_ignore_ascii_case(BONES_TO_BANANAS) {
-        (BONES_TO_BANANAS.to_string(), 15, "bones".to_string())
+        let need = knowledge::spells::by_name(BONES_TO_BANANAS).into_iter().next().map(|row| row.level).unwrap_or(15);
+        (BONES_TO_BANANAS.to_string(), need, BANANA_BONES.to_string())
     } else {
         return Err(ScriptError::Usage(format!("no F2P enchant, teleport or {BONES_TO_BANANAS} named {wanted:?} at {:?}", bot.position())));
     };
@@ -108,56 +135,60 @@ pub fn run_enchant_teleport(bot: &mut Bot, args: &[String]) -> ScriptResult {
     load.whole_pack = spell == BONES_TO_BANANAS;
     // A carried staff of the cast's element goes on before any sizing.
     wield_staff_for(bot, &load.runes)?;
-    // Teleports move the bot, not an item: exactly one cast per run.
+    let mut pacer = CastPacer::new(&spell);
+    // A goalless teleport moves the bot once (travel); with a goal it
+    // casts until it (a magic climb, D18), runes refilled between loads.
     let Some(target) = target_obj else {
-        stock_for(bot, &load, &keep, 1)?;
-        cast_one(bot, &spell, None)?;
-        bot.log(&format!("ok {spell} x1"));
-        return Ok(0);
+        if !has_goal(&spec) {
+            stock_for(bot, &load, &keep, 1)?;
+            cast_button(bot, &mut pacer)?;
+            bot.log(&format!("ok {spell} x1"));
+            return Ok(0);
+        }
+        let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| cast_button(cast_bot, &mut pacer))?;
+        bot.log(&format!("ok {spell} x{done}"));
+        return stop.map_or(Ok(0), crate::kit::cycle::exit_code);
     };
-    let (done, stop) = run_casts(bot, &spec, &load, &keep, |cast_bot| cast_one(cast_bot, &spell, Some(target)))?;
+    let (done, stop) = if spell == BONES_TO_BANANAS {
+        // The button converts every carried bone at once.
+        run_casts(bot, &spec, &load, &keep, |cast_bot| {
+            let had = pack_total(cast_bot, target);
+            pacer.cast_button(cast_bot, |seen| pack_total(seen, target) < had)
+        })?
+    } else {
+        run_casts(bot, &spec, &load, &keep, |cast_bot| cast_one(cast_bot, &spell, target))?
+    };
     bot.log(&format!("ok {spell} x{done}"));
     stop.map_or(Ok(0), crate::kit::cycle::exit_code)
+}
+
+/// One spellbook-button cast (teleport): landed when its XP shows.
+fn cast_button(bot: &mut Bot, pacer: &mut CastPacer) -> Result<(), ScriptError> {
+    let before = magic_xp(bot);
+    pacer.cast_button(bot, |seen| magic_xp(seen) > before)
 }
 
 /// Ticks to wait out one cast (server delays plus the convert tick).
 pub const CAST_TICKS: u64 = 40;
 
-/// One cast: held targets convert in the pack (input count moves),
-/// teleports move the bot. Anything quiet past the budget is loud.
-fn cast_one(bot: &mut Bot, spell: &str, target: Option<u16>) -> Result<(), ScriptError> {
-    match target {
-        Some(obj) => {
-            let had = pack_total(bot, obj);
-            cast_on_held(bot, spell, obj)?;
-            let deadline = bot.world.ticks + CAST_TICKS;
-            while bot.world.ticks < deadline {
-                bot.pump(2)?;
-                if pack_total(bot, obj) != had {
-                    return Ok(());
-                }
-            }
-            Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
-        }
-        None => {
-            let before = bot.position();
-            let com = spell_com(bot, spell)?;
-            bot.if_button(com)?;
-            let deadline = bot.world.ticks + CAST_TICKS;
-            while bot.world.ticks < deadline {
-                bot.pump(2)?;
-                if bot.position() != before {
-                    return Ok(());
-                }
-            }
-            Err(ScriptError::Failed(format!("{spell} never moved at {:?}", bot.position())))
+/// One enchant on the carried jewel: the input count moves. Anything
+/// quiet past the budget is loud.
+fn cast_one(bot: &mut Bot, spell: &str, obj: u16) -> Result<(), ScriptError> {
+    let had = pack_total(bot, obj);
+    cast_on_held(bot, spell, obj)?;
+    let deadline = bot.world.ticks + CAST_TICKS;
+    while bot.world.ticks < deadline {
+        bot.pump(2)?;
+        if pack_total(bot, obj) != had {
+            return Ok(());
         }
     }
+    Err(ScriptError::Failed(format!("{spell} never landed at {:?}", bot.position())))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{enchant_for, enchants, run_enchant_teleport, spell_runes, teleport_level, BONES_TO_BANANAS, CAST_TICKS, MAGIC_STAT, TELEPORTS};
+    use super::{enchant_for, enchants, has_goal, run_enchant_teleport, spell_runes, teleport_level, teleports, BONES_TO_BANANAS, CAST_TICKS, MAGIC_STAT};
     use crate::kit::pack::{obj_id, pack_total};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
@@ -269,7 +300,7 @@ mod tests {
     /// Teleports and bones to bananas: levels and runes from the dump.
     #[test]
     fn teleports_and_bones_match_the_dump() {
-        assert_eq!(TELEPORTS.map(|(_, level)| level), [25, 31, 37]);
+        assert_eq!(teleports(), vec![("varrock_teleport".to_string(), 25), ("lumbridge_teleport".to_string(), 31), ("falador_teleport".to_string(), 37)]);
         assert_eq!(teleport_level("varrock_teleport"), Some(25));
         assert_eq!(teleport_level("FALADOR_TELEPORT"), Some(37), "case-insensitive");
         assert_eq!(teleport_level("camelot_teleport"), None, "members never teleports");
@@ -280,6 +311,34 @@ mod tests {
         let mut bones_runes = spell_runes(BONES_TO_BANANAS);
         bones_runes.sort();
         assert_eq!(bones_runes, vec![("earthrune".to_string(), 2), ("naturerune".to_string(), 1), ("waterrune".to_string(), 2)]);
+    }
+
+    /// D18: a teleport order with a goal climbs (count, level, budget);
+    /// a bare one travels once.
+    #[test]
+    fn a_goal_turns_teleports_into_a_climb() {
+        let parse = |args: &[&str]| crate::kit::cycle::parse_cli("enchant_teleport", &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>()).expect("parses");
+        assert!(!has_goal(&parse(&[])), "travel");
+        assert!(has_goal(&parse(&["--level", "magic", "30"])));
+        assert!(has_goal(&parse(&["40"])));
+        assert!(has_goal(&parse(&["--budget-max", "6000"])));
+    }
+
+    /// A funded teleport climb and bananas reach the button press: dead
+    /// socket fails `Sdk` (bananas never cast on a held bone: the server
+    /// only has `[if_button,magic:bones_to_bananas]`).
+    #[test]
+    fn funded_climbs_reach_the_button() {
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (25, 0));
+        fund_pack(&mut bot, &[(0, "airrune", 30), (1, "lawrune", 10), (2, "firerune", 10)]);
+        let error = run_enchant_teleport(&mut bot, &["varrock_teleport".to_string(), "--level".to_string(), "magic".to_string(), "30".to_string()]).expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
+        let mut bot = offline_bot();
+        bot.world.stats.insert(MAGIC_STAT, (15, 0));
+        fund_pack(&mut bot, &[(0, "bones", 1), (1, "earthrune", 2), (2, "waterrune", 2), (3, "naturerune", 1)]);
+        let error = run_enchant_teleport(&mut bot, &[BONES_TO_BANANAS.to_string(), "1".to_string()]).expect_err("dead socket fails");
+        assert!(matches!(error, crate::ScriptError::Sdk(_)), "send path, got {error}");
     }
 
     /// Every enchant product exists in the object dump.

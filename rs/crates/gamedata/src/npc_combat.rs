@@ -57,6 +57,9 @@ pub struct NpcCombat {
     pub defence_bonus: [i64; 3],
     pub attack_rate: i64,
     pub damage_type: DamageType,
+    /// `param=undead,^true`: skeletons, zombies, ghosts, shades — the
+    /// only targets crumble undead affects (`crumble_undead.rs2`).
+    pub undead: bool,
 }
 
 fn table() -> &'static HashMap<String, NpcCombat> {
@@ -79,6 +82,7 @@ fn table() -> &'static HashMap<String, NpcCombat> {
                         defence_bonus: [int("stabdefence", 0), int("slashdefence", 0), int("crushdefence", 0)],
                         attack_rate: int("attackrate", DEFAULT_ATTACK_RATE).max(1),
                         damage_type: DamageType::parse(row.get("damagetype").as_str().unwrap_or("")),
+                        undead: row.get("undead").as_bool().unwrap_or(false),
                     },
                 );
             }
@@ -93,9 +97,32 @@ pub fn by_name(name: &str) -> Option<NpcCombat> {
     table().get(name).copied()
 }
 
+/// True when the NPC's config sets the boolean target `param` `^true`
+/// (`undead`, the one a F2P spell checks: `spells::target_param`).
+/// Unknown params and NPCs without a combat block read false.
+pub fn has_param(name: &str, param: &str) -> bool {
+    let Some(npc) = by_name(name) else { return false };
+    match param {
+        "undead" => npc.undead,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{by_name, DamageType, DEFAULT_ATTACK_RATE};
+    use super::{by_name, has_param, DamageType, DEFAULT_ATTACK_RATE};
+
+    /// The undead flag comes from the server configs (`param=undead`):
+    /// the sewer skeletons, zombies and ghosts carry it, a cow never.
+    #[test]
+    fn undead_comes_from_the_server_param() {
+        for undead in ["skeleton_unarmed", "skeleton_armed", "zombie_unarmed", "zombie_armed", "zombie2", "ghost"] {
+            assert!(has_param(undead, "undead"), "{undead} is undead");
+        }
+        assert!(!has_param("cow", "undead"));
+        assert!(!has_param("chicken", "undead"));
+        assert!(!has_param("skeleton_unarmed", "no_such_param"));
+    }
 
     /// Values straight from the server configs (`_unpack/225/all.npc`).
     #[test]

@@ -187,6 +187,14 @@ pub(crate) fn current_skill<'a>(bot: &Bot, assumed: &'a str) -> &'a str {
     live_style_index(bot).and_then(|index| live_skill(&category, index)).unwrap_or(assumed)
 }
 
+/// Skill the server trains right now from its live `%com_mode` and the
+/// wielded category, `None` before the varp streams (task report
+/// context: never a guess).
+pub fn trained_skill(bot: &Bot) -> Option<&'static str> {
+    let category = current_weapon_category(bot);
+    live_style_index(bot).and_then(|index| live_skill(&category, index))
+}
+
 /// A scimitar's speed beats a 2h sword's raw bonus: one-handed slashers win
 /// ties (strategy, not game data).
 pub(crate) fn weapon_weight(category: &str) -> f64 {

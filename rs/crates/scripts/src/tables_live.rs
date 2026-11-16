@@ -33,6 +33,11 @@ fn obj_drop_op(obj_id: u16) -> Option<u8> {
         .map(|index| index as u8 + 1)
 }
 
+fn obj_inv_op(obj_id: u16, op: u8) -> Option<String> {
+    let index = usize::from(op.checked_sub(1)?);
+    lifescape_gamedata::obj_by_id(usize::from(obj_id)).and_then(|entry| entry.inv_ops.get(index).cloned().flatten()).map(|label| label.to_string())
+}
+
 fn find_obj_by_name(needle: &str) -> Option<u16> {
     // Exact match first (the legacy obj_id semantic), contains as fallback.
     if let Some(entry) = lifescape_gamedata::objs_by_name(needle).into_iter().next() {
@@ -69,6 +74,7 @@ pub const LIVETABLES: Tables = Tables {
     obj_name,
     obj_take_op,
     obj_drop_op,
+    obj_inv_op,
     find_obj_by_name,
     com_id,
     bank_client_stands,

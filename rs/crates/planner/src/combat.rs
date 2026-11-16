@@ -64,7 +64,8 @@ fn method_sites(method: &str) -> Option<(&'static str, String)> {
         ("mining", ore)
     } else if let Some(logs) = method.strip_prefix("gather:woodcut/") {
         ("woodcut", logs)
-    } else if let Some(rest) = method.strip_prefix("fight:") {
+    } else if let Some(rest) = method.strip_prefix("fight:").or_else(|| method.strip_prefix("curse:")) {
+        // A curse casts on a combat camp's NPCs (`curse:<spell>/<spot>`).
         ("fight", rest.rsplit('/').next().unwrap_or(rest))
     } else if let Some(item) = method.strip_prefix("farm:") {
         if crate::mapping::is_fish(item) {

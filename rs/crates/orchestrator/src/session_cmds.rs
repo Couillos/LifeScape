@@ -75,8 +75,11 @@ fn cmd_run(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
     // Start carrier for the task report (contract scripts only), with a
     // fresh bank baseline: the first bank-open in-run freezes pre-stock.
     *shared.bank_baseline.lock().unwrap() = None;
+    // The planner method rides `--method` (session-only, stripped before
+    // the script parses its CLI, `report_meta`).
+    let (script_args, method) = crate::report_meta::strip_meta(&string_args);
     *shared.task_start.lock().unwrap() =
-        crate::session_report::task_start_for(&shared.bot.lock().unwrap(), script, &string_args);
+        crate::session_report::task_start_for(&shared.bot.lock().unwrap(), script, &script_args, method.as_deref());
     spawn_script_thread(shared, script, &string_args);
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }

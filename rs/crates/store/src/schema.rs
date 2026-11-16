@@ -5,7 +5,7 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
@@ -177,6 +177,60 @@ ALTER TABLE candles ADD COLUMN sell_volume INTEGER NOT NULL DEFAULT 0;
 PRAGMA user_version = 4;
 ";
 
+/// Migration 5 (plan rendements R1, report contract 2): one measure, the
+/// signed flow balance of a run. Reports gain their measure version (1:
+/// the net-diff reports, purge target D8; 2: the ledger contract), the
+/// planner's fine method and whether the launch carried it, site,
+/// target, tool tier, combat style, work and pause ticks. Side tables:
+/// every skill's level at the start, the signed flows by cause, the
+/// XP-bearing units (product, input, cast, kill, damage) and the alerts
+/// (unattributed flows, coherence residuals). Columns and tables only,
+/// nothing dropped; one transaction with its version bump.
+const MIGRATION_V5: &str = "
+ALTER TABLE task_reports ADD COLUMN measure_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE task_reports ADD COLUMN planner_method TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN method_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN site TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN target TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN tool TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN combat_style TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_reports ADD COLUMN work_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE task_reports ADD COLUMN pause_ticks INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_task_reports_measure ON task_reports(measure_version);
+CREATE INDEX IF NOT EXISTS idx_task_reports_planner ON task_reports(planner_method);
+CREATE TABLE IF NOT EXISTS task_levels(
+    report_id INTEGER NOT NULL REFERENCES task_reports(report_id),
+    skill TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    PRIMARY KEY(report_id, skill)
+);
+CREATE TABLE IF NOT EXISTS task_flows(
+    flow_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES task_reports(report_id),
+    item_name TEXT NOT NULL,
+    cause TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_flows_report ON task_flows(report_id);
+CREATE INDEX IF NOT EXISTS idx_task_flows_item ON task_flows(item_name, cause);
+CREATE TABLE IF NOT EXISTS task_units(
+    report_id INTEGER NOT NULL REFERENCES task_reports(report_id),
+    unit TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    PRIMARY KEY(report_id, unit, subject)
+);
+CREATE TABLE IF NOT EXISTS task_alerts(
+    alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES task_reports(report_id),
+    kind TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_alerts_report ON task_alerts(report_id);
+PRAGMA user_version = 5;
+";
+
 /// Reads the `user_version` pragma of an open connection.
 pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> {
     let found: i64 = connection
@@ -221,6 +275,9 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
     if found < 4 {
         apply_in_transaction(connection, MIGRATION_V4, 4)?;
     }
+    if found < 5 {
+        apply_in_transaction(connection, MIGRATION_V5, 5)?;
+    }
     Ok(())
 }
 
@@ -255,11 +312,11 @@ mod schema_tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
                  ('items','orders','deals','executions','candles','task_reports',\
                  'task_yields','accounts_econ','trends','holdings_hourly','holdings_daily',\
-                 'error_events')",
+                 'error_events','task_levels','task_flows','task_units','task_alerts')",
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(table_count, 12);
+            assert_eq!(table_count, 16);
         }
         // Reopen keeps the version: migrations are idempotent.
         let reopened = Store::open(&path)?;
@@ -334,6 +391,33 @@ mod schema_tests {
         drop(store);
         let reopened = Store::open(&path)?;
         assert_eq!(reopened.schema_version()?, SCHEMA_VERSION, "idempotent reopen");
+        Ok(())
+    }
+
+    /// A v4 file (live base before the yield contract) gains the v2
+    /// measure columns: its reports read measure version 1 (the purge
+    /// target), nothing lost.
+    #[test]
+    fn v4_file_marks_old_reports_measure_one() -> Result<(), Error> {
+        use rusqlite::Connection;
+        let path = temp_database_path("migrate-v4");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        {
+            let connection = Connection::open(&path)?;
+            for step in [super::MIGRATION_V1, super::MIGRATION_V2, super::MIGRATION_V3, super::MIGRATION_V4] {
+                connection.execute_batch(step)?;
+            }
+            connection.execute_batch(
+                "INSERT INTO task_reports(account, node_id, method, script, ticks, stop, context_level, created_clock)
+                     VALUES ('t01', 'n1', 'fishing', 'fishing', 600, 'goal_reached', 5, 1);
+                 INSERT INTO task_yields(report_id, item_name, provenance, quantity, skill, xp) VALUES (1, 'Raw shrimps', 'produced', 9, '', 0);",
+            )?;
+        }
+        let store = Store::open(&path)?;
+        assert_eq!(store.schema_version()?, SCHEMA_VERSION);
+        let version: i64 = store.connection.query_row("SELECT measure_version FROM task_reports WHERE report_id = 1", [], |row| row.get(0))?;
+        assert_eq!(version, 1);
+        assert_eq!(store.yields_for_report(1)?.len(), 1, "v1 lines kept until the purge");
         Ok(())
     }
 

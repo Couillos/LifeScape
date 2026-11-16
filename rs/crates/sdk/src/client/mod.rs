@@ -7,6 +7,7 @@ pub mod actions;
 pub mod approach;
 pub mod coin_ledger;
 pub mod item_ledger;
+pub mod run_events;
 pub mod cost_cache;
 pub mod design;
 pub mod door_leaf;
@@ -180,6 +181,8 @@ pub struct Bot {
     /// Every carried object's flows, attributed the same way plus the
     /// skill and death causes (`item_ledger`).
     pub item_ledger: item_ledger::ItemLedger,
+    /// Casts, kills and damage of the session (`run_events`).
+    pub run_events: run_events::RunEvents,
     /// Inline-pause gate, installed by the session worker (default: none).
     pub pause_gate: Option<PauseGate>,
     /// Pause ticks already billed to market pauses (and only those): the
@@ -252,6 +255,7 @@ impl Bot {
             on_pump: None,
             coin_ledger: coin_ledger::CoinLedger::default(),
             item_ledger: item_ledger::ItemLedger::default(),
+            run_events: run_events::RunEvents::default(),
             pause_gate: None,
             pause_ticks: 0,
             pause_since: None,
@@ -468,7 +472,16 @@ impl Bot {
         self.coin_ledger.set_context(kind, until);
     }
 
-    /// Feeds the ledger the coins carried now (bank open: transfers).
+    /// Names what the next change of `obj` (any: `None`) moving with
+    /// `sign` (0: both) comes from, for `ticks` (`item_ledger`).
+    pub fn item_action(&mut self, kind: &'static str, obj: Option<u16>, sign: i8, ticks: u64) {
+        let until = self.world.ticks + ticks;
+        self.item_ledger.note_action(kind, obj, sign, until);
+    }
+
+    /// Feeds the ledgers what the bot carries now (bank open: transfers):
+    /// coins in the pack, every object in pack plus worn, XP per stat,
+    /// and the NPC hits for the run events.
     fn observe_coins(&mut self) {
         let (com, slots) = self.backpack();
         if com.is_none() {
@@ -483,10 +496,17 @@ impl Bot {
         for (_, (held, count)) in &slots {
             *pack.entry(*held).or_insert(0) += *count;
         }
-        let xp_total: i64 = self.world.stats.values().map(|(_, xp)| i64::from(*xp)).sum();
+        if let Some(worn) = (self.tables.com_id)("wornitems:wear").and_then(|worn| self.world.inv.get(&worn)) {
+            for (held, count) in worn.values() {
+                *pack.entry(*held).or_insert(0) += *count;
+            }
+        }
+        let xp: Vec<(u8, i32)> = self.world.stats.iter().map(|(stat, (_, xp))| (*stat, *xp)).collect();
         let dead = self.world.stats.get(&3).is_some_and(|(level, _)| *level == 0);
         let context = self.coin_ledger.context();
-        self.item_ledger.observe(item_ledger::Seen { pack, bank_open, tick, xp_total, dead, context });
+        let hits = std::mem::take(&mut self.world.npc_hits);
+        self.run_events.observe(tick, run_events::magic_xp(&xp), &hits);
+        self.item_ledger.observe(item_ledger::Seen { pack, bank_open, tick, xp, dead, context });
     }
 
     pub fn pump(&mut self, count: u32) -> Result<Vec<Frame>> {

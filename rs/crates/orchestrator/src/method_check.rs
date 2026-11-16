@@ -50,7 +50,9 @@ pub struct MethodPlan {
     pub coins: i64,
 }
 
-/// The planner's view of `method` for `count` units (pure).
+/// The planner's view of `method` for `count` units (pure). A spell
+/// method yielding no object (teleport, curse, magic fight: D18) is
+/// launched as a magic climb of `count` casts and judged on its XP.
 pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
     // `leg@product`: the object the leg obtains (`all_methods` writes it:
     // a drop farm or a purchase names no recipe the planner can read).
@@ -58,13 +60,20 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
         Some((leg, product)) => (leg, Some(product.to_string())),
         None => (method, None),
     };
-    let way = lifescape_planner::method_way::method_way(leg);
+    let way = lifescape_planner::method_way::method_way(leg).or_else(|| lifescape_planner::spell_methods::cast_method_way(leg));
     let product = match (&named, &way) {
         (Some(product), _) => product.clone(),
         (None, Some((product, _))) => product.clone(),
         (None, None) => return Err(format!("{method}: no way known to the planner (name the object: {method}@<object>)")),
     };
-    let mut node = lifescape_planner::Node::new("check", lifescape_planner::NodeKind::ObtainItems { item: product.clone(), count }, Vec::new(), count);
+    let mut node = if product.is_empty() {
+        let skill = way.as_ref().and_then(|(_, found)| found.skill.clone()).map(|(name, _)| name).unwrap_or_else(|| "magic".to_string());
+        let mut climb = lifescape_planner::Node::new("check", lifescape_planner::NodeKind::ReachLevel { skill, level: 99 }, Vec::new(), 99);
+        climb.batch = count;
+        climb
+    } else {
+        lifescape_planner::Node::new("check", lifescape_planner::NodeKind::ObtainItems { item: product.clone(), count }, Vec::new(), count)
+    };
     // The site the brain would send a staff checker to (combat 70, the
     // recipe's level, fares in hand): a mithril rock, never the nearest
     // iron (live 2026-11-15: the check mined iron for `farm:mithril_ore`).
@@ -127,6 +136,8 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
     if drop_farm {
         args.extend(["--budget-min".to_string(), "0".to_string(), "--budget-max".to_string(), DROP_FARM_TICKS.to_string()]);
     }
+    // The fine method rides to the task report like a brain launch.
+    args.extend([crate::report_meta::METHOD_FLAG.to_string(), leg.to_string()]);
     Ok(MethodPlan { method: method.to_string(), drop_farm, quest, script, args, product, skill, inputs, tools, coins })
 }
 
@@ -143,6 +154,21 @@ pub fn held(state: &Value, item: &str) -> i64 {
 
 fn level_of(state: &Value, skill: &str) -> i64 {
     i64::from(crate::brain_succession::live_level(state, skill))
+}
+
+/// Display XP of `skill` in a session state (`skills` rows).
+pub fn skill_xp(state: &Value, skill: &str) -> i64 {
+    let Some(stat) = lifescape_sdk::provenance::skill_id(skill) else { return 0 };
+    state.get("skills").as_arr().cloned().unwrap_or_default().iter().find(|row| row.get("id").as_i64() == Some(i64::from(stat))).and_then(|row| row.get("xp").as_i64()).unwrap_or(0)
+}
+
+/// What a check counts: the product held, or the XP of its skill for a
+/// method yielding no object (teleports, curses, magic fights).
+fn measure(state: &Value, plan: &MethodPlan) -> i64 {
+    if plan.product.is_empty() {
+        return skill_xp(state, plan.skill.as_ref().map(|(skill, _)| skill.as_str()).unwrap_or("magic"));
+    }
+    held(state, &plan.product)
 }
 
 fn send(request: Value, timeout: Duration) -> Result<Value, String> {
@@ -384,7 +410,7 @@ pub fn check(account: &str, plan: &MethodPlan, count: i64) -> Result<Checked, St
     }
     stage(account, plan, count)?;
     let first = show(account)?;
-    let before = held(&first, &plan.product);
+    let before = measure(&first, plan);
     let start_wall = crate::jobs::now_secs();
     let reply = send(
         object(vec![
@@ -407,7 +433,7 @@ pub fn check(account: &str, plan: &MethodPlan, count: i64) -> Result<Checked, St
     };
     std::thread::sleep(Duration::from_secs(2));
     let after_state = show(account).unwrap_or(last);
-    Ok(Checked { drop_farm: plan.drop_farm, verdict, detail, before, after: held(&after_state, &plan.product), wall_s: crate::jobs::now_secs() - start_wall })
+    Ok(Checked { drop_farm: plan.drop_farm, verdict, detail, before, after: measure(&after_state, plan), wall_s: crate::jobs::now_secs() - start_wall })
 }
 
 fn record(account: &str, plan: Option<&MethodPlan>, method: &str, outcome: &Result<Checked, String>) -> Value {
@@ -490,6 +516,13 @@ pub fn all_methods() -> Vec<String> {
             }
         }
     }
+    // D18: the spell methods no obtain leg names (teleports, curses,
+    // crumble undead; bananas too), judged on their XP or product.
+    for method in lifescape_planner::spell_methods::all_spell_methods() {
+        if !out.contains(&method) {
+            out.push(method);
+        }
+    }
     out.sort();
     out
 }
@@ -561,6 +594,34 @@ mod tests {
         let strung = plan("string:unstrung_gold_amulet", 5).expect("stringing");
         assert_eq!(strung.script, "stringing");
         assert!(plan("no_such:method", 1).is_err());
+    }
+
+    /// D18 spell methods: each plans its script, its runes per cast and
+    /// magic at its level; a cast without product is judged on XP.
+    #[test]
+    fn spell_methods_plan_their_casts() {
+        let teleport = plan("teleport:varrock_teleport", 5).expect("teleport plans");
+        assert_eq!((teleport.script.as_str(), teleport.product.as_str()), ("enchant_teleport", ""));
+        assert_eq!(&teleport.args[..2], &["varrock_teleport".to_string(), "5".to_string()]);
+        assert_eq!(teleport.skill, Some(("magic".to_string(), 25)));
+        assert!(teleport.inputs.contains(&("lawrune".to_string(), 1)));
+        let curse = plan("curse:confuse/chickens", 5).expect("curse plans");
+        assert_eq!(curse.script, "curse");
+        assert_eq!(&curse.args[..3], &["chickens".to_string(), "--spell".to_string(), "confuse".to_string()]);
+        assert!(curse.args.windows(2).any(|pair| pair[0] == "--site"), "{:?}", curse.args);
+        assert!(curse.inputs.contains(&("bodyrune".to_string(), 1)));
+        let bananas = plan("bananas:bones", 2).expect("bananas plan");
+        assert_eq!((bananas.script.as_str(), bananas.product.as_str()), ("enchant_teleport", "banana"));
+        let crumble = plan("fight:magic/crumble_undead/wild_skeletons", 5).expect("crumble plans");
+        assert_eq!((crumble.script.as_str(), crumble.product.as_str()), ("magic", ""));
+        assert_eq!(crumble.skill, Some(("magic".to_string(), 39)));
+        assert!(crumble.inputs.contains(&("chaosrune".to_string(), 1)));
+        let all = super::all_methods();
+        for method in ["teleport:lumbridge_teleport", "curse:bind/cows", "bananas:bones", "fight:magic/crumble_undead/wild_skeletons"] {
+            assert!(all.contains(&method.to_string()), "{method} listed");
+        }
+        let state = object(vec![("skills", Value::Arr(vec![object(vec![("id", Value::Int(6)), ("xp", Value::Int(1234))])]))]);
+        assert_eq!(super::measure(&state, &teleport), 1234, "judged on magic XP");
     }
 
     #[test]

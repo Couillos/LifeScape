@@ -36,6 +36,11 @@ check('sortedRows keeps input order before any click', TableSort.sortedRows('fre
 TableSort._state.clicked = { key: 'mean', dir: -1 };
 check('sortedRows follows the table state', TableSort.sortedRows('clicked', numCols, rows).map(function (r) { return r.mean; }), [300, 200, 100, null]);
 
+check('cells html: fmt, missing as dash, num right-aligned',
+  TableSort.cellsHtml([{ key: 'skill', kind: 'str' }, { key: 'level', kind: 'num' }, { key: 'xp', kind: 'num', fmt: function (v) { return v.toLocaleString('en-US'); } }],
+    { skill: 'Total', level: null, xp: 38378 }),
+  '<td class="left">Total</td><td class="">-</td><td class="">38,378</td>');
+
 if (failures) {
   console.log(failures + ' FAILURE(S)');
   process.exit(1);

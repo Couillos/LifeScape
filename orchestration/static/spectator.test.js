@@ -12,9 +12,13 @@ function check(name, actual, expected) {
   }
 }
 
-check('skill rows', SpectatorPanels.skillRows([{ id: 0, level: 40, xp: 37224 }, { id: 3, level: 10, xp: 1154 }]),
-  [{ skill: 'attack', level: 40, xp: 37224 }, { skill: 'hitpoints', level: 10, xp: 1154 }]);
-check('unknown stat id', SpectatorPanels.skillRows([{ id: 30, level: 1, xp: 0 }]), [{ skill: 'stat30', level: 1, xp: 0 }]);
+check('skill rows', SpectatorPanels.skillRows([{ id: 0, level: 40, base: 40, xp: 37224 }, { id: 3, level: 4, base: 10, xp: 1154 }]),
+  [{ skill: 'attack', level: 40, base: 40, xp: 37224 }, { skill: 'hitpoints', level: 4, base: 10, xp: 1154 }]);
+check('unknown stat id', SpectatorPanels.skillRows([{ id: 30, level: 1, base: 1, xp: 0 }]), [{ skill: 'stat30', level: 1, base: 1, xp: 0 }]);
+check('totals sum base levels, not current', SpectatorPanels.skillTotals(SpectatorPanels.skillRows([{ id: 0, level: 45, base: 40, xp: 37224 }, { id: 3, level: 4, base: 10, xp: 1154 }])),
+  { skill: 'Total', level: 50, xp: 38378 });
+check('totals without base', SpectatorPanels.skillTotals([{ skill: 'attack', level: 40, xp: 37224 }]), { skill: 'Total', level: null, xp: 37224 });
+check('totals of no skills', SpectatorPanels.skillTotals([]), { skill: 'Total', level: 0, xp: 0 });
 check('no skills', SpectatorPanels.skillRows(undefined), []);
 check('21 skill names', SpectatorPanels.SKILLS.length, 21);
 

@@ -22,6 +22,7 @@ pub mod economy_report;
 pub mod errors;
 pub mod holdings;
 pub mod items;
+pub mod measures;
 pub mod orders;
 pub mod prices;
 pub mod reports;
@@ -34,6 +35,7 @@ pub use economy::{AccountEcon, Trend};
 pub use economy_report::{laspeyres, CoinFlowTotal, ItemFills};
 pub use errors::{ErrorFilter, ErrorRecord, FailedDeal, TaskOutcome};
 pub use items::Item;
+pub use measures::{PurgeCounts, ReportMeasure};
 pub use orders::{NewOrder, Order, OrderSide, OrderStatus};
 pub use reports::{NewTaskReport, NewTaskYield, TaskReport, TaskYield, YieldAggregate};
 

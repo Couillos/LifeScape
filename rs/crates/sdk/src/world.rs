@@ -188,6 +188,8 @@ pub struct World {
     /// bank visit can change them). A fresh `UPDATE_INV_FULL` replaces it.
     pub inv_closed: HashMap<u16, HashMap<u8, (u16, u32)>>,
     pub inv_cap: HashMap<u16, u8>,
+    /// NPC damage masks since the bot last drained them (`run_events`).
+    pub npc_hits: Vec<crate::client::run_events::NpcHit>,
     pub varps: HashMap<u16, i32>,
     pub stats: HashMap<u8, (u8, i32)>,
     pub texts: HashMap<u16, String>,
@@ -897,10 +899,14 @@ impl World {
             }
         } else if !player && (bit == 0x1 || bit == 0x10) {
             // NpcInfoDamage(2): damage, type, hp, max hp (4 bytes).
-            data.raw(4)?;
-            let now = self.ticks;
-            if let Some(npc) = pid.and_then(|nid| self.npcs.get_mut(&nid)) {
-                npc.hit_tick = Some(now);
+            let (damage, hit_type, hp, max_hp) = (data.u8()?, data.u8()?, data.u8()?, data.u8()?);
+            let tick = self.ticks;
+            if let Some((slot, npc)) = pid.and_then(|nid| self.npcs.get_mut(&nid).map(|npc| (nid, npc))) {
+                npc.hit_tick = Some(tick);
+                let npc_type = npc.npc_type;
+                if self.npc_hits.len() < 256 {
+                    self.npc_hits.push(crate::client::run_events::NpcHit { slot, npc_type, damage, hit_type, hp, max_hp, tick });
+                }
             }
         } else if player && bit == 0x2 {
             data.raw(3)?;

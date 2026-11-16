@@ -1,0 +1,6 @@
+{
+  "source": "lostcity/content/scripts/**/*.rs2 apnpct procs (orchestrator dump-npc-ranges)",
+  "spells": {
+    "crumble_undead": "undead"
+  }
+}

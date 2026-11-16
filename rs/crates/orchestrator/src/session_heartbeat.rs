@@ -35,6 +35,8 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
         Some((target_x, target_z)) => Value::Arr(vec![Value::Int(i64::from(target_x)), Value::Int(i64::from(target_z))]),
         None => Value::Null,
     };
+    // `level` = current level (UPDATE_STAT, boosted/drained), `base` =
+    // level from xp (server getLevelByExp): the dashboard totals use base.
     let mut skills: Vec<Value> = bot
         .world
         .stats
@@ -43,6 +45,7 @@ pub(crate) fn heartbeat_value(bot: &Bot, account: &str, script: &str, trail: &[(
             object(vec![
                 ("id", Value::Int(i64::from(*index))),
                 ("level", Value::Int(i64::from(*level))),
+                ("base", Value::Int(i64::from(lifescape_sdk::snapshot::level_for_xp(*xp)))),
                 ("xp", Value::Int(i64::from(*xp))),
             ])
         })
@@ -268,6 +271,24 @@ mod tests {
         assert_eq!(tells.len(), 1, "one tell received");
         assert_eq!(tells[0].get("who").as_str(), Some("t02"));
         assert_eq!(tells[0].get("text").as_str(), Some("meet at varrock"));
+    }
+
+    /// Skill rows carry the current level (UPDATE_STAT) and the base
+    /// level from xp: a drained stat keeps its base for the totals.
+    #[test]
+    fn heartbeat_skill_rows_carry_base_level() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        // Hitpoints at 1 154 xp (base 10), currently damaged to 4.
+        bot.world.stats.insert(3, (4, 1_154));
+        let value = heartbeat_value(&bot, "t01", "testing", &[]);
+        let Value::Arr(skills) = value.get("skills") else {
+            panic!("skills is an array");
+        };
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].get("id").as_i64(), Some(3));
+        assert_eq!(skills[0].get("level").as_i64(), Some(4));
+        assert_eq!(skills[0].get("base").as_i64(), Some(10));
+        assert_eq!(skills[0].get("xp").as_i64(), Some(1_154));
     }
 
     /// Live 2026-11-12: every bot banks its coins and the server stops

@@ -109,6 +109,8 @@ pub fn cast_cooldown(spell: &str) -> u64 {
     match spell {
         "highlvl_alchemy" => 4,
         "bones_to_bananas" | "telekinetic_grab" => 3,
+        // `player_teleport_normal`: `p_delay(2)` before the jump.
+        teleport if teleport.ends_with("_teleport") => 3,
         _ => 2,
     }
 }
@@ -159,11 +161,26 @@ impl CastPacer {
     /// for the cooldown, sends, re-sends up to `CAST_SENDS`. Failed loud
     /// (with the last server line) when no send lands.
     pub fn cast_held(&mut self, bot: &mut Bot, obj: u16, landed: impl Fn(&Bot) -> bool) -> Result<(), ScriptError> {
+        self.cast_with(bot, landed, |cast_bot, spell| cast_on_held(cast_bot, spell, obj))
+    }
+
+    /// Press the spellbook button (`IF_BUTTON`: teleports, bones to
+    /// bananas, `[if_button,magic:...]` server-side) until `landed` reads
+    /// its effect, paced and re-sent like `cast_held`.
+    pub fn cast_button(&mut self, bot: &mut Bot, landed: impl Fn(&Bot) -> bool) -> Result<(), ScriptError> {
+        self.cast_with(bot, landed, |cast_bot, spell| {
+            let com = spell_com(cast_bot, spell)?;
+            cast_bot.if_button(com)?;
+            Ok(())
+        })
+    }
+
+    fn cast_with(&mut self, bot: &mut Bot, landed: impl Fn(&Bot) -> bool, send: impl Fn(&mut Bot, &str) -> Result<(), ScriptError>) -> Result<(), ScriptError> {
         while bot.world.ticks < self.ready_at {
             bot.pump(1)?;
         }
         for _ in 0..CAST_SENDS {
-            cast_on_held(bot, &self.spell, obj)?;
+            send(bot, &self.spell)?;
             let deadline = bot.world.ticks + CAST_LAND_TICKS;
             while bot.world.ticks < deadline {
                 bot.pump(1)?;

@@ -759,6 +759,7 @@ mod tests {
             node_id: "fill-n1".to_string(),
             holdings,
             pause_ticks: 0,
+            meta: crate::report_meta::RunMeta::default(),
         });
         bot.world.ticks = 2000;
         bot.begin_pause();

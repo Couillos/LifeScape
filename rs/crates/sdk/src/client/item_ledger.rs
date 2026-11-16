@@ -1,12 +1,23 @@
 //! Item ledger (user 2026-11-15: "tracer d'où vient et où part chaque
-//! item"). The coin ledger's rule for every object: each change of what
-//! the pack carries is one flow, attributed to the action that caused it
-//! (`Bot::coin_context` names it for a few ticks: shop, trade, fee, loot,
-//! alch, dialogue, drop), else to the skill when XP moved in the same
-//! window (made or consumed by work), else to a death; a change with the
-//! bank open is a transfer, never a flow. What nothing explains stays
-//! `unattributed`. The session report reads these flows instead of
-//! guessing a provenance from the net holdings.
+//! item"; plan rendements §8, D19: every input AND output of a run is a
+//! flow with a cause, the net diff is only a coherence check). Each
+//! change of what the bot CARRIES (pack plus worn: wielding moves nothing
+//! out, a fired arrow leaves the quiver) is one flow, attributed in this
+//! order:
+//! 1. bank open, or closed less than `BANK_GRACE_TICKS` ago: a transfer
+//!    (pack <-> bank), never a flow (the deposit's inventory update can
+//!    land just after the client closed the bank locally);
+//! 2. a loss while dead or within `DEATH_TICKS` of a death: `death`;
+//! 3. the newest scoped action that matches the object and the sign
+//!    (`Bot::item_action`: eat, bury, drop, pickup, cast);
+//! 4. a shop, player trade or dialogue sale in force (`coin_ledger`
+//!    context): those modals move items both ways;
+//! 5. skill XP moved within `SKILL_TICKS`: `skill` (made or eaten by work);
+//! 6. nothing: `unattributed`, kept visible (the report raises an alert).
+//!
+//! Every flow also carries the bitmask of the stats whose XP rose within
+//! the window, so the report can tell a product from a by-product (a gem
+//! while mining) with the game data, which the SDK never reads.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +26,15 @@ use std::collections::HashMap;
 /// Ticks an XP gain explains item changes after it (a smelt lands the
 /// bar and the XP in the same tick or the next few).
 pub const SKILL_TICKS: u64 = 8;
+/// Ticks after the bank was last seen open during which carried changes
+/// are still transfers.
+pub const BANK_GRACE_TICKS: u64 = 2;
+/// Ticks after a death during which losses are the death's (the server
+/// clears the pack at respawn, once the hitpoints came back).
+pub const DEATH_TICKS: u64 = 30;
+/// Default lifetime of a scoped action (eat, bury, drop: the server
+/// answers within a couple of ticks).
+pub const ACTION_TICKS: u64 = 10;
 
 /// Kinds beyond the coin ledger's (`coin_ledger::kind`).
 pub mod kind {
@@ -24,6 +44,14 @@ pub mod kind {
     pub const DROPPED: &str = "dropped";
     /// Lost to a death.
     pub const DEATH: &str = "death";
+    /// Eaten or drunk (`op_held` on an Eat/Drink option).
+    pub const EAT: &str = "eat";
+    /// Buried (`op_held` on a Bury option).
+    pub const BURY: &str = "bury";
+    /// Taken off the ground (`op_obj`).
+    pub const PICKUP: &str = "pickup";
+    /// Moved by a spell the bot cast (runes out, product or target).
+    pub const CAST: &str = "cast";
 }
 
 /// One attributed change of a carried object.
@@ -33,41 +61,86 @@ pub struct ItemFlow {
     pub kind: &'static str,
     pub delta: i64,
     pub tick: u64,
+    /// Bit `stat` set: that stat's XP rose within `SKILL_TICKS`.
+    pub skills: u32,
+}
+
+/// One action the bot just sent that explains the next changes: the
+/// object it touches (`None`: any) and the sign it moves (0: both).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Action {
+    pub kind: &'static str,
+    pub obj: Option<u16>,
+    pub sign: i8,
+    pub until: u64,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ItemLedger {
     last_pack: Option<HashMap<u16, u32>>,
-    last_xp: Option<i64>,
-    xp_tick: Option<u64>,
+    last_xp: HashMap<u8, i32>,
+    xp_ticks: HashMap<u8, u64>,
+    actions: Vec<Action>,
+    bank_seen: Option<u64>,
+    death_seen: Option<u64>,
     pub flows: Vec<ItemFlow>,
 }
 
-/// What one observation knows besides the pack.
+/// What one observation knows besides the carried objects.
 pub struct Seen<'a> {
+    /// Pack plus worn, summed per object.
     pub pack: HashMap<u16, u32>,
     pub bank_open: bool,
     pub tick: u64,
-    /// Total XP over every stat now.
-    pub xp_total: i64,
+    /// XP per stat now.
+    pub xp: Vec<(u8, i32)>,
     pub dead: bool,
-    /// The action context the coin ledger holds (kind, until tick).
+    /// The coin ledger's context in force (kind, until tick).
     pub context: Option<(&'a str, u64)>,
 }
 
+/// Actions kept at most (oldest dropped): a handful live at once.
+const ACTIONS_CAP: usize = 16;
+
 impl ItemLedger {
+    /// Names what the next change of `obj` (any object: `None`) with the
+    /// sign `sign` (0: both) comes from, until tick `until`.
+    pub fn note_action(&mut self, kind: &'static str, obj: Option<u16>, sign: i8, until: u64) {
+        self.actions.push(Action { kind, obj, sign, until });
+        if self.actions.len() > ACTIONS_CAP {
+            let drop = self.actions.len() - ACTIONS_CAP;
+            self.actions.drain(..drop);
+        }
+    }
+
+    /// Stats whose XP rose within `SKILL_TICKS` of `tick` (bitmask).
+    pub fn skills_at(&self, tick: u64) -> u32 {
+        self.xp_ticks
+            .iter()
+            .filter(|(_, at)| tick <= **at + SKILL_TICKS)
+            .fold(0u32, |mask, (stat, _)| if *stat < 32 { mask | (1 << stat) } else { mask })
+    }
+
     /// One observation: records a flow per object whose count moved.
     pub fn observe(&mut self, seen: Seen<'_>) {
-        if let Some(last) = self.last_xp {
-            if seen.xp_total > last {
-                self.xp_tick = Some(seen.tick);
+        for (stat, xp) in &seen.xp {
+            if self.last_xp.get(stat).is_some_and(|last| xp > last) {
+                self.xp_ticks.insert(*stat, seen.tick);
             }
+            self.last_xp.insert(*stat, *xp);
         }
-        self.last_xp = Some(seen.xp_total);
-        let Some(last) = self.last_pack.replace(seen.pack.clone()) else { return };
         if seen.bank_open {
+            self.bank_seen = Some(seen.tick);
+        }
+        if seen.dead {
+            self.death_seen = Some(seen.tick);
+        }
+        self.actions.retain(|action| seen.tick <= action.until);
+        let Some(last) = self.last_pack.replace(seen.pack.clone()) else { return };
+        if self.bank_seen.is_some_and(|at| seen.tick <= at + BANK_GRACE_TICKS) {
             return;
         }
+        let skills = self.skills_at(seen.tick);
         let mut ids: Vec<u16> = last.keys().chain(seen.pack.keys()).copied().collect();
         ids.sort_unstable();
         ids.dedup();
@@ -76,24 +149,34 @@ impl ItemLedger {
             if delta == 0 {
                 continue;
             }
-            let kind = self.kind_now(&seen);
-            self.flows.push(ItemFlow { obj, kind, delta, tick: seen.tick });
+            let kind = self.kind_now(&seen, obj, delta, skills);
+            self.flows.push(ItemFlow { obj, kind, delta, tick: seen.tick, skills });
         }
     }
 
-    fn kind_now(&self, seen: &Seen<'_>) -> &'static str {
+    fn kind_now(&self, seen: &Seen<'_>, obj: u16, delta: i64, skills: u32) -> &'static str {
+        use super::coin_ledger::kind as coin;
+        if delta < 0 && self.death_seen.is_some_and(|at| seen.tick <= at + DEATH_TICKS) {
+            return kind::DEATH;
+        }
+        let sign: i8 = if delta > 0 { 1 } else { -1 };
+        let scoped = self
+            .actions
+            .iter()
+            .rev()
+            .find(|action| action.obj.is_none_or(|wanted| wanted == obj) && (action.sign == 0 || action.sign == sign));
+        if let Some(action) = scoped {
+            return action.kind;
+        }
         if let Some((name, until)) = seen.context {
-            if seen.tick <= until {
+            if seen.tick <= until && matches!(name, coin::SHOP | coin::TRADE | coin::DIALOGUE) {
                 return static_kind(name);
             }
         }
-        if self.xp_tick.is_some_and(|at| seen.tick <= at + SKILL_TICKS) {
+        if skills != 0 {
             return kind::SKILL;
         }
-        if seen.dead {
-            return kind::DEATH;
-        }
-        super::coin_ledger::kind::UNATTRIBUTED
+        coin::UNATTRIBUTED
     }
 
     /// Net change per (object, kind) over the flows from index `start` on.
@@ -116,41 +199,11 @@ fn static_kind(name: &str) -> &'static str {
     match name {
         coin::SHOP => coin::SHOP,
         coin::TRADE => coin::TRADE,
-        coin::FEE => coin::FEE,
-        coin::LOOT => coin::LOOT,
-        coin::ALCH => coin::ALCH,
         coin::DIALOGUE => coin::DIALOGUE,
-        kind::DROPPED => kind::DROPPED,
         _ => coin::UNATTRIBUTED,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{kind, ItemLedger, Seen};
-    use std::collections::HashMap;
-
-    fn seen(pack: &[(u16, u32)], tick: u64, xp: i64, context: Option<(&'static str, u64)>, bank_open: bool) -> Seen<'static> {
-        Seen { pack: pack.iter().copied().collect::<HashMap<_, _>>(), bank_open, tick, xp_total: xp, dead: false, context }
-    }
-
-    #[test]
-    fn every_change_names_its_cause() {
-        let mut ledger = ItemLedger::default();
-        ledger.observe(seen(&[(440, 5)], 1, 100, None, false));
-        // A smelt: ore out, bar in, XP up.
-        ledger.observe(seen(&[(440, 4), (2349, 1)], 10, 106, None, false));
-        // A shop buy: hammer in under the shop context.
-        ledger.observe(seen(&[(440, 4), (2349, 1), (2347, 1)], 30, 106, Some(("shop", 40)), false));
-        // A drop.
-        ledger.observe(seen(&[(440, 4), (2347, 1)], 60, 106, Some((kind::DROPPED, 70)), false));
-        // Banked: a transfer, no flow.
-        ledger.observe(seen(&[], 90, 106, None, true));
-        let totals = ledger.totals_since(0);
-        assert!(totals.contains(&(440, kind::SKILL, -1)), "{totals:?}");
-        assert!(totals.contains(&(2349, kind::SKILL, 1)));
-        assert!(totals.contains(&(2347, "shop", 1)));
-        assert!(totals.contains(&(2349, kind::DROPPED, -1)));
-        assert_eq!(totals.len(), 4, "the bank transfer adds nothing: {totals:?}");
-    }
-}
+#[path = "item_ledger_tests.rs"]
+mod tests;

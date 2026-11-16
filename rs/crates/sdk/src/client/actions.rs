@@ -81,6 +81,7 @@ impl Bot {
     }
 
     pub fn op_npc(&mut self, op: u8, slot: u16) -> Result<()> {
+        self.run_events.note_target(slot);
         let npc_label = self.world.npcs.get(&slot).map(|npc| (self.tables.npc_name)(npc.npc_type).unwrap_or_default()).unwrap_or_default();
         self.act(format!("op_npc{op} {npc_label} slot={slot}"));
         let mut body = Writer::new();
@@ -99,8 +100,10 @@ impl Bot {
     }
 
     pub fn op_obj(&mut self, op: u8, x: i32, z: i32, obj_id: u16) -> Result<()> {
-        // A ground object op is a take: coins it lands are loot.
+        // A ground object op is a take: coins it lands are loot, the
+        // object itself a pickup (gains only, that object only).
         self.coin_context(super::coin_ledger::kind::LOOT);
+        self.item_action(super::item_ledger::kind::PICKUP, Some(obj_id), 1, super::coin_ledger::CONTEXT_TICKS);
         self.act(format!("op_obj{op} {} id={obj_id} at ({x},{z})", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(x as u16);
@@ -122,6 +125,8 @@ impl Bot {
     }
 
     pub fn op_npc_t(&mut self, slot: u16, spell_com: u16) -> Result<()> {
+        self.run_events.note_target(slot);
+        self.note_spell(spell_com);
         self.act(format!("op_npc_t slot={slot}"));
         let mut body = Writer::new();
         body.u16(u16::from(slot));
@@ -132,6 +137,7 @@ impl Bot {
     /// Cast a spellbook spell on a ground object (telegrab): x, z, obj,
     /// then the spell button com, exactly the `OpObjTDecoder` order.
     pub fn op_obj_t(&mut self, x: i32, z: i32, obj_id: u16, spell_com: u16) -> Result<()> {
+        self.note_spell(spell_com);
         self.act(format!("op_obj_t {} id={obj_id} at ({x},{z})", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         self.send_named("OPOBJT", &opobjt_bytes(x, z, obj_id, spell_com))
     }
@@ -140,8 +146,11 @@ impl Bot {
     /// enchant): obj, pack slot, pack com, then the spell button com,
     /// exactly the `OpHeldTDecoder` order.
     pub fn op_held_t(&mut self, obj: u16, slot: u8, com: u16, spell_com: u16) -> Result<()> {
-        // Only alchemy turns a carried item into coins.
+        // Only alchemy turns a carried item into coins; every held spell
+        // eats its target and runes and may land a product (enchant,
+        // superheat): the item side is the cast.
         self.coin_context(super::coin_ledger::kind::ALCH);
+        self.note_spell(spell_com);
         self.act(format!("op_held_t {} x1 slot={slot}", (self.tables.obj_name)(obj).unwrap_or_default()));
         self.send_named("OPHELDT", &opheldt_bytes(obj, slot, com, spell_com))
     }
@@ -149,6 +158,7 @@ impl Bot {
     /// Cast a spellbook spell on a scenery object: x, z, loc, then the
     /// spell button com, exactly the `OpLocTDecoder` order.
     pub fn op_loc_t(&mut self, x: i32, z: i32, loc_id: u16, spell_com: u16) -> Result<()> {
+        self.note_spell(spell_com);
         self.act(format!("op_loc_t {} id={loc_id} at ({x},{z})", (self.tables.loc_name)(loc_id).unwrap_or_default()));
         self.send_named("OPLOCT", &oploct_bytes(x, z, loc_id, spell_com))
     }
@@ -163,6 +173,7 @@ impl Bot {
     /// Cast a spellbook spell on a player: slot, then the spell button
     /// com, exactly the client `OPPLAYERT` order (`Client.ts` TGT_PLAYER).
     pub fn op_player_t(&mut self, slot: u16, spell_com: u16) -> Result<()> {
+        self.note_spell(spell_com);
         self.act(format!("op_player_t slot={slot}"));
         self.send_named("OPPLAYERT", &opplayert_bytes(slot, spell_com))
     }
@@ -175,6 +186,13 @@ impl Bot {
     }
 
     pub fn op_held(&mut self, op: u8, obj: u16, slot: u8, com: u16) -> Result<()> {
+        // Eating and burying use the object up: the ledger names it.
+        let label = (self.tables.obj_inv_op)(obj, op).map(|label| label.to_lowercase()).unwrap_or_default();
+        match label.as_str() {
+            "eat" | "drink" => self.item_action(super::item_ledger::kind::EAT, Some(obj), -1, super::item_ledger::ACTION_TICKS),
+            "bury" => self.item_action(super::item_ledger::kind::BURY, Some(obj), -1, super::item_ledger::ACTION_TICKS),
+            _ => {}
+        }
         self.act(format!("op_held{op} {} x1 slot={slot}", (self.tables.obj_name)(obj).unwrap_or_default()));
         let mut body = Writer::new();
         body.u16(obj);
@@ -220,10 +238,20 @@ impl Bot {
     }
 
     pub fn if_button(&mut self, com: u16) -> Result<()> {
+        // A spellbook button (teleport) counts once its magic XP lands;
+        // any other button never pays magic XP and expires.
+        self.run_events.note_button(com, self.world.ticks);
         self.act(format!("if_button com={com}"));
         let mut body = Writer::new();
         body.u16(com);
         self.send_named("IF_BUTTON", &body.bytes())
+    }
+
+    /// A spell sent at `spell_com`: the cast explains the runes out and
+    /// what it lands, and counts once its magic XP arrives (`run_events`).
+    fn note_spell(&mut self, spell_com: u16) {
+        self.run_events.note_cast(spell_com, self.world.ticks);
+        self.item_action(super::item_ledger::kind::CAST, None, 0, super::item_ledger::ACTION_TICKS);
     }
 
     pub fn close_modal(&mut self) -> Result<()> {
@@ -654,6 +682,7 @@ impl Bot {
     pub fn drop(&mut self, obj_id: u16, timeout: u64) -> Result<bool> {
         self.act(format!("drop {} id={obj_id}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
         self.coin_context(super::item_ledger::kind::DROPPED);
+        self.item_action(super::item_ledger::kind::DROPPED, Some(obj_id), -1, super::item_ledger::ACTION_TICKS + timeout);
         let (com, slots) = self.backpack();
         let Some(com) = com else { return Err(Error::Unreachable("backpack not streamed".to_string())) };
         let Some(&(slot, _)) = slots.iter().find(|(_, (held, _))| *held == obj_id) else {

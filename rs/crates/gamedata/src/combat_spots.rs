@@ -91,11 +91,11 @@ const SPOTS: [CombatSpot; 9] = [
     },
 ];
 
-/// Full catalogue §5.12 (26 spots): legacy nine plus rats, imps, monks,
+/// Full catalogue §5.12 (27 spots): legacy nine plus rats, imps, monks,
 /// barbarians, crypt crawlers, bears, hobgoblins, red spiders, ice and
 /// wilderness targets. Ordered weakest first; new low spots sort where
 /// they never shadow the legacy `best_spot()` progression.
-const CATALOGUE_SPOTS: [CombatSpot; 26] = [
+const CATALOGUE_SPOTS: [CombatSpot; 27] = [
     CombatSpot { key: "chickens", npc_names: &["chicken"], min_level: 1, max_level: 9, entrance: None, access: None, danger: "safe" },
     CombatSpot { key: "monks", npc_names: &["monk"], min_level: 5, max_level: 20, entrance: None, access: None, danger: "safe" },
     CombatSpot { key: "barbarians", npc_names: &["barbarian"], min_level: 8, max_level: 25, entrance: None, access: None, danger: "safe" },
@@ -126,6 +126,10 @@ const CATALOGUE_SPOTS: [CombatSpot; 26] = [
     CombatSpot { key: "giant_spiders", npc_names: &["giantspider1", "spider"], min_level: 20, max_level: 45, entrance: Some(VARROCK_SEWERS), access: None, danger: "aggressive" },
     CombatSpot { key: "scorpions", npc_names: &["scorpion"], min_level: 20, max_level: 40, entrance: None, access: None, danger: "safe" },
     CombatSpot { key: "ghosts", npc_names: &["ghost"], min_level: 20, max_level: 40, entrance: Some(VARROCK_SEWERS), access: None, danger: "underground" },
+    // The surface undead (low Wilderness skeletons, `param=undead`): the
+    // crumble undead target a magic run reaches on foot (D18, 2026-11-16;
+    // the sewer camps above ride only with the melee ladder's clusters).
+    CombatSpot { key: "wild_skeletons", npc_names: &["skeleton_unarmed"], min_level: 20, max_level: 40, entrance: None, access: None, danger: WILD_DANGER },
     CombatSpot { key: "guards", npc_names: &["guard1", "guard2"], min_level: 20, max_level: 40, entrance: None, access: None, danger: "safe" },
     CombatSpot {
         key: "dark_wizards",
@@ -169,7 +173,7 @@ pub fn all_spots() -> Vec<CombatSpot> {
     SPOTS.to_vec()
 }
 
-/// Full catalogue §5.12, weakest first (26 spots for P2.3/P2.5).
+/// Full catalogue §5.12, weakest first (27 spots for P2.3/P2.5).
 pub fn catalogue_spots() -> Vec<CombatSpot> {
     CATALOGUE_SPOTS.to_vec()
 }
@@ -282,7 +286,7 @@ mod tests {
         // Catalogue §5.12: all targets placed in F2P zones with access
         // (key, fare, toll) and danger; Wilderness spots flagged.
         // Legacy `all_spots()` stays at nine for planner compatibility;
-        // the catalogue holds all 26.
+        // the catalogue holds all 27.
         assert_eq!(all_spots().len(), 9, "legacy spots frozen");
         let spots = catalogue_spots();
         assert!(spots.len() >= 20, "spots, got {}", spots.len());
@@ -303,7 +307,7 @@ mod tests {
         assert!(by_key("lesser_demons").expect("lesser").access.unwrap_or("").contains("30gp"));
         assert!(by_key("al_kharid_warriors").expect("warrior").access.unwrap_or("").contains("10gp"));
         let wild: Vec<&str> = spots.iter().filter(|entry| entry.danger == "wild").map(|entry| entry.key).collect();
-        for key in ["bears", "ice_warriors", "green_dragons", "greater_demons"] {
+        for key in ["bears", "wild_skeletons", "ice_warriors", "green_dragons", "greater_demons"] {
             assert!(wild.contains(&key), "{key} flagged wild: {wild:?}");
         }
     }

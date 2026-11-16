@@ -62,9 +62,11 @@ fn producers_file_their_inputs_and_tools() {
     assert_eq!(bars, (388.0_f64 / 12.5).ceil() as i64, "XP 1→5 at 12.5 a bar");
     assert!(smith.iter().any(|(item, count, _)| item == "bronze_bar" && *count == bars), "{smith:?}");
     assert!(smith.iter().any(|(item, count, _)| item == "hammer" && *count == 1), "{smith:?}");
-    // A magic climb past 21 is priced at resolve: no runes filed ahead.
-    assert!(obtains(&chain("magic", 25, 30)).is_empty(), "combat spell or alchemy, decided with the market");
-    assert!(!obtains(&chain("magic", 10, 20)).is_empty(), "combat spells below 21 keep their runes ahead");
+    // A magic climb from confuse (3, D18) is priced at resolve: no runes
+    // filed ahead (combat spell, curse, teleport, bananas or alchemy).
+    assert!(obtains(&chain("magic", 25, 30)).is_empty(), "decided with the market");
+    assert!(obtains(&chain("magic", 10, 20)).is_empty(), "curses compete from 3");
+    assert!(!obtains(&chain("magic", 1, 3)).is_empty(), "wind strike alone below confuse keeps its runes ahead");
     let runes = obtains(&chain("runecraft", 1, 2));
     assert!(runes.iter().any(|(item, count, _)| item == "air_talisman" && *count == 1), "{runes:?}");
     assert!(runes.iter().any(|(item, count, _)| item == "blankrune" && *count == 17), "{runes:?}");

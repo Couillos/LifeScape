@@ -16,6 +16,11 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/spells_generated.rs"));
 }
 
+/// Spell -> NPC param its target must carry (`spell_targets.json`,
+/// written by `orchestrator dump-npc-ranges` from the server's `apnpct`
+/// procs: crumble undead refuses anything but `undead`).
+const TARGETS: &str = include_str!("../../../../gamedata/data/spell_targets.json");
+
 /// One combat spell.
 #[derive(Debug, Clone)]
 pub struct Spell {
@@ -42,6 +47,39 @@ fn spell_from_static(row: &StaticSpell) -> Spell {
     }
 }
 
+impl Spell {
+    /// A spell cast on an NPC from the combat spellbook that deals damage
+    /// (`spellcom` + `maxhit` in `magic_spell_table`): strikes, bolts,
+    /// blasts, crumble undead... Never the display `name` (the server
+    /// gives crumble undead none: its row was dropped by that test).
+    pub fn deals_damage(&self) -> bool {
+        self.com.is_some() && self.maxhit.is_some() && self.level >= 1
+    }
+
+    /// A spell cast on an NPC that deals no damage: the stat curses and
+    /// bind (`spellcom`, no `maxhit`).
+    pub fn npc_debuff(&self) -> bool {
+        self.com.is_some() && self.maxhit.is_none() && self.level >= 1
+    }
+}
+
+/// NPC param the target of `spell` must carry (`None`: any attackable
+/// NPC). Server truth: `spell_targets.json`.
+pub fn target_param(spell: &str) -> Option<String> {
+    static TABLE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let Ok(doc) = lifescape_json::parse(TARGETS) else { return Vec::new() };
+        doc.get("spells").as_obj().map(|rows| rows.iter().filter_map(|(name, param)| Some((name.clone(), param.as_str()?.to_string()))).collect()).unwrap_or_default()
+    });
+    table.iter().find(|(name, _)| name == spell).map(|(_, param)| param.clone())
+}
+
+/// True when `spell` affects the NPC `npc` (debugname): no target param,
+/// or the NPC's config sets it (`npc_combat::has_param`).
+pub fn affects(spell: &str, npc: &str) -> bool {
+    target_param(spell).is_none_or(|param| crate::npc_combat::has_param(npc, &param))
+}
+
 /// Every combat spell.
 pub fn all_spells() -> Vec<Spell> {
     generated::ALL.iter().map(spell_from_static).collect()
@@ -64,7 +102,30 @@ pub fn by_com(com: &str) -> Vec<Spell> {
 
 #[cfg(test)]
 mod tests {
-    use super::{all_spells, by_com, by_name};
+    use super::{affects, all_spells, by_com, by_name, target_param};
+
+    /// Crumble undead is a damage spell like the strikes (its missing
+    /// display name never hides it) and hits the undead only.
+    #[test]
+    fn crumble_undead_targets_the_undead_only() {
+        let crumble = by_name("crumble_undead").into_iter().next().expect("crumble row");
+        assert!(crumble.name.is_none(), "the server row has no name");
+        assert!(crumble.deals_damage() && !crumble.members);
+        assert_eq!((crumble.level, crumble.xp, crumble.maxhit), (39, 490, Some(8)));
+        assert_eq!(target_param("crumble_undead").as_deref(), Some("undead"));
+        assert_eq!(target_param("fire_bolt"), None);
+        assert!(affects("crumble_undead", "skeleton_unarmed") && affects("crumble_undead", "ghost"));
+        assert!(!affects("crumble_undead", "cow"));
+        assert!(affects("fire_bolt", "cow"));
+    }
+
+    /// The four F2P NPC debuffs: confuse, weaken, curse, bind.
+    #[test]
+    fn debuffs_are_the_damageless_npc_spells() {
+        let mut debuffs: Vec<String> = all_spells().into_iter().filter(|row| row.npc_debuff() && !row.members).map(|row| row.spell).collect();
+        debuffs.sort();
+        assert_eq!(debuffs, vec!["bind", "confuse", "curse", "weaken"]);
+    }
 
     #[test]
     fn spell_vectors() {

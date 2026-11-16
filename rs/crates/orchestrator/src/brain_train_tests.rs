@@ -71,25 +71,27 @@ fn traded(item: &str) -> Option<f64> {
     RUNE_ASKS.iter().find(|(name, _, _)| *name == item).map(|(_, price, _)| *price as f64)
 }
 
-/// Simulated mage at magic 25 with 300 iron daggers from its smithing:
-/// low alchemy (31 XP a cast) beats water bolts (chaos runes at 90); the
-/// pick casts the stock, buys the nature runes and a staff of fire (Zaff
-/// sells it, D-A: nothing F2P makes one; cheaper than 3 fire runes a cast
-/// over the climb) first, and the resolved launch is
-/// `alchemy iron_dagger 300 --level magic 35`.
+/// Simulated mage at magic 25 with 300 iron platelegs from its smithing:
+/// low alchemy (31 XP a cast, 112 coins against a 60-coin nature rune)
+/// pays, so it beats every loss — water bolts (chaos runes at 90) and the
+/// curses, the cheapest XP that loses (D18: iron daggers, 14 coins an
+/// alch, now lose to `curse:curse/cows`); the pick casts the stock, buys
+/// the nature runes and a staff of fire (Zaff sells it, D-A: nothing F2P
+/// makes one; cheaper than 3 fire runes a cast over the climb) first, and
+/// the resolved launch is `alchemy iron_platelegs 300 --level magic 35`.
 #[test]
-fn magic_25_alchs_its_daggers_and_launches_the_batch() {
-    let snapshot = live(&[("magic", 25), ("smithing", 30)], &[("iron_dagger", 300)]);
+fn magic_25_alchs_its_platelegs_and_launches_the_batch() {
+    let snapshot = live(&[("magic", 25), ("smithing", 30)], &[("iron_platelegs", 300)]);
     let life = life_for("magic", 35);
     let level_of = |skill: &str| crate::brain_succession::live_level(&snapshot, skill);
     let held = |item: &str| crate::brain_ambition::live_count(&snapshot, item);
     let state = BotState { level_of: &level_of, held: &held, avoid: Vec::new(), quests_done: Vec::new(), units: &units, tick: 0, combat: 3, position: None, planned: Vec::new(), caster: None };
     let reader = book(&RUNE_ASKS, &[]);
     let price = |item: &str| traded(item).unwrap_or(1.0);
-    let supply = vec![AlchSupply { item: "iron_dagger".to_string(), units: 300, unit_cost: 0.0, own: true }];
+    let supply = vec![AlchSupply { item: "iron_platelegs".to_string(), units: 300, unit_cost: 0.0, own: true }];
     let market = TrainMarket { reader: &reader, traded: &traded, mage: caster(25, false, &price), supply, coins: 40_000 };
     let pick = choose_pick("magic", 25, 35, &life, &state, &[], &market).expect("a priced pick");
-    assert_eq!(pick.method, "alch:iron_dagger", "{pick:?}");
+    assert_eq!(pick.method, "alch:iron_platelegs", "{pick:?}");
     assert_eq!(pick.batch, 300);
     assert_eq!(pick.missing, vec!["naturerune".to_string(), "staff_of_fire".to_string()]);
     // The resolver blocks on both runes at once; once held, it launches
@@ -109,7 +111,7 @@ fn magic_25_alchs_its_daggers_and_launches_the_batch() {
     resolve_ready(&mut node, &ctx);
     let (script, args) = map_method(node.method.as_deref().expect("locked"), &node, None).expect("maps");
     assert_eq!(script, "alchemy");
-    assert_eq!(&args[..5], ["iron_dagger", "300", "--level", "magic", "35"], "{args:?}");
+    assert_eq!(&args[..5], ["iron_platelegs", "300", "--level", "magic", "35"], "{args:?}");
 }
 
 /// Simulated mage at magic 60 holding a staff of fire and nature runes,
@@ -134,10 +136,12 @@ fn magic_60_buys_cheap_asks_to_high_alch() {
     assert_eq!(pick.method, "alch:steel_platebody", "{pick:?}");
     assert_eq!(pick.batch, 150, "the whole resting supply");
     assert_eq!(pick.missing, vec!["steel_platebody".to_string()], "runes held, fire from the staff");
-    // No supply at all: fire blast (the staff pays its fire runes).
+    // No supply at all: every option loses, the smallest loss per XP
+    // wins (user 2026-11-15) — the curse (D18: a body rune and five
+    // elementals for 29 XP), never fire blasts at 160 a death rune.
     let bare = TrainMarket { reader: &reader, traded: &traded, mage: caster(60, true, &price), supply: Vec::new(), coins: 500_000 };
-    let fight = choose_pick("magic", 60, 65, &life, &state, &[], &bare).expect("combat pick");
-    assert_eq!(fight.method, "fight:magic/fire_blast/cows");
+    let cheapest = choose_pick("magic", 60, 65, &life, &state, &[], &bare).expect("a pick");
+    assert_eq!(cheapest.method, "curse:curse/cows", "{cheapest:?}");
 }
 
 /// A smith at 18 (mining 1) with the live scimitar bids (2961 down to 700)

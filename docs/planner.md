@@ -918,6 +918,10 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `fill:<récipient>` | `fill_water` | `<récipient>` | `--want` |
 | `gather:sheep/wool` | `shear` | — | `--want`, `--site` |
 | `enchant:<amulette>` | `enchant_teleport` | `<amulette>` | `--want` (amulettes et runes retirées de la banque, produits banqués entre charges) |
+| `teleport:<sort>` (`varrock_teleport` 25, `lumbridge_teleport` 31, `falador_teleport` 37) | `enchant_teleport` | `<sort>`, puis `<lot>` = lancers si tranche au prix | `--level magic N` ; bouton du grimoire (`IF_BUTTON`), lancé en boucle quand l'ordre a un but (niveau, nombre, budget), une fois sinon (voyage) ; XP par lancer (unité S) |
+| `curse:<sort>/<spot>` (`confuse` 3, `weaken` 11, `curse` 19, `bind` 20) | `curse` | `<spot>` (camp de la tranche : poulets puis vaches), `--spell <sort>`, puis `<lot>` | `--level magic N`, `--site`, `toll` ; cible fraîche (refus « already been lowered / held » = PNJ écarté jusqu'à sa régénération), agresseur abaissé achevé en mêlée ; XP par lancer, raté compris |
+| `bananas:bones` | `enchant_teleport` | `bones_to_bananas`, puis `<lot>` | bouton du grimoire, un lancer convertit tous les os portés (24 par lancer au prix) |
+| `fight:magic/crumble_undead/<spot>` | `magic` | `<spot>` mort-vivant | spots dont chaque PNJ porte `param=undead` (serveur) : `wild_skeletons` en surface ; refus `Usage` sur tout autre camp |
 | `alch:<objet>` | `alchemy` | `<objet>` (le script choisit haute/basse selon son niveau), puis `<lot>` = lancers (tranche de magie au prix, `node.batch`) | `--level magic N` (tranche) ; runes : 1 nature + feu (bâton de feu accepté), exigées par `required_tool` ; méthode d'argent publiée par `brain_alch` (2026-11-14) ; le script lit aussi `--spell lowlvl_alchemy\|highlvl_alchemy`, `--want` ; cible retirée en billets, pièces banquées en fin de run |
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |

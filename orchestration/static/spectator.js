@@ -1,11 +1,18 @@
 // Pure panel helpers (node-testable, spectator.test.js).
 var SpectatorPanels = (function () {
   const SKILLS = ["attack","defence","strength","hitpoints","ranged","prayer","magic","cooking","woodcutting","fletching","fishing","firemaking","crafting","smithing","mining","herblore","agility","thieving","slayer","farming","runecraft"];
-  // Skills table rows: one per skill, in stat order.
+  // Skills table rows: one per skill, in stat order. `level` = current
+  // level (boosted/drained), `base` = level from xp (heartbeat).
   function skillRows(skills) {
-    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.level, xp: s.xp }));
+    return (skills || []).map(s => ({ skill: SKILLS[s.id] || ('stat' + s.id), level: s.level, base: s.base, xp: s.xp }));
   }
-  return { SKILLS: SKILLS, skillRows: skillRows };
+  // Total line under the skills table: sum of BASE levels (not the
+  // current ones) and of xp; null (shown '-') when a row lacks the value.
+  function skillTotals(rows) {
+    const sum = (key) => rows.every(row => typeof row[key] === 'number') ? rows.reduce((acc, row) => acc + row[key], 0) : null;
+    return { skill: 'Total', level: sum('base'), xp: sum('xp') };
+  }
+  return { SKILLS: SKILLS, skillRows: skillRows, skillTotals: skillTotals };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = SpectatorPanels;
 
@@ -640,7 +647,7 @@ function updatePanels() {
   const skillTable = document.getElementById('skills');
   if (skillTable._key !== skillKey) {
     skillTable._key = skillKey;
-    TableSort.render('skills', SKILL_COLUMNS, skillRows);
+    TableSort.render('skills', SKILL_COLUMNS, skillRows, { footer: SpectatorPanels.skillTotals(skillRows) });
   }
 
   const locCounts = {};

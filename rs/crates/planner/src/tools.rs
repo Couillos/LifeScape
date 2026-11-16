@@ -51,9 +51,10 @@ pub fn required_tool(method: &str) -> Option<ToolNeed> {
         // punching (the old script melee-attacked).
         return Some(ToolNeed { tools: vec!["shortbow".to_string()], consumables: vec!["bronze_arrow".to_string()] });
     }
-    if let Some(spell) = crate::method_way::magic_spell(method) {
+    if let Some(spell) = crate::spell_methods::cast_spell(method) {
         // The runes of the spell the tranche casts (wind strike: one mind,
-        // one air), sized per cast by `sizing`.
+        // one air; a teleport, a curse, bones to bananas), sized per cast
+        // by `sizing`.
         let runes: Vec<String> = crate::method_way::spell_runes(&spell).into_iter().map(|(rune, _)| rune).collect();
         return (!runes.is_empty()).then_some(ToolNeed { tools: Vec::new(), consumables: runes });
     }

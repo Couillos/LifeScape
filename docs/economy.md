@@ -206,66 +206,82 @@ sans eux (+33 %).
 
 ## Rendements
 
-Chaque fin de tâche produit une ligne par objet dans `task_reports` /
-`task_yields` : `{script, méthode, objet, provenance, quantité, ticks,
-contexte}`, où le contexte est le niveau du skill principal (bande de
-5 niveaux), le tout horodaté en ticks. Seuls les flux de farm comptent
-dans un rendement : produits de skill, drops, spawns fixes au sol et
-objets ramassés, provenance étiquetée (`produced`, `loot`,
-`ground_spawn`, `picked`). Les flux de boutique et d'échange
-(`shop_bought`, `traded`) sont stockés bruts mais exclus des taux ; les
-`consumed` (appâts, nourriture, intrants d'une transformation)
-nourrissent le coût des intrants.
+Une seule mesure (décision 2026-11-16, `docs/decisions.md`, plan
+`docs/plan-rendements.txt`) : le RENDEMENT d'une activité, bilan de flux
+SIGNÉ par 6000 ticks de travail — tout ce qui entre (+) et tout ce qui
+sort (−) d'un run, chaque flux avec sa cause. L'XP et le profit en sont
+dérivés (XP = Σ unités porteuses × XP de l'unité du dump ; profit = Σ flux
+× prix courant), jamais mesurés à part ; les guides money making et
+entraînement en sont générés (lots R2-R8, à venir).
 
-Provenance de production (2026-11-14, `orchestrator/src/report_flows.rs`) :
-toute activité de transformation étiquette ses produits `produced` et
-les intrants qu'elle a mangés `consumed`, lus dans les données du jeu
-que le planificateur utilise (`method_way::production_ways`,
-`obtain_legs::production_legs` + `map_method`), jamais une liste : un
-objet gagné est produit quand une de ses voies de production a
-travaillé pendant le run (XP de sa compétence montée, ou jambe du
-planificateur lancée par le script même du run : meunerie, traite,
-tonte, cueillette sans XP) et a mangé un de ses intrants (à travers les
-intermédiaires du même run : argile → argile molle → pot cru → pot) ;
-le brûlé est le sous-produit de sa recette ; les bûches brûlées, les
-runes d'un sort payé et l'objet alché sont `consumed` ; les pièces de
-l'alchimie sont `produced`. Live bst29bh9 `smith` avant : « Iron bar
-lost −4, Iron full helm ground_spawn +2 » ; après : `consumed` / `produced`.
-Les taux (`rates_service`, clé = script) apprennent donc les unités par
-6000 ticks de chaque méthode de transformation (`brain_bids::units_per_6000`,
-`bid_response`, `profit`), et le coût propre d'une unité fabriquée
-(§ Réserve vendeur) compte ses intrants.
+Contrat de rapport 2 (lot R1, `session_report.rs`, `report_contract.rs`),
+poussé par la session à chaque fin de tâche :
+- contexte : `planner_method` (méthode fine du nœud lancé, transmise par
+  `--method` que la session retire avant le script ; `method_source` =
+  `node`, ou `none` quand la jambe ne l'a pas portée : rien n'est deviné),
+  `site` [x, z, niveau], `target` (ressource, spot ou recette donnée au
+  script), `tool` (meilleur palier de la famille d'outil détenu au départ,
+  ou arme + munitions portées d'un combat), `combat_style`
+  (`melee:<skill entraîné>`, `ranged`, `magic`), `levels_start` (tous les
+  skills), `work_ticks` et `pause_ticks` séparés ;
+- `flows` : bilan signé [{name, cause, qty}] tiré du registre par action
+  du SDK (`item_ledger`, `coin_ledger`), jamais du diff net. Causes
+  (`flow_causes.rs`, données du jeu, jamais une liste) : `product` (P),
+  `byproduct` (brûlé, gemme), `input` (C : cru cuit, minerai, barre,
+  argile, bûche brûlée, os enterré, essence, objet alché/enchanté),
+  consommables de méthode `ammo` (flèches tirées −, ramassées +), `rune`,
+  `bait` (appât, plumes), `supply` (fil), `food`, `discarded` (jeté),
+  `loot` (ramassé en combat), `ground_spawn` (ramassé ailleurs), `fee`,
+  `death`, `shop_bought`, `shop_sold`, `traded`, et `unattributed` ;
+- `units` : unités porteuses d'XP comptées brutes (fabriquées puis mangées
+  dans le même run comprises) — `product`, `input`, `cast` (sorts payés
+  par leur XP de magie), `kill` et `damage` par type de PNJ (masques de
+  dégâts NPC_INFO sur la cible du bot ; le serveur n'envoie pas
+  l'attaquant) ;
+- `alerts` : `unattributed` (flux que rien n'explique) et `residual`
+  (écart entre le diff net sac + porté + banque et la somme des flux d'un
+  objet : contrôle de cohérence D4/D19), loggées par la session
+  (`task_report alert …`), objectif zéro, jamais un rendement.
+
+Les champs v1 (`activity`, `items` aux provenances D45, `ticks`,
+`market_pause_ticks`) restent, dérivés des causes (`legacy_provenance` :
+product → produced, consommables → consumed, discarded → lost…) : la clé
+de l'agrégation actuelle reste le script jusqu'à R2.
+
+Registre SDK : sac et équipement porté observés ensemble (porter ne sort
+rien, une flèche tirée sort du carquois) ; actions ciblées par objet et
+par signe (manger, enterrer, jeter, ramasser, lancer) ; contexte boutique,
+échange, dialogue ; XP par stat dans les 8 ticks (`skill`) ; banque
+ouverte ou fermée depuis moins de 2 ticks = transfert (pas un flux) ;
+pertes dans les 30 ticks d'une mort = `death`.
+
+Store (schéma 5) : `task_reports` + `measure_version` (1 = rapport par
+diff net, 2 = contrat 2), méthode fine, source, site, cible, outil, style,
+ticks de travail et de pause ; `task_levels`, `task_flows` (cause),
+`task_units`, `task_alerts`. Purge des mesures 1 (D8) préparée,
+exécutée seulement sur confirmation utilisateur, daemon arrêté :
+`orchestrator purge-measures-v1` (simulation) puis `--confirm` (lignes
+v1 de `task_reports`/`task_yields` et `run/rates-snapshot.json`).
 
 Ingestion : la session pousse le rapport, le superviseur du daemon le
-verse dans le store (`jobs::ingest_report_into`) puis dans l'agrégat
-persisté (`rates_service`, `run/rates-snapshot.json`, rechargé au
-redémarrage). Écriture différée (2026-11-14, `rates_flush.rs`) : un
-rapport marque l'agrégat « sale », le thread `rates-flush` réécrit le
-fichier (tmp + rename) au plus une fois par minute, et l'arrêt propre
-(`shutdown`) l'écrit avant de sortir. Un crash ou un SIGTERM (non
-interceptable en std sans `unsafe`) perd au plus la dernière minute
-d'agrégat ; les lignes brutes du store restent complètes. Avant : 790 Ko
-réécrits à chaque rapport (~15 Mo/min, ~25 ms de CPU par rapport). Les lignes
-brutes restent requêtables pour recouper plus tard.
+verse dans le store (`jobs::ingest_report_into` : lignes v1 + mesure du
+contrat 2) puis dans l'agrégat persisté (`rates_service`,
+`run/rates-snapshot.json`, rechargé au redémarrage). Écriture différée
+(`rates_flush.rs`) : au plus une réécriture par minute, plus l'arrêt
+propre.
 
-Agrégation : rendement normalisé par 6000 ticks, par triplet (méthode,
-objet, tranche de 5 niveaux), avec n, moyenne, écart-type (population)
-et moyenne mobile exponentielle (alpha 0,3, ordre d'arrivée). Mêmes
-mesures pour l'XP par 6000 ticks, qui dimensionne les durées de montée
-de niveau. Sous 3 rapports, la page sert l'estimation de démarrage à
-froid (tables de skills du jeu et pratiques de l'époque, marquée
-`prior`) ; à 3 rapports et plus, la mesure remplace l'estimation.
+Agrégation actuelle (remplacée en R2) : par (script, objet, tranche de 5),
+n, moyenne de ratios, écart-type, EMA ; mêmes seaux pour l'XP mesurée.
+Constat de l'audit du 2026-11-16 : cette XP mesurée n'a aucun lecteur, les
+montées de niveau se dimensionnent sur des constantes (`training.rs`,
+`sizing.rs`) ; elle ne dimensionnait rien (R3 la dérive des rendements).
 
-Rentabilité d'une activité et d'une tranche : Σ rendement × prix de
-vente estimé (VWAP 24 h, sinon dernier print, sinon meilleur bid au
-repos, sinon 1 pièce ; `price_prior` tant qu'aucune transaction ne le
-porte) − intrants consommés −
-friction des pauses market (pauses mesurées par rapport, valorisées au
-taux de l'activité : une pause ne rapporte rien) + bonus de tendance
-(score public × chiffre × 0,1). Page `rates` : tableaux méthode × objet
-× tranche, rentabilité courante, nombre de bots engagés par script
-(information pour l'opérateur humain uniquement, jamais lue par les
-bots).
+Rentabilité d'une activité et d'une tranche : Σ rendement × prix courant
+(médiane des 5 derniers fills bornée par le carnet, `rates_price` ;
+sinon le carnet, sinon 1 pièce — jamais un VWAP 24 h) − intrants
+consommés − friction des pauses market (valorisées au taux de l'activité)
++ bonus de tendance (score public × chiffre × 0,1). Page `rates` :
+information pour l'opérateur, jamais lue par les bots.
 
 ## Tendances et marchands
 
@@ -1100,6 +1116,7 @@ compétence quand l'XP a bougé dans les 8 ticks (produit ou consommé par le
 travail), sinon à une mort ; banque ouverte = transfert. Le rapport de
 tâche prend ces provenances (`produced`, `consumed`, `shop_bought`,
 `shop_sold`, `traded`, `loot`/`ground_spawn`, `lost`, `death`) ; seul un
-reste que le registre n'explique pas garde la règle par différence.
+reste que le registre n'explique pas garde la règle par différence
+(2026-11-16 : remplacé, le diff net n'est plus qu'un contrôle, § Rendements).
 `orchestrator economy [heures] item <nom>` liste les entrées (+) et sorties
 (−) d'un objet par provenance ; sans nom, les principaux flux du monde.

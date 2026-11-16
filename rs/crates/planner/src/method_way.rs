@@ -23,11 +23,25 @@ pub fn fight_spot(method: &str) -> Option<&str> {
     Some(tail.rsplit('/').next().unwrap_or(tail))
 }
 
-/// Best F2P combat spell castable at `level` (strike, bolt, blast).
+/// Best F2P combat spell castable at `level` on any target (strike,
+/// bolt, blast): a damage spell of the dump (`Spell::deals_damage`, never
+/// its display name: the server gives crumble undead none) whose target
+/// needs no param (crumble undead hits the undead only).
 pub fn best_combat_spell(level: u8) -> String {
+    best_combat_spell_where(level, |spell| lifescape_gamedata::spells::target_param(spell).is_none())
+}
+
+/// Best F2P combat spell castable at `level` on every NPC of the combat
+/// spot `spot`: crumble undead (39) on an all-undead spot, the elemental
+/// ladder elsewhere (`spell_methods::spell_fits_spot`, server params).
+pub fn best_combat_spell_at(level: u8, spot: &str) -> String {
+    best_combat_spell_where(level, |spell| crate::spell_methods::spell_fits_spot(spell, spot))
+}
+
+fn best_combat_spell_where(level: u8, fits: impl Fn(&str) -> bool) -> String {
     lifescape_gamedata::spells::all_spells()
         .into_iter()
-        .filter(|spell| !spell.members && spell.maxhit.is_some() && spell.level >= 1 && spell.level <= i64::from(level) && spell.name.is_some())
+        .filter(|spell| !spell.members && spell.deals_damage() && spell.level <= i64::from(level) && fits(&spell.spell))
         .max_by_key(|spell| spell.level)
         .map(|spell| spell.spell.to_string())
         .unwrap_or_else(|| "wind_strike".to_string())
@@ -256,6 +270,8 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
             Some((product, way))
         })?,
         "telegrab" => (tail.to_string(), telegrab_way(tail)?),
+        // D18: teleports, curses and bones to bananas, one cast per action.
+        "teleport" | "curse" | "bananas" => return crate::spell_methods::spell_way(method),
         "ground" => {
             let mut merged = ways(tail).into_iter().filter(ground_workable).reduce(|mut merged, next| {
                 merged.sites.extend(next.sites);
@@ -275,7 +291,9 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
 
 /// XP one action of `method` pays (`None`: no XP data). Gathers read
 /// their tier tables, recipes their dump rows, fights their style model
-/// (`sizing`).
+/// (`sizing`), spells their dump row per CAST (plan-rendements §7 unit S:
+/// a teleport or a curse yields nothing, bones to bananas pays per cast
+/// whatever the bones it converts).
 pub fn action_xp(method: &str) -> Option<f64> {
     let (product, way) = method_way(method)?;
     let (skill, _) = way.skill.as_ref()?;

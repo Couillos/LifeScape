@@ -226,7 +226,10 @@ pub fn reach_method(skill: &str, level: u8) -> String {
         "ranged" => format!("fight:ranged/{}", tranche_resource(skill, level)),
         // The best combat spell open at the tranche's start: its runes are
         // sized per cast (`sizing`) and the script casts it (`--spell`).
-        "magic" => format!("fight:magic/{}/{}", crate::method_way::best_combat_spell(level), tranche_resource(skill, level)),
+        "magic" => {
+            let spot = tranche_resource(skill, level);
+            format!("fight:magic/{}/{spot}", crate::method_way::best_combat_spell_at(level, &spot))
+        }
         "attack" | "strength" | "defence" | "hitpoints" => {
             format!("fight:melee/{}", tranche_resource(skill, level))
         }

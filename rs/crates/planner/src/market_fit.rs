@@ -112,7 +112,7 @@ pub fn script_skill(script: &str) -> Option<&'static str> {
         "cook" | "cook_meals" | "meals" => "cooking",
         "melee" => "attack",
         "ranged" => "ranged",
-        "magic" | "alchemy" | "enchant" | "superheat" => "magic",
+        "magic" | "alchemy" | "enchant" | "enchant_teleport" | "superheat" | "curse" | "telegrab_wine" => "magic",
         "smith" | "smelt" | "smithing" => "smithing",
         "firemaking" => "firemaking",
         "crafting" | "spin" | "jewelry" | "pottery" | "tan" | "leather" => "crafting",

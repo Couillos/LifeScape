@@ -145,7 +145,7 @@ pub fn start(orch: &Arc<Orchestrator>) {
 }
 
 fn db_path() -> PathBuf {
-    crate::paths::run_dir().join("lifescape.db")
+    crate::paths::store_db()
 }
 
 fn failures_dir() -> PathBuf {

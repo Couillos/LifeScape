@@ -59,6 +59,10 @@ Registre : `src/registry.rs`, source unique `lifescape_scripts::names()`.
 statiques dans `orchestration/static/`, port via `LIFESCAPE_WEB_PORT`).
 Pages : `/` (bots), `/items`, `/market`, `/rates`, `/life`, `/economy`,
 `/hiscores`, `/errors`.
+Tableau Skills du spectateur (2026-11-16) : lignes heartbeat `skills`
+`{id, level, base, xp}` (`level` = niveau actuel boosté/drainé, `base` =
+niveau de l'xp, `session_heartbeat.rs`) ; ligne « Total » en bas (option
+`footer` de `TableSort`, jamais triée) = somme des `base` et des xp.
 Périodes des graphiques `/items` et `/market` (2026-11-15) : 24 h et
 7 jours en pas d'1 h (`res=1h`, 24/168 créneaux), 30 jours et 6 mois en
 pas d'1 jour (`res=1d`, 30/183 créneaux) ; tables `PERIODS` (`items.js`)

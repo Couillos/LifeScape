@@ -670,7 +670,7 @@ fn load_snapshot_file() -> Snapshot {
     };
     // Files written before per-run flows: rebuilt from the store reports.
     if snapshot.runs.is_empty() {
-        if let Ok(store) = Store::open(&crate::paths::run_dir().join("lifescape.db")) {
+        if let Ok(store) = Store::open(&crate::paths::store_db()) {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
             snapshot.runs = crate::rates_runs::rebuild(&store, now);
         }
@@ -681,7 +681,7 @@ fn load_snapshot_file() -> Snapshot {
 /// File missing or corrupt: trading positions rebuild exactly from the
 /// store log; yields and XP restart empty (priors cover the cold start).
 fn store_fallback() -> Snapshot {
-    let database = crate::paths::run_dir().join("lifescape.db");
+    let database = crate::paths::store_db();
     let Ok(store) = Store::open(&database) else {
         return Snapshot::new();
     };
@@ -879,7 +879,7 @@ pub(crate) fn write_snapshot_file() -> Result<usize, String> {
 /// the status list. Counts are operator eyes only (this page and API),
 /// never read by bots.
 pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
-    let store = match Store::open(&crate::paths::run_dir().join("lifescape.db")) {
+    let store = match Store::open(&crate::paths::store_db()) {
         Ok(store) => store,
         Err(error) => {
             return object(vec![

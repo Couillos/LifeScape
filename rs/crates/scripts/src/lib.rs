@@ -230,7 +230,7 @@ impl Script for DebugWalk {
 /// Every launchable script name.
 pub fn names() -> Vec<&'static str> {
     vec![
-        "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "firemaking", "cut_gems",
+        "cook", "bake_bread", "cook_meals", "fishing", "mining", "woodcut", "melee", "ranged", "magic", "curse", "firemaking", "cut_gems",
         "equip", "leatherwork", "stringing", "alchemy", "superheat", "enchant_teleport", "ground_pickup", "shear",
         "milk", "telegrab_wine", "runecraft", "smelt", "smith", "picking", "fill_water",
         "mill_grain", "essence_run", "spin", "pottery", "smelt_jewelry", "dye", "bury_loot", "dialogue_buy", "market", "tutorial",
@@ -267,6 +267,7 @@ fn runner(name: &str) -> Option<Runner> {
         "melee" => Some(|bot, args| activities::melee::run_melee(bot, args)),
         "ranged" => Some(|bot, args| activities::ranged_style::run_ranged(bot, args)),
         "magic" => Some(|bot, args| activities::magic_style::run_magic(bot, args)),
+        "curse" => Some(|bot, args| activities::curse::run_curse(bot, args)),
         "firemaking" => Some(|bot, args| activities::firemaking::run_firemaking(bot, args)),
         "cut_gems" => Some(|bot, args| activities::cut_gems::run_cut_gems(bot, args)),
         "equip" => Some(|bot, args| activities::equip::run_equip(bot, args)),
@@ -401,7 +402,7 @@ mod tests {
         ] {
             assert!(names().contains(&name), "registry misses {name}");
         }
-        assert_eq!(names().len(), 76, "check_dispose joined the registry");
+        assert_eq!(names().len(), 77, "curse joined the registry");
     }
 
     #[test]

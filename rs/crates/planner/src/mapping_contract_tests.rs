@@ -132,3 +132,31 @@ fn alchemy_training_carries_its_batch() {
     assert_eq!(args.first().map(String::as_str), Some("iron_dagger"));
     assert!(args.get(1).is_some_and(|arg| arg.starts_with("--")), "no count: {args:?}");
 }
+
+/// D18 spell families: teleports and bananas ride `enchant_teleport`
+/// with the spell first, curses their own script with the camp first and
+/// the spell after (like `fight:magic`), crumble undead the magic fight.
+#[test]
+fn spell_families_name_their_scripts() {
+    let mut tranche = climb("magic", 30);
+    let (script, args) = map_method("teleport:varrock_teleport", &tranche, None).expect("teleport maps");
+    assert_eq!(script, "enchant_teleport");
+    assert_eq!(args.first().map(String::as_str), Some("varrock_teleport"));
+    assert!(args.windows(3).any(|window| window == ["--level", "magic", "30"]), "{args:?}");
+    tranche.batch = 40;
+    let (_, batched) = map_method("teleport:falador_teleport", &tranche, None).expect("teleport maps");
+    assert_eq!(&batched[..2], &["falador_teleport".to_string(), "40".to_string()]);
+    let (script, args) = map_method("bananas:bones", &climb("magic", 20), None).expect("bananas map");
+    assert_eq!(script, "enchant_teleport");
+    assert_eq!(args.first().map(String::as_str), Some("bones_to_bananas"));
+    let mut camp = climb("magic", 10);
+    camp.site = Some((3233, 3295, 0));
+    let (script, args) = map_method("curse:confuse/chickens", &camp, None).expect("curse maps");
+    assert_eq!(script, "curse");
+    assert_eq!(&args[..3], &["chickens".to_string(), "--spell".to_string(), "confuse".to_string()]);
+    assert!(args.windows(3).any(|window| window == ["--level", "magic", "10"]), "{args:?}");
+    assert!(args.windows(2).any(|pair| pair == ["--site", "3233,3295,0"]), "{args:?}");
+    let (script, args) = map_method("fight:magic/crumble_undead/wild_skeletons", &climb("magic", 45), None).expect("crumble maps");
+    assert_eq!(script, "magic");
+    assert_eq!(&args[..3], &["wild_skeletons".to_string(), "--spell".to_string(), "crumble_undead".to_string()]);
+}

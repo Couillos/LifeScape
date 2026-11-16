@@ -665,3 +665,75 @@ maximal sans budget ; garder tous les paliers (le surplus finance le reste).
 Non fait : ramassage des spawns au sol pour un bot à 0 pièce (la trousse
 attend qu'il gagne ses 2 à 32 premières pièces).
 - 2026-11-15 — Admission de sessions retirée (E1 enveloppe, E10 pas d'ouverture 2 s) sur décision utilisateur : tout `open` passe immédiatement ; `admission.rs` → `disk_guard.rs` (avertissement D34 seul). Rejeté : garder le pas d'ouverture (création de comptes refusée à la suite).
+
+## 2026-11-16 — Rendement = bilan de flux signé, seule mesure (plan rendements, R0-R1)
+
+Décision utilisateur (plan `docs/plan-rendements.txt`, D1-D20 et §8) :
+on ne mesure qu'une chose, le RENDEMENT d'une activité, bilan de flux
+SIGNÉ par 6000 ticks de travail : ce qui entre (+) et ce qui sort (−),
+mesurés de la même façon. Tout le reste en est dérivé, jamais mesuré à
+part :
+- XP/6000 = Σ rendement(unité porteuse d'XP) × XP de l'unité (dump / 10,
+  `method_way::action_xp`) ; unités : P produit réussi, C intrant consommé
+  (bûche brûlée, os enterré, objet alché ou enchanté, essence), S lancer
+  de sort payé, K kills / dégâts par type de PNJ (combat.rs2
+  `give_combat_experience` : dégâts × 10 dixièmes × 4 selon le style
+  (contrôlé 1,33 × 3, longue portée 2 + 2, magie 2) × `combat_xp_multiplier`
+  du PNJ, PV × 1,33). L'XP observée n'est qu'un contrôle (D4, alerte > 5 %).
+- Profit/6000 = Σ flux signés × prix courant (médiane des 5 derniers fills
+  bornée par le carnet, D12) + flux de pièces (péages, alchimie).
+- Guides money making et entraînement GÉNÉRÉS (une ligne par méthode fine
+  × site × palier d'outil × tranche de 5), lus par les bots et affichés au
+  dashboard (D1, D2), jamais écrits à la main.
+
+Résumé D1-D20 : D1 guides bots = dashboard ; D2 clé méthode fine + site +
+outil + tranche ; D3 combat = kills par PNJ ; D4 XP observée = contrôle ;
+D5 recette sur stock au prix de vente ; D6 classement profit/6000, trajets
+et marché comptés ; D7 déclin par ticks de travail (demi-vie ~60 000) ;
+D8 mesures v1 purgées (confirmation à l'exécution) ; D9 prérequis +
+confiance, ni capacité ni risque ; D10 tirage pondéré ≤ 15 % du top ;
+D11 guide public seul ; D12 prix courant ; D13 traits marché ↔ autarcique
+et rapide ↔ économe ; D14 exploration ~5 % sous 3 mesures ; D15 100 %
+market au prix courant ; D16 chaînes = lignes à part ; D17 pièces → temps
+au profit de la meilleure ligne accessible ; D18 tous les sorts F2P
+méthodes du planificateur ; D19 unités comptées par le registre par action
+du SDK + compteurs d'événements, diff net = contrôle ; D20 quêtes = lignes
+raccourci du guide d'entraînement.
+
+§8 (consommation de tous les skills) : chaque sortie d'objet d'un run a une
+cause ; `lost` et `unattributed` sont des alertes à zéro visé.
+
+R1 (fait) :
+- Contrat de rapport 2 (`report_contract.rs`) : méthode fine du
+  planificateur transmise par la jambe (`--method`, drapeau de session
+  retiré avant le script, `report_meta.rs` ; sans méthode transmise :
+  `method_source = "none"`, rien d'inventé), site, cible, outil/arme,
+  style de combat, niveaux de tous les skills au départ, `work_ticks` et
+  `pause_ticks`, bilan `flows` [{name, cause, qty}], `units`
+  {product, input, cast, kill, damage}, `alerts`. Les champs v1 (`items`
+  aux provenances D45, `activity`, `ticks`) restent dérivés des causes :
+  l'agrégation actuelle lit le même rapport jusqu'à R2.
+- Causes (`flow_causes.rs`) : product, byproduct, input, ammo, rune, bait,
+  supply, food, discarded, loot, ground_spawn, fee, death, shop_bought,
+  shop_sold, traded, unattributed. Registre SDK (`item_ledger.rs`) : sac +
+  équipement porté observés ensemble (porter ne sort rien, une flèche tirée
+  sort du carquois) ; actions ciblées par objet et par signe (manger,
+  enterrer, jeter, ramasser, lancer un sort) ; banque ouverte ou fermée
+  depuis < 2 ticks = transfert ; pertes < 30 ticks après une mort = mort ;
+  XP par stat dans la fenêtre. Compteurs `run_events.rs` : lancers payés
+  (XP de magie dans les 12 ticks), dégâts et kills sur la cible (masques
+  NPC_INFO 0x1/0x10 décodés : dégâts, type, PV, PV max ; le serveur
+  n'envoie pas l'attaquant).
+- Diff net (sac + porté + banque) = contrôle de cohérence seul : un écart
+  avec la somme des flux d'un objet est une alerte `residual`, jamais un
+  rendement.
+- Store schéma 5 : colonnes de contexte de `task_reports`
+  (`measure_version` 1 = ancien rapport, 2 = contrat 2), tables
+  `task_levels`, `task_flows`, `task_units`, `task_alerts`. Purge des
+  mesures 1 préparée, NON exécutée : `orchestrator purge-measures-v1`
+  (simulation) puis `--confirm`, daemon arrêté (un daemon schéma 4 refuse
+  un fichier schéma 5).
+Rejeté : garder le diff net comme source des flux (il efface ce qui est
+produit puis consommé dans le même run : os ramassés puis enterrés, coupe +
+feu, fonte + forge, poterie façonnage + cuisson) ; mettre la méthode fine
+dans `method` (changerait la clé de l'agrégation actuelle avant R2).

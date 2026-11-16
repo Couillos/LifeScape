@@ -62,6 +62,19 @@ pub fn socket_path() -> PathBuf {
     run_dir().join("orchestrator.sock")
 }
 
+/// The daemon's SQLite store (`run/lifescape.db`). Unit tests get a
+/// per-process file instead: a test run must never migrate the live
+/// file under a running daemon of an older schema (live 2026-11-16: the
+/// schema-5 test run locked a schema-4 daemon out of its store).
+pub fn store_db() -> PathBuf {
+    if cfg!(test) {
+        let dir = env::temp_dir().join(format!("lifescape-test-store-{}", std::process::id()));
+        let _ignored = fs::create_dir_all(&dir);
+        return dir.join("lifescape.db");
+    }
+    run_dir().join("lifescape.db")
+}
+
 pub fn pid_path() -> PathBuf {
     run_dir().join("orchestrator.pid")
 }

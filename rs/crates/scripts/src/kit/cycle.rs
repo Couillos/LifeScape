@@ -279,7 +279,7 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
                 // Combat spots ride positionally for every style: the
                 // brain sends `ranged cows` / `magic chickens` like
                 // `melee cows` (PRD3 lot 6: both failed Usage before).
-                if matches!(activity, "melee" | "ranged" | "magic") && other.parse::<u32>().is_err()
+                if matches!(activity, "melee" | "ranged" | "magic" | "curse") && other.parse::<u32>().is_err()
                     || activity == "melee"
                     || (activity == "cook" && spec.resource.is_empty() && other.parse::<u32>().is_err())
                     // Gatherers: the brain's target resource rides first

@@ -1,0 +1,685 @@
+PLAN — MARCHE : UN VRAI MARCHE DE JOUEURS
+=========================================
+Date : 2026-11-16. Statut : plan, aucun code écrit.
+Source : lecture du code (rs/crates/market, orchestrator brain_* et
+market_*, planner bid_response/market_fit/resolve_obtain), docs
+economy.md, decisions.md, planner.md, plan-rendements.txt ; base live
+run/lifescape.db en LECTURE SEULE (instantané 2026-11-16 14:22 CET) ;
+run/orchestrator.log (14/11 23:05 -> 16/11 14:30, ~39 h) ; données
+gamedata/data (shops, shop_access, npcs, recipes, drops).
+Ne duplique pas docs/plan-rendements.txt : il fournit la DEMANDE
+(guides, consommation mesurée, sorts puits, 100 % market) ; ce plan
+fournit la FORMATION DES PRIX et la vie des ordres. Liens au §7.
+Référence d'idée : Grand Exchange d'OSRS et comportements de joueurs
+(file d'ordres, « insta-buy / insta-sell », marge, flippers, achat en
+boutique pour revendre, alchimie comme plancher) ; notre marché reste
+physique (remise place de Varrock), rev 274, F2P.
+
+
+0. REPONSE COURTE A LA QUESTION DE FOND
+---------------------------------------
+« On monte les bids de 5 % tous les 2000 ticks, ne faudrait-il pas
+plutôt baisser les asks ? »
+Les DEUX côtés concèdent déjà (zip.rs:75-80 `demand_step`) : un ask non
+servi descend de 5 % par fenêtre jusqu'à sa réserve, un bid non servi
+monte jusqu'à son plafond ; une vente servie remonte, un achat servi
+redescend. Le problème n'est donc pas le sens, c'est :
+  a) les bids ne vivent pas assez longtemps pour finir leur marche : 77 %
+     des vraies annulations viennent du plan d'équipement qui retire puis
+     repose ses offres, le reste de l'échéance de 6000 ticks des
+     obtentions ; une offre reposée repart plus BAS que celle qu'elle
+     remplace dans 46 % des cas (§1.2) ;
+  b) les asks descendent vers un plancher de 1 pièce pour tout ce qui
+     est trouvé (butin, réserve `Found`), et chaque nouveau vendeur se
+     place à ask − 1 : effondrement en cascade (§2 C8) ;
+  c) 73 % des objets n'ont qu'UN côté : aucune concession ne crée un
+     acheteur qui n'existe pas ; il faut de la demande (plan-rendements)
+     et des débouchés (question Q3) ;
+  d) le pas est identique pour tous (5 %, ≥ 1 pièce, même fenêtre), sans
+     horizon, sans urgence : le trait `price_patience` est tiré pour
+     chaque bot mais n'est lu nulle part.
+Modèle proposé (§3) : concession des deux côtés vers un prix limite
+PROPRE à chaque ordre, sur un horizon en ticks qui dépend du motif
+(urgent / normal / stock futur / liquidation), courbe façonnée par la
+patience du bot ; un ordre pressé franchit l'écart (prend l'ask, frappe
+le bid) ; un ordre arrivé à sa limite y RESTE tant que le besoin existe
+(pas d'annulation-repose) ; les asks ont un plancher réaliste (coût
+propre, option extérieure, valeur de garde) et rejoignent la file au
+lieu de sous-coter d'une pièce.
+
+
+1. CONSTAT CHIFFRE (mes requêtes, 2026-11-16 14:22)
+---------------------------------------------------
+Corrections du constat fourni :
+  - Tick serveur RÉEL = 60 ms, pas 600 ms. ../lostcity/engine/data/
+    config/world.json : "tickRate": 60 ; le conteneur `lostcity` monte
+    ce dossier (/opt/server/engine) et world.json l'emporte : la variable
+    NODE_TICK_RATE=600 du processus n'est lue que pour migrer un ancien
+    .env (WorldConfig.ts:298-322, :242). Confirmé par les sessions :
+    vera_dunn t=85781 à 10:26:30, t=95747 à 10:36:27 (9 966 ticks en
+    597 s = 60 ms). Donc PATIENCE_TICKS = 2000 = 120 s, pas 20 min ;
+    AWAIT_FILL_TICKS 6000 = 6 min. Le journal confirme : les ~2 100 ordres
+    « at a bound » ferment leur fenêtre toutes les ~140 s
+    (market-reprice 13:19:38 puis 13:22:01). Tout ce plan raisonne en
+    ticks ; les durées murales sont données à 60 ms (et ×10 à 600 ms).
+  - « 229 508 bids annulés » est surtout un artefact : un amend = nouvelle
+    ligne + ancienne ligne `cancelled` (market_orders.rs:78-92). Sur 24 h,
+    55 519 « annulations » de bids sont des remplacements à ≤ 1 s
+    (41 270 pas vers le HAUT, 12 856 vers le bas) : ce sont les pas de
+    la marche ZIP, qui a donc bien lieu (toutes les ~2 min).
+  - D-A n'est plus la règle : depuis le 2026-11-15 (planner.md « Achats
+    aux marchands », obtain.rs:617-625 `merchant_buy_allowed`) TOUT objet
+    F2P qu'un marchand stocke peut lui être ACHETÉ ; la vente aux PNJ
+    reste interdite. decisions.md n'a pas d'entrée datée pour ce
+    changement (à ajouter au lot M0).
+  - Le carnet a bougé depuis le constat : chiffres ci-dessous.
+
+1.1 Carnet (ordres `open`, staff exclu : aucun ordre ouvert d'admin)
+  236 objets avec ordres ouverts : 173 asks seuls (73 %), 33 bids seuls
+  (14 %), 30 deux côtés (12,7 %). Écart médian ask/bid sur les 30 :
+  ×1,72 (3 carnets croisés, paires en refroidissement).
+  65 objets en asks seuls JAMAIS échangés (ex. Iron dagger 1 230 u.,
+  60 vendeurs ; Bronze med helm 1 348 u., 57 vendeurs ; Egg, Raw
+  chicken, Goblin mail, Steel arrow, Law rune 293 u. à 1).
+  Asks à 1 pièce : 85 objets, 1 141 ordres, 353 473 unités.
+  Murs principaux (unités, prix min, vendeurs, fills totaux) :
+    Feather 256 432 @1 (56 vendeurs, 64 fills) ; Willow logs 37 260 @4 ;
+    Mind rune 32 148 @1 (58 vendeurs) ; Coal 26 952 @23 ; Yew logs
+    26 534 @3 ; Iron ore 21 186 @15 ; Fire rune 21 182 @1 ; Raw salmon
+    17 022 @5 ; Earth rune 14 611 @1 ; Iron bar 13 379 @31 ; Bronze bar
+    12 172 @9 ; Copper ore 12 043 @1 ; Gold ore 10 033 @40.
+  Bids seuls (best, acheteurs, fills jamais) : Rune full helm 23 046 (2) ;
+    Rune longsword 20 951 (2) ; Adamant platebody 20 219 (17) ; Rune axe
+    19 493 (27, min 1) ; Rune med helm 14 984 (7) ; Adamant axe 11 535
+    (17, min 1) ; Adamant kiteshield 8 593 (21) ; Amulet of power 5 583
+    (26) ; Swordfish 1 377 (9, 100 u.) ; Raw swordfish 793 ; Holy symbol
+    468 (12) ; Leather vambraces 26 (45 acheteurs) ; Cape 10 (30).
+  Offres inutiles : bids à 1 avec plafond 1 sur rune/adamant axe
+    (log « wish rune_axe (axe) bid @ 1 ceiling 1 », brain_wishlist).
+
+1.2 Vie des ordres d'achat (24 h, chaînes = ordre + ses amends)
+  13 078 intentions d'achat : 6 929 réglées (médiane 0 s : preneur à la
+  pose), 5 889 terminées par une vraie annulation, 252 au carnet.
+  Vraies annulations (non suivies d'un remplacement ≤ 1 s) : 6 217, dont
+  4 774 sur de l'équipement (77 %), 1 336 autres (obtentions), 107
+  outils. Journal 39 h : 8 748 « gear bid … cancelled: not wanted by the
+  gear plan » (~5 300/24 h), ~2 100 « market order … unfilled after 6000
+  ticks » annulées (unstrung_sapphire_amulet 391, big_bones 313,
+  raw_swordfish 311, yew_logs 131, leather 112, coal 101…), 1 382
+  « market-audit … not covered by its holdings ».
+  Durée de vie d'une intention annulée : déciles 105, 208, 365, 487,
+  763, 1 078, 1 320, 2 018, 4 168 s (≈ 1 750 à 70 000 ticks).
+  Exemple ryan_mason / Leather vambraces : 14 offres en 15 h, chacune
+  2 à 7 min, plafond 10 → 32 → 10 → 25 → 10 → 11 → 26… (budget 479 à
+  6 148 selon le portefeuille libre du moment).
+  Après une intention annulée, la suivante (même compte, même objet)
+  rouvre PLUS BAS 2 235 fois, pareil 457, plus haut 2 122 : la marche
+  est remise à zéro une fois sur deux.
+  Ventes : 11 797 intentions, 5 590 réglées, 4 788 annulées (médiane
+  1 035 s), 1 413 au carnet ; après une vente annulée, la suivante
+  rouvre au même prix 2 849 fois (retrait/regroupement de lots).
+
+1.3 Échanges (24 h)
+  8 175 fills, 142 957 unités, 3,75 M pièces, 133 objets ; 2 988 fills
+  (36,6 %) et 60 390 unités (42 %) à 1 pièce. Preneur acheteur 76 % des
+  fills (un bid posé sur un ask couvert). Deals : 8 169 réglés, 1 957
+  timeout, 349 redémarrage, 305 short, 146 mismatch, 13 no_show.
+  Volumes 24 h / VWAP : Feather 10 771 @1,0 ; Copper ore 6 825 @1,3 ;
+  Nature rune 4 271 @29,6 (derniers fills 62-70) ; Steel bar 4 104
+  @82,6 ; Gold bar 3 942 @93 ; Iron ore 3 802 @7 ; Yew logs 3 461 @12,9 ;
+  Bronze bar 3 227 @13,7 ; Mind rune 2 419 @1 ; Willow 1 798 @3,9.
+
+1.4 Offre contre consommation (task_yields, 3 jours, quantités)
+  Feather : entrées loot 172 083 + sol 98 798 ; consommé 68 224
+    (pêche à la mouche ~32 000/jour) : ~4× l'usage.
+  Yew logs : produit 228 905 ; consommé 42 371 (firemaking).
+  Willow logs : produit 101 484 ; consommé 24 366.
+  Mind rune : loot 46 574 ; consommé 7 215 (magie ~2 900/jour).
+  Fire rune : loot 44 421 ; consommé 12 206.
+  Copper ore : produit 54 064 ; consommé 33 435.
+  Activité 24 h (ticks) : melee 21,9 M, woodcut 19,9 M, mining 18,6 M,
+  contre smelt 2,2 M, magic 0,46 M, smith 0,32 M, cook 0,28 M,
+  firemaking 0,27 M : ~60 M ticks de récolte/combat pour ~4 M de
+  transformation. Les « shop_sold / shop_bought » de ces lignes sont
+  du bruit d'attribution (plan-rendements §8) : aucun script ne vend
+  aux PNJ.
+
+1.5 Profil des bots
+  `price_patience` est tiré par bot (lives : 0,06 à 0,99) et ne sert à
+  rien : model.rs:38-50 en dérive `margin`, que personne ne lit ;
+  accounts_econ le stocke à 0,5 pour les 64 comptes
+  (market_service.rs:751). 53 producteurs, 10 marchands.
+
+
+2. CAUSES DANS LE CODE
+----------------------
+C1 Amend = annulation + nouvelle ligne (market_orders.rs:78-92) : la
+   mesure des annulations est fausse, et l'ÂGE d'une offre repart à
+   zéro à chaque pas. market_demand.rs:73-75 calcule `oldest_age` sur
+   `created_clock` : une offre de 6 h a toujours < 2000 ticks d'âge,
+   `age_factor` ≤ 1,33 au lieu de ×6 ; la demande ancienne ne tire pas.
+C2 Plan d'équipement instable (brain_gear.rs:385-388, :210-222,
+   GEAR_EVERY_SECS 60 s) : budget = 50 % du portefeuille LIBRE du
+   moment ; chaque gain/dépense, chaque offre non-équipement posée,
+   change le budget, l'emplacement le plus cher descend ou remonte d'un
+   palier, l'offre non voulue est annulée, la voulue reposée à
+   `want.expected` (le plafond, donc déjà « at a bound » : aucune
+   concession). Cause n°1 des vraies annulations (77 %).
+C3 Échéance des obtentions (brain_await.rs:14, :29, :42-45) : 6000
+   ticks sans fill → annulation + échec compté ; la reprise passe par
+   `place_obtain_bid` qui ANNULE toute offre ouverte du compte sur
+   l'objet (brain_market.rs:186) et repose au `remembered_bid`
+   (brain_market.rs:189 : son dernier prix d'achat, sinon le prix
+   courant) : la marche repart du bas.
+C4 Couverture non séquestrée (market_audit.rs:229, :276) : les pièces
+   d'une offre restent en banque, le bot les dépense (boutique, péage,
+   autre achat) et l'audit annule l'offre devenue découverte.
+C5 Plafonds dérisoires : `bid_ceiling` = part du portefeuille / qté
+   (resolve_obtain.rs:44-52), `wish_ceiling` (brain_wishlist.rs:144-197)
+   pose une offre dès que le plafond ≥ 1 : rune axe à 1 pièce, inutile
+   et bruyante (signal de demande, CPU).
+C6 Pas uniforme (zip.rs:59-80, :108) : 5 % du prix courant, ≥ 1 pièce,
+   une fenêtre fixe, quel que soit l'écart à la limite, le motif ou le
+   bot ; ni horizon ni courbe. Fenêtres synchronisées : après un
+   redémarrage tous les ordres adoptés partagent `last_change_wall`
+   (market_reprice.rs:104-110, :176-183) et marchent en bloc.
+C7 Pas d'ordre « au marché » en cours de vie : un acheteur franchit
+   l'écart seulement à la pose (`opening_bid`, zip.rs:93-100) ; un
+   vendeur pressé (banque pleine, D17) ne frappe jamais le bid.
+C8 Effondrement des asks trouvés : réserve `Found` = 1 (brain_reserve.rs
+   :329) ; un objet jamais échangé ouvre à ask − 1 (zip.rs:170
+   `found_open`) : chaque nouveau vendeur sous-cote le précédent, puis
+   la marche descend tout le monde à 1.
+C9 Aucune option extérieure pour un vendeur (vente PNJ interdite) et
+   une offre structurellement > à la consommation (§1.4) : la seule
+   sortie est l'alchimie, qui exige magie 21/55 et des runes de nature
+   (non productibles F2P).
+C10 Carnets à un côté : `flip_quotes` n'ouvre la jambe d'achat que si
+   bid ET ask reposent (zip.rs:206) ; market:flip ne peut rien sur
+   73 % des carnets. Aucun marchand n'achète en boutique pour revendre.
+C11 Demande exprimée trop tard et trop court : un intrant n'est
+   recherché qu'au blocage `missing` d'un nœud (offre à 6000 ticks) ;
+   `brain_sales::planned_methods` (brain_sales.rs:55-74) et
+   `market_fit::own_use_items` ne servent qu'à NE PAS VENDRE, jamais à
+   acheter à l'avance.
+C12 L'équipement vendu en boutique reste en offre : `shop_only`
+   (brain_gear.rs:298-300) ne connaît que la route des haches de Bob,
+   pas la règle d'achat marchand du 2026-11-15 (Champions' Guild :
+   Scavvo vend rune longsword/sword/chainbody/platelegs, Valaine adamant
+   platebody ; porte à 32 points de quête).
+C13 À vérifier : `bid-why fiona_park stringstar` répond « no bid »
+   alors que 10 bids reposent sur Holy symbol (id 1718 ; deux ids
+   1718/1719 portent ce nom) : mappage nom → id possiblement faux pour
+   les objets à doublon (482 noms en double dans `items`).
+
+
+3. MODELE DE MARCHE CIBLE
+-------------------------
+3.1 Un ordre = une intention persistante
+  Chaque ordre porte une LIGNÉE (id racine conservé par les amends),
+  un MOTIF (besoin bloquant, stock futur, équipement, outil, revente
+  marchand, liquidation de surplus, liquidation de butin), un prix
+  limite, un prix d'ouverture, un horizon en ticks, une urgence. L'âge,
+  la durée de vie et l'expiration se lisent sur la lignée. Un amend
+  n'est pas une annulation (statut distinct en base).
+
+3.2 Prix limite de chaque côté (données propres ou publiques, D22)
+  Acheteur : min(valeur pour lui, ce que le portefeuille paie).
+    Valeur = intrant : réserve dérivée (derived_demand) ou seuil de
+    rentabilité de la ligne de guide (plan-rendements D15/D17) ;
+    équipement/outil : budget du plan ; tout objet qu'un marchand F2P
+    stocke : son prix boutique + trajet (au-delà on va en boutique).
+  Vendeur : max(coût propre (brain_reserve), meilleure option extérieure
+    accessible (net d'alchimie d'un lanceur ; vente PNJ si Q3 l'ouvre),
+    valeur de garde (§3.7)).
+  Les limites suivent le portefeuille ou le coût SANS remettre le prix
+  courant à zéro (déjà vrai pour `keep_bid`, à généraliser).
+
+3.3 Concession dans le temps, des deux côtés
+  Remplace le pas fixe de 5 % : à chaque fenêtre W, le prix va vers sa
+  limite selon une courbe de concession en temps (tactiques
+  « Boulware / Conceder » de la négociation automatique) :
+    p(t) = ouverture + (limite − ouverture) × (t / H) ^ (1 / β)
+  t = ticks écoulés depuis la pose (lignée), H = horizon du motif,
+  β = forme : β < 1 concède tard (patient), β > 1 concède tôt (pressé).
+  β = f(price_patience du bot, urgence du motif). Pas minimal 1 pièce,
+  amend seulement si le prix bouge d'au moins 1 pièce ET 1 % (CPU).
+  Retour d'information conservé (ZIP) : un fill partiel d'un vendeur
+  remonte son ouverture et repart la courbe plus haut ; un fill partiel
+  d'un acheteur abaisse sa limite effective ; un fill PUBLIC hors de sa
+  cotation (un autre a payé plus) rapproche l'ouverture de ce prix.
+  Fenêtres désynchronisées : décalage propre à chaque ordre (mot du
+  compte et de l'objet), aucune marche en bloc.
+
+3.4 Ordres au marché (franchir l'écart)
+  À la pose ET à chaque fenêtre : si le meilleur prix opposé est dans la
+  limite et que l'urgence l'impose (besoin bloquant, banque pleine,
+  livraison d'un marchand) OU que la courbe l'atteindrait avant k
+  fenêtres, l'ordre prend le prix opposé (acheteur prend l'ask, vendeur
+  frappe le bid). Un patient attend sa courbe : c'est ce qui crée un
+  écart et des deux côtés au carnet.
+
+3.5 Durée de vie, expiration, annulation
+  Horizon H par motif (défauts à calibrer, ticks ; 60 ms → 600 ms) :
+    besoin bloquant  6 000 (6 min → 1 h)    β 2 (concède tôt)
+    équipement/outil 36 000 (36 min → 6 h)   β selon patience
+    stock futur      72 000 (1,2 h → 12 h)   β 0,5 (patient)
+    surplus produit  36 000                  β selon patience
+    butin            72 000                  β 0,5
+  À H l'ordre est à sa limite et y RESTE (bon jusqu'à annulation, comme
+  le GE) tant que le motif existe. Annulation seulement si : le besoin
+  disparaît (nœud fait/abandonné, but changé), une autre voie l'a servi
+  (D-B), la limite tombe sous le seuil de crédibilité (§3.6), ou un
+  vendeur sans aucun acheteur visible depuis H retire et garde en
+  banque. Hystérésis : un besoin qui revient dans les 6000 ticks reprend
+  sa lignée et son prix (jamais remise à zéro).
+  Équipement : un emplacement dont l'offre repose garde sa pièce tant
+  qu'elle reste une amélioration et que son plafond ≥ 70 % de son
+  plafond initial ; replanification au plus une fois par 36 000 ticks
+  ou sur gain de palier.
+
+3.6 Crédibilité d'une offre
+  Pas d'offre dont la limite est < à un plancher public (valeur de basse
+  alchimie si un lanceur existe, sinon prix courant échangé / 4) : le
+  bot économise d'abord (`have_coins`), comme un joueur qui ne poste
+  pas « rune axe à 1 pièce ». Pas d'offre sur un objet vendu en
+  boutique F2P accessible sous la limite : il y va (C12).
+
+3.7 Planchers vendeurs réalistes, fin de la cascade à 1
+  - Rejoindre, ne pas sous-coter : un nouveau vendeur se place AU
+    meilleur ask (file par ancienneté) ; il ne sous-cote (d'un pas
+    relatif ≥ 1 %, pas d'une pièce) que s'il est pressé.
+  - Valeur de garde d'un objet trouvé : max(1, ce que le bot paierait
+    pour le remplacer plus tard s'il le consomme, net d'alchimie s'il
+    est lanceur) ; un bot qui n'en a aucun usage et aucun acheteur
+    visible retire au bout de H et garde (ou jette selon D17 / Q3).
+  - Offre à la source : un bot ne ramasse pas un objet dont le prix
+    courant × quantité < ticks de ramassage × son taux (plumes à 1 au
+    sol) ; plan-rendements R1 mesure ces ticks.
+  - L'effondrement n'est réaliste que si l'objet n'a vraiment pas de
+    demande : le critère (§6) compte les objets à 1 pièce dont la
+    consommation mesurée est > 0.
+
+3.8 Découverte du prix d'un objet jamais échangé
+  Ancrages publics seulement : prix boutique F2P (plafond acheteur
+  naturel), valeur d'alchimie (plancher si lanceurs), coût de
+  production de la ligne de guide (plan-rendements R4 : intrants aux
+  prix courants + temps au taux médian publié). Vendeur ouvre à
+  min(boutique, coût de guide × (1 + marge du profil)) ; acheteur à
+  max(plancher, valeur × (1 − marge)). Le premier croisement fixe le
+  premier fill ; ensuite médiane des 5 fills bornée par l'impact
+  (inchangé).
+
+3.9 Anti-oscillation
+  Pas proportionnel à l'écart à la limite (converge, pas d'aller-retour
+  de 5 %), médiane des fills, fenêtres désynchronisées, hystérésis des
+  annulations, rouverture à la dernière cotation de la lignée. Critère
+  simulateur : inversions de sens du prix ≤ 15 % des fills sur un
+  carnet stationnaire.
+
+3.10 Teneur de marché : marchands existants, pas un nouveau bot
+  Un teneur de marché dédié ne crée ni acheteur ni vendeur ; sur un
+  carnet à un côté il ne peut que spéculer ou importer. Le rôle revient
+  aux 10 marchands (`market:flip`), avec trois stratégies réalistes,
+  informations publiques seulement :
+    (a) écart (existant) : deux côtés présents ;
+    (b) « shop run » : acheter en boutique F2P et revendre quand le
+        meilleur bid (ou le prix courant échangé) > prix boutique +
+        trajet au taux du marchand (plumes de Gerrant, runes d'Aubury,
+        runes de nature de Lundail si la route est F2P, pièces des
+        Champions' Guild si 32 points de quête) ;
+    (c) stock spéculatif borné : acheter dans un mur d'asks à prix
+        déprimé un objet dont l'historique public montre une
+        consommation (fills d'acheteurs) et le revendre par lots ; mêmes
+        plafonds de risque (10 % du capital, 500 unités, 25 % du côté).
+  Un bot « market maker » supplémentaire n'aurait de sens que pour
+  coter les deux côtés en permanence des objets à forte rotation ; ce
+  n'est pas un comportement de joueur rev 274 : rejeté sauf avis
+  contraire (Q6).
+
+
+4. LES QUATRE POINTS DEMANDES
+-----------------------------
+4.1 Bids persistants (C1, C2, C3, C4, C5, C11)
+  Cause exacte des annulations massives : (1) la plupart ne sont PAS
+  des annulations mais des amends comptés `cancelled` (C1) ; (2) les
+  vraies : plan d'équipement qui retire/repose à chaque passe de 60 s
+  (C2, 77 %), échéance 6000 ticks des obtentions + `place_obtain_bid`
+  qui annule et repose au prix de mémoire (C3), audit de couverture
+  (C4). Cible : lignée + hystérésis + expiration « reste à la limite »
+  (§3.5) ; l'obtention garde UNE offre par (compte, objet, motif) que
+  `place_obtain_bid` reprend au lieu de l'annuler ; l'échec d'une
+  obtention ne retire plus l'offre : le nœud passe à la production ou
+  au blocage pièces, l'offre continue (D-B généralisé).
+  Besoins futurs posés à l'avance : voir 4.2.
+
+4.2 Demande des consommateurs
+  Ce que plan-rendements crée : guides générés (R4) qui rendent
+  visibles les méthodes consommatrices (pêche à la mouche, firemaking,
+  forge, cuisine, magie) ; consommation mesurée en flux signés (§8 :
+  plumes, appâts, flèches, runes, bûches, minerai) ; sorts puits D18
+  (téléports → runes de loi, bones to bananas → os, malédictions →
+  runes) ; mode « marché » des bots (D13, R6) qui achète ses intrants ;
+  100 % market (R5). Un produit saturé fait baisser sa ligne et
+  répartit les bots (équilibre indirect).
+  Ce qu'il manque côté marché pour que cette demande S'EXPRIME :
+  - stock-cible d'intrants : pour chaque méthode planifiée
+    (`planned_methods`, `own_use_items`, tranche en cours ET suivante),
+    cible = consommation /6000 du guide × horizon de la tranche ;
+    offre « stock futur » pour (cible − détenu − en vol − réservé), prix
+    limite = seuil de rentabilité de la ligne (plan-rendements D15) ou
+    réserve dérivée, patiente (β 0,5), pondérée par market_affinity
+    (un autarcique farme, un « marché » achète) ;
+  - réapprovisionnement : quand le stock tombe sous un seuil (une
+    charge d'inventaire), l'offre passe en urgence normale ;
+  - l'âge réel des offres (C1) dans les signaux de demande, pour que
+    les ambitions et `bid_response` voient une demande ancienne.
+
+4.3 Débouché des objets sans usage (question Q3, non tranchée)
+  Options, avantages / inconvénients / réalisme :
+  A. Vente au marchand PNJ quand le marché paie moins que la boutique
+     (exception à la règle « jamais vendre aux PNJ »).
+     + plancher naturel (prix de reprise boutique, qui baisse avec son
+       stock en 274) ; retire les objets du monde ; très « 2004 »
+       (les joueurs vidaient leur butin au magasin général).
+     − crée des pièces (inflation à suivre : `orchestrator economy`) ;
+       contredit une règle utilisateur explicite ; trajets boutique.
+  B. Alchimie seule (existant, brain_alch).
+     + cohérent avec le plancher d'alchimie d'OSRS ; déjà codé.
+     − exige magie 21/55 + runes de nature (non productibles F2P,
+       Lundail à vérifier) ; crée aussi des pièces ; inutile pour les
+       objets à alch 1-2 (plumes, runes élémentaires, œufs).
+  C. Puits sans pièces : ne plus ramasser ce qui ne vaut pas son temps,
+     retirer et garder puis jeter selon D17 (banque pleine).
+     + aucune création de monnaie ; réaliste (un joueur ne ramasse pas
+       des plumes à 1) ; réduit l'offre à la source.
+     − ne valorise rien ; les objets déjà en banque finissent jetés.
+  D. Demande créée (plan-rendements D18 + stock-cible §4.2) : à faire de
+     toute façon, mais ne couvre pas le butin sans aucun usage F2P
+     (casques de bronze, dagues de fer, gobelin mail).
+  Les quatre se combinent ; Q3 demande lesquelles.
+
+4.4 Objets rares (bids seuls)
+  Classement à produire (lot M9) de chaque objet bids-seuls :
+  - productible par la flotte maintenant, chaîne invisible : Holy
+    symbol (asks Unstrung symbol 408 @106 + Ball of wool 2 188 @62 ;
+    bids jusqu'à 449 : +281/unité en 100 % market, aucun preneur) ;
+    Leather vambraces (crafting, Leather sans ask) ; Swordfish (cuisine
+    45 ; Raw swordfish bids seuls : pêche 50, harpon). Remède :
+    lignes de chaîne D16 et 100 % market R5 des guides, et C13 à
+    vérifier (mappage d'id du symbole) ;
+  - productible hors de portée (forge 88-99 : adamant platebody, rune) :
+    offres légitimes, patientes, sans churn ;
+  - vendu en boutique F2P : Champions' Guild (Scavvo : rune longsword,
+    sword, chainbody, platelegs, plateskirt, mace ; Valaine : adamant
+    platebody, black full helm/platelegs ; 32 points de quête à la
+    porte) ; plumes chez Gerrant (Port Sarim, 1 000) ; amulet of power
+    seulement chez `amuletshop` (brimhaven.inv, stock 0, Karamja :
+    accès F2P à vérifier). Le plan d'équipement doit emprunter ces
+    routes (C12) au lieu d'une offre que personne ne sert.
+  - runes de nature : NON productibles en F2P 274 (aucune recette
+    `naturerune` dans recipes.json : pas d'autel de nature F2P) ;
+    lâchées en F2P (77 lignes drops.json). Boutiques : Lundail
+    (`magearena_runeshop`, base 20, stock 250, spawn (2534,4719)
+    members=false, ouverture sans porte dans shop_access) et la Magic
+    Guild (Yanille, membres). Lundail est dans la cave de l'arène
+    (échelle `magearena_ladder_to_cellar`, décalage −549/+756 depuis la
+    Wilderness profonde, ~(3090,3956)) : sol F2P et route nav À
+    VÉRIFIER (in_f2p, route hors ligne). Personne ne les achète en
+    boutique parce qu'aucune route n'est connue (economy.md :
+    « aucune boutique F2P hors Wilderness », brain_alch au marché
+    seulement) ; personne ne les vend en boutique (règle). Au marché :
+    363 fills/24 h, derniers fills 62-70 pour une boutique à 20 : la
+    stratégie « shop run » (§3.10 b) les ramènerait si la route existe.
+
+
+5. LOTS ORDONNES
+----------------
+Chaque lot : test qui échoue d'abord, un crate à la fois, --release,
+live admin/admin2 avant la flotte (AGENTS.md §5). Critères live du §6.
+
+M0  Doc et mesure d'abord.
+    - decisions.md : entrée « Achats aux marchands 2026-11-15 »
+      (remplace D-A pour l'achat) ; entrée modèle de marché (§3) une
+      fois Q1-Q6 tranchées ; economy.md § Market : tick réel, lignée.
+    - store : statut `amended` (ou colonne `replaces`) pour un amend ;
+      migration qui reclasse l'historique (remplacement ≤ 1 s, même
+      compte/objet/côté) ; colonne `motive` et `root_id`.
+    - `orchestrator economy` : section marché = les critères du §6
+      (part deux côtés, écart médian, vie des lignées d'achat, vraies
+      annulations / réglés, volume, fills à 1 d'objets consommés).
+    Tests : migration (golden sur un extrait de base), calcul des
+    critères sur un carnet fabriqué.
+
+M1  Lignée d'ordre et âge (store + orchestrator).
+    - amend garde `root_id` ; `market_demand` lit l'âge de la lignée ;
+      `QuoteBounds` porte motif, horizon, ouverture, t0 de la lignée.
+    Tests : unitaire `signals` (âge 6 h → ×6) ; amend conserve root_id
+    et t0 ; adoption après redémarrage relit t0 en base.
+
+M2  Besoins persistants (orchestrator).
+    - `place_obtain_bid` reprend l'offre de la lignée (même motif) au
+      lieu de l'annuler (C3) ; échéance d'obtention = fin de la jambe
+      marché du NŒUD, pas de l'offre (l'offre devient « stock futur »
+      ou reste bloquante selon le graphe) ;
+    - plan d'équipement avec hystérésis (§3.5) et budget lissé (C2) ;
+    - séquestre : pièces engagées soustraites de tout ce que le bot
+      dépense hors marché (boutique, péage) ou baisse ordonnée du
+      plafond au lieu de l'annulation d'audit (C4) ;
+    - crédibilité §3.6 (C5) ; routes boutique pour l'équipement (C12).
+    Tests : brain_gear (portefeuille qui oscille ±20 % → 0 annulation
+    sur 10 passes) ; brain_await (échéance → offre conservée, nœud
+    replanifié) ; wishlist (plafond 1 → aucune offre, `have_coins`).
+
+M3  Courbe de concession (market, pur).
+    - `zip` : prix(t) par lignée (§3.3), β depuis patience × urgence,
+      horizon par motif, pas minimal, amend seuil 1 % ; retour ZIP
+      conservé ; fenêtres désynchronisées ;
+    - `price_patience` lu depuis la vie du bot (plus le 0,5 du store).
+    Tests unitaires : bornes (jamais hors [ouverture, limite]),
+    monotonie sans fill, atteinte de la limite à H, β < 1 / β > 1.
+    Simulateur (nouveau `sim_lifecycle`, graines fixes) : 20 acheteurs
+    et 20 vendeurs à limites tirées, patiences variées, arrivées en
+    continu ; critères : fills ≥ 90 % des paires compatibles en ≤ H,
+    prix final à ±10 % de l'équilibre, inversions ≤ 15 %, aucun prix
+    à 1 quand toutes les réserves ≥ 5 ; comparaison avec le pas 5 %
+    actuel (même graine) en tableau.
+
+M4  Ordres au marché (market + orchestrator).
+    - franchissement par urgence (§3.4), des deux côtés ; vendeur
+      pressé (banque pleine, D17) frappe le bid ≥ son plancher.
+    Simulateur : un acheteur urgent servi en 1 fenêtre, un patient au
+    prix du vendeur ; part des fills preneur-vendeur > 0.
+
+M5  Vendeurs : planchers et fin de la cascade (market + orchestrator).
+    - `found_open` rejoint le meilleur ask (C8) ; sous-cotation relative
+      seulement si pressé ; valeur de garde ; retrait après H sans
+      acheteur visible ; option extérieure selon Q3.
+    - filtre de ramassage par valeur (avec plan-rendements R1 pour les
+      ticks de ramassage).
+    Simulateur : 50 vendeurs de butin, 3 acheteurs : le prix reste ≥ la
+    plus basse valeur de garde, pas de descente à 1 par sous-cotation.
+    Test : `found_open` jamais sous le meilleur ask existant.
+
+M6  Stock-cible et réapprovisionnement (planner + orchestrator).
+    - offres « stock futur » depuis planned_methods / own_use_items et
+      la consommation /6000 des guides (plan-rendements R2/R4) ;
+      market_affinity pondère acheter / farmer ; seuil de
+      réapprovisionnement.
+    Tests : planner pur (pêcheur à la mouche niveau 20-25 : cible de
+    plumes = consommation × tranche ; autarcique : aucune offre) ;
+    live : offres de plumes, appâts, runes, bûches au carnet.
+
+M7  Découverte du prix (market + planner).
+    - ouverture des objets jamais échangés par ancrages §3.8 (boutique,
+      alchimie, coût de guide).
+    Simulateur : objet neuf, 5 vendeurs à coûts 20-40, 5 acheteurs à
+    valeurs 30-90 : premier fill dans [20, 90] en ≤ 3 fenêtres.
+
+M8  Marchands : shop run et stock spéculatif (scripts + orchestrator).
+    - `market:flip` étendu (§3.10 b, c), plafonds de risque inchangés,
+      informations publiques seulement ; routes boutique via le
+      planificateur (accès, péages, points de quête).
+    Tests : `flip_quotes` sur carnet à un côté (bid seul > boutique +
+    trajet → jambe boutique ; ask seul déprimé + historique de
+    consommation → achat borné) ; live : un marchand sert un bid de
+    plumes ou de runes depuis une boutique.
+
+M9  Rares : classement et routes (gamedata + planner).
+    - pour chaque objet bids-seuls : productible maintenant / hors de
+      portée / boutique F2P / introuvable, publié au dashboard (info
+      opérateur) ; vérifications Lundail, amuletshop, Champions' Guild
+      (in_f2p, route, porte) ; C13.
+    Tests : gamedata (routes boutique des objets cités) ; golden de
+    classement.
+
+
+6. CRITERES LIVE (mesurés par M0 ; base 2026-11-16)
+----------------------------------------------------
+  part d'objets actifs à deux côtés        12,7 %   -> ≥ 35 %
+  écart médian meilleur ask / meilleur bid ×1,72    -> ≤ ×1,25
+  vraies annulations de bids / bids réglés  6 217 / 6 929 -> ≤ 0,2
+  annulations « not wanted by the gear plan »  ~5 300/24 h -> ≤ 200
+  lignée d'achat annulée puis rouverte plus bas  46 % -> ≤ 5 %
+  vie médiane d'une lignée d'achat non servie  ~1 080 s -> ≥ son H
+  volume échangé (unités / pièces 24 h)  142 957 / 3,75 M -> +50 %
+  objets à 1 pièce dont la consommation mesurée > 0 (plumes, runes
+    élémentaires, minerai de cuivre…)       ≥ 6 -> 0
+  asks à 1 pièce                85 objets / 353 473 u. -> à suivre
+                                (dépend de Q3 et de la demande)
+  objets en asks seuls jamais échangés      65 -> ≤ 20
+  amends par minute (CPU daemon)            à mesurer -> ≤ actuel
+  inversions de sens du prix (objets les plus échangés) ≤ 15 % des fills
+
+
+7. LIENS AVEC docs/plan-rendements.txt
+--------------------------------------
+  R1/R2 (rapport, flux signés, consommation) -> M6 (stock-cible) et M5
+    (ticks de ramassage pour le filtre de valeur).
+  R4 (guides, chaînes D16, prix courant D12) -> M7 (coût de guide comme
+    ancrage), M9 (chaînes visibles), §3.2 (seuil de rentabilité comme
+    limite acheteur).
+  R5 (100 % market) -> M6/M8 : acheteurs d'intrants et vendeurs de
+    produits sur les deux côtés d'un même carnet ; Holy symbol en est
+    le premier cas.
+  R6/D13 (market_affinity, rapide ↔ économe) -> M6 ; le trait
+    `price_patience` (déjà tiré) porte la concession (M3) ; pas de
+    nouveau trait.
+  §7 D18 (sorts puits : téléports, bones to bananas, malédictions,
+    crumble undead) -> demande de runes de loi, d'air, d'os : objets
+    aujourd'hui à 1 (Law rune 293 u. jamais échangées).
+  §5 « pas d'oscillation entretenue » -> critère d'inversions ci-dessus,
+    même mesure.
+  Ordre conseillé : M0-M2 tout de suite (indépendants des guides) ;
+  M3-M5 ensuite ; M6-M7 après R2/R4 ; M8-M9 en parallèle de R5.
+
+
+8. QUESTIONS POUR L'UTILISATEUR
+-------------------------------
+Q0 Tick réel. Le serveur tourne à 60 ms (world.json), pas 600 ms.
+   a) garder 60 ms (dev) et caler les horizons en ticks (rien à faire) ;
+   b) passer world.json à 600 (modifie ../lostcity : demande
+      explicite) ; c) les deux, horizons validés aux deux vitesses.
+   Recommandation : a) maintenant, c) avant toute prod.
+
+Q1 Mesure des annulations : comment marquer un amend ?
+   a) statut `amended` + migration de l'historique ; b) colonne
+      `replaces` (lignée) sans changer le statut ; c) rien, calcul à
+      la volée par la règle « remplacement ≤ 1 s ».
+   Recommandation : b) (lignée exacte, statut inchangé pour l'existant).
+
+Q2 Forme de la concession.
+   a) courbe en temps vers la limite, horizon par motif, β par
+      patience × urgence (§3.3) ; b) garder 5 %/fenêtre mais par
+      lignée (sans remise à zéro) et fenêtre par motif ; c) ZIP pur
+      (apprentissage sur les fills publics, sans horizon).
+   Recommandation : a), avec le retour ZIP conservé.
+
+Q3 Débouché des objets sans usage (§4.3).
+   a) vente au marchand PNJ quand le marché paie moins (exception à la
+      règle, création de pièces suivie) ; b) alchimie seule (existant) ;
+      c) puits sans pièces : filtre de ramassage par valeur, retrait
+      puis jet D17 ; (d, demande créée, se fait de toute façon).
+   Recommandation : c) + b) d'abord (aucune monnaie créée hors
+   alchimie) ; a) seulement si le volume reste bloqué après M5/M6.
+
+Q4 Expiration d'un ordre arrivé à sa limite.
+   a) reste au carnet à la limite tant que le motif existe (GE) ;
+   b) annulé à H, nouveau motif nécessaire ; c) vendeur sans acheteur :
+      retrait à H ; acheteur : reste.
+   Recommandation : c).
+
+Q5 Stock-cible d'intrants (achats à l'avance).
+   a) tranche en cours seulement ; b) tranche en cours + suivante ;
+   c) tout le plan de l'ambition (jalons ouverts).
+   Recommandation : b), plafonné par market_affinity et le budget.
+
+Q6 Teneur de marché.
+   a) aucun bot dédié, marchands existants étendus (shop run + stock
+      spéculatif, §3.10) ; b) un bot dédié qui cote les deux côtés des
+      objets à forte rotation ; c) a) puis b) si l'écart médian reste
+      > ×1,25 après M3-M8.
+   Recommandation : a).
+
+Q7 Achats boutique d'équipement rare (Champions' Guild, 32 points de
+   quête) et runes de nature chez Lundail (Wilderness profonde).
+   a) autorisés comme toute boutique F2P (règle du 2026-11-15) ;
+   b) autorisés aux seuls marchands (shop run) ; c) interdits (offres
+      au carnet uniquement).
+   Recommandation : a), routes vérifiées d'abord (M9).
+
+Q8 Offres d'objets que personne ne peut produire ni acheter (rune full
+   helm, adamant axe…).
+   a) laissées au carnet, patientes (réaliste) ; b) retirées du plan
+      d'équipement tant qu'aucune source n'existe ; c) gardées mais
+      exclues des signaux de demande et des ambitions.
+   Recommandation : a) + c).
+
+
+9. DECISIONS UTILISATEUR (2026-11-16)
+-------------------------------------
+Q0 Tick : tout en 60 ms (environnement accéléré, passera un jour à
+   600 ms) ; horizons exprimés en ticks, 2000 ticks = 2 min aujourd'hui
+   est normal. Rien à changer au serveur.
+Q1 (technique, tranché par défaut) : colonne `replaces` (lignée d'un
+   amend), statut inchangé pour l'existant.
+Q2 Concession : courbe en temps vers la limite propre de l'ordre,
+   horizon par motif, vitesse réglée par price_patience (× urgence),
+   retour ZIP sur les fills publics conservé.
+Q3 Débouché des objets sans usage : VENTE AU MAGASIN PNJ quand le
+   marché paie moins que le marchand (exception à D-A, comme un vrai
+   joueur ; création de pièces suivie et documentée dans
+   decisions.md).
+Q4 Ordre arrivé à sa limite sans contrepartie : vendeur retiré à
+   l'échéance, acheteur reste au carnet tant que son besoin existe.
+Q5 Stock-cible d'intrants : tranche en cours + suivante, plafonné par
+   market_affinity et le budget du bot.
+Q6 TENEURS DE MARCHE DEDIES (remplace la recommandation) :
+   - autant de bots que nécessaire pour coter et stocker TOUS les
+     objets échangeables F2P (univers = table items du marché ;
+     dimensionnement par la banque F2P : 60 types par compte + sac) ;
+   - postés en permanence autour de la fontaine de Varrock (la place
+     des deals) ;
+   - nouveaux comptes ajoutés à la flotte (création par la procédure
+     documentée `create-user`) ;
+   - capital : PHASE DE JEU D'ABORD — compte neuf qui joue normalement
+     (farm, money making) jusqu'à un capital cible, puis bascule en
+     rôle teneur de marché ; aucune triche (règle 13) ;
+   - cotation À PROFIT SELON LE STOCK : bid sous le prix courant, ask
+     au-dessus, écart rémunérateur ; stock haut -> bid baisse, stock
+     bas -> ask monte ; objet sans demande -> bid vers 1, surplus
+     revendu au magasin PNJ (Q3) ; informations publiques seulement
+     (D22) ;
+   - market:flip (marchands ~10 %) SUPPRIME : plus aucune ressource
+     allouée à ce rôle.
+Q7 Achats boutique rares (Champions' Guild, Lundail en Wilderness) :
+   permis à tous les bots, routes vérifiées d'abord.
+Q8 Bids sur objets introuvables : laissés tels quels (comptent comme
+   toute demande).
+
+Lots à réviser en conséquence : le lot "marchands étendus" devient
+"teneurs de marché dédiés" (création des comptes, phase de jeu,
+rôle fontaine, cotation stock-dépendante, couverture de tout
+l'univers, retrait de market:flip) ; le lot débouché devient "vente
+PNJ des invendables" (seuil : prix marché < prix marchand, suivi de
+la monnaie créée).

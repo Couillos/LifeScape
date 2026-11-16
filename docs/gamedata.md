@@ -110,6 +110,19 @@ dbrow n'a pas de colonne XP : le dump écrivait 0 pour les 129 lignes
 `smith_rows_match_the_server_tables` qui relit dbrow + struct : niveau,
 barres, unités produites (clous 2), XP).
 
+Cibles de sorts (D18, 2026-11-16) : `orchestrator dump-npc-ranges` écrit
+aussi `spell_targets.json` (sort → param PNJ exigé, lu dans les procs
+`apnpct` du serveur : `crumble_undead` → `undead`) et ajoute
+`"undead": true` aux PNJ de `npc_combat.json` dont la config porte
+`param=undead,^true` (48). Accès : `spells::target_param`,
+`spells::affects(sort, pnj)`, `npc_combat::has_param`,
+`Spell::deals_damage` (`spellcom` + `maxhit`) et `Spell::npc_debuff`
+(`spellcom` sans `maxhit` : confuse, weaken, curse, bind). Le `name` de
+`spells.json` est l'affichage du dbrow : crumble undead n'en a pas côté
+serveur, il ne sert plus à trier les sorts de combat. Catalogue de
+combat : `wild_skeletons` (squelettes de surface, Wilderness basse), le
+camp mort-vivant qu'un run de magie atteint à pied.
+
 Boucle de vérification : `cargo test --release --manifest-path rs/Cargo.toml -p lifescape-gamedata`.
 
 ## Portes d'accès (`access.rs`, 2026-11-13)

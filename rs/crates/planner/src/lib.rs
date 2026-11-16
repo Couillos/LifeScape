@@ -31,6 +31,7 @@ pub mod market_value;
 pub mod derived_demand;
 pub mod mapping;
 pub mod method_way;
+pub mod spell_methods;
 pub mod model;
 pub mod obtain_legs;
 pub mod profit;
@@ -47,6 +48,7 @@ pub mod tool_kit;
 pub mod tools;
 pub mod training;
 pub mod training_production;
+pub mod training_spells;
 pub mod tranches;
 
 pub use catalog::{

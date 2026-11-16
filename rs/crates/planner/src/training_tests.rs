@@ -76,9 +76,10 @@ fn smithing_cuts_mark_every_unlock_that_matters() {
 }
 
 #[test]
-fn priced_tranches_are_smithing_and_magic_from_21() {
+fn priced_tranches_are_smithing_and_magic_from_confuse() {
     assert!(priced_at_resolve("smithing", 1));
-    assert!(!priced_at_resolve("magic", 20));
+    assert!(!priced_at_resolve("magic", 2), "wind strike alone below confuse");
+    assert!(priced_at_resolve("magic", 3));
     assert!(priced_at_resolve("magic", 21));
     assert!(!priced_at_resolve("fishing", 50));
 }
@@ -181,12 +182,18 @@ fn magic_60_high_alchs_cheap_asks_with_a_fire_staff() {
     assert!((10..=21).contains(&batch), "the wallet pays ~20 platebodies, got {batch}");
 }
 
-/// Below the alchemy level, no pricing: the static combat spell runs.
+/// Below confuse, no pricing: the static wind strike runs. Under the
+/// alchemy level the stock never alchs.
 #[test]
-fn magic_under_21_keeps_the_combat_spells() {
-    let book = Book::default();
+fn magic_under_21_never_alchs() {
+    let mut book = Book::default();
+    for (rune, price) in [("airrune", 5.0), ("mindrune", 4.0), ("waterrune", 5.0), ("earthrune", 5.0), ("chaosrune", 90.0)] {
+        book.buy.insert(rune, (price, None));
+    }
     let supply = vec![AlchSupply { item: "iron_dagger".to_string(), units: 300, unit_cost: 10.0, own: true }];
-    assert_eq!(with_prices(&book, 0.5, 1000, |prices| best_pick("magic", 20, 21, prices, &supply)), None);
+    assert_eq!(with_prices(&book, 0.5, 1000, |prices| best_pick("magic", 2, 3, prices, &supply)), None);
+    let pick = with_prices(&book, 0.5, 1000, |prices| best_pick("magic", 20, 21, prices, &supply)).expect("a pick");
+    assert!(!pick.method.starts_with("alch:"), "{pick:?}");
 }
 
 /// User 2026-11-15: the most profitable method, never a loss when one

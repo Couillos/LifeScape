@@ -194,7 +194,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
             return false;
         }
     };
-    let Some((script, args)) = lifescape_planner::map_method(&method, &node, Some((0, FILLER_TICKS))) else {
+    let Some((script, mut args)) = lifescape_planner::map_method(&method, &node, Some((0, FILLER_TICKS))) else {
         note_idle(life, &format!("{} awaiting its fill, filler {method} maps to no script", waiting.join(",")));
         return false;
     };
@@ -210,6 +210,8 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
         crate::logln!("{error}");
     }
     crate::brain_launch::note_launch(&job.account);
+    args.push(crate::report_meta::METHOD_FLAG.to_string());
+    args.push(method.clone());
     let values: Vec<Value> = args.iter().map(|arg| lifescape_json::str_value(arg)).collect();
     let reply = orch.run_job(&job.account, &script, &values);
     if reply.get("ok").as_bool() != Some(true) {

@@ -53,7 +53,7 @@ fn method_script(method: &str, product: &str) -> Option<String> {
 
 /// Une jambe de production de `product` se lance par le script `activity`
 /// (jamais le ramassage au sol, jamais une chasse de drop).
-fn leg_runs_here(product: &str, activity: &str) -> bool {
+pub(crate) fn leg_runs_here(product: &str, activity: &str) -> bool {
     lifescape_planner::obtain_legs::production_legs(product).iter().any(|leg| {
         let drop_hunt = leg.method.starts_with("farm:") && leg.skill.is_none();
         !leg.method.starts_with("ground:") && !drop_hunt && method_script(&leg.method, product).as_deref() == Some(activity)
@@ -120,7 +120,7 @@ fn burnt_inputs(burnt: &str, decreased: &HashSet<&str>) -> Option<Vec<String>> {
 
 /// Produits des recettes qui mangent `input` (recettes dumpées et
 /// recettes complémentaires : runes, feu, filage, poterie…).
-fn products_using(input: &str) -> Vec<String> {
+pub(crate) fn products_using(input: &str) -> Vec<String> {
     let mut products: Vec<String> = lifescape_gamedata::recipes::using(input, None)
         .into_iter()
         .flat_map(|recipe| recipe.outputs.into_iter().map(|(name, _)| name))

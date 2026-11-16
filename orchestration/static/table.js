@@ -9,9 +9,11 @@
 //     rows: [{key: value, ...}]     values may be null/undefined/'' (missing)
 //     fmt (optional per column): function (value, row) -> display HTML;
 //       sorting always uses the raw value, never the formatted text.
-//     options (optional): {rowAttrs, onSort}
+//     options (optional): {rowAttrs, onSort, footer}
 //       rowAttrs: function (row) -> {attribute: value} on the <tr>
 //         (values escaped; empty/null values dropped), e.g. data-* + class.
+//       footer: row object drawn last with the same columns and fmt,
+//         never sorted (e.g. a total line); skipped when there are no rows.
 //       onSort: function () called after a header click instead of the
 //         default re-render (paged tables re-sort the whole list first).
 //   TableSort.sortedRows(id, columns, rows): rows in the table's current
@@ -81,6 +83,17 @@ var TableSort = (function () {
     return html + '>';
   }
 
+  // <td> cells of one row: fmt on the raw value, '-' when missing.
+  function cellsHtml(columns, row) {
+    var html = '';
+    for (var c = 0; c < columns.length; c++) {
+      var cell = row[columns[c].key];
+      var text = columns[c].fmt ? columns[c].fmt(cell, row) : escapeHtml(isMissing(cell) ? '-' : cell);
+      html += '<td class="' + (columns[c].kind === 'num' ? '' : 'left') + '">' + text + '</td>';
+    }
+    return html;
+  }
+
   function stateOf(id) {
     return state[id] || (state[id] = { key: null, dir: 1 });
   }
@@ -108,13 +121,9 @@ var TableSort = (function () {
     var body = '';
     for (var r = 0; r < data.length; r++) {
       body += settings.rowAttrs ? rowOpenTag(settings.rowAttrs(data[r])) : '<tr>';
-      for (var c = 0; c < columns.length; c++) {
-        var cell = data[r][columns[c].key];
-        var html = columns[c].fmt ? columns[c].fmt(cell, data[r]) : escapeHtml(isMissing(cell) ? '-' : cell);
-        body += '<td class="' + (columns[c].kind === 'num' ? '' : 'left') + '">' + html + '</td>';
-      }
-      body += '</tr>';
+      body += cellsHtml(columns, data[r]) + '</tr>';
     }
+    if (body && settings.footer) body += '<tr>' + cellsHtml(columns, settings.footer) + '</tr>';
     table.innerHTML = head + (body || '<tr><td class="left muted" colspan="' + columns.length + '">-</td></tr>');
     var headers = table.getElementsByTagName('th');
     for (var h = 0; h < headers.length; h++) {
@@ -135,7 +144,7 @@ var TableSort = (function () {
     }
   }
 
-  return { render: render, sortData: sortData, sortedRows: sortedRows, rowOpenTag: rowOpenTag, _state: state };
+  return { render: render, sortData: sortData, sortedRows: sortedRows, rowOpenTag: rowOpenTag, cellsHtml: cellsHtml, _state: state };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = TableSort;

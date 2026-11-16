@@ -31,7 +31,7 @@ pub fn socket_path() -> PathBuf {
 
 /// Database file, opened by the daemon alone.
 pub fn db_path() -> PathBuf {
-    crate::paths::run_dir().join("lifescape.db")
+    crate::paths::store_db()
 }
 
 /// Varrock fountain basin centre (map survey, rev 274): all handovers

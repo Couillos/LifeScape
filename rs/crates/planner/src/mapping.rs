@@ -88,6 +88,33 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         ("alchemy".to_string(), head)
     } else if let Some(ore) = method.strip_prefix("superheat:") {
         ("superheat".to_string(), vec![ore.to_string()])
+    } else if let Some(spell) = method.strip_prefix("teleport:") {
+        // D18: the spell rides first (`enchant_teleport <spell>`), the
+        // climb's `--level` stops the casts; a priced batch rides as the
+        // cast count like alchemy.
+        let mut head = vec![spell.to_string()];
+        if node.batch > 0 {
+            head.push(node.batch.to_string());
+        }
+        ("enchant_teleport".to_string(), head)
+    } else if method == format!("bananas:{}", crate::spell_methods::BANANA_BONES) {
+        let mut head = vec![crate::spell_methods::BONES_TO_BANANAS.to_string()];
+        if node.batch > 0 {
+            head.push(node.batch.to_string());
+        }
+        ("enchant_teleport".to_string(), head)
+    } else if let Some(tail) = method.strip_prefix("curse:") {
+        // `curse:<spell>/<spot>`: the camp first, then the spell (like
+        // `fight:magic`), the climb's level target after; a batch rides
+        // as the cast count.
+        let (spell, spot) = tail.split_once('/')?;
+        let mut head = fight_head(spot, node);
+        head.insert(1, "--spell".to_string());
+        head.insert(2, spell.to_string());
+        if node.batch > 0 {
+            head.push(node.batch.to_string());
+        }
+        ("curse".to_string(), head)
     } else if let Some(amulet) = method.strip_prefix("enchant:") {
         // The script resolves spell, level, runes and product from a
         // strung amulet (`enchant_for`): `enchant:strung_sapphire_amulet`.

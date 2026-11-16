@@ -51,7 +51,7 @@ fn kind_text(kind: &NodeKind) -> String {
 }
 
 /// Task cell of a life, computed on a normalized copy (the file itself is
-/// never rewritten here): `n1 gather:fishing/raw_shrimp` for the active
+/// never rewritten here): `gather:fishing/raw_shrimp` (method, no node id) for the active
 /// node, `done` once every node is done, `stuck` (abandoned errors in the
 /// tooltip) when nothing is left to launch, `ready` between launches.
 pub(crate) fn summarize(life: &Life) -> LifeSummary {
@@ -70,7 +70,7 @@ pub(crate) fn summarize(life: &Life) -> LifeSummary {
                     node.progress_current,
                     node.progress_target
                 );
-                (format!("{} {label}", node.id), title)
+                (label, title)
             }
             None => (active, String::new()),
         },
@@ -180,13 +180,13 @@ mod tests {
     }
 
     #[test]
-    fn active_node_shows_id_and_method() {
+    fn active_node_shows_method_only() {
         let goal = r#"{"kind": "max_skills", "skills": ["fishing"], "level": 20}"#;
         let params = r#"{"skill": "fishing", "level": 20}"#;
         let nodes = [node("n1", "reach_level", params, "active", "gather:fishing/raw_shrimp", "")];
         let summary = summarize(&life(goal, &nodes, Some("n1")));
         assert_eq!(summary.goal, "fishing 20");
-        assert_eq!(summary.task, "n1 gather:fishing/raw_shrimp");
+        assert_eq!(summary.task, "gather:fishing/raw_shrimp");
         assert_eq!(summary.task_title, "reach_level fishing 20 · progress 3/20");
     }
 

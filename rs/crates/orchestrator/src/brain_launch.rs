@@ -602,6 +602,10 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let _ = save_life(&life);
         return;
     }
+    // The planner's fine method rides to the task report (session-only
+    // flag, stripped before the script parses, `report_meta`).
+    args.push(crate::report_meta::METHOD_FLAG.to_string());
+    args.push(method.clone());
     let values: Vec<Value> = args.iter().map(|arg| lifescape_json::str_value(arg)).collect();
     crate::logln!("brain {}: launching {script} {}", job.account, args.join(" "));
     // Queued, not run: the launcher thread owns the blocking worker RPC.
