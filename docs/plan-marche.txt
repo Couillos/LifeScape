@@ -683,3 +683,59 @@ rôle fontaine, cotation stock-dépendante, couverture de tout
 l'univers, retrait de market:flip) ; le lot débouché devient "vente
 PNJ des invendables" (seuil : prix marché < prix marchand, suivi de
 la monnaie créée).
+
+
+10. PLAN DE DEVELOPPEMENT (2026-11-16, après décisions §9)
+----------------------------------------------------------
+Règles communes : AGENTS.md ; test qui échoue d'abord ; --release ;
+les tests n'ouvrent jamais run/lifescape.db (paths::store_db en
+cfg(test)) ; live sur admin/admin2 seulement (redeploy du seul compte
+staff) ; daemon + flotte déployés par l'orchestrateur de session à la
+fin de chaque vague, puis critères §6 mesurés (`orchestrator economy`).
+
+Vague 1 (en parallèle)
+  A. M0 + M1 + M2, dépôt principal (store, orchestrator) :
+     doc (achat marchand 2026-11-15, modèle §3 + décisions §9) ;
+     colonne `replaces` + root_id + motive, migration de l'historique
+     (remplacement ≤ 1 s) ; section marché de `orchestrator economy`
+     (critères §6) ; lignée et âge dans market_demand/QuoteBounds ;
+     besoins persistants (place_obtain_bid reprend la lignée, échéance
+     au nœud, plan d'équipement avec hystérésis et budget lissé,
+     séquestre des pièces engagées, crédibilité). Q8 : bids
+     introuvables laissés tels quels.
+  B. M9 + Q7, worktree (gamedata, planner) : classement des objets
+     bids-seuls ; routes et achats boutique pour TOUS les bots
+     (Champions' Guild : points de quête ; Lundail : Wilderness, route
+     vérifiée ; amuletshop) ; C13 (Holy symbol 1718/1719, bid-why).
+  -> fusion de B, déploiement, live, mesure.
+
+Vague 2 : M3 + M4 + M5 + Q3 (market pur, orchestrator, scripts)
+  courbe de concession par lignée (prix vers la limite propre,
+  horizon par motif, vitesse = price_patience lu depuis la vie ×
+  urgence, retour ZIP) ; ordres au marché (pressés franchissent
+  l'écart, des deux côtés) ; Q4 vendeur retiré à H, acheteur reste ;
+  found_open rejoint le meilleur ask (fin de la cascade à 1) ; valeur
+  de garde ; Q3 VENTE AU MAGASIN PNJ quand le marché paie moins que le
+  marchand (décision + suivi des pièces créées dans decisions.md et
+  `economy`) ; filtre de ramassage par valeur. Simulateur
+  sim_lifecycle avec les critères du lot M3-M5.
+  -> déploiement, live, mesure.
+
+Vague 3 : TENEURS DE MARCHE (remplace M8, décision Q6)
+  - suppression de market:flip (rôle, sélection ~10 %, scripts,
+    profils, docs) ;
+  - univers = objets F2P échangeables (dérivé de gamedata, justifié) ;
+    nombre de comptes = univers / capacité banque F2P (60 types) avec
+    marge ; comptes créés par la procédure documentée `create-user`
+    et ajoutés à la flotte ;
+  - cycle de vie : phase de jeu normale jusqu'au capital cible, puis
+    rôle teneur de marché permanent autour de la fontaine de Varrock ;
+  - cotation à profit selon le stock (bid sous le prix courant, ask
+    au-dessus, écart selon stock et rotation ; stock haut -> bid
+    baisse ; sans demande -> bid vers 1, surplus au magasin PNJ) ;
+    informations publiques seulement (D22) ; règle 13 respectée.
+  -> déploiement, live, mesure.
+
+Différés (dépendent de plan-rendements R2/R4) : M6 stock-cible
+(tranche en cours + suivante, Q5) et M7 découverte du prix (ancrage
+coût de guide).
