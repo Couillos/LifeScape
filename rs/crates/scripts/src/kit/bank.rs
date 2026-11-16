@@ -511,6 +511,8 @@ pub fn bank_trip(
     // Deposit what fits: a full bank's refused types stay in the pack
     // (`bank_full`), the trip fails only when the load no longer fits.
     crate::kit::bank_full::deposit_what_fits(bot, side_com, &keep)?;
+    // A kept axe or pickaxe yields to a better banked one (`tool_upgrade`).
+    crate::kit::tool_upgrade::upgrade_kept(bot, &keep)?;
     if withdraw_coins > 0 {
         if let Ok(coins) = obj_id(bot, "coins") {
             let _ = bot.bank_withdraw(coins, withdraw_coins, 50);

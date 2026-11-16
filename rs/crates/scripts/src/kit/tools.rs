@@ -26,7 +26,10 @@ pub fn blocked_tool(name: &str) -> ScriptError {
 
 /// Free tool reclaim (no shop, no hunt): pack reattach, then the best
 /// banked tool. True when a tool is held afterwards. Constrained tasks
-/// (`--no-shop`) use only this; anything still missing blocks.
+/// (`--no-shop`) use only this; anything still missing blocks. A held
+/// tool still yields to a better banked one the level works with
+/// (`tool_upgrade`, live 2026-11-16: jim_ellis cut yews with a bronze
+/// axe, an iron one in the bank).
 pub fn reclaim_free(
     bot: &mut Bot,
     bank: &lifescape_gamedata::banks::Bank,
@@ -35,6 +38,7 @@ pub fn reclaim_free(
     head_suffix: &str,
 ) -> Result<bool, ScriptError> {
     if spec.best_held(bot).is_some() {
+        crate::kit::tool_upgrade::upgrade_at_bank(bot, bank, spec)?;
         return Ok(true);
     }
     if reattach_tool(bot, handle_name, head_suffix, spec)? {

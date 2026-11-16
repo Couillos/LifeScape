@@ -513,3 +513,20 @@ relance seulement après une fenêtre sans XP ni pas
 chaîne coupée (niveau gagné) rouvre le menu (`produce::chain_cut`).
 Cuisson, feu, enterrement : un clic par unité côté serveur (274), déjà
 attendu.
+
+## Meilleur outil banqué (2026-11-16)
+
+`kit/tool_upgrade.rs` (live : jim_ellis, bûcheronnage 83, coupait des ifs
+à la hache de bronze, une hache de fer en banque ; `reclaim_free`
+s'arrêtait dès qu'une hache était tenue). Haches et pioches : à chaque
+visite de banque (`bank_trip`, pour toute famille dont la garde contient
+un outil) et au départ du run (`reclaim_free` avec un outil tenu, marche
+jusqu'à la banque du run si la vue banque connue en montre un meilleur),
+le meilleur outil banqué de rang strictement supérieur au meilleur tenu
+UTILISABLE (`gamedata::gear::usable_tools` au niveau du skill, comme la
+trousse du planner) sort ; les autres exemplaires de la famille du sac
+rentrent en banque (jamais deux dans le sac). Un outil porté reste porté
+(le plan d'équipement possède la main droite), le meilleur va au sac où
+le serveur s'en sert. Verrous du marché respectés (`banked_usable`).
+Pêche exclue : un outil par palier (filet, canne, harpon, casier), pas un
+rang (`fish_gear::ensure_gear` retire l'outil exact du palier).

@@ -6,7 +6,8 @@
 //! object tables), `bank` (bank trips, booths, toll fence, transit heals),
 //! `shop` (shop trade, sales, stock buys), `load` (gather load driver),
 //! `bans` (per-tile ban clocks), `tools` (ranks, reattach, bank restores,
-//! recovery), `spots` (generic pool + rock/fish pools + foe acquisition),
+//! recovery), `tool_upgrade` (better banked axe/pickaxe swapped in),
+//! `spots` (generic pool + rock/fish pools + foe acquisition),
 //! `trees` (tree pool), `harvest` (click-and-watch core, message classes),
 //! `woodcut`/`mine`/`fish` (skill drivers), `survival` (eat, death tally,
 //! safe point, run gates), `gear` (equip best), `loot` (ground pickup
@@ -67,6 +68,7 @@ pub mod style;
 pub mod survival;
 pub mod tan;
 pub mod toll;
+pub mod tool_upgrade;
 pub mod tools;
 pub mod trees;
 pub mod uniform;

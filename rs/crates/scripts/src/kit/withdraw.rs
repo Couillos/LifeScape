@@ -66,7 +66,7 @@ pub fn reach_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16])
 /// Reach the bank (walking when far with one of `ids` known banked) and
 /// open a live booth. False, logged, when any step falls short: the
 /// caller withdraws nothing and reports from what the pack holds.
-fn open_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16]) -> Result<bool, ScriptError> {
+pub fn open_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16]) -> Result<bool, ScriptError> {
     if !reach_bank_for(bot, bank, ids)? {
         bot.log(&format!("bank withdraw: bank at ({},{}) too far from {:?}", bank.x, bank.z, bot.position()));
         return Ok(false);
