@@ -62,18 +62,11 @@ impl HarvestSource for MilkSource {
         bot.world.npcs.contains_key(&self.slot)
     }
 
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
-        false
-    }
 
     /// Instant action: one quiet round without milk means the click never
     /// landed — move on.
     fn unacked_rounds(&self) -> u32 {
         1
-    }
-
-    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool {
-        false
     }
 }
 
@@ -233,7 +226,6 @@ mod tests {
         assert!(MILK_ACKS.is_empty(), "the milk is the ack");
         let source = super::MilkSource { slot: 1, x: 0, z: 0 };
         assert_eq!(crate::kit::harvest::HarvestSource::unacked_rounds(&source), 1, "instant click, fast give-up");
-        assert!(!crate::kit::harvest::HarvestSource::reprobe(&source, false, true, 999), "never re-clicks");
     }
 
     /// The dump carries cow spawns (the Lumbridge dairy herd); all three

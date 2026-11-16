@@ -96,6 +96,19 @@ pub(crate) fn reattack_ticks(bot: &Bot) -> u64 {
     if bot.combat_style == "magic" { 5 } else { 25 }
 }
 
+/// Re-attack while engaged (the woodcut rule for combat): a manual cast
+/// is one spell per click, so magic re-casts on its cadence; melee and
+/// ranged fight on their own (`player_combat.rs2` re-queues the swing),
+/// so they are nudged only once the fight went quiet — no combat xp and
+/// no step for a whole window — never every 25 ticks while xp flows.
+/// Pure so the cadence is locked by tests.
+pub(crate) fn reattack_due(magic: bool, window: u64, since_attack: u64, since_progress: u64) -> bool {
+    if magic {
+        return since_attack >= window;
+    }
+    since_attack >= window && since_progress >= window
+}
+
 #[cfg(test)]
 mod tests {
     use super::{foe_refusal, FoeRefusal};
@@ -104,6 +117,18 @@ mod tests {
     /// door-aware step (it may burn a door and prove it uncrossable), a
     /// foe already taken by someone else is skipped on the spot — live
     /// (bb4v5d9m 17:52:38) the step toward a taken cow paced ~20 walks.
+    /// Melee/ranged never re-click while xp flows; a quiet fight gets one
+    /// nudge per window; magic casts on its 5-tick cadence.
+    #[test]
+    fn engaged_melee_waits_while_the_fight_runs() {
+        use super::reattack_due;
+        assert!(!reattack_due(false, 25, 25, 3), "xp 3 ticks ago: the swing loop runs, no click");
+        assert!(!reattack_due(false, 25, 400, 24), "long fight, steady xp: still no click");
+        assert!(reattack_due(false, 25, 25, 25), "quiet for a window: one nudge");
+        assert!(!reattack_due(false, 25, 10, 60), "nudged 10 ticks ago: wait the window");
+        assert!(reattack_due(true, 5, 5, 0), "magic: one cast per click on the cast cadence");
+    }
+
     #[test]
     fn taken_foe_is_skipped_without_a_step() {
         assert_eq!(foe_refusal("Someone else is fighting that."), Some(FoeRefusal::Taken));

@@ -68,7 +68,7 @@ fn opplayeru_bytes(slot: u16, obj_com: u16, use_slot: u16, use_com: u16) -> Vec<
 
 
 /// Ticks the server takes to open a count dialog after Offer-X.
-const COUNT_DIALOG_TICKS: u64 = 20;
+pub(crate) const COUNT_DIALOG_TICKS: u64 = 20;
 
 impl Bot {
     pub fn op_loc(&mut self, op: u8, x: i32, z: i32, loc_id: u16) -> Result<()> {
@@ -641,35 +641,6 @@ impl Bot {
         self.backpack().1.iter().filter(|(_, (held, _))| *held == obj).map(|(_, (_, count))| *count).fold(0u32, u32::saturating_add)
     }
 
-    /// Deposit the backpack with the bank's "Deposit All" action (op 4 per
-    /// slot, one burst, then one retry of leftovers). Tick-bounded. The
-    /// running script's held objects (`hold_in_pack`) always stay.
-    pub fn bank_deposit_all(&mut self, side_com: u16, keep_ids: &[u16], timeout: u64) -> Result<bool> {
-        let kept = super::locks::deposit_keep(keep_ids, &self.pack_holds());
-        let keep_ids: &[u16] = &kept;
-        self.act(format!("bank_deposit_all keep={} timeout={timeout}", keep_ids.len()));
-        for _ in 0..2 {
-            let (_, slots) = self.backpack();
-            let pending: Vec<(u8, u16)> =
-                slots.iter().filter(|(_, (held, _))| !keep_ids.contains(held)).map(|(slot, (held, _))| (*slot, *held)).collect();
-            if pending.is_empty() {
-                return Ok(true);
-            }
-            for (slot, held) in pending {
-                self.inv_button(4, held, slot, side_com)?;
-            }
-            let deadline = self.world.ticks + timeout;
-            while self.world.ticks < deadline {
-                self.pump(2)?;
-                let (_, now) = self.backpack();
-                if now.iter().all(|(_, (held, _))| keep_ids.contains(held)) {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-
     /// (backpack com, slots) or (None, []) before the pack streams.
     /// Backpack com and slots: the canonical `inventory:inv` container the
     /// server streams, with a widest-container fallback for stale panels.
@@ -709,10 +680,6 @@ impl Bot {
         let mut body = Writer::new();
         body.u16(0);
         self.send_named("RESUME_PAUSEBUTTON", &body.bytes())
-    }
-
-    pub fn bank_items(&self) -> HashMap<u16, u32> {
-        crate::snapshot::bank_items(&self.world.inv, (self.tables.com_id)("bank_main:inv"))
     }
 
     /// Walk budget to one stand, in ticks: 10 per Manhattan tile plus a
@@ -843,78 +810,6 @@ impl Bot {
         messages.get(seen..).unwrap_or(&[]).iter().any(|message| message.to_lowercase().contains("can't reach"))
     }
 
-    /// Withdraw at least `count`, using the 10/5/1 buttons (all for coins).
-    pub fn bank_withdraw(&mut self, obj_id: u16, count: u32, timeout: u64) -> Result<u32> {
-        self.act(format!("bank_withdraw {} x{count}", (self.tables.obj_name)(obj_id).unwrap_or_default()));
-        self.withdraw_as(obj_id, obj_id, count, timeout)
-    }
-
-    /// Withdraw from the bank stack of `bank_obj` and watch `pack_obj`
-    /// land in the pack: the same object, or its banknote when the note
-    /// mode is on (the bank only ever holds the base object — searching it
-    /// for the note id found nothing, so noted withdrawals never worked).
-    /// A full pack ends the withdrawal quietly with what fits.
-    pub(crate) fn withdraw_as(&mut self, bank_obj: u16, pack_obj: u16, count: u32, timeout: u64) -> Result<u32> {
-        let main_com = (self.tables.com_id)("bank_main:inv")
-            .ok_or_else(|| Error::State("bank_main:inv missing from component table".to_string()))?;
-        // Market locks: the part promised to open orders stays banked
-        // outside the trade procedure (user rule 2026-11-13).
-        let banked: u32 = self
-            .world
-            .inv
-            .get(&main_com)
-            .map(|slots| slots.values().filter(|(held, _)| *held == bank_obj).map(|(_, n)| *n).sum())
-            .unwrap_or(0);
-        let locked = self.locked(bank_obj);
-        let count = count.min(self.withdrawable(bank_obj, banked));
-        if count == 0 {
-            if locked > 0 {
-                self.log(&format!("bank_withdraw {bank_obj}: {locked} locked by open market orders, nothing usable"));
-            }
-            return Ok(self.pack_count(pack_obj));
-        }
-        let mut remaining = count;
-        while remaining > 0 {
-            let slot = self
-                .world
-                .inv
-                .get(&main_com)
-                .and_then(|slots| slots.iter().find(|(_, (held, _))| *held == bank_obj).map(|(slot, _)| *slot));
-            let Some(slot) = slot else { break };
-            // Withdraw-all only when nothing is locked: it would take the
-            // promised part too.
-            let (op, step) = if locked == 0 && (bank_obj == 995 || remaining >= 1000) {
-                (4, remaining)
-            } else if remaining >= 10 {
-                (3, 10)
-            } else if remaining >= 5 {
-                (2, 5)
-            } else {
-                (1, 1)
-            };
-            let before = self.pack_count(pack_obj);
-            self.inv_button(op, bank_obj, slot, main_com)?;
-            let deadline = self.world.ticks + timeout;
-            let mut grew = false;
-            while self.world.ticks < deadline {
-                self.pump(2)?;
-                if self.pack_count(pack_obj) > before {
-                    grew = true;
-                    break;
-                }
-            }
-            if !grew {
-                if self.backpack().1.len() >= 28 {
-                    self.log(&format!("bank_withdraw {bank_obj}: pack full, {remaining} left in the bank"));
-                    break;
-                }
-                return Err(Error::Timeout(format!("withdraw of {bank_obj} timed out at {:?} ({} ticks)", self.position(), timeout)));
-            }
-            remaining = remaining.saturating_sub(step);
-        }
-        Ok(self.pack_count(pack_obj))
-    }
-
     pub fn cheat(&mut self, text: &str) -> Result<()> {
         self.act(format!("cheat {text}"));
         let mut body = Writer::new();
@@ -951,6 +846,7 @@ impl Bot {
     }
 
     pub fn resume_pcount(&mut self, value: i32) -> Result<()> {
+        self.act(format!("resume_pcount {value}"));
         let mut body = Writer::new();
         body.i32(value);
         self.send_named("RESUME_P_COUNTDIALOG", &body.bytes())

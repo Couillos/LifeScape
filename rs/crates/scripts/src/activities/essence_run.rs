@@ -70,7 +70,10 @@ fn rock_live(x: i32, z: i32, level: i32, seen: Option<u16>, rock: u16) -> bool {
 }
 
 /// One click, one rock: the mine runs on the mining script (`mining.rs2`
-/// `blankrunestone` arms), so the acks and the re-click probe are mining's.
+/// `blankrunestone` arms: `get_ore_essence` chains with `p_oploc(3)`,
+/// the rock never depletes), so the acks are mining's and the stand
+/// waits like woodcut: no re-click while the swing is acked (live
+/// 2026-11-16: 52 319 re-clicks every 12 ticks).
 struct EssenceSource {
     loc: u16,
     x: i32,
@@ -94,10 +97,6 @@ impl HarvestSource for EssenceSource {
     /// (live 2026-11-15, alice_knight clicked the rock from the Varrock
     /// bank 47,875 times over 10 h).
     fn target_live(&self, bot: &mut Bot, _target: &HarvestTarget) -> bool { rock_live(bot.world.x, bot.world.z, bot.world.level, bot.world.loc_at(self.x, self.z, bot.world.level).map(|(id, _, _)| id), self.loc) }
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool { false }
-    /// Mining probes reachability after every quiet round (a wall-separated
-    /// rock only refuses when clicked).
-    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool { true }
 }
 
 /// Work one rock: walk over (blocked décor settles adjacent, Ok), watch the

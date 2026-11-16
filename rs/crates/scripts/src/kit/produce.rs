@@ -284,11 +284,18 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
             // client sends IF_BUTTON, the server records `last_com` and
             // resumes the paused script (IfButtonHandler.ts:
             // resumeButtons). RESUME_PAUSEBUTTON carries no com there.
+            // The X button asks `p_countdialog`: wait for THIS dialog (a
+            // stale flag from a bank X never answers it early).
+            bot.world.count_dialog = false;
             bot.if_button(press)?;
-            bot.pump(5)?;
+            let asked = bot.world.ticks + UI_TICKS;
+            while bot.world.ticks < asked && !bot.world.count_dialog {
+                bot.pump(1)?;
+            }
             if bot.world.count_dialog {
+                bot.world.count_dialog = false;
                 bot.resume_pcount(count_answer(have, remaining))?;
-                bot.pump(5)?;
+                bot.pump(2)?;
             }
             Ok(())
         }
@@ -444,13 +451,12 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
             death_resume(bot, 40, &mut hp, &mut seen_death)?;
             return Err(ScriptError::Failed(format!("died {} at {:?}", job.spec.verb, bot.position())));
         }
-        if bot.world.modal.is_some() && matches!(job.spec.ui, ProduceUi::Direct) && !dismiss_modal(bot)? {
+        // A level-up splash ends a make-X chain (the modal close clears
+        // the weak queue): dismiss it before the next click, any UI.
+        if bot.world.modal.is_some() && !dismiss_modal(bot)? {
             break;
         }
         let have = pack_total(bot, job.input);
-        if single_shot && consumed > 0 {
-            break;
-        }
         // A refused click (grid never opened, choice never answered) ends
         // the site loud in the log: the caller's "consumed nothing" then
         // names its cause (live 2026-11-14, wheel grid, silent break).
@@ -470,8 +476,11 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
             Drain::Consumed { units } => {
                 consumed += units;
                 retries = 0;
-                if single_shot {
-                    drain_chained(bot, job, target, &mut consumed, &mut seen_death);
+                // One make-X answer runs the whole batch server-side: no
+                // click until the chain stops. A chain cut short (level-up
+                // splash) with inputs left re-opens the menu once more
+                // instead of banking the rest.
+                if single_shot && !drain_chained(bot, job, target, &mut consumed, &mut seen_death) {
                     break;
                 }
             }
@@ -508,8 +517,9 @@ fn work_site(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, target: u3
 }
 
 /// After a counter/grid answer the server chains the whole batch: keep
-/// draining without re-clicking, so no second dialogue opens.
-fn drain_chained(bot: &mut Bot, job: &ProduceJob<'_>, target: u32, consumed: &mut u32, seen_death: &mut usize) {
+/// draining without re-clicking, so no second dialogue opens. True when
+/// the chain stalled with inputs left and the order unmet (re-click).
+fn drain_chained(bot: &mut Bot, job: &ProduceJob<'_>, target: u32, consumed: &mut u32, seen_death: &mut usize) -> bool {
     let total = pack_total(bot, job.input) + *consumed;
     let drain_target = bot.world.ticks + ITEM_TICKS * u64::from(target.saturating_sub(*consumed)) + UI_TICKS;
     let mut left = pack_total(bot, job.input);
@@ -528,6 +538,13 @@ fn drain_chained(bot: &mut Bot, job: &ProduceJob<'_>, target: u32, consumed: &mu
         }
     }
     *consumed = total.saturating_sub(pack_total(bot, job.input));
+    chain_cut(*consumed, target, pack_total(bot, job.input), chain_stalled(bot.world.ticks, last_progress))
+}
+
+/// A make-X chain stopped early: it stalled (no consumption for a whole
+/// item window) with inputs carried and the order unmet. Pure.
+pub fn chain_cut(consumed: u32, target: u32, left: u32, stalled: bool) -> bool {
+    stalled && left > 0 && consumed < target
 }
 
 /// True once the server's make-X chain consumed nothing for a whole item
@@ -631,6 +648,17 @@ pub fn run_job(bot: &mut Bot, job: &ProduceJob<'_>) -> Result<ProduceBatch, Scri
 #[cfg(test)]
 mod tests {
     use super::{cook_recipe, count_answer, grid_button, match_option, site_tiles, stands_for};
+
+    /// A chain cut by a level-up splash with inputs left re-clicks once
+    /// more; a finished chain (order met or inputs gone) never does.
+    #[test]
+    fn only_a_cut_chain_reclicks() {
+        assert!(super::chain_cut(9, 27, 18, true), "level-up at bar 9: re-open the menu");
+        assert!(!super::chain_cut(27, 27, 0, true), "load done");
+        assert!(!super::chain_cut(9, 9, 18, true), "order met");
+        assert!(!super::chain_cut(9, 27, 0, true), "inputs gone");
+        assert!(!super::chain_cut(9, 27, 18, false), "still chaining: wait");
+    }
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
 

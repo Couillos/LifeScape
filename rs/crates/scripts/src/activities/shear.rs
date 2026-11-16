@@ -75,18 +75,11 @@ impl HarvestSource for ShearSource {
         })
     }
 
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
-        false
-    }
 
     /// Instant action: one quiet round without wool means the click never
     /// landed (fled sheep, race lost) — move on.
     fn unacked_rounds(&self) -> u32 {
         1
-    }
-
-    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool {
-        false
     }
 }
 
@@ -269,7 +262,6 @@ mod tests {
         assert!(SHEAR_ACKS.is_empty(), "the wool is the ack");
         let source = super::ShearSource { slot: 1, x: 0, z: 0 };
         assert_eq!(crate::kit::harvest::HarvestSource::unacked_rounds(&source), 1, "instant click, fast give-up");
-        assert!(!crate::kit::harvest::HarvestSource::reprobe(&source, true, true, 999), "never re-clicks");
         assert!(TOOLLESS_LIMIT <= 5, "no tool-hunting loops: {TOOLLESS_LIMIT}");
     }
 

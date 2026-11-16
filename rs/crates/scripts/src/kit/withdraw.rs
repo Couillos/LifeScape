@@ -83,7 +83,7 @@ fn open_bank_for(bot: &mut Bot, bank: &knowledge::banks::Bank, ids: &[u16]) -> R
 }
 
 /// Withdraw exact counts of several items in one booth visit (spell loads:
-/// runes and targets). `bot.bank_withdraw` presses 1/5/10/all, honours
+/// runes and targets). `bot.bank_withdraw` presses one 1/5/10/All/X, honours
 /// market locks and ends quietly on a full pack. A banknote id (`cert_`)
 /// comes out of its base stack in note mode (`bank_withdraw_noted`).
 /// Connection and operator stops abort typed; any other refusal is
@@ -136,23 +136,28 @@ pub fn bank_withdraw_items(
     };
     let before: u32 = ids.iter().map(|id| pack_total(bot, *id)).sum();
     let mut remaining = count;
+    // One SDK transfer per stack (`bot.bank_withdraw`: 1/5/10/All/X, one
+    // press, market locks honoured); the old 5/1 presses with a blind
+    // 5-pump wait spammed 25 presses for 25 runes.
+    let mut tried: Vec<u16> = Vec::new();
     while remaining > 0 {
         let slots = bot.world.inv.get(&main_com).cloned().unwrap_or_default();
-        // Market locks: only the unpromised part of a stack is usable
-        // (user rule 2026-11-13); a fully locked stack is skipped.
-        let Some((slot, held, usable)) = slots
+        let mut stacks: Vec<(u8, u16, u32)> = slots
             .iter()
-            .filter(|(_, (held, n))| ids.contains(held) && *n > 0)
+            .filter(|(_, (held, n))| ids.contains(held) && *n > 0 && !tried.contains(held))
             .map(|(slot, (held, n))| (*slot, *held, bot.withdrawable(*held, *n)))
-            .find(|(_, _, usable)| *usable > 0)
-        else {
-            break;
-        };
-        // Bank buttons: 1 = one, 2 = five (all for coins, handled elsewhere).
-        let (op, step) = if remaining >= 5 && usable >= 5 { (2u8, 5u32) } else { (1u8, 1u32) };
-        bot.inv_button(op, held, slot, main_com)?;
-        bot.pump(5)?;
-        remaining = remaining.saturating_sub(step);
+            .filter(|(_, _, usable)| *usable > 0)
+            .collect();
+        stacks.sort_unstable();
+        let Some((_, held, usable)) = stacks.first().copied() else { break };
+        tried.push(held);
+        let had = pack_total(bot, held);
+        match bot.bank_withdraw(held, remaining.min(usable), 50) {
+            Ok(_) => {}
+            Err(error @ (lifescape_sdk::Error::Interrupted(_) | lifescape_sdk::Error::Io(_) | lifescape_sdk::Error::Login(_))) => return Err(ScriptError::Sdk(error)),
+            Err(other) => bot.log(&format!("bank withdraw of {} x{}: {other}", crate::kit::pack::obj_label(bot, held), remaining.min(usable))),
+        }
+        remaining = remaining.saturating_sub(pack_total(bot, held).saturating_sub(had));
     }
     bot.close_modal()?;
     bot.pump(5)?;

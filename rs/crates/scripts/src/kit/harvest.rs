@@ -42,11 +42,21 @@ pub trait HarvestSource {
     /// The clicked target is still the live resource (loc id match,
     /// unstumped tile, present NPC slot).
     fn target_live(&self, bot: &mut Bot, target: &HarvestTarget) -> bool;
-    /// Fast depletion path on a quiet round (woodcut: stump on the first
-    /// silence). Mining and fishing wait out the quiet rounds instead.
-    fn depleted_now(&self, bot: &mut Bot, x: i32, z: i32, silences: u32) -> bool;
-    /// Quiet rounds before giving up without any ack (woodcut/mining 2,
-    /// fishing ~5: its 60-tick unacked rule in 12-tick rounds).
+    /// The clicked resource is used up (woodcut: stump; mining: the rock
+    /// streamed its empty loc). Checked after every gain and every quiet
+    /// round: depletion ends the stand at once, never a click on it.
+    fn depleted(&self, _bot: &mut Bot) -> bool {
+        false
+    }
+    /// The server ends the action after each product even when the
+    /// resource stays (mining: `get_ore_*` returns after an ore or a gem
+    /// without `p_oploc`): a live target is clicked again at once instead
+    /// of waiting a quiet round. Woodcut and fishing chain on their own.
+    fn gain_ends_action(&self) -> bool {
+        false
+    }
+    /// Quiet rounds before giving up without any ack (gathers 2: one
+    /// probe; instant actions 1).
     fn unacked_rounds(&self) -> u32 {
         2
     }
@@ -55,10 +65,6 @@ pub trait HarvestSource {
     fn silence_resets_on_gain(&self) -> bool {
         false
     }
-    /// Re-click decision after a quiet round (woodcut: never on an acked
-    /// live tree — a re-click restarts the swing; mining: always, as a
-    /// reachability probe; fishing: every ~30 ticks while acked).
-    fn reprobe(&self, acked: bool, live: bool, since_probe: u64) -> bool;
     /// Random events are polled per quiet round (woodcut; the others poll
     /// at the loop level instead).
     fn poll_events(&self) -> bool {
@@ -70,12 +76,39 @@ pub trait HarvestSource {
     fn note_dry_streak(&mut self, _bot: &mut Bot, _x: i32, _z: i32, _acked: bool, _live: bool, _silences: u32) {}
 }
 
-/// Click once, then only re-click after a quiet round (the server chains
-/// attempts itself while in range). A swing acked on a still-live target
-/// means the player IS working — keep waiting; the load-level stall stays
-/// the ultimate backstop. Gained product this stand. Pure delegation for
-/// everything skill-specific (`HarvestSource`); threats, modals and the
-/// refusal vocabulary are shared.
+/// Re-click decision after a quiet round, the woodcut rule for every
+/// gather: never while a swing was acked on a still-live target (the
+/// player IS working; a re-click only restarts the action server-side,
+/// live 2026-11-16: mining re-clicked every 12 ticks, 1.71 clicks per
+/// ore), otherwise one probe on the first quiet round (a wall-separated
+/// target only refuses when clicked; a lost click recovers). Pure so the
+/// cadence is locked by tests without a live connection.
+pub fn reclick_after_silence(acked: bool, live: bool, silences: u32) -> bool {
+    !(acked && live) && silences == 1
+}
+
+/// What follows a gain: the stand ends (`Some`) on a full pack or a
+/// depleted resource; otherwise a re-click now (`true`) only when the
+/// server ended the action with the product while the resource lives.
+/// Pure so the post-gain rule is locked by tests.
+pub fn after_gain(full: bool, depleted: bool, gain_ends_action: bool) -> (Option<WorkOutcome>, bool) {
+    if full {
+        return (Some(WorkOutcome::Full), false);
+    }
+    if depleted {
+        return (Some(WorkOutcome::Gone), false);
+    }
+    (None, gain_ends_action)
+}
+
+/// Click once, then wait for the server's action loop: a gain is
+/// progress, a depleted resource or a moved spot ends the stand at once,
+/// a re-click happens only when the action provably stopped (the gain
+/// ended it on a live resource, or the first quiet round without an
+/// ack). The load-level stall stays the ultimate backstop. Gained
+/// product this stand. Pure delegation for everything skill-specific
+/// (`HarvestSource`); threats, modals and the refusal vocabulary are
+/// shared.
 pub fn watch_stand<Source: HarvestSource>(
     bot: &mut Bot,
     source: &mut Source,
@@ -90,13 +123,14 @@ pub fn watch_stand<Source: HarvestSource>(
     let mut need_click = true;
     let mut target: Option<HarvestTarget> = None;
     let mut seen_msgs = bot.world.messages.len();
-    let mut last_probe = bot.world.ticks;
     let hitpoints_before = hitpoints(bot);
     loop {
         if need_click {
             target = Some(source.click(bot, spot_x, spot_z)?);
             seen_msgs = bot.world.messages.len();
-            last_probe = bot.world.ticks;
+            // The ack is per click: an old swing never vouches for a
+            // click that may have been lost.
+            acked = false;
             need_click = false;
         }
         let round_target = bot.world.ticks + ROUND_IDLE_TICKS;
@@ -139,10 +173,16 @@ pub fn watch_stand<Source: HarvestSource>(
             if now_have > had + gained {
                 gained = now_have - had;
                 // The catch that filled the last slot ends the stand: the
-                // next click could only be refused.
-                if crate::kit::pack::free_slots(bot) == 0 {
-                    return Ok((WorkOutcome::Full, gained));
+                // next click could only be refused. A depleted resource
+                // (rock emptied, stump) ends it too: repick, never a click
+                // on the empty loc.
+                let full = crate::kit::pack::free_slots(bot) == 0;
+                let depleted = !full && source.depleted(bot);
+                let (end, reclick) = after_gain(full, depleted, source.gain_ends_action());
+                if let Some(outcome) = end {
+                    return Ok((outcome, gained));
                 }
+                need_click = reclick;
                 quiet = false;
                 break;
             }
@@ -157,7 +197,7 @@ pub fn watch_stand<Source: HarvestSource>(
             check_events(bot)?;
         }
         silences += 1;
-        if source.depleted_now(bot, spot_x, spot_z, silences) {
+        if source.depleted(bot) {
             return Ok((WorkOutcome::Gone, gained));
         }
         acked = acked || work_acked(bot, seen_msgs, source.acks());
@@ -170,7 +210,7 @@ pub fn watch_stand<Source: HarvestSource>(
             return Ok((WorkOutcome::Gone, gained));
         }
         source.note_dry_streak(bot, spot_x, spot_z, acked, live, silences);
-        need_click = source.reprobe(acked, live, bot.world.ticks.saturating_sub(last_probe));
+        need_click = reclick_after_silence(acked, live, silences);
     }
 }
 
@@ -378,6 +418,53 @@ pub fn dismiss_modal(bot: &mut Bot) -> Result<bool, ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::{classify_message, dismiss_modal, operable_ring, operable_stand, work_acked, WorkOutcome};
+
+    /// The woodcut rule, now every gather's: no re-click while a swing is
+    /// acked on a live target, however long the dry streak (mining clicked
+    /// every 12 ticks, fishing every 30); one probe on the first quiet
+    /// round when nothing acked; never a second probe.
+    #[test]
+    fn no_reclick_while_the_action_runs() {
+        use super::reclick_after_silence;
+        for silences in 1..=50 {
+            assert!(!reclick_after_silence(true, true, silences), "acked live target, round {silences}: wait");
+        }
+        assert!(reclick_after_silence(false, true, 1), "first quiet round without ack: one probe");
+        assert!(!reclick_after_silence(false, true, 2), "never a second probe: Gone owns the verdict");
+        assert!(reclick_after_silence(true, false, 1), "acked on a vanished target: one probe before Gone");
+    }
+
+    /// After a gain: a depleted resource ends the stand at once (rock
+    /// emptied by the ore, stump), a full pack too; a live resource whose
+    /// action ended with the product (mining gem) is clicked again at
+    /// once; a chaining action (woodcut, fishing) is left alone.
+    #[test]
+    fn depletion_ends_the_stand_and_only_ended_actions_reclick() {
+        use super::after_gain;
+        assert_eq!(after_gain(false, true, true), (Some(WorkOutcome::Gone), false), "ore mined, rock empty: repick, no click on it");
+        assert_eq!(after_gain(false, true, false), (Some(WorkOutcome::Gone), false), "log cut, stump: repick");
+        assert_eq!(after_gain(true, false, true), (Some(WorkOutcome::Full), false), "last slot filled: bank");
+        assert_eq!(after_gain(false, false, true), (None, true), "gem on a live rock: click again now");
+        assert_eq!(after_gain(false, false, false), (None, false), "tree or spot still giving: wait, no click");
+    }
+
+    /// One mining stand replayed through the core's decisions: click, a
+    /// 4-round dry streak on the acked rock, the ore empties it. Before:
+    /// 1 click + 1 per quiet round + 1 on the empty rock (live 1.71
+    /// clicks per ore); now exactly one click per ore.
+    #[test]
+    fn a_mined_rock_costs_one_click() {
+        use super::{after_gain, reclick_after_silence};
+        let mut clicks = 1u32;
+        for silences in 1..=4 {
+            if reclick_after_silence(true, true, silences) {
+                clicks += 1;
+            }
+        }
+        let (end, reclick) = after_gain(false, true, true);
+        clicks += u32::from(reclick);
+        assert_eq!((end, clicks), (Some(WorkOutcome::Gone), 1));
+    }
     use crate::kit::{fish::FISHING_ACKS, mine::MINING_ACKS, woodcut::WOODCUT_ACKS};
     use crate::tables_live::attach_live_tables;
     use lifescape_sdk::Bot;
