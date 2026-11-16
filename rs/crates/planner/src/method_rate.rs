@@ -21,16 +21,23 @@
 //! - runecraft crafts the whole pack in one action then `p_delay(3)`;
 //! - combat spells and curses 5 ticks; melee from `melee_math`.
 //!
+//! - depleting resources: a mined rock empties on every success
+//!   (`rock_respawnrate`, a normal rock's success `p_delay(0)`), a tree
+//!   falls with every log (normal) or one in 8 (`respawnrate`); the next
+//!   swing walks to the site cluster's next rock or tree, and a small
+//!   cluster waits its respawns (`method_rate_trip`).
+//!
 //! A method without such a timing (the mill, a prep combine) is a typed
 //! `PriorError`, never a default figure. Bank walks: the round trip from
-//! the site to the nearest F2P bank at one tile a tick, shared by the
-//! actions one pack holds, plus the visit's client ops (open, deposit,
-//! one withdrawal per input kind); a way doable anywhere works at the
-//! bank.
+//! the site to the nearest F2P bank at one tile a tick (an underground
+//! site through its ladder; the essence mine through Aubury's teleport),
+//! shared by the actions one pack holds, plus the visit's client ops
+//! (open, deposit, close, two per withdrawal: button and count); a way
+//! doable anywhere works at the bank.
 
 use std::fmt;
 
-use lifescape_gamedata::action_odds::{cooking, cooking_of, fish_chance, pickaxe_rate, rock_chance, runes_per_essence, stat_odds, tree_chance};
+use lifescape_gamedata::action_odds::{cooking, cooking_of, fish_chance, pickaxe_rate, rock_chance, rock_respawn, runes_per_essence, stat_odds, tree_chance, tree_felling};
 use lifescape_gamedata::obtain::{ways, Way, WayKind};
 
 /// Ticks of the published window.
@@ -41,9 +48,24 @@ pub const PACK_SLOTS: f64 = 28.0;
 pub const WALK_TILES_PER_TICK: f64 = 1.0;
 /// Ticks of one instant use: one client op per tick.
 pub const INSTANT_USE_TICKS: f64 = 1.0;
-/// Client ops of a bank visit before the withdrawals: open the booth,
-/// deposit the pack (one op a tick, one withdrawal per input kind).
-pub const BANK_SESSION_OPS: f64 = 2.0;
+/// Client ops of a bank visit besides the withdrawals: open the booth,
+/// deposit the pack, close the bank (one op a tick).
+pub const BANK_SESSION_OPS: f64 = 3.0;
+/// Client ops of one withdrawal: the withdraw-X button, then the count
+/// dialog's answer (`resume_p_countdialog`).
+pub const WITHDRAW_OPS: f64 = 2.0;
+/// Ticks the server delays a normal rock's success (`get_ore_normal`:
+/// `p_delay(0)`); iron runs `get_ore_fast`, without it.
+pub const ROCK_SUCCESS_DELAY_TICKS: f64 = 1.0;
+/// Rocks mined by `get_ore_fast` (`mining.rs2`: iron, granite,
+/// sandstone; the F2P one is iron).
+pub const FAST_ROCKS: [&str; 1] = ["iron_ore"];
+/// Ticks between two chops of a tree (`%action_delay = clock + 3`).
+pub const CHOP_TICKS: f64 = 4.0;
+/// Runecraft: the ruins' `p_delay(1)` before the jump inside (n + 2),
+/// and the exit portal's op (a jump on the spot), per load.
+pub const RUINS_ENTRY_TICKS: f64 = 3.0;
+pub const ALTAR_EXIT_TICKS: f64 = 1.0;
 /// Odds a sheep stays still for the shears (`shear_sheep.rs2`:
 /// `random(4) = 0` escapes).
 pub const SHEAR_ODDS: f64 = 0.75;
@@ -51,6 +73,11 @@ pub const SHEAR_ODDS: f64 = 0.75;
 pub const POTTERY_FIRE_ODDS: (i64, i64) = (180, 800);
 /// Firemaking light roll, every log (`firemaking.rs2`).
 pub const FIREMAKING_ODDS: (i64, i64) = (64, 512);
+/// A sheep shorn regrows its wool for 100 ticks (`shear_sheep.rs2`).
+pub const SHEEP_REGROW_TICKS: f64 = 100.0;
+/// Ticks of one telekinetic grab (`telegrab.rs2`: the caster waits 4
+/// ticks, gets the object, then 3 more).
+pub const TELEGRAB_TICKS: f64 = 7.0;
 /// Thread one leather item wears (`leather.rs2`: one reel per five).
 pub const THREAD_PER_ITEM: f64 = 0.2;
 
@@ -110,6 +137,12 @@ pub struct Action {
     pub sites: Vec<(i64, i64, i64)>,
     /// False for work that never banks (fights, casting on the spot).
     pub banks: bool,
+    /// Ticks each SUCCESS adds on a depleting resource (the walk to the
+    /// next rock or tree, a respawn wait): never in the ceiling.
+    pub depletion_ticks: f64,
+    /// Round trip of a load that is no walk from the site (the essence
+    /// mine past Aubury's teleport); `None`: the walk to the bank.
+    pub trip: Option<f64>,
 }
 
 /// The computed prior of one key, per 6000 ticks of work.
@@ -143,7 +176,7 @@ fn recipe_action(way: &Way, product: &str, ticks: f64, success: f64) -> Action {
     let mut flows: Vec<(String, &'static str, f64)> = inputs.iter().map(|(item, qty)| (item.clone(), crate::method_rate_units::input_cause(item), -qty)).collect();
     flows.push((product.to_string(), "product", success));
     let made = [(product.to_string(), 1.0)];
-    Action { ticks, success, flows, units: vec![("product", product.to_string(), success)], slots: slots_of(&inputs).max(slots_of(&made)), sites: way.sites.clone(), banks: true }
+    Action { ticks, success, flows, units: vec![("product", product.to_string(), success)], slots: slots_of(&inputs).max(slots_of(&made)), sites: way.sites.clone(), banks: true, depletion_ticks: 0.0, trip: None }
 }
 
 /// The action one attempt of `query.method` is, from the game.
@@ -162,8 +195,10 @@ pub fn action_of(query: &PriorQuery) -> Result<Action, PriorError> {
     if method.starts_with("essence:") {
         let pickaxe = tool_or_base("essence", &query.tool, "bronze_pickaxe");
         let rate = pickaxe_rate(&pickaxe).ok_or_else(|| PriorError::NoTool(pickaxe.clone()))?;
-        let sites = ways("blankrune").into_iter().flat_map(|way| way.sites).collect();
-        return Ok(Action { ticks: (rate + 1) as f64, success: 1.0, flows: vec![("blankrune".to_string(), "product", 1.0)], units: vec![("product", "blankrune".to_string(), 1.0)], slots: 1.0, sites, banks: true });
+        let sites: Vec<(i64, i64, i64)> = ways("blankrune").into_iter().flat_map(|way| way.sites).collect();
+        // The mine is past Aubury's teleport: the load's trip rides it.
+        let trip = crate::method_rate_trip::essence_trip(&sites).ok_or_else(|| PriorError::NoWay(format!("{method}: no Aubury teleport")))?;
+        return Ok(Action { ticks: (rate + 1) as f64, success: 1.0, flows: vec![("blankrune".to_string(), "product", 1.0)], units: vec![("product", "blankrune".to_string(), 1.0)], slots: 1.0, sites, banks: true, depletion_ticks: 0.0, trip: Some(trip) });
     }
     if let Some(field) = method.strip_prefix("pick:") {
         // A field leg (`pick:wheat` gives grain): one pick, `p_delay(0)`.
@@ -180,7 +215,7 @@ pub fn action_of(query: &PriorQuery) -> Result<Action, PriorError> {
     let detail_kind = way.detail.split_whitespace().next().unwrap_or("");
     let skill = way.skill.as_ref().map(|(name, _)| name.as_str()).unwrap_or("");
     if way.kind == WayKind::Gather {
-        return gather_action(&product, &way, skill, level, &query.tool);
+        return gather_action(&product, &way, skill, level, query);
     }
     let action = match (family, detail_kind) {
         ("cook", _) | ("bake", _) | ("craft", "cook") => {
@@ -210,31 +245,39 @@ pub fn action_of(query: &PriorQuery) -> Result<Action, PriorError> {
             // ground (`firemaking.rs2`), never a flow.
             let success = stat_odds(level, FIREMAKING_ODDS.0, FIREMAKING_ODDS.1);
             let log = way.inputs.first().map(|(log, _)| log.clone()).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
-            Action { ticks: 4.0, success, flows: vec![(log.clone(), "input", -success)], units: vec![("input", log, success)], slots: 1.0, sites: Vec::new(), banks: true }
+            Action { ticks: 4.0, success, flows: vec![(log.clone(), "input", -success)], units: vec![("input", log, success)], slots: 1.0, sites: Vec::new(), banks: true, depletion_ticks: 0.0, trip: None }
         }
         ("bury", _) => {
             let bones = way.inputs.first().map(|(bones, _)| bones.clone()).ok_or_else(|| PriorError::NoWay(method.to_string()))?;
-            Action { ticks: 2.0, success: 1.0, flows: vec![(bones.clone(), "input", -1.0)], units: vec![("input", bones, 1.0)], slots: 1.0, sites: Vec::new(), banks: true }
+            Action { ticks: 2.0, success: 1.0, flows: vec![(bones.clone(), "input", -1.0)], units: vec![("input", bones, 1.0)], slots: 1.0, sites: Vec::new(), banks: true, depletion_ticks: 0.0, trip: None }
         }
         ("runecraft", _) => runecraft_action(&product, &way, level)?,
         ("superheat", _) => recipe_action(&way, &product, 3.0, 1.0),
         ("enchant", _) => recipe_action(&way, &product, 3.0, 1.0),
         ("telegrab", _) => {
-            let spawns = way.sites.len().max(1) as f64;
+            // A grabbed spawn is gone until it respawns: the spawns near
+            // the worked one share the casts (never the world's spawns).
             let respawn = lifescape_gamedata::objs_by_name(&product).first().map(|obj| obj.respawn_ticks as f64).ok_or_else(|| PriorError::NoOdds(product.clone()))?;
-            let mut action = recipe_action(&way, &product, (respawn / spawns).max(6.0), 1.0);
+            let mut action = recipe_action(&way, &product, TELEGRAB_TICKS, 1.0);
             action.slots = 1.0;
+            deplete(&mut action, method, query, TELEGRAB_TICKS, 1.0, respawn, 0.0);
             action
         }
         ("ground", _) => {
-            let spawns = way.sites.len().max(1) as f64;
             let respawn = lifescape_gamedata::objs_by_name(&product).first().map(|obj| obj.respawn_ticks as f64).ok_or_else(|| PriorError::NoOdds(product.clone()))?;
-            Action { ticks: (respawn / spawns).max(INSTANT_USE_TICKS), success: 1.0, flows: vec![(product.clone(), "ground_spawn", 1.0)], units: Vec::new(), slots: 1.0, sites: way.sites.clone(), banks: true }
+            let mut action = Action { ticks: INSTANT_USE_TICKS, success: 1.0, flows: vec![(product.clone(), "ground_spawn", 1.0)], units: Vec::new(), slots: 1.0, sites: way.sites.clone(), banks: true, depletion_ticks: 0.0, trip: None };
+            deplete(&mut action, method, query, INSTANT_USE_TICKS, 1.0, respawn, 0.0);
+            action
         }
         ("pick", _) | ("gather", _) if way.kind == WayKind::Harvest && way.detail.starts_with("shear") => {
-            // A failed grab costs one tick, a success its two p_delay(0).
-            let ticks = SHEAR_ODDS * 3.0 + (1.0 - SHEAR_ODDS) * INSTANT_USE_TICKS;
-            Action { ticks, success: SHEAR_ODDS, flows: vec![(product.clone(), "product", SHEAR_ODDS)], units: Vec::new(), slots: 1.0, sites: way.sites.clone(), banks: true }
+            // A failed grab costs one tick, a success its two p_delay(0)
+            // and the wool's `~objbox` to continue (one more op); a shorn
+            // sheep regrows for 100 ticks (`npc_changetype_keepall
+            // (sheepsheered, 100)`): the next wool walks to another sheep.
+            let ticks = SHEAR_ODDS * (3.0 + INSTANT_USE_TICKS) + (1.0 - SHEAR_ODDS) * INSTANT_USE_TICKS;
+            let mut action = Action { ticks, success: SHEAR_ODDS, flows: vec![(product.clone(), "product", SHEAR_ODDS)], units: Vec::new(), slots: 1.0, sites: way.sites.clone(), banks: true, depletion_ticks: 0.0, trip: None };
+            deplete(&mut action, method, query, ticks / SHEAR_ODDS, 1.0, SHEEP_REGROW_TICKS, 0.0);
+            action
         }
         ("pick", _) | ("gather", _) => harvest(&product, &way, 2.0),
         ("fill", _) => harvest(&product, &way, 2.0),
@@ -242,6 +285,19 @@ pub fn action_of(query: &PriorQuery) -> Result<Action, PriorError> {
         _ => return Err(PriorError::NoTiming(method.to_string())),
     };
     Ok(action)
+}
+
+/// Depletion of a resource (`method_rate_trip`): the asked site's
+/// cluster, else the way's best work site, which becomes the action's
+/// only site (its bank walk and the guides' place).
+fn deplete(action: &mut Action, key: &str, query: &PriorQuery, base: f64, fell: f64, respawn: f64, settle: f64) {
+    let worked = query.site.or_else(|| crate::method_rate_trip::best_work_site(key, &action.sites, base, fell, respawn, settle));
+    let Some(site) = worked else { return };
+    let cluster = crate::method_rate_trip::cluster(key, &action.sites, site);
+    action.depletion_ticks = crate::method_rate_trip::depletion_ticks(base, fell, respawn, settle, cluster);
+    if query.site.is_none() {
+        action.sites = vec![site];
+    }
 }
 
 /// A harvest: inputs (the empty vessel, dye ingredients, the hide) and
@@ -264,28 +320,41 @@ fn base_tool(way: &Way) -> String {
     way.tools.first().cloned().unwrap_or_default()
 }
 
-fn gather_action(product: &str, way: &Way, skill: &str, level: i64, tool: &str) -> Result<Action, PriorError> {
+/// A rock or tree: a roll every `ticks`, and what each success costs
+/// on a depleting resource (`method_rate_trip::depletion_ticks`): a
+/// mined rock empties for `rock_respawn` ticks (every success), a tree
+/// falls with `tree_felling` odds; the next one is the site cluster's.
+fn gather_action(product: &str, way: &Way, skill: &str, level: i64, query: &PriorQuery) -> Result<Action, PriorError> {
     let base = base_tool(way);
-    let (ticks, success, extra): (f64, f64, Vec<(String, &'static str, f64)>) = match skill {
+    // (roll ticks, odds, felling odds per success, respawn, settle ticks)
+    let (ticks, success, fell, respawn, settle): (f64, f64, f64, f64, f64) = match skill {
         "mining" => {
-            let pickaxe = tool_or_base("mining", tool, &base);
+            let pickaxe = tool_or_base("mining", &query.tool, &base);
             let rate = pickaxe_rate(&pickaxe).ok_or_else(|| PriorError::NoTool(pickaxe.clone()))?;
             let (low, high) = rock_chance(product).ok_or_else(|| PriorError::NoOdds(product.to_string()))?;
             // One roll in 256 finds a gem instead (`get_ore_normal`).
             let odds = if (low, high) == (256, 256) { 1.0 } else { stat_odds(level, low, high) * 255.0 / 256.0 };
-            ((rate + 1) as f64, odds, Vec::new())
+            let settle = if FAST_ROCKS.contains(&product) { 0.0 } else { ROCK_SUCCESS_DELAY_TICKS };
+            match rock_respawn(product) {
+                Some(respawn) => ((rate + 1) as f64, odds, 1.0, respawn as f64, settle),
+                None => ((rate + 1) as f64, odds, 0.0, 0.0, 0.0),
+            }
         }
         "woodcutting" => {
-            let axe = tool_or_base("woodcut", tool, &base);
+            let axe = tool_or_base("woodcut", &query.tool, &base);
             let (low, high) = tree_chance(product, &axe).ok_or_else(|| PriorError::NoOdds(format!("{product} with {axe}")))?;
-            (4.0, stat_odds(level, low, high), Vec::new())
+            let (fell, respawn) = tree_felling(product).ok_or_else(|| PriorError::NoOdds(format!("{product} felling")))?;
+            (CHOP_TICKS, stat_odds(level, low, high), fell, respawn, 0.0)
         }
         "fishing" => return fish_action(product, way, level),
         _ => return Err(PriorError::NoTiming(format!("gather {product}"))),
     };
-    let mut flows = vec![(product.to_string(), "product", success)];
-    flows.extend(extra);
-    Ok(Action { ticks, success, flows, units: vec![("product", product.to_string(), success)], slots: success.max(1.0), sites: way.sites.clone(), banks: true })
+    let flows = vec![(product.to_string(), "product", success)];
+    let mut action = Action { ticks, success, flows, units: vec![("product", product.to_string(), success)], slots: success.max(1.0), sites: way.sites.clone(), banks: true, depletion_ticks: 0.0, trip: None };
+    if fell > 0.0 && success > 0.0 {
+        deplete(&mut action, product, query, ticks / success, fell, respawn, settle);
+    }
+    Ok(action)
 }
 
 /// Ticks between two rolls of a fishing spot option (`%action_delay =
@@ -320,23 +389,26 @@ fn fish_action(product: &str, way: &Way, level: i64) -> Result<Action, PriorErro
         flows.push((bait.to_string(), "bait", -success));
     }
     let units = caught.iter().map(|(fish, odds)| ("product", fish.clone(), *odds)).collect();
-    Ok(Action { ticks, success, flows, units, slots: success, sites: way.sites.clone(), banks: true })
+    Ok(Action { ticks, success, flows, units, slots: success, sites: way.sites.clone(), banks: true, depletion_ticks: 0.0, trip: None })
 }
 
 fn runecraft_action(rune: &str, way: &Way, level: i64) -> Result<Action, PriorError> {
     let per_essence = runes_per_essence(rune, level).ok_or_else(|| PriorError::NoOdds(rune.to_string()))? as f64;
     let essence = way.inputs.first().map(|(item, _)| item.clone()).unwrap_or_else(|| "blankrune".to_string());
     // The whole pack (27 essences beside the talisman) crafts in one
-    // action, then `p_delay(3)`: four ticks shared by the load.
+    // action, then `p_delay(3)`: four ticks shared by the load, with the
+    // ruins' entry and the exit portal.
     let load = PACK_SLOTS - 1.0;
     Ok(Action {
-        ticks: 4.0 / load,
+        ticks: (4.0 + RUINS_ENTRY_TICKS + ALTAR_EXIT_TICKS) / load,
         success: 1.0,
         flows: vec![(essence.clone(), "input", -1.0), (rune.to_string(), "product", per_essence)],
         units: vec![("input", essence, 1.0)],
         slots: 1.0,
         sites: way.sites.clone(),
         banks: true,
+        depletion_ticks: 0.0,
+        trip: None,
     })
 }
 
@@ -345,6 +417,10 @@ fn runecraft_action(rune: &str, way: &Way, level: i64) -> Result<Action, PriorEr
 /// lists thousands of tiles).
 fn nearest_trip(method: &str, sites: &[(i64, i64, i64)]) -> f64 {
     static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> = std::sync::OnceLock::new();
+    if let [only] = sites {
+        // A depleting way worked at its best site (`deplete`).
+        return bank_round_trip(*only).unwrap_or(0.0);
+    }
     let memo = MEMO.get_or_init(Default::default);
     if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
         return *known;
@@ -354,11 +430,10 @@ fn nearest_trip(method: &str, sites: &[(i64, i64, i64)]) -> f64 {
     trip
 }
 
-/// Round-trip walk from `site` to the nearest F2P bank, in ticks.
+/// Round-trip walk from `site` to the nearest F2P bank, in ticks (an
+/// underground site through its ladder, `method_rate_trip`).
 pub fn bank_round_trip(site: (i64, i64, i64)) -> Option<f64> {
-    let bank = lifescape_gamedata::banks::nearest_free_bank(site.0, site.1, site.2)?;
-    let tiles = (bank.x - site.0).abs().max((bank.z - site.1).abs()) as f64;
-    Some(2.0 * tiles / WALK_TILES_PER_TICK)
+    crate::method_rate_trip::bank_round_trip(site)
 }
 
 /// The prior of one key: the action, its bank walks, per 6000 ticks.
@@ -370,19 +445,22 @@ pub fn method_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
     let bank_ticks_per_action = if action.banks {
         let tools = crate::tools::required_tool(&query.method).map(|need| need.tools.iter().filter(|tool| !stackable(tool)).count()).unwrap_or(0) as f64;
         let per_load = ((PACK_SLOTS - tools) / action.slots.max(1e-9)).max(1.0);
-        let trip = match query.site {
-            Some(site) => bank_round_trip(site).unwrap_or(0.0),
-            None => nearest_trip(&query.method, &action.sites),
+        let trip = match (action.trip, query.site) {
+            (Some(trip), _) => trip,
+            (None, Some(site)) => bank_round_trip(site).unwrap_or(0.0),
+            (None, None) => nearest_trip(&query.method, &action.sites),
         };
         let kinds = action.flows.iter().filter(|(item, cause, qty)| *qty < 0.0 && *cause != "fee" && !stackable(item)).count() as f64;
-        (trip + (BANK_SESSION_OPS + kinds) * INSTANT_USE_TICKS) / per_load
+        (trip + (BANK_SESSION_OPS + WITHDRAW_OPS * kinds) * INSTANT_USE_TICKS) / per_load
     } else {
         0.0
     };
-    let actions_per_6000 = RATE_WINDOW_TICKS / (action.ticks + bank_ticks_per_action);
+    // A depleting resource: each success also walks to the next one.
+    let ticks_per_action = action.ticks + action.success * action.depletion_ticks;
+    let actions_per_6000 = RATE_WINDOW_TICKS / (ticks_per_action + bank_ticks_per_action);
     Ok(RatePrior {
         actions_per_6000,
-        ticks_per_action: action.ticks,
+        ticks_per_action,
         bank_ticks_per_action,
         success: action.success,
         flows: action.flows.iter().map(|(item, cause, qty)| (item.clone(), *cause, qty * actions_per_6000)).collect(),
@@ -439,3 +517,7 @@ pub fn units_ceiling_per_tick(query: &PriorQuery) -> Result<Vec<(&'static str, S
 #[cfg(test)]
 #[path = "method_rate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "method_rate_server_tests.rs"]
+mod server_tests;

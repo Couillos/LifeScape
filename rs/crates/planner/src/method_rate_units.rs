@@ -22,7 +22,7 @@ pub fn alch_action(item: &str, level: u8) -> Result<Action, PriorError> {
     let ticks = if spell.high { 5.0 } else { 3.0 };
     let mut flows: Vec<(String, &'static str, f64)> = vec![(item.to_string(), "input", -1.0), ("coins".to_string(), "product", coins as f64)];
     flows.extend(spell.runes.iter().map(|(rune, count)| (rune.clone(), "rune", -(*count as f64))));
-    Ok(Action { ticks, success: 1.0, flows, units: vec![("input", item.to_string(), 1.0)], slots: 1.0, sites: Vec::new(), banks: true })
+    Ok(Action { ticks, success: 1.0, flows, units: vec![("input", item.to_string(), 1.0)], slots: 1.0, sites: Vec::new(), banks: true, depletion_ticks: 0.0, trip: None })
 }
 
 /// A D18 per-cast method (teleport, curse, bones to bananas); `None`
@@ -47,5 +47,5 @@ pub fn spell_action(method: &str) -> Result<Option<Action>, PriorError> {
         flows.push((product, "product", made));
         slots = made;
     }
-    Ok(Some(Action { ticks, success: 1.0, flows, units: vec![("cast", spell, 1.0)], slots, sites: way.sites, banks }))
+    Ok(Some(Action { ticks, success: 1.0, flows, units: vec![("cast", spell, 1.0)], slots, sites: way.sites, banks, depletion_ticks: 0.0, trip: None }))
 }

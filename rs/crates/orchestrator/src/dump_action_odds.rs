@@ -4,10 +4,16 @@
 //! `gamedata/data/action_odds.json`:
 //! - `rocks`: ore product -> `rock_successchance` (low, high),
 //!   `skill_mining/configs/mine.dbrow`;
+//! - `rock_respawn`: ore product -> `rock_respawnrate` (ticks a mined
+//!   rock stays empty, `mining.rs2` `loc_change`); a rock without one
+//!   (rune essence) never depletes;
 //! - `pickaxes`: pickaxe -> `mining_rate` (ticks between swings minus
 //!   one), `skill_mining/configs/pickaxes.obj`;
 //! - `trees`: log product -> axe -> `successchance` (low, high),
 //!   `skill_woodcutting/configs/trees.dbrow`;
+//! - `tree_respawn`: log product -> `respawnrate` of the same table
+//!   (0: a normal tree, felled by every log and back after 120 +
+//!   random(80) ticks; else felled by 1 log in 8, `woodcutting.rs2`);
 //! - `fish`: raw fish -> `success_low`, `success_high` of its
 //!   `fishing_struct`, `skill_fishing/configs/fishing.obj|.struct`;
 //! - `cooking`: uncooked -> cooked, burnt, `successchance` (fire) and
@@ -78,9 +84,16 @@ fn pair_value(low_high: (i64, i64)) -> Value {
 /// The odds document from the five config texts.
 pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish_structs: &str, cooking: &str, runecraft: &str) -> Value {
     let mut rocks = BTreeMap::new();
+    let mut rock_respawn = BTreeMap::new();
     for (_, block) in blocks(mine) {
         let output = data(&block, "rock_output").first().and_then(|values| values.first().cloned());
+        let respawn = data(&block, "rock_respawnrate").first().and_then(|values| values.first()).and_then(|value| value.parse::<i64>().ok());
         if let (Some(output), Some(chance)) = (output, data(&block, "rock_successchance").first().and_then(|values| pair(values))) {
+            // The same table as the odds (the last row of an output wins).
+            match respawn {
+                Some(respawn) => rock_respawn.insert(output.clone(), Value::Int(respawn)),
+                None => rock_respawn.remove(&output),
+            };
             rocks.insert(output, pair_value(chance));
         }
     }
@@ -91,6 +104,7 @@ pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish
         }
     }
     let mut logs = BTreeMap::new();
+    let mut tree_respawn = BTreeMap::new();
     for (_, block) in blocks(trees) {
         let Some(product) = data(&block, "product").first().and_then(|values| values.first().cloned()) else { continue };
         let mut axes = BTreeMap::new();
@@ -102,6 +116,9 @@ pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish
         // Several tables yield plain logs (dead trees...): the first
         // block with odds wins, odds-less blocks add nothing.
         if !axes.is_empty() && !logs.contains_key(&product) {
+            if let Some(respawn) = data(&block, "respawnrate").first().and_then(|values| values.first()).and_then(|value| value.parse::<i64>().ok()) {
+                tree_respawn.insert(product.clone(), Value::Int(respawn));
+            }
             logs.insert(product, Value::Obj(axes));
         }
     }
@@ -139,8 +156,10 @@ pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish
     object(vec![
         ("source", str_value("lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking configs (orchestrator dump-npc-ranges)")),
         ("rocks", Value::Obj(rocks)),
+        ("rock_respawn", Value::Obj(rock_respawn)),
         ("pickaxes", Value::Obj(picks)),
         ("trees", Value::Obj(logs)),
+        ("tree_respawn", Value::Obj(tree_respawn)),
         ("fish", Value::Obj(fish)),
         ("cooking", Value::Obj(cooks)),
         ("runecraft", Value::Obj(runes)),
@@ -159,7 +178,7 @@ pub fn dump_action_odds(scripts: &Path, output: &Path) -> Result<usize, String> 
         &read("skill_cooking/configs/cooking_source/cooking_generic.dbrow")?,
         &read("skill_runecraft/configs/runecraft.dbrow")?,
     );
-    let count = ["rocks", "pickaxes", "trees", "fish", "cooking", "runecraft"].iter().map(|key| doc.get(key).as_obj().map(|map| map.len()).unwrap_or(0)).sum();
+    let count = ["rocks", "rock_respawn", "pickaxes", "trees", "tree_respawn", "fish", "cooking", "runecraft"].iter().map(|key| doc.get(key).as_obj().map(|map| map.len()).unwrap_or(0)).sum();
     std::fs::write(output, lifescape_json::stringify_pretty(&doc) + "\n").map_err(|error| format!("{}: {error}", output.display()))?;
     println!("dump-action-odds: {count} rows -> {}", output.display());
     Ok(count)
@@ -171,9 +190,9 @@ mod tests {
 
     #[test]
     fn reads_every_odds_table() {
-        let mine = "[copper_rock_table]\ntable=mining_table\ndata=rock,copperrock1\ndata=rock_output,copper_ore\ndata=rock_successchance,128,400\n";
+        let mine = "[copper_rock_table]\ntable=mining_table\ndata=rock,copperrock1\ndata=rock_output,copper_ore\ndata=rock_successchance,128,400\ndata=rock_respawnrate,10\n[rune_essence_table]\ndata=rock_output,blankrune\ndata=rock_successchance,256,256\n";
         let picks = "[bronze_pickaxe]\nname=Bronze pickaxe\nparam=mining_rate,7\n";
-        let trees = "[normal_tree_table]\ndata=product,logs\ndata=successchance,bronze_axe,64,200\ndata=successchance,rune_axe,224,700\n";
+        let trees = "[normal_tree_table]\ndata=product,logs\ndata=successchance,bronze_axe,64,200\ndata=successchance,rune_axe,224,700\ndata=respawnrate,0\n[yew_tree_table]\ndata=product,yew_logs\ndata=successchance,bronze_axe,4,12\ndata=respawnrate,200\n";
         let fish_objs = "[raw_shrimp]\nparam=fishing_struct,fishing_struct_shrimps\n";
         let fish_structs = "[fishing_struct_shrimps]\nparam=productexp,100\nparam=success_low,48\nparam=success_high,256\n";
         let cooking = "//c\n[cooking_generic_shrimp]\ntable=cooking_generic\ndata=uncooked,raw_shrimp\ndata=cooked,shrimp\ndata=burnt,burnt_shrimp\ndata=successchance,128,512\n";
@@ -182,6 +201,10 @@ mod tests {
         assert_eq!(doc.get("runecraft").get("airrune").as_i64(), Some(11));
         assert_eq!(doc.get("rocks").get("copper_ore").as_arr().and_then(|pair| pair.get(1)).and_then(|value| value.as_i64()), Some(400));
         assert_eq!(doc.get("pickaxes").get("bronze_pickaxe").as_i64(), Some(7));
+        assert_eq!(doc.get("rock_respawn").get("copper_ore").as_i64(), Some(10), "a mined rock stays empty");
+        assert!(doc.get("rock_respawn").get("blankrune").as_i64().is_none(), "essence never depletes");
+        assert_eq!(doc.get("tree_respawn").get("logs").as_i64(), Some(0), "a normal tree: felled by every log");
+        assert_eq!(doc.get("tree_respawn").get("yew_logs").as_i64(), Some(200));
         assert_eq!(doc.get("trees").get("logs").get("rune_axe").as_arr().and_then(|pair| pair.first()).and_then(|value| value.as_i64()), Some(224));
         assert_eq!(doc.get("fish").get("raw_shrimp").as_arr().and_then(|pair| pair.first()).and_then(|value| value.as_i64()), Some(48));
         assert_eq!(doc.get("cooking").get("raw_shrimp").get("burnt").as_str(), Some("burnt_shrimp"));

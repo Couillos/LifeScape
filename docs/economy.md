@@ -410,9 +410,27 @@ tentatives par sac) × flux par tentative. Ticks d'action relus dans les
 scripts serveur (boucles p_op : roll toutes les N + 1 ticks, `p_delay(n)`
 répété toutes les n + 2) ; succès `stat_random` au niveau
 (`gamedata::action_odds`, dump `action_odds.json` : roches, pioches,
-arbres par hache, poissons, cuisson feu/fourneau, runes par essence) ;
+arbres par hache, poissons, cuisson feu/fourneau, runes par essence,
+repousse des roches et abattage des arbres) ;
 combat : `melee_math` (mêlée), modèle `sizing` (distance, magie). Familles
 sans timing (moulin, combinaisons de préparation) : `PriorError`.
+Ressources épuisables (`method_rate_trip`, audit 2026-11-16) : une roche
+minée se vide (`rock_respawnrate`, `p_delay(0)` d'une roche normale), un
+arbre normal tombe à chaque bûche (120 + random(80) ticks), les autres une
+fois sur 8 (`respawnrate`), un objet au sol ou un mouton tondu (100 ticks)
+repousse : chaque succès paie la marche vers la ressource voisine du
+groupe (même voie à ≤ 10 cases) et un petit groupe attend ses repousses
+(au plus `nombre / repousse` par tick) ; sans site demandé, le site de
+travail est celui qui minimise marche banque + coût par succès, jamais le
+monde entier. Trajets : un site souterrain (z ≥ 6400) remonte par son
+échelle (`gamedata::underground`, `transitions.json`) ; la mine
+d'essence passe par la téléportation d'Aubury (6 ticks) et le portail
+(3) ; une visite de banque = ouvrir, déposer, fermer + 2 ops par retrait
+(bouton, quantité) ; runecraft : entrée des ruines (`p_delay(1)`) et
+portail par charge. Tailler une gemme reste 1 tick (`[opheldu,chisel]`
+sans délai ni make-X). Gardes : `method_rate_server_tests` (un test par
+famille épinglé au script serveur, plafond physique sur tout le
+catalogue, ×2 d'une mesure de référence).
 
 XP dérivée (R3.1/R3.2, `planner::unit_xp`) : XP/6000 par skill = Σ unités
 porteuses × XP de l'unité (dump / 10) : produit (récolte, cuisson,

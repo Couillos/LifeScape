@@ -542,6 +542,21 @@
     "rune_pickaxe": 2,
     "steel_pickaxe": 5
   },
+  "rock_respawn": {
+    "adamantite_ore": 800,
+    "blurite_ore": 80,
+    "clay": 6,
+    "coal": 100,
+    "copper_ore": 10,
+    "gold_ore": 200,
+    "iron_ore": 20,
+    "limestone": 40,
+    "mithril_ore": 400,
+    "runite_ore": 2400,
+    "silver_ore": 200,
+    "thpunishrock": 30,
+    "tin_ore": 10
+  },
   "rocks": {
     "adamantite_ore": [
       2,
@@ -612,6 +627,17 @@
     "waterrune": 19
   },
   "source": "lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking configs (orchestrator dump-npc-ranges)",
+  "tree_respawn": {
+    "achey_tree_logs": 0,
+    "charcoal": 0,
+    "hollow_bark": 86,
+    "logs": 0,
+    "magic_logs": 400,
+    "maple_logs": 120,
+    "oak_logs": 30,
+    "willow_logs": 30,
+    "yew_logs": 200
+  },
   "trees": {
     "achey_tree_logs": {
       "adamant_axe": [

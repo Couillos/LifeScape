@@ -87,7 +87,7 @@ pub fn fight_action(query: &PriorQuery) -> Result<Action, PriorError> {
     } else {
         estimate(&melee_fighter(query.level, &query.tool), &npc, 0.0).ok_or_else(|| PriorError::NoTarget(npc_name.clone()))?.cycle_ticks
     };
-    Ok(Action { ticks: ticks.max(PLAYER_ATTACK_TICKS), success: 1.0, flows, units, slots: 0.0, sites, banks: false })
+    Ok(Action { ticks: ticks.max(PLAYER_ATTACK_TICKS), success: 1.0, flows, units, slots: 0.0, sites, banks: false, depletion_ticks: 0.0, trip: None })
 }
 
 /// One kill of the melee drop farm `farm:<item>`: the first NPC dropping
@@ -110,5 +110,7 @@ pub fn drop_action(method: &str, query: &PriorQuery) -> Result<Action, PriorErro
         slots: per_kill,
         sites: way.sites,
         banks: false,
+        depletion_ticks: 0.0,
+        trip: None,
     })
 }

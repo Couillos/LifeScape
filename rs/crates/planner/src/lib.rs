@@ -43,6 +43,7 @@ pub mod mapping;
 pub mod method_way;
 pub mod method_rate;
 pub mod method_rate_fight;
+pub mod method_rate_trip;
 pub mod method_rate_units;
 pub mod unit_xp;
 pub mod spell_methods;

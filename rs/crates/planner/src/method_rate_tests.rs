@@ -73,22 +73,24 @@ fn every_planner_family_has_a_prior_or_a_typed_error() {
 fn mining_reads_the_rock_and_the_pickaxe() {
     let at_bank = PriorQuery { site: None, ..query("gather:mining/copper_ore", 1) };
     let prior = method_prior(&at_bank).expect("copper");
-    assert_eq!(prior.ticks_per_action, 8.0);
+    assert_eq!(super::action_of(&at_bank).expect("roll").ticks, 8.0, "a roll every rate + 1");
+    assert!(prior.ticks_per_action > 8.0, "each ore empties its rock: the next one costs a walk");
     assert!((prior.success - 129.0 / 256.0 * 255.0 / 256.0).abs() < 1e-9);
     let rune = method_prior(&PriorQuery { tool: "rune_pickaxe".to_string(), ..at_bank.clone() }).expect("rune");
-    assert_eq!(rune.ticks_per_action, 3.0, "rune pickaxe: rate 2 + 1");
+    assert_eq!(super::action_of(&PriorQuery { tool: "rune_pickaxe".to_string(), ..at_bank.clone() }).expect("rune").ticks, 3.0, "rune pickaxe: rate 2 + 1");
     assert!(flow(&rune, "copper_ore") > flow(&prior, "copper_ore"), "a faster pickaxe mines more");
     let higher = method_prior(&query("gather:mining/copper_ore", 30)).expect("copper 30");
     assert!(higher.success > prior.success, "odds grow with the level");
 }
 
-/// A far bank slows the yield; the bank walk is shared by a load.
+/// A far bank slows the yield; the bank walk is shared by a load (a
+/// fishing spot: no depletion, only the walk differs).
 #[test]
 fn bank_walks_are_shared_by_the_load() {
-    let near = method_prior(&PriorQuery { site: Some((3094, 3492, 0)), ..query("gather:woodcut/logs", 10) }).expect("near");
-    let far = method_prior(&PriorQuery { site: Some((3094 + 200, 3492, 0)), ..query("gather:woodcut/logs", 10) }).expect("far");
+    let near = method_prior(&PriorQuery { site: Some((3087, 3228, 0)), ..query("gather:fishing/raw_shrimp", 10) }).expect("near");
+    let far = method_prior(&PriorQuery { site: Some((3087 + 200, 3228, 0)), ..query("gather:fishing/raw_shrimp", 10) }).expect("far");
     assert!(far.bank_ticks_per_action > near.bank_ticks_per_action);
-    assert!(flow(&far, "logs") < flow(&near, "logs"));
+    assert!(flow(&far, "raw_shrimp") < flow(&near, "raw_shrimp"));
 }
 
 /// Fishing rolls the second fish first once its level is met; bait
@@ -115,4 +117,3 @@ fn ceiling_is_one_unit_per_server_action() {
     let total: f64 = ceiling.iter().filter(|(kind, _, _)| *kind == "product").map(|(_, _, per)| per).sum();
     assert!((total - 1.0 / 6.0).abs() < 1e-9, "{ceiling:?}");
 }
-

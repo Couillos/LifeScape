@@ -34,6 +34,8 @@ pub struct CookOdds {
 #[derive(Default)]
 struct Tables {
     rocks: HashMap<String, (i64, i64)>,
+    rock_respawn: HashMap<String, i64>,
+    tree_respawn: HashMap<String, i64>,
     pickaxes: HashMap<String, i64>,
     trees: HashMap<String, HashMap<String, (i64, i64)>>,
     fish: HashMap<String, (i64, i64)>,
@@ -53,6 +55,12 @@ fn tables() -> &'static Tables {
         let Ok(doc) = lifescape_json::parse(RAW) else { return out };
         for (name, value) in doc.get("rocks").as_obj().cloned().unwrap_or_default() {
             out.rocks.extend(pair(&value).map(|odds| (name.clone(), odds)));
+        }
+        for (name, value) in doc.get("rock_respawn").as_obj().cloned().unwrap_or_default() {
+            out.rock_respawn.extend(value.as_i64().map(|ticks| (name.clone(), ticks)));
+        }
+        for (name, value) in doc.get("tree_respawn").as_obj().cloned().unwrap_or_default() {
+            out.tree_respawn.extend(value.as_i64().map(|ticks| (name.clone(), ticks)));
         }
         for (name, value) in doc.get("pickaxes").as_obj().cloned().unwrap_or_default() {
             out.pickaxes.extend(value.as_i64().map(|rate| (name.clone(), rate)));
@@ -80,6 +88,27 @@ fn tables() -> &'static Tables {
 pub fn rock_chance(product: &str) -> Option<(i64, i64)> {
     tables().rocks.get(product).copied()
 }
+
+/// Ticks a rock yielding `product` stays empty once mined
+/// (`rock_respawnrate`, `mining.rs2` `loc_change`); `None` for a rock
+/// that never depletes (rune essence).
+pub fn rock_respawn(product: &str) -> Option<i64> {
+    tables().rock_respawn.get(product).copied()
+}
+
+/// Felling of the tree yielding `product` (`woodcutting.rs2`
+/// `get_logs`): (odds one log fells it, mean ticks it stays a stump).
+/// A normal tree (`respawnrate` 0) falls with every log and is back
+/// after 120 + random(80) ticks; any other falls with 1 log in 8.
+pub fn tree_felling(product: &str) -> Option<(f64, f64)> {
+    let respawn = *tables().tree_respawn.get(product)?;
+    Some(if respawn == 0 { (1.0, NORMAL_TREE_RESPAWN_MEAN) } else { (1.0 / TREE_DEPLETE_ONE_IN, respawn as f64) })
+}
+
+/// Mean stump ticks of a normal tree: 120 + random(80).
+pub const NORMAL_TREE_RESPAWN_MEAN: f64 = 120.0 + 79.0 / 2.0;
+/// A non-normal tree falls with one log in 8 (`$deplete_chance = 8`).
+pub const TREE_DEPLETE_ONE_IN: f64 = 8.0;
 
 /// `mining_rate` of a pickaxe: one swing every `rate + 1` ticks.
 pub fn pickaxe_rate(pickaxe: &str) -> Option<i64> {
@@ -136,5 +165,9 @@ mod tests {
         assert_eq!(cooking("raw_swordfish").and_then(|row| row.range), Some((30, 310)));
         assert_eq!(super::runes_per_essence("airrune", 10), Some(1));
         assert_eq!(super::runes_per_essence("airrune", 22), Some(3));
+        assert_eq!(super::rock_respawn("silver_ore"), Some(200));
+        assert_eq!(super::rock_respawn("blankrune"), None, "essence never depletes");
+        assert_eq!(super::tree_felling("logs"), Some((1.0, 159.5)));
+        assert_eq!(super::tree_felling("yew_logs"), Some((0.125, 200.0)));
     }
 }

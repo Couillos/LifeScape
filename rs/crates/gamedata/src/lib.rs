@@ -44,6 +44,7 @@ pub mod spells;
 pub mod stations;
 pub mod toll;
 pub mod trees;
+pub mod underground;
 pub mod varps;
 pub mod xp;
 
