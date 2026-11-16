@@ -278,6 +278,7 @@ impl MarketService {
             Ok(_) => {}
             Err(error) => crate::logln!("market reload: stale deals left as they were, store refused: {error}"),
         }
+        self.rebase_note_orders();
         let rows = match self.lock_store().resting_orders() {
             Ok(rows) => rows,
             Err(error) => {
@@ -339,6 +340,26 @@ impl MarketService {
         let healed = self.uncross_books(crate::market_convene::wall_now());
         if !healed.is_empty() {
             crate::logln!("market reload: crossed books healed, deals {healed:?}");
+        }
+    }
+
+    /// Resting orders placed on a banknote (before 2026-11-16, or relisted
+    /// from a dead note deal) move to their base object's book, so both
+    /// forms meet in one carnet. Idempotent, every boot.
+    fn rebase_note_orders(&self) {
+        let ids: Vec<i64> = self.lock_engine().catalogue.iter().map(|entry| entry.id).collect();
+        let mut moved = 0usize;
+        for note in ids {
+            let base = crate::market_audit::book_item(note);
+            if base != note && self.lock_engine().find_item(base).is_some() {
+                match self.lock_store().rebase_resting_orders(note, base) {
+                    Ok(count) => moved += count,
+                    Err(error) => crate::logln!("market reload: note {note} orders left on their own book, store refused: {error}"),
+                }
+            }
+        }
+        if moved > 0 {
+            crate::logln!("market reload: {moved} resting banknote order(s) moved to their base object's book");
         }
     }
 
@@ -717,7 +738,8 @@ impl MarketService {
             Ok(side) => side,
             Err(error) => return Self::err(error),
         };
-        let item = request.get("item").as_i64().unwrap_or(-1);
+        // A banknote rests in its base object's book (one book per object).
+        let item = crate::market_audit::book_item(request.get("item").as_i64().unwrap_or(-1));
         let qty = request.get("qty").as_i64().unwrap_or(0);
         let price = request.get("price").as_i64().unwrap_or(0);
         if self.lock_engine().find_item(item).is_none() {
@@ -725,6 +747,11 @@ impl MarketService {
         }
         if let Err(error) = check_price(price) {
             return Self::err(error.to_string());
+        }
+        // Why the order exists (plan marché M1): kept by its amends.
+        let motive = request.get("motive").as_str().unwrap_or("").to_string();
+        if let Err(error) = crate::market_lineage::check_motive(&motive) {
+            return Self::err(error);
         }
         {
             // Net of the account's resting orders and in-flight deals
@@ -760,6 +787,8 @@ impl MarketService {
                 price,
                 dormant: false,
                 clock,
+                replaces: None,
+                motive,
             }) {
                 Ok(id) => id,
                 Err(error) => return Self::err(error.to_string()),
@@ -805,7 +834,7 @@ impl MarketService {
         let matched = crate::market_merge::merge_fills(matched);
         self.lock_engine().order_item.insert(order_key, item);
         if rests {
-            if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price) {
+            if let Some(bounds) = crate::market_reprice::bounds_from_request(request, &account, side == Side::Sell, price, store_id, clock) {
                 crate::market_reprice::register(self, store_id, bounds);
             }
         }

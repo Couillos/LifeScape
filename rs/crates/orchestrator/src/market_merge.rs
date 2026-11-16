@@ -130,6 +130,7 @@ impl MarketService {
                 price,
                 dormant: false,
                 clock: oldest_clock,
+                ..lifescape_store::NewOrder::default()
             })
             .map_err(|error| format!("merged row refused: {error}"))?;
         let taken = {

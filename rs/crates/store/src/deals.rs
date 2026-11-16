@@ -308,6 +308,7 @@ impl Store {
                     price: deal.price,
                     dormant: false,
                     clock: deal.created_clock,
+                    ..crate::NewOrder::default()
                 })?;
                 // Rank of the deal's clock, but re-entered now: a crossed
                 // reload makes the latest (re)entry the taker.

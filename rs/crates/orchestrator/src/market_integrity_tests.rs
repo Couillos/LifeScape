@@ -261,3 +261,45 @@ fn note_orders_lock_and_cover_the_base_object() {
     assert_eq!(short, vec![orders[0].order_id], "a note deal takes base stock too");
     cleanup(&path);
 }
+
+/// Live 2026-11-16 (M9): Gold bar ask 51 on 2357, bid 59 on its note
+/// 2358, never crossed (~40 objects quoted on both forms). An order on a
+/// banknote rests in its base object's book: a base ask and a note bid
+/// that are compatible cross.
+#[test]
+fn note_and_base_orders_share_one_book() {
+    let (service, path) = service("note-book");
+    let note = shrimp_note();
+    funded(&service, "fisher", RAW_SHRIMP);
+    funded(&service, "cook", RAW_SHRIMP);
+    assert_eq!(place(&service, "fisher", "sell", RAW_SHRIMP, 5, 51).get("status").as_str(), Some("open"));
+    let bid = place(&service, "cook", "buy", note, 5, 59);
+    assert_eq!(bid.get("status").as_str(), Some("filled"), "{bid:?}");
+    let order = bid.get("order").as_i64().expect("order");
+    assert_eq!(service.lock_store().get_order(order).expect("reads").expect("row").item_id, RAW_SHRIMP, "stored on the base object");
+    let deal = service.lock_store().open_deals_for_account("cook").expect("reads");
+    assert_eq!(deal.iter().map(|deal| deal.item_id).collect::<Vec<_>>(), vec![RAW_SHRIMP], "the deal names the base: the handover carries notes");
+    assert!(book_buys(&service, note).is_empty() && book_sells(&service, note).is_empty(), "no note book");
+    cleanup(&path);
+}
+
+/// Resting orders left on a banknote's book (before the fix) move to
+/// their base object's book at the next boot.
+#[test]
+fn restart_moves_resting_note_orders_to_the_base_book() {
+    let path = temp_db("note-rebase");
+    let note = shrimp_note();
+    let resting = {
+        let service = MarketService::open(&path, catalogue()).expect("opens");
+        let id = service
+            .lock_store()
+            .place_order(&lifescape_store::NewOrder { account: "fisher".to_string(), side: OrderSide::Sell, item_id: note, quantity: 7, price: 3, clock: 1, ..Default::default() })
+            .expect("legacy note order");
+        id
+    };
+    let service = MarketService::open(&path, catalogue()).expect("reopens");
+    assert_eq!(service.lock_store().get_order(resting).expect("reads").expect("row").item_id, RAW_SHRIMP);
+    assert_eq!(book_sells(&service, RAW_SHRIMP), vec![(3, 7)], "rests in the base book");
+    assert!(book_sells(&service, note).is_empty());
+    cleanup(&path);
+}

@@ -9,7 +9,9 @@
 //! - `signals()`: one `DemandSignal` per item with resting bids — bid
 //!   count, distinct bidders, unmet quantity, best bid, age of the oldest
 //!   bid (seconds and ticks), and a relative `weight` = best bid × unmet ×
-//!   (1 + min(age / 6000 ticks, 5)): an old unmet bid pulls harder.
+//!   (1 + min(age / 6000 ticks, 5)): an old unmet bid pulls harder. The
+//!   age is the LINEAGE's (t0 kept by every amend, plan marché M1 C1): a
+//!   bid walked for 6 h is 6 h old, not one patience window.
 //!   Empty while the market service is down (no data, no decision).
 //! - `chain_profits()`: every D58 chain (`planner::chains`) evaluated at
 //!   market prices (`rates_price::price_estimate`, never a shop price),
@@ -70,7 +72,7 @@ pub fn signals_from(orders: &[Order], now_secs: i64, name_of: &dyn Fn(i64) -> Op
         bidders.dedup();
         let unmet_qty: i64 = bids.iter().map(|order| order.remaining).sum();
         let best_bid = bids.iter().map(|order| order.price).max().unwrap_or(0);
-        let oldest_age_secs = bids.iter().map(|order| (now_secs - order.created_clock).max(0)).max().unwrap_or(0);
+        let oldest_age_secs = bids.iter().map(|order| (now_secs - order.lineage_clock()).max(0)).max().unwrap_or(0);
         let oldest_age_ticks = to_ticks(oldest_age_secs);
         let age_factor = 1.0 + (oldest_age_ticks as f64 / AGE_UNIT_TICKS as f64).min(5.0);
         out.push(DemandSignal {
@@ -232,7 +234,24 @@ mod tests {
             dormant: false,
             created_clock: created,
             updated_clock: created,
+            ..Order::default()
         }
+    }
+
+    /// Plan marché C1/M1: a bid walked by amends for 6 h (each step a
+    /// new row created a moment ago) is 6 h old: ×6, not ×1.
+    #[test]
+    fn signals_read_the_age_of_the_lineage() {
+        let now = 100_000;
+        let mut walked = bid("ryan_mason", 1, 1, 26, now - 30);
+        walked.root_id = 7;
+        walked.root_clock = now - 6 * 3600;
+        let name = |id: i64| Some(format!("item{id}"));
+        // 60 ms ticks (world.json): 6 h = 360 000 ticks.
+        let ticks = |secs: i64| (secs * 1000 / 60) as u64;
+        let found = signals_from(&[walked], now, &name, &ticks);
+        assert_eq!(found[0].oldest_age_secs, 6 * 3600);
+        assert!((found[0].weight - 26.0 * 1.0 * 6.0).abs() < 1e-9, "age factor capped at x6: {}", found[0].weight);
     }
 
     #[test]

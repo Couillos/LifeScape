@@ -206,6 +206,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
     crate::cpu_profile::timed("sales.list_surplus", || crate::brain_sales::maybe_list_surplus(job, &life));
     // PRD3 lot 5: upgrade wishes bid on the market, never blocking.
     crate::cpu_profile::timed("wishlist.bid_wishes", || crate::brain_wishlist::maybe_bid_wishes(job, &life));
+    // Persistent needs (plan marché M2): a need's bid outlives its fill
+    // wait; it closes here once no open node wants its object.
+    crate::cpu_profile::timed("market.orphan_needs", || crate::brain_market::release_orphan_needs(job, &life));
     // Alchemy (2026-11-14): nature runes for the stock a caster alchs,
     // asks under the alch floor bought to alch.
     crate::cpu_profile::timed("alch.market_pass", || crate::brain_alch::market_pass(job, &life, &live));

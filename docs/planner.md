@@ -319,7 +319,11 @@ s'il suit un redémarrage du daemon ou un `unload`/`close`/`open`
 opérateur (`brain_grace.rs`, une excuse par arrêt, effacée au lancement
 suivant). Un rapport drainé quand la file du cerveau est pleine repasse
 en attente au lieu d'être perdu. Une
-commande market non remplie attend au plus 6000 ticks puis échoue.
+commande market non remplie attend au plus 6000 ticks : la JAMBE marché
+du nœud échoue (comptée, le nœud replanifie), l'offre reste au carnet
+avec sa lignée (plan marché M2) ; `place_obtain_bid` la reprend au
+prochain achat, elle se ferme quand le besoin est servi ou qu'aucun
+nœud ouvert ne veut plus l'objet (`release_orphan_needs`).
 
 Décision sans données interdite : sans position live, rien ne part.
 Tuto (`brain_tutorial.rs`) : sur Tutorial Island (rectangles, pas les
@@ -741,7 +745,8 @@ Signaux de demande (`market_demand.rs`, lecture seule, données publiques) :
 `signals()` → `DemandSignal {item, item_id, open_bids, bidders,
 unmet_qty, best_bid, oldest_age_secs, oldest_age_ticks, weight}` (offres
 d'achat au repos ; poids = meilleure offre × quantité non servie × (1 +
-min(âge/6000 ticks, 5))), `chain_profits()` (chaînes D58 de `chains.rs`
+min(âge/6000 ticks, 5)), âge = celui de la LIGNÉE, t0 gardé par les
+amends), `chain_profits()` (chaînes D58 de `chains.rs`
 évaluées aux prix marché, jamais magasin), `kind_profits()` (chaînes +
 profits mesurés par méthode), `kind_demand()` (entrées du planner :
 `DemandItem`, `KindDemand` = 1 + part de la demande servie + part du

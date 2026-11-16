@@ -76,6 +76,9 @@ impl MarketService {
         };
         // 2. Carnet: replacement row first, then the old row closes. Any
         // refusal rolls the book back, so book and carnet never diverge.
+        // The replacement joins the old row's lineage (root, t0, motive:
+        // schema 6, decision Q1); the old row closes `amended`, never a
+        // cancellation in the measures.
         let replacement = {
             let store = self.lock_store();
             let placed = store.place_order(&NewOrder {
@@ -86,9 +89,11 @@ impl MarketService {
                 price,
                 dormant: false,
                 clock,
+                replaces: Some(order_id),
+                motive: row.motive.clone(),
             });
             match placed {
-                Ok(id) => match store.cancel_order(order_id, clock) {
+                Ok(id) => match store.cancel_order_because(order_id, clock, lifescape_store::AMENDED_REASON) {
                     Ok(()) => Ok(id),
                     Err(error) => {
                         // The carnet had closed it: the book copy was stale.
@@ -163,9 +168,16 @@ impl MarketService {
         ])
     }
 
+    /// `cancel {account, order, reason?}`: `reason` names the canceller
+    /// (`gear_plan`, `audit`, `need_gone`…) for the measures of
+    /// `orchestrator economy`; `amended` is reserved to `amend`.
     pub(crate) fn op_cancel(&self, request: &Value) -> Value {
         let account = request.get("account").as_str().unwrap_or("").to_string();
         let order_id = request.get("order").as_i64().unwrap_or(-1);
+        let reason = request.get("reason").as_str().unwrap_or("").to_string();
+        if reason == lifescape_store::AMENDED_REASON {
+            return Self::err(format!("cancel reason '{reason}' is reserved to amend"));
+        }
         let stored = self.lock_store().get_order(order_id).unwrap_or(None);
         let Some(row) = stored else {
             return Self::err(format!("unknown order {order_id}"));
@@ -181,7 +193,7 @@ impl MarketService {
         }
         let clock = Self::now_clock();
         self.lock_engine().quote_bounds.remove(&order_id);
-        if let Err(error) = self.lock_store().cancel_order(order_id, clock) {
+        if let Err(error) = self.lock_store().cancel_order_because(order_id, clock, &reason) {
             // The carnet had closed it: the stale book copy is gone now.
             return Self::err(format!("order {order_id} is closed ({error})"));
         }
@@ -218,9 +230,14 @@ impl MarketService {
     /// second resting order beside the stale one; a Short handover calls
     /// it on the defaulter's phantom lots. Returns how many it closed.
     pub(crate) fn cancel_open_for(&self, account: &str, item: i64, side: OrderSide) -> usize {
+        self.cancel_open_because(account, item, side, "")
+    }
+
+    /// `cancel_open_for` recording why (`op_cancel` reasons).
+    pub(crate) fn cancel_open_because(&self, account: &str, item: i64, side: OrderSide, reason: &str) -> usize {
         let mut closed = 0;
         for row in self.resting_rows(account, item, side) {
-            let reply = self.op_cancel(&object(vec![("account", str_value(account)), ("order", Value::Int(row.order_id))]));
+            let reply = self.op_cancel(&object(vec![("account", str_value(account)), ("order", Value::Int(row.order_id)), ("reason", str_value(reason))]));
             if reply.get("ok").as_bool() == Some(true) {
                 closed += 1;
             }

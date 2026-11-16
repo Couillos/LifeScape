@@ -114,6 +114,7 @@ pub(crate) fn release_listings(service: &MarketService, account: &str, item: &st
             ("qty", Value::Int(rest)),
             ("price", Value::Int(row.price)),
             ("floor", Value::Int(floor.min(row.price))),
+            ("motive", str_value(&row.motive)),
         ]));
         match placed.get("order").as_i64() {
             Some(new_order) => notes.push(format!("listing {order} cut by {cut} {item} (rest {rest} re-listed as {new_order} @ {})", row.price)),

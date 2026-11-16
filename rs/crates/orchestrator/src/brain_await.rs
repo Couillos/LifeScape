@@ -2,6 +2,12 @@
 //! The market wait of an obtain node (split from `brain.rs`, rule 4):
 //! a `market:buy` leg placed daemon-side keeps the node active, without
 //! a worker, until its holdings say how it ended.
+//!
+//! Persistent needs (plan marché M2, C3): the deadline ends the node's
+//! MARKET LEG, never its bid. The bid is the node's need on the book: it
+//! keeps its lineage and walk while the node replans (production, coins
+//! block, another buy that takes the same bid over); it closes when the
+//! need is met (`need_met`) or gone (`brain_market::release_orphan_needs`).
 
 use lifescape_planner::Life;
 
@@ -9,42 +15,155 @@ use crate::brain::push_history;
 use crate::brain_plan::holdings_count;
 use crate::jobs::Job;
 
-/// Market fills settle through other players: an unfilled order waits
-/// at most this many ticks (wall time = ticks × tick length, D7).
+/// Market fills settle through other players: the market leg of an
+/// obtain waits at most this many ticks (wall time = ticks × tick
+/// length, D7) before its node replans.
 pub(crate) const AWAIT_FILL_TICKS: u64 = 6000;
+
+/// The market side of a fill wait (the live service, or a test fake).
+pub(crate) trait FillMarket {
+    /// No resting buy and no handover in flight on `item` any more.
+    fn buy_closed(&self, item: &str) -> bool;
+    /// Closes the need's resting buys on `item` (it was met).
+    fn close_need(&self, item: &str) -> usize;
+}
+
+struct LiveMarket<'account> {
+    account: &'account str,
+}
+
+impl FillMarket for LiveMarket<'_> {
+    fn buy_closed(&self, item: &str) -> bool {
+        crate::brain_market::buy_closed(self.account, item)
+    }
+
+    fn close_need(&self, item: &str) -> usize {
+        crate::brain_market::cancel_open_buys(self.account, item)
+    }
+}
 
 /// One pass over the obtain node at `position`, waiting `waited` seconds
 /// for its buy of `count` `item`. Returns true while it keeps waiting
-/// (nothing changed), false once the node moved on:
-/// - holdings reach the count: done, the leftover bid closes;
-/// - a partial buy landed (holdings above the launch baseline, the order
-///   and its handover over): ready again, the next resolve produces or
-///   buys the rest, uncounted;
-/// - the deadline passed: the stale order goes, one failure counted.
+/// (nothing changed), false once the node moved on (`settle_with`).
 pub(crate) fn settle_fill(job: &Job, life: &mut Life, position: usize, item: &str, count: i64, waited: i64) -> bool {
-    let active_id = life.nodes[position].id.clone();
     let held = holdings_count(job, item);
+    let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
+    let outcome = settle_with(life, position, item, count, held, waited, deadline, &LiveMarket { account: &job.account });
+    if let Some(line) = outcome.log {
+        crate::logln!("brain {}: {line}", job.account);
+    }
+    outcome.waiting
+}
+
+/// What one settle pass did.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Settled {
+    pub waiting: bool,
+    pub log: Option<String>,
+}
+
+/// Pure core of `settle_fill` (`held`: usable holdings now; `deadline`:
+/// seconds the market leg may wait):
+/// - holdings reach the count: done, the need's bid closes;
+/// - a partial buy landed (holdings above the launch baseline, the order
+///   and its handover over): ready again, uncounted;
+/// - the deadline passed: the market leg failed (counted, the node
+///   replans: production, a coins block, or a buy that takes the same
+///   bid over); the bid STAYS with its lineage and walk;
+/// - otherwise it keeps waiting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settle_with(life: &mut Life, position: usize, item: &str, count: i64, held: i64, waited: i64, deadline: i64, market: &dyn FillMarket) -> Settled {
+    let active_id = life.nodes[position].id.clone();
     // Holdings at the placement (set at launch).
     let baseline = life.nodes[position].progress_current;
-    let deadline = (AWAIT_FILL_TICKS * crate::market_eta::live_tick_ms() / 1000) as i64;
     if held >= count {
-        crate::brain_market::cancel_open_buys(&job.account, item);
+        market.close_need(item);
         lifescape_planner::complete_node(life, position, held);
         push_history(life, &active_id, "goal_reached");
-    } else if held > baseline && crate::brain_market::buy_closed(&job.account, item) {
-        crate::logln!("brain {}: {active_id} partial buy landed ({baseline} -> {held}/{count} {item}), re-resolving", job.account);
+    } else if held > baseline && market.buy_closed(item) {
         life.nodes[position].progress_current = held;
         lifescape_planner::retry_uncounted(life, position);
         push_history(life, &active_id, "partial_fill");
+        return Settled { waiting: false, log: Some(format!("{active_id} partial buy landed ({baseline} -> {held}/{count} {item}), re-resolving")) };
     } else if waited > deadline {
-        // The stale resting order goes before the retry places a fresh
-        // one (PRD3 lot 0: bots stacked two identical bids on the same axe).
-        let closed = crate::brain_market::cancel_open_buys(&job.account, item);
-        let text = lifescape_planner::market_unfilled_error(count, item, AWAIT_FILL_TICKS, held, closed);
+        let text = lifescape_planner::market_unfilled_error(count, item, AWAIT_FILL_TICKS, held, 0);
         let fold = lifescape_planner::record_failure(life, position, &text);
         push_history(life, &active_id, if fold == lifescape_planner::FailureFold::Abandoned { "abandoned" } else { "failed" });
+        return Settled { waiting: false, log: Some(format!("{active_id} market leg ended after {AWAIT_FILL_TICKS} ticks ({held}/{count} {item}): the node replans, its bid stays on the book")) };
     } else {
-        return true;
+        return Settled { waiting: true, log: None };
     }
-    false
+    Settled { waiting: false, log: None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{settle_with, FillMarket};
+    use lifescape_planner::{Life, Node, NodeKind, NodeStatus};
+    use std::cell::Cell;
+
+    struct FakeMarket {
+        closed: Cell<usize>,
+        buy_closed: bool,
+    }
+
+    impl FillMarket for FakeMarket {
+        fn buy_closed(&self, _item: &str) -> bool {
+            self.buy_closed
+        }
+
+        fn close_need(&self, _item: &str) -> usize {
+            self.closed.set(self.closed.get() + 1);
+            1
+        }
+    }
+
+    fn waiting_life() -> Life {
+        let mut life = Life {
+            schema: 1,
+            account: "fiona_park".to_string(),
+            created_at: 0,
+            seed: 0,
+            profile: lifescape_planner::Profile::new(false, 0.5, 0.5, 0, lifescape_planner::Archetype::Producer),
+            goal: lifescape_planner::GoalKind::MakeMoney,
+            nodes: Vec::new(),
+            engagement: None,
+            active: None,
+            history: Vec::new(),
+            ambition: None,
+            goal_origin: None,
+            memory: Default::default(),
+        };
+        let mut node = Node::new("n5", NodeKind::ObtainItems { item: "unstrung_sapphire_amulet".to_string(), count: 5 }, Vec::new(), 0);
+        node.method = Some("market:buy".to_string());
+        node.status = NodeStatus::Ready;
+        life.nodes.push(node);
+        life
+    }
+
+    /// Plan marché M2 (C3): 6000 ticks without a fill end the node's
+    /// market leg (failure counted, method dropped: it replans), never
+    /// its bid (391 amulet bids a day were cancelled then re-placed lower).
+    #[test]
+    fn a_deadline_keeps_the_bid_and_replans_the_node() {
+        let mut life = waiting_life();
+        let market = FakeMarket { closed: Cell::new(0), buy_closed: false };
+        let outcome = settle_with(&mut life, 0, "unstrung_sapphire_amulet", 5, 0, 400, 360, &market);
+        assert!(!outcome.waiting);
+        assert_eq!(market.closed.get(), 0, "the bid stays on the book");
+        let node = &life.nodes[0];
+        assert_eq!((node.status.clone(), node.method.clone(), node.failures), (NodeStatus::Ready, None, 1), "replanned");
+        assert!(lifescape_planner::market_failed(node), "the rescue reads a market failure: {}", node.last_error);
+        assert_eq!(life.history.last().map(|entry| entry.outcome.as_str()), Some("failed"));
+    }
+
+    #[test]
+    fn a_met_need_closes_its_bid_and_a_young_wait_waits() {
+        let mut life = waiting_life();
+        let market = FakeMarket { closed: Cell::new(0), buy_closed: false };
+        assert!(settle_with(&mut life, 0, "unstrung_sapphire_amulet", 5, 0, 100, 360, &market).waiting);
+        assert!(!settle_with(&mut life, 0, "unstrung_sapphire_amulet", 5, 5, 100, 360, &market).waiting);
+        assert_eq!(market.closed.get(), 1, "need met: its bid closes");
+        assert_eq!(life.nodes[0].status, NodeStatus::Done);
+    }
 }

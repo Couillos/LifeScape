@@ -160,6 +160,7 @@ fn boot_reload_heals_a_crossed_carnet_once() {
             price,
             dormant: false,
             clock,
+            ..lifescape_store::NewOrder::default()
         };
         store.place_order(&row("b3gybcev", lifescape_store::OrderSide::Sell, 16, now - 600)).expect("rests");
         // Created before the asks (old rank), re-entered last: the taker.

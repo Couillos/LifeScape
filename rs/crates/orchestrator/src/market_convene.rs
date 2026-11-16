@@ -588,6 +588,7 @@ impl MarketService {
                         price: row.price,
                         dormant: false,
                         clock,
+                        ..lifescape_store::NewOrder::default()
                     })
                     .ok()
             };

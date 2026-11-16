@@ -737,3 +737,105 @@ Rejeté : garder le diff net comme source des flux (il efface ce qui est
 produit puis consommé dans le même run : os ramassés puis enterrés, coupe +
 feu, fonte + forge, poterie façonnage + cuisson) ; mettre la méthode fine
 dans `method` (changerait la clé de l'agrégation actuelle avant R2).
+
+## 2026-11-15 — Achats aux marchands (remplace D-A pour l'achat)
+
+Règle utilisateur : tout objet F2P qu'un marchand F2P stocke peut lui être
+ACHETÉ, fabricable ou non (`gamedata::obtain::merchant_buy_allowed`,
+planner.md § Achats aux marchands) ; `resolve_obtain` passe par la
+boutique quand elle ne coûte pas plus que le marché et que le
+portefeuille paie. Le prix du marchand plafonne le marché et retire des
+pièces du monde. D-A (2026-11-12, achat réservé aux objets non
+productibles) ne vaut plus pour l'ACHAT ; la vente aux PNJ reste
+interdite jusqu'à la vague 2 du plan marché (Q3 ci-dessous). Rejeté :
+garder D-A (offres que personne ne sert sur des objets en boutique, C12).
+
+## 2026-11-16 — Modèle de marché : lignée, motif, besoins persistants (plan marché, vague 1 A)
+
+Décisions utilisateur (`docs/plan-marche.txt` §9), elles priment sur les
+recommandations du plan :
+- Q0 : tick réel 60 ms (`world.json`, environnement accéléré, 600 ms un
+  jour) ; tout horizon s'exprime en ticks, 2000 ticks = 2 min aujourd'hui.
+- Q1 : un amend garde sa lignée par une colonne `replaces`, statut
+  inchangé (la ligne remplacée reste `cancelled`, `cancel_reason =
+  'amended'`).
+- Q2 (vague 2, M3) : concession en temps vers la limite PROPRE de
+  l'ordre, `p(t) = ouverture + (limite − ouverture) × (t/H)^(1/β)`,
+  horizon H par motif, vitesse β réglée par `price_patience` × urgence ;
+  retour ZIP sur les fills publics conservé. Le pas de 5 % reste en
+  vague 1.
+- Q3 (vague 2) : vente au magasin PNJ des invendables quand le marché
+  paie moins que le marchand (exception à D-A, comme un joueur ; la
+  monnaie créée est suivie par `orchestrator economy`).
+- Q4 (vague 2) : ordre arrivé à sa limite sans contrepartie : le vendeur
+  est retiré à H, l'acheteur reste au carnet tant que son besoin existe.
+- Q5 (différé, après plan-rendements R2/R4) : stock-cible d'intrants sur
+  la tranche en cours et la suivante, plafonné par `market_affinity` et
+  le budget.
+- Q6 (vague 3) : teneurs de marché DÉDIÉS (nouveaux comptes `create-user`,
+  phase de jeu jusqu'au capital cible, puis cotation à profit selon le
+  stock autour de la fontaine de Varrock, informations publiques
+  seulement, règle 13) ; `market:flip` SUPPRIMÉ en vague 3.
+- Q7 : achats boutique rares (Champions' Guild, Lundail) permis à tous les
+  bots, routes vérifiées d'abord (vague 1 B, M9).
+- Q8 : les bids sur objets introuvables sont laissés tels quels (une
+  demande comme une autre, ni filtrés des signaux ni retirés).
+
+Fait en vague 1 A (M0 + M1 + M2) :
+- Store schéma 6 (`lineage.rs`) : colonnes `replaces`, `root_id`,
+  `root_clock` (t0), `motive`, `cancel_reason` ; la migration reclasse
+  l'historique : une ligne `cancelled` remplacée par la ligne suivante du
+  même compte, objet et côté créée à ≤ 1 s de son annulation est un
+  amend (live : 306 949 amends sur 353 553 annulations). Une transaction,
+  échec = schéma 5 intact.
+- Motifs (`market_lineage.rs`) : `need` (nœud bloquant, offre D-B),
+  `gear`, `tool`, `stock` (alchimie), `surplus`, `loot` (réserve `Found`),
+  `flip` ; vide = non dit (ordres de worker). Horizons §3.5 : need 6 000,
+  gear/tool/surplus/flip 36 000, stock/loot 72 000 ticks. `QuoteBounds`
+  porte lignée, t0, motif, horizon, ouverture ; l'adoption après
+  redémarrage les relit en base (`QuoteBounds::for_row`).
+- Âge de la demande (`market_demand`) = âge de la lignée (C1).
+- Besoins persistants (C3) : `place_obtain_bid` reprend l'offre au repos
+  du compte sur l'objet (lignée `need` d'abord, `keep_bid_from`) au lieu
+  de l'annuler et de la reposer au prix de mémoire ; l'échéance de 6000
+  ticks termine la JAMBE marché du nœud (échec compté, replanification),
+  jamais l'offre ; l'offre se ferme quand le besoin est servi
+  (`need_met`) ou disparu (`need_gone`, balayage
+  `brain_market::release_orphan_needs` : aucun nœud ouvert ne veut plus
+  l'objet).
+- Plan d'équipement tenu (C2, `brain_gear_hold.rs`) : budget lissé
+  (25 % de chaque lecture), un emplacement garde sa pièce tant que son
+  plafond reste ≥ 70 % du plafond initial, replanification complète au
+  plus une fois par 36 000 ticks ou sur gain de palier (palier de niveau
+  de combat 1/5/10/20/30/40/50/60, pièce acquise ou perdue).
+- Séquestre (C4) : les pièces engagées étaient déjà soustraites du
+  portefeuille des obtentions (`ctx.coins` libre) et verrouillées en
+  banque (`set_locks`) ; l'audit de couverture BAISSE désormais une offre
+  découverte au prix que la bourse couvre (amend, la lignée continue) au
+  lieu de l'annuler, et classe les lignées par t0.
+- Crédibilité (C5, §3.6) : aucune offre d'outil, d'équipement ou D-B dont
+  le plafond est sous le plancher public de l'objet (valeur de basse
+  alchimie, ou prix courant échangé / 4, au moins 1) ; une offre de
+  souhait devenue non crédible est retirée (`credibility`). Les achats
+  bloquants (`market:buy`) n'y sont pas soumis (le planner choisit déjà
+  la jambe sur le portefeuille).
+- Annulations motivées (`cancel {reason}`) : `amended` (réservé),
+  `gear_plan`, `audit`, `need_met`, `need_gone`, `credibility`.
+- Mesure : `orchestrator economy` imprime la section marché = critères
+  §6 (`Store::market_criteria`).
+- Un carnet par objet, billet compris (constat M9 2026-11-16 : Gold bar
+  ask 51 sur 2357, bid 59 sur son billet 2358, jamais croisés, ~40
+  objets coupés en deux) : `op_place` range un ordre posé sur un billet
+  dans le carnet de l'objet de base (`market_audit::book_item`) ; au
+  démarrage, les ordres au repos sur un billet passent au carnet de base
+  (`rebase_note_orders`, idempotent : la correspondance billet → objet
+  vient de gamedata, que le store ne lit pas, d'où ce pas au boot plutôt
+  que dans la migration SQL). Le deal nomme l'objet de base ; la remise
+  porte des billets (`market_client::trade_id`) et le vendeur retire la
+  forme que sa banque tient : avant, un deal sur l'id du billet faisait
+  retirer le billet lui-même de la banque, qui ne tient que des objets
+  de base.
+Rejeté : statut `amended` (Q1 b retenu, l'existant garde son statut) ;
+annuler les offres non crédibles des besoins bloquants (vague 2, avec la
+courbe) ; garder l'échéance sur l'offre (remise à zéro de la marche une
+fois sur deux, §1.2).

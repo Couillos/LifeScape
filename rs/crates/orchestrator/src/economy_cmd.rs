@@ -5,7 +5,9 @@
 //! at capture), the coin sources and sinks of the window by provenance
 //! (task report coin lines, labelled by the SDK coin ledger), and a
 //! Laspeyres price index of the window against the one before it, on the
-//! fills of player trades.
+//! fills of player trades. The market section prints the live criteria of
+//! plan marché §6 (`Store::market_criteria`, lineages of schema 6), each
+//! beside its 2026-11-16 baseline and target.
 
 use lifescape_store::{laspeyres, Store};
 
@@ -73,7 +75,43 @@ pub fn economy_cli(args: &[String]) -> i32 {
         }
         (Err(error), _) | (_, Err(error)) => println!("fills: {error}"),
     }
+    match store.market_criteria(since, 0, &excluded) {
+        Ok(criteria) => print_market(&criteria, hours),
+        Err(error) => println!("market criteria: {error}"),
+    }
     0
+}
+
+fn share(value: Option<f64>) -> String {
+    value.map_or_else(|| "n/a".to_string(), |ratio| format!("{:.1} %", ratio * 100.0))
+}
+
+/// Seconds as ticks at the tick length this process knows
+/// (`NODE_TICK_RATE`, printed beside: the server runs 60 ms today,
+/// `world.json`), never guessed.
+fn as_ticks(seconds: i64) -> String {
+    let tick_ms = lifescape_sdk::waits::tick_ms().max(1);
+    format!("{} ticks at {tick_ms} ms", (seconds.max(0) as u64).saturating_mul(1000) / tick_ms)
+}
+
+/// Plan marché §6 criteria (baseline 2026-11-16 -> target).
+fn print_market(criteria: &lifescape_store::MarketCriteria, hours: i64) {
+    println!("market (plan marché §6, last {hours} h; baseline 2026-11-16 -> target):");
+    println!("  two-sided objects        {}/{} = {:.1} %   (12.7 % -> >= 35 %)", criteria.two_sided_items, criteria.active_items, criteria.two_sided_share() * 100.0);
+    let spread = criteria.median_spread.map_or_else(|| "n/a".to_string(), |ratio| format!("x{ratio:.2}"));
+    println!("  median ask/bid spread    {spread}   (x1.72 -> <= x1.25)");
+    let ratio = criteria.cancel_ratio().map_or_else(|| "n/a".to_string(), |value| format!("{value:.2}"));
+    println!("  true bid cancels/settled {}/{} = {ratio}   (6217/6929 -> <= 0.2)", criteria.buy_true_cancels, criteria.buy_settled);
+    println!("  gear plan cancels        {}   (~5300/24 h -> <= 200)", criteria.gear_plan_cancels);
+    let (lower, same, higher) = criteria.reopened;
+    println!("  reopened lower           {} ({lower} lower, {same} same, {higher} higher)   (46 % -> <= 5 %)", share(criteria.reopened_lower_share()));
+    let life = criteria.median_unserved_life_secs.map_or_else(|| "n/a".to_string(), |secs| format!("{secs} s = {}", as_ticks(secs)));
+    println!("  median unserved buy life {life}   (~1080 s -> >= its horizon)");
+    println!("  volume                   {} units, {} coins   (142957 / 3.75 M per 24 h -> +50 %)", criteria.volume_units, criteria.volume_coins);
+    println!("  consumed objects at 1    {} {:?}   (>= 6 -> 0)", criteria.consumed_at_one.len(), criteria.consumed_at_one);
+    println!("  asks at 1 coin           {} objects, {} orders, {} units   (85 / 353473 u. -> to follow)", criteria.ask_one_items, criteria.ask_one_orders, criteria.ask_one_units);
+    println!("  asks-only, never traded  {}   (65 -> <= 20)", criteria.asks_only_never_traded);
+    println!("  amends                   {} ({:.1}/min)", criteria.amends, criteria.amends as f64 / (hours as f64 * 60.0));
 }
 
 /// Sources and sinks of one object (or every object when `name` is

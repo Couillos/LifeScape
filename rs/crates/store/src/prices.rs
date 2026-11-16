@@ -101,7 +101,7 @@ mod tests {
     fn book_levels_stop_once_the_impact_size_is_covered() -> Result<(), crate::Error> {
         let store = Store::open_in_memory()?;
         store.upsert_item(&crate::Item { item_id: 314, name: "Feather".to_string(), shop_price: 0, alch_value: 0 })?;
-        let order = |side, quantity, price, dormant| crate::NewOrder { account: "t01".to_string(), side, item_id: 314, quantity, price, dormant, clock: 1 };
+        let order = |side, quantity, price, dormant| crate::NewOrder { account: "t01".to_string(), side, item_id: 314, quantity, price, dormant, clock: 1, ..crate::NewOrder::default() };
         store.place_order(&order(crate::OrderSide::Sell, 1, 1, false))?;
         store.place_order(&order(crate::OrderSide::Sell, 60, 4, false))?;
         store.place_order(&order(crate::OrderSide::Sell, 30, 4, false))?;

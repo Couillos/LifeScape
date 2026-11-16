@@ -4,8 +4,9 @@
 use crate::{Error, Store};
 
 /// Buy or sell side of an order.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum OrderSide {
+    #[default]
     Buy,
     Sell,
 }
@@ -35,8 +36,9 @@ impl OrderSide {
 
 /// Lifecycle of an order. Priority loss on amend is enforced by the market
 /// layer (cancel + replace); this crate only records the outcome.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum OrderStatus {
+    #[default]
     Open,
     Matched,
     Settled,
@@ -65,7 +67,11 @@ impl OrderStatus {
 }
 
 /// Caller-supplied fields for a new order. Prices are floored at 1 coin.
-#[derive(Clone, Debug, PartialEq)]
+/// `replaces`: the order an amend replaces (schema 6, decision Q1): the
+/// new row joins its lineage (same root, same t0); `None` opens a new
+/// lineage. `motive`: why the order exists (`need`, `gear`, `surplus`…,
+/// empty when the caller does not say), kept by every amend.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewOrder {
     pub account: String,
     pub side: OrderSide,
@@ -74,10 +80,16 @@ pub struct NewOrder {
     pub price: i64,
     pub dormant: bool,
     pub clock: i64,
+    pub replaces: Option<i64>,
+    pub motive: String,
 }
 
+/// Cancel reason of the row an amend closed (schema 6): the row is
+/// `cancelled` (status unchanged, Q1) but its lineage goes on.
+pub const AMENDED_REASON: &str = "amended";
+
 /// Stored order row.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Order {
     pub order_id: i64,
     pub account: String,
@@ -90,6 +102,28 @@ pub struct Order {
     pub dormant: bool,
     pub created_clock: i64,
     pub updated_clock: i64,
+    /// Order this row replaced (amend), `None` for a lineage root.
+    pub replaces: Option<i64>,
+    /// First order of the lineage (itself for a root).
+    pub root_id: i64,
+    /// Clock the lineage opened (t0), kept by every amend.
+    pub root_clock: i64,
+    pub motive: String,
+    /// Why a cancelled row closed (`amended`, `gear_plan`, `audit`…;
+    /// empty when the canceller did not say).
+    pub cancel_reason: String,
+}
+
+impl Order {
+    /// t0 of the lineage: its root's clock (the row's own creation for a
+    /// row the schema-6 migration never saw).
+    pub fn lineage_clock(&self) -> i64 {
+        if self.root_clock > 0 {
+            self.root_clock
+        } else {
+            self.created_clock
+        }
+    }
 }
 
 fn map_order(row: &rusqlite::Row<'_>) -> Result<Order, Error> {
@@ -108,11 +142,17 @@ fn map_order(row: &rusqlite::Row<'_>) -> Result<Order, Error> {
         dormant: dormant_flag != 0,
         created_clock: row.get(9)?,
         updated_clock: row.get(10)?,
+        replaces: row.get(11)?,
+        root_id: row.get(12)?,
+        root_clock: row.get(13)?,
+        motive: row.get(14)?,
+        cancel_reason: row.get(15)?,
     })
 }
 
 const ORDER_COLUMNS: &str = "order_id, account, side, item_id, quantity, remaining, \
-     price, status, dormant, created_clock, updated_clock";
+     price, status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, \
+     motive, cancel_reason";
 
 impl Store {
     /// Records a new open order, returns its id.
@@ -129,10 +169,14 @@ impl Store {
         if new_order.price < 1 {
             return Err(Error::Invalid(format!("bad order price {}", new_order.price)));
         }
+        let (root_id, root_clock) = match new_order.replaces {
+            Some(previous) => self.lineage_of(previous, new_order)?,
+            None => (0, new_order.clock),
+        };
         self.connection.execute(
             "INSERT INTO orders(account, side, item_id, quantity, remaining, price, \
-             status, dormant, created_clock, updated_clock) \
-             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7)",
+             status, dormant, created_clock, updated_clock, replaces, root_id, root_clock, motive) \
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'open', ?6, ?7, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 new_order.account,
                 new_order.side.as_str(),
@@ -141,9 +185,39 @@ impl Store {
                 new_order.price,
                 i64::from(new_order.dormant),
                 new_order.clock,
+                new_order.replaces,
+                root_id,
+                root_clock,
+                new_order.motive,
             ],
         )?;
-        Ok(self.connection.last_insert_rowid())
+        let order_id = self.connection.last_insert_rowid();
+        if root_id == 0 {
+            // A fresh order is the root of its own lineage.
+            self.connection.execute("UPDATE orders SET root_id = ?1 WHERE order_id = ?1", rusqlite::params![order_id])?;
+        }
+        Ok(order_id)
+    }
+
+    /// Root and t0 of the lineage `previous` belongs to, for the amend
+    /// `new_order` (same account, side and object, or refused).
+    fn lineage_of(&self, previous: i64, new_order: &NewOrder) -> Result<(i64, i64), Error> {
+        let Some(old) = self.get_order(previous)? else {
+            return Err(Error::NotFound(format!("replaced order {previous}")));
+        };
+        if old.account != new_order.account || old.side != new_order.side || old.item_id != new_order.item_id {
+            return Err(Error::Invalid(format!(
+                "order {previous} ({} {} {}) is another lineage than {} {} {}",
+                old.account,
+                old.side.as_str(),
+                old.item_id,
+                new_order.account,
+                new_order.side.as_str(),
+                new_order.item_id
+            )));
+        }
+        let root = if old.root_id > 0 { old.root_id } else { old.order_id };
+        Ok((root, old.lineage_clock()))
     }
 
     /// Changes the limit price of an open order and stamps the update clock.
@@ -169,13 +243,19 @@ impl Store {
 
     /// Marks an order cancelled. Fills stay recorded in deals/executions.
     pub fn cancel_order(&self, order_id: i64, clock: i64) -> Result<(), Error> {
+        self.cancel_order_because(order_id, clock, "")
+    }
+
+    /// `cancel_order` recording why (`amended` for the row an amend
+    /// replaced: the measure of true cancellations reads it, schema 6).
+    pub fn cancel_order_because(&self, order_id: i64, clock: i64, reason: &str) -> Result<(), Error> {
         let touched = self.connection.execute(
             // A partly filled order (`matched`) still rests its remainder
             // on the book: it must stay cancellable, or the remainder can
             // never be withdrawn (audit, brain, operator).
-            "UPDATE orders SET status = 'cancelled', updated_clock = ?1 \
+            "UPDATE orders SET status = 'cancelled', updated_clock = ?1, cancel_reason = ?3 \
              WHERE order_id = ?2 AND status IN ('open','matched')",
-            rusqlite::params![clock, order_id],
+            rusqlite::params![clock, order_id, reason],
         )?;
         if touched == 0 {
             return Err(Error::NotFound(format!("open order {order_id}")));
@@ -206,6 +286,17 @@ impl Store {
             return Err(Error::NotFound(format!("non-final order {order_id}")));
         }
         Ok(())
+    }
+
+    /// Moves the resting orders (open, partly matched) of `from` to the
+    /// book of `to` (a banknote's orders to its base object: one book per
+    /// object, 2026-11-16). Final rows keep their history. Returns the
+    /// rows moved.
+    pub fn rebase_resting_orders(&self, from: i64, to: i64) -> Result<usize, Error> {
+        Ok(self.connection.execute(
+            "UPDATE orders SET item_id = ?2 WHERE item_id = ?1 AND status IN ('open','matched')",
+            rusqlite::params![from, to],
+        )?)
     }
 
     /// One order by id.
@@ -288,6 +379,7 @@ mod orders_tests {
             price: 3,
             dormant: false,
             clock: 1_700_000_000,
+            ..NewOrder::default()
         }
     }
 
@@ -322,6 +414,35 @@ mod orders_tests {
             Some(OrderStatus::Cancelled)
         );
         assert!(store.account_orders("t02")?.is_empty());
+        Ok(())
+    }
+
+    /// Schema 6 (plan marché M1): an amend joins the lineage of the row
+    /// it replaces (root and t0 kept, motive carried by the caller); the
+    /// replaced row closes `amended`; a fresh order is its own root.
+    #[test]
+    fn amends_keep_root_and_t0() -> Result<(), Error> {
+        let store = Store::open_in_memory()?;
+        crate::ensure_test_item(&store, 314)?;
+        let mut first = sample_order("t04");
+        first.motive = "need".to_string();
+        let root = store.place_order(&first)?;
+        let step = |previous: i64, price: i64, clock: i64| -> Result<i64, Error> {
+            let next = store.place_order(&NewOrder { price, clock, replaces: Some(previous), motive: "need".to_string(), ..sample_order("t04") })?;
+            store.cancel_order_because(previous, clock, AMENDED_REASON)?;
+            Ok(next)
+        };
+        let second = step(root, 4, 1_700_002_000)?;
+        let third = step(second, 5, 1_700_004_000)?;
+        let row = store.get_order(third)?.expect("third row");
+        assert_eq!((row.root_id, row.root_clock, row.replaces, row.motive.as_str()), (root, 1_700_000_000, Some(second), "need"));
+        assert_eq!(row.lineage_clock(), 1_700_000_000, "t0 is the root's clock, not the amend's");
+        let replaced = store.get_order(second)?.expect("second row");
+        assert_eq!((replaced.status, replaced.cancel_reason.as_str()), (OrderStatus::Cancelled, AMENDED_REASON));
+        let fresh = store.get_order(root)?.expect("root row");
+        assert_eq!((fresh.root_id, fresh.root_clock, fresh.replaces), (root, 1_700_000_000, None));
+        let foreign = store.place_order(&NewOrder { replaces: Some(third), ..sample_order("t05") });
+        assert!(matches!(foreign, Err(Error::Invalid(_))), "another account never joins the lineage: {foreign:?}");
         Ok(())
     }
 

@@ -5,9 +5,9 @@
 use crate::Error;
 
 /// Latest schema version this build understands.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
-const MIGRATION_V1: &str = "
+pub(crate) const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS items(
     item_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS trends(
 /// Migration 2 (PRD 2, D48): item holdings move from the 30-minute JSON
 /// sampler to SQLite. Hourly points (one per item and hour) are kept 8
 /// days, daily points (last measure of each day) 400 days.
-const MIGRATION_V2: &str = "
+pub(crate) const MIGRATION_V2: &str = "
 CREATE TABLE IF NOT EXISTS holdings_hourly(
     item_id INTEGER NOT NULL,
     taken_at INTEGER NOT NULL,
@@ -134,7 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_holdings_hourly_time ON holdings_hourly(taken_at)
 /// daemon at ingest time (task errors, nav dossiers, failed deals, brain
 /// abandons). Pulled rows carry a unique `source_ref` (rescan-safe),
 /// pushed rows leave it NULL. Retention is the collector's job.
-const MIGRATION_V3: &str = "
+pub(crate) const MIGRATION_V3: &str = "
 CREATE TABLE IF NOT EXISTS error_events(
     error_id INTEGER PRIMARY KEY AUTOINCREMENT,
     clock INTEGER NOT NULL,
@@ -169,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_error_events_source ON error_events(source, clock
 /// before keep NULL (unknown side) and a 0/0 split: counted in `volume`
 /// only, never guessed. Columns only, nothing dropped or rewritten; the
 /// whole step is one transaction with its `user_version` bump.
-const MIGRATION_V4: &str = "
+pub(crate) const MIGRATION_V4: &str = "
 ALTER TABLE deals ADD COLUMN taker_side TEXT;
 ALTER TABLE executions ADD COLUMN taker_side TEXT;
 ALTER TABLE candles ADD COLUMN buy_volume INTEGER NOT NULL DEFAULT 0;
@@ -186,7 +186,7 @@ PRAGMA user_version = 4;
 /// XP-bearing units (product, input, cast, kill, damage) and the alerts
 /// (unattributed flows, coherence residuals). Columns and tables only,
 /// nothing dropped; one transaction with its version bump.
-const MIGRATION_V5: &str = "
+pub(crate) const MIGRATION_V5: &str = "
 ALTER TABLE task_reports ADD COLUMN measure_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE task_reports ADD COLUMN planner_method TEXT NOT NULL DEFAULT '';
 ALTER TABLE task_reports ADD COLUMN method_source TEXT NOT NULL DEFAULT '';
@@ -278,7 +278,35 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
     if found < 5 {
         apply_in_transaction(connection, MIGRATION_V5, 5)?;
     }
+    if found < 6 {
+        apply_lineage_v6(connection)?;
+    }
     Ok(())
+}
+
+/// Migration 6 (plan marché M0, decision Q1): order lineage columns,
+/// then the history reclassified (`lineage::reclassify_history`: an
+/// amend is a replacement within 1 s, same account, object and side).
+/// One transaction with its version bump: a failure leaves schema 5.
+fn apply_lineage_v6(connection: &rusqlite::Connection) -> Result<(), Error> {
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|source| Error::Sql(format!("migration 6 begin: {source}")))?;
+    let migrated = connection
+        .execute_batch(crate::lineage::MIGRATION_V6_COLUMNS)
+        .map_err(|source| Error::Sql(format!("migration 6: {source}")))
+        .and_then(|()| crate::lineage::reclassify_history(connection))
+        .and_then(|counts| {
+            connection.execute_batch("PRAGMA user_version = 6").map_err(|source| Error::Sql(format!("migration 6 version: {source}")))?;
+            Ok(counts)
+        });
+    if let Err(error) = migrated {
+        let _ignored = connection.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    connection
+        .execute_batch("COMMIT")
+        .map_err(|source| Error::Sql(format!("migration 6 commit: {source}")))
 }
 
 /// Runs one migration step and its version bump atomically: a failed

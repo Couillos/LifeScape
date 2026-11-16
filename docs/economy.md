@@ -18,6 +18,33 @@ couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
 derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
 marchands), `sim` (simulateur à graines fixes).
 
+Tick réel (plan marché Q0, 2026-11-16) : le serveur tourne à 60 ms
+(`../lostcity/engine/data/config/world.json`, `tickRate` 60 ; la variable
+`NODE_TICK_RATE=600` du processus ne sert qu'à migrer un ancien `.env`).
+Toute durée de marché s'exprime en ticks : 2000 ticks = 120 s, l'attente
+de fill de 6000 ticks = 6 min, un horizon de 36 000 ticks = 36 min
+(×10 le jour où le serveur passera à 600 ms).
+
+Lignée et motif (plan marché M0-M2, schéma 6, `decisions.md`
+2026-11-16) : un amend (annulation + nouvelle ligne : la priorité est
+perdue) reste la MÊME intention. La ligne de remplacement porte
+`replaces` (la ligne qu'elle remplace), `root_id` et `root_clock` (t0) de
+sa lignée, le `motive` de l'ordre ; la ligne remplacée reste `cancelled`
+avec `cancel_reason = 'amended'`. Une vraie annulation est une ligne
+terminale annulée (jamais remplacée), sa raison dite (`gear_plan`,
+`audit`, `need_met`, `need_gone`, `credibility`). L'âge d'une offre (poids
+de la demande, `market_demand`), son rang à l'audit de couverture et sa
+durée de vie se lisent sur la lignée. Motifs et horizons
+(`market_lineage`) : `need` 6 000 ticks (nœud bloquant, offre D-B),
+`gear`/`tool`/`surplus`/`flip` 36 000, `stock`/`loot` 72 000 ; vide =
+non dit (ordres de worker). `QuoteBounds` porte lignée, t0, motif,
+horizon et ouverture (la courbe de concession de la vague 2 les lira).
+Un besoin garde UNE offre par (compte, objet) : `place_obtain_bid` et
+les souhaits reprennent l'offre au repos (sa marche continue) au lieu de
+l'annuler ; l'échéance de 6000 ticks termine la jambe marché du nœud,
+pas l'offre. `orchestrator economy [heures]` imprime les critères du
+plan (§ Section marché ci-dessous).
+
 Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
 ordre posé avec un `ceiling` (acheteur) ou un `floor` (vendeur) fait un
 pas de 5 % (≥ 1 pièce) par fenêtre de patience (2000 ticks depuis le
@@ -35,8 +62,9 @@ ouverture à la référence échangée (ou au meilleur bid plus riche), à
 sous la réserve (`seller_open`). Une vente monte sans plafond propre
 (seule la demande l'arrête). Voir § Prix par l'offre
 et la demande et § Réserve vendeur. Les PNJ n'ancrent plus rien : aucun bot ne
-vend à un marchand, et l'achat marchand est réservé aux objets non
-productibles en F2P (D-A, voir `decisions.md`). Marchands (`market:flip`, ~10 %) :
+vend à un marchand (jusqu'à la vague 2, Q3) ; depuis le 2026-11-15 tout
+objet F2P qu'un marchand stocke peut lui être acheté (§ Achats aux
+marchands de `planner.md`, `decisions.md`). Marchands (`market:flip`, ~10 %, supprimé en vague 3) :
 sélection sur écart/volume, plafonds `max_capital_share` (10 %),
 `max_stock_items` (500), `max_book_share` (25 % du côté).
 
@@ -79,6 +107,22 @@ le daemon l'ouvre (`open_job`, admission et cadence respectées, une à la
 fois, `market_absent.rs`) ; compte staff/privé, ouverture refusée ou
 absence > 3000 ticks → `no_show`, ordres de l'absent annulés, côté
 honnête replacé avec sa priorité.
+
+### Section marché d'`orchestrator economy` (critères du plan marché §6)
+
+Sur la fenêtre `[maintenant − heures, maintenant)`, staff exclu
+(`Store::market_criteria`) : part des objets actifs cotés des deux côtés
+(base 12,7 % → ≥ 35 %) ; écart médian meilleur ask / meilleur bid sur
+ceux-là (×1,72 → ≤ ×1,25) ; lignées d'achat terminées : vraies
+annulations / réglées (6 217 / 6 929 → ≤ 0,2) ; annulations du plan
+d'équipement (`gear_plan`, ~5 300/24 h → ≤ 200) ; lignées d'achat
+annulées puis rouvertes plus bas par le même compte (46 % → ≤ 5 %) ; vie
+médiane d'une lignée d'achat non servie, de t0 à son annulation (~1 080 s
+→ ≥ son horizon) ; volume réglé (unités, pièces) ; objets échangés à 1
+pièce dont la consommation mesurée (`task_flows` input/ammo/rune/bait/
+supply/food, lignes v1 `consumed`) est > 0 (≥ 6 → 0) ; asks à 1 pièce
+(objets, ordres, unités) ; objets en asks seuls jamais échangés (65 →
+≤ 20) ; amends de la fenêtre (par minute : CPU de la marche).
 
 ## Place de Varrock (échange physique)
 

@@ -59,6 +59,15 @@ pub fn base_of(id: i64) -> i64 {
     }
 }
 
+/// Book of an order placed on `id` (2026-11-16, found live by M9: the
+/// carnets were cut in two, Gold bar ask 51 on 2357 and bid 59 on its
+/// banknote 2358 never crossed): a banknote trades in its base object's
+/// book. The handover carries the note anyway (`market_client::trade_id`)
+/// and the bank holds base objects.
+pub fn book_item(id: i64) -> i64 {
+    base_of(id)
+}
+
 /// Sellable holdings of one account: pack and bank (never worn), notes
 /// folded into their base object, coins apart.
 pub fn sellable(inv: &[(i64, i64)], bank: &[(i64, i64)]) -> (i64, BTreeMap<i64, i64>) {
@@ -81,20 +90,49 @@ pub fn sellable(inv: &[(i64, i64)], bank: &[(i64, i64)]) -> (i64, BTreeMap<i64, 
 /// keep their claim (they were placed first); an order only partly
 /// covered goes whole: a book never shows lots it cannot hand over.
 pub fn uncovered(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promised_coins: i64, promised: &BTreeMap<i64, i64>) -> Vec<i64> {
+    let plan = plan_coverage(orders, coins, stock, promised_coins, promised, false);
+    plan.cancel
+}
+
+/// What one audit round does to an account's orders (plan marché C4).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AuditPlan {
+    /// Orders withdrawn: a sell its stock cannot cover, a bid the purse
+    /// cannot keep at even 1 coin a unit.
+    pub cancel: Vec<i64>,
+    /// Bids lowered to what the purse still covers `(order, price)`: an
+    /// ordered cut of the ceiling instead of a cancel (C4: the bot spent
+    /// coins at a shop or a toll; its need and lineage go on).
+    pub lower: Vec<(i64, i64)>,
+}
+
+/// `uncovered` that lowers an uncovered bid to the per-unit price the
+/// purse left still covers (at least 1 coin) instead of cancelling it.
+/// Lineages keep their claim by t0 (an amend never loses its rank here).
+pub fn audit_plan(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promised_coins: i64, promised: &BTreeMap<i64, i64>) -> AuditPlan {
+    plan_coverage(orders, coins, stock, promised_coins, promised, true)
+}
+
+fn plan_coverage(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promised_coins: i64, promised: &BTreeMap<i64, i64>, lower_bids: bool) -> AuditPlan {
     let mut sorted: Vec<&Order> = orders.iter().collect();
-    sorted.sort_by_key(|order| (order.created_clock, order.order_id));
+    sorted.sort_by_key(|order| (order.lineage_clock(), order.order_id));
     let mut purse = coins - promised_coins;
     let mut left: BTreeMap<i64, i64> = stock.clone();
     for (item, qty) in promised {
         *left.entry(base_of(*item)).or_insert(0) -= qty;
     }
-    let mut cancel = Vec::new();
+    let mut plan = AuditPlan::default();
+    let cancel = &mut plan.cancel;
     for order in sorted {
         let remaining = order.remaining.max(0);
         if order.side == OrderSide::Buy {
             let cost = remaining * order.price.max(0);
+            let affordable = if remaining > 0 { purse.max(0) / remaining } else { 0 };
             if purse >= cost {
                 purse -= cost;
+            } else if lower_bids && affordable >= 1 {
+                plan.lower.push((order.order_id, affordable));
+                purse -= affordable * remaining;
             } else {
                 cancel.push(order.order_id);
             }
@@ -107,7 +145,7 @@ pub fn uncovered(orders: &[Order], coins: i64, stock: &BTreeMap<i64, i64>, promi
             }
         }
     }
-    cancel
+    plan
 }
 
 /// What a new order may still commit (live 2026-11-13, deals 1716/1722,
@@ -224,10 +262,11 @@ impl MarketService {
                     *promised.entry(deal.item_id).or_insert(0) += deal.quantity;
                 }
             }
-            let bad = uncovered(&orders, coins, &stock, promised_coins, &promised);
-            if !bad.is_empty() {
-                cancelled += self.cancel_rows(&account, &bad, "not covered by its holdings");
+            let plan = audit_plan(&orders, coins, &stock, promised_coins, &promised);
+            if !plan.cancel.is_empty() {
+                cancelled += self.cancel_rows(&account, &plan.cancel, "not covered by its holdings");
             }
+            self.lower_rows(&account, &plan.lower);
         }
         cancelled
     }
@@ -273,6 +312,32 @@ impl MarketService {
         out
     }
 
+    /// Lowers each uncovered bid to the price its purse covers (C4): an
+    /// amend (the lineage goes on), its walk capped there.
+    fn lower_rows(&self, account: &str, lowered: &[(i64, i64)]) {
+        let mut done = Vec::new();
+        for (order, price) in lowered {
+            let reply = self.handle(&lifescape_json::object(vec![
+                ("op", lifescape_json::str_value("amend")),
+                ("account", lifescape_json::str_value(account)),
+                ("order", Value::Int(*order)),
+                ("price", Value::Int(*price)),
+            ]));
+            let Some(replacement) = reply.get("order").as_i64().filter(|_| reply.get("ok").as_bool() == Some(true)) else {
+                crate::logln!("market-audit: {account}: bid {order} not lowered to {price}: {:?}", reply.get("error").as_str());
+                continue;
+            };
+            if let Some(bounds) = self.lock_engine().quote_bounds.get_mut(&replacement) {
+                bounds.ceiling = bounds.ceiling.min(*price);
+                bounds.floor = bounds.floor.min(*price);
+            }
+            done.push((*order, replacement, *price));
+        }
+        if !done.is_empty() {
+            crate::logln!("market-audit: {account}: {} bid(s) lowered to what its coins cover (order, replacement, price): {done:?}", done.len());
+        }
+    }
+
     fn cancel_rows(&self, account: &str, ids: &[i64], why: &str) -> usize {
         let mut done = 0usize;
         for id in ids {
@@ -280,6 +345,7 @@ impl MarketService {
                 ("op", lifescape_json::str_value("cancel")),
                 ("account", lifescape_json::str_value(account)),
                 ("order", Value::Int(*id)),
+                ("reason", lifescape_json::str_value("audit")),
             ]));
             if reply.get("ok").as_bool() == Some(true) {
                 done += 1;
@@ -403,7 +469,25 @@ mod tests {
             dormant: false,
             created_clock: clock,
             updated_clock: clock,
+            ..Order::default()
         }
+    }
+
+    /// Plan marché C4: a bot that spent coins at a shop keeps its bids;
+    /// the uncovered one (newest lineage) is lowered to what its purse
+    /// still covers, a bid it cannot keep at 1 coin goes. Lineages rank
+    /// by t0: a walked (amended) bid keeps its claim over a newer one.
+    #[test]
+    fn uncovered_bids_are_lowered_not_cancelled() {
+        use super::{audit_plan, AuditPlan};
+        let mut walked = order(9, OrderSide::Buy, 317, 10, 2, 50);
+        walked.root_clock = 5;
+        let newer = order(8, OrderSide::Buy, 1511, 5, 3, 20);
+        let orders = vec![newer.clone(), walked];
+        // 10 x 2 (t0 5) first, then 5 x 3 = 15 with 8 coins left: 1 each.
+        assert_eq!(audit_plan(&orders, 28, &BTreeMap::new(), 0, &BTreeMap::new()), AuditPlan { cancel: vec![], lower: vec![(8, 1)] });
+        assert_eq!(audit_plan(&orders, 24, &BTreeMap::new(), 0, &BTreeMap::new()), AuditPlan { cancel: vec![8], lower: vec![] }, "4 coins for 5 units: gone");
+        assert_eq!(audit_plan(&[newer], 30, &BTreeMap::new(), 0, &BTreeMap::new()), AuditPlan::default());
     }
 
     /// Live 2026-11-13: lara_lane listed raw shrimps (317) she did not own.

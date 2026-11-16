@@ -327,7 +327,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
         let ceiling = nature_ceiling(current_price(NATURE_RUNE), margin);
         if missing > 0 && ceiling >= 1 && coins >= ceiling {
             let qty = missing.min(coins / ceiling.max(1));
-            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling) {
+            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling, crate::market_lineage::STOCK) {
                 crate::logln!("brain {}: alchemy needs {qty} nature runes, bid @ {price} (ceiling {ceiling}) for {item}", job.account);
             }
             placed += 1;
@@ -342,7 +342,7 @@ pub(crate) fn market_pass(job: &Job, life: &Life, live: &Value) -> usize {
             if qty < 1 {
                 continue;
             }
-            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling) {
+            if let Ok(crate::market_reprice::StandingBid::Placed { price, .. }) = crate::market_reprice::keep_bid(&service, &job.account, id, qty, ceiling, crate::market_lineage::STOCK) {
                 crate::logln!("brain {}: buys {qty} {item} @ {price} to alch (ask {ask}, alch floor {ceiling}, profit {} each)", job.account, ceiling - ask);
             }
             placed += 1;

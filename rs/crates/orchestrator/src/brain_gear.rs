@@ -22,6 +22,13 @@
 //!   (one open step at a time), launched before the goal's next node;
 //! - bids on wearables the plan no longer wants are cancelled (a slot
 //!   upgraded past it, a tier the budget dropped);
+//! - the plan is HELD between passes (plan marché M2, C2:
+//!   `brain_gear_hold`): smoothed budget, a slot keeps its piece down to
+//!   70 % of its initial ceiling, a full replan at most once per 36 000
+//!   ticks or on a tier gain: a wallet that swings no longer cancels and
+//!   re-places bids every 60 s;
+//! - a want whose ceiling is under the object's public floor bids
+//!   nothing (§3.6 credibility, C5);
 //! - an Iron (no market) plans only the pieces an NPC shop sells (D-A,
 //!   `shop_only`), priced at the shop, and files them as steps.
 //!
@@ -199,6 +206,7 @@ fn cancel_order(service: &crate::market_service::MarketService, account: &str, o
         ("op", lifescape_json::str_value("cancel")),
         ("account", lifescape_json::str_value(account)),
         ("order", Value::Int(order)),
+        ("reason", lifescape_json::str_value(lifescape_store::market_criteria::GEAR_PLAN_REASON)),
     ]));
     reply.get("ok").as_bool() == Some(true)
 }
@@ -211,7 +219,7 @@ fn cancel_stale_bids(job: &Job, life: &Life, wanted: &[String]) {
     let Some(service) = crate::market_service::shared() else { return };
     let spared = crate::brain_wishlist::wanted_names(life);
     let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
-    for row in rows.iter().filter(|row| cancellable(row)) {
+    for row in rows.iter().filter(|row| cancellable(row) && row.motive != crate::market_lineage::NEED) {
         let Some(name) = name_of(row.item_id) else { continue };
         if gear_wearable(&name) && !wanted.contains(&name) && !spared.contains(&name) {
             let closed = cancel_order(&service, &job.account, row.order_id);
@@ -383,7 +391,11 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
     }
     let service = crate::market_service::shared();
     let budget = gear_ladder::wallet_ceiling(gear_free_coins(job), gear_ladder::GEAR_SHARE_PCT);
-    let wants = gear_plan::plan_gear(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    let owned_wearables: Vec<String> = owned.iter().filter(|name| gear_wearable(name)).cloned().collect();
+    let signature = crate::brain_gear_hold::gear_signature(style_name(style), &levels, &owned_wearables);
+    let now_tick = crate::brain_stuck::seconds_to_ticks(now as i64);
+    let plan = |budget: i64| gear_plan::plan_gear(style, &levels, &quests, &owned, budget, &|item| expected_price(service.as_ref(), item));
+    let wants = crate::brain_gear_hold::held_wants(&job.account, budget, now_tick, &signature, &plan);
     let wanted: Vec<String> = wants.iter().map(|want| want.item.clone()).collect();
     cancel_stale_bids(job, life, &wanted);
     let stepping = crate::brain_wishlist::wanted_names(life);
@@ -404,7 +416,11 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
             continue;
         }
         let (Some(service), Some(id)) = (service.as_ref(), id) else { continue };
-        match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, want.ceiling) {
+        let floor = crate::market_lineage::live_floor(service, id, &want.item);
+        if !crate::market_lineage::credible(want.ceiling, floor) {
+            continue;
+        }
+        match crate::market_reprice::keep_bid_from(service, &job.account, id, 1, want.expected, want.ceiling, crate::market_lineage::GEAR) {
             Ok(crate::market_reprice::StandingBid::Placed { price, .. }) => {
                 crate::logln!(
                     "brain {}: gear {} bid @ {price} (expected {}, ceiling {}, budget {budget}), waiting for a producer",
@@ -449,6 +465,7 @@ mod tests {
             dormant: false,
             created_clock: 0,
             updated_clock: 0,
+            ..Order::default()
         }
     }
 

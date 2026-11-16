@@ -124,6 +124,13 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
         Some(reserve) => lifescape_planner::derived_demand::derived_bounds(reserve, wallet),
         None => (1, wallet),
     };
+    // Credibility (plan marché §3.6, C5): beside a production the bid is
+    // optional; one under the object's public floor is noise, never placed.
+    let floor = crate::market_lineage::live_floor(&service, id, item);
+    if !crate::market_lineage::credible(ceiling, floor) {
+        crate::logln!("brain {}: no standing bid on {item}: ceiling {ceiling} under its public floor {floor}, production alone", job.account);
+        return;
+    }
     let price = lifescape_market::remembered_bid(ctx.price.max(1), ctx.best_ask, ceiling, service.own_buy_price(&job.account, id)).max(open).min(ceiling.max(1));
     let reply = service.handle(&object(vec![
         ("op", str_value("place")),
@@ -133,6 +140,7 @@ pub fn place_standing_bid(job: &Job, node: &Node, ctx: &ReadyCtx, derived: &dyn 
         ("qty", Value::Int(quantity)),
         ("price", Value::Int(price)),
         ("ceiling", Value::Int(ceiling.max(price))),
+        ("motive", str_value(crate::market_lineage::NEED)),
     ]));
     let derived_note = reserve.map(|value| format!(", derived reserve {value:.0}")).unwrap_or_default();
     crate::logln!(
@@ -177,31 +185,78 @@ pub fn buying_in_flight(account: &str, item: i64, deals: &[lifescape_store::Deal
 /// order is pure bookkeeping, the handover is the convene loop's): the
 /// covered best ask at once, else a bid at its own last fill price (the
 /// reference when it never bought the item) walking up to the ceiling. Orders what is still missing, capped by the wallet (a
-/// partial buy: the next resolve produces or buys the rest). Replaces
-/// any open bid of the account on that object.
+/// partial buy: the next resolve produces or buys the rest).
+/// Persistent need (plan marché M2, C3): the account's resting bid on
+/// the object (its `need` lineage first) is TAKEN OVER, its price and
+/// walk kept, its ceiling following the wallet; never cancelled and
+/// re-placed lower at the remembered price.
 pub fn place_obtain_bid(job: &Job, node: &Node, ctx: &ReadyCtx) -> Result<i64, String> {
     let NodeKind::ObtainItems { item, count } = &node.kind else { return Err("not an obtain node".to_string()) };
     let service = crate::market_service::shared().ok_or("market service not running")?;
     let id = obj_id(item).ok_or_else(|| format!("unknown item {item}"))?;
-    service.cancel_open_for(&job.account, id, lifescape_store::OrderSide::Buy);
     let quantity = lifescape_planner::resolve_obtain::buy_quantity(ctx, *count);
     let ceiling = lifescape_planner::resolve_obtain::bid_ceiling(ctx, quantity);
-    let (_, ask) = service.lock_engine().books.get(&id).map(|book| book.best()).unwrap_or((None, None));
-    let price = lifescape_market::remembered_bid(ctx.price.max(1), ask, ceiling, service.own_buy_price(&job.account, id));
-    let reply = service.handle(&object(vec![
-        ("op", str_value("place")),
-        ("account", str_value(&job.account)),
-        ("side", str_value("buy")),
-        ("item", Value::Int(id)),
-        ("qty", Value::Int(quantity)),
-        ("price", Value::Int(price)),
-        ("ceiling", Value::Int(ceiling.max(price))),
-    ]));
-    if reply.get("ok").as_bool() != Some(true) {
-        return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
+    let (order, price, kept) = match keep_need_bid(&service, &job.account, id, quantity, ceiling)? {
+        crate::market_reprice::StandingBid::Placed { order, price } => (order, price, false),
+        crate::market_reprice::StandingBid::Kept { order, price } => (order, price, true),
+    };
+    let how = if kept { "kept (its lineage goes on)" } else { "placed" };
+    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} {how} (ceiling {ceiling}, held {}), awaiting the fill", job.account, ctx.held);
+    Ok(order)
+}
+
+/// The `need` bid of `account` on `item` for `quantity`, ceiling
+/// `ceiling`: the resting one taken over, else a new lineage
+/// (`market_reprice::keep_bid_from`, motive `need`).
+pub(crate) fn keep_need_bid(service: &crate::market_service::MarketService, account: &str, item: i64, quantity: i64, ceiling: i64) -> Result<crate::market_reprice::StandingBid, String> {
+    crate::market_reprice::keep_bid_from(service, account, item, quantity, 1, ceiling, crate::market_lineage::NEED)
+}
+
+/// Seconds between two orphan-need sweeps of one account.
+pub const ORPHAN_SWEEP_SECS: f64 = 60.0;
+
+fn last_sweep() -> &'static std::sync::Mutex<std::collections::HashMap<String, f64>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Resting `need` bids whose object no open obtain node of the life
+/// wants any more (`wanted`: debug names): the need disappeared (node
+/// abandoned or withdrawn, goal changed), the bid goes (§3.5). Pure.
+pub fn orphan_needs(rows: &[lifescape_store::Order], wanted: &[String], name_of: &dyn Fn(i64) -> Option<String>) -> Vec<i64> {
+    rows.iter()
+        .filter(|row| crate::brain_gear::cancellable(row) && row.motive == crate::market_lineage::NEED)
+        .filter(|row| name_of(row.item_id).is_some_and(|name| !wanted.contains(&name)))
+        .map(|row| row.order_id)
+        .collect()
+}
+
+/// One sweep (rate-limited per account): cancels the orphan need bids
+/// (reason `need_gone`). An expired fill wait no longer cancels its bid
+/// (M2): this sweep is where a need's bid ends when its node is gone.
+pub fn release_orphan_needs(job: &Job, life: &lifescape_planner::Life) -> usize {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0);
+    {
+        let mut table = last_sweep().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if table.get(&job.account).is_some_and(|last| now - last < ORPHAN_SWEEP_SECS) {
+            return 0;
+        }
+        table.insert(job.account.clone(), now);
     }
-    crate::logln!("brain {}: bid {quantity}/{count} {item} @ {price} (ceiling {ceiling}, held {}), awaiting the fill", job.account, ctx.held);
-    Ok(reply.get("order").as_i64().unwrap_or(-1))
+    let Some(service) = crate::market_service::shared() else { return 0 };
+    let rows = service.lock_store().account_orders(&job.account).unwrap_or_default();
+    let wanted = crate::brain_wishlist::wanted_names(life);
+    let mut closed = 0;
+    for order in orphan_needs(&rows, &wanted, &crate::brain_gear::name_of) {
+        let reply = service.handle(&object(vec![("op", str_value("cancel")), ("account", str_value(&job.account)), ("order", Value::Int(order)), ("reason", str_value("need_gone"))]));
+        if reply.get("ok").as_bool() == Some(true) {
+            closed += 1;
+        }
+    }
+    if closed > 0 {
+        crate::logln!("brain {}: {closed} need bid(s) cancelled: no open node wants their object any more", job.account);
+    }
+    closed
 }
 
 /// True once the account's buy on `item` (debug name) has run its course:
@@ -220,16 +275,37 @@ pub fn buy_closed(account: &str, item: &str) -> bool {
 }
 
 /// Cancels the account's open buy orders on `item` (debug name): a
-/// landed obtain closes its standing bid, an expired wait its stale one.
+/// landed obtain closes its standing bid (reason `need_met`). An expired
+/// fill wait keeps its bid (plan marché M2).
 pub fn cancel_open_buys(account: &str, item: &str) -> usize {
     let (Some(service), Some(id)) = (crate::market_service::shared(), obj_id(item)) else { return 0 };
-    service.cancel_open_for(account, id, lifescape_store::OrderSide::Buy)
+    service.cancel_open_because(account, id, lifescape_store::OrderSide::Buy, "need_met")
 }
 
 #[cfg(test)]
 mod tests {
     use super::live_levels;
     use lifescape_json::{object, Value};
+
+    /// Plan marché §3.5: a need bid whose node is gone goes; one an open
+    /// node still wants, a gear bid and a legacy (motive-less) bid stay.
+    #[test]
+    fn orphan_need_bids_are_the_ones_no_node_wants() {
+        let row = |order_id: i64, item_id: i64, motive: &str| lifescape_store::Order {
+            order_id,
+            account: "fiona_park".to_string(),
+            item_id,
+            quantity: 5,
+            remaining: 5,
+            price: 3,
+            motive: motive.to_string(),
+            ..lifescape_store::Order::default()
+        };
+        let rows = vec![row(1, 1, "need"), row(2, 2, "need"), row(3, 3, "gear"), row(4, 4, "")];
+        let name = |id: i64| Some(format!("item{id}"));
+        let wanted = vec!["item2".to_string()];
+        assert_eq!(super::orphan_needs(&rows, &wanted, &name), vec![1]);
+    }
 
     /// bd23dqpq: a standing bid matched whole is still buying until the
     /// handover; another item or a sale is not.

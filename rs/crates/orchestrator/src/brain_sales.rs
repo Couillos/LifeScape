@@ -166,7 +166,8 @@ pub fn surplus(stacks: &[(String, i64)], keep: &[String], worn: &[String], liste
             continue;
         }
         let id = obj.obj_id as i64;
-        if listed.contains(&id) {
+        // A listed object covers its banknote too (one book per object).
+        if listed.contains(&crate::market_audit::book_item(id)) {
             continue;
         }
         out.push((name, id, qty));
@@ -196,7 +197,7 @@ fn spare_tools(life: &Life, stacks: &[(String, i64)], kept: &[String], listed: &
         .filter(|(name, _)| tradeable(name))
         .filter_map(|(name, qty)| {
             let id = lifescape_gamedata::objs_by_name(&name).into_iter().next()?.obj_id as i64;
-            (!listed.contains(&id)).then_some((name, id, qty))
+            (!listed.contains(&crate::market_audit::book_item(id))).then_some((name, id, qty))
         })
         .collect()
 }
@@ -268,16 +269,9 @@ fn adopt_listings(
             }
             Adoption::Walk { floor } => (row.order_id, floor),
         };
-        let bounds = crate::market_reprice::QuoteBounds {
-            account: account.to_string(),
-            sell: true,
-            floor,
-            ceiling: crate::market_reprice::SELL_CAP,
-            patience_ticks: crate::market_reprice::PATIENCE_TICKS,
-            last_change_wall: wall_now(),
-            last_remaining: row.remaining,
-            listed_wall: wall_now(),
-        };
+        // Lineage, t0 and motive read back from the carnet (plan marché
+        // M1): an adoption after a restart never restarts the age.
+        let bounds = crate::market_reprice::QuoteBounds::for_row(row, floor, crate::market_reprice::SELL_CAP);
         if crate::market_reprice::adopt(service, order, bounds) {
             walked += 1;
         }
@@ -295,7 +289,7 @@ fn spare_gear(stacks: &[(String, i64)], gear: &[String], whole: &[String], liste
         .filter(|(name, _)| tradeable(name))
         .filter_map(|(name, qty)| {
             let id = lifescape_gamedata::objs_by_name(&name).into_iter().next()?.obj_id as i64;
-            (!listed.contains(&id)).then_some((name, id, qty))
+            (!listed.contains(&crate::market_audit::book_item(id))).then_some((name, id, qty))
         })
         .collect()
 }
@@ -443,7 +437,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     }
     // Withdrawn lots stay out this pass (still in `selling`): their stock
     // is banked again and the next pass lists a demand lot.
-    let listed: HashSet<i64> = selling.iter().map(|row| row.item_id).collect();
+    let listed: HashSet<i64> = selling.iter().map(|row| crate::market_audit::book_item(row.item_id)).collect();
     let costs = crate::cpu_profile::timed("sales.own_costs", || crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account));
     // The `bid_response` make cost caps every reserve (one book and rates
     // read for the pass): what a bid quota was priced at always sells.
@@ -477,6 +471,12 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
                 continue;
             }
         };
+        // Motive (plan marché M1): found stock is loot, the rest surplus.
+        let motive = if reserve.is_some_and(|known| known.source == crate::brain_reserve::CostSource::Found) {
+            crate::market_lineage::LOOT
+        } else {
+            crate::market_lineage::SURPLUS
+        };
         let reply = service.handle(&object(vec![
             ("op", str_value("place")),
             ("account", str_value(&job.account)),
@@ -485,6 +485,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             ("qty", Value::Int(lot)),
             ("price", Value::Int(price)),
             ("floor", Value::Int(floor.min(price))),
+            ("motive", str_value(motive)),
         ]));
         let source = reserve.map(|known| format!("{:?}", known.source).to_lowercase()).unwrap_or_default();
         if reply.get("ok").as_bool() == Some(true) {
@@ -650,6 +651,7 @@ pub(crate) mod tests {
             dormant: false,
             created_clock: 0,
             updated_clock: 0,
+            ..lifescape_store::Order::default()
         };
         let rows = vec![order(56648, "hammer"), order(2, "logs"), order(3, "chisel"), order(4, "bronze_pickaxe")];
         let held: Vec<(String, i64)> = ["hammer", "logs", "chisel", "bronze_pickaxe"].iter().map(|name| (name.to_string(), 1)).collect();

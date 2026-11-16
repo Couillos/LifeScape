@@ -48,6 +48,42 @@ pub struct QuoteBounds {
     /// Daemon wall seconds the listing went up (kept across its walk
     /// steps): how fast a fill came (`market_seller::remember_fill`).
     pub listed_wall: f64,
+    /// Lineage of the order (plan marché M1): its first order and t0
+    /// (store clock seconds), kept by every amend and read back from the
+    /// carnet after a restart (`for_row`).
+    pub root_id: i64,
+    pub root_clock: i64,
+    /// Why the order exists (`market_lineage` motives) and its horizon in
+    /// ticks (§3.5): the concession of lot M3 reaches its limit there.
+    pub motive: String,
+    pub horizon_ticks: u64,
+    /// Opening price of the lineage (where the concession starts).
+    pub opening: i64,
+}
+
+impl QuoteBounds {
+    /// Bounds of a resting carnet row: lineage, t0 and motive read from
+    /// the row (adoption after a daemon restart, a kept standing bid),
+    /// never restarted at the adoption.
+    pub fn for_row(row: &lifescape_store::Order, floor: i64, ceiling: i64) -> QuoteBounds {
+        let sell = row.side == lifescape_store::OrderSide::Sell;
+        let wall = wall_now();
+        QuoteBounds {
+            account: row.account.clone(),
+            sell,
+            floor,
+            ceiling,
+            patience_ticks: PATIENCE_TICKS,
+            last_change_wall: wall,
+            last_remaining: row.remaining,
+            listed_wall: wall,
+            root_id: if row.root_id > 0 { row.root_id } else { row.order_id },
+            root_clock: row.lineage_clock(),
+            motive: row.motive.clone(),
+            horizon_ticks: crate::market_lineage::horizon_ticks(&row.motive, sell),
+            opening: row.price,
+        }
+    }
 }
 
 fn wall_now() -> f64 {
@@ -66,9 +102,10 @@ pub fn bounds_of(service: &MarketService, order: i64) -> Option<QuoteBounds> {
 
 /// Bounds parsed from a `place` request: `ceiling` (buy: the most it
 /// pays; sell: an optional cap) or `floor` (sell reserve), optional
-/// `patience` ticks. `None` = fixed-price order. A buy never walks under
-/// its opening price, a sell never over its cap.
-pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64) -> Option<QuoteBounds> {
+/// `patience` ticks, `motive`. `None` = fixed-price order. A buy never
+/// walks under its opening price, a sell never over its cap. The new
+/// order `order` (placed at store clock `clock`) is its lineage's root.
+pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64, order: i64, clock: i64) -> Option<QuoteBounds> {
     let ceiling = request.get("ceiling").as_i64();
     let floor = request.get("floor").as_i64();
     if ceiling.is_none() && floor.is_none() {
@@ -88,6 +125,11 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
         last_change_wall: wall_now(),
         last_remaining: request.get("qty").as_i64().unwrap_or(0),
         listed_wall: wall_now(),
+        root_id: order,
+        root_clock: clock,
+        motive: request.get("motive").as_str().unwrap_or("").to_string(),
+        horizon_ticks: crate::market_lineage::horizon_ticks(request.get("motive").as_str().unwrap_or(""), sell),
+        opening: price,
     })
 }
 
@@ -199,19 +241,28 @@ pub enum StandingBid {
 /// ceiling is amended down to it. Otherwise a bid opens at the covered
 /// ask, else at the bot's own last fill on the item, else the reference
 /// (`remembered_bid`, 2026-11-14).
-pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, ceiling: i64) -> Result<StandingBid, String> {
-    keep_bid_from(service, account, item, qty, 1, ceiling)
+pub fn keep_bid(service: &MarketService, account: &str, item: i64, qty: i64, ceiling: i64, motive: &str) -> Result<StandingBid, String> {
+    keep_bid_from(service, account, item, qty, 1, ceiling, motive)
 }
 
 /// `keep_bid` whose NEW bid opens at least at `open_at` (never over the
 /// ceiling): what the buyer knows the object is worth (the gear plan's
 /// expected price, 2026-11-14: a never-traded platebody bid opened at 1
 /// and climbed 5 % per window for hours). A resting bid keeps its walk.
-pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64, open_at: i64, ceiling: i64) -> Result<StandingBid, String> {
+/// Lineage (plan marché M2, C3): the resting bid of the same `motive` is
+/// taken first, else any resting bid of the account on the object (one
+/// bid per object, never a second beside it); its lineage, t0 and price
+/// go on, never a cancel and a lower repose.
+pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64, open_at: i64, ceiling: i64, motive: &str) -> Result<StandingBid, String> {
     let ceiling = ceiling.max(1);
-    let open = service.lock_store().account_orders(account).unwrap_or_default().into_iter().find(|row| {
-        row.item_id == item && row.side == lifescape_store::OrderSide::Buy && resting(row)
-    });
+    let rows: Vec<lifescape_store::Order> = service
+        .lock_store()
+        .account_orders(account)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.item_id == item && row.side == lifescape_store::OrderSide::Buy && resting(row))
+        .collect();
+    let open = rows.iter().find(|row| row.motive == motive).or_else(|| rows.first()).cloned();
     if let Some(row) = open {
         let mut order = row.order_id;
         let mut price = row.price;
@@ -230,16 +281,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
             price = ceiling;
         }
         let mut engine = service.lock_engine();
-        let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds {
-            account: account.to_string(),
-            sell: false,
-            floor: price,
-            ceiling,
-            patience_ticks: PATIENCE_TICKS,
-            last_change_wall: wall_now(),
-            last_remaining: row.remaining,
-            listed_wall: wall_now(),
-        });
+        let bounds = engine.quote_bounds.entry(order).or_insert_with(|| QuoteBounds::for_row(&row, price, ceiling));
         bounds.floor = bounds.floor.min(ceiling);
         bounds.ceiling = ceiling;
         return Ok(StandingBid::Kept { order, price });
@@ -258,6 +300,7 @@ pub fn keep_bid_from(service: &MarketService, account: &str, item: i64, qty: i64
         ("qty", Value::Int(qty.max(1))),
         ("price", Value::Int(price)),
         ("ceiling", Value::Int(ceiling.max(price))),
+        ("motive", str_value(motive)),
     ]));
     if reply.get("ok").as_bool() != Some(true) {
         return Err(reply.get("error").as_str().unwrap_or("place refused").to_string());
