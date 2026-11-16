@@ -154,26 +154,50 @@ pub fn seller_open(reference: crate::price::Reference, best_bid: Option<i64>, re
 /// zero own cost, the fight or the walk paid nothing for it), priced to
 /// clear like a player emptying a loot bank: a traded object at its
 /// current price (impact-clamped, `current_price`) or the best bid when
-/// richer; an untraded one just under the cheapest resting ask (or into
-/// a richer bid); with an empty book at `anchor` (the object's high
-/// alchemy value, public game data: the price buyers bid gear at, see
-/// `gear_plan`) else `2 x floor`. Never under `floor` (1, or a caster's
-/// alchemy net); a fast own fill lifts the lot like `seller_open`.
-/// Returns `(price, floor)`: the walk-down (`demand_step`) stops there.
-pub fn found_open(reference: crate::price::Reference, best_bid: Option<i64>, best_ask: Option<i64>, floor: i64, anchor: Option<i64>, last_sell: Option<OwnFill>) -> (i64, i64) {
+/// richer; an untraded one AT the cheapest resting ask (or into a richer
+/// bid); with an empty book at `anchor` (the object's high alchemy
+/// value, public game data: the price buyers bid gear at, see
+/// `gear_plan`) else `2 x floor`.
+///
+/// Wave 2 (M5, C8, end of the cascade to 1): a seller JOINS the queue,
+/// never under the cheapest ask of another seller (each new seller at
+/// ask - 1 walked the whole book down to 1). Only a `pressed` seller (a
+/// full bank) undercuts, by one relative step (`UNDERCUT_PCT`, at least
+/// one coin), or hits a bid at or over its floor. Never under `floor`
+/// (the keep value: 1, a caster's alchemy net, an NPC shop's buy
+/// price); a fast own fill lifts the lot like `seller_open`. Returns
+/// `(price, floor)`: the concession stops there.
+pub fn found_open(reference: crate::price::Reference, best_bid: Option<i64>, best_ask: Option<i64>, floor: i64, anchor: Option<i64>, last_sell: Option<OwnFill>, pressed: bool) -> (i64, i64) {
     let floor = floor.max(1);
     let bid = best_bid.unwrap_or(0);
+    if pressed && bid >= floor {
+        return (bid, floor);
+    }
+    let ask = best_ask.filter(|ask| *ask >= 1);
     let base = if reference.traded {
         reference.price.max(bid)
     } else {
-        match best_ask.filter(|ask| *ask >= 1) {
-            Some(ask) => (ask - 1).max(bid),
+        match ask {
+            Some(ask) => ask.max(bid),
             None if bid >= 1 => bid,
             None => anchor.filter(|value| *value >= 1).unwrap_or(floor.saturating_mul(UNTRADED_OPEN_RESERVES)),
         }
     };
-    let remembered = last_sell.filter(OwnFill::fast).map(|fill| ceil_pct(fill.price, FILL_MEMORY_PCT)).unwrap_or(0);
-    (base.max(remembered).max(floor), floor)
+    let joined = match ask {
+        Some(ask) if pressed => base.min(ask - undercut_step(ask)),
+        Some(ask) => base.max(ask),
+        None => base,
+    };
+    let remembered = if pressed { 0 } else { last_sell.filter(OwnFill::fast).map(|fill| ceil_pct(fill.price, FILL_MEMORY_PCT)).unwrap_or(0) };
+    (joined.max(remembered).max(floor), floor)
+}
+
+/// Relative undercut of a pressed seller (M5): 1 % of the ask.
+pub const UNDERCUT_PCT: i64 = 1;
+
+/// One relative undercut step under `ask` (at least one coin).
+pub fn undercut_step(ask: i64) -> i64 {
+    ((ask.max(1) * UNDERCUT_PCT + 99) / 100).max(1)
 }
 
 /// Opening bid that remembers the buyer's OWN last fill on the item

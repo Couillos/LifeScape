@@ -1,36 +1,44 @@
 #![forbid(unsafe_code)]
-//! Order repricing: prices follow supply and demand (user rule
-//! 2026-11-13: 1 coin is only the bootstrap). An order placed with
-//! bounds takes one `lifescape_market::demand_step` (5%, at least one
-//! coin) per patience window, by amend (cancel + replace: a fresh price
-//! may cross the book), its direction read from the window's fills:
-//! - an ask that sold (even partly) walks UP, toward its cap (none of
-//!   its own: demand alone stops it);
-//! - an ask that rested unfilled walks down to its reserve floor (the
-//!   seller's own cost, `brain_reserve`, never under it);
-//! - a bid that rested unfilled walks up to its ceiling (the wallet
-//!   share it may spend);
-//! - a bid that filled walks down to its opening price.
+//! Order repricing (plan marché M3/M4, wave 2): every order placed with
+//! bounds concedes in time toward its OWN limit (a buyer's ceiling, a
+//! seller's floor) over its motive's horizon, the curve shaped by the
+//! bot's drawn `price_patience` times the motive's urgency
+//! (`lifescape_market::concession`):
+//! `p(t) = opening + (limit - opening) * (t / H) ^ (1 / beta)`,
+//! t from the lineage's t0 (kept across amends and daemon restarts).
 //!
-//! Partly filled orders (`matched`) keep walking. A wanted, scarce object
-//! gets bid up until a producer finds it worth making; one that sells
-//! fast climbs; an abundant one drifts down to what sellers accept.
+//! Each window (its length from the horizon, its phase from the account
+//! and object: no walk in a block) one `concession::step`:
+//! - an own fill backs the price off one ZIP step (a seller up, a buyer
+//!   down) and restarts the curve there;
+//! - a public traded price on the conceding side pulls the quote halfway
+//!   toward it (public data only);
+//! - a pressed order (blocking need, full bank) takes the opposite best
+//!   inside its limit; any order takes what its curve reaches within the
+//!   next window;
+//! - a move under 1 % (and one coin) waits; the limit itself always lands;
+//! - Q4: a seller at its floor past its horizon with no fill is
+//!   withdrawn (`horizon`), its stock back in the bank; a buyer stays at
+//!   its ceiling while its need lives.
 //!
 //! Bounds live in the market engine's memory: after a daemon restart the
 //! brain re-adopts its resting listings (`adopt`) and its standing bids
-//! (`keep_bid`); until then an order keeps its last price.
+//! (`keep_bid`), lineage and t0 read back from the carnet.
+
+use std::collections::HashMap;
 
 use lifescape_json::{object, str_value, Value};
+use lifescape_market::concession::{self, Concession, Step, Urgency, Window};
 
 use crate::market_service::MarketService;
 
-/// Default patience: ticks of one window (one step at most per window).
-/// 2000 ticks (2026-11-14, daemon CPU: 200 ticks = 12 s at the dev tick
-/// made ~55 amends/s over thousands of resting orders); the "fast fill"
-/// of `lifescape_market::OwnFill` is a fill inside this first window.
+/// Old fixed window (ticks): the "fast fill" of
+/// `lifescape_market::OwnFill` is a fill inside this first window.
 pub const PATIENCE_TICKS: u64 = lifescape_market::zip::PATIENCE_TICKS;
 /// A sell's own cap: none (no reference band, user rule 2026-11-15).
 pub const SELL_CAP: i64 = i64::MAX / 4;
+/// Cancel reason of a Q4 withdrawal (seller at its floor past H).
+pub const HORIZON_REASON: &str = "horizon";
 
 /// Repricing bounds of one resting order.
 #[derive(Clone, Debug)]
@@ -39,9 +47,10 @@ pub struct QuoteBounds {
     pub sell: bool,
     pub floor: i64,
     pub ceiling: i64,
+    /// Ticks of one window (`concession::window_ticks` of the horizon,
+    /// or the request's `patience`).
     pub patience_ticks: u64,
-    /// Daemon wall seconds of the last window close (price change or a
-    /// window spent at a bound).
+    /// Daemon wall seconds of the last window close.
     pub last_change_wall: f64,
     /// Units still open when the window started: fewer now = it filled.
     pub last_remaining: i64,
@@ -54,40 +63,88 @@ pub struct QuoteBounds {
     pub root_id: i64,
     pub root_clock: i64,
     /// Why the order exists (`market_lineage` motives) and its horizon in
-    /// ticks (§3.5): the concession of lot M3 reaches its limit there.
+    /// ticks (§3.5): the concession reaches its limit there.
     pub motive: String,
     pub horizon_ticks: u64,
-    /// Opening price of the lineage (where the concession starts).
+    /// Opening price of the curve (the lineage's, or the ZIP back-off of
+    /// its last own fill).
     pub opening: i64,
+    /// Wall seconds the curve started (lineage t0, or the last own fill).
+    pub curve_start_wall: f64,
+    /// The bot's drawn price patience (`None` until the first window
+    /// reads it from its life, `account_patience`).
+    pub price_patience: Option<f64>,
+    /// Pressed beyond its motive (a seller with a full bank, D17).
+    pub pressed: bool,
+    /// Price of its last own fill (its public print is never a pull).
+    pub own_fill: Option<i64>,
 }
 
 impl QuoteBounds {
     /// Bounds of a resting carnet row: lineage, t0 and motive read from
     /// the row (adoption after a daemon restart, a kept standing bid),
-    /// never restarted at the adoption.
+    /// never restarted at the adoption. The window phase spreads the
+    /// adopted orders (never one block after a restart, plan C6).
     pub fn for_row(row: &lifescape_store::Order, floor: i64, ceiling: i64) -> QuoteBounds {
         let sell = row.side == lifescape_store::OrderSide::Sell;
         let wall = wall_now();
+        let horizon_ticks = crate::market_lineage::horizon_ticks(&row.motive, sell);
+        let root_clock = row.lineage_clock();
+        let window = concession::window_ticks(horizon_ticks);
         QuoteBounds {
             account: row.account.clone(),
             sell,
             floor,
             ceiling,
-            patience_ticks: PATIENCE_TICKS,
-            last_change_wall: wall,
+            patience_ticks: window,
+            last_change_wall: wall - phase_secs(&row.account, row.item_id, window),
             last_remaining: row.remaining,
             listed_wall: wall,
             root_id: if row.root_id > 0 { row.root_id } else { row.order_id },
-            root_clock: row.lineage_clock(),
+            root_clock,
             motive: row.motive.clone(),
-            horizon_ticks: crate::market_lineage::horizon_ticks(&row.motive, sell),
+            horizon_ticks,
             opening: row.price,
+            // The curve walks from the price it rests at now, over what is
+            // left of the lineage's horizon (t counts from t0).
+            curve_start_wall: root_clock as f64,
+            price_patience: None,
+            pressed: false,
+            own_fill: None,
+        }
+    }
+
+    /// The order's own limit: a seller's floor, a buyer's ceiling.
+    pub fn limit(&self) -> i64 {
+        if self.sell {
+            self.floor.max(1)
+        } else {
+            self.ceiling.max(1)
+        }
+    }
+
+    /// Urgency of the motive (blocking need: pressed; stock bought ahead
+    /// and loot: patient), or pressed by state (`pressed`).
+    pub fn urgency(&self) -> Urgency {
+        if self.pressed {
+            return Urgency::Pressed;
+        }
+        match self.motive.as_str() {
+            crate::market_lineage::NEED => Urgency::Pressed,
+            crate::market_lineage::STOCK | crate::market_lineage::LOOT => Urgency::Patient,
+            _ => Urgency::Normal,
         }
     }
 }
 
 fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// Window phase of an order in wall seconds (at the measured tick).
+fn phase_secs(account: &str, item: i64, window: u64) -> f64 {
+    let tick_ms = crate::market_eta::live_tick_ms().max(1) as f64;
+    concession::window_offset(account, item, window) as f64 * tick_ms / 1000.0
 }
 
 /// Registers bounds for a resting order (called by `place`).
@@ -100,11 +157,23 @@ pub fn bounds_of(service: &MarketService, order: i64) -> Option<QuoteBounds> {
     service.lock_engine().quote_bounds.get(&order).cloned()
 }
 
+/// The account's drawn `price_patience` (its life's profile trait, plan
+/// M3), read once per daemon life; 0.5 when the account has no life (a
+/// manual bot, a test account).
+pub fn account_patience(service: &MarketService, account: &str) -> f64 {
+    if let Some(known) = service.lock_engine().patience.get(account).copied() {
+        return known;
+    }
+    let patience = crate::brain::load_life(account).map(|life| life.profile.price_patience).unwrap_or(0.5);
+    service.lock_engine().patience.insert(account.to_string(), patience);
+    patience
+}
+
 /// Bounds parsed from a `place` request: `ceiling` (buy: the most it
 /// pays; sell: an optional cap) or `floor` (sell reserve), optional
-/// `patience` ticks, `motive`. `None` = fixed-price order. A buy never
-/// walks under its opening price, a sell never over its cap. The new
-/// order `order` (placed at store clock `clock`) is its lineage's root.
+/// `patience` window ticks, `motive`, `urgent` (a full bank). `None` =
+/// fixed-price order. The new order `order` (placed at store clock
+/// `clock`) is its lineage's root and opens the curve.
 pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i64, order: i64, clock: i64) -> Option<QuoteBounds> {
     let ceiling = request.get("ceiling").as_i64();
     let floor = request.get("floor").as_i64();
@@ -116,20 +185,29 @@ pub fn bounds_from_request(request: &Value, account: &str, sell: bool, price: i6
     } else {
         (price, ceiling.unwrap_or(price).max(price))
     };
+    let motive = request.get("motive").as_str().unwrap_or("").to_string();
+    let horizon_ticks = crate::market_lineage::horizon_ticks(&motive, sell);
+    let item = request.get("item").as_i64().unwrap_or(0);
+    let window = request.get("patience").as_i64().map(|ticks| ticks.max(1) as u64).unwrap_or_else(|| concession::window_ticks(horizon_ticks));
+    let wall = wall_now();
     Some(QuoteBounds {
         account: account.to_string(),
         sell,
         floor,
         ceiling,
-        patience_ticks: request.get("patience").as_i64().map(|ticks| ticks.max(1) as u64).unwrap_or(PATIENCE_TICKS),
-        last_change_wall: wall_now(),
+        patience_ticks: window,
+        last_change_wall: wall - phase_secs(account, item, window),
         last_remaining: request.get("qty").as_i64().unwrap_or(0),
-        listed_wall: wall_now(),
+        listed_wall: wall,
         root_id: order,
         root_clock: clock,
-        motive: request.get("motive").as_str().unwrap_or("").to_string(),
-        horizon_ticks: crate::market_lineage::horizon_ticks(request.get("motive").as_str().unwrap_or(""), sell),
+        motive,
+        horizon_ticks,
         opening: price,
+        curve_start_wall: wall,
+        price_patience: None,
+        pressed: request.get("urgent").as_bool() == Some(true),
+        own_fill: None,
     })
 }
 
@@ -137,12 +215,36 @@ fn resting(row: &lifescape_store::Order) -> bool {
     matches!(row.status, lifescape_store::OrderStatus::Open | lifescape_store::OrderStatus::Matched) && row.remaining > 0
 }
 
+/// The concession window of one resting order (pure): what it sees at
+/// daemon wall `wall` with the measured tick `tick_ms`.
+#[allow(clippy::too_many_arguments)]
+pub fn window_of(bounds: &QuoteBounds, row_price: i64, filled: bool, wall: f64, tick_ms: f64, public: Option<i64>, best_opposite: Option<i64>, patience: f64) -> Window {
+    let elapsed = ((wall - bounds.curve_start_wall).max(0.0) * 1000.0 / tick_ms.max(1.0)) as u64;
+    Window {
+        sell: bounds.sell,
+        current: row_price,
+        curve: Concession {
+            opening: bounds.opening.max(1),
+            limit: bounds.limit(),
+            horizon_ticks: bounds.horizon_ticks,
+            beta: concession::concession_beta(patience, bounds.urgency()),
+        },
+        elapsed_ticks: elapsed,
+        window_ticks: bounds.patience_ticks,
+        filled,
+        public_price: public,
+        own_fill: bounds.own_fill,
+        best_opposite,
+        pressed: bounds.urgency() == Urgency::Pressed,
+    }
+}
+
 /// One repricing pass at daemon wall `wall` with the measured tick
 /// length. Returns the number of orders moved. Work follows change, not
-/// the order count (2026-11-14, daemon CPU): an order inside its
-/// patience window is skipped before any store read; one parked at a
-/// bound closes its window without an amend; the amends of a pass share
-/// one store transaction and the pass logs one summary line.
+/// the order count (2026-11-14, daemon CPU): an order inside its window
+/// is skipped before any store read; a hold closes its window without
+/// an amend; the amends of a pass share one store transaction and the
+/// pass logs one summary line.
 pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize {
     let due: Vec<(i64, QuoteBounds)> = service
         .lock_engine()
@@ -155,25 +257,64 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
         return 0;
     }
     let batch = service.lock_store().begin_batch().unwrap_or(false);
-    let (mut moved, mut parked, mut refused) = (0usize, 0usize, 0usize);
-    for (order, bounds) in due {
+    let (mut moved, mut parked, mut refused, mut withdrawn) = (0usize, 0usize, 0usize, 0usize);
+    let mut public: HashMap<i64, Option<i64>> = HashMap::new();
+    for (order, mut bounds) in due {
         let row = service.lock_store().get_order(order).ok().flatten();
         let Some(row) = row.filter(resting) else {
             service.lock_engine().quote_bounds.remove(&order);
             continue;
         };
         let filled = row.remaining < bounds.last_remaining;
-        let next = lifescape_market::demand_step(row.price, bounds.sell, filled, bounds.floor, bounds.ceiling);
-        let window = QuoteBounds { last_change_wall: wall, last_remaining: row.remaining, ..bounds.clone() };
-        if next == row.price {
-            // Parked at a bound: the window closes, no amend, no log.
+        let patience = match bounds.price_patience {
+            Some(known) => known,
+            None => account_patience(service, &bounds.account),
+        };
+        bounds.price_patience = Some(patience);
+        let traded = *public.entry(row.item_id).or_insert_with(|| {
+            let reference = service.reference(row.item_id);
+            reference.traded.then_some(reference.price)
+        });
+        let (bid, ask) = service.lock_engine().books.get(&row.item_id).map(|book| book.best()).unwrap_or((None, None));
+        let opposite = if bounds.sell { bid } else { ask };
+        let decision = concession::step(&window_of(&bounds, row.price, filled, wall, tick_ms, traded, opposite, patience));
+        let mut window = QuoteBounds { last_change_wall: wall, last_remaining: row.remaining, ..bounds };
+        let next = match decision {
+            Step::Hold => None,
+            Step::Amend(price) => Some(price),
+            Step::Restart { opening } => {
+                window.opening = opening;
+                window.curve_start_wall = wall;
+                window.own_fill = Some(row.price);
+                Some(opening)
+            }
+            Step::Withdraw => {
+                let reply = service.handle(&object(vec![
+                    ("op", str_value("cancel")),
+                    ("account", str_value(&window.account)),
+                    ("order", Value::Int(order)),
+                    ("reason", str_value(HORIZON_REASON)),
+                ]));
+                if reply.get("ok").as_bool() == Some(true) {
+                    let key = (window.account.clone(), crate::market_audit::book_item(row.item_id));
+                    service.lock_engine().horizon_withdrawn.insert(key, wall);
+                    withdrawn += 1;
+                } else {
+                    service.lock_engine().quote_bounds.insert(order, window);
+                    refused += 1;
+                }
+                continue;
+            }
+        };
+        let Some(next) = next.filter(|price| *price != row.price) else {
+            // A hold: the window closes, no amend, no log.
             service.lock_engine().quote_bounds.insert(order, window);
             parked += 1;
             continue;
-        }
+        };
         let reply = service.handle(&object(vec![
             ("op", str_value("amend")),
-            ("account", str_value(&bounds.account)),
+            ("account", str_value(&window.account)),
             ("order", Value::Int(order)),
             ("price", Value::Int(next)),
         ]));
@@ -197,10 +338,19 @@ pub fn reprice_round(service: &MarketService, wall: f64, tick_ms: f64) -> usize 
             crate::logln!("market-reprice: batch commit failed: {error}");
         }
     }
-    if moved + refused > 0 {
-        crate::logln!("market-reprice: {moved} moved, {parked} at a bound, {refused} refused");
+    if moved + refused + withdrawn > 0 {
+        crate::logln!("market-reprice: {moved} moved, {parked} held, {withdrawn} withdrawn at their horizon, {refused} refused");
     }
     moved
+}
+
+/// True while a listing of `item` by `account` was withdrawn at its
+/// horizon with no buyer within the last `horizon_ticks` (Q4: the stock
+/// stays banked, never relisted at once).
+pub fn withdrawn_recently(service: &MarketService, account: &str, item: i64, horizon_ticks: u64, wall: f64) -> bool {
+    let tick_ms = crate::market_eta::live_tick_ms().max(1) as f64;
+    let key = (account.to_string(), crate::market_audit::book_item(item));
+    service.lock_engine().horizon_withdrawn.get(&key).is_some_and(|at| (wall - at) * 1000.0 / tick_ms < horizon_ticks as f64)
 }
 
 /// Re-adopts a resting order the engine has no bounds for (daemon

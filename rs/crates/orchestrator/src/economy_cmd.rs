@@ -60,6 +60,10 @@ pub fn economy_cli(args: &[String]) -> i32 {
                 }
             }
             println!("  net created or destroyed outside trades: {created:+}");
+            // Q3 (plan marché, 2026-11-16): coins the NPC shops paid for
+            // the objects the market paid less for (D-A exception).
+            let (npc_coins, npc_lines) = npc_sales(&flows);
+            println!("npc shop sales (Q3, coins created): {npc_coins} coins in {npc_lines} lines");
         }
         Err(error) => println!("coin flows: {error}"),
     }
@@ -80,6 +84,12 @@ pub fn economy_cli(args: &[String]) -> i32 {
         Err(error) => println!("market criteria: {error}"),
     }
     0
+}
+
+/// Coins created by NPC shop sales (`shop_sold` coin lines of the coin
+/// ledger, plan marché Q3) and their line count.
+pub fn npc_sales(flows: &[lifescape_store::CoinFlowTotal]) -> (i64, i64) {
+    flows.iter().filter(|flow| flow.provenance == "shop_sold").fold((0, 0), |(coins, lines), flow| (coins + flow.coins.max(0), lines + flow.lines))
 }
 
 fn share(value: Option<f64>) -> String {
@@ -147,4 +157,18 @@ fn item_cli(hours: i64, name: &str) -> i32 {
         println!("  no flow recorded");
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use lifescape_store::CoinFlowTotal;
+
+    /// Q3 tracking: the coins NPC shops paid (`shop_sold` coin lines).
+    #[test]
+    fn npc_sales_count_the_coins_shops_created() {
+        let flow = |provenance: &str, coins: i64, lines: i64| CoinFlowTotal { provenance: provenance.to_string(), coins, lines };
+        let flows = vec![flow("traded", 9000, 40), flow("shop_sold", 1250, 12), flow("shop_bought", -800, 5), flow("loot", 300, 9)];
+        assert_eq!(super::npc_sales(&flows), (1250, 12));
+        assert_eq!(super::npc_sales(&[]), (0, 0));
+    }
 }

@@ -114,6 +114,10 @@ pub struct Bot {
     /// 2026-11-12: an egg past the Port Sarim pen fence, ~340 refused
     /// clicks in 10 min). Memory only, gone with the session.
     pub unreachable_objs: HashSet<(u16, i32, i32, i32)>,
+    /// Ground objects (debug names) the run never picks up: worth less
+    /// than the ticks of the pickup at the bot's own rate (plan marché
+    /// M5, the brain's `--skip-loot`). Set per run by the script.
+    pub loot_skip: HashSet<String>,
     /// Market locks pushed by the daemon (see `locks`): bank withdrawals
     /// never take the part promised to open orders, outside a trade.
     pub locks: locks::SharedLocks,
@@ -233,6 +237,7 @@ impl Bot {
             toll_gates: HashSet::new(),
             approach_opened: HashSet::new(),
             unreachable_objs: HashSet::new(),
+            loot_skip: HashSet::new(),
             locks: std::sync::Arc::new(std::sync::Mutex::new(locks::Locks::default())),
             approach_depth: 0,
             allow_paid: false,

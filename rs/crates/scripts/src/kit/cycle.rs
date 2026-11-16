@@ -62,6 +62,9 @@ pub struct TaskSpec {
     /// gather bank trips; combat gearing keeps its own set (gear+food)
     /// until the equip task wires it through.
     pub keep: Vec<String>,
+    /// Ground objects never picked up (`--skip-loot NAME`, plan marché
+    /// M5: worth less than the pickup ticks at the bot's rate).
+    pub skip_loot: Vec<String>,
     /// Market runs allowed (no market service yet; recorded for later).
     pub allow_market: bool,
     /// NPC shop purchases allowed: cleared, the buy paths refuse instead
@@ -99,6 +102,7 @@ impl TaskSpec {
             budget_min_ticks: 0,
             budget_max_ticks: 0,
             keep: Vec::new(),
+            skip_loot: Vec::new(),
             allow_market: false,
             allow_shop: true,
             node_id: String::new(),
@@ -151,7 +155,7 @@ pub fn parse_order(script: &'static str, args: &[String]) -> Result<TaskSpec, Sc
 pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, ScriptError> {
     let usage = || {
         ScriptError::Usage(format!(
-            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--spell SPELL] [--wear ITEM]... [--allow-market] [--no-shop]"
+            "{activity} [count|spot...] [toll] [boat] [wild] [--kills N] [--ticks N] [--no-bank] [--xp SKILL N] [--level SKILL N] [--quest KEY] [--budget-min N] [--budget-max N] [--keep NAME]... [--node ID] [--site X,Z,LEVEL] [--want ITEM N] [--spell SPELL] [--wear ITEM]... [--skip-loot NAME]... [--allow-market] [--no-shop]"
         ))
     };
     let mut spec = TaskSpec::named(activity);
@@ -245,6 +249,11 @@ pub fn parse_cli(activity: &'static str, args: &[String]) -> Result<TaskSpec, Sc
             "--keep" => {
                 let name = args.get(index + 1).cloned().filter(|name| !name.is_empty()).ok_or_else(usage)?;
                 spec.keep.push(name);
+                index += 2;
+            }
+            "--skip-loot" => {
+                let name = args.get(index + 1).cloned().filter(|name| !name.is_empty() && !name.starts_with("--")).ok_or_else(usage)?;
+                spec.skip_loot.push(name);
                 index += 2;
             }
             "--site" => {

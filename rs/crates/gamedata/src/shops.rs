@@ -13,6 +13,7 @@ pub(crate) struct StaticShop {
     pub scope: Option<&'static str>,
     pub size: i64,
     pub restock: bool,
+    pub allstock: bool,
     pub stocks: &'static [StaticStock],
     pub members: Option<bool>,
 }
@@ -57,6 +58,8 @@ pub struct Shop {
     pub scope: Option<String>,
     pub size: i64,
     pub restock: bool,
+    /// A general store: buys any tradeable object (`inv_allstock`).
+    pub allstock: bool,
     pub stocks: Vec<Stock>,
     pub keepers: Vec<Keeper>,
     pub members: Option<bool>,
@@ -85,6 +88,7 @@ pub fn all_shops() -> Vec<Shop> {
                 scope: row.scope.map(str::to_string),
                 size: row.size,
                 restock: row.restock,
+                allstock: row.allstock,
                 stocks: row
                     .stocks
                     .iter()

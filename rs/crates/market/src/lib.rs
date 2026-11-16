@@ -6,24 +6,29 @@
 //! values, so tests run with fixed seeds and no live game.
 
 pub mod book;
+pub mod concession;
 pub mod deals;
 pub mod error;
 pub mod guards;
+pub mod outlets;
 pub mod price;
 pub mod sim;
 pub mod sim_demand;
+pub mod sim_lifecycle;
 pub mod sim_prd3;
 pub mod trends;
 pub mod zip;
 
 pub use book::{Book, Fill, Order, Side};
+pub use concession::{concession_beta, Concession, Step, Urgency, Window};
 pub use deals::{Deal, DealStatus, FailReason};
 pub use error::Error;
 pub use guards::{check_coverage, check_price};
+pub use outlets::{market_pays, npc_sale_beats_market, npc_sale_min_unit};
 pub use price::{bucketize, change_thousandths, current_price, impact_price, impact_size, median_price, vwap, Candle, LastFill, PricedFill, Reference, IMPACT_CAP, PRICE_FILLS};
 pub use trends::{compute_trend, TrendInput, TrendScores};
 pub use zip::{
-    demand_step, flip_quotes, found_open, opening_ask, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
+    demand_step, flip_quotes, found_open, opening_ask, undercut_step, opening_bid, remembered_bid, seller_open, step_toward, FlipQuote, MerchantCaps, OwnFill,
     ZipQuote,
 };
 

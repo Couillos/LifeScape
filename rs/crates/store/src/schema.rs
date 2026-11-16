@@ -239,44 +239,57 @@ pub fn current_version(connection: &rusqlite::Connection) -> Result<u32, Error> 
     u32::try_from(found).map_err(|_| Error::Sql(format!("bad user_version {found}")))
 }
 
+/// How long an opener waits for another one's write lock (a concurrent
+/// migration, a write batch) before failing typed.
+pub const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Applies every migration newer than the file version, in order.
 pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> {
     let found = current_version(connection)?;
+    migrate_from(connection, found)
+}
+
+/// Migrates a file whose version an opener read as `seen` (2026-11-16,
+/// live race `migration 6: duplicate column name: replaces`: two
+/// openers read 5, both ran the ALTER). Every pending step runs in ONE
+/// `BEGIN IMMEDIATE` transaction, and the version is read again under
+/// that write lock: what another opener migrated meanwhile is skipped.
+/// A failed step rolls the whole run back (the file keeps its version).
+pub(crate) fn migrate_from(connection: &rusqlite::Connection, seen: u32) -> Result<(), Error> {
+    if seen > SCHEMA_VERSION {
+        return Err(Error::SchemaMismatch { found: seen, expected: SCHEMA_VERSION });
+    }
+    if seen == SCHEMA_VERSION {
+        return Ok(());
+    }
+    connection.busy_timeout(BUSY_WAIT).map_err(|source| Error::Sql(format!("migration busy timeout: {source}")))?;
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|source| Error::Sql(format!("migration begin: {source}")))?;
+    let migrated = current_version(connection).and_then(|locked| pending_steps(connection, locked));
+    if let Err(error) = migrated {
+        let _ignored = connection.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    connection
+        .execute_batch("COMMIT")
+        .map_err(|source| Error::Sql(format!("migration commit: {source}")))
+}
+
+/// Steps newer than `found` (read under the write lock), each with its
+/// version bump, inside the caller's transaction.
+fn pending_steps(connection: &rusqlite::Connection, found: u32) -> Result<(), Error> {
     if found > SCHEMA_VERSION {
-        return Err(Error::SchemaMismatch {
-            found,
-            expected: SCHEMA_VERSION,
-        });
+        return Err(Error::SchemaMismatch { found, expected: SCHEMA_VERSION });
     }
-    if found < 1 {
-        connection
-            .execute_batch(MIGRATION_V1)
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        connection
-            .execute_batch("PRAGMA user_version = 1")
-            .map_err(|source| Error::Sql(source.to_string()))?;
-    }
-    if found < 2 {
-        connection
-            .execute_batch(MIGRATION_V2)
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        connection
-            .execute_batch("PRAGMA user_version = 2")
-            .map_err(|source| Error::Sql(source.to_string()))?;
-    }
-    if found < 3 {
-        connection
-            .execute_batch(MIGRATION_V3)
-            .map_err(|source| Error::Sql(source.to_string()))?;
-        connection
-            .execute_batch("PRAGMA user_version = 3")
-            .map_err(|source| Error::Sql(source.to_string()))?;
-    }
-    if found < 4 {
-        apply_in_transaction(connection, MIGRATION_V4, 4)?;
-    }
-    if found < 5 {
-        apply_in_transaction(connection, MIGRATION_V5, 5)?;
+    let plain = [(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3), (4, MIGRATION_V4), (5, MIGRATION_V5)];
+    for (version, step) in plain {
+        if found < version {
+            connection
+                .execute_batch(step)
+                .and_then(|()| connection.execute_batch(&format!("PRAGMA user_version = {version}")))
+                .map_err(|source| Error::Sql(format!("migration {version}: {source}")))?;
+        }
     }
     if found < 6 {
         apply_lineage_v6(connection)?;
@@ -287,41 +300,14 @@ pub fn apply_migrations(connection: &rusqlite::Connection) -> Result<(), Error> 
 /// Migration 6 (plan marché M0, decision Q1): order lineage columns,
 /// then the history reclassified (`lineage::reclassify_history`: an
 /// amend is a replacement within 1 s, same account, object and side).
-/// One transaction with its version bump: a failure leaves schema 5.
+/// Inside the run's transaction with its version bump: a failure leaves
+/// schema 5.
 fn apply_lineage_v6(connection: &rusqlite::Connection) -> Result<(), Error> {
     connection
-        .execute_batch("BEGIN IMMEDIATE")
-        .map_err(|source| Error::Sql(format!("migration 6 begin: {source}")))?;
-    let migrated = connection
         .execute_batch(crate::lineage::MIGRATION_V6_COLUMNS)
-        .map_err(|source| Error::Sql(format!("migration 6: {source}")))
-        .and_then(|()| crate::lineage::reclassify_history(connection))
-        .and_then(|counts| {
-            connection.execute_batch("PRAGMA user_version = 6").map_err(|source| Error::Sql(format!("migration 6 version: {source}")))?;
-            Ok(counts)
-        });
-    if let Err(error) = migrated {
-        let _ignored = connection.execute_batch("ROLLBACK");
-        return Err(error);
-    }
-    connection
-        .execute_batch("COMMIT")
-        .map_err(|source| Error::Sql(format!("migration 6 commit: {source}")))
-}
-
-/// Runs one migration step and its version bump atomically: a failed
-/// ALTER leaves the file at the previous version, never half-migrated.
-fn apply_in_transaction(connection: &rusqlite::Connection, step: &str, version: u32) -> Result<(), Error> {
-    connection
-        .execute_batch("BEGIN IMMEDIATE")
-        .map_err(|source| Error::Sql(format!("migration {version} begin: {source}")))?;
-    if let Err(source) = connection.execute_batch(step) {
-        let _ignored = connection.execute_batch("ROLLBACK");
-        return Err(Error::Sql(format!("migration {version}: {source}")));
-    }
-    connection
-        .execute_batch("COMMIT")
-        .map_err(|source| Error::Sql(format!("migration {version} commit: {source}")))
+        .map_err(|source| Error::Sql(format!("migration 6: {source}")))?;
+    crate::lineage::reclassify_history(connection)?;
+    connection.execute_batch("PRAGMA user_version = 6").map_err(|source| Error::Sql(format!("migration 6 version: {source}")))
 }
 
 #[cfg(test)]
@@ -446,6 +432,50 @@ mod schema_tests {
         let version: i64 = store.connection.query_row("SELECT measure_version FROM task_reports WHERE report_id = 1", [], |row| row.get(0))?;
         assert_eq!(version, 1);
         assert_eq!(store.yields_for_report(1)?.len(), 1, "v1 lines kept until the purge");
+        Ok(())
+    }
+
+    /// Live 2026-11-16: `errors store open: store sql: migration 6:
+    /// duplicate column name: replaces`. Two openers of one file read
+    /// `user_version` before either migrated; the second ran the same
+    /// ALTER after the first committed. The version is read again under
+    /// the write lock: a stale opener migrates nothing twice.
+    #[test]
+    fn a_stale_opener_never_migrates_twice() -> Result<(), Error> {
+        let path = temp_database_path("migrate-stale");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        let first = rusqlite::Connection::open(&path)?;
+        let second = rusqlite::Connection::open(&path)?;
+        let seen_first = current_version(&first)?;
+        let seen_second = current_version(&second)?;
+        assert_eq!((seen_first, seen_second), (0, 0), "both read the empty file");
+        super::migrate_from(&first, seen_first)?;
+        super::migrate_from(&second, seen_second)?;
+        assert_eq!(current_version(&second)?, SCHEMA_VERSION);
+        Ok(())
+    }
+
+    /// Concurrent openers of one fresh file all succeed (busy wait on
+    /// the write lock, version re-read under it).
+    #[test]
+    fn concurrent_openers_all_migrate_once() -> Result<(), Error> {
+        let path = temp_database_path("migrate-race");
+        let _remove_guard = RemoveGuard { path: path.clone() };
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Store::open(&path).and_then(|store| store.schema_version())
+                })
+            })
+            .collect();
+        for handle in handles {
+            let outcome = handle.join().map_err(|_| Error::Sql("opener thread panicked".to_string()))?;
+            assert_eq!(outcome?, SCHEMA_VERSION);
+        }
         Ok(())
     }
 

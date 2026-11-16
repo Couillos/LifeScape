@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Default selling (PRD3 lot 3). Every product a bot does not need goes
-//! to the market, never to an NPC shop: the brain lists the bot's
+//! to the market, unless an F2P shop pays more than the market (plan
+//! marché Q3, `brain_npc_sale`: the janitor's shop trip): the brain lists the bot's
 //! unlisted tradeable surplus (pack + bank) directly on the daemon
 //! market, opening at the reference (or the best bid when richer) and
 //! walking with demand (`market_reprice`: up while it sells, down to a
@@ -229,8 +230,10 @@ fn adopt_listings(
         let make_cost = make_costs.get(name).copied();
         // Today's opening for this stock (2026-11-14: an ask anchored on
         // an old reserve or an outlier comes down to it).
-        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost);
-        let reserve = reserve.map(|reserve| reserve.coins);
+        let (today, reserve) = service.sale_decision(account, name, row.item_id, row.remaining, costs, Some(life), make_cost, false);
+        // Never walked under what an F2P shop pays (Q3 outside option).
+        let outside = lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0);
+        let reserve = reserve.map(|reserve| reserve.coins.max(outside));
         let alch = crate::brain_alch::alch_floor(live, name).unwrap_or(0);
         let opening = match today {
             SaleDecision::List { price, .. } => Some(price.max(alch)),
@@ -454,11 +457,30 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
     let mut offers = surplus(&free, &keep, &worn, &listed);
     offers.extend(spare_tools(life, &free, &tools, &listed));
     offers.extend(spare_gear(&free, &gear, &whole, &listed));
+    // A full bank presses every lot (D17, M4/M5): it hits a bid at or
+    // over its floor, or undercuts the cheapest ask by one relative step.
+    let pressed = lifescape_planner::needs_cleanup(crate::brain_plan::bank_types(job));
+    // Q3: what an F2P shop pays more for than the market goes to the shop.
+    let mut shop_candidates: Vec<crate::brain_npc_sale::Candidate> = Vec::new();
     for (name, item, qty) in offers {
         if flip_stock.contains(&item) {
             continue;
         }
-        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied());
+        // Q4: a lot withdrawn at its horizon with no buyer stays banked
+        // for a horizon (never relisted at once), unless the bank is full.
+        let horizon = crate::market_lineage::horizon_ticks(crate::market_lineage::LOOT, true);
+        if !pressed && crate::market_reprice::withdrawn_recently(&service, &job.account, item, horizon, now) {
+            continue;
+        }
+        if let Some(shop_value) = lifescape_gamedata::shop_sale::npc_sale_value(&name) {
+            let reference = service.reference(item);
+            let (bid, _) = service.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
+            if lifescape_market::npc_sale_beats_market(shop_value, bid, reference) {
+                shop_candidates.push((name.clone(), qty, lifescape_market::market_pays(bid, reference)));
+                continue;
+            }
+        }
+        let (decision, reserve) = service.sale_decision(&job.account, &name, item, qty, &costs, Some(life), make_costs.get(&name).copied(), pressed);
         let (lot, price, floor) = match decision {
             // The alch floor (2026-11-14): a caster never sells under what
             // the cast nets it.
@@ -486,6 +508,7 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
             ("price", Value::Int(price)),
             ("floor", Value::Int(floor.min(price))),
             ("motive", str_value(motive)),
+            ("urgent", Value::Bool(pressed)),
         ]));
         let source = reserve.map(|known| format!("{:?}", known.source).to_lowercase()).unwrap_or_default();
         if reply.get("ok").as_bool() == Some(true) {
@@ -494,6 +517,16 @@ pub fn maybe_list_surplus(job: &Job, life: &Life) -> usize {
         } else {
             crate::logln!("brain {}: listing {lot} {name} refused, holding: {:?}", job.account, reply.get("error").as_str());
         }
+    }
+    // Q3: one shop trip when it pays more than its ticks at the bot's
+    // own rate; the janitor node carries it (`brain_npc_sale`).
+    let min_gain = (crate::brain_npc_sale::SHOP_TRIP_TICKS * costs.coins_per_tick).ceil() as i64;
+    match crate::brain_npc_sale::plan_shop_sale(&shop_candidates, crate::brain_npc_sale::live_position(&live), min_gain, &lifescape_gamedata::shop_sale::npc_sale_shops) {
+        Some(plan) => {
+            crate::logln!("brain {}: npc shop sale planned at {} ({} lots, gain {} over the market, trip worth {min_gain})", job.account, plan.shop, plan.lines.len(), plan.gain());
+            crate::brain_npc_sale::note(&job.account, plan);
+        }
+        None => crate::brain_npc_sale::forget(&job.account),
     }
     placed
 }

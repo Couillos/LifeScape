@@ -163,6 +163,12 @@ pub(crate) struct Engine {
     /// offered for sale (`free_coverage`), so a quest object is never
     /// locked in the bank by a listing (bh99tw2f, 2026-11-14).
     pub(crate) quest_reserved: HashMap<String, std::collections::BTreeMap<i64, i64>>,
+    /// Price patience per account: the life's drawn trait (plan M3),
+    /// read once (`market_reprice::account_patience`).
+    pub(crate) patience: HashMap<String, f64>,
+    /// Sellers withdrawn at their horizon with no buyer (Q4), per
+    /// (account, base item): daemon wall of the withdrawal.
+    pub(crate) horizon_withdrawn: HashMap<(String, i64), f64>,
 }
 
 impl Engine {
@@ -192,6 +198,8 @@ impl Engine {
             last_fills: HashMap::new(),
             fills_settled: 0,
             quest_reserved: HashMap::new(),
+            patience: HashMap::new(),
+            horizon_withdrawn: HashMap::new(),
         }
     }
 
@@ -763,6 +771,8 @@ impl MarketService {
             }
         }
         let clock = Self::now_clock();
+        // The life's drawn trait, never the store's 0.5 (plan M3).
+        let price_patience = crate::market_reprice::account_patience(self, &account);
         let store_id = {
             let store = self.lock_store();
             // First order creates the economic profile; later orders
@@ -775,7 +785,7 @@ impl MarketService {
                     deals_settled: 0,
                     deals_failed: 0,
                     market_affinity: 0.5,
-                    price_patience: 0.5,
+                    price_patience,
                     archetype: String::new(),
                 });
             }

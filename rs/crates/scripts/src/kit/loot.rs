@@ -117,6 +117,12 @@ pub fn drop_value(name: &str) -> i64 {
     crate::kit::pack::obj_price(name)
 }
 
+/// True when the brain's skip list names this ground object (coins are
+/// never skipped).
+pub fn skipped_loot(skip: &std::collections::HashSet<String>, name: &str) -> bool {
+    name != "coins" && skip.contains(name)
+}
+
 /// Take ground drops nearest-first, coins first, buryables never (the
 /// kill's own bones go through `bury_kill_bones`). Returns the taken
 /// count. Dead sockets fail typed; refused takes only log.
@@ -143,6 +149,11 @@ pub fn loot_ground(bot: &mut Bot) -> Result<u32, ScriptError> {
         }
         let name = (bot.tables.obj_name)(oid).unwrap_or_default();
         if name.is_empty() || bury_op(oid).is_some() {
+            continue;
+        }
+        // Not worth its pickup ticks at the bot's rate (plan marché M5:
+        // a player never picks up feathers at 1 coin): left lying.
+        if skipped_loot(&bot.loot_skip, &name) {
             continue;
         }
         // Dead socket, not a missed pickup: typed instead of skipping.

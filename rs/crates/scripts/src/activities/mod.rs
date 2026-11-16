@@ -28,6 +28,7 @@ pub mod market_cleanup;
 pub mod market_flip;
 pub mod market_deliver;
 pub mod market_shop;
+pub mod market_shop_sell;
 pub mod melee;
 pub mod mill_grain;
 pub mod mining;

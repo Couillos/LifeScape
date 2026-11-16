@@ -101,6 +101,13 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         crate::logln!("brain {}: bank past {} types, inserting {}", job.account, lifescape_planner::BANK_TYPE_LIMIT, inserted);
         dirty = true;
     }
+    // Q3: a pending NPC shop sale rides the janitor node (`brain_npc_sale`).
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
+    if crate::brain_npc_sale::maybe_insert(&mut life, now_secs) {
+        let inserted = life.nodes.last().map(|node| node.id.clone()).unwrap_or_default();
+        crate::logln!("brain {}: npc shop sale pending, inserting {}", job.account, inserted);
+        dirty = true;
+    }
     for change in crate::cpu_profile::timed("normalize", || lifescape_planner::normalize(&mut life)) {
         crate::logln!("brain {}: normalize {change}", job.account);
         dirty = true;
@@ -560,6 +567,22 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         let derived = || crate::brain_market::derived_reserve(&life, launch, &live);
         crate::cpu_profile::timed("market.standing_bid", || crate::brain_market::place_standing_bid(job, &node_snapshot, &ctx, &derived));
     }
+    // M5: a fighter leaves lying the drops not worth their pickup ticks
+    // at its own coin rate (public values: traded price or shop value).
+    if let (Some(spot), Some(service)) = (crate::brain_loot::fight_spot(&method), crate::market_service::shared()) {
+        if !life.profile.ironman {
+            let rate = crate::brain_reserve::OwnCosts::load(&service.lock_store(), &job.account).coins_per_tick;
+            let value_of = |name: &str| {
+                let traded = lifescape_gamedata::objs_by_name(name).into_iter().next().map(|obj| service.reference(obj.obj_id as i64)).filter(|reference| reference.traded).map(|reference| reference.price).unwrap_or(0);
+                traded.max(lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0))
+            };
+            let skip = crate::brain_loot::loot_skip(spot, &value_of, rate);
+            if !skip.is_empty() {
+                crate::logln!("brain {}: leaving {} lying at {spot} (under {} ticks at {rate:.2} coins/tick)", job.account, skip.join(","), crate::brain_loot::PICKUP_TICKS);
+            }
+            args.extend(crate::brain_loot::skip_args(&skip));
+        }
+    }
     // D52: flip and cleanup never sell worn, work tools or graph items.
     // The keep list carries the tools the bot works with
     // (`brain_tools::kept_tools`), so the merchant never flips its net;
@@ -596,6 +619,9 @@ pub(crate) fn maybe_launch(orch: &Arc<Orchestrator>, job: &Arc<Job>) {
         }
         if life.profile.ironman {
             args.push("--iron".to_string());
+        } else if let Some(plan) = crate::brain_npc_sale::take(&job.account) {
+            // Q3: the shop trip first (never a unit under the market).
+            args.extend(plan.args());
         }
     }
     if !crate::registry::script_known(&script) {

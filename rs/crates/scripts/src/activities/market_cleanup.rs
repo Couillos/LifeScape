@@ -8,6 +8,11 @@
 //! the carnet refuses (no own cost known), which never sells, so only its
 //! drop frees the slot. Sells open at the market and walk down to the
 //! reserve floor daemon-side (`market_reprice`).
+//! Q3 (plan marché, 2026-11-16): with `--sale-shop/--sale-site/
+//! --shopsell` the brain's NPC shop trip runs first (lots the market pays
+//! less for than the shop, `market_shop_sell`); the janitor pass follows
+//! only when the bank is still past its limit. The janitor itself never
+//! sells to a shop.
 
 #![forbid(unsafe_code)]
 
@@ -24,10 +29,13 @@ pub(crate) struct CleanupArgs {
     keep: Vec<String>,
     iron: bool,
     budget_max: u64,
+    /// Q3 shop trip (`--sale-shop`, `--sale-site`, `--shopsell`...).
+    sale: Option<crate::activities::market_shop_sell::SaleOrder>,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<CleanupArgs, ScriptError> {
-    let usage = || ScriptError::Usage("market cleanup [--keep NAME]... [--iron] [--node ID] [--budget-max N]".to_string());
+    let (args, sale) = crate::activities::market_shop_sell::split_sale_args(args)?;
+    let usage = || ScriptError::Usage("market cleanup [--keep NAME]... [--iron] [--node ID] [--budget-max N] [--sale-shop KEY --sale-site x,z,level --shopsell ITEM:QTY:MIN...]".to_string());
     let mut keep = Vec::new();
     let mut iron = false;
     let mut budget_max = 6000u64;
@@ -45,7 +53,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<CleanupArgs, ScriptError> {
             _ => return Err(usage()),
         }
     }
-    Ok(CleanupArgs { keep, iron, budget_max })
+    Ok(CleanupArgs { keep, iron, budget_max, sale })
 }
 
 // Debug names in the bank; unknown ids never list, so never sell.
@@ -121,6 +129,8 @@ fn d17_eligible(id: u16, unsellable: &[u16], listed_open: &HashSet<u16>) -> bool
 pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let parsed = parse_args(args)?;
     let (start_tick, start_pause) = (bot.world.ticks, bot.pause_ticks);
+    // Q3: the shop trip first; the janitor only for a bank still full.
+    if crate::activities::market_shop_sell::sale_then_room(bot, parsed.sale.as_ref())? { return Ok(0); }
     // Triage reads the live bank dialog: open first, since a closed
     // dialog reads stale (or empty) and would mis-sort the whole pass.
     bank_open(bot)?;
@@ -135,9 +145,7 @@ pub fn run_cleanup(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let stacks: Vec<(String, i64)> = named.iter().map(|(held, name)| (name.clone(), i64::from(bank.get(held).copied().unwrap_or(0)))).collect();
     let (protected, surplus) = lifescape_planner::space::triage_bank(&stacks, &keep);
     bot.log(&format!("cleanup: {} protected, {} surplus", protected.len(), surplus.len()));
-    if surplus.is_empty() {
-        return Ok(0);
-    }
+    if surplus.is_empty() { return Ok(0); }
     let by_name: HashMap<&str, u16> = named.iter().map(|(id, name)| (name.as_str(), *id)).collect();
     let surplus_ids: Vec<u16> = surplus.iter().filter_map(|(name, _)| by_name.get(name.as_str()).copied()).collect();
     // Carnet stock leaves the later legs alone: the shop must never sell

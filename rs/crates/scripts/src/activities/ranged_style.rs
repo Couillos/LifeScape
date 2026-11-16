@@ -101,7 +101,7 @@ pub fn run_ranged(bot: &mut Bot, args: &[String]) -> ScriptResult {
     crate::kit::toll::arm_fares(bot, spec.allow_paid, spec.allow_boat)?;
     bot.allow_shop = spec.allow_shop;
     // The brain's site anchors the hunt (`kit::foes::ranked_clusters`).
-    bot.assigned_site = spec.site;
+    crate::kit::fight::arm_fight(bot, &spec);
     crate::kit::survival::wait_pack_streamed(bot)?;
     check_events(bot)?;
     // PRD3 lot 6: the run fights ranged for real (gear scored for it,
