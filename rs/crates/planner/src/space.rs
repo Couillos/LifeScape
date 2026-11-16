@@ -294,7 +294,7 @@ mod tests {
         assert!(iron_may_use("space:cleanup"), "cleanup dispatches market sells only for non-Iron");
         assert!(!iron_may_use("market:buy"), "no buys");
         assert!(!iron_may_use("market:sell"), "no sells");
-        assert!(!iron_may_use("market:flip"), "no merchanting");
+        assert!(!iron_may_use("market:make"), "no market making");
         assert!(launch_allowed("market:buy", false), "non-Iron unaffected");
         assert!(!launch_allowed("market:buy", true), "Iron refused");
         assert!(launch_allowed("farm:feather", true), "Iron farms");

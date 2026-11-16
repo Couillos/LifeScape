@@ -1,11 +1,12 @@
 //! Fleet coverage of ambitions (user decision 2026-11-13): at least one
-//! bot per F2P skill group (12, melee as one) and at least one merchant;
+//! bot per F2P skill group (12, melee as one; the merchant role was
+//! removed in wave 3, plan marché Q6);
 //! beyond that, random long-term ambitions weighted by demand and by the
 //! bot's own levels. Pure: every bot's levels, profile and current kind
 //! come in as plain values; the daemon reads the life files.
 
 use crate::ambition::{may_change, pinned, Ambition, GENERALIST};
-use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, MERCHANT, specs};
+use crate::ambition_catalog::{fit, kind_for_group, primary_group, KindDemand, GROUPS, specs};
 
 /// One bot as the fleet assignment sees it.
 #[derive(Debug, Clone, PartialEq)]
@@ -13,8 +14,6 @@ pub struct FleetBot {
     pub account: String,
     pub levels: Vec<(String, u8)>,
     pub ironman: bool,
-    /// Drawn merchant archetype (D18): favoured for the merchant role.
-    pub merchant_archetype: bool,
     pub market_affinity: f64,
     pub seed: u64,
     /// Current ambition kind (`None`: to assign).
@@ -50,22 +49,14 @@ fn mix(seed: u64, salt: &str) -> u64 {
     (word ^ (word >> 31)).max(1)
 }
 
-/// Groups (and `merchant`) no current ambition covers as primary group.
+/// Groups no current ambition covers as primary group.
 pub fn coverage_gaps(kinds: &[&str]) -> Vec<String> {
     let covered: Vec<&str> = kinds.iter().filter_map(|kind| primary_group(kind)).collect();
-    GROUPS.iter().chain(std::iter::once(&MERCHANT)).filter(|group| !covered.contains(group)).map(|group| group.to_string()).collect()
+    GROUPS.iter().filter(|group| !covered.contains(group)).map(|group| group.to_string()).collect()
 }
 
-/// Score of one bot for one gap: skill fit; the merchant role goes to the
-/// merchant archetype first, then to the most market-minded. Iron never
-/// merchants (`None`).
+/// Score of one bot for one gap: skill fit.
 fn gap_score(bot: &FleetBot, group: &str) -> Option<f64> {
-    if group == MERCHANT {
-        if bot.ironman {
-            return None;
-        }
-        return Some(if bot.merchant_archetype { 50.0 } else { 1.0 + bot.market_affinity });
-    }
     let kind = kind_for_group(group)?;
     Some(fit(kind, &|skill| bot.level(skill)))
 }
@@ -95,7 +86,7 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
         let Some((_, _, bot_at, gap_at)) = best else { break };
         let group = gaps.remove(gap_at);
         let bot = free.remove(bot_at);
-        let kind = if group == MERCHANT { MERCHANT } else { kind_for_group(&group).unwrap_or(GENERALIST) };
+        let kind = kind_for_group(&group).unwrap_or(GENERALIST);
         out.push(Assignment { account: bot.account.clone(), kind: kind.to_string(), why: format!("coverage:{group}") });
     }
     for bot in free {
@@ -107,7 +98,7 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
 
 /// One bot's draw: an open coverage gap it can hold (best fit, seeded
 /// tie-break) wins; otherwise a random kind weighted by demand × √fit
-/// (merchant archetype ×5 on the merchant, never for Iron). Past coverage
+/// (never an operator-only kind). Past coverage
 /// the draw stays random (user decision 2026-11-13): levels tilt it (√fit
 /// = 1 + lead/5) but never fix it, or the inherited melee levels turn the
 /// whole fleet into warriors. `exclude` keeps kinds out (the one just blocked). `why`:
@@ -116,7 +107,7 @@ pub fn assign_fleet(bots: &[FleetBot], demand: &[KindDemand]) -> Vec<Assignment>
 pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude: &[&str]) -> (String, String) {
     let mut best_gap: Option<(f64, u64, &str)> = None;
     for gap in gaps {
-        let Some(kind) = (if gap == MERCHANT { Some(MERCHANT) } else { kind_for_group(gap) }) else { continue };
+        let Some(kind) = kind_for_group(gap) else { continue };
         if exclude.contains(&kind) {
             continue;
         }
@@ -127,18 +118,15 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
         }
     }
     if let Some((_, _, gap)) = best_gap {
-        let kind = if gap == MERCHANT { MERCHANT } else { kind_for_group(gap).unwrap_or(GENERALIST) };
+        let kind = kind_for_group(gap).unwrap_or(GENERALIST);
         return (kind.to_string(), format!("coverage:{gap}"));
     }
     let mut weighted: Vec<(&str, f64, Option<String>)> = Vec::new();
-    for entry in specs().iter().filter(|entry| !crate::ambition::ladderless(entry.kind) && !exclude.contains(&entry.kind)) {
-        if entry.kind == MERCHANT && bot.ironman {
-            continue;
-        }
+    let operator_only = |kind: &str| crate::ambition::ladderless(kind) || kind == crate::market_maker::MARKET_MAKER_KIND;
+    for entry in specs().iter().filter(|entry| !operator_only(entry.kind) && !exclude.contains(&entry.kind)) {
         let tilt = demand.iter().find(|known| known.kind == entry.kind);
         let demand_weight = tilt.map(|known| known.weight).unwrap_or(1.0).max(0.01);
-        let archetype = if entry.kind == MERCHANT && bot.merchant_archetype { 5.0 } else { 1.0 };
-        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt() * archetype;
+        let weight = demand_weight * fit(entry.kind, &|skill| bot.level(skill)).sqrt();
         let top = tilt.filter(|known| known.weight >= 1.5).and_then(|known| known.top_item.clone());
         weighted.push((entry.kind, weight, top));
     }
@@ -165,7 +153,7 @@ pub fn draw_kind(bot: &FleetBot, gaps: &[String], demand: &[KindDemand], exclude
 /// last change is `AMBITION_CHANGE_TICKS` old (the user's rule: one change
 /// per 72 000 ticks). Checked by the brain on every pass, not only after
 /// a milestone. `None`: no gap, sole holder, throttled, or no gap this bot
-/// may hold (Iron and the merchant), or an operator pin.
+/// may hold, or an operator pin.
 pub fn coverage_repair(ambition: &Ambition, bot: &FleetBot, gaps: &[String], redundant: bool, demand: &[KindDemand], ticks_since: &dyn Fn(i64) -> u64) -> Option<(String, String)> {
     if gaps.is_empty() || ambition.kind == GENERALIST || pinned(ambition) || !redundant || !may_change(ambition, ticks_since) {
         return None;

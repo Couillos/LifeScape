@@ -48,7 +48,7 @@ fn goals() -> Vec<GoalKind> {
         GoalKind::CompleteQuest { quest: "cook".to_string() },
         GoalKind::CompleteQuest { quest: "sheep".to_string() },
         GoalKind::MakeMoney,
-        GoalKind::GetRich { merchant: Some(false) },
+        GoalKind::GetRich,
         GoalKind::EquipBest { style: "melee".to_string() },
     ]
 }

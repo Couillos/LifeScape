@@ -146,93 +146,10 @@ pub fn lives_response_in(run_dir: &std::path::Path) -> Value {
     object(vec![("ok", Value::Bool(true)), ("lives", Value::Arr(rows))])
 }
 
-/// Open sell/buy exposure of one merchant account from its open orders.
-fn merchant_exposure(dispatch: &Dispatch, account: &str) -> (i64, i64, i64, usize, Vec<i64>) {
-    let orders = dispatch(object(vec![
-        ("cmd", str_value("market")),
-        ("op", str_value("my_orders")),
-        ("account", str_value(account)),
-    ]));
-    let mut buy_value = 0i64;
-    let mut sell_qty = 0i64;
-    let mut sell_value = 0i64;
-    let mut open = 0usize;
-    let mut items = Vec::new();
-    for row in orders.get("orders").as_arr().cloned().unwrap_or_default() {
-        if row.get("status").as_str() != Some("open") {
-            continue;
-        }
-        open += 1;
-        let left = row.get("left").as_i64().unwrap_or(0).max(0);
-        let price = row.get("price").as_i64().unwrap_or(0).max(0);
-        let item = row.get("item").as_i64().unwrap_or(-1);
-        if row.get("side").as_str() == Some("buy") {
-            buy_value = buy_value.saturating_add(left.saturating_mul(price));
-        } else {
-            sell_qty = sell_qty.saturating_add(left);
-            sell_value = sell_value.saturating_add(left.saturating_mul(price));
-        }
-        if item >= 0 && !items.contains(&item) {
-            items.push(item);
-        }
-    }
-    (buy_value, sell_qty, sell_value, open, items)
-}
-
-/// Depth quantity of one book side: `[[price, qty], …]`.
-fn book_side_qty(book: &Value, side: &str) -> i64 {
-    book.get(side)
-        .as_arr()
-        .map(|levels| {
-            levels
-                .iter()
-                .map(|level| level.as_arr().and_then(|cells| cells.get(1)).and_then(|qty| qty.as_i64()).unwrap_or(0))
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-/// Largest share of resting depth held by open orders on one side: the
-/// merchant's weight in the book on the items they quote.
-fn merchant_book_share(dispatch: &Dispatch, account: &str, items: &[i64]) -> f64 {
-    let orders = dispatch(object(vec![
-        ("cmd", str_value("market")),
-        ("op", str_value("my_orders")),
-        ("account", str_value(account)),
-    ]));
-    let mut open: std::collections::BTreeMap<(i64, String), i64> = std::collections::BTreeMap::new();
-    for row in orders.get("orders").as_arr().cloned().unwrap_or_default() {
-        if row.get("status").as_str() != Some("open") {
-            continue;
-        }
-        let key = (row.get("item").as_i64().unwrap_or(-1), row.get("side").as_str().unwrap_or("").to_string());
-        *open.entry(key).or_insert(0) += row.get("left").as_i64().unwrap_or(0).max(0);
-    }
-    let mut top = 0.0f64;
-    for item in items.iter().take(12) {
-        let book = dispatch(object(vec![
-            ("cmd", str_value("market")),
-            ("op", str_value("book")),
-            ("item", Value::Int(*item)),
-            ("depth", Value::Int(10)),
-        ]));
-        for (side, key) in [("buys", "buy"), ("sells", "sell")] {
-            let depth = book_side_qty(&book, side);
-            let held = open.get(&(*item, key.to_string())).cloned().unwrap_or(0) as f64;
-            if held > 0.0 {
-                let share = if depth > 0 { held / depth as f64 } else { 1.0 };
-                if share > top {
-                    top = share;
-                }
-            }
-        }
-    }
-    top
-}
-
 /// Economy payload from existing sources only: holdings via the `items`
-/// command, market stats via the `market` command, deals/trends/merchants
-/// via the store, top activities via the rates table. One JSON fetch for
+/// command, market stats via the `market` command, deals/trends/market
+/// makers via the store and the life files, top activities via the rates
+/// table. One JSON fetch for
 /// the economy page; bots never read it.
 pub fn economy_response(dispatch: &Dispatch) -> Value {
     economy_response_in(dispatch, &crate::paths::run_dir())
@@ -277,65 +194,15 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
     trends.truncate(15);
     let rates = crate::rates_service::rates_api(&**dispatch);
     let mut activities: Vec<(String, i64, f64)> = Vec::new();
-    let mut flip: Option<(String, f64, bool)> = None;
     for row in rates.get("profit").as_arr().cloned().unwrap_or_default() {
         let method = row.get("method").as_str().unwrap_or("").to_string();
         let profit = row.get("profit").as_f64().unwrap_or(0.0);
-        if method == "market:flip" || (flip.is_none() && method == "market") {
-            flip = Some((method.clone(), profit, row.get("price_prior").as_bool().unwrap_or(true)));
-        }
         activities.push((method, row.get("band").as_i64().unwrap_or(0), profit));
     }
     activities.sort_by(|left, right| right.2.total_cmp(&left.2));
     activities.truncate(10);
-    let mut merchants = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(lives_dir(run_dir)) {
-        let mut names: Vec<String> = entries
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().to_string())
-            .filter(|name| name.ends_with(".json"))
-            .collect();
-        names.sort();
-        for name in names {
-            let account = name[..name.len() - 5].to_string();
-            let text = std::fs::read_to_string(lives_dir(run_dir).join(&name)).unwrap_or_default();
-            let life = json::parse(&text).unwrap_or(Value::Null);
-            if life.get("profile").get("archetype").as_str() != Some("merchant") {
-                continue;
-            }
-            let (buy_value, sell_qty, sell_value, open_orders, items) = merchant_exposure(dispatch, &account);
-            let open_deals = dispatch(object(vec![
-                ("cmd", str_value("market")),
-                ("op", str_value("my_deals")),
-                ("account", str_value(&account)),
-            ]))
-            .get("deals")
-            .as_arr()
-            .map(|rows| {
-                rows.iter()
-                    .filter(|row| !matches!(row.get("status").as_str(), Some("settled") | Some("failed")))
-                    .count()
-            })
-            .unwrap_or(0);
-            let (deal_settled, deal_failed) = store
-                .get_account(&account)
-                .ok()
-                .flatten()
-                .map(|row| (row.deals_settled, row.deals_failed))
-                .unwrap_or((0, 0));
-            merchants.push(object(vec![
-                ("account", str_value(&account)),
-                ("buy_value", Value::Int(buy_value)),
-                ("sell_qty", Value::Int(sell_qty)),
-                ("sell_value", Value::Int(sell_value)),
-                ("settled", Value::Int(deal_settled)),
-                ("failed", Value::Int(deal_failed)),
-                ("open_orders", Value::Int(open_orders as i64)),
-                ("open_deals", Value::Int(open_deals as i64)),
-                ("book_share", Value::Float(merchant_book_share(dispatch, &account, &items))),
-            ]));
-        }
-    }
+    // Market makers (plan marché Q6): operator info, never read by a bot.
+    let makers: Vec<Value> = crate::market_maker_report::maker_rows(&store, &lives_dir(run_dir)).iter().map(crate::market_maker_report::row_value).collect();
     let clock = SystemTime::now().duration_since(UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     object(vec![
         ("ok", Value::Bool(true)),
@@ -380,17 +247,6 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
             ),
         ),
         (
-            "flip",
-            flip.map(|(method, profit, prior)| {
-                object(vec![
-                    ("method", str_value(&method)),
-                    ("profit", Value::Float(profit)),
-                    ("price_prior", Value::Bool(prior)),
-                ])
-            })
-            .unwrap_or(Value::Null),
-        ),
-        (
             "trends",
             Value::Arr(
                 trends
@@ -407,7 +263,7 @@ pub fn economy_response_in(dispatch: &Dispatch, run_dir: &std::path::Path) -> Va
                     .collect(),
             ),
         ),
-        ("merchants", Value::Arr(merchants)),
+        ("makers", Value::Arr(makers)),
     ])
 }
 
@@ -476,10 +332,11 @@ mod tests {
         std::fs::write(
             run.join("lives").join("m1.json"),
             r#"{"schema":1,"account":"m1","created_at":1,"seed":9,
-                "profile":{"ironman":false,"market_affinity":0.5,"price_patience":0.5,"archetype":"merchant"},
-                "goal":{"kind":"get_rich","merchant":true},
+                "profile":{"ironman":false,"market_affinity":0.5,"price_patience":0.5,"archetype":"market_maker",
+                  "maker":{"slice":4,"slices":11,"capital_target":90000,"phase":"quoting","capital_at_switch":91000,"switched_at":1}},
+                "goal":{"kind":"make_market"},
                 "nodes":[{"id":"n1","kind":"make_money","params":{},"deps":[],"status":"active",
-                "method":"market:flip","alternatives":[{"method":"market:flip","est_ticks":6000,"est_coins":0}],
+                "method":"market:make","alternatives":[{"method":"market:make","est_ticks":6000,"est_coins":0}],
                 "progress":{"current":0,"target":0},"spent_ticks":100}],
                 "engagement":{"node":"n1","min_ticks":6000,"max_ticks":12000,"chosen":9000},
                 "active":"n1","history":[]}"#,
@@ -489,11 +346,11 @@ mod tests {
         let life = life_response_in(&run, "m1");
         assert_eq!(life.get("ok").as_bool(), Some(true));
         assert_eq!(life.get("life").get("account").as_str(), Some("m1"));
-        assert_eq!(life.get("life").get("goal").get("kind").as_str(), Some("get_rich"));
+        assert_eq!(life.get("life").get("goal").get("kind").as_str(), Some("make_market"));
         let nodes = life.get("life").get("nodes").as_arr().expect("nodes array");
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].get("status").as_str(), Some("active"));
-        assert_eq!(nodes[0].get("method").as_str(), Some("market:flip"));
+        assert_eq!(nodes[0].get("method").as_str(), Some("market:make"));
         assert_eq!(nodes[0].get("alternatives").as_arr().map(|rows| rows.len()), Some(1));
         assert_eq!(life.get("life").get("engagement").get("node").as_str(), Some("n1"));
         // Unknown account and traversal read loud, never the filesystem.
@@ -511,8 +368,8 @@ mod tests {
         want.sort();
         assert_eq!(got, want, "lives row covers every §6.4 column");
         assert_eq!(rows[0].get("account").as_str(), Some("m1"));
-        assert_eq!(rows[0].get("goal").get("kind").as_str(), Some("get_rich"));
-        assert_eq!(rows[0].get("profile").get("archetype").as_str(), Some("merchant"));
+        assert_eq!(rows[0].get("goal").get("kind").as_str(), Some("make_market"));
+        assert_eq!(rows[0].get("profile").get("archetype").as_str(), Some("market_maker"));
         assert_eq!(rows[0].get("active_task").as_str(), Some("n1"));
         assert_eq!(rows[0].get("active").as_i64(), Some(1));
         assert_eq!(rows[0].get("ready").as_i64(), Some(0));
@@ -520,7 +377,7 @@ mod tests {
         assert!(rows[0].get("updated").as_i64().unwrap_or(0) > 0, "mtime feeds the last change");
         let chain: Vec<String> =
             rows[0].get("chain").as_arr().unwrap().iter().filter_map(|link| link.as_str().map(str::to_string)).collect();
-        assert_eq!(chain, vec!["market:flip".to_string()], "active method is the chain until the brain writes one");
+        assert_eq!(chain, vec!["market:make".to_string()], "active method is the chain until the brain writes one");
 
         // Economy: one stub dispatch for every daemon command used.
         fn stub(request: Value) -> Value {
@@ -580,15 +437,13 @@ mod tests {
         assert_eq!(economy.get("market").get("items").as_i64(), Some(3));
         assert!(economy.get("activities").as_arr().is_some());
         assert!(economy.get("trends").as_arr().is_some());
-        let merchants = economy.get("merchants").as_arr().expect("merchants array");
-        assert_eq!(merchants.len(), 1, "the merchant life file drives the card");
-        assert_eq!(merchants[0].get("account").as_str(), Some("m1"));
-        assert_eq!(merchants[0].get("buy_value").as_i64(), Some(40));
-        assert_eq!(merchants[0].get("sell_qty").as_i64(), Some(6));
-        assert_eq!(merchants[0].get("sell_value").as_i64(), Some(42));
-        assert_eq!(merchants[0].get("open_orders").as_i64(), Some(2));
-        // 10 of 20 resting bids, 6 of 12 asks: share 0.5.
-        assert!((merchants[0].get("book_share").as_f64().unwrap_or(-1.0) - 0.5).abs() < 1e-9);
+        let makers = economy.get("makers").as_arr().expect("makers array");
+        assert_eq!(makers.len(), 1, "the maker life file drives the card");
+        assert_eq!(makers[0].get("account").as_str(), Some("m1"));
+        assert_eq!(makers[0].get("phase").as_str(), Some("quoting"));
+        assert_eq!(makers[0].get("slice").as_i64(), Some(4));
+        assert_eq!(makers[0].get("capital").as_i64(), Some(91_000), "no deal yet: the capital at its switch");
+        assert!(economy.get("flip").is_null() && economy.get("merchants").is_null(), "the merchant card is gone");
 
         let _ = std::fs::remove_dir_all(&root);
     }

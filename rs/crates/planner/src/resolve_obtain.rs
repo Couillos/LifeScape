@@ -354,23 +354,25 @@ fn profit_of(ctx: &ReadyCtx, method: &str) -> f64 {
 }
 
 /// Coin and money nodes: the most profitable workable money method.
-/// Merchant nodes (`market:flip` only) keep their single leg.
+/// A market maker's post (`market:make` only, plan Q6) keeps its single
+/// leg; that leg never ranks as a money method elsewhere.
 pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
-    let flip_only = !node.alternatives.is_empty() && node.alternatives.iter().all(|alt| alt.method == "market:flip");
-    if flip_only {
+    let make = crate::market_maker::MAKE_METHOD;
+    let post_only = !node.alternatives.is_empty() && node.alternatives.iter().all(|alt| alt.method == make);
+    if post_only {
         for alt in &mut node.alternatives {
             alt.est_ticks = 6000;
         }
-        node.method = Some("market:flip".to_string());
+        node.method = Some(make.to_string());
         return;
     }
     let mut methods = money_methods(ctx);
     for alt in &node.alternatives {
-        if !methods.contains(&alt.method) && alt.method != "market:flip" {
+        if !methods.contains(&alt.method) && alt.method != make {
             methods.push(alt.method.clone());
         }
     }
-    let mut ranked: Vec<Alternative> = methods
+    let ranked: Vec<Alternative> = methods
         .iter()
         .map(|method| {
             let profit = profit_of(ctx, method);
@@ -380,9 +382,6 @@ pub(crate) fn resolve_money(node: &mut Node, ctx: &ReadyCtx) {
             Alternative { method: method.clone(), est_ticks: est, est_coins: 0 }
         })
         .collect();
-    if !ctx.ironman && node.alternatives.iter().any(|alt| alt.method == "market:flip") {
-        ranked.push(Alternative { method: "market:flip".to_string(), est_ticks: 6000, est_coins: 0 });
-    }
     // A coin target is met by coins in the wallet: goods only turn into
     // coins when a buyer shows up, a coin drop is coins at once. Coin
     // spots lead (most coins per kill first); the site pick falls back

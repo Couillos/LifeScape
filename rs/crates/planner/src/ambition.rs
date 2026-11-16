@@ -1,5 +1,5 @@
 //! Per-bot long-term ambitions (user decision 2026-11-13). Every bot has
-//! one ambition (`smith`, `fisher`, `merchant`…) whose milestones drive
+//! one ambition (`smith`, `fisher`, `miner`…) whose milestones drive
 //! its goal draws: level tranches, production quotas (made, never bought,
 //! then listed by the default selling), equipment tiers, coin targets.
 //! Pure: live levels, coins, demand and ticks come in as arguments; only
@@ -273,9 +273,10 @@ pub fn pinned_ambition(skill: &str, level: u8, now: &BotNow, seed: u64, demand: 
 }
 
 /// True while an operator pin holds the ambition (no redraw, no change):
-/// a skill pin, or the operator-only `overall` ambition (held for good).
+/// a skill pin, or an operator-only kind held for good (`overall`, the
+/// market maker's playing phase).
 pub fn pinned(ambition: &Ambition) -> bool {
-    ambition.pin.is_some() || ambition.kind == OVERALL
+    ambition.pin.is_some() || ambition.kind == OVERALL || ambition.kind == crate::market_maker::MARKET_MAKER_KIND
 }
 
 /// Kinds with no ladder that draw their goals directly (`goals`): the
@@ -600,13 +601,13 @@ pub fn next_milestone<'a>(ambition: &'a Ambition, avoid: &[String]) -> Option<&'
         .find(|stone| stone.target.skills().iter().all(|skill| !avoid.contains(skill)))
 }
 
-/// Goal of one milestone. Coins targets run the merchant engagement.
+/// Goal of one milestone. Coin targets run the producer money methods.
 pub fn goal_for_milestone(stone: &Milestone) -> GoalKind {
     match &stone.target {
         Target::Level { skill, level } => GoalKind::MaxSkills { skills: vec![skill.clone()], level: *level },
         Target::Produce { item, count, .. } => GoalKind::Produce { item: item.clone(), count: *count },
         Target::Equip { style } => GoalKind::EquipBest { style: style.clone() },
-        Target::Coins { .. } => GoalKind::GetRich { merchant: Some(true) },
+        Target::Coins { .. } => GoalKind::GetRich,
     }
 }
 

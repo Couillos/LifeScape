@@ -32,7 +32,7 @@ pub fn skill_banned(skill: &str, avoid: &[String]) -> bool {
     avoid.iter().any(|banned| banned == skill || (group == Some("melee") && group_of_skill(banned) == Some("melee")))
 }
 
-/// True when a method trains a banned skill (`market:flip`, unknown
+/// True when a method trains a banned skill (`market:make`, unknown
 /// methods: never).
 pub fn method_banned(method: &str, avoid: &[String]) -> bool {
     method_skill(method).is_some_and(|skill| skill_banned(skill, avoid))
@@ -57,6 +57,8 @@ pub fn side_goal(level_of: &dyn Fn(&str) -> u8, avoid: &[String], demand: &[Dema
             return Some((goal, format!("{SIDE_PREFIX}demand:{}", wanted.item)));
         }
     }
+    // A non-Iron always has money work: its window works through a ban
+    // when every money method is banned (`steer_for_work`, no idle bot).
     let money_open = !ironman || MONEY_SKILLS.iter().any(|skill| !skill_banned(skill, avoid));
     money_open.then(|| (GoalKind::MakeMoney, format!("{SIDE_PREFIX}money")))
 }

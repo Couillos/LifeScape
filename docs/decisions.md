@@ -904,3 +904,78 @@ store dans UNE transaction `BEGIN IMMEDIATE` avec relecture de
 `migration 6: duplicate column name: replaces`) ; `resolve_obtain`
 bloque sur `missing:coins` (`have_coins`) quand le plafond d'un
 `market:buy` est sous le plancher public de crédibilité (§3.6).
+
+## 2026-11-16 — Teneurs de marché dédiés, suppression de la revente marchande (plan marché, vague 3, Q6)
+
+Décision utilisateur Q6 (`docs/plan-marche.txt` §9) : des comptes DÉDIÉS
+cotent tout l'univers F2P ; la revente des marchands tirés (~10 %, méthode
+de revente, op de cotation, archétype `merchant`, ambition et rôle de
+couverture `merchant`, `rich:merchant`) est SUPPRIMÉE : plus aucune
+ressource ne lui est allouée (aucune référence restante, test
+`no_merchant_flip_reference_remains`). Migration au chargement des vies
+(`planner::market_maker::migrate_merchant`, testée) : archétype →
+producteur, but `get_rich` producteur, jambe de revente retirée des
+nœuds (le nœud se résout à nouveau), ambition `merchant` retirée (le
+cerveau en assigne une de flotte).
+
+- Univers = `gamedata::f2p::market_universe` : 1128 lignes F2P
+  échangeables − 552 billets − pièces = 575 objets (un carnet chacun).
+- Capacité = (banque 60 + sac 28 − 20 cases gardées) × 80 % = 54 ;
+  N = ⌈575/54⌉ = 11 comptes ; au plus 49 types de tranche détenus à la
+  fois (strictement sous la ligne du concierge : 55 − pièces − trousse 4 − 1).
+- Tranches : hachage rendez-vous plafonné (⌈575/11⌉ = 53), objets par id
+  croissant : couverture totale, sans recouvrement, déterministe, stable
+  à l'ajout d'un objet.
+- Capital cible = point fixe Σ min(lot_i, 10 % × T) (lot = 1000 pièces à
+  la valeur boutique, ≤ 500 unités), arrondi au millier : 60 000 à
+  290 000 selon la tranche.
+- Cycle de vie : `create-user --role market_maker` → tutoriel → phase de
+  jeu (ambition opérateur `market_maker`, échelle de pièces, méthodes
+  productrices) → bascule définitive au capital cible (achats et annonces
+  de tranche annulés `role`, nœuds abandonnés `role: market maker`, but
+  `MakeMarket`, poste `market:make` sur l'anneau de remise de la fontaine
+  de Varrock).
+- Cotation (`lifescape_market::maker`) : v = prix courant, sinon milieu
+  des autres, sinon (découverte) min(valeur boutique, meilleur ask) /
+  (1 + h) ; r = clamp((stock − lot)/lot, −1, 1) ; p = v(1 − h r) ;
+  bid = ⌊p(1 − h)⌋ ≤ v − 1, ask = ⌈p(1 + h)⌉ ≥ v + 1 et > prix boutique
+  de reprise ; h = 4 / 8 / 10 % (liquide / mince / découverte, quart de
+  lot sans relèvement) ; sans demande (aucun achat d'un autre ni bid
+  depuis 72 000 ticks) : bid −5 % par passe vers 1, stock au-delà d'un
+  lot vendu au PNJ (Q3). Plafonds : 10 % des fonds propres par objet
+  (stock à max(valeur, coût) + bid), 500 unités, 25 % d'un côté. Ordres à
+  prix fixe (motif `market_make`), jamais sur la courbe de concession ;
+  bids de teneur exclus des signaux de demande.
+
+Simulateur (`sim_maker`, 40 objets façon constat §1.1 : 60 % carnets de
+butin, 20 % deux côtés clairsemés, 20 % acheteurs seuls ; même graine,
+même carnet, avec / sans teneur ; capital 100 000 ; débouché PNJ Q3 de
+la vague 2 pour TOUS les vendeurs dans les deux runs,
+`sim_lifecycle::run_with_outlet`) :
+
+| graine | deux côtés vague 2 | vague 3 | écart médian vague 2 | vague 3 |
+|--------|--------------------|---------|----------------------|---------|
+| 11     | 6,0 %              | 81,4 %  | ×1,475               | ×1,369  |
+| 22     | 4,7 %              | 66,5 %  | ×1,472               | ×1,301  |
+| 33     | 5,6 %              | 79,5 %  | ×1,443               | ×1,170  |
+| 44     | 4,7 %              | 81,7 %  | ×1,373               | ×1,136  |
+| 55     | 2,1 %              | 85,8 %  | ×1,333               | ×1,160  |
+
+Critère (inchangé) atteint sur les 5 graines. Lecture honnête : sans Q3
+dans le simulateur, la graine 22 échouait (×1,301 contre ×1,274). Avec
+Q3, les chiffres de la vague 3 ne bougent pas : le prix échangé que le
+teneur a imprimé reste au-dessus du prix boutique, la boutique ne prend
+rien. C'est la référence vague 2 qui change : ses carnets jamais
+échangés et sans bid partent au magasin, la part à deux côtés tombe et
+son écart médian s'élargit. L'hypothèse « les asks quittent les carnets
+sans demande du teneur » est donc infirmée ; le critère passe parce que
+la vague 2 du simulateur porte enfin sa règle Q3. P&L du teneur sur ces
+40 objets : −65 à −3 837 pièces (pertes sur le butin sans demande, bornées par les
+plafonds). Objet en chute 100 → 10 : perte 5 932 à 6 090 pièces sur
+100 000 (≤ 10 %), stock max 137 (≤ 500).
+
+Rejeté : liste d'objets écrite à la main ; tranches contiguës par id
+(un objet ajouté décale tout) ; capital cible fixe sans lien avec la
+tranche ; ordres de teneur sur la courbe de concession (le teneur
+recote lui-même selon son stock) ; garder la revente marchande en
+parallèle (décision Q6).

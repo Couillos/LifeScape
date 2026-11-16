@@ -27,6 +27,7 @@ pub mod lifecycle;
 pub mod lifecycle_retire;
 pub mod life_memory;
 pub mod market_fit;
+pub mod market_maker;
 pub mod market_value;
 pub mod derived_demand;
 pub mod mapping;
@@ -70,7 +71,7 @@ pub use cost::{choose_market_or_farm, cost_craft, cost_farm, cost_market_buy, ra
 pub use expand::{expand_goal, expand_goal_from, method_feasible, required_tool, resolve_ready};
 pub use lifecycle_retire::{retire_due, retire_finished, Retirement};
 pub use life_memory::{LifeMemory, Retired, RECENT_CAP};
-pub use lifecycle::{max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
+pub use lifecycle::{abandon_for_role, max_id_number, complete_node, end_engagement, graph_state, insert_gear_step, insert_ready, park_for_fill, withdraw_gear_step, mark_launched, reached_live, next_id, normalize, record_block, record_block_from, record_contract_error, retry_uncounted, record_failure, record_progress, record_xp, retarget_market, retarget_produce, revive_stuck, FailureFold, GraphState, MAX_BLOCKS, MAX_FAILURES, MAX_REVIVES, REVIVE_COOLDOWN_TICKS};
 pub use bans_scope::{banned_scope, market_failed, market_route, market_unfilled_error, rescue_candidates, rescued_before, MARKET_RESCUE_TAG, PRODUCE_RESCUE_TAG};
 pub use bans::{ban_entry, ban_states, banned_skills, quest_lifted_bans, stuck_cause, unban_entry, BanState, StuckCause, SKILL_BAN_TICKS, UNBAN_TAG};
 pub use gear_ladder::{gear_move, next_gear_step, next_ready, next_ready_except, withdraw_dead_steps, withdraw_melee_set, GearMove, GearStep, GEAR_SHARE_PCT, TOOL_SHARE_PCT};
@@ -85,7 +86,8 @@ pub use ambition::{
     on_goal_closed, refresh, revise, Ambition, CloseOutcome, Milestone, MilestoneStatus, Revision, Stamp, Target,
     AMBITION_CHANGE_TICKS, GENERALIST, MILESTONE_MAX_BLOCKS, OVERALL,
 };
-pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS, MERCHANT};
+pub use ambition_catalog::{kind_weights, DemandItem, KindDemand, GROUPS};
+pub use market_maker::{become_quoting, maker_post, maker_role, quoting, switch_due, MakerPhase, MakerRole, MAKER_POSTS, MAKE_METHOD, MARKET_MAKER_KIND, MAKER_ROLE_CAUSE};
 pub use ambition_fleet::{assign_fleet, coverage_gaps, coverage_repair, draw_kind, optional_change, Assignment, FleetBot};
 pub use mapping::map_method;
 pub use model::{

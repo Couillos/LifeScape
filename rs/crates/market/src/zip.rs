@@ -208,100 +208,8 @@ pub fn remembered_bid(reference: i64, best_ask: Option<i64>, ceiling: i64, last_
     opening_bid(last_buy.filter(|price| *price >= 1).unwrap_or(reference), best_ask, ceiling)
 }
 
-/// Merchant quotes off the book (2026-11-14, user rule 6): buy at the
-/// best bid + 1, sell at the best ask - 1, never at reference +/- 1.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FlipQuote {
-    /// Buy leg; `None` when the spread does not pay the merchant's time.
-    pub buy: Option<i64>,
-    /// Sell leg of held stock: never under its floor.
-    pub sell: i64,
-}
-
-/// `min_margin`: coins per unit the merchant's time costs (its own
-/// reserve logic). The buy leg opens only when both sides rest and the
-/// spread left between `bid + 1` and `ask - 1` covers that margin; the
-/// sell leg rests at `ask - 1`, never under `sell_floor` (what the stock
-/// cost it plus the margin, or its own reserve) nor on the best bid, and
-/// with no ask at `2 x sell_floor` (the untraded rule).
-pub fn flip_quotes(best_bid: Option<i64>, best_ask: Option<i64>, min_margin: i64, sell_floor: i64) -> FlipQuote {
-    let floor = sell_floor.max(1);
-    let buy = match (best_bid, best_ask) {
-        (Some(bid), Some(ask)) if bid >= 1 && (ask - 1) - (bid + 1) >= min_margin.max(1) => Some(bid + 1),
-        _ => None,
-    };
-    let sell = match best_ask {
-        Some(ask) if ask >= 2 => (ask - 1).max(floor),
-        _ => floor.saturating_mul(UNTRADED_OPEN_RESERVES),
-    };
-    FlipQuote { buy, sell: sell.max(best_bid.map(|bid| bid + 1).unwrap_or(0)) }
-}
-
 fn ceil_pct(price: i64, pct: i64) -> i64 {
     (price.max(0).saturating_mul(pct) + 99) / 100
-}
-
-/// Risk caps for merchant bots (fractions of capital/book, item counts).
-#[derive(Clone, Debug, PartialEq)]
-pub struct MerchantCaps {
-    /// Max share of capital in one item (e.g. 0.10).
-    pub max_capital_share: f64,
-    /// Max resting units of one item.
-    pub max_stock_items: i64,
-    /// Max share of one side's resting depth (e.g. 0.25 guard rail).
-    pub max_book_share: f64,
-}
-
-impl MerchantCaps {
-    /// Sensible defaults: 10% of capital, 500 units, 25% of the book.
-    pub fn standard() -> Self {
-        MerchantCaps { max_capital_share: 0.10, max_stock_items: 500, max_book_share: 0.25 }
-    }
-
-    /// Capital check: the new position must stay inside its share.
-    pub fn check_capital(&self, position_cost: i64, capital: i64) -> Result<(), Error> {
-        if capital < 1 {
-            return Err(Error::Invalid(format!("bad capital {capital}")));
-        }
-        if position_cost as f64 > capital as f64 * self.max_capital_share {
-            return Err(Error::Rejected(format!(
-                "position {position_cost} over capital share on {capital}"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Stock check: units of one item stay under the cap.
-    pub fn check_stock(&self, units: i64) -> Result<(), Error> {
-        if units > self.max_stock_items {
-            return Err(Error::Rejected(format!(
-                "stock {units} over cap {}",
-                self.max_stock_items
-            )));
-        }
-        Ok(())
-    }
-
-    /// Book check: the merchant never owns more than its share of a side.
-    pub fn check_book(&self, own_qty: i64, side_qty: i64) -> Result<(), Error> {
-        if side_qty <= 0 {
-            return Ok(());
-        }
-        if own_qty as f64 > side_qty as f64 * self.max_book_share {
-            return Err(Error::Rejected(format!(
-                "book share {own_qty}/{side_qty} over cap"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Merchant table pick: widest spread among books with at least
-/// `min_volume` recently traded. Returns the item on top, if any.
-pub fn pick_table(spreads: &[(i64, i64, i64)]) -> Option<i64> {
-    let mut ranked: Vec<(i64, i64, i64)> = spreads.to_vec();
-    ranked.sort_by(|left, right| right.1.cmp(&left.1));
-    ranked.into_iter().next().map(|row| row.0)
 }
 
 #[cfg(test)]
@@ -350,7 +258,7 @@ mod step_tests {
 
 #[cfg(test)]
 mod seller_tests {
-    use super::{flip_quotes, remembered_bid, seller_open, FlipQuote, OwnFill};
+    use super::{remembered_bid, seller_open, OwnFill};
     use crate::price::Reference;
 
     const UNTRADED: Reference = Reference { price: 1, traded: false };
@@ -393,16 +301,6 @@ mod seller_tests {
         assert_eq!(remembered_bid(4, None, 50, None), 4, "never bought: the reference");
         assert_eq!(remembered_bid(1, Some(9), 50, Some(12)), 9, "a covered ask is taken");
     }
-
-    #[test]
-    fn flips_price_off_the_book_with_a_paid_margin() {
-        assert_eq!(flip_quotes(Some(10), Some(20), 3, 12), FlipQuote { buy: Some(11), sell: 19 });
-        assert_eq!(flip_quotes(Some(10), Some(14), 3, 12), FlipQuote { buy: None, sell: 13 }, "spread 11..13 pays 2 < 3");
-        assert_eq!(flip_quotes(Some(10), Some(12), 1, 15), FlipQuote { buy: None, sell: 15 }, "never under its floor");
-        assert_eq!(flip_quotes(None, Some(20), 1, 5), FlipQuote { buy: None, sell: 19 }, "no bid: no buy leg");
-        assert_eq!(flip_quotes(Some(3), None, 1, 5), FlipQuote { buy: None, sell: 10 }, "no ask: 2 x floor");
-        assert_eq!(flip_quotes(Some(1), Some(2), 1, 1), FlipQuote { buy: None, sell: 2 }, "never ref - 1 / ref + 1 at one coin");
-    }
 }
 
 #[cfg(test)]
@@ -430,23 +328,5 @@ mod tests {
         assert_eq!(quote.stepped(11, 100, true), 10);
         assert_eq!(quote.stepped(3, 10_000, true), 3, "floor holds");
         assert_eq!(quote.stepped(20, 10_000, false), 20, "ceiling holds");
-    }
-
-    #[test]
-    fn caps_reject_oversize_positions() {
-        let caps = MerchantCaps::standard();
-        assert!(caps.check_capital(100, 1000).is_ok());
-        assert!(caps.check_capital(101, 1000).is_err());
-        assert!(caps.check_stock(500).is_ok());
-        assert!(caps.check_stock(501).is_err());
-        assert!(caps.check_book(25, 100).is_ok());
-        assert!(caps.check_book(26, 100).is_err());
-        assert!(caps.check_book(10_000, 0).is_ok(), "empty book has no share");
-    }
-
-    #[test]
-    fn table_pick_prefers_the_widest_spread() {
-        assert_eq!(pick_table(&[(1, 3, 400), (2, 9, 500), (3, 5, 600)]), Some(2));
-        assert_eq!(pick_table(&[]), None);
     }
 }

@@ -208,9 +208,10 @@ impl ProfitRowShape {
     }
 }
 
-/// One Trading-table row (D44): flip profit per 6000 ticks, settled deals,
-/// execution rate, stock value. DELTA (P1.4): new table, served beside
-/// `rates`; merchant profit lives here, never in the yield rows.
+/// One Trading-table row (D44): trading profit per 6000 ticks, settled
+/// deals, execution rate, stock value. DELTA (P1.4): new table, served
+/// beside `rates`; market engagement profit lives here, never in the
+/// yield rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TradingRow {
     pub item: String,

@@ -1,11 +1,12 @@
-//! Merchant ledger (D44): flip engagements (`market`, `market:*` and
-//! `shop:*` methods) never enter the yield/XP rates; their coin P&L lands
-//! here, one row per flipped item.
+//! Trading ledger (D44): market engagements (`market`, `market:*` and
+//! `shop:*` methods: a market maker's post, buy/sell/shop legs) never
+//! enter the yield/XP rates; their coin P&L lands here, one row per
+//! traded item.
 //!
 //! One market report carries net flows only, so a same-run buy+sell nets
 //! its item to zero and leaves pure coins: such windows inherit the
-//! method's last stocked item (exact for single-item flippers, the only
-//! shape the flip script runs). Coin P&L with no stocked item ever seen
+//! method's last stocked item (exact for single-item windows). Coin P&L
+//! with no stocked item ever seen
 //! reads `unattributed`, never dropped. `settled` counts clean window
 //! exits (`budget_exhausted`, `goal_reached`); anything else lowers the
 //! fill rate. Stock positions are ticks-free nets, so they rebuild
@@ -27,7 +28,7 @@ fn mean(samples: &[f64]) -> f64 {
     if samples.is_empty() { 0.0 } else { samples.iter().sum::<f64>() / samples.len() as f64 }
 }
 
-/// Window exits that count a flip engagement as settled: the clock ran
+/// Window exits that count a market engagement as settled: the clock ran
 /// out or the goal landed. `failed`/`stopped` are attempts, not deals.
 const SETTLED_STOPS: [&str; 2] = ["budget_exhausted", "goal_reached"];
 
@@ -37,7 +38,7 @@ const ORPHAN_ITEM: &str = "unattributed";
 
 /// Market-leg provenances: player trades and NPC shop legs. Incidental
 /// gains (`produced`, `loot`, `ground_spawn`) and costs (`consumed`,
-/// `lost`) never attract flip P&L or stock.
+/// `lost`) never attract trading P&L or stock.
 const LEG_PROVENANCE: [&str; 3] = ["traded", "shop_bought", "shop_sold"];
 
 /// Coins display name, matched case-insensitively: the P&L signal.
@@ -45,7 +46,7 @@ pub fn is_coins_item(name: &str) -> bool {
     name.eq_ignore_ascii_case("coins")
 }
 
-/// One flipped item: clean exits over engagements, per-window coin P&L
+/// One traded item: clean exits over engagements, per-window coin P&L
 /// samples in arrival order, and raw bought/sold quantities (the net is
 /// the position, exact without ticks).
 #[derive(Clone, Debug, Default)]
@@ -198,7 +199,7 @@ impl TradeBook {
     }
 }
 
-/// One published trading row: flip profit per 6000 ticks, settled exits,
+/// One published trading row: trading profit per 6000 ticks, settled exits,
 /// fill rate and residual stock value (matches `api_shapes::TradingRow`,
 /// same column keys).
 #[derive(Clone, Debug)]

@@ -1,4 +1,4 @@
-// Economy front: money supply, deals, top activities, trends, merchants.
+// Economy front: money supply, deals, top activities, trends, market makers.
 // Read-only dashboard page: bots never read it.
 function number(value) {
   if (!isFinite(value)) return "-";
@@ -53,17 +53,18 @@ async function load() {
       '</td><td>' + number(row.momentum) + '</td><td class="' + scoreClass(row.score) + '">' +
       number(row.score) + '</td></tr>').join('');
 
-  const flip = payload.flip;
-  const merchants = payload.merchants || [];
-  document.getElementById('merchants').innerHTML =
-    '<tr><th class="left">bot</th><th>buy value</th><th>stock</th><th>settled</th>' +
-    '<th>failed</th><th>open</th><th>book share</th></tr>' +
-    merchants.map(row => '<tr><td class="left">' + row.account + '</td><td>' + row.buy_value +
-      '</td><td>' + row.sell_qty + '</td><td>' + row.settled + '</td><td>' + row.failed +
-      '</td><td>' + row.open_orders + '+' + row.open_deals + '</td><td>' +
-      Math.round(row.book_share * 100) + '%</td></tr>').join('') +
-    (flip ? '<tr><td class="left muted" colspan="7">market:flip ' + number(flip.profit) +
-      ' / 6000t' + (flip.price_prior ? ' (prior price)' : '') + '</td></tr>' : '');
+  // Market makers (plan marché Q6): one row per maker account.
+  const makers = payload.makers || [];
+  const pct = value => (value === null || value === undefined) ? '-' : Math.round(value * 1000) / 10 + '%';
+  const spread = value => (value === null || value === undefined) ? '-' : 'x' + number(value);
+  document.getElementById('makers').innerHTML =
+    '<tr><th class="left">bot</th><th>slice</th><th>phase</th><th>target</th><th>capital</th>' +
+    '<th>P&amp;L</th><th>spread</th><th>book share</th><th>quotes</th><th class="left">stock</th></tr>' +
+    makers.map(row => '<tr><td class="left">' + row.account + '</td><td>' + row.slice + '/' + row.slices +
+      '</td><td>' + row.phase + '</td><td>' + row.capital_target + '</td><td>' + row.capital +
+      '</td><td class="' + (row.pnl >= 0 ? 'up' : 'down') + '">' + row.pnl + '</td><td>' + spread(row.mean_spread) +
+      '</td><td>' + pct(row.book_share) + '</td><td>' + row.open_orders + '</td><td class="left">' +
+      (row.stock || []).slice(0, 4).map(line => line.name + ' ' + line.units).join(', ') + '</td></tr>').join('');
 }
 
 load();

@@ -92,6 +92,10 @@ pub fn draw_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn F
 /// generalist) or the typed reason nothing is drawable. Call
 /// `ambition::refresh` first (met levels and coins close their milestones).
 pub fn draw_goal_origin(life: &Life, level_of: &dyn Fn(&str) -> u8, ticks_since: &dyn Fn(i64) -> u64) -> Result<(GoalKind, Option<String>), NoGoal> {
+    // A quoting market maker (plan Q6) keeps its post for good.
+    if crate::market_maker::quoting(life) {
+        return Ok((GoalKind::MakeMarket, None));
+    }
     let avoid = crate::bans::banned_skills(&life.history, ticks_since);
     let ambition = life.ambition.as_ref().ok_or(NoGoal::NoAmbition)?;
     // Overall highscore (total level, then XP): the lowest F2P skill is
@@ -118,7 +122,7 @@ fn generalist_goal(life: &Life, level_of: &dyn Fn(&str) -> u8, avoid: &[String])
         .rev()
         .find(|entry| entry.node == "goal" && (entry.outcome.starts_with(DONE_TAG) || entry.outcome.starts_with(STUCK_TAG)))
         .is_some_and(|entry| entry.outcome.starts_with(DONE_TAG));
-    if closed_done && matches!(life.goal, GoalKind::MakeMoney | GoalKind::GetRich { .. }) {
+    if closed_done && matches!(life.goal, GoalKind::MakeMoney | GoalKind::GetRich) {
         return Some(life.goal.clone());
     }
     next_goal(level_of, avoid, life.seed, life.history.len() as u64)
@@ -161,7 +165,7 @@ pub fn lowest_skill_goal(skills: &[&str], level_of: &dyn Fn(&str) -> u8, avoid: 
 pub fn serves_goal(goal: &GoalKind, kind: &NodeKind) -> bool {
     match (goal, kind) {
         (GoalKind::Obtain { item: goal_item, .. } | GoalKind::Produce { item: goal_item, .. }, NodeKind::ObtainItems { item, .. }) => item == goal_item,
-        (GoalKind::MakeMoney | GoalKind::GetRich { .. }, NodeKind::MakeMoney) => true,
+        (GoalKind::MakeMoney | GoalKind::GetRich | GoalKind::MakeMarket, NodeKind::MakeMoney) => true,
         (GoalKind::CompleteQuest { quest: goal_quest }, NodeKind::CompleteQuest { quest }) => quest == goal_quest,
         (GoalKind::EquipBest { style: goal_style }, NodeKind::EquipBest { style }) => style == goal_style,
         (GoalKind::AccessArea { area: goal_area }, NodeKind::AccessArea { area }) => area == goal_area,
@@ -306,8 +310,8 @@ mod tests {
 
     #[test]
     fn money_goes_on_after_a_done_close_only() {
-        let rich = life_with(GoalKind::GetRich { merchant: Some(true) }, vec![entry("goal", DONE_TAG, 0)]);
-        assert!(matches!(draw_goal(&rich, &|_| 1, &|_| 0), Some(GoalKind::GetRich { merchant: Some(true) })));
+        let rich = life_with(GoalKind::GetRich, vec![entry("goal", DONE_TAG, 0)]);
+        assert!(matches!(draw_goal(&rich, &|_| 1, &|_| 0), Some(GoalKind::GetRich)));
         let stuck = life_with(GoalKind::MakeMoney, vec![entry("goal", &format!("{STUCK_TAG}@0:x"), 0)]);
         assert!(matches!(draw_goal(&stuck, &|_| 1, &|_| 0), Some(GoalKind::MaxSkills { .. })), "a stuck money goal moves to a skill");
     }

@@ -3,13 +3,13 @@
 //! anti-dumping addition): every listing is priced from the seller's OWN
 //! cost (`brain_reserve`), opens high when nobody traded the object, is
 //! sized to the public demand, and never walks under that reserve. A bot
-//! remembers its own fills. Merchants price flips off the book with a
-//! margin that pays their time. Every input is the bot's own data plus
+//! remembers its own fills. Every input is the bot's own data plus
 //! public market data (book, prints); never another bot's private state.
+//! (The merchant flip quotes were removed in wave 3: dedicated market
+//! makers quote their slice, `market_maker`.)
 //!
 //! Shared by the brain's default selling (`brain_sales`) and the worker
-//! scripts (`market sell`, `market flip`) through the `seller_quote` and
-//! `flip_quote` ops.
+//! script (`market sell`) through the `seller_quote` op.
 
 use lifescape_json::{object, str_value, Value};
 use lifescape_market::{found_open, seller_open, OwnFill, Reference};
@@ -18,12 +18,6 @@ use lifescape_planner::Life;
 
 use crate::brain_reserve::{CostSource, OwnCosts, Reserve};
 use crate::market_service::MarketService;
-
-/// Planner estimate of one flip unit when the merchant never measured
-/// one: the `market:flip` engagement (`est_ticks` 6000,
-/// `resolve_obtain::resolve_money`) over the 100 units a flip carries
-/// (`brain_launch`).
-pub const FLIP_EST_TICKS_PER_UNIT: f64 = 6000.0 / 100.0;
 
 /// Outcome of one sale decision.
 #[derive(Clone, Debug, PartialEq)]
@@ -121,33 +115,6 @@ pub fn adoption(price: i64, remaining: i64, reserve: Option<i64>, lot: i64, open
 /// free)`). It is withdrawn and the stack lists as one lot.
 pub fn undersized(quantity: i64, remaining: i64, free: i64, lot_of_whole: i64) -> bool {
     remaining == quantity && free > 0 && quantity.saturating_mul(2) <= lot_of_whole
-}
-
-/// Minimum flip margin per unit (pure): the merchant's ticks per flipped
-/// unit (measured from its own market reports, else the planner
-/// estimate) at its coins per tick, at least 1 coin.
-pub fn flip_margin(ticks_per_unit: Option<f64>, coins_per_tick: f64) -> i64 {
-    crate::brain_reserve::reserve_coins(ticks_per_unit.unwrap_or(FLIP_EST_TICKS_PER_UNIT), coins_per_tick)
-}
-
-/// Measured ticks per flipped unit: the merchant's own `market` reports,
-/// ticks over the units it traded (bought or sold, coins aside).
-pub fn flip_ticks_per_unit(reports: &[crate::brain_reserve::OwnReport]) -> Option<f64> {
-    let mut ticks = 0i64;
-    let mut units = 0i64;
-    for report in reports.iter().filter(|report| report.method == "market" && report.ticks > 0) {
-        let traded: i64 = report
-            .lines
-            .iter()
-            .filter(|line| line.provenance == "traded" && !crate::brain_reserve::is_coins(&line.item))
-            .map(|line| line.quantity.abs())
-            .sum();
-        if traded > 0 {
-            ticks += report.ticks;
-            units += traded;
-        }
-    }
-    (units > 0).then(|| ticks as f64 / units as f64)
 }
 
 /// The `bid_response` make cost of `name` for `account` (its life and
@@ -263,43 +230,6 @@ impl MarketService {
             ]),
             SaleDecision::Hold(why) => object(vec![("ok", Value::Bool(true)), ("hold", str_value(&why)), ("reserve", reserve_value)]),
         }
-    }
-
-    /// `flip_quote {account, item, qty}`: a merchant's legs off the book
-    /// (`lifescape_market::flip_quotes`) with its own minimum margin; the
-    /// sell leg never under what the stock cost it plus that margin, its
-    /// lot sized to the public demand. `sell` is null (hold) when the
-    /// stock has no known own cost.
-    pub(crate) fn op_flip_quote(&self, request: &Value) -> Value {
-        let account = request.get("account").as_str().unwrap_or("").to_string();
-        let item = request.get("item").as_i64().unwrap_or(-1);
-        let held = request.get("qty").as_i64().unwrap_or(0);
-        let Some(name) = usize::try_from(item).ok().and_then(lifescape_gamedata::obj_by_id).and_then(|obj| obj.name) else {
-            return Self::err(format!("unknown item {item}"));
-        };
-        let costs = OwnCosts::load(&self.lock_store(), &account);
-        let margin = flip_margin(flip_ticks_per_unit(&costs.reports), costs.coins_per_tick);
-        let sell_floor = match self.own_buy_price(&account, item) {
-            Some(paid) => Some(paid + margin),
-            None => {
-                let life = crate::brain::load_life(&account);
-                let make_cost = make_cost_of(life.as_ref(), &account, name, held);
-                let store = self.lock_store();
-                costs.reserve(&store, name, item, life.as_ref(), make_cost).map(|reserve| reserve.coins)
-            }
-        };
-        let (bid, ask) = self.lock_engine().books.get(&item).map(|book| book.best()).unwrap_or((None, None));
-        let quote = lifescape_market::flip_quotes(bid, ask, margin, sell_floor.unwrap_or(1));
-        let sell = sell_floor.map(|_| quote.sell);
-        let lot = sale_lot(held, Some(&self.public_view(&account, item)));
-        object(vec![
-            ("ok", Value::Bool(true)),
-            ("buy", quote.buy.map(Value::Int).unwrap_or(Value::Null)),
-            ("sell", sell.map(Value::Int).unwrap_or(Value::Null)),
-            ("sell_floor", sell_floor.map(Value::Int).unwrap_or(Value::Null)),
-            ("lot", Value::Int(lot)),
-            ("margin", Value::Int(margin)),
-        ])
     }
 }
 

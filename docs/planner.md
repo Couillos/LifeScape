@@ -218,13 +218,15 @@ suspendues par le compteur (cycle + session). Replanning sur `blocked`,
 `failed`, mort, perte, écart de prix > 25 %, fin d'engagement.
 
 `shop:buy` est exécutable (`market shopbuy`) mais n'existe que pour les
-objets non productibles en F2P (D-A, PRD3). `market:flip` = engagement sans objet (le
-script `market` existant : achète sous la référence, vend le stock au-
-dessus, annule les restes, sort sur budget).
+objets non productibles en F2P (D-A, PRD3). `market:make` = poste d'un
+teneur de marché (plan marché Q6, vague 3 ; remplace la revente des
+marchands, supprimée) : le script `market make --post x,z,niveau` se
+tient à sa case de la fontaine de Varrock pendant l'engagement, le démon
+cote sa tranche (`orchestrator::market_maker`), sortie sur budget.
 
 ## Contrat v2 (TaskSpec / TaskReport)
 
-Inchangé (voir §5.3 du PRD) ; `cook` et `market flip` portent désormais
+Inchangé (voir §5.3 du PRD) ; `cook` et `market make` portent désormais
 un `TaskStart` (budget + nœud), les jambes d'ordre (`buy`/`sell`) et les
 quêtes restent minimales.
 
@@ -330,10 +332,39 @@ Tuto (`brain_tutorial.rs`) : sur Tutorial Island (rectangles, pas les
 labels de zone) seul le tuto part, en nœud rapporté ; clôture sur son
 rapport ou sur preuve positive (bot vu hors de l'île sans tuto en cours) ;
 tuto abandonné sur l'île ⇒ aucun lancement, l'opérateur décide.
-`create-user [pseudo] [--iron] [--goal kind]` : pseudo (`Iron`+8, 12 max ;
-20 Iron max), profil graine, squelette, `open` ; le verrou tuto lance le
-tutoriel au premier passage, puis le but. `Iron` ne marchande jamais
-(ni `market:*` ni `flip`, même en `rich`).
+`create-user [pseudo] [--iron] [--goal kind] [--role market_maker]` :
+pseudo (`Iron`+8, 12 max ; 20 Iron max), profil graine, squelette, `open`
+; le verrou tuto lance le tutoriel au premier passage, puis le but.
+`Iron` ne marchande jamais (aucune méthode `market:*`, jamais teneur).
+
+Teneur de marché (`--role market_maker`, plan marché Q6, vague 3 ;
+`create_user_cmd.rs`, `brain::maker_start`, `planner::market_maker`) :
+la vie porte `profile.archetype = "market_maker"` et `profile.maker =
+{slice, slices, capital_target, phase, capital_at_switch, switched_at}` ;
+tranche = la première libre parmi les 11 (`market_maker::taken_slices`
+sur `run/lives`), capital cible de la tranche
+(`market_maker::capital_target`) ; refus typé si toutes les tranches ont
+leur teneur, si `--iron`, ou rôle inconnu. Phase `earning` : bot normal
+(tutoriel, banque, combat, équipement), ambition opérateur
+`market_maker` (échelle de pièces, tenue pour toujours comme `overall`,
+jamais tirée par la flotte) dont les jalons `coins` donnent `GetRich`
+(méthodes d'argent productrices). Dès que pack + banque ≥ capital cible
+(`maybe_switch`, chaque passe de lancement) : bascule DÉFINITIVE
+`quoting` (`become_quoting` → `lifecycle::abandon_for_role`, cause
+`role: market maker`, achats ouverts et annonces de la tranche annulés
+`role`), but `MakeMarket` = un nœud `make_money` à jambe unique
+`market:make` dont le site est le poste de la tranche
+(`MAKER_POSTS[slice % 8]`, anneau de remise de la fontaine). En
+`quoting` : aucune passe d'ambition, de souhait, d'outil, d'équipement ni
+d'alchimie, aucun bid répondu ; restent la passe de cotation
+(`market_maker::quote_pass`), la vente des restes hors tranche, la vente
+PNJ des invendables (Q3), le concierge (tranche gardée), la nourriture.
+
+Migration (vague 3) : une vie d'avant (archétype `merchant`, but
+`get_rich` marchand, jambe de revente, ambition `merchant`) se charge en
+productrice : jambe retirée de chaque nœud (un nœud qui la tenait se
+résout à nouveau), ambition retirée (le cerveau en assigne une de flotte
+au passage suivant), but `get_rich` producteur (`migrate_merchant`).
 
 Épingle d'ambition (décision utilisateur 2026-11-14) : `--goal
 ambition:<compétence>:<niveau>` (ex. `ambition:magic:99`) crée la vie avec
@@ -609,7 +640,8 @@ récolte et part avec le poisson en premier positionnel (b8jxrdd2 : quota truite
 brochet) ; la viande crue (`raw_beef`) est un drop, jamais une pêche.
 
 Buts : `max:a,b:40` | `obtain:item:n` | `produce:item:n` | `money` | `quest:clé` |
-`equip:style` | `area:zone` | `rich[:merchant|:producer]`.
+`equip:style` | `area:zone` | `rich` (méthodes productrices ; la variante
+marchande est supprimée en vague 3).
 
 Banc hors ligne : `brain_sim_tests.rs` rejoue 30 comptes (graphes réels,
 issues aléatoires : succès, échec, Usage, blocage, arrêt, rapport perdu)
@@ -626,13 +658,14 @@ un statut de jalon), `ambition_catalog.rs` (catalogue), `ambition_fleet.rs`
 Catalogue (un par groupe F2P rev 274, la mêlée = UN groupe : attaque,
 force, défense, PV ; la taille d'arc est membres) : `warrior` (mêlée),
 `ranger`, `priest`, `mage`, `cook`, `woodcutter`, `fisher`, `firemaker`,
-`crafter`, `smith`, `miner`, `runecrafter`, plus `merchant` et
-`generalist` (opérateur seulement, jamais tiré). Chaque entrée est une
+`crafter`, `smith`, `miner`, `runecrafter`, plus `generalist`, `overall`
+et `market_maker` (opérateur seulement, jamais tirés ; le `merchant` est
+supprimé en vague 3). Chaque entrée est une
 échelle de paliers : niveau à atteindre puis quota de production
 (plusieurs produits candidats par palier, choisis par la demande ouverte,
 sinon par la graine : les bots d'un même type ne fabriquent pas tous la
 même chose), tier d'équipement (`equip_best`) ou cible de pièces
-(marchand). Exemple forgeron : minage 10, forge 10 puis 20 dagues/épées/
+(phase de jeu d'un teneur de marché). Exemple forgeron : minage 10, forge 10 puis 20 dagues/épées/
 casques bronze, forge 18 puis 10 plastrons/jambières/boucliers bronze,
 fer, acier, mithril. Les paliers dépassés de 10 niveaux sont sautés
 (frank_lane, bûcheronnage 64, commence aux 150 bûches d'érable/saule).
@@ -646,8 +679,8 @@ drops seulement quand aucune compétence ne fabrique l'objet (les peaux
 du guerrier) — sinon les smiths ramassaient des iron_platelegs et les
 runecrafters des mind runes, sans XP (`produce_alternatives`) ; un échec
 de ramassage ne bannit aucune compétence (`bans_scope::node_skill`) ; intrants achetables via les sous-tâches ; la vente par défaut
-liste le résultat une fois le nœud fini), `equip`, `coins` (merchant :
-`GetRich{merchant}` jusqu'au montant détenu, pack + banque). Demande :
+liste le résultat une fois le nœud fini), `equip`, `coins` (teneur de
+marché : `GetRich` jusqu'au montant détenu, pack + banque). Demande :
 une offre d'achat ouverte qu'une ambition sait servir (à ≤ 10 niveaux,
 entraînement d'abord) devient un jalon `produce` en tête (`origin:
 demand:<objet>`, quantité = non servie, 5..100), un seul à la fois,
@@ -698,7 +731,7 @@ tirage (loggé). Un tirage qui ne donne aucun jalon ouvert est refusé
 (`AmbitionError::NoMilestone`, loggé) et retiré (jamais une ambition
 atteinte à la naissance, retirée à chaque passe) ; une ambition de
 couverture se prolonge à la place (`new_ambition_extended`). Une nouvelle
-ambition lit les pièces détenues (un marchand riche ne repart pas à 5 000).
+ambition lit les pièces détenues (un teneur riche ne repart pas à 5 000).
 Changement facultatif (après un jalon fait, à la clôture d'un but OU
 quand `refresh` clôt un jalon niveau/pièces) : au plus une fois toutes
 les `AMBITION_CHANGE_TICKS` = 72 000 ticks (temps mur converti par la
@@ -715,16 +748,15 @@ cours continue, délié).
 Couverture de flotte (`assign_fleet`, pur) : au premier passage qui
 rencontre une vie sans ambition, toute la flotte est assignée (fichiers
 de vie ; niveaux du snapshot live, sinon de la sauvegarde moteur). Trous
-= groupes (et `merchant`) qu'aucune ambition ne couvre en groupe
-PRIMAIRE ; glouton global : la paire (bot, trou) de meilleur score part
-d'abord (score = adéquation `(1 + avance/5)²` de la meilleure compétence
-du groupe sur la moyenne du bot ; marchand : archétype marchand d'abord,
-puis affinité marché ; jamais un Iron ; PV exclus de l'adéquation : ils
-partent de 10). La flotte = les comptes ayant un job dans le daemon
+= groupes qu'aucune ambition ne couvre en groupe PRIMAIRE (le rôle
+`merchant` de couverture est supprimé en vague 3) ; glouton global : la
+paire (bot, trou) de meilleur score part d'abord (score = adéquation
+`(1 + avance/5)²` de la meilleure compétence du groupe sur la moyenne du
+bot ; PV exclus de l'adéquation : ils partent de 10). La flotte = les comptes ayant un job dans le daemon
 (hors `admin`/`bite`), relue à chaque lancement ; les vies de `run/lives`
 sans job ne comptent pas. Au-delà de la couverture : tirage aléatoire
-(graine, splitmix64) pondéré par demande × √adéquation (archétype marchand
-×5) ; les niveaux penchent le tirage sans le figer (décision utilisateur
+(graine, splitmix64) pondéré par demande × √adéquation, jamais un type
+opérateur ; les niveaux penchent le tirage sans le figer (décision utilisateur
 « au-delà aléatoire » ; l'ancienne règle `levels:<groupe>` faisait 9
 guerriers sur 12). Log par compte : `brain <acct>: ambition <kind>
 (<why>) — milestones …`.
@@ -764,8 +796,8 @@ meilleur profit).
   couvre pas est retirée avant le choix (même règle que le carnet).
 - `market shopbuy` (nouveau) : achat PNJ via le helper partagé, avec
   retrait du complément en banque ; refuse bruyamment si fauché.
-- `market flip` auto-sélectionne le stock échangeable le plus valuable
-  (pack + banque, hors équipé) et vend les banknotes en un slot.
+- (L7 : la revente marchande auto-sélectionnait le stock le plus valuable ;
+  supprimée en vague 3, remplacée par les teneurs de marché.)
 - Abandon en cascade : un nœud dont une dépendance est abandonnée est
   abandonné à son tour (jamais de pending silencieux infini).
 - Robustesse superviseur (découverte L7) : un `job.inner` qui ne répond
@@ -775,7 +807,8 @@ meilleur profit).
   voir rapport de lot) ; le système dégrade au lieu de geler.
 - R8 (live, partiel) : autopilote vérifié sur petits buts (obtain 50
   plumes, woodcut mon tour R1 en parité, shopbuy 5 plumes avec provenance,
-  flip marchand 10913 ticks jusqu'à budget_exhausted) ; blocked{hache} →
+  revente marchande 10913 ticks jusqu'à budget_exhausted, rôle supprimé
+  depuis) ; blocked{hache} →
   sous-tâche goblins (D21 par drop) → abandon après 3 échecs (péage sans
   pièces). La montée pêche 40 + cuisine 30 + minage 30 + 1 quête reste à
   jouer en endurance (même boucle, objectifs plus longs).
@@ -830,8 +863,9 @@ spot au-delà du CB (test `launch_never_dispatches_past_the_level`).
 
 Tirage à la création (`draw_profile`, graine persistée, reproductible) :
 `market_affinity` (pondère market vs farm, D15), `price_patience`,
-marge initiale `0.05 + patience × 0.15`, archétype `get_rich`
-producteur/marchand (10 % marchand, jamais Iron). Planner sans aucune
+marge initiale `0.05 + patience × 0.15`, archétype producteur (le tirage
+de 10 % de marchands est supprimé en vague 3 ; le teneur de marché se
+crée exprès : `create-user --role market_maker`). Planner sans aucune
 méthode `market:*` pour Iron (création + résolution, garde
 `launch_allowed` au cerveau contre les vieux verrous). Le cerveau refuse
 tout lancement market pour Iron et passe `--iron` (D2 direct, aucun appel
@@ -874,7 +908,7 @@ Drapeaux communs :
 | `--budget-min/--budget-max <ticks>` | engagements `make_money` | fenêtre d'engagement |
 | `--level <comp> <N>` | nœud `reach_level` (N ≥ 2) | s'arrêter au niveau N de `<comp>` (récolteurs : leur compétence ; combat : la compétence du nœud) |
 | `--want <objet> <N>` | nœud `obtain` (sauf `market`, `walkto`, `equip`, quêtes) | s'arrêter quand N unités de plus sont détenues (N = quantité − détenu au lancement) |
-| `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` et `market buy|sell|flip|cleanup` (seul `shopbuy` marche vers un marchand) | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
+| `--site x,z,niveau` | le planner a choisi un site (`pick_site_gated`) ; tout script sauf `walkto`, `equip`, `quest_*` et `market buy|sell|make|cleanup` (seul `shopbuy` marche vers un marchand ; `make` reçoit son poste en `--post`) | travailler CE site (poste, rocher, eau, spot, magasin, apparition au sol), jamais un autre |
 | `--wear <objet>` | le site est dans une guilde à uniforme (artisanat : `brown_apron`, cuisiniers : `chefs_hat`) | porter l'objet avant la porte (le planner l'a fait obtenir) |
 | `toll` | site au-delà du péage d'Al Kharid, péage budgété ou gratuit (Prince Ali) | le script peut payer 10 po à la porte (`kit::toll::arm_fares`) |
 | `boat` | site à Karamja (`node.boat`), aller-retour budgété (60 po) ; seulement pêche, minage, bûcheronnage, combats | le script garde 60 po dans le sac et peut prendre le bateau (`kit::toll::arm_fares`, `bot.fare_reserve`) |
@@ -931,7 +965,7 @@ Blocages attendus en retour (`Blocked: missing …`, compris par `record_block_f
 | `market:buy` / `market:sell` | `market` | `buy|sell <objet> <N>` (N = manquant) | — |
 | `shop:buy` | `market` | `shopbuy <objet> <N>` | `--shop <clé>`, `--site` (marchand), `--wear`, `toll` |
 | `dialogue:buy` | `dialogue_buy` | `<objet>` | `--want <objet> N`, `--site` (vendeur), `toll` |
-| `market:flip` | `market` | `flip` | budget |
+| `market:make` | `market` | `make --post x,z,niveau` | budget (poste = site du nœud, `ReadyCtx::maker_post`) |
 | `space:cleanup` | `market` | `cleanup` | — |
 | `quest:<clé>` | `quest_<nom>` (table `quest_script`) | — | clé inconnue = aucun script (abandon typé) |
 | `access:<zone>` | `walkto` | `<x> <z>` | — |
@@ -1048,7 +1082,7 @@ Les échelles ne sont plus des listes écrites à la main
 - métier consommateur (allumeur, prêtre) et combattants (archer, mage) :
   paliers de niveau, l'équipement un palier sur deux (prêtre : mêlée) ;
   guerrier : attaque, force, défense + équipement de 20 à 90 ;
-- marchand : 5 000 → 1 000 000 pièces.
+- teneur de marché (phase de jeu) : 5 000 → 1 000 000 pièces.
 La demande ouverte (jalon `demand:`) pèse tous les produits des
 compétences de l'échelle à 10 niveaux près, pas seulement les 4 montrés
 par palier. Invariants testés : chaque produit d'un palier est fait par la

@@ -34,7 +34,7 @@ fn methods() -> Vec<String> {
         "superheat:steel_bar", "enchant:strung_sapphire_amulet", "fight:melee/cows", "fight:melee/ladder", "fight:ranged/cows",
         "fight:magic/cows", "fight:magic/fire_strike/cows", "fight:magic/earth_bolt/goblins", "cut:sapphire", "cut:ruby", "dye:yellowdye",
         "dye:reddye", "dye:bluedye", "ground:hammer", "ground:chisel", "telegrab:wine_of_zamorak", "bury:bones", "bury:big_bones",
-        "market:buy", "market:sell", "shop:buy", "dialogue:buy", "market:flip", "space:cleanup", "equip:melee", "equip:ranged", "equip:magic",
+        "market:buy", "market:sell", "shop:buy", "dialogue:buy", "market:make", "space:cleanup", "equip:melee", "equip:ranged", "equip:magic",
     ]
     .iter()
     .map(|method| method.to_string())
@@ -81,9 +81,11 @@ fn every_mapped_order_parses_in_its_script() {
         for node in nodes() {
             let node = gatherer_order(&method, &node);
             let Some((script, args)) = map_method(&method, &node, Some((6000, 9000))) else {
-                // Purchases move an obtain's missing units: no leg on a climb.
+                // Purchases move an obtain's missing units: no leg on a
+                // climb; the maker's post needs its site (Q6).
                 let purchase = matches!(method.as_str(), "market:buy" | "market:sell" | "shop:buy" | "dialogue:buy");
-                assert!(purchase && !matches!(node.kind, NodeKind::ObtainItems { .. }), "{method} maps on {:?}", node.kind);
+                let unposted = method == "market:make" && node.site.is_none();
+                assert!(unposted || (purchase && !matches!(node.kind, NodeKind::ObtainItems { .. })), "{method} maps on {:?}", node.kind);
                 continue;
             };
             assert!(crate::names().contains(&script.as_str()), "{method} names unregistered {script}");
@@ -129,7 +131,7 @@ fn contract_flags_fill_the_spec() {
 }
 
 /// `market shopbuy` buys at the planner's shop (`--shop <key>`) and its
-/// keeper's site; buy/sell/flip/cleanup carry no site (the market square
+/// keeper's site; buy/sell/make/cleanup carry no site (the market square
 /// is no planner site).
 #[test]
 fn shopbuy_carries_the_planners_shop() {
@@ -143,7 +145,7 @@ fn shopbuy_carries_the_planners_shop() {
     assert!(rum.boat && !rum.toll, "{rum:?}");
     assert!(crate::activities::market_shop::parse_shopbuy(&strings(&["shopbuy", "shears", "2", "--shop"])).is_err(), "a dangling shop fails loud");
     let order = &nodes()[0];
-    for method in ["market:buy", "market:sell", "market:flip", "space:cleanup"] {
+    for method in ["market:buy", "market:sell", "market:make", "space:cleanup"] {
         let (_, args) = map_method(method, order, None).expect("market maps");
         assert!(!args.iter().any(|arg| arg == "--site" || arg == "toll"), "{method}: {args:?}");
     }

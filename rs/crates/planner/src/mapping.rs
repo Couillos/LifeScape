@@ -171,8 +171,10 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
         // rides first, the quantity in `--want`, the seller in `--site`.
         let (item, _) = obtain_pair(node)?;
         ("dialogue_buy".to_string(), vec![item])
-    } else if method == "market:flip" {
-        ("market".to_string(), vec!["flip".to_string()])
+    } else if method == crate::market_maker::MAKE_METHOD {
+        // The maker's post (Q6): its node's site, never guessed.
+        let (x, z, level) = node.site?;
+        ("market".to_string(), vec!["make".to_string(), "--post".to_string(), format!("{x},{z},{level}")])
     } else if method == "space:cleanup" {
         ("market".to_string(), vec!["cleanup".to_string()])
     } else if let Some(recipe) = method.strip_prefix("craft:") {
@@ -227,7 +229,7 @@ pub fn map_method(method: &str, node: &Node, budget: Option<(u64, u64)>) -> Opti
     // The brain picked the site (`pick_site_gated`): every gatherer,
     // station, fight and shop works there (args contract 2026-11-13). A
     // guild site names the uniform the door checks on the body. Market
-    // orders (buy, sell, flip, cleanup) trade through the daemon: no site,
+    // orders (buy, sell, make, cleanup) trade through the daemon: no site,
     // no toll; only `shopbuy` walks to its keeper.
     let sited = !matches!(script.as_str(), "walkto" | "equip")
         && !script.starts_with("quest_")
@@ -481,8 +483,13 @@ mod tests {
 
         let (script, _) = map_method("gather:woodcut/willow_logs", &obtain(), None).expect("woodcut maps");
         assert_eq!(script, "woodcut");
-        let (script, _) = map_method("market:flip", &obtain(), budget).expect("flip maps");
+        assert!(map_method("market:make", &obtain(), budget).is_none(), "no post, no launch");
+        let mut post = obtain();
+        post.site = Some((3211, 3427, 0));
+        let (script, args) = map_method("market:make", &post, budget).expect("the maker's post maps");
         assert_eq!(script, "market");
+        assert_eq!(args[..3], ["make".to_string(), "--post".to_string(), "3211,3427,0".to_string()]);
+        assert!(!args.iter().any(|arg| arg == "--site"), "a market order carries no site: {args:?}");
         let cleanup = Node::new("n5", NodeKind::SpaceCleanup, Vec::new(), 0);
         let (script, args) = map_method("space:cleanup", &cleanup, None).expect("cleanup maps");
         assert_eq!(script, "market");

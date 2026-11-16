@@ -100,7 +100,7 @@ fn noise(rest: &str) -> bool {
         "inner contended",
         "supervise_once",
         "rates ",
-        "flip ",
+        "make: ",
         "idle ",
     ];
     NOISE.iter().any(|prefix| rest.starts_with(prefix)) || rest.contains(" listings adopted")

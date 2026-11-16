@@ -26,11 +26,12 @@ pub const STOCK: &str = "stock";
 pub const SURPLUS: &str = "surplus";
 /// Loot or found objects listed for sale.
 pub const LOOT: &str = "loot";
-/// Merchant resale (`market:flip`).
-pub const FLIP: &str = "flip";
+/// A dedicated market maker's quote (plan marché Q6, `market_maker`):
+/// fixed price, requoted by its own pass, never on the concession curve.
+pub const MARKET_MAKE: &str = "market_make";
 
 /// Every motive an order may carry (empty = not said, a worker's order).
-pub const MOTIVES: [&str; 7] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, FLIP];
+pub const MOTIVES: [&str; 7] = [NEED, GEAR, TOOL, STOCK, SURPLUS, LOOT, MARKET_MAKE];
 
 /// Rejects an unknown motive (typed refusal, never a silent default).
 pub fn check_motive(motive: &str) -> Result<(), String> {
@@ -48,7 +49,7 @@ pub fn check_motive(motive: &str) -> Result<(), String> {
 pub fn horizon_ticks(motive: &str, sell: bool) -> u64 {
     match motive {
         NEED => 6_000,
-        GEAR | TOOL | SURPLUS | FLIP => 36_000,
+        GEAR | TOOL | SURPLUS | MARKET_MAKE => 36_000,
         STOCK | LOOT => 72_000,
         _ if sell => 36_000,
         _ => 6_000,

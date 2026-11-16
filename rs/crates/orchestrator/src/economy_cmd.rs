@@ -7,7 +7,9 @@
 //! Laspeyres price index of the window against the one before it, on the
 //! fills of player trades. The market section prints the live criteria of
 //! plan marché §6 (`Store::market_criteria`, lineages of schema 6), each
-//! beside its 2026-11-16 baseline and target.
+//! beside its 2026-11-16 baseline and target. The market makers section
+//! (plan marché Q6) lists each maker: slice, phase, capital, P&L, mean
+//! spread, book share, stock (`market_maker_report`).
 
 use lifescape_store::{laspeyres, Store};
 
@@ -83,6 +85,7 @@ pub fn economy_cli(args: &[String]) -> i32 {
         Ok(criteria) => print_market(&criteria, hours),
         Err(error) => println!("market criteria: {error}"),
     }
+    crate::market_maker_report::print_rows(&crate::market_maker_report::maker_rows(&store, &crate::brain::lives_dir()));
     0
 }
 

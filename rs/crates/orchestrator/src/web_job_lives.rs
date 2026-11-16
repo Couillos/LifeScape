@@ -30,9 +30,8 @@ pub(crate) fn goal_text(goal: &GoalKind) -> String {
         GoalKind::CompleteQuest { quest } => format!("quest {quest}"),
         GoalKind::EquipBest { style } => format!("equip {style}"),
         GoalKind::AccessArea { area } => format!("area {area}"),
-        GoalKind::GetRich { merchant: None } => "rich".to_string(),
-        GoalKind::GetRich { merchant: Some(true) } => "rich merchant".to_string(),
-        GoalKind::GetRich { merchant: Some(false) } => "rich producer".to_string(),
+        GoalKind::GetRich => "rich".to_string(),
+        GoalKind::MakeMarket => "market maker".to_string(),
     }
 }
 
@@ -175,8 +174,8 @@ mod tests {
         assert_eq!(goal_text(&GoalKind::Obtain { item: "logs".to_string(), count: 28 }), "obtain logs 28");
         assert_eq!(goal_text(&GoalKind::CompleteQuest { quest: "sheep".to_string() }), "quest sheep");
         assert_eq!(goal_text(&GoalKind::MakeMoney), "money");
-        assert_eq!(goal_text(&GoalKind::GetRich { merchant: None }), "rich");
-        assert_eq!(goal_text(&GoalKind::GetRich { merchant: Some(true) }), "rich merchant");
+        assert_eq!(goal_text(&GoalKind::GetRich), "rich");
+        assert_eq!(goal_text(&GoalKind::MakeMarket), "market maker");
     }
 
     #[test]

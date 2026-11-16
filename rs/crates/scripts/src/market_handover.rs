@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(anchor_deliver_args(&posed, 59_000), strings(&["deliver", "59030", "60652", "1276=3209,3425"]));
         let absolute = strings(&["deliver", "61826", "63478", "1276=3209,3425"]);
         assert_eq!(anchor_deliver_args(&absolute, 1), absolute, "operator ticks untouched");
-        let other = strings(&["flip", "+30"]);
+        let other = strings(&["make", "+30"]);
         assert_eq!(anchor_deliver_args(&other, 1), other, "only deliver convocations");
         assert!(super::parse_deliver_args(&posed).is_err(), "an unanchored offset never reads as a tick");
     }

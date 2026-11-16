@@ -10,7 +10,7 @@ fn life_of(nodes: Vec<Node>, history: Vec<HistoryEntry>) -> Life {
         account: "t00".to_string(),
         created_at: 0,
         seed: 7,
-        profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Merchant),
+        profile: Profile::new(false, 0.5, 0.5, 7, Archetype::Producer),
         goal: GoalKind::Produce { item: "blankrune".to_string(), count: 200 },
         nodes,
         engagement: None,

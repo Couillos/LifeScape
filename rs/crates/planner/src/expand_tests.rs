@@ -36,9 +36,12 @@ fn three_goals_expand() {
     let leaf = quest.last().expect("leaf");
     assert_eq!(leaf.deps.len(), 3, "milk + egg + flour gate the quest");
 
-    let rich = expand_goal(&GoalKind::GetRich { merchant: Some(true) }, &profile());
+    let rich = expand_goal(&GoalKind::GetRich, &profile());
     assert_eq!(rich.len(), 1);
-    assert!(rich[0].alternatives.iter().any(|alt| alt.method == "market:flip"), "merchant flips");
+    assert!(rich[0].alternatives.iter().all(|alt| alt.method.starts_with("gather:")), "producer money methods only");
+    let post = expand_goal(&GoalKind::MakeMarket, &profile());
+    assert_eq!(post.len(), 1);
+    assert_eq!(post[0].alternatives.iter().map(|alt| alt.method.as_str()).collect::<Vec<_>>(), vec!["market:make"], "the maker's post");
 
     // Melee equipment is the ladder's (brain_gear): the goal only wears.
     let equip = expand_goal(&GoalKind::EquipBest { style: "melee".to_string() }, &profile());
@@ -119,8 +122,8 @@ fn iron_never_lists_market() {
     let iron = Profile::new(true, 0.9, 0.4, 7, Archetype::Producer);
     let nodes = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 100 }, &iron);
     assert!(nodes[0].alternatives.iter().all(|alt| alt.method != "market:buy"), "no market for Iron");
-    let rich = expand_goal(&GoalKind::GetRich { merchant: Some(true) }, &iron);
-    assert!(rich[0].alternatives.iter().all(|alt| alt.method != "market:flip"), "Iron never merchants");
+    let post = expand_goal(&GoalKind::MakeMarket, &iron);
+    assert!(post[0].alternatives.is_empty(), "Iron never makes a market");
 }
 
 #[test]

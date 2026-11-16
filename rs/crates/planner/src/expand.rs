@@ -70,6 +70,9 @@ pub struct ReadyCtx {
     /// live `check-method` proves them again): never resolved, the
     /// quarantine logged, no silent substitute.
     pub quarantined: Vec<String>,
+    /// A market maker's post by the Varrock fountain (plan Q6,
+    /// `market_maker::maker_post`): the site of its `market:make` node.
+    pub maker_post: Option<(i64, i64, i64)>,
 }
 
 impl ReadyCtx {
@@ -98,6 +101,7 @@ impl ReadyCtx {
             training: None,
             crowd: Vec::new(),
             quarantined: Vec::new(),
+            maker_post: None,
         }
     }
 }
@@ -237,9 +241,6 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             // Salmon: the best mainland catch (Karamja lobsters: paid boat).
             node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
             node.alternatives.push(Alternative { method: "gather:woodcut/yew_logs".to_string(), est_ticks: 0, est_coins: 0 });
-            if !profile.ironman {
-                node.alternatives.push(Alternative { method: "market:flip".to_string(), est_ticks: 0, est_coins: 0 });
-            }
             nodes.push(node);
         }
         GoalKind::CompleteQuest { quest } => {
@@ -288,16 +289,21 @@ pub fn expand_goal_from(goal: &GoalKind, profile: &Profile, level_of: &dyn Fn(&s
             node.alternatives = crate::obtain_legs::produce_alternatives(item);
             nodes.push(node);
         }
-        GoalKind::GetRich { merchant } => {
-            let is_merchant = merchant.unwrap_or(profile.archetype == crate::model::Archetype::Merchant);
+        GoalKind::GetRich => {
             let id = next_id(&mut counter);
             let mut node = Node::new(&id, NodeKind::MakeMoney, Vec::new(), 0);
-            if is_merchant && !profile.ironman {
-                node.alternatives.push(Alternative { method: "market:flip".to_string(), est_ticks: 0, est_coins: 0 });
-            } else {
-                // Salmon: the best mainland catch (Karamja lobsters: paid boat).
-                node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
-                node.alternatives.push(Alternative { method: "gather:mining/coal".to_string(), est_ticks: 0, est_coins: 0 });
+            // Salmon: the best mainland catch (Karamja lobsters: paid boat).
+            node.alternatives.push(Alternative { method: "gather:fishing/raw_salmon".to_string(), est_ticks: 0, est_coins: 0 });
+            node.alternatives.push(Alternative { method: "gather:mining/coal".to_string(), est_ticks: 0, est_coins: 0 });
+            nodes.push(node);
+        }
+        GoalKind::MakeMarket => {
+            // The maker's post (Q6): one leg, never ranked against money
+            // methods (`resolve_money`); Iron never trades.
+            let id = next_id(&mut counter);
+            let mut node = Node::new(&id, NodeKind::MakeMoney, Vec::new(), 0);
+            if !profile.ironman {
+                node.alternatives.push(Alternative { method: crate::market_maker::MAKE_METHOD.to_string(), est_ticks: 6000, est_coins: 0 });
             }
             nodes.push(node);
         }
@@ -437,6 +443,11 @@ pub(crate) fn place_on_site(node: &mut Node, ctx: &ReadyCtx) {
         return;
     }
     let Some(locked) = node.method.clone() else { return };
+    // A market maker's post is its slice's tile by the fountain (Q6).
+    if locked == crate::market_maker::MAKE_METHOD {
+        node.site = ctx.maker_post;
+        return;
+    }
     // The locked method first, then every tool-feasible alternative: the
     // first with a site this bot works now wins (a money node falls back
     // from Karamja lobsters to what is reachable).

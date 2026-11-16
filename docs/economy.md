@@ -15,8 +15,10 @@ prix de l'ordre déjà au repos ; `market_uncross` guérit le reste (boot,
 puis chaque tour de convocation). Code pur dans
 `rs/crates/market/` : `book` (carnet + appariement), `guards` (prix ≥ 1 +
 couverture), `deals` (machine à états), `price` (prix courant = médiane des 5
-derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation + plafonds
-marchands), `sim` (simulateur à graines fixes).
+derniers fills bornée par les prix d'impact du carnet, bougies OHLCV), `trends` (signaux publics), `zip` (cotation),
+`concession` (courbe vague 2), `maker` (teneurs de marché vague 3 :
+tranches, capital cible, cotation selon le stock), `sim`,
+`sim_lifecycle` et `sim_maker` (simulateurs à graines fixes).
 
 Tick réel (plan marché Q0, 2026-11-16) : le serveur tourne à 60 ms
 (`../lostcity/engine/data/config/world.json`, `tickRate` 60 ; la variable
@@ -36,7 +38,7 @@ terminale annulée (jamais remplacée), sa raison dite (`gear_plan`,
 de la demande, `market_demand`), son rang à l'audit de couverture et sa
 durée de vie se lisent sur la lignée. Motifs et horizons
 (`market_lineage`) : `need` 6 000 ticks (nœud bloquant, offre D-B),
-`gear`/`tool`/`surplus`/`flip` 36 000, `stock`/`loot` 72 000 ; vide =
+`gear`/`tool`/`surplus`/`market_make` 36 000, `stock`/`loot` 72 000 ; vide =
 non dit (ordres de worker). `QuoteBounds` porte lignée, t0, motif,
 horizon et ouverture (la courbe de concession de la vague 2 les lira).
 Un besoin garde UNE offre par (compte, objet) : `place_obtain_bid` et
@@ -100,9 +102,9 @@ ce que paie le marché + 1. Les pièces créées sont `shop_sold` dans le
 registre de pièces ; `orchestrator economy` imprime « npc shop sales ».
 Depuis le 2026-11-15 tout
 objet F2P qu'un marchand stocke peut lui être acheté (§ Achats aux
-marchands de `planner.md`, `decisions.md`). Marchands (`market:flip`, ~10 %, supprimé en vague 3) :
-sélection sur écart/volume, plafonds `max_capital_share` (10 %),
-`max_stock_items` (500), `max_book_share` (25 % du côté).
+marchands de `planner.md`, `decisions.md`). Les marchands tirés (~10 %,
+méthode de revente) sont SUPPRIMÉS en vague 3 : des teneurs de marché
+dédiés cotent tout l'univers (§ Teneurs de marché ci-dessous).
 
 Couverture vérifiée à l'ordre (objet possédé, pièces disponibles, registre
 en mémoire ; les holdings live des connectés se brancheront sur le même
@@ -416,12 +418,76 @@ de l'activité) + bonus de tendance (score public × chiffre × 0,1). Page
 confiance, prior ou mesuré ; information pour l'opérateur, les bots
 lisent les mêmes estimations par `rates_read`.
 
-## Tendances et marchands
+## Tendances
 
 Signaux publics (carnet, exécutions) : pénurie et momentum, score lissé
 borné ; bonus de rentabilité pondéré, anti-oscillation par lissage, durées
-aléatoires et profils. Marchands (`market:flip`, ~10 %) : poste fixe place
-de Varrock, plafonds de risque, garde-fou 25 % du carnet.
+aléatoires et profils. Les bids des teneurs de marché ne sont jamais de la
+demande (`market_demand::signals_from` : liquidité, pas consommation).
+
+## Teneurs de marché (plan marché vague 3, décision Q6, 2026-11-16)
+
+Des comptes DÉDIÉS cotent les deux côtés de TOUS les objets F2P
+échangeables, à profit, informations publiques seulement (D22), sans
+triche (règle 13) : leur stock vient de leurs deals.
+- Univers (`gamedata::f2p::market_universe`) : les 1128 lignes F2P
+  échangeables du catalogue du marché moins les 552 billets (`cert_*`,
+  échangés dans le carnet de leur objet de base) et les pièces = 575
+  objets, un carnet chacun.
+- Capacité d'un compte (`lifescape_market::slice_capacity`) : banque F2P
+  60 types (`bank.constant ^bank_free_slots`) + sac 28, moins 20 cases
+  gardées (pièces 1, trousse permanente 4, nourriture 1, demi-sac 14 pour
+  les livraisons), × 80 % de marge = 54 objets. N = ⌈575 / 54⌉ = 11
+  comptes. Au plus 49 types de la tranche détenus à la fois
+  (`market_maker::MAX_HELD_TYPES` = 55 − pièces − trousse 4 − 1,
+  strictement sous la ligne du concierge) : aucun bid n'ouvre un 50e
+  type, le concierge ne se déclenche jamais sur le stock du teneur (sa
+  tranche est en plus dans la liste gardée du concierge).
+- Tranches (`lifescape_market::partition`) : objets pris par id croissant,
+  chacun à la tranche de plus haut poids (hachage rendez-vous) qui a
+  encore de la place (⌈575/11⌉ = 53) : couverture totale, sans
+  recouvrement, déterministe ; un objet ajouté après les autres ne
+  déplace rien. Un compte garde sa tranche à vie (vie : `profile.maker`).
+- Capital cible (`lifescape_market::capital_target`) : de quoi poser un
+  lot d'achat (1000 pièces, ≤ 500 unités) sur chaque objet de la tranche
+  à son ancrage public (valeur boutique), chacun plafonné à 10 % de ce
+  capital (point fixe), arrondi au millier : 60 000 à 290 000 pièces
+  selon la tranche (médiane ~95 000).
+- Cycle de vie : le compte naît comme tout bot (`create-user --role
+  market_maker`, tutoriel), joue (ambition opérateur `market_maker` :
+  échelle de pièces 5 000 → 1 000 000, méthodes d'argent productrices)
+  jusqu'au capital cible, puis bascule pour toujours
+  (`market_maker::maybe_switch`, `lifescape_planner::become_quoting`) :
+  achats ouverts et annonces de sa tranche annulés (`role`), nœuds
+  abandonnés, but `MakeMarket` = un nœud `market:make` après l'autre (le
+  script `market make --post x,z,niveau` se tient à son poste, une case
+  de l'anneau de remise de la fontaine de Varrock, mange, revient au
+  poste après une livraison). Plus d'ambition, d'équipement, de souhait,
+  d'alchimie ; restent la banque, les livraisons, la vente de ses restes
+  hors tranche et la vente PNJ (Q3).
+- Cotation (`lifescape_market::maker::quote`, passe démon toutes les
+  1000 ticks, `market_maker::quote_pass`, motif `market_make`, prix fixe :
+  jamais sur la courbe de concession) :
+  juste valeur v = prix courant échangé, sinon milieu bid/ask des autres,
+  sinon (jamais échangé) plafond public / (1 + h) où plafond = min(valeur
+  boutique, meilleur ask des autres) ; lot = 1000 / v (1..500) ;
+  biais de stock r = clamp((stock − lot)/lot, −1, 1), prix de réserve
+  p = v (1 − h r) ; bid = ⌊p (1 − h)⌋ ≤ v − 1 ; ask = ⌈p (1 + h)⌉ ≥ v + 1,
+  > bid, > ce que paie une boutique. h = 4 % (liquide : achats d'autres
+  ≥ un lot sur 72 000 ticks), 8 % (mince), 10 % (découverte, quart de
+  lot, jamais relevé par un stock bas). Stock haut → bid ET ask baissent ;
+  stock bas → les deux montent. Sans demande (échangé, aucun bid d'un
+  autre, aucun achat d'un autre depuis 72 000 ticks) : le bid descend de
+  5 % par passe vers 1, le stock au-delà d'un lot part au magasin PNJ
+  (Q3, `take_dumps` → plan de vente de `brain_sales`). Plafonds :
+  capital engagé par objet (stock à max(valeur, coût) + bid) ≤ 10 % des
+  fonds propres, stock ≤ 500 unités, part d'un côté ≤ 25 % de la
+  profondeur des autres (seul sur un côté : un lot).
+- Simulateur (`sim_maker`, `sim_lifecycle::run_with_maker`, 5 graines,
+  40 objets façon constat) : voir `decisions.md` 2026-11-16 vague 3.
+- Opérateur : section « market makers » d'`orchestrator economy` et carte
+  « Market makers » de la page `economy` (capital, P&L, écart moyen
+  coté, part du carnet, stock par objet ; `market_maker_report`).
 
 ## Front et base
 
@@ -448,10 +514,9 @@ méthode choisie et alternatives avec coûts estimés, avancement,
 ticks dépensés), historique des issues. Page `economy`
 (`/api/economy`) : masse monétaire (holdings, hors Iron), deals
 (réglés, ratés, taux d'échec), top activités par profit/6000 ticks,
-tendances publiques 24 h (pénurie, momentum, score), marchands
-(capital engagé en achats ouverts, stock en ventes ouvertes, deals
-réglés/ratés, ordres et deals ouverts, part maximale du carnet, profit
-de référence `market:flip`). Les bots ne lisent aucune de ces pages.
+tendances publiques 24 h (pénurie, momentum, score), teneurs de marché
+(tranche, phase, capital cible, capital, P&L, écart moyen coté, part du
+carnet, stock). Les bots ne lisent aucune de ces pages.
 
 Base `lifescape-store` (SQLite, daemon seul) : ordres, deals,
 exécutions, bougies, rapports, rendements, fiabilité, tendances.
@@ -596,8 +661,9 @@ Constat 2026-11-14 : 104 carnets actifs sur 117 à 1 pièce, 84 % des
 deals à 1, masse monétaire ×25 en 11 h. Causes : plancher vendeur =
 référence/2 avec référence = VWAP 24 h pondéré en quantité (un gros dump
 abaisse le plancher : saule 13 → 6 → 2 → 1) ; objets jamais échangés
-ouverts à 1 ; stock de flip des marchands relisté à la référence
-(ryan_park : 81 % du côté vente à 1) ; lots entiers jetés d'un coup.
+ouverts à 1 ; stock de revente des marchands (rôle supprimé en vague 3)
+relisté à la référence (ryan_park : 81 % du côté vente à 1) ; lots
+entiers jetés d'un coup.
 
 Toutes les entrées sont les données PROPRES du bot (ses rapports, ses
 fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
@@ -657,14 +723,9 @@ fills) ou publiques (carnet, prints) ; jamais l'état privé d'un autre.
   niveau non résolu, runes d'un sort de combat). Mêmes règles pour le
   `market sell` et le `market cleanup` des workers (op `seller_quote`,
   niveaux live lus au superviseur pour le plafond de fabrication).
-- Marchands (`flip_quote`) : achat au meilleur bid + 1 seulement quand
-  l'écart `(ask − 1) − (bid + 1)` couvre la marge minimale = ticks par
-  unité flippée (mesurés sur ses rapports `market`, sinon 6000/100,
-  l'estimation de l'engagement `market:flip`) × ses pièces par tick ;
-  vente d'un lot de demande à l'ask − 1, jamais sous son prix d'achat +
-  marge (ou sa réserve pour un stock non acheté), à 2 × ce plancher
-  sans ask ; jamais réf ± 1. Le stock de flip (objets que le marchand a
-  achetés) n'est jamais relisté par `maybe_list_surplus`.
+- (Marchands : cotation de revente supprimée en vague 3, remplacée par
+  les teneurs de marché, § Teneurs de marché. La tranche d'un teneur qui
+  cote n'est jamais relistée par `maybe_list_surplus`.)
 - Coût CPU du repricing (2026-11-14, ~55 amends/s et ~10 000 lignes de
   log en 3 min après le redémarrage) : patience 2000 ticks (était 200) ;
   un ordre dans sa fenêtre est sauté avant toute lecture du store ; un
@@ -726,8 +787,8 @@ d'achat que ce bot sait fabriquer avec profit :
   et aucun temps. Total = pièces + ticks × taux du bot.
 - Taux du bot (`market_fit::coin_rate`) : meilleur profit publié (page
   rates) parmi les scripts que ses niveaux ouvrent (bande ≤ niveau),
-  plancher 0,1 pièce/tick (le temps n'est jamais gratuit) ; les flips
-  ne comptent pas.
+  plancher 0,1 pièce/tick (le temps n'est jamais gratuit) ; les
+  engagements de marché ne comptent pas.
 - Profondeur : bids qui paient plus que le coût total ; moins les asks au
   repos à ≤ 125 % du meilleur bid (offre déjà en route : ces vendeurs
   descendent vers les bids) ; moins le stock libre du bot (il le vend
@@ -775,8 +836,8 @@ d'achat que ce bot sait fabriquer avec profit :
 - `sale_lot(stock, vue)` = ce que les acheteurs prennent (bids + volume
   24 h), au moins un inventaire (28), jamais plus que le stock : taille
   d'une annonce de joueur. Câblé (2026-11-14) dans la vente par défaut,
-  l'adoption des annonces, `seller_quote` et `flip_quote`
-  (`market_seller`, § Réserve vendeur).
+  l'adoption des annonces et `seller_quote` (`market_seller`, § Réserve
+  vendeur).
 - Origine des volumes absurdes (revue 2026-11-14, `task_yields`) :
   plumes ≈ 115 000 en montées de combat sur les poulets (butin, jamais
   lâché) ; saule ≈ 8 900 en tranches de bûcheronnage, 6 500 en `make_money`
@@ -1140,8 +1201,8 @@ Règles :
   qu'un éclat d'une grosse pile (≤ moitié du lot de la pile entière,
   `market_seller::undersized`) est retirée et la pile part en un lot
   dans la même passe (`brain_sales::regroup_slivers` ; objets non
-  gardés, lignes `open` seulement, jamais le stock de flip d'un
-  marchand).
+  gardés, lignes `open` seulement, jamais la tranche d'un teneur de
+  marché).
 - Réadoption (après redémarrage) : un ask au-dessus de l'ouverture du
   jour descend à elle (`Adoption::Lower`), jamais sous la réserve.
 - Équipement porté ou gardé : UNE copie de rechange reste (une mort fait
