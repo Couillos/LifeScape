@@ -15,6 +15,7 @@ use lifescape_sdk::Bot;
 use crate::kit::bank::{bank_trip, bank_withdraw_items, nearest_bank};
 use crate::kit::cycle::{resolve_keep, run, StepControl};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
+use crate::kit::press::{follow_chain, make_press, Chain};
 use crate::kit::produce::{count_answer, match_option};
 use crate::kit::survival::{check_events, is_death_abort, learn_level, wait_pack_streamed};
 use crate::quests::common::inv_slot;
@@ -39,7 +40,8 @@ pub fn leather_recipe(product: &str) -> Option<knowledge::recipes::Recipe> {
 /// Sew banked loads in the open session: `leatherwork [product] [count]`
 /// (gloves when omitted, 0 = forever). Hides without leather tan at Ellis
 /// first (verified `tanner` grid in `kit::tan`); the sew uses the verified
-/// `leather_crafting` x1 buttons, chat options only if they speak.
+/// `leather_crafting` Make 10/5/1 buttons (one press covering the
+/// carried leather), chat options only if they speak.
 pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let (resource, rest) = crate::kit::cycle::split_resource(args);
     let spec = crate::kit::cycle::parse_cli("leatherwork", &rest)?;
@@ -101,7 +103,7 @@ pub fn run_leatherwork(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let before = pack_total(step_bot, leather);
         while pack_total(step_bot, leather) > 0 && pack_total(step_bot, thread) > 0 {
-            match sew_one(step_bot, leather, needle, product_name) {
+            match sew_batch(step_bot, &Sew { leather, needle, thread }, product_name) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died sewing, restocking to retry");
                     return Ok(StepControl::Continue);
@@ -198,18 +200,37 @@ fn sew_button(product_name: &str) -> Option<&'static str> {
     }
 }
 
-/// Sew one piece: click, answer the choice or counter, wait out the
-/// consumption. `op_held_u` opens the `leather_crafting` grid live (see
-/// `leather.rs2`), never chat options: when options stay silent but the
-/// grid modal is open, press the verified x1 button instead.
-fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Result<(), ScriptError> {
-    let had = pack_total(bot, leather);
-    let (com, slot) = inv_slot(bot, leather)?;
-    let (use_com, use_slot) = inv_slot(bot, needle)?;
-    bot.op_held_u(leather, slot, com, needle, use_slot, use_com)?;
+/// Make 1/5/10 button (`press` 1/2/3) of a product: `leather.rs2` packs
+/// each triple downwards from the x1 com (gloves 116 = 1, 115 = 5,
+/// 114 = 10).
+fn sew_press_button(product_name: &str, press: u8) -> Option<String> {
+    let single = sew_button(product_name)?;
+    let (grid, number) = single.rsplit_once("com_")?;
+    let x1: u16 = number.parse().ok()?;
+    Some(format!("{grid}com_{}", x1.checked_sub(u16::from(press.clamp(1, 3) - 1))?))
+}
+
+/// Needle, thread and the leather of one sewing run.
+struct Sew {
+    leather: u16,
+    needle: u16,
+    thread: u16,
+}
+
+/// Sew one press: needle on leather opens the grid, one Make press
+/// covering the carried leather (`press::make_press`), then the server's
+/// queue chains a piece every 2-3 ticks until the leather or the thread
+/// runs out (`leather.rs2`); a level-up cut re-presses through the
+/// caller's loop. Hard leather sews direct (no grid, one per click);
+/// chat options or a counter answer when they speak.
+fn sew_batch(bot: &mut Bot, sew: &Sew, product_name: &str) -> Result<(), ScriptError> {
+    let had = pack_total(bot, sew.leather);
+    let (button_press, items) = make_press(had, u32::MAX);
+    let (com, slot) = inv_slot(bot, sew.leather)?;
+    let (use_com, use_slot) = inv_slot(bot, sew.needle)?;
+    bot.op_held_u(sew.leather, slot, com, sew.needle, use_slot, use_com)?;
     let grid: Option<u16> = (bot.tables.com_id)("leather_crafting");
-    let button: Option<u16> = sew_button(product_name).and_then(|name| (bot.tables.com_id)(name));
-    let mut pressed = false;
+    let button: Option<u16> = sew_press_button(product_name, button_press).and_then(|name| (bot.tables.com_id)(&name));
     let target = bot.world.ticks + ITEM_TICKS;
     while bot.world.ticks < target {
         if !bot.chat_options().is_empty() {
@@ -217,27 +238,30 @@ fn sew_one(bot: &mut Bot, leather: u16, needle: u16, product_name: &str) -> Resu
                 return Err(ScriptError::Failed(format!("sew {product_name:?} matches no option at {:?}", bot.position())));
             }
             bot.chat_choose(product_name)?;
-        } else if !pressed
-            && grid.is_some_and(|grid| {
-                bot.world.modal.as_ref().is_some_and(|modal| modal.interface_id == grid)
-            })
-        {
+        } else if grid.is_some_and(|grid| bot.world.modal.as_ref().is_some_and(|modal| modal.interface_id == grid)) {
             let Some(com) = button else {
                 return Err(ScriptError::Usage(format!("sew {product_name:?} has no verified grid button at {:?}", bot.position())));
             };
             bot.if_button(com)?;
-            pressed = true;
+            let thread = sew.thread;
+            let chain = Chain { input: sew.leather, per_item: 1, items, stall_ticks: SEW_STALL_TICKS, tail_ticks: 1 };
+            follow_chain(bot, &chain, move |bot: &Bot| pack_total(bot, thread) == 0)?;
+            return if pack_total(bot, sew.leather) < had { Ok(()) } else { Err(ScriptError::Failed(format!("{product_name} never sewed at {:?}", bot.position()))) };
         }
         if bot.world.count_dialog {
             bot.resume_pcount(count_answer(had, 0))?;
         }
         bot.pump(2)?;
-        if pack_total(bot, leather) < had {
+        if pack_total(bot, sew.leather) < had {
             return Ok(());
         }
     }
     Err(ScriptError::Failed(format!("{product_name} never sewed at {:?}", bot.position())))
 }
+
+/// Silence after which a sewing chain reads as cut (a piece every 2-3
+/// ticks: a level-up splash clears the queue).
+const SEW_STALL_TICKS: u64 = 10;
 
 #[cfg(test)]
 mod tests {
@@ -301,8 +325,15 @@ mod tests {
             assert_eq!(super::sew_button(product), Some(com), "{product} button");
             let bot = offline_bot();
             assert!((bot.tables.com_id)(com).is_some(), "{com} resolves");
+            let ten = super::sew_press_button(product, 3).expect("Make 10 button");
+            assert!((bot.tables.com_id)(&ten).is_some(), "{ten} resolves");
         }
         assert_eq!(super::sew_button("hardleather_body"), None, "hard sews direct");
         assert_eq!(super::sew_button("LEATHER_GLOVES"), Some("leather_crafting:com_116"), "case-insensitive");
+        // Make 5 / Make 10 sit right below x1 (`leather.rs2` triples).
+        assert_eq!(super::sew_press_button("leather_gloves", 3).as_deref(), Some("leather_crafting:com_114"));
+        assert_eq!(super::sew_press_button("leather_vambraces", 2).as_deref(), Some("leather_crafting:com_121"));
+        assert_eq!(super::sew_press_button("leather_armour", 3).as_deref(), Some("leather_crafting:com_111"));
+        assert_eq!(super::sew_press_button("hardleather_body", 3), None, "hard sews direct");
     }
 }

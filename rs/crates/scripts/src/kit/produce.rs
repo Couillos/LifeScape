@@ -317,7 +317,7 @@ fn click_once(bot: &mut Bot, job: &ProduceJob<'_>, site: &ClickedSite, have: u32
                 .and_then(|slots| slots.get(slot))
                 .map(|(held, _)| *held)
                 .ok_or_else(|| ScriptError::Usage(format!("{inv} slot {slot} empty: the mould or gem is missing at {:?}", bot.position())))?;
-            let op = if have >= 10 { 3 } else if have >= 5 { 2 } else { 1 };
+            let (op, _) = crate::kit::press::make_press(have, remaining);
             bot.inv_button(op, held, *slot, com)?;
             bot.pump(5)?;
             Ok(())

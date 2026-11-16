@@ -185,6 +185,61 @@ fn rock_tier_spawns(tier: &knowledge::rocks::RockTier, bank: &knowledge::banks::
     found
 }
 
+/// What the rock pool offers: a live rock to walk to, or the depleted
+/// rocks to watch when waiting out a respawn beats every walk.
+pub(crate) enum RockPick {
+    Go(knowledge::rocks::RockTier, i32, i32),
+    Wait(knowledge::rocks::RockTier, Vec<(i32, i32)>, u64),
+}
+
+/// One rock of the pool: tile, Manhattan distance from the bot, and
+/// whether the stream shows it standing (unknown reads as standing).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RockCand {
+    pub pos: (i32, i32),
+    pub dist: i64,
+    pub live: bool,
+}
+
+/// Pool verdict over one tier's rocks. Pure.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RockChoice {
+    Go((i32, i32)),
+    Wait,
+    Empty,
+}
+
+/// The nearest standing rock, unless waiting out a depleted one is
+/// cheaper: a depleted rock costs its respawn (`respawn`, an upper bound:
+/// it may have been mined a while ago) or its walk, whichever is longer;
+/// a standing one costs its walk (`woodcut::travel_ticks`). Ties walk.
+/// Live 2026-11-16 (Rimmington iron): every mined rock was banned 250
+/// ticks for a 20-tick respawn, ~200 ticks of « no rock spot » per round
+/// of six rocks, and an unvetted pick clicked depleted rocks. Pure.
+pub(crate) fn choose_rock(cands: &[RockCand], respawn: u64) -> RockChoice {
+    let nearest = |live: bool| cands.iter().filter(|cand| cand.live == live).min_by_key(|cand| (cand.dist, cand.pos));
+    let walk = |cand: &RockCand| crate::kit::woodcut::travel_ticks(cand.dist.max(0) as u64);
+    match (nearest(true), nearest(false)) {
+        (Some(live), Some(depleted)) if walk(live) > respawn.max(walk(depleted)) => RockChoice::Wait,
+        (Some(live), _) => RockChoice::Go(live.pos),
+        (None, Some(_)) => RockChoice::Wait,
+        (None, None) => RockChoice::Empty,
+    }
+}
+
+/// True when the stream shows the rock mined out (its empty stage, or a
+/// cleared tile). World only, no service: unknown reads as standing.
+pub(crate) fn rock_depleted_seen(bot: &Bot, x: i32, z: i32, tier: &knowledge::rocks::RockTier) -> bool {
+    let level = bot.world.level;
+    if bot.world.loc_removed(x, z, level) {
+        return true;
+    }
+    bot.world.loc_at(x, z, level).is_some_and(|(loc, _, _)| {
+        let name = knowledge::loc_by_id(usize::from(loc)).and_then(|entry| entry.name).unwrap_or_default().to_lowercase();
+        !tier.rocks.iter().any(|rock| *rock == name)
+    })
+}
+
 pub(crate) fn pick_rock_spot(
     bot: &mut Bot,
     tiers: &[knowledge::rocks::RockTier],
@@ -192,13 +247,14 @@ pub(crate) fn pick_rock_spot(
     level: i64,
     banned: &BanSet,
     now: u64,
-) -> Option<(knowledge::rocks::RockTier, i32, i32)> {
+) -> Option<RockPick> {
     let mut affordable: Vec<&knowledge::rocks::RockTier> =
         tiers.iter().filter(|tier| tier.level <= level).collect();
     affordable.sort_by_key(|tier| (-tier.level, -rock_tier_price(tier)));
     let threats = crate::kit::danger::threats(bot);
     for tier in affordable {
         let mut cands: Vec<(i64, (i32, i32))> = Vec::new();
+        let mut depleted: Vec<RockCand> = Vec::new();
         for (spot_x, spot_z) in rock_tier_spawns(tier, bank, bot.assigned_site) {
             if banned.is_banned((spot_x, spot_z), now) || !in_assigned_site(bot, spot_x, spot_z) {
                 continue;
@@ -207,13 +263,22 @@ pub(crate) fn pick_rock_spot(
                 continue;
             }
             let dist = i64::from((spot_x - bot.world.x).abs() + (spot_z - bot.world.z).abs());
-            cands.push((dist, (spot_x, spot_z)));
+            if rock_depleted_seen(bot, spot_x, spot_z, tier) {
+                depleted.push(RockCand { pos: (spot_x, spot_z), dist, live: false });
+            } else {
+                cands.push((dist, (spot_x, spot_z)));
+            }
         }
         // Occupation perçue: dodge rocks another visible player works
         // while free ones exist; a full house keeps the pool.
         let cands = drop_occupied(bot, cands, OCCUPIED_RADIUS);
-        if let Some((_, (spot_x, spot_z))) = cands.into_iter().min_by_key(|(dist, _)| *dist) {
-            return Some((tier.clone(), spot_x, spot_z));
+        let mut pool: Vec<RockCand> = cands.into_iter().map(|(dist, pos)| RockCand { pos, dist, live: true }).collect();
+        pool.extend(depleted.iter().copied());
+        let respawn = knowledge::action_odds::rock_respawn(&tier.product).unwrap_or(0).max(0) as u64;
+        match choose_rock(&pool, respawn) {
+            RockChoice::Go((spot_x, spot_z)) => return Some(RockPick::Go(tier.clone(), spot_x, spot_z)),
+            RockChoice::Wait => return Some(RockPick::Wait(tier.clone(), depleted.iter().map(|cand| cand.pos).collect(), respawn)),
+            RockChoice::Empty => {}
         }
     }
     None
@@ -639,9 +704,26 @@ mod tests {
         let gold: Vec<knowledge::rocks::RockTier> = super::usable_rock_tiers().into_iter().filter(|tier| tier.product == "gold_ore").collect();
         assert!(!gold.is_empty(), "gold tier in the dumps");
         let banned = crate::kit::bans::BanSet::new();
-        let (tier, x, z) = super::pick_rock_spot(&mut bot, &gold, &draynor, 40, &banned, 0).expect("gold rocks at the assigned mine");
+        let Some(super::RockPick::Go(tier, x, z)) = super::pick_rock_spot(&mut bot, &gold, &draynor, 40, &banned, 0) else { panic!("gold rocks at the assigned mine") };
         assert_eq!(tier.product, "gold_ore");
         assert!(crate::kit::spots::in_assigned_site(&bot, x, z), "picked inside the site: ({x},{z})");
+    }
+
+    /// Rimmington iron (respawn 20): the next standing rock wins over
+    /// the one just mined; a depleted neighbour is waited for only when
+    /// its respawn beats the walk to a standing one; nothing standing
+    /// waits; an empty pool says so.
+    #[test]
+    fn depleted_rock_moves_to_the_nearest_standing_one() {
+        use super::{choose_rock, RockCand, RockChoice};
+        let rock = |x: i32, dist: i64, live: bool| RockCand { pos: (x, 0), dist, live };
+        assert_eq!(choose_rock(&[rock(1, 1, false), rock(2, 3, true), rock(3, 12, true)], 20), RockChoice::Go((2, 0)), "neighbour 3 tiles off");
+        assert_eq!(choose_rock(&[rock(1, 1, false), rock(3, 12, true)], 20), RockChoice::Go((3, 0)), "12 tiles walk < 20 respawn");
+        assert_eq!(choose_rock(&[rock(1, 1, false), rock(3, 30, true)], 10), RockChoice::Wait, "copper back in 10 beats 30 tiles");
+        assert_eq!(choose_rock(&[rock(1, 1, false), rock(3, 20, true)], 20), RockChoice::Go((3, 0)), "a tie walks");
+        assert_eq!(choose_rock(&[rock(1, 1, false), rock(2, 2, false)], 20), RockChoice::Wait, "all mined: wait, never click one");
+        assert_eq!(choose_rock(&[rock(5, 6, true), rock(4, 2, true)], 20), RockChoice::Go((4, 0)), "nearest standing");
+        assert_eq!(choose_rock(&[], 20), RockChoice::Empty);
     }
 
     /// Mapless worker against a real nav service (repo dumps): no painted

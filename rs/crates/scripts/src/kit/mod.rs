@@ -19,6 +19,7 @@
 //! from pack + known bank, staff counted), `fireline` (legal fire lines),
 //! `uniform` (guild uniform worn before the door, `--wear`), `anvil`
 //! (one smithing visit: bar on the anvil, Make 1/5/10, chain drained),
+//! `press` (Make 1/5/10 choice: one press covering the inputs),
 //! `janitor` (bank cleanup budget, chunks, whole-stack drops), `progress`
 //! (silent-loop guard of every `cycle::run`: no output, bank churn), `mill`
 //! (windmill hopper, lever and flour bin clicked from side stands).
@@ -53,6 +54,7 @@ pub mod mine;
 pub mod observe;
 pub mod pack;
 pub mod npc_spawn;
+pub mod press;
 pub mod produce;
 pub mod progress;
 pub mod shop;

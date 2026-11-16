@@ -8,11 +8,10 @@
 use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
-use crate::kit::spots::{pick_rock_spot, pick_rock_tier, rock_live_loc_id, rock_still_there};
+use crate::kit::spots::{pick_rock_spot, pick_rock_tier, rock_depleted_seen, rock_live_loc_id, rock_still_there, RockPick};
 use crate::kit::tools::{recover_pickaxe, PICK_SPEC};
 use crate::kit::pack::{free_slots, obj_id, pack_total};
 use crate::kit::harvest::WorkOutcome;
-use crate::kit::bans::GONE_BAN_TICKS;
 use crate::kit::survival::learn_level;
 use crate::skill_walk::walk_checked;
 use crate::ScriptError;
@@ -169,25 +168,61 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
 
     fn pick(&mut self, bot: &mut Bot, state: &mut crate::kit::load::LoopState) -> Option<(Self::Spot, i32, i32)> {
         self.level = learn_level(bot, MINING_STAT, self.level);
-        let now = bot.world.ticks;
-        let found = pick_rock_spot(bot, self.tiers, self.bank, self.level, &state.banned, now);
+        let found = pick_rock_spot(bot, self.tiers, self.bank, self.level, &state.banned, bot.world.ticks);
         match found {
-            Some((ref tier, spot_x, spot_z)) => {
+            Some(RockPick::Go(tier, spot_x, spot_z)) => {
                 bot.log(&format!("mining {} at ({spot_x},{spot_z})", tier.product));
                 bot.intend(&format!("mining {} at ({spot_x},{spot_z})", tier.product));
+                Some((tier, spot_x, spot_z))
             }
-            None => {
+            _ => {
                 bot.log("no rock spot, waiting for respawns");
                 bot.intend("waiting for a safe rock spot");
+                None
             }
         }
-        found
+    }
+
+    /// A rock the ore just mined out (stream shows its empty stage) is
+    /// no ban: the pool skips it while empty and takes it back the tick
+    /// it respawns. Any other outcome keeps the shared map (a « no ore »
+    /// the stream does not confirm still bans, never a click loop).
+    #[allow(clippy::too_many_arguments)]
+    fn on_outcome(
+        &mut self,
+        bot: &mut Bot,
+        cfg: &crate::kit::load::LoadCfg,
+        state: &mut crate::kit::load::LoopState,
+        spot: &Self::Spot,
+        at: (i32, i32),
+        outcome: WorkOutcome,
+        gained: u32,
+    ) -> Result<crate::kit::load::LoadExit, ScriptError> {
+        if outcome == WorkOutcome::Gone && rock_depleted_seen(bot, at.0, at.1, spot) {
+            state.spot = None;
+            let exit = crate::kit::load::stall_or_continue(cfg, state, gained, bot.world.ticks);
+            // Every rock near mined out: watch the stream for the first
+            // respawn instead of a blind repick (never a click on an
+            // empty rock, never a 250-tick ban on a 20-tick rock).
+            let load_over = crate::kit::load::LoopOps::is_full(self, bot) || cfg.until.is_some_and(|goal| goal.met(bot));
+            self.level = learn_level(bot, MINING_STAT, self.level);
+            if load_over {
+                return Ok(exit);
+            }
+            if let Some(RockPick::Wait(tier, rocks, respawn)) = pick_rock_spot(bot, self.tiers, self.bank, self.level, &state.banned, bot.world.ticks) {
+                let spent = bot.world.ticks;
+                wait_rock_respawn(bot, &tier, &rocks, respawn)?;
+                state.idle_since += bot.world.ticks - spent;
+            }
+            return Ok(exit);
+        }
+        Ok(crate::kit::load::apply_outcome(cfg, state, at, outcome, gained, bot.world.ticks, self.on_gone(), self.on_refusal(), self.on_no_tool()))
     }
 
     fn keep_spot(
         &mut self,
         bot: &mut Bot,
-        state: &mut crate::kit::load::LoopState,
+        _state: &mut crate::kit::load::LoopState,
         spot: &Self::Spot,
         at: (i32, i32),
     ) -> bool {
@@ -199,8 +234,8 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
             }
         }
         if !rock_still_there(bot, at.0, at.1, spot) {
+            // Mined out under us: the pool skips it until it respawns.
             bot.log(&format!("rock gone at ({},{})", at.0, at.1));
-            state.banned.ban_for(at, bot.world.ticks, GONE_BAN_TICKS);
             return false;
         }
         true
@@ -217,6 +252,40 @@ impl crate::kit::load::LoopOps for MineOps<'_> {
         work_spot(bot, at.0, at.1, &self.ore_ids, had)
     }
 }
+
+/// Watch the depleted `rocks` until one respawns (stream shows its tier
+/// rock again), at most the respawn plus a margin (capped: the repick
+/// loop re-enters for slow rocks); a hit breaks the wait (the loop-top
+/// flee owns it), random events are polled on the way. True when a rock
+/// stands again.
+fn wait_rock_respawn(bot: &mut Bot, tier: &knowledge::rocks::RockTier, rocks: &[(i32, i32)], respawn: u64) -> Result<bool, ScriptError> {
+    bot.log(&format!("{} {} rocks mined out, waiting a respawn (<= {respawn}t)", rocks.len(), tier.product));
+    bot.intend(&format!("waiting for a {} rock to respawn", tier.product));
+    let hitpoints_before = crate::kit::survival::hitpoints(bot);
+    let mut polled = bot.world.ticks;
+    let until = polled + (respawn + RESPAWN_MARGIN_TICKS).min(RESPAWN_WATCH_CAP_TICKS);
+    while bot.world.ticks < until {
+        bot.pump(1)?;
+        if bot.world.ticks >= polled + 20 {
+            polled = bot.world.ticks;
+            crate::kit::survival::check_events(bot)?;
+        }
+        if crate::kit::survival::hitpoints(bot) < hitpoints_before {
+            return Ok(false);
+        }
+        if rocks.iter().any(|(x, z)| !rock_depleted_seen(bot, *x, *z, tier)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Slack past the table respawn (server tick jitter, player-count scale
+/// only shortens it).
+const RESPAWN_MARGIN_TICKS: u64 = 10;
+/// Longest single watch (mithril 400, rune 2400): past it the load's
+/// repick loop takes over, events and stall bounds included.
+const RESPAWN_WATCH_CAP_TICKS: u64 = 300;
 
 pub fn mine_load(
     bot: &mut Bot,

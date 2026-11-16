@@ -10,6 +10,7 @@ use lifescape_gamedata as knowledge;
 use lifescape_sdk::Bot;
 
 use crate::kit::pack::pack_total;
+use crate::kit::press::{follow_chain, Chain};
 use crate::kit::survival::is_walk_abort;
 use crate::ScriptError;
 
@@ -19,19 +20,11 @@ const OPEN_TICKS: u64 = 20;
 /// Ticks without a bar going before a Make chain reads as over (an item
 /// takes 5: `p_delay(1)` then `p_delay(2)`).
 const CHAIN_STALL_TICKS: u64 = 12;
+/// Ticks after the last item before the next op: `p_delay(2)` holds the
+/// player 3 ticks (then the « not enough bars » box), and an op sent
+/// while delayed is dropped.
+const CHAIN_TAIL_TICKS: u32 = 4;
 const STAND_WALK_TICKS: u64 = 800;
-
-/// Make press for one anvil visit: the largest of 10 / 5 / 1 items
-/// (`inv_button3` / `2` / `1`) within both what the bars make and what
-/// the order still wants. (button, items); (1, 0) when nothing is due.
-pub fn make_choice(bars_make: u32, wanted: u32) -> (u8, u32) {
-    match bars_make.min(wanted) {
-        0 => (1, 0),
-        10.. => (3, 10),
-        5..=9 => (2, 5),
-        _ => (1, 1),
-    }
-}
 
 /// Anvil post of a run: the station at the brain's `--site` (any anvil,
 /// Doric's included: the brain checked the quest), else the plain anvil
@@ -115,35 +108,39 @@ fn open_columns(bot: &mut Bot, post: &knowledge::stations::Station, bar: u16) ->
 }
 
 /// One anvil visit: open the columns, press Make (`button` 1/2/3 = 1, 5,
-/// 10 items) on the product cell, drain the chain until the bars stop
-/// going for a stall window. Returns the units made; none is loud.
-pub fn smith_batch(bot: &mut Bot, post: &knowledge::stations::Station, bar: u16, product: u16, cell: (u8, u8), button: u8) -> Result<u32, ScriptError> {
+/// 10 items, `produce::make_press`) on the product cell, then follow the
+/// server's chain (5 ticks an item): it ends once `items` are made or the
+/// bars no longer make one (the server's « not enough bars » box), plus
+/// the item's `p_delay(2)` tail so the next op is never sent while the
+/// player is delayed. A chain that stalls first (level-up) ends after
+/// the stall window; the caller re-presses for what is left
+/// (`produce::chain_cut`). Returns the units made; none is loud.
+pub fn smith_batch(bot: &mut Bot, post: &knowledge::stations::Station, forge: &AnvilPress, cell: (u8, u8), button: u8, items: u32) -> Result<u32, ScriptError> {
     let column_com = (bot.tables.com_id)(&format!("smithing:column{}", cell.0)).ok_or_else(|| ScriptError::Usage(format!("unknown smithing column{} at {:?}", cell.0, bot.position())))?;
-    if !open_columns(bot, post, bar)? {
+    if !open_columns(bot, post, forge.bar)? {
         return Err(ScriptError::Failed(format!("smithing interface never opened at {:?} (anvil {} at ({},{}))", bot.position(), post.loc, post.x, post.z)));
     }
-    let had = pack_total(bot, product);
-    bot.inv_button(button, product, cell.1, column_com)?;
-    let mut bars_left = pack_total(bot, bar);
-    let mut last_progress = bot.world.ticks;
-    while bot.world.ticks.saturating_sub(last_progress) < CHAIN_STALL_TICKS {
-        bot.pump(1)?;
-        let now = pack_total(bot, bar);
-        if now < bars_left {
-            bars_left = now;
-            last_progress = bot.world.ticks;
-        }
-    }
+    let had = pack_total(bot, forge.product);
+    bot.inv_button(button, forge.product, cell.1, column_com)?;
+    let chain = Chain { input: forge.bar, per_item: forge.bars_each, items, stall_ticks: CHAIN_STALL_TICKS, tail_ticks: CHAIN_TAIL_TICKS };
+    follow_chain(bot, &chain, |_| false)?;
     // The chain ends on a mesbox when the bars run out mid-press; a level
     // up opens one too: close whatever stayed.
     if bot.world.modal.is_some() {
         bot.close_modal()?;
         bot.pump(1)?;
     }
-    let made = pack_total(bot, product).saturating_sub(had);
+    let made = pack_total(bot, forge.product).saturating_sub(had);
     if made == 0 {
         let last = bot.world.messages.last().cloned().unwrap_or_default();
         return Err(ScriptError::Failed(format!("nothing smithed at {:?} (last line {last:?})", bot.position())));
     }
     Ok(made)
+}
+
+/// Bar, bars per item and product of one smithing press.
+pub struct AnvilPress {
+    pub bar: u16,
+    pub bars_each: u32,
+    pub product: u16,
 }

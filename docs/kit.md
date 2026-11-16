@@ -151,11 +151,18 @@ au-delà de l'ordre. Forge (`smith.rs`, 2026-11-14) : enclume = celle du
 `--site` (celle de Doric aussi : le cerveau a vu la quête), sinon
 l'enclume ordinaire la plus proche hors Wilderness (`anvil_post`) ; barre
 sur l'enclume depuis le côté le plus proche (« can't reach » ⇒ côté
-suivant), puis UN appui Make par visite (`inv_button1/2/3` = 1/5/10,
-`make_choice` : le plus grand dans les barres ET le reste du `--want`,
-clous = 2 par appui) ; le serveur enchaîne (5 ticks par objet), la
-chaîne finit après 12 ticks sans barre consommée et la boîte « not
-enough bars » est fermée. Marteau et reliquat de barres gardés à chaque
+suivant), puis UN appui Make couvrant la charge (`press::make_press`,
+2026-11-16 : `inv_button1/2/3` = 1/5/10, le serveur 274 n'a pas de
+make-X ; quand les barres limitent, le plus petit appui qui les couvre
+— 8 écus de fer sur 24 barres = un Make 10, plus jamais 5+1+1+1 à ~16
+ticks la visite de Make 1 ; quand l'ordre limite, le plus grand appui
+dans le reste du `--want`, clous = 2 par appui) ; le serveur enchaîne
+(5 ticks par objet) et s'arrête seul sur les barres (« not enough bars »,
+fermée) ; la chaîne est suivie par `press::follow_chain` : finie dès les
+objets faits ou les barres sous un jeu, plus 4 ticks de `p_delay`, une
+coupure (niveau) après 12 ticks muets se ré-appuie pour le reste.
+Mesure `admin` `smith:iron_kiteshield 8` : 84 → 43 ticks à l'enclume
+(10,5 → 5,4 ticks par objet), rapport 374 → 333 ticks, sans alerte. Marteau et reliquat de barres gardés à chaque
 banque (fini le marteau déposé puis re-retiré) ; un marteau en banque
 est retiré avant tout `blocked{missing: hammer}` ; « complete Doric's
 Quest » ⇒ `blocked{quest:doric}`. Sites planner (`obtain::station_open`) :
@@ -312,6 +319,18 @@ Site, stands et trajets (2026-11-13, erreurs du lot de 21h19) :
   est un côté du rocher (`mine::rock_stands`, plus proche d'abord), jamais
   le coin diagonal où la marche s'arrête (« I can't reach that! » sur
   chaque clic, rochers bannis puis « mine failed »).
+  Roche vidée (2026-11-16, `spots::choose_rock`) : le pool lit le flux
+  (`rock_depleted_seen` : étage vide ou case vidée) ; la roche vidée n'est
+  plus bannie 250 ticks (repousse fer 20, cuivre/étain 10, charbon 100 :
+  Rimmington perdait ~200 ticks de « no rock spot » par tour de six
+  roches) : le bot passe à la roche debout la plus proche du site, sauf
+  si la repousse (`action_odds::rock_respawn`, borne haute) bat la marche
+  vers elle ; tout vidé ⇒ il regarde le flux jusqu'à la première repousse
+  (`mine::wait_rock_respawn`, ≤ repousse + 10, plafond 300), jamais un
+  clic sur une roche vide. Un « no ore » que le flux ne confirme pas
+  garde le ban (jamais de boucle de clics). Mesure `admin`
+  `farm:iron_ore 20` (Rimmington) : 43,7 → 11,5 ticks par minerai au site,
+  rapport 1029 → 491 ticks, sans alerte.
 - Trajets : `walk_checked` ne coupe plus le voyage sur une égratignure ;
   un coup reçu ne l'arrête (Ok(false), l'appelant fuit) que si les PV
   tombent sous la ligne de repas (`skill_walk::hurt_aborts`,
@@ -455,6 +474,13 @@ l'arme du bot.
   seule pelote, une amulette par aller-retour).
 - `leatherwork` : la matière est celle de la recette (cuir dur pour le
   corps en cuir dur) ; un fil par 5 pièces (`leather.rs2`), le fil s'empile.
+  Couture (2026-11-16) : un appui Make 10/5 (`press::make_press`, triplet
+  sous le bouton x1 : gants 116/115/114) au lieu d'un x1 par pièce ; la
+  file serveur coud une pièce tous les 2-3 ticks jusqu'au cuir ou au fil
+  épuisé (`press::follow_chain`), une coupure (niveau) se ré-appuie.
+  Mesure `admin` `craft:leather_vambraces 5` : 4,6 → 3,2 ticks par pièce.
+  Bijoux or (`InvGrid`) : même `make_press` (avant : 10/5/1 sur le seul
+  porté, sans le reste du `--want`).
 - `produce` atelier PNJ hors de vue : marche jusqu'à son apparition la plus
   proche (dump) puis le cherche à nouveau (teinture chez Aggie).
 

@@ -25,7 +25,8 @@ use crate::{ScriptError, ScriptResult};
 
 pub const SMITHING_STAT: u8 = 13;
 pub use crate::kit::anvil::HAMMER;
-use crate::kit::anvil::{anvil_post, make_choice, smith_batch};
+use crate::kit::anvil::{anvil_post, smith_batch, AnvilPress};
+use crate::kit::press::make_press;
 pub const ANVILS: [&str; 2] = ["anvil", "doric_anvil"];
 /// Bar debugname and the product prefix the 274 column invs use
 /// (adamantite and runite bars shorten in product names).
@@ -102,6 +103,7 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
     let mut keep_smith: Vec<u16> = vec![bar, hammer];
     keep_smith.extend(task_keep.iter().copied());
     let forge = Forge { bar, hammer, bars_each, bar_name };
+    let press = AnvilPress { bar, bars_each, product };
     let first_due = items_wanted(bot, &CycleState::begin(bot, &spec), &spec, product, yield_each);
     restock(bot, &bank, &keep_smith, &forge, first_due)?;
     run(bot, &spec, |step_bot, state| {
@@ -112,11 +114,11 @@ pub fn run_smith(bot: &mut Bot, args: &[String]) -> ScriptResult {
         }
         let made_before = pack_total(step_bot, product);
         while poll_stop(step_bot, state, &spec).is_none() {
-            let (button, items) = make_choice(pack_total(step_bot, bar) / bars_each, items_wanted(step_bot, state, &spec, product, yield_each));
+            let (button, items) = make_press(pack_total(step_bot, bar) / bars_each, items_wanted(step_bot, state, &spec, product, yield_each));
             if items == 0 {
                 break;
             }
-            match smith_batch(step_bot, &post, bar, product, cell, button) {
+            match smith_batch(step_bot, &post, &press, cell, button, items) {
                 Err(error) if is_death_abort(&error) => {
                     step_bot.log("died smithing, restocking to retry");
                     return Ok(StepControl::Continue);
@@ -183,23 +185,8 @@ fn restock(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, keep: &[u16], 
 
 #[cfg(test)]
 mod tests {
-    use crate::kit::anvil::{anvil_post, anvil_refusal, make_choice};
+    use crate::kit::anvil::{anvil_post, anvil_refusal};
     use super::{bars_to_withdraw, product_for_level, restock_order, smith_recipe, smith_spot, ANVILS, BAR_PREFIX, COLUMNS, HAMMER, PLATEBODIES};
-
-    /// One Make press per anvil visit (`smithing.rs2`: `inv_button1/2/3`
-    /// = 1/5/10): the largest press within the bars AND the order, never
-    /// past `--want` (live 2026-11-13: will_field paid 27 ticks a dagger,
-    /// one bar-on-anvil per item).
-    #[test]
-    fn make_press_is_the_largest_within_bars_and_order() {
-        assert_eq!(make_choice(25, u32::MAX), (3, 10), "a full load chains ten");
-        assert_eq!(make_choice(7, u32::MAX), (2, 5));
-        assert_eq!(make_choice(4, u32::MAX), (1, 1));
-        assert_eq!(make_choice(25, 1), (1, 1), "--want 1 makes one");
-        assert_eq!(make_choice(25, 6), (2, 5), "then one more press of 1");
-        assert_eq!(make_choice(0, 10), (1, 0), "no bar set, nothing due");
-        assert_eq!(make_choice(10, 0), (1, 0), "order met, nothing due");
-    }
 
     /// Live 2026-11-14 (bh99tw2f): `--site 3248,3404,0` with the bot at the
     /// Al Kharid bank, the old run searched anvils 150 tiles around the bot
