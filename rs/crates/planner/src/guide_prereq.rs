@@ -46,7 +46,7 @@ fn compute_prereqs(method: &str, style: &str, band_level: u8, tool: &str) -> Pre
         }
     }
     let combat = crate::combat::min_combat_for_method(method);
-    Prereqs { levels, combat, quests, tools, capital: 0.0, ironman: true }
+    Prereqs { levels, combat, quests, tools, capital: 0.0, ironman: true, stock: Vec::new() }
 }
 
 /// Union of two prerequisite sets (a chain's stages): the highest level

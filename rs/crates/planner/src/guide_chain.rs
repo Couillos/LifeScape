@@ -39,12 +39,16 @@ pub struct ChainUnit {
     pub measured: bool,
     /// Inputs bought (no source at the level), per unit.
     pub bought: Vec<(String, f64)>,
+    /// Purchases nobody covers (no source at the level, no ask deep
+    /// enough, no shop), with the reason: the chain cannot run.
+    pub missing: Vec<String>,
 }
 
 impl ChainUnit {
-    /// Coins of one unit sold at this stage.
-    pub fn value_sold(&self, engine: &Engine) -> f64 {
-        self.value_consumed + engine.sale(&self.product).price
+    /// Coins of one unit sold at this stage when `units` of it are sold
+    /// per window (a never-traded product's bids hold few units).
+    pub fn value_sold_at(&self, engine: &Engine, units: f64) -> f64 {
+        self.value_consumed + engine.sale_at(&self.product, units).price
     }
 }
 
@@ -99,6 +103,7 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
     let mut prereqs = crate::guide_prereq::prereqs_of(method, style, level, &tool);
     let mut measured = answer.confidence.measured;
     let mut bought: Vec<(String, f64)> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
     let mut downstream: Vec<String> = path.to_vec();
     downstream.push(product.to_string());
     for (item, cause, qty) in &answer.flows {
@@ -126,26 +131,36 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
                     bought.extend(source.bought.iter().map(|(name, count)| (name.clone(), count * need)));
                 }
                 None => {
-                    value -= need * engine.buy(item).price;
+                    // Bought for a window of this stage's work.
+                    let priced = engine.buy_at(item, -qty);
+                    if !priced.available {
+                        missing.push(format!("{} (nothing makes it at level {level})", engine.unavailable_reason(item, -qty)));
+                    }
+                    value -= need * priced.price;
                     bought.push((item.clone(), need));
                 }
             }
             continue;
         }
-        value += per_unit * engine.flow_price(item, cause, *qty, InputPricing::Stock).price;
+        let priced = engine.flow_price(item, cause, *qty, InputPricing::Stock);
+        if !priced.available {
+            missing.push(engine.unavailable_reason(item, -qty));
+        }
+        value += per_unit * priced.price;
     }
     let level_xp = crate::unit_xp::derived_xp(method, style, &answer.units, level);
     for (skill, gained) in level_xp {
         add_xp(&mut xp, &skill, gained / rate);
     }
-    let unit = ChainUnit { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, value_consumed: value, xp_per_unit: xp, stages: Vec::new(), prereqs, measured, bought };
-    let sold = unit.value_sold(engine);
+    let unit = ChainUnit { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, value_consumed: value, xp_per_unit: xp, stages: Vec::new(), prereqs, measured, bought, missing };
+    let sold = unit.value_sold_at(engine, crate::guide_model::WINDOW_TICKS / ticks);
     stages.push(Stage { method: method.to_string(), product: product.to_string(), ticks_per_unit: ticks, profit_6000: sold / ticks * crate::guide_model::WINDOW_TICKS });
     Ok(ChainUnit { stages, ..unit })
 }
 
 /// Fastest source of one unit of `item` at `level` (fewest ticks per
-/// unit), `None` when none can make it.
+/// unit), `None` when none can make it (a source needing a purchase
+/// nobody covers cannot).
 pub fn best_source(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String]) -> Option<ChainUnit> {
     if path.iter().any(|known| known == item) {
         return None;
@@ -157,5 +172,6 @@ fn compute_best_source(engine: &Engine, item: &str, level: u8, depth: usize, pat
     sources(item)
         .into_iter()
         .filter_map(|(method, style)| chain_unit(engine, &method, &style, item, level, depth, path).ok())
+        .filter(|unit| unit.missing.is_empty())
         .min_by(|left, right| left.ticks_per_unit.total_cmp(&right.ticks_per_unit))
 }

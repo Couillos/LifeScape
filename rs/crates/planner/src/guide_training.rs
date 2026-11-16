@@ -28,6 +28,8 @@ struct Balance {
     xp_6000: Vec<(String, f64)>,
     flows: Vec<crate::guide_model::FlowLine>,
     prereqs: Prereqs,
+    /// Purchases nobody covers: the mode cannot run (no coins counted).
+    blocked: Vec<String>,
 }
 
 fn add(into: &mut Vec<(String, f64)>, skill: &str, xp: f64) {
@@ -63,19 +65,15 @@ fn autonomous(engine: &Engine, place: &Place) -> Balance {
         farmed.push(item.clone());
     }
     let scale = WINDOW_TICKS / (WINDOW_TICKS + extra);
-    let (mut flows, _, revenue, cost) = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|item, cause| cause == "input" && farmed.iter().any(|known| known == item));
-    for line in &mut flows {
-        if line.cause == "input" && farmed.contains(&line.item) {
-            line.outlet = crate::guide_model::Outlet::Farmed;
-        }
-    }
-    Balance { coins_6000: revenue - cost + farmed_value * scale, xp_6000: xp.into_iter().map(|(skill, gained)| (skill, gained * scale)).collect(), flows, prereqs }
+    let priced = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|item, cause| cause == "input" && farmed.iter().any(|known| known == item));
+    let coins_6000 = if priced.missing.is_empty() { priced.revenue - priced.cost + farmed_value * scale } else { 0.0 };
+    Balance { coins_6000, xp_6000: xp.into_iter().map(|(skill, gained)| (skill, gained * scale)).collect(), flows: priced.lines, prereqs, blocked: priced.missing }
 }
 
 /// Market balance: the stock inputs bought, trips and waits per lot.
 fn bought(engine: &Engine, place: &Place, band: i64) -> Balance {
     let row = crate::guide_money::market_row(engine, place, band);
-    Balance { coins_6000: row.profit_6000, xp_6000: row.xp_6000, flows: row.flows, prereqs: row.prereqs }
+    Balance { coins_6000: row.profit_6000, xp_6000: row.xp_6000, flows: row.flows, prereqs: row.prereqs, blocked: row.blocked }
 }
 
 /// XP from `level` to the band's end (its last level + 1), in XP.
@@ -101,7 +99,8 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
     let effective = xp * WINDOW_TICKS / (WINDOW_TICKS + converted);
     let level = filter.level.unwrap_or(place.ask.level).max(place.ask.level);
     let ticks_to_band_end = (effective > 0.0).then(|| xp_to_band_end(level) / (effective / WINDOW_TICKS));
-    let accessible = crate::guide_prereq::passes(&balance.prereqs, filter);
+    let accessible = balance.blocked.is_empty() && crate::guide_prereq::passes(&balance.prereqs, filter);
+    let price_confidence = crate::guide_model::price_confidence(&balance.flows);
     Some(TrainingRow {
         skill: skill.to_string(),
         band,
@@ -122,6 +121,8 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
         quest_ticks: None,
         flows: balance.flows,
         confidence,
+        price_confidence,
+        blocked: balance.blocked,
         accessible,
     })
 }
@@ -164,6 +165,8 @@ pub fn quest_rows(engine: &Engine, skill: &str, filter: &GuideFilter) -> Vec<Tra
             quest_ticks: ticks,
             flows: Vec::new(),
             confidence: Confidence { measured: ticks.is_some(), read: if ticks.is_some() { "quest measured".to_string() } else { "quest unmeasured".to_string() }, ..Confidence::default() },
+            price_confidence: "traded",
+            blocked: Vec::new(),
             accessible,
         });
     }
@@ -209,7 +212,7 @@ pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow
                 if !stock || index == 0 {
                     rows.extend(row_of(skill, place, band, Supply::Autonomous, autonomous(engine, place), profit, place.answer.confidence.clone(), filter));
                 }
-                if stock && crate::guide_money::inputs_buyable(engine, place) {
+                if stock {
                     rows.extend(row_of(skill, place, band, Supply::Market, bought(engine, place, band), profit, place.answer.confidence.clone(), filter));
                 }
             }
@@ -218,6 +221,7 @@ pub fn training_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<TrainingRow
     for skill in &skills {
         rows.extend(quest_rows(engine, skill, filter));
     }
-    rows.sort_by(|left, right| right.effective_xp_6000.total_cmp(&left.effective_xp_6000));
+    // Blocked rows (an input nobody makes, offers or sells) rank last.
+    rows.sort_by(|left, right| left.blocked.is_empty().cmp(&right.blocked.is_empty()).reverse().then(right.effective_xp_6000.total_cmp(&left.effective_xp_6000)));
     (rows, unrated)
 }

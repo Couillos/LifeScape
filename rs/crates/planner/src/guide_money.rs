@@ -2,12 +2,18 @@
 //! line per F2P activity × site × tool × band × family, profit per 6000
 //! ticks at the CURRENT price = Σ signed flows × price, every tick the
 //! line costs counted (pauses, market trips, market waits, the chain's
-//! upstream work).
+//! upstream work). Every flow is priced for the volume it moves
+//! (`guide_engine`: a never-traded object's book counts only for its
+//! depth).
 //!
 //! Families:
 //! - farm: an activity without stock inputs (harvest, fight, pickup,
 //!   cast): products sold (market or shop, Q3), consumables bought;
-//! - recipe: transform owned stock, inputs at their sale price (D5);
+//! - recipe: transform owned stock, inputs at their sale price (D5).
+//!   Only a bot HOLDING the stock can work it: the row names one lot of
+//!   stock as a prerequisite; in the general guide (nothing held) it is
+//!   blocked and ranks after every other row; for a bot (filter `held`)
+//!   it is evaluated on its stock (the window's work its stock covers);
 //! - chain: farm the inputs then transform (D16, `guide_chain`), each
 //!   stage's sell-here profit beside the line;
 //! - market: buy every input (current price, or a shop's when cheaper,
@@ -15,12 +21,16 @@
 //!   per lot + the measured market wait per lot; capital = one lot;
 //!   Ironman excluded.
 //!
+//! An input nothing makes at the level, no ask covers and no shop sells
+//! blocks the chain or market row (reason given, no profit). Blocked rows
+//! are never accessible and rank after every other row.
+//!
 //! Rows: per activity, the prior's best site and the tool tier of the
 //! level, plus one row per measured exact key of that band (its site and
 //! tool). XP per 6000 ticks is a bonus column (derived from the units).
 
-use crate::guide_engine::{price_flows, round_trip_ticks, stackable, work_share, Engine, InputPricing};
-use crate::guide_model::{band_of, Confidence, Family, GuideFilter, MoneyRow, RateAnswer, RateAsk, Unrated, LOT_SLOTS, VARROCK_SQUARE, WINDOW_TICKS};
+use crate::guide_engine::{lots_per_6000, price_flows, round_trip_ticks, stock_inputs, stock_lot, work_share, Engine, InputPricing, PricedFlows};
+use crate::guide_model::{band_of, price_confidence, Confidence, Family, GuideFilter, MoneyRow, RateAnswer, RateAsk, Unrated, VARROCK_SQUARE, WINDOW_TICKS};
 
 /// One evaluated place of an activity: the ask and its yield.
 pub struct Place {
@@ -84,56 +94,78 @@ fn base_row(family: Family, place: &Place, band: i64) -> MoneyRow {
         extra_ticks_per_6000: 0.0,
         stages: Vec::new(),
         confidence: place.answer.confidence.clone(),
+        price_confidence: "traded",
+        blocked: Vec::new(),
         accessible: false,
     }
 }
 
-/// Farm or recipe line of a place: its own flows, its pauses in time.
-fn own_row(engine: &Engine, place: &Place, family: Family, band: i64) -> MoneyRow {
+/// Fills a row's priced flows; a purchase nobody covers blocks the row
+/// and leaves it without a profit (never a made-up price).
+fn apply_flows(row: &mut MoneyRow, priced: PricedFlows) {
+    row.price_confidence = price_confidence(&priced.lines);
+    row.flows = priced.lines;
+    row.other_drops = priced.other;
+    if priced.missing.is_empty() {
+        row.revenue_6000 = priced.revenue;
+        row.cost_6000 = priced.cost;
+        row.profit_6000 = priced.revenue - priced.cost;
+    } else {
+        row.blocked.extend(priced.missing);
+    }
+}
+
+/// Units of `item` a bot holds.
+fn held_of(held: &[(String, f64)], item: &str) -> f64 {
+    held.iter().filter(|(name, _)| name == item).fold(0.0, |total, (_, units)| total + units)
+}
+
+/// Farm or recipe line of a place: its own flows, its pauses in time. A
+/// recipe names one lot of its stock; nothing held (the general guide)
+/// blocks it, priced on a full window; a bot's stock (`held`) evaluates
+/// it on the share of the window that stock covers.
+fn own_row(engine: &Engine, place: &Place, family: Family, band: i64, held: &[(String, f64)]) -> MoneyRow {
     let own = crate::guide_methods::own_product(&place.ask.method);
     let extra = place.answer.pause_per_6000.max(0.0);
-    let scale = work_share(extra);
-    let (flows, other, revenue, cost) = price_flows(engine, &place.answer, own.as_deref(), InputPricing::Stock, scale, &|_, _| false);
+    let share = work_share(extra);
     let mut row = base_row(family, place, band);
-    row.flows = flows;
-    row.other_drops = other;
-    row.revenue_6000 = revenue;
-    row.cost_6000 = cost;
-    row.profit_6000 = revenue - cost;
+    let mut coverage = 1.0;
+    if family == Family::Recipe {
+        row.prereqs.stock = stock_lot(&place.answer);
+        let lacking: Vec<String> = row.prereqs.stock.iter().filter(|(item, lot)| held_of(held, item) < *lot).map(|(item, lot)| format!("{lot:.0} {item} (held {:.0})", held_of(held, item))).collect();
+        if !lacking.is_empty() {
+            row.blocked.push(format!("stock: one lot needs {}", lacking.join(", ")));
+        }
+        if !held.is_empty() {
+            coverage = stock_inputs(&place.answer).iter().map(|(item, units)| (held_of(held, item) / (units * share)).min(1.0)).fold(1.0, f64::min);
+        }
+    }
+    let scale = share * coverage;
+    apply_flows(&mut row, price_flows(engine, &place.answer, own.as_deref(), InputPricing::Stock, scale, &|_, _| false));
     row.xp_6000 = xp_scaled(&place.ask.method, &place.ask.style, &place.answer, place.ask.level, scale);
     row.extra_ticks_per_6000 = extra;
     row
 }
 
-/// True when every stock input of a place can be bought (a fill, an ask
-/// or a shop): else no 100 % market line exists.
-pub fn inputs_buyable(engine: &Engine, place: &Place) -> bool {
-    place.answer.flows.iter().filter(|(_, cause, qty)| cause == "input" && *qty < 0.0).all(|(item, _, _)| engine.buy(item).available)
-}
-
 /// 100 % market line (D15): inputs bought, a square round trip and the
-/// measured wait per lot (a pack of non-stackable inputs).
+/// measured wait per lot (a pack of non-stackable inputs). An input no
+/// ask covers and no shop sells blocks it.
 pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
     let answer = &place.answer;
-    let slots_per_6000: f64 = answer.flows.iter().filter(|(item, cause, qty)| cause == "input" && *qty < 0.0 && !stackable(item)).map(|(_, _, qty)| -qty).sum();
-    let lots_per_6000 = slots_per_6000 / LOT_SLOTS;
+    let lots = lots_per_6000(answer);
     let trip = workshop(place).and_then(|site| round_trip_ticks(VARROCK_SQUARE, site)).unwrap_or(0.0);
     let wait = engine.world.market_wait_ticks.unwrap_or(0.0);
-    let extra = answer.pause_per_6000.max(0.0) + lots_per_6000 * (trip + wait);
+    let extra = answer.pause_per_6000.max(0.0) + lots * (trip + wait);
     let scale = work_share(extra);
     let own = crate::guide_methods::own_product(&place.ask.method);
-    let (flows, other, revenue, cost) = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|_, _| false);
+    let priced = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|_, _| false);
     let mut row = base_row(crate::guide_model::Family::Market, place, band);
-    let inputs_per_6000: f64 = answer.flows.iter().filter(|(_, cause, qty)| cause == "input" && *qty < 0.0).map(|(item, _, qty)| -qty * engine.buy(item).price).sum();
     // One lot ties up its inputs: a pack of them (all stackable: the
-    // inputs of one window).
-    row.prereqs.capital = if lots_per_6000 > 0.0 { inputs_per_6000 / lots_per_6000 } else { inputs_per_6000 };
+    // inputs of one window of work).
+    let inputs_per_6000: f64 = priced.lines.iter().filter(|line| line.cause == "input" && line.per_6000 < 0.0).map(|line| -line.value_6000).sum::<f64>() / scale;
+    row.prereqs.capital = if lots > 0.0 { inputs_per_6000 / lots } else { inputs_per_6000 };
     row.prereqs.ironman = false;
-    row.flows = flows;
-    row.other_drops = other;
-    row.revenue_6000 = revenue;
-    row.cost_6000 = cost;
-    row.profit_6000 = revenue - cost;
+    apply_flows(&mut row, priced);
     row.xp_6000 = xp_scaled(&place.ask.method, &place.ask.style, answer, place.ask.level, scale);
     row.extra_ticks_per_6000 = extra;
     if engine.world.market_wait_ticks.is_none() {
@@ -151,18 +183,32 @@ fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
         return None;
     }
     let units_per_6000 = WINDOW_TICKS / unit.ticks_per_unit;
-    let sold = unit.value_sold(engine);
     let mut row = base_row(Family::Chain, place, band);
     row.prereqs = unit.prereqs.clone();
-    let priced = engine.sale(&product);
-    row.flows = vec![crate::guide_model::FlowLine { item: product.clone(), cause: "product".to_string(), per_6000: units_per_6000, unit_price: priced.price, value_6000: units_per_6000 * priced.price, outlet: priced.outlet, traded: priced.traded }];
+    let priced = engine.sale_at(&product, units_per_6000);
+    row.flows = vec![crate::guide_model::FlowLine {
+        item: product.clone(),
+        cause: "product".to_string(),
+        per_6000: units_per_6000,
+        unit_price: priced.price,
+        value_6000: units_per_6000 * priced.price,
+        outlet: priced.outlet,
+        traded: priced.traded,
+        basis: priced.basis,
+    }];
     for (item, per_unit) in &unit.bought {
-        let bought = engine.buy(item);
-        row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: "input".to_string(), per_6000: -per_unit * units_per_6000, unit_price: bought.price, value_6000: -per_unit * units_per_6000 * bought.price, outlet: bought.outlet, traded: bought.traded });
+        let units = per_unit * units_per_6000;
+        let bought = engine.buy_at(item, units);
+        row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: "input".to_string(), per_6000: -units, unit_price: bought.price, value_6000: -units * bought.price, outlet: bought.outlet, traded: bought.traded, basis: bought.basis });
     }
-    row.profit_6000 = sold * units_per_6000;
-    row.revenue_6000 = units_per_6000 * priced.price;
-    row.cost_6000 = row.revenue_6000 - row.profit_6000;
+    row.price_confidence = price_confidence(&row.flows);
+    if unit.missing.is_empty() {
+        row.profit_6000 = (unit.value_consumed + priced.price) * units_per_6000;
+        row.revenue_6000 = units_per_6000 * priced.price;
+        row.cost_6000 = row.revenue_6000 - row.profit_6000;
+    } else {
+        row.blocked = unit.missing.clone();
+    }
     row.xp_6000 = unit.xp_per_unit.iter().map(|(skill, xp)| (skill.clone(), xp * units_per_6000)).collect();
     row.extra_ticks_per_6000 = unit.ticks_per_unit * units_per_6000 - WINDOW_TICKS;
     row.stages = unit.stages;
@@ -170,8 +216,9 @@ fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
     Some(row)
 }
 
-/// Every money line of one activity at `level` (filter applied later).
-pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8) -> (Vec<MoneyRow>, Option<Unrated>) {
+/// Every money line of one activity at `level` (filter applied later),
+/// recipes evaluated on `held` (empty: nothing held).
+pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: &[(String, f64)]) -> (Vec<MoneyRow>, Option<Unrated>) {
     let band = band_of(level);
     let (found, error) = places(engine, method, style, level);
     if found.is_empty() {
@@ -180,13 +227,11 @@ pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8) -> (Ve
     let mut rows = Vec::new();
     for (index, place) in found.iter().enumerate() {
         if !has_stock_inputs(&place.answer) {
-            rows.push(own_row(engine, place, Family::Farm, band));
+            rows.push(own_row(engine, place, Family::Farm, band, held));
             continue;
         }
-        rows.push(own_row(engine, place, Family::Recipe, band));
-        if inputs_buyable(engine, place) {
-            rows.push(market_row(engine, place, band));
-        }
+        rows.push(own_row(engine, place, Family::Recipe, band, held));
+        rows.push(market_row(engine, place, band));
         // The chain farms upstream at the prior's places: one per band.
         if index == 0 {
             rows.extend(chain_row(engine, place, band));
@@ -209,8 +254,9 @@ pub fn entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
     out
 }
 
-/// The money making guide under `filter`, best profit first, and the
-/// activities nothing estimates.
+/// The money making guide under `filter`: unblocked rows best profit
+/// first, then the blocked ones (best profit first), and the activities
+/// nothing estimates.
 pub fn money_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<MoneyRow>, Vec<Unrated>) {
     let mut rows = Vec::new();
     let mut unrated = Vec::new();
@@ -224,23 +270,23 @@ pub fn money_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<MoneyRow>, Vec
                 continue;
             }
         }
-        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level);
+        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level, &filter.held);
         unrated.extend(missing.filter(|gap| !unrated.iter().any(|known: &Unrated| known.method == gap.method)));
         for mut row in found {
             if filter.family.as_deref().is_some_and(|family| family != row.family.as_str()) {
                 continue;
             }
-            row.accessible = crate::guide_prereq::passes(&row.prereqs, filter);
+            row.accessible = row.blocked.is_empty() && crate::guide_prereq::passes(&row.prereqs, filter);
             rows.push(row);
         }
     }
-    rows.sort_by(|left, right| right.profit_6000.total_cmp(&left.profit_6000));
+    rows.sort_by(|left, right| left.blocked.is_empty().cmp(&right.blocked.is_empty()).reverse().then(right.profit_6000.total_cmp(&left.profit_6000)));
     (rows, unrated)
 }
 
 /// Profit per 6000 ticks of the best ACCESSIBLE line for a bot at
 /// `level` with `quests_done` (D17's coin -> time rate), `None` when no
-/// accessible line earns.
+/// accessible line earns. Nothing held: a recipe on stock never sets it.
 pub fn best_accessible_profit(engine: &Engine, level: u8, quests_done: &[String]) -> Option<f64> {
     let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
     let (rows, _) = money_guide(engine, &filter);

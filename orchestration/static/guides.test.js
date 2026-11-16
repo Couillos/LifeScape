@@ -23,6 +23,7 @@ check('accessible only', GuidesView.visibleRows(rows, { accessibleOnly: true, li
 check('search', GuidesView.visibleRows(rows, { search: 'steel', limit: 0 }).map(function (row) { return row.method; }), ['smelt:steel_bar']);
 check('top N keeps the best first', GuidesView.visibleRows(rows, { limit: 2 }).length, 2);
 check('prerequisites', GuidesView.prereqText({ levels: { smithing: 30 }, combat: 12, quests: ['doric'], tools: ['hammer'], capital: 15000, ironman: false }), 'smithing 30, combat 12, quest doric, hammer, 15k capital, no ironman');
+check('stock prerequisite', GuidesView.prereqText({ levels: {}, combat: 3, quests: [], tools: [], capital: 0, ironman: true, stock: { rune_platebody: 28 } }), 'stock 28 rune_platebody');
 check('xp text best first', GuidesView.xpText({ mining: 5000, smithing: 200, magic: 0 }), 'mining 5000, smithing 200');
 
 if (failures) {

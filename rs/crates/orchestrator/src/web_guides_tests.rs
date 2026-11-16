@@ -76,4 +76,30 @@ fn query_sets_the_filter() {
     assert_eq!(filter.level, Some(41));
     assert_eq!(filter.family, None);
     assert_eq!(filter.quests_done, vec!["doric".to_string(), "runemysteries".to_string()]);
+    assert!(filter.held.is_empty(), "the general guide holds nothing");
+    let held = filter_of(&crate::web::parse_query("level=30&held=iron_ore:50,coal:500"));
+    assert_eq!(held.held, vec![("iron_ore".to_string(), 50.0), ("coal".to_string(), 500.0)]);
+}
+
+/// D12: a never-traded object's quote carries no current price, only its
+/// resting book (a lone bid for one unit is one unit deep); a traded one
+/// carries its current price.
+#[test]
+fn never_traded_quote_carries_its_book_depth() -> Result<(), lifescape_store::Error> {
+    let store = Store::open_in_memory()?;
+    store.upsert_item(&lifescape_store::Item { item_id: 1097, name: "Leather chaps".to_string(), shop_price: 20, alch_value: 8 })?;
+    store.place_order(&lifescape_store::NewOrder { account: "t01".to_string(), side: lifescape_store::OrderSide::Buy, item_id: 1097, quantity: 1, price: 15411, clock: 1, ..Default::default() })?;
+    let quote = quote_of(&store, "Leather chaps");
+    assert!(!quote.traded);
+    assert_eq!(quote.bids, vec![(15411.0, 1.0)]);
+    assert!(quote.asks.is_empty());
+    // One fill at 400: traded on one fill (thin), the bid clamps the
+    // price (D12) and stays in the quote for its one unit.
+    store.record_execution(&lifescape_store::NewExecution { item_id: 1097, quantity: 1, price: 400, clock: 2, server_tick: 2, taker_side: Some(lifescape_store::OrderSide::Buy) })?;
+    let quote = quote_of(&store, "Leather chaps");
+    assert!(quote.traded);
+    assert_eq!((quote.median, quote.fills), (400.0, 1));
+    assert_eq!(quote.price, 15411.0, "D12 clamp by the bid");
+    assert_eq!(quote.bids, vec![(15411.0, 1.0)]);
+    Ok(())
 }

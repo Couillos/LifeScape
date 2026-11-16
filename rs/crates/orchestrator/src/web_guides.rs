@@ -4,17 +4,19 @@
 //! - yields: the live estimator (`rates_read::estimate_using`, n >= 3
 //!   blended with the guides' game prior, else the prior alone), names
 //!   turned into debug names for the engine;
-//! - prices: the current price of each object (`rates_price`, D12; a
-//!   purchase needs a fill or a resting ask, never the 1-coin default),
-//!   the best F2P shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`)
-//!   and the cheapest F2P keeper (Q7);
+//! - prices: the current price of each traded object (`rates_price`,
+//!   D12); a never-traded object has none, only its resting book (the
+//!   engine counts it for the units it holds, `quote_of`); the best F2P
+//!   shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`) and the
+//!   cheapest F2P keeper (Q7);
 //! - the market wait per lot: mean pause of the contract-2 runs that
 //!   paused for the market; a quest's duration: mean work of its
 //!   finished contract-2 runs.
 //!
 //! Filters (query string): `skill`, `level` (a bot with every skill at
 //! it; empty: each method at its own gate), `family`, `quests` (done,
-//! comma separated). A build is cached `GUIDE_TTL` per query: the bots
+//! comma separated), `held` (objects a bot holds, `item:units,...`,
+//! debug names: a recipe on stock is evaluated on them). A build is cached `GUIDE_TTL` per query: the bots
 //! never read these guides (R7 later), the page does.
 
 #![forbid(unsafe_code)]
@@ -86,10 +88,33 @@ pub fn npc_volume_value(item: &str) -> Option<f64> {
         .map(|value| value as f64)
 }
 
-/// True when the market offers `display` now (a resting ask).
-fn market_offers(store: &Store, display: &str) -> bool {
-    let Ok(Some(item_id)) = store.item_id_by_name(display) else { return false };
-    store.book_levels_covering(item_id, lifescape_store::OrderSide::Sell, 1).map(|levels| !levels.is_empty()).unwrap_or(false)
+/// The engine's quote of `display` (D12, `lifescape_market::current_price`
+/// as `rates_price` reads it): the current price, the median of the last
+/// five fills and how many there are, and the resting (non-dormant)
+/// book of both sides as deep as the store's impact walk reads
+/// (`IMPACT_ROWS` orders). Never traded: no price, the book only. An
+/// object the market does not list: no price, no book.
+pub fn quote_of(store: &Store, display: &str) -> Quote {
+    let Ok(Some(item_id)) = store.item_id_by_name(display) else { return Quote { price: 1.0, ..Quote::default() } };
+    let last: Vec<lifescape_market::LastFill> = store
+        .last_fills(item_id, lifescape_market::PRICE_FILLS as i64)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(price, quantity)| lifescape_market::LastFill { price, quantity })
+        .collect();
+    let side = |side| store.book_levels_covering(item_id, side, i64::MAX).unwrap_or_default();
+    let (bids, asks) = (side(lifescape_store::OrderSide::Buy), side(lifescape_store::OrderSide::Sell));
+    let current = lifescape_market::current_price(&last, &bids, &asks);
+    let prices: Vec<i64> = last.iter().map(|fill| fill.price).collect();
+    let levels = |levels: Vec<(i64, i64)>| levels.into_iter().map(|(price, units)| (price as f64, units as f64)).collect();
+    Quote {
+        price: current.price as f64,
+        traded: current.traded,
+        median: lifescape_market::median_price(&prices).map(|median| median as f64).unwrap_or(0.0),
+        fills: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).count(),
+        bids: levels(bids),
+        asks: levels(asks),
+    }
 }
 
 fn site_of(text: &str) -> Option<(i64, i64, i64)> {
@@ -136,7 +161,21 @@ pub fn filter_of(params: &HashMap<String, String>) -> GuideFilter {
         level: text("level").and_then(|value| value.parse::<u8>().ok()).map(|level| level.clamp(1, 99)),
         family: text("family"),
         quests_done: text("quests").map(|value| value.split(',').map(|quest| quest.trim().to_string()).filter(|quest| !quest.is_empty()).collect()).unwrap_or_default(),
+        held: text("held").map(|value| held_of(&value)).unwrap_or_default(),
     }
+}
+
+/// `held=iron_ore:50,coal:500` (debug names): the objects a bot holds
+/// (R7); an entry without a valid count is left out.
+fn held_of(text: &str) -> Vec<(String, f64)> {
+    text.split(',')
+        .filter_map(|entry| {
+            let (item, units) = entry.split_once(':')?;
+            let units = units.trim().parse::<f64>().ok().filter(|units| units.is_finite() && *units > 0.0)?;
+            let item = item.trim();
+            (!item.is_empty()).then(|| (item.to_string(), units))
+        })
+        .collect()
 }
 
 /// Which guide.
@@ -156,12 +195,10 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
     let rate = |ask: &RateAsk| answer_of(snapshot, ask, now);
     let price = |item: &str| {
         if let Some(known) = prices.borrow().get(item) {
-            return *known;
+            return known.clone();
         }
-        let display = crate::rates_names::display_of(item);
-        let (unit, prior) = crate::rates_service::price_estimate(store, &display);
-        let quote = Quote { price: unit, traded: !prior, buyable: !prior || market_offers(store, &display) };
-        prices.borrow_mut().insert(item.to_string(), quote);
+        let quote = quote_of(store, &crate::rates_names::display_of(item));
+        prices.borrow_mut().insert(item.to_string(), quote.clone());
         quote
     };
     let npc_sale = |item: &str| npc_volume_value(item);
@@ -239,7 +276,12 @@ fn prereqs_value(prereqs: &Prereqs) -> Value {
         ("tools", Value::Arr(prereqs.tools.iter().map(|tool| str_value(tool)).collect())),
         ("capital", Value::Float(prereqs.capital)),
         ("ironman", Value::Bool(prereqs.ironman)),
+        ("stock", pairs(&prereqs.stock)),
     ])
+}
+
+fn blocked_value(reasons: &[String]) -> Value {
+    Value::Arr(reasons.iter().map(|reason| str_value(reason)).collect())
 }
 
 fn confidence_value(confidence: &Confidence) -> Value {
@@ -263,6 +305,7 @@ fn flow_value(line: &FlowLine) -> Value {
         ("value_6000", Value::Float(line.value_6000)),
         ("outlet", str_value(line.outlet.as_str())),
         ("traded", Value::Bool(line.traded)),
+        ("basis", str_value(line.basis.as_str())),
     ])
 }
 
@@ -300,6 +343,8 @@ pub fn money_value(row: &MoneyRow) -> Value {
             ),
         ),
         ("confidence", confidence_value(&row.confidence)),
+        ("price_confidence", str_value(row.price_confidence)),
+        ("blocked", blocked_value(&row.blocked)),
         ("accessible", Value::Bool(row.accessible)),
     ])
 }
@@ -326,6 +371,8 @@ pub fn training_value(row: &TrainingRow) -> Value {
         ("prereqs", prereqs_value(&row.prereqs)),
         ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
         ("confidence", confidence_value(&row.confidence)),
+        ("price_confidence", str_value(row.price_confidence)),
+        ("blocked", blocked_value(&row.blocked)),
         ("accessible", Value::Bool(row.accessible)),
     ])
 }

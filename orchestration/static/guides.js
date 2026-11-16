@@ -51,6 +51,8 @@ var GuidesView = (function () {
     if (prereqs.combat > 3) parts.push('combat ' + prereqs.combat);
     (prereqs.quests || []).forEach(function (quest) { parts.push('quest ' + quest); });
     (prereqs.tools || []).forEach(function (tool) { parts.push(tool); });
+    var stock = prereqs.stock || {};
+    Object.keys(stock).sort().forEach(function (item) { parts.push('stock ' + number(stock[item]) + ' ' + item); });
     if (prereqs.capital > 0) parts.push(number(prereqs.capital) + ' capital');
     if (prereqs.ironman === false) parts.push('no ironman');
     return parts.join(', ') || '-';
@@ -97,6 +99,8 @@ var GuidesView = (function () {
     { key: 'xp_text', label: 'XP/6000 (bonus)', kind: 'str' },
     { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
     { key: 'confidence_text', label: 'confidence', kind: 'str' },
+    { key: 'price_confidence', label: 'prices', kind: 'str' },
+    { key: 'blocked_text', label: 'blocked', kind: 'str' },
   ];
 
   var TRAINING_COLS = [
@@ -114,6 +118,8 @@ var GuidesView = (function () {
     { key: 'ticks_to_band_end', label: 'ticks to band end', kind: 'num', fmt: ticksText },
     { key: 'prereq_text', label: 'prerequisites', kind: 'str' },
     { key: 'confidence_text', label: 'confidence', kind: 'str' },
+    { key: 'price_confidence', label: 'prices', kind: 'str' },
+    { key: 'blocked_text', label: 'blocked', kind: 'str' },
   ];
 
   // Flattened display fields of an API row (sortable as text).
@@ -121,14 +127,21 @@ var GuidesView = (function () {
     row.xp_text = xpText(row.xp_6000 && typeof row.xp_6000 === 'object' ? row.xp_6000 : row.other_xp_6000);
     row.prereq_text = prereqText(row.prereqs);
     row.confidence_text = confidenceText(row.confidence);
+    row.blocked_text = blockedText(row.blocked);
     return row;
+  }
+
+  // Why no bot can work a row whatever its levels (stock not held, an
+  // input nobody makes, offers or sells).
+  function blockedText(reasons) {
+    return (reasons || []).join('; ') || '-';
   }
 
   function detailHtml(row) {
     var html = '<table class="detail"><tr><th class="left">item</th><th class="left">cause</th><th>/6000</th><th>unit price</th><th>value/6000</th><th class="left">outlet</th></tr>';
     (row.flows || []).forEach(function (line) {
       html += '<tr><td class="left">' + escapeHtml(line.display || line.item) + '</td><td class="left">' + escapeHtml(line.cause) + '</td><td>' + number(line.per_6000) + '</td><td>' +
-        number(line.unit_price) + (line.traded ? '' : ' <span class="prior">untraded</span>') + '</td><td>' + number(line.value_6000) + '</td><td class="left">' + escapeHtml(line.outlet) + '</td></tr>';
+        number(line.unit_price) + (line.traded ? '' : ' <span class="prior">' + escapeHtml(line.basis || 'untraded') + '</span>') + '</td><td>' + number(line.value_6000) + '</td><td class="left">' + escapeHtml(line.outlet) + '</td></tr>';
     });
     if (row.other_drops && row.other_drops.items > 0) {
       html += '<tr><td class="left">other drops (' + row.other_drops.items + ' objects)</td><td class="left">loot</td><td>' + number(row.other_drops.units_6000) + '</td><td>-</td><td>' + number(row.other_drops.value_6000) + '</td><td class="left">market</td></tr>';

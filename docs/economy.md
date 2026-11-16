@@ -444,11 +444,27 @@ essence, tranches d'entraînement, alchimie des objets fabriqués) × site
 (le meilleur du prior, puis chaque clé mesurée de la tranche) × outil
 (le palier du niveau) × tranche. Lecture : estimation `rates_read` avec
 le prior des guides (`method_rate::guide_prior` : un combat y ajoute sa
-table de drops ; le cerveau garde `method_prior`). Prix : courant (D12) ;
-vente PNJ au volume d'une ligne quand elle paie plus (Q3,
-`web_guides::NPC_SALE_VOLUME`) ; achat au prix courant si une exécution
-ou une offre existe, sinon boutique (Q7), sinon pas d'achat possible
-(jamais le défaut à 1 pièce).
+table de drops ; le cerveau garde `method_prior`). Prix (2026-11-16,
+`guide_engine`), toujours pour le VOLUME d'une ligne (unités / 6000
+ticks), jamais le prix d'une unité appliqué à une fenêtre :
+- objet échangé : prix courant (D12) ; une borne du carnet ne vaut que
+  pour les unités des ordres qui la posent (un bid d'1 unité au-dessus
+  de la médiane paie 1 unité, le reste à la médiane ; idem un ask sous
+  la médiane à l'achat) ; médiane sur < 5 fills marquée `thin` ;
+- objet jamais échangé : pas de prix courant ; vente = bids pour leur
+  profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`) ou
+  0 sans débouché ; achat = asks pour leur profondeur, le reste en
+  boutique (Q7), sinon intrant introuvable : ligne bloquée (raison,
+  aucun profit) ;
+- confiance prix par flux (`basis` : traded, thin, shop, book,
+  book+shop, book+none, none, own) et par ligne (`price_confidence` :
+  traded | thin | book/npc).
+Recette sur stock (D5) : prérequis `stock` = un lot de chaque intrant
+(paquet de 28 cases) ; guide général (rien détenu) : ligne bloquée,
+jamais accessible, classée après toutes les autres, jamais lue par D17 ;
+pour un bot (`held=objet:qté,...`, R7) : évaluée sur SON stock (part de
+la fenêtre que le stock couvre). Lignes bloquées (`blocked`, raisons)
+toujours après les autres.
 - money making, profit/6000 au prix courant = Σ flux signés × prix,
   pauses comptées dans les ticks ; familles farm, recipe (intrants au
   prix de vente, D5), chain (D16 : intrants farmés en amont, ticks par
@@ -472,7 +488,7 @@ ou une offre existe, sinon boutique (Q7), sinon pas d'achat possible
 Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par
 le carnet, `rates_price` ; sinon le carnet, sinon 1 pièce — jamais un
-VWAP 24 h) − Σ flux négatifs × prix (intrants, runes, munitions, appât,
+VWAP 24 h ; règle propre aux guides ci-dessus, plus stricte) − Σ flux négatifs × prix (intrants, runes, munitions, appât,
 nourriture, péages, pertes : le bilan signé, §8 ; échanges et
 `unattributed` exclus) − friction des pauses market (valorisées au taux
 de l'activité) + bonus de tendance (score public × chiffre × 0,1), lue

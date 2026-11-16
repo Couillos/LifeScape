@@ -64,14 +64,89 @@ impl RateAnswer {
     }
 }
 
-/// A current price (D12), whether a trade backs it, and whether the
-/// market can SELL it now (a fill or a resting ask): the 1-coin default
-/// of a never-traded object values a sale, never a purchase.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A current price (D12: median of the last five fills clamped by the
+/// book) and whether a trade backs it, the median and how many fills it
+/// rests on, and the resting book (non-dormant levels, best first,
+/// (price, units)). The book counts only for the units it holds (bids
+/// for a sale, asks for a purchase), never for a window's volume: an
+/// object without a fill has NO current price (`price` then carries no
+/// value), and a clamp by the book moves the price of the clamping
+/// orders' units only.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Quote {
     pub price: f64,
     pub traded: bool,
-    pub buyable: bool,
+    /// Median of the last fills (0: none, or unknown: `price` stands).
+    pub median: f64,
+    /// Fills the median rests on (at most five).
+    pub fills: usize,
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+}
+
+/// Fills a current price needs to rest on to be called "traded" rather
+/// than "thin" (D12 reads the last five).
+pub const FULL_FILLS: usize = 5;
+
+/// What a flow's unit price rests on (the guide's price confidence).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceBasis {
+    /// The current price of a traded object (D12).
+    Traded,
+    /// The current price of an object traded fewer than `FULL_FILLS`
+    /// times (D12 still: a median of what exists, flagged).
+    Thin,
+    /// A server shop's price (Q3 sale, Q7 purchase).
+    Shop,
+    /// Never traded: every unit at resting orders of the book.
+    Book,
+    /// Never traded: the book's depth, the rest at a shop.
+    BookShop,
+    /// Never traded: the book's depth, the rest worth nothing (no
+    /// outlet) or not for sale (purchase unavailable).
+    BookNone,
+    /// Never traded, no book, no shop: worth nothing, or not for sale.
+    Nothing,
+    /// Coins, or farmed upstream (time, no price).
+    Own,
+}
+
+impl PriceBasis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PriceBasis::Traded => "traded",
+            PriceBasis::Thin => "thin",
+            PriceBasis::Shop => "shop",
+            PriceBasis::Book => "book",
+            PriceBasis::BookShop => "book+shop",
+            PriceBasis::BookNone => "book+none",
+            PriceBasis::Nothing => "none",
+            PriceBasis::Own => "own",
+        }
+    }
+
+    /// Weakness of the basis: 0 a full trade history, a shop or no price
+    /// needed (coins, farmed); 1 a thin trade history; 2 the book of a
+    /// never-traded object or nothing.
+    pub fn weakness(self) -> u8 {
+        match self {
+            PriceBasis::Traded | PriceBasis::Shop | PriceBasis::Own => 0,
+            PriceBasis::Thin => 1,
+            PriceBasis::Book | PriceBasis::BookShop | PriceBasis::BookNone | PriceBasis::Nothing => 2,
+        }
+    }
+}
+
+/// Price confidence of a row, its weakest flow: "traded" (every price
+/// rests on five fills, a shop or none is needed), "thin" (one rests on
+/// fewer fills), "book/npc" (one rests on the book of a never-traded
+/// object, a shop's floor beyond it, or nothing).
+pub fn price_confidence(flows: &[FlowLine]) -> &'static str {
+    match flows.iter().map(|line| line.basis.weakness()).max().unwrap_or(0) {
+        0 => "traded",
+        1 => "thin",
+        _ => "book/npc",
+    }
 }
 
 /// One measured exact key of the estimator (the guides add a row for
@@ -117,6 +192,11 @@ pub struct GuideFilter {
     /// Quests the bot has done (planner keys): a row needing another is
     /// not accessible.
     pub quests_done: Vec<String>,
+    /// Objects the bot holds (debug name, units): a recipe on stock is
+    /// accessible only to a bot holding one lot of its inputs, and is
+    /// evaluated on that stock (R7). Empty: the general guide, where
+    /// nobody is assumed to hold anything.
+    pub held: Vec<(String, f64)>,
 }
 
 /// Money making family (§2).
@@ -173,8 +253,10 @@ pub struct FlowLine {
     pub unit_price: f64,
     pub value_6000: f64,
     pub outlet: Outlet,
-    /// The price rests on a trade (false: book or 1-coin default).
+    /// The price rests on a trade or a shop (false: the book of a
+    /// never-traded object, or no price at all).
     pub traded: bool,
+    pub basis: PriceBasis,
 }
 
 /// Everything a row needs before a bot can work it (D9).
@@ -191,6 +273,9 @@ pub struct Prereqs {
     pub capital: f64,
     /// False for rows an Ironman cannot work (market family).
     pub ironman: bool,
+    /// Stock one lot of a recipe on owned stock transforms (debug name,
+    /// units): only a bot holding it can work the row (D5).
+    pub stock: Vec<(String, f64)>,
 }
 
 /// One stage of a chain (D16): what selling at this stage pays.
@@ -225,6 +310,13 @@ pub struct MoneyRow {
     pub extra_ticks_per_6000: f64,
     pub stages: Vec<Stage>,
     pub confidence: Confidence,
+    /// "traded" or "book/npc" (`price_confidence`).
+    pub price_confidence: &'static str,
+    /// Why no bot of the filter can work the row whatever its levels: a
+    /// recipe's stock it does not hold, an input nothing makes, offers
+    /// or sells. A blocked row is never accessible, ranks after every
+    /// other row and, when an input is missing, carries no profit.
+    pub blocked: Vec<String>,
     pub accessible: bool,
 }
 
@@ -282,6 +374,10 @@ pub struct TrainingRow {
     pub quest_ticks: Option<f64>,
     pub flows: Vec<FlowLine>,
     pub confidence: Confidence,
+    /// "traded" or "book/npc" (`price_confidence`).
+    pub price_confidence: &'static str,
+    /// An input nothing makes, offers or sells (`MoneyRow::blocked`).
+    pub blocked: Vec<String>,
     pub accessible: bool,
 }
 
