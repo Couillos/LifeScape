@@ -3,6 +3,9 @@
 //! Split out of `tutorial.rs` (1000-line rule). The stage driver lives
 //! there; these handlers only act and wait on observable inventory.
 
+use std::collections::HashMap;
+
+use lifescape_sdk::world::{LocValue, Tile};
 use lifescape_sdk::Bot;
 
 use crate::quests::common as kit;
@@ -51,7 +54,12 @@ fn wait_done(bot: &mut Bot, done: &impl Fn(&Bot) -> bool, timeout: u64) -> Resul
 }
 
 pub(crate) fn use_held_on_loc_near(bot: &mut Bot, loc_names: &[&str], tool: u16, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
-    let (x, z, level, loc) = find_target_loc(bot, loc_names, 150)?;
+    let found = find_target_loc(bot, loc_names, 150)?;
+    use_held_on_loc_at(bot, found, tool, done, timeout)
+}
+
+/// Use `tool` on one known loc, walking its stand tiles in turn.
+fn use_held_on_loc_at(bot: &mut Bot, (x, z, level, loc): (i32, i32, i32, u16), tool: u16, done: impl Fn(&Bot) -> bool, timeout: u64) -> Result<bool, ScriptError> {
     let cands = ordered_stands(x, z, bot.world.x, bot.world.z);
     let target = bot.world.ticks + timeout;
     let mut held_at_click: Option<u32> = None;
@@ -87,6 +95,29 @@ pub(crate) fn use_held_on_loc_near(bot: &mut Bot, loc_names: &[&str], tool: u16,
         }
     }
     Ok(false)
+}
+
+/// Nearest live `fire` loc on `level` within `radius` (Manhattan) of
+/// `from`. A lit fire is always a live loc (added, then removed when it
+/// burns out), so only `bot.world.locs` is read: never the static map nor
+/// the station dump, whose `fireplace` (3095,3102, unreachable) and mainland
+/// `fire` (3146,3200) both match `find_loc(["fire"])` once the bot's fire
+/// is gone (hana_91, kai_ellis, hill_eric 2026-11-16). Exact name: a
+/// fireplace is not "the fire you just lit" (tut_cooking.rs2).
+pub(crate) fn nearest_live_fire(locs: &HashMap<Tile, Option<LocValue>>, from: (i32, i32), level: i32, radius: i32) -> Option<(i32, i32, i32, u16)> {
+    locs.iter()
+        .filter_map(|(tile, value)| value.map(|(loc, _, _)| (*tile, loc)))
+        .filter(|((_, _, tile_level), loc)| {
+            *tile_level == level && lifescape_gamedata::loc_by_id(usize::from(*loc)).and_then(|entry| entry.name) == Some("fire")
+        })
+        .map(|((x, z, tile_level), loc)| ((x - from.0).abs() + (z - from.1).abs(), (x, z, tile_level, loc)))
+        .filter(|(dist, _)| *dist <= radius)
+        .min_by_key(|(dist, found)| (*dist, *found))
+        .map(|(_, found)| found)
+}
+
+fn live_fire_near_bot(bot: &Bot, radius: i32) -> Option<(i32, i32, i32, u16)> {
+    nearest_live_fire(&bot.world.locs, (bot.world.x, bot.world.z), bot.world.level, radius)
 }
 
 pub(crate) fn chop(bot: &mut Bot) -> Result<(), ScriptError> {
@@ -128,11 +159,9 @@ pub(crate) fn light_fire(bot: &mut Bot) -> Result<(), ScriptError> {
         let target = bot.world.ticks + 50;
         while bot.world.ticks < target {
             bot.pump(5)?;
-            if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
-                if (fire_x - here.0).abs() + (fire_z - here.1).abs() <= 1 {
-                    bot.log("ok fire lit");
-                    return Ok(());
-                }
+            if nearest_live_fire(&bot.world.locs, here, bot.world.level, 1).is_some() {
+                bot.log("ok fire lit");
+                return Ok(());
             }
         }
         let _ = bot.walk_to(here.0 + 2, here.1, bot.world.level, 1500);
@@ -188,14 +217,24 @@ pub(crate) fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<
             check(bot.position(), catch_shrimp(bot, 300)?, "shrimp caught for cooking")?;
         }
         check(bot.position(), wait_inv(bot, raw_name, 1, 90)?, &format!("has {raw_name}"))?;
-        if kit::find_loc(bot, &["fire"], 15).is_err() {
-            bot.log("no fire nearby, lighting");
-            light_fire(bot)?;
-        }
-        if let Ok((fire_x, fire_z, _, _)) = kit::find_loc(bot, &["fire"], 150) {
-            bot.log(&format!("cooking on fire at {fire_x},{fire_z}"));
-        }
-        if use_held_on_loc_near(bot, &["fire"], raw, |candidate| kit::count(candidate, want_id) > had, 100)? {
+        // Live fires only (`nearest_live_fire`): a burnt-out fire means a
+        // relight here, never a station fireplace or a mainland fire.
+        let fire = match live_fire_near_bot(bot, 15) {
+            Some(fire) => fire,
+            None => {
+                bot.log("no fire nearby, lighting");
+                light_fire(bot)?;
+                match live_fire_near_bot(bot, 15) {
+                    Some(lit) => lit,
+                    None => {
+                        check(bot.position(), false, "lit fire seen")?;
+                        continue;
+                    }
+                }
+            }
+        };
+        bot.log(&format!("cooking on fire at {},{}", fire.0, fire.1));
+        if use_held_on_loc_at(bot, fire, raw, |candidate| kit::count(candidate, want_id) > had, 100)? {
             return Ok(());
         }
         bot.log(&format!("{want} missed this fire, relighting"));
@@ -205,7 +244,34 @@ pub(crate) fn cook_on_fire(bot: &mut Bot, raw_name: &str, want: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{use_outcome, UseOutcome};
+    use std::collections::HashMap;
+
+    use lifescape_sdk::world::{LocValue, Tile};
+
+    use super::{nearest_live_fire, use_outcome, UseOutcome};
+
+    /// hana_91 / kai_ellis / hill_eric (2026-11-16 17:30): the bot's fire
+    /// burnt out, `find_loc(["fire"])` fell back on the station dump and
+    /// returned the unreachable `fireplace` (3095,3102) within 15 tiles (so
+    /// no relight), then the mainland `fire` station (3146,3200) within
+    /// 150: dozens of `walk_to` to the continent from the island. Tutorial
+    /// cooking targets a live `fire` only; none nearby means relight.
+    #[test]
+    fn tutorial_cook_targets_only_a_live_island_fire() {
+        let shrimp_spot = (3101, 3093);
+        let no_live_locs: HashMap<Tile, Option<LocValue>> = HashMap::new();
+        assert_eq!(nearest_live_fire(&no_live_locs, shrimp_spot, 0, 15), None, "no live fire nearby: relight, never the fireplace station");
+        assert_eq!(nearest_live_fire(&no_live_locs, shrimp_spot, 0, 150), None, "never the mainland fire station");
+        let fire = lifescape_gamedata::locs_by_name("fire").first().map(|entry| entry.loc_id as u16).expect("fire loc in the dump");
+        let fireplace = lifescape_gamedata::locs_by_name("fireplace").first().map(|entry| entry.loc_id as u16).expect("fireplace loc in the dump");
+        let mut live: HashMap<Tile, Option<LocValue>> = HashMap::new();
+        live.insert((3095, 3102, 0), Some((fireplace, 10, 0)));
+        assert_eq!(nearest_live_fire(&live, shrimp_spot, 0, 15), None, "a fireplace is not the fire the bot lit");
+        live.insert((3101, 3097, 0), Some((fire, 10, 0)));
+        assert_eq!(nearest_live_fire(&live, shrimp_spot, 0, 15), Some((3101, 3097, 0, fire)), "the lit island fire");
+        live.insert((3101, 3097, 0), None);
+        assert_eq!(nearest_live_fire(&live, shrimp_spot, 0, 15), None, "burnt out (loc removed): relight");
+    }
 
     /// sara_miller (16:40:43): `op_loc_u fire + Raw shrimps`, 20 ticks
     /// without the burnt fish, a 1-tile walk to the next stand, then
