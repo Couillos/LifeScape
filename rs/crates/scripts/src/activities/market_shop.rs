@@ -121,10 +121,12 @@ pub fn run_shopbuy(bot: &mut Bot, args: &[String]) -> ScriptResult {
         held = bot.inventory().get(&coins).copied().unwrap_or(0);
     }
     bot.log(&format!("shopbuy {item} x{qty}: carrying {held} coins"));
-    if let Some((x, z, _)) = site {
+    if let Some((x, z, level)) = site {
         bot.assigned_site = site;
         crate::kit::uniform::wear_uniform(bot, &wear)?;
-        if !crate::kit::site::at_site(bot) && !crate::skill_walk::walk_checked(bot, x, z, crate::kit::site::SITE_WALK_TICKS)? {
+        // The keeper's own floor: Scavvo and Valaine trade upstairs in the
+        // Champions' Guild (level 1); the keeper pick reads the bot's level.
+        if !crate::kit::site::at_site(bot) && !crate::skill_walk::walk_checked_at(bot, x, z, level, crate::kit::site::SITE_WALK_TICKS)? {
             return Err(ScriptError::Failed(format!("shopbuy {item}: shop site ({x},{z}) not reached from {:?}", bot.position())));
         }
     }

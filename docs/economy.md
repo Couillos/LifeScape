@@ -1090,6 +1090,21 @@ pour un bot la réponse aux offres d'achat étape par étape
 (meilleure offre, profondeur, part des ventes, alchimie), coût unitaire et
 plan, lot absorbé, charge d'entraînement, taux contre le plancher (taux
 propre × 1,25) et profit contre le minimum. Une offre ignorée dit pourquoi.
+L'objet se nomme par nom de debug, billet, nom affiché ou id
+(`bid_why::resolve_item`) ; la première ligne dit lequel est lu
+(`stringstar = "Unblessed symbol" (id 1716, banknote 1717)`) et, sans offre
+sur lui, les offres posées sur ce qu'on en fait ou sur un homonyme (C13,
+2026-11-16 : les dix offres « Holy symbol » sont sur `blessedstar` 1718,
+béni par Brother Jered à partir de `stringstar` ; aucun id mal mappé).
+
+`orchestrator rares` (daemon, lecture seule, info opérateur : aucun bot ne
+le lit, Q8 : les offres restent) classe chaque objet à offres sans aucun
+ask (staff exclu) par `planner::rare_items` : productible maintenant (une
+jambe du planner que les niveaux et quêtes de la flotte font, chaque
+intrant compris), boutique F2P (porte et nombre de bots qui la passent :
+Champions' Guild 32 points de quête), hors de portée (niveau, quête ou
+intrant manquant, l'écart le plus petit affiché), introuvable (aucune jambe
+ni marchand ; voies serveur sans jambe citées, ex. bénédiction de Jered).
 
 ## Taux propre d'un bot : profit par run (2026-11-15)
 

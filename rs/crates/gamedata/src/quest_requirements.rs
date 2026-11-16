@@ -392,6 +392,14 @@ pub fn by_key(key: &str) -> Option<QuestRequirements> {
     build_f2p_quests().into_iter().find(|quest| quest.key == key)
 }
 
+/// Quest points a bot holds once `done` (planner quest keys: `dragon`,
+/// `runemysteries`) are finished: each quest's `^<key>_questpoints`
+/// reward summed (the server adds them to `%qp` at completion). Unknown
+/// keys count 0.
+pub fn quest_points_of(done: &[String]) -> i64 {
+    build_f2p_quests().iter().filter(|quest| done.iter().any(|key| *key == quest.key)).map(|quest| quest.reward_points).sum()
+}
+
 /// Objects a quest's own NPCs hand over mid-run and expect back later
 /// (never brought, never bought), by quest key. Server truth (rev 274):
 /// - `runemysteries`: the Duke's air talisman (`duke_horacio.rs2`,
@@ -482,5 +490,16 @@ mod tests {
         assert_eq!((dragon.items[0].count, dragon.items[0].obj_id), (12000, 995));
         assert_eq!(by_key("blackarmgang").expect("arrav").completion_varps, vec![(145, 4), (146, 10)]);
         assert!(by_key("nope").is_none());
+    }
+
+    /// The Champions' Guild door counts `%qp`: each finished quest adds
+    /// its `^<key>_questpoints` (Rune Mysteries 1, all of F2P 39).
+    #[test]
+    fn quest_points_sum_the_rewards() {
+        use super::quest_points_of;
+        assert_eq!(quest_points_of(&[]), 0);
+        assert_eq!(quest_points_of(&["runemysteries".to_string(), "nope".to_string()]), 1);
+        let every: Vec<String> = all_f2p_quests().into_iter().map(|quest| quest.key).collect();
+        assert_eq!(quest_points_of(&every), 39);
     }
 }

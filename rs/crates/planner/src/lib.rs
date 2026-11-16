@@ -37,6 +37,7 @@ pub mod obtain_legs;
 pub mod profit;
 pub mod quest_hold;
 pub mod quests;
+pub mod rare_items;
 pub mod replan;
 pub mod resolve_obtain;
 pub mod shop_site;

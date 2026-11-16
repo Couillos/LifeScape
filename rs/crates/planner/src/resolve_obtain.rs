@@ -16,6 +16,9 @@
 //!    the coins a purchase needs (`missing:coins:N`, filed as a
 //!    `have_coins` node that earns them), else the quest the only ways
 //!    need (`missing:quest:runemysteries`, filed as the quest's nodes).
+//!    A keeper behind the Champions' Guild door counts once the bot
+//!    holds 32 quest points; without them, and nothing else, the door
+//!    (`missing:access:champions_guild`: the quest-point ladder).
 //!    Never a silent substitute. A LIGHT quest (`quests::light_quest`)
 //!    comes before the resting bid when no ask is covered, and always
 //!    when the quest itself hands the object over (`quests::QUEST_GRANTS`:
@@ -132,9 +135,15 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
     let shop_cover = ctx.shop_price.max(1) * count;
     let shop_quest = missing_quest("shop:buy", Some(item), ctx);
     // A kit axe step lists `shop:buy` itself (D-A exception,
-    // `kit_shop_route`); graph obtains list it only when D-A allows.
+    // `kit_shop_route`); graph obtains list it only when D-A allows. A
+    // keeper behind the Champions' Guild door sells only to a bot with
+    // the quest points (`shop_gate`, user 2026-11-16 Q7); without them
+    // the door is the gap when nothing else serves (an Iron's rune
+    // chainbody climbs the quest-point ladder, `access:champions_guild`).
     let shop_route = crate::expand::source_flags(item).1 || lifescape_gamedata::obtain::kit_shop_route(item);
-    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && shop_route && shop_quest.is_none();
+    let shop_door = crate::expand::shop_gate(item, ctx).filter(|_| !lifescape_gamedata::obtain::kit_shop_route(item));
+    let shop_listed = candidates.iter().any(|method| method == "shop:buy") && shop_route && shop_quest.is_none() && shop_door.is_none();
+    let access_gap = shop_door.filter(|_| candidates.iter().any(|method| method == "shop:buy") && shop_quest.is_none());
     if candidates.iter().any(|method| method == "shop:buy") {
         if let Some(quest) = shop_quest {
             quest_gap.get_or_insert(quest);
@@ -242,8 +251,10 @@ pub(crate) fn resolve_obtain(node: &mut Node, item: &str, count: i64, ctx: &Read
         } else if market_ok || shop_listed {
             let price = if shop_listed && !market_ok { ctx.shop_price.max(1) } else { unit };
             Some(format!("missing:coins:{}", wallet_for(ctx, price * need)))
+        } else if let Some(quest) = quest_gap {
+            Some(format!("missing:quest:{quest}"))
         } else {
-            quest_gap.map(|quest| format!("missing:quest:{quest}"))
+            access_gap.map(|area| format!("missing:access:{area}"))
         };
         if let Some(reason) = reason {
             node.status = NodeStatus::Blocked { reason };

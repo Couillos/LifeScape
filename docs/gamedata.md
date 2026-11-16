@@ -57,7 +57,9 @@ ne vend aux PNJ, donc jamais une source d'achat ni un prix marchand
 `Gate::Quest` pour une porte de quête jamais ouverte par le planner
 (placard du manoir, arrière-boutique de Wydin), enclos d'argent et salle
 nord (four, moule d'amulette) de la Crafting Guild, rangée sud de la
-Champions' Guild (Scavvo, étage) ; `Gate::Sealed` pour des cases que nul
+Champions' Guild (Scavvo, étage : `Gate::QuestPoints` 32, une voie boutique
+qui porte `Way::quest_points`, Q7 2026-11-16, voir `docs/planner.md`
+§ Boutiques rares) ; `Gate::Sealed` pour des cases que nul
 n'atteint (présentoir du musée de Varrock : épée, jambières et plastron
 en fer, jamais ramassables). Wilderness ouverte à tous, toujours
 (utilisateur 2026-11-16) : plus de `Gate::Wilderness`, plus de `NEVER`

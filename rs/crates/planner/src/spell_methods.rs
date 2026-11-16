@@ -94,6 +94,7 @@ fn cast_way(spell: &str, detail: String) -> Option<Way> {
         qty: None,
         combat: None,
         quest: None,
+        quest_points: 0,
         sites: Vec::new(),
         file: String::new(),
         success: 1.0,

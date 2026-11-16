@@ -136,4 +136,65 @@ mod tests {
         ctx.coins = 0;
         assert!(pick_shop("karamja_rum", &ctx).is_none(), "no fare, no boat");
     }
+
+    /// Every F2P quest key (39 quest points).
+    fn every_quest() -> Vec<String> {
+        lifescape_gamedata::quest_requirements::all_f2p_quests().into_iter().map(|quest| quest.key).collect()
+    }
+
+    /// User 2026-11-16 (Q7): Champions' Guild purchases for every bot that
+    /// holds 32 quest points. Scavvo stands upstairs (3191,3351,1): the
+    /// launch names his shop and his floor (`market shopbuy` walks the
+    /// level, the nav opens the door on `qp:32`).
+    #[test]
+    fn champions_guild_keepers_sell_past_32_quest_points() {
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.combat = 40;
+        ctx.position = Some((3212, 3424, 0));
+        assert!(pick_shop("rune_chainbody", &ctx).is_none(), "no quest points");
+        ctx.quests_done = vec!["runemysteries".to_string(), "cook".to_string()];
+        assert!(pick_shop("rune_chainbody", &ctx).is_none(), "2 points");
+        ctx.quests_done = every_quest();
+        let (shop, site) = pick_shop("rune_chainbody", &ctx).expect("Scavvo sells it");
+        assert_eq!((shop.as_str(), site), ("runiteshop", (3191, 3351, 1)));
+        let (shop, site) = pick_shop("adamant_platebody", &ctx).expect("Valaine sells it");
+        assert_eq!((shop.as_str(), site), ("championshop", (3193, 3361, 1)));
+        let mut node = crate::Node::new("chain", crate::NodeKind::ObtainItems { item: "rune_chainbody".to_string(), count: 1 }, Vec::new(), 1);
+        node.site = Some((3191, 3351, 1));
+        let (script, args) = crate::mapping::map_method("shop:buy", &node, None).expect("shop maps");
+        assert_eq!(script, "market");
+        assert!(args.windows(2).any(|pair| pair[0] == "--shop" && pair[1] == "runiteshop"), "{args:?}");
+        assert!(args.windows(2).any(|pair| pair[0] == "--site" && pair[1] == "3191,3351,1"), "his floor: {args:?}");
+    }
+
+    /// The resolver takes the guild keeper for a bot with the points and
+    /// the coins; an Iron without them (no market; the coif is Scavvo's
+    /// alone, nobody makes it) blocks on the door, which the quest-point
+    /// ladder opens (`missing:access:champions_guild`). A piece a skill
+    /// also makes (rune chainbody, smithing 96) keeps the level gap first,
+    /// like a quest-gated shop.
+    #[test]
+    fn the_guild_door_is_a_gap_the_ladder_fills() {
+        let item = "coif";
+        let alternatives = crate::obtain_legs::obtain_alternatives(item, true);
+        assert!(alternatives.iter().any(|alt| alt.method == "shop:buy"), "{alternatives:?}");
+        let mut node = crate::Node::new("chain", crate::NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
+        node.alternatives = alternatives;
+        let mut ctx = ReadyCtx::blind(0.5);
+        ctx.ironman = true;
+        ctx.combat = 40;
+        ctx.position = Some((3212, 3424, 0));
+        ctx.levels = vec![("smithing".to_string(), 30)];
+        ctx.coins = 2_000;
+        ctx.shop_price = 200;
+        let mut shut = node.clone();
+        crate::expand::resolve_ready(&mut shut, &ctx);
+        assert_eq!(shut.method, None);
+        assert_eq!(shut.status, crate::NodeStatus::Blocked { reason: "missing:access:champions_guild".to_string() });
+        ctx.quests_done = every_quest();
+        let mut open = node.clone();
+        crate::expand::resolve_ready(&mut open, &ctx);
+        assert_eq!(open.method.as_deref(), Some("shop:buy"), "{:?}", open.status);
+        assert_eq!(open.site, Some((3191, 3351, 1)), "Scavvo's floor");
+    }
 }

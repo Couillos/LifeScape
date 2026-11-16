@@ -66,7 +66,7 @@ fn tracked_skills() -> Vec<&'static str> {
 
 /// Levels of one account: the live snapshot when it carries skills, else
 /// the engine save (written at logout), else nothing (level 1).
-fn account_levels(account: &str, live: Option<&Value>) -> Vec<(String, u8)> {
+pub(crate) fn account_levels(account: &str, live: Option<&Value>) -> Vec<(String, u8)> {
     let streamed = live.is_some_and(|snapshot| snapshot.get("skills").as_arr().is_some_and(|rows| !rows.is_empty()));
     if let (true, Some(snapshot)) = (streamed, live) {
         return tracked_skills().into_iter().map(|skill| (skill.to_string(), crate::brain_succession::live_level(snapshot, skill))).collect();

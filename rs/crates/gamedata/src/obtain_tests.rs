@@ -98,19 +98,12 @@ const NO_F2P_SOURCE: &[&str] = &[
     "anchovie_pizza",
     "black_2h_sword",
     "black_axe",
-    // Champions' Guild shop only, behind the 32 quest-point door.
-    "black_full_helm",
     "black_scimitar",
     "black_warhammer",
     "blackrobebottom",
     "blackrobetop",
     "charcoal",
-    // Scavvo's Rune Store only, upstairs in the Champions' Guild behind
-    // the 32 quest-point door (`champions_guild.inv`, live 2026-11-16).
-    "coif",
     "cooking_pot",
-    "dragon_vambraces",
-    "dragonhide_chaps",
     "halberd",
     "half_full_wine_jug",
     "javelin",
@@ -268,15 +261,70 @@ fn kit_axes_have_a_shop_route_up_to_steel() {
     assert!(kit_shop_route("bronze_sword"), "every stocked object has a merchant route (user 2026-11-15)");
 }
 
-/// Live 2026-11-15: 394 `shopbuy black_full_helm: no reachable shop`
-/// over 36 bots. Its only stockist is the Champions' Guild shop, behind
-/// the 32 quest-point door no planner opens: no shop way, no merchant
-/// route.
+/// User 2026-11-16 (Q7): rare-shop purchases are open to every bot. The
+/// Champions' Guild keepers stand upstairs behind the 32 quest-point
+/// door (`champions_guild.rs2` `%qp < 32`): their stock is a shop way
+/// carrying the door's points, a route only for a bot that holds them
+/// (live 2026-11-15: 394 `shopbuy black_full_helm: no reachable shop`
+/// when every bot was sent there). Scavvo (`runiteshop`) sells the rune
+/// pieces, Valaine (`championshop`) the adamant platebody and black.
 #[test]
-fn a_shop_behind_the_quest_point_door_is_no_way() {
-    assert!(!super::ways("black_full_helm").iter().any(|way| way.kind == super::WayKind::Shop), "championshop only");
-    assert!(!super::merchant_route("black_full_helm"));
-    assert!(super::ways("bronze_pickaxe").iter().any(|way| way.kind == super::WayKind::Shop), "Nurmof still sells");
+fn champions_guild_sells_behind_its_quest_points() {
+    let rows = [
+        ("adamant_platebody", "championshop", (3193, 3361, 1)),
+        ("black_full_helm", "championshop", (3193, 3361, 1)),
+        ("rune_longsword", "runiteshop", (3191, 3351, 1)),
+        ("rune_sword", "runiteshop", (3191, 3351, 1)),
+        ("rune_chainbody", "runiteshop", (3191, 3351, 1)),
+        ("rune_platelegs", "runiteshop", (3191, 3351, 1)),
+        ("rune_plateskirt", "runiteshop", (3191, 3351, 1)),
+        ("rune_mace", "runiteshop", (3191, 3351, 1)),
+        ("coif", "runiteshop", (3191, 3351, 1)),
+    ];
+    for (item, shop, site) in rows {
+        let way = super::ways(item).into_iter().find(|way| way.kind == super::WayKind::Shop && way.detail == shop).unwrap_or_else(|| panic!("{item}: no {shop} way"));
+        assert_eq!(way.quest_points, 32, "{item}: the guild door");
+        assert_eq!(way.sites, vec![site], "{item}: the keeper upstairs");
+        assert!(way.quest.is_none(), "{item}: no quest of its own");
+        assert!(!super::merchant_route(item), "{item}: not open to a bot without the points");
+        assert!(!super::merchant_route_for(item, 31), "{item}: 31 points stay outside");
+        assert!(super::merchant_route_for(item, 32), "{item}: 32 points buy");
+        assert_eq!(super::shop_quest_points(item), Some(32));
+        assert!(super::merchant_price(item).is_some_and(|price| price > 0), "{item}: a stocked keeper prices it");
+        assert!(super::unobtainable_reason(item).is_none(), "{item}");
+    }
+    assert_eq!(super::shop_quest_points("bronze_pickaxe"), Some(0), "Nurmof's floor is open");
+    assert_eq!(super::shop_quest_points("black_platelegs"), Some(0), "Louie sells them in Al Kharid too");
+    assert!(super::merchant_route("black_platelegs"));
+    assert!(super::merchant_route("bronze_pickaxe"));
+    assert_eq!(super::shop_quest_points("rune_full_helm"), None, "no keeper sells it");
+}
+
+/// Lundail (`magearena_runeshop`, the only F2P-flagged nature rune
+/// keeper) stands in the Mage Arena cellar (2534,4719), reached by the
+/// ladder north of the arena (~(3083,3963), `mage_arena.rs2` telejump
+/// -549/+756). Neither square is in `maps/free2play.csv`: an F2P world
+/// never spawns him (`GameMap.loadNpcs` skips members squares) and
+/// refuses the telejump (`ServerOps` p_telejump `isFreeToPlay`). No shop
+/// way, whatever the Wilderness rule.
+#[test]
+fn lundail_is_not_on_the_free_map() {
+    assert!(!crate::free_zones::is_free(2534, 4719), "the cellar");
+    assert!(!crate::free_zones::is_free(3083, 3963), "the ladder north of the arena");
+    assert!(crate::free_zones::is_free(3083, 3895), "the F2P Wilderness stops below");
+    let shops: Vec<String> = super::ways("naturerune").iter().filter(|way| way.kind == super::WayKind::Shop).map(|way| way.describe()).collect();
+    assert!(shops.is_empty(), "{shops:?}");
+    assert!(!super::merchant_route_for("naturerune", i64::MAX));
+    assert!(super::obtainable_f2p("naturerune"), "drops still give it");
+}
+
+/// Davon's amulet store (Brimhaven, `amuletshop`) stocks every amulet at
+/// 0: what players sell him only, never a purchase (amulet of power).
+#[test]
+fn davon_sells_nothing() {
+    assert!(!super::ways("amulet_of_power").iter().any(|way| way.kind == super::WayKind::Shop));
+    assert!(!super::merchant_route_for("amulet_of_power", i64::MAX));
+    assert_eq!(super::merchant_price("amulet_of_power"), None);
 }
 
 /// Only the server's pickables pick (`pickables.rs2`): no pick way for

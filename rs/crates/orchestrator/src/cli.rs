@@ -837,29 +837,8 @@ pub fn cli(argv: &[String]) -> i32 {
         "verify" => return crate::verify_cmd::verify_cli(argv.get(2..).unwrap_or(&[])),
         "check-method" => return crate::method_check::check_method_cli(argv.get(2..).unwrap_or(&[])),
         "economy" => return crate::economy_cmd::economy_cli(argv.get(2..).unwrap_or(&[])),
-        "bid-why" => {
-            let (Some(account), Some(item)) = (argv.get(2), argv.get(3)) else {
-                eprintln!("usage: bid-why <compte> <objet>");
-                return 2;
-            };
-            let request = lifescape_json::object(vec![("cmd", lifescape_json::str_value("bid_why")), ("account", lifescape_json::str_value(account)), ("item", lifescape_json::str_value(item))]);
-            return match send_command(&request, std::time::Duration::from_secs(30)) {
-                Ok(reply) if reply.get("ok").as_bool() == Some(true) => {
-                    for line in reply.get("lines").as_arr().cloned().unwrap_or_default() {
-                        println!("{}", line.as_str().unwrap_or(""));
-                    }
-                    0
-                }
-                Ok(reply) => {
-                    eprintln!("bid-why: {}", lifescape_json::stringify(reply.get("error")));
-                    1
-                }
-                Err(error) => {
-                    eprintln!("bid-why: {error}");
-                    1
-                }
-            };
-        }
+        "bid-why" => return crate::bid_why::bid_why_cli(argv.get(2..).unwrap_or(&[])),
+        "rares" => return crate::rares_cmd::rares_cli(),
         "call" => {
             let method = argv.get(3).cloned().unwrap_or_default();
             let args = Value::Arr(argv.get(4..).unwrap_or(&[]).iter().map(|a| str_value(a)).collect());

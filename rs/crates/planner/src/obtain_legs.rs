@@ -229,7 +229,10 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "shop legs without an F2P keeper: {wrong:?}");
-        assert!(!super::obtain_alternatives("black_full_helm", false).iter().any(|alt| alt.method == "shop:buy"));
+        // Valaine stocks it behind the 32 quest-point door: a leg the
+        // resolver takes with the bot's quest points (user 2026-11-16, Q7).
+        assert!(super::obtain_alternatives("black_full_helm", false).iter().any(|alt| alt.method == "shop:buy"));
+        assert!(!super::obtain_alternatives("rune_full_helm", false).iter().any(|alt| alt.method == "shop:buy"), "no keeper at all");
     }
     use super::{compute_production_legs, obtain_alternatives, produce_alternatives, production_legs};
 

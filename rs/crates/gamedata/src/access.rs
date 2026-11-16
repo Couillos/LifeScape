@@ -63,8 +63,10 @@ pub enum Gate {
     /// Island reached by the Port Sarim boat (fare each way).
     Boat { area: &'static str, fare: i64 },
     /// Door the content script opens only above a quest-point total
-    /// (Champions' Guild, `champions_guild.rs2`: 32). Never opened by the
-    /// planner today (no quest-point count in its context).
+    /// (Champions' Guild, `champions_guild.rs2`: 32). The planner's
+    /// `Pass` opens it with the quest points of the finished quests
+    /// (user 2026-11-16, Q7: Scavvo's and Valaine's stock), the nav with
+    /// the `qp:32` tag the live varp satisfies.
     QuestPoints { area: &'static str, points: i64 },
     /// Door the content script opens only for a quest's own state (an
     /// item used on it, a quest stage): never opened by the planner.

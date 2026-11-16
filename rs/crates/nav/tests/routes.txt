@@ -281,3 +281,17 @@ autel_terre_sortie | 2657,4839,0 | 3253,3420,0 | f2p | reachable ; uses_loc=2468
 # marais depuis la banque d'Al Kharid).
 cruche_alkharid_detour | 3092,3245,0 | 3302,3170,0 | f2p | reachable ; adjusted=3301,3170 ; budget_ms=1500
 adamant_retour_nord | 3269,3164,0 | 3242,3165,0 | f2p | reachable ; adjusted=3241,3164 ; budget_ms=1500
+# Q7 (2026-11-16) : achats rares en boutique. Scavvo (runiteshop, rune) en
+# (3191,3351,1) et Valaine (championshop, plastron adamant) en
+# (3193,3361,1), a l'etage de la guilde des Champions (npcs.json), porte
+# 1805 a qp>=32 (champions_guild.rs2).
+guilde_scavvo_sans_qp | 3191,3366,0 | 3191,3351,1 | f2p | unreachable=NeedsRequirement
+guilde_scavvo_avec_qp | 3191,3366,0 | 3191,3351,1 | f2p,has=qp:32 | reachable ; uses_loc=1805 ; levels=0>1
+guilde_valaine_avec_qp | 3191,3366,0 | 3193,3361,1 | f2p,has=qp:32 | reachable ; uses_loc=1805 ; levels=0>1
+# Lundail (magearena_runeshop, runes de nature) en (2534,4719,0), cave de
+# l'arene des mages (echelle magearena_ladder_to_cellar ~(3083,3963),
+# telejump -549/+756) : ni la cave ni l'echelle ne sont dans
+# maps/free2play.csv (le Wilderness F2P s'arrete a z 3903), le monde F2P
+# ne le fait pas apparaitre (GameMap.loadNpcs) et refuse le telejump.
+lundail_hors_f2p | 3083,3890,0 | 2534,4719,0 | f2p | unreachable=OutsideF2p
+arene_mages_hors_f2p | 3083,3890,0 | 3083,3960,0 | f2p | unreachable=OutsideF2p

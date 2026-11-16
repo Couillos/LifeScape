@@ -120,12 +120,29 @@ pub(crate) fn source_flags(item: &str) -> (bool, bool) {
             _ => {}
         }
     }
-    // D-A (PRD3): an NPC shop leg only for objects nobody makes or
-    // gathers in F2P, and only where an F2P keeper stocks them
-    // (`obtain::merchant_route`, the one source of truth): the old index
-    // listed black_full_helm in a shop no F2P world opens (audit
-    // 2026-11-15: 1 646 doomed `shop:buy` launches).
-    (farm, lifescape_gamedata::obtain::merchant_route(item))
+    // An NPC shop leg only where an F2P keeper stocks the object
+    // (`obtain::merchant_route_for`, the one source of truth): the old
+    // index listed black_full_helm in a shop no F2P world opens (audit
+    // 2026-11-15: 1 646 doomed `shop:buy` launches). A keeper behind the
+    // Champions' Guild door counts (user 2026-11-16, Q7): the resolver
+    // takes it with the bot's quest points (`shop_gate`).
+    (farm, lifescape_gamedata::obtain::merchant_route_for(item, i64::MAX))
+}
+
+/// The quest-point door that keeps every shop of `item` shut to this bot
+/// (`champions_guild`), `None` when a keeper it reaches sells it or no
+/// keeper does: the bot's quest points (`ctx.quests_done`) against the
+/// fewest any shop asks (`obtain::shop_quest_points`).
+pub(crate) fn shop_gate(item: &str, ctx: &ReadyCtx) -> Option<&'static str> {
+    let needed = lifescape_gamedata::obtain::shop_quest_points(item)?;
+    if needed <= lifescape_gamedata::quest_requirements::quest_points_of(&ctx.quests_done) {
+        return None;
+    }
+    lifescape_gamedata::obtain::ways(item)
+        .iter()
+        .filter(|way| way.kind == lifescape_gamedata::obtain::WayKind::Shop)
+        .flat_map(|way| way.sites.iter().flat_map(|(x, z, level)| lifescape_gamedata::access::gates_at(*x, *z, *level)))
+        .find_map(|gate| matches!(gate, lifescape_gamedata::access::Gate::QuestPoints { .. }).then(|| gate.area()))
 }
 
 

@@ -1059,3 +1059,27 @@ du marché et que le portefeuille paie (`resolve_obtain`, étape 0, prix du
 serveur `merchant_price`) ; les étapes d'équipement prennent une offre
 couverte, sinon la boutique. Le prix du marchand plafonne ainsi le marché
 et retire des pièces du monde.
+
+Boutiques rares (décision utilisateur Q7, 2026-11-16 : permises à tous les
+bots). Champions' Guild : Scavvo (`runiteshop`, (3191,3351,1) : rune
+longsword, sword, chainbody, platelegs, plateskirt, mace, coif) et Valaine
+(`championshop`, (3193,3361,1) : adamant platebody, black full helm), à
+l'étage derrière la porte 1805 (`champions_guild.rs2` : `%qp < 32`). Le
+`Way` boutique porte `quest_points` = 32 ; `merchant_route` reste « ouvert à
+tout bot », `merchant_route_for(objet, points)` et `shop_quest_points`
+lisent la porte. Points d'un bot = somme des `reward_points` de ses quêtes
+faites (`quest_requirements::quest_points_of`) ; `combat::Pass` ouvre
+`Gate::QuestPoints` avec eux (`pick_shop`, sites), le nav avec `qp:32` (varp
+101 transmis). Résolution : boutique listée seulement si le bot a les
+points (`expand::shop_gate`) ; sinon, et rien d'autre, blocage
+`missing:access:champions_guild` (échelle de points de quête). Un écart de
+niveau d'une production passe avant (même règle que la boutique d'Oziach).
+Plan d'équipement : une pièce que seule la guilde vend n'est voulue
+qu'avec les points (`gear_plan::reachable_with`), `gear_plan::shop_route_open`
+dit au plan si la pièce part en boutique. `market shopbuy` marche jusqu'à
+l'étage du marchand (`walk_checked_at`). Lundail (runes de nature, cave de
+l'arène des mages) : ni la cave (2534,4719) ni l'échelle (~3083,3963) ne
+sont dans `free2play.csv` (Wilderness F2P jusqu'à z 3903) : un monde F2P ne
+le fait pas apparaître (`GameMap.loadNpcs`) et refuse le telejump ; aucune
+voie (goldens nav `lundail_hors_f2p`, `arene_mages_hors_f2p`). Davon
+(`amuletshop`, Brimhaven) : stock 0, jamais une source.

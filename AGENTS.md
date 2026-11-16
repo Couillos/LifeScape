@@ -34,7 +34,7 @@ cargo test --release --manifest-path rs/Cargo.toml --workspace
 ./rs/target/release/orchestrator route <x> <z> <niv> <x> <z> <niv> [--paid] [--ascii]
 ./rs/target/release/orchestrator replay-nav <dossier>
 ./rs/target/release/orchestrator check-method <admin|admin2> <méthode>[@objet] [n] | check-method <staff> --list <fichier> [n] | check-method --print-all | check-method --plan <méthode>...
-./rs/target/release/orchestrator economy [heures] | bid-why <compte> <objet>
+./rs/target/release/orchestrator economy [heures] | bid-why <compte> <objet> | rares
 ```
 
 Tout se compile en release (`--release`, build, tests, agents) : le daemon et les workers tournent depuis `rs/target/release/orchestrator`, jamais depuis `debug/`.

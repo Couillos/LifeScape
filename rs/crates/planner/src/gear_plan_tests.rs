@@ -141,3 +141,24 @@ fn the_filter_bounds_the_candidates() {
     assert!(!wants.is_empty(), "black pieces, a wooden shield...");
     assert!(wants.iter().all(|want| shop_only(&want.item)), "{wants:?}");
 }
+
+/// User 2026-11-16 (Q7): the Champions' Guild sells to every bot that
+/// holds its 32 quest points. The black full helm is Valaine's alone: a
+/// defence-15 fighter without the points never bids on it (nobody could
+/// fill it), with every F2P quest done it is the helm it wants, and the
+/// gear pass walks it to the shop (`shop_route_open`).
+#[test]
+fn champions_guild_pieces_wait_for_the_quest_points() {
+    let fighter = [("attack", 15), ("defence", 15), ("strength", 15), ("hitpoints", 15)];
+    let wants = plan_gear(Style::Melee, &fighter, &[], &[], 1_000_000, &alch_price);
+    assert!(!names(&wants).contains(&"black_full_helm"), "no points, no Valaine: {:?}", names(&wants));
+    let every: Vec<String> = lifescape_gamedata::quest_requirements::all_f2p_quests().into_iter().map(|quest| quest.key).collect();
+    let done: Vec<&str> = every.iter().map(String::as_str).collect();
+    let wants = plan_gear(Style::Melee, &fighter, &done, &[], 1_000_000, &alch_price);
+    assert!(names(&wants).contains(&"black_full_helm"), "39 points pass the door: {:?}", names(&wants));
+    assert!(super::shop_route_open("black_full_helm", &done));
+    assert!(!super::shop_route_open("black_full_helm", &[]));
+    assert!(super::shop_route_open("rune_chainbody", &done), "Scavvo sells it upstairs");
+    assert!(!super::shop_route_open("rune_chainbody", &["runemysteries"]), "1 point is not 32");
+    assert!(super::shop_route_open("bronze_axe", &[]), "the kit axe stays a shop route");
+}

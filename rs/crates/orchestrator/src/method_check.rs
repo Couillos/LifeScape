@@ -82,7 +82,7 @@ pub fn plan(method: &str, count: i64) -> Result<MethodPlan, String> {
     if let Some((skill, level)) = &skill_level {
         levels.push((skill.clone(), u8::try_from((*level).clamp(1, 99)).unwrap_or(99)));
     }
-    let pass = lifescape_planner::combat::Pass { levels, held: Vec::new() };
+    let pass = lifescape_planner::combat::Pass { levels, held: Vec::new(), quest_points: 0 };
     let fare = lifescape_planner::combat::Fare { wallet: TRAVEL_COINS, free_pass: false };
     match lifescape_planner::combat::pick_site_gated(leg, STAFF_COMBAT as u8, Some(STAFF_HOME), fare, &pass) {
         lifescape_planner::combat::SitePick::At(site) => node.site = Some(site),

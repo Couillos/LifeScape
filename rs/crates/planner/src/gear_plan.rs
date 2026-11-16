@@ -63,6 +63,29 @@ fn quest_free(name: &str) -> bool {
     lifescape_gamedata::obtain::ways(name).iter().any(|way| way.quest.is_none() && way.quest_hints().is_empty())
 }
 
+/// Quest points of the finished quests (planner keys).
+fn quest_points(quests_done: &[&str]) -> i64 {
+    let done: Vec<String> = quests_done.iter().map(|quest| quest.to_string()).collect();
+    lifescape_gamedata::quest_requirements::quest_points_of(&done)
+}
+
+/// True when some way of `name` is open to a bot holding `points` quest
+/// points: a piece only the Champions' Guild sells (black full helm,
+/// coif) is wanted once the bot passes its 32-point door (user
+/// 2026-11-16, Q7), never bid on by a bot that can never buy it there.
+fn reachable_with(name: &str, points: i64) -> bool {
+    lifescape_gamedata::obtain::ways(name).iter().any(|way| way.kind != lifescape_gamedata::obtain::WayKind::Shop || way.quest_points <= points)
+}
+
+/// True when an NPC shop sells `item` to this bot now: every keeper
+/// behind no door, the Champions' Guild keepers once the finished quests
+/// give 32 quest points (user 2026-11-16, Q7), or the kit axe exception
+/// (`obtain::kit_shop_route`). The gear pass walks such a piece to the
+/// shop (an obtain step) instead of a bid nobody fills.
+pub fn shop_route_open(item: &str, quests_done: &[&str]) -> bool {
+    lifescape_gamedata::obtain::kit_shop_route(item) || lifescape_gamedata::obtain::merchant_route_for(item, quest_points(quests_done))
+}
+
 fn style_index(style: Style) -> usize {
     match style {
         Style::Melee => 0,
@@ -141,6 +164,7 @@ pub fn plan_gear_from(
     // Per slot: upgrades the bot may wear now, best first, each strictly
     // cheaper than every better one (a dearer, weaker piece is never a
     // step down).
+    let points = quest_points(quests_done);
     let mut slots: Vec<(i64, i64, Vec<(String, i64, i64)>)> = Vec::new();
     for wearpos in PLAN_SLOTS {
         if style == Style::Ranged && wearpos == SHIELD {
@@ -149,7 +173,7 @@ pub fn plan_gear_from(
         let have = owned_score(style, wearpos, owned, levels, quests_done);
         let mut options: Vec<(String, i64, i64)> = Vec::new();
         for piece in candidates(style).iter().filter(|piece| piece.wearpos == wearpos && piece.score > have) {
-            if !wieldable(&piece.entry, levels, quests_done) || owned.contains(&piece.item) || !allowed(&piece.item) {
+            if !wieldable(&piece.entry, levels, quests_done) || owned.contains(&piece.item) || !allowed(&piece.item) || !reachable_with(&piece.item, points) {
                 continue;
             }
             let price = price_of(&piece.item).max(1);

@@ -10,7 +10,7 @@ fn broke() -> Fare {
 }
 
 fn crafter(level: u8, held: &[&str]) -> Pass {
-    Pass { levels: vec![("crafting".to_string(), level)], held: held.iter().map(|item| item.to_string()).collect() }
+    Pass { levels: vec![("crafting".to_string(), level)], held: held.iter().map(|item| item.to_string()).collect(), quest_points: 0 }
 }
 
 /// Gold from Falador: the Crafting Guild rocks only with crafting 40
@@ -75,7 +75,7 @@ fn stations_are_picked_sites() {
         }
     }
     let cooks_guild = (3144, 3450, 1);
-    let cook = Pass { levels: vec![("cooking".to_string(), 32)], held: vec!["chefs_hat".to_string()] };
+    let cook = Pass { levels: vec![("cooking".to_string(), 32)], held: vec!["chefs_hat".to_string()], quest_points: 0 };
     match pick_site_gated("cook/raw_trout", 3, Some(cooks_guild), broke(), &cook) {
         SitePick::At(site) => assert!(!lifescape_gamedata::access::gates_at(site.0, site.1, site.2).is_empty(), "the guild range: {site:?}"),
         other => panic!("ranges exist, got {other:?}"),
@@ -108,7 +108,7 @@ fn drop_farms_hunt_only_rated_survivable_spots() {
 
 
 fn miner(level: u8) -> Pass {
-    Pass { levels: vec![("mining".to_string(), level)], held: Vec::new() }
+    Pass { levels: vec![("mining".to_string(), level)], held: Vec::new(), quest_points: 0 }
 }
 
 fn in_mining_guild(pick: &SitePick) -> bool {

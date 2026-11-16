@@ -41,6 +41,11 @@ fn debug_name(item_id: i64) -> Option<String> {
     Some(name.strip_prefix("cert_").unwrap_or(name).to_string())
 }
 
+/// Id of the base (non-banknote) object named `name`.
+fn base_id(name: &str) -> Option<i64> {
+    lifescape_gamedata::objs_by_name(name).into_iter().next().map(|obj| obj.obj_id as i64)
+}
+
 fn display_of(item: &str) -> String {
     lifescape_gamedata::objs_by_name(item).into_iter().next().and_then(|obj| obj.display.or(obj.name)).unwrap_or(item).to_string()
 }
@@ -81,7 +86,10 @@ fn live_views(account: &str) -> (HashMap<String, BookView>, HashMap<String, i64>
         let mut rows = Vec::new();
         for (item_id, book) in engine.books.iter() {
             let Some(name) = debug_name(*item_id) else { continue };
-            ids.entry(name.clone()).or_insert(*item_id);
+            // The base object's id, never its banknote's (both forms may
+            // hold a book; the map's order is arbitrary): the current
+            // price reads the base reference.
+            ids.entry(name.clone()).or_insert_with(|| base_id(&name).unwrap_or(*item_id));
             for order in book.orders() {
                 rows.push((name.clone(), order.account.clone(), order.side == lifescape_market::Side::Buy, order.price, order.remaining));
             }
@@ -374,6 +382,9 @@ pub fn planned_levels(life: &Life) -> Vec<(String, u8)> {
 /// response for one bot and one object (`bid_response::explain`), read
 /// from the live book and the bot's own state.
 pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, String> {
+    // The operator may name the object by display name, banknote or id
+    // (C13: "Holy symbol" is `blessedstar`, `stringstar` its input).
+    let item = &crate::bid_why::resolve_item(item)?;
     let life = crate::brain::load_life(account).ok_or_else(|| format!("no life file for {account}"))?;
     let live = crate::supervise::live_of(account).ok_or_else(|| format!("{account}: no live snapshot (not supervised, or busy)"))?;
     if crate::market_service::shared().is_none() {
@@ -386,7 +397,10 @@ pub(crate) fn explain_for(account: &str, item: &str) -> Result<Vec<String>, Stri
         state.with_producer(&life, rate, |producer| {
             let market = |name: &str| reader.view(name);
             let view = reader.view(item).unwrap_or_default();
-            let mut lines = vec![format!("{account}: coin rate {rate:.2} coins/tick")];
+            let mut lines = vec![crate::bid_why::identity_line(item), format!("{account}: coin rate {rate:.2} coins/tick")];
+            if view.bids.is_empty() {
+                lines.extend(crate::bid_why::related_bid_lines(item, &market));
+            }
             // What sets that rate: the best money rows the bot's levels open.
             let mut open: Vec<&(String, i64, f64)> = rows
                 .iter()

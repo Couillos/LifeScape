@@ -69,6 +69,9 @@ pub struct Way {
     pub combat: Option<i64>,
     /// F2P quest the way needs (directory key, `quest_dragon`).
     pub quest: Option<String>,
+    /// Quest points a door before the way's site asks (Champions' Guild
+    /// keepers: 32, `champions_guild.rs2` `%qp < 32`); 0 = no such door.
+    pub quest_points: i64,
     /// F2P sites `(x, z, level)` where it happens; empty = anywhere
     /// (item-on-item, spells) or unknown.
     pub sites: Vec<(i64, i64, i64)>,
@@ -103,6 +106,7 @@ impl Way {
             qty: None,
             combat: None,
             quest: None,
+            quest_points: 0,
             sites: Vec::new(),
             file: String::new(),
             success: 1.0,
@@ -166,6 +170,9 @@ impl Way {
         if let Some(quest) = &self.quest {
             parts.push(format!("quest {quest}"));
         }
+        if self.quest_points > 0 {
+            parts.push(format!("{} quest points", self.quest_points));
+        }
         match self.sites.len() {
             0 => {}
             1 => parts.push(format!("at {:?}", self.sites[0])),
@@ -179,17 +186,27 @@ fn npc_sites(npc_id: usize) -> Vec<(i64, i64, i64)> {
     crate::f2p::f2p_npc_spawns(Some(npc_id)).iter().map(|spawn| (spawn.x, spawn.z, spawn.level)).collect()
 }
 
-/// True when a shop keeper's spawn is reachable: no gate no bot passes
-/// (a routed shop floor underground passes) and no quest-point door
-/// (`access::Gate::QuestPoints`, never opened).
-fn shop_site_open((x, z, level): (i64, i64, i64)) -> bool {
+/// Quest points a shop keeper's spawn asks, `None` when no bot reaches
+/// it: a gate no bot passes (a routed shop floor underground passes) or
+/// a quest's own door (`access::Gate::Quest`, never opened). The
+/// Champions' Guild door (`access::Gate::QuestPoints`, 32) is a way with
+/// its quest points (user 2026-11-16, Q7: rare-shop purchases are open to
+/// every bot that holds the points; the planner climbs the quest-point
+/// ladder otherwise).
+fn shop_site_need((x, z, level): (i64, i64, i64)) -> Option<i64> {
     // The Dwarven Mine keepers (Nurmof) are routed shop floors.
     let routed = crate::access::shop_floor_routed(x, z, level);
-    crate::access::gates_at(x, z, level).iter().all(|gate| match gate {
-        crate::access::Gate::QuestPoints { .. } | crate::access::Gate::Quest { .. } => false,
-        crate::access::Gate::Underground => routed,
-        other => !crate::access::impassable(other),
-    })
+    let mut points = 0;
+    for gate in crate::access::gates_at(x, z, level) {
+        match gate {
+            crate::access::Gate::QuestPoints { points: needed, .. } => points = points.max(needed),
+            crate::access::Gate::Quest { .. } => return None,
+            crate::access::Gate::Underground if routed => {}
+            other if crate::access::impassable(&other) => return None,
+            _ => {}
+        }
+    }
+    Some(points)
 }
 
 fn npc_sites_by_name(name: &str) -> Vec<(i64, i64, i64)> {
@@ -326,18 +343,17 @@ fn way_of(item: &str, source: ItemSource) -> Option<Way> {
     let way = match source {
         ItemSource::Shop { shop } => {
             let access = crate::f2p::f2p_shop_access(&shop)?;
-            // A keeper behind a door no bot opens (Champions' Guild 32
-            // quest points: no quest-point count in the planner, live
-            // 2026-11-15 black_full_helm) is no way at all.
-            let sites: Vec<(i64, i64, i64)> =
-                access.npcs.iter().flat_map(|npc| npc_sites(*npc)).filter(|site| shop_site_open(*site)).collect();
-            if sites.is_empty() {
-                return None;
-            }
+            // A keeper behind a door no bot opens is no way at all; the
+            // Champions' Guild keepers carry the door's quest points
+            // (Scavvo's rune pieces, Valaine's adamant platebody).
+            let reached: Vec<((i64, i64, i64), i64)> =
+                access.npcs.iter().flat_map(|npc| npc_sites(*npc)).filter_map(|site| shop_site_need(site).map(|points| (site, points))).collect();
+            let fewest = reached.iter().map(|(_, points)| *points).min()?;
             let mut way = Way::new(WayKind::Shop, shop);
             way.coins = price_of(item);
             way.quest = access.quest;
-            way.sites = sites;
+            way.quest_points = fewest;
+            way.sites = reached.into_iter().map(|(site, _)| site).collect();
             way
         }
         ItemSource::Spawn { x, z, level } => {
@@ -556,12 +572,26 @@ pub fn producible_f2p(item: &str) -> bool {
     })
 }
 
-/// True when an NPC shop route exists for `item`: the D-A rule allows the
-/// purchase AND some shop actually stocks it (live 2026-11-14:
-/// black_full_helm passed D-A with no shop anywhere, `shopbuy` failed
-/// "no reachable shop" on every pass).
+/// True when an NPC shop route open to EVERY bot exists for `item`: the
+/// merchant rule allows the purchase AND some shop behind no quest-point
+/// door stocks it (live 2026-11-14: black_full_helm passed D-A with no
+/// shop anywhere, `shopbuy` failed "no reachable shop" on every pass).
+/// A Champions' Guild piece answers `merchant_route_for` with the bot's
+/// quest points.
 pub fn merchant_route(item: &str) -> bool {
-    merchant_buy_allowed(item) && ways(item).iter().any(|way| way.kind == WayKind::Shop)
+    merchant_route_for(item, 0)
+}
+
+/// `merchant_route` for a bot holding `quest_points` (Champions' Guild:
+/// 32, user 2026-11-16 Q7). `i64::MAX`: any shop route at all.
+pub fn merchant_route_for(item: &str, quest_points: i64) -> bool {
+    merchant_buy_allowed(item) && ways(item).iter().any(|way| way.kind == WayKind::Shop && way.quest_points <= quest_points)
+}
+
+/// Fewest quest points a shop selling `item` asks at its door, `None`
+/// when no shop sells it (0: an open keeper exists).
+pub fn shop_quest_points(item: &str) -> Option<i64> {
+    ways(item).iter().filter(|way| way.kind == WayKind::Shop).map(|way| way.quest_points).min()
 }
 
 /// Cheapest F2P NPC-shop price of `item` at base stock, the server

@@ -243,6 +243,7 @@ pub fn method_way(method: &str) -> Option<(String, Way)> {
                 qty: None,
                 combat: None,
                 quest: None,
+                quest_points: 0,
                 sites: Vec::new(),
                 file: String::new(),
                 success: 1.0,

@@ -197,22 +197,25 @@ pub struct SiteRow {
 }
 
 /// What gated sites the bot passes (user rule 2026-11-13, guilds and
-/// keys): its live levels and the objects it holds (pack, bank, worn).
+/// keys): its live levels, the objects it holds (pack, bank, worn) and
+/// its quest points (the Champions' Guild door, user 2026-11-16 Q7).
 /// `Pass::default()` passes no gate (offline checks, side goals).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {
     pub levels: Vec<(String, u8)>,
     pub held: Vec<String>,
+    /// Quest points of the finished quests (`quest_points_of`).
+    pub quest_points: i64,
 }
 
 impl Pass {
-    /// The ready context's levels and held objects.
+    /// The ready context's levels, held objects and quest points.
     pub fn of(ctx: &crate::expand::ReadyCtx) -> Pass {
-        Pass { levels: ctx.levels.clone(), held: ctx.tools.clone() }
+        Pass { levels: ctx.levels.clone(), held: ctx.tools.clone(), quest_points: lifescape_gamedata::quest_requirements::quest_points_of(&ctx.quests_done) }
     }
 
     /// True when the bot passes `gate` now (guild level and uniform held,
-    /// key held); impassable gates never open.
+    /// key held, quest points held); impassable gates never open.
     pub fn opens(&self, gate: &lifescape_gamedata::access::Gate) -> bool {
         use lifescape_gamedata::access::Gate;
         match gate {
@@ -221,6 +224,8 @@ impl Pass {
                     && uniform.is_none_or(|worn| self.held.iter().any(|item| item == worn))
             }
             Gate::Key { item, .. } => self.held.iter().any(|held| held == item),
+            // `champions_guild.rs2`: `%qp < 32` keeps the door shut.
+            Gate::QuestPoints { points, .. } => self.quest_points >= *points,
             _ => false,
         }
     }
