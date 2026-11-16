@@ -3,12 +3,21 @@
 //!
 //! - XP per 6000 ticks is DERIVED from the yield's units (`unit_xp`:
 //!   units × XP of the dump), never measured;
-//! - autonomous: the work alone, or with its stock inputs farmed
-//!   upstream (their sources' ticks counted, their other flows and XP
-//!   too, `guide_chain::best_source`); an input no source makes at the
-//!   level is bought;
+//! - autonomous (D13: the bot obtains everything itself): the work
+//!   alone, or with its stock inputs farmed upstream by their fastest
+//!   autonomous source, recursively (their sources' ticks counted, their
+//!   other flows and XP too, `guide_chain::best_source` under
+//!   `Sourcing::Farm`; a by-product or a drop at its own rate: an uncut
+//!   gem costs the mining of 1 roll in 256); an input with no autonomous
+//!   source at the level blocks the mode with the reason, never bought.
+//!   The method's consumables (runes, ammo, bait, supply, food, fees)
+//!   stay purchases (`guide_engine::BOUGHT_CAUSES`);
 //! - market: stock inputs bought (current price, or a shop's, Q7), a
-//!   square round trip and the measured wait per lot (as D15);
+//!   square round trip and the measured wait per lot (as D15); a volume
+//!   the asks and a shop do not cover blocks the mode (the money guide's
+//!   purchase rule);
+//! - a blocked line carries no effective rate (as a blocked money line
+//!   carries no profit) and ranks after every other;
 //! - coins spent convert to ticks at the best ACCESSIBLE money line of
 //!   the bot (D17: price ÷ profit per 6000 ticks), the effective XP rate
 //!   counts them; ticks to the band's end use the effective rate;
@@ -17,6 +26,7 @@
 
 use std::collections::HashMap;
 
+use crate::guide_chain::Sourcing;
 use crate::guide_engine::{price_flows, Engine, InputPricing};
 use crate::guide_model::{band_of, Confidence, GuideFilter, Prereqs, Supply, TrainingRow, Unrated, WINDOW_TICKS};
 use crate::guide_money::{places, row_level, Place};
@@ -39,8 +49,11 @@ fn add(into: &mut Vec<(String, f64)>, skill: &str, xp: f64) {
     }
 }
 
-/// Autonomous balance: the work's own flows, its stock inputs farmed by
-/// their fastest source (else bought: no stock is assumed).
+/// Autonomous balance (D13: the bot obtains everything itself): the
+/// work's own flows, each stock input farmed by its fastest AUTONOMOUS
+/// source (`Sourcing::Farm`: no purchase of an input anywhere upstream,
+/// a by-product or a drop counted at its own rate). An input without one
+/// blocks the mode (reason given), never a purchase in disguise.
 fn autonomous(engine: &Engine, place: &Place) -> Balance {
     let answer = &place.answer;
     let own = crate::guide_methods::own_product(&place.ask.method);
@@ -49,12 +62,19 @@ fn autonomous(engine: &Engine, place: &Place) -> Balance {
     let mut prereqs = crate::guide_prereq::prereqs_of(&place.ask.method, &place.ask.style, place.ask.level, &place.ask.tool);
     let mut farmed_value = 0.0;
     let mut farmed: Vec<String> = Vec::new();
+    let mut unsourced: Vec<String> = Vec::new();
     let path: Vec<String> = own.iter().cloned().collect();
     for (item, cause, qty) in &answer.flows {
         if cause != "input" || *qty >= 0.0 {
             continue;
         }
-        let Some(source) = crate::guide_chain::best_source(engine, item, place.ask.level, 1, &path) else { continue };
+        let Some(source) = crate::guide_chain::best_source(engine, item, place.ask.level, 1, &path, Sourcing::Farm) else {
+            if !unsourced.iter().any(|known| known.starts_with(&format!("{item}:"))) {
+                unsourced.push(crate::guide_chain::autonomous_gap(engine, item, place.ask.level, 1, &path));
+            }
+            farmed.push(item.clone());
+            continue;
+        };
         let need = -qty;
         extra += need * source.ticks_per_unit;
         farmed_value += need * source.value_consumed;
@@ -65,9 +85,12 @@ fn autonomous(engine: &Engine, place: &Place) -> Balance {
         farmed.push(item.clone());
     }
     let scale = WINDOW_TICKS / (WINDOW_TICKS + extra);
+    // Farmed and unsourced inputs are never priced as purchases.
     let priced = price_flows(engine, answer, own.as_deref(), InputPricing::Bought, scale, &|item, cause| cause == "input" && farmed.iter().any(|known| known == item));
-    let coins_6000 = if priced.missing.is_empty() { priced.revenue - priced.cost + farmed_value * scale } else { 0.0 };
-    Balance { coins_6000, xp_6000: xp.into_iter().map(|(skill, gained)| (skill, gained * scale)).collect(), flows: priced.lines, prereqs, blocked: priced.missing }
+    let mut blocked = unsourced;
+    blocked.extend(priced.missing);
+    let coins_6000 = if blocked.is_empty() { priced.revenue - priced.cost + farmed_value * scale } else { 0.0 };
+    Balance { coins_6000, xp_6000: xp.into_iter().map(|(skill, gained)| (skill, gained * scale)).collect(), flows: priced.lines, prereqs, blocked }
 }
 
 /// Market balance: the stock inputs bought, trips and waits per lot.
@@ -96,7 +119,9 @@ fn row_of(skill: &str, place: &Place, band: i64, supply: Supply, balance: Balanc
         Some(profit) if profit > 0.0 && spent > 0.0 => spent / (profit / WINDOW_TICKS),
         _ => 0.0,
     };
-    let effective = xp * WINDOW_TICKS / (WINDOW_TICKS + converted);
+    // A blocked line (an input it cannot obtain) carries no rate, as a
+    // blocked money line carries no profit.
+    let effective = if balance.blocked.is_empty() { xp * WINDOW_TICKS / (WINDOW_TICKS + converted) } else { 0.0 };
     let level = filter.level.unwrap_or(place.ask.level).max(place.ask.level);
     let ticks_to_band_end = (effective > 0.0).then(|| xp_to_band_end(level) / (effective / WINDOW_TICKS));
     let accessible = balance.blocked.is_empty() && crate::guide_prereq::passes(&balance.prereqs, filter);

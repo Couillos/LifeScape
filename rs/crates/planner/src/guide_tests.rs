@@ -439,3 +439,86 @@ fn training_input_nobody_makes_or_sells_blocks_the_row() {
     assert!(!fire.is_empty());
     assert!(fire.iter().all(|row| !row.accessible && row.blocked.iter().any(|reason| reason.contains("logs"))), "{fire:?}");
 }
+
+fn training_row<'a>(rows: &'a [crate::guide_model::TrainingRow], method: &str, supply: Supply) -> &'a crate::guide_model::TrainingRow {
+    rows.iter().find(|row| row.method == method && row.supply == supply).unwrap_or_else(|| panic!("{method} {supply:?} row"))
+}
+
+/// D13 autonomous: the bot obtains its inputs itself. Uncut sapphires
+/// only come as a mining by-product (one roll in 256, `mining.rs2`): the
+/// autonomous line counts the ticks of mining every stone (D16 chain),
+/// its effective rate collapses; the market line buys them.
+#[test]
+fn autonomous_rare_byproduct_input_collapses_the_effective_rate() {
+    let mut fixture = Fixture::new();
+    fixture.yields.insert("cut:sapphire", answer(&[("sapphire", "product", 5000.0), ("uncut_sapphire", "input", -5000.0)], &[("product", "sapphire", 5000.0)]));
+    fixture.yields.insert("gather:mining/copper_ore", answer(&[("copper_ore", "product", 500.0), ("uncut_sapphire", "byproduct", 0.25)], &[("product", "copper_ore", 500.0)]));
+    fixture.prices.extend([("sapphire", 300.0), ("uncut_sapphire", 25.0), ("copper_ore", 5.0)]);
+    let filter = GuideFilter { skill: Some("crafting".to_string()), level: Some(30), ..GuideFilter::default() };
+    let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
+    let autonomous = training_row(&rows, "cut:sapphire", Supply::Autonomous);
+    assert!(autonomous.blocked.is_empty(), "the mine is an autonomous source: {:?}", autonomous.blocked);
+    let units = vec![("product".to_string(), "sapphire".to_string(), 5000.0)];
+    let work = crate::unit_xp::derived_xp("cut:sapphire", "", &units, 30).into_iter().find(|(skill, _)| skill == "crafting").map(|(_, xp)| xp).expect("crafting XP");
+    // 5000 stones a window of cutting, each 6000 / 0.25 ticks of mining.
+    let expected = work * 6000.0 / (6000.0 + 5000.0 * 24000.0);
+    assert!((autonomous.effective_xp_6000 - expected).abs() < 1e-6, "{} vs {expected}", autonomous.effective_xp_6000);
+    assert!(autonomous.effective_xp_6000 < work / 1000.0, "collapsed: {}", autonomous.effective_xp_6000);
+    assert!(!autonomous.flows.iter().any(|line| line.item == "uncut_sapphire" && line.per_6000 < 0.0), "nothing bought: {:?}", autonomous.flows);
+    assert!(autonomous.other_xp_6000.iter().any(|(skill, xp)| skill == "mining" && *xp > 0.0), "the mining rides the line");
+    let market = training_row(&rows, "cut:sapphire", Supply::Market);
+    assert!(market.blocked.is_empty() && market.effective_xp_6000 > autonomous.effective_xp_6000 * 100.0, "{market:?}");
+}
+
+/// D13 autonomous: an input no activity of the bot yields (logs without
+/// a woodcutting yield), or whose only source needs a purchase (steel
+/// bars without mined coal), blocks the autonomous line with the reason,
+/// never a purchase in disguise; it carries no effective rate. The
+/// market line still buys.
+#[test]
+fn autonomous_input_without_autonomous_source_is_blocked() {
+    let fixture = Fixture::new();
+    let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
+    let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
+    let autonomous = training_row(&rows, "fire:logs", Supply::Autonomous);
+    assert!(!autonomous.accessible && autonomous.blocked.iter().any(|reason| reason.contains("logs")), "{autonomous:?}");
+    assert_eq!(autonomous.effective_xp_6000, 0.0, "a blocked line has no rate");
+    assert!(autonomous.ticks_to_band_end.is_none());
+    let market = training_row(&rows, "fire:logs", Supply::Market);
+    assert!(market.accessible && market.blocked.is_empty(), "{market:?}");
+    // Recursive: the dagger's bar is smelted, the bar's coal is not mined.
+    let mut fixture = Fixture::new();
+    fixture.yields.remove("gather:mining/coal");
+    fixture.yields.insert("smith:steel_dagger", answer(&[("steel_dagger", "product", 1000.0), ("steel_bar", "input", -1000.0)], &[("product", "steel_dagger", 1000.0)]));
+    fixture.prices.insert("steel_dagger", 80.0);
+    let filter = GuideFilter { skill: Some("smithing".to_string()), level: Some(30), ..GuideFilter::default() };
+    let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
+    let dagger = training_row(&rows, "smith:steel_dagger", Supply::Autonomous);
+    assert!(!dagger.accessible && dagger.blocked.iter().any(|reason| reason.contains("steel_bar")), "{dagger:?}");
+    let smelt = training_row(&rows, "smelt:steel_bar", Supply::Autonomous);
+    assert!(smelt.blocked.iter().any(|reason| reason.contains("coal")), "{smelt:?}");
+    // The money chain still buys what it does not farm (D16).
+    let (money, _) = fixture.run(|engine| money_guide(engine, &level(30)));
+    assert!(row(&money, "smelt:steel_bar", Family::Chain).blocked.is_empty());
+}
+
+/// Market mode: the inputs come from the asks for their depth, then an
+/// F2P shop (the money guide's purchase rule); past both the line is
+/// blocked with the reason and carries no effective rate.
+#[test]
+fn training_market_input_is_limited_by_the_ask_depth() {
+    let mut fixture = Fixture::new();
+    fixture.prices.remove("logs");
+    fixture.books.insert("logs", (Vec::new(), vec![(4.0, 10.0)]));
+    let filter = GuideFilter { skill: Some("firemaking".to_string()), level: Some(30), ..GuideFilter::default() };
+    let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
+    let market = training_row(&rows, "fire:logs", Supply::Market);
+    assert!(!market.accessible && market.blocked.iter().any(|reason| reason.contains("logs")), "{market:?}");
+    assert_eq!(market.effective_xp_6000, 0.0, "a blocked line has no rate");
+    fixture.shop.insert("logs", 5.0);
+    let (rows, _) = fixture.run(|engine| training_guide(engine, &filter));
+    let market = training_row(&rows, "fire:logs", Supply::Market);
+    assert!(market.accessible && market.effective_xp_6000 > 0.0, "{market:?}");
+    let logs = market.flows.iter().find(|line| line.item == "logs").expect("logs line");
+    assert_eq!(logs.basis, crate::guide_model::PriceBasis::BookShop);
+}

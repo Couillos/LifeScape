@@ -177,7 +177,7 @@ pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
 /// Chain line (D16) of an activity at the prior's place.
 fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
     let product = crate::guide_methods::own_product(&place.ask.method)?;
-    let unit = crate::guide_chain::chain_unit(engine, &place.ask.method, &place.ask.style, &product, place.ask.level, 0, &[]).ok()?;
+    let unit = crate::guide_chain::chain_unit(engine, &place.ask.method, &place.ask.style, &product, place.ask.level, 0, &[], crate::guide_chain::Sourcing::Buy).ok()?;
     // A chain farms at least one input: else it is the recipe line.
     if unit.stages.len() < 2 {
         return None;

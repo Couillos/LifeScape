@@ -29,6 +29,26 @@ fn gem_cutting_is_one_instant_use_per_stone() {
     assert!(prior.actions_per_6000 < RATE_WINDOW_TICKS);
 }
 
+/// Mining gems (`mining.rs2` `get_ore_normal`/`get_ore_fast`): one roll
+/// in 256 finds a gem from `mining_gem_table` (`random(128)`: diamond
+/// < 2, ruby < 10, emerald < 26, sapphire < 58, else nothing). The
+/// guides' prior carries them as by-products of every rock (the source
+/// of uncut gems, D16); the brain's prior is left alone; essence has no
+/// gem roll.
+#[test]
+fn mining_rolls_gems_as_byproducts_in_the_guide_prior() {
+    let copper = query("gather:mining/copper_ore", 30);
+    let prior = super::guide_prior(&copper).expect("copper");
+    let byproduct = |item: &str| prior.flows.iter().filter(|(name, cause, _)| name == item && *cause == "byproduct").map(|(_, _, qty)| qty).sum::<f64>();
+    for (gem, share) in [("uncut_diamond", 2.0), ("uncut_ruby", 8.0), ("uncut_emerald", 16.0), ("uncut_sapphire", 32.0)] {
+        let expected = prior.actions_per_6000 / 256.0 * share / 128.0;
+        assert!((byproduct(gem) - expected).abs() < 1e-9, "{gem}: {} vs {expected}", byproduct(gem));
+    }
+    assert!(!method_prior(&copper).expect("copper").flows.iter().any(|(name, _, _)| name.starts_with("uncut_")), "the brain's prior is unchanged");
+    let essence = super::guide_prior(&at("essence:blankrune", 30, "mithril_pickaxe", None)).expect("essence");
+    assert!(!essence.flows.iter().any(|(name, _, _)| name.starts_with("uncut_")));
+}
+
 /// Smithing (`smithing.rs2` `p_delay(1)` + `p_delay(2)`) 5 ticks an
 /// item; cooking 3 (`p_delay(1)`); filling 2 (`p_delay(0)`); low
 /// alchemy 3, high alchemy 5 (`alchemy.rs2`).

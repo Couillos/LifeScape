@@ -7,7 +7,15 @@
 //! for every input, the input's quantity times the ticks of one unit of
 //! the input's fastest SOURCE (a farm activity or another chain, at most
 //! `MAX_CHAIN_DEPTH` deep, never through an object already in the path).
-//! An input no source can make at the level is bought (D15 prices). The
+//! A source is a production leg of the object, or an activity of the
+//! catalogue whose guide prior yields it as a by-product or a drop (an
+//! uncut gem: one mining roll in 256, `method_rate::MINING_GEM_TABLE`;
+//! a fight's drop table): one unit then costs 6000 ticks over that
+//! activity's rate of it, however rare.
+//! An input no source can make at the level is bought (D15 prices) under
+//! `Sourcing::Buy` (money chains); under `Sourcing::Farm` (autonomous
+//! training, D13: the bot obtains everything itself) it is missing and
+//! the chain cannot run. The
 //! value of a unit counts every other flow of every stage over its time
 //! share (a fight's other loot, a smelter's coal...): only the farmed
 //! intermediates cancel. Selling at a stage pays its product's sale price
@@ -19,6 +27,20 @@ use crate::guide_model::Prereqs;
 
 /// Style a source fight is read in (its drops do not depend on it).
 pub const SOURCE_FIGHT_STYLE: &str = "melee:attack";
+
+/// How a chain comes by an input no source makes at the level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Sourcing {
+    /// Bought at the D15 prices (money chains, D16).
+    Buy,
+    /// Never bought: the input is missing, the chain cannot run
+    /// (autonomous training, D13).
+    Farm,
+}
+
+/// Causes under which an activity yields an object besides its product
+/// legs (a by-product, a drop).
+const YIELD_CAUSES: [&str; 2] = ["byproduct", "loot"];
 
 /// One unit of a chain node's product.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,13 +100,54 @@ fn compute_sources(item: &str) -> Vec<(String, String)> {
             out.push((activity, style));
         }
     }
+    for (activity, style) in yielders().iter().filter(|(_, _, items)| items.iter().any(|known| known == item)).map(|(activity, style, _)| (activity, style)) {
+        if !out.iter().any(|(known, _)| known == activity) {
+            out.push((activity.clone(), style.clone()));
+        }
+    }
     out
+}
+
+/// Activities of the catalogue with the objects their guide prior yields
+/// as a by-product or a drop (`YIELD_CAUSES`), read at their gate level
+/// with its tool tier; a fight's drops are read once, in melee
+/// (`SOURCE_FIGHT_STYLE`, as a drop leg's fight). Built once per process
+/// (pure function of the static game data).
+fn yielders() -> &'static [(String, String, Vec<String>)] {
+    static YIELDERS: std::sync::OnceLock<Vec<(String, String, Vec<String>)>> = std::sync::OnceLock::new();
+    YIELDERS.get_or_init(|| {
+        let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
+        for entry in crate::guide_methods::catalogue() {
+            if entry.method.starts_with("fight:") && !(entry.method.starts_with("fight:melee/") && entry.style == SOURCE_FIGHT_STYLE) {
+                continue;
+            }
+            if out.iter().any(|(known, _, _)| *known == entry.method) {
+                continue;
+            }
+            let level = crate::guide_methods::gate_level(&entry.method);
+            let query = crate::method_rate::PriorQuery { method: entry.method.clone(), level, tool: crate::guide_methods::tool_at(&entry.method, &entry.style, level), site: None };
+            let Ok(prior) = crate::method_rate::guide_prior(&query) else { continue };
+            let mut items: Vec<String> = Vec::new();
+            for (item, _, _) in prior.flows.iter().filter(|(_, cause, qty)| YIELD_CAUSES.contains(cause) && *qty > 0.0) {
+                if !items.contains(item) {
+                    items.push(item.clone());
+                }
+            }
+            if !items.is_empty() {
+                out.push((entry.method.clone(), entry.style.clone(), items));
+            }
+        }
+        out
+    })
 }
 
 /// One unit of `product` made by `method` for a bot at `level` in every
 /// skill; `path` holds the objects downstream (no cycle). `Err` when the
-/// method cannot make it at that level.
-pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, level: u8, depth: usize, path: &[String]) -> Result<ChainUnit, String> {
+/// method cannot make it at that level. An input without a source is
+/// bought (`Sourcing::Buy`) or missing (`Sourcing::Farm`, also past
+/// `MAX_CHAIN_DEPTH`: never assumed owned).
+#[allow(clippy::too_many_arguments)]
+pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, level: u8, depth: usize, path: &[String], sourcing: Sourcing) -> Result<ChainUnit, String> {
     if crate::guide_methods::gate_level(method) > level {
         return Err(format!("{method} needs level {}", crate::guide_methods::gate_level(method)));
     }
@@ -111,9 +174,13 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
             continue;
         }
         let per_unit = qty / rate;
+        if cause == "input" && *qty < 0.0 && sourcing == Sourcing::Farm && depth >= MAX_CHAIN_DEPTH {
+            missing.push(format!("{item}: deeper than {MAX_CHAIN_DEPTH} stages, not farmed"));
+            continue;
+        }
         if cause == "input" && *qty < 0.0 && depth < MAX_CHAIN_DEPTH {
             let need = -per_unit;
-            let upstream = best_source(engine, item, level, depth + 1, &downstream);
+            let upstream = best_source(engine, item, level, depth + 1, &downstream, sourcing);
             match upstream {
                 Some(source) => {
                     ticks += need * source.ticks_per_unit;
@@ -129,6 +196,10 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
                     crate::guide_prereq::merge(&mut prereqs, &source.prereqs);
                     measured |= source.measured;
                     bought.extend(source.bought.iter().map(|(name, count)| (name.clone(), count * need)));
+                }
+                None if sourcing == Sourcing::Farm => {
+                    // Named only: the top line explains (`autonomous_gap`).
+                    missing.push(format!("{item}: no autonomous source at level {level}"));
                 }
                 None => {
                     // Bought for a window of this stage's work.
@@ -160,18 +231,41 @@ pub fn chain_unit(engine: &Engine, method: &str, style: &str, product: &str, lev
 
 /// Fastest source of one unit of `item` at `level` (fewest ticks per
 /// unit), `None` when none can make it (a source needing a purchase
-/// nobody covers cannot).
-pub fn best_source(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String]) -> Option<ChainUnit> {
+/// nobody covers cannot; under `Sourcing::Farm`, nor one needing any
+/// purchase of an input).
+pub fn best_source(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String], sourcing: Sourcing) -> Option<ChainUnit> {
     if path.iter().any(|known| known == item) {
         return None;
     }
-    engine.source_memo((item.to_string(), level, depth), || compute_best_source(engine, item, level, depth, path))
+    engine.source_memo((item.to_string(), level, depth, sourcing), || compute_best_source(engine, item, level, depth, path, sourcing))
 }
 
-fn compute_best_source(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String]) -> Option<ChainUnit> {
+fn compute_best_source(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String], sourcing: Sourcing) -> Option<ChainUnit> {
     sources(item)
         .into_iter()
-        .filter_map(|(method, style)| chain_unit(engine, &method, &style, item, level, depth, path).ok())
+        .filter_map(|(method, style)| chain_unit(engine, &method, &style, item, level, depth, path, sourcing).ok())
         .filter(|unit| unit.missing.is_empty())
         .min_by(|left, right| left.ticks_per_unit.total_cmp(&right.ticks_per_unit))
+}
+
+/// Why no autonomous source yields `item` at `level`: each source and
+/// what stops it (its gate, no yield, an input it would have to buy).
+pub fn autonomous_gap(engine: &Engine, item: &str, level: u8, depth: usize, path: &[String]) -> String {
+    let found = sources(item);
+    if found.is_empty() {
+        return format!("{item}: no activity makes, farms or drops it (autonomous)");
+    }
+    if path.iter().any(|known| known == item) {
+        return format!("{item}: made from itself downstream (autonomous)");
+    }
+    let mut reasons: Vec<String> = Vec::new();
+    for (method, style) in found.iter().take(3) {
+        let reason = match chain_unit(engine, method, style, item, level, depth, path, Sourcing::Farm) {
+            Err(error) => error,
+            Ok(unit) => format!("{method}: {}", unit.missing.first().cloned().unwrap_or_else(|| "no source".to_string())),
+        };
+        reasons.push(reason);
+    }
+    let more = if found.len() > 3 { format!(", {} more", found.len() - 3) } else { String::new() };
+    format!("{item}: no autonomous source at level {level} ({}{more})", reasons.join("; "))
 }

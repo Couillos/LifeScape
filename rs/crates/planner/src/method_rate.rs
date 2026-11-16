@@ -60,6 +60,15 @@ pub const ROCK_SUCCESS_DELAY_TICKS: f64 = 1.0;
 /// Rocks mined by `get_ore_fast` (`mining.rs2`: iron, granite,
 /// sandstone; the F2P one is iron).
 pub const FAST_ROCKS: [&str; 1] = ["iron_ore"];
+/// One mining roll in `MINING_GEM_ROLL` finds a gem instead of ore
+/// (`mining.rs2` `get_ore_normal` and `get_ore_fast`: `random(256)`; the
+/// charged amulet's 86 is members only), drawn from `mining_gem_table`
+/// (`random(128)`: diamond < 2, ruby < 10, emerald < 26, sapphire < 58,
+/// else nothing): (gem, draws of `MINING_GEM_DRAWS`). Essence
+/// (`get_ore_essence`) never rolls one.
+pub const MINING_GEM_ROLL: f64 = 256.0;
+pub const MINING_GEM_DRAWS: f64 = 128.0;
+pub const MINING_GEM_TABLE: [(&str, f64); 4] = [("uncut_diamond", 2.0), ("uncut_ruby", 8.0), ("uncut_emerald", 16.0), ("uncut_sapphire", 32.0)];
 /// Ticks between two chops of a tree (`%action_delay = clock + 3`).
 pub const CHOP_TICKS: f64 = 4.0;
 /// Runecraft: the ruins' `p_delay(1)` before the jump inside (n + 2),
@@ -470,13 +479,21 @@ pub fn method_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
 
 /// The guides' prior (R4): `method_prior` plus, for a fight, the
 /// expected loot of its kills from the NPC's drop table (`loot` per
-/// 6000). The brain keeps `method_prior` (no decision change before
-/// R7); the guides price what a fight brings home.
+/// 6000), and for a rock the gems its rolls find (`byproduct`,
+/// `MINING_GEM_TABLE`: the source of uncut gems, D16). The brain keeps
+/// `method_prior` (no decision change before R7); the guides price what
+/// a fight or a mine brings home.
 pub fn guide_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
     let mut prior = method_prior(query)?;
     if query.method.starts_with("fight:") {
         for (item, per_kill) in crate::method_rate_fight::fight_drops_per_kill(&query.method) {
             prior.flows.push((item, "loot", per_kill * prior.actions_per_6000));
+        }
+    }
+    if query.method.starts_with("gather:mining/") {
+        // One action is one roll of the rock (`gather_action`).
+        for (gem, draws) in MINING_GEM_TABLE {
+            prior.flows.push((gem.to_string(), "byproduct", prior.actions_per_6000 / MINING_GEM_ROLL * draws / MINING_GEM_DRAWS));
         }
     }
     Ok(prior)

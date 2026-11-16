@@ -216,7 +216,7 @@ pub struct Engine<'a> {
     pub world: &'a GuideWorld<'a>,
     answers: RefCell<HashMap<AskKey, Result<RateAnswer, String>>>,
     quotes: RefCell<HashMap<String, Quote>>,
-    sources: RefCell<HashMap<(String, u8, usize), Option<crate::guide_chain::ChainUnit>>>,
+    sources: RefCell<HashMap<(String, u8, usize, crate::guide_chain::Sourcing), Option<crate::guide_chain::ChainUnit>>>,
     best_profit: RefCell<HashMap<(u8, Vec<String>), Option<f64>>>,
 }
 
@@ -233,7 +233,7 @@ impl<'a> Engine<'a> {
 
     /// Fastest source of an object at a level and depth, built once per
     /// build (the chains of every recipe share their upstream).
-    pub fn source_memo(&self, key: (String, u8, usize), compute: impl FnOnce() -> Option<crate::guide_chain::ChainUnit>) -> Option<crate::guide_chain::ChainUnit> {
+    pub fn source_memo(&self, key: (String, u8, usize, crate::guide_chain::Sourcing), compute: impl FnOnce() -> Option<crate::guide_chain::ChainUnit>) -> Option<crate::guide_chain::ChainUnit> {
         if let Some(known) = self.sources.borrow().get(&key) {
             return known.clone();
         }

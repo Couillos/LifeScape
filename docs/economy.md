@@ -504,9 +504,22 @@ toujours après les autres.
   capital) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
   lue) ;
 - entraînement : skill × tranche × activité × site × outil × mode
-  (autonome : intrants farmés, temps compté ; marché : intrants achetés,
-  pièces converties en ticks au profit de la meilleure ligne money
-  making accessible, D17) ; XP/6000 = unités × XP du dump ; pièces/6000,
+  (autonome, D13 « le bot fait tout lui-même » : chaque intrant de
+  recette OBTENU par sa source autonome la plus rapide, récursive comme
+  une chaîne D16 (`guide_chain::Sourcing::Farm` : aucun achat d'intrant
+  en amont), temps compté, XP/6000 = XP de l'action ÷ (ticks de l'action
+  + ticks d'obtention) ; intrant sans source autonome au niveau → ligne
+  autonome bloquée avec la raison, jamais achetée ; consommables de
+  méthode (runes, munitions, appât, fil, nourriture, péages) toujours
+  achetés ; marché : intrants achetés selon la règle d'achat ci-dessus,
+  volume au-delà des asks + boutique → ligne bloquée ; pièces converties
+  en ticks au profit de la meilleure ligne money making accessible, D17) ;
+  ligne bloquée : aucune XP effective (comme aucun profit en money) ;
+  sources d'une chaîne = jambes de production + activités du catalogue
+  dont le prior des guides donne l'objet en sous-produit ou drop (gemmes
+  brutes : 1 jet de minage sur 256, `mining_gem_table` de `mining.rs2`,
+  `method_rate::MINING_GEM_TABLE`, prior des guides seul ; drops des
+  combats) ; XP/6000 = unités × XP du dump ; pièces/6000,
   pièces/XP, ticks jusqu'à la fin de tranche ; raccourcis de quête (D20,
   XP forfaitaire sur la durée mesurée des runs `quest:<clé>`) ;
 - sans `level`, chaque méthode est lue à son propre seuil (vue
