@@ -31,14 +31,23 @@ pub const FISHING_ACKS: [&str; 4] = ["cast out your line", "attempt to catch", "
 /// spam. A cast acked on a still-live spot is a dry streak, not a dead
 /// spot — wait, no time cap; the load-level stall stays the ultimate
 /// backstop. Quiet without any ack gives up fast: the click itself never
-/// landed. Re-clicks probe reachability every ~30 quiet ticks: only a
-/// click surfaces a refusal.
+/// landed. No periodic re-click (the woodcut rule): the spot hopping away
+/// (`fishing_movement.rs2` `npc_tele` every 280-530 ticks) ends the stand
+/// on the clicked slot itself, the next pick clicks the new spot.
 struct FishSource<'a> {
     tier: &'a knowledge::fishing::FishTier,
     slot: u16,
     x: i32,
     z: i32,
+    /// Tile of the clicked spot NPC at the click.
+    at: (i32, i32),
     patient: bool,
+}
+
+/// True when the clicked spot NPC left its tile (`npc_tele` hop) or the
+/// stream: the server's fishing loop is over there, re-pick. Pure.
+pub(crate) fn spot_hopped(now: Option<(i32, i32)>, clicked: (i32, i32)) -> bool {
+    now != Some(clicked)
 }
 
 impl<'a> crate::kit::harvest::HarvestSource for FishSource<'a> {
@@ -57,35 +66,29 @@ impl<'a> crate::kit::harvest::HarvestSource for FishSource<'a> {
         nearest_live(bot, self.tier.category, self.x, self.z).is_none()
     }
 
+    /// The clicked spot NPC teleported off its tile (a hop) or left the
+    /// stream, or no spot of the tier stands near the pick any more.
     fn slot_moved(&self, bot: &mut Bot, _target: &crate::kit::harvest::HarvestTarget) -> bool {
-        nearest_live(bot, self.tier.category, self.x, self.z).is_some_and(|(_, live_x, live_z)| {
-            (live_x - self.x).abs() + (live_z - self.z).abs() > SPOT_MOVED_TILES
-        })
+        let clicked_hopped = spot_hopped(bot.world.npcs.get(&self.slot).map(|npc| (npc.x, npc.z)), self.at);
+        clicked_hopped
+            || nearest_live(bot, self.tier.category, self.x, self.z).is_some_and(|(_, live_x, live_z)| {
+                (live_x - self.x).abs() + (live_z - self.z).abs() > SPOT_MOVED_TILES
+            })
     }
 
     fn target_live(&self, bot: &mut Bot, target: &crate::kit::harvest::HarvestTarget) -> bool {
         !self.slot_gone(bot, target)
     }
 
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
-        false
-    }
-
-    /// The old loop's 60 unacked ticks in 12-tick rounds.
-    fn unacked_rounds(&self) -> u32 {
-        5
-    }
+    // Unacked: the shared 2 rounds (one probe). The cast acks within 1-2
+    // ticks of a landed click ("You cast out your net..."), so the old
+    // 60 silent ticks only delayed the repick (live 2026-11-16: three
+    // Draynor spots never answered, 60 ticks each).
 
     /// The old loop counts 60 ticks from the last fish, not from the
     /// click: a gain restarts the quiet budget.
     fn silence_resets_on_gain(&self) -> bool {
         true
-    }
-
-    /// Reachability probe every ~30 quiet ticks while acked: a
-    /// wall-separated spot only refuses when clicked.
-    fn reprobe(&self, acked: bool, _live: bool, since_probe: u64) -> bool {
-        acked && since_probe >= 30
     }
 
     fn note_dry_streak(&mut self, bot: &mut Bot, _x: i32, _z: i32, acked: bool, _live: bool, silences: u32) {
@@ -128,7 +131,7 @@ fn work_spot(
         bot.log(&format!("spot ({spot_x},{spot_z}) moved away (nearest live at ({live_x},{live_z})), repicking"));
         return Ok((WorkOutcome::Gone, 0));
     }
-    let mut source = FishSource { tier, slot, x: spot_x, z: spot_z, patient: false };
+    let mut source = FishSource { tier, slot, x: spot_x, z: spot_z, at: (live_x, live_z), patient: false };
     crate::kit::harvest::watch_stand(bot, &mut source, spot_x, spot_z, product_ids, had_fish)
 }
 
@@ -411,5 +414,17 @@ mod dry_tests {
             let (spot_x, spot_z) = crate::kit::spots::pick_near_fish_spot(&mut bot, &tier, None, &banned, 0, &bank).expect("near pick at the site");
             assert!(crate::kit::spots::in_assigned_site(&bot, spot_x, spot_z), "{fish}: picked inside the site ({spot_x},{spot_z})");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The clicked spot hops (`npc_tele`) or leaves the stream: the stand
+    /// ends on the slot itself; standing still is still fishing.
+    #[test]
+    fn a_hopped_spot_ends_the_stand() {
+        assert!(!super::spot_hopped(Some((3104, 3424)), (3104, 3424)), "same tile: keep fishing, no click");
+        assert!(super::spot_hopped(Some((3104, 3425)), (3104, 3424)), "one-tile hop: repick");
+        assert!(super::spot_hopped(None, (3104, 3424)), "left the stream: repick");
     }
 }

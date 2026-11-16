@@ -23,11 +23,13 @@ pub const MINING_STAT: u8 = 14;
 /// Mining-only vocabulary (point 1: skill-specific stays with the skill).
 pub const MINING_ACKS: [&str; 1] = ["swing your pick"];
 
-/// Click once, then only re-click after a quiet round (the server chains
-/// attempts itself while in range). Rock liveness is the loc id match:
-/// depletion streams a loc change, so an acked swing on a still-matching
-/// rock is a dry streak — keep waiting. Quiet rounds re-click as
-/// reachability probes: only a click surfaces a refusal.
+/// Click once, then wait for the swing loop (`mining.rs2`: `p_oploc(3)`
+/// until an ore). Rock liveness is the loc id match: an ore depletes the
+/// rock (`loc_change` to its empty stage) and the stand ends at once on
+/// the streamed change, never a click on the empty rock; a gem ends the
+/// action on a live rock (`return` without `p_oploc`), clicked again at
+/// once. An acked swing on a still-matching rock is a dry streak: no
+/// re-click (the woodcut rule, `harvest::reclick_after_silence`).
 struct RockSource {
     loc: u16,
     x: i32,
@@ -58,13 +60,13 @@ impl crate::kit::harvest::HarvestSource for RockSource {
         rock_live_loc_id(bot, self.x, self.z).is_ok_and(|id| id == self.loc)
     }
 
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
-        false
+    /// The rock streamed another loc (its empty stage): mined out.
+    fn depleted(&self, bot: &mut Bot) -> bool {
+        bot.world.loc_at(self.x, self.z, bot.world.level).is_some_and(|(id, _, _)| id != self.loc)
     }
 
-    /// Quiet rounds re-click as reachability probes: a wall-separated
-    /// rock only refuses when clicked.
-    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool {
+    /// Every ore or gem ends the server's action (`get_ore_*` returns).
+    fn gain_ends_action(&self) -> bool {
         true
     }
 

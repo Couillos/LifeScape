@@ -1,10 +1,13 @@
 //! Smelt: ores (+ coal) into bars at a furnace (catalogue §5.7, P1).
-//! Ore on a furnace smelts one bar with no interface (the 274 `use`
-//! path chains nothing), so the run goes through the shared produce
-//! brick with a direct click per ore. The make-x grid is throughput
-//! only, never correctness. Superheat stays out: `superheat` owns it.
+//! Ore on a furnace smelts one bar per click (the 274 `use` path chains
+//! nothing: one click per bar, live 1.0+ action per bar). The furnace's
+//! Smelt op opens the bar menu (`smelting.rs2` `[oploc2,_smithing_furnace]`
+//! → `if_openchat(smelting)`); its X button asks the count and chains
+//! the whole load on the weak queue (`smelt_ore_makex` →
+//! `smelt_ore_weakqueue`): three actions per load, like a player.
+//! Superheat stays out: `superheat` owns it.
 //!
-//! Process: poste fourneau · action fondre · interface directe ·
+//! Process: poste fourneau · action fondre · menu Smelt X ·
 //! intrants minerais (+ charbon) · produits barres.
 
 #![forbid(unsafe_code)]
@@ -25,8 +28,25 @@ pub const FURNACES: [&str; 2] = ["furnace1", "furnace2"];
 /// Highest F2P bar at each floor (catalogue §5.7): bar and smelt level.
 pub const BARS: [(&str, i64); 8] = [("bronze_bar", 1), ("iron_bar", 15), ("silver_bar", 20), ("steel_bar", 30), ("gold_bar", 40), ("mithril_bar", 50), ("adamantite_bar", 70), ("runite_bar", 85)];
 
-const SMELT: Produce<'static> =
-    Produce { verb: "smelting", site: ProduceSite::Loc(&FURNACES), ui: ProduceUi::Direct };
+/// Smelt-X button of each bar on the furnace menu (`smelting.rs2`:
+/// `[if_button,smelting:com_N] @smelt_ore_makex(bar)`).
+pub const SMELT_X: [(&str, &str); 8] = [
+    ("bronze_bar", "smelting:com_12"),
+    ("iron_bar", "smelting:com_16"),
+    ("silver_bar", "smelting:com_20"),
+    ("steel_bar", "smelting:com_24"),
+    ("gold_bar", "smelting:com_28"),
+    ("mithril_bar", "smelting:com_32"),
+    ("adamantite_bar", "smelting:com_36"),
+    ("runite_bar", "smelting:com_40"),
+];
+
+/// The furnace menu declaration smelting `bar` with one X answer.
+/// `None` for a bar the menu does not list: fail loud, never guess.
+pub fn smelt_produce(bar: &str) -> Option<Produce<'static>> {
+    let (_, button) = SMELT_X.iter().find(|(name, _)| *name == bar)?;
+    Some(Produce { verb: "smelting", site: ProduceSite::Loc(&FURNACES), ui: ProduceUi::Multi { op: 2, menu: "smelting", button } })
+}
 
 /// F2P smelt recipe making `bar` (members excluded).
 pub fn smelt_recipe(bar: &str) -> Option<knowledge::recipes::Recipe> {
@@ -112,6 +132,7 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
     }
     let primary = obj_id(bot, primary_name)?;
     let bar = obj_id(bot, bar_name)?;
+    let smelt = smelt_produce(bar_name).ok_or_else(|| ScriptError::Usage(format!("{bar_name} is not on the furnace menu at {:?}", bot.position())))?;
     let mut bank = nearest_bank(bot)?;
     // The brain's `--site` furnace, else the nearest one to the bot.
     let (here_x, here_z, here_level) = match spec.site {
@@ -142,7 +163,7 @@ pub fn run_smelt(bot: &mut Bot, args: &[String]) -> ScriptResult {
             // `want: 0` would read "all carried": the order is met.
             return Ok(StepControl::GoalReached);
         }
-        let job = ProduceJob { spec: &SMELT, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32) };
+        let job = ProduceJob { spec: &smelt, input: primary, input_name: primary_name, want: sets, products: vec![bar], near: (post.x as i32, post.z as i32) };
         match produce::run_job(step_bot, &job) {
             Err(error) if is_death_abort(&error) => {
                 step_bot.log("died smelting, restocking to retry");
@@ -212,6 +233,26 @@ fn fill_sets(bot: &mut Bot, bank: &lifescape_gamedata::banks::Bank, inputs: &[Se
 #[cfg(test)]
 mod tests {
     use super::{bar_for_level, furnace_post, load_sets, ore_recipe, short_inputs, smelt_recipe, wanted_sets, BARS, FURNACES, SMITHING_STAT};
+
+    /// Every F2P bar has its Smelt-X button on the furnace menu, and the
+    /// buttons exist in the component dump: one X answer per load.
+    #[test]
+    fn every_bar_smelts_through_the_x_button() {
+        let mut bot = lifescape_sdk::Bot::new("127.0.0.1", 43594, ".", ".");
+        crate::tables_live::attach_live_tables(&mut bot);
+        assert!((bot.tables.com_id)("smelting").is_some(), "menu root");
+        for (bar, _) in BARS {
+            let spec = super::smelt_produce(bar).unwrap_or_else(|| panic!("{bar} on the menu"));
+            match spec.ui {
+                crate::kit::produce::ProduceUi::Multi { op, menu, button } => {
+                    assert_eq!((op, menu), (2, "smelting"), "{bar}: furnace Smelt op opens the menu");
+                    assert!((bot.tables.com_id)(button).is_some(), "{bar}: {button} in the dump");
+                }
+                _ => panic!("{bar}: Smelt-X menu expected"),
+            }
+        }
+        assert!(super::smelt_produce("pebble").is_none());
+    }
 
     /// A load is balanced and bounded: the room, the scarcest input in
     /// pack + bank (20 copper and 5 tin load 5 sets, never 14 copper of

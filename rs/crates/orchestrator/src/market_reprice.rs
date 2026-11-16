@@ -164,7 +164,9 @@ pub fn account_patience(service: &MarketService, account: &str) -> f64 {
     if let Some(known) = service.lock_engine().patience.get(account).copied() {
         return known;
     }
-    let patience = crate::brain::load_life(account).map(|life| life.profile.price_patience).unwrap_or(0.5);
+    // Tests never read the real run/lives (a fleet account's own trait
+    // would change the curve under test): they inject into the cache.
+    let patience = if cfg!(test) { 0.5 } else { crate::brain::load_life(account).map(|life| life.profile.price_patience).unwrap_or(0.5) };
     service.lock_engine().patience.insert(account.to_string(), patience);
     patience
 }

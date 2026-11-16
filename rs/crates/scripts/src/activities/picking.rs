@@ -74,18 +74,11 @@ impl HarvestSource for PickSource {
         bot.world.loc_at(self.x, self.z, bot.world.level).is_none_or(|(id, _, _)| id == self.loc)
     }
 
-    fn depleted_now(&self, _bot: &mut Bot, _x: i32, _z: i32, _silences: u32) -> bool {
-        false
-    }
 
     /// Instant action: one quiet round without produce means the click never
     /// landed — move on.
     fn unacked_rounds(&self) -> u32 {
         1
-    }
-
-    fn reprobe(&self, _acked: bool, _live: bool, _since_probe: u64) -> bool {
-        false
     }
 }
 
@@ -279,7 +272,6 @@ mod tests {
     fn click_is_instant_and_empty_ends_fast() {
         let source = super::PickSource { loc: 1, x: 0, z: 0 };
         assert_eq!(crate::kit::harvest::HarvestSource::unacked_rounds(&source), 1, "instant click, fast give-up");
-        assert!(!crate::kit::harvest::HarvestSource::reprobe(&source, true, true, 999), "never re-clicks");
         assert!(EMPTY_LIMIT <= 5, "empty field ends fast: {EMPTY_LIMIT}");
     }
 }

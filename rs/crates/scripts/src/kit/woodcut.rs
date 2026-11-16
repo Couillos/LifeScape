@@ -272,15 +272,6 @@ fn work_spot(
     Ok((ring_pass_verdict(refused_operable), gained))
 }
 
-/// Re-click decision after a quiet round: never when a swing was acked
-/// on a still-live tree (the player is cutting — a re-click restarts the
-/// swing server-side); otherwise probe reachability (a wall-separated
-/// tree only refuses when clicked). Pure so the cadence rule is locked
-/// by tests without a live connection (`op_loc`/`pump` need a login).
-fn probe_after_silence(acked: bool, live: bool) -> bool {
-    !(acked && live)
-}
-
 /// Tree click-and-watch on the shared harvest core: the loc is resolved
 /// once per spot (stream first, template fallback), the ring stands rotate
 /// around it, the watch loop is `kit::harvest`.
@@ -314,14 +305,10 @@ impl HarvestSource for TreeSource {
         !is_stump(bot, self.x, self.z) && live_loc_id(bot, self.x, self.z).is_ok()
     }
 
-    /// Stump on the first quiet round: the tree is depleted, Gone at once
-    /// instead of waiting out a second round on a stump.
-    fn depleted_now(&self, bot: &mut Bot, _x: i32, _z: i32, silences: u32) -> bool {
-        silences == 1 && is_stump(bot, self.x, self.z)
-    }
-
-    fn reprobe(&self, acked: bool, live: bool, _since_probe: u64) -> bool {
-        probe_after_silence(acked, live)
+    /// Stump: the tree is depleted, Gone at once (after the log that
+    /// felled it or on a quiet round) instead of waiting on a stump.
+    fn depleted(&self, bot: &mut Bot) -> bool {
+        is_stump(bot, self.x, self.z)
     }
 
     fn poll_events(&self) -> bool {
@@ -679,25 +666,6 @@ mod tests {
         assert_eq!(respawn_wait_ticks(30, None), Some(30), "nowhere to go waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS, Some(1000)), Some(GONE_BAN_TICKS), "cap itself still waits");
         assert_eq!(respawn_wait_ticks(GONE_BAN_TICKS + 1, Some(1000)), None, "one over cap leaves");
-    }
-    #[test]
-    fn silence_probe_never_reclicks_an_acked_live_tree() {
-        assert!(
-            !super::probe_after_silence(true, true),
-            "acked swing on a live tree waits, exactly one op_loc per stand"
-        );
-        assert!(
-            super::probe_after_silence(false, true),
-            "no ack on a live tree re-clicks the reachability probe"
-        );
-        assert!(
-            super::probe_after_silence(true, false),
-            "acked swing on a gone tree re-clicks: Gone owns the verdict"
-        );
-        assert!(
-            super::probe_after_silence(false, false),
-            "no ack on a gone tree re-clicks the probe before Gone fires"
-        );
     }
     #[test]
     fn ring_pass_verdict_strikes_only_on_operable_refusal() {

@@ -18,7 +18,7 @@ use crate::kit::pack::free_slots;
 use crate::kit::survival::{check_events, hitpoints};
 use crate::kit::bans::BanSet;
 use crate::kit::ammo::{resolve as resolve_weapon_refusal, weapon_refusal, AmmoFix};
-use crate::kit::strike::{attack_npc, foe_refusal, reattack_ticks, FoeRefusal};
+use crate::kit::strike::{attack_npc, foe_refusal, reattack_due, reattack_ticks, FoeRefusal};
 use crate::ScriptError;
 
 // The hunt (clusters, bank trips, budgets) lives in `kit::hunt` (rule 4).
@@ -337,11 +337,11 @@ pub fn fight(
                 // ticks). No positive "you're fighting" message exists
                 // server-side (all combat lines are refusals), so evidence
                 // is xp flowing, hp taken, or the target animating — its
-                // attack anim streams, ours never does. A held fight
-                // still probes reachability every 25 ticks: a
-                // wall-separated target only refuses when clicked, and
-                // that refusal is the fast exit (UnreachableSpot path).
-                // FIGHT_STALL/KILL_CAP stay the backstops.
+                // attack anim streams, ours never does. A held melee or
+                // ranged fight is nudged only once it went quiet (no xp, no
+                // step for 25 ticks: `strike::reattack_due`), never while
+                // the server's swing loop runs. FIGHT_STALL/KILL_CAP stay
+                // the backstops.
                 if !fighting && bot.world.ticks.saturating_sub(last_attack) >= 5 {
                     if fight_engaged(
                         combat_xp(bot),
@@ -373,7 +373,14 @@ pub fn fight(
                             progress_at = bot.world.ticks;
                         }
                     }
-                } else if fighting && bot.world.ticks.saturating_sub(last_attack) >= reattack_ticks(bot) {
+                } else if fighting
+                    && reattack_due(
+                        bot.combat_style == "magic",
+                        reattack_ticks(bot),
+                        bot.world.ticks.saturating_sub(last_attack),
+                        bot.world.ticks.saturating_sub(progress_at),
+                    )
+                {
                     if !attack_npc(bot, slot, no_bank)? {
                         return Ok((kills, true, false));
                     }

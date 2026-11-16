@@ -5,6 +5,7 @@
 
 pub mod actions;
 pub mod approach;
+pub mod bank;
 pub mod coin_ledger;
 pub mod item_ledger;
 pub mod run_events;

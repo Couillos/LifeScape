@@ -457,3 +457,33 @@ l'arme du bot.
   corps en cuir dur) ; un fil par 5 pièces (`leather.rs2`), le fil s'empile.
 - `produce` atelier PNJ hors de vue : marche jusqu'à son apparition la plus
   proche (dump) puis le cherche à nouveau (teinture chez Aggie).
+
+## Transferts banque et attente d'action (2026-11-16)
+
+Banque : une seule primitive SDK, `client/bank.rs`. `bank_button(veut,
+pile)` choisit LE bouton d'un joueur (`bank.rs2`/`bank_deposit.rs2`, ops
+1/5/10/All/X des deux conteneurs) : All quand toute la pile part, 1/5/10
+quand ça tombe juste, sinon X (`P_COUNTDIALOG` → `RESUME_P_COUNTDIALOG`).
+Le serveur déplace `min(demandé, inv_total)` sur toutes les cases d'un
+coup : un Deposit-All par TYPE vide un objet non empilable entier
+(`deposit_presses`). `bank_deposit`, `bank_deposit_all`, `bank_withdraw`,
+`bank_withdraw_noted` et `kit::withdraw::bank_withdraw_items` passent
+tous par elle ; un refus serveur (sac/banque pleins, 60 types) arrête
+l'attente. Avant : un Deposit-All par case (12,3 pressions par dépôt sur
+la flotte), retraits en 10/5/1 (5,5 pressions par retrait ; pièces
+verrouillées par le marché = une pression par 10 pièces).
+
+Attente d'action (règle de la coupe de bois, `kit::harvest`) :
+`reclick_after_silence` ne re-clique jamais tant qu'un coup est acquitté
+sur une cible vivante, une seule sonde au premier tour muet sinon ;
+`after_gain` termine le poste à la déplétion (souche, rocher vidé :
+`HarvestSource::depleted`), re-clique tout de suite seulement quand le
+serveur a fini l'action avec le produit (`gain_ends_action` : minerai,
+gemme). Minage, essence, pêche (banc déplacé = `spot_hopped` sur le slot
+cliqué), cueillette, traite, tonte : même noyau. Combat mêlée/distance :
+relance seulement après une fenêtre sans XP ni pas
+(`strike::reattack_due`) ; la magie reste un sort par clic. Fonte : menu
+`Smelt` du four, bouton X, chaîne serveur (`smelt::SMELT_X`) ; une
+chaîne coupée (niveau gagné) rouvre le menu (`produce::chain_cut`).
+Cuisson, feu, enterrement : un clic par unité côté serveur (274), déjà
+attendu.

@@ -29,6 +29,7 @@ const READ_METHODS: &[&str] = &[
 const WRITE_METHODS: &[&str] = &[
     "approach",
     "approach_npc",
+    "bank_deposit",
     "bank_deposit_all",
     "bank_withdraw",
     "chat_choose",
@@ -454,6 +455,14 @@ pub(crate) fn execute_write(bot: &mut Bot, method: &str, raw_args: &[Value]) -> 
         "bank_withdraw" => {
             let timeout = call_timeout(&args, 2, method, 9000)?;
             bot.bank_withdraw(need_i64(&args, 0, method)? as u16, need_i64(&args, 1, method)? as u32, timeout)
+                .map_err(|error| error.to_string())
+                .map(|count| Value::Int(i64::from(count)))
+        }
+        "bank_deposit" => {
+            let timeout = call_timeout(&args, 2, method, 9000)?;
+            let count = need_i64(&args, 1, method)?;
+            let count = if count <= 0 { u32::MAX } else { u32::try_from(count).unwrap_or(u32::MAX) };
+            bot.bank_deposit(need_i64(&args, 0, method)? as u16, count, timeout)
                 .map_err(|error| error.to_string())
                 .map(|count| Value::Int(i64::from(count)))
         }
