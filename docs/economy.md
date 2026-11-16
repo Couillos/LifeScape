@@ -249,11 +249,19 @@ product → produced, consommables → consumed, discarded → lost…) : la cl�
 de l'agrégation actuelle reste le script jusqu'à R2.
 
 Registre SDK : sac et équipement porté observés ensemble (porter ne sort
-rien, une flèche tirée sort du carquois) ; actions ciblées par objet et
-par signe (manger, enterrer, jeter, ramasser, lancer) ; contexte boutique,
-échange, dialogue ; XP par stat dans les 8 ticks (`skill`) ; banque
-ouverte ou fermée depuis moins de 2 ticks = transfert (pas un flux) ;
-pertes dans les 30 ticks d'une mort = `death`.
+rien, une flèche tirée sort du carquois), à chaque frontière de tick
+serveur (avant chaque `PLAYER_INFO`, plus une fois au début et à la fin
+d'un rapport) : le serveur écrit sac et porté en deux trames, une
+observation en milieu de tick lisait un échange d'équipement comme quatre
+flux `unattributed` ; actions ciblées par objet et par signe (manger,
+enterrer, jeter, ramasser, lancer) ; contexte boutique, échange,
+dialogue ; XP par stat dans les 8 ticks (`skill`) ; banque ouverte =
+transfert ; fermée depuis moins de 2 ticks = transfert, sauf action
+ciblée envoyée depuis (un jet juste après la fermeture reste `discarded`) ;
+pertes dans les 30 ticks d'une mort = `death`. Contrôle de cohérence :
+billets repliés sur l'objet de base (la banque ne tient que l'objet de
+base, un lot du marché arrive noté) ; banque de fin = banque vivante, ou
+telle qu'à son dernier `UPDATE_INV_STOP_TRANSMIT` (`World::inv_closed`).
 
 Store (schéma 5) : `task_reports` + `measure_version` (1 = rapport par
 diff net, 2 = contrat 2), méthode fine, source, site, cible, outil, style,

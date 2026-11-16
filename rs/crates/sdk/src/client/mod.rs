@@ -449,7 +449,18 @@ impl Bot {
     /// Feed one pumped frame, acking rebuilds like the client: after
     /// `mapBuild` it sends `MAP_BUILD_COMPLETE` (`Client.ts:5137`), and
     /// the server streams the new region only once the ack lands.
+    ///
+    /// The ledgers observe on each `PLAYER_INFO`, before it is fed: the
+    /// server writes a tick's frames one by one (player info, NPC info,
+    /// then each inventory, then the stats), so a pump can return in the
+    /// middle of a tick. Observed there, an equip swap read as the pack
+    /// half then the worn half: four `unattributed` flows (live
+    /// 2026-11-16, eva_dale equip:melee, Yogosun fight:melee/men). The
+    /// next tick's player info closes the previous tick whole.
     fn feed(&mut self, frame: &Frame) -> Result<()> {
+        if frame.name == "PLAYER_INFO" {
+            self.observe_ledgers();
+        }
         self.world.feed(&frame.name, &frame.body)?;
         if frame.name == "REBUILD_NORMAL" {
             self.send_named("MAP_BUILD_COMPLETE", &[])?;
@@ -463,26 +474,28 @@ impl Bot {
     /// for `coin_ledger::CONTEXT_TICKS`.
     pub fn coin_context(&mut self, kind: &'static str) {
         let until = self.world.ticks + coin_ledger::CONTEXT_TICKS;
-        self.coin_ledger.set_context(kind, until);
+        self.coin_ledger.set_context(kind, self.world.ticks, until);
     }
 
     /// `coin_context` for `ticks` (a long dialogue, a walk to the NPC).
     pub fn coin_context_for(&mut self, kind: &'static str, ticks: u64) {
         let until = self.world.ticks + ticks;
-        self.coin_ledger.set_context(kind, until);
+        self.coin_ledger.set_context(kind, self.world.ticks, until);
     }
 
     /// Names what the next change of `obj` (any: `None`) moving with
     /// `sign` (0: both) comes from, for `ticks` (`item_ledger`).
     pub fn item_action(&mut self, kind: &'static str, obj: Option<u16>, sign: i8, ticks: u64) {
         let until = self.world.ticks + ticks;
-        self.item_ledger.note_action(kind, obj, sign, until);
+        self.item_ledger.note_action(kind, obj, sign, self.world.ticks, until);
     }
 
     /// Feeds the ledgers what the bot carries now (bank open: transfers):
     /// coins in the pack, every object in pack plus worn, XP per stat,
-    /// and the NPC hits for the run events.
-    fn observe_coins(&mut self) {
+    /// and the NPC hits for the run events. Runs on every server tick
+    /// boundary (`feed`); a task report calls it once at its start and
+    /// end snapshots so the ledger and the snapshot see the same state.
+    pub fn observe_ledgers(&mut self) {
         let (com, slots) = self.backpack();
         if com.is_none() {
             return;
@@ -526,7 +539,6 @@ impl Bot {
                 frames.push(frame);
             }
         }
-        self.observe_coins();
         if let Some(hook) = self.on_pump.clone() {
             if !hook(self) {
                 return Err(Error::Interrupted(format!("run stopped at {:?}", self.position())));
@@ -773,6 +785,49 @@ mod tests {
         assert_eq!((bot.world.base_x, bot.world.base_z), ((50 - 6) << 3, (50 - 6) << 3), "feed ran before the ack");
         let plain = Frame { opcode: 171, name: "IF_CLOSE".to_string(), body: vec![] };
         assert!(bot.feed(&plain).is_ok(), "non-rebuild sends nothing");
+    }
+
+    /// Live 2026-11-16 (eva_dale equip:melee t=1719, Yogosun
+    /// fight:melee/men t=1986): one wield gave four `unattributed` flows
+    /// (battleaxe -1 +1, longsword -1 +1). The server writes the pack and
+    /// the worn inventories as two frames of the same tick; a ledger
+    /// observed after a pump that stopped between them saw two halves.
+    /// Observed on tick boundaries, the swap nets out and a real gain of
+    /// the same tick still lands.
+    #[test]
+    fn ledgers_observe_whole_server_ticks() {
+        const PACK: u16 = 3214;
+        const WORN: u16 = 1688;
+        fn coms(name: &str) -> Option<u16> {
+            match name {
+                "inventory:inv" => Some(PACK),
+                "wornitems:wear" => Some(WORN),
+                _ => None,
+            }
+        }
+        fn slot_frame(com: u16, slot: u8, obj: u16, count: u8) -> Frame {
+            let mut body = com.to_be_bytes().to_vec();
+            body.push(slot);
+            body.extend((obj + 1).to_be_bytes());
+            body.push(count);
+            Frame { opcode: 0, name: "UPDATE_INV_PARTIAL".to_string(), body }
+        }
+        let tick = Frame { opcode: 0, name: "PLAYER_INFO".to_string(), body: vec![0, 0] };
+        let (longsword, battleaxe, bones) = (1301u16, 1371u16, 526u16);
+        let mut bot = Bot::new("127.0.0.1", 43594, ".", ".");
+        bot.tables.com_id = coms;
+        bot.feed(&slot_frame(PACK, 0, longsword, 1)).expect("pack");
+        bot.feed(&slot_frame(WORN, 3, battleaxe, 1)).expect("worn");
+        bot.feed(&tick).expect("tick 1");
+        bot.feed(&tick).expect("tick 2: baseline observed");
+        // One tick: wield the longsword (pack half, then worn half), and
+        // pick up bones.
+        bot.feed(&slot_frame(PACK, 0, battleaxe, 1)).expect("pack half");
+        bot.feed(&slot_frame(WORN, 3, longsword, 1)).expect("worn half");
+        bot.feed(&slot_frame(PACK, 1, bones, 1)).expect("bones");
+        bot.feed(&tick).expect("tick 3");
+        let flows: Vec<(u16, i64)> = bot.item_ledger.flows.iter().map(|flow| (flow.obj, flow.delta)).collect();
+        assert_eq!(flows, vec![(bones, 1)], "the swap moves nothing out, the gain lands");
     }
 
     /// The ack resolves its op name (a bad name fails `Protocol`, never

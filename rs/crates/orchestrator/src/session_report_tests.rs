@@ -293,3 +293,71 @@ fn closed_bank_reads_from_cache() {
     assert!(refresh_bank_cache(&bot, &mut cache_closed).is_some(), "emptied bank still streams");
     assert!(cache_closed.is_empty(), "emptied bank clears the cache");
 }
+
+/// Live 2026-11-16 (amber_moore fight:melee/men): a market pause bought
+/// 281 noted iron ore, the run banked it (the bank holds the base
+/// object): residual +281 (base, bank 1856->2137, flows 0) and -281
+/// (note, flows 281) in one report. Notes fold into their base object;
+/// the reverse leg too (alice_knight jewelry: 26 ore withdrawn noted then
+/// sold, residual -26 and +26), and noted stock carried at the start
+/// then banked (ida_reed: emerald amulet +2 and -2).
+#[test]
+fn noted_lots_fold_into_their_base_object() {
+    let mut bot = live_bot();
+    let ore = id(&bot, "iron_ore");
+    let noted = id(&bot, "cert_iron_ore");
+    item(&mut bot, noted, "trade", 281, &[]);
+    item(&mut bot, noted, "trade", -26, &[]);
+    let bank_start: HashMap<u16, u32> = [(ore, 1856)].into_iter().collect();
+    let bank_end: HashMap<u16, u32> = [(ore, 2111)].into_iter().collect();
+    let report = build_report(&bot, &holdings(&[], &[], 100), &bank_start, &holdings(&[], &[], 200), &bank_end, &ctx("melee", "goal_reached"));
+    assert!(report.alerts.is_empty(), "{:?}", report.alerts);
+    assert_eq!(report.flows, vec![line("Iron ore", "traded", -26), line("Iron ore", "traded", 281)]);
+    let amulet = id(&bot, "strung_emerald_amulet");
+    let noted_amulet = id(&bot, "cert_strung_emerald_amulet");
+    let banked: HashMap<u16, u32> = [(amulet, 2)].into_iter().collect();
+    let report = build_report(&live_bot(), &holdings(&[(noted_amulet, 2)], &[], 100), &empty_bank(), &holdings(&[], &[], 200), &banked, &ctx("mining", "failed"));
+    assert!(report.alerts.is_empty(), "{:?}", report.alerts);
+}
+
+/// Live 2026-11-16 (daisy_hunt fight:melee/men t=2096-2119): deposit 10
+/// salmon, withdraw 10, close. One pump drained the withdrawal's bank
+/// update with the stop-transmit, so a cache refreshed only while the
+/// bank streamed kept 694 instead of 684: residual +10 salmon (same for
+/// coins +1/+10, wooden shield -1, jug of water -1). Closed, the cache
+/// takes the bank as it stood at its stop-transmit.
+#[test]
+fn closed_bank_cache_takes_the_stop_transmit_state() {
+    use super::refresh_bank_cache;
+    let mut bot = live_bot();
+    let salmon = id(&bot, "salmon");
+    let bank_com = (bot.tables.com_id)("bank_main:inv").expect("bank_main in dumps");
+    let pack_com = (bot.tables.com_id)("inventory:inv").expect("inventory:inv in dumps");
+    let salmon_slot = |count: u32| {
+        let mut body = bank_com.to_be_bytes().to_vec();
+        body.push(3);
+        body.extend((salmon + 1).to_be_bytes());
+        body.push(255);
+        body.extend(count.to_be_bytes());
+        body
+    };
+    bot.world.inv.insert(bank_com, [(3u8, (salmon, 684u32))].into_iter().collect());
+    bot.world.inv.insert(pack_com, HashMap::new());
+    let mut cache = HashMap::new();
+    let baseline = refresh_bank_cache(&bot, &mut cache).expect("open bank streams");
+    // The deposit, seen while the bank streams.
+    bot.world.feed("UPDATE_INV_PARTIAL", &salmon_slot(694)).expect("deposit");
+    assert!(refresh_bank_cache(&bot, &mut cache).is_some());
+    // One drain, no refresh between: the withdrawal's bank update, then
+    // the stop-transmit.
+    bot.world.feed("UPDATE_INV_PARTIAL", &salmon_slot(684)).expect("withdrawal");
+    bot.world.feed("UPDATE_INV_STOP_TRANSMIT", &bank_com.to_be_bytes()).expect("stop transmit");
+    assert!(refresh_bank_cache(&bot, &mut cache).is_none(), "closed bank streams nothing");
+    assert_eq!(cache.get(&salmon), Some(&684), "the bank at its stop-transmit");
+    // 10 salmon carried at start and end, deposited then withdrawn
+    // (transfers, no flow): no residual.
+    let before = holdings(&[(salmon, 10)], &[], 2035);
+    let after = holdings(&[(salmon, 10)], &[], 3535);
+    let report = build_report(&bot, &before, &baseline, &after, &cache, &ctx("melee", "budget_exhausted"));
+    assert!(report.alerts.is_empty(), "{:?}", report.alerts);
+}

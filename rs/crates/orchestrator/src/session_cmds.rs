@@ -78,8 +78,14 @@ fn cmd_run(shared: &Arc<Shared>, script: &str, args: &[Value]) -> Value {
     // The planner method rides `--method` (session-only, stripped before
     // the script parses its CLI, `report_meta`).
     let (script_args, method) = crate::report_meta::strip_meta(&string_args);
-    *shared.task_start.lock().unwrap() =
-        crate::session_report::task_start_for(&shared.bot.lock().unwrap(), script, &script_args, method.as_deref());
+    // The ledgers observe on tick boundaries: close the current tick so
+    // the start snapshot and the ledger position agree.
+    let start = {
+        let mut bot = shared.bot.lock().unwrap();
+        bot.observe_ledgers();
+        crate::session_report::task_start_for(&bot, script, &script_args, method.as_deref())
+    };
+    *shared.task_start.lock().unwrap() = start;
     spawn_script_thread(shared, script, &string_args);
     object(vec![("ok", Value::Bool(true)), ("session", shared.describe())])
 }

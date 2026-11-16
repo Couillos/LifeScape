@@ -94,9 +94,13 @@ pub fn snapshot_holdings(bot: &Bot) -> Holdings {
 }
 
 /// Refresh the bank cache from the live bank com when it streams (bank
-/// open, even emptied), returning the live bank when seen. Call on every
-/// heartbeat: flows only happen while open, so the cache is the true
-/// bank whenever it is closed.
+/// open, even emptied), returning the live bank when seen. Closed, the
+/// cache takes the bank as it stood at its stop-transmit (`World::
+/// inv_closed`): one pump can drain a withdrawal's bank update together
+/// with the close, and a cache refreshed only while streaming kept the
+/// bank before that withdrawal (live 2026-11-16: residual +10 salmon,
+/// +10 shrimps, +1 and +10 coins, -1 wooden shield, -1 jug of water).
+/// Call on every heartbeat and before the end snapshot.
 pub fn refresh_bank_cache(bot: &Bot, cache: &mut HashMap<u16, u32>) -> Option<HashMap<u16, u32>> {
     let bank_com = (bot.tables.com_id)("bank_main:inv");
     if bank_com.is_some_and(|com| bot.world.inv.contains_key(&com)) {
@@ -104,6 +108,13 @@ pub fn refresh_bank_cache(bot: &Bot, cache: &mut HashMap<u16, u32>) -> Option<Ha
         *cache = bank_live.clone();
         Some(bank_live)
     } else {
+        if let Some(closed) = bank_com.and_then(|com| bot.world.inv_closed.get(&com)) {
+            let mut bank: HashMap<u16, u32> = HashMap::new();
+            for (held, count) in closed.values() {
+                *bank.entry(*held).or_insert(0) = bank.get(held).copied().unwrap_or(0).saturating_add(*count);
+            }
+            *cache = bank;
+        }
         None
     }
 }
@@ -257,6 +268,24 @@ fn market_start_for(bot: &Bot, args: &[String], meta: RunMeta) -> Option<TaskSta
     Some(TaskStart { script: "market".to_string(), budget_max, node_id, holdings: snapshot_holdings(bot), pause_ticks: bot.pause_ticks, meta })
 }
 
+/// Base object of a carried id: a banknote (`cert_<name>`) counts for the
+/// object it notes. The bank holds only base objects, a market lot rides
+/// noted: kept apart, 281 noted iron ore bought then banked read as
+/// residual +281 (base) and -281 (note) in one report (live 2026-11-16,
+/// amber_moore fight:melee/men; 22 such pairs in the first 101 reports).
+fn base_id(id: u16) -> u16 {
+    u16::try_from(crate::market_audit::base_of(i64::from(id))).unwrap_or(id)
+}
+
+/// Holdings per base object (`base_id`), signed for the diff.
+fn fold_notes(map: &HashMap<u16, u32>) -> HashMap<u16, i64> {
+    let mut folded: HashMap<u16, i64> = HashMap::new();
+    for (id, count) in map {
+        *folded.entry(base_id(*id)).or_insert(0) += i64::from(*count);
+    }
+    folded
+}
+
 fn debug_name(id: u16) -> String {
     lifescape_gamedata::obj_by_id(usize::from(id)).and_then(|entry| entry.name).map(str::to_string).unwrap_or_else(|| format!("obj{id}"))
 }
@@ -313,7 +342,7 @@ pub fn build_report(
         if Some(flow.obj) == coins {
             continue;
         }
-        *groups.entry((flow.obj, flow.kind, flow.skills, flow.delta > 0)).or_insert(0) += flow.delta;
+        *groups.entry((base_id(flow.obj), flow.kind, flow.skills, flow.delta > 0)).or_insert(0) += flow.delta;
     }
     let raw: Vec<(u16, RawFlow)> = groups
         .into_iter()
@@ -338,22 +367,25 @@ pub fn build_report(
     let flows = flow_causes::balance(&lines);
     let mut alerts: Vec<Alert> =
         flows.iter().filter(|(_, cause_name, _)| *cause_name == cause::UNATTRIBUTED).map(|(name, _, qty)| Alert { kind: "unattributed", name: name.clone(), qty: *qty, detail: String::new() }).collect();
-    // Coherence (D4, D19): net holdings diff against the ledger, per object.
-    let mut ids: Vec<u16> = before.items.keys().chain(after.items.keys()).chain(bank_baseline.keys()).chain(bank_end.keys()).chain(ledger_net.keys()).copied().collect();
+    // Coherence (D4, D19): net holdings diff against the ledger, per base
+    // object (notes folded: the bank holds only base objects).
+    let (carried_start, carried_end) = (fold_notes(&before.items), fold_notes(&after.items));
+    let (bank_start, bank_last) = (fold_notes(bank_baseline), fold_notes(bank_end));
+    let mut ids: Vec<u16> = carried_start.keys().chain(carried_end.keys()).chain(bank_start.keys()).chain(bank_last.keys()).chain(ledger_net.keys()).copied().collect();
     ids.sort_unstable();
     ids.dedup();
-    let held = |id: u16, map: &HashMap<u16, u32>| i64::from(map.get(&id).copied().unwrap_or(0));
+    let held = |id: u16, map: &HashMap<u16, i64>| map.get(&id).copied().unwrap_or(0);
     for id in ids {
-        let net = (held(id, &after.items) - held(id, &before.items)) + (held(id, bank_end) - held(id, bank_baseline));
+        let net = (held(id, &carried_end) - held(id, &carried_start)) + (held(id, &bank_last) - held(id, &bank_start));
         let flowed = ledger_net.get(&id).copied().unwrap_or(0);
         let residual = net - flowed;
         if residual != 0 {
             let detail = format!(
                 "carried {}->{} bank {}->{} flows {flowed}",
-                held(id, &before.items),
-                held(id, &after.items),
-                held(id, bank_baseline),
-                held(id, bank_end)
+                held(id, &carried_start),
+                held(id, &carried_end),
+                held(id, &bank_start),
+                held(id, &bank_last)
             );
             alerts.push(Alert { kind: "residual", name: display_name(bot, id), qty: residual, detail });
         }
@@ -417,7 +449,12 @@ pub use crate::report_contract::report_value;
 /// (`unattributed` flows, coherence `residual`s: objective zero).
 pub(crate) fn finish_task_report(shared: &std::sync::Arc<crate::session::Shared>, stop: &str, missing: &[String], error: Option<&lifescape_json::Value>) {
     let Some(start) = shared.task_start.lock().unwrap().take() else { return };
-    let bot = shared.bot.lock().unwrap();
+    let mut bot = shared.bot.lock().unwrap();
+    // The ledgers observe on tick boundaries: close the current tick so
+    // they and the end snapshot see the same state, and take the bank
+    // as it stands now (open or at its last stop-transmit).
+    bot.observe_ledgers();
+    refresh_bank_cache(&bot, &mut shared.last_bank.lock().unwrap());
     let end = snapshot_holdings(&bot);
     // The end cache counts only when the bank opened in-run (baseline
     // set): a run that never banks sees no bank moves, so pre-stock stays

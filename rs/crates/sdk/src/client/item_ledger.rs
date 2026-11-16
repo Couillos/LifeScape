@@ -4,9 +4,13 @@
 //! change of what the bot CARRIES (pack plus worn: wielding moves nothing
 //! out, a fired arrow leaves the quiver) is one flow, attributed in this
 //! order:
-//! 1. bank open, or closed less than `BANK_GRACE_TICKS` ago: a transfer
-//!    (pack <-> bank), never a flow (the deposit's inventory update can
-//!    land just after the client closed the bank locally);
+//! 1. bank open: a transfer (pack <-> bank), never a flow; bank closed
+//!    less than `BANK_GRACE_TICKS` ago: still a transfer (the deposit's
+//!    inventory update can land just after the client closed the bank
+//!    locally), unless a scoped action sent since the bank was last seen
+//!    open names it (live 2026-11-16, cleanup: withdraw, close, drop two
+//!    ticks later: the drops read as transfers, residual -2 raw shrimps,
+//!    -163 body runes);
 //! 2. a loss while dead or within `DEATH_TICKS` of a death: `death`;
 //! 3. the newest scoped action that matches the object and the sign
 //!    (`Bot::item_action`: eat, bury, drop, pickup, cast);
@@ -66,12 +70,14 @@ pub struct ItemFlow {
 }
 
 /// One action the bot just sent that explains the next changes: the
-/// object it touches (`None`: any) and the sign it moves (0: both).
+/// object it touches (`None`: any) and the sign it moves (0: both),
+/// from the tick it was sent until `until`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Action {
     pub kind: &'static str,
     pub obj: Option<u16>,
     pub sign: i8,
+    pub from: u64,
     pub until: u64,
 }
 
@@ -104,9 +110,10 @@ const ACTIONS_CAP: usize = 16;
 
 impl ItemLedger {
     /// Names what the next change of `obj` (any object: `None`) with the
-    /// sign `sign` (0: both) comes from, until tick `until`.
-    pub fn note_action(&mut self, kind: &'static str, obj: Option<u16>, sign: i8, until: u64) {
-        self.actions.push(Action { kind, obj, sign, until });
+    /// sign `sign` (0: both) comes from, sent at tick `from`, until tick
+    /// `until`.
+    pub fn note_action(&mut self, kind: &'static str, obj: Option<u16>, sign: i8, from: u64, until: u64) {
+        self.actions.push(Action { kind, obj, sign, from, until });
         if self.actions.len() > ACTIONS_CAP {
             let drop = self.actions.len() - ACTIONS_CAP;
             self.actions.drain(..drop);
@@ -137,9 +144,10 @@ impl ItemLedger {
         }
         self.actions.retain(|action| seen.tick <= action.until);
         let Some(last) = self.last_pack.replace(seen.pack.clone()) else { return };
-        if self.bank_seen.is_some_and(|at| seen.tick <= at + BANK_GRACE_TICKS) {
+        if seen.bank_open {
             return;
         }
+        let grace = self.bank_seen.filter(|at| seen.tick <= at + BANK_GRACE_TICKS);
         let skills = self.skills_at(seen.tick);
         let mut ids: Vec<u16> = last.keys().chain(seen.pack.keys()).copied().collect();
         ids.sort_unstable();
@@ -149,9 +157,24 @@ impl ItemLedger {
             if delta == 0 {
                 continue;
             }
-            let kind = self.kind_now(&seen, obj, delta, skills);
+            let kind = match grace {
+                // Just after the bank closed: a transfer, unless an action
+                // sent since the bank was last seen open names the change.
+                Some(open_at) => match self.scoped(obj, delta).filter(|action| action.from >= open_at) {
+                    Some(action) => action.kind,
+                    None => continue,
+                },
+                None => self.kind_now(&seen, obj, delta, skills),
+            };
             self.flows.push(ItemFlow { obj, kind, delta, tick: seen.tick, skills });
         }
+    }
+
+    /// The newest scoped action in force matching `obj` and the sign of
+    /// `delta`.
+    fn scoped(&self, obj: u16, delta: i64) -> Option<&Action> {
+        let sign: i8 = if delta > 0 { 1 } else { -1 };
+        self.actions.iter().rev().find(|action| action.obj.is_none_or(|wanted| wanted == obj) && (action.sign == 0 || action.sign == sign))
     }
 
     fn kind_now(&self, seen: &Seen<'_>, obj: u16, delta: i64, skills: u32) -> &'static str {
@@ -159,13 +182,7 @@ impl ItemLedger {
         if delta < 0 && self.death_seen.is_some_and(|at| seen.tick <= at + DEATH_TICKS) {
             return kind::DEATH;
         }
-        let sign: i8 = if delta > 0 { 1 } else { -1 };
-        let scoped = self
-            .actions
-            .iter()
-            .rev()
-            .find(|action| action.obj.is_none_or(|wanted| wanted == obj) && (action.sign == 0 || action.sign == sign));
-        if let Some(action) = scoped {
+        if let Some(action) = self.scoped(obj, delta) {
             return action.kind;
         }
         if let Some((name, until)) = seen.context {
