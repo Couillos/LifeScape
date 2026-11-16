@@ -187,7 +187,20 @@ pub fn cooked_of(raw: &str) -> Option<String> {
 
 /// The way one method works and the object it yields. `None` for
 /// methods with no game-data way (fights, purchases, quests, walks).
+/// Memoised for the process: a pure function of the static game data
+/// (the guides ask it thousands of times a build).
 pub fn method_way(method: &str) -> Option<(String, Way)> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<(String, Way)>>>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
+        return known.clone();
+    }
+    let found = compute_method_way(method);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), found.clone());
+    found
+}
+
+fn compute_method_way(method: &str) -> Option<(String, Way)> {
     let (family, tail) = method.split_once([':', '/'])?;
     let found = match family {
         "gather" => {

@@ -340,6 +340,20 @@ fn runecraft_action(rune: &str, way: &Way, level: i64) -> Result<Action, PriorEr
     })
 }
 
+/// Shortest bank round trip among a method's sites (0 without one),
+/// memoised per method: the sites are static game data (a tree way
+/// lists thousands of tiles).
+fn nearest_trip(method: &str, sites: &[(i64, i64, i64)]) -> f64 {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(method) {
+        return *known;
+    }
+    let trip = sites.iter().filter_map(|site| bank_round_trip(*site)).fold(None, |best: Option<f64>, trip| Some(best.map_or(trip, |known| known.min(trip)))).unwrap_or(0.0);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(method.to_string(), trip);
+    trip
+}
+
 /// Round-trip walk from `site` to the nearest F2P bank, in ticks.
 pub fn bank_round_trip(site: (i64, i64, i64)) -> Option<f64> {
     let bank = lifescape_gamedata::banks::nearest_free_bank(site.0, site.1, site.2)?;
@@ -358,7 +372,7 @@ pub fn method_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
         let per_load = ((PACK_SLOTS - tools) / action.slots.max(1e-9)).max(1.0);
         let trip = match query.site {
             Some(site) => bank_round_trip(site).unwrap_or(0.0),
-            None => action.sites.iter().filter_map(|site| bank_round_trip(*site)).fold(None, |best: Option<f64>, trip| Some(best.map_or(trip, |known| known.min(trip)))).unwrap_or(0.0),
+            None => nearest_trip(&query.method, &action.sites),
         };
         let kinds = action.flows.iter().filter(|(item, cause, qty)| *qty < 0.0 && *cause != "fee" && !stackable(item)).count() as f64;
         (trip + (BANK_SESSION_OPS + kinds) * INSTANT_USE_TICKS) / per_load
@@ -374,6 +388,41 @@ pub fn method_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
         flows: action.flows.iter().map(|(item, cause, qty)| (item.clone(), *cause, qty * actions_per_6000)).collect(),
         units: action.units.iter().map(|(kind, subject, qty)| (*kind, subject.clone(), qty * actions_per_6000)).collect(),
     })
+}
+
+/// The guides' prior (R4): `method_prior` plus, for a fight, the
+/// expected loot of its kills from the NPC's drop table (`loot` per
+/// 6000). The brain keeps `method_prior` (no decision change before
+/// R7); the guides price what a fight brings home.
+pub fn guide_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
+    let mut prior = method_prior(query)?;
+    if query.method.starts_with("fight:") {
+        for (item, per_kill) in crate::method_rate_fight::fight_drops_per_kill(&query.method) {
+            prior.flows.push((item, "loot", per_kill * prior.actions_per_6000));
+        }
+    }
+    Ok(prior)
+}
+
+/// Site of a way nearest a bank (the site a prior without one walks
+/// from); `None` for work done anywhere or on the spot (fights).
+pub fn best_site(query: &PriorQuery) -> Option<(i64, i64, i64)> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<(i64, i64, i64)>>>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(known) = memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&query.method) {
+        return *known;
+    }
+    let found = compute_best_site(query);
+    memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(query.method.clone(), found);
+    found
+}
+
+fn compute_best_site(query: &PriorQuery) -> Option<(i64, i64, i64)> {
+    let action = action_of(query).ok()?;
+    if !action.banks {
+        return None;
+    }
+    action.sites.iter().filter_map(|site| bank_round_trip(*site).map(|trip| (trip, *site))).min_by(|left, right| left.0.total_cmp(&right.0)).map(|(_, site)| site)
 }
 
 /// Physical ceiling of a method: the most attempts one work tick holds

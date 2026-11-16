@@ -185,7 +185,7 @@ mod tests {
             store.upsert_item(&lifescape_store::Item { item_id, name: name.to_string(), shop_price: 4, alch_value: 1 }).expect("item");
         }
         let mut snapshot = Snapshot::new();
-        let key = YieldKey { method: "cook/raw_shrimp".to_string(), style: String::new(), site: "3209,3215,0".to_string(), tool: String::new(), band: 1 };
+        let key = YieldKey { method: "cook:shrimp".to_string(), style: String::new(), site: "3209,3215,0".to_string(), tool: String::new(), band: 1 };
         for _ in 0..3 {
             let sample = RunSample {
                 work_ticks: 3000,
@@ -199,7 +199,7 @@ mod tests {
         let rows = profit_rows(&store, &snapshot);
         assert_eq!(rows.len(), 1, "{rows:?}");
         let row = &rows[0];
-        assert_eq!((row.method.as_str(), row.band), ("cook/raw_shrimp", 1));
+        assert_eq!((row.method.as_str(), row.band), ("cook:shrimp", 1), "keyed by activity");
         assert!(row.input_cost > 0.0 && row.revenue > 0.0);
         assert!(!row.prior, "three runs");
         let (shrimp, _) = price_estimate(&store, "Shrimps");

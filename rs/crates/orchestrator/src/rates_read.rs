@@ -2,6 +2,10 @@
 //! Reading a yield (plan rendements R2, R3.1): one estimate per D2 key
 //! for the page AND the brain, same rules.
 //!
+//! - the buckets are keyed by ACTIVITY (`planner::activity`): a query
+//!   names a planner method (`farm:raw_salmon`), the read looks its
+//!   activity up (`gather:fishing/raw_trout`); the prior stays the
+//!   queried method's own (a drop farm's prior yields its object);
 //! - key fallback, explicit and logged: the exact key (site known), else
 //!   the method on every site, else on every site and tool tier; a level
 //!   only counts with `MIN_MEASURED_REPORTS` runs or more;
@@ -104,28 +108,41 @@ fn site_text(site: Option<(i64, i64, i64)>) -> String {
     site.map(|(x, z, level)| format!("{x},{z},{level}")).unwrap_or_default()
 }
 
-/// Key of a query (its band from the level in the method's skill).
+/// Key of a query: the activity of its method (its band from the level
+/// in the activity's skill).
 pub fn key_of_query(query: &RateQuery) -> YieldKey {
-    YieldKey { method: query.method.clone(), style: query.style.clone(), site: site_text(query.site), tool: query.tool.clone(), band: band_for(&query.method, &query.style, i64::from(query.level)) }
+    let activity = lifescape_planner::activity::activity_of_method(&query.method);
+    let band = band_for(&activity, &query.style, i64::from(query.level));
+    YieldKey { method: activity, style: query.style.clone(), site: site_text(query.site), tool: query.tool.clone(), band }
 }
 
-type PriorKey = (String, u8, String, Option<(i64, i64, i64)>);
+type PriorKey = (bool, String, u8, String, Option<(i64, i64, i64)>);
 
-/// The game prior of a key, memoised (the dump lookups are slow).
-pub fn cached_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
+fn memo_prior(guide: bool, query: &PriorQuery) -> Result<RatePrior, PriorError> {
     static CACHE: OnceLock<Mutex<HashMap<PriorKey, Result<RatePrior, PriorError>>>> = OnceLock::new();
-    let key = (query.method.clone(), query.level, query.tool.clone(), query.site);
+    let key = (guide, query.method.clone(), query.level, query.tool.clone(), query.site);
     let cache = CACHE.get_or_init(Default::default);
     if let Some(found) = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
         return found.clone();
     }
-    let computed = method_prior(query);
+    let computed = if guide { lifescape_planner::method_rate::guide_prior(query) } else { method_prior(query) };
     let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if guard.len() >= PRIOR_CACHE_MAX {
         guard.clear();
     }
     guard.insert(key, computed.clone());
     computed
+}
+
+/// The game prior of a key, memoised (the dump lookups are slow).
+pub fn cached_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
+    memo_prior(false, query)
+}
+
+/// The guides' prior (R4, `method_rate::guide_prior`: a fight's drop
+/// table priced in), memoised apart from the brain's.
+pub fn cached_guide_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
+    memo_prior(true, query)
 }
 
 /// Logs a fallback once per (key, level).
@@ -183,8 +200,15 @@ fn derived(query: &RateQuery, units: &[(String, String, f64)]) -> Vec<(String, f
     lifescape_planner::unit_xp::derived_xp(&query.method, &query.style, &crate::rates_names::units_in_debug(units), query.level.max(1))
 }
 
-/// The estimate of `query` from `book` at wall clock `now`.
+/// The estimate of `query` from `book` at wall clock `now` (the brain's
+/// prior, `cached_prior`).
 pub fn estimate(book: &YieldBook, query: &RateQuery, now: i64) -> Result<RateEstimate, RateError> {
+    estimate_using(book, query, now, &cached_prior)
+}
+
+/// The estimate of `query` with the prior `prior_of` (the guides pass
+/// `cached_guide_prior`).
+pub fn estimate_using(book: &YieldBook, query: &RateQuery, now: i64, prior_of: &dyn Fn(&PriorQuery) -> Result<RatePrior, PriorError>) -> Result<RateEstimate, RateError> {
     let exact = key_of_query(query);
     let mut ladder: Vec<(YieldKey, Fallback)> = Vec::new();
     if query.site.is_some() {
@@ -193,7 +217,7 @@ pub fn estimate(book: &YieldBook, query: &RateQuery, now: i64) -> Result<RateEst
     ladder.push((exact.any_site(), Fallback::AllSites));
     ladder.push((exact.any_site_tool(), Fallback::AllSitesTools));
     let prior_query = PriorQuery { method: query.method.clone(), level: query.level.max(1), tool: query.tool.clone(), site: query.site };
-    let prior = cached_prior(&prior_query);
+    let prior = prior_of(&prior_query);
     let measured = ladder.iter().find(|(key, _)| book.get(key).is_some_and(|bucket| bucket.runs as usize >= MIN_MEASURED_REPORTS));
     let thinnest = ladder.iter().find_map(|(key, _)| book.get(key));
     let Some((key, fallback)) = measured else {

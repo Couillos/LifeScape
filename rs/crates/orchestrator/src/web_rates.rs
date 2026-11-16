@@ -1,5 +1,6 @@
-//! Rates HTTP shaping (D44, D46, R2): per-key estimates (signed flows,
-//! units, derived XP, confidence) and the trading-table JSON served
+//! Rates HTTP shaping (D44, D46, R2.1): the MEASURES view, one row per
+//! measured exact key (signed flows, units, derived XP, confidence: never
+//! a copy of a roll-up nor the prior), and the trading-table JSON served
 //! beside profit. Thin on purpose: aggregation lives in
 //! `rates_service::trading`, this module owns the payload key contract
 //! (same column keys as `api_shapes::TradingRow`).
@@ -13,8 +14,7 @@ use lifescape_store::Store;
 
 use super::trading::{trading_rows, trading_value};
 use super::{global_snapshot, profit_rows, ProfitRow, Snapshot};
-use crate::rates_estimator::YieldKey;
-use crate::rates_read::RateEstimate;
+use crate::rates_estimator::{Bucket, YieldKey};
 
 /// Trading-table JSON rows for the dashboard payload.
 pub fn trading_values(store: &Store, snapshot: &Snapshot) -> Vec<Value> {
@@ -36,59 +36,70 @@ fn profit_value(row: &ProfitRow) -> Value {
     ])
 }
 
-/// The key and confidence columns every rates row repeats.
-fn key_fields(estimate: &RateEstimate, key: &YieldKey) -> Vec<(&'static str, Value)> {
+/// The key and confidence columns every measure row repeats.
+fn key_fields(bucket: &Bucket, key: &YieldKey, now: i64) -> Vec<(&'static str, Value)> {
     vec![
         ("method", str_value(&key.method)),
         ("style", str_value(&key.style)),
         ("site", str_value(&key.site)),
         ("tool", str_value(&key.tool)),
         ("band", Value::Int(key.band)),
-        ("runs", Value::Int(estimate.confidence.runs as i64)),
-        ("prior", Value::Bool(estimate.prior)),
-        ("read", str_value(&format!("{:?}", estimate.fallback))),
-        ("age_secs", Value::Int(estimate.confidence.age_secs)),
-        ("dispersion", Value::Float(estimate.confidence.dispersion)),
-        ("failure_rate", Value::Float(estimate.confidence.failure_rate)),
-        ("rejected", Value::Int(estimate.confidence.rejected as i64)),
+        ("runs", Value::Int(bucket.runs as i64)),
+        ("thin", Value::Bool((bucket.runs as usize) < crate::rates_service::MIN_MEASURED_REPORTS)),
+        ("age_secs", Value::Int(if bucket.last_clock > 0 { (now - bucket.last_clock).max(0) } else { 0 })),
+        ("dispersion", Value::Float(bucket.dispersion())),
+        ("failure_rate", Value::Float(bucket.failure_rate())),
+        ("rejected", Value::Int(bucket.rejected as i64)),
     ]
 }
 
-/// Rows of the page, one estimate per bucket key (exact and roll-ups):
+/// True when `display` is the activity's own product (never folded).
+fn own_product(activity: &str, display: &str) -> bool {
+    lifescape_planner::method_way::method_way(activity).is_some_and(|(product, _)| crate::rates_names::debug_of(display) == product)
+}
+
+/// Rows of the measures view (R2.1): one line per MEASURED exact key
+/// (planner activity, style, site, tool, band), its own decayed sums
+/// (Σ / Σ work ticks), never the value of another key (the roll-ups stay
+/// internal, read fallbacks only) nor the prior; rare pickups fold into
+/// one "other drops" line per key (`planner::guide_flows`), valued at
+/// the current price (`price`: display name -> coins).
 /// (flows: products and consumption, units, derived XP).
-pub fn estimate_rows(snapshot: &Snapshot, now: i64) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+pub fn measure_rows(snapshot: &Snapshot, now: i64, price: &mut dyn FnMut(&str) -> f64) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+    use lifescape_planner::guide_flows::{fold_negligible_drops, OTHER_DROPS};
     let mut flows = Vec::new();
     let mut units = Vec::new();
     let mut xp = Vec::new();
-    for key in snapshot.book.buckets.keys() {
-        let estimate = match crate::rates_read::estimate_key(&snapshot.book, key, now) {
-            Ok(estimate) => estimate,
-            Err(error) => {
-                let fields = vec![
-                    ("method", str_value(&key.method)),
-                    ("style", str_value(&key.style)),
-                    ("site", str_value(&key.site)),
-                    ("tool", str_value(&key.tool)),
-                    ("band", Value::Int(key.band)),
-                    ("error", str_value(&error.to_string())),
-                ];
-                flows.push(object(fields));
-                continue;
-            }
-        };
-        for (item, cause, rate) in &estimate.flows {
-            let mut fields = key_fields(&estimate, key);
-            fields.extend([("item", str_value(item)), ("cause", str_value(cause)), ("per_6000", Value::Float(*rate))]);
+    for (key, bucket) in snapshot.book.buckets.iter().filter(|(key, bucket)| !key.is_rollup() && bucket.runs > 0) {
+        let measured = bucket.flow_rates();
+        let mut prices: BTreeMap<String, f64> = BTreeMap::new();
+        for (item, _, _) in &measured {
+            let unit = price(item);
+            prices.insert(item.clone(), unit);
+        }
+        let unit_price = |item: &str| prices.get(item).copied().unwrap_or(0.0);
+        let (kept, other) = fold_negligible_drops(&measured, &|item| own_product(&key.method, item), &unit_price);
+        for (item, cause, rate) in &kept {
+            let mut fields = key_fields(bucket, key, now);
+            fields.extend([("item", str_value(item)), ("cause", str_value(cause)), ("per_6000", Value::Float(*rate)), ("value_6000", Value::Float(rate * unit_price(item)))]);
             flows.push(object(fields));
         }
-        for (kind, subject, rate) in &estimate.units {
-            let mut fields = key_fields(&estimate, key);
+        if other.items > 0 {
+            let mut fields = key_fields(bucket, key, now);
+            let label = format!("{OTHER_DROPS} ({} objects)", other.items);
+            fields.extend([("item", str_value(&label)), ("cause", str_value("loot")), ("per_6000", Value::Float(other.units_per_6000)), ("value_6000", Value::Float(other.value_per_6000))]);
+            flows.push(object(fields));
+        }
+        let unit_rates = bucket.unit_rates();
+        for (kind, subject, rate) in &unit_rates {
+            let mut fields = key_fields(bucket, key, now);
             fields.extend([("kind", str_value(kind)), ("subject", str_value(subject)), ("per_6000", Value::Float(*rate))]);
             units.push(object(fields));
         }
-        for (skill, rate) in &estimate.xp {
-            let mut fields = key_fields(&estimate, key);
-            fields.extend([("skill", str_value(skill)), ("per_6000", Value::Float(*rate))]);
+        let level = key.band.clamp(1, 99) as u8;
+        for (skill, rate) in lifescape_planner::unit_xp::derived_xp(&key.method, &key.style, &crate::rates_names::units_in_debug(&unit_rates), level) {
+            let mut fields = key_fields(bucket, key, now);
+            fields.extend([("skill", str_value(&skill)), ("per_6000", Value::Float(rate))]);
             xp.push(object(fields));
         }
     }
@@ -131,7 +142,9 @@ pub fn rates_api(call: &dyn Fn(Value) -> Value) -> Value {
 /// engaged counts supplied by the caller (operator eyes only, never read
 /// by bots).
 pub fn rates_payload(store: &Store, snapshot: &Snapshot, engaged: BTreeMap<String, i64>) -> Value {
-    let (yields, units, xp) = estimate_rows(snapshot, crate::rates_service::now_secs());
+    let mut prices: BTreeMap<String, f64> = BTreeMap::new();
+    let mut price = |item: &str| *prices.entry(item.to_string()).or_insert_with(|| super::price_estimate(store, item).0);
+    let (yields, units, xp) = measure_rows(snapshot, crate::rates_service::now_secs(), &mut price);
     let profits: Vec<Value> = profit_rows(store, snapshot).iter().map(profit_value).collect();
     let trading: Vec<Value> = trading_values(store, snapshot);
     let mut engaged_map = BTreeMap::new();

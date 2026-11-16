@@ -1,0 +1,335 @@
+//! Guides API (plan rendements R4): `/api/guides/money` and
+//! `/api/guides/training`, the pure engine of `lifescape_planner::guide_*`
+//! fed with the public data only (D22):
+//! - yields: the live estimator (`rates_read::estimate_using`, n >= 3
+//!   blended with the guides' game prior, else the prior alone), names
+//!   turned into debug names for the engine;
+//! - prices: the current price of each object (`rates_price`, D12; a
+//!   purchase needs a fill or a resting ask, never the 1-coin default),
+//!   the best F2P shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`)
+//!   and the cheapest F2P keeper (Q7);
+//! - the market wait per lot: mean pause of the contract-2 runs that
+//!   paused for the market; a quest's duration: mean work of its
+//!   finished contract-2 runs.
+//!
+//! Filters (query string): `skill`, `level` (a bot with every skill at
+//! it; empty: each method at its own gate), `family`, `quests` (done,
+//! comma separated). A build is cached `GUIDE_TTL` per query: the bots
+//! never read these guides (R7 later), the page does.
+
+#![forbid(unsafe_code)]
+
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use lifescape_json::{object, str_value, Value};
+use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, TrainingRow, Unrated};
+use lifescape_store::Store;
+
+/// Longest a built guide serves before a rebuild.
+pub const GUIDE_TTL: Duration = Duration::from_secs(60);
+/// Store reports read per page while measuring waits and quests.
+const MEASURE_PAGE: i64 = 2000;
+
+/// Measured waits of the store: market pause per paused run, quest
+/// durations by planner quest key.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StoreWaits {
+    pub market_wait: Option<f64>,
+    pub quests: HashMap<String, f64>,
+}
+
+/// Mean market pause of the runs that paused, mean ticks of each
+/// quest's finished runs (contract 2).
+pub fn store_waits(store: &Store) -> Result<StoreWaits, String> {
+    let (mut paused, mut pauses) = (0.0, 0usize);
+    let mut quests: HashMap<String, (f64, usize)> = HashMap::new();
+    let mut after = 0;
+    loop {
+        let page = store.measures_after(after, MEASURE_PAGE).map_err(|error| format!("guides measures: {error}"))?;
+        let Some(last) = page.last() else { break };
+        after = last.report_id;
+        for stored in &page {
+            if stored.measure.pause_ticks > 0 {
+                paused += stored.measure.pause_ticks as f64;
+                pauses += 1;
+            }
+            if let Some(quest) = stored.measure.planner_method.strip_prefix("quest:") {
+                if stored.stop == "goal_reached" && stored.measure.work_ticks > 0 {
+                    let entry = quests.entry(quest.to_string()).or_insert((0.0, 0));
+                    entry.0 += (stored.measure.work_ticks + stored.measure.pause_ticks.max(0)) as f64;
+                    entry.1 += 1;
+                }
+            }
+        }
+    }
+    Ok(StoreWaits { market_wait: (pauses > 0).then(|| paused / pauses as f64), quests: quests.into_iter().map(|(key, (ticks, runs))| (key, ticks / runs as f64)).collect() })
+}
+
+/// Units a shop is assumed to already hold when a guide line sells to
+/// it: a line sells a window's output (tens to hundreds of units) and
+/// each unit sold lowers the shop's price (`shop_delta`, up to
+/// `MAX_SHOP_DELTA` per mille) down to the server's floor (10 % of the
+/// object's cost) within a few dozen units; the guide prices that
+/// volume, never the first unit's best case.
+pub const NPC_SALE_VOLUME: i64 = 100;
+
+/// What the best F2P shop pays per unit for a guide line's volume (Q3).
+pub fn npc_volume_value(item: &str) -> Option<f64> {
+    lifescape_gamedata::shop_sale::npc_sale_shops(item)
+        .iter()
+        .filter_map(|shop| lifescape_gamedata::shop_sale::unit_value_floor(&shop.shop, item, NPC_SALE_VOLUME))
+        .max()
+        .filter(|value| *value >= 1)
+        .map(|value| value as f64)
+}
+
+/// True when the market offers `display` now (a resting ask).
+fn market_offers(store: &Store, display: &str) -> bool {
+    let Ok(Some(item_id)) = store.item_id_by_name(display) else { return false };
+    store.book_levels_covering(item_id, lifescape_store::OrderSide::Sell, 1).map(|levels| !levels.is_empty()).unwrap_or(false)
+}
+
+fn site_of(text: &str) -> Option<(i64, i64, i64)> {
+    let parts: Vec<i64> = text.split(',').filter_map(|part| part.trim().parse().ok()).collect();
+    (parts.len() == 3).then(|| (parts[0], parts[1], parts[2]))
+}
+
+/// Measured exact keys of the estimator (the roll-ups stay internal).
+pub fn measured_keys(snapshot: &crate::rates_service::Snapshot) -> Vec<MeasuredKey> {
+    snapshot
+        .book()
+        .buckets
+        .keys()
+        .filter(|key| !key.is_rollup())
+        .map(|key| MeasuredKey { method: key.method.clone(), style: key.style.clone(), site: site_of(&key.site), tool: key.tool.clone(), band: key.band })
+        .collect()
+}
+
+/// The engine's yield of one ask from the live estimator.
+pub fn answer_of(snapshot: &crate::rates_service::Snapshot, ask: &RateAsk, now: i64) -> Result<RateAnswer, String> {
+    let query = crate::rates_read::RateQuery { method: ask.method.clone(), style: ask.style.clone(), site: ask.site, tool: ask.tool.clone(), level: ask.level.max(1) };
+    let estimate = crate::rates_read::estimate_using(snapshot.book(), &query, now, &crate::rates_read::cached_guide_prior).map_err(|error| error.to_string())?;
+    let debug = |item: &str| crate::rates_names::debug_of(item);
+    Ok(RateAnswer {
+        flows: estimate.flows.iter().map(|(item, cause, qty)| (debug(item), cause.clone(), *qty)).collect(),
+        units: crate::rates_names::units_in_debug(&estimate.units),
+        pause_per_6000: estimate.pause_per_6000,
+        confidence: Confidence {
+            measured: !estimate.prior,
+            runs: estimate.confidence.runs,
+            age_secs: estimate.confidence.age_secs,
+            dispersion: estimate.confidence.dispersion,
+            failure_rate: estimate.confidence.failure_rate,
+            read: format!("{:?}", estimate.fallback),
+        },
+    })
+}
+
+/// The filter of a query string.
+pub fn filter_of(params: &HashMap<String, String>) -> GuideFilter {
+    let text = |key: &str| params.get(key).map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    GuideFilter {
+        skill: text("skill"),
+        level: text("level").and_then(|value| value.parse::<u8>().ok()).map(|level| level.clamp(1, 99)),
+        family: text("family"),
+        quests_done: text("quests").map(|value| value.split(',').map(|quest| quest.trim().to_string()).filter(|quest| !quest.is_empty()).collect()).unwrap_or_default(),
+    }
+}
+
+/// Which guide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GuideKind {
+    Money,
+    Training,
+}
+
+/// One guide built from a store and a snapshot (pure engine inside).
+pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kind: GuideKind, filter: &GuideFilter) -> Result<Value, String> {
+    let started = Instant::now();
+    let waits = store_waits(store)?;
+    let measured = measured_keys(snapshot);
+    let now = crate::rates_service::now_secs();
+    let prices: RefCell<HashMap<String, Quote>> = RefCell::new(HashMap::new());
+    let rate = |ask: &RateAsk| answer_of(snapshot, ask, now);
+    let price = |item: &str| {
+        if let Some(known) = prices.borrow().get(item) {
+            return *known;
+        }
+        let display = crate::rates_names::display_of(item);
+        let (unit, prior) = crate::rates_service::price_estimate(store, &display);
+        let quote = Quote { price: unit, traded: !prior, buyable: !prior || market_offers(store, &display) };
+        prices.borrow_mut().insert(item.to_string(), quote);
+        quote
+    };
+    let npc_sale = |item: &str| npc_volume_value(item);
+    let shop_buy = |item: &str| lifescape_gamedata::obtain::merchant_price(item).map(|value| value as f64);
+    let quest_ticks = |key: &str| waits.quests.get(key).copied();
+    let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: waits.market_wait, quest_ticks: &quest_ticks, measured: &measured };
+    let engine = lifescape_planner::guide_engine::Engine::new(&world);
+    let (rows, unrated) = match kind {
+        GuideKind::Money => {
+            let (rows, unrated) = lifescape_planner::guide_money::money_guide(&engine, filter);
+            (rows.iter().map(money_value).collect::<Vec<Value>>(), unrated)
+        }
+        GuideKind::Training => {
+            let (rows, unrated) = lifescape_planner::guide_training::training_guide(&engine, filter);
+            (rows.iter().map(training_value).collect::<Vec<Value>>(), unrated)
+        }
+    };
+    Ok(object(vec![
+        ("ok", Value::Bool(true)),
+        ("count", Value::Int(rows.len() as i64)),
+        ("rows", Value::Arr(rows)),
+        ("unrated", Value::Arr(unrated.iter().map(unrated_value).collect())),
+        ("market_wait_ticks", waits.market_wait.map(Value::Float).unwrap_or(Value::Null)),
+        ("built_ms", Value::Int(started.elapsed().as_millis() as i64)),
+    ]))
+}
+
+type GuideCache = HashMap<(GuideKind, String), (Instant, Arc<Value>)>;
+
+/// HTTP entry: the cached guide of `kind` for the query string.
+pub fn guides_api(kind: GuideKind, query: &str) -> Arc<Value> {
+    static CACHE: OnceLock<Mutex<GuideCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let filter = filter_of(&crate::web::parse_query(query));
+    let key = (kind, format!("{filter:?}"));
+    let mut slot = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((built, value)) = slot.get(&key) {
+        if built.elapsed() < GUIDE_TTL {
+            return value.clone();
+        }
+    }
+    let built = match Store::open(&crate::market_service::db_path()) {
+        Ok(store) => build_guide(&store, &crate::rates_service::live_snapshot(), kind, &filter).unwrap_or_else(crate::web::err_json),
+        Err(error) => crate::web::err_json(format!("guides store: {error}")),
+    };
+    let value = Arc::new(built);
+    if slot.len() > 64 {
+        slot.clear();
+    }
+    slot.insert(key, (Instant::now(), value.clone()));
+    value
+}
+
+fn site_text(site: Option<(i64, i64, i64)>) -> String {
+    site.map(|(x, z, level)| format!("{x},{z},{level}")).unwrap_or_default()
+}
+
+fn pairs(rows: &[(String, f64)]) -> Value {
+    let mut map = BTreeMap::new();
+    for (name, value) in rows {
+        map.insert(name.clone(), Value::Float(*value));
+    }
+    Value::Obj(map)
+}
+
+fn prereqs_value(prereqs: &Prereqs) -> Value {
+    let mut levels = BTreeMap::new();
+    for (skill, level) in &prereqs.levels {
+        levels.insert(skill.clone(), Value::Int(i64::from(*level)));
+    }
+    object(vec![
+        ("levels", Value::Obj(levels)),
+        ("combat", Value::Int(i64::from(prereqs.combat))),
+        ("quests", Value::Arr(prereqs.quests.iter().map(|quest| str_value(quest)).collect())),
+        ("tools", Value::Arr(prereqs.tools.iter().map(|tool| str_value(tool)).collect())),
+        ("capital", Value::Float(prereqs.capital)),
+        ("ironman", Value::Bool(prereqs.ironman)),
+    ])
+}
+
+fn confidence_value(confidence: &Confidence) -> Value {
+    object(vec![
+        ("measured", Value::Bool(confidence.measured)),
+        ("runs", Value::Int(confidence.runs as i64)),
+        ("age_secs", Value::Int(confidence.age_secs)),
+        ("dispersion", Value::Float(confidence.dispersion)),
+        ("failure_rate", Value::Float(confidence.failure_rate)),
+        ("read", str_value(&confidence.read)),
+    ])
+}
+
+fn flow_value(line: &FlowLine) -> Value {
+    object(vec![
+        ("item", str_value(&line.item)),
+        ("display", str_value(&crate::rates_names::display_of(&line.item))),
+        ("cause", str_value(&line.cause)),
+        ("per_6000", Value::Float(line.per_6000)),
+        ("unit_price", Value::Float(line.unit_price)),
+        ("value_6000", Value::Float(line.value_6000)),
+        ("outlet", str_value(line.outlet.as_str())),
+        ("traded", Value::Bool(line.traded)),
+    ])
+}
+
+fn unrated_value(gap: &Unrated) -> Value {
+    object(vec![("method", str_value(&gap.method)), ("reason", str_value(&gap.reason))])
+}
+
+/// One money line as JSON.
+pub fn money_value(row: &MoneyRow) -> Value {
+    object(vec![
+        ("family", str_value(row.family.as_str())),
+        ("method", str_value(&row.method)),
+        ("style", str_value(&row.style)),
+        ("site", str_value(&site_text(row.site))),
+        ("tool", str_value(&row.tool)),
+        ("band", Value::Int(row.band)),
+        ("profit_6000", Value::Float(row.profit_6000)),
+        ("revenue_6000", Value::Float(row.revenue_6000)),
+        ("cost_6000", Value::Float(row.cost_6000)),
+        ("extra_ticks_6000", Value::Float(row.extra_ticks_per_6000)),
+        ("xp_6000", pairs(&row.xp_6000)),
+        ("prereqs", prereqs_value(&row.prereqs)),
+        ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
+        (
+            "other_drops",
+            object(vec![("items", Value::Int(row.other_drops.items as i64)), ("units_6000", Value::Float(row.other_drops.units_per_6000)), ("value_6000", Value::Float(row.other_drops.value_per_6000))]),
+        ),
+        (
+            "stages",
+            Value::Arr(
+                row.stages
+                    .iter()
+                    .map(|stage| object(vec![("method", str_value(&stage.method)), ("product", str_value(&stage.product)), ("ticks_per_unit", Value::Float(stage.ticks_per_unit)), ("profit_6000", Value::Float(stage.profit_6000))]))
+                    .collect(),
+            ),
+        ),
+        ("confidence", confidence_value(&row.confidence)),
+        ("accessible", Value::Bool(row.accessible)),
+    ])
+}
+
+/// One training line as JSON.
+pub fn training_value(row: &TrainingRow) -> Value {
+    object(vec![
+        ("skill", str_value(&row.skill)),
+        ("band", Value::Int(row.band)),
+        ("method", str_value(&row.method)),
+        ("style", str_value(&row.style)),
+        ("site", str_value(&site_text(row.site))),
+        ("tool", str_value(&row.tool)),
+        ("supply", str_value(row.supply.as_str())),
+        ("xp_6000", Value::Float(row.xp_6000)),
+        ("effective_xp_6000", Value::Float(row.effective_xp_6000)),
+        ("coins_6000", Value::Float(row.coins_6000)),
+        ("coins_per_xp", Value::Float(row.coins_per_xp)),
+        ("converted_ticks_6000", Value::Float(row.converted_ticks_6000)),
+        ("ticks_to_band_end", row.ticks_to_band_end.map(Value::Float).unwrap_or(Value::Null)),
+        ("other_xp_6000", pairs(&row.other_xp_6000)),
+        ("quest_xp", Value::Float(row.quest_xp)),
+        ("quest_ticks", row.quest_ticks.map(Value::Float).unwrap_or(Value::Null)),
+        ("prereqs", prereqs_value(&row.prereqs)),
+        ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
+        ("confidence", confidence_value(&row.confidence)),
+        ("accessible", Value::Bool(row.accessible)),
+    ])
+}
+
+#[cfg(test)]
+#[path = "web_guides_tests.rs"]
+mod tests;

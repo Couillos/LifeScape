@@ -28,22 +28,20 @@
 <div id="bar">
   <div style="display:flex;gap:12px;align-items:center">
     <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
-    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates" aria-current="page">Rates</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates" aria-current="page">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
   </div>
 </div>
-<h1>Rates <span class="muted">· per 6000 ticks, bands of 5 levels</span></h1>
+<h1>Rates <span class="muted">· measures per 6000 work ticks, bands of 5 levels (profit: <a href="/guides-money">money guide</a>, XP: <a href="/guides-training">training guide</a>)</span></h1>
 <div>
   <input id="search" placeholder="Filter method, site, tool, item, skill…" autocomplete="off" oninput="onSearch()">
   <span id="summary" class="muted"></span>
 </div>
-<h2>Yields and consumption <span class="muted">(signed flows per key: + in, − out; <span class="prior">prior</span> = game estimate under 3 runs, blended with it from 3; site/tool <span class="muted">all</span> = roll-up)</span></h2>
+<h2>Yields and consumption <span class="muted">(measured keys only, each with its own sums: + in, − out; <span class="prior">thin</span> = under 3 runs; pickups under one per 6000 ticks folded into "other drops", valued at the current price; trades and unattributed flows never rate)</span></h2>
 <table id="yields"></table>
 <h2>XP-bearing units</h2>
 <table id="units"></table>
 <h2>XP per 6000 ticks <span class="muted">(derived: units × XP of the unit, never measured)</span></h2>
 <table id="xp"></table>
-<h2>Profit per 6000 ticks <span class="muted">(revenue − inputs − pause friction + trend bonus)</span></h2>
-<table id="profit"></table>
 <h2>Trading <span class="muted">(flip profit per 6000 ticks, settled exits, fill rate, residual stock value)</span></h2>
 <table id="trading"></table>
 <h2>Engaged bots <span class="muted">(operator eyes only)</span></h2>

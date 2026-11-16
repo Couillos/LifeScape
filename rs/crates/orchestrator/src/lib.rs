@@ -167,6 +167,8 @@ pub mod flow_causes;
 pub mod report_meta;
 pub mod report_contract;
 pub mod purge_cmd;
+pub mod rates_rebuild_cmd;
+pub mod web_guides;
 pub mod report_progress;
 pub mod session_rescue;
 pub mod staticmap;

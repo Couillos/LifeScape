@@ -34,11 +34,11 @@ mod parse;
 mod snapshot_io;
 
 pub use parse::*;
-pub use snapshot_io::snapshot_path;
+pub use snapshot_io::{rebuild_from_store, snapshot_path};
 pub(crate) use snapshot_io::write_snapshot_file;
 #[cfg(test)]
 pub(crate) use snapshot_io::snapshot_from_json;
-pub use web_rates::{rates_api, rates_payload};
+pub use web_rates::{measure_rows, rates_api, rates_payload};
 use snapshot_io::global_snapshot;
 
 use crate::rates_estimator::YieldBook;

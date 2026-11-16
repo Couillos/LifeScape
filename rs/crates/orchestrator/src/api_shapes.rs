@@ -157,11 +157,13 @@ impl MarketListRow {
 // -- rates (§6.3) -------------------------------------------------------------
 
 /// Sortable columns (D46), shared with the front `table.js` (P1.4).
-/// Rates rows since R2: one estimate per D2 key (`web_rates`), every row
-/// repeating the key and the confidence columns.
-pub const RATE_KEY_COLUMNS: &[&str] = &["method", "style", "site", "tool", "band", "runs", "prior", "read", "age_secs", "dispersion", "failure_rate", "rejected"];
-/// `rates` rows: the signed flows (products and consumption).
-pub const YIELD_COLUMNS: &[&str] = &["item", "cause", "per_6000"];
+/// Rates rows since R2.1: one measure per measured exact key (activity,
+/// style, site, tool, band; `web_rates`), every row repeating the key and
+/// the confidence columns (`thin`: under the n >= 3 threshold).
+pub const RATE_KEY_COLUMNS: &[&str] = &["method", "style", "site", "tool", "band", "runs", "thin", "age_secs", "dispersion", "failure_rate", "rejected"];
+/// `rates` rows: the signed flows (products and consumption) and their
+/// value at the current price (the folded "other drops" line included).
+pub const YIELD_COLUMNS: &[&str] = &["item", "cause", "per_6000", "value_6000"];
 /// `units` rows: the XP-bearing unit counters.
 pub const UNIT_COLUMNS: &[&str] = &["kind", "subject", "per_6000"];
 /// `xp` rows: the XP derived from the units.

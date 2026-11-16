@@ -2,9 +2,15 @@
 //! Admission of one contract-2 report into the yield estimator (plan
 //! rendements R2): its D2 key, its sample, the checks that keep it out.
 //!
+//! - the key names the ACTIVITY (`planner::activity`): a drop farm is
+//!   the fight it runs (`farm:feather` with `melee:attack` on chickens =
+//!   `fight:melee/chickens`), a fishing leg its spot option;
 //! - a report without a planner method (`method_source = none`), a
 //!   trading or tutorial run, or a method naming no game way is never
 //!   aggregated (logged, nothing guessed);
+//! - only the yield causes (`RATED_CAUSES`) enter a sample: market
+//!   trades, shop purchases and sales, and unattributed flows stay in the
+//!   raw store, never in a rate;
 //! - `failed` / `blocked` runs count as failures of their key only;
 //! - a run carrying more units than the server allows (the physical
 //!   ceiling of `method_rate::units_ceiling_per_tick`, plus one action
@@ -24,6 +30,16 @@ pub const XP_GAP_ALERT: f64 = 0.05;
 pub const CEILING_SLACK_ACTIONS: f64 = 1.0;
 /// Fastest F2P attack interval (darts on rapid): a kill needs a hit.
 pub const FASTEST_ATTACK_TICKS: f64 = 2.0;
+/// Flow causes that are a yield of the activity (§8 signed balance):
+/// what it makes, eats, burns, picks up, pays and loses. Everything else
+/// (`traded`, `shop_bought`, `shop_sold`: transfers D16/D44;
+/// `unattributed`: an alert) stays in the store, never in a rate.
+pub const RATED_CAUSES: [&str; 13] = ["product", "byproduct", "input", "ammo", "rune", "bait", "supply", "food", "discarded", "loot", "ground_spawn", "fee", "death"];
+
+/// True for a flow cause that enters a rate.
+pub fn rated_cause(cause: &str) -> bool {
+    RATED_CAUSES.contains(&cause)
+}
 
 /// Where one report goes.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,33 +50,9 @@ pub enum Admission {
     Skipped(String),
 }
 
-/// Skill whose band keys a method: the trained melee skill of the style
-/// (attack for controlled),
-/// `ranged`, `magic`, else the skill of the method's way. `None` for a
-/// method no skill gates (milk, pick, tanning).
+/// Skill whose band keys a method (`planner::activity::band_skill`).
 pub fn band_skill(method: &str, style: &str) -> Option<String> {
-    // Controlled trains the three melee skills: it bands on attack.
-    if style == "melee:controlled" {
-        return Some("attack".to_string());
-    }
-    if let Some(skill) = style.strip_prefix("melee:").filter(|skill| !skill.is_empty()) {
-        return Some(skill.to_string());
-    }
-    if style == "ranged" || style == "magic" {
-        return Some(style.to_string());
-    }
-    if method.starts_with("fight:ranged/") {
-        return Some("ranged".to_string());
-    }
-    if method.starts_with("fight:magic/") || method.starts_with("alch:") {
-        return Some("magic".to_string());
-    }
-    if method.starts_with("essence:") {
-        return Some("mining".to_string());
-    }
-    lifescape_planner::method_way::method_way(method)
-        .or_else(|| lifescape_planner::spell_methods::spell_way(method))
-        .and_then(|(_, way)| way.skill.map(|(skill, _)| skill))
+    lifescape_planner::activity::band_skill(method, style)
 }
 
 /// Band of a key: the band of `level` in the band skill, 0 without one.
@@ -85,12 +77,15 @@ fn level_of(contract: &ParsedContract, skill: &str) -> Option<i64> {
     contract.levels.iter().find(|(name, _)| name == skill).map(|(_, level)| *level)
 }
 
-/// Key of a contract-2 report (`None` with the reason when it has none).
+/// Key of a contract-2 report (`None` with the reason when it has none):
+/// the activity the run worked (`planner::activity`), its style, site,
+/// tool and band.
 pub fn key_of(contract: &ParsedContract) -> Result<YieldKey, String> {
-    let method = contract.planner_method.as_str();
-    if method.is_empty() {
+    if contract.planner_method.is_empty() {
         return Err(format!("no planner method (source {})", if contract.method_source.is_empty() { "none" } else { &contract.method_source }));
     }
+    let activity = lifescape_planner::activity::activity_of_run(&contract.planner_method, &contract.combat_style, &contract.target, &contract.units);
+    let method = activity.as_str();
     if !rated_method(method) {
         return Err(format!("{method} is no rated method"));
     }
@@ -162,7 +157,8 @@ pub fn admit(contract: &ParsedContract, stop: &str, clock: i64) -> Admission {
     if let Some(reason) = above_ceiling(&key, contract, level) {
         return Admission::Rejected(key, reason);
     }
-    let sample = RunSample { work_ticks: contract.work_ticks, pause_ticks: contract.pause_ticks, flows: contract.flows.clone(), units: contract.units.clone(), clock };
+    let flows = contract.flows.iter().filter(|(_, cause, _)| rated_cause(cause)).cloned().collect();
+    let sample = RunSample { work_ticks: contract.work_ticks, pause_ticks: contract.pause_ticks, flows, units: contract.units.clone(), clock };
     Admission::Rated(key, sample)
 }
 
@@ -177,7 +173,8 @@ pub struct XpGap {
 /// D4 check: XP derived from the run's units against the observed XP
 /// (`observed`: skill, XP gained). Gaps above `XP_GAP_ALERT`.
 pub fn xp_gaps(contract: &ParsedContract, observed: &[(String, i64)]) -> Vec<XpGap> {
-    let method = contract.planner_method.as_str();
+    let activity = lifescape_planner::activity::activity_of_run(&contract.planner_method, &contract.combat_style, &contract.target, &contract.units);
+    let method = activity.as_str();
     let magic = level_of(contract, "magic").unwrap_or(1).clamp(1, 99) as u8;
     let units: Vec<(String, String, f64)> = contract.units.iter().map(|(kind, subject, qty)| (kind.clone(), subject.clone(), *qty as f64)).collect();
     let derived = lifescape_planner::unit_xp::derived_xp(method, &contract.combat_style, &crate::rates_names::units_in_debug(&units), magic);

@@ -42,11 +42,12 @@ fn shop_floor(item_debug: &str) -> i64 {
     lifescape_gamedata::obtain::merchant_price(item_debug).unwrap_or(1).max(1)
 }
 
-/// Rate key of a planner method: contract-2 reports key their yields
-/// by the planner method itself (plan rendements R2), so the brain asks
-/// with the method it launches. `None` for an empty method.
+/// Rate key of a planner method: the yields are keyed by the ACTIVITY
+/// the method works (plan rendements R2.1, `planner::activity`: a drop
+/// farm reads its fight's row, a fishing leg its spot option's). `None`
+/// for an empty method.
 pub(crate) fn rate_key(method: &str, _node: &Node) -> Option<String> {
-    (!method.is_empty()).then(|| method.to_string())
+    (!method.is_empty()).then(|| lifescape_planner::activity::activity_of_method(method))
 }
 
 /// Debug names of everything the live bot owns (pack, bank, worn).
@@ -446,7 +447,8 @@ mod tests {
     fn farm_yield_reads_planner_keyed_rates() {
         use super::{farm_yield, rate_key};
         let node = Node::new("n1", NodeKind::ObtainItems { item: "raw_shrimp".to_string(), count: 100 }, Vec::new(), 100);
-        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("farm:raw_shrimp"));
+        assert_eq!(rate_key("farm:raw_shrimp", &node).as_deref(), Some("gather:fishing/raw_shrimp"), "keyed by activity (R2.1)");
+        assert_eq!(rate_key("farm:feather", &node).as_deref(), Some("fight:melee/chickens"));
         let empty = crate::rates_service::Snapshot::new();
         let live = lifescape_json::parse(r#"{"skills":[{"id":8,"level":1}]}"#).expect("live");
         let low = farm_yield(&empty, "gather:woodcut/logs", "Logs", &live).expect("prior");

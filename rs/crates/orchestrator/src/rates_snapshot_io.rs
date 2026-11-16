@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Snapshot persistence of the rates: the JSON file (schema 3: the
+//! Snapshot persistence of the rates: the JSON file (schema 4: the
 //! estimator's buckets and the merchant book), its reload, and the
 //! rebuild from the store when the file is missing, corrupt or older.
 //!
@@ -19,9 +19,12 @@ use super::trading;
 use super::Snapshot;
 use crate::rates_estimator::{Bucket, YieldBook, YieldKey};
 
-/// Snapshot schema: 3 = per-key estimator buckets (R2). Older files
-/// (script buckets) are dropped and rebuilt from the store.
-const SNAPSHOT_SCHEMA: i64 = 3;
+/// Snapshot schema: 4 = per-ACTIVITY estimator buckets (R2.1: a drop
+/// farm keyed by its fight, yield causes only); 3 keyed by the planner
+/// method with every cause. Older files are dropped and rebuilt from the
+/// store (the reports keep planner method, style, target and site: the
+/// activity is derived again at the replay).
+const SNAPSHOT_SCHEMA: i64 = 4;
 /// Store reports read per page during a rebuild.
 const REBUILD_PAGE: i64 = 2000;
 
@@ -169,7 +172,7 @@ pub(super) fn snapshot_to_value(snapshot: &Snapshot) -> Value {
     ])
 }
 
-/// A schema-3 file, `None` for anything else (rebuilt from the store).
+/// A schema-4 file, `None` for anything else (rebuilt from the store).
 pub(crate) fn snapshot_from_json(text: &str) -> Option<Snapshot> {
     let value = lifescape_json::parse(text).ok()?;
     if value.get("schema").as_i64() != Some(SNAPSHOT_SCHEMA) {

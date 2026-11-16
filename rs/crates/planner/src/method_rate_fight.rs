@@ -45,6 +45,26 @@ fn kill_units(npc_name: &str, hitpoints: i64) -> Vec<(&'static str, String, f64)
     vec![("kill", npc_name.to_string(), 1.0), ("damage", npc_name.to_string(), hitpoints.max(1) as f64)]
 }
 
+/// Expected drops of one kill of a `fight:<style>/...` method's NPC (the
+/// spot's first rated NPC, its F2P drop table: rate × mean quantity),
+/// debug names. Empty when the spot or its table is unknown.
+pub fn fight_drops_per_kill(method: &str) -> Vec<(String, f64)> {
+    let Ok((npc_name, _)) = spot_target(method) else { return Vec::new() };
+    let Some(npc) = lifescape_gamedata::npcs_by_name(&npc_name).into_iter().next() else { return Vec::new() };
+    let mut out: Vec<(String, f64)> = Vec::new();
+    for drop in lifescape_gamedata::drops::drops_for_npc(npc.npc_id) {
+        let per_kill = drop.expected_per_kill();
+        if per_kill <= 0.0 || drop.obj.is_empty() {
+            continue;
+        }
+        match out.iter_mut().find(|(item, _)| *item == drop.obj) {
+            Some(known) => known.1 += per_kill,
+            None => out.push((drop.obj.clone(), per_kill)),
+        }
+    }
+    out
+}
+
 /// One kill of a `fight:<style>/...` method.
 pub fn fight_action(query: &PriorQuery) -> Result<Action, PriorError> {
     let method = query.method.as_str();

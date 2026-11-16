@@ -1,9 +1,11 @@
-// Rates front (plan rendements R2): per key (planner method, style,
-// site, tool tier, band) the signed flows (products and consumption),
-// the XP-bearing units, the XP derived from them, the confidence (n,
-// age, dispersion, failures, rejected samples, prior or measured),
-// then profit and trading tables per 6000 ticks,
-// refreshed every 30 s. Read-only dashboard page: bots never read it.
+// Rates front, the MEASURES view (plan rendements R2.1): one line per
+// measured exact key (activity, style, site, tool tier, band) with its
+// own sums only (never a roll-up copy nor the prior): the signed flows
+// (products and consumption, rare pickups folded into one valued "other
+// drops" line), the XP-bearing units, the XP derived from them, the
+// confidence (n, thin under 3 runs, age, dispersion, failures, rejected
+// samples), then the trading table; refreshed every 30 s. Profit lives
+// in the money making guide (/guides-money). Read-only dashboard page: bots never read it.
 // Sorting rides the shared TableSort helper (table.js, D46); when the
 // table.js route is not served yet, tables render unsorted instead of
 // blank.
@@ -18,14 +20,6 @@ function bandLabel(band) {
 function number(value) {
   if (!isFinite(value)) return "-";
   return Math.round(value * 10) / 10;
-}
-
-function srcHtml(prior) {
-  return prior ? '<span class="prior">prior</span>' : 'measured';
-}
-
-function priceHtml(prior) {
-  return prior ? '<span class="prior">prior</span>' : 'market';
 }
 
 function keyLabel(value) {
@@ -49,10 +43,13 @@ const KEY_COLS = [
   { key: 'tool', label: 'tool', kind: 'str', fmt: (v) => keyLabel(v) },
   { key: 'band', label: 'band', kind: 'num', fmt: (v) => bandText(v) },
 ];
+function thinHtml(thin) {
+  return thin ? '<span class="prior">thin</span>' : '';
+}
+
 const CONFIDENCE_COLS = [
   { key: 'runs', label: 'n', kind: 'num' },
-  { key: 'prior', label: 'src', kind: 'str', fmt: (v) => srcHtml(v) },
-  { key: 'read', label: 'read', kind: 'str' },
+  { key: 'thin', label: 'n<3', kind: 'str', fmt: (v) => thinHtml(v) },
   { key: 'age_secs', label: 'age', kind: 'num', fmt: (v) => ageText(v) },
   { key: 'dispersion', label: 'disp.', kind: 'num', fmt: (v) => number(v) },
   { key: 'failure_rate', label: 'fail', kind: 'num', fmt: (v) => (isFinite(v) ? Math.round(v * 100) + '%' : '-') },
@@ -62,32 +59,19 @@ const YIELD_COLS = KEY_COLS.concat([
   { key: 'item', label: 'item', kind: 'str', fmt: (v, row) => (row.error ? '<span class="prior">' + row.error + '</span>' : v) },
   { key: 'cause', label: 'cause', kind: 'str' },
   { key: 'per_6000', label: '/6000', kind: 'num', fmt: (v) => number(v) },
+  { key: 'value_6000', label: 'value/6000', kind: 'num', fmt: (v) => number(v) },
 ]).concat(CONFIDENCE_COLS);
 const UNIT_COLS = KEY_COLS.concat([
   { key: 'kind', label: 'unit', kind: 'str' },
   { key: 'subject', label: 'subject', kind: 'str' },
   { key: 'per_6000', label: '/6000', kind: 'num', fmt: (v) => number(v) },
   { key: 'runs', label: 'n', kind: 'num' },
-  { key: 'prior', label: 'src', kind: 'str', fmt: (v) => srcHtml(v) },
 ]);
 const XP_COLS = KEY_COLS.concat([
   { key: 'skill', label: 'skill', kind: 'str' },
   { key: 'per_6000', label: 'XP/6000', kind: 'num', fmt: (v) => number(v) },
   { key: 'runs', label: 'n', kind: 'num' },
-  { key: 'prior', label: 'src', kind: 'str', fmt: (v) => srcHtml(v) },
 ]);
-const PROFIT_COLS = [
-  { key: 'method', label: 'method', kind: 'str' },
-  { key: 'style', label: 'style', kind: 'str' },
-  { key: 'band', label: 'band', kind: 'num', fmt: (v) => bandText(v) },
-  { key: 'revenue', label: 'revenue', kind: 'num', fmt: (v) => number(v) },
-  { key: 'input_cost', label: 'inputs', kind: 'num', fmt: (v) => number(v) },
-  { key: 'friction', label: 'friction', kind: 'num', fmt: (v) => number(v) },
-  { key: 'trend_bonus', label: 'trend bonus', kind: 'num', fmt: (v) => number(v) },
-  { key: 'profit', label: 'profit', kind: 'num', fmt: (v) => number(v) },
-  { key: 'price_prior', label: 'price', kind: 'str', fmt: (v) => priceHtml(v) },
-  { key: 'prior', label: 'yields', kind: 'str', fmt: (v) => srcHtml(v) },
-];
 const TRADING_COLS = [
   { key: 'item', label: 'item', kind: 'str' },
   { key: 'profit_per_6000', label: 'profit/6000', kind: 'num', fmt: (v) => number(v) },
@@ -146,16 +130,14 @@ function render() {
   const yields = (payload.rates || []).filter(matches);
   const units = (payload.units || []).filter(matches);
   const xp = (payload.xp || []).filter(matches);
-  const profit = (payload.profit || []).filter(matches);
   const trading = payload.trading || [];
   document.getElementById('summary').textContent =
-    yields.length + ' flow row(s) · ' + units.length + ' unit row(s) · ' + xp.length + ' xp row(s) · ' + profit.length + ' profit row(s) · ' +
+    yields.length + ' flow row(s) · ' + units.length + ' unit row(s) · ' + xp.length + ' xp row(s) · ' +
     trading.length + ' trading row(s)';
 
   renderTable('yields', YIELD_COLS, yields);
   renderTable('units', UNIT_COLS, units);
   renderTable('xp', XP_COLS, xp);
-  renderTable('profit', PROFIT_COLS, profit);
   renderTable('trading', TRADING_COLS, trading);
 
   const engaged = payload.engaged || {};

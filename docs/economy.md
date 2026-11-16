@@ -354,13 +354,29 @@ v1 de `task_reports`/`task_yields` et `run/rates-snapshot.json`).
 Ingestion : la session pousse le rapport, le superviseur du daemon le
 verse dans le store (`jobs::ingest_report_into` : lignes v1 + mesure du
 contrat 2) puis dans l'agrégat persisté (`rates_service`,
-`run/rates-snapshot.json` schéma 3, rechargé au redémarrage ; fichier
+`run/rates-snapshot.json` schéma 4, rechargé au redémarrage ; fichier
 absent, corrompu ou d'un schéma plus ancien : reconstruit depuis les
 rapports contrat 2 du store, rejoués par la même admission). Écriture
 différée (`rates_flush.rs`) : au plus une réécriture par minute, plus
 l'arrêt propre. Un lecteur prend un `Arc` du snapshot, jamais une copie.
 
 Estimateur (R2, `rates_estimator`, `rates_measure`, `rates_read`) :
+- clé d'ACTIVITÉ (R2.1, `planner::activity`) : ce que le run a FAIT,
+  jamais l'objet voulu. Un drop farm est le combat qu'il lance
+  (`farm:feather` en `melee:attack` sur les poulets → `fight:melee/
+  chickens`, style dans la clé ; ranged `fight:ranged/<spot>`, magie
+  `fight:magic/<sort lancé>/<spot>`), une pêche son option de spot
+  (`farm:raw_salmon`, `gather:fishing/raw_salmon` → `gather:fishing/
+  raw_trout`), `farm:<minerai|bûche>` le récolteur, `farm:blankrune`
+  `essence:blankrune`, `cook/<cru>` `cook:<plat>` ; le reste nomme déjà
+  son activité. Le store garde méthode, style, cible et site : la clé
+  se dérive au rejeu (schéma 4 → reconstruction au démarrage). Le
+  cerveau lit par la même dérivation (`brain_plan::rate_key`), prior de
+  SA méthode (un drop farm garde le prior de son objet) ;
+- seules les causes de rendement entrent dans un taux
+  (`rates_measure::RATED_CAUSES` : product, byproduct, input, ammo,
+  rune, bait, supply, food, discarded, loot, ground_spawn, fee, death) ;
+  `traded`, `shop_bought`, `shop_sold`, `unattributed` restent au store ;
 - seul le contrat 2 l'alimente ; un rapport sans méthode du
   planificateur (`method_source = none`), un marchand, le tutoriel ou une
   méthode sans voie du jeu (equip, quest, space…) n'est jamais agrégé
@@ -377,7 +393,8 @@ Estimateur (R2, `rates_estimator`, `rates_measure`, `rates_read`) :
   au-dessus du plafond physique (ticks d'action du serveur, succès
   certain, une action de marge) : rejeté et loggé ;
 - lecture : clé exacte, sinon tous sites, sinon tous sites et outils
-  (repli loggé) ; seuil unique n ≥ 3 (page ET cerveau), puis mélange
+  (repli loggé ; les cumuls restent INTERNES, jamais publiés comme
+  lignes) ; seuil unique n ≥ 3 (page ET cerveau), puis mélange
   avec le prior (le prior pèse 6000 ticks de travail) ; sous le seuil, le
   prior seul (marqué) ; ni mesure ni prior calculable = `RateError`
   typée, jamais un chiffre par défaut ; le cerveau lit à sa tranche
@@ -405,16 +422,60 @@ des trois, distance ×4, magie ×2, PV ×1,33). Les seaux d'XP mesurée sont
 supprimés ; l'XP observée sert au contrôle D4 à l'ingestion (écart > 5 %
 loggé `rates: xp coherence`).
 
-Rentabilité d'une (méthode, style, tranche), cumul tous sites et outils :
+Page `rates` = vue MESURES (R2.1, `web_rates::measure_rows`) : une
+ligne par clé exacte mesurée, avec SES sommes (Σ / Σ ticks de travail),
+jamais la valeur d'un cumul ni le prior ; `thin` sous n = 3 ; les
+ramassages sous `guide_flows::NEGLIGIBLE_DROP_PER_6000` (1 par 6000
+ticks : moins d'une fois par fenêtre, une ligne qui ne tient qu'à un ou
+deux ramassages) se replient en une ligne « other drops » par clé,
+valorisée au prix courant (le profit garde chaque pièce). Copie de la
+base live du 2026-11-16 rejouée (`orchestrator rates-rebuild <copie>`) :
+735 clés mesurées (637 sous n = 3), 107 activités × style, 2 730 lignes
+de flux (contre 9 583 publiées avant, copies et échanges compris).
+
+Guides (R4, `planner::guide_*`, moteur pur ; `web_guides`,
+`/api/guides/money|training?skill&level&family&quests`, pages
+`/guides-money`, `/guides-training`) : une ligne pour chaque activité F2P
+du planificateur (`guide_methods::catalogue` : jambes de production de
+tout objet F2P par activité, combats en 4 styles, sorts D18, feu, os,
+essence, tranches d'entraînement, alchimie des objets fabriqués) × site
+(le meilleur du prior, puis chaque clé mesurée de la tranche) × outil
+(le palier du niveau) × tranche. Lecture : estimation `rates_read` avec
+le prior des guides (`method_rate::guide_prior` : un combat y ajoute sa
+table de drops ; le cerveau garde `method_prior`). Prix : courant (D12) ;
+vente PNJ au volume d'une ligne quand elle paie plus (Q3,
+`web_guides::NPC_SALE_VOLUME`) ; achat au prix courant si une exécution
+ou une offre existe, sinon boutique (Q7), sinon pas d'achat possible
+(jamais le défaut à 1 pièce).
+- money making, profit/6000 au prix courant = Σ flux signés × prix,
+  pauses comptées dans les ticks ; familles farm, recipe (intrants au
+  prix de vente, D5), chain (D16 : intrants farmés en amont, ticks par
+  unité sommés, chaque étage avec son profit « vendu ici »), market
+  (D15 : intrants achetés, aller-retour place de Varrock ↔ atelier et
+  attente market mesurée par lot, capital d'un lot, Ironman exclu) ;
+  XP/6000 en bonus ; prérequis (niveaux, combat, quêtes, outils,
+  capital) ; confiance (mesuré/estimé, n, âge, dispersion, échec, clé
+  lue) ;
+- entraînement : skill × tranche × activité × site × outil × mode
+  (autonome : intrants farmés, temps compté ; marché : intrants achetés,
+  pièces converties en ticks au profit de la meilleure ligne money
+  making accessible, D17) ; XP/6000 = unités × XP du dump ; pièces/6000,
+  pièces/XP, ticks jusqu'à la fin de tranche ; raccourcis de quête (D20,
+  XP forfaitaire sur la durée mesurée des runs `quest:<clé>`) ;
+- sans `level`, chaque méthode est lue à son propre seuil (vue
+  catalogue) ; avec, un bot à ce niveau dans tous les skills, ses
+  quêtes faites (`quests`) ; une ligne non accessible reste listée ;
+- les bots ne lisent pas encore les guides (R7).
+
+Rentabilité d'une (activité, style, tranche), cumul tous sites et outils :
 Σ flux positifs × prix courant (médiane des 5 derniers fills bornée par
 le carnet, `rates_price` ; sinon le carnet, sinon 1 pièce — jamais un
 VWAP 24 h) − Σ flux négatifs × prix (intrants, runes, munitions, appât,
 nourriture, péages, pertes : le bilan signé, §8 ; échanges et
 `unattributed` exclus) − friction des pauses market (valorisées au taux
-de l'activité) + bonus de tendance (score public × chiffre × 0,1). Page
-`rates` : par clé, rendements et consommation, unités, XP/6000 dérivée,
-confiance, prior ou mesuré ; information pour l'opérateur, les bots
-lisent les mêmes estimations par `rates_read`.
+de l'activité) + bonus de tendance (score public × chiffre × 0,1), lue
+par le cerveau (`cached_profit_rows`, plus affichée : la page money
+making la remplace pour l'opérateur).
 
 ## Tendances et marchands
 
@@ -439,8 +500,8 @@ fait à la lecture côté serveur (`store::candle_chain`, op `history`,
 les agrégats bruts par fenêtre. Le front rechaîne la queue live
 (`LifeChart.carryFlat`) et ses créneaux finissent sur la fenêtre en cours
 (`LifeChart.liveSlots`). L'anneau des prints (`trades`, `tick`, WS) est
-rechargé depuis `executions` au démarrage du daemon. Page rendements : tableaux méthode ×
-objet × tranche de niveau, rentabilité courante, nombre de bots engagés
+rechargé depuis `executions` au démarrage du daemon. Page rendements (vue mesures, § Rendements) : tableaux activité ×
+site × outil × tranche, guides money making et entraînement, nombre de bots engagés
 par script (information pour l'opérateur humain uniquement, jamais lue
 par les bots). Page `life` (`/api/lives`, `/api/life/<compte>`) : but,
 profil, engagement en cours, graphe des tâches (statuts colorés,

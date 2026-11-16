@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activity;
 pub mod ambition;
 pub mod ambition_catalog;
 pub mod ambition_fleet;
@@ -22,6 +23,14 @@ pub mod dialogue_site;
 pub mod expand;
 pub mod gear_ladder;
 pub mod gear_plan;
+pub mod guide_chain;
+pub mod guide_engine;
+pub mod guide_flows;
+pub mod guide_methods;
+pub mod guide_model;
+pub mod guide_money;
+pub mod guide_prereq;
+pub mod guide_training;
 pub mod goals;
 pub mod lifecycle;
 pub mod lifecycle_retire;

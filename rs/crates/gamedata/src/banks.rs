@@ -14,8 +14,13 @@ pub struct Bank {
     pub members: bool,
 }
 
-/// Every bank booth spawn.
+/// Every bank booth spawn (built once: a scan of every loc).
 pub fn all_banks() -> Vec<Bank> {
+    static BANKS: std::sync::OnceLock<Vec<Bank>> = std::sync::OnceLock::new();
+    BANKS.get_or_init(scan_banks).clone()
+}
+
+fn scan_banks() -> Vec<Bank> {
     let mut found = Vec::new();
     for entry in all_locs() {
         if entry.name.unwrap_or("").to_lowercase() != "bankbooth" {

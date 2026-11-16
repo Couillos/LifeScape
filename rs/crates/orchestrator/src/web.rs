@@ -2,6 +2,7 @@
 //!
 //! Same routes, same JSON shapes: GET / /spectator.js /items /items.js
 //! /market /market.js /chart.js /rates /rates.js /table.js /life /life.js /brain.js /economy /economy.js
+//! /guides-money /guides-training /guides.js /api/guides/money|training?skill&level&family&quests (web_guides)
 //! /errors /errors.js /api/errors/summary|list|dossier/<file> (web_errors)
 //! /hiscores /hiscores.js /api/hiscores (cached snapshot, hiscores_service)
 //! /map/<dir>/<file>.png /map/<dir>/manifest.json /mapscene/<sprite>.png
@@ -39,6 +40,17 @@ pub use crate::web_ws::state_payload;
 
 fn asset(name: &str) -> std::io::Result<Vec<u8>> {
     std::fs::read(paths::static_dir().join(name))
+}
+
+/// Static file of the guide pages (`/guides-money`, `/guides-training`
+/// and their scripts), `None` for any other path.
+fn guide_asset(page: &str) -> Option<(&'static str, &'static str)> {
+    Some(match page {
+        "guides-money" => ("guides_money.html", "text/html; charset=utf-8"),
+        "guides-training" => ("guides_training.html", "text/html; charset=utf-8"),
+        "guides.js" => ("guides.js", "application/javascript"),
+        _ => return None,
+    })
 }
 
 /// One precomputed map file: (dir, file) when the path is exactly
@@ -241,6 +253,15 @@ pub(crate) fn handle_get(path: &str, query: &str, dispatch: &Dispatch) -> Respon
         }
         if parts == ["api", "rates", "table"] {
             return Ok(ok_json(crate::rates_service::rates_api(&**dispatch)));
+        }
+        if parts == ["api", "guides", "money"] || parts == ["api", "guides", "training"] {
+            let kind = if parts[2] == "money" { crate::web_guides::GuideKind::Money } else { crate::web_guides::GuideKind::Training };
+            return Ok(ok_json((*crate::web_guides::guides_api(kind, query)).clone()));
+        }
+        if let [page] = parts.as_slice() {
+            if let Some((file, content_type)) = guide_asset(page) {
+                return Ok(Response { status: 200, content_type, cache: "no-store", body: asset(file).map_err(|error| error.to_string())? });
+            }
         }
         if parts == ["api", "lives"] {
             return Ok(ok_json(crate::web_lives::lives_response()));

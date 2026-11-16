@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectator — LifeScape bots</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #eee; background: #000; margin: 0; padding: 12px; }
+  a { color: #04A800; }
+  #bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
+  #bar h1 { font-size: 18px; margin: 0; }
+  #topnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .navlink { color: #04A800; text-decoration: none; border: 1px solid #444; border-radius: 3px; padding: 3px 9px; }
+  .navlink:hover { background: #262626; }
+  .navlink[aria-current="page"] { color: #ff0; border-color: #ff0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 12px 0 4px; color: #ff0; }
+  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  td, th { border: 1px solid #333; padding: 2px 8px; text-align: right; }
+  th { color: #888; font-weight: normal; }
+  td.left, th.left { text-align: left; }
+  .muted { color: #888; }
+  .prior { color: #e0a030; }
+  #search { padding: 4px 6px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+  tr.locked td { color: #777; }
+  table.detail { margin: 4px 0 6px 12px; }
+  #filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  #filters input, #filters select { padding: 3px 5px; background: #0a0a0a; color: #eee; border: 1px solid #444; }
+</style>
+</head>
+<body data-guide="training">
+<div id="bar">
+  <div style="display:flex;gap:12px;align-items:center">
+    <h1>Spectator <span class="muted">— LifeScape bots</span></h1>
+    <nav id="topnav" aria-label="Sections"><a class="navlink" href="/">Bots</a><a class="navlink" href="/items">Item holdings</a><a class="navlink" href="/market">Market</a><a class="navlink" href="/rates">Rates</a><a class="navlink" href="/guides-money">Money guide</a><a class="navlink" href="/guides-training" aria-current="page">Training guide</a><a class="navlink" href="/life">Lives</a><a class="navlink" href="/economy">Economy</a><a class="navlink" href="/hiscores">Hiscores</a><a class="navlink" href="/errors">Errors</a></nav>
+  </div>
+</div>
+<h1>Training guide <span class="muted">· XP per 6000 ticks derived from the units, every F2P method</span></h1>
+<div id="filters">
+  <select id="skill"></select>
+  <input id="level" type="number" min="1" max="99" placeholder="level (all skills)" title="A bot with every skill at this level; empty: each method at its own gate">
+  
+  <input id="quests" placeholder="quests done (doric,runemysteries)">
+  <label><input id="accessible" type="checkbox"> accessible only</label>
+  <input id="search" placeholder="Filter method, site, tool…" autocomplete="off">
+  <label>top <input id="limit" type="number" min="0" style="width:60px"></label>
+  <span id="summary" class="muted"></span>
+</div>
+<div class="muted">XP/6000 = units × XP of the dump. Autonomous: inputs farmed (their time counted); market: inputs bought, coins converted to ticks at the best accessible money line (D17). Quest lines (D20): fixed XP over the measured quest duration. Click a line for its flows.</div>
+<table id="guide"></table>
+<h2>Methods without an estimate <span class="muted">(no measure and no computable prior: typed reason)</span></h2>
+<div id="unrated" class="muted"></div>
+<script src="/table.js"></script>
+<script src="/guides.js"></script>
+</body>
+</html>
