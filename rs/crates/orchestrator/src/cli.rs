@@ -733,6 +733,8 @@ pub fn cli(argv: &[String]) -> i32 {
         "route" => return crate::routecmd::route_cmd(&argv[2..].to_vec()),
         "replay-nav" => return crate::replaynav::replay_nav_cmd(&argv[2..].to_vec()),
         "obtain" => return crate::obtaincmd::obtain_cmd(&argv[2..].to_vec()),
+        // Offline: refuses while the daemon runs, so never start it first.
+        "purge-measures-v1" => return crate::purge_cmd::purge_cli(argv.get(2..).unwrap_or(&[])),
         _ => {}
     }
     if argv[1].as_str() == "direct" {
@@ -835,7 +837,6 @@ pub fn cli(argv: &[String]) -> i32 {
         "verify" => return crate::verify_cmd::verify_cli(argv.get(2..).unwrap_or(&[])),
         "check-method" => return crate::method_check::check_method_cli(argv.get(2..).unwrap_or(&[])),
         "economy" => return crate::economy_cmd::economy_cli(argv.get(2..).unwrap_or(&[])),
-        "purge-measures-v1" => return crate::purge_cmd::purge_cli(argv.get(2..).unwrap_or(&[])),
         "bid-why" => {
             let (Some(account), Some(item)) = (argv.get(2), argv.get(3)) else {
                 eprintln!("usage: bid-why <compte> <objet>");
