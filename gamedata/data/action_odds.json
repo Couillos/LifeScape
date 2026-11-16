@@ -534,6 +534,16 @@
       64
     ]
   },
+  "mining_gems": {
+    "draws": 128,
+    "gems": {
+      "uncut_diamond": 2,
+      "uncut_emerald": 16,
+      "uncut_ruby": 8,
+      "uncut_sapphire": 32
+    },
+    "roll": 256
+  },
   "pickaxes": {
     "adamant_pickaxe": 3,
     "bronze_pickaxe": 7,
@@ -626,7 +636,7 @@
     "naturerune": 91,
     "waterrune": 19
   },
-  "source": "lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking configs (orchestrator dump-npc-ranges)",
+  "source": "lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking, skill_runecraft configs, mining.rs2 (orchestrator dump-npc-ranges)",
   "tree_respawn": {
     "achey_tree_logs": 0,
     "charcoal": 0,

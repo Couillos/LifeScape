@@ -21,7 +21,12 @@
 //!   cooking_generic.dbrow`;
 //! - `runecraft`: rune -> `multiplier` (runes per essence =
 //!   floor(level / multiplier) + 1, `runecraft.rs2`),
-//!   `skill_runecraft/configs/runecraft.dbrow`.
+//!   `skill_runecraft/configs/runecraft.dbrow`;
+//! - `mining_gems`: the gem roll of a mined rock (`mining.rs2`
+//!   `get_ore_normal`: one roll in `random($chance)`, the F2P chance,
+//!   the members amulet aside) and `mining_gem_table` (`random(draws)`,
+//!   each gem's share = its threshold minus the previous one), the
+//!   source of uncut gems.
 //!
 //! Every pair feeds `stat_random(stat, low, high)` (engine
 //! `PlayerOps.ts`): the read side (`gamedata::action_odds`) turns it into
@@ -81,8 +86,50 @@ fn pair_value(low_high: (i64, i64)) -> Value {
     Value::Arr(vec![Value::Int(low_high.0), Value::Int(low_high.1)])
 }
 
-/// The odds document from the five config texts.
-pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish_structs: &str, cooking: &str, runecraft: &str) -> Value {
+/// Text of the `[header]` section of a script (up to the next one).
+fn section<'a>(script: &'a str, header: &str) -> Option<&'a str> {
+    let start = script.find(header)? + header.len();
+    let rest = &script[start..];
+    Some(rest.find("\n[").map_or(rest, |end| &rest[..end]))
+}
+
+/// Integer between `prefix` and `suffix` on the first line holding both.
+fn number_between(text: &str, prefix: &str, suffix: &str) -> Option<i64> {
+    text.lines().find_map(|line| line.trim().strip_prefix(prefix)?.strip_suffix(suffix)?.trim().parse().ok())
+}
+
+/// The gem roll of a mined rock and its table (`mining.rs2`), `None`
+/// when the script's shape moved (never a guessed table): `roll` from
+/// `def_int $chance = N;` of `get_ore_normal` (rolled by
+/// `random($chance) = ^true`), `draws` from the proc's `random(N)`, each
+/// gem's share from the cumulative `if ($rand < X) return (gem);`.
+pub fn mining_gems_value(script: &str) -> Option<Value> {
+    let normal = section(script, "[label,get_ore_normal]")?;
+    if !normal.contains("random($chance) = ^true") {
+        return None;
+    }
+    let roll = number_between(normal, "def_int $chance =", ";")?;
+    let table = section(script, "[proc,mining_gem_table]")?;
+    let draws = number_between(table, "def_int $rand = random(", ");")?;
+    let mut gems = BTreeMap::new();
+    let mut previous = 0;
+    for line in table.lines().map(str::trim) {
+        let Some(rest) = line.strip_prefix("if ($rand < ") else { continue };
+        let (threshold, gem) = rest.split_once(") return (")?;
+        let threshold: i64 = threshold.trim().parse().ok()?;
+        let gem = gem.strip_suffix(");")?.trim();
+        if threshold <= previous || threshold > draws {
+            return None;
+        }
+        gems.insert(gem.to_string(), Value::Int(threshold - previous));
+        previous = threshold;
+    }
+    (roll > 0 && !gems.is_empty()).then(|| object(vec![("roll", Value::Int(roll)), ("draws", Value::Int(draws)), ("gems", Value::Obj(gems))]))
+}
+
+/// The odds document from the config texts and the mining script.
+#[allow(clippy::too_many_arguments)]
+pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish_structs: &str, cooking: &str, runecraft: &str, mining_script: &str) -> Value {
     let mut rocks = BTreeMap::new();
     let mut rock_respawn = BTreeMap::new();
     for (_, block) in blocks(mine) {
@@ -154,7 +201,8 @@ pub fn odds_value(mine: &str, pickaxes: &str, trees: &str, fish_objs: &str, fish
         }
     }
     object(vec![
-        ("source", str_value("lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking configs (orchestrator dump-npc-ranges)")),
+        ("source", str_value("lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking, skill_runecraft configs, mining.rs2 (orchestrator dump-npc-ranges)")),
+        ("mining_gems", mining_gems_value(mining_script).unwrap_or(Value::Null)),
         ("rocks", Value::Obj(rocks)),
         ("rock_respawn", Value::Obj(rock_respawn)),
         ("pickaxes", Value::Obj(picks)),
@@ -177,8 +225,12 @@ pub fn dump_action_odds(scripts: &Path, output: &Path) -> Result<usize, String> 
         &read("skill_fishing/configs/fishing.struct")?,
         &read("skill_cooking/configs/cooking_source/cooking_generic.dbrow")?,
         &read("skill_runecraft/configs/runecraft.dbrow")?,
+        &read("skill_mining/scripts/mining.rs2")?,
     );
-    let count = ["rocks", "rock_respawn", "pickaxes", "trees", "tree_respawn", "fish", "cooking", "runecraft"].iter().map(|key| doc.get(key).as_obj().map(|map| map.len()).unwrap_or(0)).sum();
+    if doc.get("mining_gems").as_obj().is_none() {
+        return Err("skill_mining/scripts/mining.rs2: gem roll or mining_gem_table moved".to_string());
+    }
+    let count = ["rocks", "rock_respawn", "pickaxes", "trees", "tree_respawn", "fish", "cooking", "runecraft"].iter().map(|key| doc.get(key).as_obj().map(|map| map.len()).unwrap_or(0)).sum::<usize>() + doc.get("mining_gems").get("gems").as_obj().map(|map| map.len()).unwrap_or(0);
     std::fs::write(output, lifescape_json::stringify_pretty(&doc) + "\n").map_err(|error| format!("{}: {error}", output.display()))?;
     println!("dump-action-odds: {count} rows -> {}", output.display());
     Ok(count)
@@ -197,7 +249,7 @@ mod tests {
         let fish_structs = "[fishing_struct_shrimps]\nparam=productexp,100\nparam=success_low,48\nparam=success_high,256\n";
         let cooking = "//c\n[cooking_generic_shrimp]\ntable=cooking_generic\ndata=uncooked,raw_shrimp\ndata=cooked,shrimp\ndata=burnt,burnt_shrimp\ndata=successchance,128,512\n";
         let runecraft = "[runecraft_air]\ntable=runecraft_table\ndata=rune,airrune\ndata=multiplier,11\n";
-        let doc = odds_value(mine, picks, trees, fish_objs, fish_structs, cooking, runecraft);
+        let doc = odds_value(mine, picks, trees, fish_objs, fish_structs, cooking, runecraft, MINING_SCRIPT);
         assert_eq!(doc.get("runecraft").get("airrune").as_i64(), Some(11));
         assert_eq!(doc.get("rocks").get("copper_ore").as_arr().and_then(|pair| pair.get(1)).and_then(|value| value.as_i64()), Some(400));
         assert_eq!(doc.get("pickaxes").get("bronze_pickaxe").as_i64(), Some(7));
@@ -209,6 +261,25 @@ mod tests {
         assert_eq!(doc.get("fish").get("raw_shrimp").as_arr().and_then(|pair| pair.first()).and_then(|value| value.as_i64()), Some(48));
         assert_eq!(doc.get("cooking").get("raw_shrimp").get("burnt").as_str(), Some("burnt_shrimp"));
         assert!(doc.get("cooking").get("raw_shrimp").get("range").as_arr().is_none());
+        let gems = doc.get("mining_gems");
+        assert_eq!(gems.get("roll").as_i64(), Some(256), "one roll in random($chance)");
+        assert_eq!(gems.get("draws").as_i64(), Some(128));
+        assert_eq!(gems.get("gems").get("uncut_diamond").as_i64(), Some(2));
+        assert_eq!(gems.get("gems").get("uncut_ruby").as_i64(), Some(8), "10 - 2");
+        assert_eq!(gems.get("gems").get("uncut_sapphire").as_i64(), Some(32), "58 - 26");
+    }
+
+    /// The server's shape (`mining.rs2`): the gem roll of a normal rock,
+    /// the members amulet aside, then the table proc (thresholds
+    /// cumulative over `random(128)`).
+    const MINING_SCRIPT: &str = "[label,get_ore_normal]\ndb_find(mining_table:rock, loc_type);\n// roll for gem\ndef_int $chance = 256;\ndef_obj $neck = inv_getobj(worn, ^wearpos_front);\nif ($neck ! null & oc_category($neck) = category_557 & map_members = ^true) {\n    $chance = 86;\n}\nif (random($chance) = ^true) {\n    def_namedobj $gem = ~mining_gem_table;\n}\n\n[proc,mining_gem_table]()(namedobj)\ndef_int $rand = random(128);\nif ($rand < 2) return (uncut_diamond);\nif ($rand < 10) return (uncut_ruby);\nif ($rand < 26) return (uncut_emerald);\nif ($rand < 58) return (uncut_sapphire);\nelse return(null);\n";
+
+    /// A script whose gem roll or table moved yields no table (never a
+    /// guessed one).
+    #[test]
+    fn a_moved_gem_table_is_not_guessed() {
+        assert!(super::mining_gems_value("[label,get_ore_normal]\nif (random(256) = ^true) {}\n").is_none());
+        assert!(super::mining_gems_value(&MINING_SCRIPT.replace("def_int $rand = random(128);", "")).is_none());
     }
 
     /// Writes `gamedata/data/action_odds.json` from the server configs

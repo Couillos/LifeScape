@@ -61,7 +61,7 @@ fn money_guide_prices_the_measured_fight() -> Result<(), lifescape_store::Error>
     assert!(flows.iter().any(|line| line.get("item").as_str() == Some("feather")), "{flows:?}");
     assert!(flows.iter().all(|line| line.get("cause").as_str() != Some("traded")));
     assert!(rows.iter().all(|row| row.get("prereqs").get("levels").get("attack").as_i64().unwrap_or(0) <= 3 || !row.get("accessible").as_bool().unwrap_or(true)));
-    for key in ["profit_6000", "xp_6000", "prereqs", "stages", "other_drops", "accessible", "band", "tool"] {
+    for key in ["profit_6000", "xp_6000", "prereqs", "stages", "routes", "other_drops", "accessible", "band", "tool"] {
         assert!(!matches!(measured.get(key), Value::Null), "{key} column");
     }
     Ok(())
@@ -102,4 +102,15 @@ fn never_traded_quote_carries_its_book_depth() -> Result<(), lifescape_store::Er
     assert_eq!(quote.price, 15411.0, "D12 clamp by the bid");
     assert_eq!(quote.bids, vec![(15411.0, 1.0)]);
     Ok(())
+}
+
+/// The shops' window the engine reads (§2): the base stock and the
+/// restock of one window, cheapest first, never an unlimited shop.
+#[test]
+fn shop_window_is_finite_and_cheapest_first() {
+    let steps = super::shop_window("feather");
+    let units: f64 = steps.iter().map(|(_, units)| units).sum();
+    assert!(units.is_finite() && units >= 7000.0, "{steps:?}");
+    assert!(steps.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+    assert!(super::shop_window("no_such_object").is_empty());
 }

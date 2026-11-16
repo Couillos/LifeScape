@@ -137,6 +137,17 @@ var GuidesView = (function () {
     return (reasons || []).join('; ') || '-';
   }
 
+  // The way an input or consumable came by (decisions 2026-11-16 §1/§3):
+  // farmed by its source or bought, with what each way costs a unit.
+  function routeText(route) {
+    var way = route.route === 'farm' ? 'farm ' + (route.source || '?') : 'buy';
+    var costs = [];
+    if (route.farm_coins_per_unit !== null && route.farm_coins_per_unit !== undefined) costs.push('farm ' + number(route.farm_coins_per_unit) + 'gp');
+    else if (route.farm_ticks_per_unit !== null && route.farm_ticks_per_unit !== undefined) costs.push('farm ' + number(route.farm_ticks_per_unit) + ' ticks');
+    if (route.buy_coins_per_unit !== null && route.buy_coins_per_unit !== undefined) costs.push('buy ' + number(route.buy_coins_per_unit) + 'gp');
+    return (route.display || route.item) + ' (' + route.cause + '): ' + way + (costs.length ? ' [' + costs.join(', ') + ']' : '');
+  }
+
   function detailHtml(row) {
     var html = '<table class="detail"><tr><th class="left">item</th><th class="left">cause</th><th>/6000</th><th>unit price</th><th>value/6000</th><th class="left">outlet</th></tr>';
     (row.flows || []).forEach(function (line) {
@@ -153,6 +164,9 @@ var GuidesView = (function () {
         html += '<tr><td class="left">' + escapeHtml(stage.method) + '</td><td class="left">' + escapeHtml(stage.product) + '</td><td>' + number(stage.ticks_per_unit) + '</td><td>' + number(stage.profit_6000) + '</td></tr>';
       });
       html += '</table>';
+    }
+    if (row.routes && row.routes.length) {
+      html += '<div class="muted">ways: ' + row.routes.map(function (route) { return escapeHtml(routeText(route)); }).join('; ') + '</div>';
     }
     if (row.other_xp_6000 && Object.keys(row.other_xp_6000).length) html += '<div class="muted">other XP/6000: ' + escapeHtml(xpText(row.other_xp_6000)) + '</div>';
     if (row.quest_xp > 0) html += '<div class="muted">quest XP ' + number(row.quest_xp) + ', measured duration ' + ticksText(row.quest_ticks) + '</div>';
@@ -216,7 +230,7 @@ var GuidesView = (function () {
     setInterval(load, 60000);
   }
 
-  return { start: start, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number };
+  return { start: start, queryOf: queryOf, visibleRows: visibleRows, prereqText: prereqText, xpText: xpText, number: number, routeText: routeText };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

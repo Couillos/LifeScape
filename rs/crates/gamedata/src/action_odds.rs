@@ -1,7 +1,8 @@
 //! Server success odds of gathering and cooking (dump
 //! `action_odds.json`, `orchestrator dump-npc-ranges` /
 //! `dump_action_odds`): the `(low, high)` pairs the scripts hand to
-//! `stat_random`, the pickaxe swing rates, the cooking burn pairs.
+//! `stat_random`, the pickaxe swing rates, the cooking burn pairs, the
+//! gem roll of a mined rock and its `mining_gem_table`.
 //!
 //! `stat_random(stat, low, high)` (engine `PlayerOps.ts`):
 //! `value = floor(low × (99 − L) / 98) + floor(high × (L − 1) / 98) + 1`
@@ -31,8 +32,20 @@ pub struct CookOdds {
     pub range: Option<(i64, i64)>,
 }
 
+/// The gem roll of a mined rock (`mining.rs2` `get_ore_normal` /
+/// `get_ore_fast`, F2P chance) and `mining_gem_table`: one roll in
+/// `roll` finds a gem instead of ore, drawn over `draws` (each gem's
+/// share of them; the rest finds nothing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MiningGems {
+    pub roll: i64,
+    pub draws: i64,
+    pub gems: Vec<(String, i64)>,
+}
+
 #[derive(Default)]
 struct Tables {
+    mining_gems: Option<MiningGems>,
     rocks: HashMap<String, (i64, i64)>,
     rock_respawn: HashMap<String, i64>,
     tree_respawn: HashMap<String, i64>,
@@ -79,6 +92,13 @@ fn tables() -> &'static Tables {
         }
         for (name, value) in doc.get("runecraft").as_obj().cloned().unwrap_or_default() {
             out.runecraft.extend(value.as_i64().map(|multiplier| (name.clone(), multiplier)));
+        }
+        let gems = doc.get("mining_gems");
+        if let (Some(roll), Some(draws), Some(table)) = (gems.get("roll").as_i64(), gems.get("draws").as_i64(), gems.get("gems").as_obj()) {
+            let gems: Vec<(String, i64)> = table.iter().filter_map(|(gem, share)| share.as_i64().map(|share| (gem.clone(), share))).collect();
+            if roll > 0 && draws > 0 && !gems.is_empty() {
+                out.mining_gems = Some(MiningGems { roll, draws, gems });
+            }
         }
         out
     })
@@ -142,6 +162,12 @@ pub fn runes_per_essence(rune: &str, level: i64) -> Option<i64> {
     (multiplier > 0).then(|| level.max(1) / multiplier + 1)
 }
 
+/// The gem roll of a mined rock and its table (dump `mining_gems`),
+/// `None` when the dump carries none.
+pub fn mining_gems() -> Option<MiningGems> {
+    tables().mining_gems.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{cooking, fish_chance, pickaxe_rate, rock_chance, stat_odds, tree_chance};
@@ -169,5 +195,40 @@ mod tests {
         assert_eq!(super::rock_respawn("blankrune"), None, "essence never depletes");
         assert_eq!(super::tree_felling("logs"), Some((1.0, 159.5)));
         assert_eq!(super::tree_felling("yew_logs"), Some((0.125, 200.0)));
+    }
+
+    /// The dumped gem table is the server's (`mining.rs2`, read here
+    /// again): `random($chance) = ^true` with `$chance` 256 for an F2P
+    /// player, `mining_gem_table` over `random(128)` with cumulative
+    /// thresholds (diamond < 2, ruby < 10, emerald < 26, sapphire < 58).
+    #[test]
+    fn mining_gems_are_the_server_script() {
+        let gems = super::mining_gems().expect("dump carries mining_gems");
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script = manifest
+            .ancestors()
+            .map(|dir| dir.join("lostcity/content/scripts/skill_mining/scripts/mining.rs2"))
+            .find(|candidate| candidate.is_file())
+            .expect("../lostcity checkout next to LifeScape");
+        let text = std::fs::read_to_string(&script).expect("mining.rs2 readable");
+        let normal = text.split("[label,get_ore_normal]").nth(1).and_then(|rest| rest.split("\n[").next()).expect("get_ore_normal");
+        assert!(normal.contains(&format!("def_int $chance = {};", gems.roll)) && normal.contains("random($chance) = ^true"), "gem roll moved in the server script");
+        let fast = text.split("[label,get_ore_fast]").nth(1).and_then(|rest| rest.split("\n[").next()).expect("get_ore_fast");
+        assert!(fast.contains(&format!("def_int $chance = {};", gems.roll)), "the fast rocks roll the same gems");
+        let table = text.split("[proc,mining_gem_table]").nth(1).expect("mining_gem_table");
+        assert!(table.contains(&format!("random({});", gems.draws)), "draws moved");
+        let mut threshold = 0;
+        let mut order: Vec<(String, i64)> = Vec::new();
+        for line in table.lines().map(str::trim).filter(|line| line.starts_with("if ($rand < ")) {
+            let (bound, gem) = line.trim_start_matches("if ($rand < ").split_once(") return (").expect("threshold line");
+            let bound: i64 = bound.parse().expect("threshold");
+            order.push((gem.trim_end_matches(");").to_string(), bound - threshold));
+            threshold = bound;
+        }
+        order.sort();
+        let mut dumped = gems.gems.clone();
+        dumped.sort();
+        assert_eq!(dumped, order, "the dump is the server table");
+        assert_eq!(dumped.iter().find(|(gem, _)| gem == "uncut_sapphire").map(|(_, share)| *share), Some(32));
     }
 }

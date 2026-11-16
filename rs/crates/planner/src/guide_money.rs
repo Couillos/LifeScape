@@ -14,8 +14,13 @@
 //!   stock as a prerequisite; in the general guide (nothing held) it is
 //!   blocked and ranks after every other row; for a bot (filter `held`)
 //!   it is evaluated on its stock (the window's work its stock covers);
-//! - chain: farm the inputs then transform (D16, `guide_chain`), each
-//!   stage's sell-here profit beside the line;
+//! - chain: source the inputs then transform (D16 revised 2026-11-16,
+//!   `guide_chain`): each input the cheaper way, farmed (its ticks at the
+//!   bot's D17 price) or bought (D15 at its volume), the way of each on
+//!   the line (`routes`), each stage's sell-here profit beside it. The
+//!   D17 price a chain reads is the best accessible line OUTSIDE the
+//!   chains (a chain's own rate depends on that choice: the loop is cut
+//!   there);
 //! - market: buy every input (current price, or a shop's when cheaper,
 //!   Q7), craft, sell (D15): ticks = work + a Varrock square round trip
 //!   per lot + the measured market wait per lot; capital = one lot;
@@ -27,8 +32,12 @@
 //!
 //! Rows: per activity, the prior's best site and the tool tier of the
 //! level, plus one row per measured exact key of that band (its site and
-//! tool). XP per 6000 ticks is a bonus column (derived from the units).
+//! tool) whose OWN key carries the measure (decision 2026-11-16 §4: a
+//! measured site the estimator reads through a roll-up or the prior is
+//! no line, never a copy; a key listed twice is one line). XP per 6000
+//! ticks is a bonus column (derived from the units).
 
+use crate::guide_chain::{Sourcing, TimePrice};
 use crate::guide_engine::{lots_per_6000, price_flows, round_trip_ticks, stock_inputs, stock_lot, work_share, Engine, InputPricing, PricedFlows};
 use crate::guide_model::{band_of, price_confidence, Confidence, Family, GuideFilter, MoneyRow, RateAnswer, RateAsk, Unrated, VARROCK_SQUARE, WINDOW_TICKS};
 
@@ -43,18 +52,27 @@ pub fn row_level(method: &str, filter: &GuideFilter) -> u8 {
     filter.level.unwrap_or_else(|| crate::guide_methods::gate_level(method)).clamp(1, 99)
 }
 
+/// The estimator's read of an exact key (`Confidence::read`).
+pub const EXACT_READ: &str = "Exact";
+
 /// Places of one activity at `level`: the prior's best site and tool,
-/// then every measured exact key of the band (its own site and tool).
+/// then each measured exact key of the band (its own site and tool),
+/// once, when its own key carries the measure (§4: a site read through
+/// a roll-up or the prior would copy another line).
 pub fn places(engine: &Engine, method: &str, style: &str, level: u8) -> (Vec<Place>, Option<String>) {
     let band = band_of(level);
     let mut asks = vec![RateAsk { method: method.to_string(), style: style.to_string(), site: None, tool: crate::guide_methods::tool_at(method, style, level), level }];
     for key in engine.world.measured.iter().filter(|key| key.method == method && key.style == style && key.band == band && key.site.is_some()) {
+        if asks.iter().any(|known| known.site == key.site && known.tool == key.tool) {
+            continue;
+        }
         asks.push(RateAsk { method: method.to_string(), style: style.to_string(), site: key.site, tool: key.tool.clone(), level });
     }
     let mut out = Vec::new();
     let mut error = None;
     for ask in asks {
         match engine.answer(&ask) {
+            Ok(answer) if ask.site.is_some() && answer.confidence.read != EXACT_READ => {}
             Ok(answer) => out.push(Place { ask, answer }),
             Err(reason) => error = Some(reason),
         }
@@ -93,6 +111,7 @@ fn base_row(family: Family, place: &Place, band: i64) -> MoneyRow {
         xp_6000: Vec::new(),
         extra_ticks_per_6000: 0.0,
         stages: Vec::new(),
+        routes: Vec::new(),
         confidence: place.answer.confidence.clone(),
         price_confidence: "traded",
         blocked: Vec::new(),
@@ -174,10 +193,11 @@ pub fn market_row(engine: &Engine, place: &Place, band: i64) -> MoneyRow {
     row
 }
 
-/// Chain line (D16) of an activity at the prior's place.
-fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
+/// Chain line (D16 revised) of an activity at the prior's place, its
+/// inputs sourced the cheaper way for a bot whose time is worth `time`.
+fn chain_row(engine: &Engine, place: &Place, band: i64, time: TimePrice) -> Option<MoneyRow> {
     let product = crate::guide_methods::own_product(&place.ask.method)?;
-    let unit = crate::guide_chain::chain_unit(engine, &place.ask.method, &place.ask.style, &product, place.ask.level, 0, &[], crate::guide_chain::Sourcing::Buy).ok()?;
+    let unit = crate::guide_chain::chain_unit(engine, &place.ask.method, &place.ask.style, &product, place.ask.level, 0, &[], Sourcing::Cheapest(time)).ok()?;
     // A chain farms at least one input: else it is the recipe line.
     if unit.stages.len() < 2 {
         return None;
@@ -217,13 +237,16 @@ fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
     row.xp_6000 = unit.xp_per_unit.iter().map(|(skill, xp)| (skill.clone(), xp * units_per_6000)).collect();
     row.extra_ticks_per_6000 = unit.ticks_per_unit * units_per_6000 - WINDOW_TICKS;
     row.stages = unit.stages;
+    row.routes = unit.routes;
     row.confidence.measured = unit.measured;
     Some(row)
 }
 
 /// Every money line of one activity at `level` (filter applied later),
-/// recipes evaluated on `held` (empty: nothing held).
-pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: &[(String, f64)]) -> (Vec<MoneyRow>, Option<Unrated>) {
+/// recipes evaluated on `held` (empty: nothing held); `chains`: the
+/// quests of the bot whose D17 price the chain line reads, `None` for no
+/// chain line (the lines that set that price).
+pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: &[(String, f64)], chains: Option<&[String]>) -> (Vec<MoneyRow>, Option<Unrated>) {
     let band = band_of(level);
     let (found, error) = places(engine, method, style, level);
     if found.is_empty() {
@@ -238,8 +261,9 @@ pub fn method_rows(engine: &Engine, method: &str, style: &str, level: u8, held: 
         rows.push(own_row(engine, place, Family::Recipe, band, held));
         rows.push(market_row(engine, place, band));
         // The chain farms upstream at the prior's places: one per band.
-        if index == 0 {
-            rows.extend(chain_row(engine, place, band));
+        if let (0, Some(quests)) = (index, chains) {
+            let time = TimePrice::new(best_profit_outside_chains(engine, level, quests).unwrap_or(0.0));
+            rows.extend(chain_row(engine, place, band, time));
         }
     }
     (rows, None)
@@ -263,6 +287,10 @@ pub fn entries(engine: &Engine) -> Vec<crate::guide_methods::GuideMethod> {
 /// first, then the blocked ones (best profit first), and the activities
 /// nothing estimates.
 pub fn money_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<MoneyRow>, Vec<Unrated>) {
+    guide_rows(engine, filter, true)
+}
+
+fn guide_rows(engine: &Engine, filter: &GuideFilter, with_chains: bool) -> (Vec<MoneyRow>, Vec<Unrated>) {
     let mut rows = Vec::new();
     let mut unrated = Vec::new();
     for entry in &entries(engine) {
@@ -275,7 +303,8 @@ pub fn money_guide(engine: &Engine, filter: &GuideFilter) -> (Vec<MoneyRow>, Vec
                 continue;
             }
         }
-        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level, &filter.held);
+        let chains = with_chains.then_some(filter.quests_done.as_slice());
+        let (found, missing) = method_rows(engine, &entry.method, &entry.style, level, &filter.held, chains);
         unrated.extend(missing.filter(|gap| !unrated.iter().any(|known: &Unrated| known.method == gap.method)));
         for mut row in found {
             if filter.family.as_deref().is_some_and(|family| family != row.family.as_str()) {
@@ -296,6 +325,17 @@ pub fn best_accessible_profit(engine: &Engine, level: u8, quests_done: &[String]
     let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
     let (rows, _) = money_guide(engine, &filter);
     rows.iter().filter(|row| row.accessible && row.profit_6000 > 0.0).map(|row| row.profit_6000).fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
+}
+
+/// D17 price a chain reads (§3): the best ACCESSIBLE line outside the
+/// chains for a bot at `level` with `quests_done`, built once per build;
+/// `None` when none earns (time is then worth nothing).
+pub fn best_profit_outside_chains(engine: &Engine, level: u8, quests_done: &[String]) -> Option<f64> {
+    engine.best_profit_memo((level, quests_done.to_vec(), false), || {
+        let filter = GuideFilter { level: Some(level), quests_done: quests_done.to_vec(), ..GuideFilter::default() };
+        let (rows, _) = guide_rows(engine, &filter, false);
+        rows.iter().filter(|row| row.accessible && row.profit_6000 > 0.0).map(|row| row.profit_6000).fold(None, |best: Option<f64>, profit| Some(best.map_or(profit, |known| known.max(profit))))
+    })
 }
 
 /// Confidence of a fabricated or missing answer (tests, quest rows).

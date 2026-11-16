@@ -411,7 +411,8 @@ scripts serveur (boucles p_op : roll toutes les N + 1 ticks, `p_delay(n)`
 répété toutes les n + 2) ; succès `stat_random` au niveau
 (`gamedata::action_odds`, dump `action_odds.json` : roches, pioches,
 arbres par hache, poissons, cuisson feu/fourneau, runes par essence,
-repousse des roches et abattage des arbres) ;
+repousse des roches et abattage des arbres, jet de gemme d'une roche et
+`mining_gem_table` relus de `mining.rs2`, `mining_gems`) ;
 combat : `melee_math` (mêlée), modèle `sizing` (distance, magie). Familles
 sans timing (moulin, combinaisons de préparation) : `PriorError`.
 Ressources épuisables (`method_rate_trip`, audit 2026-11-16) : une roche
@@ -459,8 +460,12 @@ Guides (R4, `planner::guide_*`, moteur pur ; `web_guides`,
 du planificateur (`guide_methods::catalogue` : jambes de production de
 tout objet F2P par activité, combats en 4 styles, sorts D18, feu, os,
 essence, tranches d'entraînement, alchimie des objets fabriqués) × site
-(le meilleur du prior, puis chaque clé mesurée de la tranche) × outil
-(le palier du niveau) × tranche. Lecture : estimation `rates_read` avec
+(le meilleur du prior, puis chaque clé mesurée de la tranche dont la clé
+EXACTE porte la mesure, n ≥ 3 : un site mesuré que l'estimateur lit par
+un cumul ou le prior ne fait aucune ligne, jamais une copie ; une clé
+listée deux fois, une ligne — décision 2026-11-16 §4) × outil (le palier
+du niveau) × tranche : une ligne par (méthode, style, site, outil,
+tranche, famille ou mode). Lecture : estimation `rates_read` avec
 le prior des guides (`method_rate::guide_prior` : un combat y ajoute sa
 table de drops ; le cerveau garde `method_prior`). Prix (2026-11-16,
 `guide_engine`), toujours pour le VOLUME d'une ligne (unités / 6000
@@ -478,12 +483,24 @@ ticks), jamais le prix d'une unité appliqué à une fenêtre :
   leur profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`)
   ou 0 sans débouché ;
 - ACHAT (décision 2026-11-16) : au moins le meilleur ask disponible :
-  asks au repos parcourus du moins cher pour le volume, chaque unité à
-  max(prix courant, ask) pour un objet échangé (à l'ask seul sinon),
-  tant qu'ils battent la boutique ; au-delà de leur profondeur, la
-  boutique F2P (Q7), sinon intrant introuvable : ligne bloquée (raison,
-  aucun profit), objet échangé compris (médiane 7 sous un ask à 35 :
-  achat à 35) ;
+  asks au repos (chaque unité à max(prix courant, ask) pour un objet
+  échangé, à l'ask seul sinon) et fenêtre des boutiques F2P parcourus
+  ENSEMBLE du moins cher pour le volume (boutique d'abord à prix égal) ;
+  au-delà, intrant introuvable : ligne bloquée (raison, aucun profit),
+  objet échangé compris (médiane 7 sous un ask à 35 : achat à 35) ;
+- STOCK BOUTIQUE FINI (décision 2026-11-16 §2, `gamedata::shop_buy`) :
+  une boutique vend par fenêtre de 6000 ticks son stock de base, unité
+  par unité au prix serveur du stock restant (`shop.rs2`
+  `adjusted_item_cost_buying` = `calc_shop_value(coût, shop_delta,
+  multiplicateur de vente, stock − base)`, au moins 1 pièce : le prix
+  monte à chaque unité achetée), puis son réassort de la fenêtre (une
+  unité toutes les `rate` ticks sous la base, `World.ts`, achetée au
+  stock 1) ; boutiques F2P atteignables sans quête (comme la vente Q3),
+  chacune à son ouvreur F2P le moins cher, `shop_delta` relu des configs
+  (`gamedata/data/shop_haggle.json` : param des `.npc`, défaut de
+  `shopkeeper.param`, argument des `~openshop`) ; au-delà, la ligne est
+  bloquée comme au-delà des asks (raison : « asks hold A, F2P shops S
+  (stock + restock), of V per window ») ;
 - confiance prix par flux (`basis` : traded, thin, shop, book,
   book+shop, book+none, none, own ; prix courant si la majorité du
   volume y est, sinon ce que carnet et PNJ en portent) et par ligne
@@ -496,8 +513,16 @@ la fenêtre que le stock couvre). Lignes bloquées (`blocked`, raisons)
 toujours après les autres.
 - money making, profit/6000 au prix courant = Σ flux signés × prix,
   pauses comptées dans les ticks ; familles farm, recipe (intrants au
-  prix de vente, D5), chain (D16 : intrants farmés en amont, ticks par
-  unité sommés, chaque étage avec son profit « vendu ici »), market
+  prix de vente, D5), chain (D16 révisé 2026-11-16 §3 : chaque intrant
+  et consommable par la voie la MOINS COÛTEUSE, farmer — ses ticks au
+  prix D17 du bot moins les autres flux de sa source — ou acheter — prix
+  au volume, asks et boutique finie ; égalité = farmer ; prix D17 lu sur
+  la meilleure ligne accessible HORS chaînes, la boucle est coupée là ;
+  ticks par unité sommés sur les étages farmés, chaque étage avec son
+  profit « vendu ici », la voie de chaque intrant affichée `routes` :
+  objet, cause, farm/buy, source, coût farmé et coût acheté par unité ;
+  une chaîne qui achète tout n'est plus une chaîne : la ligne market la
+  couvre), market
   (D15 : intrants achetés, aller-retour place de Varrock ↔ atelier et
   attente market mesurée par lot, capital d'un lot, Ironman exclu) ;
   XP/6000 en bonus ; prérequis (niveaux, combat, quêtes, outils,
@@ -510,16 +535,22 @@ toujours après les autres.
   en amont), temps compté, XP/6000 = XP de l'action ÷ (ticks de l'action
   + ticks d'obtention) ; intrant sans source autonome au niveau → ligne
   autonome bloquée avec la raison, jamais achetée ; consommables de
-  méthode (runes, munitions, appât, fil, nourriture, péages) toujours
-  achetés ; marché : intrants achetés selon la règle d'achat ci-dessus,
+  méthode (runes, munitions, appât, fil, nourriture ; décision
+  2026-11-16 §1) PRODUITS de la même façon quand une activité les fait
+  au niveau (sources du guide : jambes de production, drops et
+  sous-produits — runes élémentaires par runecraft, plumes des poulets,
+  loi par les drops de hobgobelins), leur temps compté ; seuls ceux
+  qu'aucune activité ne fait restent achetés (péages et pièces jamais
+  produits) ; la ligne affiche la voie de chacun (`routes`) ; marché : intrants achetés selon la règle d'achat ci-dessus,
   volume au-delà des asks + boutique → ligne bloquée ; pièces converties
   en ticks au profit de la meilleure ligne money making accessible, D17) ;
   ligne bloquée : aucune XP effective (comme aucun profit en money) ;
   sources d'une chaîne = jambes de production + activités du catalogue
   dont le prior des guides donne l'objet en sous-produit ou drop (gemmes
   brutes : 1 jet de minage sur 256, `mining_gem_table` de `mining.rs2`,
-  `method_rate::MINING_GEM_TABLE`, prior des guides seul ; drops des
-  combats) ; XP/6000 = unités × XP du dump ; pièces/6000,
+  dump `action_odds.json` `mining_gems` (`gamedata::action_odds::
+  mining_gems`, test qui relit le script serveur), prior des guides
+  seul ; drops des combats) ; XP/6000 = unités × XP du dump ; pièces/6000,
   pièces/XP, ticks jusqu'à la fin de tranche ; raccourcis de quête (D20,
   XP forfaitaire sur la durée mesurée des runs `quest:<clé>`) ;
 - sans `level`, chaque méthode est lue à son propre seuil (vue

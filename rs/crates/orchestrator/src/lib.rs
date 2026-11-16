@@ -154,6 +154,7 @@ pub mod session_cmds;
 pub mod session_locks;
 pub mod dump_npc_combat;
 pub mod dump_action_odds;
+pub mod dump_shop_haggle;
 pub mod dump_spell_targets;
 pub mod dump_npc_ranges;
 pub mod dump_transitions;

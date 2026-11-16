@@ -173,8 +173,12 @@ pub struct GuideWorld<'a> {
     pub price: &'a dyn Fn(&str) -> Quote,
     /// What the best F2P shop pays for one unit (plan marché Q3).
     pub npc_sale: &'a dyn Fn(&str) -> Option<f64>,
-    /// What the cheapest F2P shop asks for one unit (plan marché Q7).
-    pub shop_buy: &'a dyn Fn(&str) -> Option<f64>,
+    /// What F2P shops sell of an object in ONE window (6000 ticks):
+    /// (unit price, units) steps cheapest first, each shop's base stock
+    /// unit by unit at the server price for the stock left, then the
+    /// window's restock (plan marché Q7, decision 2026-11-16 §2,
+    /// `gamedata::shop_buy`); empty when no shop sells it.
+    pub shop_buy: &'a dyn Fn(&str) -> Vec<(f64, f64)>,
     /// Measured market wait per lot (mean pause of the runs that
     /// paused), `None` when nothing was measured.
     pub market_wait_ticks: Option<f64>,
@@ -281,6 +285,42 @@ pub struct Prereqs {
     pub stock: Vec<(String, f64)>,
 }
 
+/// How a row comes by one input or consumable (decision 2026-11-16 §1,
+/// §3): farmed by an activity (its ticks counted) or bought.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Farm,
+    Buy,
+}
+
+impl Route {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Route::Farm => "farm",
+            Route::Buy => "buy",
+        }
+    }
+}
+
+/// The way chosen for one input or consumable of a chain or an
+/// autonomous line, with what each way costs per unit of the item
+/// (coins; farming: its ticks at the bot's D17 price less the other
+/// flows of the source, `None` when the way is closed or unpriced).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputRoute {
+    pub item: String,
+    pub cause: String,
+    pub route: Route,
+    /// The farming activity (empty when bought).
+    pub source: String,
+    /// Units of the item per unit of the consuming stage's product
+    /// (chains) or per 6000 ticks of the row (training).
+    pub units: f64,
+    pub farm_ticks_per_unit: Option<f64>,
+    pub farm_coins_per_unit: Option<f64>,
+    pub buy_coins_per_unit: Option<f64>,
+}
+
 /// One stage of a chain (D16): what selling at this stage pays.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stage {
@@ -312,6 +352,8 @@ pub struct MoneyRow {
     /// Ticks added to each 6000 of work (pauses, market trips, waits).
     pub extra_ticks_per_6000: f64,
     pub stages: Vec<Stage>,
+    /// The way each input of a chain came by (farmed or bought).
+    pub routes: Vec<InputRoute>,
     pub confidence: Confidence,
     /// "traded" or "book/npc" (`price_confidence`).
     pub price_confidence: &'static str,
@@ -376,6 +418,8 @@ pub struct TrainingRow {
     /// A quest row's measured duration in ticks (`None`: unmeasured).
     pub quest_ticks: Option<f64>,
     pub flows: Vec<FlowLine>,
+    /// The way each input and consumable of an autonomous line came by.
+    pub routes: Vec<InputRoute>,
     pub confidence: Confidence,
     /// "traded" or "book/npc" (`price_confidence`).
     pub price_confidence: &'static str,

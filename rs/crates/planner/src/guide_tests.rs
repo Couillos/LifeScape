@@ -44,18 +44,42 @@ struct Fixture {
     /// Whole quotes (a median, its fills, a clamping book).
     quotes: HashMap<&'static str, Quote>,
     npc: HashMap<&'static str, f64>,
+    /// A shop selling without limit at one price.
     shop: HashMap<&'static str, f64>,
+    /// A shop's finite window: (price, units) steps, cheapest first.
+    shop_ladders: HashMap<&'static str, Vec<(f64, f64)>>,
     wait: Option<f64>,
     quests: HashMap<&'static str, f64>,
+    measured: Vec<crate::guide_model::MeasuredKey>,
+    /// Which key the estimator read for an ask at a site (else "Exact").
+    site_reads: HashMap<(i64, i64, i64), &'static str>,
 }
 
 impl Fixture {
     fn new() -> Self {
-        Fixture { yields: steel_yields(), prices: prices(), books: HashMap::new(), quotes: HashMap::new(), npc: HashMap::new(), shop: HashMap::new(), wait: Some(100.0), quests: HashMap::new() }
+        Fixture {
+            yields: steel_yields(),
+            prices: prices(),
+            books: HashMap::new(),
+            quotes: HashMap::new(),
+            npc: HashMap::new(),
+            shop: HashMap::new(),
+            shop_ladders: HashMap::new(),
+            wait: Some(100.0),
+            quests: HashMap::new(),
+            measured: Vec::new(),
+            site_reads: HashMap::new(),
+        }
     }
 
     fn run<T>(&self, body: impl FnOnce(&Engine) -> T) -> T {
-        let rate = |ask: &RateAsk| self.yields.get(ask.method.as_str()).cloned().ok_or_else(|| format!("no yield for {}", ask.method));
+        let rate = |ask: &RateAsk| {
+            let mut found = self.yields.get(ask.method.as_str()).cloned().ok_or_else(|| format!("no yield for {}", ask.method))?;
+            if let Some(site) = ask.site {
+                found.confidence.read = self.site_reads.get(&site).copied().unwrap_or("Exact").to_string();
+            }
+            Ok(found)
+        };
         let price = |item: &str| match (self.quotes.get(item), self.prices.get(item)) {
             (Some(quote), _) => quote.clone(),
             // A traded object's market makers offer it at its price.
@@ -67,9 +91,13 @@ impl Fixture {
             }
         };
         let npc = |item: &str| self.npc.get(item).copied();
-        let shop = |item: &str| self.shop.get(item).copied();
+        let shop = |item: &str| match (self.shop_ladders.get(item), self.shop.get(item)) {
+            (Some(ladder), _) => ladder.clone(),
+            (None, Some(price)) => vec![(*price, f64::INFINITY)],
+            (None, None) => Vec::new(),
+        };
         let quest = |key: &str| self.quests.get(key).copied();
-        let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc, shop_buy: &shop, market_wait_ticks: self.wait, quest_ticks: &quest, measured: &[] };
+        let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc, shop_buy: &shop, market_wait_ticks: self.wait, quest_ticks: &quest, measured: &self.measured };
         let engine = Engine::new(&world);
         body(&engine)
     }
@@ -135,10 +163,14 @@ fn full_market_counts_trips_waits_and_capital() {
 
 /// D16: the chain farms its inputs (ticks per unit summed upstream), its
 /// line pays the final product only, each stage shows its sell-here
-/// profit.
+/// profit. Buying ore costs 100 here: farming is the cheaper way (§3).
 #[test]
 fn chain_sums_upstream_ticks_and_compares_every_stage() {
-    let (rows, _) = Fixture::new().run(|engine| money_guide(engine, &level(30)));
+    let mut fixture = Fixture::new();
+    for (item, price) in [("iron_ore", 10.0), ("coal", 15.0)] {
+        fixture.quotes.insert(item, Quote { price, traded: true, median: price, fills: 5, fill_units: 500.0, bids: Vec::new(), asks: vec![(100.0, 1e9)] });
+    }
+    let (rows, _) = fixture.run(|engine| money_guide(engine, &level(30)));
     let chain = row(&rows, "smelt:steel_bar", Family::Chain);
     let ticks = 60.0 + 50.0 + 2.0 * 60.0;
     assert!((chain.profit_6000 - 50.0 * 6000.0 / ticks).abs() < 1e-6, "{}", chain.profit_6000);
@@ -222,7 +254,8 @@ fn every_f2p_method_has_a_line_or_a_typed_reason() {
     };
     let price = |_: &str| Quote { price: 1.0, ..Quote::default() };
     let none = |_: &str| None;
-    let world = GuideWorld { rate: &rate, price: &price, npc_sale: &none, shop_buy: &none, market_wait_ticks: None, quest_ticks: &none, measured: &[] };
+    let no_shop = |_: &str| Vec::new();
+    let world = GuideWorld { rate: &rate, price: &price, npc_sale: &none, shop_buy: &no_shop, market_wait_ticks: None, quest_ticks: &none, measured: &[] };
     let engine = Engine::new(&world);
     let (rows, unrated) = money_guide(&engine, &GuideFilter::default());
     let catalogue = crate::guide_methods::catalogue();
@@ -497,9 +530,11 @@ fn autonomous_input_without_autonomous_source_is_blocked() {
     assert!(!dagger.accessible && dagger.blocked.iter().any(|reason| reason.contains("steel_bar")), "{dagger:?}");
     let smelt = training_row(&rows, "smelt:steel_bar", Supply::Autonomous);
     assert!(smelt.blocked.iter().any(|reason| reason.contains("coal")), "{smelt:?}");
-    // The money chain still buys what it does not farm (D16).
-    let (money, _) = fixture.run(|engine| money_guide(engine, &level(30)));
-    assert!(row(&money, "smelt:steel_bar", Family::Chain).blocked.is_empty());
+    // The money chain still buys what it does not farm (D16): coal.
+    let price = crate::guide_chain::TimePrice::new(1200.0);
+    let unit = fixture.run(|engine| crate::guide_chain::chain_unit(engine, "smelt:steel_bar", "", "steel_bar", 30, 0, &[], crate::guide_chain::Sourcing::Cheapest(price))).expect("chain");
+    assert!(unit.missing.is_empty(), "{:?}", unit.missing);
+    assert_eq!(unit.routes.iter().find(|route| route.item == "coal").map(|route| route.route), Some(crate::guide_model::Route::Buy));
 }
 
 /// Market mode: the inputs come from the asks for their depth, then an
@@ -522,3 +557,6 @@ fn training_market_input_is_limited_by_the_ask_depth() {
     let logs = market.flows.iter().find(|line| line.item == "logs").expect("logs line");
     assert_eq!(logs.basis, crate::guide_model::PriceBasis::BookShop);
 }
+
+#[path = "guide_sourcing_tests.rs"]
+mod sourcing;

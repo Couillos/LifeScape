@@ -14,11 +14,13 @@
 //! - SALE of a NEVER-TRADED object (no current price): the resting bids
 //!   best first (while they pay more than the shop), the rest to the
 //!   best F2P shop (Q3) or worth nothing without one;
-//! - PURCHASE: at least the best resting ask: the asks walked cheapest
-//!   first for the volume, each unit at max(current price, ask) for a
-//!   traded object, while cheaper than an F2P shop; the rest from that
-//!   shop (Q7), else NOT for sale (`available` false: the row needing it
-//!   is blocked, never priced at a made-up figure);
+//! - PURCHASE: at least the best resting ask: the asks (each unit at
+//!   max(current price, ask) for a traded object) and the F2P shops'
+//!   window (Q7, decision 2026-11-16 §2: base stock unit by unit at the
+//!   server price for the stock left, then the window's restock) walked
+//!   together cheapest first for the volume; past both, NOT for sale
+//!   (`available` false: the row needing it is blocked, never priced at
+//!   a made-up figure);
 //! - a consumable a run must buy (ammo, runes, bait, supply, food, fee)
 //!   is a purchase;
 //! - a recipe's stock (its `input` flows), lost or discarded objects
@@ -197,15 +199,15 @@ fn sale_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
 
 /// Purchase steps of a quote, cheapest first (D15, Q7, user
 /// 2026-11-16): the resting asks for their depth, each unit at least the
-/// current price of a traded object (max(current price, ask)), while
-/// cheaper than the shop; then the shop. Past both: not for sale.
-fn purchase_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
+/// current price of a traded object (max(current price, ask)), and the
+/// shops' window steps (finite stock, §2), merged by price (a shop
+/// first at a tie). Past them all: not for sale.
+fn purchase_steps(quote: &Quote, shop: &[(f64, f64)]) -> Vec<Step> {
     let floor = if quote.traded { quote.price.max(1.0) } else { 0.0 };
-    let mut steps: Vec<Step> = book_steps(&quote.asks)
-        .map(|step| if step.price <= floor { Step { price: floor, tier: Tier::Current, ..step } } else { step })
-        .take_while(|step| shop.map_or(true, |shop| step.price < shop))
-        .collect();
-    steps.extend(shop.map(|price| Step { price, depth: f64::INFINITY, tier: Tier::Shop }));
+    let mut steps: Vec<Step> = shop.iter().filter(|(price, units)| *price >= 0.0 && *units > 0.0).map(|(price, units)| Step { price: *price, depth: *units, tier: Tier::Shop }).collect();
+    steps.extend(book_steps(&quote.asks).map(|step| if step.price <= floor { Step { price: floor, tier: Tier::Current, ..step } } else { step }));
+    // Stable: the shop steps (pushed first) lead at equal prices.
+    steps.sort_by(|left, right| left.price.total_cmp(&right.price));
     steps
 }
 
@@ -217,7 +219,8 @@ pub struct Engine<'a> {
     answers: RefCell<HashMap<AskKey, Result<RateAnswer, String>>>,
     quotes: RefCell<HashMap<String, Quote>>,
     sources: RefCell<HashMap<(String, u8, usize, crate::guide_chain::Sourcing), Option<crate::guide_chain::ChainUnit>>>,
-    best_profit: RefCell<HashMap<(u8, Vec<String>), Option<f64>>>,
+    best_profit: RefCell<HashMap<(u8, Vec<String>, bool), Option<f64>>>,
+    shops: RefCell<HashMap<String, Vec<(f64, f64)>>>,
 }
 
 impl<'a> Engine<'a> {
@@ -228,7 +231,19 @@ impl<'a> Engine<'a> {
             quotes: RefCell::new(HashMap::new()),
             sources: RefCell::new(HashMap::new()),
             best_profit: RefCell::new(HashMap::new()),
+            shops: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// The F2P shops' window of an object (`GuideWorld::shop_buy`), read
+    /// once per build.
+    pub fn shop_steps(&self, item: &str) -> Vec<(f64, f64)> {
+        if let Some(known) = self.shops.borrow().get(item) {
+            return known.clone();
+        }
+        let found = (self.world.shop_buy)(item);
+        self.shops.borrow_mut().insert(item.to_string(), found.clone());
+        found
     }
 
     /// Fastest source of an object at a level and depth, built once per
@@ -242,8 +257,9 @@ impl<'a> Engine<'a> {
         found
     }
 
-    /// Best accessible profit of a bot (D17), built once per build.
-    pub fn best_profit_memo(&self, key: (u8, Vec<String>), compute: impl FnOnce() -> Option<f64>) -> Option<f64> {
+    /// Best accessible profit of a bot (D17; the flag: chain lines
+    /// counted), built once per build.
+    pub fn best_profit_memo(&self, key: (u8, Vec<String>, bool), compute: impl FnOnce() -> Option<f64>) -> Option<f64> {
         if let Some(known) = self.best_profit.borrow().get(&key) {
             return *known;
         }
@@ -284,14 +300,13 @@ impl<'a> Engine<'a> {
     }
 
     /// Mean purchase price of `units` (`purchase_steps`); `available`
-    /// false past the asks' depth without a shop. Coins are worth one.
+    /// false past the asks' and the shops' depth. Coins are worth one.
     pub fn buy_at(&self, item: &str, units: f64) -> Priced {
         if item == "coins" {
             return Priced::own();
         }
         let quote = self.quote(item);
-        let shop = (self.world.shop_buy)(item);
-        walk(&purchase_steps(&quote, shop), units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
+        walk(&purchase_steps(&quote, &self.shop_steps(item)), units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
     }
 
     /// Why `units` of `item` cannot be bought (for a blocked row).
@@ -299,7 +314,9 @@ impl<'a> Engine<'a> {
         let quote = self.quote(item);
         let depth = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
         let traded = if quote.traded { "" } else { "never traded, " };
-        format!("{item}: {traded}asks hold {depth:.0} of {units:.0} per window, no F2P shop sells it")
+        let shop: f64 = self.shop_steps(item).iter().map(|(_, units)| units.max(0.0)).sum();
+        let shops = if shop > 0.0 { format!("F2P shops {shop:.0} (stock + restock)") } else { "no F2P shop sells it".to_string() };
+        format!("{item}: {traded}asks hold {depth:.0}, {shops}, of {units:.0} per window")
     }
 
     /// Mean unit price of one signed flow of `qty` units under `pricing`.

@@ -76,6 +76,16 @@ dumps (`dump_plan.mts`) : `drops.json` (+ `rate`, `qty_min/max`,
 `exact`), `shop_access.json`, `dialogue_buys.json`, `script_grants.json`,
 `config_recipes.json` ; vérification manuelle des taux :
 `node gamedata/tools/drop_rates_check.mts <content/scripts> <sujet>…`.
+Dumps hors ligne de l'orchestrateur (`dump-npc-ranges`, ou tests
+`--ignored` `write_action_odds` / `write_shop_haggle`, lecture seule de
+`../lostcity/content/scripts`) : `action_odds.json` (`gamedata::
+action_odds` : roches, pioches, arbres, poissons, cuisson, runes par
+essence, repousses, et `mining_gems` : jet de gemme 1/`roll` d'une roche
+et `mining_gem_table` de `mining.rs2`, parts sur `draws`) ;
+`shop_haggle.json` (`shop_delta` des gardiens `.npc`, défaut de
+`shopkeeper.param`, haggle des `~openshop`) lu par `gamedata::shop_buy` :
+fenêtre d'achat d'une boutique F2P = stock de base unité par unité au
+prix serveur du stock restant + réassort (1 unité / `rate` ticks).
 Table d'XP (`lifescape-gamedata::xp`, unités serveur = 10× l'affichage :
 niveau 2 à 830, 99 à 130344310).
 Apparence (`lifescape-gamedata::player_design`) : kits idk activés par

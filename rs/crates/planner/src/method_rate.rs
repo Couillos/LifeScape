@@ -60,15 +60,6 @@ pub const ROCK_SUCCESS_DELAY_TICKS: f64 = 1.0;
 /// Rocks mined by `get_ore_fast` (`mining.rs2`: iron, granite,
 /// sandstone; the F2P one is iron).
 pub const FAST_ROCKS: [&str; 1] = ["iron_ore"];
-/// One mining roll in `MINING_GEM_ROLL` finds a gem instead of ore
-/// (`mining.rs2` `get_ore_normal` and `get_ore_fast`: `random(256)`; the
-/// charged amulet's 86 is members only), drawn from `mining_gem_table`
-/// (`random(128)`: diamond < 2, ruby < 10, emerald < 26, sapphire < 58,
-/// else nothing): (gem, draws of `MINING_GEM_DRAWS`). Essence
-/// (`get_ore_essence`) never rolls one.
-pub const MINING_GEM_ROLL: f64 = 256.0;
-pub const MINING_GEM_DRAWS: f64 = 128.0;
-pub const MINING_GEM_TABLE: [(&str, f64); 4] = [("uncut_diamond", 2.0), ("uncut_ruby", 8.0), ("uncut_emerald", 16.0), ("uncut_sapphire", 32.0)];
 /// Ticks between two chops of a tree (`%action_delay = clock + 3`).
 pub const CHOP_TICKS: f64 = 4.0;
 /// Runecraft: the ruins' `p_delay(1)` before the jump inside (n + 2),
@@ -341,8 +332,14 @@ fn gather_action(product: &str, way: &Way, skill: &str, level: i64, query: &Prio
             let pickaxe = tool_or_base("mining", &query.tool, &base);
             let rate = pickaxe_rate(&pickaxe).ok_or_else(|| PriorError::NoTool(pickaxe.clone()))?;
             let (low, high) = rock_chance(product).ok_or_else(|| PriorError::NoOdds(product.to_string()))?;
-            // One roll in 256 finds a gem instead (`get_ore_normal`).
-            let odds = if (low, high) == (256, 256) { 1.0 } else { stat_odds(level, low, high) * 255.0 / 256.0 };
+            // One roll in `roll` finds a gem instead (`get_ore_normal`,
+            // dump `mining_gems`); essence rolls none.
+            let odds = if (low, high) == (256, 256) {
+                1.0
+            } else {
+                let gems = lifescape_gamedata::action_odds::mining_gems().ok_or_else(|| PriorError::NoOdds("mining_gem_table".to_string()))?;
+                stat_odds(level, low, high) * (gems.roll - 1) as f64 / gems.roll as f64
+            };
             let settle = if FAST_ROCKS.contains(&product) { 0.0 } else { ROCK_SUCCESS_DELAY_TICKS };
             match rock_respawn(product) {
                 Some(respawn) => ((rate + 1) as f64, odds, 1.0, respawn as f64, settle),
@@ -479,8 +476,8 @@ pub fn method_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
 
 /// The guides' prior (R4): `method_prior` plus, for a fight, the
 /// expected loot of its kills from the NPC's drop table (`loot` per
-/// 6000), and for a rock the gems its rolls find (`byproduct`,
-/// `MINING_GEM_TABLE`: the source of uncut gems, D16). The brain keeps
+/// 6000), and for a rock the gems its rolls find (`byproduct`, dump
+/// `mining_gems` of `mining.rs2`: the source of uncut gems, D16). The brain keeps
 /// `method_prior` (no decision change before R7); the guides price what
 /// a fight or a mine brings home.
 pub fn guide_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
@@ -492,8 +489,9 @@ pub fn guide_prior(query: &PriorQuery) -> Result<RatePrior, PriorError> {
     }
     if query.method.starts_with("gather:mining/") {
         // One action is one roll of the rock (`gather_action`).
-        for (gem, draws) in MINING_GEM_TABLE {
-            prior.flows.push((gem.to_string(), "byproduct", prior.actions_per_6000 / MINING_GEM_ROLL * draws / MINING_GEM_DRAWS));
+        let gems = lifescape_gamedata::action_odds::mining_gems().ok_or_else(|| PriorError::NoOdds("mining_gem_table".to_string()))?;
+        for (gem, share) in &gems.gems {
+            prior.flows.push((gem.clone(), "byproduct", prior.actions_per_6000 / gems.roll as f64 * *share as f64 / gems.draws as f64));
         }
     }
     Ok(prior)

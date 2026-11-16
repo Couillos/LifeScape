@@ -93,6 +93,8 @@ pub fn dump_npc_ranges(output: &Path) -> Result<usize, String> {
     crate::dump_spell_targets::dump_spell_targets(&content_dir().join("scripts"), &output.with_file_name("spell_targets.json"))?;
     // Gathering and cooking odds (rates priors, plan rendements R2).
     crate::dump_action_odds::dump_action_odds(&content_dir().join("scripts"), &output.with_file_name("action_odds.json"))?;
+    // Shop haggles (finite shop stock priced unit by unit, 2026-11-16).
+    crate::dump_shop_haggle::dump_shop_haggle(&content_dir().join("scripts"), &output.with_file_name("shop_haggle.json"))?;
     Ok(count)
 }
 

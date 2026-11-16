@@ -8,8 +8,10 @@
 //!   D12) and the units its fills moved (a thin price holds for them
 //!   only); a never-traded object has none, only its resting book (the
 //!   engine counts it for the units it holds, `quote_of`); the best F2P
-//!   shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`) and the
-//!   cheapest F2P keeper (Q7);
+//!   shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`) and what the
+//!   F2P shops sell in one window (Q7, finite stock, decision 2026-11-16
+//!   §2: base stock unit by unit at the server price, then the window's
+//!   restock, `gamedata::shop_buy`);
 //! - the market wait per lot: mean pause of the contract-2 runs that
 //!   paused for the market; a quest's duration: mean work of its
 //!   finished contract-2 runs.
@@ -28,7 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lifescape_json::{object, str_value, Value};
-use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, TrainingRow, Unrated};
+use lifescape_planner::guide_model::{Confidence, FlowLine, GuideFilter, GuideWorld, InputRoute, MeasuredKey, MoneyRow, Prereqs, Quote, RateAnswer, RateAsk, TrainingRow, Unrated};
 use lifescape_store::Store;
 
 /// Longest a built guide serves before a rebuild.
@@ -87,6 +89,12 @@ pub fn npc_volume_value(item: &str) -> Option<f64> {
         .max()
         .filter(|value| *value >= 1)
         .map(|value| value as f64)
+}
+
+/// What the F2P shops sell of `item` in one window (`WINDOW_TICKS`):
+/// (unit price, units) steps cheapest first (Q7, finite stock §2).
+pub fn shop_window(item: &str) -> Vec<(f64, f64)> {
+    lifescape_gamedata::shop_buy::purchase_steps(item, lifescape_planner::guide_model::WINDOW_TICKS as i64).into_iter().map(|step| (step.price as f64, step.units as f64)).collect()
 }
 
 /// The engine's quote of `display` (D12, `lifescape_market::current_price`
@@ -204,7 +212,7 @@ pub fn build_guide(store: &Store, snapshot: &crate::rates_service::Snapshot, kin
         quote
     };
     let npc_sale = |item: &str| npc_volume_value(item);
-    let shop_buy = |item: &str| lifescape_gamedata::obtain::merchant_price(item).map(|value| value as f64);
+    let shop_buy = |item: &str| shop_window(item);
     let quest_ticks = |key: &str| waits.quests.get(key).copied();
     let world = GuideWorld { rate: &rate, price: &price, npc_sale: &npc_sale, shop_buy: &shop_buy, market_wait_ticks: waits.market_wait, quest_ticks: &quest_ticks, measured: &measured };
     let engine = lifescape_planner::guide_engine::Engine::new(&world);
@@ -311,6 +319,25 @@ fn flow_value(line: &FlowLine) -> Value {
     ])
 }
 
+fn optional(value: Option<f64>) -> Value {
+    value.map(Value::Float).unwrap_or(Value::Null)
+}
+
+/// The way one input or consumable came by (decision 2026-11-16 §1/§3).
+fn route_value(route: &InputRoute) -> Value {
+    object(vec![
+        ("item", str_value(&route.item)),
+        ("display", str_value(&crate::rates_names::display_of(&route.item))),
+        ("cause", str_value(&route.cause)),
+        ("route", str_value(route.route.as_str())),
+        ("source", str_value(&route.source)),
+        ("units", Value::Float(route.units)),
+        ("farm_ticks_per_unit", optional(route.farm_ticks_per_unit)),
+        ("farm_coins_per_unit", optional(route.farm_coins_per_unit)),
+        ("buy_coins_per_unit", optional(route.buy_coins_per_unit)),
+    ])
+}
+
 fn unrated_value(gap: &Unrated) -> Value {
     object(vec![("method", str_value(&gap.method)), ("reason", str_value(&gap.reason))])
 }
@@ -344,6 +371,7 @@ pub fn money_value(row: &MoneyRow) -> Value {
                     .collect(),
             ),
         ),
+        ("routes", Value::Arr(row.routes.iter().map(route_value).collect())),
         ("confidence", confidence_value(&row.confidence)),
         ("price_confidence", str_value(row.price_confidence)),
         ("blocked", blocked_value(&row.blocked)),
@@ -372,6 +400,7 @@ pub fn training_value(row: &TrainingRow) -> Value {
         ("quest_ticks", row.quest_ticks.map(Value::Float).unwrap_or(Value::Null)),
         ("prereqs", prereqs_value(&row.prereqs)),
         ("flows", Value::Arr(row.flows.iter().map(flow_value).collect())),
+        ("routes", Value::Arr(row.routes.iter().map(route_value).collect())),
         ("confidence", confidence_value(&row.confidence)),
         ("price_confidence", str_value(row.price_confidence)),
         ("blocked", blocked_value(&row.blocked)),

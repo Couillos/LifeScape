@@ -997,3 +997,35 @@ Décisions utilisateur (prix des guides, `planner::guide_engine`,
   → achat à 35).
 Rejeté : la médiane d'un ou deux fills appliquée à toute une fenêtre ;
 acheter sous le meilleur ask au motif que la médiane y est.
+
+## 2026-11-16 — Guides : consommables produits, stock boutique fini, chaînes au moins coûteux, une ligne par clé
+
+Décisions utilisateur (`planner::guide_*`, `docs/economy.md` § Rendements) :
+1. Consommables en mode AUTONOME (runes, plumes, appât, fil,
+   nourriture) : produits quand une activité les fait au niveau, dérivé
+   des sources du guide (jambes de production, drops, sous-produits ;
+   `guide_chain::sourceable` + `choose` sous `Sourcing::Farm`), leur temps
+   compté comme celui d'un intrant, récursivement ; seuls ceux qu'aucune
+   activité ne fait restent achetés ; péages et pièces jamais produits.
+2. Stock boutique FINI (`gamedata::shop_buy`) : par fenêtre de 6000 ticks,
+   stock de base unité par unité au prix serveur du stock restant
+   (`calc_shop_value(coût, shop_delta, multiplicateur, stock − base)`,
+   ≥ 1), puis réassort (1 unité / `rate` ticks, `World.ts`) ; asks et
+   boutiques parcourus ensemble du moins cher ; au-delà, ligne bloquée.
+   `shop_delta` dumpé hors ligne (`gamedata/data/shop_haggle.json`,
+   `orchestrator::dump_shop_haggle`). Boutiques : F2P atteignables sans
+   quête (comme la vente Q3) ; `merchant_price` (cerveau) inchangé.
+3. Chaînes (D16 révisé) : chaque intrant (et consommable) par la voie la
+   MOINS COÛTEUSE : farmer (ticks × prix D17 du bot − autres flux de la
+   source) ou acheter (prix au volume) ; égalité = farmer ; prix D17 =
+   meilleure ligne accessible HORS chaînes (coupe la boucle) ; voie de
+   chaque intrant publiée (`routes`, JSON et page).
+4. Une ligne par clé (méthode, style, site, outil, tranche, mode) : un
+   site mesuré n'a de ligne que si SA clé exacte porte la mesure
+   (lecture `Exact`) ; une clé listée deux fois, une ligne.
+5. Table des gemmes du minage : `mining_gems` dans `action_odds.json`
+   (jet 1/256, `mining_gem_table` sur 128), relue de `mining.rs2` par le
+   dumper et par un test gamedata ; plus aucune constante épinglée.
+Rejeté : liste écrite à la main des consommables productibles ; boutique
+à profondeur infinie ; « une source l'emporte toujours » ; seuil de
+rareté inventé pour écarter un drop.
