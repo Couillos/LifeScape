@@ -150,7 +150,10 @@ fn planner_estimates_come_from_the_bots_own_graph() {
     assert_eq!(planned_ticks_per_unit(&life, "willow_logs"), Some(40.0), "the farm way, never the market leg");
     assert_eq!(planned_ticks_per_unit(&life, "logs"), None);
     let prior = prior_ticks_per_unit("Willow logs").unwrap_or(0.0);
-    assert!((prior - 6000.0 / 180.0).abs() < 1e-9, "{prior}");
+    // The game prior of the gathering leg at its gate (woodcutting 30).
+    let query = lifescape_planner::method_rate::PriorQuery { method: "farm:willow_logs".to_string(), level: 30, ..Default::default() };
+    let gained: f64 = lifescape_planner::method_rate::method_prior(&query).expect("willow prior").flows.iter().filter(|(item, _, _)| item == "willow_logs").map(|(_, _, qty)| qty).sum();
+    assert!((prior - 6000.0 / gained).abs() < 1e-9, "{prior}");
 }
 
 #[test]

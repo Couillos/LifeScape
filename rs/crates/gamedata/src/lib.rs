@@ -7,6 +7,7 @@
 //! workspace stays dependency-free.
 
 pub mod access;
+pub mod action_odds;
 pub mod bank_stands;
 pub mod banks;
 pub mod combat_spots;

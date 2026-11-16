@@ -35,6 +35,16 @@ pub struct PurgeCounts {
     pub yields: i64,
 }
 
+/// One stored contract-2 report read back in order (the rates rebuild).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredMeasure {
+    pub report_id: i64,
+    pub account: String,
+    pub stop: String,
+    pub clock: i64,
+    pub measure: ReportMeasure,
+}
+
 /// Measure version of a contract-2 report.
 pub const MEASURE_VERSION: i64 = 2;
 
@@ -160,6 +170,26 @@ impl Store {
         Ok(out)
     }
 
+    /// Contract-2 reports after `after_id`, oldest first, at most
+    /// `limit` (the rates snapshot rebuilds from them page by page).
+    pub fn measures_after(&self, after_id: i64, limit: i64) -> Result<Vec<StoredMeasure>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT report_id, account, stop, created_clock FROM task_reports WHERE measure_version >= ?1 AND report_id > ?2 ORDER BY report_id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(rusqlite::params![MEASURE_VERSION, after_id, limit], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)))?;
+        let mut heads = Vec::new();
+        for row in rows {
+            heads.push(row?);
+        }
+        let mut out = Vec::with_capacity(heads.len());
+        for (report_id, account, stop, clock) in heads {
+            if let Some(measure) = self.report_measure(report_id)? {
+                out.push(StoredMeasure { report_id, account, stop, clock, measure });
+            }
+        }
+        Ok(out)
+    }
+
     /// Rows a v1 purge would remove: measure-1 reports and their lines.
     pub fn v1_measure_counts(&self) -> Result<PurgeCounts, Error> {
         let reports = self.connection.query_row("SELECT COUNT(*) FROM task_reports WHERE measure_version < ?1", rusqlite::params![MEASURE_VERSION], |row| row.get(0))?;
@@ -238,9 +268,13 @@ mod measures_tests {
             alerts: vec![("residual".to_string(), "Coins".to_string(), -3)],
         };
         store.record_report_measure(new, &measure)?;
-        assert_eq!(store.report_measure(new)?, Some(measure));
+        assert_eq!(store.report_measure(new)?, Some(measure.clone()));
         assert_eq!(store.report_measure(old)?, None);
         assert!(store.record_report_measure(999, &ReportMeasure::default()).is_err(), "unknown report fails loud");
+        let stored = store.measures_after(0, 10)?;
+        assert_eq!(stored.len(), 1, "measure-1 rows are never read back");
+        assert_eq!((stored[0].report_id, stored[0].stop.as_str(), &stored[0].measure), (new, "goal_reached", &measure));
+        assert!(store.measures_after(new, 10)?.is_empty());
         Ok(())
     }
 

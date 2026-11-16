@@ -110,6 +110,18 @@ pub fn end_fight_tool(bot: &Bot, script: &str, start: &str) -> String {
     if worn.is_empty() { start.to_string() } else { worn }
 }
 
+/// Fight scripts pick their attack style after the start (the melee
+/// kit sets the style it trains): the report reads the style at the end,
+/// the start's when none is readable (live 2026-11-16: `melee:attack`
+/// reports whose XP all went to strength, the style read before the
+/// script set it).
+pub fn end_combat_style(bot: &Bot, script: &str, start: &str) -> String {
+    if script != "melee" {
+        return start.to_string();
+    }
+    lifescape_scripts::kit::style::trained_skill(bot).map(|skill| format!("melee:{skill}")).unwrap_or_else(|| start.to_string())
+}
+
 /// Worn objects by debug name, weapon (slot 3) and ammo (slot 13) first.
 fn worn_fight_kit(bot: &Bot) -> Vec<String> {
     let Some(worn) = (bot.tables.com_id)("wornitems:wear").and_then(|com| bot.world.inv.get(&com)) else { return Vec::new() };

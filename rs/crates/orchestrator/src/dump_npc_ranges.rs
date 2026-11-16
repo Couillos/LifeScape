@@ -91,6 +91,8 @@ pub fn dump_npc_ranges(output: &Path) -> Result<usize, String> {
     crate::dump_npc_combat::dump_npc_combat(&files, &output.with_file_name("npc_combat.json"))?;
     // The spell side of a target check (crumble undead: `undead`).
     crate::dump_spell_targets::dump_spell_targets(&content_dir().join("scripts"), &output.with_file_name("spell_targets.json"))?;
+    // Gathering and cooking odds (rates priors, plan rendements R2).
+    crate::dump_action_odds::dump_action_odds(&content_dir().join("scripts"), &output.with_file_name("action_odds.json"))?;
     Ok(count)
 }
 

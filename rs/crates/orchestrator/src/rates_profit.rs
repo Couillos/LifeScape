@@ -1,24 +1,29 @@
-//! Method profitability (split from `rates_service`, rule 4) and its
-//! shared cache (CPU 2026-11-14: every seller quote, ready context and
-//! bid draw rebuilt the whole table — ~900 catalogue loads per build,
-//! ~800 ms of CPU per `seller_quote`).
+//! Method profitability from the yield estimator (plan rendements R2,
+//! §8) and its shared cache (CPU 2026-11-14: rebuilt when the snapshot
+//! changed or after `PROFIT_TTL`, else shared as is).
 //!
-//! `profit_rows` prices each distinct item once per build.
-//! `cached_profit_rows` serves the daemon's live table: rebuilt when the
-//! rates snapshot changed (`invalidate`, every ingest) or after
-//! `PROFIT_TTL` (market prints move the prices), else shared as is.
+//! One row per (planner method, style, band): the all-sites, all-tools
+//! estimate (`rates_read`, n ≥ 3 then blended with the prior, prior
+//! alone below), priced at the current price (`price_estimate`):
+//! revenue = Σ positive flows × price, input cost = Σ negative flows ×
+//! price (inputs, runes, ammo, bait, food, fees, losses: the signed
+//! balance), friction = paused ticks at the activity's revenue rate,
+//! plus the public-trend bonus. Trading legs (`shop_*`, `traded`) are
+//! transfers, `unattributed` an alert: neither enters a profit.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lifescape_store::Store;
 
-use super::{live_snapshot, price_estimate, profit_per_6000, Snapshot, NORMALIZE_TICKS, TREND_WEIGHT};
+use super::{live_snapshot, price_estimate, Snapshot, NORMALIZE_TICKS, TREND_WEIGHT};
 
 /// Longest a cached table serves without a rebuild (market prints).
 pub const PROFIT_TTL: Duration = Duration::from_secs(10);
+/// Causes that never price into a method's profit.
+pub const UNPRICED_CAUSES: [&str; 4] = ["shop_bought", "shop_sold", "traded", "unattributed"];
 
 /// Public trend score of an item display name (24 h period preferred),
 /// 0.0 when unscored.
@@ -27,16 +32,25 @@ pub fn trend_score(store: &Store, item: &str) -> f64 {
         return 0.0;
     };
     let scores = store.trends_for_item(item_id).unwrap_or_default();
-    scores.iter().find(|trend| trend.period == "24h").map(|trend| trend.score).unwrap_or_else(|| {
-        scores.first().map(|trend| trend.score).unwrap_or(0.0)
-    })
+    scores.iter().find(|trend| trend.period == "24h").map(|trend| trend.score).unwrap_or_else(|| scores.first().map(|trend| trend.score).unwrap_or(0.0))
 }
 
-/// One profitability row per (method, band): revenue at estimated
-/// prices, input cost at shop prices, pause friction, trend bonus.
+/// Profitability of one activity, in coins per 6000 ticks: revenue at
+/// estimated sale price, minus input cost, minus the pause friction
+/// (paused ticks at the activity's own revenue rate), plus the
+/// public-trend bonus (score times revenue times weight).
+pub fn profit_per_6000(revenue_items: &[(f64, f64)], input_cost: f64, pause_ticks_per_6000: f64, trend_score: f64, trend_weight: f64) -> f64 {
+    let revenue: f64 = revenue_items.iter().map(|(yield_per, price)| yield_per * price).sum();
+    let revenue_rate = revenue / NORMALIZE_TICKS;
+    let friction = pause_ticks_per_6000 * revenue_rate;
+    revenue - input_cost - friction + trend_score * revenue * trend_weight
+}
+
+/// One profitability row per (method, style, band).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProfitRow {
     pub method: String,
+    pub style: String,
     pub band: i64,
     pub revenue: f64,
     pub input_cost: f64,
@@ -44,6 +58,8 @@ pub struct ProfitRow {
     pub trend_bonus: f64,
     pub profit: f64,
     pub price_prior: bool,
+    /// The yields behind the row are the game prior alone (n < 3).
+    pub prior: bool,
 }
 
 /// Builds profitability from the snapshot, pricing through the store
@@ -51,48 +67,49 @@ pub struct ProfitRow {
 pub fn profit_rows(store: &Store, snapshot: &Snapshot) -> Vec<ProfitRow> {
     let mut prices: HashMap<String, (f64, bool)> = HashMap::new();
     let mut trends: HashMap<String, f64> = HashMap::new();
-    let mut price_of = |item: &str| *prices.entry(item.to_string()).or_insert_with(|| price_estimate(store, item));
-    let mut bands: BTreeMap<(String, i64), Vec<(String, f64)>> = BTreeMap::new();
-    for ((method, item, band), stat) in &snapshot.yields {
-        bands.entry((method.clone(), *band)).or_default().push((item.clone(), stat.mean()));
-    }
+    let now = crate::rates_service::now_secs();
     let mut rows = Vec::new();
-    for ((method, band), products) in bands {
-        // The median run priced (`rates_runs`), never the sum of every
-        // object the bucket ever saw (cook 16: 422 083 coins per 6000).
-        let mut price_prior = false;
-        let mut priced = |item: &str| {
-            let (price, prior) = price_of(item);
-            price_prior = price_prior || prior;
-            price
+    for key in snapshot.book.buckets.keys().filter(|key| key.site == crate::rates_estimator::ANY && key.tool == crate::rates_estimator::ANY) {
+        let estimate = match crate::rates_read::estimate_key(&snapshot.book, key, now) {
+            Ok(estimate) => estimate,
+            Err(error) => {
+                crate::logln!("rates: no profit row for {} band {}: {error}", key.method, key.band);
+                continue;
+            }
         };
-        let Some(run) = snapshot.runs.median(&method, band, &mut priced) else { continue };
-        let revenue_items = run.revenue_items.clone();
-        let revenue = run.revenue;
-        let input_cost = run.input_cost;
+        let mut price_prior = false;
+        let mut revenue_items = Vec::new();
+        let mut input_cost = 0.0;
         let mut trend_weighted = 0.0;
-        for (item, (quantity, price)) in run.products.iter().zip(run.revenue_items.iter()) {
-            let trend = *trends.entry(item.clone()).or_insert_with(|| trend_score(store, item));
-            trend_weighted += quantity * price * trend;
+        for (item, cause, rate) in &estimate.flows {
+            if UNPRICED_CAUSES.contains(&cause.as_str()) || *rate == 0.0 {
+                continue;
+            }
+            let (price, prior) = *prices.entry(item.clone()).or_insert_with(|| price_estimate(store, item));
+            price_prior |= prior;
+            if *rate > 0.0 {
+                revenue_items.push((*rate, price));
+                trend_weighted += rate * price * *trends.entry(item.clone()).or_insert_with(|| trend_score(store, item));
+            } else {
+                input_cost += rate.abs() * price;
+            }
         }
-        let _ = &products;
-        let pause_per = snapshot.pause_per_6000(&method, band);
+        let revenue: f64 = revenue_items.iter().map(|(rate, price)| rate * price).sum();
         let score = if revenue > 0.0 { trend_weighted / revenue } else { 0.0 };
-        let profit = profit_per_6000(&revenue_items, input_cost, pause_per, score, TREND_WEIGHT);
-        let friction = pause_per * revenue / NORMALIZE_TICKS;
-        let trend_bonus = score * revenue * TREND_WEIGHT;
         rows.push(ProfitRow {
-            method: method.clone(),
-            band,
+            method: key.method.clone(),
+            style: key.style.clone(),
+            band: key.band,
             revenue,
             input_cost,
-            friction,
-            trend_bonus,
-            profit,
+            friction: estimate.pause_per_6000 * revenue / NORMALIZE_TICKS,
+            trend_bonus: score * revenue * TREND_WEIGHT,
+            profit: profit_per_6000(&revenue_items, input_cost, estimate.pause_per_6000, score, TREND_WEIGHT),
             price_prior,
+            prior: estimate.prior,
         });
     }
-    rows.sort_by(|left, right| (left.method.clone(), left.band).cmp(&(right.method.clone(), right.band)));
+    rows.sort_by(|left, right| (left.method.clone(), left.style.clone(), left.band).cmp(&(right.method.clone(), right.style.clone(), right.band)));
     rows
 }
 
@@ -125,8 +142,8 @@ fn profit_cache() -> &'static Mutex<Option<ProfitCache>> {
 
 /// The live profitability table (store at `market_service::db_path`,
 /// live snapshot), shared until stale. Empty when the store does not
-/// open (no rows, no decision — as before the cache). Built under the
-/// lock: concurrent callers wait for one build, never run their own.
+/// open (no rows, no decision). Built under the lock: concurrent callers
+/// wait for one build, never run their own.
 pub fn cached_profit_rows() -> Arc<Vec<ProfitRow>> {
     let mut slot = profit_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let now = Instant::now();
@@ -145,6 +162,7 @@ pub fn cached_profit_rows() -> Arc<Vec<ProfitRow>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rates_estimator::{RunSample, YieldKey};
 
     /// A cached table serves until the TTL or a snapshot change.
     #[test]
@@ -157,36 +175,34 @@ mod tests {
         assert!(!cache.fresh(built, 5), "new snapshot: rebuild");
     }
 
-    /// The memoised build prices like one `price_estimate` per row did:
-    /// same rows on a store with prints, bids and unknown items.
+    /// The signed balance prices: cooked shrimps sell, raw shrimps and
+    /// burnt ones cost (§8); one row per method band, never a sum of
+    /// every object a script ever saw.
     #[test]
-    fn memoised_build_matches_per_row_pricing() {
+    fn profit_prices_the_signed_balance() {
         let store = Store::open_in_memory().expect("store");
-        for (item_id, name) in [(1511, "Logs"), (1521, "Oak logs"), (440, "Iron ore")] {
+        for (item_id, name) in [(315, "Shrimps"), (317, "Raw shrimps")] {
             store.upsert_item(&lifescape_store::Item { item_id, name: name.to_string(), shop_price: 4, alch_value: 1 }).expect("item");
         }
         let mut snapshot = Snapshot::new();
-        let mut bucket = super::super::BucketStat::default();
-        bucket.add(120.0);
-        snapshot.yields.insert(("woodcut".to_string(), "Logs".to_string(), 1), bucket.clone());
-        snapshot.yields.insert(("woodcut".to_string(), "Oak logs".to_string(), 3), bucket.clone());
-        snapshot.yields.insert(("mining".to_string(), "Iron ore".to_string(), 3), bucket.clone());
-        snapshot.yields.insert(("mining".to_string(), "Unknown rock".to_string(), 3), bucket.clone());
-        snapshot.inputs.insert(("smelt".to_string(), "Iron ore".to_string(), 3), bucket);
-        // One run per product (2026-11-15): two mining runs, two objects.
-        snapshot.runs.record("woodcut", 1, vec![("Logs".to_string(), 120.0)]);
-        snapshot.runs.record("woodcut", 3, vec![("Oak logs".to_string(), 120.0)]);
-        snapshot.runs.record("mining", 3, vec![("Iron ore".to_string(), 120.0)]);
-        snapshot.runs.record("mining", 3, vec![("Unknown rock".to_string(), 120.0)]);
-        let rows = profit_rows(&store, &snapshot);
-        assert_eq!(rows.len(), 3, "one row per (method, band)");
-        for row in &rows {
-            let mut price = |item: &str| price_estimate(&store, item).0;
-            let median = snapshot.runs.median(&row.method, row.band, &mut price).expect("runs");
-            assert_eq!(row.revenue, median.revenue, "{} {}: the median run, never the sum", row.method, row.band);
+        let key = YieldKey { method: "cook/raw_shrimp".to_string(), style: String::new(), site: "3209,3215,0".to_string(), tool: String::new(), band: 1 };
+        for _ in 0..3 {
+            let sample = RunSample {
+                work_ticks: 3000,
+                pause_ticks: 0,
+                flows: vec![("Shrimps".to_string(), "product".to_string(), 200), ("Raw shrimps".to_string(), "input".to_string(), -250), ("Coins".to_string(), "traded".to_string(), 999)],
+                units: vec![("product".to_string(), "Shrimps".to_string(), 200)],
+                clock: 1,
+            };
+            snapshot.book.record(&key, &sample);
         }
-        let mining = rows.iter().find(|row| row.method == "mining").expect("mining");
-        let both: f64 = ["Iron ore", "Unknown rock"].iter().map(|item| 120.0 * price_estimate(&store, item).0).sum();
-        assert!(mining.revenue < both, "two runs are not one run of both objects");
+        let rows = profit_rows(&store, &snapshot);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let row = &rows[0];
+        assert_eq!((row.method.as_str(), row.band), ("cook/raw_shrimp", 1));
+        assert!(row.input_cost > 0.0 && row.revenue > 0.0);
+        assert!(!row.prior, "three runs");
+        let (shrimp, _) = price_estimate(&store, "Shrimps");
+        assert!(row.revenue < 600.0 * shrimp * 1.5, "traded coins never count: {row:?}");
     }
 }

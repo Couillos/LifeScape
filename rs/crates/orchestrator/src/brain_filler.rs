@@ -157,7 +157,7 @@ pub(crate) fn launch_filler(orch: &Arc<Orchestrator>, job: &Arc<Job>, life: &mut
     }
     let coins = crate::brain_plan::holdings_count(job, "coins");
     let mut node = Node::new(&format!("fill-{first}"), NodeKind::HaveCoins { amount: coins.saturating_add(1) }, Vec::new(), 0);
-    let mut ctx = crate::brain_plan::ready_ctx(life, &node);
+    let mut ctx = crate::brain_plan::ready_ctx(life, &node, live);
     ctx.coins = coins;
     ctx.tools = crate::brain_plan::carried_tools(job);
     ctx.bank_known = live.get("bank_streamed").as_bool() == Some(true);

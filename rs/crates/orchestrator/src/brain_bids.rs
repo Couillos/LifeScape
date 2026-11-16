@@ -24,13 +24,8 @@ use std::sync::{Mutex, OnceLock};
 use lifescape_json::Value;
 use lifescape_planner::bid_response::{best_opportunity, bid_goal, Opportunity, Producer};
 use lifescape_planner::market_fit::{coin_rate, BookView};
-use lifescape_planner::{GoalKind, Life, Node, NodeKind};
+use lifescape_planner::{GoalKind, Life};
 
-/// Units per 6000 ticks of a make recipe nobody measured yet (one action
-/// every ~5 ticks with the bank trips: smithing, smelting, cooking).
-pub const MAKE_UNITS_PER_6000: f64 = 600.0;
-/// Units per 6000 ticks of a gather nobody measured yet.
-pub const GATHER_UNITS_PER_6000: f64 = 200.0;
 /// A market-wide choice is reused this long per account (wall seconds).
 pub const CHOICE_TTL_SECS: u64 = 60;
 
@@ -306,15 +301,26 @@ pub fn realizable_rows(rows: &[(String, i64, f64)], yields: &[crate::rates_servi
         .collect()
 }
 
-/// Units per 6000 ticks of a production method for an object: measured
-/// (any band), else the cold-start prior, else the make/gather default.
+/// Units of `item` per 6000 ticks of `method` for a bot at `level` with
+/// `tool` (`rates_read`: n >= 3 blended with the game prior, else the
+/// prior; nothing computable is a typed error).
+pub fn units_per_6000_at(snapshot: &crate::rates_service::Snapshot, method: &str, item: &str, level: u8, tool: &str) -> Result<f64, crate::rates_read::RateError> {
+    crate::rates_read::gained_per_6000(snapshot.book(), method, &display_of(item), level, tool)
+}
+
+/// Units per 6000 ticks of a production method for an object, read at
+/// the method's skill gate (callers that know no bot level). A method
+/// nothing estimates logs its typed error and reads NaN: every planner
+/// consumer treats a non-finite rate as "no rate" and skips the leg,
+/// never a default figure.
 pub fn units_per_6000(snapshot: &crate::rates_service::Snapshot, method: &str, item: &str) -> f64 {
-    let probe = Node::new("probe", NodeKind::ObtainItems { item: item.to_string(), count: 1 }, Vec::new(), 1);
-    let display = display_of(item);
-    let script = crate::brain_plan::rate_key(method, &probe).unwrap_or_default();
-    crate::rates_service::measured_yield_any_band(snapshot, &script, &display)
-        .or_else(|| crate::rates_service::prior_for(&script, &display.to_lowercase()).map(|(units, _)| units))
-        .unwrap_or(if method.starts_with("farm:") || method.starts_with("gather:") { GATHER_UNITS_PER_6000 } else { MAKE_UNITS_PER_6000 })
+    match units_per_6000_at(snapshot, method, item, crate::rates_read::gate_level(method), "") {
+        Ok(rate) => rate,
+        Err(error) => {
+            crate::rates_read::log_rate_error(&error);
+            f64::NAN
+        }
+    }
 }
 
 /// What the scorer needs beyond the book, gathered by the caller.
@@ -436,7 +442,20 @@ pub(crate) fn with_bot_state<R>(life: &Life, live: &Value, use_state: impl FnOnc
     let locks = crate::brain_locks::locked_items(&life.account);
     let held = |item: &str| crate::brain_locks::free_count(crate::brain_ambition::live_count(live, item), crate::brain_locks::locked_in(&locks, item));
     let snapshot = crate::rates_service::live_snapshot();
-    let units = |method: &str, item: &str| units_per_6000(&snapshot, method, item);
+    let owned = crate::brain_plan::live_owned(live);
+    // Read at the bot's own level in the method's skill and its best
+    // tool tier (plan rendements R2), never a forced band.
+    let units = |method: &str, item: &str| {
+        let level = crate::rates_measure::band_skill(method, "").map(|skill| level_of(&skill)).unwrap_or(1);
+        let tool = crate::report_meta::best_tools(method, &owned).join("+");
+        match units_per_6000_at(&snapshot, method, item, level, &tool) {
+            Ok(rate) => rate,
+            Err(error) => {
+                crate::rates_read::log_rate_error(&error);
+                f64::NAN
+            }
+        }
+    };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs() as i64).unwrap_or(0);
     let ticks_since = |stamp: i64| crate::brain_stuck::seconds_to_ticks(now - stamp);
     let position = live.get("position").as_arr().and_then(|cells| {
@@ -573,16 +592,7 @@ mod tests {
     /// a product nobody buys is worth nothing per hour.
     #[test]
     fn coin_rates_read_what_the_market_absorbs() {
-        let yield_row = |method: &str, item: &str, band: i64, mean: f64| crate::rates_service::YieldRow {
-            method: method.to_string(),
-            item: item.to_string(),
-            band,
-            count: 3,
-            mean,
-            stddev: 0.0,
-            ema: mean,
-            prior: false,
-        };
+        let yield_row = |method: &str, item: &str, band: i64, mean: f64| crate::rates_service::YieldRow { method: method.to_string(), item: item.to_string(), band, count: 3, mean, prior: false };
         let yields = vec![yield_row("smith", "Bronze scimitar", 1, 136.0), yield_row("melee", "Coins", 1, 800.0), yield_row("cook", "Shrimps", 1, 300.0)];
         let rows = vec![("smith".to_string(), 1, 65_929.0), ("melee".to_string(), 1, 800.0), ("cook".to_string(), 1, 3_000.0), ("woodcut".to_string(), 1, 500.0)];
         let view = |item: &str| match item {

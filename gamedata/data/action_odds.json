@@ -1,0 +1,887 @@
+{
+  "cooking": {
+    "bread_dough": {
+      "burnt": "burnt_bread",
+      "cooked": "bread",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "cooked_meat": {
+      "cooked": "burnt_meat",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "eadgar_troll_thistle": {
+      "burnt": "null",
+      "cooked": "eadgar_dried_troll_thistle",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "half_baked_batta": {
+      "burnt": "null",
+      "cooked": "spoilt_batta",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "half_baked_bowl": {
+      "burnt": "null",
+      "cooked": "spoilt_gnomebowl",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "half_baked_crunchy": {
+      "burnt": "null",
+      "cooked": "spoilt_crunchies",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "mort_slimey_eel": {
+      "burnt": "burnt_eel",
+      "cooked": "mort_slimey_eel_cooked",
+      "fire": [
+        63,
+        382
+      ]
+    },
+    "raw_anchovies": {
+      "burnt": "burntfish1",
+      "cooked": "anchovies",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_bass": {
+      "burnt": "burntfish4",
+      "cooked": "bass",
+      "fire": [
+        33,
+        312
+      ]
+    },
+    "raw_batta": {
+      "burnt": "burnt_batta",
+      "cooked": "half_baked_batta",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "raw_bear_meat": {
+      "burnt": "burnt_meat",
+      "cooked": "cooked_meat",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_beef": {
+      "burnt": "burnt_meat",
+      "cooked": "cooked_meat",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_chicken": {
+      "burnt": "burnt_chicken",
+      "cooked": "cooked_chicken",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_cod": {
+      "burnt": "burntfish2",
+      "cooked": "cod",
+      "fire": [
+        83,
+        422
+      ],
+      "range": [
+        88,
+        432
+      ]
+    },
+    "raw_crunchies": {
+      "burnt": "burnt_crunchies",
+      "cooked": "half_baked_crunchy",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "raw_giant_carp": {
+      "burnt": "burntfish2",
+      "cooked": "giant_carp",
+      "fire": [
+        98,
+        452
+      ]
+    },
+    "raw_gnomebowl": {
+      "burnt": "burnt_gnomebowl",
+      "cooked": "half_baked_bowl",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "raw_herring": {
+      "burnt": "burntfish3",
+      "cooked": "herring",
+      "fire": [
+        108,
+        472
+      ]
+    },
+    "raw_lava_eel": {
+      "burnt": "lava_eel",
+      "cooked": "lava_eel",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "raw_lobster": {
+      "burnt": "burnt_lobster",
+      "cooked": "lobster",
+      "fire": [
+        38,
+        332
+      ]
+    },
+    "raw_mackerel": {
+      "burnt": "burntfish3",
+      "cooked": "mackerel",
+      "fire": [
+        98,
+        452
+      ]
+    },
+    "raw_mantaray": {
+      "burnt": "burnt_mantaray",
+      "cooked": "mantaray",
+      "fire": [
+        1,
+        202
+      ],
+      "range": [
+        1,
+        222
+      ]
+    },
+    "raw_pike": {
+      "burnt": "burntfish2",
+      "cooked": "pike",
+      "fire": [
+        78,
+        412
+      ]
+    },
+    "raw_rabbit": {
+      "burnt": "burnt_meat",
+      "cooked": "cooked_rabbit",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_rat_meat": {
+      "burnt": "burnt_meat",
+      "cooked": "cooked_meat",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_salmon": {
+      "burnt": "burntfish2",
+      "cooked": "salmon",
+      "fire": [
+        68,
+        392
+      ]
+    },
+    "raw_sardine": {
+      "burnt": "burntfish5",
+      "cooked": "sardine",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "raw_seaturtle": {
+      "burnt": "burnt_seaturtle",
+      "cooked": "seaturtle",
+      "fire": [
+        1,
+        202
+      ],
+      "range": [
+        1,
+        222
+      ]
+    },
+    "raw_shark": {
+      "burnt": "burnt_shark",
+      "cooked": "shark",
+      "fire": [
+        1,
+        202
+      ],
+      "range": [
+        1,
+        232
+      ]
+    },
+    "raw_shrimp": {
+      "burnt": "burntfish1",
+      "cooked": "shrimp",
+      "fire": [
+        128,
+        512
+      ]
+    },
+    "raw_swordfish": {
+      "burnt": "burnt_swordfish",
+      "cooked": "swordfish",
+      "fire": [
+        18,
+        292
+      ],
+      "range": [
+        30,
+        310
+      ]
+    },
+    "raw_trout": {
+      "burnt": "burntfish2",
+      "cooked": "trout",
+      "fire": [
+        88,
+        432
+      ]
+    },
+    "raw_tuna": {
+      "burnt": "burntfish4",
+      "cooked": "tuna",
+      "fire": [
+        58,
+        372
+      ]
+    },
+    "raw_ugthanki_meat": {
+      "burnt": "burnt_meat",
+      "cooked": "cooked_ugthanki_meat",
+      "fire": [
+        40,
+        252
+      ],
+      "range": [
+        30,
+        253
+      ]
+    },
+    "rawswamppaste": {
+      "burnt": "swamppaste",
+      "cooked": "swamppaste",
+      "fire": [
+        500,
+        500
+      ]
+    },
+    "seaweed": {
+      "burnt": "soda_ash",
+      "cooked": "soda_ash",
+      "fire": [
+        1,
+        1
+      ],
+      "range": [
+        1,
+        1
+      ]
+    },
+    "snail_corpse1": {
+      "burnt": "burnt_snail",
+      "cooked": "snail_corpse_cooked1",
+      "fire": [
+        93,
+        444
+      ]
+    },
+    "snail_corpse2": {
+      "burnt": "burnt_snail",
+      "cooked": "snail_corpse_cooked2",
+      "fire": [
+        93,
+        444
+      ],
+      "range": [
+        85,
+        428
+      ]
+    },
+    "snail_corpse3": {
+      "burnt": "burnt_snail",
+      "cooked": "snail_corpse_cooked3",
+      "fire": [
+        73,
+        402
+      ]
+    },
+    "tbwt_burnt_jogre_bones": {
+      "burnt": "null",
+      "cooked": "tbwt_burnt_jogre_bones",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "tbwt_burnt_jogre_bones_in_raw_karambwanji_paste": {
+      "burnt": "null",
+      "cooked": "tbwt_burnt_jogre_bones_marinated_in_karambwanji",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "tbwt_jogre_bones": {
+      "burnt": "null",
+      "cooked": "tbwt_jogre_bones",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "tbwt_jogre_bones_in_raw_karambwanji_paste": {
+      "burnt": "null",
+      "cooked": "tbwt_jogre_bones_marinated_in_karambwanji",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "tbwt_raw_karambwan": {
+      "burnt": "tbwt_burnt_karambwan",
+      "cooked": "tbwt_poorly_cooked_karambwan",
+      "fire": [
+        70,
+        255
+      ]
+    },
+    "tbwt_raw_karambwanji": {
+      "burnt": "ashes",
+      "cooked": "tbwt_cooked_karambwanji",
+      "fire": [
+        200,
+        400
+      ]
+    },
+    "uncooked_apple_pie": {
+      "burnt": "burnt_pie",
+      "cooked": "apple_pie",
+      "fire": [
+        58,
+        372
+      ]
+    },
+    "uncooked_cake": {
+      "burnt": "burnt_cake",
+      "cooked": "cake",
+      "fire": [
+        38,
+        332
+      ]
+    },
+    "uncooked_curry": {
+      "burnt": "burnt_curry",
+      "cooked": "curry",
+      "fire": [
+        38,
+        332
+      ]
+    },
+    "uncooked_meat_pie": {
+      "burnt": "burnt_pie",
+      "cooked": "meat_pie",
+      "fire": [
+        78,
+        412
+      ]
+    },
+    "uncooked_pitta_bread": {
+      "burnt": "burnt_pitta_bread",
+      "cooked": "pitta_bread",
+      "fire": [
+        118,
+        492
+      ]
+    },
+    "uncooked_pizza": {
+      "burnt": "burnt_pizza",
+      "cooked": "plain_pizza",
+      "fire": [
+        48,
+        352
+      ]
+    },
+    "uncooked_redberry_pie": {
+      "burnt": "burnt_pie",
+      "cooked": "redberry_pie",
+      "fire": [
+        98,
+        452
+      ]
+    },
+    "uncooked_stew": {
+      "burnt": "burnt_stew",
+      "cooked": "stew",
+      "fire": [
+        68,
+        392
+      ]
+    },
+    "unfinished_chocolate_saturday2": {
+      "burnt": "null",
+      "cooked": "unfinished_chocolate_saturday3",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "unfinished_drunk_dragon3": {
+      "burnt": "null",
+      "cooked": "drunk_dragon",
+      "fire": [
+        1,
+        1
+      ]
+    },
+    "wrapped_oomlie": {
+      "burnt": "burnt_oomlie",
+      "cooked": "cooked_oomlie",
+      "fire": [
+        106,
+        450
+      ],
+      "range": [
+        112,
+        476
+      ]
+    }
+  },
+  "fish": {
+    "mort_slimey_eel": [
+      10,
+      80
+    ],
+    "raw_anchovies": [
+      24,
+      128
+    ],
+    "raw_herring": [
+      24,
+      128
+    ],
+    "raw_lobster": [
+      6,
+      95
+    ],
+    "raw_pike": [
+      16,
+      96
+    ],
+    "raw_salmon": [
+      16,
+      96
+    ],
+    "raw_sardine": [
+      32,
+      192
+    ],
+    "raw_shark": [
+      3,
+      40
+    ],
+    "raw_shrimp": [
+      48,
+      256
+    ],
+    "raw_swordfish": [
+      4,
+      48
+    ],
+    "raw_trout": [
+      32,
+      192
+    ],
+    "raw_tuna": [
+      8,
+      64
+    ]
+  },
+  "pickaxes": {
+    "adamant_pickaxe": 3,
+    "bronze_pickaxe": 7,
+    "iron_pickaxe": 6,
+    "mithril_pickaxe": 4,
+    "rune_pickaxe": 2,
+    "steel_pickaxe": 5
+  },
+  "rocks": {
+    "adamantite_ore": [
+      2,
+      25
+    ],
+    "blankrune": [
+      256,
+      256
+    ],
+    "blurite_ore": [
+      95,
+      350
+    ],
+    "clay": [
+      128,
+      400
+    ],
+    "coal": [
+      16,
+      100
+    ],
+    "copper_ore": [
+      128,
+      400
+    ],
+    "gold_ore": [
+      7,
+      75
+    ],
+    "iron_ore": [
+      96,
+      350
+    ],
+    "limestone": [
+      95,
+      310
+    ],
+    "mithril_ore": [
+      5,
+      50
+    ],
+    "runite_ore": [
+      1,
+      18
+    ],
+    "silver_ore": [
+      25,
+      200
+    ],
+    "thpunishrock": [
+      128,
+      400
+    ],
+    "tin_ore": [
+      128,
+      400
+    ]
+  },
+  "runecraft": {
+    "airrune": 11,
+    "bodyrune": 46,
+    "chaosrune": 74,
+    "cosmicrune": 59,
+    "earthrune": 26,
+    "firerune": 35,
+    "mindrune": 14,
+    "naturerune": 91,
+    "waterrune": 19
+  },
+  "source": "lostcity/content/scripts skill_mining, skill_woodcutting, skill_fishing, skill_cooking configs (orchestrator dump-npc-ranges)",
+  "trees": {
+    "achey_tree_logs": {
+      "adamant_axe": [
+        192,
+        600
+      ],
+      "black_axe": [
+        144,
+        450
+      ],
+      "bronze_axe": [
+        64,
+        200
+      ],
+      "iron_axe": [
+        96,
+        300
+      ],
+      "mithril_axe": [
+        160,
+        500
+      ],
+      "rune_axe": [
+        224,
+        700
+      ],
+      "steel_axe": [
+        128,
+        400
+      ]
+    },
+    "charcoal": {
+      "adamant_axe": [
+        192,
+        600
+      ],
+      "black_axe": [
+        144,
+        450
+      ],
+      "bronze_axe": [
+        64,
+        200
+      ],
+      "iron_axe": [
+        96,
+        300
+      ],
+      "mithril_axe": [
+        160,
+        500
+      ],
+      "rune_axe": [
+        224,
+        700
+      ],
+      "steel_axe": [
+        128,
+        400
+      ]
+    },
+    "hollow_bark": {
+      "adamant_axe": [
+        59,
+        81
+      ],
+      "black_axe": [
+        42,
+        57
+      ],
+      "bronze_axe": [
+        18,
+        26
+      ],
+      "iron_axe": [
+        28,
+        40
+      ],
+      "mithril_axe": [
+        46,
+        68
+      ],
+      "rune_axe": [
+        64,
+        94
+      ],
+      "steel_axe": [
+        36,
+        54
+      ]
+    },
+    "logs": {
+      "adamant_axe": [
+        192,
+        600
+      ],
+      "black_axe": [
+        144,
+        450
+      ],
+      "bronze_axe": [
+        64,
+        200
+      ],
+      "iron_axe": [
+        96,
+        300
+      ],
+      "mithril_axe": [
+        160,
+        500
+      ],
+      "rune_axe": [
+        224,
+        700
+      ],
+      "steel_axe": [
+        128,
+        400
+      ]
+    },
+    "magic_logs": {
+      "adamant_axe": [
+        6,
+        18
+      ],
+      "black_axe": [
+        5,
+        13
+      ],
+      "bronze_axe": [
+        2,
+        6
+      ],
+      "iron_axe": [
+        3,
+        9
+      ],
+      "mithril_axe": [
+        5,
+        15
+      ],
+      "rune_axe": [
+        7,
+        21
+      ],
+      "steel_axe": [
+        4,
+        12
+      ]
+    },
+    "maple_logs": {
+      "adamant_axe": [
+        24,
+        75
+      ],
+      "black_axe": [
+        18,
+        56
+      ],
+      "bronze_axe": [
+        8,
+        25
+      ],
+      "iron_axe": [
+        12,
+        37
+      ],
+      "mithril_axe": [
+        20,
+        62
+      ],
+      "rune_axe": [
+        28,
+        87
+      ],
+      "steel_axe": [
+        16,
+        50
+      ]
+    },
+    "oak_logs": {
+      "adamant_axe": [
+        96,
+        300
+      ],
+      "black_axe": [
+        72,
+        225
+      ],
+      "bronze_axe": [
+        32,
+        100
+      ],
+      "iron_axe": [
+        48,
+        150
+      ],
+      "mithril_axe": [
+        80,
+        250
+      ],
+      "rune_axe": [
+        112,
+        350
+      ],
+      "steel_axe": [
+        64,
+        200
+      ]
+    },
+    "willow_logs": {
+      "adamant_axe": [
+        48,
+        150
+      ],
+      "black_axe": [
+        36,
+        112
+      ],
+      "bronze_axe": [
+        16,
+        50
+      ],
+      "iron_axe": [
+        24,
+        75
+      ],
+      "mithril_axe": [
+        40,
+        125
+      ],
+      "rune_axe": [
+        56,
+        175
+      ],
+      "steel_axe": [
+        32,
+        100
+      ]
+    },
+    "yew_logs": {
+      "adamant_axe": [
+        12,
+        37
+      ],
+      "black_axe": [
+        9,
+        28
+      ],
+      "bronze_axe": [
+        4,
+        12
+      ],
+      "iron_axe": [
+        6,
+        19
+      ],
+      "mithril_axe": [
+        10,
+        31
+      ],
+      "rune_axe": [
+        14,
+        44
+      ],
+      "steel_axe": [
+        8,
+        25
+      ]
+    }
+  }
+}

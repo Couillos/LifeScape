@@ -157,71 +157,30 @@ impl MarketListRow {
 // -- rates (§6.3) -------------------------------------------------------------
 
 /// Sortable columns (D46), shared with the front `table.js` (P1.4).
-pub const YIELD_COLUMNS: &[&str] = &["method", "item", "band", "count", "mean", "stddev", "ema", "prior"];
-pub const XP_COLUMNS: &[&str] = &["method", "skill", "band", "count", "mean", "stddev", "ema", "prior"];
+/// Rates rows since R2: one estimate per D2 key (`web_rates`), every row
+/// repeating the key and the confidence columns.
+pub const RATE_KEY_COLUMNS: &[&str] = &["method", "style", "site", "tool", "band", "runs", "prior", "read", "age_secs", "dispersion", "failure_rate", "rejected"];
+/// `rates` rows: the signed flows (products and consumption).
+pub const YIELD_COLUMNS: &[&str] = &["item", "cause", "per_6000"];
+/// `units` rows: the XP-bearing unit counters.
+pub const UNIT_COLUMNS: &[&str] = &["kind", "subject", "per_6000"];
+/// `xp` rows: the XP derived from the units.
+pub const XP_COLUMNS: &[&str] = &["skill", "per_6000"];
 pub const TRADING_COLUMNS: &[&str] = &["item", "profit_per_6000", "deals_settled", "fill_rate", "stock_value"];
 
-/// One published yield row per 6000 ticks (matches `rates_payload`
-/// `rates` entries; `market:*`/`shop:*` methods never appear here, D44).
-#[derive(Debug, Clone, PartialEq)]
-pub struct YieldRowShape {
-    pub method: String,
-    pub item: String,
-    pub band: i64,
-    pub count: usize,
-    pub mean: f64,
-    pub stddev: f64,
-    pub ema: f64,
-    pub prior: bool,
-}
-
-impl YieldRowShape {
-    pub fn to_value(&self) -> Value {
-        object(vec![
-            ("method", str_value(&self.method)),
-            ("item", str_value(&self.item)),
-            ("band", Value::Int(self.band)),
-            ("count", Value::Int(self.count as i64)),
-            ("mean", Value::Float(self.mean)),
-            ("stddev", Value::Float(self.stddev)),
-            ("ema", Value::Float(self.ema)),
-            ("prior", Value::Bool(self.prior)),
-        ])
-    }
-}
-
-/// One published XP row per 6000 ticks (matches `rates_payload` `xp`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct XpRowShape {
-    pub method: String,
-    pub skill: String,
-    pub band: i64,
-    pub count: usize,
-    pub mean: f64,
-    pub stddev: f64,
-    pub ema: f64,
-    pub prior: bool,
-}
-
-impl XpRowShape {
-    pub fn to_value(&self) -> Value {
-        object(vec![
-            ("method", str_value(&self.method)),
-            ("skill", str_value(&self.skill)),
-            ("band", Value::Int(self.band)),
-            ("count", Value::Int(self.count as i64)),
-            ("mean", Value::Float(self.mean)),
-            ("stddev", Value::Float(self.stddev)),
-            ("ema", Value::Float(self.ema)),
-            ("prior", Value::Bool(self.prior)),
-        ])
-    }
+/// Every key of one rates row: the key and confidence columns plus the
+/// table's own (`YIELD_COLUMNS`, `UNIT_COLUMNS`, `XP_COLUMNS`).
+pub fn rate_row_columns(own: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = RATE_KEY_COLUMNS.iter().chain(own.iter()).map(|key| key.to_string()).collect();
+    out.sort();
+    out
 }
 
 /// One profitability row (matches `rates_payload` `profit` entries).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfitRowShape {
     pub method: String,
+    pub style: String,
     pub band: i64,
     pub revenue: f64,
     pub input_cost: f64,
@@ -229,12 +188,14 @@ pub struct ProfitRowShape {
     pub trend_bonus: f64,
     pub profit: f64,
     pub price_prior: bool,
+    pub prior: bool,
 }
 
 impl ProfitRowShape {
     pub fn to_value(&self) -> Value {
         object(vec![
             ("method", str_value(&self.method)),
+            ("style", str_value(&self.style)),
             ("band", Value::Int(self.band)),
             ("revenue", Value::Float(self.revenue)),
             ("input_cost", Value::Float(self.input_cost)),
@@ -242,6 +203,7 @@ impl ProfitRowShape {
             ("trend_bonus", Value::Float(self.trend_bonus)),
             ("profit", Value::Float(self.profit)),
             ("price_prior", Value::Bool(self.price_prior)),
+            ("prior", Value::Bool(self.prior)),
         ])
     }
 }
@@ -402,7 +364,7 @@ impl HoldingsHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::{Candle, CandleRes, Exec, HoldingsHistory, HoldingsRes, LivesRow, MarketHistory, MarketListRow, ProfitRowShape, TradingRow, XpRowShape, YieldRowShape, LIVES_COLUMNS, TRADING_COLUMNS, XP_COLUMNS, YIELD_COLUMNS};
+    use super::{Candle, CandleRes, Exec, HoldingsHistory, HoldingsRes, LivesRow, MarketHistory, MarketListRow, ProfitRowShape, TradingRow, LIVES_COLUMNS, TRADING_COLUMNS};
     use lifescape_json::{object, str_value, Value};
 
     fn keys(value: &Value) -> Vec<String> {
@@ -456,28 +418,9 @@ mod tests {
     /// Rates keys are frozen and sortable columns name exactly them.
     #[test]
     fn rates_keys_match_sortable_columns() {
-        let yld = YieldRowShape {
-            method: "gather:shrimp".to_string(),
-            item: "Shrimp".to_string(),
-            band: 1,
-            count: 4,
-            mean: 120.0,
-            stddev: 5.0,
-            ema: 118.0,
-            prior: false,
-        };
-        let xp = XpRowShape {
-            method: "gather:shrimp".to_string(),
-            skill: "fishing".to_string(),
-            band: 1,
-            count: 4,
-            mean: 300.0,
-            stddev: 0.0,
-            ema: 300.0,
-            prior: true,
-        };
         let profit = ProfitRowShape {
             method: "gather:shrimp".to_string(),
+            style: String::new(),
             band: 1,
             revenue: 720.0,
             input_cost: 0.0,
@@ -485,6 +428,7 @@ mod tests {
             trend_bonus: 0.0,
             profit: 717.0,
             price_prior: false,
+            prior: false,
         };
         let trading = TradingRow {
             item: "Feather".to_string(),
@@ -493,16 +437,6 @@ mod tests {
             fill_rate: 0.75,
             stock_value: 12000,
         };
-        let mut ykeys = keys(&yld.to_value());
-        ykeys.sort();
-        let mut want: Vec<String> = YIELD_COLUMNS.iter().map(|key| key.to_string()).collect();
-        want.sort();
-        assert_eq!(ykeys, want);
-        let mut xkeys = keys(&xp.to_value());
-        xkeys.sort();
-        let mut xwant: Vec<String> = XP_COLUMNS.iter().map(|key| key.to_string()).collect();
-        xwant.sort();
-        assert_eq!(xkeys, xwant);
         let mut tkeys = keys(&trading.to_value());
         tkeys.sort();
         let mut twant: Vec<String> = TRADING_COLUMNS.iter().map(|key| key.to_string()).collect();

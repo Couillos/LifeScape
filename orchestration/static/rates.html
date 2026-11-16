@@ -33,12 +33,14 @@
 </div>
 <h1>Rates <span class="muted">· per 6000 ticks, bands of 5 levels</span></h1>
 <div>
-  <input id="search" placeholder="Filter method or item…" autocomplete="off" oninput="onSearch()">
+  <input id="search" placeholder="Filter method, site, tool, item, skill…" autocomplete="off" oninput="onSearch()">
   <span id="summary" class="muted"></span>
 </div>
-<h2>Yields <span class="muted">(farm flows only; <span class="prior">prior</span> = cold-start estimate, replaced at 3 reports)</span></h2>
+<h2>Yields and consumption <span class="muted">(signed flows per key: + in, − out; <span class="prior">prior</span> = game estimate under 3 runs, blended with it from 3; site/tool <span class="muted">all</span> = roll-up)</span></h2>
 <table id="yields"></table>
-<h2>XP per 6000 ticks</h2>
+<h2>XP-bearing units</h2>
+<table id="units"></table>
+<h2>XP per 6000 ticks <span class="muted">(derived: units × XP of the unit, never measured)</span></h2>
 <table id="xp"></table>
 <h2>Profit per 6000 ticks <span class="muted">(revenue − inputs − pause friction + trend bonus)</span></h2>
 <table id="profit"></table>

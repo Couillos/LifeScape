@@ -103,7 +103,8 @@ pub fn sale_lot(spare: i64, view: Option<&BookView>) -> i64 {
     absorbed.max(SALE_LOT_MIN).min(spare.max(0))
 }
 
-/// Skill a rates script trains (`rates_service` keys rows by script).
+/// Skill a rates row trains: a script name (older rows) or a planner
+/// method (`rates_service` keys rows by planner method since R2).
 pub fn script_skill(script: &str) -> Option<&'static str> {
     Some(match script {
         "woodcut" => "woodcutting",
@@ -118,7 +119,8 @@ pub fn script_skill(script: &str) -> Option<&'static str> {
         "crafting" | "spin" | "jewelry" | "pottery" | "tan" | "leather" => "crafting",
         "runecraft" => "runecraft",
         "bury" | "prayer" => "prayer",
-        _ => return None,
+        // The rates key rows by planner method (plan rendements R2).
+        _ => return crate::ambition_catalog::method_skill(script),
     })
 }
 

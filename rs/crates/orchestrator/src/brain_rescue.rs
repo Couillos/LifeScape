@@ -74,7 +74,7 @@ pub(crate) fn market_rescue(job: &Job, life: &mut Life, live: &Value) -> bool {
             push_history(life, &node.id, lifescape_planner::PRODUCE_RESCUE_TAG);
             return true;
         }
-        let mut ctx = crate::brain_plan::ready_ctx(life, &node);
+        let mut ctx = crate::brain_plan::ready_ctx(life, &node, live);
         crate::brain_market::fill_ctx(&mut ctx, &node, live);
         let held = crate::brain_plan::holdings_count(job, item);
         let committed = crate::brain_gear::committed_coins(&job.account, crate::brain_gear::obj_id(item));

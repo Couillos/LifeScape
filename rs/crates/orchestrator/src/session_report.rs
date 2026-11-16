@@ -468,7 +468,11 @@ pub(crate) fn finish_task_report(shared: &std::sync::Arc<crate::session::Shared>
         stop: stop.to_string(),
         missing: missing.to_vec(),
         error: error.map(|error| (error.get("type").as_str().unwrap_or("?").to_string(), error.get("message").as_str().unwrap_or("").to_string())),
-        meta: RunMeta { tool: crate::report_meta::end_fight_tool(&bot, &start.script, &start.meta.tool), ..start.meta.clone() },
+        meta: RunMeta {
+            tool: crate::report_meta::end_fight_tool(&bot, &start.script, &start.meta.tool),
+            combat_style: crate::report_meta::end_combat_style(&bot, &start.script, &start.meta.combat_style),
+            ..start.meta.clone()
+        },
     };
     let report = build_report(&bot, &start.holdings, &baseline, &end, &bank_end, &ctx);
     drop(bot);
