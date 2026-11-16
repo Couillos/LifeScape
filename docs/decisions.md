@@ -979,3 +979,21 @@ Rejeté : liste d'objets écrite à la main ; tranches contiguës par id
 tranche ; ordres de teneur sur la courbe de concession (le teneur
 recote lui-même selon son stock) ; garder la revente marchande en
 parallèle (décision Q6).
+
+## 2026-11-16 — Guides : prix mince borné au volume échangé, achat au moins au meilleur ask
+
+Décisions utilisateur (prix des guides, `planner::guide_engine`,
+`docs/economy.md` § Rendements) :
+- Prix mince : un prix courant posé sur moins de 5 fills ne vaut que pour
+  le volume réellement échangé (Σ quantités de ces fills,
+  `Quote::fill_units`) ; au-delà, la ligne vend aux bids restants pour
+  leur profondeur, puis au PNJ (Q3), sinon 0, comme un objet jamais
+  échangé (Leather chaps : 1 fill d'1 unité à 15 411 ne vaut plus
+  15 411 pour 300 unités).
+- Prix d'achat : un intrant coûte au moins le meilleur ask : achat =
+  max(prix courant, asks au repos parcourus pour le volume) ; au-delà de
+  la profondeur des asks, la boutique F2P (Q7), sinon ligne bloquée,
+  objet échangé compris (Uncut emerald : médiane 7, ask le moins cher 35
+  → achat à 35).
+Rejeté : la médiane d'un ou deux fills appliquée à toute une fenêtre ;
+acheter sous le meilleur ask au motif que la médiane y est.

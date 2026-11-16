@@ -5,7 +5,8 @@
 //!   blended with the guides' game prior, else the prior alone), names
 //!   turned into debug names for the engine;
 //! - prices: the current price of each traded object (`rates_price`,
-//!   D12); a never-traded object has none, only its resting book (the
+//!   D12) and the units its fills moved (a thin price holds for them
+//!   only); a never-traded object has none, only its resting book (the
 //!   engine counts it for the units it holds, `quote_of`); the best F2P
 //!   shop sale at a line's volume (Q3, `NPC_SALE_VOLUME`) and the
 //!   cheapest F2P keeper (Q7);
@@ -112,6 +113,7 @@ pub fn quote_of(store: &Store, display: &str) -> Quote {
         traded: current.traded,
         median: lifescape_market::median_price(&prices).map(|median| median as f64).unwrap_or(0.0),
         fills: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).count(),
+        fill_units: last.iter().filter(|fill| fill.price >= 1 && fill.quantity >= 1).map(|fill| fill.quantity as f64).sum(),
         bids: levels(bids),
         asks: levels(asks),
     }

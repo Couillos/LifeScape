@@ -447,18 +447,29 @@ le prior des guides (`method_rate::guide_prior` : un combat y ajoute sa
 table de drops ; le cerveau garde `method_prior`). Prix (2026-11-16,
 `guide_engine`), toujours pour le VOLUME d'une ligne (unités / 6000
 ticks), jamais le prix d'une unité appliqué à une fenêtre :
-- objet échangé : prix courant (D12) ; une borne du carnet ne vaut que
-  pour les unités des ordres qui la posent (un bid d'1 unité au-dessus
-  de la médiane paie 1 unité, le reste à la médiane ; idem un ask sous
-  la médiane à l'achat) ; médiane sur < 5 fills marquée `thin` ;
-- objet jamais échangé : pas de prix courant ; vente = bids pour leur
-  profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`) ou
-  0 sans débouché ; achat = asks pour leur profondeur, le reste en
-  boutique (Q7), sinon intrant introuvable : ligne bloquée (raison,
-  aucun profit) ;
+- vente d'un objet échangé : prix courant (D12) pour chaque unité, ou
+  le PNJ s'il paie plus (Q3) ; un bid qui lève le prix au-dessus de la
+  médiane ne paie que ses propres unités (un bid d'1 unité paie 1 unité,
+  le reste à la médiane) ;
+- prix MINCE (< 5 fills, `thin`, décision 2026-11-16) : il ne vaut que
+  pour le volume réellement échangé (Σ quantités de ces fills,
+  `Quote::fill_units`) ; au-delà, vente aux bids restants pour leur
+  profondeur, puis au PNJ (Q3), sinon 0, comme un objet jamais échangé
+  (1 fill d'1 unité à 15 411 : 1 unité à 15 411, pas 300) ;
+- vente d'un objet jamais échangé : pas de prix courant ; bids pour
+  leur profondeur, le reste au PNJ (Q3, `web_guides::NPC_SALE_VOLUME`)
+  ou 0 sans débouché ;
+- ACHAT (décision 2026-11-16) : au moins le meilleur ask disponible :
+  asks au repos parcourus du moins cher pour le volume, chaque unité à
+  max(prix courant, ask) pour un objet échangé (à l'ask seul sinon),
+  tant qu'ils battent la boutique ; au-delà de leur profondeur, la
+  boutique F2P (Q7), sinon intrant introuvable : ligne bloquée (raison,
+  aucun profit), objet échangé compris (médiane 7 sous un ask à 35 :
+  achat à 35) ;
 - confiance prix par flux (`basis` : traded, thin, shop, book,
-  book+shop, book+none, none, own) et par ligne (`price_confidence` :
-  traded | thin | book/npc).
+  book+shop, book+none, none, own ; prix courant si la majorité du
+  volume y est, sinon ce que carnet et PNJ en portent) et par ligne
+  (`price_confidence` : traded | thin | book/npc).
 Recette sur stock (D5) : prérequis `stock` = un lot de chaque intrant
 (paquet de 28 cases) ; guide général (rien détenu) : ligne bloquée,
 jamais accessible, classée après toutes les autres, jamais lue par D17 ;

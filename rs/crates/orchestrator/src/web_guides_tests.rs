@@ -98,7 +98,7 @@ fn never_traded_quote_carries_its_book_depth() -> Result<(), lifescape_store::Er
     store.record_execution(&lifescape_store::NewExecution { item_id: 1097, quantity: 1, price: 400, clock: 2, server_tick: 2, taker_side: Some(lifescape_store::OrderSide::Buy) })?;
     let quote = quote_of(&store, "Leather chaps");
     assert!(quote.traded);
-    assert_eq!((quote.median, quote.fills), (400.0, 1));
+    assert_eq!((quote.median, quote.fills, quote.fill_units), (400.0, 1, 1.0));
     assert_eq!(quote.price, 15411.0, "D12 clamp by the bid");
     assert_eq!(quote.bids, vec![(15411.0, 1.0)]);
     Ok(())

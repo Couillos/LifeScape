@@ -1,23 +1,24 @@
 //! Shared core of the guides (plan rendements R4): memoised yields of
 //! one build, the price rules and the pricing of one yield's flows.
 //!
-//! Price rules (D12, plan marché §9), always for a VOLUME (the units a
-//! row moves per 6000 ticks), never for one unit applied to a window:
-//! - a TRADED object has a current price (median of its last five fills
-//!   clamped by the book): every unit at it, or at an F2P shop when the
-//!   shop pays more for a sale (Q3) or asks less for a purchase (Q7). A
-//!   clamp moves the price of the clamping orders' units only: a bid
-//!   lifting it above the median pays its own units, the rest sells at
-//!   the median; an ask cutting it under the median sells its own units,
-//!   the rest is bought at the median. A median of fewer than five fills
-//!   is flagged `thin`;
-//! - a NEVER-TRADED object has no current price: its book counts only
-//!   for the units it holds. A sale fills the resting bids best first
-//!   (as long as they pay more than the shop), the rest goes to the best
-//!   F2P shop (Q3) or is worth nothing without one; a purchase fills the
-//!   resting asks best first (while cheaper than the shop), the rest
-//!   comes from an F2P shop (Q7) or is NOT for sale (`available` false:
-//!   the row needing it is blocked, never priced at a made-up figure);
+//! Price rules (D12, plan marché §9, user 2026-11-16), always for a
+//! VOLUME (the units a row moves per 6000 ticks), never for one unit
+//! applied to a window:
+//! - SALE of a TRADED object: its current price (median of its last five
+//!   fills clamped by the book) for every unit, or an F2P shop's when it
+//!   pays more (Q3). A bid lifting the price above the median pays its
+//!   own units only. A price resting on fewer than five fills (`thin`)
+//!   holds for the units those fills moved only: past them the sale hits
+//!   the remaining bids for their depth, then the shop (Q3), else is
+//!   worth nothing, as a never-traded object;
+//! - SALE of a NEVER-TRADED object (no current price): the resting bids
+//!   best first (while they pay more than the shop), the rest to the
+//!   best F2P shop (Q3) or worth nothing without one;
+//! - PURCHASE: at least the best resting ask: the asks walked cheapest
+//!   first for the volume, each unit at max(current price, ask) for a
+//!   traded object, while cheaper than an F2P shop; the rest from that
+//!   shop (Q7), else NOT for sale (`available` false: the row needing it
+//!   is blocked, never priced at a made-up figure);
 //! - a consumable a run must buy (ammo, runes, bait, supply, food, fee)
 //!   is a purchase;
 //! - a recipe's stock (its `input` flows), lost or discarded objects
@@ -60,55 +61,84 @@ impl Priced {
     }
 }
 
-/// Which side of a never-traded object's book a volume walks.
+/// Which side of a book a volume walks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
-    /// Hit the bids, the rest to a shop that buys (Q3).
+    /// Hit the bids, the rest to a shop that buys (Q3), else worth 0.
     Sell,
-    /// Lift the asks, the rest from a shop that sells (Q7).
+    /// Lift the asks, the rest from a shop that sells (Q7), else not for
+    /// sale.
     Buy,
 }
 
-/// Walks one side of a book for `units`: the resting levels best first
-/// while they beat `rest`, the rest of the units at `rest` (a traded
-/// object's current price, or a shop), else uncovered. `traded`: the
-/// rest is the object's own price (its basis names the line); else the
-/// line says how much of it the book of a never-traded object holds.
-fn walk_book(levels: &[(f64, f64)], units: f64, rest: Option<(f64, PriceBasis)>, side: Side, traded: bool) -> Priced {
+/// What prices one step of a walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tier {
+    /// The object's current price (D12, from its fills).
+    Current,
+    /// Resting orders of the book.
+    Book,
+    /// An F2P shop (no depth limit).
+    Shop,
+}
+
+/// One step of a walk: a unit price for at most `depth` units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Step {
+    price: f64,
+    depth: f64,
+    tier: Tier,
+}
+
+/// Resting levels with a price and a depth, best first, as book steps.
+fn book_steps(levels: &[(f64, f64)]) -> impl Iterator<Item = Step> + '_ {
+    levels.iter().filter(|(price, depth)| *price >= 1.0 && *depth > 0.0).map(|(price, depth)| Step { price: *price, depth: *depth, tier: Tier::Book })
+}
+
+/// Walks `steps` in order for `units`: each step takes what it holds,
+/// the rest is uncovered (worth nothing for a sale, not for sale for a
+/// purchase). `traded` names the basis of an object priced mostly at its
+/// current price (`Traded` or `Thin`); the others say what the book and
+/// the shop hold of the volume.
+fn walk(steps: &[Step], units: f64, side: Side, traded: Option<PriceBasis>) -> Priced {
     let units = if units > 0.0 { units } else { 1.0 };
-    let beats_rest = |price: f64| match (rest, side) {
-        (Some((rest, _)), Side::Sell) => price > rest,
-        (Some((rest, _)), Side::Buy) => price < rest,
-        (None, _) => true,
-    };
-    let mut remaining = units;
-    let mut value = 0.0;
-    let mut at_book = 0.0;
-    for (price, depth) in levels.iter().filter(|(price, depth)| *price >= 1.0 && *depth > 0.0) {
-        if remaining <= 0.0 || !beats_rest(*price) {
+    let (mut remaining, mut value) = (units, 0.0);
+    let (mut at_current, mut at_book, mut at_shop) = (0.0, 0.0, 0.0);
+    for step in steps {
+        if remaining <= 0.0 {
             break;
         }
-        let taken = depth.min(remaining);
-        value += taken * price;
-        at_book += taken;
+        let taken = step.depth.min(remaining);
+        if taken <= 0.0 {
+            continue;
+        }
+        value += taken * step.price;
         remaining -= taken;
+        match step.tier {
+            Tier::Current => at_current += taken,
+            Tier::Book => at_book += taken,
+            Tier::Shop => at_shop += taken,
+        }
     }
-    let at_rest = if remaining > 0.0 { rest.map(|(price, basis)| (remaining, price, basis)) } else { None };
-    if let Some((taken, price, _)) = at_rest {
-        value += taken * price;
-        remaining = 0.0;
-    }
-    let basis = match (traded, rest, at_book > 0.0, at_rest.is_some(), remaining > 0.0) {
-        (true, Some((_, basis)), _, _, _) => basis,
-        (_, _, true, false, false) => PriceBasis::Book,
-        (_, _, true, true, _) => PriceBasis::BookShop,
-        (_, _, true, false, true) => PriceBasis::BookNone,
-        (_, _, false, true, _) => PriceBasis::Shop,
-        (_, _, false, false, _) => PriceBasis::Nothing,
+    let uncovered = remaining.max(0.0);
+    let available = side == Side::Sell || uncovered <= 1e-9;
+    let basis = match (traded, at_book > 0.0, at_shop > 0.0, uncovered > 1e-9) {
+        (_, _, _, true) if side == Side::Buy => {
+            if at_book + at_current > 0.0 {
+                PriceBasis::BookNone
+            } else {
+                PriceBasis::Nothing
+            }
+        }
+        (Some(basis), _, _, _) if at_current >= at_book + at_shop + uncovered => basis,
+        (_, true, false, false) => PriceBasis::Book,
+        (_, true, true, _) => PriceBasis::BookShop,
+        (_, true, false, true) => PriceBasis::BookNone,
+        (_, false, true, _) => PriceBasis::Shop,
+        (Some(basis), false, false, false) => basis,
+        (_, false, false, _) => PriceBasis::Nothing,
     };
-    let at_shop = at_rest.filter(|(_, _, basis)| *basis == PriceBasis::Shop).map(|(taken, _, _)| taken).unwrap_or(0.0);
-    let outlet = if at_shop > at_book { Outlet::Shop } else { Outlet::Market };
-    let available = side == Side::Sell || remaining <= 0.0;
+    let outlet = if at_shop > at_book + at_current { Outlet::Shop } else { Outlet::Market };
     let price = if available { value / units } else { 0.0 };
     Priced { price, outlet, traded: basis.weakness() == 0, basis, available }
 }
@@ -122,13 +152,61 @@ fn median_of(quote: &Quote) -> f64 {
     }
 }
 
+/// True when a traded object's current price rests on fewer than
+/// `FULL_FILLS` fills (user 2026-11-16: it holds for their units only).
+fn thin(quote: &Quote) -> bool {
+    quote.fills < crate::guide_model::FULL_FILLS
+}
+
 /// Basis of a traded object's own price: thin under `FULL_FILLS`.
 fn traded_basis(quote: &Quote) -> PriceBasis {
-    if quote.fills < crate::guide_model::FULL_FILLS {
+    if thin(quote) {
         PriceBasis::Thin
     } else {
         PriceBasis::Traded
     }
+}
+
+/// Sale steps of a quote, best first (D12, Q3, user 2026-11-16). A
+/// traded object: the bids above its price for their units, then its
+/// price (for the units its fills moved when thin; every unit else),
+/// then, past a thin price, the remaining bids and the shop; a shop
+/// paying more than the price takes every unit the bids above it leave.
+/// A never-traded object: the bids above the shop, then the shop.
+fn sale_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
+    let shop_step = |price: f64| Step { price, depth: f64::INFINITY, tier: Tier::Shop };
+    let above_shop = |step: &Step| shop.map_or(true, |shop| step.price > shop);
+    let mut steps: Vec<Step> = Vec::new();
+    let base = quote.price.min(median_of(quote));
+    if !quote.traded || shop.is_some_and(|shop| shop > base) {
+        steps.extend(book_steps(&quote.bids).take_while(above_shop));
+        steps.extend(shop.map(shop_step));
+        return steps;
+    }
+    let bids: Vec<Step> = book_steps(&quote.bids).collect();
+    let lifting = bids.iter().take_while(|step| step.price > base).count();
+    steps.extend(bids[..lifting].iter().copied());
+    let depth = if thin(quote) { quote.fill_units.max(0.0) } else { f64::INFINITY };
+    steps.push(Step { price: base, depth, tier: Tier::Current });
+    if depth.is_finite() {
+        steps.extend(bids[lifting..].iter().copied().take_while(above_shop));
+        steps.extend(shop.map(shop_step));
+    }
+    steps
+}
+
+/// Purchase steps of a quote, cheapest first (D15, Q7, user
+/// 2026-11-16): the resting asks for their depth, each unit at least the
+/// current price of a traded object (max(current price, ask)), while
+/// cheaper than the shop; then the shop. Past both: not for sale.
+fn purchase_steps(quote: &Quote, shop: Option<f64>) -> Vec<Step> {
+    let floor = if quote.traded { quote.price.max(1.0) } else { 0.0 };
+    let mut steps: Vec<Step> = book_steps(&quote.asks)
+        .map(|step| if step.price <= floor { Step { price: floor, tier: Tier::Current, ..step } } else { step })
+        .take_while(|step| shop.map_or(true, |shop| step.price < shop))
+        .collect();
+    steps.extend(shop.map(|price| Step { price, depth: f64::INFINITY, tier: Tier::Shop }));
+    steps
 }
 
 type AskKey = (String, String, Option<(i64, i64, i64)>, String, u8);
@@ -195,54 +273,33 @@ impl<'a> Engine<'a> {
         found
     }
 
-    /// Mean sale price of `units`. A traded object: its current price,
-    /// a bid's lift above the median for the bid's units only, or the
-    /// shop's when it pays more (Q3). A never-traded object: its bids for
-    /// the units they hold, the rest to the shop or worth nothing. Coins
-    /// are worth one.
+    /// Mean sale price of `units` (`sale_steps`). Coins are worth one.
     pub fn sale_at(&self, item: &str, units: f64) -> Priced {
         if item == "coins" {
             return Priced::own();
         }
         let quote = self.quote(item);
         let shop = (self.world.npc_sale)(item);
-        if quote.traded {
-            let base = quote.price.min(median_of(&quote));
-            let rest = match shop {
-                Some(shop) if shop > base => (shop, PriceBasis::Shop),
-                _ => (base, traded_basis(&quote)),
-            };
-            return walk_book(&quote.bids, units, Some(rest), Side::Sell, true);
-        }
-        walk_book(&quote.bids, units, shop.map(|price| (price, PriceBasis::Shop)), Side::Sell, false)
+        walk(&sale_steps(&quote, shop), units, Side::Sell, quote.traded.then(|| traded_basis(&quote)))
     }
 
-    /// Mean purchase price of `units`. A traded object: its current
-    /// price, an ask's cut under the median for the ask's units only, or
-    /// the shop's when it sells cheaper (Q7). A never-traded object: its
-    /// asks for the units they hold, the rest from a shop, else not for
-    /// sale (`available` false). Coins are worth one.
+    /// Mean purchase price of `units` (`purchase_steps`); `available`
+    /// false past the asks' depth without a shop. Coins are worth one.
     pub fn buy_at(&self, item: &str, units: f64) -> Priced {
         if item == "coins" {
             return Priced::own();
         }
         let quote = self.quote(item);
         let shop = (self.world.shop_buy)(item);
-        if quote.traded {
-            let base = quote.price.max(median_of(&quote));
-            let rest = match shop {
-                Some(shop) if shop < base => (shop, PriceBasis::Shop),
-                _ => (base, traded_basis(&quote)),
-            };
-            return walk_book(&quote.asks, units, Some(rest), Side::Buy, true);
-        }
-        walk_book(&quote.asks, units, shop.map(|price| (price, PriceBasis::Shop)), Side::Buy, false)
+        walk(&purchase_steps(&quote, shop), units, Side::Buy, quote.traded.then(|| traded_basis(&quote)))
     }
 
     /// Why `units` of `item` cannot be bought (for a blocked row).
     pub fn unavailable_reason(&self, item: &str, units: f64) -> String {
-        let depth = self.quote(item).asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
-        format!("{item}: never traded, asks hold {depth:.0} of {units:.0} per window, no F2P shop sells it")
+        let quote = self.quote(item);
+        let depth = quote.asks.iter().fold(0.0, |held, (_, depth)| held + depth.max(0.0));
+        let traded = if quote.traded { "" } else { "never traded, " };
+        format!("{item}: {traded}asks hold {depth:.0} of {units:.0} per window, no F2P shop sells it")
     }
 
     /// Mean unit price of one signed flow of `qty` units under `pricing`.

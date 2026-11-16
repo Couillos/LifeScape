@@ -196,18 +196,23 @@ fn chain_row(engine: &Engine, place: &Place, band: i64) -> Option<MoneyRow> {
         traded: priced.traded,
         basis: priced.basis,
     }];
+    let mut missing = unit.missing.clone();
     for (item, per_unit) in &unit.bought {
         let units = per_unit * units_per_6000;
         let bought = engine.buy_at(item, units);
+        if !bought.available {
+            missing.push(engine.unavailable_reason(item, units));
+        }
         row.flows.push(crate::guide_model::FlowLine { item: item.clone(), cause: "input".to_string(), per_6000: -units, unit_price: bought.price, value_6000: -units * bought.price, outlet: bought.outlet, traded: bought.traded, basis: bought.basis });
     }
     row.price_confidence = price_confidence(&row.flows);
-    if unit.missing.is_empty() {
+    if missing.is_empty() {
         row.profit_6000 = (unit.value_consumed + priced.price) * units_per_6000;
         row.revenue_6000 = units_per_6000 * priced.price;
         row.cost_6000 = row.revenue_6000 - row.profit_6000;
     } else {
-        row.blocked = unit.missing.clone();
+        missing.dedup();
+        row.blocked = missing;
     }
     row.xp_6000 = unit.xp_per_unit.iter().map(|(skill, xp)| (skill.clone(), xp * units_per_6000)).collect();
     row.extra_ticks_per_6000 = unit.ticks_per_unit * units_per_6000 - WINDOW_TICKS;

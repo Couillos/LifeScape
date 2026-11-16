@@ -80,6 +80,9 @@ pub struct Quote {
     pub median: f64,
     /// Fills the median rests on (at most five).
     pub fills: usize,
+    /// Units those fills moved (Σ quantities): a thin price (fewer than
+    /// `FULL_FILLS` fills) holds for these units only (user 2026-11-16).
+    pub fill_units: f64,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
 }
