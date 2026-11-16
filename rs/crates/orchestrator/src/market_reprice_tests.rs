@@ -50,53 +50,62 @@ fn cleanup(path: &std::path::Path) {
     let _ = std::fs::remove_file(path.with_extension("db-journal"));
 }
 
-/// An ask that sold during its window walks up; the next idle window
-/// walks it back down; never under its reserve.
+fn now_wall() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// Wall seconds of `ticks` at the 600 ms tick the tests pass.
+fn ticks(count: f64) -> f64 {
+    count * 0.6
+}
+
+/// Plan marché M3 + Q4: an ask that sold backs off one ZIP step (the
+/// rest asks higher) and restarts its curve; idle, it concedes to its
+/// reserve by its horizon (36 000 ticks unsaid), never under it; at its
+/// reserve past the horizon with no buyer, it is withdrawn.
 #[test]
-fn filled_asks_climb_idle_asks_fall() {
+fn filled_asks_back_off_idle_asks_concede_then_withdraw() {
     let (service, path) = service("asks");
     funded(&service, "maker");
     funded(&service, "taker");
+    let start = now_wall();
     let ask = place(&service, vec![("account", str_value("maker")), ("side", str_value("sell")), ("qty", Value::Int(10)), ("price", Value::Int(5)), ("floor", Value::Int(4)), ("patience", Value::Int(1))]);
     assert_eq!(ask.get("ok").as_bool(), Some(true), "{ask:?}");
     let take = place(&service, vec![("account", str_value("taker")), ("side", str_value("buy")), ("qty", Value::Int(2)), ("price", Value::Int(5))]);
     assert_eq!(take.get("status").as_str(), Some("filled"), "{take:?}");
     crate::market_test_support::settle_matched(&service);
-    let mut wall = 4_000_000_000.0;
-    wall += 10.0;
-    assert_eq!(reprice_round(&service, wall, 600.0), 1);
+    let restart = start + 10.0;
+    assert_eq!(reprice_round(&service, restart, 600.0), 1);
     assert_eq!(price_of(&service, "maker"), Some(6), "sold at 5: the rest asks 6");
-    wall += 10.0;
-    reprice_round(&service, wall, 600.0);
-    assert_eq!(price_of(&service, "maker"), Some(5), "idle window: back down");
-    wall += 10.0;
-    reprice_round(&service, wall, 600.0);
-    assert_eq!(price_of(&service, "maker"), Some(4));
-    wall += 10.0;
-    reprice_round(&service, wall, 600.0);
-    assert_eq!(price_of(&service, "maker"), Some(4), "held at the reserve");
+    reprice_round(&service, restart + 10.0, 600.0);
+    assert_eq!(price_of(&service, "maker"), Some(6), "16 ticks into 36 000: no move");
+    reprice_round(&service, restart + ticks(36_000.0), 600.0);
+    assert_eq!(price_of(&service, "maker"), Some(4), "its reserve at its horizon");
+    reprice_round(&service, restart + ticks(36_100.0), 600.0);
+    assert_eq!(price_of(&service, "maker"), None, "Q4: no buyer at its reserve past H, withdrawn");
+    assert!(super::withdrawn_recently(&service, "maker", FEATHER, 72_000, restart + ticks(36_200.0)));
     cleanup(&path);
 }
 
-/// A standing bid keeps its walk across passes; only its ceiling follows
-/// the wallet, and a shrunk ceiling pulls the price down to it.
+/// A standing bid keeps its curve across passes; only its ceiling
+/// follows the wallet, and a shrunk ceiling pulls the price down to it.
 #[test]
 fn standing_bids_keep_their_walk() {
     let (service, path) = service("standing");
     funded(&service, "fighter");
+    let start = now_wall();
     let first = keep_bid(&service, "fighter", FEATHER, 1, 10, "gear").expect("placed");
     let StandingBid::Placed { order, price } = first else { panic!("{first:?}") };
     assert_eq!(price, 1, "untraded: opens at the 1-coin reference");
     assert_eq!(bounds_of(&service, order).map(|bounds| bounds.ceiling), Some(10));
-    let mut wall = 4_000_000_000.0;
-    for _ in 0..3 {
-        // One default window: 2000 ticks at 600 ms.
-        wall += 1200.0;
-        reprice_round(&service, wall, 600.0);
+    for window in 1..=9 {
+        // One gear window: 2000 ticks.
+        reprice_round(&service, start + ticks(2000.0 * f64::from(window)) + 1.0, 600.0);
     }
-    assert_eq!(price_of(&service, "fighter"), Some(4), "three idle windows: 1 -> 4");
+    // Patience 0.5 (no life), gear: linear, 1 -> 10 over 36 000 ticks.
+    assert_eq!(price_of(&service, "fighter"), Some(5), "half its horizon: 1 + 9 x 0.5");
     let kept = keep_bid(&service, "fighter", FEATHER, 1, 30, "gear").expect("kept");
-    assert!(matches!(kept, StandingBid::Kept { price: 4, .. }), "no reset to the reference: {kept:?}");
+    assert!(matches!(kept, StandingBid::Kept { price: 5, .. }), "no reset to the reference: {kept:?}");
     let resting = service.lock_store().account_orders("fighter").unwrap_or_default().into_iter().find(|row| row.remaining > 0).expect("rests");
     assert_eq!(bounds_of(&service, resting.order_id).map(|bounds| bounds.ceiling), Some(30), "the ceiling rose with the wallet");
     let shrunk = keep_bid(&service, "fighter", FEATHER, 1, 2, "gear").expect("kept");
@@ -123,9 +132,10 @@ fn adopted_listings_walk() {
     service.lock_engine().quote_bounds.remove(&order);
     assert!(super::handled(&service, order));
     assert!(!adopt(&service, order, bounds.clone()), "never re-adopted");
-    service.lock_engine().quote_bounds.insert(order, bounds);
-    reprice_round(&service, 4_000_000_000.0, 600.0);
-    assert_eq!(price_of(&service, "old_seller"), Some(8), "idle: walks down");
+    service.lock_engine().quote_bounds.insert(order, bounds.clone());
+    // Half its horizon from its lineage's t0: halfway from 9 to 1.
+    reprice_round(&service, bounds.curve_start_wall + ticks(18_000.0), 600.0);
+    assert_eq!(price_of(&service, "old_seller"), Some(5), "idle: concedes from its t0");
     cleanup(&path);
 }
 
@@ -160,12 +170,10 @@ fn a_need_bid_keeps_its_lineage_across_amends_and_obtains() {
     let first = super::keep_bid_from(&service, "fiona_park", FEATHER, 5, 1, 10, crate::market_lineage::NEED).expect("placed");
     let StandingBid::Placed { order: root, .. } = first else { panic!("{first:?}") };
     let root_row = service.lock_store().get_order(root).ok().flatten().expect("root row");
-    let mut wall = 4_000_000_000.0;
-    for _ in 0..2 {
-        wall += 1200.0;
-        reprice_round(&service, wall, 600.0);
-    }
-    assert_eq!(price_of(&service, "fiona_park"), Some(3), "two idle windows: 1 -> 3");
+    // A need: pressed (beta 2), 6000 ticks, 500-tick windows: one window
+    // in, 1 + 9 x sqrt(500 / 6000) = 3.
+    reprice_round(&service, now_wall() + ticks(500.0) + 1.0, 600.0);
+    assert_eq!(price_of(&service, "fiona_park"), Some(3), "one window: 1 -> 3");
     let kept = super::keep_bid_from(&service, "fiona_park", FEATHER, 5, 1, 10, crate::market_lineage::NEED).expect("kept");
     let StandingBid::Kept { order, price: 3 } = kept else { panic!("taken over at its walked price: {kept:?}") };
     let row = service.lock_store().get_order(order).ok().flatten().expect("walked row");

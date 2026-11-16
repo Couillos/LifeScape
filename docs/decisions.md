@@ -839,3 +839,68 @@ Rejeté : statut `amended` (Q1 b retenu, l'existant garde son statut) ;
 annuler les offres non crédibles des besoins bloquants (vague 2, avec la
 courbe) ; garder l'échéance sur l'offre (remise à zéro de la marche une
 fois sur deux, §1.2).
+
+## 2026-11-16 — Concession, ordres au marché, vendeurs, vente aux PNJ (plan marché, vague 2)
+
+M3 (Q2) : le pas de 5 % par fenêtre est remplacé par une courbe de
+concession par lignée vers la limite propre de l'ordre (plafond acheteur,
+plancher vendeur) sur l'horizon du motif (`lifescape_market::concession`,
+`market_reprice`) : `p(t) = ouverture + (limite − ouverture) ×
+(t/H)^(1/β)`, β = 2^(1 − 2 × `price_patience`) × urgence (`need` ×2,
+`stock`/`loot` ×0,5), bornée [0,25 ; 4] ; `price_patience` lu dans la vie
+du bot (le 0,5 du store n'est plus écrit). Retour ZIP : fill propre →
+recul de 5 % et courbe relancée ; prix courant public (hors fill propre)
+du côté concédé → tiré de moitié. Amend seulement ≥ 1 % (≥ 1 pièce) ou
+pour poser la limite ; fenêtre H/12 dans [500 ; 2000] ticks, phase par
+hash compte/objet. M4 : un ordre pressé (`need`, banque pleine `urgent`)
+prend le meilleur prix opposé dans sa limite ; tout ordre prend celui que
+sa courbe atteint à la fenêtre suivante. Q4 : vendeur à son plancher
+après H sans fill retiré (`horizon`), stock gardé un horizon ; acheteur
+gardé à sa limite. M5 : `found_open` rejoint le meilleur ask (fin de la
+cascade à 1), sous-cotation relative (1 %) et frappe du bid réservées au
+vendeur pressé ; plancher = valeur de garde `max(coût propre, prix
+boutique (Q3), net d'alchimie, 1)` ; filtre de ramassage par valeur
+(`brain_loot`, `--skip-loot` : pile < 20 ticks du taux du bot).
+
+Simulateur `sim_lifecycle` (20 acheteurs / 20 vendeurs, limites 60-140 /
+50-130, 2 unités, patiences 0,05-0,95, arrivées sur 18 000 ticks, H 36 000,
+5 graines ; même carnet, mêmes arrivées) :
+
+| critère (5 graines)            | concession        | ancien pas 5 %    |
+|--------------------------------|-------------------|-------------------|
+| fills / paires compatibles     | 1,08 – 1,33       | 1,00 – 1,30       |
+| prix final vs équilibre        | ≤ 7,0 %           | ≤ 17,0 % (g. 33)  |
+| inversions du prix courant     | 4,5 % (≤ 15,4 %)  | 0 – 15,4 %        |
+| prix d'ask/fill le plus bas    | 81 – 96 (> 1)     | 74 – 97           |
+| attente moyenne d'un acheteur  | 2 269 – 17 578 t. | 2 468 – 10 700 t. |
+| vendeurs retirés à H (Q4)      | 3 – 8             | 0                 |
+| butin 50 vendeurs / 3 acheteurs: plus bas ask | 5 (= garde min.) | 1 (cascade) |
+
+(fills > paires : l'enchère continue fait aussi des échanges hors
+équilibre ; la concession attend davantage : les patients concèdent tard,
+c'est voulu.)
+
+Q3 (décision utilisateur, EXCEPTION ASSUMÉE À D-A) : un objet que le
+marché paie MOINS qu'un marchand F2P (meilleur bid et prix courant
+échangé ; rien pour un objet jamais échangé sans bid,
+`outlets::npc_sale_beats_market`) est vendu à la boutique, comme un joueur
+qui vide son butin au magasin général. Valeur serveur `calc_shop_value`
+(`shop.rs2`, `shop_sale.rs` : coût × multiplicateur d'achat / 1000 au stock
+de base, puis − delta par unité tenue ; le dump n'a pas `shop_delta`, le
+script minore avec 30, le plus fort du contenu). Jamais une unité vendue
+≤ ce que paie le marché (MIN = marché + 1, vérifié par unité). Le voyage
+part avec le nœud janitor (`SpaceCleanup`) quand le gain dépasse 1500
+ticks au taux du bot ; la boutique qui paie le plus, gardien le plus
+proche. La monnaie créée est suivie : provenance `shop_sold` du registre
+de pièces, ligne « npc shop sales » de `orchestrator economy`. Le
+plancher de toute vente ne descend jamais sous ce prix boutique (option
+extérieure). Rejeté : alchimie seule (magie 21/55, runes de nature non
+productibles F2P) ; puits sans pièces seul (aucune valorisation).
+
+Petits ajouts : plan d'équipement et Iron achètent chez Scavvo/Valaine
+dès 32 points de quête (`gear_plan::shop_route_open`) ; migrations du
+store dans UNE transaction `BEGIN IMMEDIATE` avec relecture de
+`user_version` sous verrou et `busy_timeout` 30 s (course live
+`migration 6: duplicate column name: replaces`) ; `resolve_obtain`
+bloque sur `missing:coins` (`have_coins`) quand le plafond d'un
+`market:buy` est sous le plancher public de crédibilité (§3.6).

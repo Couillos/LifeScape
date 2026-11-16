@@ -458,6 +458,55 @@ pub fn buy_best_affordable(bot: &mut Bot, cands: &[String]) -> Result<Option<Str
     Ok(None)
 }
 
+/// Ticks one sale click gets to take the unit from the pack.
+pub const SELL_UNIT_TICKS: u64 = 10;
+
+/// Sells up to `count` units of `obj_name` (carried as `form`: the object
+/// or its banknote) to the OPEN shop `shop` (`gamedata::shops` key), one
+/// unit per click (`[inv_button2,shop_template_side:inv]`, sell 1), while
+/// the server's value of the next unit, bounded from below
+/// (`shop_sale::unit_value_floor` with the shop's live stock of it), is
+/// at least `min_unit` coins: never a unit under what the market pays
+/// (plan marché Q3). Returns (units sold, coins received). A click the
+/// server refuses ends the sale, logged.
+pub fn sell_units(bot: &mut Bot, form: u16, obj_name: &str, shop: &str, count: u32, min_unit: i64) -> Result<(u32, i64), ScriptError> {
+    let side_com = (bot.tables.com_id)("shop_template_side:inv")
+        .ok_or_else(|| ScriptError::Usage("shop_template_side:inv missing from component table".to_string()))?;
+    let main_com = (bot.tables.com_id)("shop_template:inv")
+        .ok_or_else(|| ScriptError::Usage("shop_template:inv missing from component table".to_string()))?;
+    let coins = obj_id(bot, "coins")?;
+    let base = obj_id(bot, obj_name)?;
+    let (mut sold, mut earned) = (0u32, 0i64);
+    while sold < count {
+        let shop_holds: i64 = bot.world.inv.get(&main_com).map(|slots| slots.values().filter(|(held, _)| *held == base).map(|(_, qty)| i64::from(*qty)).sum()).unwrap_or(0);
+        let Some(floor) = knowledge::shop_sale::unit_value_floor(shop, obj_name, shop_holds) else {
+            return Err(ScriptError::Usage(format!("shop {shop} buys no {obj_name}")));
+        };
+        if floor < min_unit {
+            bot.log(&format!("shopsell {obj_name}: the next unit pays at least {floor} < {min_unit} (the market): stop after {sold}"));
+            break;
+        }
+        let Some(slot) = bot.world.inv.get(&side_com).and_then(|slots| slots.iter().find(|(_, (held, _))| *held == form).map(|(slot, _)| *slot)) else {
+            break;
+        };
+
+        let (coins_before, units_before) = (pack_total(bot, coins), pack_total(bot, form));
+        bot.inv_button(2, form, slot, side_com)?;
+        let deadline = bot.world.ticks + SELL_UNIT_TICKS;
+        while bot.world.ticks < deadline && pack_total(bot, form) >= units_before {
+            bot.pump(1)?;
+        }
+        if pack_total(bot, form) >= units_before {
+            bot.log(&format!("shopsell {obj_name}: the shop took nothing at {:?}", bot.position()));
+            break;
+        }
+        bot.pump(1)?;
+        sold += 1;
+        earned += i64::from(pack_total(bot, coins)) - i64::from(coins_before);
+    }
+    Ok((sold, earned))
+}
+
 /// Sell-button batches for an amount: 10s, then 5s, then 1s.
 pub fn sell_batches(mut amount: u32) -> Vec<(u8, u32)> {
     let mut batches = Vec::new();

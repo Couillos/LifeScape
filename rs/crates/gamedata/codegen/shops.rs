@@ -43,13 +43,20 @@ fn render_stocks(row: &crate::workspace_json::Value) -> String {
     rendered
 }
 
+/// `allstock` (a general store: buys any tradeable object) reads like
+/// `restock`.
+fn shop_allstock(row: &crate::workspace_json::Value) -> bool {
+    row.get("allstock").as_str().is_some_and(|text| matches!(text.to_lowercase().as_str(), "yes" | "true" | "1"))
+}
+
 fn render_shop(row: &crate::workspace_json::Value) -> String {
     format!(
-        "    super::StaticShop {{ name: {}, scope: {}, size: {}, restock: {}, stocks: {}, members: {} }},\n",
+        "    super::StaticShop {{ name: {}, scope: {}, size: {}, restock: {}, allstock: {}, stocks: {}, members: {} }},\n",
         render_req_str(row, "name"),
         crate::render_opt_str(row.get("scope")),
         shop_size(row),
         shop_restock(row),
+        shop_allstock(row),
         render_stocks(row),
         crate::render_opt_flag(row, "members"),
     )

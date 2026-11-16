@@ -45,14 +45,31 @@ l'annuler ; l'échéance de 6000 ticks termine la jambe marché du nœud,
 pas l'offre. `orchestrator economy [heures]` imprime les critères du
 plan (§ Section marché ci-dessous).
 
-Stratégie de cotation inspirée de ZIP (PRD3, demande 2026-11-13) : un
-ordre posé avec un `ceiling` (acheteur) ou un `floor` (vendeur) fait un
-pas de 5 % (≥ 1 pièce) par fenêtre de patience (2000 ticks depuis le
-2026-11-14, `zip::PATIENCE_TICKS`, voir § Coût CPU du repricing) tant qu'il
-reste au carnet (`market_reprice`, `lifescape_market::demand_step`), sa
-direction lue dans la fenêtre : vente servie (même en partie) → monte,
-vente au repos → descend jusqu'à son plancher, achat au repos → monte
-jusqu'à son plafond, achat servi → redescend vers son prix d'ouverture.
+Courbe de concession (vague 2, M3/M4, `lifescape_market::concession`,
+`market_reprice`, remplace le pas de 5 % par fenêtre) : un ordre posé
+avec un `ceiling` (acheteur) ou un `floor` (vendeur) concède dans le temps
+vers sa limite PROPRE, `p(t) = ouverture + (limite − ouverture) ×
+(t/H)^(1/β)`, t compté depuis le t0 de la lignée (relancé par un fill
+propre), H l'horizon du motif, β = `concession_beta(price_patience,
+urgence)` = 2^(1 − 2 × patience) × (×2 `need`/banque pleine, ×0,5
+`stock`/`loot`, ×1 sinon), borné [0,25 ; 4] ; `price_patience` est lu
+dans la vie du bot (`account_patience`, plus le 0,5 du store). Fenêtre
+= H/12 bornée [500 ; 2000] ticks, phase propre à chaque ordre (hash
+compte/objet : jamais une marche en bloc après un redémarrage).
+Chaque fenêtre (`concession::step`) : fill propre → recul ZIP de 5 %
+(≥ 1 pièce : le vendeur remonte, l'acheteur redescend) et courbe
+relancée de là ; un prix courant échangé (hors fill propre) du côté où
+l'ordre concède le tire de moitié vers lui ; sans fill, le prix ne va
+que vers la limite (jamais hors [ouverture, limite]) ; amend seulement
+au-delà de 1 % (≥ 1 pièce) ou pour poser la limite. M4 : un ordre pressé
+(`need`, ou `urgent` : banque pleine) prend le meilleur prix opposé
+dans sa limite, tout ordre prend celui que sa courbe atteindrait à la
+fenêtre suivante. Q4 : un vendeur à son plancher après H sans fill est
+retiré (`cancel_reason = 'horizon'`) et son stock reste en banque un
+horizon (`withdrawn_recently`, sauf banque pleine) ; un acheteur reste
+à son plafond tant que son besoin existe. Simulateur
+`sim_lifecycle` (graines fixes, tableau contre l'ancien pas dans
+`decisions.md` 2026-11-16 vague 2).
 Acheteur : ouvre à l'ask s'il le couvre, sinon à son propre dernier
 prix d'achat de l'objet, sinon au prix courant (`remembered_bid`),
 plafond = ce que son portefeuille paie (plus de plafond « juste »).
@@ -60,9 +77,28 @@ Vendeur : plancher = sa réserve, son PROPRE coût (§ Réserve vendeur),
 ouverture à la référence échangée (ou au meilleur bid plus riche), à
 `max(meilleur bid, 2 × réserve)` pour un objet jamais échangé, jamais
 sous la réserve (`seller_open`). Une vente monte sans plafond propre
-(seule la demande l'arrête). Voir § Prix par l'offre
-et la demande et § Réserve vendeur. Les PNJ n'ancrent plus rien : aucun bot ne
-vend à un marchand (jusqu'à la vague 2, Q3) ; depuis le 2026-11-15 tout
+(seule la demande l'arrête). Vague 2 (M5) : le plancher d'un vendeur
+est sa valeur de garde, `max(coût propre, ce qu'une boutique F2P paie
+(Q3), net d'alchimie d'un lanceur, 1)` ; un butin (`found_open`)
+REJOINT le meilleur ask d'un autre vendeur au lieu de le sous-coter
+d'une pièce (fin de la cascade à 1) ; seul un vendeur pressé (banque
+pleine) frappe un bid ≥ son plancher ou sous-cote d'un pas relatif de
+1 % (≥ 1 pièce). Filtre de ramassage (`brain_loot`) : un combattant
+laisse au sol les drops de son spot dont la pile vaut moins de 20 ticks
+de son propre taux (`--skip-loot`, valeur publique = prix courant
+échangé ou prix boutique, le plus riche ; jamais les pièces ni les os).
+Voir § Prix par l'offre
+et la demande et § Réserve vendeur. Vente aux PNJ (Q3, vague 2,
+`decisions.md`) : un surplus qu'une boutique F2P paie PLUS que le marché
+(meilleur bid, prix courant échangé ; rien pour un objet jamais échangé
+sans bid) n'est pas listé ; quand le gain dépasse 1500 ticks au taux du
+bot, le nœud janitor (`SpaceCleanup`, `market cleanup --sale-shop
+--sale-site --shopsell ITEM:QTY:MIN`) va à la boutique qui paie le plus
+(gardien le plus proche) et vend unité par unité tant que la valeur
+serveur minorée (`shop_sale::unit_value_floor`, delta 30) reste ≥ MIN =
+ce que paie le marché + 1. Les pièces créées sont `shop_sold` dans le
+registre de pièces ; `orchestrator economy` imprime « npc shop sales ».
+Depuis le 2026-11-15 tout
 objet F2P qu'un marchand stocke peut lui être acheté (§ Achats aux
 marchands de `planner.md`, `decisions.md`). Marchands (`market:flip`, ~10 %, supprimé en vague 3) :
 sélection sur écart/volume, plafonds `max_capital_share` (10 %),

@@ -35,13 +35,20 @@ pub enum SaleDecision {
     Hold(String),
 }
 
-/// What a FOUND lot prices against (`found_open`): the cheapest ask of
-/// ANOTHER account (the seller's own listing never anchors its own
-/// opening) and the object's high alchemy value.
+/// What a lot prices against: for FOUND stock (`found_open`) the
+/// cheapest ask of ANOTHER account (the seller's own listing never
+/// anchors its own opening) and the object's high alchemy value; for
+/// every lot the seller's outside option and its urgency (wave 2).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FoundMarks {
     pub others_ask: Option<i64>,
     pub anchor: Option<i64>,
+    /// Outside option per unit (Q3: what an NPC shop the bot reaches
+    /// pays, `market_npc_sale`): no listing ever walks under it.
+    pub outside: i64,
+    /// A full bank (D17, M4/M5): the lot hits a bid at or over its
+    /// floor, or undercuts the cheapest ask by one relative step.
+    pub pressed: bool,
 }
 
 /// One sale (pure): the opening ask from the seller's reserve and own
@@ -59,10 +66,16 @@ pub fn plan_sale(free: i64, reserve: Option<Reserve>, reference: Reference, best
     if qty <= 0 {
         return SaleDecision::Hold("nothing free".to_string());
     }
+    // The keep value: the own cost, never under the outside option.
+    let keep = reserve.coins.max(marks.outside).max(1);
     let (price, floor) = if reserve.source == CostSource::Found {
-        found_open(reference, best_bid, marks.others_ask, reserve.coins, marks.anchor, last_sell)
+        found_open(reference, best_bid, marks.others_ask, keep, marks.anchor, last_sell, marks.pressed)
     } else {
-        seller_open(reference, best_bid, reserve.coins, last_sell)
+        match best_bid.filter(|bid| marks.pressed && *bid >= keep) {
+            // M4: a full bank hits a bid at or over its floor.
+            Some(bid) => (bid, keep),
+            None => seller_open(reference, best_bid, keep, last_sell),
+        }
     };
     SaleDecision::List { qty, price, floor }
 }
@@ -201,9 +214,11 @@ impl MarketService {
     }
 
     /// The account's sale decision for `free` units of `name` (`item`),
-    /// its reserve capped at `make_cost` (`brain_bids::production_costs_for`).
+    /// its reserve capped at `make_cost` (`brain_bids::production_costs_for`),
+    /// never under what an F2P shop pays (Q3 outside option), `pressed`
+    /// when its bank is full (M4/M5).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>) -> (SaleDecision, Option<Reserve>) {
+    pub(crate) fn sale_decision(&self, account: &str, name: &str, item: i64, free: i64, costs: &OwnCosts, life: Option<&Life>, make_cost: Option<f64>, pressed: bool) -> (SaleDecision, Option<Reserve>) {
         let reserve = {
             let store = self.lock_store();
             costs.reserve(&store, name, item, life, make_cost)
@@ -214,7 +229,12 @@ impl MarketService {
         let others_ask = self.lock_engine().books.get(&item).and_then(|book| {
             book.orders().into_iter().filter(|order| order.side == lifescape_market::Side::Sell && order.remaining > 0 && order.account != account && order.price >= 1).map(|order| order.price).min()
         });
-        let marks = FoundMarks { others_ask, anchor: lifescape_planner::alchemy::alch_value(name, true) };
+        let marks = FoundMarks {
+            others_ask,
+            anchor: lifescape_planner::alchemy::alch_value(name, true),
+            outside: lifescape_gamedata::shop_sale::npc_sale_value(name).unwrap_or(0),
+            pressed,
+        };
         (plan_sale(free, reserve, reference, bid, last, marks, &self.public_view(account, item)), reserve)
     }
 
@@ -230,7 +250,8 @@ impl MarketService {
         let costs = OwnCosts::load(&self.lock_store(), &account);
         let life = crate::brain::load_life(&account);
         let make_cost = make_cost_of(life.as_ref(), &account, name, qty);
-        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref(), make_cost);
+        let pressed = request.get("urgent").as_bool() == Some(true);
+        let (decision, reserve) = self.sale_decision(&account, name, item, qty, &costs, life.as_ref(), make_cost, pressed);
         let reserve_value = reserve.map(|known| Value::Int(known.coins)).unwrap_or(Value::Null);
         match decision {
             SaleDecision::List { qty, price, floor } => object(vec![

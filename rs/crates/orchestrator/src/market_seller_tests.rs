@@ -61,10 +61,10 @@ fn asks(asks: Vec<(i64, i64)>) -> BookView {
 fn found_loot_lists_a_whole_lot_at_a_clearing_price() {
     let arrows = Reference { price: 2, traded: true };
     let view = BookView { asks: vec![(1, 7), (2, 14), (2, 451)], volume_24h: 332, ..BookView::default() };
-    let marks = |others_ask: Option<i64>, anchor: Option<i64>| FoundMarks { others_ask, anchor };
+    let marks = |others_ask: Option<i64>, anchor: Option<i64>| FoundMarks { others_ask, anchor, ..FoundMarks::default() };
     assert_eq!(plan_sale(838, found(), arrows, None, None, marks(Some(1), Some(1)), &view), SaleDecision::List { qty: 332, price: 2, floor: 1 });
     let daggers = Reference { price: 18, traded: false };
-    assert_eq!(plan_sale(41, found(), daggers, None, None, marks(Some(18), Some(21)), &asks(vec![(18, 2), (22, 4), (28, 9)])), SaleDecision::List { qty: 28, price: 17, floor: 1 }, "an inventory, just under the cheapest ask");
+    assert_eq!(plan_sale(41, found(), daggers, None, None, marks(Some(18), Some(21)), &asks(vec![(18, 2), (22, 4), (28, 9)])), SaleDecision::List { qty: 28, price: 18, floor: 1 }, "an inventory, AT the cheapest ask (wave 2: joins, never undercuts)");
     // Fur: only its own old ask rests (131): it never anchors the lot.
     assert_eq!(plan_sale(6, found(), Reference { price: 131, traded: false }, None, None, marks(None, Some(12)), &asks(vec![(131, 2)])), SaleDecision::List { qty: 6, price: 12, floor: 1 }, "the whole small stack at its alch value");
     // No band: a fast fill far above the reference is the opening's guide.

@@ -31,6 +31,14 @@ pub use crate::kit::hunt::{budget_left, level_reached, run_spot, run_spot_with, 
 /// owns the snapshots and the re-click throttle. Ready for smithing-
 /// style loops too: any started-loop-vs-dead-click verdict.
 
+/// Per-run fight knobs from the brain's command line: its site (the
+/// hunt's anchor) and the drops not worth their pickup ticks at the
+/// bot's rate (plan marché M5, `--skip-loot`).
+pub fn arm_fight(bot: &mut Bot, spec: &crate::kit::cycle::TaskSpec) {
+    bot.assigned_site = spec.site;
+    bot.loot_skip = spec.skip_loot.iter().cloned().collect();
+}
+
 /// Spots named on the CLI. An unknown key is a contract error (`Usage`):
 /// the old silent drop sent every `chicken_lumbridge` run to the auto
 /// pick (goblins, cows) where fresh bots died 11-18 times per run.

@@ -316,8 +316,10 @@ fn iron_gear(job: &Job, life: &mut Life, plan: &IronPlan) -> bool {
     }
     let budget = gear_ladder::wallet_ceiling(crate::brain_plan::holdings_count(job, "coins"), gear_ladder::GEAR_SHARE_PCT);
     let price_of = |item: &str| lifescape_gamedata::obtain::merchant_price(item).unwrap_or(i64::MAX / 64);
-    let allowed = |item: &str| lifescape_gamedata::obtain::merchant_route(item);
-    let wants = gear_plan::plan_gear_from(plan.style, &plan.levels(), &plan.quests(), &plan.owned, budget, &price_of, &allowed);
+    // A guild keeper opens with its quest points (Scavvo, Valaine: 32).
+    let quests = plan.quests();
+    let allowed = |item: &str| gear_plan::shop_route_open(item, &quests);
+    let wants = gear_plan::plan_gear_from(plan.style, &plan.levels(), &quests, &plan.owned, budget, &price_of, &allowed);
     let now = wall_now();
     let Some(want) = wants.iter().find(|want| !recently_withdrawn(&job.account, &want.item, now)) else { return false };
     let why = format!("Iron, shop price {}, budget {budget}", want.expected);
@@ -406,7 +408,9 @@ pub(crate) fn gear_pass(job: &Job, life: &mut Life, live: &Value) -> bool {
         let id = obj_id(&want.item);
         let best_ask = service.as_ref().zip(id).and_then(|(service, id)| service.lock_engine().books.get(&id).and_then(|book| book.best().1));
         let covered = best_ask.is_some_and(|ask| ask <= want.ceiling);
-        if covered || shop_only(&want.item) {
+        // A shop the bot's quest points open (Champions' Guild at 32:
+        // Scavvo, Valaine) sells it: the step walks there (wave 2 (a)).
+        if covered || gear_plan::shop_route_open(&want.item, &quests) {
             if !step_open && !recently_withdrawn(&job.account, &want.item, now) {
                 let why = format!("ask {best_ask:?}, ceiling {}, budget {budget}", want.ceiling);
                 file_step(job, life, Some(&want.item), style, &why);

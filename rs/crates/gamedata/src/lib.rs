@@ -37,6 +37,7 @@ pub mod rocks;
 pub mod script_sources;
 pub mod services;
 pub mod shop_access;
+pub mod shop_sale;
 pub mod shops;
 pub mod spawns;
 pub mod spells;

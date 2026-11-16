@@ -84,7 +84,7 @@ fn decide(store: &lifescape_store::Store, resting: &[lifescape_store::Order], co
     let reserve = costs.reserve(store, name, item, Some(life), None);
     let (view, reference, best_bid, others_ask) = market_of(store, resting, &account, item);
     let last = store.last_own_fill(&account, item, false).ok().flatten().map(|(price, _)| OwnFill { price, rested_ticks: None });
-    let marks = FoundMarks { others_ask, anchor: lifescape_planner::alchemy::alch_value(name, true) };
+    let marks = FoundMarks { others_ask, anchor: lifescape_planner::alchemy::alch_value(name, true), ..FoundMarks::default() };
     let decision = match plan_sale(free, reserve, reference, best_bid, last, marks, &view) {
         SaleDecision::List { qty, price, floor } => match crate::brain_alch::alch_floor(job, name) {
             Some(alch) if alch > floor => SaleDecision::List { qty, price: price.max(alch), floor: alch },

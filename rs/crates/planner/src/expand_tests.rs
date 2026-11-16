@@ -543,3 +543,30 @@ fn a_training_pick_locks_or_blocks_on_all_it_lacks() {
     assert_eq!(node.method.as_deref(), Some("smith:iron_dagger"), "static tranche method");
     assert_eq!(node.batch, 0);
 }
+
+/// Plan marché vague 2 (c), §3.6: a `market:buy` whose per-unit ceiling
+/// is under the public credibility floor (low alchemy value, a quarter
+/// of the current price) is no offer: the bot earns the coins first
+/// (`have_coins`), like a player who never posts "rune axe for 10".
+/// A feather at 1 coin stays a resting bid.
+#[test]
+fn an_incredible_bid_blocks_on_coins_instead() {
+    use crate::model::NodeStatus;
+    let alch_low = lifescape_gamedata::objs_by_name("rune_axe").into_iter().next().map(|obj| obj.alch_low).unwrap_or(0);
+    assert!(alch_low > 10, "dump value {alch_low}");
+    let mut nodes = expand_goal(&GoalKind::Obtain { item: "rune_axe".to_string(), count: 1 }, &profile());
+    let mut ctx = ReadyCtx::blind(0.5);
+    ctx.coins = 10;
+    ctx.price = 1;
+    ctx.levels = vec![("smithing".to_string(), 1)];
+    resolve_ready(&mut nodes[0], &ctx);
+    assert_ne!(nodes[0].method.as_deref(), Some("market:buy"), "a 10-coin rune axe bid is noise: {:?}", nodes[0].alternatives);
+    assert_eq!(nodes[0].status, NodeStatus::Blocked { reason: format!("missing:coins:{alch_low}") }, "the coins of a credible bid");
+    let mut feathers = expand_goal(&GoalKind::Obtain { item: "feather".to_string(), count: 5 }, &profile());
+    let mut cheap = ReadyCtx::blind(0.5);
+    cheap.coins = 10;
+    cheap.price = 1;
+    cheap.levels = vec![("fishing".to_string(), 1)];
+    resolve_ready(&mut feathers[0], &cheap);
+    assert!(!matches!(&feathers[0].status, NodeStatus::Blocked { reason } if reason.starts_with("missing:coins")), "{:?} {:?}", feathers[0].status, feathers[0].alternatives);
+}

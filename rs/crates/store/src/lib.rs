@@ -111,6 +111,9 @@ impl Store {
     }
 
     fn initialize(connection: rusqlite::Connection) -> Result<Self, Error> {
+        // A concurrent opener (migration, write batch) is waited for,
+        // never a raw SQLITE_BUSY (2026-11-16 migration race).
+        connection.busy_timeout(schema::BUSY_WAIT)?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         schema::apply_migrations(&connection)?;
         Ok(Self { connection })

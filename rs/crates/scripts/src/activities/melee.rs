@@ -73,7 +73,7 @@ pub fn run_melee(bot: &mut Bot, args: &[String]) -> ScriptResult {
     bot.allow_shop = spec.allow_shop;
     // The brain's site anchors the hunt (`kit::foes::ranked_clusters`);
     // never one a previous run left on the session's Bot.
-    bot.assigned_site = spec.site;
+    crate::kit::fight::arm_fight(bot, &spec);
     // The session's Bot outlives one run: a ranged or magic run before
     // this one left its style behind. Melee scores, plans and attacks
     // melee (no bow, no quiver refill).
